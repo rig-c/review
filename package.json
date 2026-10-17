@@ -1,0 +1,26 @@
+{
+  "name": "@rig-c/review",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local human rig inspection and structured feedback export",
+  "scripts": {
+    "review": "bun src/cli.ts",
+    "check": "bun src/cli.ts check",
+    "demo": "bun src/cli.ts examples/demo/review.json",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "bun src/build.ts",
+    "feedback": "bun src/cli.ts feedback"
+  },
+  "dependencies": {
+    "@rig-c/play": "1.11.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  }
+}

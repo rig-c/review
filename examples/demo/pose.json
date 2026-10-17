@@ -1,0 +1,244 @@
+{
+  "spec": "rig-pose-sequence/1",
+  "space": {
+    "units": "picture-px",
+    "origin": "top-left",
+    "y": "down"
+  },
+  "width": 800,
+  "height": 800,
+  "source": "synthetic-schema-example-not-a-Nova-extraction",
+  "frames": [
+    {
+      "t": 0,
+      "people": [
+        {
+          "id": "sample",
+          "joints": {
+            "neck": {
+              "state": "observed",
+              "at": [
+                400,
+                220
+              ],
+              "score": 1
+            },
+            "r_shoulder": {
+              "state": "observed",
+              "at": [
+                310,
+                275
+              ]
+            },
+            "r_elbow": {
+              "state": "observed",
+              "at": [
+                280,
+                387
+              ]
+            },
+            "r_wrist": {
+              "state": "observed",
+              "at": [
+                280,
+                487
+              ]
+            },
+            "l_shoulder": {
+              "state": "observed",
+              "at": [
+                490,
+                275
+              ]
+            },
+            "l_elbow": {
+              "state": "observed",
+              "at": [
+                520,
+                387
+              ]
+            },
+            "l_wrist": {
+              "state": "observed",
+              "at": [
+                520,
+                487
+              ]
+            },
+            "r_hip": {
+              "state": "observed",
+              "at": [
+                374,
+                560
+              ]
+            },
+            "l_hip": {
+              "state": "observed",
+              "at": [
+                426,
+                560
+              ]
+            },
+            "nose": {
+              "state": "missing"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "t": 0.5,
+      "people": [
+        {
+          "id": "sample",
+          "joints": {
+            "neck": {
+              "state": "observed",
+              "at": [
+                420,
+                220
+              ],
+              "score": 1
+            },
+            "r_shoulder": {
+              "state": "observed",
+              "at": [
+                330,
+                275
+              ]
+            },
+            "r_elbow": {
+              "state": "observed",
+              "at": [
+                300,
+                387
+              ]
+            },
+            "r_wrist": {
+              "state": "observed",
+              "at": [
+                300,
+                487
+              ]
+            },
+            "l_shoulder": {
+              "state": "observed",
+              "at": [
+                510,
+                275
+              ]
+            },
+            "l_elbow": {
+              "state": "observed",
+              "at": [
+                540,
+                387
+              ]
+            },
+            "l_wrist": {
+              "state": "observed",
+              "at": [
+                540,
+                487
+              ]
+            },
+            "r_hip": {
+              "state": "observed",
+              "at": [
+                394,
+                560
+              ]
+            },
+            "l_hip": {
+              "state": "observed",
+              "at": [
+                446,
+                560
+              ]
+            },
+            "nose": {
+              "state": "missing"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "t": 1,
+      "people": [
+        {
+          "id": "sample",
+          "joints": {
+            "neck": {
+              "state": "observed",
+              "at": [
+                400,
+                220
+              ],
+              "score": 1
+            },
+            "r_shoulder": {
+              "state": "observed",
+              "at": [
+                310,
+                275
+              ]
+            },
+            "r_elbow": {
+              "state": "observed",
+              "at": [
+                280,
+                387
+              ]
+            },
+            "r_wrist": {
+              "state": "observed",
+              "at": [
+                280,
+                487
+              ]
+            },
+            "l_shoulder": {
+              "state": "observed",
+              "at": [
+                490,
+                275
+              ]
+            },
+            "l_elbow": {
+              "state": "observed",
+              "at": [
+                520,
+                387
+              ]
+            },
+            "l_wrist": {
+              "state": "observed",
+              "at": [
+                520,
+                487
+              ]
+            },
+            "r_hip": {
+              "state": "observed",
+              "at": [
+                374,
+                560
+              ]
+            },
+            "l_hip": {
+              "state": "observed",
+              "at": [
+                426,
+                560
+              ]
+            },
+            "nose": {
+              "state": "missing"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

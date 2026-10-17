@@ -1,0 +1,67 @@
+{
+  "schema": "rig-review/1",
+  "id": "abstract-lantern",
+  "title": "Lantern \u00b7 first inspection",
+  "revision": "source-study-1",
+  "references": [
+    {
+      "id": "source",
+      "label": "Original geometric study",
+      "type": "image",
+      "path": "lantern.svg",
+      "width": 800,
+      "height": 800
+    },
+    {
+      "id": "pose",
+      "label": "Canonical pose sequence \u00b7 synthetic example",
+      "type": "pose",
+      "path": "pose.json"
+    }
+  ],
+  "animations": [],
+  "checkpoints": [
+    {
+      "id": "silhouette",
+      "title": "Check silhouette and hanging joint",
+      "workspace": "modeling",
+      "reference": "source",
+      "note": "This original abstract SVG is source material. No compiled model is included; record structured feedback rather than assuming playback."
+    },
+    {
+      "id": "joints",
+      "title": "Check the intended joint chain",
+      "workspace": "modeling",
+      "reference": "pose",
+      "note": "A synthetic rig-pose-sequence/1 schema example, not a Nova extraction. Picture pixels, top-left origin, Y down; no rig binding is inferred."
+    },
+    {
+      "id": "sound",
+      "title": "Audition the proposed soft chime",
+      "workspace": "motion",
+      "note": "Play the local original tone and leave an audio note. No animation timing is claimed."
+    }
+  ],
+  "authoring": [
+    {
+      "label": "Source provenance and next build",
+      "path": "SOURCE.md"
+    }
+  ],
+  "audio": {
+    "clips": [
+      {
+        "id": "chime",
+        "label": "Original synthetic chime",
+        "path": "chime.wav"
+      }
+    ],
+    "cues": [
+      {
+        "id": "sample",
+        "clip": "chime",
+        "time": 0
+      }
+    ]
+  }
+}
