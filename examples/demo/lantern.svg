@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
+<rect width="800" height="800" fill="#182029"/>
+<circle cx="400" cy="390" r="270" fill="#202c38"/>
+<path d="M400 92V220" stroke="#89aaa9" stroke-width="16"/>
+<circle cx="400" cy="220" r="22" fill="#a8c8c3"/>
+<path d="M310 275L400 238L490 275L520 487L400 560L280 487Z" fill="#e9bb69" stroke="#f8dc9c" stroke-width="9"/>
+<path d="M310 275L400 320L490 275M400 320V560M280 487L400 435L520 487" fill="none" stroke="#b87e4b" stroke-width="10"/>
+<path d="M400 568V650M374 650H426" stroke="#89aaa9" stroke-width="13" stroke-linecap="round"/>
+<text x="400" y="733" text-anchor="middle" fill="#a8b9c3" font-family="sans-serif" font-size="20">ORIGINAL SOURCE STUDY · NO COMPILED MODEL</text>
+</svg>
