@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, symlink, mkdir, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadReview, packagePath, parseManifest } from '../src/manifest.ts';
@@ -46,3 +46,34 @@ test('reviewed artifact identity records exact separate rig/motion byte hashes a
 test('absent rig and motion stay null and compiled model takes identity precedence',async()=>{const f=await fixture();const p=await loadReview(f.path);expect(p.reviewedSource.rig).toBeNull();expect(p.reviewedSource.motion).toBeNull();const model=JSON.stringify({spec:'rigc-compiled/3',pages:[]});await writeFile(join(f.root,'skeleton.model.json'),model);await writeFile(join(f.root,'skeleton.json'),'raw evidence');await writeFile(f.path,JSON.stringify({...f.input,model:'skeleton.model.json'}));expect((await loadReview(f.path)).reviewedSource.rig).toEqual({path:'skeleton.model.json',sha256:createHash('sha256').update(model).digest('hex')});});
 
 test('binary skeleton evidence receives exact rig identity without enabling playback',async()=>{const root=await mkdtemp(join(tmpdir(),'review-skel-'));dirs.push(root);const bytes=new Uint8Array([0,255,83,75,69,76,128,1]);await writeFile(join(root,'skeleton.skel'),bytes);await writeFile(join(root,'motion.json'),'{}');const p=await loadReview(root);expect(p.manifest.model).toBeUndefined();expect(p.reviewedSource.rig).toEqual({path:'skeleton.skel',sha256:createHash('sha256').update(bytes).digest('hex')});expect(p.reviewedSource.motion?.path).toBe('motion.json');expect(await Bun.file(join(root,'skeleton.skel')).bytes()).toEqual(bytes);});
+
+async function buildFolder(){const root=await mkdtemp(join(tmpdir(),'review-build-'));dirs.push(root);await mkdir(join(root,'build'));return root;}
+test('rigc build folder binds model pages and root motion without changing delivered files',async()=>{
+ const root=await buildFolder();const contents={'build/skeleton.model.json':JSON.stringify({spec:'rigc-compiled/3',pages:[{name:'page.png'}]}),'build/page.png':'page bytes','motion.json':'{"animations":[]}','report.json':'{}','source.mp4':'video','contact-strip.png':'strip'};
+ for(const [path,bytes] of Object.entries(contents))await writeFile(join(root,path),bytes);
+ const before=await readdir(root,{recursive:true});const p=await loadReview(root);
+ expect(p.manifest.model).toBe('build/skeleton.model.json');expect(p.manifest.motion).toBe('motion.json');expect([...p.files].sort()).toEqual(Object.keys(contents).sort());expect(p.manifest.references).toHaveLength(2);
+ for(const [key,path] of [['rig','build/skeleton.model.json'],['motion','motion.json']] as const)expect(p.reviewedSource[key]).toEqual({path,sha256:createHash('sha256').update(contents[path]).digest('hex')});
+ expect(await readdir(root,{recursive:true})).toEqual(before);expect(await Bun.file(join(root,'review.json')).exists()).toBe(false);
+ for(const [path,bytes] of Object.entries(contents))expect(await Bun.file(join(root,path)).text()).toBe(bytes);
+});
+test('build model alone is recognized and root compiled model keeps precedence',async()=>{
+ const root=await buildFolder();await writeFile(join(root,'build/skeleton.model.json'),'{"spec":"rigc-compiled/3","pages":[]}');expect((await loadReview(root)).manifest.model).toBe('build/skeleton.model.json');
+ await writeFile(join(root,'skeleton.model.json'),'{"spec":"rigc-compiled/3","pages":[]}');await writeFile(join(root,'build/skeleton.model.json'),'invalid unselected build');const p=await loadReview(root);expect(p.manifest.model).toBe('skeleton.model.json');expect(p.files.has('build/skeleton.model.json')).toBe(false);
+});
+test('folder model discovery does not search arbitrary or deeper directories',async()=>{
+ const root=await buildFolder();await Bun.write(join(root,'other/skeleton.model.json'),'{"spec":"rigc-compiled/3","pages":[]}');await Bun.write(join(root,'build/deeper/skeleton.model.json'),'{"spec":"rigc-compiled/3","pages":[]}');await expect(loadReview(root)).rejects.toThrow('no recognized');
+ await writeFile(join(root,'motion.json'),'{}');expect((await loadReview(root)).manifest.model).toBeUndefined();
+});
+test('explicit review manifest remains authoritative over discovered build layout',async()=>{
+ const root=await buildFolder();await writeFile(join(root,'build/skeleton.model.json'),'invalid ignored model');await writeFile(join(root,'review.json'),JSON.stringify({schema:'rig-review/1',id:'curated',title:'Curated',revision:'one'}));const p=await loadReview(root);expect(p.manifest.id).toBe('curated');expect(p.manifest.model).toBeUndefined();expect(p.reviewedSource.rig).toBeNull();
+});
+test('selected build model refuses invalid format, directory and dangling symlink',async()=>{
+ const root=await buildFolder();const model=join(root,'build/skeleton.model.json');await writeFile(model,'{"spec":"wrong","pages":[]}');await expect(loadReview(root)).rejects.toThrow('model.spec');await rm(model);await mkdir(model);await expect(loadReview(root)).rejects.toThrow('regular file');await rm(model,{recursive:true});await symlink(join(root,'missing.model.json'),model);await expect(loadReview(root)).rejects.toThrow();
+});
+test('build model and build directory symlinks cannot escape the package',async()=>{
+ const root=await buildFolder();const outside=await buildFolder();await writeFile(join(outside,'skeleton.model.json'),'{"spec":"rigc-compiled/3","pages":[]}');await symlink(join(outside,'skeleton.model.json'),join(root,'build/skeleton.model.json'));await expect(loadReview(root)).rejects.toThrow('symlinks may not escape');await rm(join(root,'build'),{recursive:true});await symlink(outside,join(root,'build'));await expect(loadReview(root)).rejects.toThrow('symlinks may not escape');
+});
+test('discovered build pages may resolve inside the package but cannot escape it',async()=>{
+ const root=await buildFolder();const model=join(root,'build/skeleton.model.json');await writeFile(join(root,'page.png'),'page');await writeFile(model,JSON.stringify({spec:'rigc-compiled/3',pages:[{name:'../page.png'}]}));expect((await loadReview(root)).files.has('page.png')).toBe(true);await writeFile(model,JSON.stringify({spec:'rigc-compiled/3',pages:[{name:'../../outside.png'}]}));await expect(loadReview(root)).rejects.toThrow('inside package');
+});
