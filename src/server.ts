@@ -24,7 +24,7 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
         const input=await bodyJson(req);await unchanged();return json(await saveSession(p,input,options.stateDir));
       }
       if(req.method!=='GET'&&req.method!=='HEAD')return json({error:'Method not allowed'},405);
-      if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,assetsBase:'/assets/',capabilities:{playback:!!p.manifest.model,modeling:false,motion:false,feedback:true,audio:true}});}
+      if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,report:p.report,assetsBase:'/assets/',capabilities:{playback:!!p.manifest.model,modeling:false,motion:false,feedback:true,audio:true}});}
       if(url.pathname==='/api/session'){await unchanged();return json(await readSession(p,options.stateDir));}
       if(url.pathname.startsWith('/assets/')){
         const path=packagePath(decodeURIComponent(url.pathname.slice('/assets/'.length)));if(!p.files.has(path))return json({error:'Asset not declared by package'},404);
