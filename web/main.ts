@@ -1,8 +1,10 @@
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import type { Checkpoint, Reference, ReviewedSource, ReviewManifest } from '../src/manifest.ts';
 import type { Feedback, ReviewSession } from '../src/session.ts';
+import type { ReportEvent, ReportSeeds } from '../src/report.ts';
+import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
 
-interface ReviewResponse { manifest: ReviewManifest; sourceHash: string; reviewedSource: ReviewedSource; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
+interface ReviewResponse { manifest: ReviewManifest; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
 interface PoseReference { schema: 'rig-review-pose/1'; coordinateSystem: 'image-pixels-y-down'; width: number; height: number; joints: { id: string; x: number; y: number; parent?: string }[] }
 interface SequenceJoint { state: 'observed' | 'occluded' | 'missing' | 'inferred'; at?: [number, number]; score?: number }
 interface PoseSequence { spec: 'rig-pose-sequence/1'; space: { units: 'picture-px'; origin: 'top-left'; y: 'down' }; width: number; height: number; source?: string; frames: { t: number; people: { id: string; joints: Record<string, SequenceJoint> }[] }[]; camera?: { s: number; tx: number; ty: number; inliers: number }[]; cameraSource?: unknown }
@@ -42,6 +44,11 @@ let sequenceSvg: SVGSVGElement | null = null;
 let selectedPerson = '';
 let lastPoseFrame = -1;
 const audioPlaying = new Set<HTMLAudioElement>();
+const reportPageSize = 8;
+let reportPage = 0;
+let selectedReportEvent: ReportEvent | null = null;
+let selectedReportTime: number | undefined;
+let selectedReportTarget: number | undefined;
 
 function message(value: string, error = false): void {
   text('message', value);
@@ -131,6 +138,7 @@ function setWorkspace(value: typeof workspace): void {
   for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workspace]')) tab.setAttribute('aria-pressed', String(tab.dataset.workspace === value));
   el('modeling-tools').hidden = value !== 'modeling'; el('motion-tools').hidden = value !== 'motion';
   el('sound-panel').hidden = value !== 'motion';
+  el('report-panel').hidden = value !== 'motion';
   el('angle-panel').hidden = value !== 'modeling' || !axisInspection;
 }
 
@@ -308,6 +316,90 @@ function renderCues(): void {
   input('sync-audio').disabled = !data.manifest.audio.clips.length;
 }
 
+function reportEvents(): ReportEvent[] {
+  const field = select('report-category').value;
+  return data.report?.categories.filter(category => field === 'all' || category.field === field).flatMap(category => category.events) ?? [];
+}
+
+function initReport(): void {
+  const report = data.report;
+  el('report-browser').hidden = !report; el('report-unavailable').hidden = !!report;
+  if (!report) { text('report-summary', '미제공'); return; }
+  const counts = reportCounts(report); text('report-summary', `${counts.events}개 이벤트 · 명시된 빈 분류 ${counts.empty.length}개`);
+  const source = el<HTMLAnchorElement>('report-source-link'); source.hidden = false; source.href = assetUrl(report.path);
+  const filter = select('report-category'); filter.replaceChildren(option('all', '모든 이벤트'));
+  for (const category of report.categories) filter.append(option(category.field, `${category.field} · ${category.state === 'empty' ? 'none' : category.events.length}`));
+  const empty = el('report-empty-categories'); empty.replaceChildren();
+  for (const field of counts.empty) { const label = document.createElement('span'); label.textContent = `${field}: none`; empty.append(label); }
+  el('report-missing').hidden = !counts.missing.length;
+  text('report-missing', counts.missing.length ? `미제공 필드: ${counts.missing.join(', ')} (none으로 판정하지 않음)` : '');
+  renderReportEvents();
+}
+
+function renderReportEvents(): void {
+  const events = reportEvents();
+  const pages = Math.ceil(events.length / reportPageSize); reportPage = Math.max(0, Math.min(reportPage, Math.max(0, pages - 1)));
+  const start = reportPage * reportPageSize, rows = events.slice(start, start + reportPageSize);
+  text('report-page', rows.length ? `${start + 1}–${start + rows.length} / ${events.length}` : '0 / 0');
+  button('report-previous').disabled = reportPage === 0; button('report-next').disabled = reportPage >= pages - 1;
+  const list = el('report-events'); list.replaceChildren();
+  for (const event of rows) {
+    const row = document.createElement('li'), item = document.createElement('button'); item.type = 'button'; item.setAttribute('aria-current', String(event.id === selectedReportEvent?.id));
+    const title = document.createElement('strong'); title.textContent = `${event.field} · ${eventCoordinates(event)}`;
+    const targets = document.createElement('small'); targets.textContent = event.targets.length ? event.targets.map(targetLabel).join(' · ') : '본 / 슬롯 매핑 없음';
+    const timing = document.createElement('small'); timing.textContent = eventTimingLabel(event); if (!event.seek) timing.className = 'no-time';
+    item.append(title, targets, timing); item.onclick = () => chooseReportEvent(event); row.append(item); list.append(row);
+  }
+  if (!rows.length) { const empty = document.createElement('li'); empty.className = 'hint'; empty.textContent = select('report-category').value === 'all' ? '제공된 이벤트가 없습니다.' : 'none · 제공된 빈 이벤트 배열'; list.append(empty); }
+}
+
+function prefillReportEvent(): void {
+  if (!selectedReportEvent) return;
+  const selection = eventSelection(selectedReportEvent, selectedReportTarget);
+  input('feedback-start').value = selection.frames ? String(selection.frames[0]) : '';
+  input('feedback-end').value = selection.frames ? String(selection.frames[1]) : '';
+  select('feedback-target-kind').value = selection.target?.kind ?? '';
+  input('feedback-target-name').value = selection.target?.name ?? '';
+  text('report-prefill-note', `${selection.frames ? '명시된 프레임 구간을 가져왔습니다.' : '프레임 정보 없음 · 프레임 구간은 직접 입력해야 합니다.'} ${selection.target ? '명명된 대상을 가져왔습니다.' : selection.targets.length > 1 ? '여러 대상 중 하나를 선택해 주세요.' : '본 / 슬롯 매핑 없음 · 대상을 직접 지정해 주세요.'} defect / quality는 직접 선택합니다.`);
+}
+
+function chooseReportEvent(event: ReportEvent): void {
+  const draft = reportDraftForMarker(selectedReportEvent?.id ?? null, event.id, { category: select('feedback-category').value, summary: input('feedback-summary').value });
+  select('feedback-category').value = draft.category; input('feedback-summary').value = draft.summary;
+  pause(); selectedReportEvent = event; selectedReportTime = undefined; selectedReportTarget = undefined;
+  const selection = eventSelection(event);
+  const times = select('report-time'); times.replaceChildren();
+  for (const [index, value] of selection.exactTimes.entries()) times.append(option(String(index), `${index + 1}. ${value} s`));
+  times.hidden = !selection.exactTimes.length; el('report-time-label').hidden = times.hidden;
+  const targets = select('report-target'); targets.replaceChildren(option('', '대상 선택'));
+  for (const [index, target] of selection.targets.entries()) targets.append(option(String(index), targetLabel(target)));
+  el('report-target-control').hidden = selection.targets.length <= 1;
+  prefillReportEvent(); renderReportSelection(); renderReportEvents();
+  if (event.seek) seekReportEvent();
+}
+
+function renderReportSelection(): void {
+  const event = selectedReportEvent; el('report-selection').hidden = !event; if (!event) return;
+  text('report-selection-heading', `${event.field} · ${eventCoordinates(event)}`);
+  const exact = eventSeekTime(event, selectedReportTime);
+  text('report-timing', event.times?.length ? `${eventTimingLabel(event)} · ${event.times.length}개의 개별 시각을 보존합니다. 시각 사이를 연속 구간으로 확장하지 않습니다.` : eventTimingLabel(event));
+  button('report-seek').disabled = exact === null;
+  text('report-provenance', `출처 ${event.source.path}${event.source.pointer}${Object.keys(event.provenance).length ? ' · 원본 식별자: ' + JSON.stringify(event.provenance) : ''}`);
+  text('report-details', JSON.stringify({ source: event.source, frames: event.frames, times: event.times, timeInterval: event.timeInterval, durationSeconds: event.durationSeconds, targets: event.targets, provenance: event.provenance, details: event.details }, null, 2));
+}
+
+function seekReportEvent(): void {
+  const event = selectedReportEvent; if (!event) return;
+  const exact = eventSeekTime(event, selectedReportTime); if (exact === null) return;
+  pause();
+  const reportAnimation = data.report?.animation;
+  if (reportAnimation && player && !assets?.animations.some(item => item.name === reportAnimation)) { message(`리포트의 애니메이션 "${reportAnimation}"이 현재 리그에 없어 seek하지 않았습니다.`, true); return; }
+  if (reportAnimation && assets?.animations.some(item => item.name === reportAnimation) && animation !== reportAnimation) chooseAnimation(reportAnimation);
+  if (duration > 0 && exact > duration) { message(`명시 시각 ${exact} s가 현재 자료 범위 ${duration} s 밖입니다. 다른 시각으로 바꿔 seek하지 않았습니다.`, true); return; }
+  seek(exact);
+  message((player || video || sequence) ? `리포트의 명시 시각 ${exact} s를 선택했습니다.` : `리포트의 명시 시각 ${exact} s · 재생 자료가 없어 시각만 표시합니다.`);
+}
+
 function tick(now: number): void {
   if (playing) {
     const dt = lastFrame ? Math.min((now - lastFrame) / 1000, .1) : 0;
@@ -418,6 +510,12 @@ function bind(): void {
   };
   input('audio-volume').oninput = () => { text('audio-volume-label', `${Math.round(Number(input('audio-volume').value) * 100)}%`); for (const audio of audioPlaying) audio.volume = Number(input('audio-volume').value); };
   input('sync-audio').onchange = () => { if (!input('sync-audio').checked) stopAudio(); };
+  select('report-category').onchange = () => { reportPage = 0; renderReportEvents(); };
+  button('report-previous').onclick = () => { reportPage--; renderReportEvents(); };
+  button('report-next').onclick = () => { reportPage++; renderReportEvents(); };
+  button('report-seek').onclick = seekReportEvent;
+  select('report-time').onchange = () => { selectedReportTime = Number(select('report-time').value); renderReportSelection(); seekReportEvent(); };
+  select('report-target').onchange = () => { const value = select('report-target').value; selectedReportTarget = value ? Number(value) : undefined; prefillReportEvent(); };
   select('review-status').onchange = () => { session.status = select('review-status').value as ReviewSession['status']; markDirty(); };
   el<HTMLTextAreaElement>('checkpoint-note').oninput = () => { const entry = checkpointEntry(); if (entry) { entry.note = el<HTMLTextAreaElement>('checkpoint-note').value; markDirty(); } };
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="outcome"]')) radio.onchange = () => { const entry = checkpointEntry(); if (entry) { entry.outcome = radio.value as typeof entry.outcome; markDirty(); renderCheckpoints(); } };
@@ -426,6 +524,7 @@ function bind(): void {
     const start = input('feedback-start').value.trim(), end = input('feedback-end').value.trim(), frameStart = Number(start), frameEnd = Number(end);
     const name = input('feedback-target-name').value.trim(), summary = input('feedback-summary').value.trim();
     if (!start || !end || !Number.isSafeInteger(frameStart) || !Number.isSafeInteger(frameEnd) || frameStart < 0 || frameEnd < frameStart) { message('시작 / 끝 프레임을 0 이상의 정수로 입력하고 끝이 시작보다 앞서지 않게 지정해 주세요.', true); return; }
+    if (!['bone', 'slot', 'rig'].includes(select('feedback-target-kind').value) || !['defect', 'quality'].includes(select('feedback-category').value)) { message('대상 종류와 defect / quality 분류를 직접 선택해 주세요.', true); return; }
     if (!name || !summary || /[\r\n]/.test(summary) || summary.length > 1000) { message('대상의 실제 이름과 1,000자 이내 한 줄 요약을 입력해 주세요.', true); return; }
     const box = assets?.stage ?? player?.bounds();
     const center = cameraCenter ?? (box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null);
@@ -435,6 +534,7 @@ function bind(): void {
       sourceTime: sequence ? sequence.frames[0]!.t + time : time,
       camera: center ? { zoom, x: center.x, y: center.y, coordinateSystem: 'world-y-up' } : { zoom, coordinateSystem: 'reference-fit' },
       axis: axisInspection ? { id: select('axis-select').value, value: Number(input('axis-value').value) } : null,
+      reportEvent: selectedReportEvent ? { id: selectedReportEvent.id, field: selectedReportEvent.field, source: { ...selectedReportEvent.source }, frames: selectedReportEvent.frames ? [...selectedReportEvent.frames] : null, exactTime: eventSeekTime(selectedReportEvent, selectedReportTime), targets: selectedReportEvent.targets.map(target => ({ ...target })) } : null,
     } });
     input('feedback-summary').value = ''; markDirty(); renderProposals(); message('구조화된 피드백 표시를 추가했습니다. 리뷰 제출을 눌러 보관하세요.');
   };
@@ -456,16 +556,17 @@ function bind(): void {
 async function start(): Promise<void> {
   try {
     [data, session] = await Promise.all([api<ReviewResponse>('/api/review'), api<ReviewSession>('/api/session')]);
-    text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; input('feedback-target-name').value = data.manifest.id;
+    text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; select('feedback-target-kind').value = 'rig'; input('feedback-target-name').value = data.manifest.id;
     select('reference-select').replaceChildren(); for (const reference of data.manifest.references) select('reference-select').append(option(reference.id, `${reference.label} · ${reference.type}`));
     if (!data.manifest.references.length) { select('reference-select').append(option('', '자료 미제공')); select('reference-select').disabled = true; }
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = '소스 파일 미제공';
-    bind(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues();
+    bind(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const reference = data.manifest.references[0]; if (reference) await showReference(reference.id);
     await initPlayer();
     const requestedId = new URLSearchParams(location.search).get('checkpoint');
     const first = requestedId ? data.manifest.checkpoints.find(point => point.id === requestedId) : data.manifest.checkpoints[0];
     if (first) await chooseCheckpoint(first); else renderCheckpoint();
+    if (data.report && !first?.workspace) workspace = 'motion';
     renderTransport(); setWorkspace(workspace);
     if (requestedId && !first) message(`확인 항목 "${requestedId}"이 패키지에 없습니다. 목록에서 선택해 주세요.`, true);
     else message(data.manifest.model ? '원본을 유지하며 검토 상태와 구조화된 피드백을 기록합니다. 모션은 읽기 전용입니다.' : '리그 미제공 패키지입니다. 제공된 원본 자료와 확인 항목을 검토할 수 있습니다.');

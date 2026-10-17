@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { toolVersions } from './versions.ts';
 import { validatePoseSequence } from './pose.ts';
+import { parseReport, type ReportSeeds } from './report.ts';
 import { readFile, realpath, stat, lstat, readdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, posix } from 'node:path';
@@ -16,7 +17,7 @@ export interface ReviewManifest {
   audio: { clips: { id: string; label?: string; path: string }[]; cues: { id: string; clip: string; time: number; animation?: string }[] };
 }
 export interface ReviewedSource { readonly packageRevision:string; readonly viewerVersion:string; readonly runtimeVersion:string; readonly rig:{readonly path:string;readonly sha256:string}|null; readonly motion:{readonly path:string;readonly sha256:string}|null }
-export interface ReviewPackage { root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string> }
+export interface ReviewPackage { root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null }
 function fail(field: string, expected: string): never { throw new Error(`${field}: expected ${expected}`); }
 export function object(value: unknown, field: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) fail(field, 'object'); return value as Record<string, unknown>; }
 export function string(value: unknown, field: string): string { if (typeof value !== 'string' || !value.trim() || value.length > 10000) fail(field, 'nonempty string (at most 10000 characters)'); return value; }
@@ -88,10 +89,14 @@ export async function loadReview(input: string): Promise<ReviewPackage> {
     const joints=list(pose.joints,`pose ${r.id}.joints`,(v,f)=>({id:id(v.id,f+'.id'),x:number(v.x,f+'.x',-Number.MAX_VALUE),y:number(v.y,f+'.y',-Number.MAX_VALUE),parent:optionalString(v.parent,f+'.parent')}));
     for(const j of joints) if(j.parent&&!joints.some(v=>v.id===j.parent&&v.id!==j.id)) fail(`pose ${r.id} joint ${j.id}.parent`,'another declared joint id');
   }
+  const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;
   const hash = createHash('sha256');hash.update(JSON.stringify(manifest));hash.update('\0');const fileHashes=new Map<string,string>();
-  for(const p of [...files].sort()) { const full=await safeFile(root,p); const before=await stat(full); hash.update(p);hash.update('\0');hash.update(String(before.size));hash.update('\0'); const fileHash=createHash('sha256');for await(const chunk of createReadStream(full)){hash.update(chunk);fileHash.update(chunk);}fileHashes.set(p,fileHash.digest('hex')); const after=await stat(full); if(before.size!==after.size||before.mtimeMs!==after.mtimeMs) throw new Error(`Asset ${p} changed while hashing; retry with stable package inputs`); }
+  for(const p of [...files].sort()) { const full=await safeFile(root,p); const before=await stat(full); hash.update(p);hash.update('\0');hash.update(String(before.size));hash.update('\0'); const fileHash=createHash('sha256');const reportChunks:Buffer[]=[];for await(const chunk of createReadStream(full)){hash.update(chunk);fileHash.update(chunk);if(p===reportPath)reportChunks.push(chunk);}fileHashes.set(p,fileHash.digest('hex')); const after=await stat(full); if(before.size!==after.size||before.mtimeMs!==after.mtimeMs) throw new Error(`Asset ${p} changed while hashing; retry with stable package inputs`);
+    // The parser and package hash consume the same bytes, never two file reads.
+    if(p===reportPath){let value:unknown;try{value=JSON.parse(Buffer.concat(reportChunks).toString('utf8'));}catch(e){throw new Error(`${p}: ${e instanceof Error?e.message:String(e)}`);}report=parseReport(value,p);}
+  }
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null};
-  return {root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files};
+  return {root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report};
 }
 
 /** An adapter over an existing output directory; never writes a manifest there. */
