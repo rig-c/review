@@ -51,10 +51,10 @@ async function buildFolder(){const root=await mkdtemp(join(tmpdir(),'review-buil
 test('rigc build folder binds model pages and root motion without changing delivered files',async()=>{
  const root=await buildFolder();const contents={'build/skeleton.model.json':JSON.stringify({spec:'rigc-compiled/3',pages:[{name:'page.png'}]}),'build/page.png':'page bytes','motion.json':'{"animations":[]}','report.json':'{}','source.mp4':'video','contact-strip.png':'strip'};
  for(const [path,bytes] of Object.entries(contents))await writeFile(join(root,path),bytes);
- const before=await readdir(root,{recursive:true});const p=await loadReview(root);
+ const before=(await readdir(root,{recursive:true})).sort();const p=await loadReview(root);
  expect(p.manifest.model).toBe('build/skeleton.model.json');expect(p.manifest.motion).toBe('motion.json');expect([...p.files].sort()).toEqual(Object.keys(contents).sort());expect(p.manifest.references).toHaveLength(2);
  for(const [key,path] of [['rig','build/skeleton.model.json'],['motion','motion.json']] as const)expect(p.reviewedSource[key]).toEqual({path,sha256:createHash('sha256').update(contents[path]).digest('hex')});
- expect(await readdir(root,{recursive:true})).toEqual(before);expect(await Bun.file(join(root,'review.json')).exists()).toBe(false);
+ expect((await readdir(root,{recursive:true})).sort()).toEqual(before);expect(await Bun.file(join(root,'review.json')).exists()).toBe(false);
  for(const [path,bytes] of Object.entries(contents))expect(await Bun.file(join(root,path)).text()).toBe(bytes);
 });
 test('build model alone is recognized and root compiled model keeps precedence',async()=>{
