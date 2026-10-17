@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { toolVersions } from './versions.ts';
 import { validatePoseSequence } from './pose.ts';
-import { readFile, realpath, stat, readdir } from 'node:fs/promises';
+import { readFile, realpath, stat, lstat, readdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, posix } from 'node:path';
 
@@ -98,6 +98,13 @@ export async function loadReview(input: string): Promise<ReviewPackage> {
 async function folderManifest(root:string):Promise<ReviewManifest>{
   const entries=(await readdir(root,{withFileTypes:true})).filter(v=>v.isFile()||v.isSymbolicLink()).map(v=>v.name).sort();
   const has=(name:string)=>entries.includes(name);const references:Reference[]=[];
+  let model:string|undefined;
+  // These are named layouts, not a recursive search. Check existence separately
+  // so an existing broken symlink is refused rather than treated as absent.
+  for(const candidate of ['skeleton.model.json','build/skeleton.model.json']){
+    try{await lstat(resolve(root,candidate));}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')continue;throw e;}
+    await safeFile(root,candidate);model=candidate;break;
+  }
   for(const name of entries){
     if(/\.(mp4|webm|mov)$/i.test(name))references.push({id:`video-${references.length+1}`,label:name,type:'video',path:name});
     if(/(strip|contact|sheet|띠|filmstrip)/i.test(name)&&/\.(png|jpe?g|webp|svg)$/i.test(name))references.push({id:`strip-${references.length+1}`,label:name,type:'image',path:name});
@@ -105,6 +112,6 @@ async function folderManifest(root:string):Promise<ReviewManifest>{
   }
   const name=basename(root);const packageId=name.replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^[^a-zA-Z0-9]+/,'').slice(0,128)||'output-bundle';
   const authoring=entries.filter(n=>n==='motion.json'||n==='report.json'||(/^skeleton\./i.test(n)&&n!=='skeleton.model.json')).map(path=>({label:path+' · read only',path}));
-  if(!references.length&&!authoring.length&&!has('skeleton.model.json'))throw new Error('Output folder: no recognized skeleton.*, motion.json, report.json, source video, pose sequence or contact strip');
-  return parseManifest({schema:'rig-review/1',id:packageId,title:name,revision:'folder-adapter/1',model:has('skeleton.model.json')?'skeleton.model.json':undefined,motion:has('motion.json')?'motion.json':undefined,references,authoring,checkpoints:references.map(r=>({id:r.id,title:'Inspect '+r.label,reference:r.id,workspace:'motion'}))});
+  if(!references.length&&!authoring.length&&!model)throw new Error('Output folder: no recognized skeleton.*, build/skeleton.model.json, motion.json, report.json, source video, pose sequence or contact strip');
+  return parseManifest({schema:'rig-review/1',id:packageId,title:name,revision:'folder-adapter/1',model,motion:has('motion.json')?'motion.json':undefined,references,authoring,checkpoints:references.map(r=>({id:r.id,title:'Inspect '+r.label,reference:r.id,workspace:'motion'}))});
 }
