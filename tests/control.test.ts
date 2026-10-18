@@ -41,6 +41,72 @@ test('numeric view readback preserves per-pane canonical coordinates and refuses
  const parsed=parseControlView(view);expect(parsed.cameras.rig).not.toBe(world);expect(parsed.cameras.rig!.center).not.toBe(world.center);
 });
 
+test('camera sync and pane commands remain closed and legacy observations remain readable',()=>{
+ const commands:ControlCommand[]=[{type:'camera-sync',value:true},{type:'camera-sync',value:false},{type:'camera',target:'a',zoom:2,pan:{x:-42,y:12}},{type:'fit',target:'b'}];
+ for(const command of commands)expect(parseControlCommand(command)).toEqual(command);
+ for(const invalid of [{type:'camera-sync',value:'on'},{type:'camera-sync',value:1},{type:'camera-sync',value:true,target:'a'},{type:'camera-sync',enabled:true},{type:'fit',target:'all'},{type:'camera',target:'b',zoom:1,pan:{x:65537,y:0}}])expect(()=>parseControlCommand(invalid)).toThrow();
+ const legacy=inspection();expect(parseControlInspection(legacy)).toEqual(legacy);
+ const view:ControlView={schema:'rig-review-view/1',cameraSync:false,activeCamera:'b',cameras:{rig:null,a:null,b:null,reference:null}};
+ const state={...legacy,view,cameras:{...legacy.cameras,a:{zoom:2,pan:{x:30,y:-10}},b:{zoom:.5,pan:{x:-20,y:40}}}};
+ expect(parseControlInspection(state)).toEqual(state);expect(parseControlView({...view,cameraSync:true,activeCamera:'reference'})).toEqual({...view,cameraSync:true,activeCamera:'reference'});
+ const parsed=parseControlInspection(state);expect(parsed.cameras.a).not.toBe(state.cameras.a);expect(parsed.cameras.a!.pan).not.toBe(state.cameras.a.pan);
+ for(const invalid of [{...view,cameraSync:'off'},{...view,cameraSync:null},{...view,activeCamera:'all'},{...view,activeCamera:null},{...view,enabled:true}])expect(()=>parseControlView(invalid)).toThrow();
+ for(const cameras of [{...state.cameras,a:null},{...state.cameras,b:{zoom:1,pan:{x:Infinity,y:0}}},{...state.cameras,c:{zoom:1,pan:{x:0,y:0}}}])expect(()=>parseControlInspection({...state,cameras})).toThrow();
+});
+
+test('sync preflight preserves drafts and checks actual pane availability without inventing legacy support',()=>{
+ const legacy=inspection(),view:ControlView={schema:'rig-review-view/1',cameraSync:false,activeCamera:'a',cameras:{rig:null,a:null,b:null,reference:null}};
+ const state={...legacy,view,cameras:{...legacy.cameras,a:{zoom:2,pan:{x:10,y:20}},b:{zoom:1,pan:{x:0,y:0}}}};
+ expect(()=>preflightControl({type:'camera-sync',value:true},legacy,'compare')).toThrow('UNAVAILABLE: camera sync');
+ for(const value of [true,false])expect(()=>preflightControl({type:'camera-sync',value},{...state,dirty:true},'compare')).not.toThrow();
+ expect(()=>preflightControl({type:'camera-sync',value:true},{...state,busy:true},'compare')).toThrow('CONTROL_BUSY');
+ for(const target of ['a','b'] as const){
+  const command:ControlCommand={type:'fit',target};
+  expect(()=>preflightControl(command,state,'compare')).not.toThrow();
+  expect(()=>preflightControl(command,state,'single')).toThrow(`UNAVAILABLE: ${target} camera`);
+  expect(()=>preflightControl(command,{...state,cameras:legacy.cameras},'compare')).toThrow(`UNAVAILABLE: ${target} camera`);
+  expect(()=>preflightControl(command,{...state,capabilities:{...state.capabilities,camera:false}},'compare')).toThrow(`UNAVAILABLE: ${target} camera`);
+ }
+ const numeric={space:'world' as const,center:{x:0,y:0},zoom:1,viewport:{width:640,height:480},visible:{x:-320,y:-240,width:640,height:480}};
+ expect(()=>preflightControl({type:'fit',target:'b'},{...legacy,view:{...view,cameras:{...view.cameras,b:numeric}}},'compare')).not.toThrow();
+ // Legacy rig commands keep their explicit A/B-group meaning, including when sync is off.
+ expect(()=>preflightControl({type:'fit',target:'rig'},state,'compare')).not.toThrow();
+});
+
+test('synchronized observed CSS pan can exceed the command bound while commands stay bounded',()=>{
+ const state=inspection();state.cameras.reference.pan={x:120000,y:-131072};
+ expect(parseControlInspection(state)).toEqual(state);
+ for(const coordinate of [Number.MAX_SAFE_INTEGER,-Number.MAX_SAFE_INTEGER])expect(parseControlInspection({...state,cameras:{...state.cameras,rig:{zoom:1,pan:{x:coordinate,y:coordinate}}}}).cameras.rig.pan.x).toBe(coordinate);
+ for(const coordinate of [Infinity,NaN,Number.MAX_SAFE_INTEGER+1,-Number.MAX_SAFE_INTEGER-1])expect(()=>parseControlInspection({...state,cameras:{...state.cameras,rig:{zoom:1,pan:{x:coordinate,y:0}}}})).toThrow();
+ expect(parseControlCommand({type:'camera',target:'a',zoom:1,pan:{x:65536,y:-65536}}).type).toBe('camera');
+ for(const coordinate of [65537,-65537,120000])expect(()=>parseControlCommand({type:'camera',target:'reference',zoom:1,pan:{x:coordinate,y:0}})).toThrow('control.pan.x');
+});
+
+test('actual control client acknowledges truthful scaled pan after a legal camera command',async()=>{
+ const source=await readFile(new URL('../web/control.ts',import.meta.url),'utf8'),start=source.indexOf('export function connectControl(');if(start<0)throw new Error('control client boundary missing');
+ const compiled=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(start).replace('export function','function'));
+ const state=inspection();state.view={schema:'rig-review-view/1',cameraSync:true,activeCamera:'reference',cameras:{rig:null,a:null,b:null,reference:null}};
+ const request:ControlRequest={schema:'rig-review-control-command/1',requestId:'scaled-camera-pan',pageId:'page',instanceKey:'a'.repeat(64),sourceHash:'b'.repeat(64),expectedRevision:0,command:{type:'camera',target:'reference',zoom:1,pan:{x:60000,y:0}}};
+ let acknowledged!:(value:Record<string,unknown>)=>void,delivered=false;const receipt=new Promise<Record<string,unknown>>(resolve=>{acknowledged=resolve;});
+ const fetch=async(path:string,options?:RequestInit)=>{
+  let result:unknown={};if(path.endsWith('/config'))result={enabled:true,sourceHash:request.sourceHash,mode:'single'};
+  else if(path.endsWith('/register'))result={pageId:'page',pageToken:'page capability',revision:0};
+  else if(path.endsWith('/poll')){result={command:delivered?null:{commandId:'command',request}};delivered=true;}
+  else if(path.endsWith('/ack'))acknowledged(JSON.parse(String(options?.body)) as Record<string,unknown>);
+  return Response.json(result);
+ };
+ const window={addEventListener:()=>{},removeEventListener:()=>{}};
+ const open=new Function('ControlLocalRevision','parseControlCommand','parseControlInspection','preflightControl','window','document','fetch',compiled+';return connectControl;')(ControlLocalRevision,parseControlCommand,parseControlInspection,preflightControl,window,{hidden:false},fetch) as (adapter:{sourceHash:string;mode:'single';observe:()=>ControlInspection;apply:(command:ControlCommand)=>Promise<void>})=>()=>void;
+ const dispose=open({sourceHash:request.sourceHash,mode:'single',observe:()=>state,apply:async command=>{
+  if(command.type!=='camera')throw new Error('Expected camera command');
+  // Same normalized pan: reference width300, rig width600.
+  state.cameras.reference={zoom:command.zoom,pan:{...command.pan}};
+  state.cameras.rig={zoom:command.zoom,pan:{x:command.pan.x*2,y:command.pan.y*2}};
+ }});
+ try{const ack=await receipt;expect(ack.status).toBe('applied');expect(ack.revision).toBe(1);expect((ack.inspection as ControlInspection).cameras.rig.pan.x).toBe(120000);expect(ack.inspection).toEqual(state);}
+ finally{dispose();}
+});
+
 test('actual control client captures navigation before a held remote apply and acknowledges superseded, while hover still applies',async()=>{
  const source=await readFile(new URL('../web/control.ts',import.meta.url),'utf8'),start=source.indexOf('export function connectControl(');if(start<0)throw new Error('control client boundary missing');
  const compiled=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(start).replace('export function','function'));

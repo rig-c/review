@@ -4,7 +4,7 @@
 
 The delivery unit is an existing output folder or an optional curated review package handed from an agent to a person. This reusable app owns inspection, reference comparison, annotations and feedback export. Upstream compiler, splitter and runtime remain their respective tools. The existing producing agent needs no change to open its output here.
 
-The person needs two workspaces: **modeling** for setup geometry, source art, pivot/joint placement, meshes, weights, draw order and angle coverage; **motion** for playback, frame intervals, reference video/poses, contact/deformation and audio inspection. Motion is strictly **view, annotate and export**: time/angle controls navigate inspection. This app does not author animation keys, retime motion or write `motion.json`. Future modeling touch-up remains in scope as a design goal; it is not implemented by this starter.
+The person uses one inspection workspace with **View**, **Rig**, **Playback** and **Feedback** sections. Rig covers setup geometry, source art, pivot/joint placement, meshes, weights, draw order and angle coverage; Playback covers frame intervals, reference video/poses, contact/deformation and audio inspection. Motion is strictly **view, annotate and export**: time/angle controls navigate inspection. This app does not author animation keys, retime motion or write `motion.json`. Future modeling touch-up remains in scope as a design goal; it is not implemented by this starter.
 
 ## Implemented foundation
 
@@ -27,7 +27,7 @@ Any future modeling edit needs provenance, undo/redo, explicit units and an expo
 ## Acceptance progression
 
 1. Delivery and feedback: one command opens unchanged output; declared assets load; explicit frame/target/category feedback saves and exports; changed source invalidates approval.
-2. Runtime inspection: a real gated artifact plays and seeks through the public runtime, survives reference/workspace changes and names missing dependencies. Source-only fixtures cannot close this item.
+2. Runtime inspection: a real gated artifact plays and seeks through the public runtime, survives reference and Inspector section changes and names missing dependencies. Source-only fixtures cannot close this item.
 3. Modeling touch-up: a bounded real geometry edit round-trips into authoritative source, reruns its gate and presents measured before/after evidence with undo/conflict controls.
 
 ## Screen prototype

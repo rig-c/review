@@ -1,6 +1,7 @@
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
+import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
 import {rendererStatus} from './renderer-status.ts';
-import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,panCenter,idleAvailable,initialIdleAnimation,automaticIdlePreview,type ViewPoint} from './view-controls.ts';
+import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,type ViewPoint} from './view-controls.ts';
 import {RigOverlays} from './rig-overlays.ts';
 import {connectControl} from './control.ts';
 import type {ControlCommand,ControlInspection,ControlView} from '../src/control.ts';
@@ -45,7 +46,9 @@ let playing = false;
 let time = 0;
 let duration = 0;
 let lastFrame = 0;
-let workspace: 'modeling' | 'motion' = 'modeling';
+type CameraTarget='rig'|'reference';
+let cameraSync=true,activeCamera:CameraTarget='rig',cameraRestoring=false,cameraLayout='';
+const cameraFrames:Partial<Record<CameraTarget,CameraFrame>>={};
 let view: 'compare' | 'reference' | 'rig' = 'compare';
 let zoom = 1;
 let cameraCenter: { x: number; y: number } | null = null;
@@ -135,20 +138,20 @@ function renderCheckpoints(): void {
 async function chooseCheckpoint(point: Checkpoint,initial?:{referenceId?:string;updateUrl:boolean}): Promise<void> {
   pause(); checkpoint = point; axisInspection = false;
   if(initial?.updateUrl!==false){const url = new URL(location.href); url.searchParams.set('checkpoint', point.id); window.history.replaceState(null, '', url);}
-  if (point.workspace) setWorkspace(point.workspace);
   if (point.animation) chooseAnimation(point.animation);
   time = point.time ?? 0;
   const referenceId=initial?.referenceId??point.reference;
   if (referenceId && select('reference-select').value !== referenceId) {
     select('reference-select').value = referenceId; await showReference(referenceId);
   }
-  zoom = Math.min(8, Math.max(.25, point.camera?.zoom ?? 1));referenceZoom=zoom;
+  zoom = Math.min(8, Math.max(.25, point.camera?.zoom ?? 1));
+  if(cameraSync)activeCamera=player?'rig':'reference';
   cameraCenter = point.camera ? { x: point.camera.x, y: point.camera.y } : null;
   seek(time);
   if (point.axis && player && !input('axis-value').disabled) {
     select('axis-select').value = point.axis.id; chooseAxis(); input('axis-value').value = String(point.axis.value); applyAxis();
   }
-  fitCamera(); renderCheckpoint(); renderCheckpoints();
+  if(cameraSync)alignCameras();fitCamera(); renderCheckpoint(); renderCheckpoints();
 }
 
 function renderCheckpoint(): void {
@@ -159,15 +162,6 @@ function renderCheckpoint(): void {
   el<HTMLTextAreaElement>('checkpoint-note').value = entry?.note ?? '';
   el<HTMLTextAreaElement>('checkpoint-note').disabled = !checkpoint;
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="outcome"]')) { radio.checked = radio.value === (entry?.outcome ?? 'pending'); radio.disabled = !checkpoint; }
-}
-
-function setWorkspace(value: typeof workspace): void {
-  workspace = value;
-  for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workspace]')) tab.setAttribute('aria-pressed', String(tab.dataset.workspace === value));
-  el('modeling-tools').hidden = false; el('motion-tools').hidden = value !== 'motion';
-  el('sound-panel').hidden = value !== 'motion';
-  el('report-panel').hidden = value !== 'motion';
-  el('angle-panel').hidden = value !== 'modeling' || !axisInspection;
 }
 
 function setView(value: typeof view): void {
@@ -233,7 +227,7 @@ function renderSequenceFrame(): void {
 
 async function showReference(id: string): Promise<void> {
   const generation = ++referenceGeneration;
-  video?.pause(); video = null;controlledVideoSample=null; referenceCenter=null; referenceSize = null; sequence = null; sequenceSvg = null; selectedPerson=''; lastPoseFrame = -1; el('person-control').hidden = true;
+  video?.pause(); video = null;controlledVideoSample=null;delete cameraFrames.reference; referenceCenter=null; referenceSize = null; sequence = null; sequenceSvg = null; selectedPerson=''; lastPoseFrame = -1; el('person-control').hidden = true;
   const content = el('reference-content'); content.replaceChildren();
   const reference = data.manifest.references.find(item => item.id === id);
   el('reference-empty').hidden = false;
@@ -277,7 +271,7 @@ async function showReference(id: string): Promise<void> {
 }
 
 function referenceFit(): void {
-  if (!referenceSize) return;
+  if (!referenceSize || !paneFrame('reference')) return;
   const viewport = el('reference-viewport'), content = el('reference-content');
   const scale = referenceScale = Math.max(.001,Math.min((viewport.clientWidth - 24) / referenceSize.width, (viewport.clientHeight - 56) / referenceSize.height) * referenceZoom);
   const center=referenceCenter??{x:referenceSize.width/2,y:referenceSize.height/2};
@@ -287,10 +281,13 @@ function referenceFit(): void {
 }
 
 function fitCamera(): void {
-  referenceFit();renderNumericView(); text('zoom-value', `${Math.round(zoom * 100)}%`);
+  const boxKey=assets?.stage??player?.bounds();
+  const layout=['rig','reference'].map(target=>{const v=el(target+'-viewport');return `${v.clientWidth}:${v.clientHeight}`;}).join('|')+view+referenceGeneration+!!player+JSON.stringify(referenceSize)+JSON.stringify(boxKey);
+  if(cameraSync&&!cameraRestoring&&layout!==cameraLayout)alignCameras();cameraLayout=layout;
+  referenceFit();renderNumericView();renderCameraControls();
   if (!player || !assets) return;
   const box: PoseBounds | null = assets.stage ?? player.bounds(); if (!box || box.width <= 0 || box.height <= 0) return;
-  const viewport = el('rig-viewport');
+  const viewport = el('rig-viewport');if(!paneFrame('rig'))return;
   const scale = rigScale = Math.max(.001,Math.min((viewport.clientWidth - 28) / box.width, (viewport.clientHeight - 58) / box.height) * zoom);
   const center = cameraCenter ?? { x: box.x + box.width / 2, y: box.y + box.height / 2 };displayedCenter={...center};
   const root = el('rig-root'); root.style.left = `${viewport.clientWidth / 2 - center.x * scale}px`; root.style.top = `${viewport.clientHeight / 2 + center.y * scale}px`; root.style.transform = `scale(${scale})`;
@@ -641,16 +638,43 @@ function issueFields(feedback: Feedback): { title: string; body: string; labels:
   return { title, body, labels: [feedback.category] };
 }
 
-function zoomViewport(target:'rig'|'reference',deltaY:number):void {
- const factor=deltaY<0?1.1:1/1.1;
- if(target==='rig'){zoom=Math.max(.25,Math.min(8,zoom*factor));fitCamera();}
- else{referenceZoom=Math.max(.25,Math.min(8,referenceZoom*factor));referenceFit();renderNumericView();}
+function paneFrame(target:CameraTarget,hidden=false):CameraFrame|null {
+ const viewport=el(target+'-viewport'),pane=el(target+'-pane');
+ const box=target==='rig'?assets?.stage??player?.bounds():referenceSize?{x:0,y:0,...referenceSize}:null;
+ if(!box||target==='rig'&&!player){delete cameraFrames[target];return null;}
+ if(pane.hidden||viewport.clientWidth<=0||viewport.clientHeight<=0)return hidden?cameraFrames[target]??null:null;
+ const frame=cameraFrame(target==='rig'?'world':'image',box,viewport.clientWidth,viewport.clientHeight,target==='rig'?28:24,target==='rig'?58:56);
+ if(frame)cameraFrames[target]=frame;return frame;
 }
+function paneCamera(target:CameraTarget){return target==='rig'?{zoom,center:cameraCenter}:{zoom:referenceZoom,center:referenceCenter};}
+function writeCamera(target:CameraTarget,value:ReturnType<typeof cameraFromSignature>):void {if(target==='rig'){zoom=value.zoom;cameraCenter=value.center;}else{referenceZoom=value.zoom;referenceCenter=value.center;}}
+function activateCamera(target:CameraTarget):void {if(paneFrame(target)){activeCamera=target;renderCameraControls();}}
+function availableCamera():CameraTarget|null {return paneFrame(activeCamera)?activeCamera:paneFrame('rig')?'rig':paneFrame('reference')?'reference':null;}
+function alignCameras():void {
+ const target=availableCamera();if(!target)return;
+ const frame=paneFrame(target)!;assertCameraView(paneCamera(target),frame);const signature=cameraSignature(paneCamera(target),frame);
+ const updates:Partial<Record<CameraTarget,ReturnType<typeof cameraFromSignature>>>={};
+ for(const other of ['rig','reference'] as const){if(other===target)continue;const next=paneFrame(other);if(next)updates[other]=cameraFromSignature(signature,next);}
+ for(const other of ['rig','reference'] as const){const update=updates[other];if(update)writeCamera(other,update);}activeCamera=target;
+}
+function renderCameraControls():void {input('camera-sync').checked=cameraSync;const target=availableCamera();text('zoom-value',`${Math.round((target?paneCamera(target).zoom:1)*100)}% · ${target==='reference'?'Reference':'Rig'}`);button('fit').textContent=cameraSync?'Fit views':'Fit active';text('coordinates',cameraSync?'Cameras synchronized · drag to pan · scroll to zoom':'Independent cameras · drag to pan · scroll to zoom');}
+function setCameraSync(value:boolean):void {if(value)alignCameras();cameraSync=value;fitCamera();renderCameraControls();}
+function cameraAction(action:()=>void):void {try{action();}catch(error){renderCameraControls();message(errorText(error),true);}}
+function updateCamera(target:CameraTarget,value:CameraSignature):void {
+ const frame=paneFrame(target);if(!frame)return;
+ const updates:Partial<Record<CameraTarget,ReturnType<typeof cameraFromSignature>>>={[target]:cameraFromSignature(value,frame)};
+ if(cameraSync)for(const other of ['rig','reference'] as const){if(other===target)continue;const next=paneFrame(other);if(next)updates[other]=cameraFromSignature(value,next);}
+ for(const other of ['rig','reference'] as const){const update=updates[other];if(update)writeCamera(other,update);}activeCamera=target;
+ fitCamera();renderCameraControls();
+}
+function zoomCamera(factor:number,target=availableCamera()):void {if(!target)return;const frame=paneFrame(target);if(frame)updateCamera(target,zoomSignature(cameraSignature(paneCamera(target),frame),factor));}
+function panCamera(target:CameraTarget,dx:number,dy:number):void {const frame=paneFrame(target);if(frame)updateCamera(target,dragSignature(cameraSignature(paneCamera(target),frame),frame,dx,dy));}
+function fitActiveCamera(target=availableCamera()):void {if(target)updateCamera(target,{zoom:1,pan:{x:0,y:0}});}
+function zoomViewport(target:CameraTarget,deltaY:number):void {zoomCamera(deltaY<0?1.1:1/1.1,target);}
 
 function bind(): void {
   button('strip-export').onclick = () => { void exportStrip(); };
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
-  for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workspace]')) tab.onclick = () => {setWorkspace(tab.dataset.workspace as typeof workspace);showInspector(tab.dataset.workspace==='modeling'?'rig':'playback');};
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => setView(item.dataset.view as typeof view);
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
   select('reference-select').onchange = () => { void showReference(select('reference-select').value); };
@@ -658,8 +682,10 @@ function bind(): void {
   select('animation-select').onchange = () => {chooseAnimation(select('animation-select').value);if(canRepeatIdle())void playPreview();};
   select('part-set').onchange = () => { try { if(!player)return;player.setSet(select('part-set').value || null);drawRig(()=>player!.draw());fitCamera(); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } };
   select('axis-select').onchange = chooseAxis; input('axis-value').oninput = applyAxis;
-  button('zoom-in').onclick = () => { zoom = Math.min(8, zoom * 1.25);referenceZoom=zoom;fitCamera(); }; button('zoom-out').onclick = () => { zoom = Math.max(.25, zoom / 1.25);referenceZoom=zoom;fitCamera(); }; button('fit').onclick = () => { zoom = 1;referenceZoom=1; cameraCenter = null; referenceCenter=null;fitCamera(); };
-  for (const id of ['reference-viewport', 'rig-viewport']) el(id).addEventListener('wheel', event => { event.preventDefault(); zoomViewport(id==='rig-viewport'?'rig':'reference',event.deltaY); }, { passive: false });
+  button('zoom-in').onclick=()=>cameraAction(()=>zoomCamera(1.25));button('zoom-out').onclick=()=>cameraAction(()=>zoomCamera(1/1.25));button('fit').onclick=()=>cameraAction(()=>fitActiveCamera());
+  input('camera-sync').onchange=()=>cameraAction(()=>setCameraSync(input('camera-sync').checked));
+  for(const target of ['rig','reference'] as const)for(const event of ['pointerdown','focusin'] as const)el(target+'-viewport').addEventListener(event,()=>activateCamera(target));
+  for (const id of ['reference-viewport', 'rig-viewport']) el(id).addEventListener('wheel', event => { event.preventDefault(); cameraAction(()=>zoomViewport(id==='rig-viewport'?'rig':'reference',event.deltaY)); }, { passive: false });
   input('scrub').oninput = () => { pause(); seek(Number(input('scrub').value)); };
   input('frame-number').onfocus = pause;
   input('frame-number').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); const value = input('frame-number').value.trim(); seekFrame(value ? Number(value) : NaN); } };
@@ -694,11 +720,11 @@ function bind(): void {
     const center = cameraCenter ?? (box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null);
     session.feedback.push({ id: crypto.randomUUID(), frameStart, frameEnd, target, category: select('feedback-category').value as Feedback['category'], summary, context: {
       interval: { frameStart, frameEnd, inclusive: true },
-      checkpoint: checkpoint?.id ?? null, workspace, animation: selectedAnimation, time, frame: frameAtTime(activeFrameClock(), time),
+      checkpoint: checkpoint?.id ?? null, animation: selectedAnimation, time, frame: frameAtTime(activeFrameClock(), time),
       reference: select('reference-select').value || null, person: selectedPerson || null,
       sourceTime: sequence ? sequence.frames[0]!.t + time : time,
       camera: center ? { zoom, x: center.x, y: center.y, coordinateSystem: 'world-y-up' } : { zoom, coordinateSystem: 'reference-fit' },
-      view:{theme:appearance?.get()??'system',layers:{...layers},referenceCamera:{zoom:referenceZoom,center:referenceCenter?{...referenceCenter}:null}},
+      view:{...numericView(),theme:appearance?.get()??'system',layers:{...layers}},
       axis: axisInspection ? { id: select('axis-select').value, value: Number(input('axis-value').value) } : null,
       reportEvent: selectedReportEvent ? { id: selectedReportEvent.id, field: selectedReportEvent.field, source: { ...selectedReportEvent.source }, frames: selectedReportEvent.frames ? [...selectedReportEvent.frames] : null, exactTime: eventSeekTime(selectedReportEvent, selectedReportTime), targets: selectedReportEvent.targets.map(target => ({ ...target })) } : null,
     } });
@@ -719,8 +745,7 @@ function bind(): void {
   appearance=bindAppearance(select('appearance'));
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
-  viewDisposers.push(bindPan(el('rig-viewport'),(dx,dy)=>{const box=assets?.stage??player?.bounds();if(!box)return;cameraCenter=panCenter(cameraCenter??{x:box.x+box.width/2,y:box.y+box.height/2},dx,dy,rigScale,'world');fitCamera();}));
-  viewDisposers.push(bindPan(el('reference-viewport'),(dx,dy)=>{if(!referenceSize)return;referenceCenter=panCenter(referenceCenter??{x:referenceSize.width/2,y:referenceSize.height/2},dx,dy,referenceScale,'image');referenceFit();}));
+  for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
   input('idle-repeat').onchange=()=>{renderIdle();if(canRepeatIdle())void playPreview();};
   for(const id of ['proposal-panel','checkpoint-detail'])el(id).addEventListener('focusin',pause);
@@ -745,8 +770,7 @@ async function start(): Promise<void> {
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
     await initPlayer(first);
     if (first) await chooseCheckpoint(first,initial); else renderCheckpoint();
-    if (data.report && !first?.workspace) workspace = 'motion';
-    renderTransport(); setWorkspace(workspace);
+    activeCamera=player?'rig':'reference';if(cameraSync)alignCameras();renderTransport();fitCamera();
     if (requestedId && !first) message(`Checkpoint "${requestedId}" is not in this package. Select one from the list.`, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
@@ -781,13 +805,12 @@ async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<v
  if(['animation','time','playback'].includes(command.type)&&(localDraft()||saving||stripBusy))throw new Error('CONTROL_DRAFT_BUSY: preserve review draft');
  if(command.type==='theme'){appearance?.set(command.value);return;}
  if(command.type==='layout'){fitCamera();return;}
+ if(command.type==='camera-sync'){setCameraSync(command.value);return;}
  if(command.type==='layers'){if(!player)throw new Error('CONTROL_LAYERS_UNAVAILABLE');Object.assign(layers,{images:command.images,mesh:command.meshes,bones:command.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;redrawOverlay(false);return;}
  if(command.type==='camera'||command.type==='fit'){
-  const target=command.target;
-  if(target==='rig'&&!player||target==='reference'&&!referenceSize)throw new Error('CONTROL_CAMERA_UNAVAILABLE');
-  if(command.type==='fit'){if(target==='rig'){zoom=1;cameraCenter=null;}else{referenceZoom=1;referenceCenter=null;}}
-  else{if(target==='rig')zoom=command.zoom;else referenceZoom=command.zoom;fitCamera();if(target==='rig'){const box=assets?.stage??player?.bounds();if(!box)throw new Error('CONTROL_CAMERA_UNAVAILABLE');cameraCenter={x:box.x+box.width/2-command.pan.x/rigScale,y:box.y+box.height/2+command.pan.y/rigScale};}else if(referenceSize)referenceCenter={x:referenceSize.width/2-command.pan.x/referenceScale,y:referenceSize.height/2-command.pan.y/referenceScale};}
-  fitCamera();return;
+  const target=command.target;if(target!=='rig'&&target!=='reference')throw new Error('CONTROL_CAMERA_MODE: single review has no A/B panes');
+  const frame=paneFrame(target);if(!frame)throw new Error('CONTROL_CAMERA_UNAVAILABLE');
+  if(command.type==='fit')fitActiveCamera(target);else updateCamera(target,{zoom:command.zoom,pan:{x:command.pan.x/frame.width,y:command.pan.y/frame.height}});return;
  }
  if(command.type==='animation'){if(!assets?.animations.some(a=>a.name===command.name))throw new Error('CONTROL_ANIMATION_UNAVAILABLE');chooseAnimation(command.name);return;}
  if(command.type==='playback'){if(command.value==='pause')pause();else{await playPreview();if(!playing)throw new Error('CONTROL_PLAYBACK_REFUSED');}return;}
@@ -833,14 +856,12 @@ async function decodedControlTime(media:HTMLVideoElement,target:number,signal:Ab
  });
 }
 function numericView():ControlView {
- const viewport=el('rig-viewport'),root=el('rig-root'),reference=el('reference-viewport'),content=el('reference-content');
- const rig=player?numericCamera('world',displayedCenter??{x:(viewport.clientWidth/2-parseFloat(root.style.left||'0'))/rigScale,y:(parseFloat(root.style.top||'0')-viewport.clientHeight/2)/rigScale},zoom,rigScale,viewport.clientWidth,viewport.clientHeight):null;
- const ref=referenceSize?numericCamera('image',{x:(reference.clientWidth/2-parseFloat(content.style.left||'0'))/referenceScale,y:(reference.clientHeight/2-parseFloat(content.style.top||'0'))/referenceScale},referenceZoom,referenceScale,reference.clientWidth,reference.clientHeight):null;
- return {schema:'rig-review-view/1',cameras:{rig,a:null,b:null,reference:ref}};
+ const numeric=(target:CameraTarget)=>{const frame=paneFrame(target,true);if(!frame)return null;const camera=paneCamera(target);return numericCamera(frame.space,camera.center??frame.center,camera.zoom,frame.baseScale*camera.zoom,frame.width,frame.height);};
+ return {schema:'rig-review-view/1',cameraSync,activeCamera,cameras:{rig:numeric('rig'),a:null,b:null,reference:numeric('reference')}};
 }
 function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data.sourceHash,rigs:[data.reviewedSource.rig?.sha256??null]};}
-function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time:player?.time??time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{workspace,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
+function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time:player?.time??time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  await restoreTransaction(()=>prepareInspection(bookmark,signal),()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
 }
@@ -875,6 +896,7 @@ async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal)
  if(signal.aborted)throw new Error('Inspection restore superseded');
 }
 async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
+ cameraRestoring=true;try{
  const selection=bookmark.selection;
  pause();
  if(selection.checkpoint!==undefined){checkpoint=data.manifest.checkpoints.find(c=>c.id===selection.checkpoint);renderCheckpoint();renderCheckpoints();}
@@ -884,16 +906,18 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
  if(selection.partSet!==undefined&&player){if(selection.partSet||player.sets().length)player.setSet(selection.partSet||null);select('part-set').value=selection.partSet??'';}
  if(bookmark.time!==null){if(video&&video.readyState<1)await waitReferenceMetadata(video,signal);await inspectControlTime(bookmark.time,signal);}
  if(selection.person!==undefined){selectedPerson=selection.person??'';select('person-select').value=selectedPerson;lastPoseFrame=-1;renderSequenceFrame();}
- if(selection.workspace)setWorkspace(selection.workspace);if(selection.view)setView(selection.view);
+ if(selection.view)setView(selection.view);
  appearance?.set(bookmark.theme);
  Object.assign(layers,{images:bookmark.layers.images,mesh:bookmark.layers.meshes,bones:bookmark.layers.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;
  if(selection.inspector)showInspector(selection.inspector);syncStageLayout(el('stage-layout'));fitCamera();
  const camera=bookmark.view.cameras.rig,ref=bookmark.view.cameras.reference,rigViewport=el('rig-viewport'),referenceViewport=el('reference-viewport');
- const nextZoom=camera&&player&&rigViewport.clientWidth&&rigViewport.clientHeight?restoredZoom(camera,rigScale/zoom,rigViewport.clientWidth,rigViewport.clientHeight):null;
- const nextReferenceZoom=ref&&referenceSize&&referenceViewport.clientWidth&&referenceViewport.clientHeight?restoredZoom(ref,referenceScale/referenceZoom,referenceViewport.clientWidth,referenceViewport.clientHeight):null;
+ const nextZoom=camera&&player&&rigViewport.clientWidth&&rigViewport.clientHeight?restoredZoom(camera,rigScale/zoom,rigViewport.clientWidth,rigViewport.clientHeight):camera?.zoom??null;
+ const nextReferenceZoom=ref&&referenceSize&&referenceViewport.clientWidth&&referenceViewport.clientHeight?restoredZoom(ref,referenceScale/referenceZoom,referenceViewport.clientWidth,referenceViewport.clientHeight):ref?.zoom??null;
  if(nextZoom!==null&&camera){zoom=nextZoom;cameraCenter={...camera.center};}
  if(nextReferenceZoom!==null&&ref){referenceZoom=nextReferenceZoom;referenceCenter={...ref.center};}
- fitCamera();redrawOverlay(false);pause();renderTransport();
+ cameraSync=bookmark.view.cameraSync??false;activeCamera=bookmark.view.activeCamera==='reference'?'reference':'rig';
+ fitCamera();redrawOverlay(false);pause();renderTransport();renderCameraControls();
+ }finally{cameraRestoring=false;}
 }
 async function waitReferenceMetadata(media:HTMLVideoElement,signal:AbortSignal):Promise<void> {if(media.readyState>=1)return;await new Promise<void>((resolve,reject)=>{const clean=()=>{clearTimeout(timer);media.removeEventListener('loadedmetadata',ready);media.removeEventListener('error',fail);signal.removeEventListener('abort',fail);};const ready=()=>{clean();resolve();},fail=()=>{clean();reject(new Error('Saved reference metadata unavailable'));};const timer=setTimeout(fail,10000);media.addEventListener('loadedmetadata',ready,{once:true});media.addEventListener('error',fail,{once:true});signal.addEventListener('abort',fail,{once:true});});}
 async function setupPersistence():Promise<boolean> {

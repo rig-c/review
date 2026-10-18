@@ -32,7 +32,9 @@ export function parseBookmark(value:unknown,expected?:InspectionBinding):Inspect
  for(const k of ['checkpoint','reference','person','inspector','partSet'])if(selection[k]!==undefined&&selection[k]!==null)text(selection[k],k);
  if(selection.axis!==undefined&&selection.axis!==null){const axis=record(selection.axis,'axis');keys(axis,['id','value'],'axis');text(axis.id,'axis id');if(typeof axis.value!=='number'||!Number.isFinite(axis.value))throw new Error('View axis value invalid');}
  if(selection.inspector!==undefined&&!['view','rig','playback','feedback'].includes(String(selection.inspector)))throw new Error('Inspector selection invalid');
- return {schema:o.schema,binding,animation,time:o.time as number|null,theme:o.theme as InspectionBookmark['theme'],layers:{images:layers.images as boolean,meshes:layers.meshes as boolean,bones:layers.bones as boolean},view:parseControlView(o.view),selection:{...selection} as InspectionSelection};
+ const view=parseControlView(o.view);
+ if(view.activeCamera&&(binding.mode==='single'&&(view.activeCamera==='a'||view.activeCamera==='b')||binding.mode==='compare'&&view.activeCamera==='rig'))throw new Error('View active camera is unavailable in this review mode');
+ return {schema:o.schema,binding,animation,time:o.time as number|null,theme:o.theme as InspectionBookmark['theme'],layers:{images:layers.images as boolean,meshes:layers.meshes as boolean,bones:layers.bones as boolean},view,selection:{...selection} as InspectionSelection};
 }
 export function encodeBookmark(value:InspectionBookmark):string {
  const parsed=parseBookmark(value),bytes=new TextEncoder().encode(JSON.stringify(parsed));
@@ -125,7 +127,7 @@ interface PersistenceAdapter<T extends PersistenceSession> {
  afterInputs:()=>void;onConflict:(conflict:boolean)=>void;onStatus:(message:string)=>void;
 }
 export interface PersistenceConnection {restored:boolean;restoring:()=>boolean;save:()=>void;submitted:(session:unknown)=>Promise<void>;dispose:()=>void}
-const viewInputIds=new Set(['appearance','layer-images','layer-mesh','layer-bones','animation-select','reference-select','person-select','axis-select','axis-value','scrub','frame-number','frame-scrub','time-input','frame-input','part-set']);
+const viewInputIds=new Set(['camera-sync','appearance','layer-images','layer-mesh','layer-bones','animation-select','reference-select','person-select','axis-select','axis-value','scrub','frame-number','frame-scrub','time-input','frame-input','part-set']);
 /** Restore once after normal startup; snapshots never perform a server mutation. */
 export async function connectInspectionPersistence<T extends PersistenceSession>(adapter:PersistenceAdapter<T>):Promise<PersistenceConnection> {
  let restoring=true,closed=false,conflict=false,timer:ReturnType<typeof setTimeout>|undefined;

@@ -56,7 +56,9 @@ Joints are named source coordinates, not inferred rig bindings. No retargeting, 
 
 ## Checkpoints, axes and audio
 
-A checkpoint requires `id` and `title`. Optional `workspace` is `modeling` or `motion`; `animation` names a declared animation; `reference` names a declared reference; `time` is finite seconds >= 0; `note` provides inspection guidance. Optional `camera: {zoom,x,y}` states a positive scale relative to fit and a center in model world coordinates (Y up). Optional `axis: {id,value}` names a declared axis and a finite value inside its min…max range; it is applied after the checkpoint time. The checkpoint URL is `/?checkpoint=<encoded id>`; reopening it restores the declared time, camera and workspace, not an approval.
+A checkpoint requires `id` and `title`. Optional `workspace` is `modeling` or `motion`; `animation` names a declared animation; `reference` names a declared reference; `time` is finite seconds >= 0; `note` provides inspection guidance. Optional `camera: {zoom,x,y}` states a positive scale relative to fit and a center in model world coordinates (Y up). Optional `axis: {id,value}` names a declared axis and a finite value inside its min…max range; it is applied after the checkpoint time. The checkpoint URL is `/?checkpoint=<encoded id>`; reopening it restores the declared time and camera, not an approval. The legacy
+workspace field remains accepted as checkpoint context; the unified inspection
+page has no modeling/motion workspace switch.
 
 An optional axis declares `id`, `label`, `animation`, finite `min` and `max` with `min < max`. It maps the scalar range linearly to that animation's 0…runtime duration for inspection. Only one axis is applied at a time; composite angle blending is not claimed.
 
@@ -64,7 +66,7 @@ Audio clips contain `id`, local `path` and optional `label`. Cues require `id`, 
 
 ## HTTP contract
 
-- `GET /api/review` returns `{manifest, sourceHash, reviewedSource, report, feedbackCatalog, assetsBase:"/assets/", capabilities}`. `report` is the normalized read-only finding data described below, or null. `capabilities` is `{playback:boolean, modeling:false, motion:false, feedback:true, audio:true}`. The modeling/motion flags mean source editing capability; the workspaces themselves remain available. `audio:true` denotes the audition facility; clip presence determines what can play.
+- `GET /api/review` returns `{manifest, sourceHash, reviewedSource, report, feedbackCatalog, assetsBase:"/assets/", capabilities}`. `report` is the normalized read-only finding data described below, or null. `capabilities` is `{playback:boolean, modeling:false, motion:false, feedback:true, audio:true}`. The modeling/motion flags mean source editing capability; setup and motion inspection share one workspace. `audio:true` denotes the audition facility; clip presence determines what can play.
 - `GET /assets/<path>` serves an allowlisted local asset. Encode each path segment when building the URL. Responses use no-store and nosniff headers.
 - `GET /api/session` returns the current session or a fresh pending session.
 - `PUT /api/session` accepts the full session object below, with matching schema/id/revision/sourceHash. It requires the server's exact Origin, `application/json`, and <= 1 MiB. It returns the saved session with server-generated `updatedAt`.
@@ -457,7 +459,7 @@ queries only an already running matching opt-in worker. It reports mode,
 instanceKey, sourceHash and each live page's pageId/revision/actual inspection.
 No page is chosen by latest activity; commands need an explicit page when more
 than one is connected. Reads include current theme, automatic/effective layout,
-linked rig and independent reference camera, animation/time, playback/idle-loop,
+synchronized or independent per-pane cameras, animation/time, playback/idle-loop,
 layers, readiness/feedback eligibility and supported capabilities. Unavailable
 capabilities stay false; absence does not manufacture a model or frame clock.
 
@@ -471,7 +473,12 @@ A measured camera replaces null with
 `{space,center:{x,y},zoom,viewport:{width,height},visible:{x,y,width,height}}`.
 The `rig`, `a` and `b` entries use `space:"world"` (Y up); `reference` uses
 `space:"image"` (Y down). Single view uses rig; compare uses distinct A/B entries
-with their actual panel dimensions and shared rig camera. Viewport dimensions
+with their actual panel dimensions and independent cameras. Optional
+`cameraSync:boolean` and `activeCamera:"rig"|"a"|"b"|"reference"` fields belong
+inside this canonical view. Current pages report both; older observations without
+them remain readable. `inspection.cameras` still requires legacy CSS `rig` and
+`reference` entries, and may additionally report `a` and `b`; compare `rig` aliases
+A for readback. Canonical per-pane view coordinates describe the actual cameras. Viewport dimensions
 are positive CSS pixels up to65536, zoom is0.25..8, coordinates are finite within
 the safe-number range and visible extents are positive. Missing measurements
 are null, never invented zero-size panels. The optional observation is additive
@@ -486,11 +493,23 @@ The command envelope is closed:
 ```
 
 Supported commands are `theme` with `system|dark|light`, `layout` with `auto`,
-`camera` with target `rig|reference`, zoom0.25..8 and finite pan{x,y} within
-±65536 viewport CSS pixels, `fit` with that target, `playback` with `play|pause`,
+`camera` with target `rig|a|b|reference`, zoom0.25..8 and finite pan{x,y} within
+±65536 viewport CSS pixels, `fit` with that target,
+`camera-sync` with boolean `value`, `playback` with `play|pause`,
 `animation` with an actual single model name, `time` with nonnegative finite
-seconds, and `layers` with boolean images/meshes/bones. A rig camera links A/B;
-reference coordinates remain independent. Names and actual time/domain checks
+seconds, and `layers` with boolean images/meshes/bones. Targets A/B are valid
+only in comparison and require the actual pane. A page without a reported
+`view.cameraSync` refuses a sync command rather than inventing support.
+
+Fresh inspections start with camera sync on. Sync copies zoom relative to each
+pane's fit and CSS pan divided by that pane's viewport width/height to all visible
+measurable panes, including reference, single rig or compare A/B. It does not
+infer content alignment between image and world coordinates. Sync off preserves
+all current views and subsequent camera/fit operations affect only the target.
+Turning sync on aligns visible panes to the last active pane, deterministically
+rig in single or A in compare before any pane is active. A legacy compare
+`target:"rig"` command is an explicit A/B-group operation even when sync is off;
+when sync is on its effect also propagates to reference. Names and actual time/domain checks
 are performed by the same normal UI adapters. Invalid compare animation changes
 require a new binding and are refused. No requested time is claimed displayed
 before existing media/player completion. Compare retains its actual reference
@@ -550,13 +569,23 @@ not a remote editing or publication service. See the CLI examples in README.
 The UI's view link uses `#review=<base64url UTF-8 JSON>` with schema
 `rig-review-inspection/1` and a maximum16KiB ASCII fragment. The closed envelope
 binds mode, exact sourceHash, ordered rig model hashes (or null when unavailable),
-animation/time, named selection, theme/layers and the canonical `ControlView`.
+animation/time, named selection, theme/layers and the canonical `ControlView`,
+including sync mode, active pane and each independent camera.
 The loaded source hash includes the selected explicit reference binding; compare
 also binds ordered A/B and the reference/animation. A mismatched binding is
 refused. Camera state is world/image center and zoom plus actual viewport and
 visible rectangle, not a bookmark of CSS pan offsets. Restoring is paused and
 occurs before automatic idle preview or remote page registration. An initial
-valid URL view takes precedence over the saved local view.
+valid URL view takes precedence over the saved local view. Historical links or
+local bookmarks without cameraSync restore with sync off, preserving their
+existing reference and rig framing. Fresh inspections default to on. Canonical
+camera restoration preserves the saved per-pane views before a subsequent synced
+gesture or explicit sync-on action aligns them. Legacy modeling/motion workspace
+selection remains accepted without restoring a top-level workspace switch.
+
+These optional fields preserve acceptance of older payloads by the current
+parser; strict older binaries may refuse new observations. This is not a
+forward-compatibility promise or a new source/review identity.
 
 Browser local storage uses `rig-review-draft/1:<scope>:<sourceHash>` and an active
 source marker `rig-review-active/1:<scope>`. A draft has schema
