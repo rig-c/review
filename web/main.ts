@@ -5,7 +5,7 @@ import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs
 import {RigOverlays} from './rig-overlays.ts';
 import {connectControl} from './control.ts';
 import type {ControlCommand,ControlInspection,ControlView} from '../src/control.ts';
-import {connectInspectionPersistence,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
+import {connectInspectionPersistence,serializableView,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
 import {initialPlayerAnimation} from '../src/animation-selection.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import type {ReferenceBinding} from '../src/reference.ts';
@@ -724,7 +724,7 @@ function bind(): void {
       reference: select('reference-select').value || null, person: selectedPerson || null,
       sourceTime: sequence ? sequence.frames[0]!.t + time : time,
       camera: center ? { zoom, x: center.x, y: center.y, coordinateSystem: 'world-y-up' } : { zoom, coordinateSystem: 'reference-fit' },
-      view:{...numericView(),theme:appearance?.get()??'system',layers:{...layers}},
+      view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},
       axis: axisInspection ? { id: select('axis-select').value, value: Number(input('axis-value').value) } : null,
       reportEvent: selectedReportEvent ? { id: selectedReportEvent.id, field: selectedReportEvent.field, source: { ...selectedReportEvent.source }, frames: selectedReportEvent.frames ? [...selectedReportEvent.frames] : null, exactTime: eventSeekTime(selectedReportEvent, selectedReportTime), targets: selectedReportEvent.targets.map(target => ({ ...target })) } : null,
     } });

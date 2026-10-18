@@ -2,7 +2,8 @@ import {test,expect} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {syncStageLayout} from '../web/view-controls.ts';
 import {openGate} from '../src/open-protocol.ts';
-import {encodeBookmark,decodeBookmark,parseBookmark,numericCamera,restoredZoom,InspectionDraftStore,sessionFingerprint,recoverSession,inspectionLink,restoreTransaction,type InspectionBinding,type InspectionBookmark,type LocalInspectionDraft} from '../web/inspection-persistence.ts';
+import type {Json} from '../src/manifest.ts';
+import {serializableView,encodeBookmark,decodeBookmark,parseBookmark,numericCamera,restoredZoom,InspectionDraftStore,sessionFingerprint,recoverSession,inspectionLink,restoreTransaction,type InspectionBinding,type InspectionBookmark,type LocalInspectionDraft} from '../web/inspection-persistence.ts';
 const binding:InspectionBinding={mode:'single',sourceHash:'a'.repeat(64),rigs:['b'.repeat(64)]};
 const camera=numericCamera('world',{x:10,y:20},2,2,800,600)!;
 const bookmark=():InspectionBookmark=>({schema:'rig-review-inspection/1',binding,animation:'idle',time:.5,theme:'light',layers:{images:true,meshes:true,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:camera,a:null,b:null,reference:null}},selection:{workspace:'modeling',view:'rig',reference:'original',checkpoint:null,person:'사람',inspector:'rig',partSet:null,axis:null}});
@@ -20,6 +21,13 @@ test('source-bound camera modes and divergent A/B regions roundtrip while legacy
  const compare:InspectionBookmark={...original,binding:compareBinding,view:{schema:'rig-review-view/1',cameraSync:false,activeCamera:'b',cameras:{rig:null,a:camera,b:numericCamera('world',{x:-40,y:180},3,4,400,700),reference:null}}};
  expect(decodeBookmark(encodeBookmark(compare),compareBinding)?.view).toEqual(compare.view);
  expect(()=>parseBookmark({...original,view:{...original.view,activeCamera:'a'}})).toThrow('review mode');expect(()=>parseBookmark({...compare,view:{...compare.view,activeCamera:'rig'}})).toThrow('review mode');
+});
+test('feedback camera context is typed inert JSON with complete independent views and no shared references',()=>{
+ const view:import('../src/control.ts').ControlView={schema:'rig-review-view/1',cameraSync:false,activeCamera:'b',cameras:{rig:null,a:camera,b:numericCamera('world',{x:-40,y:180},3,4,400,700),reference:numericCamera('image',{x:960,y:540},1,1,300,800)}};
+ const stored:Json={...serializableView(view),theme:'light',layers:{images:true,mesh:true,bones:false,meshOpacity:.65}};
+ expect(JSON.parse(JSON.stringify(stored))).toEqual({...view,theme:'light',layers:{images:true,mesh:true,bones:false,meshOpacity:.65}});
+ view.cameras.a!.center.x=500;expect(JSON.parse(JSON.stringify(stored)).cameras.a.center.x).toBe(10);view.cameras.a!.center.x=10;
+ const legacy=serializableView(bookmark().view);expect(Object.hasOwn(legacy,'cameraSync')).toBe(false);expect(Object.hasOwn(legacy,'activeCamera')).toBe(false);
 });
 test('numeric region restores source coverage in a changed aspect rather than replaying pixel pan',()=>{expect(camera.center).toEqual({x:10,y:20});expect(camera.visible).toEqual({x:-190,y:-130,width:400,height:300});const zoom=restoredZoom(camera,1,400,900);expect(zoom).toBe(1);const changed=numericCamera('world',camera.center,zoom,1,400,900)!;expect(changed.center).toEqual(camera.center);expect(changed.visible.width).toBe(400);expect(changed.visible.height).toBe(900);expect(()=>restoredZoom(camera,100,400,900)).toThrow('VIEW_CAMERA_RANGE');expect(numericCamera('image',{x:0,y:0},1,1,0,10)).toBe(null);});
 test('all unsent form text/status/radio and feedback session remain local; exact baseline fingerprint detects a newer submission',async()=>{const storage=new MemoryStorage(),warnings:string[]=[],store=new InspectionDraftStore('single:rig',binding,s=>warnings.push(s),storage),value=draft();expect(store.write(value)).toBe(true);expect(store.read()).toEqual(value);expect(recoverSession(value.session,baseline)?.status).toBe('approved');expect(baseline.status).toBe('pending');expect(recoverSession({...value.session as object,sourceHash:'f'.repeat(64)},baseline)).toBe(null);const before=await sessionFingerprint(baseline),after=await sessionFingerprint({...baseline,updatedAt:'2026-10-18T09:00:00Z'});expect(before).not.toBe(after);expect(warnings).toEqual([]);});
