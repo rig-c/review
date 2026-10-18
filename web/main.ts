@@ -3,9 +3,10 @@ import type { Checkpoint, Reference, ReviewedSource, ReviewManifest } from '../s
 import type { Feedback, ReviewSession } from '../src/session.ts';
 import type { ReportEvent, ReportSeeds } from '../src/report.ts';
 import { clockForAnimation, frameAtTime, lastFrame as lastProducerFrame, timeAtFrame } from '../src/frame-clock.ts';
+import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, type FeedbackCatalog } from '../src/feedback-validation.ts';
 import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
 
-interface ReviewResponse { manifest: ReviewManifest; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
+interface ReviewResponse { manifest: ReviewManifest; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
 interface PoseReference { schema: 'rig-review-pose/1'; coordinateSystem: 'image-pixels-y-down'; width: number; height: number; joints: { id: string; x: number; y: number; parent?: string }[] }
 interface SequenceJoint { state: 'observed' | 'occluded' | 'missing' | 'inferred'; at?: [number, number]; score?: number }
 interface PoseSequence { spec: 'rig-pose-sequence/1'; space: { units: 'picture-px'; origin: 'top-left'; y: 'down' }; width: number; height: number; source?: string; frames: { t: number; people: { id: string; joints: Record<string, SequenceJoint> }[] }[]; camera?: { s: number; tx: number; ty: number; inliers: number }[]; cameraSource?: unknown }
@@ -69,15 +70,14 @@ function assetUrl(path: string): string {
 
 function markDirty(): void {
   dirty = true;
-  text('dirty', '미제출 변경');
-  el('dirty').classList.add('dirty');
-  button('save').disabled = saving;
+  updateSavedState();
 }
 
 function updateSavedState(): void {
   text('dirty', dirty ? '미제출 변경' : session.updatedAt ? '제출됨' : '미제출');
   el('dirty').classList.toggle('dirty', dirty);
-  button('save').disabled = saving;
+  button('save').disabled = saving || session.feedbackWarnings.length > 0;
+  button('save').title = session.feedbackWarnings.length ? '경고가 있는 기존 피드백을 삭제한 뒤 올바른 대상으로 다시 추가해 주세요.' : '';
 }
 
 function renderProvenance(): void {
@@ -275,6 +275,28 @@ function renderTransport(): void {
   input('scrub').max = String(Math.max(duration, .001)); input('scrub').value = String(time); input('scrub').disabled = duration <= 0;
   button('play').disabled = (!player && !video && !sequence) || duration <= 0;
   renderFrameTransport();
+  renderFeedbackRange();
+}
+
+function feedbackAnimation(): string | null { return player && player.current !== animation ? null : animation || null; }
+
+function renderFeedbackRange(): void {
+  const last = feedbackLastFrame(data.feedbackCatalog, feedbackAnimation());
+  for (const id of ['feedback-start', 'feedback-end']) {
+    if (last === null) input(id).removeAttribute('max'); else input(id).max = String(Math.max(0, last));
+  }
+  text('feedback-range-hint', last === null ? '범위 미확인 · 양끝 포함 정수 프레임을 직접 지정합니다. FPS는 추정하지 않습니다.' : last < 0 ? '명시 클록과 선택 clip이 겹치는 프레임이 없습니다.' : `명시 클록과 현재 clip 기준 F0–F${last} · 양끝 포함`);
+}
+
+function renderFeedbackTargets(preserve = false): void {
+  const kind = select('feedback-target-kind').value;
+  const names = ['bone', 'slot', 'rig'].includes(kind) ? feedbackTargetNames(data.feedbackCatalog, kind as Feedback['target']['kind']) : null;
+  const list = el<HTMLDataListElement>('feedback-target-names'); list.replaceChildren();
+  for (const name of names ?? []) list.append(option(name, name));
+  const field = input('feedback-target-name'); field.readOnly = kind === 'rig'; field.disabled = !names?.length;
+  if (kind === 'rig') field.value = data.feedbackCatalog.rig;
+  else if (!preserve || !names?.includes(field.value)) field.value = '';
+  text('feedback-target-hint', !kind ? '대상 종류를 먼저 선택해 주세요.' : names === null ? '실제 대상 목록 미제공 · 본 / 슬롯 피드백을 추가할 수 없습니다.' : !names.length ? '이 종류의 대상이 없습니다.' : kind === 'rig' ? '패키지의 실제 리그 식별자입니다.' : `현재 리그의 ${names.length}개 이름 중 선택하거나 정확히 입력해 주세요.`);
 }
 
 function renderFrameTransport(): void {
@@ -393,7 +415,8 @@ function prefillReportEvent(): void {
   input('feedback-end').value = selection.frames ? String(selection.frames[1]) : '';
   select('feedback-target-kind').value = selection.target?.kind ?? '';
   input('feedback-target-name').value = selection.target?.name ?? '';
-  text('report-prefill-note', `${selection.frames ? '명시된 프레임 구간을 가져왔습니다.' : '프레임 정보 없음 · 프레임 구간은 직접 입력해야 합니다.'} ${selection.target ? '명명된 대상을 가져왔습니다.' : selection.targets.length > 1 ? '여러 대상 중 하나를 선택해 주세요.' : '본 / 슬롯 매핑 없음 · 대상을 직접 지정해 주세요.'} defect / quality는 직접 선택합니다.`);
+  renderFeedbackTargets(true);
+  text('report-prefill-note', `${selection.frames ? '명시된 프레임 구간을 가져왔습니다.' : '프레임 정보 없음 · 프레임 구간은 직접 입력해야 합니다.'} ${selection.target ? input('feedback-target-name').value === selection.target.name ? '리그 목록과 일치하는 대상을 가져왔습니다.' : '리포트 대상이 현재 리그 목록에 없어 직접 지정해야 합니다.' : selection.targets.length > 1 ? '여러 대상 중 하나를 선택해 주세요.' : '본 / 슬롯 매핑 없음 · 대상을 직접 지정해 주세요.'} defect / quality는 직접 선택합니다.`);
 }
 
 function chooseReportEvent(event: ReportEvent): void {
@@ -484,11 +507,17 @@ function applyAxis(): void {
 
 function renderProposals(): void {
   const area = el('proposal-list'); area.replaceChildren();
+  const warnings = el('feedback-warnings'); warnings.hidden = session.feedbackWarnings.length === 0;
+  warnings.textContent = session.feedbackWarnings.length ? `기존 피드백 검증 경고 ${session.feedbackWarnings.length}개 · 기록을 그대로 보존했습니다. 아래 경고 항목을 확인하고 삭제 후 올바르게 다시 추가해야 제출할 수 있습니다. JSON / Markdown으로 원문과 경고를 보관할 수 있습니다.` : '';
   for (const feedback of session.feedback) {
     const item = document.createElement('div'); item.className = 'proposal-item'; const title = document.createElement('strong'); title.textContent = `${feedback.category} · ${feedback.target.kind}:${feedback.target.name} · F${feedback.frameStart}–${feedback.frameEnd}`; const description = document.createElement('span'); description.textContent = feedback.summary;
-    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '삭제'; remove.onclick = () => { session.feedback = session.feedback.filter(item => item.id !== feedback.id); markDirty(); renderProposals(); };
-    item.append(title, description, document.createElement('br'), remove); area.append(item);
+    item.append(title, description);
+    for (const warning of session.feedbackWarnings.filter(value => value.id === feedback.id)) { const note = document.createElement('p'); note.className = 'hint'; note.textContent = `검증 경고 · ${warning.error}`; item.append(note); }
+    const details = document.createElement('details'), summary = document.createElement('summary'), source = document.createElement('pre'); summary.textContent = '저장된 피드백과 검사 context'; source.textContent = JSON.stringify(feedback, null, 2); details.append(summary, source);
+    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '삭제'; remove.onclick = () => { session.feedback = session.feedback.filter(item => item.id !== feedback.id); session.feedbackWarnings = session.feedbackWarnings.filter(warning => warning.id !== feedback.id); markDirty(); renderProposals(); };
+    item.append(details, remove); area.append(item);
   }
+  updateSavedState();
 }
 
 function propose(tool: string): void {
@@ -499,6 +528,7 @@ function propose(tool: string): void {
   };
   const choice = choices[tool]; if (!choice) return;
   select('feedback-target-kind').value = choice.target; input('feedback-target-name').value = choice.target === 'rig' ? data.manifest.id : ''; input('feedback-summary').placeholder = choice.hint;
+  renderFeedbackTargets();
   input('feedback-summary').focus(); message('프레임 구간과 실제 본 / 슬롯 이름을 지정해 피드백을 표시합니다. 모션 키는 작성하지 않습니다.');
 }
 
@@ -521,6 +551,8 @@ function issueFields(feedback: Feedback): { title: string; body: string; labels:
     `- Target: ${feedback.target.kind} / ${markdown(feedback.target.name)}`,
     `- Category: ${feedback.category}`, '', markdown(feedback.summary), '', 'Inspection context:',
     ...JSON.stringify(feedback.context ?? null, null, 2).split('\n').map(line => '    ' + line),
+    '', 'Validation warnings (must be corrected before submission):',
+    ...JSON.stringify(session.feedbackWarnings.filter(warning => warning.id === feedback.id), null, 2).split('\n').map(line => '    ' + line),
   ].join('\n');
   return { title, body, labels: [feedback.category] };
 }
@@ -556,17 +588,21 @@ function bind(): void {
   select('review-status').onchange = () => { session.status = select('review-status').value as ReviewSession['status']; markDirty(); };
   el<HTMLTextAreaElement>('checkpoint-note').oninput = () => { const entry = checkpointEntry(); if (entry) { entry.note = el<HTMLTextAreaElement>('checkpoint-note').value; markDirty(); } };
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="outcome"]')) radio.onchange = () => { const entry = checkpointEntry(); if (entry) { entry.outcome = radio.value as typeof entry.outcome; markDirty(); renderCheckpoints(); } };
-  select('feedback-target-kind').onchange = () => { input('feedback-target-name').value = select('feedback-target-kind').value === 'rig' ? data.manifest.id : ''; };
+  select('feedback-target-kind').onchange = () => renderFeedbackTargets();
   button('add-proposal').onclick = () => {
     const start = input('feedback-start').value.trim(), end = input('feedback-end').value.trim(), frameStart = Number(start), frameEnd = Number(end);
     const name = input('feedback-target-name').value.trim(), summary = input('feedback-summary').value.trim();
     if (!start || !end || !Number.isSafeInteger(frameStart) || !Number.isSafeInteger(frameEnd) || frameStart < 0 || frameEnd < frameStart) { message('시작 / 끝 프레임을 0 이상의 정수로 입력하고 끝이 시작보다 앞서지 않게 지정해 주세요.', true); return; }
     if (!['bone', 'slot', 'rig'].includes(select('feedback-target-kind').value) || !['defect', 'quality'].includes(select('feedback-category').value)) { message('대상 종류와 defect / quality 분류를 직접 선택해 주세요.', true); return; }
     if (!name || !summary || /[\r\n]/.test(summary) || summary.length > 1000) { message('대상의 실제 이름과 1,000자 이내 한 줄 요약을 입력해 주세요.', true); return; }
+    const target: Feedback['target'] = { kind: select('feedback-target-kind').value as Feedback['target']['kind'], name };
+    const selectedAnimation = feedbackAnimation();
+    try { validateFeedbackSelection(data.feedbackCatalog, { frameStart, frameEnd, target, animation: selectedAnimation }); } catch (error) { message(errorText(error), true); return; }
     const box = assets?.stage ?? player?.bounds();
     const center = cameraCenter ?? (box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null);
-    session.feedback.push({ id: crypto.randomUUID(), frameStart, frameEnd, target: { kind: select('feedback-target-kind').value as Feedback['target']['kind'], name }, category: select('feedback-category').value as Feedback['category'], summary, context: {
-      checkpoint: checkpoint?.id ?? null, workspace, animation: animation || null, time, frame: frameAtTime(activeFrameClock(), time),
+    session.feedback.push({ id: crypto.randomUUID(), frameStart, frameEnd, target, category: select('feedback-category').value as Feedback['category'], summary, context: {
+      interval: { frameStart, frameEnd, inclusive: true },
+      checkpoint: checkpoint?.id ?? null, workspace, animation: selectedAnimation, time, frame: frameAtTime(activeFrameClock(), time),
       reference: select('reference-select').value || null, person: selectedPerson || null,
       sourceTime: sequence ? sequence.frames[0]!.t + time : time,
       camera: center ? { zoom, x: center.x, y: center.y, coordinateSystem: 'world-y-up' } : { zoom, coordinateSystem: 'reference-fit' },
@@ -576,6 +612,7 @@ function bind(): void {
     input('feedback-summary').value = ''; markDirty(); renderProposals(); message('구조화된 피드백 표시를 추가했습니다. 리뷰 제출을 눌러 보관하세요.');
   };
   button('save').onclick = async () => {
+    if (session.feedbackWarnings.length) { message('기존 피드백의 검증 경고를 먼저 확인해 주세요. 경고 항목을 삭제한 뒤 올바르게 다시 추가해야 제출할 수 있습니다.', true); return; }
     saving = true; updateSavedState(); const savedPayload = JSON.stringify(session);
     try { const saved = await api<ReviewSession>('/api/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: savedPayload });
       if (JSON.stringify(session) === savedPayload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;
@@ -583,8 +620,8 @@ function bind(): void {
       message(dirty ? '제출 중 추가한 변경이 있습니다. 다시 제출해 주세요.' : '선택한 검토 상태·피드백·검토 대상 출처를 제출했습니다.');
     } catch (error) { message(`제출 실패: ${errorText(error)}`, true); } finally { saving = false; updateSavedState(); }
   };
-  button('export').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ schema: 'rig-review-feedback/1', id: session.id, revision: session.revision, sourceHash: session.sourceHash, reviewedSource: session.reviewedSource, status: session.status, checkpoints: session.checkpoints, feedback: session.feedback, issues: session.feedback.map(issueFields) }, null, 2) + '\n', 'application/json'); message('검토 대상 출처·피드백·이슈용 필드를 JSON으로 내보냈습니다. 원본은 변경하지 않았습니다.'); };
-  button('export-markdown').onclick = () => { const content = [`# ${markdown(session.id)} review feedback`, '', 'Reviewed source:', ...JSON.stringify({ sourceHash: session.sourceHash, reviewedSource: session.reviewedSource }, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(item => { const issue = issueFields(item); return [`## ${markdown(issue.title)}`, '', issue.body, '', '---', '']; })].join('\n'); download(`${session.id}-issues.md`, content, 'text/markdown'); message('검토 출처와 각 피드백의 구조화된 이슈 내용을 Markdown으로 내보냈습니다.'); };
+  button('export').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ schema: 'rig-review-feedback/1', id: session.id, revision: session.revision, sourceHash: session.sourceHash, reviewedSource: session.reviewedSource, status: session.status, checkpoints: session.checkpoints, feedback: session.feedback, feedbackWarnings: session.feedbackWarnings, issues: session.feedback.map(issueFields) }, null, 2) + '\n', 'application/json'); message('검토 대상 출처·피드백·검증 경고·이슈용 필드를 JSON으로 내보냈습니다. 원본은 변경하지 않았습니다.'); };
+  button('export-markdown').onclick = () => { const content = [`# ${markdown(session.id)} review feedback`, '', 'Reviewed source:', ...JSON.stringify({ sourceHash: session.sourceHash, reviewedSource: session.reviewedSource }, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(item => { const issue = issueFields(item); return [`## ${markdown(issue.title)}`, '', issue.body, '', '---', '']; })].join('\n'); download(`${session.id}-issues.md`, content, 'text/markdown'); message('검토 출처·검증 경고와 각 피드백의 구조화된 이슈 내용을 Markdown으로 내보냈습니다.'); };
   const resize = new ResizeObserver(fitCamera); resize.observe(el('rig-viewport')); resize.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
   window.addEventListener('pagehide', () => { pause(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
@@ -597,7 +634,7 @@ async function start(): Promise<void> {
     select('reference-select').replaceChildren(); for (const reference of data.manifest.references) select('reference-select').append(option(reference.id, `${reference.label} · ${reference.type}`));
     if (!data.manifest.references.length) { select('reference-select').append(option('', '자료 미제공')); select('reference-select').disabled = true; }
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = '소스 파일 미제공';
-    bind(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    bind(); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const reference = data.manifest.references[0]; if (reference) await showReference(reference.id);
     await initPlayer();
     const requestedId = new URLSearchParams(location.search).get('checkpoint');

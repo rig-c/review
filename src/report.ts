@@ -67,7 +67,9 @@ export function parseReport(input:unknown,path='report.json'):ReportSeeds|null {
       // The legacy top-level holds use from/to as frame indices, unlike switches.
       if(field==='holds'&&(row.from!==undefined||row.to!==undefined)){const interval=frames([row.from,row.to],where+'.from/to');if(event.frames&&(event.frames[0]!==interval[0]||event.frames[1]!==interval[1]))fail(where+'.from/to','consistent holds frames and from/to');event.frames=interval;}
       if(event.frames&&report.frameCount!==undefined&&event.frames[1]>=report.frameCount)fail(where+'.frames',`indices below report.frames (${report.frameCount})`);
-      for(const name of ['bone','slot'] as const)if(row[name]!==undefined)event.targets.push({kind:name,name:text(row[name],where+'.'+name)});
+      const target=(kind:ReportTarget['kind'],name:string)=>{if(!event.targets.some(value=>value.kind===kind&&value.name===name))event.targets.push({kind,name});};
+      for(const name of ['bone','slot'] as const)if(row[name]!==undefined)target(name,text(row[name],where+'.'+name));
+      if(row.bones!==undefined)for(const name of names(row.bones,where+'.bones'))target('bone',name);
       if(field==='switches'&&row.slots!==undefined){const slots=record(row.slots,where+'.slots');for(const [slot,attachment] of Object.entries(slots)){text(slot,where+'.slots key');text(attachment,where+'.slots.'+slot);if(!event.targets.some(t=>t.kind==='slot'&&t.name===slot))event.targets.push({kind:'slot',name:slot});}}
       for(const key of ['joint','point','chain','side','set','attachment','line'] as const)if(row[key]!==undefined)event.provenance[key]=text(row[key],where+'.'+key);
       for(const key of ['chains','joints'] as const)if(row[key]!==undefined)event.provenance[key]=names(row[key],where+'.'+key);
