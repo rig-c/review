@@ -4,6 +4,7 @@ import { appRoot, buildWeb } from './build.ts';
 import { packagePath, safeFile } from './manifest.ts';
 import { assertCompareUnchanged, safeCompareReference, type ComparePackage } from './compare.ts';
 import { serveReference } from './reference.ts';
+import {referenceFrameIndex} from './reference-frame-index.ts';
 import { exportCompareStrip, stripJson } from './strip-export.ts';
 import { readCompareSession, saveCompareSession } from './compare-session.ts';
 
@@ -28,6 +29,7 @@ function serveAsset(req:Request,path:string):Response{
 }
 export async function startCompareServer(p:ComparePackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;activity?:()=>void}={}){
   const bundle=await buildWeb('compare');
+  const frames=referenceFrameIndex(p.referencePath,p.response.binding.reference.sha256,p.response.sourceHash);
   return Bun.serve({hostname:'127.0.0.1',port:options.port??4317,async fetch(req,server){try{
     const url=new URL(req.url),origin=`http://127.0.0.1:${server.port}`;
     if(url.origin!==origin)return json({error:'Loopback host required'},403);
@@ -42,6 +44,7 @@ export async function startCompareServer(p:ComparePackage,options:{port?:number;
       return new Response(result.png?new Uint8Array(result.png):stripJson(result),{headers:{...headers,'Content-Type':result.png?'image/png':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="review-strip.${result.png?'png':'json'}"`}});
     }
     if(req.method!=='GET'&&req.method!=='HEAD')return json({error:'Method not allowed'},405);
+    if(url.pathname==='/api/compare/reference-frames'){if(url.search)return json({error:'Reference frame index accepts no parameters'},400);await assertCompareUnchanged(p);await safeCompareReference(p);return json(await frames());}
     if(url.pathname==='/api/compare'){await assertCompareUnchanged(p);return json(p.response);}
     if(url.pathname==='/api/compare/session')return json(await readCompareSession(p,options.stateDir));
     if(url.pathname==='/compare-reference')return await serveReference(req,await safeCompareReference(p),p.response.binding.reference.sha256,headers);

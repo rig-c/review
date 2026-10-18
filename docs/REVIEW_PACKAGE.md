@@ -315,3 +315,84 @@ model is written by open. There is no browser launch or new LAN exposure.
 
 The printed feedback retrieval command uses POSIX shell quoting for literal path
 arguments. It is not a PowerShell or cmd.exe command string.
+
+### Exact compare frame inspection
+
+Comparison may read the fixed `/api/compare/reference-frames` endpoint to obtain
+the explicitly selected reference's real ffprobe timestamps. The endpoint accepts
+no path parameters, remains loopback/read-only, and rechecks the pinned reference
+bytes before using its per-server cached index. Probe input/output is bounded;
+missing ffprobe or duplicate PTS makes exact frame selection unavailable without
+disabling basic seconds playback.
+
+Frame inspection uses the same nearest real PTS policy as strip export (ties keep
+the earlier PTS). The browser seeks inside that real frame's interval, then checks
+the returned requestVideoFrameCallback timestamp against the selected decoded
+index. This match uses nearest indexed PTS within the video's real half-open
+`[0,duration)` domain: browser PTS may retain more digits than ffprobe's decimal
+output at the first or final frame. No epsilon or video rate is inferred.
+Both rigs still pose at the returned actual mediaTime. Requested producer
+frame/time, decoded video index/PTS and actual player times remain distinct data.
+
+A displayed **Review frame** is a unique explicit producer sample associated with
+that decoded index by the same nearest-PTS selection. It is not an inferred video
+FPS or a change to the producer's sample times. Missing clocks and ambiguous
+multiple-sample associations remain unknown; association is bounded to100000
+explicit samples. The original `frameAtTime` closed-domain floor rule remains
+unchanged for existing consumers and raw feedback/trace fields. Raw floor frames
+stay in trace details; requested producer indices and review associations are
+additional fields, not renamed actual pose metadata.
+
+A nearest-frame selection outside the shared clip domain is refused before the
+video or valid inspection changes. Playback crossing a shorter clip end pauses
+and explicitly inspects the final supported indexed PTS, reporting that timestamp
+and the clip end rather than claiming a clamp to the requested end. Without an
+exact index it pauses and invalidates inspection feedback; seconds controls remain
+available for recovery. A decoded timestamp outside the shared domain likewise
+leaves inspection unavailable without permanently disabling transport.
+
+### Live compare submission timing
+
+Each actual requestVideoFrameCallback mediaTime immediately poses both rigs with
+fixed-history public seek and submits both draws. There is no pre/post admission
+based on a historical draw-cost estimate. This synchronous path has no queued
+newer JavaScript callback to drop; it does not invent an asynchronous scheduler.
+
+The browser reports the current frame's expectedDisplayTime. Its completion
+lateness remains a separate diagnostic. The **next-reference estimate** is
+`expectedDisplayTime + (next actual decoded PTS - current indexed PTS) * 1000 /
+video.playbackRate`. Adjacent timestamps come from the verified reference index,
+not producer FPS, a guessed cadence, an epsilon or video slowdown. If the index,
+next timestamp or positive finite playback rate is absent, timing is unknown:
+basic playback continues but strict timing cannot pass. The final indexed frame
+has no invented next interval. CPU draw-return time is submission completion,
+not compositor acknowledgement or proof of pixel presentation.
+
+`lastDrawn` changes only after both draw calls succeed. Prepared player.time is
+reported separately. A failed second draw invalidates the pair. A late or
+unknown-timing live submission cannot supply successful inspection feedback;
+paused inspection has no deadline and can recover a valid pair. The transport
+shows actual last-drawn time, reference drift, known/unknown timing counts and
+late submissions without suppressing future drawing.
+
+The manual measurement records every eligible live callback, actual presented
+index gaps, last-drawn drift, paired pose/draw cost and both timing diagnostics.
+It requires at least99% decoded-callback coverage and99% drawn-pair coverage,
+full clip bounds and known paired state; all-held or endpoint-only runs fail.
+The original1.11.0 baseline and first1.11.2 all-held failure are retained as
+historical evidence. Runtime1.11.2 consumption does not itself certify performance:
+acceptance requires independent actual measurement and the producer's corrected
+physics oracle, with their scopes reported separately.
+
+At the actual media `ended` event, comparison pauses and reuses exact inspection
+of the last supported indexed reference frame. This restores valid endpoint
+feedback without inventing a future display deadline. Missing-index fallback
+keeps inspection unavailable and the existing supported-seek recovery path.
+
+A terminal timing sample is N/A only when the bound verified index says it is
+the last decoded frame exactly at the shared clip end, there is no successor,
+an actual ended event follows it, and a later valid paused inspection confirms
+the same actual last-drawn pair and enables feedback. The manual raw evidence
+records all of those facts. Other unknown timing remains a strict failure; the
+terminal case is excluded from the deadline denominator, never counted as an
+on-time submission.
