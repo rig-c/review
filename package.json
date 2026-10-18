@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@napi-rs/canvas": "1.0.11",
-    "@rig-c/play": "1.11.2"
+    "@rig-c/play": "1.12.0"
   },
   "devDependencies": {
     "@types/bun": "^1.3.0",

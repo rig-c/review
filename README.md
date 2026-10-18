@@ -285,6 +285,19 @@ input package merely by restoring a page. Browser storage is convenient local
 recovery, not a durable backup; export feedback separately when it must be kept.
 Control capabilities are excluded from links and browser persistence.
 
+
+## Inspect a part
+
+The right Parts explorer selects an actual model slot on a specific single/A/B side. All rows follow the public held snapshot's exact draw-order z, including hidden/null slots. Search matches the exact source slot names: a row is shown when its name contains the typed text, case-sensitively, with no case folding or normalization. Arrow keys/Home/End move between result buttons, Enter/Space selects, and Escape returns to search. Whole rig restores full drawing. Selecting a drawn row fits its conservative world bounds within the existing camera zoom range; Sync cameras applies the same normalized camera action to every visible pane, while independent mode changes only that selected pane. Hidden/empty geometry reports `PART_FIT_UNAVAILABLE` and keeps the camera.
+
+Solo preserves the full held pose's resolved clips and filters only drawing. In context, the whole rig remains visible with an amber dashed conservative selection box; this box is geometry/clip bounds, not exact source-alpha coverage. Selection changes no track, skin, set, motion, source asset or review decision. The selected slot's side/mode survives source-bound links and local drafts. The Rig inspector shows actual posed mesh counts or region corners, page/region, current skin/set context and declared attachment candidates. **Use slot for feedback** explicitly prefills the target; selecting a row alone submits nothing.
+
+The pinned published `@rig-c/play`1.12.0 supplies `slotIdentity()` and frame generation. The explorer atomically retains the public identity snapshot with the same-generation held frame: exact attachment key, owning skin, active set/skin, full z order and explicit hidden/no-attachment/timeline-null/set-hide reasons. Hidden/null slots keep null keys with their reported reason; declarations and texture/UV names never replace that public result. An identity-known attachment need not have a visible primitive or positive fit bounds. The current UI follows its selected slot as animation changes, updating the displayed identity to the actual held frame.
+
+Source-bound links/drafts and explicit feedback preserve that side/slot plus exact attachment/owning skin/set/active skin/null reason. A restored explicit target is checked after restoring its animation/time/set and drawing; `PART_IDENTITY_MISMATCH` rolls back rather than silently substituting another key. Older slot-only links remain readable and resolve from the current authoritative snapshot. Runtime generation is current observation/feedback evidence, never a persistent identity. Named vertex weights and original source alpha remain unavailable in this inspection; packed pages are not original part images.
+
+This explorer is inspection. Producer-backed optimization, candidate Apply/undo/export and permanent resizable-panel settings remain separate work; the explorer does not generate mesh, rig or motion bytes.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

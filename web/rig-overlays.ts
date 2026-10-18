@@ -1,4 +1,5 @@
 /** Inspection graphics from the last successfully drawn public player pose. */
+import {partBounds} from './part-selection.ts';
 import type {BoneWorld,PosedFrame,RigPlayer} from '@rig-c/play';
 
 export interface OverlayPoint {x:number;y:number}
@@ -8,13 +9,13 @@ export interface RigOverlaySettings {images:boolean;mesh:boolean;bones:boolean;m
 export interface OverlayPlayer extends Pick<RigPlayer,'posedFrame'|'bone'> {}
 export interface OverlayLine {from:OverlayPoint;to:OverlayPoint;slot?:string}
 export interface OverlayBone {name:string;point:OverlayPoint;xAxis:OverlayPoint;yAxis:OverlayPoint}
-export interface RigOverlayGeometry {mesh:OverlayLine[];bones:OverlayLine[];joints:OverlayBone[];warnings:string[];captured:{mesh:boolean;bones:boolean}}
+export interface RigOverlayGeometry {selection:OverlayLine[];mesh:OverlayLine[];bones:OverlayLine[];joints:OverlayBone[];warnings:string[];captured:{mesh:boolean;bones:boolean}}
 export interface OverlaySnapshot {
  available:boolean;needsCapture:boolean;meshEdges:number;boneCount:number;
  capabilities:{images:boolean;mesh:boolean;bones:boolean};warnings:string[];
 }
 export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number}
-export interface OverlayRefresh extends OverlayView {player:OverlayPlayer|null;bones:readonly BoneOverlaySpec[]}
+export interface OverlayRefresh extends OverlayView {player:OverlayPlayer|null;bones:readonly BoneOverlaySpec[];frame?:PosedFrame;selectedSlot?:string|null}
 const point=(x:number,y:number):OverlayPoint=>({x,y});
 const finite=(p:OverlayPoint)=>Number.isFinite(p.x)&&Number.isFinite(p.y);
 const message=(error:unknown)=>error instanceof Error?error.message:String(error);
@@ -41,10 +42,11 @@ function meshLines(frame:PosedFrame,warnings:string[]):OverlayLine[]{
 }
 
 /** Takes copies; later seeks cannot turn an old overlay into a prepared pose. */
-export function captureRigGeometry(player:OverlayPlayer,specs:readonly BoneOverlaySpec[],layers:Pick<RigOverlaySettings,'mesh'|'bones'>):RigOverlayGeometry{
- const geometry:RigOverlayGeometry={mesh:[],bones:[],joints:[],warnings:[],captured:{mesh:false,bones:false}};
+export function captureRigGeometry(player:OverlayPlayer,specs:readonly BoneOverlaySpec[],layers:Pick<RigOverlaySettings,'mesh'|'bones'>,frame?:PosedFrame,selectedSlot?:string|null):RigOverlayGeometry{
+ const geometry:RigOverlayGeometry={selection:[],mesh:[],bones:[],joints:[],warnings:[],captured:{mesh:false,bones:false}};
+ if(selectedSlot){try{const bounds=partBounds(frame??player.posedFrame(null),selectedSlot);if(bounds){const {x,y,width,height}=bounds,points=[point(x,y),point(x+width,y),point(x+width,y+height),point(x,y+height)];geometry.selection=points.map((from,i)=>({from,to:points[(i+1)%4]!,slot:selectedSlot}));}}catch(error){geometry.warnings.push(`Selection bounds unavailable: ${message(error)}`);}}
  if(layers.mesh){
-  try{geometry.mesh=meshLines(player.posedFrame(),geometry.warnings);geometry.captured.mesh=true;}
+  try{geometry.mesh=meshLines(frame??player.posedFrame(),geometry.warnings);geometry.captured.mesh=true;}
   catch(error){geometry.warnings.push(`Mesh overlay unavailable: ${message(error)}`);}
  }
  if(layers.bones){
@@ -86,7 +88,7 @@ export class RigOverlays {
  refresh(input:OverlayRefresh):OverlaySnapshot{
   if(this.disposed)return this.unavailable('Overlay has been disposed');
   this.playerAvailable=!!input.player;
-  this.geometry=input.player?captureRigGeometry(input.player,input.bones,input.settings):null;
+  this.geometry=input.player?captureRigGeometry(input.player,input.bones,input.settings,input.frame,input.selectedSlot):null;
   return this.redraw(input);
  }
  redraw({project,settings,dpr=globalThis.devicePixelRatio??1}:OverlayView):OverlaySnapshot{
@@ -130,6 +132,7 @@ export class RigOverlays {
     ctx.fillStyle='#ffe26b';ctx.strokeStyle='#44310d';ctx.lineWidth=1;ctx.beginPath();ctx.arc(center.x,center.y,2.8,0,Math.PI*2);ctx.fill();ctx.stroke();
    }
   }
+  if(this.geometry?.selection.length){ctx.globalAlpha=1;ctx.strokeStyle='#ffbb47';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.beginPath();for(const edge of this.geometry.selection)line(edge);ctx.stroke();ctx.setLineDash([]);}
   ctx.restore();
   return this.snapshot(true,needsCapture,warnings);
  }

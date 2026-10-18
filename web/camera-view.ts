@@ -32,3 +32,13 @@ export function zoomSignature(value:CameraSignature,factor:number):CameraSignatu
 export function dragSignature(value:CameraSignature,frame:CameraFrame,dx:number,dy:number):CameraSignature {
  return {zoom:value.zoom,pan:{x:value.pan.x+dx/frame.width,y:value.pan.y+dy/frame.height}};
 }
+
+/** Fit a selected conservative world box using the existing whole-rig camera
+ * reference and normalized sync contract. The established zoom range still applies. */
+export function boundsFitSignature(box:{x:number;y:number;width:number;height:number},frame:CameraFrame,marginX=0,marginY=0):CameraSignature {
+ if(![box.x,box.y,box.width,box.height].every(Number.isFinite)||box.width<=0||box.height<=0)throw new Error('PART_FIT_UNAVAILABLE: positive finite drawn bounds required');
+ const scale=Math.min((frame.width-marginX)/box.width,(frame.height-marginY)/box.height);
+ if(!Number.isFinite(scale)||scale<=0)throw new Error('PART_FIT_UNAVAILABLE: viewport has no usable extent');
+ const camera={zoom:clampZoom(scale/frame.baseScale),center:{x:box.x+box.width/2,y:box.y+box.height/2}};
+ assertCameraView(camera,frame);return cameraSignature(camera,frame);
+}
