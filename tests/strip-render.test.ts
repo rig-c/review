@@ -31,7 +31,7 @@ describe('real public-player Node canvas strip',()=>{
   expect(p.width).toBe(780);expect([result.width,result.height]).toEqual([p.width,p.height]);
   const footer=footerLineBins(p,608);expect(footer.lines).toBeGreaterThanOrEqual(12);
   expect(p.height).toBe(608+footer.lines*16+16);expect(p.height).toBeLessThan(1108);expect(footer.lastInk).toBeGreaterThan(p.height-24);
-  expect(result.renderer).toMatchObject({name:'@rig-c/play',version:'1.11.0'});expect(result.renderer.backend).toContain('@napi-rs/canvas 1.0.11');
+  const declaredRuntime=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')).dependencies['@rig-c/play'];expect(result.renderer).toMatchObject({name:'@rig-c/play',version:declaredRuntime});expect(result.renderer.backend).toContain('@napi-rs/canvas 1.0.11');
   expect(result.samples.map(sample=>[sample.requestedFrame,sample.requestedTime,sample.presentedTime,sample.decodedFrame,sample.delta,sample.frames.single])).toEqual([[0,0,0,0,0,0],[1,.5,.5,1,0,1],[2,1,1,2,0,2]]);
   for(const sample of result.samples)expect(sample.playerTimes.single).toBeCloseTo(sample.presentedTime,9);
   const actual=[0,1,2].map(column=>colors(p,column));for(const cell of actual){expect(cell.red).toBeGreaterThan(1000);expect(cell.green).toBeGreaterThan(1000);}

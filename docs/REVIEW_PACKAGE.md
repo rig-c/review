@@ -360,3 +360,32 @@ explicitly warns that the old pose is held; it does not slow the video or claim
 that prepared-but-undrawn time is synchronized. Performance acceptance remains
 open until the fast deterministic-seek runtime dependency and real measurement
 meet all#24 target drift, deadline, pose cost and physics-equivalence bars.
+
+## Actual browser draw backend
+
+Browser players retain play's default DOM mode and default mesh backend. Rigid
+parts remain DOM images; a WebGL mesh label does not claim full-frame GL drawing.
+WebGL is used when available, with Canvas2D as the supported mesh fallback.
+Published play1.11.1 supplies truthful public last-render telemetry after an actual
+GL flush fallback. This consumer does not probe GL or inspect private renderer
+state. The separate Node strip exporter deliberately remains Canvas2D.
+
+The backend badge is sampled after successful draw/frame calls. Fresh mesh
+rasterization names its actual backend; cached-only rasters are labeled reused
+without inventing a fresh backend submission. A no-mesh DOM draw does not claim
+GL. Load/draw failure clears current success. Zoom/fit changes CSS and backing
+ratio settings without claiming another render; no independent compare draw is
+added, because a prepared-but-undrawn player may differ from the last visible pose.
+
+Comparison records independent A/B badges after both draws succeed, including a
+late completed pair. A dropped pair keeps explicitly labeled last-drawn backend
+metadata rather than reading old counters as a new draw. A partial pair failure
+invalidates both current badges; paused inspection can recover. Pending inspection
+shows previous-draw qualification. Badges do not change feedback eligibility,
+clocks, source identities or any model/motion data. A runtime upgrade is recorded
+by the existing provenance/history contract; it does not migrate approval.
+
+Browser GL/fallback pixels require separate explicitly authorized app-level
+validation. Pure status controls and no-mesh public-runtime controls verify the
+adapter boundary only. They are not native GL execution or visual acceptance,
+and1.11.1 does not complete the independent fast-seek performance gates in#24.

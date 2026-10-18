@@ -1,4 +1,5 @@
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
+import {rendererStatus} from './renderer-status.ts';
 import {initialPlayerAnimation} from '../src/animation-selection.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import type {ReferenceBinding} from '../src/reference.ts';
@@ -337,19 +338,24 @@ function seekFrame(frame: number): void {
   message(`F${frame} · Explicit time ${exact} s${!player && !video && !sequence ? ' (No playback reference · time display only)' : ''}`);
 }
 
+function drawRig(action:()=>void):void {
+ try{action();text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);}
+ catch(error){text('renderer-state',rendererStatus(null,'failed').label);throw error;}
+}
+
 function chooseAnimation(name: string): void {
   pause(); animation = name; axisInspection = false; el('angle-panel').hidden = true;
   const runtimeAnimation = assets?.animations.find(item => item.name === name);
   duration = runtimeAnimation?.duration ?? data.manifest.animations.find(item => item.id === name)?.duration ?? 0;
   select('animation-select').value = name;
-  if (player && runtimeAnimation) { player.play(name, { loop: false }); player.pause(); player.draw(); }
-  else if (player && name) message(`Animation "${name}" is not present in the rig.`, true);
+  if (player && runtimeAnimation) {drawRig(()=>{player!.play(name,{loop:false});player!.pause();player!.draw();});}
+  else if (player && name){text('renderer-state',rendererStatus(null,'failed').label);message(`Animation "${name}" is not present in the rig.`, true);}
   time = 0; renderTransport(); renderCues();
 }
 
 function seek(value: number): void {
   time = duration > 0 ? Math.min(Math.max(0, value), duration) : Math.max(0, value);
-  if (player && player.current) { try { player.seek(time); player.draw(); } catch (error) { message(errorText(error), true); } }
+  if (player && player.current) { try { player.seek(time); drawRig(()=>player!.draw()); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } }
   if (video && video.readyState >= 1 && Number.isFinite(video.duration)) video.currentTime = Math.min(time, video.duration);
   renderSequenceFrame(); renderTransport();
 }
@@ -468,7 +474,7 @@ function tick(now: number): void {
   if (playing) {
     const dt = lastFrame ? Math.min((now - lastFrame) / 1000, .1) : 0;
     const previous = time; time = Math.min(duration, time + dt);
-    if (player && player.current) { try { player.frame(dt); } catch (error) { pause(); message(errorText(error), true); } }
+    if (player && player.current) { try { drawRig(()=>player!.frame(dt)); } catch (error) { pause(); message(errorText(error), true); } }
     if (video && Math.abs(video.currentTime - time) > .15) video.currentTime = Math.min(time, video.duration || time);
     if (input('sync-audio').checked) for (const cue of activeCues()) if ((previous < cue.time && cue.time <= time) || (previous === 0 && cue.time === 0 && dt > 0)) void audition(cue.clip);
     renderSequenceFrame(); renderTransport(); if (time >= duration) pause(); lastFrame = now;
@@ -477,6 +483,7 @@ function tick(now: number): void {
 }
 
 async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
+  text('renderer-state',rendererStatus(null,'pending').label);
   if (!data.manifest.model) { text('player-state', 'No rig supplied · reference review is available'); return; }
   text('player-state', 'Loading compiled rig…');
   try {
@@ -484,13 +491,13 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     assets = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, url) => {
       const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith('/assets/')) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
-    player = new RigPlayer(el('rig-root'), assets, { meshBackend: 'canvas2d' });
+    player = new RigPlayer(el('rig-root'), assets);
     player.on('event', event => { text('event-log', `Runtime event: ${event.name} · ${event.time.toFixed(2)} s`); });
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
     animations.disabled = assets.animations.length === 0;
     const initial=initialPlayerAnimation(assets.animations.map(clip=>clip.name),data.initialAnimation??undefined,initialCheckpoint);
-    if(initial)chooseAnimation(initial);else player.draw();
+    if(initial)chooseAnimation(initial);else drawRig(()=>player!.draw());
     el('rig-empty').hidden = true; text('player-state', '@rig-c/play · Actual rig');
     const presets = player.sets(); if (presets.length) { select('part-set').replaceChildren(option('', 'Original set')); for (const set of presets) select('part-set').append(option(set.name, set.name)); select('part-set').disabled = false; }
     const validAxes = data.manifest.axes.filter(axis => assets?.animations.some(item => item.name === axis.animation));
@@ -498,7 +505,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     select('axis-select').replaceChildren(); for (const axis of validAxes) select('axis-select').append(option(axis.id, axis.label));
     input('axis-value').disabled = !validAxes.length;
     fitCamera();
-  } catch (error) { player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${errorText(error)}`); message(errorText(error), true); }
+  } catch (error) { text('renderer-state',rendererStatus(null,'failed').label);player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${errorText(error)}`); message(errorText(error), true); }
 }
 
 function chooseAxis(): void {
@@ -623,7 +630,7 @@ function bind(): void {
   select('reference-select').onchange = () => { void showReference(select('reference-select').value); };
   select('person-select').onchange = () => { selectedPerson = select('person-select').value; lastPoseFrame = -1; renderSequenceFrame(); };
   select('animation-select').onchange = () => chooseAnimation(select('animation-select').value);
-  select('part-set').onchange = () => { try { player?.setSet(select('part-set').value || null); player?.draw(); fitCamera(); } catch (error) { message(errorText(error), true); } };
+  select('part-set').onchange = () => { try { if(!player)return;player.setSet(select('part-set').value || null);drawRig(()=>player!.draw());fitCamera(); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } };
   select('axis-select').onchange = chooseAxis; input('axis-value').oninput = applyAxis;
   button('zoom-in').onclick = () => { zoom = Math.min(8, zoom * 1.25); fitCamera(); }; button('zoom-out').onclick = () => { zoom = Math.max(.25, zoom / 1.25); fitCamera(); }; button('fit').onclick = () => { zoom = 1; cameraCenter = null; fitCamera(); };
   for (const id of ['reference-viewport', 'rig-viewport']) el(id).addEventListener('wheel', event => { event.preventDefault(); zoom = Math.max(.25, Math.min(8, zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1))); fitCamera(); }, { passive: false });
