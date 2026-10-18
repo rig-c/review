@@ -2,6 +2,7 @@ import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/
 import type { Checkpoint, Reference, ReviewedSource, ReviewManifest } from '../src/manifest.ts';
 import type { Feedback, ReviewSession } from '../src/session.ts';
 import type { ReportEvent, ReportSeeds } from '../src/report.ts';
+import { clockForAnimation, frameAtTime, lastFrame as lastProducerFrame, timeAtFrame } from '../src/frame-clock.ts';
 import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
 
 interface ReviewResponse { manifest: ReviewManifest; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
@@ -269,9 +270,41 @@ function fitCamera(): void {
 }
 
 function renderTransport(): void {
-  text('time-label', sequence ? `입력 ${(time + sequence.frames[0]!.t).toFixed(2)} ↔ ${time.toFixed(2)} / ${duration.toFixed(2)} s` : `${time.toFixed(2)} / ${duration.toFixed(2)} s`);
+  const end = duration > 0 ? ` / ${duration.toFixed(4)}` : '';
+  text('time-label', sequence ? `입력 ${(time + sequence.frames[0]!.t).toFixed(4)} ↔ ${time.toFixed(4)}${end} s` : `${time.toFixed(4)}${end} s`);
   input('scrub').max = String(Math.max(duration, .001)); input('scrub').value = String(time); input('scrub').disabled = duration <= 0;
   button('play').disabled = (!player && !video && !sequence) || duration <= 0;
+  renderFrameTransport();
+}
+
+function renderFrameTransport(): void {
+  const clock = activeFrameClock();
+  const last = lastProducerFrame(clock), frame = frameAtTime(clock, time);
+  el('frame-controls').hidden = last === null;
+  if (!clock) { text('frame-label', data.report?.clock ? data.report.animation ? 'frame unknown · report와 현재 clip 불일치' : 'frame unknown · report animation 미제공' : 'rate unknown'); return; }
+  if (last === null) { text('frame-label', 'F? / ? · frame range unknown'); return; }
+  text('frame-label', `F${frame === null ? '?' : frame} / ${last}${frame === null ? ' · 범위 밖' : ''}`);
+  text('frame-clock-label', clock.kind === 'uniform' ? `${clock.fps} fps · frame0 ${clock.frame0} s` : `frameTimes · ${clock.frameTimes.length}개 명시 시각`);
+  input('frame-number').max = String(last);
+  if (document.activeElement !== input('frame-number')) input('frame-number').value = frame === null ? '' : String(frame);
+  input('frame-scrub').max = String(last); input('frame-scrub').hidden = frame === null;
+  if (frame !== null) input('frame-scrub').value = String(frame);
+  input('frame-scrub').disabled = last === 0;
+  el('frame-outside').hidden = frame !== null;
+}
+
+function activeFrameClock() {
+  const active = player && player.current !== animation ? '' : animation;
+  return clockForAnimation(data.report?.clock, data.report?.animation, active, !!player);
+}
+
+function seekFrame(frame: number): void {
+  const exact = timeAtFrame(activeFrameClock(), frame);
+  if (exact === null) { message('명시된 클록 범위의 정수 프레임을 선택해 주세요.', true); renderFrameTransport(); return; }
+  pause();
+  if ((duration > 0 && exact > duration) || (video && video.readyState >= 1 && Number.isFinite(video.duration) && exact > video.duration)) { message(`F${frame}의 명시 시각 ${exact} s가 현재 자료 범위 밖입니다. 다른 시각으로 바꾸지 않았습니다.`, true); renderFrameTransport(); return; }
+  seek(exact);
+  message(`F${frame} · 명시된 시각 ${exact} s${!player && !video && !sequence ? ' (재생 자료 없음 · 시각 표시만)' : ''}`);
 }
 
 function chooseAnimation(name: string): void {
@@ -287,7 +320,7 @@ function chooseAnimation(name: string): void {
 function seek(value: number): void {
   time = duration > 0 ? Math.min(Math.max(0, value), duration) : Math.max(0, value);
   if (player && player.current) { try { player.seek(time); player.draw(); } catch (error) { message(errorText(error), true); } }
-  if (video && video.readyState >= 1 && Number.isFinite(video.duration)) video.currentTime = Math.min(time, Math.max(0, video.duration - .001));
+  if (video && video.readyState >= 1 && Number.isFinite(video.duration)) video.currentTime = Math.min(time, video.duration);
   renderSequenceFrame(); renderTransport();
 }
 
@@ -504,6 +537,10 @@ function bind(): void {
   button('zoom-in').onclick = () => { zoom = Math.min(8, zoom * 1.25); fitCamera(); }; button('zoom-out').onclick = () => { zoom = Math.max(.25, zoom / 1.25); fitCamera(); }; button('fit').onclick = () => { zoom = 1; cameraCenter = null; fitCamera(); };
   for (const id of ['reference-viewport', 'rig-viewport']) el(id).addEventListener('wheel', event => { event.preventDefault(); zoom = Math.max(.25, Math.min(8, zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1))); fitCamera(); }, { passive: false });
   input('scrub').oninput = () => { pause(); seek(Number(input('scrub').value)); };
+  input('frame-number').onfocus = pause;
+  input('frame-number').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); const value = input('frame-number').value.trim(); seekFrame(value ? Number(value) : NaN); } };
+  button('frame-jump').onclick = () => { const value = input('frame-number').value.trim(); seekFrame(value ? Number(value) : NaN); };
+  input('frame-scrub').oninput = () => seekFrame(Number(input('frame-scrub').value));
   button('play').onclick = () => {
     if (playing) { pause(); return; }
     if (time >= duration) seek(0); playing = true; lastFrame = 0; player?.resume(); button('play').textContent = 'Ⅱ'; button('play').setAttribute('aria-label', '일시정지'); if (video) void video.play().catch(error => { pause(); message(errorText(error), true); });
@@ -529,7 +566,7 @@ function bind(): void {
     const box = assets?.stage ?? player?.bounds();
     const center = cameraCenter ?? (box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null);
     session.feedback.push({ id: crypto.randomUUID(), frameStart, frameEnd, target: { kind: select('feedback-target-kind').value as Feedback['target']['kind'], name }, category: select('feedback-category').value as Feedback['category'], summary, context: {
-      checkpoint: checkpoint?.id ?? null, workspace, animation: animation || null, time,
+      checkpoint: checkpoint?.id ?? null, workspace, animation: animation || null, time, frame: frameAtTime(activeFrameClock(), time),
       reference: select('reference-select').value || null, person: selectedPerson || null,
       sourceTime: sequence ? sequence.frames[0]!.t + time : time,
       camera: center ? { zoom, x: center.x, y: center.y, coordinateSystem: 'world-y-up' } : { zoom, coordinateSystem: 'reference-fit' },
