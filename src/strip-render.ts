@@ -172,7 +172,10 @@ export async function renderStrip(input:StripRenderInput,tools:StripTools={}):Pr
             rig.player.draw();if(rig.renderer.backendActive!=='canvas2d')fail('STRIP_RENDERER','unexpected raster backend');
             contain(ctx,rig.renderer.canvas as unknown as Canvas,left,cellTop,layout.cellWidth,layout.cellHeight);
             record.playerTimes[row.id]=rig.player.time;record.frames[row.id]=frameAtTime(rig.clock,actual);
-            ctx.fillStyle='#172a22';ctx.fillText(`F${record.frames[row.id]??'—'} | ${rig.player.time.toFixed(6)}s`,left+5,cellTop+5);
+            // The selected basis labels the requested report sample. The pose
+            // still uses decoded PTS, preserved separately in the JSON record.
+            const label=row.id===group.basis?`F${sample.requestedFrame} | ${sample.time!.toFixed(6)}s`:`F${record.frames[row.id]??'—'} | ${rig.player.time.toFixed(6)}s`;
+            ctx.fillStyle='#172a22';ctx.fillText(label,left+5,cellTop+5);
           }
           ctx.strokeStyle='#b7c2b9';ctx.strokeRect(left,cellTop,layout.cellWidth,layout.cellHeight);
         }

@@ -16,6 +16,7 @@ async function pixels(result:StripRenderResult){const image=await loadImage(resu
 function region(p:{data:Uint8ClampedArray;width:number},x:number,y:number,w:number,h:number){const out:number[]=[];for(let iy=y;iy<y+h;iy++)for(let ix=x;ix<x+w;ix++){const i=(iy*p.width+ix)*4;out.push(p.data[i]!,p.data[i+1]!,p.data[i+2]!);}return out;}
 function colors(p:{data:Uint8ClampedArray;width:number},column:number){let red=0,green=0,redX=0;const left=120+column*220,top=64+260;for(let y=top+30;y<top+255;y++)for(let x=left+1;x<left+219;x++){const i=(y*p.width+x)*4,r=p.data[i]!,g=p.data[i+1]!,b=p.data[i+2]!;if(r>180&&g<80&&b<80){red++;redX+=x-left;}if(g>140&&r<90&&b<90)green++;}return {red,green,redCenter:redX/red};}
 function footerLineBins(p:{data:Uint8ClampedArray;width:number;height:number},top:number){const bins=new Set<number>();let lastInk=top;for(let y=top+8;y<p.height;y++)for(let x=10;x<p.width-10;x++){const i=(y*p.width+x)*4;if(p.data[i]!<100){bins.add(Math.floor((y-top-8)/16));lastInk=y;break;}}return {lines:bins.size,lastInk};}
+function labelPixels(text:string){const canvas=createCanvas(210,20),ctx=canvas.getContext('2d');ctx.fillStyle='#f1f1f1';ctx.fillRect(0,0,210,20);ctx.font='14px sans-serif';ctx.textBaseline='top';ctx.fillStyle='#172a22';ctx.fillText(text,0,0);return region({data:ctx.getImageData(0,0,210,20).data,width:210},0,0,210,20);}
 
 describe('real public-player Node canvas strip',()=>{
  test('nearest decoded timestamp is explicit and ties keep earlier frames',()=>{
@@ -60,6 +61,23 @@ describe('real public-player Node canvas strip',()=>{
   const result=await renderStrip(request),p=await pixels(result),footer=footerLineBins(p,608);
   expect(p.width).toBe(2100);expect(footer.lines).toBeGreaterThanOrEqual(12);expect(result.height).toBe(608+footer.lines*16+16);expect(result.height).toBeLessThan(1108);expect(footer.lastInk).toBeGreaterThan(p.height-24);
   request.plan.layout.footerHeight=1;await expect(renderStrip(request)).rejects.toThrow('STRIP_LAYOUT_FOOTER');
+ },60000);
+ test('basis F176–184 labels use requested irregular samples while actual PTS frame metadata stays distinct',async()=>{
+  const request=await input(),source=request.rigs[0]!,item=request.plan.binding.packages[0]!;
+  const frameTimes=Array.from({length:185},(_,frame)=>frame<176?frame*.500003/176:.500003+(frame-176)**2*.000013);
+  request.rigs=[{...source,id:'a',clock:null},{...source,id:'b',clock:{kind:'samples',frameTimes}}];
+  request.plan.mode='compare';request.plan.basis='b';request.plan.rows=[{id:'reference',label:'Reference'},{id:'a',label:'A'},{id:'b',label:'B'}];request.plan.layout.footerHeight=820;
+  request.plan.binding.packages=[{...item,id:'a',label:'A'},{...item,id:'b',label:'B'}];
+  const group=request.plan.groups[0]!;group.basis='b';group.frameStart=176;group.frameEnd=184;group.samples=Array.from({length:9},(_,column)=>({requestedFrame:176+column,time:frameTimes[176+column]!}));
+  const result=await renderStrip(request),p=await pixels(result);
+  expect(result.samples.map(sample=>sample.requestedFrame)).toEqual([176,177,178,179,180,181,182,183,184]);
+  expect(result.samples.map(sample=>sample.frames.b)).toEqual(Array(9).fill(175));
+  expect(result.samples.every(sample=>sample.frames.a===null&&sample.presentedTime===.5&&sample.playerTimes.a===.5&&sample.playerTimes.b===.5)).toBe(true);
+  expect(result.samples[0]!.delta).toBeCloseTo(-.000003,12);
+  for(const [column,sample] of group.samples.entries()){
+    expect(region(p,120+column*220+5,64+2*260+5,210,20)).toEqual(labelPixels(`F${sample.requestedFrame} | ${sample.time!.toFixed(6)}s`));
+    expect(region(p,120+column*220+5,64+260+5,210,20)).toEqual(labelPixels('F— | 0.500000s'));
+  }
  },60000);
  test('wrong motion and omitted rigid region fail the same real-pixel oracle',async()=>{
   const still=await pixels(await renderStrip(await input('still'))),omitted=await pixels(await renderStrip(await input('inspect','mesh-only/skeleton.model.json')));
