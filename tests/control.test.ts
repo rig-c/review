@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {ControlLocalRevision} from '../web/control.ts';
-import {parseControlCommand,parseControlInspection,parseControlView,parseControlRequest,preflightControl,type ControlInspection,type ControlCommand,type ControlRequest,type ControlView} from '../src/control.ts';
+import {parseControlWorkspace,parseControlCommand,parseControlInspection,parseControlView,parseControlRequest,preflightControl,type ControlWorkspace,type ControlInspection,type ControlCommand,type ControlRequest,type ControlView} from '../src/control.ts';
 export function inspection():ControlInspection{return {theme:'system',layout:'auto',effectiveLayout:'row',cameras:{rig:{zoom:1,pan:{x:0,y:0}},reference:{zoom:1,pan:{x:0,y:0}}},animation:'idle',time:0,playing:false,loop:'off',layers:{images:true,meshes:false,bones:false},ready:true,seeking:false,dirty:false,busy:false,feedbackEligible:true,capabilities:{camera:true,referenceCamera:true,animation:true,time:true,playback:true,layers:{images:true,meshes:true,bones:true}}};}
 test('closed inspection commands accept finite presentation and transport values only',()=>{
  for(const value of [{type:'theme',value:'light'},{type:'camera',target:'reference',zoom:2,pan:{x:24,y:-12}},{type:'time',seconds:.500003},{type:'animation',name:'--help'},{type:'layers',images:false,meshes:true,bones:true}] satisfies ControlCommand[])expect(parseControlCommand(value)).toEqual(value);
@@ -136,4 +136,11 @@ test('selected part readback is closed typed observation and never an authoring 
  const part={side:'b',slot:'actual.slot',mode:'solo'} as const;expect(parseControlInspection({...inspection(),part}).part).toEqual(part);expect(parseControlInspection({...inspection(),part:null}).part).toBeNull();
  for(const value of [{...part,path:'/private'},{...part,side:'reference'},{...part,mode:'apply'},{...part,slot:''}])expect(()=>parseControlInspection({...inspection(),part:value})).toThrow();
  expect(()=>parseControlCommand({type:'part',...part})).toThrow();
+});
+
+
+test('workspace readback is bounded effective presentation; legacy observations need no saved defaults',()=>{
+ const value:ControlWorkspace={schema:'rig-review-workspace/1',requestedView:'compare',effectiveView:'rig',comparisonAvailable:false,reason:'Reference decode failed',visiblePanes:['rig'],panels:{left:{mode:'panel',size:170,open:false},right:{mode:'drawer',size:0,open:true},inspector:{mode:'panel',size:280,open:false}},stage:{width:640,height:400}};
+ expect(parseControlWorkspace(value)).toEqual(value);expect(parseControlInspection({...inspection(),workspace:value}).workspace).toEqual(value);expect(parseControlInspection(inspection()).workspace).toBeUndefined();
+ for(const bad of [{...value,preferences:{}},{...value,stage:{width:Infinity,height:20}},{...value,visiblePanes:['rig','rig']},{...value,visiblePanes:['candidate']},{...value,panels:{...value.panels,right:{mode:'drawer',size:100,open:true}}},{...value,panels:{...value.panels,left:{mode:'panel',size:170,open:true}}},{...value,panels:{...value.panels,left:{mode:'panel',size:901,open:false}}}])expect(()=>parseControlWorkspace(bad)).toThrow();
 });

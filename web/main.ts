@@ -1,3 +1,4 @@
+import {bindWorkspaceUI,singlePresentation,type WorkspaceUI} from './workspace-ui.ts';
 import {PartExplorer,loadPartCatalog} from './part-selection.ts';
 import {instanceFetch,instanceRoute} from './instance-base.ts';
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
@@ -52,6 +53,10 @@ type CameraTarget='rig'|'reference';
 let cameraSync=true,activeCamera:CameraTarget='rig',cameraRestoring=false,cameraLayout='';
 const cameraFrames:Partial<Record<CameraTarget,CameraFrame>>={};
 let view: 'compare' | 'reference' | 'rig' = 'compare';
+let workspace:WorkspaceUI|null=null;
+let referenceReady=false,referenceReason='No renderable reference supplied.',rigReady=false,rigReason='No compiled model supplied.';
+let effectiveView:'compare'|'reference'|'rig'|'none'='none';
+let initializing=true;
 let zoom = 1;
 let cameraCenter: { x: number; y: number } | null = null;
 let referenceCenter:ViewPoint|null=null;
@@ -70,6 +75,7 @@ let referenceSize: { width: number; height: number } | null = null;
 let video: HTMLVideoElement | null = null;
 let controlledVideoSample:{media:HTMLVideoElement;position:number;time:number}|null=null;
 let referenceGeneration = 0;
+let referenceAbort:AbortController|null=null;
 let axisInspection = false;
 let sequence: PoseSequence | null = null;
 let sequenceSvg: SVGSVGElement | null = null;
@@ -167,10 +173,15 @@ function renderCheckpoint(): void {
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="outcome"]')) { radio.checked = radio.value === (entry?.outcome ?? 'pending'); radio.disabled = !checkpoint; }
 }
 
-function setView(value: typeof view): void {
-  view = value;
-  for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.setAttribute('aria-pressed', String(item.dataset.view === value));
-  el('reference-pane').hidden = value === 'rig'; el('rig-pane').hidden = value === 'reference'; fitCamera();
+function setView(value: typeof view): void {view=value;renderSinglePresentation();}
+function singleState(){return singlePresentation(view,{ready:rigReady,reason:rigReason},{ready:referenceReady,reason:referenceReason});}
+function renderSinglePresentation():void {
+ const state=singleState();effectiveView=state.effective;
+ for(const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')){item.setAttribute('aria-pressed',String(item.dataset.view===effectiveView));item.disabled=item.dataset.view==='compare'?!state.comparisonAvailable:item.dataset.view==='rig'?!rigReady:!referenceReady;}
+ // Keep one useful explanatory pane when neither input can render.
+ el('reference-pane').hidden=effectiveView==='rig'||effectiveView==='none'&&!!data?.manifest.model;
+ el('rig-pane').hidden=effectiveView==='reference'||effectiveView==='none'&&!data?.manifest.model;
+ text('comparison-state',state.reason??'Actual rig and selected reference available.');fitCamera();
 }
 
 function svgNode(tag: string, attrs: Record<string, string | number>, parent: SVGElement): SVGElement {
@@ -229,29 +240,29 @@ function renderSequenceFrame(): void {
 }
 
 async function showReference(id: string): Promise<void> {
-  const generation = ++referenceGeneration;
+  const generation = ++referenceGeneration;referenceAbort?.abort();const controller=new AbortController();referenceAbort=controller;const signal=controller.signal;referenceReady=false;referenceReason='Selected reference is loading.';
   video?.pause(); video = null;controlledVideoSample=null;delete cameraFrames.reference; referenceCenter=null; referenceSize = null; sequence = null; sequenceSvg = null; selectedPerson=''; lastPoseFrame = -1; el('person-control').hidden = true;
-  const content = el('reference-content'); content.replaceChildren();
+  const content = el('reference-content'); content.replaceChildren();renderSinglePresentation();
   const reference = data.manifest.references.find(item => item.id === id);
   el('reference-empty').hidden = false;
-  if (!reference) { text('reference-empty', 'No reference supplied.'); text('reference-info', 'Add image, video or input-pose references to the package.'); return; }
+  if (!reference) { referenceReason='No renderable reference supplied.';renderSinglePresentation();text('reference-empty', 'No reference supplied.'); text('reference-info', 'Add image, video or input-pose references to the package.'); return; }
   text('reference-label', reference.label + (reference.type === 'pose' ? ' · Static input pose' : ' · Reference'));
   text('reference-empty', 'Loading reference…');
   text('reference-info', `${reference.type} · ${reference.path}`);
-  const fail = () => { if (generation !== referenceGeneration) return; el('reference-empty').hidden = false; text('reference-empty', 'Could not open the reference. Check the package files.'); };
+  const fail = (reason='Selected reference could not render. Check its input and decoder.') => { if (generation !== referenceGeneration) return; referenceReady=false;referenceSize=null;referenceReason=reason;renderSinglePresentation(); el('reference-empty').hidden = false; text('reference-empty', 'Could not open the reference. Check the package files.'); };
   try {
     if (reference.type === 'pose') {
-      const response = await fetch(referenceUrl(reference)); if (!response.ok) throw new Error(`Pose reference HTTP ${response.status}`);
+      const response = await fetch(referenceUrl(reference),{signal}); if (!response.ok) throw new Error(`Pose reference HTTP ${response.status}`);
       const value: unknown = await response.json(); if (generation !== referenceGeneration) return;
       const canonical = readSequence(value);
       if (canonical) {
-        sequence = canonical; referenceSize = { width: canonical.width, height: canonical.height };
+        referenceReady=true;referenceReason='';sequence = canonical; referenceSize = { width: canonical.width, height: canonical.height };
         sequenceSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); sequenceSvg.setAttribute('width', String(canonical.width)); sequenceSvg.setAttribute('height', String(canonical.height)); sequenceSvg.setAttribute('viewBox', `0 0 ${canonical.width} ${canonical.height}`); sequenceSvg.setAttribute('role', 'img'); sequenceSvg.setAttribute('aria-label', 'Original input pose sequence · joint states and confidence preserved');
         content.append(sequenceSvg); const people = [...new Set(canonical.frames.flatMap(frame => frame.people.map(person => person.id)))];
         select('person-select').replaceChildren(); if (people.length !== 1) select('person-select').append(option('', 'Select person')); for (const id of people) select('person-select').append(option(id, id)); selectedPerson = people.length === 1 ? people[0]! : ''; select('person-select').value = selectedPerson; el('person-control').hidden = false;
         if (!player) duration = canonical.frames[canonical.frames.length - 1]!.t - canonical.frames[0]!.t;
         text('reference-info', `${reference.path} · picture-px / top-left / y↓ · ${canonical.frames.length} frames${canonical.camera ? ' · Camera metadata preserved (normalization is not applied twice)' : ''}`);
-        renderSequenceFrame(); fitCamera(); renderTransport(); return;
+        renderSequenceFrame(); renderSinglePresentation(); renderTransport(); return;
       }
       const pose = readPose(value);
       referenceSize = { width: pose.width, height: pose.height };
@@ -262,15 +273,31 @@ async function showReference(id: string): Promise<void> {
         const dot = svgNode('circle', { cx: joint.x, cy: joint.y, r: 4, fill: '#203d31', stroke: '#caead9', 'stroke-width': 1.5 }, svg);
         const title = document.createElementNS(svg.namespaceURI, 'title'); title.textContent = joint.id; dot.append(title);
       }
-      content.append(svg); el('reference-empty').hidden = true; fitCamera();
+      content.append(svg); referenceReady=true;referenceReason='';el('reference-empty').hidden = true; renderSinglePresentation();
     } else if (reference.type === 'image') {
-      const image = new Image(); image.draggable=false; image.alt = reference.label; image.onload = () => { if (generation !== referenceGeneration) return; referenceSize = { width: image.naturalWidth, height: image.naturalHeight }; image.width = image.naturalWidth; image.height = image.naturalHeight; el('reference-empty').hidden = true; fitCamera(); }; await new Promise<void>((resolve,reject)=>{const loaded=image.onload;const timer=setTimeout(()=>reject(new Error('Reference image load timed out')),10000);image.onload=event=>{clearTimeout(timer);if(typeof loaded==='function')loaded.call(image,event);resolve();};image.onerror=()=>{clearTimeout(timer);fail();reject(new Error('Reference image load failed'));};image.src=referenceUrl(reference);content.append(image);});
+      const image = new Image(); image.draggable=false; image.alt = reference.label; image.onload = () => { if (generation !== referenceGeneration) return; if(!image.naturalWidth||!image.naturalHeight){fail();return;}referenceReady=true;referenceReason='';referenceSize = { width: image.naturalWidth, height: image.naturalHeight }; image.width = image.naturalWidth; image.height = image.naturalHeight; el('reference-empty').hidden = true; renderSinglePresentation(); }; await new Promise<void>((resolve,reject)=>{const loaded=image.onload;const timer=setTimeout(()=>reject(new Error('Reference image load timed out')),10000);image.onload=event=>{clearTimeout(timer);if(typeof loaded==='function')loaded.call(image,event);resolve();};image.onerror=()=>{clearTimeout(timer);fail();reject(new Error('Reference image load failed'));};image.src=referenceUrl(reference);content.append(image);});
     } else {
-      const media = document.createElement('video'); media.controls = true; media.muted = true; media.preload = 'metadata'; media.playsInline = true;
-      media.onloadedmetadata = () => { if (generation !== referenceGeneration) return; referenceSize = { width: media.videoWidth, height: media.videoHeight }; media.width = media.videoWidth; media.height = media.videoHeight; if (Number.isFinite(media.duration) && !player) duration = media.duration; media.currentTime = Math.min(time, Math.max(0, media.duration - .01)); el('reference-empty').hidden = true; fitCamera(); renderTransport(); };
-      media.onerror = fail; media.src = referenceUrl(reference); video = media; content.append(media);
+      const media = document.createElement('video'); media.controls = true; media.muted = true; media.preload = 'auto'; media.playsInline = true;
+      media.onloadedmetadata = () => {if(generation!==referenceGeneration)return;if(Number.isFinite(media.duration)&&!player)duration=media.duration;};
+      video=media;content.append(media);
+      await new Promise<void>((resolve,reject)=>{
+       const timer=setTimeout(()=>{fail();reject(new Error('Reference video decode timed out'));},15000);
+       media.onloadeddata=async()=>{clearTimeout(timer);if(generation!==referenceGeneration){resolve();return;}if(media.readyState<2||!media.videoWidth||!media.videoHeight||!Number.isFinite(media.duration)||media.duration<0){fail();reject(new Error('Reference video has no renderable frame'));return;}
+        try{
+         const intended=player?.time??time;if(!Number.isFinite(intended)||intended<0||intended>media.duration)throw new Error(`Reference video cannot inspect held time ${intended} s outside 0–${media.duration} s. Rig time is unchanged.`);
+         const decoded=await decodedControlTime(media,intended,signal);
+         if(signal.aborted||generation!==referenceGeneration||media!==video){reject(new Error('Reference selection superseded'));return;}
+         if(!Number.isFinite(decoded)||decoded<0||decoded>media.duration)throw new Error('Reference decoded timestamp is outside its real domain');
+         controlledVideoSample={media,position:media.currentTime,time:decoded};
+         referenceReady=true;referenceReason='';referenceSize={width:media.videoWidth,height:media.videoHeight};media.width=media.videoWidth;media.height=media.videoHeight;
+         text('reference-info',`${reference.path} · requested held ${intended.toFixed(4)} s · decoded ${decoded.toFixed(4)} s`);
+         el('reference-empty').hidden=true;renderSinglePresentation();renderTransport();resolve();
+        }catch(error){reject(error);} };
+       media.onerror=()=>{clearTimeout(timer);fail();reject(new Error('Reference video decode failed'));};signal.addEventListener('abort',()=>{clearTimeout(timer);reject(new Error('Reference selection superseded'));},{once:true});media.src=referenceUrl(reference);
+      });
+
     }
-  } catch (error) { fail(); message(errorText(error), true); }
+  } catch (error) {if(generation===referenceGeneration){fail(errorText(error)); message(errorText(error), true);} }
 }
 
 function referenceFit(): void {
@@ -286,7 +313,8 @@ function referenceFit(): void {
 function fitCamera(): void {
   const boxKey=assets?.stage??player?.bounds();
   const layout=['rig','reference'].map(target=>{const v=el(target+'-viewport');return `${v.clientWidth}:${v.clientHeight}`;}).join('|')+view+referenceGeneration+!!player+JSON.stringify(referenceSize)+JSON.stringify(boxKey);
-  if(cameraSync&&!cameraRestoring&&layout!==cameraLayout)alignCameras();cameraLayout=layout;
+  // Layout alone preserves each held camera; synchronization is an explicit gesture.
+ cameraLayout=layout;
   referenceFit();renderNumericView();renderCameraControls();
   if (!player || !assets) return;
   const box: PoseBounds | null = assets.stage ?? player.bounds(); if (!box || box.width <= 0 || box.height <= 0) return;
@@ -494,7 +522,7 @@ function tick(now: number): void {
     const dt = lastFrame ? Math.min((now - lastFrame) / 1000, .1) : 0;
     const previous = time; time = Math.min(duration, time + dt);
     if (player && player.current) { try { drawRig(()=>player!.frame(dt)); } catch (error) { pause(); message(errorText(error), true); } }
-    if (video && Math.abs(video.currentTime - time) > .15) video.currentTime = Math.min(time, video.duration || time);
+    if (video && referenceReady&&Math.abs(video.currentTime - time) > .15) video.currentTime = Math.min(time, video.duration || time);
     if (input('sync-audio').checked) for (const cue of activeCues()) if ((previous < cue.time && cue.time <= time) || (previous === 0 && cue.time === 0 && dt > 0)) void audition(cue.clip);
     renderSequenceFrame(); renderTransport(); if(time>=duration){if(canRepeatIdle()&&!idleHeld){stopAudio();seek(0);player?.resume();if(video)void video.play().catch(error=>{pause();message(errorText(error),true);});}else pause();} lastFrame = now;
   }
@@ -502,6 +530,7 @@ function tick(now: number): void {
 }
 
 async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
+  rigReady=false;rigReason=data.manifest.model?'Compiled player is loading.':'No compiled model supplied.';
   text('renderer-state',rendererStatus(null,'pending').label);
   if (!data.manifest.model) { text('player-state', 'No rig supplied · reference review is available'); return; }
   text('player-state', 'Loading compiled rig…');
@@ -525,8 +554,8 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     select('axis-select').replaceChildren(); for (const axis of validAxes) select('axis-select').append(option(axis.id, axis.label));
     input('axis-value').disabled = !validAxes.length;
     for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;
-    fitCamera();
-  } catch (error) { text('renderer-state',rendererStatus(null,'failed').label);player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${errorText(error)}`); message(errorText(error), true); }
+    rigReady=true;rigReason='';renderSinglePresentation();
+  } catch (error) {rigReady=false;rigReason='Compiled player unavailable: '+errorText(error); text('renderer-state',rendererStatus(null,'failed').label);player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${errorText(error)}`); message(errorText(error), true);renderSinglePresentation(); }
 }
 
 function chooseAxis(): void {
@@ -746,7 +775,9 @@ function bind(): void {
   };
   button('export').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ schema: 'rig-review-feedback/1', id: session.id, revision: session.revision, sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: session.reviewedSource, status: session.status, checkpoints: session.checkpoints, feedback: session.feedback, feedbackWarnings: session.feedbackWarnings, issues: session.feedback.map(issueFields) }, null, 2) + '\n', 'application/json'); message('Exported source provenance, feedback, validation warnings and issue fields as JSON. Source files remain unchanged.'); };
   button('export-markdown').onclick = () => { const content = [`# ${markdown(session.id)} review feedback`, '', 'Reviewed source:', ...JSON.stringify({ sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: session.reviewedSource }, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(item => { const issue = issueFields(item); return [`## ${markdown(issue.title)}`, '', issue.body, '', '---', '']; })].join('\n'); download(`${session.id}-issues.md`, content, 'text/markdown'); message('Exported source provenance, validation warnings and structured issue content as Markdown.'); };
-  appearance=bindAppearance(select('appearance'));
+  workspace=bindWorkspaceUI({changed:fitCamera,defaultTheme:theme=>appearance?.set(theme)});
+  cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
+  appearance=bindAppearance(select('appearance'),workspace.defaults().theme);
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
   for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));
@@ -757,7 +788,7 @@ function bind(): void {
   document.addEventListener('visibilitychange',()=>{if(document.hidden){const resume=playing;pause();suspendedPreview=resume;}else if(suspendedPreview){suspendedPreview=false;void playPreview();}});
   const resize = new ResizeObserver(fitCamera); resize.observe(el('rig-viewport')); resize.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { persistence?.dispose();pause();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());overlays?.dispose(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
+  window.addEventListener('pagehide', () => { persistence?.dispose();workspace?.dispose();referenceAbort?.abort();pause();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());overlays?.dispose(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
 }
 
 async function start(): Promise<void> {
@@ -770,20 +801,21 @@ async function start(): Promise<void> {
     if (!data.manifest.references.length) { select('reference-select').append(option('', 'No references supplied')); select('reference-select').disabled = true; }
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
     bind(); parts=new PartExplorer(el('parts-explorer'),el('selected-part'),previous=>{redrawOverlay(true);const part=parts?.value();if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
-    if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
-    await initPlayer(first);
+    if(initial.referenceId)select('reference-select').value=initial.referenceId;
+    await Promise.all([initial.referenceId?showReference(initial.referenceId):Promise.resolve(),initPlayer(first)]);
     if (first) await chooseCheckpoint(first,initial); else renderCheckpoint();
-    activeCamera=player?'rig':'reference';if(cameraSync)alignCameras();renderTransport();fitCamera();
+    activeCamera=player?'rig':'reference';renderSinglePresentation();if(cameraSync)alignCameras();renderTransport();fitCamera();
     if (requestedId && !first) message(`Checkpoint "${requestedId}" is not in this package. Select one from the list.`, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
     const restored=await setupPersistence();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
-    controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
-  } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
+    initializing=false;
+  } catch (error) {initializing=false;message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
-function showInspector(name:string):void {document.querySelector<HTMLButtonElement>(`[data-inspector="${name}"]`)?.click();}
-function bindInspector():void {bindInspectorTabs(()=>{if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]'))pause();fitCamera();});}
+function showInspector(name:string):void {workspace?.revealInspector();document.querySelector<HTMLButtonElement>(`[data-inspector="${name}"]`)?.click();}
+function bindInspector():void {bindInspectorTabs(()=>{workspace?.afterTab();if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]'))pause();fitCamera();},()=>workspace?.beforeTab());}
 
 function redrawOverlay(fresh:boolean):void {
  if(!overlays||!player)return;
@@ -802,7 +834,7 @@ async function playPreview():Promise<void> {
 function localDraft():boolean{return dirty||!!input('feedback-summary').value.trim()||!!input('feedback-start').value.trim()||!!input('feedback-end').value.trim()||!!select('feedback-category').value||!!input('feedback-target-name').value.trim()&&input('feedback-target-name').value!==data.manifest.id;}
 function controlState():ControlInspection {
  const box=assets?.stage??player?.bounds(),center=box?{x:box.x+box.width/2,y:box.y+box.height/2}:null;
- return {part:parts?.value()??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?zoom:1,pan:{x:center&&cameraCenter?(center.x-cameraCenter.x)*rigScale:0,y:center&&cameraCenter?(cameraCenter.y-center.y)*rigScale:0}},reference:{zoom:referenceSize?referenceZoom:1,pan:{x:referenceSize&&referenceCenter?(referenceSize.width/2-referenceCenter.x)*referenceScale:0,y:referenceSize&&referenceCenter?(referenceSize.height/2-referenceCenter.y)*referenceScale:0}}},animation:animation||null,time:player?.time??time,playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!!data,seeking:seekingControl||!!video?.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring(),capabilities:{camera:!!player,referenceCamera:!!referenceSize,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
+ return {...(workspace?{workspace:workspace.observe({requestedView:view,effectiveView,comparisonAvailable:singleState().comparisonAvailable,reason:singleState().reason,visiblePanes:effectiveView==='compare'?['rig','reference']:effectiveView==='none'?[]:[effectiveView]})}:{}),part:parts?.value()??null,view:numericView(false),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?zoom:1,pan:{x:center&&cameraCenter?(center.x-cameraCenter.x)*rigScale:0,y:center&&cameraCenter?(cameraCenter.y-center.y)*rigScale:0}},reference:{zoom:referenceSize?referenceZoom:1,pan:{x:referenceSize&&referenceCenter?(referenceSize.width/2-referenceCenter.x)*referenceScale:0,y:referenceSize&&referenceCenter?(referenceSize.height/2-referenceCenter.y)*referenceScale:0}}},animation:animation||null,time:player?.time??time,playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!initializing,seeking:seekingControl||!!video?.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:initializing||saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!initializing&&!persistence?.restoring(),capabilities:{camera:rigReady&&!el('rig-pane').hidden,referenceCamera:referenceReady&&!el('reference-pane').hidden,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
 }
 async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
@@ -859,11 +891,11 @@ async function decodedControlTime(media:HTMLVideoElement,target:number,signal:Ab
   media.currentTime=target;
  });
 }
-function numericView():ControlView {
- const numeric=(target:CameraTarget)=>{const frame=paneFrame(target,true);if(!frame)return null;const camera=paneCamera(target);return numericCamera(frame.space,camera.center??frame.center,camera.zoom,frame.baseScale*camera.zoom,frame.width,frame.height);};
+function numericView(includeHidden=true):ControlView {
+ const numeric=(target:CameraTarget)=>{if(!includeHidden&&!(target==='rig'?rigReady:referenceReady))return null;const frame=paneFrame(target,includeHidden);if(!frame)return null;const camera=paneCamera(target);return numericCamera(frame.space,camera.center??frame.center,camera.zoom,frame.baseScale*camera.zoom,frame.width,frame.height);};
  return {schema:'rig-review-view/1',cameraSync,activeCamera,cameras:{rig:numeric('rig'),a:null,b:null,reference:numeric('reference')}};
 }
-function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
+function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(false),null,2);}
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data.sourceHash,rigs:[data.reviewedSource.rig?.sha256??null]};}
 function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time:player?.time??time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
@@ -928,7 +960,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
 async function waitReferenceMetadata(media:HTMLVideoElement,signal:AbortSignal):Promise<void> {if(media.readyState>=1)return;await new Promise<void>((resolve,reject)=>{const clean=()=>{clearTimeout(timer);media.removeEventListener('loadedmetadata',ready);media.removeEventListener('error',fail);signal.removeEventListener('abort',fail);};const ready=()=>{clean();resolve();},fail=()=>{clean();reject(new Error('Saved reference metadata unavailable'));};const timer=setTimeout(fail,10000);media.addEventListener('loadedmetadata',ready,{once:true});media.addEventListener('error',fail,{once:true});signal.addEventListener('abort',fail,{once:true});});}
 async function setupPersistence():Promise<boolean> {
  persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
- ui:()=>({reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();},afterInputs:()=>{const target=input('feedback-target-name').value;renderFeedbackTargets(true);if(select('feedback-target-kind').value!=='rig')input('feedback-target-name').value=target;renderFeedbackRange();text('audio-volume-label',`${Math.round(Number(input('audio-volume').value)*100)}%`);},onConflict:value=>{draftConflict=value;updateSavedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
+ ui:()=>({inspectorScroll:workspace?.scroll()??'{}',reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{workspace?.restoreScroll(value.inspectorScroll);if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();},afterInputs:()=>{const target=input('feedback-target-name').value;renderFeedbackTargets(true);if(select('feedback-target-kind').value!=='rig')input('feedback-target-name').value=target;renderFeedbackRange();text('audio-volume-label',`${Math.round(Number(input('audio-volume').value)*100)}%`);},onConflict:value=>{draftConflict=value;updateSavedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
  return persistence.restored;
 }
 void start();

@@ -80,7 +80,7 @@ export function restoredZoom(camera:NonNullable<ControlView['cameras']['rig']>,b
 export function captureInputs(root:ParentNode=document):FormInputs {
  const result:FormInputs={};for(const node of root.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement>('input,select,textarea')){
   const key=node.id||(node instanceof HTMLInputElement&&node.type==='radio'&&node.name?`radio:${node.name}:${node.value}`:'');
-  if(!key||node instanceof HTMLInputElement&&['password','file'].includes(node.type))continue;
+  if(!key||node.hasAttribute('data-app-preference')||node instanceof HTMLInputElement&&['password','file'].includes(node.type))continue;
   result[key]={value:node.value,...(node instanceof HTMLInputElement&&['checkbox','radio'].includes(node.type)?{checked:node.checked}:{})};
  }return result;
 }
@@ -88,7 +88,7 @@ export function restoreInputs(inputs:FormInputs,excluded:ReadonlySet<string>=new
  for(const [key,value]of Object.entries(inputs)){
   if(excluded.has(key))continue;
   const node=key.startsWith('radio:')?[...root.querySelectorAll<HTMLInputElement>('input[type=radio]')].find(n=>`radio:${n.name}:${n.value}`===key):root.querySelector<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement>('#'+CSS.escape(key));
-  if(!node)continue;if(node instanceof HTMLSelectElement&&![...node.options].some(o=>o.value===value.value))continue;
+  if(!node||node.hasAttribute('data-app-preference'))continue;if(node instanceof HTMLSelectElement&&![...node.options].some(o=>o.value===value.value))continue;
   if(node instanceof HTMLInputElement&&['password','file'].includes(node.type))continue;
   node.value=value.value;if(node instanceof HTMLInputElement&&value.checked!==undefined)node.checked=value.checked;
  }

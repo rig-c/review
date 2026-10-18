@@ -1,3 +1,4 @@
+import {bindWorkspaceUI,type WorkspaceUI} from './workspace-ui.ts';
 import {instanceFetch,instanceRoute} from './instance-base.ts';
 import {PartExplorer,loadPartCatalog} from './part-selection.ts';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature,type PaneCamera} from './camera-view.ts';
@@ -26,6 +27,8 @@ const text = (id: string, value: string) => { el(id).textContent = value; };
 const describe = (value: unknown) => value instanceof Error ? value.message : String(value);
 const video = el<HTMLVideoElement>('reference-video');
 let data: CompareResponse, session: CompareSession;
+const sideReady:Partial<Record<Side,boolean>>={},sideFailure:Partial<Record<Side,string>>={};
+let referenceUsable=false;
 const assets: Partial<Record<Side, ModelAssets>> = {}, players: Partial<Record<Side, RigPlayer>> = {};
 let domain: CompareDomain | null = null, trace: CompareTrace | null = null, lastPresented: ReferenceSample | null = null;
 let dirty = false, saving = false, ready = false, seeking = false, disposed = false;
@@ -35,6 +38,7 @@ type CameraTarget=Side|'reference';
 const cameras:Record<CameraTarget,PaneCamera>={a:{zoom:1,center:null},b:{zoom:1,center:null},reference:{zoom:1,center:null}};
 const cameraFrames:Partial<Record<CameraTarget,CameraFrame>>={};
 const rigScales:Record<Side,number>={a:1,b:1};
+let workspace:WorkspaceUI|null=null,comparisonFailure:string|null='Comparison inputs are loading.';
 let cameraSync=true,activeCamera:CameraTarget='a',cameraRestoring=false,cameraLayout='';
 let idleHeld=true,loopRestarting=false,suspendedPreview=false;
 let appearance:ReturnType<typeof bindAppearance>|null=null,controlDispose:(()=>void)|null=null;
@@ -111,7 +115,7 @@ function invalidateTrace(reason: string): void {
 }
 
 function stop(): void { video.pause(); players.a?.pause(); players.b?.pause(); button('play').textContent = loopRestarting&&!idleHeld?'Ⅱ':'▶'; button('play').setAttribute('aria-label',loopRestarting&&!idleHeld?'Cancel idle restart and pause comparison':'Play reference video and both rigs'); }
-function failPair(error: unknown): void { stop(); ready = false; invalidateTrace('Comparison stopped · no valid synchronized time');for(const side of ['a','b'] as const){overlays[side]?.clear();text(`${side}-renderer`,rendererBadges[side].failed().label);} button('play').disabled = true; input('scrub').disabled = true; button('seek').disabled = true;button('frame-seek').disabled=true; message(`Comparison stopped: ${describe(error)}`, true); }
+function failPair(error: unknown): void { comparisonFailure=describe(error);stop(); ready = false; invalidateTrace('Comparison stopped · no valid synchronized time');for(const side of ['a','b'] as const){overlays[side]?.clear();text(`${side}-renderer`,rendererBadges[side].failed().label);} button('play').disabled = true; input('scrub').disabled = true; button('seek').disabled = true;button('frame-seek').disabled=true; message(`Comparison stopped: ${describe(error)}`, true); }
 
 function renderPresentation(state:PresentationState):void {
  for(const side of ['a','b'] as const){const value=rendererBadges[side].observe(state.status,players[side]?.renderer??null);text(`${side}-renderer`,value.label);}
@@ -209,7 +213,8 @@ async function seekTo(target: number,producer:{side:Side;frame:number;time:numbe
 function unionBounds(a: PoseBounds, b: PoseBounds): PoseBounds { const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y); return { x, y, width: Math.max(a.x + a.width, b.x + b.width) - x, height: Math.max(a.y + a.height, b.y + b.height) - y }; }
 function fit(): void {
  const layout=['a','b','reference'].map(target=>{const v=el(target+'-viewport');return `${v.clientWidth}:${v.clientHeight}`;}).join('|')+!!players.a+!!players.b+video.videoWidth+':'+video.videoHeight;
- if(cameraSync&&!cameraRestoring&&layout!==cameraLayout)alignCameras();cameraLayout=layout;
+ // Shell reflow preserves each held camera; sync requires an explicit gesture.
+ cameraLayout=layout;
  for(const side of ['a','b'] as const){
   const frame=paneFrame(side);if(!frame)continue;const camera=cameras[side],center=camera.center??frame.center,scale=rigScales[side]=frame.baseScale*camera.zoom;
   const viewport=el(side+'-viewport'),root=el(side+'-root');root.style.left=`${viewport.clientWidth/2-center.x*scale}px`;root.style.top=`${viewport.clientHeight/2+center.y*scale}px`;root.style.transform=`scale(${scale})`;players[side]?.renderer.syncPixelRatio();
@@ -218,14 +223,22 @@ function fit(): void {
 }
 
 async function loadSide(side: Side, value: CompareSide): Promise<number> {
-  text(`${side}-title`, value.manifest.title);
-  if (!value.manifest.model) throw new Error(`${side.toUpperCase()}: compiled model Not supplied`);
-  const modelUrl = new URL(sideAsset(side, value.manifest.model), location.href).href;
-  const loaded = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, base) => { const url = new URL(name, base); if (url.origin !== location.origin || !url.pathname.startsWith(instanceRoute(`/compare-assets/${side}/`,location.href))) throw new Error(`${side}: model page escapes its package`); return url.href; } });
-  assets[side] = loaded; const clip = loaded.animations.find(item => item.name === data.animation); if (!clip) throw new Error(`${side.toUpperCase()}: animation "${data.animation}" Not supplied`);
-  const player = new RigPlayer(el(`${side}-root`), loaded, { seekStep: compareSeekStep });
-  players[side] = player;parts?.register(side,await loadPartCatalog(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]),player); player.environment(null); player.play(data.animation, { loop: false }); player.pause();
-  el(`${side}-empty`).hidden = true; return clip.duration;
+ sideReady[side]=false;text(`${side}-title`,value.manifest.title);
+ try{
+  if(!value.manifest.model)throw new Error(`${side.toUpperCase()}: compiled model Not supplied`);
+  const modelUrl=new URL(sideAsset(side,value.manifest.model),location.href).href;
+  const loaded=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,base)=>{const url=new URL(name,base);if(url.origin!==location.origin||!url.pathname.startsWith(instanceRoute(`/compare-assets/${side}/`,location.href)))throw new Error(`${side}: model page escapes its package`);return url.href;}});
+  assets[side]=loaded;const clip=loaded.animations.find(item=>item.name===data.animation);if(!clip)throw new Error(`${side.toUpperCase()}: animation "${data.animation}" Not supplied`);
+  const player=new RigPlayer(el(`${side}-root`),loaded,{seekStep:compareSeekStep});players[side]=player;
+  parts?.register(side,await loadPartCatalog(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]),player);
+  player.environment(null);player.play(data.animation,{loop:false});player.pause();
+  // A real paused diagnostic draw remains usable if the other input refuses.
+  player.seek(0);player.draw();parts?.present(side);sideReady[side]=true;delete sideFailure[side];
+  el(`${side}-empty`).hidden=true;fit();return clip.duration;
+ }catch(error){
+  sideReady[side]=false;sideFailure[side]=`${side.toUpperCase()}: ${describe(error)}`;players[side]?.dispose();delete players[side];assets[side]?.dispose();delete assets[side];
+  text(`${side}-empty`,sideFailure[side]!);el(`${side}-empty`).hidden=false;throw new Error(sideFailure[side]);
+ }
 }
 
 async function loadFrameIndex():Promise<void>{
@@ -245,8 +258,8 @@ function loadReference(): Promise<number> {
   text('reference-name', data.reference.name); observeVideoFrames();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Could not read reference video metadata / first frame.')), 15000);
-    video.addEventListener('loadeddata', () => { clearTimeout(timer); if (!Number.isFinite(video.duration) || video.duration < 0) reject(new Error('Reference video duration must be finite.')); else { el('reference-empty').hidden = true; resolve(video.duration); } }, { once: true });
-    video.addEventListener('error', () => { clearTimeout(timer); reject(new Error('Reference video load failed')); }, { once: true }); video.src = url.href; video.load();
+    video.addEventListener('loadeddata', () => { clearTimeout(timer); if (!Number.isFinite(video.duration) || video.duration < 0||video.readyState<2||!video.videoWidth||!video.videoHeight) reject(new Error('Reference video duration must be finite.')); else {referenceUsable=true;el('reference-empty').hidden = true;fit();resolve(video.duration); } }, { once: true });
+    video.addEventListener('error', () => {referenceUsable=false;clearTimeout(timer);if(ready)failPair(new Error('Reference video load failed'));reject(new Error('Reference video load failed')); }, { once: true }); video.src = url.href; video.load();
   });
 }
 
@@ -366,7 +379,9 @@ function bind(): void {
   button('submit').onclick = async () => { if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; } saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;await persistence?.submitted(saved); message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status and A/B/reference-video provenance.'); } catch (error) { message(`Submission failed: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
   button('export-json').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ ...session, schema: 'rig-review-compare-feedback/1', issues: session.feedback.map(issue) }, null, 2) + '\n', 'application/json'); };
   button('export-markdown').onclick = () => { download(`${session.id}-issues.md`, [`# ${md(data.title)}`, '', 'Ordered A/B and reference provenance:', ...JSON.stringify(session.binding, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(feedback => { const entry = issue(feedback); return [`## ${md(entry.title)}`, '', entry.body, '', '---', '']; })].join('\n'), 'text/markdown'); };
-  appearance=bindAppearance(select('appearance'));
+  workspace=bindWorkspaceUI({changed:fit,defaultTheme:theme=>appearance?.set(theme)});
+  cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
+  appearance=bindAppearance(select('appearance'),workspace.defaults().theme);
   for(const side of ['a','b'] as const)overlays[side]=new RigOverlays({canvas:el<HTMLCanvasElement>(side+'-overlay'),rigRoot:el(side+'-root')});
   for(const target of ['a','b','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));
   viewDisposers.push(bindStageLayout(el('stage-layout'),fit));
@@ -377,7 +392,7 @@ function bind(): void {
   document.addEventListener('visibilitychange',()=>{if(document.hidden){suspendedPreview=!video.paused;stop();}else if(suspendedPreview&&!idleHeld){suspendedPreview=false;void playComparison().catch(error=>message(describe(error),true));}});
   const observer = new ResizeObserver(fit); observer.observe(el('a-viewport')); observer.observe(el('b-viewport'));observer.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { persistence?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
+  window.addEventListener('pagehide', () => { persistence?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
 }
 
 async function start(): Promise<void> {
@@ -385,16 +400,17 @@ async function start(): Promise<void> {
     [data, session] = await Promise.all([api<CompareResponse>('/api/compare'), api<CompareSession>('/api/compare/session')]);
     submittedBaseline=structuredClone(session);
     if (data.id !== session.id || data.sourceHash !== session.sourceHash || JSON.stringify(data.binding) !== JSON.stringify(session.binding)) throw new Error('Comparison and submission session refer to different source identities. Reopen the review.');
-    text('title', data.title); text('animation', `${data.animation} · A/B order and reference video hash are fixed`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); parts=new PartExplorer(el('parts-explorer'),el('selected-part'),previous=>{redrawOverlays(true);const part=parts?.value();if(part){activeCamera=part.side==='b'?'b':'a';document.querySelector<HTMLButtonElement>('[data-inspector=rig]')?.click();renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera());persistence?.save();},part=>{select('side').value=part.side;select('target-kind').value='slot';renderFeedbackSelection();input('target-name').value=part.slot;document.querySelector<HTMLButtonElement>('[data-inspector=feedback]')?.click();}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackSelection(); renderFeedback(); savedState();
+    text('title', data.title); text('animation', `${data.animation} · A/B order and reference video hash are fixed`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); parts=new PartExplorer(el('parts-explorer'),el('selected-part'),previous=>{redrawOverlays(true);const part=parts?.value();if(part){activeCamera=part.side==='b'?'b':'a';workspace?.revealInspector();document.querySelector<HTMLButtonElement>('[data-inspector=rig]')?.click();renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera());persistence?.save();},part=>{select('side').value=part.side;select('target-kind').value='slot';renderFeedbackSelection();input('target-name').value=part.slot;workspace?.revealInspector();document.querySelector<HTMLButtonElement>('[data-inspector=feedback]')?.click();}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackSelection(); renderFeedback(); savedState();
+    controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
     const [referenceDuration, aDuration, bDuration] = await Promise.all([loadReference(), loadSide('a', data.a), loadSide('b', data.b)]);
     void loadFrameIndex();
-    domain = commonDomain(referenceDuration, aDuration, bDuration); input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
+    domain = commonDomain(referenceDuration, aDuration, bDuration); input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;comparisonFailure=null;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;
     await seekTo(0);activeCamera='a';if(cameraSync)alignCameras();fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
-    controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
-  } catch (error) { failPair(error); for (const side of ['a', 'b'] as const) if (!players[side]) text(`${side}-empty`, `${side.toUpperCase()} Could not open comparison rig.`); text('reference-empty', 'Check the reference video and comparison inputs.'); }
+
+  } catch (error) { failPair(error); for (const side of ['a', 'b'] as const) if (!sideReady[side]) text(`${side}-empty`,sideFailure[side]??`${side.toUpperCase()} Could not open comparison rig.`); text('reference-empty', 'Check the reference video and comparison inputs.'); }
 }
-function sharedBox():PoseBounds|null {const a=assets.a?.stage??players.a?.bounds(),b=assets.b?.stage??players.b?.bounds();return a&&b?unionBounds(a,b):null;}
+function sharedBox():PoseBounds|null {const a=assets.a?.stage??players.a?.bounds(),b=assets.b?.stage??players.b?.bounds();return a&&b?unionBounds(a,b):a??b??null;}
 function paneFrame(target:CameraTarget,hidden=false):CameraFrame|null {
  const viewport=el(target+'-viewport');if(viewport.clientWidth<=0||viewport.clientHeight<=0)return hidden?cameraFrames[target]??null:null;
  const box=target==='reference'?video.videoWidth>0&&video.videoHeight>0?{x:0,y:0,width:video.videoWidth,height:video.videoHeight}:null:players[target]?sharedBox():null;
@@ -427,7 +443,7 @@ function redrawOverlays(fresh:boolean):void {
  text('layer-state',warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');
  if(!fresh&&needsCapture&&trace&&!seeking&&!video.seeking&&players.a&&players.b){try{drawSynchronizedPair(inspectionPlayer('a'),inspectionPlayer('b'));redrawOverlays(true);for(const side of ['a','b'] as const)text(`${side}-renderer`,rendererBadges[side].observe('drawn',players[side]!.renderer).label);}catch(error){failPair(error);}}
 }
-function bindInspector():void {bindInspectorTabs(()=>{if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]')){idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);}fit();});}
+function bindInspector():void {bindInspectorTabs(()=>{workspace?.afterTab();if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]')){idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);}fit();},()=>workspace?.beforeTab());}
 
 function canRepeatIdle():boolean{return data?.animation==='idle'&&idleAvailable(assets.a?.animations.map(a=>a.name)??[],data.animation)&&idleAvailable(assets.b?.animations.map(a=>a.name)??[],data.animation)&&input('idle-repeat').checked&&!!domain&&domain.end>0;}
 function renderIdle():void {text('idle-state',canRepeatIdle()?'Actual idle · repeat enabled':'Bound non-idle inspection · no automatic playback');}
@@ -452,7 +468,7 @@ async function restartIdle():Promise<void> {
 function localDraft():boolean{return dirty||!!input('summary').value.trim()||!!input('frame-start').value.trim()||!!input('frame-end').value.trim()||!!input('target-name').value.trim()||!!select('category').value;}
 function controlState():ControlInspection {
  const css=(target:CameraTarget)=>{const frame=paneFrame(target,true);if(!frame)return {zoom:1,pan:{x:0,y:0}};const value=cameraSignature(cameras[target],frame);return {zoom:value.zoom,pan:{x:value.pan.x*frame.width,y:value.pan.y*frame.height}};};
- return {part:parts?.value()??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:css('a'),a:css('a'),b:css('b'),reference:css('reference')},animation:data.animation,time:trace?.reference??null,playing:!video.paused,loop:canRepeatIdle()?'idle':'off',layers:{images:!!players.a&&layers.images,meshes:!!players.a&&layers.mesh,bones:!!players.a&&layers.bones},ready,seeking:seeking||video.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring()&&!!feedbackTrace(ready,seeking||video.seeking,trace),capabilities:{camera:!!players.a&&!!players.b,referenceCamera:video.readyState>=1,animation:false,time:ready,playback:ready,layers:{images:!!players.a&&!!players.b,meshes:!!players.a&&!!players.b,bones:!!players.a&&!!players.b}}};
+ return {...(workspace?{workspace:workspace.observe({requestedView:'ab-reference',effectiveView:ready?'ab-reference':sideReady.a||sideReady.b||referenceUsable?'available':'none',comparisonAvailable:ready,reason:comparisonFailure,visiblePanes:[...(referenceUsable?['reference' as const]:[]),...(sideReady.a?['a' as const]:[]),...(sideReady.b?['b' as const]:[])]})}:{}),part:parts?.value()??null,view:numericView(false),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:css('a'),a:css('a'),b:css('b'),reference:css('reference')},animation:data.animation,time:trace?.reference??null,playing:!video.paused,loop:canRepeatIdle()?'idle':'off',layers:{images:!!players.a&&layers.images,meshes:!!players.a&&layers.mesh,bones:!!players.a&&layers.bones},ready,seeking:seeking||video.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring()&&!!feedbackTrace(ready,seeking||video.seeking,trace),capabilities:{camera:!!players.a&&!!players.b,referenceCamera:video.readyState>=1,animation:false,time:ready,playback:ready,layers:{images:!!players.a&&!!players.b,meshes:!!players.a&&!!players.b,bones:!!players.a&&!!players.b}}};
 }
 async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
@@ -470,11 +486,11 @@ async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<v
  if(command.type==='playback'){if(command.value==='play')await playComparison(signal);else{idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined){await seekTo(current);if(!trace)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');}}return;}
  if(command.type==='time'){if(!domain)throw new Error('CONTROL_TIME_UNAVAILABLE');requireCommonTime(command.seconds,domain);await seekTo(command.seconds);if(signal.aborted||!trace)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');}
 }
-function numericView():ControlView {
- const numeric=(target:CameraTarget)=>{const frame=paneFrame(target,true);if(!frame)return null;const camera=cameras[target];return numericCamera(frame.space,camera.center??frame.center,camera.zoom,frame.baseScale*camera.zoom,frame.width,frame.height);};
+function numericView(includeHidden=true):ControlView {
+ const numeric=(target:CameraTarget)=>{if(!includeHidden&&!(target==='reference'?referenceUsable:sideReady[target]))return null;const frame=paneFrame(target,includeHidden);if(!frame)return null;const camera=cameras[target];return numericCamera(frame.space,camera.center??frame.center,camera.zoom,frame.baseScale*camera.zoom,frame.width,frame.height);};
  return {schema:'rig-review-view/1',cameraSync,activeCamera,cameras:{rig:null,a:numeric('a'),b:numeric('b'),reference:numeric('reference')}};
 }
-function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
+function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(false),null,2);}
 function inspectionBinding():InspectionBinding{return {mode:'compare',sourceHash:data.sourceHash,rigs:[data.a.reviewedSource.rig?.sha256??null,data.b.reviewedSource.rig?.sha256??null]};}
 function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:data.animation,time:trace?.reference??presentation.snapshot().lastDrawn?.reference??null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{part:parts?.value()??null,reference:data.reference.sha256,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view'}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
@@ -493,7 +509,8 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
  parts?.select(bookmark.selection.part??null);
  idleHeld=true;stop();if(bookmark.time!==null){await seekTo(bookmark.time);if(signal.aborted||!trace)throw new Error('Saved reference inspection could not settle');}
  appearance?.set(bookmark.theme);Object.assign(layers,{images:bookmark.layers.images,mesh:bookmark.layers.meshes,bones:bookmark.layers.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;
- if(bookmark.selection.inspector){for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-inspector]')){const selected=tab.dataset.inspector===bookmark.selection.inspector;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==bookmark.selection.inspector;}
+ if(bookmark.selection.inspector){workspace?.revealInspector();document.querySelector<HTMLButtonElement>(`[data-inspector="${bookmark.selection.inspector}"]`)?.click();}
+
  syncStageLayout(el('stage-layout'));fit();
  for(const target of ['a','b','reference'] as const){const camera=bookmark.view.cameras[target],frame=paneFrame(target,true);if(camera&&frame)cameras[target]={zoom:restoredZoom(camera,frame.baseScale,frame.width,frame.height),center:{...camera.center}};}
  cameraSync=bookmark.view.cameraSync??false;activeCamera=bookmark.view.activeCamera==='b'||bookmark.view.activeCamera==='reference'?bookmark.view.activeCamera:'a';
@@ -502,7 +519,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
 }
 async function setupPersistence():Promise<boolean> {
  persistence=await connectInspectionPersistence({scope:'compare:'+data.a.manifest.id+':'+data.b.manifest.id+':'+data.reference.name,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('status').value=session.status;renderFeedback();savedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
- ui:()=>({frameBasis:select('frame-basis').value}),restoreUI:value=>{if(value.frameBasis==='a'||value.frameBasis==='b')select('frame-basis').value=value.frameBasis;frameControls();},afterInputs:()=>{video.muted=!input('reference-audio').checked;const name=input('target-name').value;renderFeedbackSelection();input('target-name').value=name;},onConflict:value=>{draftConflict=value;savedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
+ ui:()=>({inspectorScroll:workspace?.scroll()??'{}',frameBasis:select('frame-basis').value}),restoreUI:value=>{workspace?.restoreScroll(value.inspectorScroll);if(value.frameBasis==='a'||value.frameBasis==='b')select('frame-basis').value=value.frameBasis;frameControls();},afterInputs:()=>{video.muted=!input('reference-audio').checked;const name=input('target-name').value;renderFeedbackSelection();input('target-name').value=name;},onConflict:value=>{draftConflict=value;savedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
  return persistence.restored;
 }
 void start();
