@@ -4,5 +4,5 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"], "types": ["bun"],
     "strict": true, "noEmit": true, "skipLibCheck": true, "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.ts", "web/**/*.ts", "tests/**/*.ts"]
+  "include": ["src/**/*.ts", "web/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
 }
