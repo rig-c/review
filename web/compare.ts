@@ -6,6 +6,7 @@ import { commonDomain, compareSeekStep, feedbackTrace, inspectionFrame, requireC
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection } from '../src/feedback-validation.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 
+import {RendererBadge} from './renderer-status.ts';
 import {ComparePresentation,type PresentationState} from '../src/compare-presentation.ts';
 import {nextReferenceInterval,ReferenceSelectionUnavailable,inspectionReferenceFrame,lastSupportedReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,type ReferenceFrameIndex,type VideoInfo,type VideoFrame} from '../src/reference-frames.ts';
 type Side = 'a' | 'b';
@@ -25,6 +26,7 @@ let latestSeek = 0;
 let stripBusy = false;
 let referenceFrames:VideoInfo|null=null;
 const presentation=new ComparePresentation();
+const rendererBadges={a:new RendererBadge(),b:new RendererBadge()};
 const associations:Record<Side,Map<number,number|null>>={a:new Map(),b:new Map()};
 let requestedProducer:{side:Side;frame:number;time:number}|null=null;
 let endStopReason:string|null=null;
@@ -79,6 +81,7 @@ function renderTrace(value: CompareTrace): void {
 
 function updateFeedbackAvailability(): void { button('add-feedback').disabled = !feedbackTrace(ready, seeking || video.seeking, trace); }
 function invalidateTrace(reason: string): void {
+  for(const side of ['a','b'] as const)text(`${side}-renderer`,rendererBadges[side].pending().label);
   trace = null; updateFeedbackAvailability();
   for (const id of ['reference-time', 'a-time', 'b-time']) text(id, '— s');
   for (const side of ['a', 'b'] as const) text(`${side}-frame`, 'frame unknown · 동기화 없음');
@@ -87,9 +90,10 @@ function invalidateTrace(reason: string): void {
 }
 
 function stop(): void { video.pause(); players.a?.pause(); players.b?.pause(); button('play').textContent = '▶'; button('play').setAttribute('aria-label', '참조 영상과 비교 재생'); }
-function failPair(error: unknown): void { stop(); ready = false; invalidateTrace('비교 중단 · 유효한 동기화 시각 없음'); button('play').disabled = true; input('scrub').disabled = true; button('seek').disabled = true;button('frame-seek').disabled=true; message(`비교 중단: ${describe(error)}`, true); }
+function failPair(error: unknown): void { stop(); ready = false; invalidateTrace('비교 중단 · 유효한 동기화 시각 없음');for(const side of ['a','b'] as const)text(`${side}-renderer`,rendererBadges[side].failed().label); button('play').disabled = true; input('scrub').disabled = true; button('seek').disabled = true;button('frame-seek').disabled=true; message(`비교 중단: ${describe(error)}`, true); }
 
 function renderPresentation(state:PresentationState):void {
+ for(const side of ['a','b'] as const){const value=rendererBadges[side].observe(state.status,players[side]?.renderer??null);text(`${side}-renderer`,value.label);}
  const target=state.target?.time,last=state.lastDrawn;
  if(target!==undefined){text('reference-time',`${target.toFixed(6)} s`);text('time',`${target.toFixed(4)} / ${domain!.end.toFixed(4)} s`);input('scrub').value=String(target);}
  const delta=target===undefined||!last?null:Math.max(Math.abs(last.a-target),Math.abs(last.b-target))*24;
@@ -102,7 +106,7 @@ function renderPresentation(state:PresentationState):void {
   text('clock-source','Feedback requires a pair submitted before the known next-reference estimate or paused inspection.');
  }
  text('sync-warning',state.deadlineKind==='unknown'?'Next-reference timing unknown: an adjacent decoded timestamp and positive playback rate are required. Playback continues; pause for exact inspection.':state.lastLatenessMs>0?'The pair finished CPU draw submission after the estimated next reference display boundary. Pause for exact inspection.':'');
- text('trace',JSON.stringify({presentation:state,playerTimes:{a:players.a?.time??null,b:players.b?.time??null},rawFloorFrames:{a:currentFrame('a'),b:currentFrame('b')},reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,endStopReason,decodedIndex:referenceFrames&&target!==undefined?referenceFrameAtTime(referenceFrames,target)?.index??null:null},null,2));
+ text('trace',JSON.stringify({presentation:state,playerTimes:{a:players.a?.time??null,b:players.b?.time??null},rawFloorFrames:{a:currentFrame('a'),b:currentFrame('b')},reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,endStopReason,renderers:{a:rendererBadges.a.snapshot(),b:rendererBadges.b.snapshot()},decodedIndex:referenceFrames&&target!==undefined?referenceFrameAtTime(referenceFrames,target)?.index??null:null},null,2));
  frameControls();
 }
 function acceptReference(sample: ReferenceSample,deadline:number|null=null,presentedFrames:number|null=null): void {
@@ -153,7 +157,7 @@ function seekReferenceFrame(target: number, signal: AbortSignal,selected:VideoFr
     try {
       // Registered while paused before changing currentTime, so a fast seek
       // cannot present its new frame before this callback is installed.
-      if (hasFrames) handle = video.requestVideoFrameCallback((_now, metadata) => { handle = null; const actual=selected?referenceFrameAtTime(referenceFrames!,metadata.mediaTime):null;if(selected&&actual?.index!==selected.index){finish(new Error('REFERENCE_FRAME_MISMATCH: decoded frame does not match selected reference PTS'));return;}presented = { time: metadata.mediaTime, source: 'video-frame' }; finish(); });
+      if (hasFrames) handle = video.requestVideoFrameCallback((_now, metadata) => { handle = null; const actual=selected?referenceFrameAtTime(referenceFrames!,metadata.mediaTime):null;if(selected&&actual?.index!==selected.index){finish(new ReferenceSelectionUnavailable('REFERENCE_FRAME_MISMATCH: decoded frame does not match selected reference PTS; choose another supported time to inspect'));return;}presented = { time: metadata.mediaTime, source: 'video-frame' }; finish(); });
       video.currentTime = seekPosition;
       if (!video.seeking) { seeked = true; if (!hasFrames) presented = { time: video.currentTime, source: 'current-time' }; finish(); }
     } catch (error) { finish(new Error(describe(error))); }
@@ -198,7 +202,7 @@ async function loadSide(side: Side, value: CompareSide): Promise<number> {
   const modelUrl = new URL(sideAsset(side, value.manifest.model), location.href).href;
   const loaded = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, base) => { const url = new URL(name, base); if (url.origin !== location.origin || !url.pathname.startsWith(`/compare-assets/${side}/`)) throw new Error(`${side}: model page escapes its package`); return url.href; } });
   assets[side] = loaded; const clip = loaded.animations.find(item => item.name === data.animation); if (!clip) throw new Error(`${side.toUpperCase()}: animation "${data.animation}" 미제공`);
-  const player = new RigPlayer(el(`${side}-root`), loaded, { seekStep: compareSeekStep, meshBackend: 'canvas2d' });
+  const player = new RigPlayer(el(`${side}-root`), loaded, { seekStep: compareSeekStep });
   players[side] = player; player.environment(null); player.play(data.animation, { loop: false }); player.pause();
   el(`${side}-empty`).hidden = true; return clip.duration;
 }
