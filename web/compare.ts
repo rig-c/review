@@ -12,6 +12,7 @@ import {bindAppearance,bindPan,bindStageLayout,bindInspectorTabs,syncStageLayout
 import {RigOverlays} from './rig-overlays.ts';
 import {bindWorkspaceUI,type WorkspaceUI} from './workspace-ui.ts';
 import {connectControl} from './control.ts';
+import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
 import type {ControlCommand,ControlInspection,ControlView} from '../src/control.ts';
 import {connectInspectionPersistence,serializableView,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
 import {RendererBadge} from './renderer-status.ts';
@@ -45,6 +46,8 @@ function inspectionPlayer(side:Side):InspectionPlayer {const player=players[side
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let stripBusy = false;
 let persistence:PersistenceConnection|null=null,submittedBaseline:CompareSession|null=null,draftConflict=false;
+// First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
+const access=pageInstanceAccess();let readOnly:string|null=null;
 let referenceFrames:VideoInfo|null=null;
 const presentation=new ComparePresentation();
 const rendererBadges={a:new RendererBadge(),b:new RendererBadge()};
@@ -54,15 +57,15 @@ let endStopReason:string|null=null;
 const traceRows: CompareTrace[] = [];
 
 function message(value: string, error = false): void { text('message', value); el('message').classList.toggle('error', error); }
-function savedState(): void { text('save-state', dirty ? 'Unsubmitted changes' : session.updatedAt ? 'Submitted' : 'Not submitted'); el('save-state').classList.toggle('dirty', dirty); button('submit').disabled = saving || draftConflict || session.feedbackWarnings.length > 0; button('submit').title = session.feedbackWarnings.length ? 'Delete feedback with validation warnings, then add it again with a valid target.' : ''; }
+function savedState(): void { text('save-state', dirty ? 'Unsubmitted changes' : session.updatedAt ? 'Submitted' : 'Not submitted'); el('save-state').classList.toggle('dirty', dirty); button('submit').disabled = saving || draftConflict || !!readOnly || session.feedbackWarnings.length > 0; button('submit').title = readOnly ? readOnly : session.feedbackWarnings.length ? 'Delete feedback with validation warnings, then add it again with a valid target.' : ''; }
 function markDirty(): void { dirty = true; savedState(); }
-async function api<T>(path: string, init?: RequestInit): Promise<T> { const response = await fetch(path, init); if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`); return await response.json() as T; }
+async function api<T>(path: string, init?: RequestInit): Promise<T> { const method = (init?.method ?? 'GET').toUpperCase(); const response = await fetch(access.route(path), method === 'GET' || method === 'HEAD' ? init : { ...init, headers: access.headers(init?.headers) }); if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`); return await response.json() as T; }
 
 function sideAsset(side: Side, path: string): string {
   if (!path || path.startsWith('/') || /[\\%?#\x00-\x1f:]/.test(path) || path.split('/').some(part => !part || part === '.' || part === '..')) throw new Error(`Invalid ${side} asset path: ${path}`);
   const base = `/compare-assets/${side}/`;
   if (data[side].assetsBase !== base) throw new Error(`Unexpected ${side} assets base`);
-  return base + path.split('/').map(encodeURIComponent).join('/');
+  return access.route(base + path.split('/').map(encodeURIComponent).join('/'));
 }
 
 function currentFrame(side: Side): number | null {
@@ -221,7 +224,7 @@ async function loadSide(side: Side, value: CompareSide): Promise<number> {
   text(`${side}-title`, value.manifest.title);
   if (!value.manifest.model) throw new Error(`${side.toUpperCase()}: compiled model Not supplied`);
   const modelUrl = new URL(sideAsset(side, value.manifest.model), location.href).href;
-  const loaded = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, base) => { const url = new URL(name, base); if (url.origin !== location.origin || !url.pathname.startsWith(`/compare-assets/${side}/`)) throw new Error(`${side}: model page escapes its package`); return url.href; } });
+  const loaded = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, base) => { const url = new URL(name, base); if (url.origin !== location.origin || !url.pathname.startsWith(access.route(`/compare-assets/${side}/`))) throw new Error(`${side}: model page escapes its package`); return url.href; } });
   assets[side] = loaded; const clip = loaded.animations.find(item => item.name === data.animation); if (!clip) throw new Error(`${side.toUpperCase()}: animation "${data.animation}" Not supplied`);
   const player = new RigPlayer(el(`${side}-root`), loaded, { seekStep: compareSeekStep });
   players[side] = player;parts?.register(side,await loadPartCatalog(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]),player); player.environment(null); player.play(data.animation, { loop: false }); player.pause();
@@ -241,7 +244,7 @@ async function loadFrameIndex():Promise<void>{
  frameControls();
 }
 function loadReference(): Promise<number> {
-  const url = new URL(data.reference.url, location.href); if (url.origin !== location.origin || url.pathname !== '/compare-reference' || url.search || url.hash) throw new Error('Reference must be the server-bound local compare video');
+  if (data.reference.url !== '/compare-reference') throw new Error('Reference must be the server-bound local compare video'); const url = new URL(access.route(data.reference.url), location.href); if (url.origin !== location.origin || url.pathname !== access.route('/compare-reference') || url.search || url.hash) throw new Error('Reference must be the server-bound local compare video');
   text('reference-name', data.reference.name); observeVideoFrames();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Could not read reference video metadata / first frame.')), 15000);
@@ -290,7 +293,7 @@ function stripStatus(value: string, error = false): void { text('strip-status', 
 function updateStripControls(): void {
   el('strip-panel').setAttribute('aria-busy', String(stripBusy));
   select('strip-scope').disabled = stripBusy; select('strip-format').disabled = stripBusy; select('strip-basis').disabled = stripBusy || select('strip-scope').value === 'feedback';
-  button('strip-export').disabled = stripBusy; button('strip-export').textContent = stripBusy ? 'Generating strip…' : 'Download strip';
+  button('strip-export').disabled = stripBusy || !!readOnly; button('strip-export').title = readOnly ?? ''; button('strip-export').textContent = stripBusy ? 'Generating strip…' : 'Download strip';
 }
 async function exportStrip(): Promise<void> {
   if (stripBusy) return;
@@ -315,7 +318,7 @@ async function exportStrip(): Promise<void> {
     for (const interval of intervals) if (!Number.isSafeInteger(interval.frameStart) || !Number.isSafeInteger(interval.frameEnd) || interval.frameStart < 0 || interval.frameEnd < interval.frameStart) throw new Error(`${interval.id}: Specify an inclusive range of nonnegative integer frames.`);
     const request: StripRequest = { format, sourceHash: data.sourceHash, animation: data.animation, intervals };
     stripBusy = true; updateStripControls(); stripStatus(`${data.animation} · ${intervals.length} ranges · Generating ${format.toUpperCase()}…`);
-    const response = await fetch('/api/compare/strip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
+    const response = await fetch(access.route('/api/compare/strip'), { method: 'POST', headers: access.headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(request) });
     if (!response.ok) {
       const failure: unknown = await response.json().catch(() => null);
       throw new Error(failure && typeof failure === 'object' && 'error' in failure && typeof failure.error === 'string' ? failure.error : `Strip export failed · HTTP ${response.status}`);
@@ -363,7 +366,7 @@ function bind(): void {
     session.feedback.push({ id: crypto.randomUUID(), side, frameStart, frameEnd, target, category: category as CompareFeedback['category'], summary, context: { interval: { frameStart, frameEnd, inclusive: true }, animation: data.animation, mediaTime: inspected.reference, clockSource: inspected.source, frame: currentFrame(side), frames: { a: currentFrame('a'), b: currentFrame('b') }, playheads: { reference: inspected.reference, a: inspected.a, b: inspected.b },reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,part:parts?.feedback()??null,view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},decodedIndex:referenceFrames?referenceFrameAtTime(referenceFrames,inspected.reference)?.index??null:null } });
     input('summary').value = ''; markDirty(); renderFeedback(); message('Added feedback bound to the target build and both reviewed sources.');
   };
-  button('submit').onclick = async () => { if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; } saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;await persistence?.submitted(saved); message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status and A/B/reference-video provenance.'); } catch (error) { message(`Submission failed: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
+  button('submit').onclick = async () => { if(readOnly){message(readOnly,true);return;}if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; } saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;await persistence?.submitted(saved); message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status and A/B/reference-video provenance.'); } catch (error) { message(`Submission failed: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
   button('export-json').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ ...session, schema: 'rig-review-compare-feedback/1', issues: session.feedback.map(issue) }, null, 2) + '\n', 'application/json'); };
   button('export-markdown').onclick = () => { download(`${session.id}-issues.md`, [`# ${md(data.title)}`, '', 'Ordered A/B and reference provenance:', ...JSON.stringify(session.binding, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(feedback => { const entry = issue(feedback); return [`## ${md(entry.title)}`, '', entry.body, '', '---', '']; })].join('\n'), 'text/markdown'); };
   // Saved browser defaults seed a new inspection; explicit links and source drafts restore over them.
@@ -385,7 +388,9 @@ function bind(): void {
 
 async function start(): Promise<void> {
   try {
-    [data, session] = await Promise.all([api<CompareResponse>('/api/compare'), api<CompareSession>('/api/compare/session')]);
+    let writes: { capabilityRequired: boolean };
+    [data, session, writes] = await Promise.all([api<CompareResponse>('/api/compare'), api<CompareSession>('/api/compare/session'), api<{ capabilityRequired: boolean }>('/api/access')]);
+    readOnly = readOnlyReason(access, writes.capabilityRequired); if (readOnly) message(readOnly, true);
     submittedBaseline=structuredClone(session);
     if (data.id !== session.id || data.sourceHash !== session.sourceHash || JSON.stringify(data.binding) !== JSON.stringify(session.binding)) throw new Error('Comparison and submission session refer to different source identities. Reopen the review.');
     text('title', data.title); text('animation', `${data.animation} · A/B order and reference video hash are fixed`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); parts=new PartExplorer(el('parts-explorer'),el('selected-part'),previous=>{redrawOverlays(true);const part=parts?.value();if(part){activeCamera=part.side==='b'?'b':'a';workspace?.revealInspector();document.querySelector<HTMLButtonElement>('[data-inspector=rig]')?.click();renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera());persistence?.save();},part=>{select('side').value=part.side;select('target-kind').value='slot';renderFeedbackSelection();input('target-name').value=part.slot;document.querySelector<HTMLButtonElement>('[data-inspector=feedback]')?.click();}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackSelection(); renderFeedback(); savedState();
@@ -394,7 +399,7 @@ async function start(): Promise<void> {
     domain = commonDomain(referenceDuration, aDuration, bDuration); input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;
     await seekTo(0);activeCamera='a';if(cameraSync)alignCameras();fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
-    controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
+    if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { failPair(error); for (const side of ['a', 'b'] as const) if (!players[side]) text(`${side}-empty`, `${side.toUpperCase()} Could not open comparison rig.`); text('reference-empty', 'Check the reference video and comparison inputs.'); }
 }
 function sharedBox():PoseBounds|null {const a=assets.a?.stage??players.a?.bounds(),b=assets.b?.stage??players.b?.bounds();return a&&b?unionBounds(a,b):null;}
@@ -504,7 +509,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
  }finally{cameraRestoring=false;}
 }
 async function setupPersistence():Promise<boolean> {
- persistence=await connectInspectionPersistence({scope:'compare:'+data.a.manifest.id+':'+data.b.manifest.id+':'+data.reference.name,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('status').value=session.status;renderFeedback();savedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
+ persistence=await connectInspectionPersistence({scope:'compare:'+data.a.manifest.id+':'+data.a.sourceHash+':'+data.b.manifest.id+':'+data.b.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('status').value=session.status;renderFeedback();savedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
  ui:()=>({inspectorScroll:workspace?.scroll()??'{}',frameBasis:select('frame-basis').value}),restoreUI:value=>{if(value.frameBasis==='a'||value.frameBasis==='b')select('frame-basis').value=value.frameBasis;frameControls();workspace?.restoreScroll(value.inspectorScroll);},afterInputs:()=>{video.muted=!input('reference-audio').checked;const name=input('target-name').value;renderFeedbackSelection();input('target-name').value=name;},onConflict:value=>{draftConflict=value;savedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
  return persistence.restored;
 }

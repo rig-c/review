@@ -107,22 +107,39 @@ export function recoverSession<T extends {id:string;revision:string;sourceHash:s
  if('checkpoints'in baseline){if(!o.checkpoints||typeof o.checkpoints!=='object'||Array.isArray(o.checkpoints))return null;for(const value of Object.values(o.checkpoints)){if(!value||typeof value!=='object'||Array.isArray(value))return null;const item=value as Record<string,unknown>;if(!['pending','pass','fail'].includes(String(item.outcome))||typeof item.note!=='string'||item.note.length>32768)return null;}}
  return o as T;
 }
-/** Storage is confined to this app/scope. A source change drops that scope's old draft only. */
+/** Drafts kept per origin before least-recently-written eviction; recent drafts are never evicted. */
+export const maximumDrafts=32,protectedDraftMs=24*60*60*1000;
+const draftPrefix='rig-review-draft/1:',draftIndex='rig-review-draft-index/1';
+/** Storage is confined to this app; the scope carries the source identity (`single:<id>:<sourceHash>`), so
+ * revisions of one package opened on one origin keep separate drafts. Opening deletes nothing; writing evicts
+ * the least-recently-written drafts beyond 32, except any written within the last 24 hours. */
 export class InspectionDraftStore {
  private storage:Storage|null=null;
  private blocked=false;
  private rawRecovery:string|null=null;
  recovery():string|null{return this.rawRecovery;}
  readonly key:string;
- constructor(private readonly scope:string,private readonly binding:InspectionBinding,private readonly warn:(message:string)=>void,storage?:Storage){
-  this.key=`rig-review-draft/1:${scope}:${binding.sourceHash}`;
-  try{this.storage=storage??localStorage;const active=`rig-review-active/1:${scope}`,previous=this.storage.getItem(active);if(previous&&previous!==this.key&&previous.startsWith(`rig-review-draft/1:${scope}:`)){this.storage.removeItem(previous);warn('Previous input draft cleared for this review scope because its source changed.');}this.storage.setItem(active,this.key);}catch{this.storage=null;warn('Local draft storage unavailable. Keep this page open or export feedback before leaving.');}
+ constructor(private readonly scope:string,private readonly binding:InspectionBinding,private readonly warn:(message:string)=>void,storage?:Storage,private readonly now:()=>number=Date.now){
+  this.key=`${draftPrefix}${scope}:${binding.sourceHash}`;
+  try{this.storage=storage??localStorage;this.storage.getItem(draftIndex);}catch{this.storage=null;warn('Local draft storage unavailable. Keep this page open or export feedback before leaving.');}
+ }
+ /** Written-at times by key; a draft missing from the index falls back to its own savedAt. */
+ private written():Map<string,number>{
+  const storage=this.storage!,times=new Map<string,number>();let index:Record<string,unknown>={};try{const raw=storage.getItem(draftIndex);const parsed=raw?JSON.parse(raw):{};if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))index=parsed;}catch{}
+  for(let i=0;i<storage.length;i++){const key=storage.key(i);if(!key?.startsWith(draftPrefix))continue;let time=Number(index[key]);if(!Number.isFinite(time)){try{time=Date.parse(JSON.parse(storage.getItem(key)??'').savedAt);}catch{time=NaN;}}times.set(key,Number.isFinite(time)?time:0);}
+  return times;
+ }
+ private evict():void{
+  const storage=this.storage!,now=this.now(),times=this.written();times.set(this.key,now);
+  const old=[...times].filter(([key,time])=>key!==this.key&&now-time>protectedDraftMs).sort((a,b)=>a[1]-b[1]);
+  for(const [key]of old){if(times.size<=maximumDrafts)break;storage.removeItem(key);times.delete(key);}
+  storage.setItem(draftIndex,JSON.stringify(Object.fromEntries(times)));
  }
  read():LocalInspectionDraft|null {
   if(!this.storage)return null;try{const raw=this.storage.getItem(this.key);if(!raw)return null;this.rawRecovery=raw;if(new TextEncoder().encode(raw).length>maximumDraftBytes)throw new Error('Draft exceeds 512 KiB');const o=record(JSON.parse(raw),'draft');keys(o,['schema','sourceHash','baseline','savedAt','reviewDirty','bookmark','inputs','session','ui'],'draft');if(o.schema!=='rig-review-local-draft/1'||o.sourceHash!==this.binding.sourceHash)throw new Error('Draft binding/version differs');if(typeof o.reviewDirty!=='boolean')throw new Error('Draft review state invalid');const bookmark=parseBookmark(o.bookmark,this.binding),baseline=hash(o.baseline);if(typeof o.savedAt!=='string'||!Number.isFinite(Date.parse(o.savedAt)))throw new Error('Draft timestamp invalid');const ui=record(o.ui,'draft UI');for(const [k,v]of Object.entries(ui)){text(k,'draft UI key');if(v!==null&&typeof v!=='string'&&typeof v!=='number'||typeof v==='number'&&!Number.isFinite(v))throw new Error('Draft UI value invalid');}return {schema:o.schema,sourceHash:this.binding.sourceHash,baseline,savedAt:o.savedAt,reviewDirty:o.reviewDirty,bookmark,inputs:parseInputs(o.inputs),session:o.session,ui:ui as LocalInspectionDraft['ui']};}catch(error){this.blocked=true;this.warn(`Saved local draft was not restored: ${error instanceof Error?error.message:String(error)}. It remains in storage for recovery.`);return null;}
  }
  write(draft:LocalInspectionDraft):boolean {
-  if(!this.storage||this.blocked)return false;try{const value=JSON.stringify(draft);if(new TextEncoder().encode(value).length>maximumDraftBytes)throw new Error('Draft exceeds 512 KiB');this.storage.setItem(this.key,value);return true;}catch(error){this.warn(`Local draft could not be saved: ${error instanceof Error?error.message:String(error)}. Export feedback before leaving.`);return false;}
+  if(!this.storage||this.blocked)return false;try{const value=JSON.stringify(draft);if(new TextEncoder().encode(value).length>maximumDraftBytes)throw new Error('Draft exceeds 512 KiB');this.storage.setItem(this.key,value);try{this.evict();}catch{}return true;}catch(error){this.warn(`Local draft could not be saved: ${error instanceof Error?error.message:String(error)}. Export feedback before leaving.`);return false;}
  }
  clear():void {try{this.storage?.removeItem(this.key);this.blocked=false;this.rawRecovery=null;}catch{this.warn('Local draft could not be cleared.');}}
 }

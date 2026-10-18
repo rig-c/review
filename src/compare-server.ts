@@ -1,5 +1,5 @@
 import {createControlServer,type ControlIdentity} from './control-server.ts';
-import {openGate,staleOpenStatus,type OpenIdentity} from './open-protocol.ts';
+import {openGate,staleOpenStatus,accessGate,openNonceGate,stampOpen,type OpenIdentity} from './open-protocol.ts';
 import { readFile } from 'node:fs/promises';
 import { appRoot, buildWeb } from './build.ts';
 import { packagePath, safeFile } from './manifest.ts';
@@ -28,13 +28,15 @@ function serveAsset(req:Request,path:string):Response{
   }
   return new Response(req.method==='HEAD'?null:file,{headers:{...assetHeaders,'Content-Length':String(size)}});
 }
-export async function startCompareServer(p:ComparePackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;activity?:()=>void;control?:ControlIdentity}={}){
+/** `capability` (open workers and foreground CLI serving) gates every non-GET request; tests may omit it. */
+export async function startCompareServer(p:ComparePackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;activity?:()=>void;control?:ControlIdentity;capability?:string}={}){
   const bundle=await buildWeb('compare');
   const frames=referenceFrameIndex(p.referencePath,p.response.binding.reference.sha256,p.response.sourceHash);
   const control=options.control?createControlServer({identity:options.control,sourceHash:p.response.sourceHash,mode:'compare',unchanged:()=>assertCompareUnchanged(p),activity:options.activity}):null;
-  return Bun.serve({hostname:'127.0.0.1',port:options.port??4317,async fetch(req,server){try{
-    const url=new URL(req.url),origin=`http://127.0.0.1:${server.port}`;
+  const handle=async(req:Request,port:number|undefined):Promise<Response>=>{try{
+    const url=new URL(req.url),origin=`http://127.0.0.1:${port}`;
     if(url.origin!==origin)return json({error:'Loopback host required'},403);
+    const refused=openNonceGate(req,options.open)??accessGate(req,options.capability);if(refused)return refused;
     const controlled=await control?.(req,origin);if(controlled)return controlled;
     options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await assertCompareUnchanged(p);}catch{return staleOpenStatus(options.open!);}}return gate;}
     if(req.method==='PUT'&&url.pathname==='/api/compare/session'){
@@ -56,5 +58,6 @@ export async function startCompareServer(p:ComparePackage,options:{port?:number;
     if(url.pathname==='/'||url.pathname==='/index.html')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/compare.html'),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
     if(url.pathname==='/styles.css')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/compare.css'),{headers:{...headers,'Content-Type':'text/css'}});
     return json({error:'Not found'},404);
-  }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message.includes('inputs changed')?409:400);}}});
+  }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message.includes('inputs changed')?409:400);}};
+  return Bun.serve({hostname:'127.0.0.1',port:options.port??4317,async fetch(req,server){return stampOpen(req,await handle(req,server.port),options.open);}});
 }

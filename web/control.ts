@@ -1,5 +1,6 @@
 import {parseControlCommand,parseControlInspection,preflightControl,type ControlCommand,type ControlDelivery,type ControlInspection,type ControlMode} from '../src/control.ts';
-interface Adapter {sourceHash:string;mode:ControlMode;observe:()=>ControlInspection;apply:(command:ControlCommand,signal:AbortSignal)=>Promise<void>;onStatus?:(value:string)=>void}
+/** `route`/`headers` place calls under the page's instance base and add its write capability. */
+interface Adapter {sourceHash:string;mode:ControlMode;route?:(path:string)=>string;headers?:()=>Headers;observe:()=>ControlInspection;apply:(command:ControlCommand,signal:AbortSignal)=>Promise<void>;onStatus?:(value:string)=>void}
 /** Ongoing drags are local changes too; pointer hover is not a revision. */
 export class ControlLocalRevision {
  revision=0;private pointers=new Set<number>();
@@ -21,8 +22,9 @@ export function connectControl(adapter:Adapter):()=>void{
  const local=new ControlLocalRevision(()=>{lastUser=Date.now();inflight?.abort(new Error('CONTROL_SUPERSEDED: local interaction'));});
  const status=(text:string)=>adapter.onStatus?.(text);
  const observe=()=>parseControlInspection(adapter.observe());
+ const route=adapter.route??((path:string)=>path),capability=()=>Object.fromEntries(adapter.headers?.()??[]) as Record<string,string>;
  async function call<T>(path:string,value?:unknown):Promise<T>{
-  const response=await fetch(path,{method:value===undefined?'GET':'POST',headers:{...(value===undefined?{}:{'Content-Type':'application/json'}),...(token?{Authorization:'Bearer '+token}:{})},...(value===undefined?{}:{body:JSON.stringify(value)}),signal:AbortSignal.timeout(5000)});
+  const response=await fetch(route(path),{method:value===undefined?'GET':'POST',headers:{...(value===undefined?{}:{...capability(),'Content-Type':'application/json'}),...(token?{Authorization:'Bearer '+token}:{})},...(value===undefined?{}:{body:JSON.stringify(value)}),signal:AbortSignal.timeout(5000)});
   const result=await response.json();if(!response.ok)throw new Error(typeof result.error==='string'?result.error:'CONTROL_REQUEST_FAILED');return result as T;
  }
  function interaction(event:Event){if(!event.isTrusted)return;local.interaction(event.type,'pointerId' in event?(event as PointerEvent).pointerId:undefined);}
@@ -53,7 +55,7 @@ export function connectControl(adapter:Adapter):()=>void{
  }
  void (async()=>{
   try{
-   const response=await fetch('/api/control/config',{signal:AbortSignal.timeout(5000)});if(response.status===404){closed=true;return;}if(!response.ok)throw new Error('CONTROL_UNAVAILABLE');
+   const response=await fetch(route('/api/control/config'),{signal:AbortSignal.timeout(5000)});if(response.status===404){closed=true;return;}if(!response.ok)throw new Error('CONTROL_UNAVAILABLE');
    const config=await response.json();if(!config.enabled){closed=true;return;}if(config.sourceHash!==adapter.sourceHash||config.mode!==adapter.mode)throw new Error('CONTROL_STALE_BINDING');
    const page=await call<{pageId:string;pageToken:string;revision:number}>('/api/control/register',{sourceHash:adapter.sourceHash,inspection:observe()});
    pageId=page.pageId;token=page.pageToken;
@@ -61,5 +63,5 @@ export function connectControl(adapter:Adapter):()=>void{
    status('Remote inspection enabled · page '+pageId);void poll();
   }catch(error){closed=true;status(error instanceof Error?error.message:'Remote control unavailable');}
  })();
- return ()=>{closed=true;if(timer)clearTimeout(timer);inflight?.abort();for(const event of events)window.removeEventListener(event,interaction,true);if(pageId)void fetch('/api/control/close',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({pageId}),keepalive:true}).catch(()=>{});};
+ return ()=>{closed=true;if(timer)clearTimeout(timer);inflight?.abort();for(const event of events)window.removeEventListener(event,interaction,true);if(pageId)void fetch(route('/api/control/close'),{method:'POST',headers:{...capability(),'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({pageId}),keepalive:true}).catch(()=>{});};
 }

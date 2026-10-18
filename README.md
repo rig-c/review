@@ -51,7 +51,7 @@ For a curated handoff, [REVIEW_PACKAGE.md](docs/REVIEW_PACKAGE.md) documents opt
 bun run review -- /absolute/path/to/package/review.json --checkpoint silhouette
 ```
 
-The server prints the exact link, for example `http://127.0.0.1:4317/?checkpoint=silhouette`. `--port 0` selects a free port. It binds only `127.0.0.1` and never opens a browser automatically. A folder containing `review.json` uses that explicit manifest.
+The server prints the exact link, for example `http://127.0.0.1:4317/?checkpoint=silhouette#cap=…`. The `#cap=` fragment is this server's write capability (see [Managed front and write capability](#managed-front-and-write-capability)). `--port 0` selects a free port. It binds only `127.0.0.1` and never opens a browser automatically. A folder containing `review.json` uses that explicit manifest.
 
 ## Compare two outputs
 
@@ -140,7 +140,9 @@ The footer fits its measured text while retaining full hashes. RGB/dark-tint fea
 ## One-command owner handoff
 
 `open` validates and hashes an existing folder, starts a background loopback
-instance or reuses the exact matching one, prints its hash-bound URL, and exits:
+instance or reuses the exact matching one, prints its hash-bound URL, and exits.
+By default the URL goes through the managed front at `127.0.0.1:4318`; `--direct`
+prints the instance's own port instead (see [Managed front and write capability](#managed-front-and-write-capability)):
 
 ```sh
 bun run open -- /absolute/output --reference /absolute/original.mp4
@@ -198,6 +200,40 @@ printed: every current instance binds only `127.0.0.1`.
 
 The printed feedback retrieval command uses POSIX shell quoting for literal path
 arguments. It is not a PowerShell or cmd.exe command string.
+
+### Managed front and write capability
+
+`open` is **managed by default**. It ensures one detached loopback front at
+`127.0.0.1:4318` (`RIG_REVIEW_FRONT_PORT` overrides) for the state directory and
+prints `http://127.0.0.1:4318/instances/<key>/?input=…&handoff=…#cap=…`. Every
+inspection therefore shares one stable browser origin, so Settings, panel sizes and
+source-bound drafts survive a reopen. The front only routes: it takes the worker
+address from that key's private open record, allows a closed per-method route
+list, bounds bodies (16 KiB control, 1 MiB session/strip) and upstream time,
+limits concurrent upstream streams, re-verifies the worker's nonce on every
+request, and refuses an unknown, expired or replaced instance by name
+(`FRONT_INSTANCE_UNKNOWN`, `FRONT_INSTANCE_EXPIRED`, `FRONT_INSTANCE_REPLACED`).
+Worker error text is not passed through; failures become named `FRONT_*` codes.
+Package assets keep their `sandbox` CSP through the front. It never reads packages.
+Idle fronts exit after 30 minutes once no live instance remains.
+
+If another listener holds the front port, `open` fails with
+`FRONT_PORT_BUSY: 127.0.0.1:4318 is held by another listener; use --direct` and
+does not fall back silently. `open --direct` keeps the per-instance port and
+prints that worker's own URL.
+
+One origin cannot isolate scripts that run on it, so writes are bound to a
+per-instance capability rather than to the page's origin or the key in its path.
+Each worker mints a 256-bit capability kept only in its private 0600 open record.
+`open` (managed or direct) and the foreground `review`/`review compare` commands
+print it in the `#cap=` fragment, which browsers never send to a server. The page
+moves it into memory and that tab's `sessionStorage`, then removes the fragment
+from the address bar. Every mutation sends it as `X-Review-Capability`; the front
+checks it before forwarding and the worker compares it again in constant time
+before its existing same-origin check. No endpoint returns it, so a page opened
+for one instance cannot submit to another. A copied view link (without the
+fragment) opens read-only and says *Read-only view: reopen with rig-review open to
+edit*; run `open` again for a writable link.
 
 ## Control the current inspection page
 
@@ -271,8 +307,11 @@ workspace selections are accepted without restoring a top-level workspace switch
 for a different source binding is refused.
 
 Ordinary form inputs, selected panels, view state and unsent feedback/checkpoint
-choices are kept in browser local storage for the same source. Changing the
-model/source clears the previous draft in that page's storage scope. Browser
+choices are kept in browser local storage for the same source. The draft scope
+includes the source hash (`single:<id>:<sourceHash>`; compare uses both sides'
+id and hash), so two revisions of one package keep separate drafts. Opening a page
+deletes no draft; saving evicts the least-recently-written drafts beyond 32, but
+never one written within the last 24 hours. Browser
 Settings (below) remain, while a source-bound appearance override does not
 carry over. URL view state takes precedence over the locally saved view. Each
 Inspector section's own scroll position is part of this source-bound draft.
@@ -312,9 +351,9 @@ until you change a setting. Several open tabs merge their writes per field, so
 changing the theme in one tab does not undo a panel size changed in another.
 Separate browser profiles keep separate preferences.
 
-Browser storage is per origin. Persistence is claimed only within one origin:
-each managed open currently uses its own loopback port, so Settings, panel
-sizes and drafts do not carry across a managed reopen on a different port.
+Browser storage is per origin. Managed opens share the front's one origin, so
+Settings, panel sizes and drafts carry across reopens. `--direct` and foreground
+serving use per-port origins and keep them separate.
 
 
 ## Inspect a part
