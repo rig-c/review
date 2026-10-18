@@ -2,7 +2,7 @@ import {afterEach,expect,test} from 'bun:test';
 import {mkdtemp,mkdir,cp,writeFile,readFile,rm,utimes,realpath} from 'node:fs/promises';
 import {join} from 'node:path';import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
-import {inspectionReferenceFrame,lastSupportedReferenceFrame,nearestReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,requireUniqueReferencePts,type VideoInfo} from '../src/reference-frames.ts';
+import {nextReferenceInterval,inspectionReferenceFrame,lastSupportedReferenceFrame,nearestReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,requireUniqueReferencePts,type VideoInfo} from '../src/reference-frames.ts';
 import {frameAtTime,type FrameClock} from '../src/frame-clock.ts';
 import {referenceFrameIndex} from '../src/reference-frame-index.ts';
 import {freshCompareSession,saveCompareSession,readCompareSession} from '../src/compare-session.ts';
@@ -58,4 +58,10 @@ test('fixed comparison timestamp endpoint binds actual public reference and reje
  expect((await fetch(base+'/api/compare/reference-frames?path=/etc/passwd')).status).toBe(400);expect((await fetch(base+'/api/compare/reference-frames',{method:'POST'})).status).toBe(405);expect((await fetch(base+'/api/compare/reference-frames',{headers:{Host:'evil.test'}})).status).toBe(403);
  await writeFile(reference,(await readFile(reference)).subarray(0,-1));expect((await fetch(base+'/api/compare/reference-frames')).status).toBe(409);
  }finally{await server.stop(true);}
+});
+
+test('next-reference estimate uses adjacent real VFR PTS and actual rate; no terminal or missing interval is invented',()=>{
+ const video=info([0,.071,.313,.9],1.7);
+ expect(nextReferenceInterval(video,.071,1)).toBe(.313-.071);expect(nextReferenceInterval(video,.071,2)).toBe((.313-.071)/2);expect(nextReferenceInterval(video,.071,.5)).toBe((.313-.071)/.5);
+ expect(nextReferenceInterval(video,.9,1)).toBeNull();expect(nextReferenceInterval(null,0,1)).toBeNull();expect(nextReferenceInterval(video,0,0)).toBeNull();expect(nextReferenceInterval(video,0,-1)).toBeNull();expect(nextReferenceInterval(video,0,NaN)).toBeNull();expect(nextReferenceInterval(info([0,0,.1],.2),0,1)).toBeNull();
 });

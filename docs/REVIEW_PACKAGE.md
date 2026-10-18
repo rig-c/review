@@ -351,25 +351,48 @@ exact index it pauses and invalidates inspection feedback; seconds controls rema
 available for recovery. A decoded timestamp outside the shared domain likewise
 leaves inspection unavailable without permanently disabling transport.
 
-### Live compare presentation budget
+### Live compare submission timing
 
-Live comparison uses only the real requestVideoFrameCallback expectedDisplayTime
-as its presentation deadline. A callback already late skips preparation and draw.
-After deterministic preparation, the caller compares remaining time with a
-rolling p95 estimate of its last20 actual pair draw costs; a pair that cannot fit
-is held without either draw. This estimate is not a guarantee: actual completion
-lateness is recorded separately, including a draw that finishes late.
+Each actual requestVideoFrameCallback mediaTime immediately poses both rigs with
+fixed-history public seek and submits both draws. There is no pre/post admission
+based on a historical draw-cost estimate. This synchronous path has no queued
+newer JavaScript callback to drop; it does not invent an asynchronous scheduler.
+
+The browser reports the current frame's expectedDisplayTime. Its completion
+lateness remains a separate diagnostic. The **next-reference estimate** is
+`expectedDisplayTime + (next actual decoded PTS - current indexed PTS) * 1000 /
+video.playbackRate`. Adjacent timestamps come from the verified reference index,
+not producer FPS, a guessed cadence, an epsilon or video slowdown. If the index,
+next timestamp or positive finite playback rate is absent, timing is unknown:
+basic playback continues but strict timing cannot pass. The final indexed frame
+has no invented next interval. CPU draw-return time is submission completion,
+not compositor acknowledgement or proof of pixel presentation.
 
 `lastDrawn` changes only after both draw calls succeed. Prepared player.time is
-reported separately and never substituted for the visible pose time. A failed
-second draw invalidates the pair. A held/late pair cannot supply successful
-inspection feedback; the advancing reference timestamp, last drawn timestamp,
-drift (in1/24s comparison units), dropped count and deadline misses remain visible.
-Frame inspection and pause inspection have no live presentation deadline and
-replay the same fixed history. They can recover a valid pair.
+reported separately. A failed second draw invalidates the pair. A late or
+unknown-timing live submission cannot supply successful inspection feedback;
+paused inspection has no deadline and can recover a valid pair. The transport
+shows actual last-drawn time, reference drift, known/unknown timing counts and
+late submissions without suppressing future drawing.
 
-With1.11.0, replay may exceed every available frame budget. The transport then
-explicitly warns that the old pose is held; it does not slow the video or claim
-that prepared-but-undrawn time is synchronized. Performance acceptance remains
-open until the fast deterministic-seek runtime dependency and real measurement
-meet all#24 target drift, deadline, pose cost and physics-equivalence bars.
+The manual measurement records every eligible live callback, actual presented
+index gaps, last-drawn drift, paired pose/draw cost and both timing diagnostics.
+It requires at least99% decoded-callback coverage and99% drawn-pair coverage,
+full clip bounds and known paired state; all-held or endpoint-only runs fail.
+The original1.11.0 baseline and first1.11.2 all-held failure are retained as
+historical evidence. Runtime1.11.2 consumption does not itself certify performance:
+acceptance requires independent actual measurement and the producer's corrected
+physics oracle, with their scopes reported separately.
+
+At the actual media `ended` event, comparison pauses and reuses exact inspection
+of the last supported indexed reference frame. This restores valid endpoint
+feedback without inventing a future display deadline. Missing-index fallback
+keeps inspection unavailable and the existing supported-seek recovery path.
+
+A terminal timing sample is N/A only when the bound verified index says it is
+the last decoded frame exactly at the shared clip end, there is no successor,
+an actual ended event follows it, and a later valid paused inspection confirms
+the same actual last-drawn pair and enables feedback. The manual raw evidence
+records all of those facts. Other unknown timing remains a strict failure; the
+terminal case is excluded from the deadline denominator, never counted as an
+on-time submission.

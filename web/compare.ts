@@ -7,7 +7,7 @@ import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection } fro
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 
 import {ComparePresentation,type PresentationState} from '../src/compare-presentation.ts';
-import {ReferenceSelectionUnavailable,inspectionReferenceFrame,lastSupportedReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,type ReferenceFrameIndex,type VideoInfo,type VideoFrame} from '../src/reference-frames.ts';
+import {nextReferenceInterval,ReferenceSelectionUnavailable,inspectionReferenceFrame,lastSupportedReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,type ReferenceFrameIndex,type VideoInfo,type VideoFrame} from '../src/reference-frames.ts';
 type Side = 'a' | 'b';
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const node = document.getElementById(id); if (!node) throw new Error(`Missing compare UI element: ${id}`); return node as T;
@@ -94,14 +94,14 @@ function renderPresentation(state:PresentationState):void {
  if(target!==undefined){text('reference-time',`${target.toFixed(6)} s`);text('time',`${target.toFixed(4)} / ${domain!.end.toFixed(4)} s`);input('scrub').value=String(target);}
  const delta=target===undefined||!last?null:Math.max(Math.abs(last.a-target),Math.abs(last.b-target))*24;
  const visible=last?`${last.reference.toFixed(6)} s`:'unknown';
- text('sync-status',`${state.status==='held'?'Held':state.status==='drawn'?(state.lastLatenessMs>0?'Drawn late':'Drawn'):'Unknown'} pose ${visible} · Δ ${delta===null?'—':delta.toFixed(2)} (1/24 s units) · dropped ${state.dropped} · deadline misses ${state.deadlineMisses}/${state.callbacks} · replay ${state.lastPoseMs.toFixed(1)} ms · lateness ${state.lastLatenessMs.toFixed(1)} ms`);
+ text('sync-status',`${state.status==='held'?'Held':state.status==='drawn'?(state.lastLatenessMs>0?'Drawn late':'Drawn'):'Unknown'} pose ${visible} · Δ ${delta===null?'—':delta.toFixed(2)} (1/24 s units) · dropped ${state.dropped} · deadline misses ${state.deadlineMisses}/${state.deadlineKnownCallbacks} known next-reference estimates (${state.deadlineUnknownCallbacks} unknown) · replay ${state.lastPoseMs.toFixed(1)} ms · lateness ${state.deadlineKind==='unknown'?'unknown':state.lastLatenessMs.toFixed(1)+' ms'} (next-reference estimate; CPU submission)`);
  el('sync-status').classList.toggle('error',state.status==='held'||state.lastLatenessMs>0||state.status==='failed');
  if(!state.inspection){
   trace=null;updateFeedbackAvailability();
-  for(const side of ['a','b'] as const){text(`${side}-time`,last?`${last[side].toFixed(6)} s · held`:'unknown');const decoded=last&&referenceFrames?referenceFrameAtTime(referenceFrames,last.reference):null,frame=decoded?associations[side].get(decoded.index)??null:null;text(`${side}-frame`,last?`Held review F${frame??'—'}`:'Review frame unknown');}
-  text('clock-source','Reference continues; feedback requires a fresh drawn pair or paused inspection.');
+  for(const side of ['a','b'] as const){text(`${side}-time`,last?`${last[side].toFixed(6)} s · ${state.status==='held'?'held':'drawn; feedback unavailable'}`:'unknown');const decoded=last&&referenceFrames?referenceFrameAtTime(referenceFrames,last.reference):null,frame=decoded?associations[side].get(decoded.index)??null:null;text(`${side}-frame`,last?`${state.status==='held'?'Held':'Drawn'} review F${frame??'—'}`:'Review frame unknown');}
+  text('clock-source','Feedback requires a pair submitted before the known next-reference estimate or paused inspection.');
  }
- text('sync-warning',state.status==='held'?'Holding the last drawn pose: deterministic replay exceeded the real presentation budget. Pause and inspect an exact frame; the current replay cannot keep up.':state.lastLatenessMs>0?'The pair finished drawing after its presentation deadline. Pause for exact inspection.':'');
+ text('sync-warning',state.deadlineKind==='unknown'?'Next-reference timing unknown: an adjacent decoded timestamp and positive playback rate are required. Playback continues; pause for exact inspection.':state.lastLatenessMs>0?'The pair finished CPU draw submission after the estimated next reference display boundary. Pause for exact inspection.':'');
  text('trace',JSON.stringify({presentation:state,playerTimes:{a:players.a?.time??null,b:players.b?.time??null},rawFloorFrames:{a:currentFrame('a'),b:currentFrame('b')},reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,endStopReason,decodedIndex:referenceFrames&&target!==undefined?referenceFrameAtTime(referenceFrames,target)?.index??null:null},null,2));
  frameControls();
 }
@@ -109,7 +109,7 @@ function acceptReference(sample: ReferenceSample,deadline:number|null=null,prese
  if(!ready||seeking||video.seeking||!domain||!players.a||!players.b)return;
  if(sample.time>domain.end){stopAtSupportedEnd();return;}
  if(trace?.reference===sample.time&&trace.source===sample.source)return;
- try{const state=presentation.present(sample,deadline,presentedFrames,players.a,players.b,domain,()=>performance.now());if(state.inspection)renderTrace(state.inspection);renderPresentation(state);}catch(error){failPair(error);renderPresentation(presentation.snapshot());}
+ try{const state=presentation.present(sample,deadline,presentedFrames,players.a,players.b,domain,()=>performance.now(),nextReferenceInterval(referenceFrames,sample.time,video.playbackRate));if(state.inspection)renderTrace(state.inspection);renderPresentation(state);}catch(error){failPair(error);renderPresentation(presentation.snapshot());}
 }
 
 function stopAtSupportedEnd():void {
@@ -316,7 +316,7 @@ function bind(): void {
   button('play').onclick = async () => { if (!ready || seeking || !domain) return; if (!video.paused) {const current=lastPresented?.time;stop();if(current!==undefined)void seekTo(current);return; } if (trace && trace.reference >= domain.end) { message('공통 범위 끝입니다. 앞 시각으로 이동해 다시 재생해 주세요.'); return; } try { requestedProducer=null;endStopReason=null;await video.play(); button('play').textContent = 'Ⅱ'; button('play').setAttribute('aria-label', '비교 일시정지'); } catch (error) { failPair(error); } };
   input('scrub').oninput = () => { void seekTo(Number(input('scrub').value)); };
   button('seek').onclick = () => { const value = input('time-input').value.trim(); if (!value) { message('이동할 초를 입력해 주세요.', true); return; } void seekTo(Number(value)); };
-  video.addEventListener('ended', () => { stop(); if (typeof video.requestVideoFrameCallback !== 'function') acceptReference({ time: video.currentTime, source: 'current-time' }); });
+  video.addEventListener('ended', () => { stopAtSupportedEnd(); });
   input('reference-audio').onchange = () => { video.muted = !input('reference-audio').checked; };
   button('zoom-in').onclick = () => { zoom = Math.min(8, zoom * 1.25); fit(); }; button('zoom-out').onclick = () => { zoom = Math.max(.25, zoom / 1.25); fit(); }; button('fit').onclick = () => { zoom = 1; fit(); };
   for (const side of ['a', 'b'] as const) el(`${side}-viewport`).addEventListener('wheel', event => { event.preventDefault(); zoom = Math.max(.25, Math.min(8, zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1))); fit(); }, { passive: false });

@@ -29,6 +29,15 @@ export function referenceFrameAtTime(video:VideoInfo,time:number):VideoFrame|nul
  if(!Number.isFinite(time)||!Number.isFinite(video.duration)||!video.frames.length||time<0||time>=video.duration)return null;
  return nearestReferenceFrame(video.frames,time);
 }
+/** CPU submission budget estimate from adjacent decoded timestamps. The browser
+ * reports the current display time only; this is not a compositor acknowledgement. */
+export function nextReferenceInterval(video:VideoInfo|null,time:number,playbackRate:number):number|null {
+ if(!video||!Number.isFinite(playbackRate)||playbackRate<=0)return null;
+ const current=referenceFrameAtTime(video,time);if(!current)return null;
+ const next=video.frames[current.index+1];if(!next)return null;
+ const interval=(next.time-current.time)/playbackRate;
+ return Number.isFinite(interval)&&interval>0?interval:null;
+}
 /** Invert explicit producer sample→nearest decoded index only when one-to-one.
  * This is a review sample association, not frameAtTime's floor interpretation. */
 export function producerFrameAssociations(clock:FrameClock|null|undefined,video:VideoInfo):Map<number,number|null> {
