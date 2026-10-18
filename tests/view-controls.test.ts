@@ -27,6 +27,91 @@ test('real handoff automatic idle checkpoint previews; deep-link, timed or axis 
 import {readFile} from 'node:fs/promises';
 import {feedbackTargetNames} from '../src/feedback-validation.ts';
 
+interface PanHostEvent {
+ type:string;target:PanHostElement;code?:string;pointerId?:number;isPrimary?:boolean;button?:number;buttons?:number;clientX?:number;clientY?:number;defaultPrevented:boolean;preventDefault():void;
+}
+class PanHostEvents {
+ handlers=new Map<string,{listener:(event:PanHostEvent)=>void;capture:boolean}[]>();
+ addEventListener(type:string,listener:(event:PanHostEvent)=>void,capture=false){const rows=this.handlers.get(type)??[];rows.push({listener,capture});this.handlers.set(type,rows);}
+ removeEventListener(type:string,listener:(event:PanHostEvent)=>void){this.handlers.set(type,(this.handlers.get(type)??[]).filter(row=>row.listener!==listener));}
+ emit(type:string,target:PanHostElement,values:Partial<PanHostEvent>={},captureOnly=false):PanHostEvent {
+  const event:PanHostEvent={type,target,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;},...values};
+  for(const row of [...this.handlers.get(type)??[]])if(!captureOnly||row.capture)row.listener(event);return event;
+ }
+}
+class PanHostStyle {
+ private values=new Map<string,{value:string;priority:string}>();
+ getPropertyValue(name:string){return this.values.get(name)?.value??'';}
+ getPropertyPriority(name:string){return this.values.get(name)?.priority??'';}
+ setProperty(name:string,value:string,priority=''){this.values.set(name,{value,priority});}
+ removeProperty(name:string){const value=this.getPropertyValue(name);this.values.delete(name);return value;}
+}
+class PanHostElement extends PanHostEvents {
+ style=new PanHostStyle();dataset:Record<string,string>={};videos:PanHostElement[]=[];controls=true;captured=new Set<number>();parent:PanHostElement|null=null;
+ constructor(readonly tagName:string){super();}
+ closest(selector:string):PanHostElement|null {return selector.split(',').some(value=>value==='video[controls]'?this.tagName==='VIDEO'&&this.controls:value.toUpperCase()===this.tagName)?this:this.parent?.closest(selector)??null;}
+ querySelectorAll(){return this.videos.filter(video=>video.controls);}
+ setPointerCapture(id:number){this.captured.add(id);}
+ hasPointerCapture(id:number){return this.captured.has(id);}
+ releasePointerCapture(id:number){this.captured.delete(id);}
+}
+async function panHost(){
+ const source=await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8'),begin=source.indexOf('const panVideoOverrides='),end=source.indexOf('export function bindInspectorTabs(',begin);if(begin<0||end<begin)throw new Error('Pan lifecycle boundary missing');
+ const window=new PanHostEvents(),document=new PanHostEvents(),body=new PanHostElement('BODY');
+ class Observer {
+  static active=new Set<Observer>();constructor(private changed:()=>void){}
+  observe(){Observer.active.add(this);}disconnect(){Observer.active.delete(this);}
+  static mutate(){for(const observer of [...Observer.active])observer.changed();}
+ }
+ const script=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(begin,end).replace('export function','function'));
+ const bind=new Function('window','document','Element','MutationObserver',script+';return bindPan;')(window,document,PanHostElement,Observer) as (viewport:PanHostElement,move:(dx:number,dy:number)=>void,enabled?:()=>boolean)=>()=>void;
+ const keyDown=(target=body)=>document.emit('keydown',target,{code:'Space'});
+ const keyUp=(target=body)=>window.emit('keyup',target,{code:'Space'},true);
+ // Native media swallows down/up before DOM dispatch unless hit testing is
+ // redirected. This models the sealed trusted trace, not native rendering.
+ const gesture=(viewport:PanHostElement,video:PanHostElement)=>{
+  const redirected=video.style.getPropertyValue('pointer-events')==='none',target=redirected?viewport:video;
+  if(redirected)viewport.emit('pointerdown',target,{pointerId:7,isPrimary:true,button:0,buttons:1,clientX:100,clientY:200});
+  viewport.emit('pointermove',target,{pointerId:7,isPrimary:true,button:-1,buttons:1,clientX:136,clientY:220});
+  if(redirected)viewport.emit('pointerup',target,{pointerId:7,isPrimary:true,button:0,buttons:0,clientX:136,clientY:220});
+  return redirected;
+ };
+ return {bind,window,document,body,keyDown,keyUp,gesture,mutate:()=>Observer.mutate(),observers:()=>Observer.active.size};
+}
+
+test('Space redirects native video hit testing for a real pan lifecycle and restores exact inline controls state',async()=>{
+ const host=await panHost(),viewport=new PanHostElement('DIV'),video=new PanHostElement('VIDEO'),moves:number[][]=[];viewport.videos=[video];video.style.setProperty('pointer-events','auto','important');
+ const dispose=host.bind(viewport,(dx,dy)=>moves.push([dx,dy]));
+ try{
+  expect(host.gesture(viewport,video)).toBe(false);expect(moves).toEqual([]);expect(video.style.getPropertyValue('pointer-events')).toBe('auto');
+  const key=host.keyDown();expect(key.defaultPrevented).toBe(true);expect(video.style.getPropertyValue('pointer-events')).toBe('none');expect(video.style.getPropertyPriority('pointer-events')).toBe('important');
+  expect(host.gesture(viewport,video)).toBe(true);expect(moves).toEqual([[36,20]]);expect(viewport.hasPointerCapture(7)).toBe(false);expect(viewport.dataset.panning).toBeUndefined();
+  // Keyup cleanup runs at window capture even if native video would eat bubbling.
+  host.keyUp(video);expect(video.style.getPropertyValue('pointer-events')).toBe('auto');expect(video.style.getPropertyPriority('pointer-events')).toBe('important');expect(host.observers()).toBe(0);
+  expect(host.gesture(viewport,video)).toBe(false);expect(moves).toEqual([[36,20]]);
+  for(const tag of ['INPUT','TEXTAREA','SELECT','BUTTON']){expect(host.keyDown(new PanHostElement(tag)).defaultPrevented).toBe(false);expect(video.style.getPropertyValue('pointer-events')).toBe('auto');}
+  viewport.emit('pointerdown',new PanHostElement('BUTTON'),{pointerId:8,isPrimary:true,button:0,clientX:0,clientY:0});expect(viewport.hasPointerCapture(8)).toBe(false);
+  host.keyDown();viewport.emit('pointerdown',viewport,{pointerId:9,isPrimary:true,button:0,clientX:0,clientY:0});expect(viewport.hasPointerCapture(9)).toBe(true);
+  host.window.emit('blur',host.body);expect(video.style.getPropertyValue('pointer-events')).toBe('auto');expect(viewport.hasPointerCapture(9)).toBe(false);expect(viewport.dataset.panning).toBeUndefined();expect(host.observers()).toBe(0);
+ }finally{dispose();}
+ expect(host.document.handlers.get('keydown')).toHaveLength(0);expect(host.window.handlers.get('keyup')).toHaveLength(0);
+});
+
+test('multiple pan binders and videos added, removed or replaced while Space is held never retain native-control overrides',async()=>{
+ const host=await panHost(),a=new PanHostElement('DIV'),b=new PanHostElement('DIV'),old=new PanHostElement('VIDEO'),replacement=new PanHostElement('VIDEO');a.videos=[old];b.videos=[old];old.style.setProperty('pointer-events','visiblePainted');
+ const disposeA=host.bind(a,()=>{}),disposeB=host.bind(b,()=>{});
+ try{
+  host.keyDown();expect(old.style.getPropertyValue('pointer-events')).toBe('none');expect(host.observers()).toBe(2);
+  disposeA();expect(old.style.getPropertyValue('pointer-events')).toBe('none');expect(host.observers()).toBe(1);
+  b.videos=[replacement];host.mutate();expect(old.style.getPropertyValue('pointer-events')).toBe('visiblePainted');expect(old.style.getPropertyPriority('pointer-events')).toBe('');expect(replacement.style.getPropertyValue('pointer-events')).toBe('none');
+  replacement.controls=false;host.mutate();expect(replacement.style.getPropertyValue('pointer-events')).toBe('');
+  replacement.controls=true;host.mutate();expect(replacement.style.getPropertyValue('pointer-events')).toBe('none');
+  host.keyUp(replacement);expect(replacement.style.getPropertyValue('pointer-events')).toBe('');expect(host.observers()).toBe(0);
+  host.keyDown();expect(replacement.style.getPropertyValue('pointer-events')).toBe('none');disposeB();expect(replacement.style.getPropertyValue('pointer-events')).toBe('');expect(host.observers()).toBe(0);
+  const disabled=host.bind(b,()=>{throw new Error('Disabled pan must not move');},()=>false);try{expect(host.keyDown().defaultPrevented).toBe(false);expect(replacement.style.getPropertyValue('pointer-events')).toBe('');expect(host.gesture(b,replacement)).toBe(false);}finally{disabled();}
+ }finally{disposeA();disposeB();}
+});
+
 test('actual single video inspection acknowledges decoded PTS, repeats that actual frame and rolls back a refused sample',async()=>{
  const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),begin=source.indexOf('async function inspectControlTime('),end=source.indexOf('function numericView()',begin);if(begin<0||end<begin)throw new Error('single decoded seek boundary missing');
  const functions=source.slice(begin,end);
