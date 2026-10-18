@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { loadReview } from './manifest.ts';
+import { formatFeedbackIssues } from './feedback-export.ts';
 import {loadReferencedReview,selectedReference,assertReviewUnchanged} from './reference.ts';
 import {shellWord} from './open-shell.ts';
 import {openReview,loadOpenPackage,defaultStateDir,type OpenInputs} from './open.ts';
@@ -11,7 +12,7 @@ import { readSession, type Feedback } from './session.ts';
 import { readCompareSession } from './compare-session.ts';
 import { exportReviewStrip, exportCompareStrip, stripJson, writeStripOutput, validateStripOutput } from './strip-export.ts';
 import type { StripInterval, StripRequest } from './strip.ts';
-const usage='Usage: rig-review open <dir> [--reference <video>] [--compare <dir>] [--animation <name>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>';
+const usage='Usage: rig-review open <dir> [--reference <video>] [--compare <dir>] [--animation <name>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--format json|issue]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>';
 async function stripCommand(args:string[],options:{stateDir?:string}){
   const compare=args[0]==='compare';if(compare)args.shift();const a=args.shift(),b=compare?args.shift():undefined;if(!a||compare&&!b)throw new Error('strip: expected package input(s)');
   let reference:string|undefined,referenceVideo:string|undefined,animation:string|undefined,basis:'a'|'b'|undefined,range:string|undefined,output:string|undefined,jsonOnly=false,all=false;
@@ -30,23 +31,35 @@ async function stripCommand(args:string[],options:{stateDir?:string}){
   if(output){await writeStripOutput(result,output,roots);console.log(`Strip exported: ${output}${result.png?' (PNG + .json provenance)':''}`);}else console.log(stripJson(result).trimEnd());
 }
 export function parseOpenInputs(args:string[]):OpenInputs {const input=args.shift();if(!input||input.startsWith('--'))throw new Error(usage);const result:OpenInputs={input};const seen=new Set<string>();while(args.length){const flag=args.shift()!,value=args.shift();if(!value||value.startsWith('--'))throw new Error(`Missing value for ${flag}`);if(seen.has(flag))throw new Error(`Duplicate open option ${flag}`);seen.add(flag);if(flag==='--reference')result.reference=value;else if(flag==='--compare')result.compare=value;else if(flag==='--animation')result.animation=value;else throw new Error(`Unknown open option ${flag}`);}return result;}
+/** Formatting is CLI-only; session lookup/save contracts remain unchanged. */
+export function feedbackFormat(args:string[]):{args:string[];format:'json'|'issue'} {
+ const remaining:string[]=[];let format:'json'|'issue'='json',seen=false;
+ for(let i=0;i<args.length;i++){
+  if(args[i]!=='--format'){remaining.push(args[i]!);continue;}
+  if(seen)throw new Error('feedback --format: duplicate option');seen=true;
+  const value=args[++i];if(value!=='json'&&value!=='issue')throw new Error('feedback --format: expected json | issue');format=value;
+ }
+ return {args:remaining,format};
+}
 export async function main(args:string[],options:{stateDir?:string}={}){
   options={stateDir:options.stateDir??defaultStateDir()};args=args.filter(v=>v!=='--');
   if(args[0]==='open'){args.shift();if(args.includes('--help')||args.includes('-h')){console.log(usage);return;}const inputs=parseOpenInputs(args);const result=await openReview(inputs,options);console.log(result.url);console.error(`Review ${result.reused?'reused':'started'}; feedback: rig-review feedback ${[result.inputs.input,...(result.inputs.compare?['--compare',result.inputs.compare]:[]),...(result.inputs.reference?['--reference',result.inputs.reference]:[]),...(result.inputs.animation?['--animation',result.inputs.animation]:[])].map(shellWord).join(' ')}`);return;}
   if(args[0]==='strip'){args.shift();if(args.includes('--help')){console.log(usage+'\nStrip: strip <package> --reference <declared-video-id> --animation <name> (--frames FIRST:LAST | --all-feedback) [--json] [--out path]\n       strip compare <a> <b> --reference <video> --animation <name> --basis a|b (--frames FIRST:LAST | --all-feedback) [--json] [--out path]');return;}return stripCommand(args,options);}let command:'review'|'check'|'feedback'='review';if(args[0]==='check'||args[0]==='feedback'){command=args.shift() as 'check'|'feedback';}
   if(args.includes('--help')||args.includes('-h')){console.log(usage);return;}
+  let format:'json'|'issue'='json';if(command==='feedback'){const parsed=feedbackFormat(args);args=parsed.args;format=parsed.format;}
+  const printFeedback=(session:Parameters<typeof formatFeedbackIssues>[0])=>console.log(format==='issue'?formatFeedbackIssues(session).trimEnd():JSON.stringify(session,null,2));
   if(args[0]==='compare'){
     args.shift();const a=args.shift(),b=args.shift();if(!a||!b)throw new Error(usage);let reference:string|undefined,animation:string|undefined,port=4317;
     while(args.length){const flag=args.shift(),value=args.shift();if(!value)throw new Error(`Missing value for ${flag}`);if(flag==='--reference')reference=value;else if(flag==='--animation')animation=value;else if(flag==='--port'){port=Number(value);if(!Number.isInteger(port)||port<0||port>65535)throw new Error('--port: expected integer 0…65535');}else throw new Error(`Unknown compare option ${flag}`);}
     if(!reference||!animation)throw new Error('compare: --reference and --animation are required');const p=await loadCompare({a,b,reference,animation});
-    if(command==='feedback'){console.log(JSON.stringify(await readFeedbackCompareSession(p,options.stateDir),null,2));return;}
+    if(command==='feedback'){printFeedback(await readFeedbackCompareSession(p,options.stateDir));return;}
     if(command==='check'){console.log(`Comparison valid: ${p.response.title}\nSource SHA-256: ${p.response.sourceHash}\nAnimation: ${animation}\nReference SHA-256: ${p.response.reference.sha256}\nPlayback: two compiled models present`);return;}
     const server=await startCompareServer(p,{port,stateDir:options.stateDir});console.log(`Compare ready: http://127.0.0.1:${server.port}/\nComparison: ${p.response.title}\nSource SHA-256: ${p.response.sourceHash}\nPress Ctrl+C to stop.`);return;
   }
   const input=args.shift();if(!input)throw new Error(usage);let port=4317;let checkpoint:string|undefined,reference:string|undefined,compare:string|undefined,animation:string|undefined;
   while(args.length){const flag=args.shift();const value=args.shift();if(!value)throw new Error(`Missing value for ${flag}`);if(flag==='--port'){port=Number(value);if(!Number.isInteger(port)||port<0||port>65535)throw new Error('--port: expected integer 0…65535');}else if(flag==='--checkpoint')checkpoint=value;else if(flag==='--reference')reference=value;else if(flag==='--compare')compare=value;else if(flag==='--animation')animation=value;else throw new Error(`Unknown option ${flag}\n${usage}`);}
-  if(compare){if(command!=='feedback')throw new Error('--compare: use open or feedback');const loaded=await loadOpenPackage({input,compare,reference,animation});if(loaded.mode!=='compare')throw new Error('Expected comparison');console.log(JSON.stringify(await readFeedbackCompareSession(loaded.p,options.stateDir),null,2));return;}if(animation)throw new Error('--animation: use with --compare');
-  const p=await loadReferencedReview(input,reference);if(command==='feedback'){const saved=await readFeedbackSession(p,options.stateDir);await assertReviewUnchanged(p);console.log(JSON.stringify(saved,null,2));return;}if(command==='check'){console.log(`Package valid: ${p.manifest.title}\nRevision: ${p.manifest.revision}\nSource SHA-256: ${p.sourceHash}\nDeclared files: ${p.files.size}\nPlayback: ${p.manifest.model?'compiled model present':'unavailable (no model)'}`);return;}
+  if(compare){if(command!=='feedback')throw new Error('--compare: use open or feedback');const loaded=await loadOpenPackage({input,compare,reference,animation});if(loaded.mode!=='compare')throw new Error('Expected comparison');printFeedback(await readFeedbackCompareSession(loaded.p,options.stateDir));return;}if(animation)throw new Error('--animation: use with --compare');
+  const p=await loadReferencedReview(input,reference);if(command==='feedback'){const saved=await readFeedbackSession(p,options.stateDir);await assertReviewUnchanged(p);printFeedback(saved);return;}if(command==='check'){console.log(`Package valid: ${p.manifest.title}\nRevision: ${p.manifest.revision}\nSource SHA-256: ${p.sourceHash}\nDeclared files: ${p.files.size}\nPlayback: ${p.manifest.model?'compiled model present':'unavailable (no model)'}`);return;}
   if(checkpoint&&!p.manifest.checkpoints.some(v=>v.id===checkpoint))throw new Error(`Unknown checkpoint ${checkpoint}`);
   const server=await startServer(p,{port,stateDir:options.stateDir});const url=new URL(`http://127.0.0.1:${server.port}/`);if(checkpoint)url.searchParams.set('checkpoint',checkpoint);
   console.log(`Review ready: ${url}\nPackage: ${p.manifest.title} (${p.manifest.revision})\nSource SHA-256: ${p.sourceHash}\nPress Ctrl+C to stop.`);
