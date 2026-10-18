@@ -118,14 +118,25 @@ instance or reuses the exact matching one, prints its hash-bound URL, and exits:
 ```sh
 bun run open -- /absolute/output --reference /absolute/original.mp4
 # Installed executable mapping:
-rig-review open /absolute/output --reference /absolute/original.mp4
+rig-review open /absolute/output --reference /absolute/original.mp4 --animation dance
 rig-review feedback /absolute/output --reference /absolute/original.mp4
 rig-review open /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance
 rig-review feedback /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance
 ```
 
-`--animation` can be omitted for compare only when the actual models have exactly
-one common animation. Multiple candidates are a named refusal. Opening never
+`open` chooses an explicit `--animation` first, then the normalized report's
+`animation` after validating actual model membership, then a unique actual clip
+(or unique common clip in compare). Thus `rig-review open /absolute/output
+--reference /absolute/original.mp4` opens a report-bound `dance` without the flag
+and prints `animation: dance (from report.json)` on stderr. Conflicting A/B reports,
+a stale report name or multiple clips without a report refuse by name; no first
+entry, filename or frame rate supplies a guess. Explicit invalid names never fall
+back. The selected clip actually initializes single playback, while an explicit
+checkpoint link or later manual choice takes priority. Incompatible automatic
+checkpoints do not apply another clip's time or axis. Static/source-only packages
+remain inspectable without claiming clip selection; explicit unvalidatable clips
+refuse. Single review sessions remain package-wide; animation selection does not
+create an animation-specific approval identity. Opening never
 approves a review. The command prints the matching feedback retrieval command on
 stderr; stdout contains the URL alone. A selected external video takes precedence
 at automatic startup; an explicit checkpoint link or manual checkpoint selection
