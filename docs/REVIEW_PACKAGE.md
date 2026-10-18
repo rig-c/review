@@ -212,3 +212,64 @@ Each interval has its own source-row grid; overlapping groups preserve their fee
 The pure layout reserves a maximum `footerHeight` budget for complete provenance. The native renderer wraps the actual footer text before allocation and uses only that measured height; `rendering.width/height` records the actual PNG extent. Unsupported RGB/dark tint refuses by name (`STRIP_UNSUPPORTED_TINT`) rather than claiming Canvas2D pixel parity for features its published renderer omits.
 
 A strip plan with one clock basis reports `plan.basis:"single"|"a"|"b"`. A comparison batch containing both sides reports `plan.basis:"mixed"`; each group still carries its own `basis` and its own report-derived sample times. Consumers must use the group basis for a mixed plan rather than treating the first group as a batch-wide clock. The selected basis row labels requested producer frames/times; actual PTS and independently calculated actual frames remain separate rendering metadata. Output containment and every parent-directory check use native platform separators, including Windows drive and UNC paths.
+
+## Open-managed handoff and explicit single reference
+
+`rig-review open <input> [--reference <local-video>] [--compare <input>]
+[--animation <name>]` hashes and validates the input, starts/reuses a fixed-binding
+background instance and prints a URL alone on stdout. Its matching read-only
+`feedback <input> --reference <same-video> [--compare <input> --animation <name>]`
+command is printed on stderr. Existing `feedback compare ...` remains supported.
+An omitted comparison animation is accepted only for exactly one actual common
+model animation; no filename or first-entry selection supplies a default.
+
+Single `--reference` is an explicit CLI-selected regular local mp4/mov/webm file.
+It does not alter the source manifest, the package files allowlist or manifest
+path validation. The HTTP response exposes `explicitReference:{id,name,sha256,
+url:"/review-reference"}` and a view-only reference entry. The frontend consumes
+that fixed URL instead of a package asset URL. Automatic startup preserves the
+selected video; explicit checkpoint links and manual choices keep their declared
+reference behavior. GET/HEAD/ranges on this endpoint re-resolve the original
+canonical regular file, refuse symlink replacement, and use the same sandbox,
+nosniff and 206/416 boundary as package media. No arbitrary path is accepted by
+HTTP. Review/session/save/export freshly rehash the complete source binding.
+
+Referenced single sessions add:
+
+```json
+{"referenceBinding":{"packageSourceHash":"<base folder hash>","reference":{"id":"<selected id>","name":"original.mp4","sha256":"<video bytes hash>"}}}
+```
+
+The session `sourceHash` is the deterministic combined reference/content digest;
+`reviewedSource` remains the actual unchanged rig/motion/tool identity. Strict
+parsing requires the exact reference binding and includes this content in the
+state key. Reference-free sessions retain their old contract. Retrieving without
+`--reference` does not borrow approval from a referenced session. Historical
+lookup over the same selected reference retains its originally recorded versions;
+copying a package object for this read preserves the private reference capability.
+Public JSON/Markdown contain relative artifact paths and video basename/hash,
+never its absolute path. The selected video also works in the single strip panel
+and `strip --reference-video <path>`; both use the same immutable binding and
+post-render revalidation. The original `strip --reference <declared-id>` syntax
+is unchanged.
+
+Open-managed URLs have `input=<content hash>&handoff=<instance key>`. Missing or
+wrong keys receive 409 before HTML is served. APIs remain fixed to that instance
+and retain exact Origin/body validation; the URL is not a dynamic package picker.
+A private bounded `/api/open-status` handshake requires its instance capability,
+returns matching identity, and verifies current input hashes. The state registry
+never makes a PID/port alone authoritative. Changed input, reference, mode,
+canonical input location or actual tool source/static fingerprint gets a distinct
+instance identity. Existing foreground servers do not gain an open registration
+or browser filesystem API.
+
+Registry/request/log/claim files are private tool-state files; a per-binding claim
+serializes startup, stale records are not reused, and no unrelated process is
+terminated. Workers expire after 30 minutes without requests and clean only their
+own nonce's registration. Startup waiting is bounded. `RIG_REVIEW_STATE_DIR`
+changes the tool state root but cannot place it inside a source package, including
+through a symlink alias. No package manifest, source video, motion or compiled
+model is written by open. There is no browser launch or new LAN exposure.
+
+The printed feedback retrieval command uses POSIX shell quoting for literal path
+arguments. It is not a PowerShell or cmd.exe command string.

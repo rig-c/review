@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "build": "bun src/build.ts",
-    "feedback": "bun src/cli.ts feedback"
+    "feedback": "bun src/cli.ts feedback",
+    "open": "bun src/cli.ts open"
   },
   "dependencies": {
     "@napi-rs/canvas": "1.0.11",
@@ -23,5 +24,8 @@
   },
   "engines": {
     "bun": ">=1.3.0"
+  },
+  "bin": {
+    "rig-review": "src/cli.ts"
   }
 }
