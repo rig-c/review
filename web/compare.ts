@@ -227,7 +227,7 @@ async function loadSide(side: Side, value: CompareSide): Promise<number> {
   const loaded = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, base) => { const url = new URL(name, base); if (url.origin !== location.origin || !url.pathname.startsWith(access.route(`/compare-assets/${side}/`))) throw new Error(`${side}: model page escapes its package`); return url.href; } });
   assets[side] = loaded; const clip = loaded.animations.find(item => item.name === data.animation); if (!clip) throw new Error(`${side.toUpperCase()}: animation "${data.animation}" Not supplied`);
   const player = new RigPlayer(el(`${side}-root`), loaded, { seekStep: compareSeekStep });
-  players[side] = player;parts?.register(side,await loadPartCatalog(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]),player); player.environment(null); player.play(data.animation, { loop: false }); player.pause();
+  players[side] = player;try{parts?.register(side,await loadPartCatalog(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]),player);}catch(error){parts?.refuseCatalog(side,error);} player.environment(null); player.play(data.animation, { loop: false }); player.pause();
   el(`${side}-empty`).hidden = true; return clip.duration;
 }
 
