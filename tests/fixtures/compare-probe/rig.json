@@ -1,0 +1,25 @@
+{
+  "spec": "rigc-rig/1",
+  "name": "compare-probe",
+  "images": "images",
+  "skeleton": {
+    "width": 100,
+    "height": 100
+  },
+  "bones": [
+    {
+      "name": "root"
+    },
+    {
+      "name": "probe",
+      "parent": "root",
+      "x": 3,
+      "y": 7,
+      "length": 12
+    }
+  ],
+  "slots": [],
+  "skins": {
+    "default": {}
+  }
+}

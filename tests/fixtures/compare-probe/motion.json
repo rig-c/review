@@ -1,0 +1,68 @@
+{
+  "spec": "rigc-motion/1",
+  "archetype": "compare-probe",
+  "cut": "compare-probe",
+  "easings": {},
+  "animations": {
+    "inspect": {
+      "duration": 2,
+      "loop": false,
+      "tracks": [
+        {
+          "bone": "probe",
+          "property": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0
+              ]
+            },
+            {
+              "t": 0.5,
+              "v": [
+                35
+              ]
+            },
+            {
+              "t": 1.5,
+              "v": [
+                -20
+              ]
+            },
+            {
+              "t": 2,
+              "v": [
+                0
+              ]
+            }
+          ]
+        },
+        {
+          "bone": "probe",
+          "property": "translatex",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0
+              ]
+            },
+            {
+              "t": 1,
+              "v": [
+                9
+              ]
+            },
+            {
+              "t": 2,
+              "v": [
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
