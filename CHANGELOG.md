@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/rig-c/review/compare/v0.2.0...v0.2.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **smoke:** read npm 12's pack --json result instead of assuming an array ([#64](https://github.com/rig-c/review/issues/64)) ([e6cb77c](https://github.com/rig-c/review/commit/e6cb77c385c9d80e34b752131998785089290843)), closes [#63](https://github.com/rig-c/review/issues/63)
+
 ## [0.2.0](https://github.com/rig-c/review/compare/v0.1.0...v0.2.0) (2026-10-18)
 
 
