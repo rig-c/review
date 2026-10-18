@@ -81,17 +81,17 @@ function markDirty(): void {
 }
 
 function updateSavedState(): void {
-  text('dirty', dirty ? '미제출 변경' : session.updatedAt ? '제출됨' : '미제출');
+  text('dirty', dirty ? 'Unsubmitted changes' : session.updatedAt ? 'Submitted' : 'Not submitted');
   el('dirty').classList.toggle('dirty', dirty);
   button('save').disabled = saving || session.feedbackWarnings.length > 0;
-  button('save').title = session.feedbackWarnings.length ? '경고가 있는 기존 피드백을 삭제한 뒤 올바른 대상으로 다시 추가해 주세요.' : '';
+  button('save').title = session.feedbackWarnings.length ? 'Delete feedback with validation warnings, then add it again with a valid target.' : '';
 }
 
 function renderProvenance(): void {
   const provenance = session.reviewedSource;
   text('provenance-version', provenance.packageRevision);
-  text('provenance-rig', provenance.rig ? provenance.rig.sha256.slice(0, 12) + '…' : '미제공');
-  text('provenance-motion', provenance.motion ? provenance.motion.sha256.slice(0, 12) + '…' : '미제공');
+  text('provenance-rig', provenance.rig ? provenance.rig.sha256.slice(0, 12) + '…' : 'Not supplied');
+  text('provenance-motion', provenance.motion ? provenance.motion.sha256.slice(0, 12) + '…' : 'Not supplied');
   text('provenance-full', JSON.stringify({ sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: provenance }, null, 2));
 }
 
@@ -107,10 +107,10 @@ function renderCheckpoints(): void {
     item.setAttribute('aria-current', String(point.id === checkpoint?.id));
     const label = document.createElement('span'); label.textContent = point.title;
     const status = document.createElement('small');
-    status.textContent = { pending: '○ 대기', pass: '✓ 통과', fail: '↗ 수정 필요' }[session.checkpoints[point.id]?.outcome ?? 'pending'];
+    status.textContent = { pending: '○ Pending', pass: '✓ Pass', fail: '↗ Needs changes' }[session.checkpoints[point.id]?.outcome ?? 'pending'];
     item.append(label, status); item.onclick = () => { void chooseCheckpoint(point); }; list.append(item);
   }
-  if (!data.manifest.checkpoints.length) list.textContent = '확인 항목이 없습니다.';
+  if (!data.manifest.checkpoints.length) list.textContent = 'No checkpoints supplied.';
 }
 
 async function chooseCheckpoint(point: Checkpoint,initial?:{referenceId?:string;updateUrl:boolean}): Promise<void> {
@@ -133,9 +133,9 @@ async function chooseCheckpoint(point: Checkpoint,initial?:{referenceId?:string;
 }
 
 function renderCheckpoint(): void {
-  text('checkpoint-title', checkpoint?.title ?? '패키지 전체 살펴보기');
-  text('detail-title', checkpoint?.title ?? '확인 항목 미제공');
-  text('detail-note', checkpoint?.note ?? '확인 항목의 메모와 결과를 기록합니다.');
+  text('checkpoint-title', checkpoint?.title ?? 'Review entire package');
+  text('detail-title', checkpoint?.title ?? 'No checkpoint supplied');
+  text('detail-note', checkpoint?.note ?? 'Record checkpoint notes and outcomes.');
   const entry = checkpoint ? session.checkpoints[checkpoint.id] : undefined;
   el<HTMLTextAreaElement>('checkpoint-note').value = entry?.note ?? '';
   el<HTMLTextAreaElement>('checkpoint-note').disabled = !checkpoint;
@@ -204,8 +204,8 @@ function renderSequenceFrame(): void {
   if (lo === lastPoseFrame) return;
   lastPoseFrame = lo; sequenceSvg.replaceChildren();
   const frame = sequence.frames[lo]!, person = frame.people.find(item => item.id === selectedPerson);
-  text('reference-label', `입력 포즈 · ${selectedPerson || '인물 미선택'} · t ${frame.t.toFixed(3)} s`);
-  if (!person) { el('reference-empty').hidden = false; text('reference-empty', selectedPerson ? '선택 인물이 이 프레임에 없습니다.' : '인물을 선택해 주세요.'); return; }
+  text('reference-label', `Input pose · ${selectedPerson || 'No person selected'} · t ${frame.t.toFixed(3)} s`);
+  if (!person) { el('reference-empty').hidden = false; text('reference-empty', selectedPerson ? 'The selected person is absent from this frame.' : 'Select a person.'); return; }
   el('reference-empty').hidden = true;
   const pairs = [['nose', 'neck'], ['neck', 'r_shoulder'], ['r_shoulder', 'r_elbow'], ['r_elbow', 'r_wrist'], ['neck', 'l_shoulder'], ['l_shoulder', 'l_elbow'], ['l_elbow', 'l_wrist'], ['neck', 'r_hip'], ['r_hip', 'r_knee'], ['r_knee', 'r_ankle'], ['neck', 'l_hip'], ['l_hip', 'l_knee'], ['l_knee', 'l_ankle']];
   for (const [a, b] of pairs) { const from = person.joints[a!], to = person.joints[b!]; if (from?.at && to?.at && from.state !== 'missing' && to.state !== 'missing') svgNode('line', { x1: from.at[0], y1: from.at[1], x2: to.at[0], y2: to.at[1], stroke: '#b2deca', 'stroke-width': 2, 'stroke-dasharray': from.state === 'observed' && to.state === 'observed' ? 'none' : '5 4' }, sequenceSvg); }
@@ -218,11 +218,11 @@ async function showReference(id: string): Promise<void> {
   const content = el('reference-content'); content.replaceChildren();
   const reference = data.manifest.references.find(item => item.id === id);
   el('reference-empty').hidden = false;
-  if (!reference) { text('reference-empty', '원본 자료가 제공되지 않았습니다.'); text('reference-info', '이미지 · 영상 · 입력 포즈를 패키지에 연결할 수 있습니다.'); return; }
-  text('reference-label', reference.label + (reference.type === 'pose' ? ' · 정적 입력 포즈' : ' · 원본'));
-  text('reference-empty', '원본 자료를 읽는 중…');
+  if (!reference) { text('reference-empty', 'No reference supplied.'); text('reference-info', 'Add image, video or input-pose references to the package.'); return; }
+  text('reference-label', reference.label + (reference.type === 'pose' ? ' · Static input pose' : ' · Reference'));
+  text('reference-empty', 'Loading reference…');
   text('reference-info', `${reference.type} · ${reference.path}`);
-  const fail = () => { if (generation !== referenceGeneration) return; el('reference-empty').hidden = false; text('reference-empty', '자료를 열지 못했습니다. 패키지의 파일을 확인해 주세요.'); };
+  const fail = () => { if (generation !== referenceGeneration) return; el('reference-empty').hidden = false; text('reference-empty', 'Could not open the reference. Check the package files.'); };
   try {
     if (reference.type === 'pose') {
       const response = await fetch(referenceUrl(reference)); if (!response.ok) throw new Error(`Pose reference HTTP ${response.status}`);
@@ -230,16 +230,16 @@ async function showReference(id: string): Promise<void> {
       const canonical = readSequence(value);
       if (canonical) {
         sequence = canonical; referenceSize = { width: canonical.width, height: canonical.height };
-        sequenceSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); sequenceSvg.setAttribute('width', String(canonical.width)); sequenceSvg.setAttribute('height', String(canonical.height)); sequenceSvg.setAttribute('viewBox', `0 0 ${canonical.width} ${canonical.height}`); sequenceSvg.setAttribute('role', 'img'); sequenceSvg.setAttribute('aria-label', '원본 입력 포즈 시퀀스 · 상태와 confidence 보존');
+        sequenceSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); sequenceSvg.setAttribute('width', String(canonical.width)); sequenceSvg.setAttribute('height', String(canonical.height)); sequenceSvg.setAttribute('viewBox', `0 0 ${canonical.width} ${canonical.height}`); sequenceSvg.setAttribute('role', 'img'); sequenceSvg.setAttribute('aria-label', 'Original input pose sequence · joint states and confidence preserved');
         content.append(sequenceSvg); const people = [...new Set(canonical.frames.flatMap(frame => frame.people.map(person => person.id)))];
-        select('person-select').replaceChildren(); if (people.length !== 1) select('person-select').append(option('', '인물 선택')); for (const id of people) select('person-select').append(option(id, id)); selectedPerson = people.length === 1 ? people[0]! : ''; select('person-select').value = selectedPerson; el('person-control').hidden = false;
+        select('person-select').replaceChildren(); if (people.length !== 1) select('person-select').append(option('', 'Select person')); for (const id of people) select('person-select').append(option(id, id)); selectedPerson = people.length === 1 ? people[0]! : ''; select('person-select').value = selectedPerson; el('person-control').hidden = false;
         if (!player) duration = canonical.frames[canonical.frames.length - 1]!.t - canonical.frames[0]!.t;
-        text('reference-info', `${reference.path} · picture-px / top-left / y↓ · ${canonical.frames.length} frames${canonical.camera ? ' · camera 메타데이터 보존 (정규화 중복 적용 없음)' : ''}`);
+        text('reference-info', `${reference.path} · picture-px / top-left / y↓ · ${canonical.frames.length} frames${canonical.camera ? ' · Camera metadata preserved (normalization is not applied twice)' : ''}`);
         renderSequenceFrame(); fitCamera(); renderTransport(); return;
       }
       const pose = readPose(value);
       referenceSize = { width: pose.width, height: pose.height };
-      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('width', String(pose.width)); svg.setAttribute('height', String(pose.height)); svg.setAttribute('viewBox', `0 0 ${pose.width} ${pose.height}`); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', reference.label + ' · 변경하지 않은 정적 입력 포즈');
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('width', String(pose.width)); svg.setAttribute('height', String(pose.height)); svg.setAttribute('viewBox', `0 0 ${pose.width} ${pose.height}`); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', reference.label + ' · Unmodified static input pose');
       const byId = new Map(pose.joints.map(joint => [joint.id, joint]));
       for (const joint of pose.joints) {
         if (joint.parent) { const parent = byId.get(joint.parent)!; svgNode('line', { x1: parent.x, y1: parent.y, x2: joint.x, y2: joint.y, stroke: '#b2deca', 'stroke-width': 2 }, svg); }
@@ -279,7 +279,7 @@ function fitCamera(): void {
 
 function renderTransport(): void {
   const end = duration > 0 ? ` / ${duration.toFixed(4)}` : '';
-  text('time-label', sequence ? `입력 ${(time + sequence.frames[0]!.t).toFixed(4)} ↔ ${time.toFixed(4)}${end} s` : `${time.toFixed(4)}${end} s`);
+  text('time-label', sequence ? `Source ${(time + sequence.frames[0]!.t).toFixed(4)} ↔ ${time.toFixed(4)}${end} s` : `${time.toFixed(4)}${end} s`);
   input('scrub').max = String(Math.max(duration, .001)); input('scrub').value = String(time); input('scrub').disabled = duration <= 0;
   button('play').disabled = (!player && !video && !sequence) || duration <= 0;
   renderFrameTransport();
@@ -293,7 +293,7 @@ function renderFeedbackRange(): void {
   for (const id of ['feedback-start', 'feedback-end']) {
     if (last === null) input(id).removeAttribute('max'); else input(id).max = String(Math.max(0, last));
   }
-  text('feedback-range-hint', last === null ? '범위 미확인 · 양끝 포함 정수 프레임을 직접 지정합니다. FPS는 추정하지 않습니다.' : last < 0 ? '명시 클록과 선택 clip이 겹치는 프레임이 없습니다.' : `명시 클록과 현재 clip 기준 F0–F${last} · 양끝 포함`);
+  text('feedback-range-hint', last === null ? 'Bounds unknown · enter an inclusive integer frame range. FPS is not inferred.' : last < 0 ? 'No frames overlap the explicit clock and selected clip.' : `F0–F${last} for the explicit clock and current clip · inclusive`);
 }
 
 function renderFeedbackTargets(preserve = false): void {
@@ -304,17 +304,17 @@ function renderFeedbackTargets(preserve = false): void {
   const field = input('feedback-target-name'); field.readOnly = kind === 'rig'; field.disabled = !names?.length;
   if (kind === 'rig') field.value = data.feedbackCatalog.rig;
   else if (!preserve || !names?.includes(field.value)) field.value = '';
-  text('feedback-target-hint', !kind ? '대상 종류를 먼저 선택해 주세요.' : names === null ? '실제 대상 목록 미제공 · 본 / 슬롯 피드백을 추가할 수 없습니다.' : !names.length ? '이 종류의 대상이 없습니다.' : kind === 'rig' ? '패키지의 실제 리그 식별자입니다.' : `현재 리그의 ${names.length}개 이름 중 선택하거나 정확히 입력해 주세요.`);
+  text('feedback-target-hint', !kind ? 'Select a target type first.' : names === null ? 'Actual target catalog unavailable · bone and slot feedback cannot be added.' : !names.length ? 'No targets of this type.' : kind === 'rig' ? 'Actual rig identifier for this package.' : `Choose or enter an exact name from this rig: ${names.length} targets.`);
 }
 
 function renderFrameTransport(): void {
   const clock = activeFrameClock();
   const last = lastProducerFrame(clock), frame = frameAtTime(clock, time);
   el('frame-controls').hidden = last === null;
-  if (!clock) { text('frame-label', data.report?.clock ? data.report.animation ? 'frame unknown · report와 현재 clip 불일치' : 'frame unknown · report animation 미제공' : 'rate unknown'); return; }
+  if (!clock) { text('frame-label', data.report?.clock ? data.report.animation ? 'Frame unknown · report and current clip do not match' : 'Frame unknown · report animation not supplied' : 'rate unknown'); return; }
   if (last === null) { text('frame-label', 'F? / ? · frame range unknown'); return; }
-  text('frame-label', `F${frame === null ? '?' : frame} / ${last}${frame === null ? ' · 범위 밖' : ''}`);
-  text('frame-clock-label', clock.kind === 'uniform' ? `${clock.fps} fps · frame0 ${clock.frame0} s` : `frameTimes · ${clock.frameTimes.length}개 명시 시각`);
+  text('frame-label', `F${frame === null ? '?' : frame} / ${last}${frame === null ? ' · Out of range' : ''}`);
+  text('frame-clock-label', clock.kind === 'uniform' ? `${clock.fps} fps · frame0 ${clock.frame0} s` : `frameTimes · ${clock.frameTimes.length} explicit times`);
   input('frame-number').max = String(last);
   if (document.activeElement !== input('frame-number')) input('frame-number').value = frame === null ? '' : String(frame);
   input('frame-scrub').max = String(last); input('frame-scrub').hidden = frame === null;
@@ -330,11 +330,11 @@ function activeFrameClock() {
 
 function seekFrame(frame: number): void {
   const exact = timeAtFrame(activeFrameClock(), frame);
-  if (exact === null) { message('명시된 클록 범위의 정수 프레임을 선택해 주세요.', true); renderFrameTransport(); return; }
+  if (exact === null) { message('Select an integer frame within the explicit clock bounds.', true); renderFrameTransport(); return; }
   pause();
-  if ((duration > 0 && exact > duration) || (video && video.readyState >= 1 && Number.isFinite(video.duration) && exact > video.duration)) { message(`F${frame}의 명시 시각 ${exact} s가 현재 자료 범위 밖입니다. 다른 시각으로 바꾸지 않았습니다.`, true); renderFrameTransport(); return; }
+  if ((duration > 0 && exact > duration) || (video && video.readyState >= 1 && Number.isFinite(video.duration) && exact > video.duration)) { message(`F${frame} maps to ${exact} s, outside the current reference range. The requested time was not changed.`, true); renderFrameTransport(); return; }
   seek(exact);
-  message(`F${frame} · 명시된 시각 ${exact} s${!player && !video && !sequence ? ' (재생 자료 없음 · 시각 표시만)' : ''}`);
+  message(`F${frame} · Explicit time ${exact} s${!player && !video && !sequence ? ' (No playback reference · time display only)' : ''}`);
 }
 
 function chooseAnimation(name: string): void {
@@ -343,7 +343,7 @@ function chooseAnimation(name: string): void {
   duration = runtimeAnimation?.duration ?? data.manifest.animations.find(item => item.id === name)?.duration ?? 0;
   select('animation-select').value = name;
   if (player && runtimeAnimation) { player.play(name, { loop: false }); player.pause(); player.draw(); }
-  else if (player && name) message(`리그에 애니메이션 "${name}"이 없습니다.`, true);
+  else if (player && name) message(`Animation "${name}" is not present in the rig.`, true);
   time = 0; renderTransport(); renderCues();
 }
 
@@ -355,13 +355,13 @@ function seek(value: number): void {
 }
 
 function stopAudio(): void { for (const audio of audioPlaying) audio.pause(); audioPlaying.clear(); }
-function pause(): void { playing = false; lastFrame = 0; player?.pause(); video?.pause(); stopAudio(); button('play').textContent = '▶'; button('play').setAttribute('aria-label', '재생'); }
+function pause(): void { playing = false; lastFrame = 0; player?.pause(); video?.pause(); stopAudio(); button('play').textContent = '▶'; button('play').setAttribute('aria-label', 'Play'); }
 
 async function audition(clipId: string): Promise<void> {
   const clip = data.manifest.audio.clips.find(item => item.id === clipId); if (!clip) return;
   const audio = new Audio(assetUrl(clip.path)); audio.volume = Number(input('audio-volume').value); audioPlaying.add(audio);
-  audio.onended = () => audioPlaying.delete(audio); audio.onerror = () => { audioPlaying.delete(audio); message(`음원을 열지 못했습니다: ${clip.label ?? clip.id}`, true); };
-  try { await audio.play(); } catch (error) { audioPlaying.delete(audio); message(`음원 재생 거부: ${errorText(error)}`, true); }
+  audio.onended = () => audioPlaying.delete(audio); audio.onerror = () => { audioPlaying.delete(audio); message(`Could not open audio: ${clip.label ?? clip.id}`, true); };
+  try { await audio.play(); } catch (error) { audioPlaying.delete(audio); message(`Audio playback was refused: ${errorText(error)}`, true); }
 }
 
 function activeCues() { return data.manifest.audio.cues.filter(cue => !cue.animation || cue.animation === animation); }
@@ -371,11 +371,11 @@ function renderCues(): void {
     const clip = data.manifest.audio.clips.find(item => item.id === cue.clip);
     const row = document.createElement('div'); row.className = 'cue';
     const label = document.createElement('span'); label.textContent = `◇ ${cue.id} · ${cue.time.toFixed(2)} s → ${clip?.label ?? cue.clip}`;
-    const jump = document.createElement('button'); jump.type = 'button'; jump.textContent = '시점 보기'; jump.onclick = () => { pause(); seek(cue.time); };
-    const play = document.createElement('button'); play.type = 'button'; play.textContent = '미리듣기'; play.disabled = !clip; play.onclick = () => { void audition(cue.clip); };
+    const jump = document.createElement('button'); jump.type = 'button'; jump.textContent = 'Go to cue'; jump.onclick = () => { pause(); seek(cue.time); };
+    const play = document.createElement('button'); play.type = 'button'; play.textContent = 'Audition'; play.disabled = !clip; play.onclick = () => { void audition(cue.clip); };
     row.append(label, jump, play); area.append(row);
   }
-  if (!activeCues().length) area.textContent = '연결된 사운드 큐가 없습니다.';
+  if (!activeCues().length) area.textContent = 'No linked sound cues.';
   input('sync-audio').disabled = !data.manifest.audio.clips.length;
 }
 
@@ -387,15 +387,15 @@ function reportEvents(): ReportEvent[] {
 function initReport(): void {
   const report = data.report;
   el('report-browser').hidden = !report; el('report-unavailable').hidden = !!report;
-  if (!report) { text('report-summary', '미제공'); return; }
-  const counts = reportCounts(report); text('report-summary', `${counts.events}개 이벤트 · 명시된 빈 분류 ${counts.empty.length}개`);
+  if (!report) { text('report-summary', 'Not supplied'); return; }
+  const counts = reportCounts(report); text('report-summary', `${counts.events} events · ${counts.empty.length} explicitly empty categories`);
   const source = el<HTMLAnchorElement>('report-source-link'); source.hidden = false; source.href = assetUrl(report.path);
-  const filter = select('report-category'); filter.replaceChildren(option('all', '모든 이벤트'));
+  const filter = select('report-category'); filter.replaceChildren(option('all', 'All events'));
   for (const category of report.categories) filter.append(option(category.field, `${category.field} · ${category.state === 'empty' ? 'none' : category.events.length}`));
   const empty = el('report-empty-categories'); empty.replaceChildren();
   for (const field of counts.empty) { const label = document.createElement('span'); label.textContent = `${field}: none`; empty.append(label); }
   el('report-missing').hidden = !counts.missing.length;
-  text('report-missing', counts.missing.length ? `미제공 필드: ${counts.missing.join(', ')} (none으로 판정하지 않음)` : '');
+  text('report-missing', counts.missing.length ? `Fields not supplied: ${counts.missing.join(', ')} (not classified as none)` : '');
   renderReportEvents();
 }
 
@@ -409,11 +409,11 @@ function renderReportEvents(): void {
   for (const event of rows) {
     const row = document.createElement('li'), item = document.createElement('button'); item.type = 'button'; item.setAttribute('aria-current', String(event.id === selectedReportEvent?.id));
     const title = document.createElement('strong'); title.textContent = `${event.field} · ${eventCoordinates(event)}`;
-    const targets = document.createElement('small'); targets.textContent = event.targets.length ? event.targets.map(targetLabel).join(' · ') : '본 / 슬롯 매핑 없음';
+    const targets = document.createElement('small'); targets.textContent = event.targets.length ? event.targets.map(targetLabel).join(' · ') : 'No bone/slot mapping';
     const timing = document.createElement('small'); timing.textContent = eventTimingLabel(event); if (!event.seek) timing.className = 'no-time';
     item.append(title, targets, timing); item.onclick = () => chooseReportEvent(event); row.append(item); list.append(row);
   }
-  if (!rows.length) { const empty = document.createElement('li'); empty.className = 'hint'; empty.textContent = select('report-category').value === 'all' ? '제공된 이벤트가 없습니다.' : 'none · 제공된 빈 이벤트 배열'; list.append(empty); }
+  if (!rows.length) { const empty = document.createElement('li'); empty.className = 'hint'; empty.textContent = select('report-category').value === 'all' ? 'No events supplied.' : 'none · explicitly supplied empty event array'; list.append(empty); }
 }
 
 function prefillReportEvent(): void {
@@ -424,7 +424,7 @@ function prefillReportEvent(): void {
   select('feedback-target-kind').value = selection.target?.kind ?? '';
   input('feedback-target-name').value = selection.target?.name ?? '';
   renderFeedbackTargets(true);
-  text('report-prefill-note', `${selection.frames ? '명시된 프레임 구간을 가져왔습니다.' : '프레임 정보 없음 · 프레임 구간은 직접 입력해야 합니다.'} ${selection.target ? input('feedback-target-name').value === selection.target.name ? '리그 목록과 일치하는 대상을 가져왔습니다.' : '리포트 대상이 현재 리그 목록에 없어 직접 지정해야 합니다.' : selection.targets.length > 1 ? '여러 대상 중 하나를 선택해 주세요.' : '본 / 슬롯 매핑 없음 · 대상을 직접 지정해 주세요.'} defect / quality는 직접 선택합니다.`);
+  text('report-prefill-note', `${selection.frames ? 'Copied the explicit frame range.' : 'No frame data · enter the range manually.'} ${selection.target ? input('feedback-target-name').value === selection.target.name ? 'Copied a target present in the rig catalog.' : 'The report target is absent from the current rig catalog; choose a target manually.' : selection.targets.length > 1 ? 'Select one of the named targets.' : 'No bone/slot mapping · choose a target manually.'} Choose defect or quality yourself.`);
 }
 
 function chooseReportEvent(event: ReportEvent): void {
@@ -435,7 +435,7 @@ function chooseReportEvent(event: ReportEvent): void {
   const times = select('report-time'); times.replaceChildren();
   for (const [index, value] of selection.exactTimes.entries()) times.append(option(String(index), `${index + 1}. ${value} s`));
   times.hidden = !selection.exactTimes.length; el('report-time-label').hidden = times.hidden;
-  const targets = select('report-target'); targets.replaceChildren(option('', '대상 선택'));
+  const targets = select('report-target'); targets.replaceChildren(option('', 'Select target'));
   for (const [index, target] of selection.targets.entries()) targets.append(option(String(index), targetLabel(target)));
   el('report-target-control').hidden = selection.targets.length <= 1;
   prefillReportEvent(); renderReportSelection(); renderReportEvents();
@@ -446,9 +446,9 @@ function renderReportSelection(): void {
   const event = selectedReportEvent; el('report-selection').hidden = !event; if (!event) return;
   text('report-selection-heading', `${event.field} · ${eventCoordinates(event)}`);
   const exact = eventSeekTime(event, selectedReportTime);
-  text('report-timing', event.times?.length ? `${eventTimingLabel(event)} · ${event.times.length}개의 개별 시각을 보존합니다. 시각 사이를 연속 구간으로 확장하지 않습니다.` : eventTimingLabel(event));
+  text('report-timing', event.times?.length ? `${eventTimingLabel(event)} · Preserves ${event.times.length} discrete times. Gaps are not expanded into a continuous interval.` : eventTimingLabel(event));
   button('report-seek').disabled = exact === null;
-  text('report-provenance', `출처 ${event.source.path}${event.source.pointer}${Object.keys(event.provenance).length ? ' · 원본 식별자: ' + JSON.stringify(event.provenance) : ''}`);
+  text('report-provenance', `Source ${event.source.path}${event.source.pointer}${Object.keys(event.provenance).length ? ' · Original identifiers: ' + JSON.stringify(event.provenance) : ''}`);
   text('report-details', JSON.stringify({ source: event.source, frames: event.frames, times: event.times, timeInterval: event.timeInterval, durationSeconds: event.durationSeconds, targets: event.targets, provenance: event.provenance, details: event.details }, null, 2));
 }
 
@@ -457,11 +457,11 @@ function seekReportEvent(): void {
   const exact = eventSeekTime(event, selectedReportTime); if (exact === null) return;
   pause();
   const reportAnimation = data.report?.animation;
-  if (reportAnimation && player && !assets?.animations.some(item => item.name === reportAnimation)) { message(`리포트의 애니메이션 "${reportAnimation}"이 현재 리그에 없어 seek하지 않았습니다.`, true); return; }
+  if (reportAnimation && player && !assets?.animations.some(item => item.name === reportAnimation)) { message(`Report animation "${reportAnimation}" is absent from the current rig; no seek was performed.`, true); return; }
   if (reportAnimation && assets?.animations.some(item => item.name === reportAnimation) && animation !== reportAnimation) chooseAnimation(reportAnimation);
-  if (duration > 0 && exact > duration) { message(`명시 시각 ${exact} s가 현재 자료 범위 ${duration} s 밖입니다. 다른 시각으로 바꿔 seek하지 않았습니다.`, true); return; }
+  if (duration > 0 && exact > duration) { message(`Explicit time ${exact} s is outside the current range of ${duration} s. No substitute time was used.`, true); return; }
   seek(exact);
-  message((player || video || sequence) ? `리포트의 명시 시각 ${exact} s를 선택했습니다.` : `리포트의 명시 시각 ${exact} s · 재생 자료가 없어 시각만 표시합니다.`);
+  message((player || video || sequence) ? `Selected report time ${exact} s.` : `Report time ${exact} s · no playback reference; time display only.`);
 }
 
 function tick(now: number): void {
@@ -477,28 +477,28 @@ function tick(now: number): void {
 }
 
 async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
-  if (!data.manifest.model) { text('player-state', '리그 미제공 · 원본 자료 검토 가능'); return; }
-  text('player-state', '컴파일된 리그 읽는 중');
+  if (!data.manifest.model) { text('player-state', 'No rig supplied · reference review is available'); return; }
+  text('player-state', 'Loading compiled rig…');
   try {
     const modelUrl = new URL(assetUrl(data.manifest.model), location.href).href;
     assets = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, url) => {
       const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith('/assets/')) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
     player = new RigPlayer(el('rig-root'), assets, { meshBackend: 'canvas2d' });
-    player.on('event', event => { text('event-log', `런타임 이벤트: ${event.name} · ${event.time.toFixed(2)} s`); });
+    player.on('event', event => { text('event-log', `Runtime event: ${event.name} · ${event.time.toFixed(2)} s`); });
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
     animations.disabled = assets.animations.length === 0;
     const initial=initialPlayerAnimation(assets.animations.map(clip=>clip.name),data.initialAnimation??undefined,initialCheckpoint);
     if(initial)chooseAnimation(initial);else player.draw();
-    el('rig-empty').hidden = true; text('player-state', '@rig-c/play · 실제 리그');
-    const presets = player.sets(); if (presets.length) { select('part-set').replaceChildren(option('', '원본 세트')); for (const set of presets) select('part-set').append(option(set.name, set.name)); select('part-set').disabled = false; }
+    el('rig-empty').hidden = true; text('player-state', '@rig-c/play · Actual rig');
+    const presets = player.sets(); if (presets.length) { select('part-set').replaceChildren(option('', 'Original set')); for (const set of presets) select('part-set').append(option(set.name, set.name)); select('part-set').disabled = false; }
     const validAxes = data.manifest.axes.filter(axis => assets?.animations.some(item => item.name === axis.animation));
-    text('axis-state', validAxes.length ? `${validAxes.length}개 축` : '축 미제공');
+    text('axis-state', validAxes.length ? `${validAxes.length} axes` : 'No inspection axes supplied');
     select('axis-select').replaceChildren(); for (const axis of validAxes) select('axis-select').append(option(axis.id, axis.label));
     input('axis-value').disabled = !validAxes.length;
     fitCamera();
-  } catch (error) { player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', '리그 로드 실패'); text('rig-empty', `리그를 열지 못했습니다: ${errorText(error)}`); message(errorText(error), true); }
+  } catch (error) { player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${errorText(error)}`); message(errorText(error), true); }
 }
 
 function chooseAxis(): void {
@@ -517,13 +517,13 @@ function applyAxis(): void {
 function renderProposals(): void {
   const area = el('proposal-list'); area.replaceChildren();
   const warnings = el('feedback-warnings'); warnings.hidden = session.feedbackWarnings.length === 0;
-  warnings.textContent = session.feedbackWarnings.length ? `기존 피드백 검증 경고 ${session.feedbackWarnings.length}개 · 기록을 그대로 보존했습니다. 아래 경고 항목을 확인하고 삭제 후 올바르게 다시 추가해야 제출할 수 있습니다. JSON / Markdown으로 원문과 경고를 보관할 수 있습니다.` : '';
+  warnings.textContent = session.feedbackWarnings.length ? `${session.feedbackWarnings.length} validation warnings in existing feedback · original records are preserved. Review the marked entries, delete them and add valid replacements before submitting. JSON and Markdown exports preserve both the original records and warnings.` : '';
   for (const feedback of session.feedback) {
     const item = document.createElement('div'); item.className = 'proposal-item'; const title = document.createElement('strong'); title.textContent = `${feedback.category} · ${feedback.target.kind}:${feedback.target.name} · F${feedback.frameStart}–${feedback.frameEnd}`; const description = document.createElement('span'); description.textContent = feedback.summary;
     item.append(title, description);
-    for (const warning of session.feedbackWarnings.filter(value => value.id === feedback.id)) { const note = document.createElement('p'); note.className = 'hint'; note.textContent = `검증 경고 · ${warning.error}`; item.append(note); }
-    const details = document.createElement('details'), summary = document.createElement('summary'), source = document.createElement('pre'); summary.textContent = '저장된 피드백과 검사 context'; source.textContent = JSON.stringify(feedback, null, 2); details.append(summary, source);
-    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '삭제'; remove.onclick = () => { session.feedback = session.feedback.filter(item => item.id !== feedback.id); session.feedbackWarnings = session.feedbackWarnings.filter(warning => warning.id !== feedback.id); markDirty(); renderProposals(); };
+    for (const warning of session.feedbackWarnings.filter(value => value.id === feedback.id)) { const note = document.createElement('p'); note.className = 'hint'; note.textContent = `Validation warning · ${warning.error}`; item.append(note); }
+    const details = document.createElement('details'), summary = document.createElement('summary'), source = document.createElement('pre'); summary.textContent = 'Saved feedback and inspection context'; source.textContent = JSON.stringify(feedback, null, 2); details.append(summary, source);
+    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Delete'; remove.onclick = () => { session.feedback = session.feedback.filter(item => item.id !== feedback.id); session.feedbackWarnings = session.feedbackWarnings.filter(warning => warning.id !== feedback.id); markDirty(); renderProposals(); };
     item.append(details, remove); area.append(item);
   }
   updateSavedState();
@@ -532,13 +532,13 @@ function renderProposals(): void {
 function propose(tool: string): void {
   if (tool === 'angle' && !input('axis-value').disabled) { chooseAxis(); return; }
   const choices: Record<string, { target: Feedback['target']['kind']; hint: string }> = {
-    mesh: { target: 'slot', hint: '메시 밀도에 대한 한 줄 피드백' }, contour: { target: 'slot', hint: '윤곽 곡률에 대한 한 줄 피드백' }, chest: { target: 'rig', hint: '가슴 위치에 대한 한 줄 피드백' },
-    angle: { target: 'rig', hint: '얼굴 / 몸통 각도 변형에 대한 한 줄 피드백' }, pose: { target: 'bone', hint: '입력 포즈와 비교한 한 줄 피드백' }, timing: { target: 'rig', hint: '선택 구간의 타이밍에 대한 한 줄 피드백' }, audio: { target: 'rig', hint: '이벤트 / 음원 연결에 대한 한 줄 피드백' },
+    mesh: { target: 'slot', hint: 'One-line feedback on mesh density' }, contour: { target: 'slot', hint: 'One-line feedback on contour curvature' }, chest: { target: 'rig', hint: 'One-line feedback on chest position' },
+    angle: { target: 'rig', hint: 'One-line feedback on face or torso angle deformation' }, pose: { target: 'bone', hint: 'One-line feedback on differences from the input pose' }, timing: { target: 'rig', hint: 'One-line feedback on timing in the selected range' }, audio: { target: 'rig', hint: 'One-line feedback on event or audio links' },
   };
   const choice = choices[tool]; if (!choice) return;
   select('feedback-target-kind').value = choice.target; input('feedback-target-name').value = choice.target === 'rig' ? data.manifest.id : ''; input('feedback-summary').placeholder = choice.hint;
   renderFeedbackTargets();
-  input('feedback-summary').focus(); message('프레임 구간과 실제 본 / 슬롯 이름을 지정해 피드백을 표시합니다. 모션 키는 작성하지 않습니다.');
+  input('feedback-summary').focus(); message('Specify a frame range and actual bone or slot name to add feedback. Motion keys are not edited.');
 }
 
 function download(name: string, content: string, mime: string): void {
@@ -554,41 +554,41 @@ function stripStatus(value: string, error = false): void { text('strip-status', 
 function updateStripControls(): void {
   el('strip-panel').setAttribute('aria-busy', String(stripBusy));
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).disabled = stripBusy;
-  button('strip-export').disabled = stripBusy; button('strip-export').textContent = stripBusy ? '스트립 생성 중…' : '스트립 다운로드';
+  button('strip-export').disabled = stripBusy; button('strip-export').textContent = stripBusy ? 'Generating strip…' : 'Download strip';
 }
 
 async function exportStrip(): Promise<void> {
   if (stripBusy) return;
-  stripStatus('선택 구간을 확인하는 중입니다.');
+  stripStatus('Checking the selected range…');
   try {
     const format = select('strip-format').value, selectedAnimation = feedbackAnimation();
-    if (format !== 'png' && format !== 'json') throw new Error('PNG 또는 JSON 형식을 선택해 주세요.');
-    if (!selectedAnimation) throw new Error('스트립을 내보낼 애니메이션을 명시적으로 선택해 주세요.');
+    if (format !== 'png' && format !== 'json') throw new Error('Select PNG or JSON.');
+    if (!selectedAnimation) throw new Error('Explicitly select an animation to export.');
     const intervals: StripInterval[] = [];
     if (select('strip-scope').value === 'feedback') {
-      if (!session.feedback.length) throw new Error('내보낼 피드백 구간이 없습니다.');
+      if (!session.feedback.length) throw new Error('No feedback ranges to export.');
       for (const feedback of session.feedback) {
         const context = feedback.context;
-        if (!context || typeof context !== 'object' || Array.isArray(context) || context.animation !== selectedAnimation) throw new Error(`피드백 ${feedback.id}: 현재 선택한 애니메이션과 다르거나 애니메이션 정보가 없습니다. 일괄 내보내기는 같은 애니메이션의 구간만 지원합니다.`);
+        if (!context || typeof context !== 'object' || Array.isArray(context) || context.animation !== selectedAnimation) throw new Error(`Feedback ${feedback.id}: Its animation is missing or differs from the selected animation. Batch export supports ranges from the same animation only.`);
         intervals.push({ id: feedback.id, feedbackId: feedback.id, basis: 'single', frameStart: feedback.frameStart, frameEnd: feedback.frameEnd });
       }
     } else {
       const start = input('feedback-start').value.trim(), end = input('feedback-end').value.trim();
-      if (!start || !end) throw new Error('오른쪽 피드백의 시작·끝 프레임에 스트립 구간을 입력해 주세요.');
+      if (!start || !end) throw new Error('Enter the strip start and end frames in the feedback form.');
       intervals.push({ id: 'selection', basis: 'single', frameStart: Number(start), frameEnd: Number(end) });
     }
-    for (const interval of intervals) if (!Number.isSafeInteger(interval.frameStart) || !Number.isSafeInteger(interval.frameEnd) || interval.frameStart < 0 || interval.frameEnd < interval.frameStart) throw new Error(`${interval.id}: 양끝을 포함하는 0 이상의 정수 프레임 구간을 지정해 주세요.`);
+    for (const interval of intervals) if (!Number.isSafeInteger(interval.frameStart) || !Number.isSafeInteger(interval.frameEnd) || interval.frameStart < 0 || interval.frameEnd < interval.frameStart) throw new Error(`${interval.id}: Specify an inclusive range of nonnegative integer frames.`);
     const referenceId = select('strip-reference').value;
     const request: StripRequest = { format, sourceHash: data.sourceHash, animation: selectedAnimation, ...(referenceId ? { referenceId } : {}), intervals };
-    stripBusy = true; updateStripControls(); stripStatus(`${selectedAnimation} · ${intervals.length}개 구간의 ${format.toUpperCase()}를 생성하는 중입니다.`);
+    stripBusy = true; updateStripControls(); stripStatus(`${selectedAnimation} · ${intervals.length} ranges · Generating ${format.toUpperCase()}…`);
     const response = await fetch('/api/strip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
     if (!response.ok) {
       const failure: unknown = await response.json().catch(() => null);
-      throw new Error(failure && typeof failure === 'object' && 'error' in failure && typeof failure.error === 'string' ? failure.error : `스트립 내보내기 실패 · HTTP ${response.status}`);
+      throw new Error(failure && typeof failure === 'object' && 'error' in failure && typeof failure.error === 'string' ? failure.error : `Strip export failed · HTTP ${response.status}`);
     }
     const mime = format === 'png' ? 'image/png' : 'application/json';
-    if (!(response.headers.get('content-type') ?? '').toLowerCase().startsWith(mime)) throw new Error('스트립 응답의 파일 형식이 요청과 다릅니다.');
-    downloadStrip(`review-strip.${format}`, await response.blob()); stripStatus(`${selectedAnimation} · ${intervals.length}개 구간의 ${format.toUpperCase()} 다운로드를 요청했습니다. 검토 상태는 변경하지 않았습니다.`);
+    if (!(response.headers.get('content-type') ?? '').toLowerCase().startsWith(mime)) throw new Error('The strip response format does not match the request.');
+    downloadStrip(`review-strip.${format}`, await response.blob()); stripStatus(`${selectedAnimation} · ${intervals.length} ranges · Requested ${format.toUpperCase()} download. Review status was not changed.`);
   } catch (error) { stripStatus(errorText(error), true); }
   finally { stripBusy = false; updateStripControls(); }
 }
@@ -616,7 +616,7 @@ function issueFields(feedback: Feedback): { title: string; body: string; labels:
 
 function bind(): void {
   button('strip-export').onclick = () => { void exportStrip(); };
-  for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('선택이 변경되었습니다. 다운로드할 구간·애니메이션·참조 영상을 확인해 주세요.');
+  for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
   for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workspace]')) tab.onclick = () => setWorkspace(tab.dataset.workspace as typeof workspace);
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => setView(item.dataset.view as typeof view);
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
@@ -634,7 +634,7 @@ function bind(): void {
   input('frame-scrub').oninput = () => seekFrame(Number(input('frame-scrub').value));
   button('play').onclick = () => {
     if (playing) { pause(); return; }
-    if (time >= duration) seek(0); playing = true; lastFrame = 0; player?.resume(); button('play').textContent = 'Ⅱ'; button('play').setAttribute('aria-label', '일시정지'); if (video) void video.play().catch(error => { pause(); message(errorText(error), true); });
+    if (time >= duration) seek(0); playing = true; lastFrame = 0; player?.resume(); button('play').textContent = 'Ⅱ'; button('play').setAttribute('aria-label', 'Pause'); if (video) void video.play().catch(error => { pause(); message(errorText(error), true); });
   };
   input('audio-volume').oninput = () => { text('audio-volume-label', `${Math.round(Number(input('audio-volume').value) * 100)}%`); for (const audio of audioPlaying) audio.volume = Number(input('audio-volume').value); };
   input('sync-audio').onchange = () => { if (!input('sync-audio').checked) stopAudio(); };
@@ -651,9 +651,9 @@ function bind(): void {
   button('add-proposal').onclick = () => {
     const start = input('feedback-start').value.trim(), end = input('feedback-end').value.trim(), frameStart = Number(start), frameEnd = Number(end);
     const name = input('feedback-target-name').value.trim(), summary = input('feedback-summary').value.trim();
-    if (!start || !end || !Number.isSafeInteger(frameStart) || !Number.isSafeInteger(frameEnd) || frameStart < 0 || frameEnd < frameStart) { message('시작 / 끝 프레임을 0 이상의 정수로 입력하고 끝이 시작보다 앞서지 않게 지정해 주세요.', true); return; }
-    if (!['bone', 'slot', 'rig'].includes(select('feedback-target-kind').value) || !['defect', 'quality'].includes(select('feedback-category').value)) { message('대상 종류와 defect / quality 분류를 직접 선택해 주세요.', true); return; }
-    if (!name || !summary || /[\r\n]/.test(summary) || summary.length > 1000) { message('대상의 실제 이름과 1,000자 이내 한 줄 요약을 입력해 주세요.', true); return; }
+    if (!start || !end || !Number.isSafeInteger(frameStart) || !Number.isSafeInteger(frameEnd) || frameStart < 0 || frameEnd < frameStart) { message('Enter nonnegative integer start and end frames, with the end at or after the start.', true); return; }
+    if (!['bone', 'slot', 'rig'].includes(select('feedback-target-kind').value) || !['defect', 'quality'].includes(select('feedback-category').value)) { message('Select a target type and defect or quality category.', true); return; }
+    if (!name || !summary || /[\r\n]/.test(summary) || summary.length > 1000) { message('Enter the actual target name and a one-line summary of up to 1,000 characters.', true); return; }
     const target: Feedback['target'] = { kind: select('feedback-target-kind').value as Feedback['target']['kind'], name };
     const selectedAnimation = feedbackAnimation();
     try { validateFeedbackSelection(data.feedbackCatalog, { frameStart, frameEnd, target, animation: selectedAnimation }); } catch (error) { message(errorText(error), true); return; }
@@ -668,19 +668,19 @@ function bind(): void {
       axis: axisInspection ? { id: select('axis-select').value, value: Number(input('axis-value').value) } : null,
       reportEvent: selectedReportEvent ? { id: selectedReportEvent.id, field: selectedReportEvent.field, source: { ...selectedReportEvent.source }, frames: selectedReportEvent.frames ? [...selectedReportEvent.frames] : null, exactTime: eventSeekTime(selectedReportEvent, selectedReportTime), targets: selectedReportEvent.targets.map(target => ({ ...target })) } : null,
     } });
-    input('feedback-summary').value = ''; markDirty(); renderProposals(); message('구조화된 피드백 표시를 추가했습니다. 리뷰 제출을 눌러 보관하세요.');
+    input('feedback-summary').value = ''; markDirty(); renderProposals(); message('Added structured feedback. Submit the review to save it.');
   };
   button('save').onclick = async () => {
-    if (session.feedbackWarnings.length) { message('기존 피드백의 검증 경고를 먼저 확인해 주세요. 경고 항목을 삭제한 뒤 올바르게 다시 추가해야 제출할 수 있습니다.', true); return; }
+    if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; }
     saving = true; updateSavedState(); const savedPayload = JSON.stringify(session);
     try { const saved = await api<ReviewSession>('/api/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: savedPayload });
       if (JSON.stringify(session) === savedPayload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;
       renderProvenance();
-      message(dirty ? '제출 중 추가한 변경이 있습니다. 다시 제출해 주세요.' : '선택한 검토 상태·피드백·검토 대상 출처를 제출했습니다.');
-    } catch (error) { message(`제출 실패: ${errorText(error)}`, true); } finally { saving = false; updateSavedState(); }
+      message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status, feedback and source provenance.');
+    } catch (error) { message(`Submission failed: ${errorText(error)}`, true); } finally { saving = false; updateSavedState(); }
   };
-  button('export').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ schema: 'rig-review-feedback/1', id: session.id, revision: session.revision, sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: session.reviewedSource, status: session.status, checkpoints: session.checkpoints, feedback: session.feedback, feedbackWarnings: session.feedbackWarnings, issues: session.feedback.map(issueFields) }, null, 2) + '\n', 'application/json'); message('검토 대상 출처·피드백·검증 경고·이슈용 필드를 JSON으로 내보냈습니다. 원본은 변경하지 않았습니다.'); };
-  button('export-markdown').onclick = () => { const content = [`# ${markdown(session.id)} review feedback`, '', 'Reviewed source:', ...JSON.stringify({ sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: session.reviewedSource }, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(item => { const issue = issueFields(item); return [`## ${markdown(issue.title)}`, '', issue.body, '', '---', '']; })].join('\n'); download(`${session.id}-issues.md`, content, 'text/markdown'); message('검토 출처·검증 경고와 각 피드백의 구조화된 이슈 내용을 Markdown으로 내보냈습니다.'); };
+  button('export').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ schema: 'rig-review-feedback/1', id: session.id, revision: session.revision, sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: session.reviewedSource, status: session.status, checkpoints: session.checkpoints, feedback: session.feedback, feedbackWarnings: session.feedbackWarnings, issues: session.feedback.map(issueFields) }, null, 2) + '\n', 'application/json'); message('Exported source provenance, feedback, validation warnings and issue fields as JSON. Source files remain unchanged.'); };
+  button('export-markdown').onclick = () => { const content = [`# ${markdown(session.id)} review feedback`, '', 'Reviewed source:', ...JSON.stringify({ sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: session.reviewedSource }, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(item => { const issue = issueFields(item); return [`## ${markdown(issue.title)}`, '', issue.body, '', '---', '']; })].join('\n'); download(`${session.id}-issues.md`, content, 'text/markdown'); message('Exported source provenance, validation warnings and structured issue content as Markdown.'); };
   const resize = new ResizeObserver(fitCamera); resize.observe(el('rig-viewport')); resize.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
   window.addEventListener('pagehide', () => { pause(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
@@ -692,18 +692,18 @@ async function start(): Promise<void> {
     text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; select('feedback-target-kind').value = 'rig'; input('feedback-target-name').value = data.manifest.id;
     select('reference-select').replaceChildren(); for (const reference of data.manifest.references) select('reference-select').append(option(reference.id, `${reference.label} · ${reference.type}`));
     for (const reference of data.manifest.references.filter(item => item.type === 'video')) select('strip-reference').append(option(reference.id, reference.label));
-    if (!data.manifest.references.length) { select('reference-select').append(option('', '자료 미제공')); select('reference-select').disabled = true; }
-    const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = '소스 파일 미제공';
-    bind(); updateStripControls(); stripStatus('오른쪽 시작·끝 프레임 또는 모든 피드백 구간을 선택해 다운로드합니다. 미제출 피드백도 선택에 포함되며, 내보내기로 제출되지는 않습니다.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    if (!data.manifest.references.length) { select('reference-select').append(option('', 'No references supplied')); select('reference-select').disabled = true; }
+    const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
+    bind(); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
     await initPlayer(first);
     if (first) await chooseCheckpoint(first,initial); else renderCheckpoint();
     if (data.report && !first?.workspace) workspace = 'motion';
     renderTransport(); setWorkspace(workspace);
-    if (requestedId && !first) message(`확인 항목 "${requestedId}"이 패키지에 없습니다. 목록에서 선택해 주세요.`, true);
-    else message(data.manifest.model ? '원본을 유지하며 검토 상태와 구조화된 피드백을 기록합니다. 모션은 읽기 전용입니다.' : '리그 미제공 패키지입니다. 제공된 원본 자료와 확인 항목을 검토할 수 있습니다.');
+    if (requestedId && !first) message(`Checkpoint "${requestedId}" is not in this package. Select one from the list.`, true);
+    else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-  } catch (error) { message(`검토 패키지를 열지 못했습니다: ${errorText(error)}`, true); text('dirty', '불러오기 실패'); }
+  } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
 void start();
