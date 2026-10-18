@@ -10,6 +10,7 @@ import type { StripInterval, StripRequest } from '../src/strip.ts';
 
 import {bindAppearance,bindPan,bindStageLayout,bindInspectorTabs,syncStageLayout,idleAvailable} from './view-controls.ts';
 import {RigOverlays} from './rig-overlays.ts';
+import {bindWorkspaceUI,type WorkspaceUI} from './workspace-ui.ts';
 import {connectControl} from './control.ts';
 import type {ControlCommand,ControlInspection,ControlView} from '../src/control.ts';
 import {connectInspectionPersistence,serializableView,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
@@ -36,7 +37,7 @@ const cameraFrames:Partial<Record<CameraTarget,CameraFrame>>={};
 const rigScales:Record<Side,number>={a:1,b:1};
 let cameraSync=true,activeCamera:CameraTarget='a',cameraRestoring=false,cameraLayout='';
 let idleHeld=true,loopRestarting=false,suspendedPreview=false;
-let appearance:ReturnType<typeof bindAppearance>|null=null,controlDispose:(()=>void)|null=null;
+let appearance:ReturnType<typeof bindAppearance>|null=null,controlDispose:(()=>void)|null=null,workspace:WorkspaceUI|null=null;
 const viewDisposers:(()=>void)[]=[];
 let parts:PartExplorer|null=null;
 const overlays:Partial<Record<Side,RigOverlays>>={};
@@ -365,7 +366,10 @@ function bind(): void {
   button('submit').onclick = async () => { if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; } saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;await persistence?.submitted(saved); message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status and A/B/reference-video provenance.'); } catch (error) { message(`Submission failed: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
   button('export-json').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ ...session, schema: 'rig-review-compare-feedback/1', issues: session.feedback.map(issue) }, null, 2) + '\n', 'application/json'); };
   button('export-markdown').onclick = () => { download(`${session.id}-issues.md`, [`# ${md(data.title)}`, '', 'Ordered A/B and reference provenance:', ...JSON.stringify(session.binding, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(feedback => { const entry = issue(feedback); return [`## ${md(entry.title)}`, '', entry.body, '', '---', '']; })].join('\n'), 'text/markdown'); };
-  appearance=bindAppearance(select('appearance'));
+  // Saved browser defaults seed a new inspection; explicit links and source drafts restore over them.
+  workspace=bindWorkspaceUI({changed:fit,defaultTheme:theme=>appearance?.set(theme)});
+  cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
+  appearance=bindAppearance(select('appearance'),workspace.defaults().theme);
   for(const side of ['a','b'] as const)overlays[side]=new RigOverlays({canvas:el<HTMLCanvasElement>(side+'-overlay'),rigRoot:el(side+'-root')});
   for(const target of ['a','b','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));
   viewDisposers.push(bindStageLayout(el('stage-layout'),fit));
@@ -376,7 +380,7 @@ function bind(): void {
   document.addEventListener('visibilitychange',()=>{if(document.hidden){suspendedPreview=!video.paused;stop();}else if(suspendedPreview&&!idleHeld){suspendedPreview=false;void playComparison().catch(error=>message(describe(error),true));}});
   const observer = new ResizeObserver(fit); observer.observe(el('a-viewport')); observer.observe(el('b-viewport'));observer.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { persistence?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
+  window.addEventListener('pagehide', () => { persistence?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
 }
 
 async function start(): Promise<void> {
@@ -384,7 +388,7 @@ async function start(): Promise<void> {
     [data, session] = await Promise.all([api<CompareResponse>('/api/compare'), api<CompareSession>('/api/compare/session')]);
     submittedBaseline=structuredClone(session);
     if (data.id !== session.id || data.sourceHash !== session.sourceHash || JSON.stringify(data.binding) !== JSON.stringify(session.binding)) throw new Error('Comparison and submission session refer to different source identities. Reopen the review.');
-    text('title', data.title); text('animation', `${data.animation} · A/B order and reference video hash are fixed`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); parts=new PartExplorer(el('parts-explorer'),el('selected-part'),previous=>{redrawOverlays(true);const part=parts?.value();if(part){activeCamera=part.side==='b'?'b':'a';document.querySelector<HTMLButtonElement>('[data-inspector=rig]')?.click();renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera());persistence?.save();},part=>{select('side').value=part.side;select('target-kind').value='slot';renderFeedbackSelection();input('target-name').value=part.slot;document.querySelector<HTMLButtonElement>('[data-inspector=feedback]')?.click();}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackSelection(); renderFeedback(); savedState();
+    text('title', data.title); text('animation', `${data.animation} · A/B order and reference video hash are fixed`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); parts=new PartExplorer(el('parts-explorer'),el('selected-part'),previous=>{redrawOverlays(true);const part=parts?.value();if(part){activeCamera=part.side==='b'?'b':'a';workspace?.revealInspector();document.querySelector<HTMLButtonElement>('[data-inspector=rig]')?.click();renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera());persistence?.save();},part=>{select('side').value=part.side;select('target-kind').value='slot';renderFeedbackSelection();input('target-name').value=part.slot;document.querySelector<HTMLButtonElement>('[data-inspector=feedback]')?.click();}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackSelection(); renderFeedback(); savedState();
     const [referenceDuration, aDuration, bDuration] = await Promise.all([loadReference(), loadSide('a', data.a), loadSide('b', data.b)]);
     void loadFrameIndex();
     domain = commonDomain(referenceDuration, aDuration, bDuration); input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
@@ -426,7 +430,7 @@ function redrawOverlays(fresh:boolean):void {
  text('layer-state',warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');
  if(!fresh&&needsCapture&&trace&&!seeking&&!video.seeking&&players.a&&players.b){try{drawSynchronizedPair(inspectionPlayer('a'),inspectionPlayer('b'));redrawOverlays(true);for(const side of ['a','b'] as const)text(`${side}-renderer`,rendererBadges[side].observe('drawn',players[side]!.renderer).label);}catch(error){failPair(error);}}
 }
-function bindInspector():void {bindInspectorTabs(()=>{if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]')){idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);}fit();});}
+function bindInspector():void {bindInspectorTabs(()=>{workspace?.afterTab();if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]')){idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);}fit();},()=>workspace?.beforeTab());}
 
 function canRepeatIdle():boolean{return data?.animation==='idle'&&idleAvailable(assets.a?.animations.map(a=>a.name)??[],data.animation)&&idleAvailable(assets.b?.animations.map(a=>a.name)??[],data.animation)&&input('idle-repeat').checked&&!!domain&&domain.end>0;}
 function renderIdle():void {text('idle-state',canRepeatIdle()?'Actual idle · repeat enabled':'Bound non-idle inspection · no automatic playback');}
@@ -492,7 +496,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
  parts?.select(bookmark.selection.part??null);
  idleHeld=true;stop();if(bookmark.time!==null){await seekTo(bookmark.time);if(signal.aborted||!trace)throw new Error('Saved reference inspection could not settle');}
  appearance?.set(bookmark.theme);Object.assign(layers,{images:bookmark.layers.images,mesh:bookmark.layers.meshes,bones:bookmark.layers.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;
- if(bookmark.selection.inspector){for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-inspector]')){const selected=tab.dataset.inspector===bookmark.selection.inspector;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==bookmark.selection.inspector;}
+ if(bookmark.selection.inspector){workspace?.beforeTab();for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-inspector]')){const selected=tab.dataset.inspector===bookmark.selection.inspector;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==bookmark.selection.inspector;workspace?.afterTab();}
  syncStageLayout(el('stage-layout'));fit();
  for(const target of ['a','b','reference'] as const){const camera=bookmark.view.cameras[target],frame=paneFrame(target,true);if(camera&&frame)cameras[target]={zoom:restoredZoom(camera,frame.baseScale,frame.width,frame.height),center:{...camera.center}};}
  cameraSync=bookmark.view.cameraSync??false;activeCamera=bookmark.view.activeCamera==='b'||bookmark.view.activeCamera==='reference'?bookmark.view.activeCamera:'a';
@@ -501,7 +505,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
 }
 async function setupPersistence():Promise<boolean> {
  persistence=await connectInspectionPersistence({scope:'compare:'+data.a.manifest.id+':'+data.b.manifest.id+':'+data.reference.name,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('status').value=session.status;renderFeedback();savedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
- ui:()=>({frameBasis:select('frame-basis').value}),restoreUI:value=>{if(value.frameBasis==='a'||value.frameBasis==='b')select('frame-basis').value=value.frameBasis;frameControls();},afterInputs:()=>{video.muted=!input('reference-audio').checked;const name=input('target-name').value;renderFeedbackSelection();input('target-name').value=name;},onConflict:value=>{draftConflict=value;savedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
+ ui:()=>({inspectorScroll:workspace?.scroll()??'{}',frameBasis:select('frame-basis').value}),restoreUI:value=>{if(value.frameBasis==='a'||value.frameBasis==='b')select('frame-basis').value=value.frameBasis;frameControls();workspace?.restoreScroll(value.inspectorScroll);},afterInputs:()=>{video.muted=!input('reference-audio').checked;const name=input('target-name').value;renderFeedbackSelection();input('target-name').value=name;},onConflict:value=>{draftConflict=value;savedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
  return persistence.restored;
 }
 void start();

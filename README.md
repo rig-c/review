@@ -272,9 +272,10 @@ for a different source binding is refused.
 
 Ordinary form inputs, selected panels, view state and unsent feedback/checkpoint
 choices are kept in browser local storage for the same source. Changing the
-model/source clears the previous draft in that page's storage scope. The global
-appearance preference remains, while a source-bound appearance override does
-not carry over. URL view state takes precedence over the locally saved view.
+model/source clears the previous draft in that page's storage scope. Browser
+Settings (below) remain, while a source-bound appearance override does not
+carry over. URL view state takes precedence over the locally saved view. Each
+Inspector section's own scroll position is part of this source-bound draft.
 
 Local recovery compares the original submitted server-session fingerprint,
 including its update time. It cannot replace a newer server review: conflicting
@@ -284,6 +285,36 @@ errors never count as a successful save. Nothing is written to the server or
 input package merely by restoring a page. Browser storage is convenient local
 recovery, not a durable backup; export feedback separately when it must be kept.
 Control capabilities are excluded from links and browser persistence.
+
+## Workspace settings and panels
+
+The left, right and bottom panels are resizable. Drag a separator, or focus it
+and use the arrow keys (Shift for larger steps) and Home/End. Escape, a
+cancelled pointer or window blur during a drag returns the previous size. The
+stage keeps a usable minimum. When the window is too narrow, the left and then
+the right panel, and when it is too short, the Inspector, become explicit
+drawers opened from buttons above the stage instead of shrinking to nothing. Responsive clamping
+never overwrites the desired size, so a wider window restores it.
+
+Settings, in the lower left, holds browser defaults: Theme, Sync cameras by
+default, Repeat idle by default, and Reset layout. Defaults seed a new
+inspection only. A view link or source draft keeps its own appearance, camera
+sync and idle choice, and restoring it neither changes the saved defaults nor
+starts playback. Reset layout restores panel sizes and nothing else.
+
+These defaults and desired panel sizes are one versioned, closed record in
+browser `localStorage` (`rig-review-preferences/1`). It holds no source path,
+hash, feedback, review decision or capability. The first load migrates the
+earlier same-origin appearance preference. If storage is denied, unavailable
+or the record is corrupt, the page uses defaults and every control keeps
+working for that page; a corrupt record is refused rather than overwritten
+until you change a setting. Several open tabs merge their writes per field, so
+changing the theme in one tab does not undo a panel size changed in another.
+Separate browser profiles keep separate preferences.
+
+Browser storage is per origin. Persistence is claimed only within one origin:
+each managed open currently uses its own loopback port, so Settings, panel
+sizes and drafts do not carry across a managed reopen on a different port.
 
 
 ## Inspect a part
@@ -296,7 +327,7 @@ The pinned published `@rig-c/play`1.12.0 supplies `slotIdentity()` and frame gen
 
 Source-bound links/drafts and explicit feedback preserve that side/slot plus exact attachment/owning skin/set/active skin/null reason. A restored explicit target is checked after restoring its animation/time/set and drawing; `PART_IDENTITY_MISMATCH` rolls back rather than silently substituting another key. Older slot-only links remain readable and resolve from the current authoritative snapshot. Runtime generation is current observation/feedback evidence, never a persistent identity. Named vertex weights and original source alpha remain unavailable in this inspection; packed pages are not original part images.
 
-This explorer is inspection. Producer-backed optimization, candidate Apply/undo/export and permanent resizable-panel settings remain separate work; the explorer does not generate mesh, rig or motion bytes.
+This explorer is inspection. Producer-backed optimization and candidate Apply/undo/export remain separate work; the explorer does not generate mesh, rig or motion bytes.
 
 ## License
 

@@ -14,11 +14,12 @@ export function automaticIdlePreview(names:readonly string[],selected:string,che
 }
 export function themePreference(value:unknown):ThemePreference {return value==='dark'||value==='light'?value:'system';}
 
-export function bindAppearance(control:HTMLSelectElement):{get:()=>ThemePreference;set:(value:ThemePreference)=>void;dispose:()=>void} {
- let current:ThemePreference='system';try{current=themePreference(localStorage.getItem('rig-review-appearance/1'));}catch{/* Storage is optional. */}
+/** The inspection appearance is transient; workspace Settings owns the saved browser default. */
+export function bindAppearance(control:HTMLSelectElement,initial:ThemePreference='system'):{get:()=>ThemePreference;set:(value:ThemePreference)=>void;dispose:()=>void} {
+ let current=themePreference(initial);
  const system=matchMedia('(prefers-color-scheme: light)');
  const render=()=>{document.documentElement.dataset.theme=current==='system'?(system.matches?'light':'dark'):current;control.value=current;};
- const set=(value:ThemePreference)=>{current=value;try{localStorage.setItem('rig-review-appearance/1',current);}catch{/* Storage is optional. */}render();};
+ const set=(value:ThemePreference)=>{current=themePreference(value);render();};
  const change=()=>set(themePreference(control.value));control.addEventListener('change',change);system.addEventListener('change',render);render();
  return {get:()=>current,set,dispose:()=>{control.removeEventListener('change',change);system.removeEventListener('change',render);}};
 }
@@ -60,8 +61,9 @@ export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,en
  return ()=>{blur();window.removeEventListener('blur',blur);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);viewport.removeEventListener('pointerdown',start);viewport.removeEventListener('pointermove',drag);viewport.removeEventListener('pointerup',end);viewport.removeEventListener('pointercancel',end);viewport.removeEventListener('lostpointercapture',end);viewport.removeEventListener('dragstart',native);};
 }
 
-export function bindInspectorTabs(changed:()=>void):void {
+/** beforeChange runs while the old panel is still visible; changed runs after the new one is shown. */
+export function bindInspectorTabs(changed:()=>void,beforeChange:()=>void=()=>{}):void {
  const tabs=[...document.querySelectorAll<HTMLButtonElement>('[data-inspector]')];
- const activate=(tab:HTMLButtonElement)=>{for(const item of tabs){const active=item===tab;item.setAttribute('aria-selected',String(active));item.tabIndex=active?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==tab.dataset.inspector;changed();};
+ const activate=(tab:HTMLButtonElement)=>{beforeChange();for(const item of tabs){const active=item===tab;item.setAttribute('aria-selected',String(active));item.tabIndex=active?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==tab.dataset.inspector;changed();};
  for(const [index,tab] of tabs.entries()){tab.onclick=()=>activate(tab);tab.onkeydown=event=>{const next=event.key==='ArrowRight'?(index+1)%tabs.length:event.key==='ArrowLeft'?(index+tabs.length-1)%tabs.length:event.key==='Home'?0:event.key==='End'?tabs.length-1:null;if(next===null)return;event.preventDefault();const target=tabs[next];if(target){activate(target);target.focus();}};}
 }
