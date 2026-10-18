@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Local human rig inspection and structured feedback export",
+  "license": "MIT",
   "scripts": {
     "review": "bun src/cli.ts",
     "check": "bun src/cli.ts check",
@@ -34,7 +35,8 @@
     "examples/demo",
     "docs/REVIEW_PACKAGE.md",
     "docs/DESIGN.md",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "exports": {
     "./package.json": "./package.json"

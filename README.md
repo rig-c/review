@@ -284,3 +284,7 @@ errors never count as a successful save. Nothing is written to the server or
 input package merely by restoring a page. Browser storage is convenient local
 recovery, not a durable backup; export feedback separately when it must be kept.
 Control capabilities are excluded from links and browser persistence.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -13,7 +13,7 @@ try{
  const packed=await run(['npm','pack','--json','--pack-destination',work],root);
  if(!step('npm pack',packed.exit===0,packed.stderr.trim().split('\n').at(-1)))throw new Error('pack');
  const [info]=JSON.parse(packed.stdout) as {filename:string;files:{path:string}[]}[];const files=info!.files.map(f=>f.path);
- step('tarball carries the bin, web and demo',['src/cli.ts','web/main.ts','web/index.html','examples/demo/review.json'].every(f=>files.includes(f)),`${files.length} files`);
+ step('tarball carries the bin, web, demo and licence',['src/cli.ts','web/main.ts','web/index.html','examples/demo/review.json','LICENSE'].every(f=>files.includes(f)),`${files.length} files`);
  step('tarball carries no tests or fixtures',!files.some(f=>f.startsWith('tests/')||f.startsWith('node_modules/')));
  await Bun.$`mkdir -p ${app}`;await writeFile(join(app,'package.json'),JSON.stringify({name:'rig-review-smoke',private:true})+'\n');
  const installed=await run(['npm','i','-D','--no-audit','--no-fund',join(work,info!.filename)],app);
