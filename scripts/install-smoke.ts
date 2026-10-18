@@ -4,15 +4,24 @@
  * help, `check` on the bundled demo, and a served page whose browser bundle is built from the
  * installed `web/` against the installed `@rig-c/play`. A file missing from `files` fails here.
  */
-import {mkdtemp,rm,writeFile} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
+import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
 const root=new URL('..',import.meta.url).pathname,work=await mkdtemp(join(tmpdir(),'rig-review-smoke-')),app=join(work,'app');
+const manifest=JSON.parse(await readFile(join(root,'package.json'),'utf8')) as {name:string};
 let failed=false;
+interface PackResult {filename:string;files:{path:string}[]}
+/** npm <= 11 prints an array of results; npm 12 prints an object keyed by package name. Anything else is refused by name. */
+function packResult(value:unknown,name:string):PackResult{
+ const entry=Array.isArray(value)?(value.length===1?value[0]:undefined):value&&typeof value==='object'?(value as Record<string,unknown>)[name]:undefined;
+ const result=entry as Partial<PackResult>|undefined;
+ if(!result||typeof result.filename!=='string'||!Array.isArray(result.files))throw new Error(`SMOKE_PACK_JSON: unrecognised npm pack --json output: ${JSON.stringify(value).slice(0,200)}`);
+ return result as PackResult;
+}
 function step(name:string,ok:boolean,detail=''){console.log(`${ok?'ok  ':'FAIL'} ${name}${detail?' · '+detail:''}`);if(!ok)failed=true;return ok;}
 async function run(cmd:string[],cwd:string){const child=Bun.spawn(cmd,{cwd,stdout:'pipe',stderr:'pipe',env:{...process.env,RIG_REVIEW_STATE_DIR:join(work,'state')}});const [stdout,stderr,exit]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);return {stdout,stderr,exit};}
 try{
  const packed=await run(['npm','pack','--json','--pack-destination',work],root);
  if(!step('npm pack',packed.exit===0,packed.stderr.trim().split('\n').at(-1)))throw new Error('pack');
- const [info]=JSON.parse(packed.stdout) as {filename:string;files:{path:string}[]}[];const files=info!.files.map(f=>f.path);
+ const info=packResult(JSON.parse(packed.stdout),manifest.name);const files=info.files.map(f=>f.path);
  step('tarball carries the bin, web, demo and licence',['src/cli.ts','web/main.ts','web/index.html','examples/demo/review.json','LICENSE'].every(f=>files.includes(f)),`${files.length} files`);
  step('tarball carries no tests or fixtures',!files.some(f=>f.startsWith('tests/')||f.startsWith('node_modules/')));
  await Bun.$`mkdir -p ${app}`;await writeFile(join(app,'package.json'),JSON.stringify({name:'rig-review-smoke',private:true})+'\n');

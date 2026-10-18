@@ -21,11 +21,17 @@ jobs:
       - run: bun run check -- examples/demo/review.json
   install-smoke:
     # What `npm i -D @rig-c/review` delivers, on the minimum Bun the package declares and on latest.
+    # The `release` entry is the release job's own environment (setup-node with registry-url, so its
+    # .npmrc is in use, and npm@latest), measured here so an npm change fails before a tag, not the cut.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        bun-version: ['1.3.0', latest]
+        include:
+          - {bun-version: '1.3.0', npm: bundled}
+          - {bun-version: latest, npm: bundled}
+          - {bun-version: latest, npm: release}
+    name: install-smoke (bun ${{ matrix.bun-version }}, npm ${{ matrix.npm }})
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -34,4 +40,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          registry-url: ${{ matrix.npm == 'release' && 'https://registry.npmjs.org' || '' }}
+      - name: Use the release job's npm
+        if: ${{ matrix.npm == 'release' }}
+        run: |
+          npm install -g npm@latest
+          npm --version
       - run: bun run smoke
