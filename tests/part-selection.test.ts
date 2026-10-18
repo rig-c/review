@@ -170,3 +170,43 @@ test('nonenumerable public generation survives owned frame and Solo copies',()=>
 test('retained public identity owns row copies and never rereads later prepared metadata',()=>{
  const a=fake(),inspection=new PartInspection(),snap=a.player.slotIdentity(),raw={...snap,slots:snap.slots.map(row=>({...row}))};a.identity(raw);inspection.register('single',entries,a.player);inspection.present('single');inspection.select({side:'single',slot:'s',mode:'context'});raw.slots[0]!.attachment='later-raw-key';raw.skin='later-active-skin';raw.set='later-set';expect(inspection.observation()).toMatchObject({skin:null,set:null,generation:1,activeAttachment:{skin:'default',attachment:'first'}});
 });
+
+/** The draw boundary as main.ts/compare.ts run it: the player draws whole first, then parts present inside the same try. */
+function drawBoundary(explorer:PartInspection,side:'single'|'a'|'b',drawn:string[]):void {drawn.push(side);explorer.present(side);}
+test('identity mismatch keeps the rig drawn whole, names the refusal, offers nothing stale, and a later valid frame recovers Solo',async()=>{
+ const {host,detail,Explorer,counter}=await explorerHarness(),a=fake(),changes:unknown[]=[],explorer=new Explorer(host as unknown as HTMLElement,detail as unknown as HTMLElement,previous=>changes.push(previous),()=>{});
+ const drawn:string[]=[],list=host.querySelector('[data-part-list]')!,status=host.querySelector('[data-part-status]')!,solo=host.querySelector('[data-part-solo]')!,rows=()=>list.querySelectorAll('button');
+ explorer.register('single',entries,a.player);drawBoundary(explorer,'single',drawn);explorer.select({side:'single',slot:'s',mode:'solo'});expect(a.rendered.at(-1)!.order.map(r=>r.slot)).toEqual(['s']);
+ const snapshot=a.player.slotIdentity(),soloDraws=a.rendered.length,mismatch=()=>{a.source(copyPartFrame(frame));a.identity({...snapshot,generation:a.player.generation,slots:snapshot.slots.map(row=>row.slot==='other'?{...row,attachment:null,skin:null,reason:'hidden' as const}:row)});};mismatch();
+ expect(()=>drawBoundary(explorer,'single',drawn)).not.toThrow();expect(drawn).toHaveLength(2);
+ // No Solo render from the refused frame: the player's own whole draw stays on screen.
+ expect(a.rendered).toHaveLength(soloDraws);expect(explorer.refusal('single')).toMatchObject({code:'PART_IDENTITY_FRAME_MISMATCH',catalog:false});
+ expect(host.dataset.parts).toBe('unavailable');expect(status.textContent).toContain('Parts unavailable · PART_IDENTITY_FRAME_MISMATCH');expect(detail.textContent).toContain('Parts unavailable');
+ expect(explorer.value()).toBeNull();expect(explorer.observation()).toBeNull();expect(explorer.feedback()).toBeNull();expect(explorer.bounds()).toBeNull();expect(explorer.frame('single')).toBeUndefined();expect(()=>explorer.assertIdentity({side:'single',slot:'s',mode:'solo'})).toThrow('PART_IDENTITY_UNAVAILABLE');
+ expect(solo.disabled).toBe(true);expect(rows().every(row=>row.disabled&&row.attributes.get('aria-pressed')==='false'&&row.textContent.includes('parts unavailable · PART_IDENTITY_FRAME_MISMATCH'))).toBe(true);expect(detail.querySelector('button')!.hidden).toBe(true);
+ const changed=changes.length;rows()[0]!.onclick!();expect(changes).toHaveLength(changed);expect(status.textContent).toContain('PARTS_UNAVAILABLE');expect(a.rendered).toHaveLength(soloDraws);
+ // A sustained failure rewrites nothing; availability is part of the view key.
+ const settled=counter.writes;for(let tick=0;tick<10;tick++){mismatch();drawBoundary(explorer,'single',drawn);}expect(counter.writes).toBe(settled);
+ a.identity(null);a.source(copyPartFrame(frame));drawBoundary(explorer,'single',drawn);
+ expect(explorer.refusal('single')).toBeNull();expect(host.dataset.parts).toBeUndefined();expect(explorer.value()).toMatchObject({slot:'s',mode:'solo',identity:{attachment:'first'}});expect(a.rendered.at(-1)!.order.map(r=>r.slot)).toEqual(['s']);
+ expect(solo.disabled).toBe(false);expect(solo.checked).toBe(true);expect(rows().some(row=>row.disabled)).toBe(false);expect(status.textContent).toContain('declared slots');
+});
+test('catalog load or hash failure keeps the rig drawn and refuses only that side until it registers a matching catalog',async()=>{
+ const {host,detail,Explorer}=await explorerHarness(),a=fake(),b=fake(),explorer=new Explorer(host as unknown as HTMLElement,detail as unknown as HTMLElement,()=>{},()=>{});
+ const bytes=new TextEncoder().encode(JSON.stringify(model)),fetcher=new Proxy(fetch,{apply:()=>Promise.resolve(new Response(bytes))}),missing=new Proxy(fetch,{apply:()=>Promise.resolve(new Response('',{status:404}))});
+ for(const [side,load]of [['a',()=>loadPartCatalog('http://local.invalid/model','0'.repeat(64),['s','other','clip'],fetcher)],['b',()=>loadPartCatalog('http://local.invalid/model','0'.repeat(64),['s','other','clip'],missing)]] as const){try{explorer.register(side,await load(),side==='a'?a.player:b.player);}catch(error){explorer.refuseCatalog(side,error);}}
+ const drawn:string[]=[];expect(()=>{drawBoundary(explorer,'a',drawn);drawBoundary(explorer,'b',drawn);}).not.toThrow();expect(drawn).toEqual(['a','b']);expect(a.rendered).toHaveLength(0);
+ expect(explorer.refusal('a')).toMatchObject({code:'PART_SOURCE_CHANGED',catalog:true});expect(explorer.refusal('b')).toMatchObject({code:'PART_CATALOG_UNAVAILABLE',catalog:true});
+ const status=host.querySelector('[data-part-status]')!;expect(status.textContent).toContain('A PART_SOURCE_CHANGED');expect(status.textContent).toContain('B PART_CATALOG_UNAVAILABLE');expect(status.textContent).toContain('until the package reloads');expect(host.querySelector('[data-part-list]')!.querySelectorAll('button')).toHaveLength(0);
+ expect(()=>explorer.select({side:'a',slot:'s',mode:'context'})).toThrow('PART_UNAVAILABLE');expect(explorer.value()).toBeNull();expect(explorer.feedback()).toBeNull();
+ // A later valid frame does not resurrect a refused catalog; a reload that registers a matching one does.
+ drawBoundary(explorer,'a',drawn);expect(explorer.refusal('a')).not.toBeNull();
+ explorer.register('a',entries,a.player);drawBoundary(explorer,'a',drawn);expect(explorer.refusal('a')).toBeNull();explorer.select({side:'a',slot:'s',mode:'context'});expect(explorer.value()).toMatchObject({side:'a',slot:'s',identity:{attachment:'first'}});expect(explorer.refusal('b')).not.toBeNull();
+});
+test('first row click opens in context; a later click keeps the current mode',async()=>{
+ const {host,detail,Explorer}=await explorerHarness(),a=fake(),explorer=new Explorer(host as unknown as HTMLElement,detail as unknown as HTMLElement,()=>{},()=>{});
+ explorer.register('single',entries,a.player);explorer.present('single');const row=(slot:string)=>host.querySelector('[data-part-list]')!.querySelectorAll('button').find(item=>item.dataset.slot===slot)!,draws=a.rendered.length;
+ row('s').onclick!();expect(explorer.value()).toMatchObject({slot:'s',mode:'context'});expect(a.rendered.at(-1)!.order).toHaveLength(2);expect(a.rendered.length).toBeGreaterThan(draws);
+ row('other').onclick!();expect(explorer.value()).toMatchObject({slot:'other',mode:'context'});
+ explorer.select({...explorer.value()!,mode:'solo'});row('s').onclick!();expect(explorer.value()).toMatchObject({slot:'s',mode:'solo'});expect(a.rendered.at(-1)!.order.map(r=>r.slot)).toEqual(['s']);
+});
