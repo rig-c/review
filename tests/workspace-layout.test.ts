@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {allocateWorkspaceLayout,bindWorkspaceDrawer,bindWorkspaceSeparator,InspectorScrollMemory,parseInspectorScroll,type ScrollScheduler,type WorkspacePanel} from '../web/workspace-layout.ts';
-import {defaultWorkspacePanels} from '../web/workspace-preferences.ts';
+import {defaultWorkspacePanels,panelBounds,type WorkspacePanels} from '../web/workspace-preferences.ts';
 class LayoutElement extends EventTarget {
  attrs=new Map<string,string>();dataset:Record<string,string>={};style={touchAction:'pan-y'};tabIndex=-1;captured=new Set<number>();focused=false;id='';open=false;showCalls=0;closeCalls=0;
  getAttribute(key:string){return this.attrs.get(key)??null;}setAttribute(key:string,value:string){this.attrs.set(key,value);}removeAttribute(key:string){this.attrs.delete(key);}closest(){return null;}
@@ -56,4 +56,35 @@ test('responsive boundary rectangles never overflow and preserve a positive stag
 test('pointer events from editing descendants are untouched while a button separator itself can drag',()=>{
  const h=separator();const input={closest:()=>input};const untouched=h.element.emit('pointerdown',{target:input,pointerId:2,isPrimary:true,button:0,clientX:0,clientY:0});expect(untouched.defaultPrevented).toBe(false);expect(h.element.captured.size).toBe(0);
  Object.defineProperty(h.element,'closest',{value:()=>h.element});h.element.emit('pointerdown',{pointerId:2,isPrimary:true,button:0,clientX:0,clientY:0});expect(h.element.hasPointerCapture(2)).toBe(true);h.binding.dispose();
+});
+
+test('a responsive clamped separator click and bound key never save the temporary size',()=>{
+ const element=new LayoutElement(),commits:number[]=[],resizes:number[]=[];let desired=420;
+ const binding=bindWorkspaceSeparator({element:element as unknown as HTMLElement,panel:'leftWidth',controls:'left',label:'Resize left',events:null,desired:()=>desired,range:()=>({min:120,max:184,value:184,enabled:true}),resize:value=>{desired=value;resizes.push(value);},commit:value=>commits.push(value)});
+ element.emit('pointerdown',{pointerId:1,isPrimary:true,button:0,clientX:0});element.emit('pointerup',{pointerId:1});element.emit('keydown',{key:'ArrowRight'});element.emit('keydown',{key:'End'});expect(desired).toBe(420);expect(resizes).toEqual([]);expect(commits).toEqual([]);binding.dispose();
+});
+
+test('a resize that disables its own separator cancels safely before the move callback returns',()=>{
+ const element=new LayoutElement();let desired=200,enabled=true;const commits:number[]=[];
+ const binding=bindWorkspaceSeparator({element:element as unknown as HTMLElement,panel:'leftWidth',controls:'left',label:'Resize left',events:null,desired:()=>desired,range:()=>({min:120,max:600,value:desired,enabled}),resize:value=>{desired=value;if(value>200)enabled=false;},commit:value=>commits.push(value)});
+ element.emit('pointerdown',{pointerId:1,isPrimary:true,button:0,clientX:0});expect(()=>element.emit('pointermove',{pointerId:1,clientX:10})).not.toThrow();expect(desired).toBe(200);expect(element.hasPointerCapture(1)).toBe(false);expect(commits).toEqual([]);element.emit('pointerup',{pointerId:1});expect(commits).toEqual([]);binding.dispose();
+});
+
+test('coupled allocation uses reachable effective ranges and inverse desired values for keyboard and pointer',()=>{
+ const element=new LayoutElement(),available={width:700,height:500};let desired:WorkspacePanels={leftWidth:420,rightWidth:550,inspectorHeight:280};const commits:number[]=[];
+ const effective=(leftWidth=desired.leftWidth)=>allocateWorkspaceLayout(available,{...desired,leftWidth}).leftWidth;
+ const range=()=>({min:effective(panelBounds.leftWidth.min),max:effective(panelBounds.leftWidth.max),value:effective(),enabled:true});
+ const binding=bindWorkspaceSeparator({element:element as unknown as HTMLElement,panel:'leftWidth',controls:'left',label:'Resize left',events:null,desired:()=>desired.leftWidth,range,resolveDesired:(target,context)=>{expect(context.range).toEqual(range());expect(context.desired).toBe(desired.leftWidth);let low=panelBounds.leftWidth.min,high=panelBounds.leftWidth.max;for(let i=0;i<60;i++){const mid=(low+high)/2;if(effective(mid)<target)low=mid;else high=mid;}return (low+high)/2;},resize:value=>{desired={...desired,leftWidth:value};},commit:value=>commits.push(value)});
+ const original=effective();element.emit('keydown',{key:'ArrowRight'});expect(effective()).toBeCloseTo(original+8,6);expect(desired.leftWidth).toBeGreaterThan(420);expect(commits.at(-1)).toBe(desired.leftWidth);
+ element.emit('keydown',{key:'Home'});expect(effective()).toBeCloseTo(range().min,6);element.emit('keydown',{key:'End'});expect(effective()).toBeCloseTo(range().max,6);const atEnd=desired.leftWidth,count=commits.length;element.emit('keydown',{key:'ArrowRight'});expect(commits.length).toBe(count);expect(desired.leftWidth).toBe(atEnd);
+ element.emit('pointerdown',{pointerId:2,isPrimary:true,button:0,clientX:100});element.emit('pointermove',{pointerId:2,clientX:90});expect(effective()).toBeCloseTo(range().max-10,6);element.emit('pointercancel',{pointerId:2});expect(desired.leftWidth).toBe(atEnd);expect(commits.length).toBe(count);
+ element.emit('pointerdown',{pointerId:3,isPrimary:true,button:0,clientX:100});element.emit('pointermove',{pointerId:3,clientX:90});const moved=desired.leftWidth;element.emit('pointerup',{pointerId:3});expect(commits.at(-1)).toBe(moved);expect(effective()).toBeCloseTo(range().max-10,6);binding.dispose();
+});
+
+test('settled programmatic clamping survives before-hide capture but intentional user scroll replaces it',()=>{
+ const queue=scheduler(),memory=new InspectorScrollMemory({view:{x:23,y:480}},queue.value),panel={scrollLeft:0,scrollTop:0,scrollWidth:500,scrollHeight:400,clientWidth:500,clientHeight:400};memory.restore('view',panel);queue.frame();queue.frame();queue.frame();expect(memory.restoring('view')).toBe(false);expect(panel.scrollTop).toBe(0);
+ // The ordinary before-hide capture happens after restore suppression has ended.
+ memory.capture('view',panel);expect(memory.snapshot().view).toEqual({x:23,y:480});panel.scrollWidth=900;panel.scrollHeight=1200;memory.restore('view',panel);queue.frame();queue.frame();queue.frame();expect(panel.scrollTop).toBe(480);expect(panel.scrollLeft).toBe(23);
+ panel.scrollLeft=0;panel.scrollTop=0;memory.capture('view',panel,true);memory.restore('view',panel);queue.frame();queue.frame();expect(memory.snapshot().view).toEqual({x:0,y:0});expect(panel.scrollTop).toBe(0);
+ memory.restore('view',panel);queue.frame();panel.scrollTop=77;memory.capture('view',panel,true);queue.frame();queue.frame();expect(panel.scrollTop).toBe(77);expect(memory.snapshot().view).toEqual({x:0,y:77});expect(memory.restoring('view')).toBe(false);memory.dispose();
 });

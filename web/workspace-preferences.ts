@@ -46,7 +46,7 @@ export function mergeWorkspacePreferences(...records:WorkspacePreferences[]):Wor
 }
 let fallbackWriter=0;
 export class WorkspacePreferenceStore {
- private value=defaultWorkspacePreferences();private persistence:PreferenceStatus={state:'available',detail:'Browser preferences use defaults.'};private readonly storage:PreferenceStorage|null;private readonly events:PreferenceEventSource|null;private readonly writer:string;private listeners=new Set<(value:WorkspacePreferences)=>void>();private closed=false;
+ private value=defaultWorkspacePreferences();private persistence:PreferenceStatus={state:'available',detail:'Browser preferences use defaults.'};private readonly storage:PreferenceStorage|null;private readonly events:PreferenceEventSource|null;private readonly writer:string;private listeners=new Set<(value:WorkspacePreferences)=>void>();private conflicts=new Set<Field>();private closed=false;
  constructor(private readonly options:WorkspacePreferenceOptions={}){
   this.writer=options.writer??(globalThis.crypto?.randomUUID?.()??`local-${Date.now().toString(36)}-${++fallbackWriter}`);if(!/^[A-Za-z0-9_-]{1,80}$/.test(this.writer))throw new Error('PREFERENCES_WRITER: invalid tab writer');
   let storage=options.storage??null;if(options.storage===undefined){try{storage=globalThis.localStorage;}catch{this.statusTo('memory-only','Browser storage access was denied; preferences remain usable in this page.');}}this.storage=storage;this.events=options.events===undefined?(typeof window==='undefined'?null:window):options.events;
@@ -56,21 +56,28 @@ export class WorkspacePreferenceStore {
  status():PreferenceStatus{return {...this.persistence};}
  subscribe(listener:(value:WorkspacePreferences)=>void):()=>void {this.listeners.add(listener);return ()=>this.listeners.delete(listener);}
  update(patch:WorkspacePreferencePatch):WorkspacePreferences {
-  if(this.closed)throw new Error('PREFERENCES_DISPOSED');const changes=patches(patch);if(!changes.size)return this.get();const loaded=this.read();let next=loaded.kind==='valid'?mergeWorkspacePreferences(this.value,loaded.value):clone(this.value);
-  if(next.revision===Number.MAX_SAFE_INTEGER)throw new Error('PREFERENCES_REVISION_EXHAUSTED');const revision=next.revision+1;for(const [field,v]of changes){put(next,field,v);next.stamps[field]={revision,writer:this.writer};}next.revision=revision;this.value=next;this.persist();this.notify();return this.get();
+  if(this.closed)throw new Error('PREFERENCES_DISPOSED');const changes=patches(patch);if(!changes.size)return this.get();const loaded=this.read();if(loaded.kind==='valid')this.reconcile(loaded.value);const next=clone(this.value);
+  if(next.revision===Number.MAX_SAFE_INTEGER)throw new Error('PREFERENCES_REVISION_EXHAUSTED');const revision=next.revision+1;for(const [field,v]of changes)put(next,field,v);for(const field of new Set([...changes.keys(),...this.conflicts]))next.stamps[field]={revision,writer:this.writer};next.revision=revision;this.conflicts.clear();this.value=next;this.persist();this.notify();return this.get();
  }
  resetLayout():WorkspacePreferences{return this.update({panels:{...defaultWorkspacePanels}});}
  /** Reconcile after resuming a suspended tab as well as on storage events. */
- refresh():WorkspacePreferences {if(this.closed)return this.get();const loaded=this.read();if(loaded.kind==='valid'){this.value=mergeWorkspacePreferences(this.value,loaded.value);this.persist();this.notify();}return this.get();}
+ refresh():WorkspacePreferences {if(this.closed)return this.get();const loaded=this.read();if(loaded.kind==='valid'){this.reconcile(loaded.value);if(!this.conflicts.size)this.persist();this.notify();}return this.get();}
  dispose():void {if(this.closed)return;this.closed=true;this.events?.removeEventListener('storage',this.storageEvent);this.listeners.clear();}
  private statusTo(state:PreferenceStatus['state'],detail:string){this.persistence={state,detail};this.options.onStatus?.(this.status());}
+ /** Quarantine only equal-stamp conflicting leaves; retain every independent valid update.
+  * An explicit edit gives quarantined known values a new stamp before repairing storage. */
+ private reconcile(...records:WorkspacePreferences[]):void {
+  const next=clone(this.value);
+  for(const value of records)for(const field of fields){const a=next.stamps[field],b=value.stamps[field],order=b.revision-a.revision||(b.writer<a.writer?-1:b.writer>a.writer?1:0);if(order>0){put(next,field,leaf(value,field));next.stamps[field]={...b};this.conflicts.delete(field);}else if(order===0&&leaf(next,field)!==leaf(value,field))this.conflicts.add(field);}
+  next.revision=Math.max(...fields.map(field=>next.stamps[field].revision));this.value=next;if(this.conflicts.size)this.statusTo('corrupt',`Browser preference fields were refused because their stamps conflict: ${[...this.conflicts].join(', ')}. Known values remain usable; an explicit edit repairs them.`);
+ }
  private read():{kind:'valid';value:WorkspacePreferences}|{kind:'absent'|'denied'|'corrupt'} {
   if(!this.storage){this.statusTo('memory-only','Browser storage is unavailable; preferences remain usable in this page.');return {kind:'denied'};}
   let raw:string|null;try{raw=this.storage.getItem(workspacePreferenceKey);}catch{this.statusTo('memory-only','Browser storage read was denied; preferences remain usable in this page.');return {kind:'denied'};}
   if(raw===null)return {kind:'absent'};try{return {kind:'valid',value:parseText(raw)};}catch(error){this.statusTo('corrupt',`Saved browser preferences were refused: ${error instanceof Error?error.message:String(error)}. Current page defaults remain usable.`);return {kind:'corrupt'};}
  }
  private persist():void {
-  if(!this.storage)return;const latest=this.read();if(latest.kind==='valid')this.value=mergeWorkspacePreferences(this.value,latest.value);
+  if(!this.storage)return;const latest=this.read();if(latest.kind==='valid')this.reconcile(latest.value);if(this.conflicts.size)return;
   const text=JSON.stringify(this.value);if(latest.kind==='valid'&&JSON.stringify(latest.value)===text){this.statusTo('available','Browser preferences are current.');return;}
   try{this.storage.setItem(workspacePreferenceKey,text);this.statusTo('available','Browser preferences saved.');}catch{this.statusTo('memory-only','Browser storage write was denied; changed preferences remain usable in this page.');}
  }
@@ -81,8 +88,8 @@ export class WorkspacePreferenceStore {
  }
  private storageEvent:EventListener=(event)=>{
   if(this.closed)return;const e=event as StorageEvent;if(e.key!==workspacePreferenceKey&&e.key!==null||e.storageArea&&e.storageArea!==this.storage)return;const latest=this.read();
-  if(latest.kind==='absent'){this.value=defaultWorkspacePreferences();this.statusTo('available','Browser preferences were cleared; defaults remain usable.');this.notify();return;}
-  try{const incoming=e.newValue===null||e.key===null?null:parseText(e.newValue);this.value=mergeWorkspacePreferences(this.value,...(incoming?[incoming]:[]),...(latest.kind==='valid'?[latest.value]:[]));if(latest.kind!=='corrupt')this.persist();this.notify();}catch(error){this.statusTo('corrupt',`Browser preference update was refused: ${error instanceof Error?error.message:String(error)}.`);}
+  if(latest.kind==='absent'){this.value=defaultWorkspacePreferences();this.conflicts.clear();this.statusTo('available','Browser preferences were cleared; defaults remain usable.');this.notify();return;}
+  try{const incoming=e.newValue===null||e.key===null?null:parseText(e.newValue);this.reconcile(...(incoming?[incoming]:[]),...(latest.kind==='valid'?[latest.value]:[]));if(latest.kind!=='corrupt'&&!this.conflicts.size)this.persist();this.notify();}catch(error){this.statusTo('corrupt',`Browser preference update was refused: ${error instanceof Error?error.message:String(error)}.`);}
  };
  private notify(){for(const listener of this.listeners)listener(this.get());}
 }

@@ -38,3 +38,22 @@ test('concurrent same-field edits use a deterministic writer tie and old events 
 test('field merge rejects conflicting same-stamp values and subscriptions stop at disposal',()=>{
  const hub=new PreferenceHub(),a=hub.endpoint(),store=new WorkspacePreferenceStore({...a,writer:'a'});let calls=0;const unsubscribe=store.subscribe(value=>{calls++;value.panels.rightWidth=899;});store.update({theme:'dark'});expect(store.get().panels.rightWidth).toBe(defaultWorkspacePanels.rightWidth);expect(calls).toBe(1);const one=store.get(),two=store.get();two.theme='light';expect(()=>mergeWorkspacePreferences(one,two)).toThrow('STAMP_CONFLICT');unsubscribe();store.update({defaultCameraSync:false});expect(calls).toBe(1);store.dispose();expect(()=>store.update({theme:'light'})).toThrow('DISPOSED');
 });
+
+test('logical stamp corruption quarantines only that field and explicit edits repair it',()=>{
+ for(const delivery of ['refresh','event','update'] as const){
+  const hub=new PreferenceHub(),end=hub.endpoint(),store=new WorkspacePreferenceStore({...end,writer:'known'});store.update({theme:'dark'});
+  const corrupted=store.get();corrupted.theme='light';corrupted.defaultIdleRepeat=false;corrupted.stamps.defaultIdleRepeat={revision:2,writer:'other'};corrupted.revision=2;
+  // Individually well-formed, but its theme disagrees with this page at exactly one stamp.
+  parseWorkspacePreferences(corrupted);hub.values.set(workspacePreferenceKey,JSON.stringify(corrupted));const writes=hub.writes;
+  if(delivery==='refresh')expect(()=>store.refresh()).not.toThrow();
+  if(delivery==='event'){const event=new Event('storage');Object.assign(event,{key:workspacePreferenceKey,newValue:JSON.stringify(corrupted),storageArea:end.storage});expect(()=>end.events.dispatchEvent(event)).not.toThrow();}
+  if(delivery!=='update'){expect(store.status().state).toBe('corrupt');expect(store.get()).toMatchObject({theme:'dark',defaultIdleRepeat:false});expect(hub.writes).toBe(writes);}
+  expect(()=>store.update({panels:{leftWidth:200}})).not.toThrow();
+  const repaired=parseWorkspacePreferences(JSON.parse(hub.values.get(workspacePreferenceKey)!));expect(repaired).toMatchObject({theme:'dark',defaultIdleRepeat:false,panels:{leftWidth:200}});expect(repaired.stamps.theme).toEqual({revision:3,writer:'known'});expect(repaired.stamps.defaultIdleRepeat).toEqual({revision:2,writer:'other'});expect(store.status().state).toBe('available');expect(store.get()).toEqual(repaired);store.dispose();
+ }
+});
+
+test('denied corruption repair retains every usable value and retries after access returns',()=>{
+ const hub=new PreferenceHub(),end=hub.endpoint(),store=new WorkspacePreferenceStore({...end,writer:'known'});store.update({theme:'dark'});const conflict=store.get();conflict.theme='light';hub.values.set(workspacePreferenceKey,JSON.stringify(conflict));store.refresh();expect(store.status().state).toBe('corrupt');
+ end.denyWrite=true;store.update({defaultCameraSync:false});expect(store.get()).toMatchObject({theme:'dark',defaultCameraSync:false});expect(store.status().state).toBe('memory-only');end.denyWrite=false;store.refresh();expect(store.status().state).toBe('available');expect(JSON.parse(hub.values.get(workspacePreferenceKey)!)).toMatchObject({theme:'dark',defaultCameraSync:false});store.dispose();
+});
