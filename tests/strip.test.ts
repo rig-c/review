@@ -23,3 +23,12 @@ test('wrong source identity, animation, basis and report range refuse by name',(
  for(const [patch,expected] of [[{sourceHash:'0'.repeat(64)},'inputs changed'],[{animation:'other'},'animation'],[{intervals:[{id:'x',basis:'single',frameStart:0,frameEnd:4}]},'last frame'],[{intervals:[{id:'x',basis:'a',frameStart:0,frameEnd:1}]},'basis']] as const)expect(()=>planStrip({...request(),...patch} as StripRequest,{mode:'single',binding,reports:{single:report}})).toThrow(expected);
  expect(()=>planStrip(request(),{mode:'single',binding,reports:{single:parseReport({spec:'rig-pose-report/1',frameTimes:[0,1,2]})}})).toThrow('explicit report animation');
 });
+
+test('mixed compare batches identify the root as mixed and retain each own clock in either order',()=>{
+ const paired:StripBinding={...binding,packages:[{...binding.packages[0],id:'a'},{...binding.packages[0],id:'b'}]};
+ const reports={a:parseReport({spec:'rig-pose-report/1',animation:'dance',frameTimes:[0,.1,.7,1]}),b:report};
+ const a={id:'a-note',feedbackId:'A',basis:'a' as const,frameStart:1,frameEnd:2},b={id:'b-note',feedbackId:'B',basis:'b' as const,frameStart:1,frameEnd:2};
+ for(const intervals of [[a,b],[b,a]]){const plan=planStrip(request({referenceId:undefined,intervals}),{mode:'compare',binding:paired,reports});expect(plan.basis).toBe('mixed');expect(plan.groups.map(g=>g.basis)).toEqual(intervals.map(g=>g.basis));expect(Object.fromEntries(plan.groups.map(g=>[g.basis,g.samples.map(s=>s.time)]))).toEqual({a:[.1,.7],b:[.037,.19]});expect(plan.groups.map(g=>g.feedbackId)).toEqual(intervals.map(g=>g.feedbackId));}
+ expect(planStrip(request({referenceId:undefined,intervals:[a,{...a,id:'a-next'}]}),{mode:'compare',binding:paired,reports}).basis).toBe('a');
+ expect(planStrip(request({referenceId:undefined,intervals:[b]}),{mode:'compare',binding:paired,reports}).basis).toBe('b');
+});

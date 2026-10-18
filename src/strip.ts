@@ -10,7 +10,7 @@ export interface StripBinding {sourceHash:string;packages:{id:StripSide;label:st
 export interface StripRow {id:'reference'|StripSide;label:string}
 export interface StripGroup {id:string;feedbackId:string|null;basis:StripSide;frameStart:number;frameEnd:number;samples:{requestedFrame:number;time:number|null}[]}
 /** layout.footerHeight is a maximum provenance budget; rendering.height records the measured PNG. */
-export interface StripPlan {schema:'rig-review-strip/1';mode:'single'|'compare';animation:string;basis:StripSide;rows:StripRow[];groups:StripGroup[];binding:StripBinding;layout:{cellWidth:number;cellHeight:number;labelHeight:number;rowLabelWidth:number;groupGap:number;footerHeight:number}}
+export interface StripPlan {schema:'rig-review-strip/1';mode:'single'|'compare';animation:string;basis:StripSide|'mixed';rows:StripRow[];groups:StripGroup[];binding:StripBinding;layout:{cellWidth:number;cellHeight:number;labelHeight:number;rowLabelWidth:number;groupGap:number;footerHeight:number}}
 export interface StripRenderInput {plan:StripPlan;referencePath:string;rigs:{id:StripSide;root:string;modelPath:string;animation:string;clock:FrameClock|null}[]}
 export interface StripRenderSample {groupId:string;requestedFrame:number;requestedTime:number;presentedTime:number;delta:number;decodedFrame:number;sampling:'video-frame';playerTimes:Partial<Record<StripSide,number>>;frames:Partial<Record<StripSide,number|null>>}
 export interface StripRenderResult {png:Uint8Array;width:number;height:number;renderer:{name:string;version:string;backend:string};samples:StripRenderSample[]}
@@ -47,5 +47,5 @@ export function planStrip(request:StripRequest,context:{mode:'single'|'compare';
   const width=layout.rowLabelWidth+Math.max(...groups.map(g=>g.samples.length))*layout.cellWidth;
   const height=groups.length*(layout.labelHeight*2+rows.length*layout.cellHeight+layout.groupGap)+layout.footerHeight;
   if(width>16384||height>16384||width*height>64000000)throw new Error('strip.layout: export exceeds 64 megapixels or 16384 pixels; split the selection');
-  return {schema:'rig-review-strip/1',mode:context.mode,animation:request.animation,basis:groups[0]!.basis,rows,groups,binding:structuredClone(context.binding),layout};
+  return {schema:'rig-review-strip/1',mode:context.mode,animation:request.animation,basis:new Set(groups.map(group=>group.basis)).size===1?groups[0]!.basis:'mixed',rows,groups,binding:structuredClone(context.binding),layout};
 }

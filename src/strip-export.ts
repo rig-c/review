@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { realpath, stat, lstat, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
-import { basename, dirname, isAbsolute, relative, resolve, parse } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, parse, sep, type posix } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { loadReview, safeFile, type ReviewPackage } from './manifest.ts';
 import { assertCompareUnchanged, safeCompareReference, type ComparePackage } from './compare.ts';
@@ -44,11 +44,19 @@ export async function exportCompareStrip(p:ComparePackage,input:unknown,options:
   return finish(plan,reference.path,[{id:'a',p:p.a},{id:'b',p:p.b}],request.format==='png',async()=>{await assertCompareUnchanged(p);await safeCompareReference(p);await verifyReference(reference);},options);
 }
 export function stripJson(result:StripExport):string{return JSON.stringify({plan:result.plan,rendering:result.rendering},null,2)+'\n';}
+/** Pure boundary rules also exercise Windows paths on a non-Windows verifier. */
+export function stripPathIsInside(root:string,target:string,paths:Pick<typeof posix,'relative'|'isAbsolute'|'sep'>={relative,isAbsolute,sep}):boolean{
+  const rel=paths.relative(root,target);return rel===''||(!rel.startsWith('..'+paths.sep)&&rel!=='..'&&!paths.isAbsolute(rel));
+}
+export function stripParentPaths(target:string,paths:Pick<typeof posix,'relative'|'parse'|'dirname'|'resolve'|'sep'>={relative,parse,dirname,resolve,sep}):string[]{
+  const base=paths.parse(target).root,parts=paths.relative(base,paths.dirname(target)).split(paths.sep).filter(Boolean),parents:string[]=[];let cursor=base;
+  for(const part of parts){cursor=paths.resolve(cursor,part);parents.push(cursor);}return parents;
+}
 /** No symlink parent or package-contained path can become a derived output target. */
 export async function validateStripOutput(output:string,roots:string[]):Promise<string>{
-  const target=resolve(output),parts=relative(parse(target).root,dirname(target)).split('/').filter(Boolean);let cursor=parse(target).root;
-  for(const part of parts){cursor=resolve(cursor,part);const info=await lstat(cursor);if(info.isSymbolicLink()||!info.isDirectory())throw new Error('strip.output: parent must be an existing directory without symlinks');}
-  for(const root of roots){const canonical=await realpath(root),rel=relative(canonical,target);if(rel===''||(!rel.startsWith('../')&&rel!=='..'&&!isAbsolute(rel)))throw new Error('strip.output: derived files must be outside every source package');}
+  const target=resolve(output);
+  for(const parent of stripParentPaths(target)){const info=await lstat(parent);if(info.isSymbolicLink()||!info.isDirectory())throw new Error('strip.output: parent must be an existing directory without symlinks');}
+  for(const root of roots)if(stripPathIsInside(await realpath(root),target))throw new Error('strip.output: derived files must be outside every source package');
   try{await lstat(target);throw new Error('strip.output: destination already exists');}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
   return target;
 }
