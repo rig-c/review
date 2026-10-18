@@ -1,5 +1,14 @@
 # Review package and existing-folder adapter v1
 
+The toolchain delivery flow is **Parts → Pose → Core (rigc) → Review → Play →
+Adapter**. Review supplies human inspection and feedback bound to the exact
+reviewed sources; it neither replaces Core's build validation nor authors motion.
+The app uses the published `@rig-c/play` loader/player to preview artifacts during
+that inspection. This conceptual delivery order is not an import/dependency
+order. Adapter means downstream consumer integration, not a newly introduced or
+unreleased adapter contract. Existing producer formats and playback dependencies
+remain authoritative.
+
 The CLI also accepts an existing output directory. It reads a root `review.json` when present. Otherwise it constructs this contract in memory: optional root `skeleton.model.json`, otherwise the fixed rigc build path `build/skeleton.model.json`; read-only `skeleton.*`, `motion.json` and `report.json` links; root videos (`mp4`, `webm`, `mov`); image filenames containing strip/contact/sheet/filmstrip/띠; and canonical `*pose*.json` references. The root compiled model takes precedence over the build path. These are the only two automatically recognized model paths; discovery never searches recursively. The opened directory remains the package root, so root motion/references accompany the build model and its model-relative pages. An existing selected model with an invalid type, dangling symlink, escaping symlink or invalid model envelope is refused rather than skipped. Each reference is shown separately; no source relationship, FPS or video synchronization is inferred. It never inserts or rewrites a manifest or motion file in the source folder. Raw Spine JSON/skel remains read-only evidence with playback unavailable. The folder revision is `folder-adapter/1`; actual changed file bytes are distinguished by the source hash.
 
 `review.json` is UTF-8 JSON. Its directory is the package root. Required keys are `schema: "rig-review/1"`, `id`, `title`, and `revision`. `id` and every entry ID match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. Titles and revision strings are nonempty. Optional collections normalize to empty arrays.
@@ -143,7 +152,7 @@ Timing is deliberately explicit:
 - Legacy `seconds` and optional `spanSeconds` are durations only, normalized as `durationSeconds`. Neither starts a seek. `frames` plus overall `duration` never implies FPS; unrelated event samples do not establish a clock for other events.
 - `timing:"mapped"` means an explicit seek is available; `"frames-unmapped"` retains source frame coordinates but displays **시간 맵 없음 — seek 불가**. `"unavailable"` denotes an entry with no usable seek or frame coordinate (for example a provided empty discrete time list). No missing time receives zero.
 
-The existing dancer v19 report has no declared full clock. Its frame-only markers remain visible with feedback frame prefills and unavailable seek; switch/from and uncovered/times can seek. Producer timing additions are tracked in [rig-c/pose #209](https://github.com/rig-c/pose/issues/209). Selecting a marker preloads only supplied frame coordinates and actual target choices. It neither guesses FPS nor maps scan joints to rig bones, and report measurements do not automatically mark a defect, category, checkpoint result or overall approval.
+For a legacy report with no declared full clock, frame-only markers remain visible with feedback frame prefills and unavailable seek; switch/from and uncovered/times can seek. Producer timing additions are tracked in [rig-c/pose #209](https://github.com/rig-c/pose/issues/209). Selecting a marker preloads only supplied frame coordinates and actual target choices. It neither guesses FPS nor maps scan joints to rig bones, and report measurements do not automatically mark a defect, category, checkpoint result or overall approval.
 
 
 ## Producer-frame transport
@@ -431,3 +440,139 @@ The separate #24 timing evidence describes its original forced-Canvas2D setup,
 CPU submission rather than compositor acknowledgement, and its stated host.
 Changing to the default mesh backend does not turn those measurements into a
 WebGL benchmark or a user-Mac performance claim.
+
+## Opt-in current-page inspection control
+
+`open ... --control` starts a distinct fixed-binding worker with an ephemeral
+control capability. A normal `open`/foreground instance does not expose control.
+The capability is random, separate from the public source hash, handoff key and
+open-status nonce, and stored only in the private0600 worker record outside all
+input packages. It is not printed, embedded in URLs, exported with feedback or
+returned by the control status response. Reuse still requires exact canonical
+inputs, tool fingerprint, source hash and startup animation. Existing family or
+unrelated processes are never replaced or stopped by a control request.
+
+`control <input> [--reference <video>] [--compare <input>] [--animation <name>]`
+queries only an already running matching opt-in worker. It reports mode,
+instanceKey, sourceHash and each live page's pageId/revision/actual inspection.
+No page is chosen by latest activity; commands need an explicit page when more
+than one is connected. Reads include current theme, automatic/effective layout,
+linked rig and independent reference camera, animation/time, playback/idle-loop,
+layers, readiness/feedback eligibility and supported capabilities. Unavailable
+capabilities stay false; absence does not manufacture a model or frame clock.
+
+`inspection.view`, when supplied, is a closed `rig-review-view/1` observation:
+
+```json
+{"schema":"rig-review-view/1","cameras":{"rig":null,"a":null,"b":null,"reference":null}}
+```
+
+A measured camera replaces null with
+`{space,center:{x,y},zoom,viewport:{width,height},visible:{x,y,width,height}}`.
+The `rig`, `a` and `b` entries use `space:"world"` (Y up); `reference` uses
+`space:"image"` (Y down). Single view uses rig; compare uses distinct A/B entries
+with their actual panel dimensions and shared rig camera. Viewport dimensions
+are positive CSS pixels up to65536, zoom is0.25..8, coordinates are finite within
+the safe-number range and visible extents are positive. Missing measurements
+are null, never invented zero-size panels. The optional observation is additive
+to the existing inspection protocol and does not add a source-switch or write
+command. Saved canonical coordinates and actual panel geometry must not be
+confused with the viewport-specific CSS pan accepted by a camera command.
+
+The command envelope is closed:
+
+```json
+{"schema":"rig-review-control-command/1","requestId":"theme-1","pageId":"<registered-page>","instanceKey":"<exact-worker-key>","sourceHash":"<exact-loaded-hash>","expectedRevision":0,"command":{"type":"theme","value":"light"}}
+```
+
+Supported commands are `theme` with `system|dark|light`, `layout` with `auto`,
+`camera` with target `rig|reference`, zoom0.25..8 and finite pan{x,y} within
+±65536 viewport CSS pixels, `fit` with that target, `playback` with `play|pause`,
+`animation` with an actual single model name, `time` with nonnegative finite
+seconds, and `layers` with boolean images/meshes/bones. A rig camera links A/B;
+reference coordinates remain independent. Names and actual time/domain checks
+are performed by the same normal UI adapters. Invalid compare animation changes
+require a new binding and are refused. No requested time is claimed displayed
+before existing media/player completion. Compare retains its actual reference
+PTS and fixed-step pair path; no independent animation clock is introduced.
+A single-video time request commits the actual decoded timestamp to both rig and
+inspection state, reporting requested versus actual time when they differ. A
+failed or out-of-domain decode attempts to recover the prior actual inspection;
+a superseding local action is never undone. This does not promise an exact
+arbitrary requested video time or infer a video frame rate.
+
+Local UI gestures, live view-link/history navigation and remote applied commands
+advance the page revision. Captured navigation supersedes an in-flight remote
+action before the view restore handler runs. A
+command carries the exact expected revision; a stale one cannot overwrite a
+newer local inspection. The browser helper registers, polls and acknowledges
+through fixed `/api/control/register`, `/api/control/poll`, `/api/control/ack`
+and `/api/control/close` endpoints using a separate page capability. Its poll
+reads the same actual inspection state as the widgets, not a second simulated
+player. User input during an asynchronous remote action aborts/supersedes it;
+an already started action is not promised rolled back. Dirty annotations or
+unadded form drafts prevent context-changing animation/time/playback commands;
+presentation-only camera/theme/layer changes preserve them. Save/export or
+bookmarked-view restoration busy states refuse concurrent control.
+
+Agent `GET /api/control`, `POST /api/control/commands` and
+`GET /api/control/receipts/<commandId>` require the private Bearer capability.
+Mutations additionally require the exact loopback Origin and application/json;
+all endpoints reject nonloopback host/path parameters and provide no CORS.
+Registration is exact-Origin only and yields its page capability only to that
+same-origin response. JSON has a streamed16KiB ceiling and2-second body deadline.
+At most4 live pages,8 queued commands per page and64 retained receipts are kept.
+Page leases expire after30 seconds; queued commands expire after10 seconds.
+Unacknowledged dispatched commands become outcome-unknown on expired/closed
+pages, never applied success. Idle polling alone does not keep the worker alive;
+existing30-minute idle shutdown remains in effect.
+
+HTTP202/`queued` means accepted for delivery only. A receipt later reports
+`dispatched`, `applied`, `rejected`, `failed`, `superseded` or `outcome-unknown`,
+with actual observed inspection/revision only after acknowledgment. A repeated
+requestId with the identical envelope returns its original receipt; different
+content conflicts. CLI command exit0 requires applied; other command outcomes or
+bounded wait expiry exit2. Query-only reads exit0 when available. Request waits
+are0..30000ms (default10000); transport timeouts return an error, not a blind
+success or an automatic command retry.
+
+Source bytes are revalidated on accepted enqueue, dispatch and acknowledgment;
+existing session/save/export validation remains independently authoritative.
+Input changes refuse and never mutate the loaded source binding, replace a
+reference, transfer a prior approval or rewrite feedback. There is no command
+for paths, URLs, JS/eval, arbitrary DOM/CSS, disk writes, feedback/status, Submit,
+strip export or motion keys. The current-page API is a local inspection adapter,
+not a remote editing or publication service. See the CLI examples in README.
+
+
+## Source-bound inspection links and local drafts
+
+The UI's view link uses `#review=<base64url UTF-8 JSON>` with schema
+`rig-review-inspection/1` and a maximum16KiB ASCII fragment. The closed envelope
+binds mode, exact sourceHash, ordered rig model hashes (or null when unavailable),
+animation/time, named selection, theme/layers and the canonical `ControlView`.
+The loaded source hash includes the selected explicit reference binding; compare
+also binds ordered A/B and the reference/animation. A mismatched binding is
+refused. Camera state is world/image center and zoom plus actual viewport and
+visible rectangle, not a bookmark of CSS pan offsets. Restoring is paused and
+occurs before automatic idle preview or remote page registration. An initial
+valid URL view takes precedence over the saved local view.
+
+Browser local storage uses `rig-review-draft/1:<scope>:<sourceHash>` and an active
+source marker `rig-review-active/1:<scope>`. A draft has schema
+`rig-review-local-draft/1` and a maximum512KiB UTF-8 payload. It contains ordinary
+ID/radio form inputs, UI selections, the inspection bookmark and the unsent
+feedback/checkpoint/status session. It records the SHA-256 fingerprint of the
+original submitted server-session baseline, including updatedAt. That baseline
+is checked before restoration: a local draft cannot silently overwrite a newer
+server review or borrow its approval. On conflict the original local payload is
+available to download; explicit recovery is pending rather than a transferred
+approval. Corrupt data is likewise preserved with a warning, and writes remain
+blocked until explicit discard. Storage failure is a named UI state, not a save.
+
+A model/source change clears only the prior matching scope's source-bound draft.
+The separate global appearance preference remains; source-bound camera,
+selection, form and view overrides do not migrate. No restore writes the server,
+model, motion or source assets. Capability tokens, worker credentials and arbitrary
+paths/commands are not persistence fields. Local browser storage can be cleared
+or unavailable and is not a durable backup or an authoritative approval ledger.

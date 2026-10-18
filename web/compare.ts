@@ -2,10 +2,15 @@ import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/
 import type { CompareResponse, CompareSide } from '../src/compare.ts';
 import type { CompareFeedback, CompareSession } from '../src/compare-session.ts';
 import { clockForAnimation, lastFrame, timeAtFrame } from '../src/frame-clock.ts';
-import { commonDomain, compareSeekStep, feedbackTrace, inspectionFrame, requireCommonTime, type CompareDomain, type CompareTrace, type ReferenceSample } from '../src/compare-playhead.ts';
+import { commonDomain, drawSynchronizedPair, compareSeekStep, feedbackTrace, inspectionFrame, requireCommonTime, type CompareDomain, type CompareTrace, type ReferenceSample } from '../src/compare-playhead.ts';
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection } from '../src/feedback-validation.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 
+import {bindAppearance,bindPan,bindStageLayout,bindInspectorTabs,panCenter,idleAvailable,type ViewPoint} from './view-controls.ts';
+import {RigOverlays} from './rig-overlays.ts';
+import {connectControl} from './control.ts';
+import type {ControlCommand,ControlInspection,ControlView} from '../src/control.ts';
+import {connectInspectionPersistence,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
 import {RendererBadge} from './renderer-status.ts';
 import {ComparePresentation,type PresentationState} from '../src/compare-presentation.ts';
 import {nextReferenceInterval,ReferenceSelectionUnavailable,inspectionReferenceFrame,lastSupportedReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,type ReferenceFrameIndex,type VideoInfo,type VideoFrame} from '../src/reference-frames.ts';
@@ -23,7 +28,15 @@ let domain: CompareDomain | null = null, trace: CompareTrace | null = null, last
 let dirty = false, saving = false, ready = false, seeking = false, disposed = false, zoom = 1;
 let seekAbort: AbortController | null = null, videoCallback: number | null = null, fallbackCallback: number | null = null;
 let latestSeek = 0;
+let cameraCenter:ViewPoint|null=null,rigScale=1,referenceZoom=1,referencePan:ViewPoint={x:0,y:0};
+let idleHeld=true,loopRestarting=false,suspendedPreview=false;
+let displayedCenter:ViewPoint|null=null;
+let appearance:ReturnType<typeof bindAppearance>|null=null,controlDispose:(()=>void)|null=null;
+const viewDisposers:(()=>void)[]=[];
+const overlays:Partial<Record<Side,RigOverlays>>={};
+const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let stripBusy = false;
+let persistence:PersistenceConnection|null=null,submittedBaseline:CompareSession|null=null,draftConflict=false;
 let referenceFrames:VideoInfo|null=null;
 const presentation=new ComparePresentation();
 const rendererBadges={a:new RendererBadge(),b:new RendererBadge()};
@@ -33,7 +46,7 @@ let endStopReason:string|null=null;
 const traceRows: CompareTrace[] = [];
 
 function message(value: string, error = false): void { text('message', value); el('message').classList.toggle('error', error); }
-function savedState(): void { text('save-state', dirty ? 'Unsubmitted changes' : session.updatedAt ? 'Submitted' : 'Not submitted'); el('save-state').classList.toggle('dirty', dirty); button('submit').disabled = saving || session.feedbackWarnings.length > 0; button('submit').title = session.feedbackWarnings.length ? 'Delete feedback with validation warnings, then add it again with a valid target.' : ''; }
+function savedState(): void { text('save-state', dirty ? 'Unsubmitted changes' : session.updatedAt ? 'Submitted' : 'Not submitted'); el('save-state').classList.toggle('dirty', dirty); button('submit').disabled = saving || draftConflict || session.feedbackWarnings.length > 0; button('submit').title = session.feedbackWarnings.length ? 'Delete feedback with validation warnings, then add it again with a valid target.' : ''; }
 function markDirty(): void { dirty = true; savedState(); }
 async function api<T>(path: string, init?: RequestInit): Promise<T> { const response = await fetch(path, init); if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`); return await response.json() as T; }
 
@@ -89,11 +102,12 @@ function invalidateTrace(reason: string): void {
   text('trace', JSON.stringify({ status: reason, current: null, previous: traceRows }, null, 2));
 }
 
-function stop(): void { video.pause(); players.a?.pause(); players.b?.pause(); button('play').textContent = '▶'; button('play').setAttribute('aria-label', 'Play reference video and both rigs'); }
-function failPair(error: unknown): void { stop(); ready = false; invalidateTrace('Comparison stopped · no valid synchronized time');for(const side of ['a','b'] as const)text(`${side}-renderer`,rendererBadges[side].failed().label); button('play').disabled = true; input('scrub').disabled = true; button('seek').disabled = true;button('frame-seek').disabled=true; message(`Comparison stopped: ${describe(error)}`, true); }
+function stop(): void { video.pause(); players.a?.pause(); players.b?.pause(); button('play').textContent = loopRestarting&&!idleHeld?'Ⅱ':'▶'; button('play').setAttribute('aria-label',loopRestarting&&!idleHeld?'Cancel idle restart and pause comparison':'Play reference video and both rigs'); }
+function failPair(error: unknown): void { stop(); ready = false; invalidateTrace('Comparison stopped · no valid synchronized time');for(const side of ['a','b'] as const){overlays[side]?.clear();text(`${side}-renderer`,rendererBadges[side].failed().label);} button('play').disabled = true; input('scrub').disabled = true; button('seek').disabled = true;button('frame-seek').disabled=true; message(`Comparison stopped: ${describe(error)}`, true); }
 
 function renderPresentation(state:PresentationState):void {
  for(const side of ['a','b'] as const){const value=rendererBadges[side].observe(state.status,players[side]?.renderer??null);text(`${side}-renderer`,value.label);}
+ if(state.status==='drawn')redrawOverlays(true);else if(state.status==='failed')for(const overlay of Object.values(overlays))overlay.clear();
  const target=state.target?.time,last=state.lastDrawn;
  if(target!==undefined){text('reference-time',`${target.toFixed(6)} s`);text('time',`${target.toFixed(4)} / ${domain!.end.toFixed(4)} s`);input('scrub').value=String(target);}
  const delta=target===undefined||!last?null:Math.max(Math.abs(last.a-target),Math.abs(last.b-target))*24;
@@ -117,6 +131,7 @@ function acceptReference(sample: ReferenceSample,deadline:number|null=null,prese
 }
 
 function stopAtSupportedEnd():void {
+ if(canRepeatIdle()&&!idleHeld&&!document.hidden){void restartIdle();return;}
  stop();requestedProducer=null;
  if(!domain)return;
  const selected=referenceFrames&&typeof video.requestVideoFrameCallback==='function'?lastSupportedReferenceFrame(referenceFrames,domain):null;
@@ -164,8 +179,9 @@ function seekReferenceFrame(target: number, signal: AbortSignal,selected:VideoFr
   });
 }
 
-async function seekTo(target: number,producer:{side:Side;frame:number;time:number}|null=null,endReason:string|null=null): Promise<void> {
+async function seekTo(target: number,producer:{side:Side;frame:number;time:number}|null=null,endReason:string|null=null,continuing=false): Promise<void> {
   if (!domain || !players.a || !players.b || !ready) return;
+  if(!continuing)idleHeld=true;
   let selected:VideoFrame|null=null;
   try { requireCommonTime(target, domain);if(referenceFrames&&typeof video.requestVideoFrameCallback==='function')selected=inspectionReferenceFrame(referenceFrames,target,domain); } catch (error) { message(describe(error), true); return; }
   stop(); seekAbort?.abort(); seekAbort = new AbortController(); const signal = seekAbort.signal, generation = ++latestSeek; seeking = true; invalidateTrace('Synchronizing reference video and both rigs');
@@ -189,11 +205,13 @@ function fit(): void {
   const a = assets.a.stage ?? players.a.bounds(), b = assets.b.stage ?? players.b.bounds(); if (!a || !b) return;
   const box = unionBounds(a, b); if (!(box.width > 0 && box.height > 0)) return;
   const width = Math.min(el('a-viewport').clientWidth, el('b-viewport').clientWidth), height = Math.min(el('a-viewport').clientHeight, el('b-viewport').clientHeight);
-  const scale = Math.min((width - 22) / box.width, (height - 38) / box.height) * zoom;
+  const scale = rigScale = Math.max(.001,Math.min((width - 22) / box.width, (height - 38) / box.height) * zoom);
+  const center=cameraCenter??{x:box.x+box.width/2,y:box.y+box.height/2};displayedCenter={...center};
   for (const side of ['a', 'b'] as const) {
     const viewport = el(`${side}-viewport`), root = el(`${side}-root`);
-    root.style.left = `${viewport.clientWidth / 2 - (box.x + box.width / 2) * scale}px`; root.style.top = `${viewport.clientHeight / 2 + (box.y + box.height / 2) * scale}px`; root.style.transform = `scale(${scale})`; players[side]?.renderer.syncPixelRatio();
+    root.style.left = `${viewport.clientWidth / 2 - center.x * scale}px`; root.style.top = `${viewport.clientHeight / 2 + center.y * scale}px`; root.style.transform = `scale(${scale})`; players[side]?.renderer.syncPixelRatio();
   }
+  redrawOverlays(false);referenceFit();renderNumericView();
 }
 
 async function loadSide(side: Side, value: CompareSide): Promise<number> {
@@ -317,12 +335,12 @@ function bind(): void {
   button('frame-seek').onclick=()=>{const side=select('frame-basis').value as Side,raw=input('frame-input').value.trim(),frame=Number(raw),clock=clockForAnimation(data[side].report?.clock,data[side].report?.animation,players[side]?.current??'',true),time=timeAtFrame(clock,frame);if(!raw||time===null){message('Choose an integer frame inside the explicit producer clock.',true);return;}void seekTo(time,{side,frame,time});};
   button('strip-export').onclick = () => { void exportStrip(); };
   for (const id of ['strip-scope', 'strip-basis', 'strip-format']) select(id).onchange = () => { updateStripControls(); stripStatus('Selection changed. Check the ranges and frame-basis report before downloading.'); };
-  button('play').onclick = async () => { if (!ready || seeking || !domain) return; if (!video.paused) {const current=lastPresented?.time;stop();if(current!==undefined)void seekTo(current);return; } if (trace && trace.reference >= domain.end) { message('At the end of the shared range. Seek earlier to play again.'); return; } try { requestedProducer=null;endStopReason=null;await video.play(); button('play').textContent = 'Ⅱ'; button('play').setAttribute('aria-label', 'Pause comparison'); } catch (error) { failPair(error); } };
+  button('play').onclick=()=>{if(loopRestarting||seeking&&!idleHeld){void cancelPendingPlayback();return;}if(!video.paused){idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined)void seekTo(current);return;}void playComparison().catch(error=>message(describe(error),true));};
   input('scrub').oninput = () => { void seekTo(Number(input('scrub').value)); };
   button('seek').onclick = () => { const value = input('time-input').value.trim(); if (!value) { message('Enter a time in seconds.', true); return; } void seekTo(Number(value)); };
   video.addEventListener('ended', () => { stopAtSupportedEnd(); });
   input('reference-audio').onchange = () => { video.muted = !input('reference-audio').checked; };
-  button('zoom-in').onclick = () => { zoom = Math.min(8, zoom * 1.25); fit(); }; button('zoom-out').onclick = () => { zoom = Math.max(.25, zoom / 1.25); fit(); }; button('fit').onclick = () => { zoom = 1; fit(); };
+  button('zoom-in').onclick = () => { zoom = Math.min(8, zoom * 1.25); fit(); }; button('zoom-out').onclick = () => { zoom = Math.max(.25, zoom / 1.25); fit(); }; button('fit').onclick = () => { zoom = 1;cameraCenter=null;referenceZoom=1;referencePan={x:0,y:0};fit(); };
   for (const side of ['a', 'b'] as const) el(`${side}-viewport`).addEventListener('wheel', event => { event.preventDefault(); zoom = Math.max(.25, Math.min(8, zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1))); fit(); }, { passive: false });
   select('status').onchange = () => { session.status = select('status').value as CompareSession['status']; markDirty(); };
   select('side').onchange = () => { renderFeedbackSelection(); select('category').value = ''; input('summary').value = ''; }; select('target-kind').onchange = renderFeedbackSelection;
@@ -335,27 +353,124 @@ function bind(): void {
     if (!['bone', 'slot', 'rig'].includes(kind) || !['defect', 'quality'].includes(category) || !name || !summary || /[\r\n]/.test(summary) || summary.length > 1000) { message('Enter a target type, actual name, category and one-line summary of up to 1,000 characters.', true); return; }
     const target: CompareFeedback['target'] = { kind: kind as CompareFeedback['target']['kind'], name };
     try { validateFeedbackSelection(data[side].feedbackCatalog, { frameStart, frameEnd, target, animation: data.animation }); } catch (error) { message(describe(error), true); return; }
-    session.feedback.push({ id: crypto.randomUUID(), side, frameStart, frameEnd, target, category: category as CompareFeedback['category'], summary, context: { interval: { frameStart, frameEnd, inclusive: true }, animation: data.animation, mediaTime: inspected.reference, clockSource: inspected.source, frame: currentFrame(side), frames: { a: currentFrame('a'), b: currentFrame('b') }, playheads: { reference: inspected.reference, a: inspected.a, b: inspected.b },reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,decodedIndex:referenceFrames?referenceFrameAtTime(referenceFrames,inspected.reference)?.index??null:null } });
+    session.feedback.push({ id: crypto.randomUUID(), side, frameStart, frameEnd, target, category: category as CompareFeedback['category'], summary, context: { interval: { frameStart, frameEnd, inclusive: true }, animation: data.animation, mediaTime: inspected.reference, clockSource: inspected.source, frame: currentFrame(side), frames: { a: currentFrame('a'), b: currentFrame('b') }, playheads: { reference: inspected.reference, a: inspected.a, b: inspected.b },reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,view:{theme:appearance?.get()??'system',layers:{...layers},camera:{zoom,center:cameraCenter?{...cameraCenter}:null},referenceCamera:{zoom:referenceZoom,pan:{...referencePan}}},decodedIndex:referenceFrames?referenceFrameAtTime(referenceFrames,inspected.reference)?.index??null:null } });
     input('summary').value = ''; markDirty(); renderFeedback(); message('Added feedback bound to the target build and both reviewed sources.');
   };
-  button('submit').onclick = async () => { if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; } saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt; message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status and A/B/reference-video provenance.'); } catch (error) { message(`Submission failed: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
+  button('submit').onclick = async () => { if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; } saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;await persistence?.submitted(saved); message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status and A/B/reference-video provenance.'); } catch (error) { message(`Submission failed: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
   button('export-json').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ ...session, schema: 'rig-review-compare-feedback/1', issues: session.feedback.map(issue) }, null, 2) + '\n', 'application/json'); };
   button('export-markdown').onclick = () => { download(`${session.id}-issues.md`, [`# ${md(data.title)}`, '', 'Ordered A/B and reference provenance:', ...JSON.stringify(session.binding, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(feedback => { const entry = issue(feedback); return [`## ${md(entry.title)}`, '', entry.body, '', '---', '']; })].join('\n'), 'text/markdown'); };
+  appearance=bindAppearance(select('appearance'));
+  for(const side of ['a','b'] as const){overlays[side]=new RigOverlays({canvas:el<HTMLCanvasElement>(`${side}-overlay`),rigRoot:el(`${side}-root`)});viewDisposers.push(bindPan(el(`${side}-viewport`),(dx,dy)=>{const box=sharedBox();if(!box)return;cameraCenter=panCenter(cameraCenter??{x:box.x+box.width/2,y:box.y+box.height/2},dx,dy,rigScale,'world');fit();}));}
+  viewDisposers.push(bindStageLayout(el('stage-layout'),fit));
+  viewDisposers.push(bindPan(el('reference-viewport'),(dx,dy)=>{referencePan={x:referencePan.x+dx,y:referencePan.y+dy};referenceFit();}));
+  el('reference-viewport').addEventListener('wheel',event=>{event.preventDefault();referenceZoom=Math.max(.25,Math.min(8,referenceZoom*(event.deltaY<0?1.1:1/1.1)));referenceFit();},{passive:false});
+  for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlays(false);};
+  input('idle-repeat').onchange=()=>{renderIdle();if(canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));};
+  el('inspector-feedback').addEventListener('focusin',()=>{idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);});
+  bindInspector();
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){suspendedPreview=!video.paused;stop();}else if(suspendedPreview&&!idleHeld){suspendedPreview=false;void playComparison().catch(error=>message(describe(error),true));}});
   const observer = new ResizeObserver(fit); observer.observe(el('a-viewport')); observer.observe(el('b-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { disposed = true; seekAbort?.abort(); stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
+  window.addEventListener('pagehide', () => { persistence?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
 }
 
 async function start(): Promise<void> {
   try {
     [data, session] = await Promise.all([api<CompareResponse>('/api/compare'), api<CompareSession>('/api/compare/session')]);
+    submittedBaseline=structuredClone(session);
     if (data.id !== session.id || data.sourceHash !== session.sourceHash || JSON.stringify(data.binding) !== JSON.stringify(session.binding)) throw new Error('Comparison and submission session refer to different source identities. Reopen the review.');
     text('title', data.title); text('animation', `${data.animation} · A/B order and reference video hash are fixed`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackSelection(); renderFeedback(); savedState();
     const [referenceDuration, aDuration, bDuration] = await Promise.all([loadReference(), loadSide('a', data.a), loadSide('b', data.b)]);
     void loadFrameIndex();
     domain = commonDomain(referenceDuration, aDuration, bDuration); input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;
-    await seekTo(0); fit();
+    await seekTo(0); fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
+    controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { failPair(error); for (const side of ['a', 'b'] as const) if (!players[side]) text(`${side}-empty`, `${side.toUpperCase()} Could not open comparison rig.`); text('reference-empty', 'Check the reference video and comparison inputs.'); }
+}
+function sharedBox():PoseBounds|null {const a=assets.a?.stage??players.a?.bounds(),b=assets.b?.stage??players.b?.bounds();return a&&b?unionBounds(a,b):null;}
+function referenceFit():void {video.style.transform=`translate(${referencePan.x}px,${referencePan.y}px) scale(${referenceZoom})`;renderNumericView();}
+function redrawOverlays(fresh:boolean):void {
+ const warnings:string[]=[];let needsCapture=false;
+ for(const side of ['a','b'] as const){const overlay=overlays[side],player=players[side];if(!overlay||!player)continue;const root=el(`${side}-root`),project=(x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*rigScale,y:parseFloat(root.style.top||'0')-y*rigScale});const snapshot=fresh?overlay.refresh({player,bones:(data[side].feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers}):overlay.redraw({project,settings:layers});warnings.push(...snapshot.warnings);needsCapture ||= snapshot.needsCapture;}
+ text('layer-state',warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');
+ if(!fresh&&needsCapture&&trace&&!seeking&&!video.seeking&&players.a&&players.b){try{drawSynchronizedPair(players.a,players.b);redrawOverlays(true);for(const side of ['a','b'] as const)text(`${side}-renderer`,rendererBadges[side].observe('drawn',players[side]!.renderer).label);}catch(error){failPair(error);}}
+}
+function bindInspector():void {bindInspectorTabs(()=>{if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]')){idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);}fit();});}
+
+function canRepeatIdle():boolean{return data?.animation==='idle'&&idleAvailable(assets.a?.animations.map(a=>a.name)??[],data.animation)&&idleAvailable(assets.b?.animations.map(a=>a.name)??[],data.animation)&&input('idle-repeat').checked&&!!domain&&domain.end>0;}
+function renderIdle():void {text('idle-state',canRepeatIdle()?'Actual idle · repeat enabled':'Bound non-idle inspection · no automatic playback');}
+async function playComparison(signal?:AbortSignal):Promise<void> {
+ if(!ready||seeking||!domain||domain.end<=0)throw new Error('Comparison playback is unavailable');
+ idleHeld=false;if(trace&&trace.reference>=domain.end){await seekTo(0,null,null,true);if(!trace||signal?.aborted)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');}
+ const generation=latestSeek;requestedProducer=null;endStopReason=null;
+ try{await video.play();if(signal?.aborted||generation!==latestSeek||idleHeld){stop();throw new Error('CONTROL_SUPERSEDED');}button('play').textContent='Ⅱ';button('play').setAttribute('aria-label','Pause comparison');}catch(error){stop();idleHeld=true;throw new Error(`Playback is paused: ${describe(error)}. Use Play to retry.`);}
+}
+async function cancelPendingPlayback():Promise<void> {
+ const previous=presentation.snapshot().lastDrawn?.reference??trace?.reference??null;
+ idleHeld=true;++latestSeek;seekAbort?.abort();seeking=false;requestedProducer=null;stop();invalidateTrace('Idle restart cancelled · restoring paused inspection');frameControls();
+ // Recover the last actual drawn inspection via a NEW generation. The aborted
+ // restart can no longer commit or resume after this explicit manual hold.
+ if(previous!==null&&ready&&!disposed)await seekTo(previous);
+}
+async function restartIdle():Promise<void> {
+ if(loopRestarting)return;loopRestarting=true;stop();
+ try{await seekTo(0,null,null,true);if(!idleHeld&&canRepeatIdle()&&!disposed&&!document.hidden&&trace)await playComparison();}
+ catch(error){idleHeld=true;message(describe(error),true);}finally{loopRestarting=false;}
+}
+function localDraft():boolean{return dirty||!!input('summary').value.trim()||!!input('frame-start').value.trim()||!!input('frame-end').value.trim()||!!input('target-name').value.trim()||!!select('category').value;}
+function controlState():ControlInspection {
+ const box=sharedBox(),center=box?{x:box.x+box.width/2,y:box.y+box.height/2}:null;
+ return {view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom,pan:{x:center&&cameraCenter?(center.x-cameraCenter.x)*rigScale:0,y:center&&cameraCenter?(cameraCenter.y-center.y)*rigScale:0}},reference:{zoom:referenceZoom,pan:{...referencePan}}},animation:data.animation,time:trace?.reference??null,playing:!video.paused,loop:canRepeatIdle()?'idle':'off',layers:{images:!!players.a&&layers.images,meshes:!!players.a&&layers.mesh,bones:!!players.a&&layers.bones},ready,seeking:seeking||video.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring()&&!!feedbackTrace(ready,seeking||video.seeking,trace),capabilities:{camera:!!players.a&&!!players.b,referenceCamera:video.readyState>=1,animation:false,time:ready,playback:ready,layers:{images:!!players.a&&!!players.b,meshes:!!players.a&&!!players.b,bones:!!players.a&&!!players.b}}};
+}
+async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<void> {
+ if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
+ if(['animation','time','playback'].includes(command.type)&&(localDraft()||saving||stripBusy))throw new Error('CONTROL_DRAFT_BUSY: preserve review draft');
+ if(command.type==='theme'){appearance?.set(command.value);return;}
+ if(command.type==='layout'){fit();return;}
+ if(command.type==='animation'){if(command.name!==data.animation)throw new Error('CONTROL_REBIND_REQUIRED');return;}
+ if(command.type==='layers'){if(!players.a||!players.b)throw new Error('CONTROL_LAYERS_UNAVAILABLE');Object.assign(layers,{images:command.images,mesh:command.meshes,bones:command.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;redrawOverlays(false);return;}
+ if(command.type==='camera'||command.type==='fit'){
+  if(command.target==='rig'){const box=sharedBox();if(!box)throw new Error('CONTROL_CAMERA_UNAVAILABLE');if(command.type==='fit'){zoom=1;cameraCenter=null;}else{zoom=command.zoom;fit();cameraCenter={x:box.x+box.width/2-command.pan.x/rigScale,y:box.y+box.height/2+command.pan.y/rigScale};}fit();}
+  else{if(video.readyState<1)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');if(command.type==='fit'){referenceZoom=1;referencePan={x:0,y:0};}else{referenceZoom=command.zoom;referencePan={...command.pan};}referenceFit();}return;
+ }
+ if(command.type==='playback'){if(command.value==='play')await playComparison(signal);else{idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined){await seekTo(current);if(!trace)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');}}return;}
+ if(command.type==='time'){if(!domain)throw new Error('CONTROL_TIME_UNAVAILABLE');requireCommonTime(command.seconds,domain);await seekTo(command.seconds);if(signal.aborted||!trace)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');}
+}
+function numericView():ControlView {
+ const cameras:ControlView['cameras']={rig:null,a:null,b:null,reference:null};
+ for(const side of ['a','b'] as const){const viewport=el(`${side}-viewport`),root=el(`${side}-root`);if(players[side])cameras[side]=numericCamera('world',displayedCenter??{x:(viewport.clientWidth/2-parseFloat(root.style.left||'0'))/rigScale,y:(parseFloat(root.style.top||'0')-viewport.clientHeight/2)/rigScale},zoom,rigScale,viewport.clientWidth,viewport.clientHeight);}
+ const viewport=el('reference-viewport');if(video.videoWidth>0&&video.videoHeight>0){const scale=Math.min(viewport.clientWidth/video.videoWidth,viewport.clientHeight/video.videoHeight)*referenceZoom;cameras.reference=numericCamera('image',{x:video.videoWidth/2-referencePan.x/scale,y:video.videoHeight/2-referencePan.y/scale},referenceZoom,scale,viewport.clientWidth,viewport.clientHeight);}
+ return {schema:'rig-review-view/1',cameras};
+}
+function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
+function inspectionBinding():InspectionBinding{return {mode:'compare',sourceHash:data.sourceHash,rigs:[data.a.reviewedSource.rig?.sha256??null,data.b.reviewedSource.rig?.sha256??null]};}
+function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:data.animation,time:trace?.reference??presentation.snapshot().lastDrawn?.reference??null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{reference:data.reference.sha256,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view'}};}
+async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
+ await restoreTransaction(async()=>{
+
+ if(bookmark.animation!==data.animation||bookmark.selection.reference!==data.reference.sha256)throw new Error('Saved comparison animation/reference requires a different source binding');
+ if(!domain)throw new Error('Comparison is not ready');if(bookmark.time!==null)requireCommonTime(bookmark.time,domain);
+ const a=bookmark.view.cameras.a,b=bookmark.view.cameras.b;
+ if(a&&b&&(a.center.x!==b.center.x||a.center.y!==b.center.y||a.zoom!==b.zoom))throw new Error('Saved A/B cameras conflict with their shared world view');
+ const candidate=a??b,refCandidate=bookmark.view.cameras.reference;if(candidate){const v=el(a?'a-viewport':'b-viewport');restoredZoom(candidate,rigScale/zoom,v.clientWidth,v.clientHeight);}if(refCandidate){const v=el('reference-viewport');restoredZoom(refCandidate,Math.min(v.clientWidth/video.videoWidth,v.clientHeight/video.videoHeight),v.clientWidth,v.clientHeight);}
+
+ if(bookmark.view.cameras.rig)throw new Error('Saved single-rig camera is unavailable in comparison');
+ if(signal.aborted)throw new Error('Inspection restore superseded');
+ },()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);video.muted=!input('reference-audio').checked;});
+}
+async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
+ const a=bookmark.view.cameras.a,b=bookmark.view.cameras.b;
+ idleHeld=true;stop();if(bookmark.time!==null){await seekTo(bookmark.time);if(signal.aborted||!trace)throw new Error('Saved reference inspection could not settle');}
+ appearance?.set(bookmark.theme);Object.assign(layers,{images:bookmark.layers.images,mesh:bookmark.layers.meshes,bones:bookmark.layers.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;
+ fit();const camera=a??b,ref=bookmark.view.cameras.reference;
+ if(camera){const viewport=el(a?'a-viewport':'b-viewport');zoom=restoredZoom(camera,rigScale/zoom,viewport.clientWidth,viewport.clientHeight);cameraCenter={...camera.center};}
+ if(ref){const viewport=el('reference-viewport'),baseScale=Math.min(viewport.clientWidth/video.videoWidth,viewport.clientHeight/video.videoHeight);referenceZoom=restoredZoom(ref,baseScale,viewport.clientWidth,viewport.clientHeight);const scale=baseScale*referenceZoom;referencePan={x:(video.videoWidth/2-ref.center.x)*scale,y:(video.videoHeight/2-ref.center.y)*scale};}
+ fit();redrawOverlays(false);if(bookmark.selection.inspector){for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-inspector]')){const selected=tab.dataset.inspector===bookmark.selection.inspector;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==bookmark.selection.inspector;fit();}idleHeld=true;stop();
+}
+async function setupPersistence():Promise<boolean> {
+ persistence=await connectInspectionPersistence({scope:'compare:'+data.a.manifest.id+':'+data.b.manifest.id+':'+data.reference.name,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('status').value=session.status;renderFeedback();savedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
+ ui:()=>({frameBasis:select('frame-basis').value}),restoreUI:value=>{if(value.frameBasis==='a'||value.frameBasis==='b')select('frame-basis').value=value.frameBasis;frameControls();},afterInputs:()=>{video.muted=!input('reference-audio').checked;const name=input('target-name').value;renderFeedbackSelection();input('target-name').value=name;},onConflict:value=>{draftConflict=value;savedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
+ return persistence.restored;
 }
 void start();

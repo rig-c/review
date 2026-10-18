@@ -1,6 +1,6 @@
 # review
 
-A private standalone human inspection and structured feedback app. Read README.md, docs/REVIEW_PACKAGE.md and docs/DESIGN.md before changing the delivery contract.
+A standalone human inspection and structured feedback app. Read README.md, docs/REVIEW_PACKAGE.md and docs/DESIGN.md before changing the delivery contract.
 
 - Work here; do not edit rigc, parts or play core repositories as part of review changes.
 - Keep supplied source assets and compiled models immutable. Motion is view/annotate/export only; never author keys or write motion.json. Store feedback separately, bound to package identity, revision and actual input hash. Opening a package never approves it.

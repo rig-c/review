@@ -1,3 +1,4 @@
+import {parseControlCommand,type ControlCommand,type ControlReceipt} from './control.ts';
 /** One fixed-package worker per exact binding. There is no general daemon API. */
 import {createHash,randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
@@ -13,21 +14,21 @@ import {startServer} from './server.ts';
 import {startCompareServer} from './compare-server.ts';
 import {selectAnimation,type AnimationSelection} from './animation-selection.ts';
 import type {OpenIdentity} from './open-protocol.ts';
-export interface OpenInputs {input:string;compare?:string;reference?:string;animation?:string}
+export interface OpenInputs {input:string;compare?:string;reference?:string;animation?:string;control?:boolean}
 export type OpenPackage=({mode:'single';p:ReviewPackage;inputs:OpenInputs;contentHash:string}|{mode:'compare';p:ComparePackage;inputs:OpenInputs;contentHash:string})&{selection:AnimationSelection|null};
-interface RecordFile extends OpenIdentity {schema:'rig-review-open-instance/1';pid:number;origin:string}
-interface WorkerRequest {schema:'rig-review-open-request/1';inputs:OpenInputs;identity:OpenIdentity;stateDir:string;registry:string;request:string;idleMs:number}
+interface RecordFile extends OpenIdentity {schema:'rig-review-open-instance/1';pid:number;origin:string;controlToken?:string}
+interface WorkerRequest {schema:'rig-review-open-request/1';inputs:OpenInputs;identity:OpenIdentity;stateDir:string;registry:string;request:string;idleMs:number;controlToken?:string}
 const appRoot=fileURLToPath(new URL('..',import.meta.url));
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep=(ms:number)=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 export const defaultStateDir=()=>process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review');
 export async function loadOpenPackage(inputs:OpenInputs):Promise<OpenPackage>{
- if(!inputs.compare){const p=await loadReferencedReview(inputs.input,inputs.reference),selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);return {mode:'single',p,selection,contentHash:p.sourceHash,inputs:{input:p.manifestPath,...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{})}};}
+ if(!inputs.compare){const p=await loadReferencedReview(inputs.input,inputs.reference),selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);return {mode:'single',p,selection,contentHash:p.sourceHash,inputs:{input:p.manifestPath,...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{}),...(inputs.control?{control:true}:{})}};}
  if(!inputs.reference)throw new Error('open compare: explicit --reference required');
  const [a,b]=await Promise.all([loadReview(inputs.input),loadReview(inputs.compare)]),selection=selectAnimation([{label:'a',catalog:a.feedbackCatalog,report:a.report},{label:'b',catalog:b.feedbackCatalog,report:b.report}],inputs.animation)!;
  const p=await loadCompare({a:inputs.input,b:inputs.compare,reference:inputs.reference,animation:selection.name});
  if(p.a.sourceHash!==a.sourceHash||p.b.sourceHash!==b.sourceHash)throw new Error('open inputs changed while selecting animation');
- return {mode:'compare',p,selection,contentHash:p.response.sourceHash,inputs:{input:p.inputs.a,compare:p.inputs.b,reference:p.inputs.reference,animation:selection.name}};
+ return {mode:'compare',p,selection,contentHash:p.response.sourceHash,inputs:{input:p.inputs.a,compare:p.inputs.b,reference:p.inputs.reference,animation:selection.name,...(inputs.control?{control:true}:{})}};
 }
 /** Flat tool source/static files are small; no package or producer recursive scan. */
 export async function openFingerprint():Promise<string>{
@@ -75,7 +76,7 @@ export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idl
  try{
   const row=await reuse();if(row)return {url:openUrl(row),reused:true,nonce:row.nonce,inputs:p.inputs,selection:p.selection};
   const identity:OpenIdentity={key,contentHash:p.contentHash,nonce,fingerprint};request=join(canonicalControl,`${key}.${nonce}.request.json`);const log=join(canonicalControl,`${key}.${nonce}.log`);
-  const spec:WorkerRequest={schema:'rig-review-open-request/1',inputs:p.inputs,identity,stateDir,registry,request,idleMs:options.idleMs??30*60*1000};await writeFile(request,JSON.stringify(spec),{mode:0o600,flag:'wx'});
+  const spec:WorkerRequest={schema:'rig-review-open-request/1',inputs:p.inputs,identity,stateDir,registry,request,idleMs:options.idleMs??30*60*1000,...(p.inputs.control?{controlToken:randomUUID()}:{} )};await writeFile(request,JSON.stringify(spec),{mode:0o600,flag:'wx'});
   const logHandle=await openFile(log,'a',0o600);let child;try{child=spawn(process.execPath,[join(appRoot,'src/open-worker.ts'),request],{cwd:canonicalControl,detached:true,stdio:['ignore',logHandle.fd,logHandle.fd],env:process.env});spawned=child;child.unref();}finally{await logHandle.close();}
   let exited:string|undefined;child.on('error',error=>{exited=error.message;});child.on('exit',(code,signal)=>{exited=`exit ${code} ${signal??''}`;});
   while(performance.now()<deadline){const record=await reuse();if(record){handedOff=true;return {url:openUrl(record),reused:false,nonce:record.nonce,inputs:p.inputs,selection:p.selection};}if(exited)throw new Error(`OPEN_START: ${exited}; worker log ${log}`);await sleep(30);}throw new Error(`OPEN_TIMEOUT: worker did not become ready; log ${log}`);
@@ -85,11 +86,37 @@ export async function runOpenWorker(requestPath:string):Promise<void>{
  const raw=await smallJson(requestPath) as WorkerRequest;if(raw.schema!=='rig-review-open-request/1'||!raw.identity||!recordValue({schema:'rig-review-open-instance/1',...raw.identity,pid:process.pid,origin:'http://127.0.0.1:1'},raw.identity.key))throw new Error('open worker: invalid request');
  const spec=raw,control=await realpath(join(spec.stateDir,'open'));if(dirname(await realpath(requestPath))!==control||spec.request!==requestPath||spec.registry!==join(control,spec.identity.key+'.json')||!Number.isSafeInteger(spec.idleMs)||spec.idleMs<100)throw new Error('open worker: invalid state locations or idle limit');
  const p=await loadOpenPackage(spec.inputs),fingerprint=await openFingerprint();if(fingerprint!==spec.identity.fingerprint||openKey(p,fingerprint)!==spec.identity.key||p.contentHash!==spec.identity.contentHash)throw new Error('open worker: inputs changed before startup');
- let last=performance.now();const options={port:0,stateDir:spec.stateDir,open:spec.identity,activity:()=>{last=performance.now();}};
+ if(spec.inputs.control&&(!spec.controlToken||!/^[a-f0-9-]{36}$/.test(spec.controlToken)))throw new Error('open control: invalid private capability');
+ let last=performance.now();const options={port:0,stateDir:spec.stateDir,open:spec.identity,activity:()=>{last=performance.now();},...(spec.inputs.control?{control:{token:spec.controlToken!,instanceKey:spec.identity.key}}:{})};
  const server=p.mode==='single'?await startServer(p.p,{...options,initialAnimation:p.selection?.name}):await startCompareServer(p.p,options);
  const check=()=>p.mode==='single'?assertReviewUnchanged(p.p):assertCompareUnchanged(p.p);
- await check();const record:RecordFile={schema:'rig-review-open-instance/1',...spec.identity,pid:process.pid,origin:`http://127.0.0.1:${server.port}`};const tmp=spec.registry+'.'+spec.identity.nonce+'.tmp';await writeFile(tmp,JSON.stringify(record),{mode:0o600,flag:'wx'});await rename(tmp,spec.registry);
+ await check();const record:RecordFile={schema:'rig-review-open-instance/1',...spec.identity,pid:process.pid,origin:`http://127.0.0.1:${server.port}`,...(spec.inputs.control?{controlToken:spec.controlToken}:{})};const tmp=spec.registry+'.'+spec.identity.nonce+'.tmp';await writeFile(tmp,JSON.stringify(record),{mode:0o600,flag:'wx'});await rename(tmp,spec.registry);
  await unlink(requestPath).catch(e=>{if(e.code!=='ENOENT')throw e;});
  let stopped=false;const stop=async()=>{if(stopped)return;stopped=true;server.stop(true);clearInterval(timer);const current=await readRecord(spec.registry,spec.identity.key);if(current?.nonce===spec.identity.nonce)await unlink(spec.registry).catch(()=>{});};
  const timer=setInterval(()=>{if(performance.now()-last>=spec.idleMs)void stop();},Math.min(1000,spec.idleMs));process.on('SIGTERM',()=>{void stop();});process.on('SIGINT',()=>{void stop();});
+}
+
+/** Read/control an already running, explicitly opted-in exact binding. Never starts a worker. */
+export async function controlReview(inputs:OpenInputs,commandOptions:{pageId?:string;expectedRevision?:number;requestId?:string;command?:ControlCommand;waitMs?:number;stateDir?:string}={}):Promise<unknown>{
+ const wait=commandOptions.waitMs??10000;if(!Number.isSafeInteger(wait)||wait<0||wait>30000)throw new Error('CONTROL_WAIT: expected integer 0..30000');
+ const p=await loadOpenPackage({...inputs,control:true}),fingerprint=await openFingerprint(),key=openKey(p,fingerprint),stateDir=await canonicalDestination(resolve(commandOptions.stateDir??defaultStateDir()));
+ const controlDir=join(stateDir,'open');
+ try{if((await lstat(controlDir)).isSymbolicLink())throw new Error('CONTROL_STATE: control directory cannot be a symlink');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Error('CONTROL_INSTANCE_UNAVAILABLE: open the exact inputs once with --control');throw error;}
+ const file=join(controlDir,key+'.json');try{const info=await lstat(file);if(!info.isFile()||(info.mode&0o077)!==0)throw new Error('CONTROL_STATE: owner-only regular capability record required');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Error('CONTROL_INSTANCE_UNAVAILABLE: open the exact inputs once with --control');throw error;}
+ const record=await readRecord(file,key);
+ if(!record||!record.controlToken||!await alive(record))throw new Error('CONTROL_INSTANCE_UNAVAILABLE: open the exact inputs once with --control');
+ const headers={Authorization:'Bearer '+record.controlToken,Origin:record.origin,'Content-Type':'application/json'};
+ const get=async(path:string,body?:unknown)=>{const response=await fetch(record.origin+path,{method:body===undefined?'GET':'POST',headers,...(body===undefined?{}:{body:JSON.stringify(body)}),redirect:'error',signal:AbortSignal.timeout(5000)});const value=await readOpenStatus(response,5000);if(!response.ok)throw new Error((value as {error?:string}).error??'CONTROL_REQUEST_FAILED');return value;};
+ const state=await get('/api/control') as {sourceHash:string;instanceKey:string;pages:{pageId:string;revision:number}[]};
+ if(state.sourceHash!==p.contentHash||state.instanceKey!==key)throw new Error('CONTROL_STALE_BINDING');
+ if(!commandOptions.command)return state;
+ const page=commandOptions.pageId?state.pages.find(row=>row.pageId===commandOptions.pageId):state.pages.length===1?state.pages[0]:undefined;
+ if(!page)throw new Error(state.pages.length>1?'CONTROL_PAGE_REQUIRED: select exact --page from current state':'CONTROL_NO_PAGE');
+ if(!Number.isSafeInteger(commandOptions.expectedRevision)||commandOptions.expectedRevision!<0)throw new Error('CONTROL_REVISION_REQUIRED: use the observed --expected-revision');
+ const command=parseControlCommand(commandOptions.command),request={schema:'rig-review-control-command/1',requestId:commandOptions.requestId??randomUUID(),pageId:page.pageId,instanceKey:key,sourceHash:p.contentHash,expectedRevision:commandOptions.expectedRevision,command};
+ const receipt=await get('/api/control/commands',request) as ControlReceipt;
+ if(wait===0)return receipt;
+ const deadline=performance.now()+wait;let current=receipt;
+ while(['queued','dispatched'].includes(current.status)&&performance.now()<deadline){await sleep(Math.min(100,Math.max(1,deadline-performance.now())));current=await get('/api/control/receipts/'+encodeURIComponent(current.commandId)) as ControlReceipt;}
+ return {...current,...(['queued','dispatched'].includes(current.status)?{timedOut:true}:{} )};
 }

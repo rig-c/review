@@ -1,3 +1,4 @@
+import {createControlServer,type ControlIdentity} from './control-server.ts';
 import { readFile } from 'node:fs/promises';
 import { appRoot, buildWeb } from './build.ts';
 import { packagePath, safeFile, type ReviewPackage } from './manifest.ts';
@@ -14,13 +15,15 @@ async function bodyJson(req:Request):Promise<unknown>{
   while(true){const {value,done}=await reader.read();if(done)break;bytes+=value.length;if(bytes>1024*1024){await reader.cancel();throw new Error('Session payload exceeds 1 MiB');}chunks.push(value);}
   const full=new Uint8Array(bytes);let offset=0;for(const chunk of chunks){full.set(chunk,offset);offset+=chunk.length;}return JSON.parse(new TextDecoder().decode(full));
 }
-export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void}={}){
+export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity}={}){
   const bundle=await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
+  const control=options.control?createControlServer({identity:options.control,sourceHash:p.sourceHash,mode:'single',unchanged,activity:options.activity}):null;
   return Bun.serve({hostname:'127.0.0.1',port:options.port??4317,
     async fetch(req,server){try {
       const url=new URL(req.url);const origin=`http://127.0.0.1:${server.port}`;
       if(url.origin!==origin)return json({error:'Loopback host required'},403);
+      const controlled=await control?.(req,origin);if(controlled)return controlled;
       options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await unchanged();}catch{return staleOpenStatus(options.open!);}}return gate;}
       if(req.method==='PUT'&&url.pathname==='/api/session'){
         if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
