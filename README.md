@@ -68,7 +68,7 @@ bun run feedback -- /absolute/path/to/output
 bun run feedback -- /absolute/path/to/package/review.json
 ```
 
-This read-only command prints the session JSON, including reviewed artifact identity and feedback. It prints pending with `updatedAt: null` when no saved review exists for these exact inputs and tool versions. It neither submits a review nor changes source. A changed input gets its own pending state; use the submitted export to inspect a prior revision.
+This read-only command prints the session JSON, including reviewed artifact identity and feedback. The exact current-tool session wins when present. After a viewer/runtime upgrade, if that exact session is absent, the CLI can retrieve the latest saved submission over the same content with its original recorded versions and `retrieval: {kind:"prior-tools", toolsChangedSince:true, matchingSubmissions, currentTools}`. It does not migrate approval into the current UI or change saved bytes. Changed inputs still return a fresh pending session; a prior submission is never borrowed across content, revision or reviewed-artifact changes. The same lookup applies to `feedback compare`, preserving both recorded side bindings, reference identity and animation. See [historical retrieval](docs/REVIEW_PACKAGE.md#historical-feedback-retrieval) for selection and validation rules.
 
 ## Development
 
