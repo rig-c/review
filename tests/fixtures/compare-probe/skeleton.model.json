@@ -1,0 +1,146 @@
+{
+  "spec": "rigc-compiled/3",
+  "referenceScale": 100,
+  "stage": {
+    "x": 0,
+    "y": 0,
+    "width": 100,
+    "height": 100
+  },
+  "bones": [
+    {
+      "name": "root"
+    },
+    {
+      "name": "probe",
+      "parent": "root",
+      "length": 12,
+      "x": 3,
+      "y": 7
+    }
+  ],
+  "slots": [],
+  "skins": [
+    {
+      "name": "default",
+      "bones": [],
+      "constraints": {
+        "ik": [],
+        "transform": [],
+        "path": [],
+        "physics": [],
+        "slider": []
+      },
+      "attachments": {}
+    }
+  ],
+  "constraints": [],
+  "events": [],
+  "animations": [
+    {
+      "name": "inspect",
+      "duration": 2,
+      "bones": [
+        {
+          "name": "probe",
+          "timelines": [
+            {
+              "name": "rotate",
+              "keys": [
+                {
+                  "time": 0,
+                  "value": 0
+                },
+                {
+                  "time": 0.5,
+                  "value": 35
+                },
+                {
+                  "time": 1.5,
+                  "value": -20
+                },
+                {
+                  "time": 2,
+                  "value": 0
+                }
+              ]
+            },
+            {
+              "name": "translatex",
+              "keys": [
+                {
+                  "time": 0,
+                  "value": 0
+                },
+                {
+                  "time": 1,
+                  "value": 9
+                },
+                {
+                  "time": 2,
+                  "value": 0
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "slots": [],
+      "constraints": {
+        "ik": [],
+        "transform": [],
+        "path": [],
+        "physics": [],
+        "slider": []
+      },
+      "attachments": [],
+      "drawOrder": [],
+      "events": []
+    }
+  ],
+  "editorOrder": {
+    "skins": [
+      {
+        "name": "default",
+        "slots": []
+      }
+    ],
+    "animations": [
+      "inspect"
+    ]
+  },
+  "images": [],
+  "pageGrids": [],
+  "droppedStates": [],
+  "absentParts": [],
+  "meshBones": [],
+  "meshes": [],
+  "physics": [],
+  "deformTransforms": [],
+  "trackDerivations": [],
+  "rig": {
+    "archetype": "compare-probe",
+    "axisBone": null,
+    "axisSubtree": [],
+    "detached": [],
+    "slotOrder": null,
+    "meshKinds": {},
+    "meshDeclaredBones": {},
+    "meshSoftBones": {},
+    "deformMayFold": [],
+    "consumerDrivenMix": [],
+    "idleDrivesMeshes": null,
+    "axes": [],
+    "basePlates": [],
+    "meshSlotBudget": null,
+    "meshTriangleBudget": null,
+    "contactDepth": null,
+    "capContainmentCeiling": null,
+    "massBone": null,
+    "inwardUnit": null
+  },
+  "pages": [],
+  "spine": {
+    "sha256": "e83ea2a44700f9de26c0690915da67dc74dc30173da8a78d57c0f03b2320695e"
+  }
+}
