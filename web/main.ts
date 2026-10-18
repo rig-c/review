@@ -1,6 +1,6 @@
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import {rendererStatus} from './renderer-status.ts';
-import {bindAppearance,bindPan,bindStageLayout,bindInspectorTabs,panCenter,idleAvailable,initialIdleAnimation,automaticIdlePreview,type ViewPoint} from './view-controls.ts';
+import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,panCenter,idleAvailable,initialIdleAnimation,automaticIdlePreview,type ViewPoint} from './view-controls.ts';
 import {RigOverlays} from './rig-overlays.ts';
 import {connectControl} from './control.ts';
 import type {ControlCommand,ControlInspection,ControlView} from '../src/control.ts';
@@ -868,8 +868,10 @@ async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal)
  const clipDuration=bookmark.animation?assets?.animations.find(a=>a.name===bookmark.animation)?.duration:undefined,referenceId=selection.reference===undefined?select('reference-select').value:selection.reference,isVideo=data.manifest.references.find(r=>r.id===referenceId)?.type==='video';const limit=clipDuration===undefined?info.duration??0:isVideo&&info.duration!==null?Math.min(clipDuration,info.duration):clipDuration;
  if(bookmark.time!==null&&(bookmark.time<0||bookmark.time>limit&&limit>=0))throw new Error('Saved inspection time is outside the selected clip/reference');
  const rig=bookmark.view.cameras.rig,ref=bookmark.view.cameras.reference;
- if(rig){const viewport=el('rig-viewport');restoredZoom(rig,rigScale/zoom,viewport.clientWidth||rig.viewport.width,viewport.clientHeight||rig.viewport.height);}
- if(ref){if(info.width<=0||info.height<=0)throw new Error('Saved reference camera has no selected image/video/pose');const viewport=el('reference-viewport'),width=viewport.clientWidth||ref.viewport.width,height=viewport.clientHeight||ref.viewport.height;const base=Math.max(.001,Math.min((width-24)/info.width,(height-56)/info.height));restoredZoom(ref,base,width,height);}
+ if(rig&&!player)throw new Error('Saved rig camera is unavailable');
+ if(ref&&(info.width<=0||info.height<=0))throw new Error('Saved reference camera has no selected image/video/pose');
+ // Viewport aspect, Inspector and pose bounds may differ from the current view.
+ // Range fitting belongs to the transactional apply after that layout is measured.
  if(signal.aborted)throw new Error('Inspection restore superseded');
 }
 async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
@@ -885,10 +887,13 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
  if(selection.workspace)setWorkspace(selection.workspace);if(selection.view)setView(selection.view);
  appearance?.set(bookmark.theme);
  Object.assign(layers,{images:bookmark.layers.images,mesh:bookmark.layers.meshes,bones:bookmark.layers.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;
- fitCamera();const camera=bookmark.view.cameras.rig,ref=bookmark.view.cameras.reference;
- if(camera&&player){const v=el('rig-viewport');if(v.clientWidth&&v.clientHeight){zoom=restoredZoom(camera,rigScale/zoom,v.clientWidth,v.clientHeight);cameraCenter={...camera.center};}}
- if(ref&&referenceSize){const v=el('reference-viewport');if(v.clientWidth&&v.clientHeight){referenceZoom=restoredZoom(ref,referenceScale/referenceZoom,v.clientWidth,v.clientHeight);referenceCenter={...ref.center};}}
- fitCamera();redrawOverlay(false);if(selection.inspector)showInspector(selection.inspector);pause();renderTransport();
+ if(selection.inspector)showInspector(selection.inspector);syncStageLayout(el('stage-layout'));fitCamera();
+ const camera=bookmark.view.cameras.rig,ref=bookmark.view.cameras.reference,rigViewport=el('rig-viewport'),referenceViewport=el('reference-viewport');
+ const nextZoom=camera&&player&&rigViewport.clientWidth&&rigViewport.clientHeight?restoredZoom(camera,rigScale/zoom,rigViewport.clientWidth,rigViewport.clientHeight):null;
+ const nextReferenceZoom=ref&&referenceSize&&referenceViewport.clientWidth&&referenceViewport.clientHeight?restoredZoom(ref,referenceScale/referenceZoom,referenceViewport.clientWidth,referenceViewport.clientHeight):null;
+ if(nextZoom!==null&&camera){zoom=nextZoom;cameraCenter={...camera.center};}
+ if(nextReferenceZoom!==null&&ref){referenceZoom=nextReferenceZoom;referenceCenter={...ref.center};}
+ fitCamera();redrawOverlay(false);pause();renderTransport();
 }
 async function waitReferenceMetadata(media:HTMLVideoElement,signal:AbortSignal):Promise<void> {if(media.readyState>=1)return;await new Promise<void>((resolve,reject)=>{const clean=()=>{clearTimeout(timer);media.removeEventListener('loadedmetadata',ready);media.removeEventListener('error',fail);signal.removeEventListener('abort',fail);};const ready=()=>{clean();resolve();},fail=()=>{clean();reject(new Error('Saved reference metadata unavailable'));};const timer=setTimeout(fail,10000);media.addEventListener('loadedmetadata',ready,{once:true});media.addEventListener('error',fail,{once:true});signal.addEventListener('abort',fail,{once:true});});}
 async function setupPersistence():Promise<boolean> {

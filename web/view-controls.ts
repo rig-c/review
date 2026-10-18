@@ -22,8 +22,9 @@ export function bindAppearance(control:HTMLSelectElement):{get:()=>ThemePreferen
  const change=()=>set(themePreference(control.value));control.addEventListener('change',change);system.addEventListener('change',render);render();
  return {get:()=>current,set,dispose:()=>{control.removeEventListener('change',change);system.removeEventListener('change',render);}};
 }
+export function syncStageLayout(area:Pick<HTMLElement,'clientWidth'|'clientHeight'|'dataset'>):boolean {const next=stageOrientation(area.clientWidth,area.clientHeight);if(area.dataset.orientation===next)return false;area.dataset.orientation=next;return true;}
 export function bindStageLayout(area:HTMLElement,changed:()=>void):()=>void {
- const render=()=>{const next=stageOrientation(area.clientWidth,area.clientHeight);if(area.dataset.orientation!==next){area.dataset.orientation=next;changed();}};
+ const render=()=>{if(syncStageLayout(area))changed();};
  const observer=new ResizeObserver(render);observer.observe(area);render();return ()=>observer.disconnect();
 }
 export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,enabled:()=>boolean=()=>true):()=>void {
