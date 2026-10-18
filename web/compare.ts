@@ -3,6 +3,7 @@ import type { CompareResponse, CompareSide } from '../src/compare.ts';
 import type { CompareFeedback, CompareSession } from '../src/compare-session.ts';
 import { clockForAnimation, lastFrame } from '../src/frame-clock.ts';
 import { commonDomain, compareSeekStep, feedbackTrace, inspectionFrame, requireCommonTime, seekAfterReference, seekSynchronizedPair, type CompareDomain, type CompareTrace, type ReferenceSample } from '../src/compare-playhead.ts';
+import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection } from '../src/feedback-validation.ts';
 
 type Side = 'a' | 'b';
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -21,7 +22,7 @@ let latestSeek = 0;
 const traceRows: CompareTrace[] = [];
 
 function message(value: string, error = false): void { text('message', value); el('message').classList.toggle('error', error); }
-function savedState(): void { text('save-state', dirty ? '미제출 변경' : session.updatedAt ? '제출됨' : '미제출'); el('save-state').classList.toggle('dirty', dirty); button('submit').disabled = saving; }
+function savedState(): void { text('save-state', dirty ? '미제출 변경' : session.updatedAt ? '제출됨' : '미제출'); el('save-state').classList.toggle('dirty', dirty); button('submit').disabled = saving || session.feedbackWarnings.length > 0; button('submit').title = session.feedbackWarnings.length ? '경고가 있는 기존 피드백을 삭제한 뒤 올바른 대상으로 다시 추가해 주세요.' : ''; }
 function markDirty(): void { dirty = true; savedState(); }
 async function api<T>(path: string, init?: RequestInit): Promise<T> { const response = await fetch(path, init); if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`); return await response.json() as T; }
 
@@ -175,20 +176,39 @@ function provenance(): void {
   const p = document.createElement('p'); p.textContent = `REF · ${data.reference.sha256.slice(0, 12)}`; brief.append(p); text('provenance-full', JSON.stringify(session.binding, null, 2));
 }
 
+function renderFeedbackSelection(): void {
+  const side = select('side').value, kind = select('target-kind').value;
+  const catalog = side === 'a' || side === 'b' ? data[side].feedbackCatalog : null;
+  const names = catalog && ['bone', 'slot', 'rig'].includes(kind) ? feedbackTargetNames(catalog, kind as CompareFeedback['target']['kind']) : null;
+  const list = el<HTMLDataListElement>('target-names'); list.replaceChildren();
+  for (const name of names ?? []) { const option = document.createElement('option'); option.value = name; list.append(option); }
+  const field = input('target-name'); field.value = kind === 'rig' && catalog ? catalog.rig : ''; field.readOnly = kind === 'rig'; field.disabled = !names?.length;
+  text('target-hint', !catalog || !kind ? '대상 빌드와 종류를 먼저 선택해 주세요.' : names === null ? '실제 대상 목록 미제공 · 본 / 슬롯 피드백을 추가할 수 없습니다.' : !names.length ? '이 종류의 대상이 없습니다.' : kind === 'rig' ? '선택한 패키지의 실제 리그 식별자입니다.' : `${side.toUpperCase()} 리그의 ${names.length}개 실제 이름 중 선택하거나 정확히 입력해 주세요.`);
+  const last = catalog ? feedbackLastFrame(catalog, data.animation) : null;
+  for (const id of ['frame-start', 'frame-end']) { if (last === null) input(id).removeAttribute('max'); else input(id).max = String(Math.max(0, last)); }
+  text('feedback-range-hint', !catalog ? '대상 A / B를 선택하면 프레임 범위를 확인합니다.' : last === null ? '범위 미확인 · 양끝 포함 정수 프레임을 직접 지정합니다. FPS는 추정하지 않습니다.' : last < 0 ? '명시 클록과 선택 clip이 겹치는 프레임이 없습니다.' : `${side.toUpperCase()}의 명시 클록과 현재 clip 기준 F0–F${last} · 양끝 포함`);
+}
+
 function renderFeedback(): void {
   const list = el('feedback-list'); list.replaceChildren();
+  const warnings = el('feedback-warnings'); warnings.hidden = session.feedbackWarnings.length === 0;
+  warnings.textContent = session.feedbackWarnings.length ? `기존 피드백 검증 경고 ${session.feedbackWarnings.length}개 · 기록을 그대로 보존했습니다. 아래 경고 항목을 확인하고 삭제 후 올바르게 다시 추가해야 제출할 수 있습니다. JSON / Markdown으로 원문과 경고를 보관할 수 있습니다.` : '';
   for (const feedback of session.feedback) {
     const row = document.createElement('div'); row.className = 'feedback-item'; const title = document.createElement('strong'); title.textContent = `${feedback.side.toUpperCase()} · ${feedback.category} · ${feedback.target.kind}:${feedback.target.name} · F${feedback.frameStart}–${feedback.frameEnd}`; const summary = document.createElement('span'); summary.textContent = feedback.summary;
-    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '삭제'; remove.onclick = () => { session.feedback = session.feedback.filter(value => value.id !== feedback.id); renderFeedback(); markDirty(); };
-    row.append(title, summary, document.createElement('br'), remove); list.append(row);
+    row.append(title, summary);
+    for (const warning of session.feedbackWarnings.filter(value => value.id === feedback.id)) { const note = document.createElement('p'); note.className = 'hint'; note.textContent = `검증 경고 · ${warning.error}`; row.append(note); }
+    const details = document.createElement('details'), heading = document.createElement('summary'), source = document.createElement('pre'); heading.textContent = '저장된 피드백과 검사 context'; source.textContent = JSON.stringify(feedback, null, 2); details.append(heading, source);
+    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '삭제'; remove.onclick = () => { session.feedback = session.feedback.filter(value => value.id !== feedback.id); session.feedbackWarnings = session.feedbackWarnings.filter(warning => warning.id !== feedback.id); renderFeedback(); markDirty(); };
+    row.append(details, remove); list.append(row);
   }
+  savedState();
 }
 
 function download(filename: string, content: string, type: string): void { const url = URL.createObjectURL(new Blob([content], { type })), link = document.createElement('a'); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 const md = (value: string) => value.replace(/[\\`*_{}\[\]<>]/g, '\\$&');
 function issue(feedback: CompareFeedback) {
   const title = `[${feedback.category}][${feedback.side.toUpperCase()}] ${feedback.target.kind}:${feedback.target.name} F${feedback.frameStart}–${feedback.frameEnd} · ${feedback.summary}`;
-  const body = [`Side: ${feedback.side.toUpperCase()}`, `Frames: ${feedback.frameStart}–${feedback.frameEnd} (inclusive; explicit producer frame numbers)`, `Target: ${feedback.target.kind} / ${md(feedback.target.name)}`, '', md(feedback.summary), '', 'Ordered compare provenance:', ...JSON.stringify(session.binding, null, 2).split('\n').map(line => '    ' + line), '', 'Inspection context:', ...JSON.stringify(feedback.context ?? null, null, 2).split('\n').map(line => '    ' + line)].join('\n');
+  const body = [`Side: ${feedback.side.toUpperCase()}`, `Frames: ${feedback.frameStart}–${feedback.frameEnd} (inclusive; explicit producer frame numbers)`, `Target: ${feedback.target.kind} / ${md(feedback.target.name)}`, '', md(feedback.summary), '', 'Ordered compare provenance:', ...JSON.stringify(session.binding, null, 2).split('\n').map(line => '    ' + line), '', 'Inspection context:', ...JSON.stringify(feedback.context ?? null, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings (must be corrected before submission):', ...JSON.stringify(session.feedbackWarnings.filter(warning => warning.id === feedback.id), null, 2).split('\n').map(line => '    ' + line)].join('\n');
   return { title, body, labels: [feedback.category] };
 }
 
@@ -201,8 +221,7 @@ function bind(): void {
   button('zoom-in').onclick = () => { zoom = Math.min(8, zoom * 1.25); fit(); }; button('zoom-out').onclick = () => { zoom = Math.max(.25, zoom / 1.25); fit(); }; button('fit').onclick = () => { zoom = 1; fit(); };
   for (const side of ['a', 'b'] as const) el(`${side}-viewport`).addEventListener('wheel', event => { event.preventDefault(); zoom = Math.max(.25, Math.min(8, zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1))); fit(); }, { passive: false });
   select('status').onchange = () => { session.status = select('status').value as CompareSession['status']; markDirty(); };
-  const targetName = () => { const side = select('side').value; input('target-name').value = select('target-kind').value === 'rig' && (side === 'a' || side === 'b') ? data[side].manifest.id : ''; };
-  select('side').onchange = () => { targetName(); select('category').value = ''; input('summary').value = ''; }; select('target-kind').onchange = targetName;
+  select('side').onchange = () => { renderFeedbackSelection(); select('category').value = ''; input('summary').value = ''; }; select('target-kind').onchange = renderFeedbackSelection;
   button('add-feedback').onclick = () => {
     const inspected = feedbackTrace(ready, seeking || video.seeking, trace);
     if (!inspected) { message('참조 영상과 양쪽 리그의 동기화가 성공한 뒤 피드백을 추가해 주세요.', true); return; }
@@ -210,12 +229,14 @@ function bind(): void {
     if (side !== 'a' && side !== 'b') { message('피드백 대상 A / B를 선택해 주세요.', true); return; }
     if (!start || !end || !Number.isSafeInteger(frameStart) || !Number.isSafeInteger(frameEnd) || frameStart < 0 || frameEnd < frameStart) { message('양끝을 포함하는 0 이상의 정수 프레임 구간을 입력해 주세요.', true); return; }
     if (!['bone', 'slot', 'rig'].includes(kind) || !['defect', 'quality'].includes(category) || !name || !summary || /[\r\n]/.test(summary) || summary.length > 1000) { message('대상 종류·실제 이름·분류·1,000자 이내 한 줄 요약을 입력해 주세요.', true); return; }
-    session.feedback.push({ id: crypto.randomUUID(), side, frameStart, frameEnd, target: { kind: kind as CompareFeedback['target']['kind'], name }, category: category as CompareFeedback['category'], summary, context: { animation: data.animation, mediaTime: inspected.reference, clockSource: inspected.source, frame: currentFrame(side), frames: { a: currentFrame('a'), b: currentFrame('b') }, playheads: { reference: inspected.reference, a: inspected.a, b: inspected.b } } });
+    const target: CompareFeedback['target'] = { kind: kind as CompareFeedback['target']['kind'], name };
+    try { validateFeedbackSelection(data[side].feedbackCatalog, { frameStart, frameEnd, target, animation: data.animation }); } catch (error) { message(describe(error), true); return; }
+    session.feedback.push({ id: crypto.randomUUID(), side, frameStart, frameEnd, target, category: category as CompareFeedback['category'], summary, context: { interval: { frameStart, frameEnd, inclusive: true }, animation: data.animation, mediaTime: inspected.reference, clockSource: inspected.source, frame: currentFrame(side), frames: { a: currentFrame('a'), b: currentFrame('b') }, playheads: { reference: inspected.reference, a: inspected.a, b: inspected.b } } });
     input('summary').value = ''; markDirty(); renderFeedback(); message('대상 빌드와 양쪽 검토 출처에 연결된 피드백을 추가했습니다.');
   };
-  button('submit').onclick = async () => { saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt; message(dirty ? '제출 중 추가한 변경이 있습니다. 다시 제출해 주세요.' : '선택한 검토 상태와 A/B·참조 영상 출처를 제출했습니다.'); } catch (error) { message(`제출 실패: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
+  button('submit').onclick = async () => { if (session.feedbackWarnings.length) { message('기존 피드백의 검증 경고를 먼저 확인해 주세요. 경고 항목을 삭제한 뒤 올바르게 다시 추가해야 제출할 수 있습니다.', true); return; } saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt; message(dirty ? '제출 중 추가한 변경이 있습니다. 다시 제출해 주세요.' : '선택한 검토 상태와 A/B·참조 영상 출처를 제출했습니다.'); } catch (error) { message(`제출 실패: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
   button('export-json').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ ...session, schema: 'rig-review-compare-feedback/1', issues: session.feedback.map(issue) }, null, 2) + '\n', 'application/json'); };
-  button('export-markdown').onclick = () => { download(`${session.id}-issues.md`, [`# ${md(data.title)}`, '', 'Ordered A/B and reference provenance:', ...JSON.stringify(session.binding, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(feedback => { const entry = issue(feedback); return [`## ${md(entry.title)}`, '', entry.body, '', '---', '']; })].join('\n'), 'text/markdown'); };
+  button('export-markdown').onclick = () => { download(`${session.id}-issues.md`, [`# ${md(data.title)}`, '', 'Ordered A/B and reference provenance:', ...JSON.stringify(session.binding, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(feedback => { const entry = issue(feedback); return [`## ${md(entry.title)}`, '', entry.body, '', '---', '']; })].join('\n'), 'text/markdown'); };
   const observer = new ResizeObserver(fit); observer.observe(el('a-viewport')); observer.observe(el('b-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
   window.addEventListener('pagehide', () => { disposed = true; seekAbort?.abort(); stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
@@ -225,7 +246,7 @@ async function start(): Promise<void> {
   try {
     [data, session] = await Promise.all([api<CompareResponse>('/api/compare'), api<CompareSession>('/api/compare/session')]);
     if (data.id !== session.id || data.sourceHash !== session.sourceHash || JSON.stringify(data.binding) !== JSON.stringify(session.binding)) throw new Error('비교 화면과 제출 세션의 원본 출처가 다릅니다. 다시 열어 주세요.');
-    text('title', data.title); text('animation', `${data.animation} · A/B 순서와 원본 영상 해시 고정`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); renderFeedback(); savedState();
+    text('title', data.title); text('animation', `${data.animation} · A/B 순서와 원본 영상 해시 고정`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); renderFeedbackSelection(); renderFeedback(); savedState();
     const [referenceDuration, aDuration, bDuration] = await Promise.all([loadReference(), loadSide('a', data.a), loadSide('b', data.b)]);
     domain = commonDomain(referenceDuration, aDuration, bDuration); input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `공통 범위 0–${domain.end} s · 한쪽만 clamp / loop하지 않음`); ready = true;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;

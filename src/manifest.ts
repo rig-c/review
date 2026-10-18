@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { toolVersions } from './versions.ts';
+import type { FeedbackCatalog } from './feedback-validation.ts';
 import { validatePoseSequence } from './pose.ts';
 import { parseReport, type ReportSeeds } from './report.ts';
 import { readFile, realpath, stat, lstat, readdir } from 'node:fs/promises';
@@ -17,7 +18,7 @@ export interface ReviewManifest {
   audio: { clips: { id: string; label?: string; path: string }[]; cues: { id: string; clip: string; time: number; animation?: string }[] };
 }
 export interface ReviewedSource { readonly packageRevision:string; readonly viewerVersion:string; readonly runtimeVersion:string; readonly rig:{readonly path:string;readonly sha256:string}|null; readonly motion:{readonly path:string;readonly sha256:string}|null }
-export interface ReviewPackage { root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null }
+export interface ReviewPackage { root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; feedbackCatalog:FeedbackCatalog }
 function fail(field: string, expected: string): never { throw new Error(`${field}: expected ${expected}`); }
 export function object(value: unknown, field: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) fail(field, 'object'); return value as Record<string, unknown>; }
 export function string(value: unknown, field: string): string { if (typeof value !== 'string' || !value.trim() || value.length > 10000) fail(field, 'nonempty string (at most 10000 characters)'); return value; }
@@ -75,8 +76,9 @@ export async function loadReview(input: string): Promise<ReviewPackage> {
   const rigPath=manifest.model??await rootFile('skeleton.json')??authoringPath('skeleton.json')??await rootFile('skeleton.skel')??authoringPath('skeleton.skel');
   const motionPath=manifest.motion??await rootFile('motion.json')??authoringPath('motion.json');
   if(rigPath)files.add(rigPath);if(motionPath)files.add(motionPath);
+  let modelBytesHash:string|null=null;
   if(manifest.model) {
-    files.add(manifest.model); const model = object(JSON.parse(await readFile(await safeFile(root,manifest.model),'utf8')),'model');
+    files.add(manifest.model); const bytes=await readFile(await safeFile(root,manifest.model));modelBytesHash=createHash('sha256').update(bytes).digest('hex');const model = object(JSON.parse(bytes.toString('utf8')),'model');
     if(model.spec !== 'rigc-compiled/3') fail('model.spec','rigc-compiled/3, produced by a gated rigc build');
     if(!Array.isArray(model.pages)) fail('model.pages','array');
     for(const page of model.pages) { const p = object(page,'model.pages[]'); const name = string(p.name,'model.pages[].name'); if(isAbsolute(name)||/[:\\%?#\x00-\x1f]/.test(name)||name.split('/').some(v=>!v))fail('model.pages[].name','literal relative model page path'); files.add(packagePath(posix.join(posix.dirname(manifest.model),name),'model page resolved inside package')); }
@@ -89,14 +91,16 @@ export async function loadReview(input: string): Promise<ReviewPackage> {
     const joints=list(pose.joints,`pose ${r.id}.joints`,(v,f)=>({id:id(v.id,f+'.id'),x:number(v.x,f+'.x',-Number.MAX_VALUE),y:number(v.y,f+'.y',-Number.MAX_VALUE),parent:optionalString(v.parent,f+'.parent')}));
     for(const j of joints) if(j.parent&&!joints.some(v=>v.id===j.parent&&v.id!==j.id)) fail(`pose ${r.id} joint ${j.id}.parent`,'another declared joint id');
   }
-  const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;
+  const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;let modelMetadata:Record<string,unknown>|null=null;
   const hash = createHash('sha256');hash.update(JSON.stringify(manifest));hash.update('\0');const fileHashes=new Map<string,string>();
-  for(const p of [...files].sort()) { const full=await safeFile(root,p); const before=await stat(full); hash.update(p);hash.update('\0');hash.update(String(before.size));hash.update('\0'); const fileHash=createHash('sha256');const reportChunks:Buffer[]=[];for await(const chunk of createReadStream(full)){hash.update(chunk);fileHash.update(chunk);if(p===reportPath)reportChunks.push(chunk);}fileHashes.set(p,fileHash.digest('hex')); const after=await stat(full); if(before.size!==after.size||before.mtimeMs!==after.mtimeMs) throw new Error(`Asset ${p} changed while hashing; retry with stable package inputs`);
+  for(const p of [...files].sort()) { const full=await safeFile(root,p); const before=await stat(full); hash.update(p);hash.update('\0');hash.update(String(before.size));hash.update('\0'); const fileHash=createHash('sha256');const metadataChunks:Buffer[]=[];for await(const chunk of createReadStream(full)){hash.update(chunk);fileHash.update(chunk);if(p===reportPath||p===manifest.model)metadataChunks.push(chunk);}fileHashes.set(p,fileHash.digest('hex')); const after=await stat(full); if(before.size!==after.size||before.mtimeMs!==after.mtimeMs) throw new Error(`Asset ${p} changed while hashing; retry with stable package inputs`);
     // The parser and package hash consume the same bytes, never two file reads.
-    if(p===reportPath){let value:unknown;try{value=JSON.parse(Buffer.concat(reportChunks).toString('utf8'));}catch(e){throw new Error(`${p}: ${e instanceof Error?e.message:String(e)}`);}report=parseReport(value,p);}
+    if(p===manifest.model){if(fileHashes.get(p)!==modelBytesHash)throw new Error(`Model ${p} changed while hashing; retry with stable package inputs`);modelMetadata=object(JSON.parse(Buffer.concat(metadataChunks).toString('utf8')),'model');}
+    if(p===reportPath){let value:unknown;try{value=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));}catch(e){throw new Error(`${p}: ${e instanceof Error?e.message:String(e)}`);}report=parseReport(value,p);}
   }
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null};
-  return {root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report};
+  const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations:modelAnimations(modelMetadata),clock:report?.clock??null,clockAnimation:report?.animation??null};
+  return {root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog};
 }
 
 /** An adapter over an existing output directory; never writes a manifest there. */
@@ -119,4 +123,18 @@ async function folderManifest(root:string):Promise<ReviewManifest>{
   const authoring=entries.filter(n=>n==='motion.json'||n==='report.json'||(/^skeleton\./i.test(n)&&n!=='skeleton.model.json')).map(path=>({label:path+' · read only',path}));
   if(!references.length&&!authoring.length&&!model)throw new Error('Output folder: no recognized skeleton.*, build/skeleton.model.json, motion.json, report.json, source video, pose sequence or contact strip');
   return parseManifest({schema:'rig-review/1',id:packageId,title:name,revision:'folder-adapter/1',model,motion:has('motion.json')?'motion.json':undefined,references,authoring,checkpoints:references.map(r=>({id:r.id,title:'Inspect '+r.label,reference:r.id,workspace:'motion'}))});
+}
+
+/** Exact hashed model bytes supply names; absent metadata stays unavailable. */
+function modelNames(model:Record<string,unknown>|null,field:'bones'|'slots'):string[]|null {
+  if(model===null||model[field]===undefined)return null;
+  const entries=model[field];if(!Array.isArray(entries))fail(`model.${field}`,'array');
+  const names=entries.map((value,i)=>string(object(value,`model.${field}[${i}]`).name,`model.${field}[${i}].name`));
+  if(new Set(names).size!==names.length)fail(`model.${field}`,'unique names');return names;
+}
+function modelAnimations(model:Record<string,unknown>|null):FeedbackCatalog['animations'] {
+  if(model===null||model.animations===undefined)return null;
+  if(!Array.isArray(model.animations))fail('model.animations','array');
+  const animations=model.animations.map((value,i)=>{const v=object(value,`model.animations[${i}]`);return {name:string(v.name,`model.animations[${i}].name`),duration:number(v.duration,`model.animations[${i}].duration`)};});
+  if(new Set(animations.map(value=>value.name)).size!==animations.length)fail('model.animations','unique names');return animations;
 }

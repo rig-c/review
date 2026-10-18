@@ -94,3 +94,11 @@ test('normalized report and source hash are derived from the same exact report b
  const root=await mkdtemp(join(tmpdir(),'review-report-bytes-'));dirs.push(root);const file=join(root,'report.json');const bytes='\n'+JSON.stringify({spec:'rig-pose-report/1',landings:[{bone:'real',frame:7}]},null,2)+'\n';await writeFile(file,bytes);const pkg=await loadReview(root);const hash=createHash('sha256');hash.update(JSON.stringify(pkg.manifest));hash.update('\0');hash.update('report.json');hash.update('\0');hash.update(String(Buffer.byteLength(bytes)));hash.update('\0');hash.update(bytes);expect(pkg.sourceHash).toBe(hash.digest('hex'));expect(pkg.report).toEqual(parseReport(JSON.parse(bytes)));expect(pkg.report?.categories[0]?.events[0]?.frames).toEqual([7,7]);
  await writeFile(file,'{invalid JSON');await expect(loadReview(root)).rejects.toThrow('report.json:');
 });
+
+
+test('producer bones lists supply actual distinct choices without mapping scan provenance or choosing first',()=>{
+ const source={spec:'rig-pose-report/1',frameTimes:[0,0.3],frames:2,raised:[{frames:[0,1],bone:'upper',bones:['upper','lower','lower'],chain:'arm',joint:'scan_elbow'}]};const snapshot=JSON.stringify(source);const event=parseReport(source)!.categories[0]!.events[0]!;
+ expect(event.targets).toEqual([{kind:'bone',name:'upper'},{kind:'bone',name:'lower'}]);expect(event.provenance).toEqual({chain:'arm',joint:'scan_elbow'});expect(event.details.bones).toEqual(['upper','lower','lower']);expect(eventSelection(event).target).toBeNull();expect(eventSelection(event,1).target).toEqual({kind:'bone',name:'lower'});expect(JSON.stringify(source)).toBe(snapshot);
+ for(const bones of ['upper',[1],['']])expect(()=>parseReport({...source,raised:[{frames:[0,1],bones}]})).toThrow('report.json.raised[0].bones');
+ const joint=parseReport({...source,raised:[{frames:[0,1],joint:'scan_elbow'}]})!.categories[0]!.events[0]!;expect(joint.targets).toEqual([]);
+});

@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { loadReview, object, safeFile, string, type ReviewManifest, type ReviewedSource, type ReviewPackage } from './manifest.ts';
+import type { FeedbackCatalog } from './feedback-validation.ts';
 import type { ReportSeeds } from './report.ts';
 
 export interface CompareInputs {a:string;b:string;reference:string;animation:string}
@@ -11,7 +12,7 @@ export interface CompareBinding {
   b:{sourceHash:string;reviewedSource:ReviewedSource};
   reference:{name:string;sha256:string};animation:string;
 }
-export interface CompareSide {manifest:ReviewManifest;report:ReportSeeds|null;sourceHash:string;reviewedSource:ReviewedSource;assetsBase:'/compare-assets/a/'|'/compare-assets/b/'}
+export interface CompareSide {manifest:ReviewManifest;report:ReportSeeds|null;feedbackCatalog:FeedbackCatalog;sourceHash:string;reviewedSource:ReviewedSource;assetsBase:'/compare-assets/a/'|'/compare-assets/b/'}
 export interface CompareResponse {mode:'compare';id:string;title:string;revision:'compare/1';sourceHash:string;binding:CompareBinding;animation:string;a:CompareSide;b:CompareSide;reference:{name:string;sha256:string;url:'/compare-reference'}}
 export interface ComparePackage {inputs:CompareInputs;a:ReviewPackage;b:ReviewPackage;referencePath:string;response:CompareResponse}
 
@@ -40,7 +41,7 @@ export async function loadCompare(inputs:CompareInputs):Promise<ComparePackage>{
   const reference={name:basename(referencePath),sha256:await hashFile(referencePath)};
   const binding:CompareBinding={a:{sourceHash:a.sourceHash,reviewedSource:a.reviewedSource},b:{sourceHash:b.sourceHash,reviewedSource:b.reviewedSource},reference,animation};
   const sourceHash=createHash('sha256').update(JSON.stringify(binding)).digest('hex');
-  return {inputs:{a:a.manifestPath,b:b.manifestPath,reference:referencePath,animation},a,b,referencePath,response:{mode:'compare',id:'compare-'+sourceHash.slice(0,16),title:`${a.manifest.title} / ${b.manifest.title}`,revision:'compare/1',sourceHash,binding,animation,a:{manifest:a.manifest,report:a.report,sourceHash:a.sourceHash,reviewedSource:a.reviewedSource,assetsBase:'/compare-assets/a/'},b:{manifest:b.manifest,report:b.report,sourceHash:b.sourceHash,reviewedSource:b.reviewedSource,assetsBase:'/compare-assets/b/'},reference:{...reference,url:'/compare-reference'}}};
+  return {inputs:{a:a.manifestPath,b:b.manifestPath,reference:referencePath,animation},a,b,referencePath,response:{mode:'compare',id:'compare-'+sourceHash.slice(0,16),title:`${a.manifest.title} / ${b.manifest.title}`,revision:'compare/1',sourceHash,binding,animation,a:{manifest:a.manifest,report:a.report,feedbackCatalog:a.feedbackCatalog,sourceHash:a.sourceHash,reviewedSource:a.reviewedSource,assetsBase:'/compare-assets/a/'},b:{manifest:b.manifest,report:b.report,feedbackCatalog:b.feedbackCatalog,sourceHash:b.sourceHash,reviewedSource:b.reviewedSource,assetsBase:'/compare-assets/b/'},reference:{...reference,url:'/compare-reference'}}};
 }
 
 export async function assertCompareUnchanged(p:ComparePackage):Promise<void>{
