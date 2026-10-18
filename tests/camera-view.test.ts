@@ -1,5 +1,5 @@
 import {test,expect} from 'bun:test';
-import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,dragSignature,zoomSignature} from '../web/camera-view.ts';
+import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature} from '../web/camera-view.ts';
 
 test('normalized camera motion uses each viewport and image/world Y sign, never common pixels or centers',()=>{
  const world=cameraFrame('world',{x:-300,y:80,width:200,height:600},600,400,28,58)!;
@@ -22,4 +22,14 @@ test('camera candidates refuse unsafe source centers or visible origins before a
  expect(()=>cameraFromSignature({zoom:1,pan:{x:-100,y:0}},frame)).toThrow('VIEW_CAMERA_RANGE');
  expect(()=>assertCameraView({zoom:.25,center:{x:-Number.MAX_SAFE_INTEGER+10,y:0}},frame)).toThrow('VIEW_CAMERA_RANGE');
  const tiny=cameraFrame('world',{x:0,y:0,width:1e-18,height:1e-18},600,400)!;expect(()=>assertCameraView({zoom:1,center:{x:1,y:0}},tiny)).toThrow('VIEW_CAMERA_RANGE');
+});
+
+
+test('selected world fit centers actual bounds and sync propagates normalized action with existing zoom limits',()=>{
+ const world=cameraFrame('world',{x:0,y:0,width:100,height:100},500,400,28,58)!,reference=cameraFrame('image',{x:0,y:0,width:1920,height:1080},300,600,24,56)!;
+ const box={x:40,y:10,width:20,height:40},signature=boundsFitSignature(box,world,28,58),fitted=cameraFromSignature(signature,world),paired=cameraFromSignature(signature,reference);
+ expect(fitted.center!.x).toBeCloseTo(50,12);expect(fitted.center!.y).toBeCloseTo(30,12);expect(fitted.zoom).toBeCloseTo(2.5,12);expect(box.height*world.baseScale*fitted.zoom).toBeCloseTo(342,12);
+ expect(cameraSignature(paired,reference).pan.x).toBeCloseTo(signature.pan.x,12);expect(cameraSignature(paired,reference).pan.y).toBeCloseTo(signature.pan.y,12);expect(paired.zoom).toBe(fitted.zoom);
+ expect(boundsFitSignature({x:40,y:10,width:.01,height:.01},world).zoom).toBe(8);
+ expect(()=>boundsFitSignature({...box,width:0},world)).toThrow('PART_FIT_UNAVAILABLE');expect(()=>boundsFitSignature(box,world,500,400)).toThrow('PART_FIT_UNAVAILABLE');
 });

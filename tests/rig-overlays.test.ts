@@ -1,3 +1,4 @@
+import {PartInspection,partCatalog} from '../web/part-selection.ts';
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
@@ -89,5 +90,47 @@ test('disabled inspection has no poser reads; enabling a layer waits for actual 
   const malformed=structuredClone(rig.player.posedFrame()) as PosedFrame,mesh=malformed.order.find(slot=>slot.kind==='mesh')!;if(mesh.kind!=='mesh')throw new Error('Fixture must carry an actual mesh');mesh.triangles[0]=999;
   const bad:OverlayPlayer={posedFrame(){return malformed;},bone(name){return rig.player.bone(name);}};const refused=captureRigGeometry(bad,[{name:'missing'}],settings);expect(refused.warnings.join(' ')).toContain('triangle index outside');expect(refused.warnings.join(' ')).toContain('Bone overlay missing');expect(refused.mesh).toHaveLength(3);
   expect(overlay.refresh({player:null,bones:specs,project,settings,dpr:1}).warnings.join(' ')).toContain('no successfully drawn rig pose');
+ }finally{overlay.dispose();rig.dispose();}
+});
+
+test('real published player Solo preserves time, skin, bones and subsequent poses; overlays follow selected actual geometry',async()=>{
+ const {player,dispose}=await realRig();try{
+  const model=JSON.parse(await readFile(new URL('./fixtures/strip-probe/build/skeleton.model.json',import.meta.url),'utf8'));
+  const inspection=new PartInspection();inspection.register('single',partCatalog(model,['rigid','mesh']),player);player.seek(.5);player.draw();inspection.present('single');
+  const time=player.time,skin=player.skin,set=player.set,bone={...player.bone('mesh')},full=player.posedFrame(null),canvas=player.renderer as CanvasRenderer;
+  const before=pixels(canvas.canvas as unknown as Canvas),beforeHash=hash(before);
+  inspection.select({side:'single',slot:'mesh',mode:'solo'});const soloHash=hash(pixels(canvas.canvas as unknown as Canvas));expect(soloHash).not.toBe(beforeHash);expect(inspection.observation()).toMatchObject({kind:'mesh',vertices:4,triangles:2,skin:null});
+  const selected=captureRigGeometry(player,specs,settings,inspection.frame('single'));expect(selected.mesh.map(edge=>edge.slot)).toEqual(Array(5).fill('mesh'));
+  inspection.select({side:'single',slot:'mesh',mode:'context'});expect(hash(pixels(canvas.canvas as unknown as Canvas))).toBe(beforeHash);inspection.select(null);expect(hash(pixels(canvas.canvas as unknown as Canvas))).toBe(beforeHash);
+  expect(player.time).toBe(time);expect(player.skin).toBe(skin);expect(player.set).toBe(set);expect(player.bone('mesh')).toEqual(bone);expect(player.posedFrame(null)).toEqual(full);
+  player.seek(.75);player.draw();const expectedNext=player.posedFrame(null);player.seek(.5);player.draw();inspection.present('single');inspection.select({side:'single',slot:'rigid',mode:'solo'});inspection.select(null);player.seek(.75);player.draw();expect(player.posedFrame(null)).toEqual(expectedNext);
+ }finally{dispose();}
+});
+
+test('actual native renderer clips a selected full-frame row; removing its clip is a pixel-visible negative control',async()=>{
+ const {player,dispose}=await realRig();try{
+  const frame=player.posedFrame(),identity=player.slotIdentity(),mesh=frame.order.find(row=>row.kind==='mesh');if(!mesh||mesh.kind!=='mesh')throw new Error('expected actual mesh');
+  if(frame.generation===undefined)throw new Error('Published player frame must carry its held generation');
+  expect(frame.generation).toBe(player.generation);expect(identity.generation).toBe(frame.generation);expect(identity.slots.map(row=>row.z)).toEqual(identity.slots.map((_,index)=>index));
+  const xs=mesh.vertices.filter((_,i)=>i%2===0),ys=mesh.vertices.filter((_,i)=>i%2===1),left=Math.min(...xs),right=Math.max(...xs),bottom=Math.min(...ys),top=Math.max(...ys),middle=(left+right)/2;
+  const clip={polygon:[left,bottom,middle,bottom,middle,top,left,top],inverse:false,convex:true};const clipped={...mesh,clip};
+  const model=JSON.parse(await readFile(new URL('./fixtures/strip-probe/build/skeleton.model.json',import.meta.url),'utf8'));
+  // Only add the test clip: full public slot identity/order and its generation stay authoritative.
+  const clippedFrame:PosedFrame={generation:frame.generation,order:frame.order.map(row=>row===mesh?clipped:row)};
+  const inspection=new PartInspection();inspection.register('single',partCatalog(model,['rigid','mesh']),{get generation(){return player.generation;},get skin(){return player.skin;},get set(){return player.set;},renderer:player.renderer,slotIdentity:()=>player.slotIdentity(),posedFrame:()=>clippedFrame});inspection.present('single');inspection.select({side:'single',slot:mesh.slot,mode:'solo'});
+  const actualIdentity=identity.slots.find(row=>row.slot===mesh.slot)!;expect(inspection.observation()).toMatchObject({generation:identity.generation,z:actualIdentity.z,reason:actualIdentity.reason,identity:{attachment:actualIdentity.attachment,skin:actualIdentity.skin,reason:actualIdentity.reason,set:identity.set,activeSkin:identity.skin}});
+  const canvas=(player.renderer as CanvasRenderer).canvas as unknown as Canvas,clippedPixels=inkBounds(canvas);expect(clippedPixels.count).toBeGreaterThan(0);expect(inspection.frame('single')!.order[0]!.clip).toEqual(clip);
+  player.renderer.render({order:[mesh]});const unclippedPixels=inkBounds(canvas);expect(unclippedPixels.count).toBeGreaterThan(clippedPixels.count);expect(unclippedPixels.right-unclippedPixels.left).toBeGreaterThan(clippedPixels.right-clippedPixels.left);
+ }finally{dispose();}
+});
+
+
+test('context selection paints conservative bounds with layers off and preserves the held rig',async()=>{
+ const rig=await realRig(),h=host(),overlay=new RigOverlays({canvas:h.canvas,rigRoot:h.root});try{
+  const frame=rig.player.posedFrame(null),before=structuredClone(frame),time=rig.player.time,off={...settings,mesh:false,bones:false};
+  overlay.refresh({player:rig.player,bones:specs,frame,project,settings:off,dpr:1});expect(inkBounds(h.surface).count).toBe(0);
+  const selected=overlay.refresh({player:rig.player,bones:specs,frame,selectedSlot:'mesh',project,settings:off,dpr:1});expect(selected.warnings).toEqual([]);expect(inkBounds(h.surface).count).toBeGreaterThan(0);
+  const held=hash(pixels(h.surface));rig.player.seek(.5);overlay.redraw({project,settings:off,dpr:1});expect(hash(pixels(h.surface))).toBe(held);expect(time).toBe(0);expect(frame).toEqual(before);
+  overlay.refresh({player:rig.player,bones:specs,frame,selectedSlot:'not-drawn',project,settings:off,dpr:1});expect(inkBounds(h.surface).count).toBe(0);
  }finally{overlay.dispose();rig.dispose();}
 });

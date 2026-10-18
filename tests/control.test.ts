@@ -131,3 +131,18 @@ test('actual control client captures navigation before a held remote apply and a
   }finally{release();dispose();}
  }
 });
+
+test('selected part readback is closed typed observation and never an authoring command',()=>{
+ const part={side:'b',slot:'actual.slot',mode:'solo'} as const;expect(parseControlInspection({...inspection(),part}).part).toEqual(part);expect(parseControlInspection({...inspection(),part:null}).part).toBeNull();
+ for(const value of [{...part,path:'/private'},{...part,side:'reference'},{...part,mode:'apply'},{...part,slot:''}])expect(()=>parseControlInspection({...inspection(),part:value})).toThrow();
+ expect(()=>parseControlCommand({type:'part',...part})).toThrow();
+});
+
+
+test('exact selected attachment target is closed and generation remains observation only',()=>{
+ const identity={attachment:'linked-key',skin:'owning',reason:null,set:'wink',activeSkin:'alternate'},part={side:'b',slot:'face',mode:'solo',identity};
+ expect(parseControlInspection({...inspection(),part,partGeneration:27})).toMatchObject({part,partGeneration:27});
+ for(const reason of ['hidden','no-attachment','timeline-null','set-hide'] as const)expect(parseControlInspection({...inspection(),part:{...part,identity:{...identity,attachment:null,skin:null,reason}}}).part?.identity?.reason).toBe(reason);
+ for(const bad of [{...identity,generation:27},{...identity,reason:'hidden'},{...identity,attachment:null},{...identity,reason:'inferred'},{...identity,activeSkin:undefined},{...identity,path:'/private'}])expect(()=>parseControlInspection({...inspection(),part:{...part,identity:bad}})).toThrow();
+ expect(()=>parseControlInspection({...inspection(),partGeneration:-1})).toThrow();expect(()=>parseControlInspection({...inspection(),partGeneration:NaN})).toThrow();
+});
