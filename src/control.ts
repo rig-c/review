@@ -81,7 +81,7 @@ export function parseControlRequest(v:unknown):ControlRequest{
 }
 /** Shared preflight; adapters additionally validate actual names/domains before mutation. */
 export function preflightControl(command:ControlCommand,state:ControlInspection,mode:ControlMode):void{
- if(state.busy)throw new Error('CONTROL_BUSY: save or export in progress');
+ if(state.busy)throw new Error('CONTROL_BUSY: inspection update in progress');
  if(['animation','time','playback'].includes(command.type)&&state.dirty)throw new Error('CONTROL_UNSUBMITTED_CHANGES: preserve the current feedback draft');
  if(['animation','time','playback'].includes(command.type)&&(!state.ready||state.seeking))throw new Error('CONTROL_NOT_READY: inspection is not settled');
  const cap=state.capabilities;

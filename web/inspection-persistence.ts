@@ -124,11 +124,14 @@ interface PersistenceAdapter<T extends PersistenceSession> {
  ui:()=>Record<string,string|number|null>;restoreUI:(ui:Record<string,string|number|null>)=>void;
  afterInputs:()=>void;onConflict:(conflict:boolean)=>void;onStatus:(message:string)=>void;
 }
-export interface PersistenceConnection {restored:boolean;save:()=>void;submitted:(session:unknown)=>Promise<void>;dispose:()=>void}
+export interface PersistenceConnection {restored:boolean;restoring:()=>boolean;save:()=>void;submitted:(session:unknown)=>Promise<void>;dispose:()=>void}
 const viewInputIds=new Set(['appearance','layer-images','layer-mesh','layer-bones','animation-select','reference-select','person-select','axis-select','axis-value','scrub','frame-number','frame-scrub','time-input','frame-input','part-set']);
 /** Restore once after normal startup; snapshots never perform a server mutation. */
 export async function connectInspectionPersistence<T extends PersistenceSession>(adapter:PersistenceAdapter<T>):Promise<PersistenceConnection> {
  let restoring=true,closed=false,conflict=false,timer:ReturnType<typeof setTimeout>|undefined;
+ let navigationGeneration=0,navigationAbort:AbortController|null=null,navigationQueue=Promise.resolve(),lastNavigationHash=location.hash;
+ let previousInert:boolean|null=null;
+ const holdRestore=(value:boolean)=>{restoring=value;const body=document.body;if(value){if(body&&previousInert===null){previousInert=body.inert;body.inert=true;}}else if(body&&previousInert!==null){body.inert=previousInert;previousInert=null;}};
  let baseline=await sessionFingerprint(adapter.baseline);const status=adapter.onStatus,initialInputs=captureInputs();
  const store=new InspectionDraftStore(adapter.scope,adapter.binding,status),draft=store.read();
  const notice=document.getElementById('draft-recovery');if(notice)notice.replaceChildren();
@@ -158,12 +161,31 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
  function save():void {
   if(closed||restoring||conflict)return;
   try{const bookmark=parseBookmark(adapter.bookmark(),adapter.binding);const value:LocalInspectionDraft={schema:'rig-review-local-draft/1',sourceHash:adapter.binding.sourceHash,baseline,savedAt:new Date().toISOString(),reviewDirty:adapter.reviewDirty(),bookmark,inputs:captureInputs(),session:adapter.session(),ui:adapter.ui()};
-   if(store.write(value)){const url=new URL(location.href);url.hash=encodeBookmark(bookmark);history.replaceState(null,'',url);}
+   if(store.write(value)){const url=new URL(location.href);url.hash=encodeBookmark(bookmark);history.replaceState(null,'',url);lastNavigationHash=url.hash;}
   }catch(error){status(`Local view was not saved: ${error instanceof Error?error.message:String(error)}`);}
  }
+ function navigateView():void {
+  if(closed||location.hash===lastNavigationHash)return;
+  lastNavigationHash=location.hash;const generation=++navigationGeneration;
+  navigationAbort?.abort();navigationAbort=null;if(timer)clearTimeout(timer);
+  let bookmark:InspectionBookmark|null=null;
+  try{bookmark=decodeBookmark(location.hash,adapter.binding);}catch(error){status(`View link refused: ${error instanceof Error?error.message:String(error)}`);}
+  // A cleared or invalid fragment cancels pending restoration, but never
+  // applies a local draft or changes the submitted review/session.
+  if(!bookmark){void navigationQueue.finally(()=>{if(!closed&&generation===navigationGeneration)holdRestore(false);});return;}
+  const requested=bookmark,controller=new AbortController();navigationAbort=controller;
+  holdRestore(true);status('Restoring source-bound view · inspection controls temporarily paused.');
+  navigationQueue=navigationQueue.then(async()=>{
+   if(closed||generation!==navigationGeneration||controller.signal.aborted)return;
+   try{await adapter.restoreBookmark(requested,controller.signal);if(!closed&&generation===navigationGeneration&&!controller.signal.aborted)status(adapter.reviewDirty()?'View link restored · paused inspection; local draft not submitted.':'View link restored · paused inspection; submitted review unchanged.');}
+   catch(error){if(!closed&&generation===navigationGeneration&&!controller.signal.aborted)status(`View link was not restored: ${error instanceof Error?error.message:String(error)}`);}
+   finally{if(!closed&&generation===navigationGeneration){navigationAbort=null;holdRestore(false);save();}}
+  });
+ }
+ window.addEventListener('hashchange',navigateView);window.addEventListener('popstate',navigateView);
  function schedule():void {if(timer)clearTimeout(timer);timer=setTimeout(save,120);}
  const events=['input','change','click','pointerup','wheel'] as const;for(const event of events)window.addEventListener(event,schedule,{passive:true});
  const interval=setInterval(()=>{if(!document.hidden)save();},1000);
- const copy=document.getElementById('copy-view');if(copy)copy.onclick=async()=>{try{const url=inspectionLink(location.href,adapter.bookmark());await navigator.clipboard.writeText(url.href);history.replaceState(null,'',url);status('View link copied · source-bound numeric region, no review decisions.');}catch(error){status(`View link was not copied: ${error instanceof Error?error.message:String(error)}`);}};
- return {restored,save,submitted:async session=>{baseline=await sessionFingerprint(session);save();},dispose:()=>{save();closed=true;if(timer)clearTimeout(timer);clearInterval(interval);for(const event of events)window.removeEventListener(event,schedule);}};
+ const copy=document.getElementById('copy-view');const copyView=async()=>{if(closed)return;try{const url=inspectionLink(location.href,adapter.bookmark());await navigator.clipboard.writeText(url.href);history.replaceState(null,'',url);lastNavigationHash=url.hash;status('View link copied · source-bound numeric region, no review decisions.');}catch(error){status(`View link was not copied: ${error instanceof Error?error.message:String(error)}`);}};if(copy)copy.onclick=copyView;
+ return {restored,restoring:()=>restoring,save,submitted:async session=>{baseline=await sessionFingerprint(session);save();},dispose:()=>{save();closed=true;++navigationGeneration;navigationAbort?.abort();holdRestore(false);window.removeEventListener('hashchange',navigateView);window.removeEventListener('popstate',navigateView);if(copy?.onclick===copyView)copy.onclick=null;if(timer)clearTimeout(timer);clearInterval(interval);for(const event of events)window.removeEventListener(event,schedule);}};
 }

@@ -62,6 +62,7 @@ const viewDisposers:(()=>void)[]=[];
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let referenceSize: { width: number; height: number } | null = null;
 let video: HTMLVideoElement | null = null;
+let controlledVideoSample:{media:HTMLVideoElement;position:number;time:number}|null=null;
 let referenceGeneration = 0;
 let axisInspection = false;
 let sequence: PoseSequence | null = null;
@@ -232,7 +233,7 @@ function renderSequenceFrame(): void {
 
 async function showReference(id: string): Promise<void> {
   const generation = ++referenceGeneration;
-  video?.pause(); video = null; referenceCenter=null; referenceSize = null; sequence = null; sequenceSvg = null; selectedPerson=''; lastPoseFrame = -1; el('person-control').hidden = true;
+  video?.pause(); video = null;controlledVideoSample=null; referenceCenter=null; referenceSize = null; sequence = null; sequenceSvg = null; selectedPerson=''; lastPoseFrame = -1; el('person-control').hidden = true;
   const content = el('reference-content'); content.replaceChildren();
   const reference = data.manifest.references.find(item => item.id === id);
   el('reference-empty').hidden = false;
@@ -640,6 +641,12 @@ function issueFields(feedback: Feedback): { title: string; body: string; labels:
   return { title, body, labels: [feedback.category] };
 }
 
+function zoomViewport(target:'rig'|'reference',deltaY:number):void {
+ const factor=deltaY<0?1.1:1/1.1;
+ if(target==='rig'){zoom=Math.max(.25,Math.min(8,zoom*factor));fitCamera();}
+ else{referenceZoom=Math.max(.25,Math.min(8,referenceZoom*factor));referenceFit();renderNumericView();}
+}
+
 function bind(): void {
   button('strip-export').onclick = () => { void exportStrip(); };
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
@@ -652,7 +659,7 @@ function bind(): void {
   select('part-set').onchange = () => { try { if(!player)return;player.setSet(select('part-set').value || null);drawRig(()=>player!.draw());fitCamera(); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } };
   select('axis-select').onchange = chooseAxis; input('axis-value').oninput = applyAxis;
   button('zoom-in').onclick = () => { zoom = Math.min(8, zoom * 1.25);referenceZoom=zoom;fitCamera(); }; button('zoom-out').onclick = () => { zoom = Math.max(.25, zoom / 1.25);referenceZoom=zoom;fitCamera(); }; button('fit').onclick = () => { zoom = 1;referenceZoom=1; cameraCenter = null; referenceCenter=null;fitCamera(); };
-  for (const id of ['reference-viewport', 'rig-viewport']) el(id).addEventListener('wheel', event => { event.preventDefault(); zoom = Math.max(.25, Math.min(8, zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1))); referenceZoom=zoom;fitCamera(); }, { passive: false });
+  for (const id of ['reference-viewport', 'rig-viewport']) el(id).addEventListener('wheel', event => { event.preventDefault(); zoomViewport(id==='rig-viewport'?'rig':'reference',event.deltaY); }, { passive: false });
   input('scrub').oninput = () => { pause(); seek(Number(input('scrub').value)); };
   input('frame-number').onfocus = pause;
   input('frame-number').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); const value = input('frame-number').value.trim(); seekFrame(value ? Number(value) : NaN); } };
@@ -767,7 +774,7 @@ async function playPreview():Promise<void> {
 function localDraft():boolean{return dirty||!!input('feedback-summary').value.trim()||!!input('feedback-start').value.trim()||!!input('feedback-end').value.trim()||!!select('feedback-category').value||!!input('feedback-target-name').value.trim()&&input('feedback-target-name').value!==data.manifest.id;}
 function controlState():ControlInspection {
  const box=assets?.stage??player?.bounds(),center=box?{x:box.x+box.width/2,y:box.y+box.height/2}:null;
- return {view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?zoom:1,pan:{x:center&&cameraCenter?(center.x-cameraCenter.x)*rigScale:0,y:center&&cameraCenter?(cameraCenter.y-center.y)*rigScale:0}},reference:{zoom:referenceSize?referenceZoom:1,pan:{x:referenceSize&&referenceCenter?(referenceSize.width/2-referenceCenter.x)*referenceScale:0,y:referenceSize&&referenceCenter?(referenceSize.height/2-referenceCenter.y)*referenceScale:0}}},animation:animation||null,time:player?.time??(video?.currentTime??time),playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!!data,seeking:seekingControl||!!video?.seeking,dirty:localDraft(),busy:saving||stripBusy,feedbackEligible:true,capabilities:{camera:!!player,referenceCamera:!!referenceSize,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
+ return {view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?zoom:1,pan:{x:center&&cameraCenter?(center.x-cameraCenter.x)*rigScale:0,y:center&&cameraCenter?(cameraCenter.y-center.y)*rigScale:0}},reference:{zoom:referenceSize?referenceZoom:1,pan:{x:referenceSize&&referenceCenter?(referenceSize.width/2-referenceCenter.x)*referenceScale:0,y:referenceSize&&referenceCenter?(referenceSize.height/2-referenceCenter.y)*referenceScale:0}}},animation:animation||null,time:player?.time??time,playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!!data,seeking:seekingControl||!!video?.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring(),capabilities:{camera:!!player,referenceCamera:!!referenceSize,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
 }
 async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
@@ -790,14 +797,33 @@ async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<v
  }
 }
 async function inspectControlTime(target:number,signal:AbortSignal):Promise<void> {
+ if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
  const media=video;
  if(!media){if(player){player.seek(target);drawRig(()=>player!.draw());}time=target;renderSequenceFrame();renderTransport();return;}
  if(media.readyState<1||target>media.duration)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');
- if(media.currentTime===target&&!media.seeking){if(player){player.seek(target);drawRig(()=>player!.draw());}time=target;renderSequenceFrame();renderTransport();return;}
- await new Promise<void>((resolve,reject)=>{
+ const previousPosition=media.currentTime;
+ const commit=(actual:number)=>{
+  if(signal.aborted||media!==video)throw new Error('CONTROL_SUPERSEDED');
+  if(!Number.isFinite(actual)||actual<0||actual>duration)throw new Error('CONTROL_TIME_OUTSIDE_DOMAIN');
+  if(player){player.seek(actual);drawRig(()=>player!.draw());}time=actual;
+  controlledVideoSample={media,position:media.currentTime,time:actual};if(axisInspection&&duration>0){const axis=data.manifest.axes.find(item=>item.id===select('axis-select').value&&item.animation===animation);if(axis){const value=axis.min+actual/duration*(axis.max-axis.min);input('axis-value').value=String(value);text('axis-value-label',value.toFixed(3));}}renderSequenceFrame();renderTransport();
+ };
+ try{const actual=await decodedControlTime(media,target,signal);if(signal.aborted||media!==video)throw new Error('CONTROL_SUPERSEDED');commit(actual);if(Math.abs(actual-target)>1e-6)message(`Reference decoded ${actual.toFixed(4)} s · requested ${target.toFixed(4)} s. The rig and saved view use the decoded timestamp.`);}
+ catch(error){
+  // Superseding local/remote input owns its position; never undo it. Other
+  // refusals recover the prior reference through the same decoded-frame path.
+  if(signal.aborted||media!==video)throw error;
+  try{commit(await decodedControlTime(media,previousPosition,signal));}catch(recovery){throw new Error(`Reference inspection failed (${errorText(error)}); prior inspection recovery failed (${errorText(recovery)})`);}
+  throw error;
+ }
+}
+async function decodedControlTime(media:HTMLVideoElement,target:number,signal:AbortSignal):Promise<number> {
+ if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
+ if(!media.seeking&&media.currentTime===target&&controlledVideoSample?.media===media&&controlledVideoSample.position===target)return controlledVideoSample.time;
+ return await new Promise<number>((resolve,reject)=>{
   let actual:number|null=null,done=false,handle:number|null=null;
   const cleanup=()=>{clearTimeout(timer);media.removeEventListener('seeked',onSeek);signal.removeEventListener('abort',abort);if(handle!==null)media.cancelVideoFrameCallback(handle);};
-  const finish=()=>{if(!done||actual===null)return;cleanup();if(signal.aborted){reject(new Error('CONTROL_SUPERSEDED'));return;}if(actual<0||actual>duration){reject(new Error('CONTROL_TIME_OUTSIDE_DOMAIN'));return;}if(Math.abs(actual-target)>1e-6){reject(new Error('CONTROL_REFERENCE_SELECTION_UNAVAILABLE: decoded timestamp differs from requested seconds'));return;}time=actual;try{if(player){player.seek(actual);drawRig(()=>player!.draw());}renderSequenceFrame();renderTransport();resolve();}catch(error){reject(error);}};
+  const finish=()=>{if(!done||actual===null)return;cleanup();if(signal.aborted){reject(new Error('CONTROL_SUPERSEDED'));return;}resolve(actual);};
   const onSeek=()=>{done=true;if(typeof media.requestVideoFrameCallback!=='function')actual=media.currentTime;finish();};
   const abort=()=>{cleanup();reject(new Error('CONTROL_SUPERSEDED'));};
   const timer=setTimeout(()=>{cleanup();reject(new Error('CONTROL_REFERENCE_TIMEOUT'));},10000);
@@ -867,7 +893,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
 async function waitReferenceMetadata(media:HTMLVideoElement,signal:AbortSignal):Promise<void> {if(media.readyState>=1)return;await new Promise<void>((resolve,reject)=>{const clean=()=>{clearTimeout(timer);media.removeEventListener('loadedmetadata',ready);media.removeEventListener('error',fail);signal.removeEventListener('abort',fail);};const ready=()=>{clean();resolve();},fail=()=>{clean();reject(new Error('Saved reference metadata unavailable'));};const timer=setTimeout(fail,10000);media.addEventListener('loadedmetadata',ready,{once:true});media.addEventListener('error',fail,{once:true});signal.addEventListener('abort',fail,{once:true});});}
 async function setupPersistence():Promise<boolean> {
  persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
- ui:()=>({reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();},afterInputs:()=>{renderFeedbackRange();text('audio-volume-label',`${Math.round(Number(input('audio-volume').value)*100)}%`);},onConflict:value=>{draftConflict=value;updateSavedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
+ ui:()=>({reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();},afterInputs:()=>{const target=input('feedback-target-name').value;renderFeedbackTargets(true);if(select('feedback-target-kind').value!=='rig')input('feedback-target-name').value=target;renderFeedbackRange();text('audio-volume-label',`${Math.round(Number(input('audio-volume').value)*100)}%`);},onConflict:value=>{draftConflict=value;updateSavedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
  return persistence.restored;
 }
 void start();

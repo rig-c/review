@@ -1,4 +1,5 @@
 import {expect,test} from 'bun:test';
+import {readFile} from 'node:fs/promises';
 import {ControlLocalRevision} from '../web/control.ts';
 import {parseControlCommand,parseControlInspection,parseControlView,parseControlRequest,preflightControl,type ControlInspection,type ControlCommand,type ControlRequest,type ControlView} from '../src/control.ts';
 export function inspection():ControlInspection{return {theme:'system',layout:'auto',effectiveLayout:'row',cameras:{rig:{zoom:1,pan:{x:0,y:0}},reference:{zoom:1,pan:{x:0,y:0}}},animation:'idle',time:0,playing:false,loop:'off',layers:{images:true,meshes:false,bones:false},ready:true,seeking:false,dirty:false,busy:false,feedbackEligible:true,capabilities:{camera:true,referenceCamera:true,animation:true,time:true,playback:true,layers:{images:true,meshes:true,bones:true}}};}
@@ -38,4 +39,29 @@ test('numeric view readback preserves per-pane canonical coordinates and refuses
  for(const invalid of [null,{...view,schema:'rig-review-view/2'},{...view,token:'secret'},{...view,cameras:{...view.cameras,path:'/private'}},{...view,cameras:{...view.cameras,rig:{...world,space:'image'}}},{...view,cameras:{...view.cameras,reference:world}},{...view,cameras:{...view.cameras,rig:{...world,center:{x:NaN,y:0}}}},{...view,cameras:{...view.cameras,rig:{...world,viewport:{width:0,height:480}}}},{...view,cameras:{...view.cameras,rig:{...world,visible:{...world.visible,width:-1}}}},{...view,cameras:{...view.cameras,rig:{...world,zoom:Infinity}}}])expect(()=>parseControlView(invalid)).toThrow();
  expect(()=>parseControlInspection({...inspection(),view:{...view,cameras:{rig:world}}})).toThrow('expected object');
  const parsed=parseControlView(view);expect(parsed.cameras.rig).not.toBe(world);expect(parsed.cameras.rig!.center).not.toBe(world.center);
+});
+
+test('actual control client captures navigation before a held remote apply and acknowledges superseded, while hover still applies',async()=>{
+ const source=await readFile(new URL('../web/control.ts',import.meta.url),'utf8'),start=source.indexOf('export function connectControl(');if(start<0)throw new Error('control client boundary missing');
+ const compiled=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(start).replace('export function','function'));
+ for(const eventType of ['hashchange','popstate','pointermove']){
+  const handlers=new Map<string,{handler:(event:Event)=>void;capture:boolean}>(),window={addEventListener:(type:string,handler:(event:Event)=>void,options:{capture:boolean})=>handlers.set(type,{handler,capture:options.capture}),removeEventListener:(type:string)=>handlers.delete(type)};
+  const state=inspection();let release!:()=>void,started!:()=>void,acknowledged!:(value:Record<string,unknown>)=>void,delivered=false;
+  const gate=new Promise<void>(resolve=>{release=resolve;}),applying=new Promise<void>(resolve=>{started=resolve;}),receipt=new Promise<Record<string,unknown>>(resolve=>{acknowledged=resolve;});
+  const request:ControlRequest={schema:'rig-review-control-command/1',requestId:'navigation-race',pageId:'page',instanceKey:'a'.repeat(64),sourceHash:'b'.repeat(64),expectedRevision:0,command:{type:'theme',value:'light'}};
+  const fetch=async(path:string,options?:RequestInit)=>{
+   let result:unknown={};if(path.endsWith('/config'))result={enabled:true,sourceHash:request.sourceHash,mode:'single'};
+   else if(path.endsWith('/register'))result={pageId:'page',pageToken:'page capability',revision:0};
+   else if(path.endsWith('/poll')){result={command:delivered?null:{commandId:'command',request}};delivered=true;}
+   else if(path.endsWith('/ack')){const body=JSON.parse(String(options?.body)) as Record<string,unknown>;acknowledged(body);}
+   return Response.json(result);
+  };
+  const open=new Function('ControlLocalRevision','parseControlCommand','parseControlInspection','preflightControl','window','document','fetch',compiled+';return connectControl;')(ControlLocalRevision,parseControlCommand,parseControlInspection,preflightControl,window,{hidden:false},fetch) as (adapter:{sourceHash:string;mode:'single';observe:()=>ControlInspection;apply:(command:ControlCommand,signal:AbortSignal)=>Promise<void>})=>()=>void;
+  const dispose=open({sourceHash:request.sourceHash,mode:'single',observe:()=>state,apply:async(_command,signal)=>{started();await gate;if(!signal.aborted)state.theme='light';}});
+  try{
+   await applying;const registered=handlers.get(eventType);expect(registered).toBeDefined();expect(registered!.capture).toBe(true);
+   registered!.handler({type:eventType,isTrusted:true,pointerId:99} as unknown as Event);release();const ack=await receipt;
+   expect(ack.status).toBe(eventType==='pointermove'?'applied':'superseded');expect(ack.revision).toBe(1);expect(ack.inspection).toEqual(state);expect(state.theme).toBe(eventType==='pointermove'?'light':'system');
+  }finally{release();dispose();}
+ }
 });

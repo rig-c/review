@@ -1,5 +1,14 @@
 # Review package and existing-folder adapter v1
 
+The toolchain delivery flow is **Parts → Pose → Core (rigc) → Review → Play →
+Adapter**. Review supplies human inspection and feedback bound to the exact
+reviewed sources; it neither replaces Core's build validation nor authors motion.
+The app uses the published `@rig-c/play` loader/player to preview artifacts during
+that inspection. This conceptual delivery order is not an import/dependency
+order. Adapter means downstream consumer integration, not a newly introduced or
+unreleased adapter contract. Existing producer formats and playback dependencies
+remain authoritative.
+
 The CLI also accepts an existing output directory. It reads a root `review.json` when present. Otherwise it constructs this contract in memory: optional root `skeleton.model.json`, otherwise the fixed rigc build path `build/skeleton.model.json`; read-only `skeleton.*`, `motion.json` and `report.json` links; root videos (`mp4`, `webm`, `mov`); image filenames containing strip/contact/sheet/filmstrip/띠; and canonical `*pose*.json` references. The root compiled model takes precedence over the build path. These are the only two automatically recognized model paths; discovery never searches recursively. The opened directory remains the package root, so root motion/references accompany the build model and its model-relative pages. An existing selected model with an invalid type, dangling symlink, escaping symlink or invalid model envelope is refused rather than skipped. Each reference is shown separately; no source relationship, FPS or video synchronization is inferred. It never inserts or rewrites a manifest or motion file in the source folder. Raw Spine JSON/skel remains read-only evidence with playback unavailable. The folder revision is `folder-adapter/1`; actual changed file bytes are distinguished by the source hash.
 
 `review.json` is UTF-8 JSON. Its directory is the package root. Required keys are `schema: "rig-review/1"`, `id`, `title`, and `revision`. `id` and every entry ID match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. Titles and revision strings are nonempty. Optional collections normalize to empty arrays.
@@ -143,7 +152,7 @@ Timing is deliberately explicit:
 - Legacy `seconds` and optional `spanSeconds` are durations only, normalized as `durationSeconds`. Neither starts a seek. `frames` plus overall `duration` never implies FPS; unrelated event samples do not establish a clock for other events.
 - `timing:"mapped"` means an explicit seek is available; `"frames-unmapped"` retains source frame coordinates but displays **시간 맵 없음 — seek 불가**. `"unavailable"` denotes an entry with no usable seek or frame coordinate (for example a provided empty discrete time list). No missing time receives zero.
 
-The existing dancer v19 report has no declared full clock. Its frame-only markers remain visible with feedback frame prefills and unavailable seek; switch/from and uncovered/times can seek. Producer timing additions are tracked in [rig-c/pose #209](https://github.com/rig-c/pose/issues/209). Selecting a marker preloads only supplied frame coordinates and actual target choices. It neither guesses FPS nor maps scan joints to rig bones, and report measurements do not automatically mark a defect, category, checkpoint result or overall approval.
+For a legacy report with no declared full clock, frame-only markers remain visible with feedback frame prefills and unavailable seek; switch/from and uncovered/times can seek. Producer timing additions are tracked in [rig-c/pose #209](https://github.com/rig-c/pose/issues/209). Selecting a marker preloads only supplied frame coordinates and actual target choices. It neither guesses FPS nor maps scan joints to rig bones, and report measurements do not automatically mark a defect, category, checkpoint result or overall approval.
 
 
 ## Producer-frame transport
@@ -486,8 +495,15 @@ are performed by the same normal UI adapters. Invalid compare animation changes
 require a new binding and are refused. No requested time is claimed displayed
 before existing media/player completion. Compare retains its actual reference
 PTS and fixed-step pair path; no independent animation clock is introduced.
+A single-video time request commits the actual decoded timestamp to both rig and
+inspection state, reporting requested versus actual time when they differ. A
+failed or out-of-domain decode attempts to recover the prior actual inspection;
+a superseding local action is never undone. This does not promise an exact
+arbitrary requested video time or infer a video frame rate.
 
-Local UI gestures and remote applied commands advance the page revision. A
+Local UI gestures, live view-link/history navigation and remote applied commands
+advance the page revision. Captured navigation supersedes an in-flight remote
+action before the view restore handler runs. A
 command carries the exact expected revision; a stale one cannot overwrite a
 newer local inspection. The browser helper registers, polls and acknowledges
 through fixed `/api/control/register`, `/api/control/poll`, `/api/control/ack`
@@ -496,8 +512,8 @@ reads the same actual inspection state as the widgets, not a second simulated
 player. User input during an asynchronous remote action aborts/supersedes it;
 an already started action is not promised rolled back. Dirty annotations or
 unadded form drafts prevent context-changing animation/time/playback commands;
-presentation-only camera/theme/layer changes preserve them. Save/export busy
-states refuse concurrent control.
+presentation-only camera/theme/layer changes preserve them. Save/export or
+bookmarked-view restoration busy states refuse concurrent control.
 
 Agent `GET /api/control`, `POST /api/control/commands` and
 `GET /api/control/receipts/<commandId>` require the private Bearer capability.

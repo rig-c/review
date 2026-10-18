@@ -10,7 +10,7 @@ export class ControlLocalRevision {
   else if(type==='pointermove'&&pointerId!==undefined)change=this.pointers.has(pointerId);
   else if(['pointerup','pointercancel','lostpointercapture'].includes(type)&&pointerId!==undefined)change=this.pointers.delete(pointerId);
   else if(type==='blur'){change=this.pointers.size>0;this.pointers.clear();}
-  else change=['wheel','keydown','input','change'].includes(type);
+  else change=['wheel','keydown','input','change','hashchange','popstate'].includes(type);
   if(change){this.revision++;this.changed();}
  }
  applied():void{this.revision++;}
@@ -26,7 +26,7 @@ export function connectControl(adapter:Adapter):()=>void{
   const result=await response.json();if(!response.ok)throw new Error(typeof result.error==='string'?result.error:'CONTROL_REQUEST_FAILED');return result as T;
  }
  function interaction(event:Event){if(!event.isTrusted)return;local.interaction(event.type,'pointerId' in event?(event as PointerEvent).pointerId:undefined);}
- const events=['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture','blur','wheel','keydown','input','change'] as const;
+ const events=['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture','blur','wheel','keydown','input','change','hashchange','popstate'] as const;
  for(const event of events)window.addEventListener(event,interaction,{capture:true,passive:true});
  async function apply(delivery:ControlDelivery){
   const startRevision=local.revision,abort=new AbortController();inflight=abort;let outcome:'applied'|'rejected'|'failed'|'superseded'='rejected',error:string|undefined;

@@ -49,20 +49,20 @@ async function openFormCoordinator(saved:LocalInspectionDraft,explicit:Inspectio
  const ids=source.slice(source.indexOf('const viewInputIds='),source.indexOf('/** Restore once'));
  const begin=compare.indexOf('afterInputs:()=>{'),end=compare.indexOf(',onConflict:',begin);if(begin<0||end<begin)throw new Error('compare restored-input action missing');
  const action=compare.slice(begin+'afterInputs:'.length,end);
- const script=`async function open(deps){const {InspectionDraftStore:Base,storage,saved,explicit,baseline,binding,bookmark,sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink}=deps;
+ const script=`async function open(deps){const {InspectionDraftStore:Base,storage,saved,explicit,baseline,binding,bookmark,sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction}=deps;
  class HTMLInputElement{constructor(id,type,value,checked=false){Object.assign(this,{id,type,value,checked,name:''});}}class HTMLSelectElement{constructor(id,value,values){this.id=id;this.value=value;this.options=values.map(value=>({value}));}}class HTMLTextAreaElement{}
  const nodes=[new HTMLInputElement('reference-audio','checkbox','on',false),new HTMLSelectElement('part-set','','alternate old'.split(' ')),new HTMLInputElement('target-name','text','server target'),new HTMLSelectElement('status','pending',['pending','approved'])],video={muted:true},CSS={escape:value=>value};
- const notice={children:[],replaceChildren(){this.children=[];},append(button){this.children.push(button);}},document={hidden:false,getElementById:id=>id==='draft-recovery'?notice:null,querySelectorAll:()=>nodes,querySelector:selector=>nodes.find(n=>'#'+n.id===selector),createElement:()=>({type:'',textContent:'',onclick:null})};
- const window=new EventTarget(),location={href:'http://127.0.0.1:1234/',hash:explicit?encodeBookmark(explicit):''},history={replaceState(){}},navigator={clipboard:{writeText:async()=>{}}};
+ const notice={children:[],replaceChildren(){this.children=[];},append(button){this.children.push(button);}},document={hidden:false,body:{inert:false},getElementById:id=>id==='draft-recovery'?notice:null,querySelectorAll:()=>nodes,querySelector:selector=>nodes.find(n=>'#'+n.id===selector),createElement:()=>({type:'',textContent:'',onclick:null})};
+ const window=new EventTarget(),location={href:'http://127.0.0.1:1234/',hash:explicit?encodeBookmark(explicit):''},history={replaceState(_state,_unused,value){const url=new URL(value);location.href=url.href;location.hash=url.hash;}},navigator={clipboard:{writeText:async()=>{}}};
  const InspectionDraftStore=class extends Base{constructor(scope,binding,warn){super(scope,binding,warn,storage);}};
  new InspectionDraftStore('single:rig',binding,()=>{}).write(saved);
- let current=structuredClone(baseline),dirty=false,conflict=false,restores=0,preset='';const messages=[],input=id=>nodes.find(n=>n.id===id),renderFeedbackSelection=()=>{};
+ let current=structuredClone(baseline),dirty=false,conflict=false,restores=0,preset='',displayedTime=null;const held=new Map(),calls=[];const messages=[],input=id=>nodes.find(n=>n.id===id),renderFeedbackSelection=()=>{};
  const afterInputs=${action};
  ${ids}\n${inputs}\n${connect}
- const connection=await connectInspectionPersistence({scope:'single:rig',binding,baseline,session:()=>current,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{current=value;dirty=isDirty;restores++;},bookmark:()=>explicit??bookmark,restoreBookmark:async value=>{preset=value.selection.partSet??'';input('part-set').value=preset;},ui:()=>({}),restoreUI:()=>{},afterInputs,onConflict:value=>{conflict=value;},onStatus:value=>messages.push(value)});
- return {connection,state:()=>({current,dirty,conflict,restores,preset,presetWidget:input('part-set').value,muted:video.muted,audioChecked:input('reference-audio').checked}),buttons:()=>notice.children.map(b=>b.textContent),click:label=>{const b=notice.children.find(b=>b.textContent===label);if(!b)throw new Error('missing recovery action');b.onclick();},messages};}`;
+ const connection=await connectInspectionPersistence({scope:'single:rig',binding,baseline,session:()=>current,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{current=value;dirty=isDirty;restores++;},bookmark:()=>{const value=explicit??bookmark;return {...value,time:displayedTime??value.time,selection:{...value.selection,partSet:preset}};},restoreBookmark:async(value,signal)=>{await restoreTransaction(async()=>{},()=>({preset,displayedTime}),async()=>{calls.push(value.time);preset=value.selection.partSet??'';input('part-set').value=preset;const gate=held.get(value.time);if(gate)await gate.promise;if(signal.aborted)throw new Error('RESTORE_SUPERSEDED');displayedTime=value.time;},async previous=>{preset=previous.preset;displayedTime=previous.displayedTime;input('part-set').value=preset;});},ui:()=>({}),restoreUI:()=>{},afterInputs,onConflict:value=>{conflict=value;},onStatus:value=>messages.push(value)});
+ return {connection,url:()=>location.href,state:()=>({current,dirty,conflict,restores,preset,presetWidget:input('part-set').value,muted:video.muted,audioChecked:input('reference-audio').checked,displayedTime,inert:document.body.inert,calls:[...calls],target:input('target-name').value}),hold:time=>{let release;const promise=new Promise(resolve=>release=resolve);held.set(time,{promise,release});},release:time=>held.get(time).release(),navigate:(value,event='hashchange')=>{location.hash=typeof value==='string'?value:encodeBookmark(value);location.href='http://127.0.0.1:1234/'+location.hash;window.dispatchEvent(new Event(event));},buttons:()=>notice.children.map(b=>b.textContent),click:label=>{const b=notice.children.find(b=>b.textContent===label);if(!b)throw new Error('missing recovery action');b.onclick();},messages};}`;
  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script),storage=new MemoryStorage();
- return await new Function('deps',code+';return open(deps);')({InspectionDraftStore,storage,saved,explicit,baseline,binding,bookmark:bookmark(),sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink}) as {connection:{dispose():void};state():{current:typeof baseline;dirty:boolean;conflict:boolean;restores:number;preset:string;presetWidget:string;muted:boolean;audioChecked:boolean};buttons():string[];click(label:string):void;messages:string[]};
+ return await new Function('deps',code+';return open(deps);')({InspectionDraftStore,storage,saved,explicit,baseline,binding,bookmark:bookmark(),sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction}) as {connection:{dispose():void;save():void;restoring():boolean};url():string;navigate(value:InspectionBookmark|string,event?:string):void;hold(time:number):void;release(time:number):void;state():{current:typeof baseline;dirty:boolean;conflict:boolean;restores:number;preset:string;presetWidget:string;muted:boolean;audioChecked:boolean;displayedTime:number|null;inert:boolean;calls:number[];target:string};buttons():string[];click(label:string):void;messages:string[]};
 }
 
 test('valid draft with incompatible session offers scoped discard, retains server baseline and unblocks submission',async()=>{
@@ -75,4 +75,26 @@ test('restored audio checkbox applies actual media mute while explicit URL prese
  const saved=draft();saved.baseline=await sessionFingerprint(baseline);saved.reviewDirty=false;saved.session=baseline;saved.inputs={'reference-audio':{value:'on',checked:true},'part-set':{value:'old'}};
  const explicit=bookmark();explicit.selection.partSet='alternate';const app=await openFormCoordinator(saved,explicit);
  try{expect(app.state()).toMatchObject({audioChecked:true,muted:false,preset:'alternate',presetWidget:'alternate',restores:0});}finally{app.connection.dispose();}
+});
+
+test('same-document hash/popstate restores preserve local decisions, suspend autosave and settle only the latest transactional view',async()=>{
+ const saved=draft();saved.baseline=await sessionFingerprint(baseline);saved.inputs={'target-name':{value:'unadded feedback target'},status:{value:'approved'}};
+ const app=await openFormCoordinator(saved,null),flush=()=>new Promise<void>(resolve=>setTimeout(resolve,0));
+ const first=bookmark();first.time=.75;first.selection.partSet='alternate';const last=bookmark();last.time=1;last.selection.partSet='old';
+ try{
+  expect(app.state()).toMatchObject({current:{status:'approved'},dirty:true,restores:1,target:'unadded feedback target'});
+  app.hold(.75);app.navigate(first);await flush();expect(app.connection.restoring()).toBe(true);expect(app.state().inert).toBe(true);const requested=app.url();app.connection.save();expect(app.url()).toBe(requested);
+  app.navigate(last,'popstate');await flush();expect(app.state().calls).toEqual([.5,.75]);app.release(.75);await flush();await flush();
+  expect(app.connection.restoring()).toBe(false);expect(app.state()).toMatchObject({displayedTime:1,preset:'old',presetWidget:'old',inert:false,current:{status:'approved'},dirty:true,restores:1,target:'unadded feedback target'});expect(app.state().calls).toEqual([.5,.75,1]);expect(decodeBookmark(new URL(app.url()).hash,binding)?.time).toBe(1);
+  app.navigate(last);await flush();expect(app.state().calls).toEqual([.5,.75,1]);
+  const before=app.state();app.navigate({...first,binding:{...binding,sourceHash:'d'.repeat(64)}});await flush();expect(app.state()).toEqual(before);expect(app.messages.at(-1)).toContain('VIEW_SOURCE_CHANGED');
+  app.navigate('#review=??');await flush();expect(app.state()).toEqual(before);expect(app.messages.at(-1)).toContain('encoding');
+  app.connection.dispose();app.navigate(first);await flush();expect(app.state()).toEqual(before);
+ }finally{app.connection.dispose();}
+});
+
+test('invalid navigation cancels an unfinished link transaction without applying a fallback draft or leaving controls locked',async()=>{
+ const saved=draft();saved.baseline=await sessionFingerprint(baseline);saved.reviewDirty=false;saved.session=baseline;
+ const app=await openFormCoordinator(saved,null),flush=()=>new Promise<void>(resolve=>setTimeout(resolve,0)),next=bookmark();next.time=.75;next.selection.partSet='alternate';
+ try{const previous=app.state();app.hold(.75);app.navigate(next);await flush();expect(app.connection.restoring()).toBe(true);app.navigate('#review=invalid!');app.release(.75);await flush();await flush();expect(app.connection.restoring()).toBe(false);expect(app.state()).toMatchObject({displayedTime:previous.displayedTime,preset:previous.preset,presetWidget:previous.presetWidget,current:baseline,inert:false,restores:0});expect(app.state().calls).toEqual([.5,.75]);}finally{app.connection.dispose();}
 });

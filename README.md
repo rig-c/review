@@ -4,6 +4,19 @@ A reusable local workspace for a person to inspect an agent's rig output, compar
 
 The first foundation provides modeling and motion inspection workspaces, compiled-model playback through `@rig-c/play`, local image, video and pose-sequence references, checkpoints, audio audition, and saved structured feedback. **Motion is view, annotate and export only.** Navigation changes inspection time; it never retimes, authors keys, or writes `motion.json`. Modeling touch-up remains a design goal; this starter does not edit meshes, weights or source art.
 
+## Place in the toolchain
+
+[Parts](https://github.com/rig-c/parts) → [Pose](https://github.com/rig-c/pose) →
+[Core / rigc](https://github.com/rig-c/core) → **Review** →
+[Play](https://github.com/rig-c/play) → **Adapter** (consumer integration).
+
+Review is the human inspection and source-bound feedback gate in this delivery
+flow. It inspects the upstream build without replacing Core's compiler gate or
+authoring motion. Review itself uses the published Play runtime for previews;
+the chain describes delivery and feedback responsibilities, not runtime import
+order. Adapter denotes downstream consumer integration, without promising an
+unreleased adapter API or changing existing compilation/playback dependencies.
+
 ## Start
 
 Requires Bun 1.3 or later. From this checkout:
@@ -197,11 +210,15 @@ is a one-time handoff, not a new link for each parameter change.
 Commands cover appearance, automatic layout, linked rig or independent reference
 camera, playback, single animation, time and actual inspection layers. Camera pan
 is measured in viewport CSS pixels (right/down positive). Comparison retains its
-fixed animation and actual video-master seek path. Unsupported features, stale
+fixed animation and actual video-master seek path. A single-video time request
+uses the actual decoded timestamp for both reference and rig; the applied
+acknowledgement reports that time, which may differ from the requested seconds.
+Unsupported features, stale
 page/source/revision, unsubmitted feedback drafts and out-of-range values refuse
 by name. No command changes a package/reference, authors motion, or submits or
 approves feedback. Local controls and remote readback use the same inspection
-state.
+state. A live view-link/history change supersedes pending remote work, and
+commands refuse while that view is being restored.
 
 Remote inspection readback also includes versioned numeric `view` coordinates
 when the page can measure them: rig/world center and zoom, reference/image center
