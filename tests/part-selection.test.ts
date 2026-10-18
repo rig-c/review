@@ -85,9 +85,9 @@ test('drawn entries follow actual z order; undrawn declarations stay separate in
  expect(orderedParts(entries,null).map(entry=>entry.slot)).toEqual(['s','other','clip']);expect(entries.map(entry=>entry.slot)).toEqual(['s','other','clip']);
 });
 
-test('animated Inspector details retain the focused feedback action and use the current selection',async()=>{
- // Run the actual explorer class with a scoped DOM host; removing a focused
- // subtree clears activeElement as it does in the browser. No global DOM leaks.
+/** The actual explorer class over a scoped DOM host; removing a focused subtree clears activeElement as in the browser. */
+async function explorerHarness(){
+ const counter={writes:0};
  const document:{activeElement:DetailNode|null;body:DetailNode|null;createElement:(tag:string)=>DetailNode}={activeElement:null,body:null,createElement:tag=>new DetailNode(tag.toUpperCase())};
  class DetailNode {
   parentElement:DetailNode|null=null;children:DetailNode[]=[];dataset:Record<string,string>={};attributes=new Map<string,string>();selector='';value='';disabled=false;hidden=false;checked=false;type='';title='';className='';onclick:(()=>void)|null=null;onchange:(()=>void)|null=null;private content='';
@@ -98,7 +98,7 @@ test('animated Inspector details retain the focused feedback action and use the 
   contains(node:DetailNode|null):boolean{return !!node&&(node===this||this.children.some(child=>child.contains(node)));}
   append(...nodes:DetailNode[]){for(const node of nodes){if(node.parentElement)node.parentElement.children=node.parentElement.children.filter(child=>child!==node);node.parentElement=this;this.children.push(node);}}
   replaceChildren(...nodes:DetailNode[]){if(document.activeElement!==this&&this.contains(document.activeElement))document.activeElement=document.body;for(const child of this.children)child.parentElement=null;this.children=[];this.content='';this.append(...nodes);}
-  setAttribute(name:string,value:string){this.attributes.set(name,value);}
+  setAttribute(name:string,value:string){counter.writes++;this.attributes.set(name,value);}
   addEventListener(){}
   focus(){if(this.isConnected&&!this.disabled)document.activeElement=this;}
   querySelector(selector:string):DetailNode|null{return this.querySelectorAll(selector)[0]??null;}
@@ -110,6 +110,10 @@ test('animated Inspector details retain the focused feedback action and use the 
  const source=await readFile(new URL('../web/part-selection.ts',import.meta.url),'utf8'),begin=source.indexOf('export class PartExplorer extends');if(begin<0)throw new Error('Actual explorer class boundary absent');
  const script=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(begin).replace('export class','class'));
  const Explorer=new Function('PartInspection','orderedParts','partIdentity','document','HTMLElement',script+';return PartExplorer;')(PartInspection,orderedParts,partIdentity,document,DetailNode) as typeof PartExplorer;
+ return {document,host,detail,Explorer,DetailNode,counter};
+}
+test('animated Inspector details retain the focused feedback action and use the current selection',async()=>{
+ const {document,host,detail,Explorer}=await explorerHarness();
  const targets:unknown[]=[],a=fake(),b=fake(),explorer=new Explorer(host as unknown as HTMLElement,detail as unknown as HTMLElement,()=>{},part=>targets.push(part));
  explorer.register('a',entries,a.player);explorer.register('b',entries,b.player);explorer.present('a');explorer.present('b');explorer.select({side:'a',slot:'s',mode:'solo'});
  const action=detail.querySelector('button')!;action.focus();const beforeBounds=detail.textContent;expect(document.activeElement).toBe(action);expect(action.isConnected).toBe(true);
@@ -118,6 +122,18 @@ test('animated Inspector details retain the focused feedback action and use the 
  explorer.select({side:'b',slot:'other',mode:'context'});expect(detail.querySelector('button')).toBe(action);expect(document.activeElement).toBe(action);action.onclick!();expect(targets).toHaveLength(1);expect(targets[0]).toMatchObject({side:'b',slot:'other',mode:'context',identity:{attachment:'sprite',skin:'default'}});
  explorer.select(null);expect(action.hidden).toBe(true);expect(action.disabled).toBe(true);expect(detail.textContent).toContain('Whole rig');action.onclick!();expect(targets).toHaveLength(1);
  explorer.select({side:'a',slot:'s',mode:'solo'});expect(detail.querySelector('button')).toBe(action);expect(action.hidden).toBe(false);expect(action.disabled).toBe(false);action.onclick!();expect(targets.at(-1)).toMatchObject({side:'a',slot:'s',mode:'solo',identity:{attachment:'first',skin:'default'}});
+});
+
+test('playback frames rewrite the parts list only when what it shows changes; search is case-sensitive on exact names',async()=>{
+ const {host,detail,Explorer,counter}=await explorerHarness(),a=fake(),explorer=new Explorer(host as unknown as HTMLElement,detail as unknown as HTMLElement,()=>{},()=>{});
+ explorer.register('single',entries,a.player);explorer.present('single');explorer.select({side:'single',slot:'other',mode:'context'});
+ const list=host.querySelector('[data-part-list]')!,rows=()=>list.querySelectorAll('button');
+ const settled=counter.writes;for(let tick=0;tick<60;tick++){a.source(copyPartFrame(frame));explorer.present('single');}
+ expect(counter.writes).toBe(settled);
+ const moved=copyPartFrame(frame);moved.order=moved.order.filter(row=>row.slot!=='other');a.source(moved);explorer.present('single');
+ expect(counter.writes).toBeGreaterThan(settled);expect(rows().find(row=>row.dataset.slot==='other')!.attributes.get('aria-label')).toContain('not drawn');
+ const search=host.querySelector('[data-part-search]')!;search.value='Other';(explorer as unknown as {renderList():void}).renderList();expect(rows()).toHaveLength(0);
+ search.value='oth';(explorer as unknown as {renderList():void}).renderList();expect(rows().map(row=>row.dataset.slot)).toEqual(['other']);
 });
 
 test('identity capture rejects stale or forged generation/order atomically and retains the actual prior draw',()=>{
