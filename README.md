@@ -171,3 +171,41 @@ printed: every current instance binds only `127.0.0.1`.
 
 The printed feedback retrieval command uses POSIX shell quoting for literal path
 arguments. It is not a PowerShell or cmd.exe command string.
+
+## Control the current inspection page
+
+Opt in once when opening a fixed package, then keep that page open:
+
+```sh
+rig-review open /absolute/output --reference /absolute/original.mp4 --control
+rig-review control /absolute/output --reference /absolute/original.mp4
+```
+
+The second command reads the connected page's actual inspection state and its
+`pageId`/`revision`; it does not open a browser or start another worker. To change
+that page, use the observed values and a closed inspection command:
+
+```sh
+rig-review control /absolute/output --reference /absolute/original.mp4 --page '<pageId>' --expected-revision 0 --request-id theme-1 --command '{"type":"theme","value":"light"}'
+```
+
+Use the same reference/compare/animation inputs as the controlled `open`. Multiple
+pages require an explicit `--page`. The URL and source binding stay unchanged;
+existing ordinary servers do not become controllable. Starting the opt-in worker
+is a one-time handoff, not a new link for each parameter change.
+
+Commands cover appearance, automatic layout, linked rig or independent reference
+camera, playback, single animation, time and actual inspection layers. Camera pan
+is measured in viewport CSS pixels (right/down positive). Comparison retains its
+fixed animation and actual video-master seek path. Unsupported features, stale
+page/source/revision, unsubmitted feedback drafts and out-of-range values refuse
+by name. No command changes a package/reference, authors motion, or submits or
+approves feedback. Local controls and remote readback use the same inspection
+state.
+
+The CLI waits up to10 seconds for the page's actual acknowledgment. `queued` or
+`dispatched` is not success; non-applied commands exit2 and may carry
+`timedOut:true`. Reuse the same `--request-id` and original request to obtain its
+receipt without applying it twice. `--wait-ms 0` returns the queued receipt;
+`--wait-ms` is bounded to30000. A timeout does not mean an already delivered action
+was rolled back. Tokens stay in private tool state, not URLs or command output.

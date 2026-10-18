@@ -1,3 +1,4 @@
+import {createControlServer,type ControlIdentity} from './control-server.ts';
 import {openGate,staleOpenStatus,type OpenIdentity} from './open-protocol.ts';
 import { readFile } from 'node:fs/promises';
 import { appRoot, buildWeb } from './build.ts';
@@ -27,12 +28,14 @@ function serveAsset(req:Request,path:string):Response{
   }
   return new Response(req.method==='HEAD'?null:file,{headers:{...assetHeaders,'Content-Length':String(size)}});
 }
-export async function startCompareServer(p:ComparePackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;activity?:()=>void}={}){
+export async function startCompareServer(p:ComparePackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;activity?:()=>void;control?:ControlIdentity}={}){
   const bundle=await buildWeb('compare');
   const frames=referenceFrameIndex(p.referencePath,p.response.binding.reference.sha256,p.response.sourceHash);
+  const control=options.control?createControlServer({identity:options.control,sourceHash:p.response.sourceHash,mode:'compare',unchanged:()=>assertCompareUnchanged(p),activity:options.activity}):null;
   return Bun.serve({hostname:'127.0.0.1',port:options.port??4317,async fetch(req,server){try{
     const url=new URL(req.url),origin=`http://127.0.0.1:${server.port}`;
     if(url.origin!==origin)return json({error:'Loopback host required'},403);
+    const controlled=await control?.(req,origin);if(controlled)return controlled;
     options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await assertCompareUnchanged(p);}catch{return staleOpenStatus(options.open!);}}return gate;}
     if(req.method==='PUT'&&url.pathname==='/api/compare/session'){
       if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);

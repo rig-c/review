@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
+import {parseControlCommand} from './control.ts';
 import { loadReview } from './manifest.ts';
 import { formatFeedbackIssues } from './feedback-export.ts';
 import {loadReferencedReview,selectedReference,assertReviewUnchanged} from './reference.ts';
 import {animationDiagnostic,selectAnimation} from './animation-selection.ts';
 import {shellWord} from './open-shell.ts';
-import {openReview,loadOpenPackage,defaultStateDir,type OpenInputs} from './open.ts';
+import {openReview,controlReview,loadOpenPackage,defaultStateDir,type OpenInputs} from './open.ts';
 import { readFeedbackSession, readFeedbackCompareSession } from './session-history.ts';
 import { startServer } from './server.ts';
 import { loadCompare } from './compare.ts';
@@ -13,7 +14,7 @@ import { readSession, type Feedback } from './session.ts';
 import { readCompareSession } from './compare-session.ts';
 import { exportReviewStrip, exportCompareStrip, stripJson, writeStripOutput, validateStripOutput } from './strip-export.ts';
 import type { StripInterval, StripRequest } from './strip.ts';
-const usage='Usage: rig-review open <dir> [--reference <video>] [--compare <dir>] [--animation <name>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--format json|issue]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>';
+const usage='Usage: rig-review open <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--control]\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--format json|issue]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>';
 async function stripCommand(args:string[],options:{stateDir?:string}){
   const compare=args[0]==='compare';if(compare)args.shift();const a=args.shift(),b=compare?args.shift():undefined;if(!a||compare&&!b)throw new Error('strip: expected package input(s)');
   let reference:string|undefined,referenceVideo:string|undefined,animation:string|undefined,basis:'a'|'b'|undefined,range:string|undefined,output:string|undefined,jsonOnly=false,all=false;
@@ -31,7 +32,23 @@ async function stripCommand(args:string[],options:{stateDir?:string}){
   else {if(basis)throw new Error('strip --basis: single package uses single basis');const p=await loadReferencedReview(a,referenceVideo);if(!reference)reference=selectedReference(p)?.binding.reference.id;roots=[p.root];if(all)intervals=fromFeedback((await readSession(p,options.stateDir)).feedback);if(output){await validateStripOutput(output,roots);if(!jsonOnly)await validateStripOutput(output+'.json',roots);}result=await exportReviewStrip(p,request(p.sourceHash));}
   if(output){await writeStripOutput(result,output,roots);console.log(`Strip exported: ${output}${result.png?' (PNG + .json provenance)':''}`);}else console.log(stripJson(result).trimEnd());
 }
-export function parseOpenInputs(args:string[]):OpenInputs {const input=args.shift();if(!input||input.startsWith('--'))throw new Error(usage);const result:OpenInputs={input};const seen=new Set<string>();while(args.length){const flag=args.shift()!,value=args.shift();if(value===undefined||value==='')throw new Error(`Missing value for ${flag}`);if(seen.has(flag))throw new Error(`Duplicate open option ${flag}`);seen.add(flag);if(flag==='--reference')result.reference=value;else if(flag==='--compare')result.compare=value;else if(flag==='--animation')result.animation=value;else throw new Error(`Unknown open option ${flag}`);}return result;}
+export function parseOpenInputs(args:string[]):OpenInputs {
+ const input=args.shift();if(!input||input.startsWith('--'))throw new Error(usage);const result:OpenInputs={input},seen=new Set<string>();
+ while(args.length){const flag=args.shift()!;if(seen.has(flag))throw new Error(`Duplicate open option ${flag}`);seen.add(flag);if(flag==='--control'){result.control=true;continue;}const value=args.shift();if(value===undefined||value==='')throw new Error(`Missing value for ${flag}`);if(flag==='--reference')result.reference=value;else if(flag==='--compare')result.compare=value;else if(flag==='--animation')result.animation=value;else throw new Error(`Unknown open option ${flag}`);}return result;
+}
+async function controlCommand(args:string[],stateDir?:string){
+ const input=args.shift();if(!input||input==='--help'||input==='-h'){console.log(usage);return;}
+ const inputs:OpenInputs={input},options:Parameters<typeof controlReview>[1]={stateDir},seen=new Set<string>();
+ while(args.length){const flag=args.shift()!;if(seen.has(flag))throw new Error(`Duplicate control option ${flag}`);seen.add(flag);const value=args.shift();if(value===undefined||value==='')throw new Error(`Missing value for ${flag}`);
+  if(flag==='--reference')inputs.reference=value;else if(flag==='--compare')inputs.compare=value;else if(flag==='--animation')inputs.animation=value;
+  else if(flag==='--page')options.pageId=value;else if(flag==='--request-id')options.requestId=value;
+  else if(flag==='--expected-revision'){const n=Number(value);if(!/^\d+$/.test(value)||!Number.isSafeInteger(n))throw new Error('--expected-revision: expected safe integer >= 0');options.expectedRevision=n;}
+  else if(flag==='--wait-ms'){const n=Number(value);if(!/^\d+$/.test(value)||!Number.isSafeInteger(n)||n>30000)throw new Error('--wait-ms: expected integer 0..30000');options.waitMs=n;}
+  else if(flag==='--command'){if(value.length>8192)throw new Error('--command: JSON exceeds 8 KiB');options.command=parseControlCommand(JSON.parse(value));}
+  else throw new Error(`Unknown control option ${flag}`);
+ }
+ const result=await controlReview(inputs,options);console.log(JSON.stringify(result,null,2));if(options.command&&(result as {status?:string}).status!=='applied')process.exitCode=2;
+}
 /** Formatting is CLI-only; session lookup/save contracts remain unchanged. */
 export function feedbackFormat(args:string[]):{args:string[];format:'json'|'issue'} {
  const remaining:string[]=[];let format:'json'|'issue'='json',seen=false,inputs=-1;
@@ -56,15 +73,16 @@ function commandHelpRequested(args:readonly string[],command:'open'|'review'|'ch
  if(args[0]==='--help'||args[0]==='-h')return true;
  const compare=command!=='open'&&args[0]==='compare';
  const flags=command==='open'?['--reference','--compare','--animation']:compare?['--reference','--animation','--port']:['--port','--checkpoint','--reference','--compare','--animation'];
- for(let i=compare?3:1;i<args.length;i+=2){
+ for(let i=compare?3:1;i<args.length;){
   const flag=args[i];if(flag==='--help'||flag==='-h')return true;
-  if(!flags.includes(flag!))return false;
+  if(command==='open'&&flag==='--control'){i++;continue;}if(!flags.includes(flag!))return false;i+=2;
  }
  return false;
 }
 export async function main(args:string[],options:{stateDir?:string}={}){
   options={stateDir:options.stateDir??defaultStateDir()};if(args[0]==='--')args.shift();
-  if(args[0]==='open'){const openArgs=args.slice(1);if(commandHelpRequested(openArgs,'open')){console.log(usage);return;}const inputs=parseOpenInputs(openArgs);const result=await openReview(inputs,options);console.log(result.url);if(result.selection)console.error(animationDiagnostic(result.selection));console.error(`Review ${result.reused?'reused':'started'}; feedback: rig-review feedback ${[result.inputs.input,...(result.inputs.compare?['--compare',result.inputs.compare]:[]),...(result.inputs.reference?['--reference',result.inputs.reference]:[]),...(result.inputs.animation?['--animation',result.inputs.animation]:[])].map(shellWord).join(' ')}`);return;}
+  if(args[0]==='control')return controlCommand(args.slice(1),options.stateDir);
+  if(args[0]==='open'){const openArgs=args.slice(1);if(commandHelpRequested(openArgs,'open')){console.log(usage);return;}const inputs=parseOpenInputs(openArgs);const result=await openReview(inputs,options);console.log(result.url);if(inputs.control)console.error('Inspection control enabled; query the current connected page with rig-review control and the same inputs.');if(result.selection)console.error(animationDiagnostic(result.selection));console.error(`Review ${result.reused?'reused':'started'}; feedback: rig-review feedback ${[result.inputs.input,...(result.inputs.compare?['--compare',result.inputs.compare]:[]),...(result.inputs.reference?['--reference',result.inputs.reference]:[]),...(result.inputs.animation?['--animation',result.inputs.animation]:[])].map(shellWord).join(' ')}`);return;}
   if(args[0]==='strip'){args.shift();if(args.includes('--help')){console.log(usage+'\nStrip: strip <package> --reference <declared-video-id> --animation <name> (--frames FIRST:LAST | --all-feedback) [--json] [--out path]\n       strip compare <a> <b> --reference <video> --animation <name> --basis a|b (--frames FIRST:LAST | --all-feedback) [--json] [--out path]');return;}return stripCommand(args,options);}let command:'review'|'check'|'feedback'='review';if(args[0]==='check'||args[0]==='feedback'){command=args.shift() as 'check'|'feedback';}
   if(args[0]==='--help'||args[0]==='-h'){console.log(usage);return;}
   let format:'json'|'issue'='json';if(command==='feedback'){const parsed=feedbackFormat(args);args=parsed.args;format=parsed.format;}

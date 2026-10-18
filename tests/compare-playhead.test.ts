@@ -133,9 +133,9 @@ test('actual compare seek adapter refuses mismatched decoded frame without disab
     const control=(id:string)=>{let value=controls.get(id);if(!value){value={disabled:false,textContent:'',setAttribute(){}};controls.set(id,value);}return value;};
     const callbacks=legacyGenericError?seekFunctions.replace("new ReferenceSelectionUnavailable('REFERENCE_FRAME_MISMATCH:","new Error('REFERENCE_FRAME_MISMATCH:"):seekFunctions;
     if(legacyGenericError&&callbacks===seekFunctions)throw new Error('legacy mismatch mutant was not applied');
-    const script=`function openAdapter(deps){const {video,players,referenceFrames,presentation,rendererBadges,ReferenceSelectionUnavailable,inspectionReferenceFrame,referenceFrameAtTime,referenceSeekPosition,requireCommonTime,feedbackTrace,button,input}=deps;let ready=true,seeking=false,trace=null,seekAbort=null,latestSeek=0,lastPresented=null,requestedProducer=null,endStopReason=null;const domain={start:0,end:2},traceRows=[];const text=()=>{},message=()=>{},describe=error=>error instanceof Error?error.message:String(error),frameControls=()=>{},renderTrace=value=>{trace=value;},renderPresentation=()=>{};${stateFunctions}\n${callbacks}\nreturn {seekTo,state:()=>({ready,seeking,trace})};}`;
+    const script=`function openAdapter(deps){const {video,players,referenceFrames,presentation,rendererBadges,overlays,ReferenceSelectionUnavailable,inspectionReferenceFrame,referenceFrameAtTime,referenceSeekPosition,requireCommonTime,feedbackTrace,button,input}=deps;let ready=true,seeking=false,trace=null,seekAbort=null,latestSeek=0,lastPresented=null,requestedProducer=null,endStopReason=null,idleHeld=true,loopRestarting=false;const domain={start:0,end:2},traceRows=[];const text=()=>{},message=()=>{},describe=error=>error instanceof Error?error.message:String(error),frameControls=()=>{},renderTrace=value=>{trace=value;},renderPresentation=()=>{};${stateFunctions}\n${callbacks}\nreturn {seekTo,state:()=>({ready,seeking,trace})};}`;
     const compiled=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script);
-    const adapter=new Function('deps',compiled+'\nreturn openAdapter(deps);')({video,players:{a,b},referenceFrames:{frames:[0,.5,1].map((time,index)=>({index,time})),duration:1.5},presentation:new ComparePresentation(),rendererBadges:{a:new RendererBadge(),b:new RendererBadge()},ReferenceSelectionUnavailable,inspectionReferenceFrame,referenceFrameAtTime,referenceSeekPosition,requireCommonTime,feedbackTrace,button:control,input:control}) as {seekTo(time:number):Promise<void>;state():{ready:boolean;seeking:boolean;trace:CompareTrace|null}};
+    const adapter=new Function('deps',compiled+'\nreturn openAdapter(deps);')({video,players:{a,b},referenceFrames:{frames:[0,.5,1].map((time,index)=>({index,time})),duration:1.5},presentation:new ComparePresentation(),rendererBadges:{a:new RendererBadge(),b:new RendererBadge()},overlays:{},ReferenceSelectionUnavailable,inspectionReferenceFrame,referenceFrameAtTime,referenceSeekPosition,requireCommonTime,feedbackTrace,button:control,input:control}) as {seekTo(time:number):Promise<void>;state():{ready:boolean;seeking:boolean;trace:CompareTrace|null}};
     return {video,control,...adapter};
   };
   try{
@@ -149,4 +149,20 @@ test('actual compare seek adapter refuses mismatched decoded frame without disab
     const legacy=open(true);legacy.video.actual=1;await legacy.seekTo(.5);
     expect(legacy.state().ready).toBe(false);expect(legacy.control('play').disabled).toBe(true);expect(legacy.control('seek').disabled).toBe(true);expect(legacy.control('scrub').disabled).toBe(true);legacy.video.actual=.5;await legacy.seekTo(.5);expect(legacy.state().trace).toBeNull();expect(legacy.video.pendingCallbacks).toBe(0);
   }finally{a.dispose();b.dispose();assets.dispose();}
+});
+
+test('actual idle restart cancellation aborts its old generation and restores a held inspection; uncancelled restart resumes once',async()=>{
+ const source=await readFile(new URL('../web/compare.ts',import.meta.url),'utf8');
+ const start=source.indexOf('async function cancelPendingPlayback('),end=source.indexOf('function localDraft(',start);
+ if(start<0||end<start)throw new Error('idle restart adapter boundary missing');
+ // Exercise the actual app orchestration, including its post-await guard. The
+ // browser's asynchronous reference-seek boundary is deliberately held here;
+ // public poser/actual seek accuracy is covered by the adjacent real-player test.
+ const body=source.slice(start,end);
+ const script=`function open(){let idleHeld=false,loopRestarting=false,latestSeek=0,seeking=false,requestedProducer=null,ready=true,disposed=false,resumes=0,trace={reference:.5};let release;const gate=new Promise(resolve=>release=resolve),seekAbort=new AbortController(),document={hidden:false};const presentation={snapshot:()=>({lastDrawn:{reference:.5}})},stop=()=>{},invalidateTrace=()=>{trace=null;},frameControls=()=>{},message=()=>{},describe=e=>String(e),canRepeatIdle=()=>true;let calls=[];async function seekTo(target){calls.push(target);const generation=++latestSeek;if(target===0)await gate;if(generation===latestSeek){trace={reference:target};seeking=false;}}async function playComparison(){resumes++;}${body};return {start:restartIdle,cancel:cancelPendingPlayback,release:()=>release(),state:()=>({idleHeld,loopRestarting,latestSeek,aborted:seekAbort.signal.aborted,resumes,trace,calls})};}`;
+ const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script);
+ type Harness={start():Promise<void>;cancel():Promise<void>;release():void;state():{idleHeld:boolean;loopRestarting:boolean;latestSeek:number;aborted:boolean;resumes:number;trace:{reference:number}|null;calls:number[]}};
+ const open=()=>new Function(code+';return open();')() as Harness;
+ const cancelled=open(),pending=cancelled.start();await Promise.resolve();expect(cancelled.state().loopRestarting).toBe(true);await cancelled.cancel();expect(cancelled.state().aborted).toBe(true);expect(cancelled.state().calls).toEqual([0,.5]);cancelled.release();await pending;expect(cancelled.state()).toMatchObject({idleHeld:true,loopRestarting:false,resumes:0,trace:{reference:.5}});
+ const normal=open(),running=normal.start();normal.release();await running;expect(normal.state()).toMatchObject({idleHeld:false,loopRestarting:false,resumes:1,trace:{reference:0}});
 });

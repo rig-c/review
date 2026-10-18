@@ -4,3 +4,89 @@
 @media(max-width:850px){.layout{grid-template-columns:1fr}aside{border-left:0;border-top:1px solid #3b5b69;display:grid;grid-template-columns:1fr 1fr;gap:12px 24px}aside>.eyebrow,aside>label,aside>select{grid-column:1/-1}.feedback-form,.provenance{margin-top:0}.feedback-form{padding-top:0;border-top:0}.actions{margin-left:0}.rig-viewport,.reference-viewport{min-height:420px}}
 @media(max-width:550px){header{gap:12px;padding:13px}.stages{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.pane:first-child{grid-column:1/-1}.reference-viewport{min-height:240px}.rig-viewport{min-height:365px}.pane-head{padding:7px}.pane-foot{font-size:11px}aside{display:block}.feedback-form{margin-top:23px;padding-top:20px;border-top:1px solid #405f6c}.toolbar{padding:11px 13px}.transport{padding:12px;gap:8px}.transport input[type=range]{min-width:130px}.transport input[type=number]{width:84px}.provenance{margin-top:18px}}
 @media(pointer:coarse){button{min-height:42px}input,select{font-size:16px}.row button{min-width:38px}}
+
+/* Inspection layout is bounded independently of pane content and review forms. */
+#stage-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:minmax(0,1fr);height:clamp(480px,calc(100dvh - 300px),900px);min-height:0;flex:none;align-items:stretch}
+#stage-layout[data-orientation=vertical]{grid-template-columns:minmax(0,1fr);grid-template-rows:repeat(2,minmax(0,1fr))}
+#stage-layout>.stage-pane,#stage-layout>.pane{grid-column:auto;min-height:0;min-width:0;display:flex;flex-direction:column}
+#stage-layout .viewport,#stage-layout .rig-viewport,#stage-layout .reference-viewport{min-height:0;min-width:0;flex:1;touch-action:none;cursor:grab;user-select:none}
+#stage-layout [data-panning=true]{cursor:grabbing!important}
+#stage-layout img{-webkit-user-drag:none;user-select:none}
+.rig-overlay{position:absolute;inset:0;pointer-events:none;width:100%;height:100%;z-index:1}
+.inspection-controls{display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;padding:9px 14px;border-bottom:1px solid #35515e;font-size:11px;background:#172f3b}
+.inspection-controls label{display:inline-flex;align-items:center;gap:5px;margin:0;white-space:nowrap}
+.inspection-controls select{width:auto;padding:4px;font-size:11px}
+.inspection-controls input[type=checkbox]{width:auto;margin:0}
+.inspection-controls fieldset{display:flex;gap:10px;align-items:center;border:0;padding:0;margin:0;min-width:0;flex-wrap:wrap}
+.inspection-controls legend{float:left;margin-right:9px;font-size:11px}
+#control-state:empty{display:none}
+:root[data-theme=light]{color-scheme:light;color:#233c47;background:#f4f7f9}
+:root[data-theme=dark]{color-scheme:dark}
+[data-theme=light] body,[data-theme=light] main{background:#f4f7f9;color:#233c47}
+[data-theme=light] header,[data-theme=light] .topbar,[data-theme=light] .workspaces,[data-theme=light] footer{background:#edf3f5;border-color:#bacbd3;color:#294552}
+[data-theme=light] aside,[data-theme=light] .transport,[data-theme=light] .frame-controls,[data-theme=light] .inspection-controls,[data-theme=light] .sound-panel,[data-theme=light] .angle-panel,[data-theme=light] .report-panel{background:#e9f0f3;border-color:#b7c9d1;color:#294552}
+[data-theme=light] button{background:#e2ebef;border-color:#a6bdc8;color:#264652}
+[data-theme=light] button:hover{background:#d0e2e8}
+[data-theme=light] button.primary,[data-theme=light] .primary{background:#24694d;border-color:#24694d;color:#fff}
+[data-theme=light] input,[data-theme=light] select,[data-theme=light] textarea{background:#fff;border-color:#8faab7;color:#243e4a;accent-color:#276c50}
+[data-theme=light] input::placeholder,[data-theme=light] textarea::placeholder{color:#607986}
+[data-theme=light] .hint,[data-theme=light] .subtle,[data-theme=light] .label,[data-theme=light] .eyebrow,[data-theme=light] aside label,[data-theme=light] .tool small,[data-theme=light] .stage-footer,[data-theme=light] .compare-info,[data-theme=light] .boundary,[data-theme=light] .trace,[data-theme=light] .transport output,[data-theme=light] .zoom-controls output,[data-theme=light] .frame-range label,[data-theme=light] .frame-controls label{color:#496774}
+[data-theme=light] .workspaces button,[data-theme=light] .segmented button{color:#3e5c69}
+[data-theme=light] .workspaces button[aria-pressed=true]{color:#185738;border-bottom-color:#276c50}
+[data-theme=light] .workspaces button span{color:#58727e}
+[data-theme=light] .segmented,[data-theme=light] .provenance,[data-theme=light] .report-selection pre{background:#e1ebef;border-color:#9cb5c0;color:#294552}
+[data-theme=light] .segmented button[aria-pressed=true],[data-theme=light] .checkpoint[aria-current=true],[data-theme=light] .report-event-list button[aria-current=true]{background:#cde4d8;border-color:#56866e;color:#1f4937}
+[data-theme=light] .checkpoint small{color:#4b6c59}
+[data-theme=light] .provenance p,[data-theme=light] .provenance-row span,[data-theme=light] .provenance details,[data-theme=light] .report-selection details,[data-theme=light] .report-event-list small{color:#486470}
+[data-theme=light] .report-event-list button,[data-theme=light] .report-empty-categories span{background:#e5eef2;border-color:#acbfca;color:#294552}
+[data-theme=light] .feedback-item strong{color:#1e4e3b}
+[data-theme=light] a{color:#175f48}
+[data-theme=light] .error{color:#a03225!important}
+[data-theme=light] .dirty,[data-theme=light] .report-event-list .no-time{color:#875800!important}
+[data-theme=light] :focus-visible{outline-color:#24694d}
+/* Source pixels retain their original color; the neutral stage stays dark in both themes. */
+
+#stage-layout{grid-template-columns:repeat(3,minmax(0,1fr))}#stage-layout[data-orientation=vertical]{grid-template-columns:minmax(0,1fr);grid-template-rows:repeat(3,minmax(0,1fr))}
+#reference-video{transform-origin:center;user-select:none}
+
+/* The application shell never scrolls; each Inspector tab and the source list owns overflow. */
+html,body{height:100%;overflow:hidden}body{height:100dvh}#app{height:100dvh;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;overflow:hidden}
+.layout{min-height:0!important;overflow:hidden;grid-template-columns:170px minmax(0,1fr)!important}
+main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
+.left-panel{min-height:0;overflow:auto;padding:13px 10px}
+#stage-layout{height:auto;min-height:0;flex:1;overflow:hidden;padding:8px;gap:7px}
+.inspector{height:clamp(205px,32dvh,340px);min-height:180px;flex:none;display:flex;flex-direction:column;border-top:1px solid #49616d;background:#182d38;overflow:hidden}
+.inspector-heading{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:7px 12px;border-bottom:1px solid #3e5c69;flex:none;font-size:11px}
+.inspector-heading strong{font-size:10px;letter-spacing:.08em;font-weight:500}
+.inspector-heading [role=tablist]{display:flex;gap:4px}
+.inspector-heading button{padding:4px 9px;font-size:11px}
+.inspector-heading button[aria-selected=true]{background:#3d5d4d;color:#e0f3e7;border-color:#7fa98e}
+.inspector-body{flex:1;min-height:0;overflow:hidden}
+.inspector-body>[role=tabpanel]{height:100%;overflow:auto;padding:12px 15px;min-height:0}
+.inspector .inspection-controls{padding:0;border:0;background:transparent}
+.inspector .provenance{margin-top:10px}
+.inspector .transport{padding:0 0 10px;border:0;background:transparent;flex-wrap:wrap}
+.inspector .report-panel{padding:10px 0}
+.inspector .feedback-form{border:0;padding:0;margin:0}
+#inspector-feedback{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(270px,100%),1fr));gap:20px;align-items:start}
+#inspector-feedback>section,#inspector-feedback>#checkpoint-detail,#inspector-feedback>#proposal-panel{break-inside:avoid}
+#inspector-feedback .divider{display:none}
+#inspector-feedback>label,#inspector-feedback>select{display:block;max-width:300px}
+#inspector-rig #modeling-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0}
+#inspector-rig .tool{width:auto}
+#inspector-rig #part-set{max-width:190px}
+#inspector-playback #motion-tools{display:flex;gap:8px;flex-wrap:wrap}
+#inspector-playback .tool{width:auto}
+[data-theme=light] .inspector{background:#edf3f5;border-color:#a6bec8;color:#294552}
+[data-theme=light] .inspector-heading{border-color:#b3c6d0}
+[data-theme=light] .inspector-heading button[aria-selected=true]{background:#cde4d8;color:#1e4d36;border-color:#59836b}
+@media(max-width:780px){.layout{grid-template-columns:130px minmax(0,1fr)!important}.inspector{height:36dvh}.stage-meta{padding:6px 10px 0}.stage-footer{padding:5px 10px}.inspector-heading>.hint{display:none}}
+@media(max-width:540px){.layout{grid-template-columns:minmax(0,1fr)!important}.left-panel{display:block;padding:8px;font-size:11px}.layout{grid-template-columns:105px minmax(0,1fr)!important}.topbar,header{padding:7px 10px;gap:8px}.topbar .brand,header .brand{font-size:14px}.top-actions,.actions{gap:4px}.top-actions button,.actions button{padding:4px 6px;font-size:10px}.workspaces button{padding:6px}.inspector{height:40dvh;min-height:150px}.inspector-heading{gap:8px;padding:5px 8px}.inspector-heading button{padding:4px 7px}.stage-footer{display:none}}
+
+body{display:grid;grid-template-rows:auto minmax(0,1fr) auto}.layout{grid-template-columns:minmax(0,1fr)!important}.toolbar{padding:7px 12px}.pane-head{padding:5px 9px;min-height:32px}.pane-foot{padding:5px 8px;min-height:30px}.inspector{height:clamp(205px,32dvh,340px)}
+
+@media(max-width:540px){.layout{grid-template-columns:minmax(0,1fr)!important}}
+
+.inspector .feedback-form>label,.inspector .review-summary>label{display:block;font-size:11px;margin:10px 0 5px}.inspector .frame-range input{width:100%}.inspector [role=tabpanel]{overscroll-behavior:contain}.left-panel{overscroll-behavior:contain}#stage-layout .pane-label{max-width:calc(100% - 15px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.rig-layer-controls{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:11px}.rig-layer-controls fieldset{display:flex;gap:12px;align-items:center;flex-wrap:wrap;border:0;margin:0;padding:0}.rig-layer-controls legend{float:left;margin-right:10px}.rig-layer-controls label{display:inline-flex;gap:5px;align-items:center}.rig-layer-controls input[type=checkbox]{width:auto}

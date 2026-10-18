@@ -1,5 +1,9 @@
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import {rendererStatus} from './renderer-status.ts';
+import {bindAppearance,bindPan,bindStageLayout,bindInspectorTabs,panCenter,idleAvailable,initialIdleAnimation,automaticIdlePreview,type ViewPoint} from './view-controls.ts';
+import {RigOverlays} from './rig-overlays.ts';
+import {connectControl} from './control.ts';
+import type {ControlCommand,ControlInspection} from '../src/control.ts';
 import {initialPlayerAnimation} from '../src/animation-selection.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import type {ReferenceBinding} from '../src/reference.ts';
@@ -43,6 +47,16 @@ let workspace: 'modeling' | 'motion' = 'modeling';
 let view: 'compare' | 'reference' | 'rig' = 'compare';
 let zoom = 1;
 let cameraCenter: { x: number; y: number } | null = null;
+let referenceCenter:ViewPoint|null=null;
+let rigScale=1,referenceScale=1,referenceZoom=1;
+let playbackIntent=0,desiredPlay=false,seekingControl=false;
+let overlays:RigOverlays|null=null;
+let appearance:ReturnType<typeof bindAppearance>|null=null;
+let idleHeld=false;
+let suspendedPreview=false;
+let controlDispose:(()=>void)|null=null;
+const viewDisposers:(()=>void)[]=[];
+const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let referenceSize: { width: number; height: number } | null = null;
 let video: HTMLVideoElement | null = null;
 let referenceGeneration = 0;
@@ -124,7 +138,7 @@ async function chooseCheckpoint(point: Checkpoint,initial?:{referenceId?:string;
   if (referenceId && select('reference-select').value !== referenceId) {
     select('reference-select').value = referenceId; await showReference(referenceId);
   }
-  zoom = Math.min(8, Math.max(.25, point.camera?.zoom ?? 1));
+  zoom = Math.min(8, Math.max(.25, point.camera?.zoom ?? 1));referenceZoom=zoom;
   cameraCenter = point.camera ? { x: point.camera.x, y: point.camera.y } : null;
   seek(time);
   if (point.axis && player && !input('axis-value').disabled) {
@@ -146,7 +160,7 @@ function renderCheckpoint(): void {
 function setWorkspace(value: typeof workspace): void {
   workspace = value;
   for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workspace]')) tab.setAttribute('aria-pressed', String(tab.dataset.workspace === value));
-  el('modeling-tools').hidden = value !== 'modeling'; el('motion-tools').hidden = value !== 'motion';
+  el('modeling-tools').hidden = false; el('motion-tools').hidden = value !== 'motion';
   el('sound-panel').hidden = value !== 'motion';
   el('report-panel').hidden = value !== 'motion';
   el('angle-panel').hidden = value !== 'modeling' || !axisInspection;
@@ -215,7 +229,7 @@ function renderSequenceFrame(): void {
 
 async function showReference(id: string): Promise<void> {
   const generation = ++referenceGeneration;
-  video?.pause(); video = null; referenceSize = null; sequence = null; sequenceSvg = null; lastPoseFrame = -1; el('person-control').hidden = true;
+  video?.pause(); video = null; referenceCenter=null; referenceSize = null; sequence = null; sequenceSvg = null; lastPoseFrame = -1; el('person-control').hidden = true;
   const content = el('reference-content'); content.replaceChildren();
   const reference = data.manifest.references.find(item => item.id === id);
   el('reference-empty').hidden = false;
@@ -249,7 +263,7 @@ async function showReference(id: string): Promise<void> {
       }
       content.append(svg); el('reference-empty').hidden = true; fitCamera();
     } else if (reference.type === 'image') {
-      const image = new Image(); image.alt = reference.label; image.onload = () => { if (generation !== referenceGeneration) return; referenceSize = { width: image.naturalWidth, height: image.naturalHeight }; image.width = image.naturalWidth; image.height = image.naturalHeight; el('reference-empty').hidden = true; fitCamera(); }; image.onerror = fail; image.src = referenceUrl(reference); content.append(image);
+      const image = new Image(); image.draggable=false; image.alt = reference.label; image.onload = () => { if (generation !== referenceGeneration) return; referenceSize = { width: image.naturalWidth, height: image.naturalHeight }; image.width = image.naturalWidth; image.height = image.naturalHeight; el('reference-empty').hidden = true; fitCamera(); }; image.onerror = fail; image.src = referenceUrl(reference); content.append(image);
     } else {
       const media = document.createElement('video'); media.controls = true; media.muted = true; media.preload = 'metadata'; media.playsInline = true;
       media.onloadedmetadata = () => { if (generation !== referenceGeneration) return; referenceSize = { width: media.videoWidth, height: media.videoHeight }; media.width = media.videoWidth; media.height = media.videoHeight; if (Number.isFinite(media.duration) && !player) duration = media.duration; media.currentTime = Math.min(time, Math.max(0, media.duration - .01)); el('reference-empty').hidden = true; fitCamera(); renderTransport(); };
@@ -261,9 +275,10 @@ async function showReference(id: string): Promise<void> {
 function referenceFit(): void {
   if (!referenceSize) return;
   const viewport = el('reference-viewport'), content = el('reference-content');
-  const scale = Math.min((viewport.clientWidth - 24) / referenceSize.width, (viewport.clientHeight - 56) / referenceSize.height) * zoom;
-  content.style.left = `${(viewport.clientWidth - referenceSize.width * scale) / 2}px`;
-  content.style.top = `${(viewport.clientHeight - referenceSize.height * scale) / 2}px`;
+  const scale = referenceScale = Math.max(.001,Math.min((viewport.clientWidth - 24) / referenceSize.width, (viewport.clientHeight - 56) / referenceSize.height) * referenceZoom);
+  const center=referenceCenter??{x:referenceSize.width/2,y:referenceSize.height/2};
+  content.style.left = `${viewport.clientWidth/2-center.x*scale}px`;
+  content.style.top = `${viewport.clientHeight/2-center.y*scale}px`;
   content.style.transform = `scale(${scale})`;
 }
 
@@ -272,10 +287,10 @@ function fitCamera(): void {
   if (!player || !assets) return;
   const box: PoseBounds | null = assets.stage ?? player.bounds(); if (!box || box.width <= 0 || box.height <= 0) return;
   const viewport = el('rig-viewport');
-  const scale = Math.min((viewport.clientWidth - 28) / box.width, (viewport.clientHeight - 58) / box.height) * zoom;
+  const scale = rigScale = Math.max(.001,Math.min((viewport.clientWidth - 28) / box.width, (viewport.clientHeight - 58) / box.height) * zoom);
   const center = cameraCenter ?? { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   const root = el('rig-root'); root.style.left = `${viewport.clientWidth / 2 - center.x * scale}px`; root.style.top = `${viewport.clientHeight / 2 + center.y * scale}px`; root.style.transform = `scale(${scale})`;
-  player.renderer.syncPixelRatio();
+  player.renderer.syncPixelRatio();redrawOverlay(false);
 }
 
 function renderTransport(): void {
@@ -339,8 +354,8 @@ function seekFrame(frame: number): void {
 }
 
 function drawRig(action:()=>void):void {
- try{action();text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);}
- catch(error){text('renderer-state',rendererStatus(null,'failed').label);throw error;}
+ try{action();text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);}
+ catch(error){overlays?.clear();text('renderer-state',rendererStatus(null,'failed').label);throw error;}
 }
 
 function chooseAnimation(name: string): void {
@@ -350,7 +365,7 @@ function chooseAnimation(name: string): void {
   select('animation-select').value = name;
   if (player && runtimeAnimation) { drawRig(()=>{player!.play(name,{loop:false});player!.pause();player!.draw();}); }
   else if (player && name){text('renderer-state',rendererStatus(null,'failed').label);message(`Animation "${name}" is not present in the rig.`, true);}
-  time = 0; renderTransport(); renderCues();
+  time = 0; renderTransport(); renderCues();renderIdle();
 }
 
 function seek(value: number): void {
@@ -361,7 +376,7 @@ function seek(value: number): void {
 }
 
 function stopAudio(): void { for (const audio of audioPlaying) audio.pause(); audioPlaying.clear(); }
-function pause(): void { playing = false; lastFrame = 0; player?.pause(); video?.pause(); stopAudio(); button('play').textContent = '▶'; button('play').setAttribute('aria-label', 'Play'); }
+function pause(): void { ++playbackIntent;desiredPlay=false;suspendedPreview=false;idleHeld=true; playing = false; lastFrame = 0; player?.pause(); video?.pause(); stopAudio(); button('play').textContent = '▶'; button('play').setAttribute('aria-label', 'Play'); }
 
 async function audition(clipId: string): Promise<void> {
   const clip = data.manifest.audio.clips.find(item => item.id === clipId); if (!clip) return;
@@ -477,7 +492,7 @@ function tick(now: number): void {
     if (player && player.current) { try { drawRig(()=>player!.frame(dt)); } catch (error) { pause(); message(errorText(error), true); } }
     if (video && Math.abs(video.currentTime - time) > .15) video.currentTime = Math.min(time, video.duration || time);
     if (input('sync-audio').checked) for (const cue of activeCues()) if ((previous < cue.time && cue.time <= time) || (previous === 0 && cue.time === 0 && dt > 0)) void audition(cue.clip);
-    renderSequenceFrame(); renderTransport(); if (time >= duration) pause(); lastFrame = now;
+    renderSequenceFrame(); renderTransport(); if(time>=duration){if(canRepeatIdle()&&!idleHeld){stopAudio();seek(0);player?.resume();if(video)void video.play().catch(error=>{pause();message(errorText(error),true);});}else pause();} lastFrame = now;
   }
   requestAnimationFrame(tick);
 }
@@ -496,7 +511,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
     animations.disabled = assets.animations.length === 0;
-    const initial=initialPlayerAnimation(assets.animations.map(clip=>clip.name),data.initialAnimation??undefined,initialCheckpoint);
+    const names=assets.animations.map(clip=>clip.name),initial=initialIdleAnimation(names,initialPlayerAnimation(names,data.initialAnimation??undefined,initialCheckpoint),!!data.initialAnimation||!!initialCheckpoint?.animation||!!initialCheckpoint?.axis);
     if(initial)chooseAnimation(initial);else drawRig(()=>player!.draw());
     el('rig-empty').hidden = true; text('player-state', '@rig-c/play · Actual rig');
     const presets = player.sets(); if (presets.length) { select('part-set').replaceChildren(option('', 'Original set')); for (const set of presets) select('part-set').append(option(set.name, set.name)); select('part-set').disabled = false; }
@@ -504,6 +519,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     text('axis-state', validAxes.length ? `${validAxes.length} axes` : 'No inspection axes supplied');
     select('axis-select').replaceChildren(); for (const axis of validAxes) select('axis-select').append(option(axis.id, axis.label));
     input('axis-value').disabled = !validAxes.length;
+    for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;
     fitCamera();
   } catch (error) { text('renderer-state',rendererStatus(null,'failed').label);player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${errorText(error)}`); message(errorText(error), true); }
 }
@@ -537,7 +553,7 @@ function renderProposals(): void {
 }
 
 function propose(tool: string): void {
-  if (tool === 'angle' && !input('axis-value').disabled) { chooseAxis(); return; }
+  if (tool === 'angle' && !input('axis-value').disabled) { showInspector('rig');chooseAxis(); return; }
   const choices: Record<string, { target: Feedback['target']['kind']; hint: string }> = {
     mesh: { target: 'slot', hint: 'One-line feedback on mesh density' }, contour: { target: 'slot', hint: 'One-line feedback on contour curvature' }, chest: { target: 'rig', hint: 'One-line feedback on chest position' },
     angle: { target: 'rig', hint: 'One-line feedback on face or torso angle deformation' }, pose: { target: 'bone', hint: 'One-line feedback on differences from the input pose' }, timing: { target: 'rig', hint: 'One-line feedback on timing in the selected range' }, audio: { target: 'rig', hint: 'One-line feedback on event or audio links' },
@@ -545,7 +561,7 @@ function propose(tool: string): void {
   const choice = choices[tool]; if (!choice) return;
   select('feedback-target-kind').value = choice.target; input('feedback-target-name').value = choice.target === 'rig' ? data.manifest.id : ''; input('feedback-summary').placeholder = choice.hint;
   renderFeedbackTargets();
-  input('feedback-summary').focus(); message('Specify a frame range and actual bone or slot name to add feedback. Motion keys are not edited.');
+  showInspector('feedback');input('feedback-summary').focus(); message('Specify a frame range and actual bone or slot name to add feedback. Motion keys are not edited.');
 }
 
 function download(name: string, content: string, mime: string): void {
@@ -624,16 +640,16 @@ function issueFields(feedback: Feedback): { title: string; body: string; labels:
 function bind(): void {
   button('strip-export').onclick = () => { void exportStrip(); };
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
-  for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workspace]')) tab.onclick = () => setWorkspace(tab.dataset.workspace as typeof workspace);
+  for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workspace]')) tab.onclick = () => {setWorkspace(tab.dataset.workspace as typeof workspace);showInspector(tab.dataset.workspace==='modeling'?'rig':'playback');};
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => setView(item.dataset.view as typeof view);
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
   select('reference-select').onchange = () => { void showReference(select('reference-select').value); };
   select('person-select').onchange = () => { selectedPerson = select('person-select').value; lastPoseFrame = -1; renderSequenceFrame(); };
-  select('animation-select').onchange = () => chooseAnimation(select('animation-select').value);
+  select('animation-select').onchange = () => {chooseAnimation(select('animation-select').value);if(canRepeatIdle())void playPreview();};
   select('part-set').onchange = () => { try { if(!player)return;player.setSet(select('part-set').value || null);drawRig(()=>player!.draw());fitCamera(); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } };
   select('axis-select').onchange = chooseAxis; input('axis-value').oninput = applyAxis;
-  button('zoom-in').onclick = () => { zoom = Math.min(8, zoom * 1.25); fitCamera(); }; button('zoom-out').onclick = () => { zoom = Math.max(.25, zoom / 1.25); fitCamera(); }; button('fit').onclick = () => { zoom = 1; cameraCenter = null; fitCamera(); };
-  for (const id of ['reference-viewport', 'rig-viewport']) el(id).addEventListener('wheel', event => { event.preventDefault(); zoom = Math.max(.25, Math.min(8, zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1))); fitCamera(); }, { passive: false });
+  button('zoom-in').onclick = () => { zoom = Math.min(8, zoom * 1.25);referenceZoom=zoom;fitCamera(); }; button('zoom-out').onclick = () => { zoom = Math.max(.25, zoom / 1.25);referenceZoom=zoom;fitCamera(); }; button('fit').onclick = () => { zoom = 1;referenceZoom=1; cameraCenter = null; referenceCenter=null;fitCamera(); };
+  for (const id of ['reference-viewport', 'rig-viewport']) el(id).addEventListener('wheel', event => { event.preventDefault(); zoom = Math.max(.25, Math.min(8, zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1))); referenceZoom=zoom;fitCamera(); }, { passive: false });
   input('scrub').oninput = () => { pause(); seek(Number(input('scrub').value)); };
   input('frame-number').onfocus = pause;
   input('frame-number').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); const value = input('frame-number').value.trim(); seekFrame(value ? Number(value) : NaN); } };
@@ -641,7 +657,7 @@ function bind(): void {
   input('frame-scrub').oninput = () => seekFrame(Number(input('frame-scrub').value));
   button('play').onclick = () => {
     if (playing) { pause(); return; }
-    if (time >= duration) seek(0); playing = true; lastFrame = 0; player?.resume(); button('play').textContent = 'Ⅱ'; button('play').setAttribute('aria-label', 'Pause'); if (video) void video.play().catch(error => { pause(); message(errorText(error), true); });
+    void playPreview();
   };
   input('audio-volume').oninput = () => { text('audio-volume-label', `${Math.round(Number(input('audio-volume').value) * 100)}%`); for (const audio of audioPlaying) audio.volume = Number(input('audio-volume').value); };
   input('sync-audio').onchange = () => { if (!input('sync-audio').checked) stopAudio(); };
@@ -672,6 +688,7 @@ function bind(): void {
       reference: select('reference-select').value || null, person: selectedPerson || null,
       sourceTime: sequence ? sequence.frames[0]!.t + time : time,
       camera: center ? { zoom, x: center.x, y: center.y, coordinateSystem: 'world-y-up' } : { zoom, coordinateSystem: 'reference-fit' },
+      view:{theme:appearance?.get()??'system',layers:{...layers},referenceCamera:{zoom:referenceZoom,center:referenceCenter?{...referenceCenter}:null}},
       axis: axisInspection ? { id: select('axis-select').value, value: Number(input('axis-value').value) } : null,
       reportEvent: selectedReportEvent ? { id: selectedReportEvent.id, field: selectedReportEvent.field, source: { ...selectedReportEvent.source }, frames: selectedReportEvent.frames ? [...selectedReportEvent.frames] : null, exactTime: eventSeekTime(selectedReportEvent, selectedReportTime), targets: selectedReportEvent.targets.map(target => ({ ...target })) } : null,
     } });
@@ -688,9 +705,19 @@ function bind(): void {
   };
   button('export').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ schema: 'rig-review-feedback/1', id: session.id, revision: session.revision, sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: session.reviewedSource, status: session.status, checkpoints: session.checkpoints, feedback: session.feedback, feedbackWarnings: session.feedbackWarnings, issues: session.feedback.map(issueFields) }, null, 2) + '\n', 'application/json'); message('Exported source provenance, feedback, validation warnings and issue fields as JSON. Source files remain unchanged.'); };
   button('export-markdown').onclick = () => { const content = [`# ${markdown(session.id)} review feedback`, '', 'Reviewed source:', ...JSON.stringify({ sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: session.reviewedSource }, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(item => { const issue = issueFields(item); return [`## ${markdown(issue.title)}`, '', issue.body, '', '---', '']; })].join('\n'); download(`${session.id}-issues.md`, content, 'text/markdown'); message('Exported source provenance, validation warnings and structured issue content as Markdown.'); };
+  appearance=bindAppearance(select('appearance'));
+  overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
+  viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
+  viewDisposers.push(bindPan(el('rig-viewport'),(dx,dy)=>{const box=assets?.stage??player?.bounds();if(!box)return;cameraCenter=panCenter(cameraCenter??{x:box.x+box.width/2,y:box.y+box.height/2},dx,dy,rigScale,'world');fitCamera();}));
+  viewDisposers.push(bindPan(el('reference-viewport'),(dx,dy)=>{if(!referenceSize)return;referenceCenter=panCenter(referenceCenter??{x:referenceSize.width/2,y:referenceSize.height/2},dx,dy,referenceScale,'image');referenceFit();}));
+  for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
+  input('idle-repeat').onchange=()=>{renderIdle();if(canRepeatIdle())void playPreview();};
+  for(const id of ['proposal-panel','checkpoint-detail'])el(id).addEventListener('focusin',pause);
+  bindInspector();
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){const resume=playing;pause();suspendedPreview=resume;}else if(suspendedPreview){suspendedPreview=false;void playPreview();}});
   const resize = new ResizeObserver(fitCamera); resize.observe(el('rig-viewport')); resize.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { pause(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
+  window.addEventListener('pagehide', () => { pause();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());overlays?.dispose(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
 }
 
 async function start(): Promise<void> {
@@ -711,6 +738,67 @@ async function start(): Promise<void> {
     if (requestedId && !first) message(`Checkpoint "${requestedId}" is not in this package. Select one from the list.`, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
+    renderIdle();if(canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
+}
+function showInspector(name:string):void {document.querySelector<HTMLButtonElement>(`[data-inspector="${name}"]`)?.click();}
+function bindInspector():void {bindInspectorTabs(()=>{if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]'))pause();fitCamera();});}
+
+function redrawOverlay(fresh:boolean):void {
+ if(!overlays||!player)return;
+ const root=el('rig-root'),project=(x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*rigScale,y:parseFloat(root.style.top||'0')-y*rigScale});
+ const value=fresh?overlays.refresh({player,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers}):overlays.redraw({project,settings:layers});
+ text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
+}
+function canRepeatIdle():boolean{return !!player&&idleAvailable(assets?.animations.map(a=>a.name)??[],animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
+function renderIdle():void {text('idle-state',canRepeatIdle()?'Actual idle · repeat enabled':animation==='idle'?'Idle repeat paused':'Non-idle inspection · no automatic playback');}
+async function playPreview():Promise<void> {
+ if((!player&&!video&&!sequence)||duration<=0)return;
+ const intent=++playbackIntent;desiredPlay=true;idleHeld=false;if(time>=duration)seek(0);
+ if(video){try{await video.play();}catch(error){pause();message(`Playback is paused: ${errorText(error)}. Use Play to retry.`,true);return;}}
+ if(intent!==playbackIntent||!desiredPlay){if(!desiredPlay)video?.pause();return;}playing=true;lastFrame=0;player?.resume();button('play').textContent='Ⅱ';button('play').setAttribute('aria-label','Pause');
+}
+function localDraft():boolean{return dirty||!!input('feedback-summary').value.trim()||!!input('feedback-start').value.trim()||!!input('feedback-end').value.trim()||!!select('feedback-category').value||!!input('feedback-target-name').value.trim()&&input('feedback-target-name').value!==data.manifest.id;}
+function controlState():ControlInspection {
+ const box=assets?.stage??player?.bounds(),center=box?{x:box.x+box.width/2,y:box.y+box.height/2}:null;
+ return {theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?zoom:1,pan:{x:center&&cameraCenter?(center.x-cameraCenter.x)*rigScale:0,y:center&&cameraCenter?(cameraCenter.y-center.y)*rigScale:0}},reference:{zoom:referenceSize?referenceZoom:1,pan:{x:referenceSize&&referenceCenter?(referenceSize.width/2-referenceCenter.x)*referenceScale:0,y:referenceSize&&referenceCenter?(referenceSize.height/2-referenceCenter.y)*referenceScale:0}}},animation:animation||null,time:player?.time??(video?.currentTime??time),playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!!data,seeking:seekingControl||!!video?.seeking,dirty:localDraft(),busy:saving||stripBusy,feedbackEligible:true,capabilities:{camera:!!player,referenceCamera:!!referenceSize,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
+}
+async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<void> {
+ if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
+ if(['animation','time','playback'].includes(command.type)&&(localDraft()||saving||stripBusy))throw new Error('CONTROL_DRAFT_BUSY: preserve review draft');
+ if(command.type==='theme'){appearance?.set(command.value);return;}
+ if(command.type==='layout'){fitCamera();return;}
+ if(command.type==='layers'){if(!player)throw new Error('CONTROL_LAYERS_UNAVAILABLE');Object.assign(layers,{images:command.images,mesh:command.meshes,bones:command.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;redrawOverlay(false);return;}
+ if(command.type==='camera'||command.type==='fit'){
+  const target=command.target;
+  if(target==='rig'&&!player||target==='reference'&&!referenceSize)throw new Error('CONTROL_CAMERA_UNAVAILABLE');
+  if(command.type==='fit'){if(target==='rig'){zoom=1;cameraCenter=null;}else{referenceZoom=1;referenceCenter=null;}}
+  else{if(target==='rig')zoom=command.zoom;else referenceZoom=command.zoom;fitCamera();if(target==='rig'){const box=assets?.stage??player?.bounds();if(!box)throw new Error('CONTROL_CAMERA_UNAVAILABLE');cameraCenter={x:box.x+box.width/2-command.pan.x/rigScale,y:box.y+box.height/2+command.pan.y/rigScale};}else if(referenceSize)referenceCenter={x:referenceSize.width/2-command.pan.x/referenceScale,y:referenceSize.height/2-command.pan.y/referenceScale};}
+  fitCamera();return;
+ }
+ if(command.type==='animation'){if(!assets?.animations.some(a=>a.name===command.name))throw new Error('CONTROL_ANIMATION_UNAVAILABLE');chooseAnimation(command.name);return;}
+ if(command.type==='playback'){if(command.value==='pause')pause();else{await playPreview();if(!playing)throw new Error('CONTROL_PLAYBACK_REFUSED');}return;}
+ if(command.type==='time'){
+  if(!Number.isFinite(command.seconds)||command.seconds<0||command.seconds>duration)throw new Error('CONTROL_TIME_OUTSIDE_DOMAIN');
+  pause();seekingControl=true;try{await inspectControlTime(command.seconds,signal);}finally{seekingControl=false;}
+ }
+}
+async function inspectControlTime(target:number,signal:AbortSignal):Promise<void> {
+ const media=video;
+ if(!media){if(player){player.seek(target);drawRig(()=>player!.draw());}time=target;renderSequenceFrame();renderTransport();return;}
+ if(media.readyState<1||target>media.duration)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');
+ if(media.currentTime===target&&!media.seeking){if(player){player.seek(target);drawRig(()=>player!.draw());}time=target;renderSequenceFrame();renderTransport();return;}
+ await new Promise<void>((resolve,reject)=>{
+  let actual:number|null=null,done=false,handle:number|null=null;
+  const cleanup=()=>{clearTimeout(timer);media.removeEventListener('seeked',onSeek);signal.removeEventListener('abort',abort);if(handle!==null)media.cancelVideoFrameCallback(handle);};
+  const finish=()=>{if(!done||actual===null)return;cleanup();if(signal.aborted){reject(new Error('CONTROL_SUPERSEDED'));return;}if(actual<0||actual>duration){reject(new Error('CONTROL_TIME_OUTSIDE_DOMAIN'));return;}if(Math.abs(actual-target)>1e-6){reject(new Error('CONTROL_REFERENCE_SELECTION_UNAVAILABLE: decoded timestamp differs from requested seconds'));return;}time=actual;try{if(player){player.seek(actual);drawRig(()=>player!.draw());}renderSequenceFrame();renderTransport();resolve();}catch(error){reject(error);}};
+  const onSeek=()=>{done=true;if(typeof media.requestVideoFrameCallback!=='function')actual=media.currentTime;finish();};
+  const abort=()=>{cleanup();reject(new Error('CONTROL_SUPERSEDED'));};
+  const timer=setTimeout(()=>{cleanup();reject(new Error('CONTROL_REFERENCE_TIMEOUT'));},10000);
+  media.addEventListener('seeked',onSeek);signal.addEventListener('abort',abort,{once:true});
+  if(typeof media.requestVideoFrameCallback==='function')handle=media.requestVideoFrameCallback((_n,m)=>{handle=null;actual=m.mediaTime;finish();});
+  media.currentTime=target;
+ });
 }
 void start();

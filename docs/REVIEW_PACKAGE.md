@@ -431,3 +431,81 @@ The separate #24 timing evidence describes its original forced-Canvas2D setup,
 CPU submission rather than compositor acknowledgement, and its stated host.
 Changing to the default mesh backend does not turn those measurements into a
 WebGL benchmark or a user-Mac performance claim.
+
+## Opt-in current-page inspection control
+
+`open ... --control` starts a distinct fixed-binding worker with an ephemeral
+control capability. A normal `open`/foreground instance does not expose control.
+The capability is random, separate from the public source hash, handoff key and
+open-status nonce, and stored only in the private0600 worker record outside all
+input packages. It is not printed, embedded in URLs, exported with feedback or
+returned by the control status response. Reuse still requires exact canonical
+inputs, tool fingerprint, source hash and startup animation. Existing family or
+unrelated processes are never replaced or stopped by a control request.
+
+`control <input> [--reference <video>] [--compare <input>] [--animation <name>]`
+queries only an already running matching opt-in worker. It reports mode,
+instanceKey, sourceHash and each live page's pageId/revision/actual inspection.
+No page is chosen by latest activity; commands need an explicit page when more
+than one is connected. Reads include current theme, automatic/effective layout,
+linked rig and independent reference camera, animation/time, playback/idle-loop,
+layers, readiness/feedback eligibility and supported capabilities. Unavailable
+capabilities stay false; absence does not manufacture a model or frame clock.
+
+The command envelope is closed:
+
+```json
+{"schema":"rig-review-control-command/1","requestId":"theme-1","pageId":"<registered-page>","instanceKey":"<exact-worker-key>","sourceHash":"<exact-loaded-hash>","expectedRevision":0,"command":{"type":"theme","value":"light"}}
+```
+
+Supported commands are `theme` with `system|dark|light`, `layout` with `auto`,
+`camera` with target `rig|reference`, zoom0.25..8 and finite pan{x,y} within
+±65536 viewport CSS pixels, `fit` with that target, `playback` with `play|pause`,
+`animation` with an actual single model name, `time` with nonnegative finite
+seconds, and `layers` with boolean images/meshes/bones. A rig camera links A/B;
+reference coordinates remain independent. Names and actual time/domain checks
+are performed by the same normal UI adapters. Invalid compare animation changes
+require a new binding and are refused. No requested time is claimed displayed
+before existing media/player completion. Compare retains its actual reference
+PTS and fixed-step pair path; no independent animation clock is introduced.
+
+Local UI gestures and remote applied commands advance the page revision. A
+command carries the exact expected revision; a stale one cannot overwrite a
+newer local inspection. The browser helper registers, polls and acknowledges
+through fixed `/api/control/register`, `/api/control/poll`, `/api/control/ack`
+and `/api/control/close` endpoints using a separate page capability. Its poll
+reads the same actual inspection state as the widgets, not a second simulated
+player. User input during an asynchronous remote action aborts/supersedes it;
+an already started action is not promised rolled back. Dirty annotations or
+unadded form drafts prevent context-changing animation/time/playback commands;
+presentation-only camera/theme/layer changes preserve them. Save/export busy
+states refuse concurrent control.
+
+Agent `GET /api/control`, `POST /api/control/commands` and
+`GET /api/control/receipts/<commandId>` require the private Bearer capability.
+Mutations additionally require the exact loopback Origin and application/json;
+all endpoints reject nonloopback host/path parameters and provide no CORS.
+Registration is exact-Origin only and yields its page capability only to that
+same-origin response. JSON has a streamed16KiB ceiling and2-second body deadline.
+At most4 live pages,8 queued commands per page and64 retained receipts are kept.
+Page leases expire after30 seconds; queued commands expire after10 seconds.
+Unacknowledged dispatched commands become outcome-unknown on expired/closed
+pages, never applied success. Idle polling alone does not keep the worker alive;
+existing30-minute idle shutdown remains in effect.
+
+HTTP202/`queued` means accepted for delivery only. A receipt later reports
+`dispatched`, `applied`, `rejected`, `failed`, `superseded` or `outcome-unknown`,
+with actual observed inspection/revision only after acknowledgment. A repeated
+requestId with the identical envelope returns its original receipt; different
+content conflicts. CLI command exit0 requires applied; other command outcomes or
+bounded wait expiry exit2. Query-only reads exit0 when available. Request waits
+are0..30000ms (default10000); transport timeouts return an error, not a blind
+success or an automatic command retry.
+
+Source bytes are revalidated on accepted enqueue, dispatch and acknowledgment;
+existing session/save/export validation remains independently authoritative.
+Input changes refuse and never mutate the loaded source binding, replace a
+reference, transfer a prior approval or rewrite feedback. There is no command
+for paths, URLs, JS/eval, arbitrary DOM/CSS, disk writes, feedback/status, Submit,
+strip export or motion keys. The current-page API is a local inspection adapter,
+not a remote editing or publication service. See the CLI examples in README.
