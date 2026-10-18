@@ -70,6 +70,16 @@ bun run feedback -- /absolute/path/to/package/review.json
 
 This read-only command prints the session JSON, including reviewed artifact identity and feedback. The exact current-tool session wins when present. After a viewer/runtime upgrade, if that exact session is absent, the CLI can retrieve the latest saved submission over the same content with its original recorded versions and `retrieval: {kind:"prior-tools", toolsChangedSince:true, matchingSubmissions, currentTools}`. It does not migrate approval into the current UI or change saved bytes. Changed inputs still return a fresh pending session; a prior submission is never borrowed across content, revision or reviewed-artifact changes. The same lookup applies to `feedback compare`, preserving both recorded side bindings, reference identity and animation. See [historical retrieval](docs/REVIEW_PACKAGE.md#historical-feedback-retrieval) for selection and validation rules.
 
+
+For grouped issue-ready text, use the same input/reference binding with `--format issue`:
+
+```sh
+rig-review feedback /absolute/output --reference /absolute/original.mp4 --format issue
+rig-review feedback /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance --format issue
+```
+
+The header counts feedback records by defect/quality and by build; blocks group by category, then exact target kind/name. Overlapping intervals and A/B sides remain distinct items. Each block retains its id, inclusive interval, one-line summary and selected/full paired provenance. Historical tool identities and validation warnings remain visible; output never migrates approval, writes state or publishes an issue. Default output and `--format json` remain the existing session JSON. Only feedback accepts `--format`, with `json` or `issue` as its value.
+
 ## Development
 
 ```sh

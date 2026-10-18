@@ -116,6 +116,17 @@ Discovery reads only regular `<64 lowercase hex>.json` files in the private stat
 
 Existing legacy-feedback warnings remain visible when a historical row fails today's target/interval rules. The original evidence and recorded tool identity remain available, while resubmission to the current server still requires a valid current binding and corrected feedback.
 
+
+### Grouped issue export
+
+`rig-review feedback <input> [--reference <video>] --format issue` and both comparison feedback forms accept the same explicit binding as their JSON output. Compare supports either `feedback compare <a> <b> --reference <video> --animation <name>` or `feedback <a> --compare <b> --reference <video> [--animation <name>]`; the latter retains open's unique-common-animation rule. `--format` is accepted only for feedback and only once, with `json` or `issue`; omitted format remains the unchanged JSON response. Formatting reads the existing current/history session once and never writes source or state.
+
+The issue text header reports total records, defect/quality counts, and per-build defect/quality/total counts. A single review has one build row; comparison always has separate A/B rows even if hashes or target names coincide. Empty categories and sides report zero. Counts measure feedback records, not frame lengths, unique targets or report findings. Every feedback id produces one issue block, including legacy warning rows and overlapping intervals.
+
+Blocks group in fixed category order (`defect`, then `quality`), followed by exact `(target.kind,target.name)` with deterministic code-unit ordering, then side and feedback id. Bone and slot names do not collide. Each block carries its original id, inclusive chosen frames, target, category, one-line summary, side and selected build's source hash/reviewedSource. Compare also repeats the complete ordered A/B/reference/animation binding so a copied block retains both source identities. Single external-reference blocks retain `referenceBinding` with the base package hash and selected video name/id/SHA. Missing rig/motion artifacts remain null. The original inspection context stays separate from chosen frames; no clock or category is inferred.
+
+The header retains recorded status/timestamp and full source/tool provenance. Prior-tool retrieval is labeled as historical rather than current approval; original versions, currentTools and matching-submission count remain available. Server-derived per-feedback warnings and historical read warnings are included without discarding their items. Formatting does not make an invalid legacy item resubmittable. User text is escaped in Markdown syntax positions and inert evidence uses data-safe JSON fences, preserving arbitrary ids/targets/context without creating extra headings or rows. No issue is posted automatically.
+
 ## Read-only rig-pose report markers
 
 A folder's root `report.json`, or a unique declared authoring file named `report.json`, is read only and remains part of the exact input hash. A JSON object with `spec: "rig-pose-report/1"` supplies normalized findings under `/api/review.report`; unrelated report objects remain evidence and supply null. An explicit manifest does not discover an undeclared report. Recognized malformed values fail by source field name. No report is rewritten and selecting a finding never submits a review.
