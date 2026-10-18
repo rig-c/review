@@ -1,3 +1,4 @@
+import type { FrameClock } from './frame-clock.ts';
 /** Read-only rig-pose findings. Frame indices never imply a sampling rate. */
 export const reportFields = ['switches','raised','short','endOn','cleaned.holds','cleaned.seams','feet.jumps','feet.supports','landings','shear','artRange','uncovered','flips','turns','range','holds'] as const;
 export type ReportField = typeof reportFields[number];
@@ -13,7 +14,7 @@ export interface ReportEvent {
   details:Record<string,unknown>;
 }
 export interface ReportCategory { field:ReportField; state:'events'|'empty'; events:ReportEvent[] }
-export interface ReportSeeds { spec:'rig-pose-report/1';path:string;animation?:string;rig?:string;frameCount?:number;durationSeconds?:number;categories:ReportCategory[] }
+export interface ReportSeeds { spec:'rig-pose-report/1';path:string;animation?:string;rig?:string;frameCount?:number;durationSeconds?:number;clock:FrameClock|null;categories:ReportCategory[] }
 
 function fail(field:string,expected:string):never { throw new Error(`${field}: expected ${expected}`); }
 function record(v:unknown,field:string):Record<string,unknown>{if(!v||typeof v!=='object'||Array.isArray(v))fail(field,'object');return v as Record<string,unknown>;}
@@ -27,7 +28,7 @@ function names(v:unknown,field:string):string[]{if(!Array.isArray(v))fail(field,
 /** Unrelated report documents remain evidence rather than invented findings. */
 export function parseReport(input:unknown,path='report.json'):ReportSeeds|null {
   const root=record(input,path);if(root.spec!=='rig-pose-report/1')return null;
-  const report:ReportSeeds={spec:'rig-pose-report/1',path,categories:[]};
+  const report:ReportSeeds={spec:'rig-pose-report/1',path,clock:null,categories:[]};
   if(root.animation!==undefined)report.animation=text(root.animation,path+'.animation');
   if(root.rig!==undefined)report.rig=text(root.rig,path+'.rig');
   if(root.frames!==undefined)report.frameCount=frame(root.frames,path+'.frames');
@@ -37,6 +38,16 @@ export function parseReport(input:unknown,path='report.json'):ReportSeeds|null {
   let fps:number|undefined,frame0:number|undefined;
   if(root.fps!==undefined||root.frame0!==undefined){fps=finite(root.fps,path+'.fps');if(fps===0)fail(path+'.fps','number > 0');frame0=finite(root.frame0,path+'.frame0');}
   if(frameTimes&&fps!==undefined)for(let i=0;i<frameTimes.length;i++)if(Math.abs(frameTimes[i]!-(frame0!+i/fps))>1e-6)fail(path+'.frameTimes','times matching declared fps/frame0');
+  if(frameTimes)report.clock={kind:'samples',frameTimes};
+  else if(fps!==undefined){
+    if(report.frameCount!==undefined&&report.frameCount>0){const last=report.frameCount-1;const end=finite(frame0!+last/fps,path+'.fps frame time');
+      // A finite endpoint pair cannot prove every sample differs: rounding can
+      // collapse an interior pair. Conservatively require a step wider than the
+      // division/addition rounding budget across the whole declared domain.
+      if(last>0&&1/fps<=4*Number.EPSILON*Math.max(frame0!,end))fail(path+'.fps','distinct representable frame times across the clock domain');
+    }
+    report.clock={kind:'uniform',fps,frame0:frame0!,...(report.frameCount===undefined?{}:{frameCount:report.frameCount})};
+  }
   // Producer contract rig-c/pose#209: frame0 is seconds; t = frame0 + frame/fps.
   const mapped=(n:number):{time:number;source:'frameTimes'|'fps'}|undefined=>{
     if(frameTimes){if(n>=frameTimes.length)fail(path+'.frameTimes',`time for event frame ${n}`);return {time:frameTimes[n]!,source:'frameTimes'};}
