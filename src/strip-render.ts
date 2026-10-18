@@ -31,7 +31,7 @@ function command(binary:string,args:string[],kind:string):Promise<Buffer>{
 export async function referenceFramePng(path:string,index:number,binary:string,width:number,height:number):Promise<Buffer>{
   // Downsize before native image decode; output cells must not retain hundreds
   // of full-resolution source rasters merely because the video was 4K.
-  return command(binary,['-v','error','-threads','1','-filter_threads','1','-i',path,'-map','0:v:0','-vf',`select=eq(n\\,${index}),scale=${width}:${height}:force_original_aspect_ratio=decrease`,'-vsync','0','-frames:v','1','-f','image2pipe','-c:v','png','-threads','1','pipe:1'],'FFMPEG');
+  return command(binary,['-v','error','-threads','1','-filter_threads','1','-i',path,'-map','0:v:0','-vf',`select=eq(n\\,${index}),scale=${width}:${height}:force_original_aspect_ratio=decrease`,'-fps_mode','passthrough','-frames:v','1','-f','image2pipe','-c:v','png','-threads','1','pipe:1'],'FFMPEG');
 }
 
 /** Only DOM ownership and canvas/image IO are adapted; all drawing remains native/player code. */
