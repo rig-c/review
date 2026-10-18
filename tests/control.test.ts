@@ -142,5 +142,14 @@ test('selected part readback is closed typed observation and never an authoring 
 test('workspace readback is bounded effective presentation; legacy observations need no saved defaults',()=>{
  const value:ControlWorkspace={schema:'rig-review-workspace/1',requestedView:'compare',effectiveView:'rig',comparisonAvailable:false,reason:'Reference decode failed',visiblePanes:['rig'],panels:{left:{mode:'panel',size:170,open:false},right:{mode:'drawer',size:0,open:true},inspector:{mode:'panel',size:280,open:false}},stage:{width:640,height:400}};
  expect(parseControlWorkspace(value)).toEqual(value);expect(parseControlInspection({...inspection(),workspace:value}).workspace).toEqual(value);expect(parseControlInspection(inspection()).workspace).toBeUndefined();
+ const part={side:'single',slot:'face',mode:'solo',identity:{attachment:null,skin:null,reason:'timeline-null',set:'alternate',activeSkin:'active'}} as const;expect(parseControlInspection({...inspection(),workspace:value,part,partGeneration:41})).toMatchObject({workspace:value,part,partGeneration:41});
  for(const bad of [{...value,preferences:{}},{...value,stage:{width:Infinity,height:20}},{...value,visiblePanes:['rig','rig']},{...value,visiblePanes:['candidate']},{...value,panels:{...value.panels,right:{mode:'drawer',size:100,open:true}}},{...value,panels:{...value.panels,left:{mode:'panel',size:170,open:true}}},{...value,panels:{...value.panels,left:{mode:'panel',size:901,open:false}}}])expect(()=>parseControlWorkspace(bad)).toThrow();
+});
+
+test('exact selected attachment target is closed and generation remains observation only',()=>{
+ const identity={attachment:'linked-key',skin:'owning',reason:null,set:'wink',activeSkin:'alternate'},part={side:'b',slot:'face',mode:'solo',identity};
+ expect(parseControlInspection({...inspection(),part,partGeneration:27})).toMatchObject({part,partGeneration:27});
+ for(const reason of ['hidden','no-attachment','timeline-null','set-hide'] as const)expect(parseControlInspection({...inspection(),part:{...part,identity:{...identity,attachment:null,skin:null,reason}}}).part?.identity?.reason).toBe(reason);
+ for(const bad of [{...identity,generation:27},{...identity,reason:'hidden'},{...identity,attachment:null},{...identity,reason:'inferred'},{...identity,activeSkin:undefined},{...identity,path:'/private'}])expect(()=>parseControlInspection({...inspection(),part:{...part,identity:bad}})).toThrow();
+ expect(()=>parseControlInspection({...inspection(),partGeneration:-1})).toThrow();expect(()=>parseControlInspection({...inspection(),partGeneration:NaN})).toThrow();
 });
