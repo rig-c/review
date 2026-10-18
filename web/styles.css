@@ -102,3 +102,38 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 @media(max-width:1050px){.layout{grid-template-columns:110px minmax(0,1fr) 185px!important}.parts-explorer{padding:8px}}
 @media(max-width:700px){.layout{grid-template-columns:minmax(0,1fr) 165px!important}.left-panel{display:none!important}}
 @media(max-width:460px){.layout{grid-template-columns:minmax(0,1fr) 132px!important}.parts-explorer{padding:6px}.parts-explorer li button{padding:6px}.parts-explorer>.hint{font-size:10px}}
+
+/* Resizable workspace: one measured shell; workspace-ui clamps the desired browser sizes. */
+.layout.workspace-layout{display:grid;grid-template-columns:var(--workspace-columns)!important;min-height:0!important;overflow:hidden}
+.workspace-layout>main{display:grid;min-width:0;min-height:0;overflow:hidden;grid-column:3;grid-row:1}
+.workspace-stage-stack{grid-row:1;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.workspace-stage-stack>#stage-layout{flex:1;min-height:0;height:auto;overflow:hidden}
+.workspace-layout>.left-panel{grid-column:1;grid-row:1;display:flex!important;flex-direction:column;overflow:hidden;min-width:0;padding:0;border-right:1px solid #49616d}
+.workspace-sources{flex:1;min-height:0;overflow:auto;padding:10px;overscroll-behavior:contain}
+.workspace-settings{flex:none;max-height:65%;overflow:auto;padding:10px;border-top:1px solid #49616d}
+.workspace-settings h2{font-size:12px;margin:0 0 8px}
+.workspace-settings label{display:flex;align-items:center;gap:6px;font-size:11px;margin:7px 0}
+.workspace-settings select{width:auto;min-width:0;flex:1}
+.workspace-settings .hint{margin:6px 0}
+.workspace-settings input[type=checkbox]{width:auto;flex:none}
+.workspace-layout>.parts-explorer{display:block;grid-template-columns:none;grid-column:5;grid-row:1;width:auto;min-width:0;min-height:0;height:auto;overflow:auto}
+.workspace-layout .inspector{grid-row:3;height:auto!important;min-height:0!important;max-height:none;overflow:hidden}
+.workspace-separator{position:relative;z-index:3;background:#34515e;touch-action:none;cursor:col-resize;min-width:0;min-height:0}
+.workspace-separator::after{content:'';position:absolute;inset:0 -4px}
+.workspace-separator:focus-visible{outline:2px solid #c8e8d6;outline-offset:-2px;background:#719581}
+.workspace-separator[data-resizing=true]{background:#8ac9a3}
+.workspace-leftWidth{grid-column:2;grid-row:1}.workspace-rightWidth{grid-column:4;grid-row:1}
+.workspace-inspectorHeight{grid-row:2;cursor:row-resize}.workspace-inspectorHeight::after{inset:-4px 0}
+.workspace-drawer-triggers{display:flex;gap:6px;flex-wrap:wrap;flex:none;padding:4px 8px;min-height:0}
+.workspace-drawer-triggers:not(:has(button:not([hidden]))){display:none}
+.workspace-drawer-triggers button{padding:4px 7px;font-size:11px;min-height:28px}
+.workspace-drawer{position:fixed;inset:0;width:min(94vw,950px);height:min(92dvh,850px);max-width:94vw;max-height:92dvh;margin:auto;padding:8px;border:1px solid #739383;border-radius:8px;background:#182d38;color:inherit;overflow:hidden;z-index:20}
+.workspace-drawer:not([open]){display:none}.workspace-drawer[open]{display:flex;flex-direction:column;gap:8px}
+.workspace-drawer::backdrop{background:#07141ed0}
+.workspace-drawer-close{align-self:flex-end;flex:none}
+.workspace-drawer>.left-panel{display:flex!important;flex-direction:column;flex:1;overflow:hidden;min-height:0;padding:0}
+.workspace-drawer>.parts-explorer{display:block;grid-template-columns:none;flex:1;width:auto;min-width:0;min-height:0;height:auto;overflow:auto}
+.workspace-drawer>.inspector{flex:1;height:auto!important;min-height:0!important;max-height:none;overflow:hidden}
+[data-theme=light] .workspace-settings,[data-theme=light] .workspace-drawer{background:#edf3f5;color:#294552;border-color:#a6bec8}
+[data-theme=light] .workspace-separator{background:#b2c7cf}[data-theme=light] .workspace-separator:focus-visible{outline-color:#24694d;background:#70a58c}
+@media(pointer:coarse){.workspace-separator::after{inset:0 -7px}.workspace-inspectorHeight::after{inset:-7px 0}.workspace-drawer-triggers button{min-height:38px}}

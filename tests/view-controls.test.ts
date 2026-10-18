@@ -188,3 +188,20 @@ test('actual compare camera adapters keep A/B/reference independent OFF, synchro
  app.sync(true);app.edge();const groupBefore=app.state().view;await expect(app.remote({type:'camera',target:'a',zoom:1,pan:{x:-65536,y:0}})).rejects.toThrow('VIEW_CAMERA_RANGE');expect(app.state().view).toEqual(groupBefore);
  app.sync(false);await app.remote({type:'camera',target:'a',zoom:1,pan:{x:-65536,y:0}});const offBefore=app.state().view;await expect(app.remote({type:'camera-sync',value:true})).rejects.toThrow('VIEW_CAMERA_RANGE');expect(app.state().view).toEqual(offBefore);
 });
+
+test('inspection appearance applies source or Settings choices without touching browser storage',async()=>{
+ const source=await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8'),a=source.indexOf('export function bindAppearance('),b=source.indexOf('export function syncStageLayout',a);
+ const control=Object.assign(new EventTarget(),{value:''}),system=Object.assign(new EventTarget(),{matches:false}),document={documentElement:{dataset:{} as Record<string,string>}};
+ let storageTouches=0;const storage={getItem(){storageTouches++;return 'system';},setItem(){storageTouches++;}};
+ const fn=new Function('matchMedia','document','themePreference','localStorage',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a,b).replace('export function','function'))+';return bindAppearance;')(()=>system,document,themePreference,storage);
+ const binding=fn(control,'dark');expect(document.documentElement.dataset.theme).toBe('dark');binding.set('light');expect(document.documentElement.dataset.theme).toBe('light');expect(control.value).toBe('light');binding.set('system');system.matches=true;system.dispatchEvent(new Event('change'));expect(document.documentElement.dataset.theme).toBe('light');expect(binding.get()).toBe('system');expect(storageTouches).toBe(0);binding.dispose();
+});
+
+test('tab switching captures the old panel before hiding and restores after showing, by mouse and keyboard',async()=>{
+ const source=await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8'),a=source.indexOf('export function bindInspectorTabs('),panels=[{dataset:{inspectorPanel:'view'},hidden:false},{dataset:{inspectorPanel:'rig'},hidden:true}],tabs=[{dataset:{inspector:'view'},setAttribute(){},tabIndex:0,focus(){}},{dataset:{inspector:'rig'},setAttribute(){},tabIndex:-1,focus(){}}];
+ const trace:string[]=[],document={querySelectorAll:(selector:string)=>selector==='[data-inspector]'?tabs:panels};
+ const bind=new Function('document',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a).replace('export function','function'))+';return bindInspectorTabs;')(document);
+ bind(()=>trace.push('after:'+panels.map(p=>p.hidden).join(',')),()=>trace.push('before:'+panels.map(p=>p.hidden).join(',')));
+ (tabs[1] as unknown as {onclick:()=>void}).onclick();expect(trace).toEqual(['before:false,true','after:true,false']);
+ const key=Object.assign(new Event('keydown',{cancelable:true}),{key:'ArrowLeft'});(tabs[1] as unknown as {onkeydown:(event:Event)=>void}).onkeydown(key);expect(key.defaultPrevented).toBe(true);expect(trace.slice(2)).toEqual(['before:true,false','after:false,true']);
+});
