@@ -19,14 +19,16 @@ unreleased adapter API or changing existing compilation/playback dependencies.
 
 ## Start
 
-Requires Bun 1.3 or later. From this checkout:
+Install it beside the agent that produced the output, then open that output folder:
 
 ```sh
-bun install
-bun run demo
+npm i -D @rig-c/review
+npx rig-review open /absolute/path/to/output
 ```
 
-Open the printed loopback URL. The bundled original lantern study has source art, an explicitly synthetic canonical pose-sequence sample and an original synthetic chime. It has no compiled model: playback remains unavailable until a real model is supplied.
+`rig-review` runs under **Bun 1.3.0 or later**, which must be on `PATH`; CI runs the installed package on 1.3.0 and on the latest Bun. `open` prints a loopback URL and exits; see [One-command owner handoff](#one-command-owner-handoff). `npx rig-review --help` lists every command.
+
+The package is 0.1.x: the CLI is the supported surface, and no importable API is promised yet (`exports` exposes only `package.json`).
 
 ## Existing output handoff
 
@@ -95,11 +97,23 @@ The header counts feedback records by defect/quality and by build; blocks group 
 
 ## Development
 
+From a clone:
+
+```sh
+bun install
+bun run demo
+```
+
+Open the printed loopback URL. The bundled original lantern study has source art, an explicitly synthetic canonical pose-sequence sample and an original synthetic chime. It has no compiled model: playback remains unavailable until a real model is supplied. Inside a clone, `bun run review -- <dir>`, `bun run check -- <dir>` and `bun src/cli.ts <command>` are the same CLI as `npx rig-review`.
+
 ```sh
 bun run typecheck
 bun test
 bun run build
+bun run smoke
 ```
+
+`smoke` packs this tree, installs the tarball into an empty project, and runs the installed bin: `--help`, `open --help`, `check` on the bundled demo, and a served page whose browser bundle is built from the installed files. A file missing from `files` in `package.json` fails there, not after publishing.
 
 The server bundles `web/main.ts` at startup using the pinned installed runtime, with no CDN. `build` verifies that browser bundle in memory. CI checks types, focused path/state/API tests, bundling and the demo package. Follow AGENTS.md for contributor verification policy. [DESIGN.md](docs/DESIGN.md) distinguishes the runnable foundation from future modeling touch-up and preserves the illustrative screen concept.
 
