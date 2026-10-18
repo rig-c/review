@@ -7,7 +7,8 @@ import {RigOverlays} from './rig-overlays.ts';
 import {bindWorkspaceUI,type WorkspaceUI} from './workspace-ui.ts';
 import {connectControl} from './control.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
-import type {ControlCommand,ControlInspection,ControlView} from '../src/control.ts';
+import {controlComparison,type ControlCommand,type ControlInspection,type ControlView} from '../src/control.ts';
+import {singleEligibility,videoReferenceAt,type InputState,type SingleLayout} from '../src/comparison-eligibility.ts';
 import {connectInspectionPersistence,serializableView,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
 import {initialPlayerAnimation} from '../src/animation-selection.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
@@ -56,6 +57,8 @@ type CameraTarget='rig'|'reference';
 let cameraSync=true,activeCamera:CameraTarget='rig',cameraRestoring=false,cameraLayout='';
 const cameraFrames:Partial<Record<CameraTarget,CameraFrame>>={};
 let view: 'compare' | 'reference' | 'rig' = 'compare';
+// Requested layout persists in the source-bound draft; the effective one follows actual load events only.
+let rigInput:InputState={state:'pending'},referenceInput:InputState={state:'absent'},effectiveView:SingleLayout|null=null;
 let zoom = 1;
 let cameraCenter: { x: number; y: number } | null = null;
 let referenceCenter:ViewPoint|null=null;
@@ -173,10 +176,27 @@ function renderCheckpoint(): void {
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="outcome"]')) { radio.checked = radio.value === (entry?.outcome ?? 'pending'); radio.disabled = !checkpoint; }
 }
 
-function setView(value: typeof view): void {
-  view = value;
-  for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.setAttribute('aria-pressed', String(item.dataset.view === value));
-  el('reference-pane').hidden = value === 'rig'; el('rig-pane').hidden = value === 'reference'; fitCamera();
+function setView(value: typeof view): void {view=value;renderLayout();}
+function layoutEligibility(){return singleEligibility({rig:rigInput,reference:referenceInput,requested:view});}
+/** Unavailable layouts stay visible but disabled with their named reason; no placeholder pane stands in for a missing input. */
+function renderLayout():void {
+ const state=layoutEligibility();effectiveView=state.effective;
+ for(const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')){const layout=item.dataset.view as SingleLayout,reason=state.reasons[layout]??'';item.setAttribute('aria-pressed',String(layout===state.effective));item.disabled=!!reason;item.title=reason;if(reason)item.setAttribute('aria-description',reason);else item.removeAttribute('aria-description');}
+ el('reference-pane').hidden=state.effective!=='compare'&&state.effective!=='reference';el('rig-pane').hidden=state.effective!=='compare'&&state.effective!=='rig';
+ const shown={compare:'Side by side',reference:'Reference only',rig:'Rig only'};
+ text('layout-state',state.effective===null?`No input rendered · ${state.reasons.compare??''}`:state.effective===state.requested?shown[state.effective]:`${shown[state.effective]} · ${shown[state.requested]} unavailable: ${state.reasons[state.requested]??''}`);
+ fitCamera();
+}
+function setReferenceInput(value:InputState):void {const leaving=referenceInput.state==='out-of-domain'&&value.state!=='out-of-domain';referenceInput=value;if(value.state==='out-of-domain')message(`REFERENCE_OUT_OF_DOMAIN: ${value.reason}. The reference was not clamped.`,true);else if(leaving)message('Reference back in its domain at the held time.');renderLayout();}
+/** A video counts only after `seeked` at the held time with a decoded frame (readyState >= 2). */
+function holdVideoReference(media:HTMLVideoElement,generation:number):void {
+ if(referenceInput.state==='failed')return;
+ const next=videoReferenceAt(time,media.duration);
+ if(next.state!=='pending'){if(referenceInput.state!==next.state||next.state!=='out-of-domain')setReferenceInput(next);return;}
+ if(referenceInput.state==='loaded'){media.currentTime=time;return;}
+ const held=time,current=()=>generation===referenceGeneration&&media===video&&referenceInput.state==='pending'&&time===held;
+ media.addEventListener('seeked',()=>{if(!current())return;const done=()=>{if(current()&&media.readyState>=2)setReferenceInput({state:'loaded'});};if(media.readyState>=2)done();else for(const event of ['loadeddata','canplay'])media.addEventListener(event,done,{once:true});},{once:true});
+ if(referenceInput.state!=='pending')setReferenceInput({state:'pending'});media.currentTime=held;
 }
 
 function svgNode(tag: string, attrs: Record<string, string | number>, parent: SVGElement): SVGElement {
@@ -239,12 +259,12 @@ async function showReference(id: string): Promise<void> {
   video?.pause(); video = null;controlledVideoSample=null;delete cameraFrames.reference; referenceCenter=null; referenceSize = null; sequence = null; sequenceSvg = null; selectedPerson=''; lastPoseFrame = -1; el('person-control').hidden = true;
   const content = el('reference-content'); content.replaceChildren();
   const reference = data.manifest.references.find(item => item.id === id);
-  el('reference-empty').hidden = false;
+  el('reference-empty').hidden = false;setReferenceInput(reference?{state:'pending'}:{state:'absent'});
   if (!reference) { text('reference-empty', 'No reference supplied.'); text('reference-info', 'Add image, video or input-pose references to the package.'); return; }
   text('reference-label', reference.label + (reference.type === 'pose' ? ' · Static input pose' : ' · Reference'));
   text('reference-empty', 'Loading reference…');
   text('reference-info', `${reference.type} · ${reference.path}`);
-  const fail = () => { if (generation !== referenceGeneration) return; el('reference-empty').hidden = false; text('reference-empty', 'Could not open the reference. Check the package files.'); };
+  const fail = (reason='reference could not render') => { if (generation !== referenceGeneration) return; setReferenceInput({state:'failed',reason}); el('reference-empty').hidden = false; text('reference-empty', 'Could not open the reference. Check the package files.'); };
   try {
     if (reference.type === 'pose') {
       const response = await fetch(referenceUrl(reference)); if (!response.ok) throw new Error(`Pose reference HTTP ${response.status}`);
@@ -257,7 +277,7 @@ async function showReference(id: string): Promise<void> {
         select('person-select').replaceChildren(); if (people.length !== 1) select('person-select').append(option('', 'Select person')); for (const id of people) select('person-select').append(option(id, id)); selectedPerson = people.length === 1 ? people[0]! : ''; select('person-select').value = selectedPerson; el('person-control').hidden = false;
         if (!player) duration = canonical.frames[canonical.frames.length - 1]!.t - canonical.frames[0]!.t;
         text('reference-info', `${reference.path} · picture-px / top-left / y↓ · ${canonical.frames.length} frames${canonical.camera ? ' · Camera metadata preserved (normalization is not applied twice)' : ''}`);
-        renderSequenceFrame(); fitCamera(); renderTransport(); return;
+        renderSequenceFrame(); setReferenceInput({state:'loaded'}); renderTransport(); return;
       }
       const pose = readPose(value);
       referenceSize = { width: pose.width, height: pose.height };
@@ -268,15 +288,16 @@ async function showReference(id: string): Promise<void> {
         const dot = svgNode('circle', { cx: joint.x, cy: joint.y, r: 4, fill: '#203d31', stroke: '#caead9', 'stroke-width': 1.5 }, svg);
         const title = document.createElementNS(svg.namespaceURI, 'title'); title.textContent = joint.id; dot.append(title);
       }
-      content.append(svg); el('reference-empty').hidden = true; fitCamera();
+      content.append(svg); el('reference-empty').hidden = true; setReferenceInput({state:'loaded'});
     } else if (reference.type === 'image') {
       const image = new Image(); image.draggable=false; image.alt = reference.label; image.onload = () => { if (generation !== referenceGeneration) return; referenceSize = { width: image.naturalWidth, height: image.naturalHeight }; image.width = image.naturalWidth; image.height = image.naturalHeight; el('reference-empty').hidden = true; fitCamera(); }; await new Promise<void>((resolve,reject)=>{const loaded=image.onload;const timer=setTimeout(()=>reject(new Error('Reference image load timed out')),10000);image.onload=event=>{clearTimeout(timer);if(typeof loaded==='function')loaded.call(image,event);resolve();};image.onerror=()=>{clearTimeout(timer);fail();reject(new Error('Reference image load failed'));};image.src=referenceUrl(reference);content.append(image);});
+      await image.decode(); if (generation !== referenceGeneration) return; if (!image.naturalWidth || !image.naturalHeight) throw new Error('Reference image has no renderable pixels'); setReferenceInput({state:'loaded'});
     } else {
       const media = document.createElement('video'); media.controls = true; media.muted = true; media.preload = 'metadata'; media.playsInline = true;
-      media.onloadedmetadata = () => { if (generation !== referenceGeneration) return; referenceSize = { width: media.videoWidth, height: media.videoHeight }; media.width = media.videoWidth; media.height = media.videoHeight; if (Number.isFinite(media.duration) && !player) duration = media.duration; media.currentTime = Math.min(time, Math.max(0, media.duration - .01)); el('reference-empty').hidden = true; fitCamera(); renderTransport(); };
-      media.onerror = fail; media.src = referenceUrl(reference); video = media; content.append(media);
+      media.onloadedmetadata = () => { if (generation !== referenceGeneration) return; referenceSize = { width: media.videoWidth, height: media.videoHeight }; media.width = media.videoWidth; media.height = media.videoHeight; if (Number.isFinite(media.duration) && !player) duration = media.duration; el('reference-empty').hidden = true; holdVideoReference(media, generation); fitCamera(); renderTransport(); };
+      media.onerror = () => fail('reference video could not be decoded'); media.src = referenceUrl(reference); video = media; content.append(media);
     }
-  } catch (error) { fail(); message(errorText(error), true); }
+  } catch (error) { fail(errorText(error)); message(errorText(error), true); }
 }
 
 function referenceFit(): void {
@@ -381,7 +402,7 @@ function chooseAnimation(name: string): void {
 function seek(value: number): void {
   time = duration > 0 ? Math.min(Math.max(0, value), duration) : Math.max(0, value);
   if (player && player.current) { try { player.seek(time); drawRig(()=>player!.draw()); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } }
-  if (video && video.readyState >= 1 && Number.isFinite(video.duration)) video.currentTime = Math.min(time, video.duration);
+  if (video && video.readyState >= 1) holdVideoReference(video, referenceGeneration);
   renderSequenceFrame(); renderTransport();
 }
 
@@ -500,7 +521,7 @@ function tick(now: number): void {
     const dt = lastFrame ? Math.min((now - lastFrame) / 1000, .1) : 0;
     const previous = time; time = Math.min(duration, time + dt);
     if (player && player.current) { try { drawRig(()=>player!.frame(dt)); } catch (error) { pause(); message(errorText(error), true); } }
-    if (video && Math.abs(video.currentTime - time) > .15) video.currentTime = Math.min(time, video.duration || time);
+    if (video && video.readyState >= 1 && time > video.duration) { if (referenceInput.state !== 'out-of-domain') holdVideoReference(video, referenceGeneration); } else if (video && referenceInput.state === 'loaded' && Math.abs(video.currentTime - time) > .15) video.currentTime = time;
     if (input('sync-audio').checked) for (const cue of activeCues()) if ((previous < cue.time && cue.time <= time) || (previous === 0 && cue.time === 0 && dt > 0)) void audition(cue.clip);
     renderSequenceFrame(); renderTransport(); if(time>=duration){if(canRepeatIdle()&&!idleHeld){stopAudio();seek(0);player?.resume();if(video)void video.play().catch(error=>{pause();message(errorText(error),true);});}else pause();} lastFrame = now;
   }
@@ -784,8 +805,11 @@ async function start(): Promise<void> {
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
     bind(); parts=new PartExplorer(el('parts-explorer'),el('selected-part'),previous=>{redrawOverlay(true);const part=parts?.value();if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
+    rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
     await initPlayer(first);
+    // initPlayer keeps `player` only after its first draw succeeded; a declared model path alone never counts.
+    rigInput=player?{state:'loaded'}:data.manifest.model?{state:'failed',reason:el('rig-empty').textContent||'compiled player unavailable'}:{state:'absent'};renderLayout();
     if (first) await chooseCheckpoint(first,initial); else renderCheckpoint();
     activeCamera=player?'rig':'reference';if(cameraSync)alignCameras();renderTransport();fitCamera();
     if (requestedId && !first) message(`Checkpoint "${requestedId}" is not in this package. Select one from the list.`, true);
@@ -810,13 +834,13 @@ function renderIdle():void {text('idle-state',canRepeatIdle()?'Actual idle · re
 async function playPreview():Promise<void> {
  if((!player&&!video&&!sequence)||duration<=0)return;
  const intent=++playbackIntent;desiredPlay=true;idleHeld=false;if(time>=duration)seek(0);
- if(video){try{await video.play();}catch(error){pause();message(`Playback is paused: ${errorText(error)}. Use Play to retry.`,true);return;}}
+ if(video&&referenceInput.state==='loaded'){try{await video.play();}catch(error){pause();message(`Playback is paused: ${errorText(error)}. Use Play to retry.`,true);return;}}
  if(intent!==playbackIntent||!desiredPlay){if(!desiredPlay)video?.pause();return;}playing=true;lastFrame=0;player?.resume();button('play').textContent='Ⅱ';button('play').setAttribute('aria-label','Pause');
 }
 function localDraft():boolean{return dirty||!!input('feedback-summary').value.trim()||!!input('feedback-start').value.trim()||!!input('feedback-end').value.trim()||!!select('feedback-category').value||!!input('feedback-target-name').value.trim()&&input('feedback-target-name').value!==data.manifest.id;}
 function controlState():ControlInspection {
  const box=assets?.stage??player?.bounds(),center=box?{x:box.x+box.width/2,y:box.y+box.height/2}:null;
- return {part:parts?.value()??null,partGeneration:parts?.observation()?.generation??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?zoom:1,pan:{x:center&&cameraCenter?(center.x-cameraCenter.x)*rigScale:0,y:center&&cameraCenter?(cameraCenter.y-center.y)*rigScale:0}},reference:{zoom:referenceSize?referenceZoom:1,pan:{x:referenceSize&&referenceCenter?(referenceSize.width/2-referenceCenter.x)*referenceScale:0,y:referenceSize&&referenceCenter?(referenceSize.height/2-referenceCenter.y)*referenceScale:0}}},animation:animation||null,time:player?.time??time,playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!!data,seeking:seekingControl||!!video?.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring(),capabilities:{camera:!!player,referenceCamera:!!referenceSize,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
+ return {part:parts?.value()??null,partGeneration:parts?.observation()?.generation??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?zoom:1,pan:{x:center&&cameraCenter?(center.x-cameraCenter.x)*rigScale:0,y:center&&cameraCenter?(cameraCenter.y-center.y)*rigScale:0}},reference:{zoom:referenceSize?referenceZoom:1,pan:{x:referenceSize&&referenceCenter?(referenceSize.width/2-referenceCenter.x)*referenceScale:0,y:referenceSize&&referenceCenter?(referenceSize.height/2-referenceCenter.y)*referenceScale:0}}},animation:animation||null,time:player?.time??time,playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!!data,seeking:seekingControl||!!video?.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring(),comparison:controlComparison(layoutEligibility()),capabilities:{camera:!!player,referenceCamera:!!referenceSize,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
 }
 async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
