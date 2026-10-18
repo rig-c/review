@@ -1,11 +1,13 @@
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import type { CompareResponse, CompareSide } from '../src/compare.ts';
 import type { CompareFeedback, CompareSession } from '../src/compare-session.ts';
-import { clockForAnimation, lastFrame } from '../src/frame-clock.ts';
-import { commonDomain, compareSeekStep, feedbackTrace, inspectionFrame, requireCommonTime, seekAfterReference, seekSynchronizedPair, type CompareDomain, type CompareTrace, type ReferenceSample } from '../src/compare-playhead.ts';
+import { clockForAnimation, lastFrame, timeAtFrame } from '../src/frame-clock.ts';
+import { commonDomain, compareSeekStep, feedbackTrace, inspectionFrame, requireCommonTime, type CompareDomain, type CompareTrace, type ReferenceSample } from '../src/compare-playhead.ts';
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection } from '../src/feedback-validation.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 
+import {ComparePresentation,type PresentationState} from '../src/compare-presentation.ts';
+import {nextReferenceInterval,ReferenceSelectionUnavailable,inspectionReferenceFrame,lastSupportedReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,type ReferenceFrameIndex,type VideoInfo,type VideoFrame} from '../src/reference-frames.ts';
 type Side = 'a' | 'b';
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const node = document.getElementById(id); if (!node) throw new Error(`Missing compare UI element: ${id}`); return node as T;
@@ -21,6 +23,11 @@ let dirty = false, saving = false, ready = false, seeking = false, disposed = fa
 let seekAbort: AbortController | null = null, videoCallback: number | null = null, fallbackCallback: number | null = null;
 let latestSeek = 0;
 let stripBusy = false;
+let referenceFrames:VideoInfo|null=null;
+const presentation=new ComparePresentation();
+const associations:Record<Side,Map<number,number|null>>={a:new Map(),b:new Map()};
+let requestedProducer:{side:Side;frame:number;time:number}|null=null;
+let endStopReason:string|null=null;
 const traceRows: CompareTrace[] = [];
 
 function message(value: string, error = false): void { text('message', value); el('message').classList.toggle('error', error); }
@@ -41,13 +48,21 @@ function currentFrame(side: Side): number | null {
   return inspectionFrame(clock, feedbackTrace(ready, seeking || video.seeking, trace));
 }
 
+function currentReviewFrame(side:Side):number|null {
+ if(!referenceFrames||!trace)return null;
+ const frame=referenceFrameAtTime(referenceFrames,trace.reference);return frame?associations[side].get(frame.index)??null:null;
+}
 function frameLabel(side: Side): string {
-  const sideData = data[side], player = players[side];
-  const clock = clockForAnimation(sideData.report?.clock, sideData.report?.animation, player?.current ?? '', !!player);
-  if (!sideData.report?.clock) return 'rate unknown';
-  if (!clock) return 'Frame unknown · clip not bound';
-  const last = lastFrame(clock), frame = currentFrame(side);
-  return `F${frame ?? '?'} / ${last ?? '?'}${frame === null ? ' · Out of range' : ''}`;
+ const sideData=data[side],player=players[side],clock=clockForAnimation(sideData.report?.clock,sideData.report?.animation,player?.current??'',!!player);
+ if(!clock)return 'Review frame unknown';
+ const frame=currentReviewFrame(side),decoded=referenceFrames&&trace?referenceFrameAtTime(referenceFrames,trace.reference):null;
+ return `Review F${frame??'—'} / ${lastFrame(clock)??'—'}${decoded?` · video #${decoded.index}`:''}`;
+}
+function frameControls():void {
+ const exact=!!referenceFrames&&typeof video.requestVideoFrameCallback==='function';
+ for(const side of ['a','b'] as const){const option=select('frame-basis').querySelector<HTMLOptionElement>(`option[value="${side}"]`);if(option)option.disabled=!associations[side].size;}
+ const side=select('frame-basis').value as Side,clock=data[side]?.report?.clock;
+ input('frame-input').max=String(lastFrame(clock)??0);input('frame-input').disabled=!exact||!clock||!ready||seeking;button('frame-seek').disabled=!exact||!clock||!ready||seeking;
 }
 
 function renderTrace(value: CompareTrace): void {
@@ -58,8 +73,8 @@ function renderTrace(value: CompareTrace): void {
   if (document.activeElement !== input('scrub')) input('scrub').value = String(value.reference);
   if (document.activeElement !== input('time-input')) input('time-input').value = value.reference.toFixed(6);
   text('clock-source', value.source === 'video-frame' ? 'requestVideoFrameCallback · Actual mediaTime' : 'currentTime fallback');
-  text('trace', JSON.stringify({ seekStep: compareSeekStep, referenceClock: value.source, frames: { a: currentFrame('a'), b: currentFrame('b') }, recent: traceRows }, null, 2));
-  updateFeedbackAvailability();
+  text('trace', JSON.stringify({ seekStep: compareSeekStep, referenceClock: value.source, frames: { a: currentFrame('a'), b: currentFrame('b') }, reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')}, requestedProducer,endStopReason, decodedIndex:referenceFrames?referenceFrameAtTime(referenceFrames,value.reference)?.index??null:null, recent: traceRows }, null, 2));
+  updateFeedbackAvailability();frameControls();
 }
 
 function updateFeedbackAvailability(): void { button('add-feedback').disabled = !feedbackTrace(ready, seeking || video.seeking, trace); }
@@ -72,13 +87,37 @@ function invalidateTrace(reason: string): void {
 }
 
 function stop(): void { video.pause(); players.a?.pause(); players.b?.pause(); button('play').textContent = '▶'; button('play').setAttribute('aria-label', 'Play reference video and both rigs'); }
-function failPair(error: unknown): void { stop(); ready = false; invalidateTrace('Comparison stopped · no valid synchronized time'); button('play').disabled = true; input('scrub').disabled = true; button('seek').disabled = true; message(`Comparison stopped: ${describe(error)}`, true); }
+function failPair(error: unknown): void { stop(); ready = false; invalidateTrace('Comparison stopped · no valid synchronized time'); button('play').disabled = true; input('scrub').disabled = true; button('seek').disabled = true;button('frame-seek').disabled=true; message(`Comparison stopped: ${describe(error)}`, true); }
 
-function acceptReference(sample: ReferenceSample): void {
-  if (!ready || seeking || video.seeking || !domain || !players.a || !players.b) return;
-  if (sample.time > domain.end) { stop(); void seekTo(domain.end); return; }
-  if (trace?.reference === sample.time && trace.source === sample.source) return;
-  try { renderTrace(seekSynchronizedPair(sample, players.a, players.b, domain)); } catch (error) { failPair(error); }
+function renderPresentation(state:PresentationState):void {
+ const target=state.target?.time,last=state.lastDrawn;
+ if(target!==undefined){text('reference-time',`${target.toFixed(6)} s`);text('time',`${target.toFixed(4)} / ${domain!.end.toFixed(4)} s`);input('scrub').value=String(target);}
+ const delta=target===undefined||!last?null:Math.max(Math.abs(last.a-target),Math.abs(last.b-target))*24;
+ const visible=last?`${last.reference.toFixed(6)} s`:'unknown';
+ text('sync-status',`${state.status==='held'?'Held':state.status==='drawn'?(state.lastLatenessMs>0?'Drawn late':'Drawn'):'Unknown'} pose ${visible} · Δ ${delta===null?'—':delta.toFixed(2)} (1/24 s units) · dropped ${state.dropped} · deadline misses ${state.deadlineMisses}/${state.deadlineKnownCallbacks} known next-reference estimates (${state.deadlineUnknownCallbacks} unknown) · replay ${state.lastPoseMs.toFixed(1)} ms · lateness ${state.deadlineKind==='unknown'?'unknown':state.lastLatenessMs.toFixed(1)+' ms'} (next-reference estimate; CPU submission)`);
+ el('sync-status').classList.toggle('error',state.status==='held'||state.lastLatenessMs>0||state.status==='failed');
+ if(!state.inspection){
+  trace=null;updateFeedbackAvailability();
+  for(const side of ['a','b'] as const){text(`${side}-time`,last?`${last[side].toFixed(6)} s · ${state.status==='held'?'held':'drawn; feedback unavailable'}`:'unknown');const decoded=last&&referenceFrames?referenceFrameAtTime(referenceFrames,last.reference):null,frame=decoded?associations[side].get(decoded.index)??null:null;text(`${side}-frame`,last?`${state.status==='held'?'Held':'Drawn'} review F${frame??'—'}`:'Review frame unknown');}
+  text('clock-source','Feedback requires a pair submitted before the known next-reference estimate or paused inspection.');
+ }
+ text('sync-warning',state.deadlineKind==='unknown'?'Next-reference timing unknown: an adjacent decoded timestamp and positive playback rate are required. Playback continues; pause for exact inspection.':state.lastLatenessMs>0?'The pair finished CPU draw submission after the estimated next reference display boundary. Pause for exact inspection.':'');
+ text('trace',JSON.stringify({presentation:state,playerTimes:{a:players.a?.time??null,b:players.b?.time??null},rawFloorFrames:{a:currentFrame('a'),b:currentFrame('b')},reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,endStopReason,decodedIndex:referenceFrames&&target!==undefined?referenceFrameAtTime(referenceFrames,target)?.index??null:null},null,2));
+ frameControls();
+}
+function acceptReference(sample: ReferenceSample,deadline:number|null=null,presentedFrames:number|null=null): void {
+ if(!ready||seeking||video.seeking||!domain||!players.a||!players.b)return;
+ if(sample.time>domain.end){stopAtSupportedEnd();return;}
+ if(trace?.reference===sample.time&&trace.source===sample.source)return;
+ try{const state=presentation.present(sample,deadline,presentedFrames,players.a,players.b,domain,()=>performance.now(),nextReferenceInterval(referenceFrames,sample.time,video.playbackRate));if(state.inspection)renderTrace(state.inspection);renderPresentation(state);}catch(error){failPair(error);renderPresentation(presentation.snapshot());}
+}
+
+function stopAtSupportedEnd():void {
+ stop();requestedProducer=null;
+ if(!domain)return;
+ const selected=referenceFrames&&typeof video.requestVideoFrameCallback==='function'?lastSupportedReferenceFrame(referenceFrames,domain):null;
+ if(selected){const reason=`Playback stopped at the last supported decoded reference frame: ${selected.time.toFixed(6)} s (shared clip end ${domain.end.toFixed(6)} s).`;void seekTo(selected.time,null,reason);}
+ else{endStopReason='Playback stopped outside the shared clip domain. Exact reference selection is unavailable; choose a supported time to inspect again.';invalidateTrace(endStopReason);text('sync-warning',endStopReason);message(endStopReason);frameControls();}
 }
 
 function observeVideoFrames(): void {
@@ -86,7 +125,7 @@ function observeVideoFrames(): void {
     const next = () => { videoCallback = video.requestVideoFrameCallback((_now, metadata) => {
       if (disposed) return;
       lastPresented = { time: metadata.mediaTime, source: 'video-frame' };
-      acceptReference(lastPresented); next();
+      acceptReference(lastPresented,metadata.expectedDisplayTime,metadata.presentedFrames); next();
     }); }; next();
   } else {
     // This is a media-clock sampler, not an elapsed-time animation loop. The
@@ -96,9 +135,10 @@ function observeVideoFrames(): void {
 }
 
 /** On supported browsers a seek waits for BOTH seeked and the decoded frame. */
-function seekReferenceFrame(target: number, signal: AbortSignal): Promise<ReferenceSample> {
+function seekReferenceFrame(target: number, signal: AbortSignal,selected:VideoFrame|null): Promise<ReferenceSample> {
   video.pause();
-  if (!video.seeking && video.currentTime === target && lastPresented) return Promise.resolve({ ...lastPresented });
+  const seekPosition=selected?referenceSeekPosition(referenceFrames!,selected):target;
+  if(!video.seeking&&lastPresented&&(selected?referenceFrameAtTime(referenceFrames!,lastPresented.time)?.index===selected.index:video.currentTime===target))return Promise.resolve({...lastPresented});
   return new Promise((resolve, reject) => {
     let seeked = false, presented: ReferenceSample | null = null, handle: number | null = null;
     const hasFrames = typeof video.requestVideoFrameCallback === 'function';
@@ -113,28 +153,29 @@ function seekReferenceFrame(target: number, signal: AbortSignal): Promise<Refere
     try {
       // Registered while paused before changing currentTime, so a fast seek
       // cannot present its new frame before this callback is installed.
-      if (hasFrames) handle = video.requestVideoFrameCallback((_now, metadata) => { handle = null; presented = { time: metadata.mediaTime, source: 'video-frame' }; finish(); });
-      video.currentTime = target;
+      if (hasFrames) handle = video.requestVideoFrameCallback((_now, metadata) => { handle = null; const actual=selected?referenceFrameAtTime(referenceFrames!,metadata.mediaTime):null;if(selected&&actual?.index!==selected.index){finish(new Error('REFERENCE_FRAME_MISMATCH: decoded frame does not match selected reference PTS'));return;}presented = { time: metadata.mediaTime, source: 'video-frame' }; finish(); });
+      video.currentTime = seekPosition;
       if (!video.seeking) { seeked = true; if (!hasFrames) presented = { time: video.currentTime, source: 'current-time' }; finish(); }
     } catch (error) { finish(new Error(describe(error))); }
   });
 }
 
-async function seekTo(target: number): Promise<void> {
+async function seekTo(target: number,producer:{side:Side;frame:number;time:number}|null=null,endReason:string|null=null): Promise<void> {
   if (!domain || !players.a || !players.b || !ready) return;
-  try { requireCommonTime(target, domain); } catch (error) { message(describe(error), true); return; }
+  let selected:VideoFrame|null=null;
+  try { requireCommonTime(target, domain);if(referenceFrames&&typeof video.requestVideoFrameCallback==='function')selected=inspectionReferenceFrame(referenceFrames,target,domain); } catch (error) { message(describe(error), true); return; }
   stop(); seekAbort?.abort(); seekAbort = new AbortController(); const signal = seekAbort.signal, generation = ++latestSeek; seeking = true; invalidateTrace('Synchronizing reference video and both rigs');
   try {
-    const value = await seekAfterReference(target, async value => {
-      const sample = await seekReferenceFrame(value, signal);
-      if (signal.aborted || generation !== latestSeek) throw new DOMException('Reference seek superseded', 'AbortError');
-      return sample;
-    }, players.a, players.b, domain);
+    const sample=await seekReferenceFrame(target,signal,selected);
+    if(signal.aborted||generation!==latestSeek)throw new DOMException('Reference seek superseded','AbortError');
+    if(sample.time<domain.start||sample.time>domain.end)throw new ReferenceSelectionUnavailable('the presented reference timestamp is outside the shared clip domain; choose a supported time');
+    const inspected=presentation.inspect(sample,players.a,players.b,domain,()=>performance.now());
+    const value=inspected.inspection!;
     if (generation !== latestSeek || signal.aborted) return;
-    seeking = false; lastPresented = { time: value.reference, source: value.source }; renderTrace(value);
-    message('Inspecting both rigs at the actual reference video time.');
-  } catch (error) { if (!signal.aborted && generation === latestSeek) failPair(error); }
-  finally { if (generation === latestSeek) { seeking = false; updateFeedbackAvailability(); } }
+    requestedProducer=producer;endStopReason=endReason;seeking = false; lastPresented = { time: value.reference, source: value.source }; renderTrace(value);renderPresentation(inspected);
+    message(endReason??'Inspecting both rigs at the actual reference video time.');
+  } catch (error) { if (!signal.aborted && generation === latestSeek){if(error instanceof ReferenceSelectionUnavailable){stop();invalidateTrace(describe(error));message(describe(error),true);}else failPair(error);} }
+  finally { if (generation === latestSeek) { seeking = false; updateFeedbackAvailability();frameControls(); } }
 }
 
 function unionBounds(a: PoseBounds, b: PoseBounds): PoseBounds { const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y); return { x, y, width: Math.max(a.x + a.width, b.x + b.width) - x, height: Math.max(a.y + a.height, b.y + b.height) - y }; }
@@ -162,6 +203,18 @@ async function loadSide(side: Side, value: CompareSide): Promise<number> {
   el(`${side}-empty`).hidden = true; return clip.duration;
 }
 
+async function loadFrameIndex():Promise<void>{
+ try{
+  const value=await api<ReferenceFrameIndex>('/api/compare/reference-frames');
+  if(!value.available){text('frame-index-status',value.reason);return;}
+  if(value.sourceHash!==data.sourceHash||value.referenceSha256!==data.reference.sha256)throw new Error('Reference frame index identity differs');
+  referenceFrames=value.video;
+  for(const side of ['a','b'] as const){const clock=clockForAnimation(data[side].report?.clock,data[side].report?.animation,data.animation,true);associations[side]=producerFrameAssociations(clock,referenceFrames);}
+  select('frame-basis').value=associations.b.size?'b':'a';
+  text('frame-index-status',typeof video.requestVideoFrameCallback==='function'?'Exact selection: nearest real reference PTS; review frame = unique explicit sample association.':'Exact frame selection unavailable: requestVideoFrameCallback required; seconds playback remains available.');
+ }catch(error){referenceFrames=null;text('frame-index-status',`Exact frame selection unavailable: ${describe(error)}`);}
+ frameControls();
+}
 function loadReference(): Promise<number> {
   const url = new URL(data.reference.url, location.href); if (url.origin !== location.origin || url.pathname !== '/compare-reference' || url.search || url.hash) throw new Error('Reference must be the server-bound local compare video');
   text('reference-name', data.reference.name); observeVideoFrames();
@@ -256,12 +309,14 @@ function issue(feedback: CompareFeedback) {
 }
 
 function bind(): void {
+  select('frame-basis').onchange=frameControls;
+  button('frame-seek').onclick=()=>{const side=select('frame-basis').value as Side,raw=input('frame-input').value.trim(),frame=Number(raw),clock=clockForAnimation(data[side].report?.clock,data[side].report?.animation,players[side]?.current??'',true),time=timeAtFrame(clock,frame);if(!raw||time===null){message('Choose an integer frame inside the explicit producer clock.',true);return;}void seekTo(time,{side,frame,time});};
   button('strip-export').onclick = () => { void exportStrip(); };
   for (const id of ['strip-scope', 'strip-basis', 'strip-format']) select(id).onchange = () => { updateStripControls(); stripStatus('Selection changed. Check the ranges and frame-basis report before downloading.'); };
-  button('play').onclick = async () => { if (!ready || seeking || !domain) return; if (!video.paused) { stop(); return; } if (trace && trace.reference >= domain.end) { message('At the end of the shared range. Seek earlier to play again.'); return; } try { await video.play(); button('play').textContent = 'Ⅱ'; button('play').setAttribute('aria-label', 'Pause comparison'); } catch (error) { failPair(error); } };
+  button('play').onclick = async () => { if (!ready || seeking || !domain) return; if (!video.paused) {const current=lastPresented?.time;stop();if(current!==undefined)void seekTo(current);return; } if (trace && trace.reference >= domain.end) { message('At the end of the shared range. Seek earlier to play again.'); return; } try { requestedProducer=null;endStopReason=null;await video.play(); button('play').textContent = 'Ⅱ'; button('play').setAttribute('aria-label', 'Pause comparison'); } catch (error) { failPair(error); } };
   input('scrub').oninput = () => { void seekTo(Number(input('scrub').value)); };
   button('seek').onclick = () => { const value = input('time-input').value.trim(); if (!value) { message('Enter a time in seconds.', true); return; } void seekTo(Number(value)); };
-  video.addEventListener('ended', () => { stop(); if (typeof video.requestVideoFrameCallback !== 'function') acceptReference({ time: video.currentTime, source: 'current-time' }); });
+  video.addEventListener('ended', () => { stopAtSupportedEnd(); });
   input('reference-audio').onchange = () => { video.muted = !input('reference-audio').checked; };
   button('zoom-in').onclick = () => { zoom = Math.min(8, zoom * 1.25); fit(); }; button('zoom-out').onclick = () => { zoom = Math.max(.25, zoom / 1.25); fit(); }; button('fit').onclick = () => { zoom = 1; fit(); };
   for (const side of ['a', 'b'] as const) el(`${side}-viewport`).addEventListener('wheel', event => { event.preventDefault(); zoom = Math.max(.25, Math.min(8, zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1))); fit(); }, { passive: false });
@@ -276,7 +331,7 @@ function bind(): void {
     if (!['bone', 'slot', 'rig'].includes(kind) || !['defect', 'quality'].includes(category) || !name || !summary || /[\r\n]/.test(summary) || summary.length > 1000) { message('Enter a target type, actual name, category and one-line summary of up to 1,000 characters.', true); return; }
     const target: CompareFeedback['target'] = { kind: kind as CompareFeedback['target']['kind'], name };
     try { validateFeedbackSelection(data[side].feedbackCatalog, { frameStart, frameEnd, target, animation: data.animation }); } catch (error) { message(describe(error), true); return; }
-    session.feedback.push({ id: crypto.randomUUID(), side, frameStart, frameEnd, target, category: category as CompareFeedback['category'], summary, context: { interval: { frameStart, frameEnd, inclusive: true }, animation: data.animation, mediaTime: inspected.reference, clockSource: inspected.source, frame: currentFrame(side), frames: { a: currentFrame('a'), b: currentFrame('b') }, playheads: { reference: inspected.reference, a: inspected.a, b: inspected.b } } });
+    session.feedback.push({ id: crypto.randomUUID(), side, frameStart, frameEnd, target, category: category as CompareFeedback['category'], summary, context: { interval: { frameStart, frameEnd, inclusive: true }, animation: data.animation, mediaTime: inspected.reference, clockSource: inspected.source, frame: currentFrame(side), frames: { a: currentFrame('a'), b: currentFrame('b') }, playheads: { reference: inspected.reference, a: inspected.a, b: inspected.b },reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,decodedIndex:referenceFrames?referenceFrameAtTime(referenceFrames,inspected.reference)?.index??null:null } });
     input('summary').value = ''; markDirty(); renderFeedback(); message('Added feedback bound to the target build and both reviewed sources.');
   };
   button('submit').onclick = async () => { if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; } saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt; message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status and A/B/reference-video provenance.'); } catch (error) { message(`Submission failed: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
@@ -293,6 +348,7 @@ async function start(): Promise<void> {
     if (data.id !== session.id || data.sourceHash !== session.sourceHash || JSON.stringify(data.binding) !== JSON.stringify(session.binding)) throw new Error('Comparison and submission session refer to different source identities. Reopen the review.');
     text('title', data.title); text('animation', `${data.animation} · A/B order and reference video hash are fixed`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackSelection(); renderFeedback(); savedState();
     const [referenceDuration, aDuration, bDuration] = await Promise.all([loadReference(), loadSide('a', data.a), loadSide('b', data.b)]);
+    void loadFrameIndex();
     domain = commonDomain(referenceDuration, aDuration, bDuration); input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;
     await seekTo(0); fit();

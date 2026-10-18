@@ -1,0 +1,525 @@
+{
+  "schema": "rig-review-sync-evidence/1",
+  "issue": 24,
+  "scope": {
+    "host": "Nova WSL isolated headless Chromium, not the user Mac",
+    "browser": "151.0.7922.34",
+    "bun": "1.4.2",
+    "viewport": [
+      1600,
+      1000
+    ],
+    "flags": [
+      "--autoplay-policy=no-user-gesture-required"
+    ],
+    "renderer": "DOM with forced Canvas2D meshes; no WebGL acceptance claim",
+    "comparisonFramesPerSecond": 24,
+    "comparisonUnitMeaning": "Acceptance unit only, not inferred producer FPS",
+    "drawMeaning": "Both public draw calls returned CPU submission; not compositor acknowledgement"
+  },
+  "runtime": {
+    "version": "1.11.2",
+    "gitHead": "db0e276f674369c028197fafe435f65e98626814",
+    "tarballSHA256": "1eac6d8be4560e02e72e7d3d376d1ee3d9c2bc2f047a538276ebcaaa948ee9b9",
+    "integrity": "sha512-yh1h5uMF6jhjfT9HCeOuP0yaFmXvN9Wm4Mp1Uvdo/q+X/EaghNvCyQFN4N8nFA/qrfX6Silk3Yxnf98/GUVxbw==",
+    "bundleSHA256": "b2c6de0c6309d1e274530c7b247cc6d127d1d9212d92ae5c789edbf8ce310007"
+  },
+  "sourceHashes": {
+    "a": {
+      "sourceSHA256": "e2474960948a7a0d67456729e3a48a5a8489249864238d8cc826d7df1868e9b0",
+      "rigSHA256": "cfea9049d5452c5da52e3fdac9d203ac52dcd6f094bbf4980998f2cede05dadf",
+      "motionSHA256": "35c8bfcfadd61f2e19872885eb0134676a0e7bb62715f3362e88f73d34bbb0f3"
+    },
+    "b": {
+      "sourceSHA256": "689ca4f61b24cd8a1abbb03f887cbfc1675802fbab80d34e93314fb33e85a2cf",
+      "rigSHA256": "d90a0190eee43232a8b321d34b83f885496600fb81e9b341d251e40badd8fe7d",
+      "motionSHA256": "0654db17a876424eaf6688b7e080a5f433b9181af5587bd66ce6226600bdd9b3"
+    },
+    "referenceSHA256": "5acb8530c1d6005159205269b678f11fd954baeb8fcf4d94372f1966884654f0"
+  },
+  "dependencyOnlyHistoricalFailure": {
+    "run": {
+      "runId": "20261018T045843Z-fcd56ba199bb4fa198cad9f0fd277a31",
+      "resultSHA256": "a49e195a04b15ac48dbb98895cad8c2459d3e11dc5a0c3d4ad5432807ac4552d",
+      "inputSHA256": "144c1711d8f79f9a9dda636513a174b1f133fa5bd42587274e20b27f1b59defa",
+      "sealedReceiptVerified": true,
+      "processQuiescent": true
+    },
+    "rawSHA256": "c1cc313282c73d6aa324819405943322d3fb121199f8ede1d2bad5649c17a001",
+    "policy": "Current expectedDisplayTime hard admission before/after posing",
+    "summary": {
+      "callbacks": 312,
+      "rawCallbacks": 312,
+      "posedPairs": 158,
+      "drawnPairs": 0,
+      "heldCallbacks": 312,
+      "drawCoverage": 0,
+      "knownPairedCallbacks": 312,
+      "domain": {
+        "start": 0,
+        "end": 13,
+        "firstPts": 0.041667,
+        "lastPts": 13,
+        "covered": false
+      },
+      "acceptance": {
+        "gates": {
+          "actualPresentedClock": true,
+          "noErrors": true,
+          "fullDomain": false,
+          "knownEveryCallback": true,
+          "freshPairs": false,
+          "poseP95": true,
+          "deadlineMissRate": false,
+          "visibleDrift": false,
+          "deadlineLateness": true
+        },
+        "pass": false
+      },
+      "previousPoseAgeVsPresentedPtsFrames": {
+        "max": 312,
+        "median": 156,
+        "p95": 297
+      },
+      "targetPoseDriftVsPresentedPtsFrames": {
+        "max": 312,
+        "median": 156,
+        "p95": 297
+      },
+      "postPoseVsElementCurrentTimeFrames": {
+        "max": 311.773056,
+        "median": 155.768832,
+        "p95": 296.97146399999997,
+        "meaning": "HTMLMediaElement.currentTime after pose; diagnostic only, not decoded PTS"
+      },
+      "bothPoseMs": {
+        "p50": 5,
+        "p95": 10.900000000001455
+      },
+      "bothDrawMs": {
+        "p50": null,
+        "p95": null
+      },
+      "callbackMs": {
+        "p50": 1.8000000000029104,
+        "p95": 9.39999999999418
+      },
+      "presentedFrameGaps": {
+        "total": 0,
+        "max": 0
+      },
+      "callbackDeadline": {
+        "eligible": 312,
+        "misses": 155,
+        "missPct": 49.67948717948718,
+        "arrivalLatenessMs": {
+          "max": 1.0999999999985448,
+          "median": 0,
+          "p95": 0.7999999999974534
+        },
+        "latenessMs": {
+          "max": 6.499999999998636,
+          "median": 0,
+          "p95": 1.0000000000027285
+        },
+        "lateness24fpsFrames": {
+          "max": 0.15599999999996725,
+          "median": 0,
+          "p95": 0.024000000000065483
+        }
+      }
+    },
+    "verdict": "FAIL; all held; retained unchanged"
+  },
+  "immediateSubmissionBeforeEndpointRepair": {
+    "run": {
+      "runId": "20261018T050517Z-c32bf08bf6bb4692bef7af697a04562c",
+      "resultSHA256": "2b7095236b885737ca2cf718ca8d92760528c39cbaf10a995d3f642577310220",
+      "inputSHA256": "08e1679afaa2a054b9efd6afd276efb2daa5c4125a2eb191bab0299ff1f25f93",
+      "sealedReceiptVerified": true,
+      "processQuiescent": true
+    },
+    "rawSHA256": "087ad44115c757e61c28e312c31f62f549f996090bb4803efabb04ddd235db35",
+    "summary": {
+      "callbacks": 312,
+      "rawCallbacks": 312,
+      "posedPairs": 312,
+      "drawnPairs": 312,
+      "heldCallbacks": 0,
+      "drawCoverage": 1,
+      "presentationCoverage": {
+        "monotonic": true,
+        "observed": 312,
+        "gaps": 0,
+        "observedFraction": 1,
+        "missPct": 0
+      },
+      "knownPairedCallbacks": 312,
+      "domain": {
+        "start": 0,
+        "end": 13,
+        "firstPts": 0.041667,
+        "lastPts": 13,
+        "startBoundary": {
+          "videoTime": 0,
+          "presentedPts": 0,
+          "drawn": {
+            "a": 0,
+            "b": 0
+          },
+          "presentedFrames": 1
+        },
+        "covered": true
+      },
+      "acceptance": {
+        "gates": {
+          "actualPresentedClock": true,
+          "noErrors": true,
+          "fullDomain": true,
+          "knownEveryCallback": true,
+          "freshPairs": true,
+          "decodedCadence": true,
+          "drawCoverage": true,
+          "poseP95": true,
+          "deadlineKnown": false,
+          "deadlineMissRate": true,
+          "visibleDrift": true,
+          "deadlineLateness": true
+        },
+        "pass": false
+      },
+      "previousPoseAgeVsPresentedPtsFrames": {
+        "max": 1.0000080000000082,
+        "median": 1.0000079999999976,
+        "p95": 1.0000080000000082
+      },
+      "targetPoseDriftVsPresentedPtsFrames": {
+        "max": 5.4143356464919634e-12,
+        "median": 0,
+        "p95": 9.379164112033322e-13
+      },
+      "postPoseVsElementCurrentTimeFrames": {
+        "max": 0.8326560000000001,
+        "median": 0.3485759999999942,
+        "p95": 0.7457999999999885,
+        "meaning": "HTMLMediaElement.currentTime after pose; diagnostic only, not decoded PTS"
+      },
+      "bothPoseMs": {
+        "p50": 2.900000000008731,
+        "p95": 4.80000000000291
+      },
+      "bothDrawMs": {
+        "p50": 4.399999999994179,
+        "p95": 6.400000000008731
+      },
+      "callbackMs": {
+        "p50": 7.600000000005821,
+        "p95": 10.69999999999709
+      },
+      "presentedFrameGaps": {
+        "total": 0,
+        "leading": 0,
+        "max": 0
+      },
+      "currentDisplayDiagnostic": {
+        "meaning": "Current-frame expectedDisplayTime diagnostic retained; not the next-reference submission budget",
+        "eligible": 312,
+        "misses": 152,
+        "latenessMs": {
+          "max": 20.29999999998836,
+          "median": 0,
+          "p95": 11.199999999987995
+        }
+      },
+      "callbackDeadline": {
+        "basis": "next-reference estimate from actual adjacent PTS / actual playbackRate; CPU submission, not compositor acknowledgement",
+        "eligible": 311,
+        "unknown": 1,
+        "misses": 0,
+        "missPct": 0,
+        "arrivalLatenessMs": {
+          "max": 6.7999999999883585,
+          "median": 0,
+          "p95": 0.8999999999978172
+        },
+        "latenessMs": {
+          "max": 0,
+          "median": 0,
+          "p95": 0
+        },
+        "lateness24fpsFrames": {
+          "max": 0,
+          "median": 0,
+          "p95": 0
+        }
+      }
+    },
+    "verdict": "Strict FAIL; final no-successor timing unknown without proven post-ended feedback inspection"
+  },
+  "final": {
+    "run": {
+      "runId": "20261018T051212Z-9601058690f6474c8ee8b3f4b7c1ff78",
+      "resultSHA256": "f72e4375fd9e6275be03c527058e01b9ecc8d204dc6484bfcbd10a04419480f1",
+      "inputSHA256": "1429626f30c631e9c7269673ef5fc79e90772130ae107b8eeed4d1c109755494",
+      "sealedReceiptVerified": true,
+      "processQuiescent": true
+    },
+    "rawSHA256": "1f0e15e54231b1ef8e56d2b7e7150eb76ea58ac2c78274236f79004b83cf0eb5",
+    "observerSHA256": "3390b266cf9de9b9ba6b58950335272abcb8c68f02e13d8ac96086cb4f63a697",
+    "summary": {
+      "callbacks": 312,
+      "rawCallbacks": 312,
+      "posedPairs": 312,
+      "drawnPairs": 312,
+      "heldCallbacks": 0,
+      "drawCoverage": 1,
+      "presentationCoverage": {
+        "monotonic": true,
+        "observed": 312,
+        "gaps": 0,
+        "observedFraction": 1,
+        "missPct": 0
+      },
+      "knownPairedCallbacks": 312,
+      "domain": {
+        "start": 0,
+        "end": 13,
+        "firstPts": 0.041667,
+        "lastPts": 13,
+        "startBoundary": {
+          "videoTime": 0,
+          "presentedPts": 0,
+          "drawn": {
+            "a": 0,
+            "b": 0
+          },
+          "presentedFrames": 1
+        },
+        "covered": true
+      },
+      "acceptance": {
+        "gates": {
+          "actualPresentedClock": true,
+          "noErrors": true,
+          "fullDomain": true,
+          "knownEveryCallback": true,
+          "freshPairs": true,
+          "decodedCadence": true,
+          "drawCoverage": true,
+          "poseP95": true,
+          "deadlineKnown": true,
+          "deadlineMissRate": true,
+          "visibleDrift": true,
+          "deadlineLateness": true
+        },
+        "pass": true
+      },
+      "previousPoseAgeVsPresentedPtsFrames": {
+        "max": 1.0000080000000082,
+        "median": 1.0000079999999976,
+        "p95": 1.0000080000000082
+      },
+      "targetPoseDriftVsPresentedPtsFrames": {
+        "max": 5.4143356464919634e-12,
+        "median": 0,
+        "p95": 9.379164112033322e-13
+      },
+      "postPoseVsElementCurrentTimeFrames": {
+        "max": 0.5196720000000141,
+        "median": 0.17551199999999767,
+        "p95": 0.49692000000001,
+        "meaning": "HTMLMediaElement.currentTime after pose; diagnostic only, not decoded PTS"
+      },
+      "bothPoseMs": {
+        "p50": 2.7999999999956344,
+        "p95": 4.399999999994179
+      },
+      "bothDrawMs": {
+        "p50": 4.19999999999709,
+        "p95": 6.599999999998545
+      },
+      "callbackMs": {
+        "p50": 7.399999999994179,
+        "p95": 10.599999999998545
+      },
+      "presentedFrameGaps": {
+        "total": 0,
+        "leading": 0,
+        "max": 0
+      },
+      "currentDisplayDiagnostic": {
+        "meaning": "Current-frame expectedDisplayTime diagnostic retained; not the next-reference submission budget",
+        "eligible": 312,
+        "misses": 147,
+        "latenessMs": {
+          "max": 15.799999999997453,
+          "median": 0,
+          "p95": 10.599999999996726
+        }
+      },
+      "callbackDeadline": {
+        "basis": "next-reference estimate from actual adjacent PTS / actual playbackRate; CPU submission, not compositor acknowledgement",
+        "eligible": 311,
+        "unknown": 0,
+        "terminalNotApplicable": [
+          {
+            "decodedIndex": 312,
+            "mediaTime": 13,
+            "reason": "Verified last indexed frame at shared end; actual ended event followed by valid paused inspection. No next display deadline invented."
+          }
+        ],
+        "misses": 0,
+        "missPct": 0,
+        "arrivalLatenessMs": {
+          "max": 5.699999999998909,
+          "median": 0,
+          "p95": 0.7000000000007276
+        },
+        "latenessMs": {
+          "max": 0,
+          "median": 0,
+          "p95": 0
+        },
+        "lateness24fpsFrames": {
+          "max": 0,
+          "median": 0,
+          "p95": 0
+        }
+      }
+    },
+    "terminalProof": {
+      "bindingMatchesIndex": true,
+      "indexCount": 313,
+      "last": {
+        "index": 312,
+        "time": 13
+      },
+      "endedEvents": [
+        {
+          "at": 14434.199999999997,
+          "ended": true,
+          "phase": "playback"
+        }
+      ],
+      "pausedInspection": {
+        "at": 14435.099999999999,
+        "videoPaused": true,
+        "feedbackDisabled": false,
+        "deadlineKind": "paused",
+        "decodedIndex": 312,
+        "inspection": {
+          "reference": 13,
+          "a": 13.000000000000226,
+          "b": 13.000000000000226,
+          "source": "video-frame"
+        },
+        "drawn": {
+          "a": 13.000000000000226,
+          "b": 13.000000000000226
+        }
+      }
+    },
+    "scrubs": {
+      "count": 13,
+      "poseMs": {
+        "p50": 0,
+        "p95": 0.10000000000582077
+      },
+      "targetDriftFrames": {
+        "max": 5.4143356464919634e-12,
+        "median": 0
+      },
+      "reviewLabelMismatches": []
+    },
+    "errors": []
+  },
+  "controls": {
+    "forcedLate": {
+      "rawSHA256": "c856860fff3413b3bbc8a5c0388cb264f76b853fac20981cef83bf21fd356937",
+      "injectedDelayPerSeekMs": 80,
+      "lateDrawn": {
+        "a": 1.875,
+        "b": 1.875
+      },
+      "lateFeedbackDisabled": true,
+      "pausedRecoveryDrawn": {
+        "a": 1.875,
+        "b": 1.875
+      },
+      "pausedRecoveryFeedbackDisabled": false
+    },
+    "missingIndex": {
+      "rawSHA256": "4f3509678f41832af920da196951a32e97df7cae2e712a5d33512e9ff17f5d55",
+      "exactFrameDisabled": true,
+      "basicPlaybackCallbacks": 48,
+      "strictTiming": "unknown; not passing"
+    },
+    "timer1x": {
+      "max": 1.7152079999998922,
+      "median": 1.1095919999998607,
+      "p95": 1.5976079999998731
+    },
+    "timerHalf": {
+      "observedDrift": {
+        "max": 180.46560000000002,
+        "median": 150.47760000000005,
+        "p95": 177.41760000000005
+      },
+      "limitation": "Includes a nonzero reference epoch offset; not a pure isolated half-speed error estimate"
+    }
+  },
+  "publicColdOracle": {
+    "runId": "20261018T045843Z-fcd56ba199bb4fa198cad9f0fd277a31",
+    "rawSHA256": "6697564f76a47b122fd6a67c38760dd48c044303f5c83d9592fc34d38850d794",
+    "pass": true,
+    "candidate": "1.11.2",
+    "oracle": "1.11.1",
+    "rigs": [
+      {
+        "side": "a",
+        "boneCount": 96,
+        "times": 313,
+        "orders": {
+          "forward": 313,
+          "backward": 313,
+          "random": 313,
+          "repeated": 5,
+          "offgrid": 3
+        },
+        "diffs": [],
+        "oracle": "published @rig-c/play 1.11.1 public seek; loop=false, environment(null), seekStep=1/60",
+        "physicsScope": "public posed bones/frame and 1/180 continuation only; hidden state covered separately by accepted producer oracle"
+      },
+      {
+        "side": "b",
+        "boneCount": 96,
+        "times": 313,
+        "orders": {
+          "forward": 313,
+          "backward": 313,
+          "random": 313,
+          "repeated": 5,
+          "offgrid": 3
+        },
+        "diffs": [],
+        "oracle": "published @rig-c/play 1.11.1 public seek; loop=false, environment(null), seekStep=1/60",
+        "physicsScope": "public posed bones/frame and 1/180 continuation only; hidden state covered separately by accepted producer oracle"
+      }
+    ],
+    "scope": "Public bones/posedFrame/time and fixed continuation only; no hidden PhysicsState access. Retained because the later app change alters draw admission and endpoint inspection, not seek history."
+  },
+  "cleanup": {
+    "ownedBrowserProxyAndServerClosedInAllThreeFlows": true,
+    "linuxSubreaperQuiescent": true,
+    "originalAndCopiedInputsChanged": 0,
+    "personalProfilesOrExistingTabsUsed": false,
+    "hqServerAccessed": false
+  },
+  "limitations": [
+    "The original current-display lateness diagnostic remains disclosed; the adopted next-reference estimate does not retroactively pass historical current-deadline failures.",
+    "Terminal N/A requires bound last decoded frame at shared end, actual ended afterward, and a later valid paused inspection with matching last actual pair and feedback enabled. Other unknown timing fails.",
+    "Producer hidden-physics acceptance is separate upstream evidence. Historical producer reports are not asserted to be cryptographically bound to the exact npm artifact tested here; this consumer independently pins and hashes its installed public release.",
+    "Cold initial loading and a fresh first-far paused seek were not separately timed as acceptance metrics.",
+    "No compositor scanout, user-Mac or WebGL performance claim is made."
+  ]
+}

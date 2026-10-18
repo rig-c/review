@@ -12,22 +12,14 @@ import { stripNoClock, type StripRenderInput, type StripRenderResult, type Strip
 import { toolVersions } from './versions.ts';
 
 export interface StripTools { ffmpeg?:string; ffprobe?:string }
-interface VideoFrame {index:number;time:number}
-interface VideoInfo {frames:VideoFrame[];duration:number}
+import {nearestReferenceFrame} from './reference-frames.ts';
+import {probeReference} from './probe-reference.ts';
+export {nearestReferenceFrame} from './reference-frames.ts';
 type NativeCanvas=typeof import('@napi-rs/canvas');
 interface OpenRig {id:StripSide;assets:ModelAssets;player:RigPlayer;renderer:CanvasRenderer;clock:StripRenderInput['rigs'][number]['clock']}
 function fail(code:string,text:string):never {throw new Error(`${code}: ${text}`);}
 let hostQueue=Promise.resolve();
 
-/** Selection uses decoded timestamps, never a guessed FPS. Equal distance keeps earlier PTS. */
-export function nearestReferenceFrame(frames:readonly VideoFrame[],time:number):VideoFrame {
-  if(!Number.isFinite(time)||!frames.length)fail('STRIP_REFERENCE_TIME','finite time and decoded frames required');
-  let lo=0,hi=frames.length;
-  while(lo<hi){const mid=lo+Math.floor((hi-lo)/2);if(frames[mid]!.time<time)lo=mid+1;else hi=mid;}
-  const after=frames[lo],before=frames[lo-1];
-  if(!before)return after!;if(!after)return before;
-  return time-before.time<=after.time-time?before:after;
-}
 function command(binary:string,args:string[],kind:string):Promise<Buffer>{
   return new Promise((resolveCommand,reject)=>{
     execFile(binary,args,{encoding:'buffer',timeout:60000,maxBuffer:32*1024*1024,windowsHide:true},(error,stdout,stderr)=>{
@@ -35,16 +27,6 @@ function command(binary:string,args:string[],kind:string):Promise<Buffer>{
       resolveCommand(stdout);
     });
   });
-}
-async function probe(referencePath:string,binary:string):Promise<VideoInfo>{
-  const bytes=await command(binary,['-v','error','-threads','1','-select_streams','v:0','-show_frames','-show_streams','-show_format','-show_entries','frame=best_effort_timestamp_time:stream=duration:format=duration','-of','json',referencePath],'FFPROBE');
-  const value=JSON.parse(bytes.toString('utf8')) as {frames?:{best_effort_timestamp_time?:string}[];streams?:{duration?:string}[];format?:{duration?:string}};
-  if(!Array.isArray(value.frames)||!value.frames.length)fail('STRIP_REFERENCE','no decoded video frames');
-  const frames=value.frames.map((frame,index)=>({index,time:Number(frame.best_effort_timestamp_time)}));
-  for(let i=0;i<frames.length;i++)if(!Number.isFinite(frames[i]!.time)||frames[i]!.time<0||(i>0&&frames[i]!.time<frames[i-1]!.time))fail('STRIP_REFERENCE','expected finite ordered nonnegative decoded PTS');
-  const duration=Number(value.streams?.[0]?.duration??value.format?.duration);
-  if(!Number.isFinite(duration)||duration<frames.at(-1)!.time)fail('STRIP_REFERENCE','finite video duration covering decoded frames required');
-  return {frames,duration};
 }
 export async function referenceFramePng(path:string,index:number,binary:string,width:number,height:number):Promise<Buffer>{
   // Downsize before native image decode; output cells must not retain hundreds
@@ -127,7 +109,7 @@ export async function renderStrip(input:StripRenderInput,tools:StripTools={}):Pr
     try{native=await import('@napi-rs/canvas');}catch(error){fail('STRIP_CANVAS',`@napi-rs/canvas unavailable: ${error instanceof Error?error.message:String(error)}`);}
     const images=new Map<string,Buffer>();restore=installHost(native,images);
     const ffmpeg=tools.ffmpeg??process.env.RIG_REVIEW_FFMPEG??'ffmpeg',ffprobe=tools.ffprobe??process.env.RIG_REVIEW_FFPROBE??'ffprobe';
-    const video=await probe(input.referencePath,ffprobe);
+    const video=await probeReference(input.referencePath,ffprobe);
     for(const source of input.rigs)rigs.push(await openRig(source,images));
     if(!rigs.length)fail('STRIP_MODEL','at least one compiled rig required');
     const end=Math.min(video.duration,...rigs.map(rig=>rig.assets.animations.find(a=>a.name===input.plan.animation)!.duration));
