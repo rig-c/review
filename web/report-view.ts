@@ -21,16 +21,16 @@ export function eventSeekTime(event: ReportEvent, timeIndex?: number): number | 
 }
 
 export function eventTimingLabel(event: ReportEvent): string {
-  if (!event.seek) return event.frames ? '시간 맵 없음 — seek 불가' : '시간 정보 없음 — seek 불가';
-  const source = { event: '명시 시각', frameTimes: 'frameTimes 매핑', fps: '명시 fps + frame0 매핑' }[event.seek.source];
+  if (!event.seek) return event.frames ? 'No time mapping — cannot seek' : 'No time data — cannot seek';
+  const source = { event: 'Explicit time', frameTimes: 'frameTimes mapping', fps: 'Explicit fps + frame0 mapping' }[event.seek.source];
   return `${source} · ${event.seek.time} s`;
 }
 
 export function eventCoordinates(event: ReportEvent): string {
   const labels: string[] = [];
   if (event.frames) labels.push(`F${event.frames[0]}–${event.frames[1]}`);
-  if (event.field === 'uncovered' && event.times) labels.push(`개별 시각 ${event.times.length}개`);
-  else if (event.timeInterval) labels.push(`${event.timeInterval.start}–${event.timeInterval.end} s (${event.timeInterval.endKind === 'boundary' ? '끝 경계' : '프레임 시각'})`);
+  if (event.field === 'uncovered' && event.times) labels.push(`${event.times.length} discrete times`);
+  else if (event.timeInterval) labels.push(`${event.timeInterval.start}–${event.timeInterval.end} s (${event.timeInterval.endKind === 'boundary' ? 'end boundary' : 'frame time'})`);
   else if (event.seek) labels.push(`${event.seek.time} s`);
   return labels.join(' · ');
 }

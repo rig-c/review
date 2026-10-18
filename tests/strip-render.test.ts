@@ -86,7 +86,7 @@ describe('real public-player Node canvas strip',()=>{
  },60000);
  test('no clock, missing tool and actual decoded PTS outside common domain refuse',async()=>{
   const request=await input();request.plan.groups[0]!.samples[0]!.time=null;
-  await expect(renderStrip(request,{ffprobe:'missing-not-executed'})).rejects.toThrow('report에 frameTimes 없음');
+  await expect(renderStrip(request,{ffprobe:'missing-not-executed'})).rejects.toThrow('Report has no frameTimes');
   await expect(renderStrip(await input(),{ffprobe:'rig-review-deliberately-missing-ffprobe'})).rejects.toThrow('STRIP_FFPROBE');
   const short=await input('short');short.plan.groups[0]!.samples=[{requestedFrame:1,time:.76}];
   await expect(renderStrip(short)).rejects.toThrow('STRIP_DOMAIN: decoded PTS 1');
