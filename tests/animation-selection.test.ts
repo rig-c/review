@@ -42,3 +42,19 @@ test('the runtime init selection actually plays the report clip instead of the f
  try{const selected=selectAnimation([source('single',assets.animations.map(item=>item.name),'dance')],undefined,true)!,name=initialPlayerAnimation(assets.animations.map(item=>item.name),selected.name)!;player.play(name,{loop:false});player.pause();player.seek(.25);player.draw();expect(player.current).toBe('dance');expect(player.time).toBeCloseTo(.25,12);player.play(initialPlayerAnimation(assets.animations.map(item=>item.name),selected.name,{animation:'idle'})!,{loop:false});expect(player.current).toBe('idle');}
  finally{player.dispose();assets.dispose();}
 });
+
+
+test('compatible automatic axis preserves the complete checkpoint while mismatched or unavailable bindings are skipped',()=>{
+ const point={id:'dance-review',title:'Review this pose',animation:'dance',time:.4,axis:{id:'look',value:.25},reference:'source',camera:{zoom:2,x:10,y:20},workspace:'modeling' as const,note:'Retain this checkpoint context'};
+ const manifest={references:[{id:'source',label:'Source',type:'image' as const,path:'source.png'},{id:'explicit',label:'Explicit',type:'video' as const,path:'selected.mp4'}],axes:[{id:'look',label:'Look',animation:'dance',min:-1,max:1}],checkpoints:[point]};
+ const compatible=initialReviewSelection(manifest,null,undefined,'dance');expect(compatible.checkpoint).toBe(point);expect(compatible.checkpoint).toMatchObject({id:'dance-review',time:.4,axis:{id:'look',value:.25},camera:{zoom:2,x:10,y:20},workspace:'modeling',note:'Retain this checkpoint context'});expect(compatible.referenceId).toBe('source');expect(compatible.updateUrl).toBe(false);
+ const explicitReference=initialReviewSelection(manifest,null,'explicit','dance');expect(explicitReference.checkpoint).toBe(point);expect(explicitReference.referenceId).toBe('explicit');
+ const wrongAxis={...manifest,axes:[{...manifest.axes[0]!,animation:'idle'}]};expect(initialReviewSelection(wrongAxis,null,undefined,'dance').checkpoint).toBeUndefined();
+ expect(initialReviewSelection({...manifest,axes:[]},null,undefined,'dance').checkpoint).toBeUndefined();
+ const {axes,...missingAxes}=manifest;expect(initialReviewSelection(missingAxes,null,undefined,'dance').checkpoint).toBeUndefined();
+ expect(initialReviewSelection({...manifest,checkpoints:[{...point,axis:{id:'missing',value:0}}]},null,undefined,'dance').checkpoint).toBeUndefined();
+ expect(initialReviewSelection({...manifest,checkpoints:[{...point,animation:'idle'}]},null,undefined,'dance').checkpoint).toBeUndefined();
+ expect(initialReviewSelection({...manifest,checkpoints:[{...point,animation:undefined}]},null,undefined,'dance').checkpoint).toBeUndefined();
+ const requested=initialReviewSelection(wrongAxis,point.id,'explicit','dance');expect(requested.checkpoint).toBe(point);expect(requested.referenceId).toBe('source');expect(requested.updateUrl).toBe(true);
+ expect(initialReviewSelection(manifest,null).checkpoint).toBe(point);
+});

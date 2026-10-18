@@ -248,9 +248,11 @@ values, not independent options. The old strip export grammar is unchanged.
 The worker revalidates its resolved name and complete source binding before
 startup. Its API provides `initialAnimation` (a validated name or null); the
 single player uses it rather than the first runtime entry. Explicit checkpoint
-links and subsequent manual choices override startup selection. A conflicting
-or unbound automatic checkpoint, or one with an axis, is skipped so another
-clip's time/axis cannot silently apply. Compatible named checkpoints still work.
+links and subsequent manual choices override startup selection. With a selected clip, an automatic checkpoint is retained when its own
+animation and any declared axis's resolved animation both match that clip. Its
+time, camera, workspace and checkpoint identity remain intact. Conflicting or
+unbound checkpoints and unresolved or conflicting axes are skipped so another
+clip's time/axis cannot silently apply.
 A static model with zero clips stays static. A source-only report can remain
 evidence without claiming observed playback; an explicit name without compiled
 catalog metadata refuses as validation unavailable.
