@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
+import {referenceBinding,type ReferenceBinding} from './reference.ts';
 import { validateFeedbackSelection } from './feedback-validation.ts';
 import { choice, object, string, type Json, type ReviewPackage, type ReviewedSource } from './manifest.ts';
 export interface Feedback {id:string;frameStart:number;frameEnd:number;target:{kind:'bone'|'slot'|'rig';name:string};category:'defect'|'quality';summary:string;context?:Json}
@@ -36,12 +37,13 @@ export function readPackageFeedback(feedback:Feedback,p:ReviewPackage,animation?
     return {feedback:{...feedback,...(normalized===undefined?{}:{context:normalized})},warning:{id:feedback.id,error:e instanceof Error?e.message:String(e)}};
   }
 }
-export interface ReviewSession { schema:'rig-review-session/1'; id:string; revision:string; sourceHash:string; reviewedSource:ReviewedSource; status:'pending'|'approved'|'changes-requested'; checkpoints:Record<string,{outcome:'pending'|'pass'|'fail';note:string}>; feedback:Feedback[]; feedbackWarnings:FeedbackWarning[]; updatedAt:string|null }
-export function freshSession(p:ReviewPackage):ReviewSession { return {schema:'rig-review-session/1',id:p.manifest.id,revision:p.manifest.revision,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,status:'pending',checkpoints:{},feedback:[],feedbackWarnings:[],updatedAt:null}; }
+export interface ReviewSession { schema:'rig-review-session/1'; id:string; revision:string; sourceHash:string; reviewedSource:ReviewedSource; referenceBinding?:ReferenceBinding; status:'pending'|'approved'|'changes-requested'; checkpoints:Record<string,{outcome:'pending'|'pass'|'fail';note:string}>; feedback:Feedback[]; feedbackWarnings:FeedbackWarning[]; updatedAt:string|null }
+export function freshSession(p:ReviewPackage):ReviewSession { return {schema:'rig-review-session/1',id:p.manifest.id,revision:p.manifest.revision,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,...(referenceBinding(p)?{referenceBinding:referenceBinding(p)}:{}),status:'pending',checkpoints:{},feedback:[],feedbackWarnings:[],updatedAt:null}; }
 export function parseSession(input:unknown,p:ReviewPackage,strict=true):ReviewSession {
   const v=object(input,'session'); const fresh=freshSession(p);
   for(const k of ['schema','id','revision','sourceHash'] as const) if(v[k]!==fresh[k]) throw new Error(`session.${k}: does not match loaded package`);
   if(!isDeepStrictEqual(v.reviewedSource,p.reviewedSource))throw new Error('session.reviewedSource: does not match exact rig/motion hashes and tool versions of loaded package');
+  if(!isDeepStrictEqual(v.referenceBinding,fresh.referenceBinding))throw new Error('session.referenceBinding: does not match selected reference and package hash');
   const status=choice(v.status,['pending','approved','changes-requested'],'session.status');
   const entries=object(v.checkpoints,'session.checkpoints'); const checkpoints:ReviewSession['checkpoints']={};
   for(const [key,value] of Object.entries(entries)) { if(!p.manifest.checkpoints.some(c=>c.id===key)) throw new Error(`session.checkpoints: unknown checkpoint ${key}`);const c=object(value,'checkpoint');if(typeof c.note!=='string'||c.note.length>10000)throw new Error('checkpoint.note: expected string <= 10000 characters');checkpoints[key]={outcome:choice(c.outcome,['pending','pass','fail'],'checkpoint.outcome'),note:c.note}; }

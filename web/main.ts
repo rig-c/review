@@ -1,4 +1,6 @@
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
+import {initialReviewSelection} from '../src/open-selection.ts';
+import type {ReferenceBinding} from '../src/reference.ts';
 import type { Checkpoint, Reference, ReviewedSource, ReviewManifest } from '../src/manifest.ts';
 import type { Feedback, ReviewSession } from '../src/session.ts';
 import type { ReportEvent, ReportSeeds } from '../src/report.ts';
@@ -7,7 +9,7 @@ import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, type
 import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 
-interface ReviewResponse { manifest: ReviewManifest; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
+interface ReviewResponse { manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
 interface PoseReference { schema: 'rig-review-pose/1'; coordinateSystem: 'image-pixels-y-down'; width: number; height: number; joints: { id: string; x: number; y: number; parent?: string }[] }
 interface SequenceJoint { state: 'observed' | 'occluded' | 'missing' | 'inferred'; at?: [number, number]; score?: number }
 interface PoseSequence { spec: 'rig-pose-sequence/1'; space: { units: 'picture-px'; origin: 'top-left'; y: 'down' }; width: number; height: number; source?: string; frames: { t: number; people: { id: string; joints: Record<string, SequenceJoint> }[] }[]; camera?: { s: number; tx: number; ty: number; inliers: number }[]; cameraSource?: unknown }
@@ -65,6 +67,8 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return await response.json() as T;
 }
 
+function referenceUrl(reference:Reference):string {return data.explicitReference?.id===reference.id?data.explicitReference.url:assetUrl(reference.path);}
+
 function assetUrl(path: string): string {
   if (!path || path.startsWith('/') || /[\\%?#\x00-\x1f]/.test(path) || /^[a-zA-Z]:/.test(path) || path.split('/').some(part => !part || part === '.' || part === '..')) throw new Error(`Unsupported package asset path: ${path}`);
   return '/assets/' + path.split('/').map(encodeURIComponent).join('/');
@@ -87,7 +91,7 @@ function renderProvenance(): void {
   text('provenance-version', provenance.packageRevision);
   text('provenance-rig', provenance.rig ? provenance.rig.sha256.slice(0, 12) + '…' : '미제공');
   text('provenance-motion', provenance.motion ? provenance.motion.sha256.slice(0, 12) + '…' : '미제공');
-  text('provenance-full', JSON.stringify({ sourceHash: session.sourceHash, reviewedSource: provenance }, null, 2));
+  text('provenance-full', JSON.stringify({ sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: provenance }, null, 2));
 }
 
 function checkpointEntry(): ReviewSession['checkpoints'][string] | undefined {
@@ -108,14 +112,15 @@ function renderCheckpoints(): void {
   if (!data.manifest.checkpoints.length) list.textContent = '확인 항목이 없습니다.';
 }
 
-async function chooseCheckpoint(point: Checkpoint): Promise<void> {
+async function chooseCheckpoint(point: Checkpoint,initial?:{referenceId?:string;updateUrl:boolean}): Promise<void> {
   pause(); checkpoint = point; axisInspection = false;
-  const url = new URL(location.href); url.searchParams.set('checkpoint', point.id); window.history.replaceState(null, '', url);
+  if(initial?.updateUrl!==false){const url = new URL(location.href); url.searchParams.set('checkpoint', point.id); window.history.replaceState(null, '', url);}
   if (point.workspace) setWorkspace(point.workspace);
   if (point.animation) chooseAnimation(point.animation);
   time = point.time ?? 0;
-  if (point.reference && select('reference-select').value !== point.reference) {
-    select('reference-select').value = point.reference; await showReference(point.reference);
+  const referenceId=initial?.referenceId??point.reference;
+  if (referenceId && select('reference-select').value !== referenceId) {
+    select('reference-select').value = referenceId; await showReference(referenceId);
   }
   zoom = Math.min(8, Math.max(.25, point.camera?.zoom ?? 1));
   cameraCenter = point.camera ? { x: point.camera.x, y: point.camera.y } : null;
@@ -219,7 +224,7 @@ async function showReference(id: string): Promise<void> {
   const fail = () => { if (generation !== referenceGeneration) return; el('reference-empty').hidden = false; text('reference-empty', '자료를 열지 못했습니다. 패키지의 파일을 확인해 주세요.'); };
   try {
     if (reference.type === 'pose') {
-      const response = await fetch(assetUrl(reference.path)); if (!response.ok) throw new Error(`Pose reference HTTP ${response.status}`);
+      const response = await fetch(referenceUrl(reference)); if (!response.ok) throw new Error(`Pose reference HTTP ${response.status}`);
       const value: unknown = await response.json(); if (generation !== referenceGeneration) return;
       const canonical = readSequence(value);
       if (canonical) {
@@ -242,11 +247,11 @@ async function showReference(id: string): Promise<void> {
       }
       content.append(svg); el('reference-empty').hidden = true; fitCamera();
     } else if (reference.type === 'image') {
-      const image = new Image(); image.alt = reference.label; image.onload = () => { if (generation !== referenceGeneration) return; referenceSize = { width: image.naturalWidth, height: image.naturalHeight }; image.width = image.naturalWidth; image.height = image.naturalHeight; el('reference-empty').hidden = true; fitCamera(); }; image.onerror = fail; image.src = assetUrl(reference.path); content.append(image);
+      const image = new Image(); image.alt = reference.label; image.onload = () => { if (generation !== referenceGeneration) return; referenceSize = { width: image.naturalWidth, height: image.naturalHeight }; image.width = image.naturalWidth; image.height = image.naturalHeight; el('reference-empty').hidden = true; fitCamera(); }; image.onerror = fail; image.src = referenceUrl(reference); content.append(image);
     } else {
       const media = document.createElement('video'); media.controls = true; media.muted = true; media.preload = 'metadata'; media.playsInline = true;
       media.onloadedmetadata = () => { if (generation !== referenceGeneration) return; referenceSize = { width: media.videoWidth, height: media.videoHeight }; media.width = media.videoWidth; media.height = media.videoHeight; if (Number.isFinite(media.duration) && !player) duration = media.duration; media.currentTime = Math.min(time, Math.max(0, media.duration - .01)); el('reference-empty').hidden = true; fitCamera(); renderTransport(); };
-      media.onerror = fail; media.src = assetUrl(reference.path); video = media; content.append(media);
+      media.onerror = fail; media.src = referenceUrl(reference); video = media; content.append(media);
     }
   } catch (error) { fail(); message(errorText(error), true); }
 }
@@ -591,7 +596,7 @@ function issueFields(feedback: Feedback): { title: string; body: string; labels:
   const title = `[${feedback.category}] ${feedback.target.kind}:${feedback.target.name} F${feedback.frameStart}–${feedback.frameEnd} · ${feedback.summary}`;
   const body = [
     `- Package: ${markdown(session.id)} / ${markdown(session.revision)}`,
-    `- Source hash: ${session.sourceHash}`,
+    `- Source hash: ${session.sourceHash}`, ...(session.referenceBinding?[`- Reference binding: ${JSON.stringify(session.referenceBinding)}`]:[]),
     `- Package revision: ${markdown(session.reviewedSource.packageRevision)}`,
     `- Viewer version: ${markdown(session.reviewedSource.viewerVersion)}`,
     `- Runtime version: ${markdown(session.reviewedSource.runtimeVersion)}`,
@@ -672,8 +677,8 @@ function bind(): void {
       message(dirty ? '제출 중 추가한 변경이 있습니다. 다시 제출해 주세요.' : '선택한 검토 상태·피드백·검토 대상 출처를 제출했습니다.');
     } catch (error) { message(`제출 실패: ${errorText(error)}`, true); } finally { saving = false; updateSavedState(); }
   };
-  button('export').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ schema: 'rig-review-feedback/1', id: session.id, revision: session.revision, sourceHash: session.sourceHash, reviewedSource: session.reviewedSource, status: session.status, checkpoints: session.checkpoints, feedback: session.feedback, feedbackWarnings: session.feedbackWarnings, issues: session.feedback.map(issueFields) }, null, 2) + '\n', 'application/json'); message('검토 대상 출처·피드백·검증 경고·이슈용 필드를 JSON으로 내보냈습니다. 원본은 변경하지 않았습니다.'); };
-  button('export-markdown').onclick = () => { const content = [`# ${markdown(session.id)} review feedback`, '', 'Reviewed source:', ...JSON.stringify({ sourceHash: session.sourceHash, reviewedSource: session.reviewedSource }, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(item => { const issue = issueFields(item); return [`## ${markdown(issue.title)}`, '', issue.body, '', '---', '']; })].join('\n'); download(`${session.id}-issues.md`, content, 'text/markdown'); message('검토 출처·검증 경고와 각 피드백의 구조화된 이슈 내용을 Markdown으로 내보냈습니다.'); };
+  button('export').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ schema: 'rig-review-feedback/1', id: session.id, revision: session.revision, sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: session.reviewedSource, status: session.status, checkpoints: session.checkpoints, feedback: session.feedback, feedbackWarnings: session.feedbackWarnings, issues: session.feedback.map(issueFields) }, null, 2) + '\n', 'application/json'); message('검토 대상 출처·피드백·검증 경고·이슈용 필드를 JSON으로 내보냈습니다. 원본은 변경하지 않았습니다.'); };
+  button('export-markdown').onclick = () => { const content = [`# ${markdown(session.id)} review feedback`, '', 'Reviewed source:', ...JSON.stringify({ sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: session.reviewedSource }, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(item => { const issue = issueFields(item); return [`## ${markdown(issue.title)}`, '', issue.body, '', '---', '']; })].join('\n'); download(`${session.id}-issues.md`, content, 'text/markdown'); message('검토 출처·검증 경고와 각 피드백의 구조화된 이슈 내용을 Markdown으로 내보냈습니다.'); };
   const resize = new ResizeObserver(fitCamera); resize.observe(el('rig-viewport')); resize.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
   window.addEventListener('pagehide', () => { pause(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
@@ -688,11 +693,10 @@ async function start(): Promise<void> {
     if (!data.manifest.references.length) { select('reference-select').append(option('', '자료 미제공')); select('reference-select').disabled = true; }
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = '소스 파일 미제공';
     bind(); updateStripControls(); stripStatus('오른쪽 시작·끝 프레임 또는 모든 피드백 구간을 선택해 다운로드합니다. 미제출 피드백도 선택에 포함되며, 내보내기로 제출되지는 않습니다.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
-    const reference = data.manifest.references[0]; if (reference) await showReference(reference.id);
+    const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id),first=initial.checkpoint;
+    if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
     await initPlayer();
-    const requestedId = new URLSearchParams(location.search).get('checkpoint');
-    const first = requestedId ? data.manifest.checkpoints.find(point => point.id === requestedId) : data.manifest.checkpoints[0];
-    if (first) await chooseCheckpoint(first); else renderCheckpoint();
+    if (first) await chooseCheckpoint(first,initial); else renderCheckpoint();
     if (data.report && !first?.workspace) workspace = 'motion';
     renderTransport(); setWorkspace(workspace);
     if (requestedId && !first) message(`확인 항목 "${requestedId}"이 패키지에 없습니다. 목록에서 선택해 주세요.`, true);

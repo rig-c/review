@@ -99,3 +99,54 @@ Strip times require the selected report's exact `frameTimes` and matching animat
 PNG export uses the pinned published `@rig-c/play` canvas player and real Node Canvas2D, with `ffmpeg` and `ffprobe` available on PATH for reference decoding. Missing capabilities fail by name. Each requested sample chooses the nearest actual decoded reference PTS (ties earlier); both rigs seek that actual PTS using the viewer's fixed step. JSON distinguishes requested time, actual PTS, delta, decoded frame index, actual player times and independently known producer frames. Requests outside the common domain refuse instead of clamping. The PNG shows source rows, chronological frame columns, and full source hashes/revisions/tool and renderer versions. Batch groups stack vertically. Exports are bounded to64 intervals,256 total frames,64 megapixels and16384 pixels per dimension; larger selections must be split.
 
 The footer fits its measured text while retaining full hashes. RGB/dark-tint features unsupported by the published Canvas2D path refuse with `STRIP_UNSUPPORTED_TINT`; they are not silently omitted.
+
+## One-command owner handoff
+
+`open` validates and hashes an existing folder, starts a background loopback
+instance or reuses the exact matching one, prints its hash-bound URL, and exits:
+
+```sh
+bun run open -- /absolute/output --reference /absolute/original.mp4
+# Installed executable mapping:
+rig-review open /absolute/output --reference /absolute/original.mp4
+rig-review feedback /absolute/output --reference /absolute/original.mp4
+rig-review open /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance
+rig-review feedback /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance
+```
+
+`--animation` can be omitted for compare only when the actual models have exactly
+one common animation. Multiple candidates are a named refusal. Opening never
+approves a review. The command prints the matching feedback retrieval command on
+stderr; stdout contains the URL alone. A selected external video takes precedence
+at automatic startup; an explicit checkpoint link or manual checkpoint selection
+still chooses that checkpoint's reference.
+
+The selected video is a separate CLI capability, not a manifest path escape or a
+file copied into the source package. Its name and streaming byte hash, plus the
+base package hash, appear as `referenceBinding` in single review responses,
+sessions and feedback exports. Use the same `--reference` when retrieving that
+submission; omitting it reads the separate reference-free identity. Changed
+package or reference bytes start pending state. Existing historical retrieval
+preserves earlier recorded tool versions over exactly the same reference content.
+
+The single strip panel can export the selected external video using that same
+binding. Headless equivalent (the original declared-reference form stays valid):
+
+```sh
+rig-review strip /absolute/output --reference-video /absolute/original.mp4 --animation dance --frames 176:184 --out /absolute/external/strip.png
+```
+
+Only tool-owned instances with matching content, canonical input locations, tool
+fingerprint and a private capability handshake are reused. The URL hash is
+checked before serving the app; a stale link never selects another instance's
+package. Input hashes are freshly computed, not trusted from mtime caches. Idle
+open-managed workers stop after 30 minutes. Their private registry, requests and
+logs live beside feedback under `~/.local/state/rig-c-review/open/`; nothing is
+written into supplied folders. `RIG_REVIEW_STATE_DIR` selects another state root
+outside all input packages. Existing foreground review commands still work.
+
+No browser is opened, no LAN listener is added, and no misleading phone/QR URL is
+printed: every current instance binds only `127.0.0.1`.
+
+The printed feedback retrieval command uses POSIX shell quoting for literal path
+arguments. It is not a PowerShell or cmd.exe command string.

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadCompare, assertCompareUnchanged, type ComparePackage } from '../src/compare.ts';
@@ -25,8 +25,11 @@ test('changing A or B model page, motion, model, or reference refuses both read 
  for(const path of ['a/build/page.png','b/build/page.png','a/motion.json','b/motion.json','a/build/skeleton.model.json','b/build/skeleton.model.json','ref.mp4']){const f=await fixture(),p=await loadCompare(f.inputs),file=join(f.root,path),old=await readFile(file,'utf8');await writeFile(file,old+' ');await expect(assertCompareUnchanged(p)).rejects.toThrow('inputs changed');await expect(saveCompareSession(p,{...freshCompareSession(p),feedback:[note()]},join(f.root,'state'))).rejects.toThrow('inputs changed');await expect(readCompareSession(p,join(f.root,'state'))).rejects.toThrow('inputs changed');}
 });
 test('comparison refuses missing rig, animation, external package symlink and non-video reference',async()=>{
- const f=await fixture();await expect(loadCompare({...f.inputs,animation:'missing'})).rejects.toThrow('compare.a.animation');await writeFile(join(f.root,'ref.txt'),'bytes');await expect(loadCompare({...f.inputs,reference:join(f.root,'ref.txt')})).rejects.toThrow('compare.reference');await rm(join(f.root,'a/build/skeleton.model.json'));await expect(loadCompare(f.inputs)).rejects.toThrow('compare.a.model');
+ const f=await fixture();await writeFile(join(f.root,'ref.txt'),'bytes');await expect(loadCompare({...f.inputs,reference:join(f.root,'ref.txt')})).rejects.toThrow('compare.reference');await rm(join(f.root,'a/build/skeleton.model.json'));await expect(loadCompare(f.inputs)).rejects.toThrow('compare.a.model');
  const other=await fixture();await rm(join(other.root,'a/build/page.png'));await symlink(join(other.root,'ref.mp4'),join(other.root,'a/build/page.png'));await expect(loadCompare(other.inputs)).rejects.toThrow('symlinks may not escape');
+});
+test('comparison animation refusal identifies each invalid side independently of parallel read order',async()=>{
+ for(const side of ['a','b'] as const){const f=await fixture(),other=side==='a'?'b':'a',modelPath=join(f.root,other,'build/skeleton.model.json'),model=JSON.parse(await readFile(modelPath,'utf8'));model.animations.push({name:'only-other-side',duration:2});await writeFile(modelPath,JSON.stringify(model));await expect(loadCompare({...f.inputs,animation:'only-other-side'})).rejects.toThrow(`compare.${side}.animation: model has no animation "only-other-side"`);}
 });
 test('compare HTTP isolates sides and reference, guards mutations and detects delayed changed input',async()=>{
  const f=await fixture(),p=await loadCompare(f.inputs);const server=await startCompareServer(p,{port:0,stateDir:join(f.root,'state')});const base=`http://127.0.0.1:${server.port}`;try{
@@ -46,5 +49,14 @@ test('reference GET, HEAD and ranges refuse replaced leaf or parent symlinks',as
  for(const replace of ['leaf','parent']){const f=await fixture();const referenceDir=join(f.root,'reference'),outside=join(f.root,'outside');await mkdir(referenceDir);await mkdir(outside);await writeFile(join(referenceDir,'ref.mp4'),'selected bytes');await writeFile(join(outside,'ref.mp4'),'OUTSIDE SECRET');const p=await loadCompare({...f.inputs,reference:join(referenceDir,'ref.mp4')});const server=await startCompareServer(p,{port:0,stateDir:join(f.root,'state')});try{
    if(replace==='leaf'){await rm(join(referenceDir,'ref.mp4'));await symlink(join(outside,'ref.mp4'),join(referenceDir,'ref.mp4'));}else{await rename(referenceDir,referenceDir+'-original');await symlink(outside,referenceDir);}
    for(const init of [{method:'GET'},{method:'HEAD'},{headers:{Range:'bytes=0-6'}}]){const response=await fetch(`http://127.0.0.1:${server.port}/compare-reference`,init);expect(response.status).toBe(400);expect(await response.text()).not.toContain('OUTSIDE SECRET');}
+ }finally{await server.stop(true);}}
+});
+
+
+test('comparison reference refuses same-size overwritten and atomically replaced bytes for GET/HEAD/ranges',async()=>{
+ for(const replacement of ['overwrite','atomic']){const f=await fixture(),p=await loadCompare(f.inputs),server=await startCompareServer(p,{port:0,stateDir:join(f.root,'state')}),url=`http://127.0.0.1:${server.port}/compare-reference`;try{
+  await utimes(f.inputs.reference,new Date(0),new Date(1000));const original=await fetch(url,{headers:{Range:'bytes=2-5'}});expect(original.status).toBe(206);expect(await original.text()).toBe('2345');expect((await fetch(url,{method:'HEAD'})).status).toBe(200);
+  if(replacement==='overwrite')await writeFile(f.inputs.reference,'9876543210');else{await writeFile(f.inputs.reference+'.next','9876543210');await rename(f.inputs.reference+'.next',f.inputs.reference);}await utimes(f.inputs.reference,new Date(0),new Date(1000));
+  for(const init of [{method:'GET'},{method:'HEAD'},{headers:{Range:'bytes=2-5'}}]){const response=await fetch(url,init);expect(response.status).toBe(409);if(init.method!=='HEAD')expect(await response.text()).not.toContain('9876543210');}
  }finally{await server.stop(true);}}
 });

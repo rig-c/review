@@ -3,13 +3,14 @@ import { realpath, stat, lstat, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, parse, sep, type posix } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { loadReview, safeFile, type ReviewPackage } from './manifest.ts';
+import { safeFile, type ReviewPackage } from './manifest.ts';
+import {assertReviewUnchanged,selectedReference,safeSelectedReference,packageSourceHash} from './reference.ts';
 import { assertCompareUnchanged, safeCompareReference, type ComparePackage } from './compare.ts';
 import { parseStripRequest, planStrip, type StripBinding, type StripPlan, type StripRenderInput, type StripRenderResult } from './strip.ts';
 export interface StripExportOptions {render?:(input:StripRenderInput)=>Promise<StripRenderResult>}
 export interface StripExport {plan:StripPlan;rendering:(Omit<StripRenderResult,'png'>&{pngSha256:string})|null;png:Uint8Array|null}
 const sha=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
-async function unchanged(p:ReviewPackage){try{const current=await loadReview(p.manifestPath);if(current.sourceHash!==p.sourceHash||!isDeepStrictEqual(current.reviewedSource,p.reviewedSource))throw new Error('source binding differs');}catch(e){throw new Error(`Strip inputs changed. Restart review before export. ${e instanceof Error?e.message:String(e)}`);}}
+async function unchanged(p:ReviewPackage){try{await assertReviewUnchanged(p);}catch(e){throw new Error(`Strip inputs changed. Restart review before export. ${e instanceof Error?e.message:String(e)}`);}}
 /** Streaming identity remains bounded even for long source videos and JSON plans. */
 export async function hashStripReference(path:string,onChunk?:(size:number)=>void){
   const canonical=await realpath(path),before=await stat(canonical);if(!before.isFile())throw new Error('strip.reference: expected regular video');
@@ -31,10 +32,12 @@ export async function exportReviewStrip(p:ReviewPackage,input:unknown,options:St
   const request=parseStripRequest(input);await unchanged(p);requireAnimation(p,request.animation,false);
   if(!request.referenceId)throw new Error('strip.referenceId: explicitly select a declared reference video');
   const selected=p.manifest.references.find(r=>r.id===request.referenceId&&r.type==='video');if(!selected)throw new Error('strip.referenceId: expected declared reference video id');
-  const reference=await referenceFile(await safeFile(p.root,selected.path));
-  const binding:StripBinding={sourceHash:p.sourceHash,packages:[{id:'single',label:p.manifest.title,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource}],reference:{name:reference.name,sha256:reference.sha256},compare:null};
+  const explicit=selectedReference(p),external=explicit?.binding.reference.id===selected.id;
+  const reference=await referenceFile(external?await safeSelectedReference(p):await safeFile(p.root,selected.path));
+  if(external&&reference.sha256!==explicit!.binding.reference.sha256)throw new Error('Strip inputs changed: selected reference hash differs');
+  const binding:StripBinding={sourceHash:p.sourceHash,packages:[{id:'single',label:p.manifest.title,sourceHash:packageSourceHash(p),reviewedSource:p.reviewedSource}],reference:{name:reference.name,sha256:reference.sha256},compare:null};
   const plan=planStrip(request,{mode:'single',binding,reports:{single:p.report}});
-  return finish(plan,reference.path,[{id:'single',p}],request.format==='png',async()=>{await unchanged(p);const current=await safeFile(p.root,selected.path);if(current!==reference.path)throw new Error('Strip inputs changed: reference path changed');await verifyReference(reference);},options);
+  return finish(plan,reference.path,[{id:'single',p}],request.format==='png',async()=>{await unchanged(p);const current=external?await safeSelectedReference(p):await safeFile(p.root,selected.path);if(current!==reference.path)throw new Error('Strip inputs changed: reference path changed');await verifyReference(reference);},options);
 }
 export async function exportCompareStrip(p:ComparePackage,input:unknown,options:StripExportOptions={}):Promise<StripExport>{
   const request=parseStripRequest(input);await assertCompareUnchanged(p);if(request.animation!==p.response.animation)throw new Error('strip.animation: expected fixed comparison animation');
