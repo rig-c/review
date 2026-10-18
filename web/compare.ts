@@ -13,7 +13,8 @@ import {RigOverlays} from './rig-overlays.ts';
 import {bindWorkspaceUI,type WorkspaceUI} from './workspace-ui.ts';
 import {connectControl} from './control.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
-import type {ControlCommand,ControlInspection,ControlView} from '../src/control.ts';
+import {controlComparison,type ControlCommand,type ControlInspection,type ControlView} from '../src/control.ts';
+import {pairEligibility,type InputState,type PairDomain} from '../src/comparison-eligibility.ts';
 import {connectInspectionPersistence,serializableView,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
 import {RendererBadge} from './renderer-status.ts';
 import {ComparePresentation,type PresentationState} from '../src/compare-presentation.ts';
@@ -54,6 +55,8 @@ const rendererBadges={a:new RendererBadge(),b:new RendererBadge()};
 const associations:Record<Side,Map<number,number|null>>={a:new Map(),b:new Map()};
 let requestedProducer:{side:Side;frame:number;time:number}|null=null;
 let endStopReason:string|null=null;
+// Actual load outcomes per input; the shared domain exists only after all three loaded.
+let pairInputs:{a:InputState;b:InputState;reference:InputState;domain:PairDomain}={a:{state:'pending'},b:{state:'pending'},reference:{state:'pending'},domain:null};
 const traceRows: CompareTrace[] = [];
 
 function message(value: string, error = false): void { text('message', value); el('message').classList.toggle('error', error); }
@@ -227,7 +230,9 @@ async function loadSide(side: Side, value: CompareSide): Promise<number> {
   const loaded = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, base) => { const url = new URL(name, base); if (url.origin !== location.origin || !url.pathname.startsWith(access.route(`/compare-assets/${side}/`))) throw new Error(`${side}: model page escapes its package`); return url.href; } });
   assets[side] = loaded; const clip = loaded.animations.find(item => item.name === data.animation); if (!clip) throw new Error(`${side.toUpperCase()}: animation "${data.animation}" Not supplied`);
   const player = new RigPlayer(el(`${side}-root`), loaded, { seekStep: compareSeekStep });
-  players[side] = player;parts?.register(side,await loadPartCatalog(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]),player); player.environment(null); player.play(data.animation, { loop: false }); player.pause();
+  // A side counts as loaded only after its first successful draw.
+  try { players[side] = player;parts?.register(side,await loadPartCatalog(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]),player); player.environment(null); player.play(data.animation, { loop: false }); player.pause(); player.draw(); }
+  catch (error) { delete players[side]; player.dispose(); throw error; }
   el(`${side}-empty`).hidden = true; return clip.duration;
 }
 
@@ -394,15 +399,40 @@ async function start(): Promise<void> {
     submittedBaseline=structuredClone(session);
     if (data.id !== session.id || data.sourceHash !== session.sourceHash || JSON.stringify(data.binding) !== JSON.stringify(session.binding)) throw new Error('Comparison and submission session refer to different source identities. Reopen the review.');
     text('title', data.title); text('animation', `${data.animation} · A/B order and reference video hash are fixed`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); parts=new PartExplorer(el('parts-explorer'),el('selected-part'),previous=>{redrawOverlays(true);const part=parts?.value();if(part){activeCamera=part.side==='b'?'b':'a';workspace?.revealInspector();document.querySelector<HTMLButtonElement>('[data-inspector=rig]')?.click();renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera());persistence?.save();},part=>{select('side').value=part.side;select('target-kind').value='slot';renderFeedbackSelection();input('target-name').value=part.slot;document.querySelector<HTMLButtonElement>('[data-inspector=feedback]')?.click();}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackSelection(); renderFeedback(); savedState();
-    const [referenceDuration, aDuration, bDuration] = await Promise.all([loadReference(), loadSide('a', data.a), loadSide('b', data.b)]);
+    renderPairLayout();
+    const settled = await Promise.allSettled([loadReference(), loadSide('a', data.a), loadSide('b', data.b)]);
+    const outcome = (value: PromiseSettledResult<number>): InputState => value.status === 'fulfilled' ? { state: 'loaded' } : { state: 'failed', reason: describe(value.reason) };
+    pairInputs = { reference: outcome(settled[0]), a: outcome(settled[1]), b: outcome(settled[2]), domain: null };
+    if (settled[0].status === 'fulfilled' && settled[1].status === 'fulfilled' && settled[2].status === 'fulfilled') { try { domain = commonDomain(settled[0].value, settled[1].value, settled[2].value); pairInputs.domain = { end: domain.end }; } catch (error) { pairInputs.domain = { refused: describe(error) }; } }
+    renderPairLayout();
+    if (!domain) { showSurvivors(); return; }
     void loadFrameIndex();
-    domain = commonDomain(referenceDuration, aDuration, bDuration); input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
+    input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;
     await seekTo(0);activeCamera='a';if(cameraSync)alignCameras();fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
     if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { failPair(error); for (const side of ['a', 'b'] as const) if (!players[side]) text(`${side}-empty`, `${side.toUpperCase()} Could not open comparison rig.`); text('reference-empty', 'Check the reference video and comparison inputs.'); }
 }
-function sharedBox():PoseBounds|null {const a=assets.a?.stage??players.a?.bounds(),b=assets.b?.stage??players.b?.bounds();return a&&b?unionBounds(a,b):null;}
+function sharedBox():PoseBounds|null {const a=assets.a?.stage??players.a?.bounds(),b=assets.b?.stage??players.b?.bounds();return a&&b?unionBounds(a,b):a??b??null;}
+/** The pair is offered only when both sides and the shared video actually loaded; a failed side leaves the survivor as a single pane, named. */
+function renderPairLayout():PairEligibilityState {
+ const state=pairEligibility(pairInputs),shown={reference:state.effective==='compare'||state.effective==='reference',a:state.effective==='compare'||state.effective==='a',b:state.effective==='compare'||state.effective==='b'};
+ for(const target of ['reference','a','b'] as const){const pane=el(target+'-viewport').closest('section');if(pane)pane.hidden=!shown[target];}
+ el('stage-layout').dataset.panes=String(Object.values(shown).filter(Boolean).length);
+ if(state.effective!=='compare')text('domain',state.effective===null?`No input rendered · ${state.reasons.compare??''}`:`${state.effective==='reference'?'Reference only':state.effective.toUpperCase()+' only'} · comparison unavailable: ${state.reasons.compare??''}`);
+ return state;
+}
+type PairEligibilityState=ReturnType<typeof pairEligibility>;
+/** Static single-pane inspection of whatever actually loaded. No synchronized pair, playback or feedback. */
+function showSurvivors():void {
+ invalidateTrace('Comparison unavailable · no synchronized pair');
+ for(const side of ['a','b'] as const){if(pairInputs[side].state==='loaded'&&players[side])text(`${side}-renderer`,rendererBadges[side].succeeded(players[side]!.renderer).label);else{assets[side]?.dispose();delete assets[side];text(`${side}-empty`,`${side.toUpperCase()} unavailable · ${pairInputs[side].state==='failed'?(pairInputs[side] as {reason:string}).reason:'not loaded'}`);text(`${side}-renderer`,rendererBadges[side].failed().label);}}
+ if(pairInputs.reference.state!=='loaded')text('reference-empty','Reference video unavailable.');
+ updateFeedbackAvailability();
+ const state=renderPairLayout();activeCamera=state.effective==='b'?'b':state.effective==='reference'?'reference':'a';fit();
+ message(`Comparison unavailable · ${state.reasons.compare??''}${state.effective&&state.effective!=='compare'?` · showing ${state.effective==='reference'?'the reference':state.effective.toUpperCase()} alone`:''}`,true);
+ if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
+}
 function paneFrame(target:CameraTarget,hidden=false):CameraFrame|null {
  const viewport=el(target+'-viewport');if(viewport.clientWidth<=0||viewport.clientHeight<=0)return hidden?cameraFrames[target]??null:null;
  const box=target==='reference'?video.videoWidth>0&&video.videoHeight>0?{x:0,y:0,width:video.videoWidth,height:video.videoHeight}:null:players[target]?sharedBox():null;
@@ -460,7 +490,7 @@ async function restartIdle():Promise<void> {
 function localDraft():boolean{return dirty||!!input('summary').value.trim()||!!input('frame-start').value.trim()||!!input('frame-end').value.trim()||!!input('target-name').value.trim()||!!select('category').value;}
 function controlState():ControlInspection {
  const css=(target:CameraTarget)=>{const frame=paneFrame(target,true);if(!frame)return {zoom:1,pan:{x:0,y:0}};const value=cameraSignature(cameras[target],frame);return {zoom:value.zoom,pan:{x:value.pan.x*frame.width,y:value.pan.y*frame.height}};};
- return {part:parts?.value()??null,partGeneration:parts?.observation()?.generation??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:css('a'),a:css('a'),b:css('b'),reference:css('reference')},animation:data.animation,time:trace?.reference??null,playing:!video.paused,loop:canRepeatIdle()?'idle':'off',layers:{images:!!players.a&&layers.images,meshes:!!players.a&&layers.mesh,bones:!!players.a&&layers.bones},ready,seeking:seeking||video.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring()&&!!feedbackTrace(ready,seeking||video.seeking,trace),capabilities:{camera:!!players.a&&!!players.b,referenceCamera:video.readyState>=1,animation:false,time:ready,playback:ready,layers:{images:!!players.a&&!!players.b,meshes:!!players.a&&!!players.b,bones:!!players.a&&!!players.b}}};
+ return {part:parts?.value()??null,partGeneration:parts?.observation()?.generation??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:css('a'),a:css('a'),b:css('b'),reference:css('reference')},animation:data.animation,time:trace?.reference??null,playing:!video.paused,loop:canRepeatIdle()?'idle':'off',layers:{images:!!players.a&&layers.images,meshes:!!players.a&&layers.mesh,bones:!!players.a&&layers.bones},ready,seeking:seeking||video.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring()&&pairEligibility(pairInputs).feedback&&!!feedbackTrace(ready,seeking||video.seeking,trace),comparison:controlComparison(pairEligibility(pairInputs)),capabilities:{camera:!!players.a&&!!players.b,referenceCamera:video.readyState>=1,animation:false,time:ready,playback:ready&&pairEligibility(pairInputs).playback,layers:{images:!!players.a&&!!players.b,meshes:!!players.a&&!!players.b,bones:!!players.a&&!!players.b}}};
 }
 async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
