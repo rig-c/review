@@ -396,3 +396,38 @@ the same actual last-drawn pair and enables feedback. The manual raw evidence
 records all of those facts. Other unknown timing remains a strict failure; the
 terminal case is excluded from the deadline denominator, never counted as an
 on-time submission.
+
+
+## Actual browser draw backend
+
+Browser players retain play's default DOM mode and default mesh backend. Rigid
+parts remain DOM images; a WebGL mesh label does not claim full-frame GL drawing.
+WebGL is requested by the published default, with Canvas2D as the supported mesh
+fallback. Accurate public actual-flush telemetry requires play 1.11.1 or later;
+this checkout consumes pinned 1.11.2. The consumer does not probe GL or inspect
+private renderer state. The separate Node strip exporter remains Canvas2D.
+
+The backend badge is sampled only after successful draw/frame calls. Fresh mesh
+rasterization names its observed backend; cached-only rasters are labeled reused
+without inventing a fresh backend submission. A no-mesh DOM draw does not claim
+GL. Load/draw failure clears current success. Zoom/fit changes CSS and backing
+ratio settings without claiming another render; no independent compare draw is
+added, because prepared player time may differ from the last visible pose.
+
+Comparison records independent A/B badges after both draws succeed, including
+late and unknown-timing completed pairs. These draws report current renderer
+telemetry even when their timing makes feedback unavailable. A fatal partial
+pair failure invalidates both current badges and stops app transport; it does not
+promise in-place recovery from a renderer error. Recoverable late/unknown timing
+or reference-selection mismatch can recover through paused inspection. Pending
+inspection qualifies the previous draw without claiming a new submission.
+Badges do not change feedback eligibility, clocks, source identities or any
+model/motion data. Runtime history records upgrades without migrating approval.
+
+Browser GL/fallback pixels still require separately authorized app-level
+validation. Pure status controls and no-mesh public-player controls cover the
+adapter boundary only; they do not prove native GL execution or visual quality.
+The separate #24 timing evidence describes its original forced-Canvas2D setup,
+CPU submission rather than compositor acknowledgement, and its stated host.
+Changing to the default mesh backend does not turn those measurements into a
+WebGL benchmark or a user-Mac performance claim.

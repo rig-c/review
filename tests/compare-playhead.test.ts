@@ -5,6 +5,7 @@ import { commonDomain, compareSeekStep, feedbackTrace, inspectionFrame, seekAfte
 import { ComparePresentation } from '../src/compare-presentation.ts';
 import { ReferenceSelectionUnavailable, inspectionReferenceFrame, referenceFrameAtTime, referenceSeekPosition } from '../src/reference-frames.ts';
 import { requireCommonTime } from '../src/compare-playhead.ts';
+import { RendererBadge } from '../web/renderer-status.ts';
 
 async function fixture(): Promise<ModelAssets> {
   const bytes = await readFile(new URL('./fixtures/compare-probe/skeleton.model.json', import.meta.url), 'utf8');
@@ -132,9 +133,9 @@ test('actual compare seek adapter refuses mismatched decoded frame without disab
     const control=(id:string)=>{let value=controls.get(id);if(!value){value={disabled:false,textContent:'',setAttribute(){}};controls.set(id,value);}return value;};
     const callbacks=legacyGenericError?seekFunctions.replace("new ReferenceSelectionUnavailable('REFERENCE_FRAME_MISMATCH:","new Error('REFERENCE_FRAME_MISMATCH:"):seekFunctions;
     if(legacyGenericError&&callbacks===seekFunctions)throw new Error('legacy mismatch mutant was not applied');
-    const script=`function openAdapter(deps){const {video,players,referenceFrames,presentation,ReferenceSelectionUnavailable,inspectionReferenceFrame,referenceFrameAtTime,referenceSeekPosition,requireCommonTime,feedbackTrace,button,input}=deps;let ready=true,seeking=false,trace=null,seekAbort=null,latestSeek=0,lastPresented=null,requestedProducer=null,endStopReason=null;const domain={start:0,end:2},traceRows=[];const text=()=>{},message=()=>{},describe=error=>error instanceof Error?error.message:String(error),frameControls=()=>{},renderTrace=value=>{trace=value;},renderPresentation=()=>{};${stateFunctions}\n${callbacks}\nreturn {seekTo,state:()=>({ready,seeking,trace})};}`;
+    const script=`function openAdapter(deps){const {video,players,referenceFrames,presentation,rendererBadges,ReferenceSelectionUnavailable,inspectionReferenceFrame,referenceFrameAtTime,referenceSeekPosition,requireCommonTime,feedbackTrace,button,input}=deps;let ready=true,seeking=false,trace=null,seekAbort=null,latestSeek=0,lastPresented=null,requestedProducer=null,endStopReason=null;const domain={start:0,end:2},traceRows=[];const text=()=>{},message=()=>{},describe=error=>error instanceof Error?error.message:String(error),frameControls=()=>{},renderTrace=value=>{trace=value;},renderPresentation=()=>{};${stateFunctions}\n${callbacks}\nreturn {seekTo,state:()=>({ready,seeking,trace})};}`;
     const compiled=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script);
-    const adapter=new Function('deps',compiled+'\nreturn openAdapter(deps);')({video,players:{a,b},referenceFrames:{frames:[0,.5,1].map((time,index)=>({index,time})),duration:1.5},presentation:new ComparePresentation(),ReferenceSelectionUnavailable,inspectionReferenceFrame,referenceFrameAtTime,referenceSeekPosition,requireCommonTime,feedbackTrace,button:control,input:control}) as {seekTo(time:number):Promise<void>;state():{ready:boolean;seeking:boolean;trace:CompareTrace|null}};
+    const adapter=new Function('deps',compiled+'\nreturn openAdapter(deps);')({video,players:{a,b},referenceFrames:{frames:[0,.5,1].map((time,index)=>({index,time})),duration:1.5},presentation:new ComparePresentation(),rendererBadges:{a:new RendererBadge(),b:new RendererBadge()},ReferenceSelectionUnavailable,inspectionReferenceFrame,referenceFrameAtTime,referenceSeekPosition,requireCommonTime,feedbackTrace,button:control,input:control}) as {seekTo(time:number):Promise<void>;state():{ready:boolean;seeking:boolean;trace:CompareTrace|null}};
     return {video,control,...adapter};
   };
   try{
