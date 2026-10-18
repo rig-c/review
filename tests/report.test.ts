@@ -76,8 +76,8 @@ test('matching duplicate hold and duration coordinates are retained',()=>{
 });
 test('marker view model preserves missing coordinates, discrete time gaps and actual target choices',()=>{
  const report=parseReport(allFields())!;const event=(field:string)=>report.categories.find(c=>c.field===field)!.events[0]!;
- const joint=event('cleaned.holds');const selection=eventSelection(joint);expect(selection.frames).toEqual([0,2]);expect(selection.target).toBeNull();expect(selection.seek).toBeNull();expect(selection).not.toHaveProperty('category');expect(eventTimingLabel(joint)).toBe('시간 맵 없음 — seek 불가');expect(eventSeekTime(joint)).toBeNull();
- const uncovered=event('uncovered');expect(eventSelection(uncovered).frames).toBeNull();expect(eventSelection(uncovered).exactTimes).toEqual([0.1,0.3,4.8]);expect(eventSeekTime(uncovered,2)).toBe(4.8);expect(eventSeekTime(uncovered,3)).toBeNull();expect(eventCoordinates(uncovered)).toContain('3개');
+ const joint=event('cleaned.holds');const selection=eventSelection(joint);expect(selection.frames).toEqual([0,2]);expect(selection.target).toBeNull();expect(selection.seek).toBeNull();expect(selection).not.toHaveProperty('category');expect(eventTimingLabel(joint)).toBe('No time mapping — cannot seek');expect(eventSeekTime(joint)).toBeNull();
+ const uncovered=event('uncovered');expect(eventSelection(uncovered).frames).toBeNull();expect(eventSelection(uncovered).exactTimes).toEqual([0.1,0.3,4.8]);expect(eventSeekTime(uncovered,2)).toBe(4.8);expect(eventSeekTime(uncovered,3)).toBeNull();expect(eventCoordinates(uncovered)).toContain('3 discrete times');
  const multi={...event('switches'),targets:[{kind:'slot' as const,name:'first'},{kind:'slot' as const,name:'second'}]};expect(eventSelection(multi).target).toBeNull();expect(eventSelection(multi,1).target).toEqual({kind:'slot',name:'second'});expect(eventSelection(multi,9).target).toBeNull();
  const counts=reportCounts(parseReport({spec:'rig-pose-report/1',flips:[],landings:[{bone:'hip',frame:3}]})!);expect(counts.events).toBe(1);expect(counts.empty).toEqual(['flips']);expect(counts.missing).toContain('raised');expect(counts.missing).not.toContain('flips');
 });
