@@ -2,6 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import { loadModel, RigPlayer, type ModelAssets } from '@rig-c/play';
 import { commonDomain, compareSeekStep, feedbackTrace, inspectionFrame, seekAfterReference, seekSynchronizedPair, type CompareTrace, type ReferenceSample } from '../src/compare-playhead.ts';
+import { ComparePresentation } from '../src/compare-presentation.ts';
+import { ReferenceSelectionUnavailable, inspectionReferenceFrame, referenceFrameAtTime, referenceSeekPosition } from '../src/reference-frames.ts';
+import { requireCommonTime } from '../src/compare-playhead.ts';
 
 async function fixture(): Promise<ModelAssets> {
   const bytes = await readFile(new URL('./fixtures/compare-probe/skeleton.model.json', import.meta.url), 'utf8');
@@ -105,4 +108,44 @@ describe('reference-locked compare playhead', () => {
       expect(() => seekSynchronizedPair({ time: .2, source: 'video-frame' }, a, b, commonDomain(2, 2, 2))).toThrow('seek');
     } finally { a.dispose(); b.dispose(); assets.dispose(); }
   });
+});
+
+test('actual compare seek adapter refuses mismatched decoded frame without disabling transport, then recovers on a supported seconds seek', async()=>{
+  // Exercise the app's actual callback, catch, cleanup and transport-failure
+  // bodies without starting a browser or replacing the public rig poser.
+  const source=await readFile(new URL('../web/compare.ts',import.meta.url),'utf8');
+  const between=(from:string,to:string)=>{const start=source.indexOf(from),end=source.indexOf(to,start);if(start<0||end<start)throw new Error('compare adapter test boundary missing');return source.slice(start,end);};
+  const stateFunctions=between('function updateFeedbackAvailability()', 'function renderPresentation(');
+  const seekFunctions=between('function seekReferenceFrame(', 'function unionBounds(');
+  class VideoAdapter extends EventTarget {
+    paused=true;seeking=false;actual=.5;private position=0;private serial=0;private callbacks=new Map<number,VideoFrameRequestCallback>();
+    pause(){this.paused=true;}
+    get currentTime(){return this.position;}
+    set currentTime(value:number){this.position=value;this.seeking=true;queueMicrotask(()=>{this.seeking=false;this.dispatchEvent(new Event('seeked'));for(const [id,callback] of this.callbacks){this.callbacks.delete(id);callback(0,{mediaTime:this.actual} as VideoFrameCallbackMetadata);}});}
+    requestVideoFrameCallback(callback:VideoFrameRequestCallback){const id=++this.serial;this.callbacks.set(id,callback);return id;}
+    cancelVideoFrameCallback(id:number){this.callbacks.delete(id);}
+    get pendingCallbacks(){return this.callbacks.size;}
+  }
+  const assets=await fixture(),a=player(assets),b=player(assets);
+  const open=(legacyGenericError=false)=>{
+    const video=new VideoAdapter(),controls=new Map<string,{disabled:boolean;textContent:string;setAttribute():void}>();
+    const control=(id:string)=>{let value=controls.get(id);if(!value){value={disabled:false,textContent:'',setAttribute(){}};controls.set(id,value);}return value;};
+    const callbacks=legacyGenericError?seekFunctions.replace("new ReferenceSelectionUnavailable('REFERENCE_FRAME_MISMATCH:","new Error('REFERENCE_FRAME_MISMATCH:"):seekFunctions;
+    if(legacyGenericError&&callbacks===seekFunctions)throw new Error('legacy mismatch mutant was not applied');
+    const script=`function openAdapter(deps){const {video,players,referenceFrames,presentation,ReferenceSelectionUnavailable,inspectionReferenceFrame,referenceFrameAtTime,referenceSeekPosition,requireCommonTime,feedbackTrace,button,input}=deps;let ready=true,seeking=false,trace=null,seekAbort=null,latestSeek=0,lastPresented=null,requestedProducer=null,endStopReason=null;const domain={start:0,end:2},traceRows=[];const text=()=>{},message=()=>{},describe=error=>error instanceof Error?error.message:String(error),frameControls=()=>{},renderTrace=value=>{trace=value;},renderPresentation=()=>{};${stateFunctions}\n${callbacks}\nreturn {seekTo,state:()=>({ready,seeking,trace})};}`;
+    const compiled=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script);
+    const adapter=new Function('deps',compiled+'\nreturn openAdapter(deps);')({video,players:{a,b},referenceFrames:{frames:[0,.5,1].map((time,index)=>({index,time})),duration:1.5},presentation:new ComparePresentation(),ReferenceSelectionUnavailable,inspectionReferenceFrame,referenceFrameAtTime,referenceSeekPosition,requireCommonTime,feedbackTrace,button:control,input:control}) as {seekTo(time:number):Promise<void>;state():{ready:boolean;seeking:boolean;trace:CompareTrace|null}};
+    return {video,control,...adapter};
+  };
+  try{
+    const app=open();app.video.actual=1;
+    await app.seekTo(.5);
+    expect(app.state()).toEqual({ready:true,seeking:false,trace:null});expect(app.control('play').disabled).toBe(false);expect(app.control('seek').disabled).toBe(false);expect(app.control('scrub').disabled).toBe(false);expect(app.control('add-feedback').disabled).toBe(true);expect(app.video.pendingCallbacks).toBe(0);expect(a.time).toBe(0);expect(b.time).toBe(0);
+    app.video.actual=.5;await app.seekTo(.5);
+    expect(app.state().ready).toBe(true);expect(app.state().trace?.reference).toBe(.5);expect(app.control('add-feedback').disabled).toBe(false);expect(a.time).toBeCloseTo(.5,12);expect(b.bone('probe')).toEqual(a.bone('probe'));expect(app.video.pendingCallbacks).toBe(0);
+    // Negative control: only revert the error classification in memory. The
+    // exact same actual app catch/failPair path now reproduces permanent stop.
+    const legacy=open(true);legacy.video.actual=1;await legacy.seekTo(.5);
+    expect(legacy.state().ready).toBe(false);expect(legacy.control('play').disabled).toBe(true);expect(legacy.control('seek').disabled).toBe(true);expect(legacy.control('scrub').disabled).toBe(true);legacy.video.actual=.5;await legacy.seekTo(.5);expect(legacy.state().trace).toBeNull();expect(legacy.video.pendingCallbacks).toBe(0);
+  }finally{a.dispose();b.dispose();assets.dispose();}
 });

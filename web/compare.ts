@@ -153,7 +153,7 @@ function seekReferenceFrame(target: number, signal: AbortSignal,selected:VideoFr
     try {
       // Registered while paused before changing currentTime, so a fast seek
       // cannot present its new frame before this callback is installed.
-      if (hasFrames) handle = video.requestVideoFrameCallback((_now, metadata) => { handle = null; const actual=selected?referenceFrameAtTime(referenceFrames!,metadata.mediaTime):null;if(selected&&actual?.index!==selected.index){finish(new Error('REFERENCE_FRAME_MISMATCH: decoded frame does not match selected reference PTS'));return;}presented = { time: metadata.mediaTime, source: 'video-frame' }; finish(); });
+      if (hasFrames) handle = video.requestVideoFrameCallback((_now, metadata) => { handle = null; const actual=selected?referenceFrameAtTime(referenceFrames!,metadata.mediaTime):null;if(selected&&actual?.index!==selected.index){finish(new ReferenceSelectionUnavailable('REFERENCE_FRAME_MISMATCH: decoded frame does not match selected reference PTS; choose another supported time to inspect'));return;}presented = { time: metadata.mediaTime, source: 'video-frame' }; finish(); });
       video.currentTime = seekPosition;
       if (!video.seeking) { seeked = true; if (!hasFrames) presented = { time: video.currentTime, source: 'current-time' }; finish(); }
     } catch (error) { finish(new Error(describe(error))); }
