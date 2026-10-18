@@ -42,7 +42,9 @@ test('managed front routes by key, refuses unlisted/oversized/foreign-host reque
  }
  // The worker's own identity is re-verified per request: a replaced record nonce is refused by name.
  const fileA=join(f.state,'open',ra.key+'.json'),savedA=await readFile(fileA,'utf8');await writeFile(fileA,JSON.stringify({...ra,nonce:crypto.randomUUID()}),{mode:0o600});await refused(fetch(aBase+'api/review'),410,'FRONT_INSTANCE_REPLACED');await writeFile(fileA,savedA,{mode:0o600});expect((await fetch(aBase+'api/review')).status).toBe(200);
- const fileB=join(f.state,'open',rb.key+'.json'),savedB=await readFile(fileB,'utf8');process.kill(rb.pid,'SIGTERM');for(let n=0;n<80;n++){try{await fetch(rb.origin+'/api/access',{signal:AbortSignal.timeout(100)});}catch{break;}await new Promise(r=>setTimeout(r,25));}
+ const fileB=join(f.state,'open',rb.key+'.json'),savedB=await readFile(fileB,'utf8');process.kill(rb.pid,'SIGTERM');
+ // Wait for the process itself to exit: its own shutdown removes the record and must not race the rewrite below.
+ for(let n=0;n<200;n++){try{process.kill(rb.pid,0);}catch{break;}await new Promise(r=>setTimeout(r,25));}expect(()=>process.kill(rb.pid,0)).toThrow();
  await writeFile(fileB,savedB,{mode:0o600});await refused(fetch(bBase+'api/review'),410,'FRONT_INSTANCE_EXPIRED');await rm(fileB);await refused(fetch(bBase+'api/review'),404,'FRONT_INSTANCE_UNKNOWN');
 },60000);
 
