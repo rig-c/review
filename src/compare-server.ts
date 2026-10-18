@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { appRoot, buildWeb } from './build.ts';
 import { packagePath, safeFile } from './manifest.ts';
 import { assertCompareUnchanged, safeCompareReference, type ComparePackage } from './compare.ts';
+import { exportCompareStrip, stripJson } from './strip-export.ts';
 import { readCompareSession, saveCompareSession } from './compare-session.ts';
 
 const headers={'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
@@ -31,6 +32,11 @@ export async function startCompareServer(p:ComparePackage,options:{port?:number;
     if(req.method==='PUT'&&url.pathname==='/api/compare/session'){
       if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
       return json(await saveCompareSession(p,await bodyJson(req),options.stateDir));
+    }
+    if(req.method==='POST'&&url.pathname==='/api/compare/strip'){
+      if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+      const result=await exportCompareStrip(p,await bodyJson(req));
+      return new Response(result.png?new Uint8Array(result.png):stripJson(result),{headers:{...headers,'Content-Type':result.png?'image/png':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="review-strip.${result.png?'png':'json'}"`}});
     }
     if(req.method!=='GET'&&req.method!=='HEAD')return json({error:'Method not allowed'},405);
     if(url.pathname==='/api/compare'){await assertCompareUnchanged(p);return json(p.response);}

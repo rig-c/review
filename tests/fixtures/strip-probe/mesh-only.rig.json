@@ -1,0 +1,75 @@
+{
+  "spec": "rigc-rig/1",
+  "name": "strip-probe",
+  "images": "images",
+  "skeleton": {
+    "width": 80,
+    "height": 64
+  },
+  "bones": [
+    {
+      "name": "root"
+    },
+    {
+      "name": "rigid",
+      "parent": "root",
+      "x": -18,
+      "y": 0
+    },
+    {
+      "name": "mesh",
+      "parent": "root",
+      "x": 18,
+      "y": 0
+    }
+  ],
+  "slots": [
+    {
+      "name": "mesh",
+      "bone": "mesh",
+      "attachment": "mesh"
+    }
+  ],
+  "skins": {
+    "default": {
+      "mesh": {
+        "mesh": {
+          "type": "mesh",
+          "path": "mesh",
+          "image": "mesh.png",
+          "width": 20,
+          "height": 20,
+          "uvs": [
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1
+          ],
+          "triangles": [
+            0,
+            1,
+            2,
+            0,
+            2,
+            3
+          ],
+          "vertices": [
+            -10,
+            -10,
+            -10,
+            10,
+            10,
+            10,
+            10,
+            -10
+          ],
+          "hull": 4
+        }
+      }
+    }
+  }
+}

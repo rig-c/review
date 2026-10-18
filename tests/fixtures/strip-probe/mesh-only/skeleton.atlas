@@ -1,0 +1,8 @@
+mesh.png
+size: 20, 20
+filter: Linear, Linear
+pma: false
+mesh
+bounds: 0, 0, 20, 20
+offsets: 0, 0, 20, 20
+rotate: 0

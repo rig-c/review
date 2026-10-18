@@ -1,0 +1,110 @@
+{
+  "spec": "rigc-motion/1",
+  "archetype": "strip-probe",
+  "cut": "strip-probe",
+  "easings": {},
+  "animations": {
+    "inspect": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "bone": "rigid",
+          "property": "translatex",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0
+              ]
+            },
+            {
+              "t": 0.5,
+              "v": [
+                12
+              ]
+            },
+            {
+              "t": 1,
+              "v": [
+                0
+              ]
+            }
+          ]
+        },
+        {
+          "bone": "mesh",
+          "property": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0
+              ]
+            },
+            {
+              "t": 0.5,
+              "v": [
+                35
+              ]
+            },
+            {
+              "t": 1,
+              "v": [
+                -20
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "still": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "bone": "root",
+          "property": "translatex",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0
+              ]
+            },
+            {
+              "t": 1,
+              "v": [
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "short": {
+      "duration": 0.8,
+      "loop": false,
+      "tracks": [
+        {
+          "bone": "root",
+          "property": "translatex",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0
+              ]
+            },
+            {
+              "t": 0.8,
+              "v": [
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
