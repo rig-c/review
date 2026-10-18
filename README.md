@@ -203,9 +203,42 @@ by name. No command changes a package/reference, authors motion, or submits or
 approves feedback. Local controls and remote readback use the same inspection
 state.
 
+Remote inspection readback also includes versioned numeric `view` coordinates
+when the page can measure them: rig/world center and zoom, reference/image center
+and zoom, each panel's current CSS viewport size and visible rectangle. World
+coordinates use Y up; reference image coordinates use Y down. Compare reports
+actual A and B rectangles separately; unavailable measurements are null. These
+are the same current cameras used by the local controls, rather than a second
+simulated view. Camera commands still use the documented viewport CSS pan.
+
 The CLI waits up to10 seconds for the page's actual acknowledgment. `queued` or
 `dispatched` is not success; non-applied commands exit2 and may carry
 `timedOut:true`. Reuse the same `--request-id` and original request to obtain its
 receipt without applying it twice. `--wait-ms 0` returns the queued receipt;
 `--wait-ms` is bounded to30000. A timeout does not mean an already delivered action
 was rolled back. Tokens stay in private tool state, not URLs or command output.
+
+## Keep and share an inspection
+
+The view link stores the current numeric inspection in a bounded, versioned
+`#review=` fragment. It includes the exact loaded source/model binding, selected
+animation/time and reference selection, appearance/layers, and canonical camera
+centers with visible bounds. Reloading a matching link restores a paused view;
+it does not restart an idle loop or submit a review. Coordinates adapt to the
+current viewport instead of replaying another window's CSS pan offsets. A link
+for a different source binding is refused.
+
+Ordinary form inputs, selected panels, view state and unsent feedback/checkpoint
+choices are kept in browser local storage for the same source. Changing the
+model/source clears the previous draft in that page's storage scope. The global
+appearance preference remains, while a source-bound appearance override does
+not carry over. URL view state takes precedence over the locally saved view.
+
+Local recovery compares the original submitted server-session fingerprint,
+including its update time. It cannot replace a newer server review: conflicting
+or corrupt saved data remains available to download, with an explicit warning;
+recovering a conflicting draft requires choosing a pending review. Storage
+errors never count as a successful save. Nothing is written to the server or
+input package merely by restoring a page. Browser storage is convenient local
+recovery, not a durable backup; export feedback separately when it must be kept.
+Control capabilities are excluded from links and browser persistence.

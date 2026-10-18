@@ -2,11 +2,20 @@
 export type ControlMode='single'|'compare';
 export interface ControlCamera {zoom:number;pan:{x:number;y:number}}
 export interface ControlLayers {images:boolean;meshes:boolean;bones:boolean}
+/** Observed camera coordinates, independent of viewport-specific CSS pan. */
+export interface ControlNumericCamera {
+ space:'world'|'image';center:{x:number;y:number};zoom:number;
+ viewport:{width:number;height:number};visible:{x:number;y:number;width:number;height:number};
+}
+export interface ControlView {
+ schema:'rig-review-view/1';
+ cameras:{rig:ControlNumericCamera|null;a:ControlNumericCamera|null;b:ControlNumericCamera|null;reference:ControlNumericCamera|null};
+}
 export interface ControlInspection {
  theme:'system'|'dark'|'light';layout:'auto';effectiveLayout:'row'|'column'|null;
  cameras:{rig:ControlCamera;reference:ControlCamera};animation:string|null;time:number|null;
  playing:boolean;loop:'idle'|'off';layers:ControlLayers;ready:boolean;seeking:boolean;
- dirty:boolean;busy:boolean;feedbackEligible:boolean;
+ dirty:boolean;busy:boolean;feedbackEligible:boolean;view?:ControlView;
  capabilities:{camera:boolean;referenceCamera:boolean;animation:boolean;time:boolean;playback:boolean;layers:ControlLayers};
 }
 export type ControlCommand=
@@ -30,6 +39,22 @@ function choice<T extends string>(v:unknown,values:readonly T[],name:string):T{i
 function pan(v:unknown){const o=controlObject(v,['x','y'],'control.pan');return {x:num(o.x,'control.pan.x',-65536,65536),y:num(o.y,'control.pan.y',-65536,65536)};}
 function camera(v:unknown):ControlCamera{const o=controlObject(v,['zoom','pan'],'control.camera');return {zoom:num(o.zoom,'control.camera.zoom',.25,8),pan:pan(o.pan)};}
 function layers(v:unknown):ControlLayers{const o=controlObject(v,['images','meshes','bones'],'control.layers');return {images:bool(o.images,'control.layers.images'),meshes:bool(o.meshes,'control.layers.meshes'),bones:bool(o.bones,'control.layers.bones')};}
+export function parseControlView(v:unknown):ControlView{
+ const o=controlObject(v,['schema','cameras'],'control.view');
+ if(o.schema!=='rig-review-view/1')throw new Error('control.view.schema: expected rig-review-view/1');
+ const c=controlObject(o.cameras,['rig','a','b','reference'],'control.view.cameras');
+ const numeric=(value:unknown,id:'rig'|'a'|'b'|'reference'):ControlNumericCamera|null=>{
+  if(value===null)return null;
+  const name=`control.view.cameras.${id}`,camera=controlObject(value,['space','center','zoom','viewport','visible'],name);
+  const space=id==='reference'?'image':'world';
+  if(camera.space!==space)throw new Error(`${name}.space: expected ${space}`);
+  const center=controlObject(camera.center,['x','y'],`${name}.center`),viewport=controlObject(camera.viewport,['width','height'],`${name}.viewport`),visible=controlObject(camera.visible,['x','y','width','height'],`${name}.visible`);
+  const coordinate=(value:unknown,field:string)=>num(value,`${name}.${field}`,-Number.MAX_SAFE_INTEGER,Number.MAX_SAFE_INTEGER);
+  const positive=(value:unknown,field:string,max:number)=>{const n=num(value,`${name}.${field}`,0,max);if(n===0)throw new Error(`${name}.${field}: expected positive dimension`);return n;};
+  return {space,center:{x:coordinate(center.x,'center.x'),y:coordinate(center.y,'center.y')},zoom:num(camera.zoom,`${name}.zoom`,.25,8),viewport:{width:positive(viewport.width,'viewport.width',65536),height:positive(viewport.height,'viewport.height',65536)},visible:{x:coordinate(visible.x,'visible.x'),y:coordinate(visible.y,'visible.y'),width:positive(visible.width,'visible.width',Number.MAX_SAFE_INTEGER),height:positive(visible.height,'visible.height',Number.MAX_SAFE_INTEGER)}};
+ };
+ return {schema:'rig-review-view/1',cameras:{rig:numeric(c.rig,'rig'),a:numeric(c.a,'a'),b:numeric(c.b,'b'),reference:numeric(c.reference,'reference')}};
+}
 export function parseControlCommand(v:unknown):ControlCommand{
  const base=controlObject(v,['type','value','target','zoom','pan','name','seconds','images','meshes','bones'],'control.command');
  const type=choice(base.type,['theme','layout','camera','fit','playback','animation','time','layers'] as const,'control.command.type');
@@ -44,9 +69,9 @@ export function parseControlCommand(v:unknown):ControlCommand{
  return {type,images:bool(base.images,'control.layers.images'),meshes:bool(base.meshes,'control.layers.meshes'),bones:bool(base.bones,'control.layers.bones')};
 }
 export function parseControlInspection(v:unknown):ControlInspection{
- const o=controlObject(v,['theme','layout','effectiveLayout','cameras','animation','time','playing','loop','layers','ready','seeking','dirty','busy','feedbackEligible','capabilities'],'control.inspection');
+ const o=controlObject(v,['theme','layout','effectiveLayout','cameras','animation','time','playing','loop','layers','ready','seeking','dirty','busy','feedbackEligible','capabilities','view'],'control.inspection');
  const c=controlObject(o.cameras,['rig','reference'],'control.cameras'),a=controlObject(o.capabilities,['camera','referenceCamera','animation','time','playback','layers'],'control.capabilities');
- return {theme:choice(o.theme,['system','dark','light'] as const,'control.theme'),layout:choice(o.layout,['auto'] as const,'control.layout'),effectiveLayout:o.effectiveLayout===null?null:choice(o.effectiveLayout,['row','column'] as const,'control.effectiveLayout'),cameras:{rig:camera(c.rig),reference:camera(c.reference)},animation:o.animation===null?null:controlString(o.animation,'control.animation'),time:o.time===null?null:num(o.time,'control.time',0,Number.MAX_SAFE_INTEGER),playing:bool(o.playing,'control.playing'),loop:choice(o.loop,['idle','off'] as const,'control.loop'),layers:layers(o.layers),ready:bool(o.ready,'control.ready'),seeking:bool(o.seeking,'control.seeking'),dirty:bool(o.dirty,'control.dirty'),busy:bool(o.busy,'control.busy'),feedbackEligible:bool(o.feedbackEligible,'control.feedbackEligible'),capabilities:{camera:bool(a.camera,'control.capabilities.camera'),referenceCamera:bool(a.referenceCamera,'control.capabilities.referenceCamera'),animation:bool(a.animation,'control.capabilities.animation'),time:bool(a.time,'control.capabilities.time'),playback:bool(a.playback,'control.capabilities.playback'),layers:layers(a.layers)}};
+ return {...(o.view===undefined?{}:{view:parseControlView(o.view)}),theme:choice(o.theme,['system','dark','light'] as const,'control.theme'),layout:choice(o.layout,['auto'] as const,'control.layout'),effectiveLayout:o.effectiveLayout===null?null:choice(o.effectiveLayout,['row','column'] as const,'control.effectiveLayout'),cameras:{rig:camera(c.rig),reference:camera(c.reference)},animation:o.animation===null?null:controlString(o.animation,'control.animation'),time:o.time===null?null:num(o.time,'control.time',0,Number.MAX_SAFE_INTEGER),playing:bool(o.playing,'control.playing'),loop:choice(o.loop,['idle','off'] as const,'control.loop'),layers:layers(o.layers),ready:bool(o.ready,'control.ready'),seeking:bool(o.seeking,'control.seeking'),dirty:bool(o.dirty,'control.dirty'),busy:bool(o.busy,'control.busy'),feedbackEligible:bool(o.feedbackEligible,'control.feedbackEligible'),capabilities:{camera:bool(a.camera,'control.capabilities.camera'),referenceCamera:bool(a.referenceCamera,'control.capabilities.referenceCamera'),animation:bool(a.animation,'control.capabilities.animation'),time:bool(a.time,'control.capabilities.time'),playback:bool(a.playback,'control.capabilities.playback'),layers:layers(a.layers)}};
 }
 export function parseControlRequest(v:unknown):ControlRequest{
  const o=controlObject(v,['schema','requestId','pageId','instanceKey','sourceHash','expectedRevision','command'],'control.request');

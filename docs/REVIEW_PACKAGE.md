@@ -452,6 +452,24 @@ linked rig and independent reference camera, animation/time, playback/idle-loop,
 layers, readiness/feedback eligibility and supported capabilities. Unavailable
 capabilities stay false; absence does not manufacture a model or frame clock.
 
+`inspection.view`, when supplied, is a closed `rig-review-view/1` observation:
+
+```json
+{"schema":"rig-review-view/1","cameras":{"rig":null,"a":null,"b":null,"reference":null}}
+```
+
+A measured camera replaces null with
+`{space,center:{x,y},zoom,viewport:{width,height},visible:{x,y,width,height}}`.
+The `rig`, `a` and `b` entries use `space:"world"` (Y up); `reference` uses
+`space:"image"` (Y down). Single view uses rig; compare uses distinct A/B entries
+with their actual panel dimensions and shared rig camera. Viewport dimensions
+are positive CSS pixels up to65536, zoom is0.25..8, coordinates are finite within
+the safe-number range and visible extents are positive. Missing measurements
+are null, never invented zero-size panels. The optional observation is additive
+to the existing inspection protocol and does not add a source-switch or write
+command. Saved canonical coordinates and actual panel geometry must not be
+confused with the viewport-specific CSS pan accepted by a camera command.
+
 The command envelope is closed:
 
 ```json
@@ -509,3 +527,36 @@ reference, transfer a prior approval or rewrite feedback. There is no command
 for paths, URLs, JS/eval, arbitrary DOM/CSS, disk writes, feedback/status, Submit,
 strip export or motion keys. The current-page API is a local inspection adapter,
 not a remote editing or publication service. See the CLI examples in README.
+
+
+## Source-bound inspection links and local drafts
+
+The UI's view link uses `#review=<base64url UTF-8 JSON>` with schema
+`rig-review-inspection/1` and a maximum16KiB ASCII fragment. The closed envelope
+binds mode, exact sourceHash, ordered rig model hashes (or null when unavailable),
+animation/time, named selection, theme/layers and the canonical `ControlView`.
+The loaded source hash includes the selected explicit reference binding; compare
+also binds ordered A/B and the reference/animation. A mismatched binding is
+refused. Camera state is world/image center and zoom plus actual viewport and
+visible rectangle, not a bookmark of CSS pan offsets. Restoring is paused and
+occurs before automatic idle preview or remote page registration. An initial
+valid URL view takes precedence over the saved local view.
+
+Browser local storage uses `rig-review-draft/1:<scope>:<sourceHash>` and an active
+source marker `rig-review-active/1:<scope>`. A draft has schema
+`rig-review-local-draft/1` and a maximum512KiB UTF-8 payload. It contains ordinary
+ID/radio form inputs, UI selections, the inspection bookmark and the unsent
+feedback/checkpoint/status session. It records the SHA-256 fingerprint of the
+original submitted server-session baseline, including updatedAt. That baseline
+is checked before restoration: a local draft cannot silently overwrite a newer
+server review or borrow its approval. On conflict the original local payload is
+available to download; explicit recovery is pending rather than a transferred
+approval. Corrupt data is likewise preserved with a warning, and writes remain
+blocked until explicit discard. Storage failure is a named UI state, not a save.
+
+A model/source change clears only the prior matching scope's source-bound draft.
+The separate global appearance preference remains; source-bound camera,
+selection, form and view overrides do not migrate. No restore writes the server,
+model, motion or source assets. Capability tokens, worker credentials and arbitrary
+paths/commands are not persistence fields. Local browser storage can be cleared
+or unavailable and is not a durable backup or an authoritative approval ledger.
