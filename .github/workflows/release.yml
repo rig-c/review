@@ -1,0 +1,115 @@
+# Release: the cut is one click, and no secret leaves this repository.
+#
+# Every push to main hands the commits to release-please, which keeps a
+# "release: vX.Y.Z" pull request open: the next version derived from the
+# conventional-commit subjects since the last release, CHANGELOG.md generated,
+# package.json bumped. Merging that PR is the release: the resulting push runs
+# this workflow again, release-please tags vX.Y.Z and cuts the GitHub release,
+# and the same run publishes @rig-c/review to npm over OIDC (trusted
+# publishing) with provenance. No npm token, no OTP.
+#
+# Nothing below the release-please step runs until a release PR is merged, so
+# this file can land before the trusted publisher is registered on npm; the
+# release PR must not be merged until it is.
+#
+# Two constraints are load-bearing, do not "simplify" them away:
+#   - The publish must stay in THIS file. npm's trusted publisher for
+#     @rig-c/review names the repository rig-c/review and the workflow
+#     filename `release.yml`.
+#   - It must stay on a GitHub-hosted runner. npm does not support OIDC from
+#     self-hosted runners.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # release commit, tag, GitHub release
+      pull-requests: write # open and update the release PR
+      issues: write # release-please labels
+      id-token: write # OIDC token for npm trusted publishing
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          # A PR opened with GITHUB_TOKEN starts no other workflows, so the
+          # release PR carries no checks of its own; its only change is the
+          # version, changelog and manifest, and the publish below re-runs the
+          # install smoke on the tagged tree before anything is published.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # Everything below runs only on the push that merged the release PR.
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        with:
+          ref: ${{ steps.release.outputs.tag_name }}
+
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Node 22 ships npm 10; the OIDC exchange landed in npm 11.5.1.
+      - name: Use an npm that speaks OIDC
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Install dependencies
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        run: bun install --frozen-lockfile
+
+      # The gate: the tagged tree must typecheck, and its packed tarball must
+      # install into an empty project and run (help, check on the bundled demo,
+      # a served page). A red here publishes nothing.
+      - name: Typecheck and install smoke on the tagged tree
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        run: |
+          bun run typecheck
+          bun run smoke
+
+      # `--access public`: a scoped package is restricted unless told otherwise.
+      - name: Publish @rig-c/review
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        run: npm publish --provenance --access public
+
+      # Reads what the registry serves, not what this tree packs. The registry
+      # can take minutes to serve a new version, so the fetch retries for up to
+      # 15 minutes; a red here un-publishes nothing, it says the confirmation
+      # was not taken.
+      - name: Confirm the registry serves the released version
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        env:
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          for attempt in $(seq 1 30); do
+            if served="$(npm view "@rig-c/review@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then
+              echo "registry serves @rig-c/review@$version (attempt $attempt)"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::@rig-c/review@$version was not served within 15 minutes: confirmation NOT taken"
+          exit 1

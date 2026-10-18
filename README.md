@@ -117,6 +117,10 @@ bun run smoke
 
 The server bundles `web/main.ts` at startup using the pinned installed runtime, with no CDN. `build` verifies that browser bundle in memory. CI checks types, focused path/state/API tests, bundling and the demo package. Follow AGENTS.md for contributor verification policy. [DESIGN.md](docs/DESIGN.md) distinguishes the runnable foundation from future modeling touch-up and preserves the illustrative screen concept.
 
+### Releasing
+
+Releases are cut by `.github/workflows/release.yml`. On every push to main, release-please keeps a `release: vX.Y.Z` pull request whose version comes from the conventional-commit subjects since the last release. Merging it tags the version, creates the GitHub release, runs typecheck and the install smoke on the tagged tree, and publishes to npm through trusted publishing (OIDC) with provenance. No npm token is stored. Nothing is published until a release PR is merged.
+
 ## Frame strip export
 
 The strip panel exports the explicitly entered inclusive feedback interval, or all current in-memory feedback intervals, as a PNG or JSON download. Batch selections include unsaved annotations; they do not submit or approve a review. Choose a declared reference video in single-package mode and an explicit clock basis A/B in compare mode. Every selected feedback interval must identify the selected animation. Separate intervals remain separate strip groups, including overlaps.
