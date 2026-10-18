@@ -14,7 +14,7 @@ export interface StripPlan {schema:'rig-review-strip/1';mode:'single'|'compare';
 export interface StripRenderInput {plan:StripPlan;referencePath:string;rigs:{id:StripSide;root:string;modelPath:string;animation:string;clock:FrameClock|null}[]}
 export interface StripRenderSample {groupId:string;requestedFrame:number;requestedTime:number;presentedTime:number;delta:number;decodedFrame:number;sampling:'video-frame';playerTimes:Partial<Record<StripSide,number>>;frames:Partial<Record<StripSide,number|null>>}
 export interface StripRenderResult {png:Uint8Array;width:number;height:number;renderer:{name:string;version:string;backend:string};samples:StripRenderSample[]}
-export const stripNoClock='report에 frameTimes 없음 — pose 0.30.0 이상으로 재생성';
+export const stripNoClock='Report has no frameTimes — regenerate with pose 0.30.0 or later';
 function obj(value:unknown,field:string):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))throw new Error(`${field}: expected object`);return value as Record<string,unknown>;}
 function text(value:unknown,field:string):string{if(typeof value!=='string'||!value.trim()||value.length>256)throw new Error(`${field}: expected nonempty string <= 256 characters`);return value;}
 function keys(value:Record<string,unknown>,allowed:string[],field:string){for(const key of Object.keys(value))if(!allowed.includes(key))throw new Error(`${field}.${key}: unsupported field`);}
