@@ -131,3 +131,9 @@ test('actual control client captures navigation before a held remote apply and a
   }finally{release();dispose();}
  }
 });
+
+test('selected part readback is closed typed observation and never an authoring command',()=>{
+ const part={side:'b',slot:'actual.slot',mode:'solo'} as const;expect(parseControlInspection({...inspection(),part}).part).toEqual(part);expect(parseControlInspection({...inspection(),part:null}).part).toBeNull();
+ for(const value of [{...part,path:'/private'},{...part,side:'reference'},{...part,mode:'apply'},{...part,slot:''}])expect(()=>parseControlInspection({...inspection(),part:value})).toThrow();
+ expect(()=>parseControlCommand({type:'part',...part})).toThrow();
+});

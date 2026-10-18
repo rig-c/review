@@ -1,5 +1,6 @@
+import {PartExplorer,loadPartCatalog} from './part-selection.ts';
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
-import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
+import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
 import {rendererStatus} from './renderer-status.ts';
 import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,type ViewPoint} from './view-controls.ts';
 import {RigOverlays} from './rig-overlays.ts';
@@ -56,6 +57,7 @@ let referenceCenter:ViewPoint|null=null;
 let rigScale=1,referenceScale=1,referenceZoom=1;
 let displayedCenter:ViewPoint|null=null;
 let playbackIntent=0,desiredPlay=false,seekingControl=false;
+let parts:PartExplorer|null=null;
 let overlays:RigOverlays|null=null;
 let appearance:ReturnType<typeof bindAppearance>|null=null;
 let idleHeld=false;
@@ -355,7 +357,7 @@ function seekFrame(frame: number): void {
 }
 
 function drawRig(action:()=>void):void {
- try{action();text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);}
+ try{action();parts?.present('single');text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);}
  catch(error){overlays?.clear();text('renderer-state',rendererStatus(null,'failed').label);throw error;}
 }
 
@@ -508,6 +510,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
       const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith('/assets/')) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
     player = new RigPlayer(el('rig-root'), assets);
+    const catalog=await loadPartCatalog(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);parts?.register('single',catalog,player);
     player.on('event', event => { text('event-log', `Runtime event: ${event.name} · ${event.time.toFixed(2)} s`); });
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
@@ -669,7 +672,7 @@ function updateCamera(target:CameraTarget,value:CameraSignature):void {
 }
 function zoomCamera(factor:number,target=availableCamera()):void {if(!target)return;const frame=paneFrame(target);if(frame)updateCamera(target,zoomSignature(cameraSignature(paneCamera(target),frame),factor));}
 function panCamera(target:CameraTarget,dx:number,dy:number):void {const frame=paneFrame(target);if(frame)updateCamera(target,dragSignature(cameraSignature(paneCamera(target),frame),frame,dx,dy));}
-function fitActiveCamera(target=availableCamera()):void {if(target)updateCamera(target,{zoom:1,pan:{x:0,y:0}});}
+function fitActiveCamera(target=availableCamera()):void {if(!target)return;const part=parts?.value();if(target==='rig'&&part){const box=parts?.bounds(),frame=paneFrame(target);if(!box||!frame){message('PART_FIT_UNAVAILABLE: selected slot has no positive drawn bounds.',true);return;}updateCamera(target,boundsFitSignature(box,frame,28,58));message('Selected slot fitted.');}else{if(!paneFrame(target))return;updateCamera(target,{zoom:1,pan:{x:0,y:0}});message('View fitted.');}}
 function zoomViewport(target:CameraTarget,deltaY:number):void {zoomCamera(deltaY<0?1.1:1/1.1,target);}
 
 function bind(): void {
@@ -718,7 +721,7 @@ function bind(): void {
     try { validateFeedbackSelection(data.feedbackCatalog, { frameStart, frameEnd, target, animation: selectedAnimation }); } catch (error) { message(errorText(error), true); return; }
     const box = assets?.stage ?? player?.bounds();
     const center = cameraCenter ?? (box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null);
-    session.feedback.push({ id: crypto.randomUUID(), frameStart, frameEnd, target, category: select('feedback-category').value as Feedback['category'], summary, context: {
+    session.feedback.push({ id: crypto.randomUUID(), frameStart, frameEnd, target, category: select('feedback-category').value as Feedback['category'], summary, context: {part:parts?.feedback()??null,
       interval: { frameStart, frameEnd, inclusive: true },
       checkpoint: checkpoint?.id ?? null, animation: selectedAnimation, time, frame: frameAtTime(activeFrameClock(), time),
       reference: select('reference-select').value || null, person: selectedPerson || null,
@@ -765,7 +768,7 @@ async function start(): Promise<void> {
     for (const reference of data.manifest.references.filter(item => item.type === 'video')) select('strip-reference').append(option(reference.id, reference.label));
     if (!data.manifest.references.length) { select('reference-select').append(option('', 'No references supplied')); select('reference-select').disabled = true; }
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
-    bind(); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    bind(); parts=new PartExplorer(el('parts-explorer'),el('selected-part'),previous=>{redrawOverlay(true);const part=parts?.value();if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
     await initPlayer(first);
@@ -784,7 +787,7 @@ function bindInspector():void {bindInspectorTabs(()=>{if(document.querySelector(
 function redrawOverlay(fresh:boolean):void {
  if(!overlays||!player)return;
  const root=el('rig-root'),project=(x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*rigScale,y:parseFloat(root.style.top||'0')-y*rigScale});
- const value=fresh?overlays.refresh({player,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers}):overlays.redraw({project,settings:layers});
+ const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers}):overlays.redraw({project,settings:layers});
  text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
 }
 function canRepeatIdle():boolean{return !!player&&idleAvailable(assets?.animations.map(a=>a.name)??[],animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
@@ -798,7 +801,7 @@ async function playPreview():Promise<void> {
 function localDraft():boolean{return dirty||!!input('feedback-summary').value.trim()||!!input('feedback-start').value.trim()||!!input('feedback-end').value.trim()||!!select('feedback-category').value||!!input('feedback-target-name').value.trim()&&input('feedback-target-name').value!==data.manifest.id;}
 function controlState():ControlInspection {
  const box=assets?.stage??player?.bounds(),center=box?{x:box.x+box.width/2,y:box.y+box.height/2}:null;
- return {view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?zoom:1,pan:{x:center&&cameraCenter?(center.x-cameraCenter.x)*rigScale:0,y:center&&cameraCenter?(cameraCenter.y-center.y)*rigScale:0}},reference:{zoom:referenceSize?referenceZoom:1,pan:{x:referenceSize&&referenceCenter?(referenceSize.width/2-referenceCenter.x)*referenceScale:0,y:referenceSize&&referenceCenter?(referenceSize.height/2-referenceCenter.y)*referenceScale:0}}},animation:animation||null,time:player?.time??time,playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!!data,seeking:seekingControl||!!video?.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring(),capabilities:{camera:!!player,referenceCamera:!!referenceSize,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
+ return {part:parts?.value()??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?zoom:1,pan:{x:center&&cameraCenter?(center.x-cameraCenter.x)*rigScale:0,y:center&&cameraCenter?(cameraCenter.y-center.y)*rigScale:0}},reference:{zoom:referenceSize?referenceZoom:1,pan:{x:referenceSize&&referenceCenter?(referenceSize.width/2-referenceCenter.x)*referenceScale:0,y:referenceSize&&referenceCenter?(referenceSize.height/2-referenceCenter.y)*referenceScale:0}}},animation:animation||null,time:player?.time??time,playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!!data,seeking:seekingControl||!!video?.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring(),capabilities:{camera:!!player,referenceCamera:!!referenceSize,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
 }
 async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
@@ -861,7 +864,7 @@ function numericView():ControlView {
 }
 function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data.sourceHash,rigs:[data.reviewedSource.rig?.sha256??null]};}
-function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time:player?.time??time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
+function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time:player?.time??time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  await restoreTransaction(()=>prepareInspection(bookmark,signal),()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
 }
@@ -877,6 +880,7 @@ async function inspectionReferenceInfo(id:string|null,signal:AbortSignal):Promis
 }
 async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  const selection=bookmark.selection;
+ parts?.validate(selection.part);
  if(player&&!bookmark.animation||bookmark.animation&&!assets?.animations.some(a=>a.name===bookmark.animation))throw new Error('Saved animation is absent from this rig');
  if(selection.reference&&!data.manifest.references.some(r=>r.id===selection.reference))throw new Error('Saved reference is not declared');
  if(selection.checkpoint&&!data.manifest.checkpoints.some(c=>c.id===selection.checkpoint))throw new Error('Saved checkpoint is absent');
@@ -898,6 +902,7 @@ async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal)
 async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  cameraRestoring=true;try{
  const selection=bookmark.selection;
+ parts?.select(selection.part??null);
  pause();
  if(selection.checkpoint!==undefined){checkpoint=data.manifest.checkpoints.find(c=>c.id===selection.checkpoint);renderCheckpoint();renderCheckpoints();}
  if(selection.reference!==undefined&&select('reference-select').value!==(selection.reference??'')){select('reference-select').value=selection.reference??'';await showReference(selection.reference??'');if(selection.reference&&!referenceSize&& !video)throw new Error('Saved reference did not load');}

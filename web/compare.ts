@@ -1,9 +1,10 @@
-import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,dragSignature,zoomSignature,type CameraFrame,type CameraSignature,type PaneCamera} from './camera-view.ts';
+import {PartExplorer,loadPartCatalog} from './part-selection.ts';
+import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature,type PaneCamera} from './camera-view.ts';
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import type { CompareResponse, CompareSide } from '../src/compare.ts';
 import type { CompareFeedback, CompareSession } from '../src/compare-session.ts';
 import { clockForAnimation, lastFrame, timeAtFrame } from '../src/frame-clock.ts';
-import { commonDomain, drawSynchronizedPair, compareSeekStep, feedbackTrace, inspectionFrame, requireCommonTime, type CompareDomain, type CompareTrace, type ReferenceSample } from '../src/compare-playhead.ts';
+import { commonDomain, drawSynchronizedPair, compareSeekStep, feedbackTrace, inspectionFrame, requireCommonTime, type InspectionPlayer, type CompareDomain, type CompareTrace, type ReferenceSample } from '../src/compare-playhead.ts';
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection } from '../src/feedback-validation.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 
@@ -37,7 +38,9 @@ let cameraSync=true,activeCamera:CameraTarget='a',cameraRestoring=false,cameraLa
 let idleHeld=true,loopRestarting=false,suspendedPreview=false;
 let appearance:ReturnType<typeof bindAppearance>|null=null,controlDispose:(()=>void)|null=null;
 const viewDisposers:(()=>void)[]=[];
+let parts:PartExplorer|null=null;
 const overlays:Partial<Record<Side,RigOverlays>>={};
+function inspectionPlayer(side:Side):InspectionPlayer {const player=players[side];if(!player)throw new Error('Part player unavailable');return {get time(){return player.time;},pause:()=>player.pause(),seek:time=>player.seek(time),draw:()=>{player.draw();parts?.present(side);}};}
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let stripBusy = false;
 let persistence:PersistenceConnection|null=null,submittedBaseline:CompareSession|null=null,draftConflict=false;
@@ -131,7 +134,7 @@ function acceptReference(sample: ReferenceSample,deadline:number|null=null,prese
  if(!ready||seeking||video.seeking||!domain||!players.a||!players.b)return;
  if(sample.time>domain.end){stopAtSupportedEnd();return;}
  if(trace?.reference===sample.time&&trace.source===sample.source)return;
- try{const state=presentation.present(sample,deadline,presentedFrames,players.a,players.b,domain,()=>performance.now(),nextReferenceInterval(referenceFrames,sample.time,video.playbackRate));if(state.inspection)renderTrace(state.inspection);renderPresentation(state);}catch(error){failPair(error);renderPresentation(presentation.snapshot());}
+ try{const state=presentation.present(sample,deadline,presentedFrames,inspectionPlayer('a'),inspectionPlayer('b'),domain,()=>performance.now(),nextReferenceInterval(referenceFrames,sample.time,video.playbackRate));if(state.inspection)renderTrace(state.inspection);renderPresentation(state);}catch(error){failPair(error);renderPresentation(presentation.snapshot());}
 }
 
 function stopAtSupportedEnd():void {
@@ -193,7 +196,7 @@ async function seekTo(target: number,producer:{side:Side;frame:number;time:numbe
     const sample=await seekReferenceFrame(target,signal,selected);
     if(signal.aborted||generation!==latestSeek)throw new DOMException('Reference seek superseded','AbortError');
     if(sample.time<domain.start||sample.time>domain.end)throw new ReferenceSelectionUnavailable('the presented reference timestamp is outside the shared clip domain; choose a supported time');
-    const inspected=presentation.inspect(sample,players.a,players.b,domain,()=>performance.now());
+    const inspected=presentation.inspect(sample,inspectionPlayer('a'),inspectionPlayer('b'),domain,()=>performance.now());
     const value=inspected.inspection!;
     if (generation !== latestSeek || signal.aborted) return;
     requestedProducer=producer;endStopReason=endReason;seeking = false; lastPresented = { time: value.reference, source: value.source }; renderTrace(value);renderPresentation(inspected);
@@ -220,7 +223,7 @@ async function loadSide(side: Side, value: CompareSide): Promise<number> {
   const loaded = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, base) => { const url = new URL(name, base); if (url.origin !== location.origin || !url.pathname.startsWith(`/compare-assets/${side}/`)) throw new Error(`${side}: model page escapes its package`); return url.href; } });
   assets[side] = loaded; const clip = loaded.animations.find(item => item.name === data.animation); if (!clip) throw new Error(`${side.toUpperCase()}: animation "${data.animation}" Not supplied`);
   const player = new RigPlayer(el(`${side}-root`), loaded, { seekStep: compareSeekStep });
-  players[side] = player; player.environment(null); player.play(data.animation, { loop: false }); player.pause();
+  players[side] = player;parts?.register(side,await loadPartCatalog(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]),player); player.environment(null); player.play(data.animation, { loop: false }); player.pause();
   el(`${side}-empty`).hidden = true; return clip.duration;
 }
 
@@ -356,7 +359,7 @@ function bind(): void {
     if (!['bone', 'slot', 'rig'].includes(kind) || !['defect', 'quality'].includes(category) || !name || !summary || /[\r\n]/.test(summary) || summary.length > 1000) { message('Enter a target type, actual name, category and one-line summary of up to 1,000 characters.', true); return; }
     const target: CompareFeedback['target'] = { kind: kind as CompareFeedback['target']['kind'], name };
     try { validateFeedbackSelection(data[side].feedbackCatalog, { frameStart, frameEnd, target, animation: data.animation }); } catch (error) { message(describe(error), true); return; }
-    session.feedback.push({ id: crypto.randomUUID(), side, frameStart, frameEnd, target, category: category as CompareFeedback['category'], summary, context: { interval: { frameStart, frameEnd, inclusive: true }, animation: data.animation, mediaTime: inspected.reference, clockSource: inspected.source, frame: currentFrame(side), frames: { a: currentFrame('a'), b: currentFrame('b') }, playheads: { reference: inspected.reference, a: inspected.a, b: inspected.b },reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},decodedIndex:referenceFrames?referenceFrameAtTime(referenceFrames,inspected.reference)?.index??null:null } });
+    session.feedback.push({ id: crypto.randomUUID(), side, frameStart, frameEnd, target, category: category as CompareFeedback['category'], summary, context: { interval: { frameStart, frameEnd, inclusive: true }, animation: data.animation, mediaTime: inspected.reference, clockSource: inspected.source, frame: currentFrame(side), frames: { a: currentFrame('a'), b: currentFrame('b') }, playheads: { reference: inspected.reference, a: inspected.a, b: inspected.b },reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,part:parts?.feedback()??null,view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},decodedIndex:referenceFrames?referenceFrameAtTime(referenceFrames,inspected.reference)?.index??null:null } });
     input('summary').value = ''; markDirty(); renderFeedback(); message('Added feedback bound to the target build and both reviewed sources.');
   };
   button('submit').onclick = async () => { if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; } saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;await persistence?.submitted(saved); message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status and A/B/reference-video provenance.'); } catch (error) { message(`Submission failed: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
@@ -381,7 +384,7 @@ async function start(): Promise<void> {
     [data, session] = await Promise.all([api<CompareResponse>('/api/compare'), api<CompareSession>('/api/compare/session')]);
     submittedBaseline=structuredClone(session);
     if (data.id !== session.id || data.sourceHash !== session.sourceHash || JSON.stringify(data.binding) !== JSON.stringify(session.binding)) throw new Error('Comparison and submission session refer to different source identities. Reopen the review.');
-    text('title', data.title); text('animation', `${data.animation} · A/B order and reference video hash are fixed`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackSelection(); renderFeedback(); savedState();
+    text('title', data.title); text('animation', `${data.animation} · A/B order and reference video hash are fixed`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); parts=new PartExplorer(el('parts-explorer'),el('selected-part'),previous=>{redrawOverlays(true);const part=parts?.value();if(part){activeCamera=part.side==='b'?'b':'a';document.querySelector<HTMLButtonElement>('[data-inspector=rig]')?.click();renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera());persistence?.save();},part=>{select('side').value=part.side;select('target-kind').value='slot';renderFeedbackSelection();input('target-name').value=part.slot;document.querySelector<HTMLButtonElement>('[data-inspector=feedback]')?.click();}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackSelection(); renderFeedback(); savedState();
     const [referenceDuration, aDuration, bDuration] = await Promise.all([loadReference(), loadSide('a', data.a), loadSide('b', data.b)]);
     void loadFrameIndex();
     domain = commonDomain(referenceDuration, aDuration, bDuration); input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
@@ -415,13 +418,13 @@ function updateCamera(target:CameraTarget,value:CameraSignature,rigGroup=false):
 }
 function zoomCamera(factor:number,target=availableCamera()):void {if(!target)return;const frame=paneFrame(target);if(frame)updateCamera(target,zoomSignature(cameraSignature(cameras[target],frame),factor));}
 function panCamera(target:CameraTarget,dx:number,dy:number):void {const frame=paneFrame(target);if(frame)updateCamera(target,dragSignature(cameraSignature(cameras[target],frame),frame,dx,dy));}
-function fitActiveCamera(target=availableCamera()):void {if(target)updateCamera(target,{zoom:1,pan:{x:0,y:0}});}
+function fitActiveCamera(target=availableCamera()):void {if(!target)return;const part=parts?.value();if(part?.side===target){const box=parts?.bounds(),frame=paneFrame(target);if(!box||!frame){message('PART_FIT_UNAVAILABLE: selected slot has no positive drawn bounds.',true);return;}updateCamera(target,boundsFitSignature(box,frame,22,38));message('Selected slot fitted.');}else{if(!paneFrame(target))return;updateCamera(target,{zoom:1,pan:{x:0,y:0}});message('View fitted.');}}
 function referenceFit():void {const frame=paneFrame('reference');if(!frame)return;const signature=cameraSignature(cameras.reference,frame);video.style.transform=`translate(${signature.pan.x*frame.width}px,${signature.pan.y*frame.height}px) scale(${signature.zoom})`;}
 function redrawOverlays(fresh:boolean):void {
  const warnings:string[]=[];let needsCapture=false;
- for(const side of ['a','b'] as const){const overlay=overlays[side],player=players[side];if(!overlay||!player)continue;const root=el(`${side}-root`),project=(x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*rigScales[side],y:parseFloat(root.style.top||'0')-y*rigScales[side]});const snapshot=fresh?overlay.refresh({player,bones:(data[side].feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers}):overlay.redraw({project,settings:layers});warnings.push(...snapshot.warnings);needsCapture ||= snapshot.needsCapture;}
+ for(const side of ['a','b'] as const){const overlay=overlays[side],player=players[side];if(!overlay||!player)continue;const root=el(`${side}-root`),project=(x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*rigScales[side],y:parseFloat(root.style.top||'0')-y*rigScales[side]});const snapshot=fresh?overlay.refresh({player,frame:parts?.frame(side),selectedSlot:parts?.value()?.side===side?parts.value()!.slot:null,bones:(data[side].feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers}):overlay.redraw({project,settings:layers});warnings.push(...snapshot.warnings);needsCapture ||= snapshot.needsCapture;}
  text('layer-state',warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');
- if(!fresh&&needsCapture&&trace&&!seeking&&!video.seeking&&players.a&&players.b){try{drawSynchronizedPair(players.a,players.b);redrawOverlays(true);for(const side of ['a','b'] as const)text(`${side}-renderer`,rendererBadges[side].observe('drawn',players[side]!.renderer).label);}catch(error){failPair(error);}}
+ if(!fresh&&needsCapture&&trace&&!seeking&&!video.seeking&&players.a&&players.b){try{drawSynchronizedPair(inspectionPlayer('a'),inspectionPlayer('b'));redrawOverlays(true);for(const side of ['a','b'] as const)text(`${side}-renderer`,rendererBadges[side].observe('drawn',players[side]!.renderer).label);}catch(error){failPair(error);}}
 }
 function bindInspector():void {bindInspectorTabs(()=>{if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]')){idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);}fit();});}
 
@@ -448,7 +451,7 @@ async function restartIdle():Promise<void> {
 function localDraft():boolean{return dirty||!!input('summary').value.trim()||!!input('frame-start').value.trim()||!!input('frame-end').value.trim()||!!input('target-name').value.trim()||!!select('category').value;}
 function controlState():ControlInspection {
  const css=(target:CameraTarget)=>{const frame=paneFrame(target,true);if(!frame)return {zoom:1,pan:{x:0,y:0}};const value=cameraSignature(cameras[target],frame);return {zoom:value.zoom,pan:{x:value.pan.x*frame.width,y:value.pan.y*frame.height}};};
- return {view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:css('a'),a:css('a'),b:css('b'),reference:css('reference')},animation:data.animation,time:trace?.reference??null,playing:!video.paused,loop:canRepeatIdle()?'idle':'off',layers:{images:!!players.a&&layers.images,meshes:!!players.a&&layers.mesh,bones:!!players.a&&layers.bones},ready,seeking:seeking||video.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring()&&!!feedbackTrace(ready,seeking||video.seeking,trace),capabilities:{camera:!!players.a&&!!players.b,referenceCamera:video.readyState>=1,animation:false,time:ready,playback:ready,layers:{images:!!players.a&&!!players.b,meshes:!!players.a&&!!players.b,bones:!!players.a&&!!players.b}}};
+ return {part:parts?.value()??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:css('a'),a:css('a'),b:css('b'),reference:css('reference')},animation:data.animation,time:trace?.reference??null,playing:!video.paused,loop:canRepeatIdle()?'idle':'off',layers:{images:!!players.a&&layers.images,meshes:!!players.a&&layers.mesh,bones:!!players.a&&layers.bones},ready,seeking:seeking||video.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring()&&!!feedbackTrace(ready,seeking||video.seeking,trace),capabilities:{camera:!!players.a&&!!players.b,referenceCamera:video.readyState>=1,animation:false,time:ready,playback:ready,layers:{images:!!players.a&&!!players.b,meshes:!!players.a&&!!players.b,bones:!!players.a&&!!players.b}}};
 }
 async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
@@ -472,10 +475,11 @@ function numericView():ControlView {
 }
 function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
 function inspectionBinding():InspectionBinding{return {mode:'compare',sourceHash:data.sourceHash,rigs:[data.a.reviewedSource.rig?.sha256??null,data.b.reviewedSource.rig?.sha256??null]};}
-function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:data.animation,time:trace?.reference??presentation.snapshot().lastDrawn?.reference??null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{reference:data.reference.sha256,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view'}};}
+function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:data.animation,time:trace?.reference??presentation.snapshot().lastDrawn?.reference??null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{part:parts?.value()??null,reference:data.reference.sha256,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view'}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  await restoreTransaction(async()=>{
 
+ parts?.validate(bookmark.selection.part);
  if(bookmark.animation!==data.animation||bookmark.selection.reference!==data.reference.sha256)throw new Error('Saved comparison animation/reference requires a different source binding');
  if(!domain)throw new Error('Comparison is not ready');if(bookmark.time!==null)requireCommonTime(bookmark.time,domain);
  for(const target of ['a','b','reference'] as const)if(bookmark.view.cameras[target]&&!paneFrame(target,true))throw new Error('Saved '+target+' camera is unavailable');
@@ -485,6 +489,7 @@ async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal)
 }
 async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  cameraRestoring=true;try{
+ parts?.select(bookmark.selection.part??null);
  idleHeld=true;stop();if(bookmark.time!==null){await seekTo(bookmark.time);if(signal.aborted||!trace)throw new Error('Saved reference inspection could not settle');}
  appearance?.set(bookmark.theme);Object.assign(layers,{images:bookmark.layers.images,mesh:bookmark.layers.meshes,bones:bookmark.layers.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;
  if(bookmark.selection.inspector){for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-inspector]')){const selected=tab.dataset.inspector===bookmark.selection.inspector;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==bookmark.selection.inspector;}

@@ -605,3 +605,16 @@ selection, form and view overrides do not migrate. No restore writes the server,
 model, motion or source assets. Capability tokens, worker credentials and arbitrary
 paths/commands are not persistence fields. Local browser storage can be cleared
 or unavailable and is not a durable backup or an authoritative approval ledger.
+
+
+## Parts explorer and source-bound selection
+
+Part selection is closed `{side:"single"|"a"|"b",slot:string,mode:"context"|"solo"}` or null for Whole rig. Slot membership is checked against that side's actual model catalog, whose exact byte SHA-256 must equal `reviewedSource.rig.sha256`. The source model remains immutable. The catalog retains explicit slot/bone/setup and skin/attachment declarations; an atlas page does not identify a part. Malformed catalog/hash mismatch refuses rather than substituting a guessed catalog.
+
+`selection.part` is optional in versioned inspection links/drafts; absent legacy values mean Whole rig. Unknown keys, invalid modes/sides and unavailable slot membership refuse before restoration mutation. Single cannot restore an A/B target and compare cannot restore a single target. Existing transactional rollback also restores selection. Restoring explicit view cameras does not auto-fit the selected part; a deliberate local selection or Fit action does. The optional `part` control observation reports this exact actual slot selection, without adding a selection/source-writing/approval command.
+
+`context.part` in explicit feedback carries copied observed side/slot/mode, drawn kind/page/region/sequence/z, actual mesh counts, current player skin (null means no skin set), set, declared skin/key candidates, conservative world-Y-up bounds, and `activeAttachment:{skin,attachment}|null` with `identityUnavailable`. Identity is exact only for one possible declared attachment on a currently drawn slot without a set override; ambiguous/hidden/set-selected cases report `PART_ATTACHMENT_IDENTITY_UNAVAILABLE`. The current public player does not expose arbitrary current per-slot attachment keys/owning skins or hidden draw positions. No UV/topology/texture-name match is used as identity evidence. A declared candidate is not an activated attachment. Named vertex weights and original source alpha remain unavailable; this package contract supplies no inferred loose-art mapping.
+
+The right list orders actual drawn rows by held-frame z, with undrawn declarations afterward in declared order. Solo filters a copied full held posed frame after clip resolution; it never sets player skin, set, slots, clock or track. Context/Whole preserve full drawing. An amber diagnostic selection box uses conservative world bounds intersected with a normal clip's AABB; inverse clips remain conservative. It is not alpha coverage or an exact clip polygon. Selection/Fit centers those bounds within the established0.25–8× camera limit. SyncON sends the same fit-relative zoom/normalized pan signature to visible panes; OFF affects only the selected side. Missing/nonpositive bounds report `PART_FIT_UNAVAILABLE`. Fitting never reseeks or authors motion.
+
+Selection, links, controls and export never approve a review. Producer-backed optimization must use a separately owned producer returning a new source-bound package revision/hash and provenance; Review does not generate rig, motion or mesh bytes.

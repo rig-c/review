@@ -270,3 +270,14 @@ errors never count as a successful save. Nothing is written to the server or
 input package merely by restoring a page. Browser storage is convenient local
 recovery, not a durable backup; export feedback separately when it must be kept.
 Control capabilities are excluded from links and browser persistence.
+
+
+## Inspect a part
+
+The right Parts explorer selects an actual model slot on a specific single/A/B side. Drawn rows follow the held frame's current draw order; undrawn declarations follow afterward in their declared order, since the public player does not expose their current hidden draw positions. Search uses exact source names. Arrow keys/Home/End move between result buttons, Enter/Space selects, and Escape returns to search. Whole rig restores full drawing. Selecting a drawn row fits its conservative world bounds within the existing camera zoom range; Sync cameras applies the same normalized camera action to every visible pane, while independent mode changes only that selected pane. Hidden/empty geometry reports `PART_FIT_UNAVAILABLE` and keeps the camera.
+
+Solo preserves the full held pose's resolved clips and filters only drawing. In context, the whole rig remains visible with an amber dashed conservative selection box; this box is geometry/clip bounds, not exact source-alpha coverage. Selection changes no track, skin, set, motion, source asset or review decision. The selected slot's side/mode survives source-bound links and local drafts. The Rig inspector shows actual posed mesh counts or region corners, page/region, current skin/set context and declared attachment candidates. **Use slot for feedback** explicitly prefills the target; selecting a row alone submits nothing.
+
+A unique declaration on a currently drawn slot with no active set can identify its exact skin/key. Otherwise `PART_ATTACHMENT_IDENTITY_UNAVAILABLE` explains the published player's missing active-attachment identity; the app does not guess from matching UVs, names or counts. Hidden/null and ambiguous attachment selection remain unavailable pending a public player capability. Named vertex weights and original source alpha are unavailable in this inspection; packed pages are not original part images. These are explicit limits on attachment-level acceptance.
+
+This explorer is inspection. Producer-backed optimization, candidate Apply/undo/export and permanent resizable-panel settings remain separate work; the explorer does not generate mesh, rig or motion bytes.
