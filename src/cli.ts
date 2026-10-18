@@ -33,11 +33,20 @@ async function stripCommand(args:string[],options:{stateDir?:string}){
 export function parseOpenInputs(args:string[]):OpenInputs {const input=args.shift();if(!input||input.startsWith('--'))throw new Error(usage);const result:OpenInputs={input};const seen=new Set<string>();while(args.length){const flag=args.shift()!,value=args.shift();if(!value||value.startsWith('--'))throw new Error(`Missing value for ${flag}`);if(seen.has(flag))throw new Error(`Duplicate open option ${flag}`);seen.add(flag);if(flag==='--reference')result.reference=value;else if(flag==='--compare')result.compare=value;else if(flag==='--animation')result.animation=value;else throw new Error(`Unknown open option ${flag}`);}return result;}
 /** Formatting is CLI-only; session lookup/save contracts remain unchanged. */
 export function feedbackFormat(args:string[]):{args:string[];format:'json'|'issue'} {
- const remaining:string[]=[];let format:'json'|'issue'='json',seen=false;
+ const remaining:string[]=[];let format:'json'|'issue'='json',seen=false,inputs=-1;
  for(let i=0;i<args.length;i++){
-  if(args[i]!=='--format'){remaining.push(args[i]!);continue;}
-  if(seen)throw new Error('feedback --format: duplicate option');seen=true;
-  const value=args[++i];if(value!=='json'&&value!=='issue')throw new Error('feedback --format: expected json | issue');format=value;
+  const token=args[i]!;
+  // Compare owns its next two positional inputs, even when they look like flags.
+  if(inputs>0){remaining.push(token);inputs--;continue;}
+  if(token==='--format'){
+   if(seen)throw new Error('feedback --format: duplicate option');seen=true;
+   const value=args[++i];if(value!=='json'&&value!=='issue')throw new Error('feedback --format: expected json | issue');format=value;continue;
+  }
+  remaining.push(token);
+  if(inputs<0){inputs=token==='compare'?2:0;continue;}
+  // The existing CLI consumes option/value pairs. Leave their validation to it;
+  // in particular, --animation may legitimately own the value "--format".
+  const value=args[++i];if(value!==undefined)remaining.push(value);
  }
  return {args:remaining,format};
 }

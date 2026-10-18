@@ -16,11 +16,11 @@ const dirs: string[] = [];
 afterEach(async () => { for (const path of dirs.splice(0)) await rm(path, { recursive: true, force: true }); });
 async function directory() { const path = await realpath(await mkdtemp(join(tmpdir(), 'review-feedback-export-'))); dirs.push(path); return path; }
 // Metadata-only transport fixtures: this suite makes no compile/raster claim.
-async function fixture(id = 'probe') {
+async function fixture(id = 'probe', animation = 'inspect') {
   const root = await directory(), path = join(root, 'review.json');
   await writeFile(path, JSON.stringify({ schema: 'rig-review/1', id, title: id, revision: 'one', model: 'skeleton.model.json', motion: 'motion.json' }));
   await writeFile(join(root, 'motion.json'), 'unchanged motion');
-  await writeFile(join(root, 'skeleton.model.json'), JSON.stringify({ spec: 'rigc-compiled/3', pages: [], bones: ['root', 'same', 'constructor', '__proto__'].map(name => ({ name })), slots: [{ name: 'same' }], animations: [{ name: 'inspect', duration: 2 }] }));
+  await writeFile(join(root, 'skeleton.model.json'), JSON.stringify({ spec: 'rigc-compiled/3', pages: [], bones: ['root', 'same', 'constructor', '__proto__'].map(name => ({ name })), slots: [{ name: 'same' }], animations: [{ name: animation, duration: 2 }] }));
   return { root, path, p: await loadReview(path) };
 }
 const note = (id: string, category: Feedback['category'] = 'defect', kind: Feedback['target']['kind'] = 'bone', name = 'same'): Feedback => ({ id, frameStart: 10, frameEnd: 18, target: { kind, name }, category, summary: 'Inspect this interval', context: { animation: 'inspect', time: 0.5, frame: null, interval: { frameStart: 10, frameEnd: 18, inclusive: true } } });
@@ -38,10 +38,10 @@ async function cli(args: string[], state: string) {
   const [stdout, stderr, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   return { stdout, stderr, exit };
 }
-async function pair() {
-  const a = await fixture('a'), b = await fixture('b'), reference = join(await directory(), 'original.mp4');
+async function pair(animation = 'inspect') {
+  const a = await fixture('a', animation), b = await fixture('b', animation), reference = join(await directory(), 'original.mp4');
   await writeFile(reference, 'immutable explicit reference');
-  const p = await loadCompare({ a: a.path, b: b.path, reference, animation: 'inspect' });
+  const p = await loadCompare({ a: a.path, b: b.path, reference, animation });
   return { a, b, reference, p };
 }
 function older(p: ReviewPackage): ReviewPackage { return { ...p, reviewedSource: { ...p.reviewedSource, viewerVersion: '0.0.0', runtimeVersion: '1.0.0' } }; }
@@ -181,4 +181,46 @@ test('actual CLI preserves historical warnings but rejects format on unrelated c
     expect(await proc.exited).toBe(1); expect(await new Response(proc.stderr).text()).toContain('Unknown');
   }
   const emptyState = await directory(), fresh = await cli([f.path, '--format', 'issue'], emptyState); expect(fresh.exit).toBe(0); expect(fresh.stdout).toContain('Items: 0 · defect: 0 · quality: 0'); expect(await readdir(emptyState)).toEqual([]);
+});
+
+
+test('format extraction respects positional inputs and existing option value ownership', () => {
+  const old = ['compare', 'a', 'b', '--reference', 'video', '--animation', '--format'];
+  expect(feedbackFormat(old)).toEqual({ args: old, format: 'json' });
+  expect(feedbackFormat([...old, '--format', 'issue'])).toEqual({ args: old, format: 'issue' });
+  expect(feedbackFormat(['--format', 'json', ...old])).toEqual({ args: old, format: 'json' });
+  expect(feedbackFormat(['compare', '--format', 'b', '--reference', 'video', '--animation', 'inspect'])).toEqual({ args: ['compare', '--format', 'b', '--reference', 'video', '--animation', 'inspect'], format: 'json' });
+  for (const flag of ['--reference', '--compare', '--animation', '--checkpoint', '--port']) {
+    const args = ['input', flag, '--format'];
+    expect(feedbackFormat(args)).toEqual({ args, format: 'json' });
+    expect(feedbackFormat([...args, '--format', 'issue'])).toEqual({ args, format: 'issue' });
+    expect(feedbackFormat(['input', flag])).toEqual({ args: ['input', flag], format: 'json' });
+  }
+});
+
+test('actual comparison feedback retrieves an animation named --format with default and genuine formats', async () => {
+  const f = await pair('--format'), state = await directory();
+  const value: CompareSession = { ...freshCompareSession(f.p), status: 'changes-requested', updatedAt: '2025-01-01T00:00:00.000Z', feedback: [{ ...note('flag-animation'), side: 'b', context: { animation: '--format' } }] };
+  await writeFile(compareSessionFile(f.p, state), JSON.stringify(value));
+  const before = { a: await inventory(f.a.root), b: await inventory(f.b.root), state: await inventory(state), reference: await readFile(f.reference, 'utf8') };
+  const old = ['compare', f.a.path, f.b.path, '--reference', f.reference, '--animation', '--format'];
+  const alias = [f.a.path, '--compare', f.b.path, '--reference', f.reference, '--animation', '--format'];
+  const outputs: string[] = [];
+  for (const args of [old, alias]) {
+    const plain = await cli(args, state), json = await cli([...args, '--format', 'json'], state), issue = await cli([...args, '--format', 'issue'], state);
+    expect(plain.exit).toBe(0); expect(json.exit).toBe(0); expect(json.stdout).toBe(plain.stdout);
+    const session = JSON.parse(plain.stdout);
+    expect(session.id).toBe(value.id); expect(session.binding).toEqual(f.p.response.binding); expect(session.binding.animation).toBe('--format');
+    expect(session.feedback.map((item: Feedback) => item.id)).toEqual(['flag-animation']);
+    expect(issue.exit).toBe(0); expect(headingIds(issue.stdout)).toEqual(['flag-animation']); expect(issue.stdout).toContain(f.p.response.binding.reference.sha256);
+    outputs.push(issue.stdout);
+    for (const tail of [['--format', 'csv'], ['--format'], ['--format', 'issue', '--format', 'json']]) {
+      const refused = await cli([...args, ...tail], state);
+      expect(refused.exit).toBe(1); expect(refused.stderr).toContain('feedback --format');
+    }
+    const missingReference = await cli([...args, '--reference'], state);
+    expect(missingReference.exit).toBe(1); expect(missingReference.stderr).toContain('Missing value for --reference');
+  }
+  expect(outputs[0]).toBe(outputs[1]);
+  expect({ a: await inventory(f.a.root), b: await inventory(f.b.root), state: await inventory(state), reference: await readFile(f.reference, 'utf8') }).toEqual(before);
 });
