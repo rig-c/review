@@ -30,7 +30,7 @@ export function requireCommonTime(time: number, domain: CompareDomain): void {
 }
 
 /** No frame(dt), resume, per-side clamp or loop exists on this inspection path. */
-export function seekSynchronizedPair(sample: ReferenceSample, a: InspectionPlayer, b: InspectionPlayer, domain: CompareDomain): CompareTrace {
+export function prepareSynchronizedPair(sample: ReferenceSample, a: InspectionPlayer, b: InspectionPlayer, domain: CompareDomain): CompareTrace {
   requireCommonTime(sample.time, domain);
   a.pause(); b.pause();
   // Prepare both poses before either draw. A refusal is a failed pair, never a
@@ -38,8 +38,13 @@ export function seekSynchronizedPair(sample: ReferenceSample, a: InspectionPlaye
   a.seek(sample.time); b.seek(sample.time);
   const trace = { reference: sample.time, a: a.time, b: b.time, source: sample.source };
   if (![trace.a, trace.b].every(Number.isFinite) || Math.abs(trace.a - sample.time) > 1e-9 || Math.abs(trace.b - sample.time) > 1e-9 || trace.a !== trace.b) throw new Error(`compare playhead mismatch: reference=${trace.reference}, a=${trace.a}, b=${trace.b}`);
-  a.draw(); b.draw();
   return trace;
+}
+
+export function drawSynchronizedPair(a:InspectionPlayer,b:InspectionPlayer):void {a.draw();b.draw();}
+
+export function seekSynchronizedPair(sample: ReferenceSample,a:InspectionPlayer,b:InspectionPlayer,domain:CompareDomain):CompareTrace {
+ const trace=prepareSynchronizedPair(sample,a,b,domain);drawSynchronizedPair(a,b);return trace;
 }
 
 /** The browser adapter resolves only after the reference seek has completed. */
