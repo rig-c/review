@@ -29,7 +29,7 @@ Every path is a literal relative path, including `model`, optional read-only `mo
 
 `model` is optional and must point to `rigc-compiled/3` under a filename ending `.model.json`, produced by an upstream gated rigc build. Review uses the public `@rig-c/play` loader and player; Spine JSON/skel is not its input. Its pages are resolved relative to the model document. Missing model means unavailable playback, never a mock playback success. The runtime's optional attachment-set sidecar is not part of v1; attachment presets must remain unavailable rather than guessed.
 
-Reference `type` is `image`, `video`, or `pose`. `width` and `height` optionally state image pixel dimensions. The primary animated pose input is Nova/@rig-c/pose's canonical `rig-pose-sequence/1`, consumed directly:
+Reference `type` is `image`, `video`, or `pose`. `width` and `height` optionally state image pixel dimensions. The primary animated pose input is the canonical `rig-pose-sequence/1` format documented by `@rig-c/pose`, consumed directly:
 
 ```json
 {"spec":"rig-pose-sequence/1","space":{"units":"picture-px","origin":"top-left","y":"down"},"width":1080,"height":1920,"source":"producer","frames":[{"t":0,"people":[{"id":"a","joints":{"neck":{"state":"observed","at":[540,410],"score":0.93},"r_wrist":{"state":"missing"}}}]}]}
@@ -115,6 +115,17 @@ The result retains the original status, feedback, recorded `reviewedSource`/comp
 Discovery reads only regular `<64 lowercase hex>.json` files in the private state directory and never follows candidate symlinks or opens paths embedded in JSON. Historical candidate reads are bounded to 32 MiB per file and 64 MiB per search, and more than 100 unreadable candidate files produce a named refusal. Unreadable/nonregular/unparseable unrelated files appear as `historyWarnings:[{file,error}]` rather than fabricated submissions. A matching record with contradictory binding, filename or other invalid session data fails by name. A missing directory or no matching submission yields fresh current pending; content changes never inherit historical approval. Neither lookup rewrites a state file, source asset, model or motion.
 
 Existing legacy-feedback warnings remain visible when a historical row fails today's target/interval rules. The original evidence and recorded tool identity remain available, while resubmission to the current server still requires a valid current binding and corrected feedback.
+
+
+### Grouped issue export
+
+`rig-review feedback <input> [--reference <video>] --format issue` and both comparison feedback forms accept the same explicit binding as their JSON output. Compare supports either `feedback compare <a> <b> --reference <video> --animation <name>` or `feedback <a> --compare <b> --reference <video> [--animation <name>]`; the latter retains open's unique-common-animation rule. `--format` is accepted only for feedback and only once, with `json` or `issue`; omitted format remains the unchanged JSON response. Formatting reads the existing current/history session once and never writes source or state.
+
+The issue text header reports total records, defect/quality counts, and per-build defect/quality/total counts. A single review has one build row; comparison always has separate A/B rows even if hashes or target names coincide. Empty categories and sides report zero. Counts measure feedback records, not frame lengths, unique targets or report findings. Every feedback id produces one issue block, including legacy warning rows and overlapping intervals.
+
+Blocks group in fixed category order (`defect`, then `quality`), followed by exact `(target.kind,target.name)` with deterministic code-unit ordering, then side and feedback id. Bone and slot names do not collide. Each block carries its original id, inclusive chosen frames, target, category, one-line summary, side and selected build's source hash/reviewedSource. Compare also repeats the complete ordered A/B/reference/animation binding so a copied block retains both source identities. Single external-reference blocks retain `referenceBinding` with the base package hash and selected video name/id/SHA. Missing rig/motion artifacts remain null. The original inspection context stays separate from chosen frames; no clock or category is inferred.
+
+The header retains recorded status/timestamp and full source/tool provenance. Prior-tool retrieval is labeled as historical rather than current approval; original versions, currentTools and matching-submission count remain available. Server-derived per-feedback warnings and historical read warnings are included without discarding their items. Formatting does not make an invalid legacy item resubmittable. User text is escaped in Markdown syntax positions and inert evidence uses data-safe JSON fences, preserving arbitrary ids/targets/context without creating extra headings or rows. No issue is posted automatically.
 
 ## Read-only rig-pose report markers
 
@@ -220,8 +231,39 @@ A strip plan with one clock basis reports `plan.basis:"single"|"a"|"b"`. A compa
 background instance and prints a URL alone on stdout. Its matching read-only
 `feedback <input> --reference <same-video> [--compare <input> --animation <name>]`
 command is printed on stderr. Existing `feedback compare ...` remains supported.
-An omitted comparison animation is accepted only for exactly one actual common
-model animation; no filename or first-entry selection supplies a default.
+Open animation selection uses `--animation` first, a normalized report `animation`
+second, and a unique actual model clip (or common A/B clip) last. Report metadata
+comes from the exact already-hashed recognized report bytes, never a separately
+opened JSON file. Equal A/B declarations or a declaration on one side select the
+named clip only if both real catalogs contain it. Conflicting reports and stale
+names refuse; explicit flags can resolve conflicts but invalid explicit names
+never fall back. No frame count, FPS, duration or filename selects a clip.
+
+Stdout remains URL-only. Stderr prints `animation: dance (from report.json)` for
+the root-report case, the actual package-relative report path for other report
+locations, `from --animation` for explicit flags, or `unique actual clip`.
+Option values such as an actual animation named `--format` or `--help` are literal
+values, not independent options. The old strip export grammar is unchanged.
+
+The worker revalidates its resolved name and complete source binding before
+startup. Its API provides `initialAnimation` (a validated name or null); the
+single player uses it rather than the first runtime entry. Explicit checkpoint
+links and subsequent manual choices override startup selection. With a selected clip, an automatic checkpoint is retained when its own
+animation and any declared axis's resolved animation both match that clip. Its
+time, camera, workspace and checkpoint identity remain intact. Conflicting or
+unbound checkpoints and unresolved or conflicting axes are skipped so another
+clip's time/axis cannot silently apply.
+A static model with zero clips stays static. A source-only report can remain
+evidence without claiming observed playback; an explicit name without compiled
+catalog metadata refuses as validation unavailable.
+
+Single source/session/reference hashes remain unchanged: startup selection
+participates only in fixed-worker reuse identity, not clip-specific approval.
+An explicit flag and report resolving to the same effective name reuse the same
+worker. Different compare names retain the existing animation-bound ordered
+comparison identity. The printed feedback command includes the effective name;
+single feedback retrieval validates an explicit name without changing its
+package-wide identity or stored review.
 
 Single `--reference` is an explicit CLI-selected regular local mp4/mov/webm file.
 It does not alter the source manifest, the package files allowlist or manifest

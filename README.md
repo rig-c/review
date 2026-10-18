@@ -2,7 +2,7 @@
 
 A reusable local workspace for a person to inspect an agent's rig output, compare source references, and export feedback ready to become an issue. The person receives a package or opens an existing output folder; the agent does not build a new viewer for each rig.
 
-The first foundation provides modeling and motion inspection workspaces, compiled-model playback through `@rig-c/play`, local image/video/Nova pose references, checkpoints, audio audition, and saved structured feedback. **Motion is view, annotate and export only.** Navigation changes inspection time; it never retimes, authors keys, or writes `motion.json`. Modeling touch-up remains a design goal; this starter does not edit meshes, weights or source art.
+The first foundation provides modeling and motion inspection workspaces, compiled-model playback through `@rig-c/play`, local image, video and pose-sequence references, checkpoints, audio audition, and saved structured feedback. **Motion is view, annotate and export only.** Navigation changes inspection time; it never retimes, authors keys, or writes `motion.json`. Modeling touch-up remains a design goal; this starter does not edit meshes, weights or source art.
 
 ## Start
 
@@ -70,6 +70,16 @@ bun run feedback -- /absolute/path/to/package/review.json
 
 This read-only command prints the session JSON, including reviewed artifact identity and feedback. The exact current-tool session wins when present. After a viewer/runtime upgrade, if that exact session is absent, the CLI can retrieve the latest saved submission over the same content with its original recorded versions and `retrieval: {kind:"prior-tools", toolsChangedSince:true, matchingSubmissions, currentTools}`. It does not migrate approval into the current UI or change saved bytes. Changed inputs still return a fresh pending session; a prior submission is never borrowed across content, revision or reviewed-artifact changes. The same lookup applies to `feedback compare`, preserving both recorded side bindings, reference identity and animation. See [historical retrieval](docs/REVIEW_PACKAGE.md#historical-feedback-retrieval) for selection and validation rules.
 
+
+For grouped issue-ready text, use the same input/reference binding with `--format issue`:
+
+```sh
+rig-review feedback /absolute/output --reference /absolute/original.mp4 --format issue
+rig-review feedback /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance --format issue
+```
+
+The header counts feedback records by defect/quality and by build; blocks group by category, then exact target kind/name. Overlapping intervals and A/B sides remain distinct items. Each block retains its id, inclusive interval, one-line summary and selected/full paired provenance. Historical tool identities and validation warnings remain visible; output never migrates approval, writes state or publishes an issue. Default output and `--format json` remain the existing session JSON. Only feedback accepts `--format`, with `json` or `issue` as its value.
+
 ## Development
 
 ```sh
@@ -78,7 +88,7 @@ bun test
 bun run build
 ```
 
-The server bundles `web/main.ts` at startup using the pinned installed runtime, with no CDN. `build` verifies that browser bundle in memory. CI checks types, focused path/state/API tests, bundling and the demo package. Follow AGENTS.md and the global nova-run policy for full verification bundles. [DESIGN.md](docs/DESIGN.md) distinguishes the runnable foundation from future modeling touch-up and preserves the illustrative screen concept.
+The server bundles `web/main.ts` at startup using the pinned installed runtime, with no CDN. `build` verifies that browser bundle in memory. CI checks types, focused path/state/API tests, bundling and the demo package. Follow AGENTS.md for contributor verification policy. [DESIGN.md](docs/DESIGN.md) distinguishes the runnable foundation from future modeling touch-up and preserves the illustrative screen concept.
 
 ## Frame strip export
 
@@ -108,14 +118,25 @@ instance or reuses the exact matching one, prints its hash-bound URL, and exits:
 ```sh
 bun run open -- /absolute/output --reference /absolute/original.mp4
 # Installed executable mapping:
-rig-review open /absolute/output --reference /absolute/original.mp4
+rig-review open /absolute/output --reference /absolute/original.mp4 --animation dance
 rig-review feedback /absolute/output --reference /absolute/original.mp4
 rig-review open /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance
 rig-review feedback /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance
 ```
 
-`--animation` can be omitted for compare only when the actual models have exactly
-one common animation. Multiple candidates are a named refusal. Opening never
+`open` chooses an explicit `--animation` first, then the normalized report's
+`animation` after validating actual model membership, then a unique actual clip
+(or unique common clip in compare). Thus `rig-review open /absolute/output
+--reference /absolute/original.mp4` opens a report-bound `dance` without the flag
+and prints `animation: dance (from report.json)` on stderr. Conflicting A/B reports,
+a stale report name or multiple clips without a report refuse by name; no first
+entry, filename or frame rate supplies a guess. Explicit invalid names never fall
+back. The selected clip actually initializes single playback, while an explicit
+checkpoint link or later manual choice takes priority. Incompatible automatic
+checkpoints do not apply another clip's time or axis. Static/source-only packages
+remain inspectable without claiming clip selection; explicit unvalidatable clips
+refuse. Single review sessions remain package-wide; animation selection does not
+create an animation-specific approval identity. Opening never
 approves a review. The command prints the matching feedback retrieval command on
 stderr; stdout contains the URL alone. A selected external video takes precedence
 at automatic startup; an explicit checkpoint link or manual checkpoint selection
