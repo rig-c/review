@@ -70,11 +70,11 @@ test('bounded body cancels both oversized chunked and stalled requests',async()=
 });
 test('real opted-in worker/CLI discovers an existing page and distinguishes timeout from applied',async()=>{
  const root=await mkdtemp(join(tmpdir(),'review-control-cli-'));roots.push(root);const input=join(root,'input'),stateDir=join(root,'state');await cp(join(import.meta.dir,'../examples/demo'),input,{recursive:true});const before=await readFile(join(input,'review.json'));
- const opened=await openReview({input:join(input,'review.json'),control:true},{stateDir,idleMs:10000});const origin=new URL(opened.url).origin;
+ const opened=await openReview({input:join(input,'review.json'),control:true},{stateDir,idleMs:10000,direct:true});const origin=new URL(opened.url).origin;
  const file=(await readdir(join(stateDir,'open'))).find(name=>/^[a-f0-9]{64}\.json$/.test(name))!;const record=JSON.parse(await readFile(join(stateDir,'open',file),'utf8'));
  try{
   expect((await stat(join(stateDir,'open',file))).mode&0o077).toBe(0);const queried=await controlReview({input:join(input,'review.json')},{stateDir}) as {pages:unknown[];sourceHash:string};expect(queried.pages).toEqual([]);expect(JSON.stringify(queried)).not.toContain(record.controlToken);
-  const headers={Origin:origin,'Content-Type':'application/json'},page=await (await fetch(origin+'/api/control/register',{method:'POST',headers,body:JSON.stringify({sourceHash:queried.sourceHash,inspection:state()})})).json();
+  const headers={Origin:origin,'Content-Type':'application/json','X-Review-Capability':record.capability},page=await (await fetch(origin+'/api/control/register',{method:'POST',headers,body:JSON.stringify({sourceHash:queried.sourceHash,inspection:state()})})).json();
   const args=['src/cli.ts','control',join(input,'review.json'),'--page',page.pageId,'--expected-revision','0','--request-id','actual-cli','--command','{"type":"theme","value":"light"}','--wait-ms','10'];
   const cli=Bun.spawn([process.execPath,...args],{env:{...process.env,RIG_REVIEW_STATE_DIR:stateDir},stdout:'pipe',stderr:'pipe'}),text=await new Response(cli.stdout).text();expect(await cli.exited).toBe(2);const queued=JSON.parse(text);expect(queued.status).toBe('queued');expect(queued.timedOut).toBe(true);
   const pageHeaders={...headers,Authorization:'Bearer '+page.pageToken};const delivered=await (await fetch(origin+'/api/control/poll',{method:'POST',headers:pageHeaders,body:JSON.stringify({pageId:page.pageId,revision:0,inspection:state(),active:false})})).json();expect(delivered.command.commandId).toBe(queued.commandId);

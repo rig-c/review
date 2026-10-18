@@ -587,8 +587,11 @@ These optional fields preserve acceptance of older payloads by the current
 parser; strict older binaries may refuse new observations. This is not a
 forward-compatibility promise or a new source/review identity.
 
-Browser local storage uses `rig-review-draft/1:<scope>:<sourceHash>` and an active
-source marker `rig-review-active/1:<scope>`. A draft has schema
+Browser local storage uses `rig-review-draft/1:<scope>:<sourceHash>`, where the
+scope itself carries the source identity (`single:<id>:<sourceHash>`, or compare's
+A and B id/hash), plus a written-time index `rig-review-draft-index/1`. Opening
+deletes nothing; a write evicts the least-recently-written drafts beyond 32 except
+any written within the last 24 hours. A draft has schema
 `rig-review-local-draft/1` and a maximum512KiB UTF-8 payload. It contains ordinary
 ID/radio form inputs, UI selections, the inspection bookmark and the unsent
 feedback/checkpoint/status session. It records the SHA-256 fingerprint of the

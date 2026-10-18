@@ -6,6 +6,7 @@ import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs
 import {RigOverlays} from './rig-overlays.ts';
 import {bindWorkspaceUI,type WorkspaceUI} from './workspace-ui.ts';
 import {connectControl} from './control.ts';
+import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
 import type {ControlCommand,ControlInspection,ControlView} from '../src/control.ts';
 import {connectInspectionPersistence,serializableView,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
 import {initialPlayerAnimation} from '../src/animation-selection.ts';
@@ -34,6 +35,9 @@ const button = (id: string) => el<HTMLButtonElement>(id);
 const text = (id: string, value: string) => { el(id).textContent = value; };
 const option = (value: string, label: string) => { const item = document.createElement('option'); item.value = value; item.textContent = label; return item; };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+// First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
+const access = pageInstanceAccess();
+let readOnly: string | null = null;
 let data: ReviewResponse;
 let session: ReviewSession;
 let dirty = false;
@@ -89,16 +93,17 @@ function message(value: string, error = false): void {
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const method = (init?.method ?? 'GET').toUpperCase();
+  const response = await fetch(access.route(path), method === 'GET' || method === 'HEAD' ? init : { ...init, headers: access.headers(init?.headers) });
   if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
   return await response.json() as T;
 }
 
-function referenceUrl(reference:Reference):string {return data.explicitReference?.id===reference.id?data.explicitReference.url:assetUrl(reference.path);}
+function referenceUrl(reference:Reference):string {return data.explicitReference?.id===reference.id?access.route(data.explicitReference.url):assetUrl(reference.path);}
 
 function assetUrl(path: string): string {
   if (!path || path.startsWith('/') || /[\\%?#\x00-\x1f]/.test(path) || /^[a-zA-Z]:/.test(path) || path.split('/').some(part => !part || part === '.' || part === '..')) throw new Error(`Unsupported package asset path: ${path}`);
-  return '/assets/' + path.split('/').map(encodeURIComponent).join('/');
+  return access.route('/assets/' + path.split('/').map(encodeURIComponent).join('/'));
 }
 
 function markDirty(): void {
@@ -109,8 +114,8 @@ function markDirty(): void {
 function updateSavedState(): void {
   text('dirty', dirty ? 'Unsubmitted changes' : session.updatedAt ? 'Submitted' : 'Not submitted');
   el('dirty').classList.toggle('dirty', dirty);
-  button('save').disabled = saving || draftConflict || session.feedbackWarnings.length > 0;
-  button('save').title = session.feedbackWarnings.length ? 'Delete feedback with validation warnings, then add it again with a valid target.' : '';
+  button('save').disabled = saving || draftConflict || !!readOnly || session.feedbackWarnings.length > 0;
+  button('save').title = readOnly ? readOnly : session.feedbackWarnings.length ? 'Delete feedback with validation warnings, then add it again with a valid target.' : '';
 }
 
 function renderProvenance(): void {
@@ -509,7 +514,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
   try {
     const modelUrl = new URL(assetUrl(data.manifest.model), location.href).href;
     assets = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, url) => {
-      const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith('/assets/')) throw new Error(`Model page escapes local package: ${name}`); return target.href;
+      const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith(access.route('/assets/'))) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
     player = new RigPlayer(el('rig-root'), assets);
     const catalog=await loadPartCatalog(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);parts?.register('single',catalog,player);
@@ -583,7 +588,7 @@ function stripStatus(value: string, error = false): void { text('strip-status', 
 function updateStripControls(): void {
   el('strip-panel').setAttribute('aria-busy', String(stripBusy));
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).disabled = stripBusy;
-  button('strip-export').disabled = stripBusy; button('strip-export').textContent = stripBusy ? 'Generating strip…' : 'Download strip';
+  button('strip-export').disabled = stripBusy || !!readOnly; button('strip-export').title = readOnly ?? ''; button('strip-export').textContent = stripBusy ? 'Generating strip…' : 'Download strip';
 }
 
 async function exportStrip(): Promise<void> {
@@ -610,7 +615,7 @@ async function exportStrip(): Promise<void> {
     const referenceId = select('strip-reference').value;
     const request: StripRequest = { format, sourceHash: data.sourceHash, animation: selectedAnimation, ...(referenceId ? { referenceId } : {}), intervals };
     stripBusy = true; updateStripControls(); stripStatus(`${selectedAnimation} · ${intervals.length} ranges · Generating ${format.toUpperCase()}…`);
-    const response = await fetch('/api/strip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
+    const response = await fetch(access.route('/api/strip'), { method: 'POST', headers: access.headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(request) });
     if (!response.ok) {
       const failure: unknown = await response.json().catch(() => null);
       throw new Error(failure && typeof failure === 'object' && 'error' in failure && typeof failure.error === 'string' ? failure.error : `Strip export failed · HTTP ${response.status}`);
@@ -736,6 +741,7 @@ function bind(): void {
     input('feedback-summary').value = ''; markDirty(); renderProposals(); message('Added structured feedback. Submit the review to save it.');
   };
   button('save').onclick = async () => {
+    if(readOnly){message(readOnly,true);return;}
     if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}
     if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; }
     saving = true; updateSavedState(); const savedPayload = JSON.stringify(session);
@@ -766,7 +772,9 @@ function bind(): void {
 
 async function start(): Promise<void> {
   try {
-    [data, session] = await Promise.all([api<ReviewResponse>('/api/review'), api<ReviewSession>('/api/session')]);
+    let writes: { capabilityRequired: boolean };
+    [data, session, writes] = await Promise.all([api<ReviewResponse>('/api/review'), api<ReviewSession>('/api/session'), api<{ capabilityRequired: boolean }>('/api/access')]);
+    readOnly = readOnlyReason(access, writes.capabilityRequired);
     submittedBaseline=structuredClone(session);
     text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; select('feedback-target-kind').value = 'rig'; input('feedback-target-name').value = data.manifest.id;
     select('reference-select').replaceChildren(); for (const reference of data.manifest.references) select('reference-select').append(option(reference.id, `${reference.label} · ${reference.type}`));
@@ -780,10 +788,11 @@ async function start(): Promise<void> {
     if (first) await chooseCheckpoint(first,initial); else renderCheckpoint();
     activeCamera=player?'rig':'reference';if(cameraSync)alignCameras();renderTransport();fitCamera();
     if (requestedId && !first) message(`Checkpoint "${requestedId}" is not in this package. Select one from the list.`, true);
+    else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
     const restored=await setupPersistence();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
-    controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
+    if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
 function showInspector(name:string,reveal=true):void {if(reveal)workspace?.revealInspector();document.querySelector<HTMLButtonElement>(`[data-inspector="${name}"]`)?.click();}
@@ -931,7 +940,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
 }
 async function waitReferenceMetadata(media:HTMLVideoElement,signal:AbortSignal):Promise<void> {if(media.readyState>=1)return;await new Promise<void>((resolve,reject)=>{const clean=()=>{clearTimeout(timer);media.removeEventListener('loadedmetadata',ready);media.removeEventListener('error',fail);signal.removeEventListener('abort',fail);};const ready=()=>{clean();resolve();},fail=()=>{clean();reject(new Error('Saved reference metadata unavailable'));};const timer=setTimeout(fail,10000);media.addEventListener('loadedmetadata',ready,{once:true});media.addEventListener('error',fail,{once:true});signal.addEventListener('abort',fail,{once:true});});}
 async function setupPersistence():Promise<boolean> {
- persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
+ persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
  ui:()=>({inspectorScroll:workspace?.scroll()??'{}',reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();workspace?.restoreScroll(value.inspectorScroll);},afterInputs:()=>{const target=input('feedback-target-name').value;renderFeedbackTargets(true);if(select('feedback-target-kind').value!=='rig')input('feedback-target-name').value=target;renderFeedbackRange();text('audio-volume-label',`${Math.round(Number(input('audio-volume').value)*100)}%`);},onConflict:value=>{draftConflict=value;updateSavedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
  return persistence.restored;
 }

@@ -32,7 +32,7 @@ test('feedback camera context is typed inert JSON with complete independent view
 });
 test('numeric region restores source coverage in a changed aspect rather than replaying pixel pan',()=>{expect(camera.center).toEqual({x:10,y:20});expect(camera.visible).toEqual({x:-190,y:-130,width:400,height:300});const zoom=restoredZoom(camera,1,400,900);expect(zoom).toBe(1);const changed=numericCamera('world',camera.center,zoom,1,400,900)!;expect(changed.center).toEqual(camera.center);expect(changed.visible.width).toBe(400);expect(changed.visible.height).toBe(900);expect(()=>restoredZoom(camera,100,400,900)).toThrow('VIEW_CAMERA_RANGE');expect(numericCamera('image',{x:0,y:0},1,1,0,10)).toBe(null);});
 test('all unsent form text/status/radio and feedback session remain local; exact baseline fingerprint detects a newer submission',async()=>{const storage=new MemoryStorage(),warnings:string[]=[],store=new InspectionDraftStore('single:rig',binding,s=>warnings.push(s),storage),value=draft();expect(store.write(value)).toBe(true);expect(store.read()).toEqual(value);expect(recoverSession(value.session,baseline)?.status).toBe('approved');expect(baseline.status).toBe('pending');expect(recoverSession({...value.session as object,sourceHash:'f'.repeat(64)},baseline)).toBe(null);const before=await sessionFingerprint(baseline),after=await sessionFingerprint({...baseline,updatedAt:'2026-10-18T09:00:00Z'});expect(before).not.toBe(after);expect(warnings).toEqual([]);});
-test('source change clears only that exact app scope, preserving unrelated local data',()=>{const storage=new MemoryStorage(),first=new InspectionDraftStore('single:rig',binding,()=>{},storage);first.write(draft());storage.setItem('unrelated','keep');const other=new InspectionDraftStore('single:other',binding,()=>{},storage);other.write(draft());const changed=new InspectionDraftStore('single:rig',{...binding,sourceHash:'d'.repeat(64)},()=>{},storage);expect(changed.read()).toBe(null);expect(storage.getItem(first.key)).toBe(null);expect(storage.getItem(other.key)).not.toBe(null);expect(storage.getItem('unrelated')).toBe('keep');});
+test('opening another source of the same scope deletes nothing, preserving unrelated local data',()=>{const storage=new MemoryStorage(),first=new InspectionDraftStore('single:rig',binding,()=>{},storage);first.write(draft());storage.setItem('unrelated','keep');const other=new InspectionDraftStore('single:other',binding,()=>{},storage);other.write(draft());const changed=new InspectionDraftStore('single:rig',{...binding,sourceHash:'d'.repeat(64)},()=>{},storage);expect(changed.read()).toBe(null);expect(storage.getItem(first.key)).not.toBe(null);expect(storage.getItem(other.key)).not.toBe(null);expect(storage.getItem('unrelated')).toBe('keep');});
 test('corrupt local storage stays downloadable and cannot be silently overwritten; storage denial is visible',()=>{const storage=new MemoryStorage(),warnings:string[]=[],store=new InspectionDraftStore('single:rig',binding,s=>warnings.push(s),storage);storage.setItem(store.key,'{broken');expect(store.read()).toBe(null);expect(store.recovery()).toBe('{broken');expect(store.write(draft())).toBe(false);expect(storage.getItem(store.key)).toBe('{broken');expect(warnings[0]).toContain('remains in storage');store.clear();expect(store.write(draft())).toBe(true);const denied:Storage={length:0,getItem(){throw new Error('denied');},setItem(){throw new Error('denied');},removeItem(){throw new Error('denied');},key(){throw new Error('denied');},clear(){throw new Error('Global clear is forbidden');}};new InspectionDraftStore('denied',binding,s=>warnings.push(s),denied);expect(warnings.at(-1)).toContain('unavailable');});
 
 test('actual fixed-instance landing gate accepts copied view links while arbitrary query capabilities are excluded',()=>{
@@ -141,4 +141,24 @@ test('source-bound links retain exact owning identity and null reasons without p
 test('browser Settings are neither saved into nor restored from a source draft',async()=>{
  const saved=draft();saved.baseline=await sessionFingerprint(baseline);saved.session=baseline;saved.reviewDirty=false;saved.inputs['settings-sync']={value:'on',checked:true};
  const app=await openFormCoordinator(saved,null);try{expect(app.state().settingsSync).toBe(false);app.connection.save();expect(app.savedFields()).not.toContain('settings-sync');expect(app.savedFields()).toContain('camera-sync');}finally{app.connection.dispose();}
+});
+
+test('two revisions of one manifest id keep both drafts on one origin',()=>{
+ const storage=new MemoryStorage(),revised:InspectionBinding={...binding,sourceHash:'d'.repeat(64)};
+ const first=new InspectionDraftStore('single:rig:'+binding.sourceHash,binding,()=>{},storage),second=new InspectionDraftStore('single:rig:'+revised.sourceHash,revised,()=>{},storage);
+ const one=draft(),two={...draft(),sourceHash:revised.sourceHash,bookmark:{...bookmark(),binding:revised},inputs:{'feedback-summary':{value:'Second revision note'}}};
+ expect(first.write(one)).toBe(true);expect(second.write(two)).toBe(true);expect(first.key).not.toBe(second.key);
+ expect(new InspectionDraftStore('single:rig:'+binding.sourceHash,binding,()=>{},storage).read()?.inputs).toEqual(one.inputs);
+ expect(new InspectionDraftStore('single:rig:'+revised.sourceHash,revised,()=>{},storage).read()?.inputs).toEqual(two.inputs);
+});
+test('least-recently-written drafts beyond 32 are evicted, but never one written in the last 24 hours',()=>{
+ const storage=new MemoryStorage(),day=24*60*60*1000,start=Date.parse('2026-10-01T00:00:00Z');let clock=start;const store=(n:number)=>new InspectionDraftStore('single:rig'+n,binding,()=>{},storage,()=>clock);
+ for(let n=0;n<30;n++){clock=start+n*1000;store(n).write(draft());}
+ clock=start+3*day;for(let n=30;n<40;n++){clock+=1000;store(n).write(draft());}
+ const kept=(s:MemoryStorage)=>[...s.values.keys()].filter(k=>k.startsWith('rig-review-draft/1:'));
+ expect(kept(storage)).toHaveLength(32);for(let n=0;n<8;n++)expect(storage.getItem(store(n).key)).toBeNull();for(let n=8;n<40;n++)expect(storage.getItem(store(n).key)).not.toBeNull();
+ // All 40 written within 24 h: none is evicted, even beyond the limit.
+ const fresh=new MemoryStorage();clock=start;for(let n=0;n<40;n++){clock+=60000;new InspectionDraftStore('single:recent'+n,binding,()=>{},fresh,()=>clock).write(draft());}expect(kept(fresh)).toHaveLength(40);
+ // Rewriting an old scope makes it recent, so the next eviction takes the following oldest instead.
+ clock+=3*day;store(8).write(draft());clock+=1000;store(40).write(draft());expect(storage.getItem(store(8).key)).not.toBeNull();expect(storage.getItem(store(9).key)).toBeNull();expect(kept(storage)).toHaveLength(32);
 });

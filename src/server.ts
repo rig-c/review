@@ -4,7 +4,7 @@ import { appRoot, buildWeb } from './build.ts';
 import { packagePath, safeFile, type ReviewPackage } from './manifest.ts';
 import { exportReviewStrip, stripJson } from './strip-export.ts';
 import {assertReviewUnchanged,referenceBinding,selectedReference,safeSelectedReference,serveReference} from './reference.ts';
-import {openGate,staleOpenStatus,type OpenIdentity} from './open-protocol.ts';
+import {openGate,staleOpenStatus,accessGate,openNonceGate,stampOpen,type OpenIdentity} from './open-protocol.ts';
 import { readSession, saveSession } from './session.ts';
 const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
 function json(data:unknown,status=200){return Response.json(data,{status,headers});}
@@ -15,14 +15,15 @@ async function bodyJson(req:Request):Promise<unknown>{
   while(true){const {value,done}=await reader.read();if(done)break;bytes+=value.length;if(bytes>1024*1024){await reader.cancel();throw new Error('Session payload exceeds 1 MiB');}chunks.push(value);}
   const full=new Uint8Array(bytes);let offset=0;for(const chunk of chunks){full.set(chunk,offset);offset+=chunk.length;}return JSON.parse(new TextDecoder().decode(full));
 }
-export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity}={}){
+/** `capability` (open workers and foreground CLI serving) gates every non-GET request; tests may omit it. */
+export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string}={}){
   const bundle=await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
   const control=options.control?createControlServer({identity:options.control,sourceHash:p.sourceHash,mode:'single',unchanged,activity:options.activity}):null;
-  return Bun.serve({hostname:'127.0.0.1',port:options.port??4317,
-    async fetch(req,server){try {
-      const url=new URL(req.url);const origin=`http://127.0.0.1:${server.port}`;
+  const handle=async(req:Request,port:number|undefined):Promise<Response>=>{try {
+      const url=new URL(req.url);const origin=`http://127.0.0.1:${port}`;
       if(url.origin!==origin)return json({error:'Loopback host required'},403);
+      const refused=openNonceGate(req,options.open)??accessGate(req,options.capability);if(refused)return refused;
       const controlled=await control?.(req,origin);if(controlled)return controlled;
       options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await unchanged();}catch{return staleOpenStatus(options.open!);}}return gate;}
       if(req.method==='PUT'&&url.pathname==='/api/session'){
@@ -56,6 +57,6 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       if(url.pathname==='/'||url.pathname==='/index.html')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/index.html'),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
       if(url.pathname==='/styles.css')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/styles.css'),{headers:{...headers,'Content-Type':'text/css'}});
       return json({error:'Not found'},404);
-    }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message.includes('inputs changed')?409:400);}}
-  });
+    }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message.includes('inputs changed')?409:400);}};
+  return Bun.serve({hostname:'127.0.0.1',port:options.port??4317,async fetch(req,server){return stampOpen(req,await handle(req,server.port),options.open);}});
 }
