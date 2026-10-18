@@ -1,4 +1,5 @@
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
+import {initialPlayerAnimation} from '../src/animation-selection.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import type {ReferenceBinding} from '../src/reference.ts';
 import type { Checkpoint, Reference, ReviewedSource, ReviewManifest } from '../src/manifest.ts';
@@ -9,7 +10,7 @@ import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, type
 import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 
-interface ReviewResponse { manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
+interface ReviewResponse { initialAnimation?:string|null; manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
 interface PoseReference { schema: 'rig-review-pose/1'; coordinateSystem: 'image-pixels-y-down'; width: number; height: number; joints: { id: string; x: number; y: number; parent?: string }[] }
 interface SequenceJoint { state: 'observed' | 'occluded' | 'missing' | 'inferred'; at?: [number, number]; score?: number }
 interface PoseSequence { spec: 'rig-pose-sequence/1'; space: { units: 'picture-px'; origin: 'top-left'; y: 'down' }; width: number; height: number; source?: string; frames: { t: number; people: { id: string; joints: Record<string, SequenceJoint> }[] }[]; camera?: { s: number; tx: number; ty: number; inliers: number }[]; cameraSource?: unknown }
@@ -475,7 +476,7 @@ function tick(now: number): void {
   requestAnimationFrame(tick);
 }
 
-async function initPlayer(): Promise<void> {
+async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
   if (!data.manifest.model) { text('player-state', '리그 미제공 · 원본 자료 검토 가능'); return; }
   text('player-state', '컴파일된 리그 읽는 중');
   try {
@@ -488,7 +489,8 @@ async function initPlayer(): Promise<void> {
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
     animations.disabled = assets.animations.length === 0;
-    if (assets.animations[0]) chooseAnimation(assets.animations[0].name); else player.draw();
+    const initial=initialPlayerAnimation(assets.animations.map(clip=>clip.name),data.initialAnimation??undefined,initialCheckpoint);
+    if(initial)chooseAnimation(initial);else player.draw();
     el('rig-empty').hidden = true; text('player-state', '@rig-c/play · 실제 리그');
     const presets = player.sets(); if (presets.length) { select('part-set').replaceChildren(option('', '원본 세트')); for (const set of presets) select('part-set').append(option(set.name, set.name)); select('part-set').disabled = false; }
     const validAxes = data.manifest.axes.filter(axis => assets?.animations.some(item => item.name === axis.animation));
@@ -693,9 +695,9 @@ async function start(): Promise<void> {
     if (!data.manifest.references.length) { select('reference-select').append(option('', '자료 미제공')); select('reference-select').disabled = true; }
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = '소스 파일 미제공';
     bind(); updateStripControls(); stripStatus('오른쪽 시작·끝 프레임 또는 모든 피드백 구간을 선택해 다운로드합니다. 미제출 피드백도 선택에 포함되며, 내보내기로 제출되지는 않습니다.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
-    const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id),first=initial.checkpoint;
+    const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
-    await initPlayer();
+    await initPlayer(first);
     if (first) await chooseCheckpoint(first,initial); else renderCheckpoint();
     if (data.report && !first?.workspace) workspace = 'motion';
     renderTransport(); setWorkspace(workspace);

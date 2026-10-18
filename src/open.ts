@@ -11,9 +11,10 @@ import {loadReview,type ReviewPackage} from './manifest.ts';
 import {loadCompare,assertCompareUnchanged,type ComparePackage} from './compare.ts';
 import {startServer} from './server.ts';
 import {startCompareServer} from './compare-server.ts';
+import {selectAnimation,type AnimationSelection} from './animation-selection.ts';
 import type {OpenIdentity} from './open-protocol.ts';
 export interface OpenInputs {input:string;compare?:string;reference?:string;animation?:string}
-export type OpenPackage={mode:'single';p:ReviewPackage;inputs:OpenInputs;contentHash:string}|{mode:'compare';p:ComparePackage;inputs:OpenInputs;contentHash:string};
+export type OpenPackage=({mode:'single';p:ReviewPackage;inputs:OpenInputs;contentHash:string}|{mode:'compare';p:ComparePackage;inputs:OpenInputs;contentHash:string})&{selection:AnimationSelection|null};
 interface RecordFile extends OpenIdentity {schema:'rig-review-open-instance/1';pid:number;origin:string}
 interface WorkerRequest {schema:'rig-review-open-request/1';inputs:OpenInputs;identity:OpenIdentity;stateDir:string;registry:string;request:string;idleMs:number}
 const appRoot=fileURLToPath(new URL('..',import.meta.url));
@@ -21,11 +22,12 @@ const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value))
 const sleep=(ms:number)=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 export const defaultStateDir=()=>process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review');
 export async function loadOpenPackage(inputs:OpenInputs):Promise<OpenPackage>{
- if(!inputs.compare){if(inputs.animation)throw new Error('open --animation: use with --compare');const p=await loadReferencedReview(inputs.input,inputs.reference);return {mode:'single',p,contentHash:p.sourceHash,inputs:{input:p.manifestPath,...(selectedReference(p)?{reference:selectedReference(p)!.path}:{})}};}
+ if(!inputs.compare){const p=await loadReferencedReview(inputs.input,inputs.reference),selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);return {mode:'single',p,selection,contentHash:p.sourceHash,inputs:{input:p.manifestPath,...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{})}};}
  if(!inputs.reference)throw new Error('open compare: explicit --reference required');
- let animation=inputs.animation;
- if(!animation){const [a,b]=await Promise.all([loadReview(inputs.input),loadReview(inputs.compare)]),common=(a.feedbackCatalog.animations??[]).filter(a=>(b.feedbackCatalog.animations??[]).some(b=>b.name===a.name)).map(a=>a.name);if(common.length!==1)throw new Error(`open.animation: expected --animation; common animations: ${common.join(', ')||'(none)'}`);animation=common[0]!;}
- const p=await loadCompare({a:inputs.input,b:inputs.compare,reference:inputs.reference,animation});return {mode:'compare',p,contentHash:p.response.sourceHash,inputs:{input:p.inputs.a,compare:p.inputs.b,reference:p.inputs.reference,animation}};
+ const [a,b]=await Promise.all([loadReview(inputs.input),loadReview(inputs.compare)]),selection=selectAnimation([{label:'a',catalog:a.feedbackCatalog,report:a.report},{label:'b',catalog:b.feedbackCatalog,report:b.report}],inputs.animation)!;
+ const p=await loadCompare({a:inputs.input,b:inputs.compare,reference:inputs.reference,animation:selection.name});
+ if(p.a.sourceHash!==a.sourceHash||p.b.sourceHash!==b.sourceHash)throw new Error('open inputs changed while selecting animation');
+ return {mode:'compare',p,selection,contentHash:p.response.sourceHash,inputs:{input:p.inputs.a,compare:p.inputs.b,reference:p.inputs.reference,animation:selection.name}};
 }
 /** Flat tool source/static files are small; no package or producer recursive scan. */
 export async function openFingerprint():Promise<string>{
@@ -52,31 +54,31 @@ async function claimOwner(claim:string):Promise<{file:string;pid:number;nonce:st
 async function removeClaimFile(claim:string,owner:{file:string;nonce:string}){try{const current=await smallJson(owner.file) as {nonce?:string};if(current.nonce!==owner.nonce)return;await unlink(owner.file);await rmdir(claim);}catch(e){if(!['ENOENT','ENOTEMPTY','EEXIST'].includes((e as NodeJS.ErrnoException).code??''))throw e;}}
 async function releaseClaim(claim:string,nonce:string){await removeClaimFile(claim,{file:join(claim,`owner.${nonce}.json`),nonce});}
 async function canonicalDestination(path:string):Promise<string>{try{return await realpath(path);}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;const parent=dirname(path);if(parent===path)throw e;return join(await canonicalDestination(parent),basename(path));}}
-export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idleMs?:number}={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs}>{
+export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idleMs?:number}={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs;selection:AnimationSelection|null}>{
  const p=await loadOpenPackage(inputs),fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
  const stateDir=await canonicalDestination(resolve(options.stateDir??defaultStateDir())),roots=p.mode==='single'?[p.p.root]:[p.p.a.root,p.p.b.root];
  for(const root of roots){const rel=relative(root,stateDir);if(!rel||rel!=='..'&&!rel.startsWith('..'+(process.platform==='win32'?'\\':'/'))&&!isAbsolute(rel))throw new Error('open.state: must be outside input packages');}
  const control=join(stateDir,'open');await mkdir(control,{recursive:true,mode:0o700});const canonicalControl=await realpath(control);if((await lstat(control)).isSymbolicLink())throw new Error('open.state: control directory cannot be a symlink');
  const registry=join(canonicalControl,key+'.json'),claim=join(canonicalControl,key+'.claim'),nonce=randomUUID(),deadline=performance.now()+20000;
  const reuse=async()=>{const row=await readRecord(registry,key);return row&&row.fingerprint===fingerprint&&row.contentHash===p.contentHash&&await alive(row)?row:null;};
- const ready=await reuse();if(ready)return {url:openUrl(ready),reused:true,nonce:ready.nonce,inputs:p.inputs};
+ const ready=await reuse();if(ready)return {url:openUrl(ready),reused:true,nonce:ready.nonce,inputs:p.inputs,selection:p.selection};
  // Publish a populated directory atomically: no live owner ever exposes an
  // empty claim. Unique owner filenames make stale cleanup safe after replacement.
  const candidate=join(canonicalControl,`${key}.${nonce}.claiming`);await mkdir(candidate,{mode:0o700});await writeFile(join(candidate,`owner.${nonce}.json`),JSON.stringify({pid:process.pid,nonce}),{mode:0o600,flag:'wx'});
  let claimed=false;
  try{while(!claimed){try{try{await lstat(claim);const occupied=new Error('claim exists') as NodeJS.ErrnoException;occupied.code='EEXIST';throw occupied;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}await rename(candidate,claim);claimed=true;}
- catch(e){if(!['EEXIST','ENOTEMPTY'].includes((e as NodeJS.ErrnoException).code??''))throw e;const row=await reuse();if(row){await rm(candidate,{recursive:true});return {url:openUrl(row),reused:true,nonce:row.nonce,inputs:p.inputs};}
+ catch(e){if(!['EEXIST','ENOTEMPTY'].includes((e as NodeJS.ErrnoException).code??''))throw e;const row=await reuse();if(row){await rm(candidate,{recursive:true});return {url:openUrl(row),reused:true,nonce:row.nonce,inputs:p.inputs,selection:p.selection};}
  try{const before=await lstat(claim),owner=await claimOwner(claim);if(owner&&!running(owner.pid)){const again=await claimOwner(claim);if(again?.nonce===owner.nonce&&(await lstat(claim)).ino===before.ino)await removeClaimFile(claim,owner);}else if(!owner&&Date.now()-before.mtimeMs>=250&&(await lstat(claim)).ino===before.ino){try{await rmdir(claim);}catch(error){if(!['ENOENT','ENOTEMPTY','EEXIST'].includes((error as NodeJS.ErrnoException).code??''))throw error;}}}
  catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}if(performance.now()>deadline)throw new Error('OPEN_BUSY: instance startup claim did not become ready');await sleep(30);}}}
  catch(error){await rm(candidate,{recursive:true,force:true});throw error;}
  let request:string|undefined,spawned:ReturnType<typeof spawn>|undefined,handedOff=false;
  try{
-  const row=await reuse();if(row)return {url:openUrl(row),reused:true,nonce:row.nonce,inputs:p.inputs};
+  const row=await reuse();if(row)return {url:openUrl(row),reused:true,nonce:row.nonce,inputs:p.inputs,selection:p.selection};
   const identity:OpenIdentity={key,contentHash:p.contentHash,nonce,fingerprint};request=join(canonicalControl,`${key}.${nonce}.request.json`);const log=join(canonicalControl,`${key}.${nonce}.log`);
   const spec:WorkerRequest={schema:'rig-review-open-request/1',inputs:p.inputs,identity,stateDir,registry,request,idleMs:options.idleMs??30*60*1000};await writeFile(request,JSON.stringify(spec),{mode:0o600,flag:'wx'});
   const logHandle=await openFile(log,'a',0o600);let child;try{child=spawn(process.execPath,[join(appRoot,'src/open-worker.ts'),request],{cwd:canonicalControl,detached:true,stdio:['ignore',logHandle.fd,logHandle.fd],env:process.env});spawned=child;child.unref();}finally{await logHandle.close();}
   let exited:string|undefined;child.on('error',error=>{exited=error.message;});child.on('exit',(code,signal)=>{exited=`exit ${code} ${signal??''}`;});
-  while(performance.now()<deadline){const record=await reuse();if(record){handedOff=true;return {url:openUrl(record),reused:false,nonce:record.nonce,inputs:p.inputs};}if(exited)throw new Error(`OPEN_START: ${exited}; worker log ${log}`);await sleep(30);}throw new Error(`OPEN_TIMEOUT: worker did not become ready; log ${log}`);
+  while(performance.now()<deadline){const record=await reuse();if(record){handedOff=true;return {url:openUrl(record),reused:false,nonce:record.nonce,inputs:p.inputs,selection:p.selection};}if(exited)throw new Error(`OPEN_START: ${exited}; worker log ${log}`);await sleep(30);}throw new Error(`OPEN_TIMEOUT: worker did not become ready; log ${log}`);
  }finally{if(spawned&&!handedOff&&spawned.exitCode===null&&spawned.signalCode===null)spawned.kill('SIGTERM');await releaseClaim(claim,nonce);if(request)await unlink(request).catch(e=>{if(e.code!=='ENOENT')throw e;});}
 }
 export async function runOpenWorker(requestPath:string):Promise<void>{
@@ -84,7 +86,7 @@ export async function runOpenWorker(requestPath:string):Promise<void>{
  const spec=raw,control=await realpath(join(spec.stateDir,'open'));if(dirname(await realpath(requestPath))!==control||spec.request!==requestPath||spec.registry!==join(control,spec.identity.key+'.json')||!Number.isSafeInteger(spec.idleMs)||spec.idleMs<100)throw new Error('open worker: invalid state locations or idle limit');
  const p=await loadOpenPackage(spec.inputs),fingerprint=await openFingerprint();if(fingerprint!==spec.identity.fingerprint||openKey(p,fingerprint)!==spec.identity.key||p.contentHash!==spec.identity.contentHash)throw new Error('open worker: inputs changed before startup');
  let last=performance.now();const options={port:0,stateDir:spec.stateDir,open:spec.identity,activity:()=>{last=performance.now();}};
- const server=p.mode==='single'?await startServer(p.p,options):await startCompareServer(p.p,options);
+ const server=p.mode==='single'?await startServer(p.p,{...options,initialAnimation:p.selection?.name}):await startCompareServer(p.p,options);
  const check=()=>p.mode==='single'?assertReviewUnchanged(p.p):assertCompareUnchanged(p.p);
  await check();const record:RecordFile={schema:'rig-review-open-instance/1',...spec.identity,pid:process.pid,origin:`http://127.0.0.1:${server.port}`};const tmp=spec.registry+'.'+spec.identity.nonce+'.tmp';await writeFile(tmp,JSON.stringify(record),{mode:0o600,flag:'wx'});await rename(tmp,spec.registry);
  await unlink(requestPath).catch(e=>{if(e.code!=='ENOENT')throw e;});
