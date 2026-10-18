@@ -27,16 +27,37 @@ export function bindStageLayout(area:HTMLElement,changed:()=>void):()=>void {
  const render=()=>{if(syncStageLayout(area))changed();};
  const observer=new ResizeObserver(render);observer.observe(area);render();return ()=>observer.disconnect();
 }
+// Nested or separately disposed pan binders must not restore another binder's override.
+const panVideoOverrides=new WeakMap<HTMLVideoElement,{owners:number;value:string;priority:string}>();
 export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,enabled:()=>boolean=()=>true):()=>void {
  let pointer:number|null=null,x=0,y=0,space=false;
- const keyDown=(event:KeyboardEvent)=>{if(event.code==='Space'&&!(event.target instanceof Element&&event.target.closest('input,textarea,select,button'))){space=true;event.preventDefault();}};
- const keyUp=(event:KeyboardEvent)=>{if(event.code==='Space')space=false;};const blur=()=>{space=false;pointer=null;delete viewport.dataset.panning;};
+ const videos=new Set<HTMLVideoElement>();
+ const releaseVideo=(video:HTMLVideoElement)=>{
+  const previous=panVideoOverrides.get(video);if(!previous)return;
+  if(--previous.owners===0){if(previous.value)video.style.setProperty('pointer-events',previous.value,previous.priority);else video.style.removeProperty('pointer-events');panVideoOverrides.delete(video);}
+ };
+ const syncVideos=()=>{
+  const current=new Set(viewport.querySelectorAll<HTMLVideoElement>('video[controls]'));
+  for(const video of videos)if(!current.has(video)){releaseVideo(video);videos.delete(video);}
+  for(const video of current)if(!videos.has(video)){
+   const previous=panVideoOverrides.get(video);
+   if(previous)previous.owners++;else{panVideoOverrides.set(video,{owners:1,value:video.style.getPropertyValue('pointer-events'),priority:video.style.getPropertyPriority('pointer-events')});video.style.setProperty('pointer-events','none','important');}
+   videos.add(video);
+  }
+ };
+ const observer=new MutationObserver(()=>{if(space)syncVideos();});
+ const releaseSpace=()=>{space=false;observer.disconnect();for(const video of videos)releaseVideo(video);videos.clear();};
+ const releasePointer=()=>{const id=pointer;pointer=null;delete viewport.dataset.panning;if(id!==null&&viewport.hasPointerCapture(id))viewport.releasePointerCapture(id);};
+ const keyDown=(event:KeyboardEvent)=>{if(event.code==='Space'&&enabled()&&!(event.target instanceof Element&&event.target.closest('input,textarea,select,button'))){
+  if(!space){space=true;syncVideos();observer.observe(viewport,{childList:true,subtree:true,attributes:true,attributeFilter:['controls']});}event.preventDefault();
+ }};
+ const keyUp=(event:KeyboardEvent)=>{if(event.code==='Space')releaseSpace();};const blur=()=>{releaseSpace();releasePointer();};
  const start=(event:PointerEvent)=>{if(!enabled()||!event.isPrimary||event.button!==0)return;const target=event.target;if(target instanceof Element&&(target.closest('button,input,select,textarea,a')||target.closest('video[controls]')&&!space))return;pointer=event.pointerId;x=event.clientX;y=event.clientY;viewport.setPointerCapture(pointer);viewport.dataset.panning='true';event.preventDefault();};
  const drag=(event:PointerEvent)=>{if(event.pointerId!==pointer)return;const dx=event.clientX-x,dy=event.clientY-y;x=event.clientX;y=event.clientY;move(dx,dy);event.preventDefault();};
- const end=(event:PointerEvent)=>{if(event.pointerId!==pointer)return;pointer=null;delete viewport.dataset.panning;if(viewport.hasPointerCapture(event.pointerId))viewport.releasePointerCapture(event.pointerId);};
+ const end=(event:PointerEvent)=>{if(event.pointerId===pointer)releasePointer();};
  const native=(event:DragEvent)=>event.preventDefault();
- window.addEventListener('blur',blur);document.addEventListener('keydown',keyDown);document.addEventListener('keyup',keyUp);viewport.addEventListener('pointerdown',start);viewport.addEventListener('pointermove',drag);viewport.addEventListener('pointerup',end);viewport.addEventListener('pointercancel',end);viewport.addEventListener('lostpointercapture',end);viewport.addEventListener('dragstart',native);
- return ()=>{window.removeEventListener('blur',blur);document.removeEventListener('keydown',keyDown);document.removeEventListener('keyup',keyUp);viewport.removeEventListener('pointerdown',start);viewport.removeEventListener('pointermove',drag);viewport.removeEventListener('pointerup',end);viewport.removeEventListener('pointercancel',end);viewport.removeEventListener('lostpointercapture',end);viewport.removeEventListener('dragstart',native);};
+ window.addEventListener('blur',blur);document.addEventListener('keydown',keyDown,true);window.addEventListener('keyup',keyUp,true);viewport.addEventListener('pointerdown',start);viewport.addEventListener('pointermove',drag);viewport.addEventListener('pointerup',end);viewport.addEventListener('pointercancel',end);viewport.addEventListener('lostpointercapture',end);viewport.addEventListener('dragstart',native);
+ return ()=>{blur();window.removeEventListener('blur',blur);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);viewport.removeEventListener('pointerdown',start);viewport.removeEventListener('pointermove',drag);viewport.removeEventListener('pointerup',end);viewport.removeEventListener('pointercancel',end);viewport.removeEventListener('lostpointercapture',end);viewport.removeEventListener('dragstart',native);};
 }
 
 export function bindInspectorTabs(changed:()=>void):void {

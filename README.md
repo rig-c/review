@@ -2,7 +2,7 @@
 
 A reusable local workspace for a person to inspect an agent's rig output, compare source references, and export feedback ready to become an issue. The person receives a package or opens an existing output folder; the agent does not build a new viewer for each rig.
 
-The first foundation provides modeling and motion inspection workspaces, compiled-model playback through `@rig-c/play`, local image, video and pose-sequence references, checkpoints, audio audition, and saved structured feedback. **Motion is view, annotate and export only.** Navigation changes inspection time; it never retimes, authors keys, or writes `motion.json`. Modeling touch-up remains a design goal; this starter does not edit meshes, weights or source art.
+The app provides one inspection workspace for setup geometry and motion, compiled-model playback through `@rig-c/play`, local image, video and pose-sequence references, checkpoints, audio audition, and saved structured feedback. **Motion is view, annotate and export only.** Navigation changes inspection time; it never retimes, authors keys, or writes `motion.json`. Modeling touch-up remains a design goal; this starter does not edit meshes, weights or source art.
 
 ## Place in the toolchain
 
@@ -207,9 +207,16 @@ pages require an explicit `--page`. The URL and source binding stay unchanged;
 existing ordinary servers do not become controllable. Starting the opt-in worker
 is a one-time handoff, not a new link for each parameter change.
 
-Commands cover appearance, automatic layout, linked rig or independent reference
-camera, playback, single animation, time and actual inspection layers. Camera pan
-is measured in viewport CSS pixels (right/down positive). Comparison retains its
+Commands cover appearance, automatic layout, synchronized or independent pane
+cameras, playback, single animation, time and actual inspection layers. Camera
+pan is measured in viewport CSS pixels (right/down positive). New inspections
+start with camera sync on: zoom relative to fit and pan normalized by each pane's
+viewport move all visible measurable reference/rig panes together. Turn sync off
+with `{"type":"camera-sync","value":false}` to inspect each pane independently;
+turning it off preserves current views. Turning it on aligns the visible panes
+to the last active pane. Camera/fit targets are `rig|reference` in single review
+and `a|b|reference` in compare. For legacy clients, compare `target:"rig"` explicitly
+moves both A/B even when sync is off; its CSS readback aliases A. Comparison retains its
 fixed animation and actual video-master seek path. A single-video time request
 uses the actual decoded timestamp for both reference and rig; the applied
 acknowledgement reports that time, which may differ from the requested seconds.
@@ -224,7 +231,8 @@ Remote inspection readback also includes versioned numeric `view` coordinates
 when the page can measure them: rig/world center and zoom, reference/image center
 and zoom, each panel's current CSS viewport size and visible rectangle. World
 coordinates use Y up; reference image coordinates use Y down. Compare reports
-actual A and B rectangles separately; unavailable measurements are null. These
+actual A and B rectangles separately; unavailable measurements are null. The
+canonical view also reports `cameraSync` and `activeCamera`. These
 are the same current cameras used by the local controls, rather than a second
 simulated view. Camera commands still use the documented viewport CSS pan.
 
@@ -239,10 +247,13 @@ was rolled back. Tokens stay in private tool state, not URLs or command output.
 
 The view link stores the current numeric inspection in a bounded, versioned
 `#review=` fragment. It includes the exact loaded source/model binding, selected
-animation/time and reference selection, appearance/layers, and canonical camera
-centers with visible bounds. Reloading a matching link restores a paused view;
+animation/time and reference selection, appearance/layers, camera sync and the
+active pane, and each canonical camera center with visible bounds. Reloading a matching link restores a paused view;
 it does not restart an idle loop or submit a review. Coordinates adapt to the
-current viewport instead of replaying another window's CSS pan offsets. A link
+current viewport instead of replaying another window's CSS pan offsets.
+Historical links without a sync mode restore with sync off to preserve their
+saved views; fresh inspections start with sync on. Legacy modeling/motion
+workspace selections are accepted without restoring a top-level workspace switch. A link
 for a different source binding is refused.
 
 Ordinary form inputs, selected panels, view state and unsent feedback/checkpoint
