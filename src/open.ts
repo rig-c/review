@@ -14,6 +14,7 @@ import {startServer} from './server.ts';
 import {startCompareServer} from './compare-server.ts';
 import {selectAnimation,type AnimationSelection} from './animation-selection.ts';
 import type {OpenIdentity} from './open-protocol.ts';
+import {playPackagePath} from './versions.ts';
 export interface OpenInputs {input:string;compare?:string;reference?:string;animation?:string;control?:boolean}
 export type OpenPackage=({mode:'single';p:ReviewPackage;inputs:OpenInputs;contentHash:string}|{mode:'compare';p:ComparePackage;inputs:OpenInputs;contentHash:string})&{selection:AnimationSelection|null};
 interface RecordFile extends OpenIdentity {schema:'rig-review-open-instance/1';pid:number;origin:string;controlToken?:string}
@@ -33,7 +34,10 @@ export async function loadOpenPackage(inputs:OpenInputs):Promise<OpenPackage>{
 /** Flat tool source/static files are small; no package or producer recursive scan. */
 export async function openFingerprint():Promise<string>{
  const hash=createHash('sha256');for(const directory of ['src','web'])for(const entry of (await readdir(join(appRoot,directory),{withFileTypes:true})).sort((a,b)=>a.name<b.name?-1:1))if(entry.isFile()&&/\.(ts|css|html)$/.test(entry.name)){hash.update(directory+'/'+entry.name+'\0');hash.update(await readFile(join(appRoot,directory,entry.name)));}
- for(const name of ['package.json','bun.lock','node_modules/@rig-c/play/package.json']){hash.update(name+'\0');hash.update(await readFile(join(appRoot,name)));}return hash.digest('hex');
+ // An installed copy ships no lockfile; the resolved runtime manifest still binds its dependency.
+ hash.update('package.json\0');hash.update(await readFile(join(appRoot,'package.json')));
+ hash.update('bun.lock\0');try{hash.update(await readFile(join(appRoot,'bun.lock')));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;hash.update('(absent)');}
+ hash.update('@rig-c/play/package.json\0');hash.update(await readFile(playPackagePath()));return hash.digest('hex');
 }
 export function openKey(p:OpenPackage,fingerprint:string):string {return digest({fingerprint,installation:appRoot,mode:p.mode,inputs:p.inputs,content:p.contentHash,identity:p.mode==='single'?p.p.reviewedSource:p.p.response.binding});}
 export function openUrl(record:Pick<RecordFile,'origin'|'key'|'contentHash'>):string {const url=new URL(record.origin);url.searchParams.set('input',record.contentHash);url.searchParams.set('handoff',record.key);return url.href;}
