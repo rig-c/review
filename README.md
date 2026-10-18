@@ -297,3 +297,7 @@ The pinned published `@rig-c/play`1.12.0 supplies `slotIdentity()` and frame gen
 Source-bound links/drafts and explicit feedback preserve that side/slot plus exact attachment/owning skin/set/active skin/null reason. A restored explicit target is checked after restoring its animation/time/set and drawing; `PART_IDENTITY_MISMATCH` rolls back rather than silently substituting another key. Older slot-only links remain readable and resolve from the current authoritative snapshot. Runtime generation is current observation/feedback evidence, never a persistent identity. Named vertex weights and original source alpha remain unavailable in this inspection; packed pages are not original part images.
 
 This explorer is inspection. Producer-backed optimization, candidate Apply/undo/export and permanent resizable-panel settings remain separate work; the explorer does not generate mesh, rig or motion bytes.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
