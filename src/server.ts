@@ -34,7 +34,7 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       if(req.method!=='GET'&&req.method!=='HEAD')return json({error:'Method not allowed'},405);
       if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,...(referenceBinding(p)?{referenceBinding:referenceBinding(p),explicitReference:{...referenceBinding(p)!.reference,url:'/review-reference'}}:{}),report:p.report,feedbackCatalog:p.feedbackCatalog,assetsBase:'/assets/',capabilities:{playback:!!p.manifest.model,modeling:false,motion:false,feedback:true,audio:true}});}
       if(url.pathname==='/api/session'){await unchanged();return json(await readSession(p,options.stateDir));}
-      if(url.pathname==='/review-reference')return serveReference(req,await safeSelectedReference(p),headers);
+      if(url.pathname==='/review-reference')return await serveReference(req,await safeSelectedReference(p),referenceBinding(p)!.reference.sha256,headers);
       if(url.pathname.startsWith('/assets/')){
         const path=packagePath(decodeURIComponent(url.pathname.slice('/assets/'.length)));if(!p.files.has(path))return json({error:'Asset not declared by package'},404);
         const file=Bun.file(await safeFile(p.root,path));const size=file.size;

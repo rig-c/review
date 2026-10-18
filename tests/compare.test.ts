@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadCompare, assertCompareUnchanged, type ComparePackage } from '../src/compare.ts';
@@ -46,5 +46,14 @@ test('reference GET, HEAD and ranges refuse replaced leaf or parent symlinks',as
  for(const replace of ['leaf','parent']){const f=await fixture();const referenceDir=join(f.root,'reference'),outside=join(f.root,'outside');await mkdir(referenceDir);await mkdir(outside);await writeFile(join(referenceDir,'ref.mp4'),'selected bytes');await writeFile(join(outside,'ref.mp4'),'OUTSIDE SECRET');const p=await loadCompare({...f.inputs,reference:join(referenceDir,'ref.mp4')});const server=await startCompareServer(p,{port:0,stateDir:join(f.root,'state')});try{
    if(replace==='leaf'){await rm(join(referenceDir,'ref.mp4'));await symlink(join(outside,'ref.mp4'),join(referenceDir,'ref.mp4'));}else{await rename(referenceDir,referenceDir+'-original');await symlink(outside,referenceDir);}
    for(const init of [{method:'GET'},{method:'HEAD'},{headers:{Range:'bytes=0-6'}}]){const response=await fetch(`http://127.0.0.1:${server.port}/compare-reference`,init);expect(response.status).toBe(400);expect(await response.text()).not.toContain('OUTSIDE SECRET');}
+ }finally{await server.stop(true);}}
+});
+
+
+test('comparison reference refuses same-size overwritten and atomically replaced bytes for GET/HEAD/ranges',async()=>{
+ for(const replacement of ['overwrite','atomic']){const f=await fixture(),p=await loadCompare(f.inputs),server=await startCompareServer(p,{port:0,stateDir:join(f.root,'state')}),url=`http://127.0.0.1:${server.port}/compare-reference`;try{
+  await utimes(f.inputs.reference,new Date(0),new Date(1000));const original=await fetch(url,{headers:{Range:'bytes=2-5'}});expect(original.status).toBe(206);expect(await original.text()).toBe('2345');expect((await fetch(url,{method:'HEAD'})).status).toBe(200);
+  if(replacement==='overwrite')await writeFile(f.inputs.reference,'9876543210');else{await writeFile(f.inputs.reference+'.next','9876543210');await rename(f.inputs.reference+'.next',f.inputs.reference);}await utimes(f.inputs.reference,new Date(0),new Date(1000));
+  for(const init of [{method:'GET'},{method:'HEAD'},{headers:{Range:'bytes=2-5'}}]){const response=await fetch(url,init);expect(response.status).toBe(409);if(init.method!=='HEAD')expect(await response.text()).not.toContain('9876543210');}
  }finally{await server.stop(true);}}
 });

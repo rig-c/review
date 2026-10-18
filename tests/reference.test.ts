@@ -1,9 +1,9 @@
 import {afterEach,expect,test} from 'bun:test';
-import {mkdtemp,mkdir,cp,readFile,writeFile,rm,realpath,symlink,rename,readdir} from 'node:fs/promises';
+import {mkdtemp,mkdir,cp,readFile,writeFile,rm,realpath,symlink,rename,readdir,utimes,readlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';import {join} from 'node:path';import {createHash} from 'node:crypto';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import {loadReview} from '../src/manifest.ts';
-import {loadReferencedReview,referenceBinding,selectedReference,assertReviewUnchanged,safeSelectedReference} from '../src/reference.ts';
+import {loadReferencedReview,referenceBinding,selectedReference,assertReviewUnchanged,safeSelectedReference,serveReference} from '../src/reference.ts';
 import {freshSession,parseSession,saveSession} from '../src/session.ts';
 import {readFeedbackSession} from '../src/session-history.ts';
 import {startServer} from '../src/server.ts';
@@ -16,3 +16,29 @@ test('reference-bound historical retrieval retains the original versions and can
 test('selected reference serves fixed URL with sandbox/ranges, exports the same strip binding and refuses replacement',async()=>{const f=await referenceFixture(),p=await loadReferencedReview(f.producer,f.reference),server=await startServer(p,{port:0,stateDir:f.state}),base=`http://127.0.0.1:${server.port}`;try{const response=await fetch(base+'/api/review'),data=await response.json();expect(data.explicitReference.url).toBe('/review-reference');expect(data.manifest.references[0].id).toBe(data.explicitReference.id);expect(JSON.stringify(data)).not.toContain(f.root);const partial=await fetch(base+'/review-reference',{headers:{Range:'bytes=0-7'}});expect(partial.status).toBe(206);expect(partial.headers.get('content-security-policy')).toContain('sandbox');expect(new Uint8Array(await partial.arrayBuffer())).toEqual(new Uint8Array((await readFile(f.reference)).subarray(0,8)));expect((await fetch(base+'/review-reference',{method:'HEAD'})).status).toBe(200);expect((await fetch(base+'/review-reference',{headers:{Range:'bytes=99999999-'}})).status).toBe(416);const request={format:'json',sourceHash:p.sourceHash,animation:'inspect',referenceId:data.explicitReference.id,intervals:[{id:'one',basis:'single',frameStart:0,frameEnd:2}]};const plan=await exportReviewStrip(p,request);expect(plan.plan.binding.sourceHash).toBe(p.sourceHash);expect(plan.plan.binding.packages[0].sourceHash).toBe(referenceBinding(p)!.packageSourceHash);expect(plan.plan.binding.reference.sha256).toBe(referenceBinding(p)!.reference.sha256);const png=await exportReviewStrip(p,{...request,format:'png'});expect(png.png!.length).toBeGreaterThan(1000);expect(png.rendering?.samples.map(s=>s.presentedTime)).toEqual([0,.5,1]);await rename(f.reference,f.reference+'.original');await writeFile(join(f.root,'secret.mov'),'secret');await symlink(join(f.root,'secret.mov'),f.reference);await expect(safeSelectedReference(p)).rejects.toThrow('canonical');for(const method of ['GET','HEAD'])expect((await fetch(base+'/review-reference',{method})).status).toBe(400);}finally{server.stop(true);}},30000);
 
 test('explicit CLI video wins automatic checkpoint startup without overriding a requested checkpoint',()=>{const manifest={references:[{id:'selected',label:'Selected',type:'video' as const,path:'virtual.mp4'},{id:'producer',label:'Generated',type:'video' as const,path:'clip.mp4'}],checkpoints:[{id:'first',title:'First',reference:'producer'}]};const automatic=initialReviewSelection(manifest,null,'selected');expect(automatic.referenceId).toBe('selected');expect(automatic.checkpoint?.id).toBe('first');expect(automatic.updateUrl).toBe(false);const requested=initialReviewSelection(manifest,'first','selected');expect(requested.referenceId).toBe('producer');expect(requested.updateUrl).toBe(true);expect(initialReviewSelection(manifest,null).referenceId).toBe('producer');expect(initialReviewSelection(manifest,null).updateUrl).toBe(true);});
+
+
+test('reference byte serving hashes before GET/HEAD/ranges and accepts byte-identical touches',async()=>{
+ for(const replacement of ['overwrite','atomic']){const f=await referenceFixture(),p=await loadReferencedReview(f.producer,f.reference),server=await startServer(p,{port:0,stateDir:f.state}),url=`http://127.0.0.1:${server.port}/review-reference`;try{
+  const original=await readFile(f.reference);await utimes(f.reference,new Date(0),new Date(1000));
+  const same=await fetch(url,{headers:{Range:'bytes=0-7'}});expect(same.status).toBe(206);expect(new Uint8Array(await same.arrayBuffer())).toEqual(new Uint8Array(original.subarray(0,8)));expect((await fetch(url,{method:'HEAD'})).status).toBe(200);
+  const changed=Buffer.from(original);changed[0]^=255;
+  if(replacement==='overwrite')await writeFile(f.reference,changed);else{await writeFile(f.reference+'.next',changed);await rename(f.reference+'.next',f.reference);}
+  // Restore mtime as well: metadata equality never substitutes for the pinned SHA.
+  await utimes(f.reference,new Date(0),new Date(1000));
+  for(const init of [{method:'GET'},{method:'HEAD'},{headers:{Range:'bytes=0-7'}}]){const response=await fetch(url,init);expect(response.status).toBe(409);if(init.method!=='HEAD'){expect(await response.text()).toContain('Reference inputs changed');}}
+ }finally{await server.stop(true);}}
+});
+
+test('verified reference streams the same descriptor and closes HEAD, 416, completion and cancel',async()=>{
+ const f=await referenceFixture(),bytes=Buffer.alloc(256*1024,37);await writeFile(f.reference,bytes);const digest=sha(bytes),request=(headers?:Record<string,string>,method='GET')=>new Request('http://localhost/reference',{headers,method});
+ const descriptors=async()=>{if(process.platform!=='linux')return [];const result:string[]=[];for(const fd of await readdir('/proc/self/fd'))try{if((await readlink('/proc/self/fd/'+fd)).replace(/ \(deleted\)$/,'')===f.reference)result.push(fd);}catch{}return result;};
+ const baseline=await descriptors();
+ for(const [headers,method,status] of [[undefined,'HEAD',200],[{Range:'bytes=9999999-'},'GET',416]] as const){expect((await serveReference(request(headers,method),f.reference,digest,{})).status).toBe(status);expect(await descriptors()).toEqual(baseline);}
+ const completed=await serveReference(request(),f.reference,digest,{});expect(new Uint8Array(await completed.arrayBuffer())).toEqual(new Uint8Array(bytes));expect(await descriptors()).toEqual(baseline);
+ const canceled=await serveReference(request(),f.reference,digest,{});await canceled.body!.cancel();expect(await descriptors()).toEqual(baseline);
+ // A response already opened before pathname replacement never switches to new bytes.
+ const opened=await serveReference(request(),f.reference,digest,{}),reader=opened.body!.getReader(),first=await reader.read();expect(first.value!.length).toBeLessThanOrEqual(65536);expect([...first.value!].every(value=>value===37)).toBe(true);
+ await writeFile(f.reference+'.next',Buffer.alloc(bytes.length,99));await rename(f.reference+'.next',f.reference);
+ let failed=false,wrongBytes=false;try{while(true){const part=await reader.read();if(part.done)break;if(![...part.value].every(value=>value===37))wrongBytes=true;}}catch{failed=true;}expect(wrongBytes).toBe(false);expect(failed).toBe(true);expect(await descriptors()).toEqual(baseline);
+});

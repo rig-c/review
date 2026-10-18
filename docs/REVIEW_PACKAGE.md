@@ -230,7 +230,7 @@ url:"/review-reference"}` and a view-only reference entry. The frontend consumes
 that fixed URL instead of a package asset URL. Automatic startup preserves the
 selected video; explicit checkpoint links and manual choices keep their declared
 reference behavior. GET/HEAD/ranges on this endpoint re-resolve the original
-canonical regular file, refuse symlink replacement, and use the same sandbox,
+canonical regular file, refuse symlink replacement, and verify the pinned full-video SHA before every response. Single and compare reference endpoints hash and stream the same opened descriptor with 64 KiB buffers; HEAD, rejected ranges, cancellation and completion close it. A detected same-inode change during streaming aborts the body; this is not an atomic snapshot against concurrent external writers. Both endpoints use the same sandbox,
 nosniff and 206/416 boundary as package media. No arbitrary path is accepted by
 HTTP. Review/session/save/export freshly rehash the complete source binding.
 

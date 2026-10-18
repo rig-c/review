@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { appRoot, buildWeb } from './build.ts';
 import { packagePath, safeFile } from './manifest.ts';
 import { assertCompareUnchanged, safeCompareReference, type ComparePackage } from './compare.ts';
+import { serveReference } from './reference.ts';
 import { exportCompareStrip, stripJson } from './strip-export.ts';
 import { readCompareSession, saveCompareSession } from './compare-session.ts';
 
@@ -43,7 +44,7 @@ export async function startCompareServer(p:ComparePackage,options:{port?:number;
     if(req.method!=='GET'&&req.method!=='HEAD')return json({error:'Method not allowed'},405);
     if(url.pathname==='/api/compare'){await assertCompareUnchanged(p);return json(p.response);}
     if(url.pathname==='/api/compare/session')return json(await readCompareSession(p,options.stateDir));
-    if(url.pathname==='/compare-reference')return serveAsset(req,await safeCompareReference(p));
+    if(url.pathname==='/compare-reference')return await serveReference(req,await safeCompareReference(p),p.response.binding.reference.sha256,headers);
     if(url.pathname.startsWith('/compare-assets/')){const match=/^\/compare-assets\/(a|b)\/(.+)$/.exec(url.pathname);if(!match)return json({error:'Unknown comparison side'},404);const side=match[1] as 'a'|'b',path=packagePath(decodeURIComponent(match[2]!));if(!p[side].files.has(path))return json({error:'Asset not declared by package'},404);return serveAsset(req,await safeFile(p[side].root,path));}
     if(url.pathname==='/main.js')return new Response(req.method==='HEAD'?null:bundle,{headers:{...headers,'Content-Type':'text/javascript'}});
     if(url.pathname==='/'||url.pathname==='/index.html')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/compare.html'),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
