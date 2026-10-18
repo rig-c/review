@@ -879,7 +879,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
  if(selection.reference!==undefined&&select('reference-select').value!==(selection.reference??'')){select('reference-select').value=selection.reference??'';await showReference(selection.reference??'');if(selection.reference&&!referenceSize&& !video)throw new Error('Saved reference did not load');}
  if(bookmark.animation&&player)chooseAnimation(bookmark.animation);
  if(selection.axis){select('axis-select').value=selection.axis.id;chooseAxis();input('axis-value').value=String(selection.axis.value);applyAxis();}
- if(selection.partSet!==undefined&&player){player.setSet(selection.partSet||null);select('part-set').value=selection.partSet??'';}
+ if(selection.partSet!==undefined&&player){if(selection.partSet||player.sets().length)player.setSet(selection.partSet||null);select('part-set').value=selection.partSet??'';}
  if(bookmark.time!==null){if(video&&video.readyState<1)await waitReferenceMetadata(video,signal);await inspectControlTime(bookmark.time,signal);}
  if(selection.person!==undefined){selectedPerson=selection.person??'';select('person-select').value=selectedPerson;lastPoseFrame=-1;renderSequenceFrame();}
  if(selection.workspace)setWorkspace(selection.workspace);if(selection.view)setView(selection.view);
