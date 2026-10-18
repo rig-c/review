@@ -137,3 +137,4 @@ body{display:grid;grid-template-rows:auto minmax(0,1fr) auto}.layout{grid-templa
 [data-theme=light] .workspace-settings,[data-theme=light] .workspace-drawer{background:#edf3f5;color:#294552;border-color:#a6bec8}
 [data-theme=light] .workspace-separator{background:#b2c7cf}[data-theme=light] .workspace-separator:focus-visible{outline-color:#24694d;background:#70a58c}
 @media(pointer:coarse){.workspace-separator::after{inset:0 -7px}.workspace-inspectorHeight::after{inset:-7px 0}.workspace-drawer-triggers button{min-height:38px}}
+#stage-layout[data-panes="1"]{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}

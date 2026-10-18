@@ -1,4 +1,5 @@
 /** Inspection-only protocol. Source identity and human review decisions are not commands. */
+import {singleLayouts,pairLayouts,type ComparisonLayout,type Eligibility} from './comparison-eligibility.ts';
 export type ControlMode='single'|'compare';
 export type ControlCameraTarget='rig'|'a'|'b'|'reference';
 export interface ControlCamera {zoom:number;pan:{x:number;y:number}}
@@ -24,11 +25,28 @@ export function parsePartIdentity(value:unknown):ControlPartIdentity {
 }
 export interface ControlPart {side:'single'|'a'|'b';slot:string;mode:'context'|'solo';identity?:ControlPartIdentity}
 export function parseControlPart(value:unknown):ControlPart|null {if(value===null)return null;const o=controlObject(value,['side','slot','mode','identity'],'control.part');return {side:choice(o.side,['single','a','b'] as const,'control.part.side'),slot:controlString(o.slot,'control.part.slot',512),mode:choice(o.mode,['context','solo'] as const,'control.part.mode'),...(o.identity===undefined?{}:{identity:parsePartIdentity(o.identity)})};}
+/** Observed layout offer: requested (source-bound draft), effective (actually visible) and a named reason per unavailable layout. */
+export interface ControlComparison {mode:'single'|'compare';requestedLayout:ComparisonLayout;effectiveLayout:ComparisonLayout|null;usableLayouts:ComparisonLayout[];reasons:Partial<Record<ComparisonLayout,string>>;candidate:{state:'unavailable';reason:'no producer handoff'}}
+export function controlComparison(value:Eligibility<ComparisonLayout>):ControlComparison {return {mode:value.mode,requestedLayout:value.requested,effectiveLayout:value.effective,usableLayouts:[...value.usable],reasons:{...value.reasons},candidate:{...value.candidate}};}
+export function parseControlComparison(value:unknown):ControlComparison {
+ const o=controlObject(value,['mode','requestedLayout','effectiveLayout','usableLayouts','reasons','candidate'],'control.comparison');
+ const mode=choice(o.mode,['single','compare'] as const,'control.comparison.mode'),layouts:readonly ComparisonLayout[]=mode==='single'?singleLayouts:pairLayouts;
+ const requested=choice(o.requestedLayout,layouts,'control.comparison.requestedLayout');
+ if(!Array.isArray(o.usableLayouts)||o.usableLayouts.length>layouts.length)throw new Error('control.comparison.usableLayouts: expected layout list');
+ const usable=o.usableLayouts.map(item=>choice(item,layouts,'control.comparison.usableLayouts'));if(new Set(usable).size!==usable.length)throw new Error('control.comparison.usableLayouts: duplicate layout');
+ const effective=o.effectiveLayout===null?null:choice(o.effectiveLayout,layouts,'control.comparison.effectiveLayout');
+ if(effective===null?usable.length>0:!usable.includes(effective))throw new Error('control.comparison.effectiveLayout: must be a usable layout, null only when none is usable');
+ if(usable.includes(requested)&&effective!==requested)throw new Error('control.comparison.effectiveLayout: a usable request is effective');
+ const r=controlObject(o.reasons,layouts,'control.comparison.reasons'),reasons:Partial<Record<ComparisonLayout,string>>={};
+ for(const layout of layouts){if(usable.includes(layout)){if(r[layout]!==undefined)throw new Error(`control.comparison.reasons.${layout}: usable layout has no refusal`);}else reasons[layout]=controlString(r[layout],`control.comparison.reasons.${layout}`,1024);}
+ const c=controlObject(o.candidate,['state','reason'],'control.comparison.candidate');if(c.state!=='unavailable'||c.reason!=='no producer handoff')throw new Error('control.comparison.candidate: no candidate source exists');
+ return {mode,requestedLayout:requested,effectiveLayout:effective,usableLayouts:usable,reasons,candidate:{state:'unavailable',reason:'no producer handoff'}};
+}
 export interface ControlInspection {
  theme:'system'|'dark'|'light';layout:'auto';effectiveLayout:'row'|'column'|null;
  cameras:{rig:ControlCamera;reference:ControlCamera;a?:ControlCamera;b?:ControlCamera};animation:string|null;time:number|null;
  playing:boolean;loop:'idle'|'off';layers:ControlLayers;ready:boolean;seeking:boolean;
- dirty:boolean;busy:boolean;feedbackEligible:boolean;view?:ControlView;part?:ControlPart|null;partGeneration?:number|null;
+ dirty:boolean;busy:boolean;feedbackEligible:boolean;view?:ControlView;comparison?:ControlComparison;part?:ControlPart|null;partGeneration?:number|null;
  capabilities:{camera:boolean;referenceCamera:boolean;animation:boolean;time:boolean;playback:boolean;layers:ControlLayers};
 }
 export type ControlCommand=
@@ -84,9 +102,9 @@ export function parseControlCommand(v:unknown):ControlCommand{
  return {type,images:bool(base.images,'control.layers.images'),meshes:bool(base.meshes,'control.layers.meshes'),bones:bool(base.bones,'control.layers.bones')};
 }
 export function parseControlInspection(v:unknown):ControlInspection{
- const o=controlObject(v,['theme','layout','effectiveLayout','cameras','animation','time','playing','loop','layers','ready','seeking','dirty','busy','feedbackEligible','capabilities','view','part','partGeneration'],'control.inspection');
+ const o=controlObject(v,['theme','layout','effectiveLayout','cameras','animation','time','playing','loop','layers','ready','seeking','dirty','busy','feedbackEligible','capabilities','view','part','partGeneration','comparison'],'control.inspection');
  const c=controlObject(o.cameras,['rig','reference','a','b'],'control.cameras'),a=controlObject(o.capabilities,['camera','referenceCamera','animation','time','playback','layers'],'control.capabilities');
- return {...(o.view===undefined?{}:{view:parseControlView(o.view)}),...(o.part===undefined?{}:{part:parseControlPart(o.part)}),...(o.partGeneration===undefined?{}:{partGeneration:o.partGeneration===null?null:controlInteger(o.partGeneration,'control.partGeneration')}),theme:choice(o.theme,['system','dark','light'] as const,'control.theme'),layout:choice(o.layout,['auto'] as const,'control.layout'),effectiveLayout:o.effectiveLayout===null?null:choice(o.effectiveLayout,['row','column'] as const,'control.effectiveLayout'),cameras:{rig:camera(c.rig),reference:camera(c.reference),...(c.a===undefined?{}:{a:camera(c.a)}),...(c.b===undefined?{}:{b:camera(c.b)})},animation:o.animation===null?null:controlString(o.animation,'control.animation'),time:o.time===null?null:num(o.time,'control.time',0,Number.MAX_SAFE_INTEGER),playing:bool(o.playing,'control.playing'),loop:choice(o.loop,['idle','off'] as const,'control.loop'),layers:layers(o.layers),ready:bool(o.ready,'control.ready'),seeking:bool(o.seeking,'control.seeking'),dirty:bool(o.dirty,'control.dirty'),busy:bool(o.busy,'control.busy'),feedbackEligible:bool(o.feedbackEligible,'control.feedbackEligible'),capabilities:{camera:bool(a.camera,'control.capabilities.camera'),referenceCamera:bool(a.referenceCamera,'control.capabilities.referenceCamera'),animation:bool(a.animation,'control.capabilities.animation'),time:bool(a.time,'control.capabilities.time'),playback:bool(a.playback,'control.capabilities.playback'),layers:layers(a.layers)}};
+ return {...(o.view===undefined?{}:{view:parseControlView(o.view)}),...(o.comparison===undefined?{}:{comparison:parseControlComparison(o.comparison)}),...(o.part===undefined?{}:{part:parseControlPart(o.part)}),...(o.partGeneration===undefined?{}:{partGeneration:o.partGeneration===null?null:controlInteger(o.partGeneration,'control.partGeneration')}),theme:choice(o.theme,['system','dark','light'] as const,'control.theme'),layout:choice(o.layout,['auto'] as const,'control.layout'),effectiveLayout:o.effectiveLayout===null?null:choice(o.effectiveLayout,['row','column'] as const,'control.effectiveLayout'),cameras:{rig:camera(c.rig),reference:camera(c.reference),...(c.a===undefined?{}:{a:camera(c.a)}),...(c.b===undefined?{}:{b:camera(c.b)})},animation:o.animation===null?null:controlString(o.animation,'control.animation'),time:o.time===null?null:num(o.time,'control.time',0,Number.MAX_SAFE_INTEGER),playing:bool(o.playing,'control.playing'),loop:choice(o.loop,['idle','off'] as const,'control.loop'),layers:layers(o.layers),ready:bool(o.ready,'control.ready'),seeking:bool(o.seeking,'control.seeking'),dirty:bool(o.dirty,'control.dirty'),busy:bool(o.busy,'control.busy'),feedbackEligible:bool(o.feedbackEligible,'control.feedbackEligible'),capabilities:{camera:bool(a.camera,'control.capabilities.camera'),referenceCamera:bool(a.referenceCamera,'control.capabilities.referenceCamera'),animation:bool(a.animation,'control.capabilities.animation'),time:bool(a.time,'control.capabilities.time'),playback:bool(a.playback,'control.capabilities.playback'),layers:layers(a.layers)}};
 }
 export function parseControlRequest(v:unknown):ControlRequest{
  const o=controlObject(v,['schema','requestId','pageId','instanceKey','sourceHash','expectedRevision','command'],'control.request');
