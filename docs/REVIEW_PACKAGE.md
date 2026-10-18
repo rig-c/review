@@ -220,8 +220,37 @@ A strip plan with one clock basis reports `plan.basis:"single"|"a"|"b"`. A compa
 background instance and prints a URL alone on stdout. Its matching read-only
 `feedback <input> --reference <same-video> [--compare <input> --animation <name>]`
 command is printed on stderr. Existing `feedback compare ...` remains supported.
-An omitted comparison animation is accepted only for exactly one actual common
-model animation; no filename or first-entry selection supplies a default.
+Open animation selection uses `--animation` first, a normalized report `animation`
+second, and a unique actual model clip (or common A/B clip) last. Report metadata
+comes from the exact already-hashed recognized report bytes, never a separately
+opened JSON file. Equal A/B declarations or a declaration on one side select the
+named clip only if both real catalogs contain it. Conflicting reports and stale
+names refuse; explicit flags can resolve conflicts but invalid explicit names
+never fall back. No frame count, FPS, duration or filename selects a clip.
+
+Stdout remains URL-only. Stderr prints `animation: dance (from report.json)` for
+the root-report case, the actual package-relative report path for other report
+locations, `from --animation` for explicit flags, or `unique actual clip`.
+Option values such as an actual animation named `--format` or `--help` are literal
+values, not independent options. The old strip export grammar is unchanged.
+
+The worker revalidates its resolved name and complete source binding before
+startup. Its API provides `initialAnimation` (a validated name or null); the
+single player uses it rather than the first runtime entry. Explicit checkpoint
+links and subsequent manual choices override startup selection. A conflicting
+or unbound automatic checkpoint, or one with an axis, is skipped so another
+clip's time/axis cannot silently apply. Compatible named checkpoints still work.
+A static model with zero clips stays static. A source-only report can remain
+evidence without claiming observed playback; an explicit name without compiled
+catalog metadata refuses as validation unavailable.
+
+Single source/session/reference hashes remain unchanged: startup selection
+participates only in fixed-worker reuse identity, not clip-specific approval.
+An explicit flag and report resolving to the same effective name reuse the same
+worker. Different compare names retain the existing animation-bound ordered
+comparison identity. The printed feedback command includes the effective name;
+single feedback retrieval validates an explicit name without changing its
+package-wide identity or stored review.
 
 Single `--reference` is an explicit CLI-selected regular local mp4/mov/webm file.
 It does not alter the source manifest, the package files allowlist or manifest

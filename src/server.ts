@@ -14,7 +14,7 @@ async function bodyJson(req:Request):Promise<unknown>{
   while(true){const {value,done}=await reader.read();if(done)break;bytes+=value.length;if(bytes>1024*1024){await reader.cancel();throw new Error('Session payload exceeds 1 MiB');}chunks.push(value);}
   const full=new Uint8Array(bytes);let offset=0;for(const chunk of chunks){full.set(chunk,offset);offset+=chunk.length;}return JSON.parse(new TextDecoder().decode(full));
 }
-export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;activity?:()=>void}={}){
+export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void}={}){
   const bundle=await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
   return Bun.serve({hostname:'127.0.0.1',port:options.port??4317,
@@ -32,7 +32,7 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       return new Response(result.png?new Uint8Array(result.png):stripJson(result),{headers:{...headers,'Content-Type':result.png?'image/png':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="review-strip.${result.png?'png':'json'}"`}});
     }
       if(req.method!=='GET'&&req.method!=='HEAD')return json({error:'Method not allowed'},405);
-      if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,...(referenceBinding(p)?{referenceBinding:referenceBinding(p),explicitReference:{...referenceBinding(p)!.reference,url:'/review-reference'}}:{}),report:p.report,feedbackCatalog:p.feedbackCatalog,assetsBase:'/assets/',capabilities:{playback:!!p.manifest.model,modeling:false,motion:false,feedback:true,audio:true}});}
+      if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,initialAnimation:options.initialAnimation??null,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,...(referenceBinding(p)?{referenceBinding:referenceBinding(p),explicitReference:{...referenceBinding(p)!.reference,url:'/review-reference'}}:{}),report:p.report,feedbackCatalog:p.feedbackCatalog,assetsBase:'/assets/',capabilities:{playback:!!p.manifest.model,modeling:false,motion:false,feedback:true,audio:true}});}
       if(url.pathname==='/api/session'){await unchanged();return json(await readSession(p,options.stateDir));}
       if(url.pathname==='/review-reference')return await serveReference(req,await safeSelectedReference(p),referenceBinding(p)!.reference.sha256,headers);
       if(url.pathname.startsWith('/assets/')){
