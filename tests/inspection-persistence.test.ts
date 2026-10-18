@@ -129,3 +129,8 @@ test('part link selection is side-bound and closed; legacy links retain Whole ri
  for(const part of [{side:'a',slot:'actual.slot',mode:'solo'},{side:'single',slot:'actual.slot',mode:'apply'},{side:'single',slot:'actual.slot',mode:'solo',path:'escape'}])expect(()=>parseBookmark({...selected,selection:{part}})).toThrow();
  const compare={...selected,binding:{mode:'compare',sourceHash:binding.sourceHash,rigs:[...binding.rigs,...binding.rigs]},selection:{part:{side:'b',slot:'actual.slot',mode:'context'}}};expect(parseBookmark(compare).selection.part?.side).toBe('b');expect(()=>parseBookmark({...compare,selection:{part:selected.selection.part}})).toThrow('side unavailable');
 });
+
+test('source-bound copied view keeps its exact stable instance path and public digests without capabilities',()=>{
+ const key='c'.repeat(64),current='http://127.0.0.1:4318/instances/'+key+'/?input='+binding.sourceHash+'&handoff='+key+'&token=never-copy';
+ const link=inspectionLink(current,bookmark());expect(link.pathname).toBe('/instances/'+key+'/');expect(link.searchParams.get('input')).toBe(binding.sourceHash);expect(link.searchParams.get('handoff')).toBe(key);expect(link.searchParams.has('token')).toBe(false);expect(decodeBookmark(link.hash,binding)).toEqual(bookmark());
+});

@@ -14,7 +14,7 @@ import { readSession, type Feedback } from './session.ts';
 import { readCompareSession } from './compare-session.ts';
 import { exportReviewStrip, exportCompareStrip, stripJson, writeStripOutput, validateStripOutput } from './strip-export.ts';
 import type { StripInterval, StripRequest } from './strip.ts';
-const usage='Usage: rig-review open <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--control]\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--format json|issue]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>';
+const usage='Usage: rig-review open <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--control] [--direct]\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--format json|issue]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>';
 async function stripCommand(args:string[],options:{stateDir?:string}){
   const compare=args[0]==='compare';if(compare)args.shift();const a=args.shift(),b=compare?args.shift():undefined;if(!a||compare&&!b)throw new Error('strip: expected package input(s)');
   let reference:string|undefined,referenceVideo:string|undefined,animation:string|undefined,basis:'a'|'b'|undefined,range:string|undefined,output:string|undefined,jsonOnly=false,all=false;
@@ -34,7 +34,7 @@ async function stripCommand(args:string[],options:{stateDir?:string}){
 }
 export function parseOpenInputs(args:string[]):OpenInputs {
  const input=args.shift();if(!input||input.startsWith('--'))throw new Error(usage);const result:OpenInputs={input},seen=new Set<string>();
- while(args.length){const flag=args.shift()!;if(seen.has(flag))throw new Error(`Duplicate open option ${flag}`);seen.add(flag);if(flag==='--control'){result.control=true;continue;}const value=args.shift();if(value===undefined||value==='')throw new Error(`Missing value for ${flag}`);if(flag==='--reference')result.reference=value;else if(flag==='--compare')result.compare=value;else if(flag==='--animation')result.animation=value;else throw new Error(`Unknown open option ${flag}`);}return result;
+ while(args.length){const flag=args.shift()!;if(seen.has(flag))throw new Error(`Duplicate open option ${flag}`);seen.add(flag);if(flag==='--control'){result.control=true;continue;}if(flag==='--direct'){result.direct=true;continue;}const value=args.shift();if(value===undefined||value==='')throw new Error(`Missing value for ${flag}`);if(flag==='--reference')result.reference=value;else if(flag==='--compare')result.compare=value;else if(flag==='--animation')result.animation=value;else throw new Error(`Unknown open option ${flag}`);}return result;
 }
 async function controlCommand(args:string[],stateDir?:string){
  const input=args.shift();if(!input||input==='--help'||input==='-h'){console.log(usage);return;}
@@ -75,7 +75,7 @@ function commandHelpRequested(args:readonly string[],command:'open'|'review'|'ch
  const flags=command==='open'?['--reference','--compare','--animation']:compare?['--reference','--animation','--port']:['--port','--checkpoint','--reference','--compare','--animation'];
  for(let i=compare?3:1;i<args.length;){
   const flag=args[i];if(flag==='--help'||flag==='-h')return true;
-  if(command==='open'&&flag==='--control'){i++;continue;}if(!flags.includes(flag!))return false;i+=2;
+  if(command==='open'&&(flag==='--control'||flag==='--direct')){i++;continue;}if(!flags.includes(flag!))return false;i+=2;
  }
  return false;
 }

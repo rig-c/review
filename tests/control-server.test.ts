@@ -70,7 +70,7 @@ test('bounded body cancels both oversized chunked and stalled requests',async()=
 });
 test('real opted-in worker/CLI discovers an existing page and distinguishes timeout from applied',async()=>{
  const root=await mkdtemp(join(tmpdir(),'review-control-cli-'));roots.push(root);const input=join(root,'input'),stateDir=join(root,'state');await cp(join(import.meta.dir,'../examples/demo'),input,{recursive:true});const before=await readFile(join(input,'review.json'));
- const opened=await openReview({input:join(input,'review.json'),control:true},{stateDir,idleMs:10000});const origin=new URL(opened.url).origin;
+ const opened=await openReview({input:join(input,'review.json'),control:true},{stateDir,idleMs:10000,direct:true});const origin=new URL(opened.url).origin;
  const file=(await readdir(join(stateDir,'open'))).find(name=>/^[a-f0-9]{64}\.json$/.test(name))!;const record=JSON.parse(await readFile(join(stateDir,'open',file),'utf8'));
  try{
   expect((await stat(join(stateDir,'open',file))).mode&0o077).toBe(0);const queried=await controlReview({input:join(input,'review.json')},{stateDir}) as {pages:unknown[];sourceHash:string};expect(queried.pages).toEqual([]);expect(JSON.stringify(queried)).not.toContain(record.controlToken);

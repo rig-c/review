@@ -1,4 +1,5 @@
 import {PartExplorer,loadPartCatalog} from './part-selection.ts';
+import {instanceFetch,instanceRoute} from './instance-base.ts';
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
 import {rendererStatus} from './renderer-status.ts';
@@ -87,16 +88,16 @@ function message(value: string, error = false): void {
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const response = await instanceFetch(path, init);
   if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
   return await response.json() as T;
 }
 
-function referenceUrl(reference:Reference):string {return data.explicitReference?.id===reference.id?data.explicitReference.url:assetUrl(reference.path);}
+function referenceUrl(reference:Reference):string {return data.explicitReference?.id===reference.id?instanceRoute(data.explicitReference.url,location.href):assetUrl(reference.path);}
 
 function assetUrl(path: string): string {
   if (!path || path.startsWith('/') || /[\\%?#\x00-\x1f]/.test(path) || /^[a-zA-Z]:/.test(path) || path.split('/').some(part => !part || part === '.' || part === '..')) throw new Error(`Unsupported package asset path: ${path}`);
-  return '/assets/' + path.split('/').map(encodeURIComponent).join('/');
+  return instanceRoute('/assets/' + path.split('/').map(encodeURIComponent).join('/'),location.href);
 }
 
 function markDirty(): void {
@@ -507,7 +508,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
   try {
     const modelUrl = new URL(assetUrl(data.manifest.model), location.href).href;
     assets = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, url) => {
-      const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith('/assets/')) throw new Error(`Model page escapes local package: ${name}`); return target.href;
+      const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith(instanceRoute('/assets/',location.href))) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
     player = new RigPlayer(el('rig-root'), assets);
     const catalog=await loadPartCatalog(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);parts?.register('single',catalog,player);
@@ -608,7 +609,7 @@ async function exportStrip(): Promise<void> {
     const referenceId = select('strip-reference').value;
     const request: StripRequest = { format, sourceHash: data.sourceHash, animation: selectedAnimation, ...(referenceId ? { referenceId } : {}), intervals };
     stripBusy = true; updateStripControls(); stripStatus(`${selectedAnimation} · ${intervals.length} ranges · Generating ${format.toUpperCase()}…`);
-    const response = await fetch('/api/strip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
+    const response = await instanceFetch('/api/strip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
     if (!response.ok) {
       const failure: unknown = await response.json().catch(() => null);
       throw new Error(failure && typeof failure === 'object' && 'error' in failure && typeof failure.error === 'string' ? failure.error : `Strip export failed · HTTP ${response.status}`);

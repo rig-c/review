@@ -1,3 +1,4 @@
+import {instanceFetch,instanceRoute} from './instance-base.ts';
 import {PartExplorer,loadPartCatalog} from './part-selection.ts';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature,type PaneCamera} from './camera-view.ts';
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
@@ -55,13 +56,13 @@ const traceRows: CompareTrace[] = [];
 function message(value: string, error = false): void { text('message', value); el('message').classList.toggle('error', error); }
 function savedState(): void { text('save-state', dirty ? 'Unsubmitted changes' : session.updatedAt ? 'Submitted' : 'Not submitted'); el('save-state').classList.toggle('dirty', dirty); button('submit').disabled = saving || draftConflict || session.feedbackWarnings.length > 0; button('submit').title = session.feedbackWarnings.length ? 'Delete feedback with validation warnings, then add it again with a valid target.' : ''; }
 function markDirty(): void { dirty = true; savedState(); }
-async function api<T>(path: string, init?: RequestInit): Promise<T> { const response = await fetch(path, init); if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`); return await response.json() as T; }
+async function api<T>(path: string, init?: RequestInit): Promise<T> { const response = await instanceFetch(path, init); if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`); return await response.json() as T; }
 
 function sideAsset(side: Side, path: string): string {
   if (!path || path.startsWith('/') || /[\\%?#\x00-\x1f:]/.test(path) || path.split('/').some(part => !part || part === '.' || part === '..')) throw new Error(`Invalid ${side} asset path: ${path}`);
   const base = `/compare-assets/${side}/`;
   if (data[side].assetsBase !== base) throw new Error(`Unexpected ${side} assets base`);
-  return base + path.split('/').map(encodeURIComponent).join('/');
+  return instanceRoute(base + path.split('/').map(encodeURIComponent).join('/'),location.href);
 }
 
 function currentFrame(side: Side): number | null {
@@ -220,7 +221,7 @@ async function loadSide(side: Side, value: CompareSide): Promise<number> {
   text(`${side}-title`, value.manifest.title);
   if (!value.manifest.model) throw new Error(`${side.toUpperCase()}: compiled model Not supplied`);
   const modelUrl = new URL(sideAsset(side, value.manifest.model), location.href).href;
-  const loaded = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, base) => { const url = new URL(name, base); if (url.origin !== location.origin || !url.pathname.startsWith(`/compare-assets/${side}/`)) throw new Error(`${side}: model page escapes its package`); return url.href; } });
+  const loaded = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, base) => { const url = new URL(name, base); if (url.origin !== location.origin || !url.pathname.startsWith(instanceRoute(`/compare-assets/${side}/`,location.href))) throw new Error(`${side}: model page escapes its package`); return url.href; } });
   assets[side] = loaded; const clip = loaded.animations.find(item => item.name === data.animation); if (!clip) throw new Error(`${side.toUpperCase()}: animation "${data.animation}" Not supplied`);
   const player = new RigPlayer(el(`${side}-root`), loaded, { seekStep: compareSeekStep });
   players[side] = player;parts?.register(side,await loadPartCatalog(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]),player); player.environment(null); player.play(data.animation, { loop: false }); player.pause();
@@ -240,7 +241,7 @@ async function loadFrameIndex():Promise<void>{
  frameControls();
 }
 function loadReference(): Promise<number> {
-  const url = new URL(data.reference.url, location.href); if (url.origin !== location.origin || url.pathname !== '/compare-reference' || url.search || url.hash) throw new Error('Reference must be the server-bound local compare video');
+  const url = new URL(instanceRoute(data.reference.url,location.href), location.href); if (url.origin !== location.origin || url.pathname !== instanceRoute('/compare-reference',location.href) || url.search || url.hash) throw new Error('Reference must be the server-bound local compare video');
   text('reference-name', data.reference.name); observeVideoFrames();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Could not read reference video metadata / first frame.')), 15000);
@@ -314,7 +315,7 @@ async function exportStrip(): Promise<void> {
     for (const interval of intervals) if (!Number.isSafeInteger(interval.frameStart) || !Number.isSafeInteger(interval.frameEnd) || interval.frameStart < 0 || interval.frameEnd < interval.frameStart) throw new Error(`${interval.id}: Specify an inclusive range of nonnegative integer frames.`);
     const request: StripRequest = { format, sourceHash: data.sourceHash, animation: data.animation, intervals };
     stripBusy = true; updateStripControls(); stripStatus(`${data.animation} · ${intervals.length} ranges · Generating ${format.toUpperCase()}…`);
-    const response = await fetch('/api/compare/strip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
+    const response = await instanceFetch('/api/compare/strip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
     if (!response.ok) {
       const failure: unknown = await response.json().catch(() => null);
       throw new Error(failure && typeof failure === 'object' && 'error' in failure && typeof failure.error === 'string' ? failure.error : `Strip export failed · HTTP ${response.status}`);

@@ -96,7 +96,7 @@ test('actual control client acknowledges truthful scaled pan after a legal camer
   return Response.json(result);
  };
  const window={addEventListener:()=>{},removeEventListener:()=>{}};
- const open=new Function('ControlLocalRevision','parseControlCommand','parseControlInspection','preflightControl','window','document','fetch',compiled+';return connectControl;')(ControlLocalRevision,parseControlCommand,parseControlInspection,preflightControl,window,{hidden:false},fetch) as (adapter:{sourceHash:string;mode:'single';observe:()=>ControlInspection;apply:(command:ControlCommand)=>Promise<void>})=>()=>void;
+ const open=new Function('ControlLocalRevision','parseControlCommand','parseControlInspection','preflightControl','window','document','instanceFetch',compiled+';return connectControl;')(ControlLocalRevision,parseControlCommand,parseControlInspection,preflightControl,window,{hidden:false},fetch) as (adapter:{sourceHash:string;mode:'single';observe:()=>ControlInspection;apply:(command:ControlCommand)=>Promise<void>})=>()=>void;
  const dispose=open({sourceHash:request.sourceHash,mode:'single',observe:()=>state,apply:async command=>{
   if(command.type!=='camera')throw new Error('Expected camera command');
   // Same normalized pan: reference width300, rig width600.
@@ -122,7 +122,7 @@ test('actual control client captures navigation before a held remote apply and a
    else if(path.endsWith('/ack')){const body=JSON.parse(String(options?.body)) as Record<string,unknown>;acknowledged(body);}
    return Response.json(result);
   };
-  const open=new Function('ControlLocalRevision','parseControlCommand','parseControlInspection','preflightControl','window','document','fetch',compiled+';return connectControl;')(ControlLocalRevision,parseControlCommand,parseControlInspection,preflightControl,window,{hidden:false},fetch) as (adapter:{sourceHash:string;mode:'single';observe:()=>ControlInspection;apply:(command:ControlCommand,signal:AbortSignal)=>Promise<void>})=>()=>void;
+  const open=new Function('ControlLocalRevision','parseControlCommand','parseControlInspection','preflightControl','window','document','instanceFetch',compiled+';return connectControl;')(ControlLocalRevision,parseControlCommand,parseControlInspection,preflightControl,window,{hidden:false},fetch) as (adapter:{sourceHash:string;mode:'single';observe:()=>ControlInspection;apply:(command:ControlCommand,signal:AbortSignal)=>Promise<void>})=>()=>void;
   const dispose=open({sourceHash:request.sourceHash,mode:'single',observe:()=>state,apply:async(_command,signal)=>{started();await gate;if(!signal.aborted)state.theme='light';}});
   try{
    await applying;const registered=handlers.get(eventType);expect(registered).toBeDefined();expect(registered!.capture).toBe(true);
