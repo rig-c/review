@@ -33,7 +33,7 @@
       "title": "Check the intended joint chain",
       "workspace": "modeling",
       "reference": "pose",
-      "note": "A synthetic rig-pose-sequence/1 schema example, not a Nova extraction. Picture pixels, top-left origin, Y down; no rig binding is inferred."
+      "note": "An authored synthetic rig-pose-sequence/1 schema example, not extracted from footage. Picture pixels, top-left origin, Y down; no rig binding is inferred."
     },
     {
       "id": "sound",

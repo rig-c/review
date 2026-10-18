@@ -12,7 +12,7 @@ at timestamps 0, 0.5 and 1 seconds. A second original 3840×2160 flat-color
 video checks reduction to the output cell before native image decode. No private
 artwork, video or rig is used.
 
-Generate on the coordinated Nova snapshot with:
+Regenerate in an isolated verification snapshot with the pinned compiler and ffmpeg available:
 
 ```sh
 bun tests/fixtures/strip-probe/generate.ts
