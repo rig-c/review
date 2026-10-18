@@ -109,10 +109,16 @@ test('real published player Solo preserves time, skin, bones and subsequent pose
 
 test('actual native renderer clips a selected full-frame row; removing its clip is a pixel-visible negative control',async()=>{
  const {player,dispose}=await realRig();try{
-  const frame=player.posedFrame(null),mesh=frame.order.find(row=>row.kind==='mesh');if(!mesh||mesh.kind!=='mesh')throw new Error('expected actual mesh');
+  const frame=player.posedFrame(),identity=player.slotIdentity(),mesh=frame.order.find(row=>row.kind==='mesh');if(!mesh||mesh.kind!=='mesh')throw new Error('expected actual mesh');
+  if(frame.generation===undefined)throw new Error('Published player frame must carry its held generation');
+  expect(frame.generation).toBe(player.generation);expect(identity.generation).toBe(frame.generation);expect(identity.slots.map(row=>row.z)).toEqual(identity.slots.map((_,index)=>index));
   const xs=mesh.vertices.filter((_,i)=>i%2===0),ys=mesh.vertices.filter((_,i)=>i%2===1),left=Math.min(...xs),right=Math.max(...xs),bottom=Math.min(...ys),top=Math.max(...ys),middle=(left+right)/2;
   const clip={polygon:[left,bottom,middle,bottom,middle,top,left,top],inverse:false,convex:true};const clipped={...mesh,clip};
-  const inspection=new PartInspection();inspection.register('single',[{slot:mesh.slot,bone:'mesh',setup:null,declarations:[]}],{get skin(){return player.skin;},get set(){return player.set;},renderer:player.renderer,posedFrame:()=>({order:[clipped]})});inspection.present('single');inspection.select({side:'single',slot:mesh.slot,mode:'solo'});
+  const model=JSON.parse(await readFile(new URL('./fixtures/strip-probe/build/skeleton.model.json',import.meta.url),'utf8'));
+  // Only add the test clip: full public slot identity/order and its generation stay authoritative.
+  const clippedFrame:PosedFrame={generation:frame.generation,order:frame.order.map(row=>row===mesh?clipped:row)};
+  const inspection=new PartInspection();inspection.register('single',partCatalog(model,['rigid','mesh']),{get generation(){return player.generation;},get skin(){return player.skin;},get set(){return player.set;},renderer:player.renderer,slotIdentity:()=>player.slotIdentity(),posedFrame:()=>clippedFrame});inspection.present('single');inspection.select({side:'single',slot:mesh.slot,mode:'solo'});
+  const actualIdentity=identity.slots.find(row=>row.slot===mesh.slot)!;expect(inspection.observation()).toMatchObject({generation:identity.generation,z:actualIdentity.z,reason:actualIdentity.reason,identity:{attachment:actualIdentity.attachment,skin:actualIdentity.skin,reason:actualIdentity.reason,set:identity.set,activeSkin:identity.skin}});
   const canvas=(player.renderer as CanvasRenderer).canvas as unknown as Canvas,clippedPixels=inkBounds(canvas);expect(clippedPixels.count).toBeGreaterThan(0);expect(inspection.frame('single')!.order[0]!.clip).toEqual(clip);
   player.renderer.render({order:[mesh]});const unclippedPixels=inkBounds(canvas);expect(unclippedPixels.count).toBeGreaterThan(clippedPixels.count);expect(unclippedPixels.right-unclippedPixels.left).toBeGreaterThan(clippedPixels.right-clippedPixels.left);
  }finally{dispose();}
