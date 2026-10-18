@@ -33,3 +33,11 @@ Any future modeling edit needs provenance, undo/redo, explicit units and an expo
 ## Screen prototype
 
 [design-prototype.html](design-prototype.html) preserves the interactive screen concept. It is **illustrative**, with sample controls/data, separate from the implemented app. Its older motion key/curve editing concept is superseded by the current view/annotate/export boundary. It does not demonstrate completed mesh, motion, angle or audio editing.
+
+## Inspection strips
+
+An inclusive annotation interval can also become a derived frame strip. The single view selects one declared source video; compare retains its explicit shared video and chooses a producer clock basis for each interval. A batch preserves separate feedback intervals and side provenance. Source rows run down the sheet and requested producer frames run across it. A vertical batch repeats this grid rather than merging overlapping annotations.
+
+Exact report `frameTimes` selects the requested seconds. Actual video decoding selects the nearest presented PTS (ties earlier), which drives all rig rows through the same published player/poser and fixed seek step as inspection. Requested frames, decoded PTS and each side's independently known frame remain distinct data. Missing clocks do not become a guessed rate or an empty rendered cell: PNG names the regeneration requirement and JSON can preserve an unmapped selection.
+
+The export uses dedicated real canvas players and leaves the live playhead/session alone. PNG pixels, full source identity/footer and JSON are derived output outside the input packages. Exporting never approves a review or authors motion. Browser download controls share the bounded backend plan; a CLI can render and write new external files without providing a filesystem endpoint to the browser. Real CLI canvas/video tests do not establish browser WebGL or interactive presentation parity.

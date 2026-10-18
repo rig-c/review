@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { appRoot, buildWeb } from './build.ts';
 import { loadReview, packagePath, safeFile, type ReviewPackage } from './manifest.ts';
+import { exportReviewStrip, stripJson } from './strip-export.ts';
 import { readSession, saveSession } from './session.ts';
 const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
 function json(data:unknown,status=200){return Response.json(data,{status,headers});}
@@ -23,6 +24,11 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
         if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
         const input=await bodyJson(req);await unchanged();return json(await saveSession(p,input,options.stateDir));
       }
+    if(req.method==='POST'&&url.pathname==='/api/strip'){
+      if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+      const result=await exportReviewStrip(p,await bodyJson(req));
+      return new Response(result.png?new Uint8Array(result.png):stripJson(result),{headers:{...headers,'Content-Type':result.png?'image/png':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="review-strip.${result.png?'png':'json'}"`}});
+    }
       if(req.method!=='GET'&&req.method!=='HEAD')return json({error:'Method not allowed'},405);
       if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,report:p.report,feedbackCatalog:p.feedbackCatalog,assetsBase:'/assets/',capabilities:{playback:!!p.manifest.model,modeling:false,motion:false,feedback:true,audio:true}});}
       if(url.pathname==='/api/session'){await unchanged();return json(await readSession(p,options.stateDir));}

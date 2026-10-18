@@ -4,6 +4,7 @@ import type { CompareFeedback, CompareSession } from '../src/compare-session.ts'
 import { clockForAnimation, lastFrame } from '../src/frame-clock.ts';
 import { commonDomain, compareSeekStep, feedbackTrace, inspectionFrame, requireCommonTime, seekAfterReference, seekSynchronizedPair, type CompareDomain, type CompareTrace, type ReferenceSample } from '../src/compare-playhead.ts';
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection } from '../src/feedback-validation.ts';
+import type { StripInterval, StripRequest } from '../src/strip.ts';
 
 type Side = 'a' | 'b';
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -19,6 +20,7 @@ let domain: CompareDomain | null = null, trace: CompareTrace | null = null, last
 let dirty = false, saving = false, ready = false, seeking = false, disposed = false, zoom = 1;
 let seekAbort: AbortController | null = null, videoCallback: number | null = null, fallbackCallback: number | null = null;
 let latestSeek = 0;
+let stripBusy = false;
 const traceRows: CompareTrace[] = [];
 
 function message(value: string, error = false): void { text('message', value); el('message').classList.toggle('error', error); }
@@ -205,6 +207,47 @@ function renderFeedback(): void {
 }
 
 function download(filename: string, content: string, type: string): void { const url = URL.createObjectURL(new Blob([content], { type })), link = document.createElement('a'); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+function downloadStrip(filename: string, content: Blob): void { const url = URL.createObjectURL(content), link = document.createElement('a'); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+function stripStatus(value: string, error = false): void { text('strip-status', value); el('strip-status').setAttribute('role', error ? 'alert' : 'status'); }
+function updateStripControls(): void {
+  el('strip-panel').setAttribute('aria-busy', String(stripBusy));
+  select('strip-scope').disabled = stripBusy; select('strip-format').disabled = stripBusy; select('strip-basis').disabled = stripBusy || select('strip-scope').value === 'feedback';
+  button('strip-export').disabled = stripBusy; button('strip-export').textContent = stripBusy ? '스트립 생성 중…' : '스트립 다운로드';
+}
+async function exportStrip(): Promise<void> {
+  if (stripBusy) return;
+  stripStatus('선택 구간을 확인하는 중입니다.');
+  try {
+    const format = select('strip-format').value;
+    if (format !== 'png' && format !== 'json') throw new Error('PNG 또는 JSON 형식을 선택해 주세요.');
+    const intervals: StripInterval[] = [];
+    if (select('strip-scope').value === 'feedback') {
+      if (!session.feedback.length) throw new Error('내보낼 피드백 구간이 없습니다.');
+      for (const feedback of session.feedback) {
+        const context = feedback.context;
+        if (!context || typeof context !== 'object' || Array.isArray(context) || context.animation !== data.animation) throw new Error(`피드백 ${feedback.id}: 비교 애니메이션과 다르거나 애니메이션 정보가 없습니다. 구간을 다른 애니메이션으로 바꾸지 않았습니다.`);
+        intervals.push({ id: feedback.id, feedbackId: feedback.id, basis: feedback.side, frameStart: feedback.frameStart, frameEnd: feedback.frameEnd });
+      }
+    } else {
+      const basis = select('strip-basis').value, start = input('frame-start').value.trim(), end = input('frame-end').value.trim();
+      if (basis !== 'a' && basis !== 'b') throw new Error('프레임 구간의 기준 report를 A / B 중 명시적으로 선택해 주세요.');
+      if (!start || !end) throw new Error('오른쪽 피드백의 시작·끝 프레임에 스트립 구간을 입력해 주세요.');
+      intervals.push({ id: 'selection', basis, frameStart: Number(start), frameEnd: Number(end) });
+    }
+    for (const interval of intervals) if (!Number.isSafeInteger(interval.frameStart) || !Number.isSafeInteger(interval.frameEnd) || interval.frameStart < 0 || interval.frameEnd < interval.frameStart) throw new Error(`${interval.id}: 양끝을 포함하는 0 이상의 정수 프레임 구간을 지정해 주세요.`);
+    const request: StripRequest = { format, sourceHash: data.sourceHash, animation: data.animation, intervals };
+    stripBusy = true; updateStripControls(); stripStatus(`${data.animation} · ${intervals.length}개 구간의 ${format.toUpperCase()}를 생성하는 중입니다.`);
+    const response = await fetch('/api/compare/strip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
+    if (!response.ok) {
+      const failure: unknown = await response.json().catch(() => null);
+      throw new Error(failure && typeof failure === 'object' && 'error' in failure && typeof failure.error === 'string' ? failure.error : `스트립 내보내기 실패 · HTTP ${response.status}`);
+    }
+    const mime = format === 'png' ? 'image/png' : 'application/json';
+    if (!(response.headers.get('content-type') ?? '').toLowerCase().startsWith(mime)) throw new Error('스트립 응답의 파일 형식이 요청과 다릅니다.');
+    downloadStrip(`review-strip.${format}`, await response.blob()); stripStatus(`${data.animation} · ${intervals.length}개 구간의 ${format.toUpperCase()} 다운로드를 요청했습니다. 검토 상태는 변경하지 않았습니다.`);
+  } catch (error) { stripStatus(describe(error), true); }
+  finally { stripBusy = false; updateStripControls(); }
+}
 const md = (value: string) => value.replace(/[\\`*_{}\[\]<>]/g, '\\$&');
 function issue(feedback: CompareFeedback) {
   const title = `[${feedback.category}][${feedback.side.toUpperCase()}] ${feedback.target.kind}:${feedback.target.name} F${feedback.frameStart}–${feedback.frameEnd} · ${feedback.summary}`;
@@ -213,6 +256,8 @@ function issue(feedback: CompareFeedback) {
 }
 
 function bind(): void {
+  button('strip-export').onclick = () => { void exportStrip(); };
+  for (const id of ['strip-scope', 'strip-basis', 'strip-format']) select(id).onchange = () => { updateStripControls(); stripStatus('선택이 변경되었습니다. 다운로드할 구간과 기준 report를 확인해 주세요.'); };
   button('play').onclick = async () => { if (!ready || seeking || !domain) return; if (!video.paused) { stop(); return; } if (trace && trace.reference >= domain.end) { message('공통 범위 끝입니다. 앞 시각으로 이동해 다시 재생해 주세요.'); return; } try { await video.play(); button('play').textContent = 'Ⅱ'; button('play').setAttribute('aria-label', '비교 일시정지'); } catch (error) { failPair(error); } };
   input('scrub').oninput = () => { void seekTo(Number(input('scrub').value)); };
   button('seek').onclick = () => { const value = input('time-input').value.trim(); if (!value) { message('이동할 초를 입력해 주세요.', true); return; } void seekTo(Number(value)); };
@@ -246,7 +291,7 @@ async function start(): Promise<void> {
   try {
     [data, session] = await Promise.all([api<CompareResponse>('/api/compare'), api<CompareSession>('/api/compare/session')]);
     if (data.id !== session.id || data.sourceHash !== session.sourceHash || JSON.stringify(data.binding) !== JSON.stringify(session.binding)) throw new Error('비교 화면과 제출 세션의 원본 출처가 다릅니다. 다시 열어 주세요.');
-    text('title', data.title); text('animation', `${data.animation} · A/B 순서와 원본 영상 해시 고정`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); renderFeedbackSelection(); renderFeedback(); savedState();
+    text('title', data.title); text('animation', `${data.animation} · A/B 순서와 원본 영상 해시 고정`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); updateStripControls(); stripStatus('오른쪽 시작·끝 프레임 또는 모든 피드백 구간을 선택해 다운로드합니다. 미제출 피드백도 선택에 포함되며, 내보내기로 제출되지는 않습니다.'); renderFeedbackSelection(); renderFeedback(); savedState();
     const [referenceDuration, aDuration, bDuration] = await Promise.all([loadReference(), loadSide('a', data.a), loadSide('b', data.b)]);
     domain = commonDomain(referenceDuration, aDuration, bDuration); input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `공통 범위 0–${domain.end} s · 한쪽만 clamp / loop하지 않음`); ready = true;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;

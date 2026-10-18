@@ -14,6 +14,7 @@
     "feedback": "bun src/cli.ts feedback"
   },
   "dependencies": {
+    "@napi-rs/canvas": "1.0.11",
     "@rig-c/play": "1.11.0"
   },
   "devDependencies": {

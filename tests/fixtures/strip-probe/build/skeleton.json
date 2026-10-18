@@ -1,0 +1,155 @@
+{
+  "skeleton": {
+    "spine": "4.3.13",
+    "x": -28,
+    "y": -10,
+    "width": 56,
+    "height": 20,
+    "images": "../build/"
+  },
+  "bones": [
+    {
+      "name": "root"
+    },
+    {
+      "name": "rigid",
+      "parent": "root",
+      "x": -18
+    },
+    {
+      "name": "mesh",
+      "parent": "root",
+      "x": 18
+    }
+  ],
+  "slots": [
+    {
+      "name": "rigid",
+      "bone": "rigid",
+      "attachment": "rigid"
+    },
+    {
+      "name": "mesh",
+      "bone": "mesh",
+      "attachment": "mesh"
+    }
+  ],
+  "skins": [
+    {
+      "name": "default",
+      "attachments": {
+        "mesh": {
+          "mesh": {
+            "type": "mesh",
+            "path": "mesh",
+            "uvs": [
+              0,
+              1,
+              0,
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "triangles": [
+              0,
+              1,
+              2,
+              0,
+              2,
+              3
+            ],
+            "vertices": [
+              -10,
+              -10,
+              -10,
+              10,
+              10,
+              10,
+              10,
+              -10
+            ],
+            "hull": 4,
+            "edges": [
+              0,
+              2,
+              2,
+              4,
+              4,
+              6,
+              6,
+              0,
+              0,
+              4
+            ],
+            "width": 20,
+            "height": 20
+          }
+        },
+        "rigid": {
+          "rigid": {
+            "width": 20,
+            "height": 20,
+            "path": "rigid"
+          }
+        }
+      }
+    }
+  ],
+  "animations": {
+    "inspect": {
+      "bones": {
+        "rigid": {
+          "translatex": [
+            {},
+            {
+              "time": 0.5,
+              "value": 12
+            },
+            {
+              "time": 1
+            }
+          ]
+        },
+        "mesh": {
+          "rotate": [
+            {},
+            {
+              "time": 0.5,
+              "value": 35
+            },
+            {
+              "time": 1,
+              "value": -20
+            }
+          ]
+        }
+      }
+    },
+    "short": {
+      "bones": {
+        "root": {
+          "translatex": [
+            {},
+            {
+              "time": 0.8
+            }
+          ]
+        }
+      }
+    },
+    "still": {
+      "bones": {
+        "root": {
+          "translatex": [
+            {},
+            {
+              "time": 1
+            }
+          ]
+        }
+      }
+    }
+  }
+}

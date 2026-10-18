@@ -5,6 +5,7 @@ import type { ReportEvent, ReportSeeds } from '../src/report.ts';
 import { clockForAnimation, frameAtTime, lastFrame as lastProducerFrame, timeAtFrame } from '../src/frame-clock.ts';
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, type FeedbackCatalog } from '../src/feedback-validation.ts';
 import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
+import type { StripInterval, StripRequest } from '../src/strip.ts';
 
 interface ReviewResponse { manifest: ReviewManifest; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
 interface PoseReference { schema: 'rig-review-pose/1'; coordinateSystem: 'image-pixels-y-down'; width: number; height: number; joints: { id: string; x: number; y: number; parent?: string }[] }
@@ -25,6 +26,7 @@ let data: ReviewResponse;
 let session: ReviewSession;
 let dirty = false;
 let saving = false;
+let stripBusy = false;
 let checkpoint: Checkpoint | undefined;
 let assets: ModelAssets | null = null;
 let player: RigPlayer | null = null;
@@ -536,6 +538,54 @@ function download(name: string, content: string, mime: string): void {
   const url = URL.createObjectURL(new Blob([content], { type: mime })); const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function downloadStrip(name: string, content: Blob): void {
+  const url = URL.createObjectURL(content), link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function stripStatus(value: string, error = false): void { text('strip-status', value); el('strip-status').setAttribute('role', error ? 'alert' : 'status'); }
+
+function updateStripControls(): void {
+  el('strip-panel').setAttribute('aria-busy', String(stripBusy));
+  for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).disabled = stripBusy;
+  button('strip-export').disabled = stripBusy; button('strip-export').textContent = stripBusy ? '스트립 생성 중…' : '스트립 다운로드';
+}
+
+async function exportStrip(): Promise<void> {
+  if (stripBusy) return;
+  stripStatus('선택 구간을 확인하는 중입니다.');
+  try {
+    const format = select('strip-format').value, selectedAnimation = feedbackAnimation();
+    if (format !== 'png' && format !== 'json') throw new Error('PNG 또는 JSON 형식을 선택해 주세요.');
+    if (!selectedAnimation) throw new Error('스트립을 내보낼 애니메이션을 명시적으로 선택해 주세요.');
+    const intervals: StripInterval[] = [];
+    if (select('strip-scope').value === 'feedback') {
+      if (!session.feedback.length) throw new Error('내보낼 피드백 구간이 없습니다.');
+      for (const feedback of session.feedback) {
+        const context = feedback.context;
+        if (!context || typeof context !== 'object' || Array.isArray(context) || context.animation !== selectedAnimation) throw new Error(`피드백 ${feedback.id}: 현재 선택한 애니메이션과 다르거나 애니메이션 정보가 없습니다. 일괄 내보내기는 같은 애니메이션의 구간만 지원합니다.`);
+        intervals.push({ id: feedback.id, feedbackId: feedback.id, basis: 'single', frameStart: feedback.frameStart, frameEnd: feedback.frameEnd });
+      }
+    } else {
+      const start = input('feedback-start').value.trim(), end = input('feedback-end').value.trim();
+      if (!start || !end) throw new Error('오른쪽 피드백의 시작·끝 프레임에 스트립 구간을 입력해 주세요.');
+      intervals.push({ id: 'selection', basis: 'single', frameStart: Number(start), frameEnd: Number(end) });
+    }
+    for (const interval of intervals) if (!Number.isSafeInteger(interval.frameStart) || !Number.isSafeInteger(interval.frameEnd) || interval.frameStart < 0 || interval.frameEnd < interval.frameStart) throw new Error(`${interval.id}: 양끝을 포함하는 0 이상의 정수 프레임 구간을 지정해 주세요.`);
+    const referenceId = select('strip-reference').value;
+    const request: StripRequest = { format, sourceHash: data.sourceHash, animation: selectedAnimation, ...(referenceId ? { referenceId } : {}), intervals };
+    stripBusy = true; updateStripControls(); stripStatus(`${selectedAnimation} · ${intervals.length}개 구간의 ${format.toUpperCase()}를 생성하는 중입니다.`);
+    const response = await fetch('/api/strip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
+    if (!response.ok) {
+      const failure: unknown = await response.json().catch(() => null);
+      throw new Error(failure && typeof failure === 'object' && 'error' in failure && typeof failure.error === 'string' ? failure.error : `스트립 내보내기 실패 · HTTP ${response.status}`);
+    }
+    const mime = format === 'png' ? 'image/png' : 'application/json';
+    if (!(response.headers.get('content-type') ?? '').toLowerCase().startsWith(mime)) throw new Error('스트립 응답의 파일 형식이 요청과 다릅니다.');
+    downloadStrip(`review-strip.${format}`, await response.blob()); stripStatus(`${selectedAnimation} · ${intervals.length}개 구간의 ${format.toUpperCase()} 다운로드를 요청했습니다. 검토 상태는 변경하지 않았습니다.`);
+  } catch (error) { stripStatus(errorText(error), true); }
+  finally { stripBusy = false; updateStripControls(); }
+}
+
 const markdown = (value: string) => value.replace(/[\\`*_{}\[\]<>]/g, '\\$&');
 function issueFields(feedback: Feedback): { title: string; body: string; labels: string[] } {
   const title = `[${feedback.category}] ${feedback.target.kind}:${feedback.target.name} F${feedback.frameStart}–${feedback.frameEnd} · ${feedback.summary}`;
@@ -558,6 +608,8 @@ function issueFields(feedback: Feedback): { title: string; body: string; labels:
 }
 
 function bind(): void {
+  button('strip-export').onclick = () => { void exportStrip(); };
+  for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('선택이 변경되었습니다. 다운로드할 구간·애니메이션·참조 영상을 확인해 주세요.');
   for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workspace]')) tab.onclick = () => setWorkspace(tab.dataset.workspace as typeof workspace);
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => setView(item.dataset.view as typeof view);
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
@@ -632,9 +684,10 @@ async function start(): Promise<void> {
     [data, session] = await Promise.all([api<ReviewResponse>('/api/review'), api<ReviewSession>('/api/session')]);
     text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; select('feedback-target-kind').value = 'rig'; input('feedback-target-name').value = data.manifest.id;
     select('reference-select').replaceChildren(); for (const reference of data.manifest.references) select('reference-select').append(option(reference.id, `${reference.label} · ${reference.type}`));
+    for (const reference of data.manifest.references.filter(item => item.type === 'video')) select('strip-reference').append(option(reference.id, reference.label));
     if (!data.manifest.references.length) { select('reference-select').append(option('', '자료 미제공')); select('reference-select').disabled = true; }
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = '소스 파일 미제공';
-    bind(); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    bind(); updateStripControls(); stripStatus('오른쪽 시작·끝 프레임 또는 모든 피드백 구간을 선택해 다운로드합니다. 미제출 피드백도 선택에 포함되며, 내보내기로 제출되지는 않습니다.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const reference = data.manifest.references[0]; if (reference) await showReference(reference.id);
     await initPlayer();
     const requestedId = new URLSearchParams(location.search).get('checkpoint');

@@ -1,0 +1,342 @@
+{
+  "spec": "rigc-compiled/3",
+  "referenceScale": 100,
+  "stage": {
+    "x": 0,
+    "y": 0,
+    "width": 80,
+    "height": 64
+  },
+  "bones": [
+    {
+      "name": "root"
+    },
+    {
+      "name": "rigid",
+      "parent": "root",
+      "x": -18,
+      "y": 0
+    },
+    {
+      "name": "mesh",
+      "parent": "root",
+      "x": 18,
+      "y": 0
+    }
+  ],
+  "slots": [
+    {
+      "name": "mesh",
+      "bone": "mesh",
+      "setup": "mesh"
+    }
+  ],
+  "skins": [
+    {
+      "name": "default",
+      "bones": [],
+      "constraints": {
+        "ik": [],
+        "transform": [],
+        "path": [],
+        "physics": [],
+        "slider": []
+      },
+      "attachments": {
+        "mesh": {
+          "mesh": {
+            "kind": "mesh",
+            "path": "mesh",
+            "uvs": [
+              0,
+              1,
+              0,
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "triangles": [
+              0,
+              1,
+              2,
+              0,
+              2,
+              3
+            ],
+            "vertices": {
+              "weighted": false,
+              "xy": [
+                -10,
+                -10,
+                -10,
+                10,
+                10,
+                10,
+                10,
+                -10
+              ]
+            },
+            "hull": 4,
+            "edges": [
+              0,
+              2,
+              2,
+              4,
+              4,
+              6,
+              6,
+              0,
+              0,
+              4
+            ],
+            "width": 20,
+            "height": 20
+          }
+        }
+      }
+    }
+  ],
+  "constraints": [],
+  "events": [],
+  "animations": [
+    {
+      "name": "inspect",
+      "duration": 1,
+      "bones": [
+        {
+          "name": "rigid",
+          "timelines": [
+            {
+              "name": "translatex",
+              "keys": [
+                {
+                  "time": 0,
+                  "value": 0
+                },
+                {
+                  "time": 0.5,
+                  "value": 12
+                },
+                {
+                  "time": 1,
+                  "value": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "mesh",
+          "timelines": [
+            {
+              "name": "rotate",
+              "keys": [
+                {
+                  "time": 0,
+                  "value": 0
+                },
+                {
+                  "time": 0.5,
+                  "value": 35
+                },
+                {
+                  "time": 1,
+                  "value": -20
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "slots": [],
+      "constraints": {
+        "ik": [],
+        "transform": [],
+        "path": [],
+        "physics": [],
+        "slider": []
+      },
+      "attachments": [],
+      "drawOrder": [],
+      "events": []
+    },
+    {
+      "name": "still",
+      "duration": 1,
+      "bones": [
+        {
+          "name": "root",
+          "timelines": [
+            {
+              "name": "translatex",
+              "keys": [
+                {
+                  "time": 0,
+                  "value": 0
+                },
+                {
+                  "time": 1,
+                  "value": 0
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "slots": [],
+      "constraints": {
+        "ik": [],
+        "transform": [],
+        "path": [],
+        "physics": [],
+        "slider": []
+      },
+      "attachments": [],
+      "drawOrder": [],
+      "events": []
+    },
+    {
+      "name": "short",
+      "duration": 0.8,
+      "bones": [
+        {
+          "name": "root",
+          "timelines": [
+            {
+              "name": "translatex",
+              "keys": [
+                {
+                  "time": 0,
+                  "value": 0
+                },
+                {
+                  "time": 0.8,
+                  "value": 0
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "slots": [],
+      "constraints": {
+        "ik": [],
+        "transform": [],
+        "path": [],
+        "physics": [],
+        "slider": []
+      },
+      "attachments": [],
+      "drawOrder": [],
+      "events": []
+    }
+  ],
+  "editorOrder": {
+    "skins": [
+      {
+        "name": "default",
+        "slots": [
+          "mesh"
+        ]
+      }
+    ],
+    "animations": [
+      "inspect",
+      "short",
+      "still"
+    ]
+  },
+  "images": [
+    {
+      "region": "mesh",
+      "page": "../images/mesh.png",
+      "width": 20,
+      "height": 20,
+      "hasAlpha": true,
+      "isBase": false
+    }
+  ],
+  "pageGrids": [],
+  "droppedStates": [],
+  "absentParts": [],
+  "meshBones": [
+    "mesh"
+  ],
+  "meshes": [
+    {
+      "slot": "mesh",
+      "kind": "authored",
+      "attachments": [
+        "mesh"
+      ],
+      "vertices": 4,
+      "triangles": 2,
+      "bones": [
+        "mesh"
+      ],
+      "coverage": 1,
+      "overshoot": 0
+    }
+  ],
+  "physics": [],
+  "deformTransforms": [],
+  "trackDerivations": [],
+  "rig": {
+    "archetype": "strip-probe",
+    "axisBone": null,
+    "axisSubtree": [],
+    "detached": [],
+    "slotOrder": [
+      "mesh"
+    ],
+    "meshKinds": {
+      "mesh": "authored"
+    },
+    "meshDeclaredBones": {
+      "mesh": [
+        "mesh"
+      ]
+    },
+    "meshSoftBones": {},
+    "deformMayFold": [],
+    "consumerDrivenMix": [],
+    "idleDrivesMeshes": null,
+    "axes": [],
+    "basePlates": [],
+    "meshSlotBudget": null,
+    "meshTriangleBudget": null,
+    "contactDepth": null,
+    "capContainmentCeiling": null,
+    "massBone": null,
+    "inwardUnit": null
+  },
+  "pages": [
+    {
+      "name": "mesh.png",
+      "width": 20,
+      "height": 20,
+      "pma": false,
+      "scale": null,
+      "regions": [
+        {
+          "name": "mesh",
+          "x": 0,
+          "y": 0,
+          "width": 20,
+          "height": 20,
+          "offsetX": 0,
+          "offsetY": 0,
+          "originalWidth": 20,
+          "originalHeight": 20,
+          "degrees": 0,
+          "index": 0
+        }
+      ]
+    }
+  ],
+  "spine": {
+    "sha256": "157f32af4accd3258ffce9a4ed16f72c70f21816fdcf82343e43be6b5bdb3aad"
+  }
+}
