@@ -37,10 +37,10 @@ class Host extends EventTarget {
  setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);}
 }
 let hostDocument:{activeElement:Host|null};
-function openHost(){
+function openHost(options:{explorerLeft?:boolean;tabs?:string[]}={}){
  const body=new Host('body'),layout=new Host(),main=new Host('main'),left=new Host('aside'),right=new Host('aside'),stage=new Host(),inspector=new Host(),heading=new Host();layout.className='layout';left.className='left-panel';right.id='parts-explorer';stage.id='stage-layout';inspector.className='inspector';heading.clientHeight=30;
- const panels={} as Record<string,Host>;for(const tab of ['view','rig','playback','feedback']){const panel=new Host('section'),button=new Host('button');panel.id='inspector-'+tab;panel.dataset.inspectorPanel=tab;panel.hidden=tab!=='view';panel.clientHeight=200;panel.clientWidth=500;button.dataset.inspector=tab;button.attrs.set('aria-selected',String(tab==='view'));panels[tab]=panel;inspector.append(button,panel);}
- main.append(heading,stage,inspector);layout.append(left,main,right);body.append(layout);
+ const tabs=options.tabs??['view','rig','playback','feedback'],panels={} as Record<string,Host>;for(const tab of tabs){const panel=new Host('section'),button=new Host('button');panel.id='inspector-'+tab;panel.dataset.inspectorPanel=tab;panel.hidden=tab!==tabs[0];panel.clientHeight=200;panel.clientWidth=500;button.dataset.inspector=tab;button.attrs.set('aria-selected',String(tab===tabs[0]));panels[tab]=panel;inspector.append(button,panel);}
+ main.append(heading,stage,inspector);if(options.explorerLeft){left.append(right);layout.append(left,main);}else layout.append(left,main,right);body.append(layout);
  const values=new Map<string,string>(),events=new EventTarget(),frames=new Map<number,()=>void>();let handle=0;
  const document=Object.assign(new EventTarget(),{body,hidden:false,activeElement:null as Host|null,getElementById:(id:string)=>body.all().find(n=>n.id===id)??null,querySelector:(selector:string)=>body.querySelector(selector),createElement:(tag:string)=>new Host(tag)});hostDocument=document;
  const globals={document,window:events,localStorage:{getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>values.set(key,value)},requestAnimationFrame:(callback:()=>void)=>{frames.set(++handle,callback);return handle;},cancelAnimationFrame:(id:number)=>frames.delete(id),ResizeObserver:class{observe(){}disconnect(){}},MutationObserver:class{constructor(_callback:()=>void){}observe(){}disconnect(){}}};
@@ -89,4 +89,40 @@ test('drawer sources override the legacy important narrow sidebar hide in both r
   });
   expect(matching.some(row=>row.value==='none'&&row.important)).toBe(true);matching.sort((a,b)=>Number(a.important)-Number(b.important)||a.specificity-b.specificity||a.index-b.index);expect(matching.at(-1)).toMatchObject({selector:'.workspace-drawer>.left-panel',value:'flex',important:true});
  }
+});
+
+test('an explorer inside the left column makes it the parts column: no right column, explorer width, three sections',()=>{
+ const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback']});try{
+  app.layout.clientWidth=1280;app.layout.clientHeight=800;app.ui.refresh();app.flush();
+  expect(app.layout.style.values.get('--workspace-columns')).toBe('260px 8px minmax(0,1fr) 0px 0px');
+  const handles=app.layout.children.filter(node=>node.classes.has('workspace-separator'));expect(handles.map(node=>node.className)).toEqual(['workspace-separator workspace-rightWidth workspace-side-left']);
+  expect(handles[0]!.getAttribute('aria-controls')).toBe('workspace-left');expect(handles[0]!.getAttribute('aria-label')).toBe('Resize Parts and settings');
+  const left=app.get('workspace-left'),explorer=app.get('parts-explorer');expect(left.contains(explorer)).toBe(true);
+  app.panels.rig!.scrollTop=40;app.activate('playback');app.activate('rig');expect(app.panels.rig!.scrollTop).toBe(40);expect(JSON.parse(app.ui.scroll()).rig).toEqual({x:0,y:40});
+  app.ui.restoreScroll(JSON.stringify({view:{x:0,y:12}}));
+  app.layout.clientWidth=420;app.ui.refresh();app.flush();expect(left.parentElement?.id).toBe('workspace-drawer-rightWidth');expect(app.layout.style.values.get('--workspace-columns')).toBe('0px 0px minmax(0,1fr) 0px 0px');
+  app.layout.clientWidth=1280;app.ui.refresh();app.flush();expect(left.parentElement).toBe(app.layout);expect(app.layout.children[0]).toBe(left);
+ }finally{app.close();}
+});
+
+const indexHtml=()=>readFile(new URL('../web/index.html',import.meta.url),'utf8');
+const between=(html:string,start:string,end:string)=>{const a=html.indexOf(start),b=html.indexOf(end,a);if(a<0||b<a)throw new Error(`index.html region missing: ${start} … ${end}`);return html.slice(a,b+end.length);};
+test('the review page has three inspector sections, Setup, Animate and Feedback, and no View section',async()=>{
+ const html=await indexHtml(),tabs=[...html.matchAll(/<button role="tab" id="([^"]+)" data-inspector="([^"]+)" aria-controls="([^"]+)"[^>]*>([^<]+)<\/button>/g)].map(m=>m.slice(1));
+ expect(tabs).toEqual([['tab-rig','rig','inspector-rig','Setup'],['tab-playback','playback','inspector-playback','Animate'],['tab-feedback','feedback','inspector-feedback','Feedback']]);
+ for(const [,name,panel]of tabs)expect(html).toContain(`<section id="${panel}" role="tabpanel" aria-labelledby="tab-${name}" data-inspector-panel="${name}"`);
+ expect(html.split('\n').filter(line=>line.includes('data-inspector=')).length).toBe(3);
+ for(const gone of ['id="inspector-view"','id="tab-view"','data-inspector="view"','data-inspector-panel="view"'])expect(html).not.toContain(gone);
+ const setup=between(html,'<section id="inspector-rig"','<section id="inspector-playback"');for(const id of ['selected-part','modeling-tools','part-set','angle-panel'])expect(setup).toContain(`id="${id}"`);
+ const feedback=between(html,'<section id="inspector-feedback"','</footer>');expect(between(feedback,'<section class="provenance"','</section>')).toContain('id="source-files"');
+});
+test('every footer status readout lives inside footer and the stage-meta row is gone',async()=>{
+ const html=await indexHtml(),footer=between(html,'<footer','</footer>');
+ for(const id of ['message','source-hash','player-state','layout-state','renderer-state','layer-state','control-state','idle-state','draft-state'])expect(footer).toContain(`id="${id}"`);
+ expect(html).not.toContain('stage-meta');expect(html.match(/role="status"/g)?.length).toBe(8);
+});
+test('the parts explorer is the left column with checkpoints and reference folded above it',async()=>{
+ const html=await indexHtml(),left=between(html,'<aside class="left-panel">','<main>');
+ expect(left.indexOf('<details id="package-context"')).toBeLessThan(left.indexOf('<aside id="parts-explorer"'));for(const id of ['checkpoints','checkpoint-title','reference-select','person-select'])expect(between(left,'<details id="package-context"','</details>')).toContain(`id="${id}"`);
+ expect(html.slice(html.indexOf('</main>'),html.indexOf('<footer'))).toBe('</main></div>');expect(html.match(/parts-explorer/g)?.length).toBe(2);
 });

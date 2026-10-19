@@ -3,29 +3,49 @@ import {parseWorkspacePanels,panelBounds,type WorkspacePanels} from './workspace
 export type WorkspacePanel=keyof WorkspacePanels;
 export const workspaceMinimums=Object.freeze({stageWidth:240,stageHeight:180,separator:8});
 export interface SeparatorRange {min:number;max:number;value:number;enabled:boolean}
-export interface EffectiveWorkspaceLayout {leftWidth:number;rightWidth:number;inspectorHeight:number;stageWidth:number;stageHeight:number;leftMode:'panel'|'drawer';rightMode:'panel'|'drawer';inspectorMode:'panel'|'drawer';stageMinimumSatisfied:boolean;separators:Record<WorkspacePanel,SeparatorRange>}
+export type WorkspaceColumnKey=Exclude<WorkspacePanel,'inspectorHeight'>;
+/** Which saved width each side column uses; null means the page has no column on that side.
+ * The compare page keeps sources left and parts right; the single review page shows the parts
+ * explorer (its saved `rightWidth`) on the left and has no right column. */
+export interface WorkspaceColumns {left:WorkspaceColumnKey|null;right:WorkspaceColumnKey|null}
+export const defaultWorkspaceColumns:Readonly<WorkspaceColumns>=Object.freeze({left:'leftWidth',right:'rightWidth'});
+export type WorkspacePanelMode='panel'|'drawer'|'absent';
+/** Sizes and modes are keyed by saved panel, not by side; `absent` panels have width 0 and no separator. */
+export interface EffectiveWorkspaceLayout {leftWidth:number;rightWidth:number;inspectorHeight:number;stageWidth:number;stageHeight:number;leftMode:WorkspacePanelMode;rightMode:WorkspacePanelMode;inspectorMode:'panel'|'drawer';stageMinimumSatisfied:boolean;separators:Record<WorkspacePanel,SeparatorRange>}
 const clamp=(value:number,min:number,max:number)=>Math.max(min,Math.min(max,value));
-/** Input rectangle excludes app chrome. Drawer triggers must remain outside collapsed panel content.
- * Collapse left, then right when minima cannot coexist; Inspector becomes a drawer below its minimum.
- * Returned clamps never replace the user's desired desktop sizes. */
-export function allocateWorkspaceLayout(available:{width:number;height:number},desired:WorkspacePanels):EffectiveWorkspaceLayout {
- const panels=parseWorkspacePanels(desired),{width,height}=available,{stageWidth:minWidth,stageHeight:minHeight,separator}=workspaceMinimums;
- if(![width,height].every(n=>Number.isFinite(n)&&n>=0&&n<=65536))throw new Error('WORKSPACE_RECTANGLE: finite 0..65536 CSS pixels required');
- let left=true,right=true;if(width<panelBounds.leftWidth.min+panelBounds.rightWidth.min+minWidth+2*separator)left=false;if(width<(left?panelBounds.leftWidth.min+separator:0)+panelBounds.rightWidth.min+minWidth+separator)right=false;
- const count=Number(left)+Number(right),budget=Math.max(0,width-minWidth-count*separator),leftMin=left?panelBounds.leftWidth.min:0,rightMin=right?panelBounds.rightWidth.min:0,wantLeft=left?panels.leftWidth:0,wantRight=right?panels.rightWidth:0;
- const slack=wantLeft+wantRight-leftMin-rightMin,ratio=slack>0?Math.min(1,Math.max(0,(budget-leftMin-rightMin)/slack)):1,leftWidth=leftMin+(wantLeft-leftMin)*ratio,rightWidth=rightMin+(wantRight-rightMin)*ratio;
- const inspector=height>=minHeight+panelBounds.inspectorHeight.min+separator,inspectorHeight=inspector?Math.min(panels.inspectorHeight,height-minHeight-separator):0;
- const stageWidth=Math.max(0,width-leftWidth-rightWidth-count*separator),stageHeight=Math.max(0,height-inspectorHeight-(inspector?separator:0));
- const range=(visible:boolean,key:WorkspacePanel,value:number,max:number):SeparatorRange=>visible?{min:panelBounds[key].min,max:Math.max(panelBounds[key].min,Math.min(panelBounds[key].max,max)),value,enabled:true}:{min:0,max:0,value:0,enabled:false};
- return {leftWidth,rightWidth,inspectorHeight,stageWidth,stageHeight,leftMode:left?'panel':'drawer',rightMode:right?'panel':'drawer',inspectorMode:inspector?'panel':'drawer',stageMinimumSatisfied:width>=minWidth&&height>=minHeight,separators:{leftWidth:range(left,'leftWidth',leftWidth,width-rightWidth-count*separator-minWidth),rightWidth:range(right,'rightWidth',rightWidth,width-leftWidth-count*separator-minWidth),inspectorHeight:range(inspector,'inspectorHeight',inspectorHeight,height-minHeight-separator)}};
+export function parseWorkspaceColumns(value:WorkspaceColumns):WorkspaceColumns {
+ const ok=(v:unknown)=>v===null||v==='leftWidth'||v==='rightWidth';
+ if(!value||!ok(value.left)||!ok(value.right)||value.left!==null&&value.left===value.right)throw new Error(`WORKSPACE_COLUMNS: left ${String(value?.left)} / right ${String(value?.right)}; required distinct leftWidth, rightWidth or null`);
+ return {left:value.left,right:value.right};
 }
-export interface WorkspaceSeparatorOptions {element:HTMLElement;panel:WorkspacePanel;controls:string;label:string;range:()=>SeparatorRange;resize:(desired:number)=>void;desired?:()=>number;resolveDesired?:(effective:number,context:{range:SeparatorRange;desired:number})=>number;commit?:(desired:number)=>void;events?:Pick<EventTarget,'addEventListener'|'removeEventListener'>|null;step?:number;coarseStep?:number}
+/** Input rectangle excludes app chrome. Drawer triggers must remain outside collapsed panel content.
+ * Collapse the left column, then the right one when minima cannot coexist; Inspector becomes a drawer below its minimum.
+ * Returned clamps never replace the user's desired desktop sizes. */
+export function allocateWorkspaceLayout(available:{width:number;height:number},desired:WorkspacePanels,columns:WorkspaceColumns=defaultWorkspaceColumns):EffectiveWorkspaceLayout {
+ const panels=parseWorkspacePanels(desired),{left:leftKey,right:rightKey}=parseWorkspaceColumns(columns),{width,height}=available,{stageWidth:minWidth,stageHeight:minHeight,separator}=workspaceMinimums;
+ if(![width,height].every(n=>Number.isFinite(n)&&n>=0&&n<=65536))throw new Error('WORKSPACE_RECTANGLE: finite 0..65536 CSS pixels required');
+ const boundLeft=leftKey?panelBounds[leftKey].min:0,boundRight=rightKey?panelBounds[rightKey].min:0;
+ let left=leftKey!==null,right=rightKey!==null;
+ if(left&&right&&width<boundLeft+boundRight+minWidth+2*separator)left=false;
+ if(right&&width<(left?boundLeft+separator:0)+boundRight+minWidth+separator)right=false;
+ if(left&&!right&&width<boundLeft+minWidth+separator)left=false;
+ const count=Number(left)+Number(right),budget=Math.max(0,width-minWidth-count*separator),leftMin=left?boundLeft:0,rightMin=right?boundRight:0,wantLeft=left?panels[leftKey!]:0,wantRight=right?panels[rightKey!]:0;
+ const slack=wantLeft+wantRight-leftMin-rightMin,ratio=slack>0?Math.min(1,Math.max(0,(budget-leftMin-rightMin)/slack)):1,leftSize=leftMin+(wantLeft-leftMin)*ratio,rightSize=rightMin+(wantRight-rightMin)*ratio;
+ const inspector=height>=minHeight+panelBounds.inspectorHeight.min+separator,inspectorHeight=inspector?Math.min(panels.inspectorHeight,height-minHeight-separator):0;
+ const stageWidth=Math.max(0,width-leftSize-rightSize-count*separator),stageHeight=Math.max(0,height-inspectorHeight-(inspector?separator:0));
+ const range=(visible:boolean,key:WorkspacePanel,value:number,max:number):SeparatorRange=>visible?{min:panelBounds[key].min,max:Math.max(panelBounds[key].min,Math.min(panelBounds[key].max,max)),value,enabled:true}:{min:0,max:0,value:0,enabled:false};
+ const size:Record<WorkspaceColumnKey,number>={leftWidth:0,rightWidth:0},mode:Record<WorkspaceColumnKey,WorkspacePanelMode>={leftWidth:'absent',rightWidth:'absent'},separators:Record<WorkspacePanel,SeparatorRange>={leftWidth:range(false,'leftWidth',0,0),rightWidth:range(false,'rightWidth',0,0),inspectorHeight:range(inspector,'inspectorHeight',inspectorHeight,height-minHeight-separator)};
+ if(leftKey){size[leftKey]=leftSize;mode[leftKey]=left?'panel':'drawer';separators[leftKey]=range(left,leftKey,leftSize,width-rightSize-count*separator-minWidth);}
+ if(rightKey){size[rightKey]=rightSize;mode[rightKey]=right?'panel':'drawer';separators[rightKey]=range(right,rightKey,rightSize,width-leftSize-count*separator-minWidth);}
+ return {leftWidth:size.leftWidth,rightWidth:size.rightWidth,inspectorHeight,stageWidth,stageHeight,leftMode:mode.leftWidth,rightMode:mode.rightWidth,inspectorMode:inspector?'panel':'drawer',stageMinimumSatisfied:width>=minWidth&&height>=minHeight,separators};
+}
+export interface WorkspaceSeparatorOptions {element:HTMLElement;panel:WorkspacePanel;controls:string;label:string;range:()=>SeparatorRange;resize:(desired:number)=>void;desired?:()=>number;resolveDesired?:(effective:number,context:{range:SeparatorRange;desired:number})=>number;commit?:(desired:number)=>void;side?:'left'|'right';events?:Pick<EventTarget,'addEventListener'|'removeEventListener'>|null;step?:number;coarseStep?:number}
 /** Arrow keys act only on the separator itself. Right/bottom boundaries grow inward.
  * Pointer cancellation, capture loss, Escape and blur restore the prior desired size.
  * Coupled allocators supply their reachable effective range and resolveDesired inverse;
  * resize/commit receive desired sizes, including when effective geometry is clamped. */
 export function bindWorkspaceSeparator(options:WorkspaceSeparatorOptions):{refresh():void;dispose():void} {
- const {element,panel}=options,vertical=panel!=='inspectorHeight',direction=panel==='leftWidth'?1:-1,events=options.events===undefined?(typeof window==='undefined'?null:window):options.events;
+ const {element,panel}=options,vertical=panel!=='inspectorHeight',direction=(options.side??(panel==='leftWidth'?'left':'right'))==='left'?1:-1,events=options.events===undefined?(typeof window==='undefined'?null:window):options.events;
  if(!options.controls||!options.label||/[\x00-\x1f]/.test(options.controls+options.label))throw new Error('WORKSPACE_SEPARATOR: controls and accessible label required');
  const step=options.step??8,coarse=options.coarseStep??40;if(![step,coarse].every(n=>Number.isFinite(n)&&n>0))throw new Error('WORKSPACE_SEPARATOR: positive finite keyboard steps required');
  const attrs=['role','aria-orientation','aria-controls','aria-label','aria-valuemin','aria-valuemax','aria-valuenow','aria-valuetext','aria-disabled'],saved=new Map(attrs.map(key=>[key,element.getAttribute(key)])),tabIndex=element.tabIndex,touchAction=element.style.touchAction;

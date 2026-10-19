@@ -2,6 +2,9 @@
 export const workspacePreferenceKey='rig-review-preferences/1';
 export const legacyAppearanceKey='rig-review-appearance/1';
 export type WorkspaceTheme='system'|'dark'|'light';
+/** Saved field names are part of the stored record and do not move with the panels.
+ * `rightWidth` is the parts explorer's width wherever the page shows it (the single review page shows
+ * it on the left); `leftWidth` is the compare page's sources column. */
 export interface WorkspacePanels {leftWidth:number;rightWidth:number;inspectorHeight:number}
 export const panelBounds=Object.freeze({leftWidth:Object.freeze({min:120,max:720}),rightWidth:Object.freeze({min:180,max:900}),inspectorHeight:Object.freeze({min:160,max:900})});
 export const defaultWorkspacePanels:Readonly<WorkspacePanels>=Object.freeze({leftWidth:170,rightWidth:260,inspectorHeight:280});

@@ -4,7 +4,7 @@
 
 The delivery unit is an existing output folder or an optional curated review package handed from an agent to a person. This reusable app owns inspection, reference comparison, annotations and feedback export. Upstream compiler, splitter and runtime remain their respective tools. The existing producing agent needs no change to open its output here.
 
-The person uses one inspection workspace with **View**, **Rig**, **Playback** and **Feedback** sections. Rig covers setup geometry, source art, pivot/joint placement, meshes, weights, draw order and angle coverage; Playback covers frame intervals, reference video/poses, contact/deformation and audio inspection. Motion is strictly **view, annotate and export**: time/angle controls navigate inspection. This app does not author animation keys, retime motion or write `motion.json`. Future modeling touch-up remains in scope as a design goal; it is not implemented by this starter.
+The person uses one inspection workspace with **Setup**, **Animate** and **Feedback** sections (the compare page keeps **View**, **Rig**, **Playback** and **Feedback**). Setup covers setup geometry, source art, pivot/joint placement, meshes, weights, draw order and angle coverage; Animate covers frame intervals, reference video/poses, contact/deformation and audio inspection. Motion is strictly **view, annotate and export**: time/angle controls navigate inspection. This app does not author animation keys, retime motion or write `motion.json`. Future modeling touch-up remains in scope as a design goal; it is not implemented by this starter.
 
 ## Implemented foundation
 
@@ -34,6 +34,17 @@ Any future modeling edit needs provenance, undo/redo, explicit units and an expo
 
 [design-prototype.html](design-prototype.html) preserves the interactive screen concept. It is **illustrative**, with sample controls/data, separate from the implemented app. Its older motion key/curve editing concept is superseded by the current view/annotate/export boundary. It does not demonstrate completed mesh, motion, angle or audio editing.
 
+## Workspace layout
+
+The single review page is one inspection workspace: a left column, the stage, the Inspector under the stage and one status footer. There is no right panel.
+
+- **Left column.** The Parts explorer fills it. Checkpoints, the current checkpoint title and the reference select fold into a compact strip above the part list; the strip opens when the package supplies checkpoints or references and stays folded for a plain output folder. Browser Settings sit at the bottom.
+- **View bar.** Pane choice, the persistent image / mesh edges / bone points layer toggles (keys `I`, `M`, `B`), camera sync and zoom, then appearance, repeat idle and Copy view link at the right end. The toggles stay native checkboxes, so their checked state is the pressed state, the draft input and the `layers` control value. A disabled toggle names the footer's layer reason as its tooltip. Turning images off leaves the mesh/bone overlay alone.
+- **Inspector.** Three sections: **Setup** (selected part, part presets, modeling-review proposals, angle panel), **Animate** (transport, frame navigation, motion-review proposals, sound cues, report events) and **Feedback** (review status, reviewed source with the read-only source-file list, selected checkpoint, structured feedback, frame-strip export). Their element ids and saved section names (`rig`, `playback`, `feedback`) are unchanged; a saved `view` section from older links restores without selecting a section.
+- **Footer.** Message (truncated, full text as tooltip) on the left; player, effective layout, renderer, layers, idle, remote control and draft state in the middle; the numeric view region (behind **View region**) and the source hash on the right.
+
+The compare page keeps its own markup and stylesheet: sources left, Parts explorer right and its four Inspector sections.
+
 ## Inspection strips
 
 An inclusive annotation interval can also become a derived frame strip. The single view selects one declared source video; compare retains its explicit shared video and chooses a producer clock basis for each interval. A batch preserves separate feedback intervals and side provenance. Source rows run down the sheet and requested producer frames run across it. A vertical batch repeats this grid rather than merging overlapping annotations.
@@ -45,7 +56,7 @@ The export uses dedicated real canvas players and leaves the live playhead/sessi
 
 ## Implemented slot inspection and public identity snapshots
 
-The right Parts explorer provides source-hash-bound slot selection, held-pose clipped Solo, Whole/context, conservative bounds fit, a diagnostic selection box, actual mesh/region counts and reproducible selection context. This is inspection rather than geometry editing. All rows use the public held identity snapshot's exact z order, including hidden/null slots. Current source-bound links/drafts and control observations retain side/slot/mode.
+The Parts explorer (the review page's left column; the compare page's right one) provides source-hash-bound slot selection, held-pose clipped Solo, Whole/context, conservative bounds fit, a diagnostic selection box, actual mesh/region counts and reproducible selection context. This is inspection rather than geometry editing. All rows use the public held identity snapshot's exact z order, including hidden/null slots. Current source-bound links/drafts and control observations retain side/slot/mode.
 
 Published Play1.12.0 supplies a frozen `slotIdentity()` snapshot coherent with `posedFrame().generation`. Review retains copied frame/identity together only after equal-generation and source-slot/order checks, uses the player's default public filter, and never seeks/reposes/changes physics merely to read identity. Exact owning skin/key, active set/skin and null reasons come from that snapshot, not a unique-declaration or texture match. A resolved identity can remain known without visible geometry or fit bounds. Clip declarations do not invent keys when the API reports no drawable attachment.
 
@@ -55,11 +66,11 @@ A future optimization operation sends explicit source-bound selection/bounds to 
 
 ## Workspace geometry and browser preferences
 
-Left, right and bottom panels have pointer and keyboard separators with separator semantics: orientation, the controlled panel, an accessible name and the actual reachable minimum/maximum/current pixels. Arrow keys act only when the separator itself has focus, so text-entry arrows are never intercepted. A drag holds pointer capture; cancel, lost capture, blur, Escape and disposal restore the previous desired size and release it.
+Side and bottom panels have pointer and keyboard separators with separator semantics: orientation, the controlled panel, an accessible name and the actual reachable minimum/maximum/current pixels. Arrow keys act only when the separator itself has focus, so text-entry arrows are never intercepted. A drag holds pointer capture; cancel, lost capture, blur, Escape and disposal restore the previous desired size and release it.
 
-The allocator measures the layout rectangle minus stage chrome and keeps a 240×180 CSS-pixel stage minimum. It shrinks side panels proportionally toward their own minima; when the width still cannot hold them it turns the left, then the right panel, and when the height cannot hold it the Inspector, into a native modal drawer opened from a trigger outside it. Effective sizes are computed from desired sizes and never written back; a separator inverts the allocator so a clamped pixel value is not saved as the desktop desire.
+The allocator measures the layout rectangle minus stage chrome and keeps a 240×180 CSS-pixel stage minimum. It shrinks side panels proportionally toward their own minima; when the width still cannot hold them it turns the left, then the right column, and when the height cannot hold it the Inspector, into a native modal drawer opened from a trigger outside it. Effective sizes are computed from desired sizes and never written back; a separator inverts the allocator so a clamped pixel value is not saved as the desktop desire.
 
-Browser defaults live in one closed, versioned record: theme, default camera sync, default idle repeat and the three desired panel sizes. Each field carries a logical stamp, so stale whole-record writes from other tabs converge per field without wall-clock ordering; an equal-stamp disagreement quarantines only that field until an explicit edit repairs it. Denied, unavailable or corrupt storage falls back to in-page defaults. The legacy same-origin appearance key migrates once, only when no new record exists. Reset layout changes geometry only.
+Browser defaults live in one closed, versioned record: theme, default camera sync, default idle repeat and the three desired panel sizes. The saved `rightWidth` is the Parts explorer's width wherever the page shows it, so the review page's left parts column keeps the width chosen before the move; `leftWidth` is the compare page's sources column. Each field carries a logical stamp, so stale whole-record writes from other tabs converge per field without wall-clock ordering; an equal-stamp disagreement quarantines only that field until an explicit edit repairs it. Denied, unavailable or corrupt storage falls back to in-page defaults. The legacy same-origin appearance key migrates once, only when no new record exists. Reset layout changes geometry only.
 
 Content state stays source-bound. Each Inspector section's x/y scroll offset is captured before its panel hides and restored after it shows, after two frames of layout, and again when its content extent changes. Restoring clamps to the current extent without replacing the remembered offset, and intentional user scrolling supersedes a pending restore. Offsets are kept in the source draft's UI state, never in the global record or a copied view link.
 
