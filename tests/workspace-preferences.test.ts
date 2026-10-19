@@ -57,3 +57,17 @@ test('denied corruption repair retains every usable value and retries after acce
  const hub=new PreferenceHub(),end=hub.endpoint(),store=new WorkspacePreferenceStore({...end,writer:'known'});store.update({theme:'dark'});const conflict=store.get();conflict.theme='light';hub.values.set(workspacePreferenceKey,JSON.stringify(conflict));store.refresh();expect(store.status().state).toBe('corrupt');
  end.denyWrite=true;store.update({defaultCameraSync:false});expect(store.get()).toMatchObject({theme:'dark',defaultCameraSync:false});expect(store.status().state).toBe('memory-only');end.denyWrite=false;store.refresh();expect(store.status().state).toBe('available');expect(JSON.parse(hub.values.get(workspacePreferenceKey)!)).toMatchObject({theme:'dark',defaultCameraSync:false});store.dispose();
 });
+
+test('Settings collapsed state round-trips through storage under its own key and records from before it still load',()=>{
+ const hub=new PreferenceHub(),end=hub.endpoint(),store=new WorkspacePreferenceStore({...end,writer:'one'});expect(store.get().settingsCollapsed).toBe(true);
+ store.update({settingsCollapsed:false});const stored=JSON.parse(hub.values.get(workspacePreferenceKey)!);expect(stored.settingsCollapsed).toBe(false);expect(stored.stamps.settingsCollapsed).toEqual({revision:1,writer:'one'});
+ expect(stored).toMatchObject({theme:'system',defaultCameraSync:true,defaultIdleRepeat:true});store.dispose();
+ const reopened=new WorkspacePreferenceStore({...hub.endpoint(),writer:'two'});expect(reopened.get().settingsCollapsed).toBe(false);expect(reopened.status().state).toBe('available');reopened.dispose();
+ // A record written before the field existed has neither the value nor its stamp: it loads, collapsed.
+ const old=JSON.parse(JSON.stringify(defaultWorkspacePreferences()));delete old.settingsCollapsed;delete old.stamps.settingsCollapsed;old.theme='dark';old.stamps.theme={revision:4,writer:'legacy'};old.revision=4;
+ expect(parseWorkspacePreferences(old)).toMatchObject({theme:'dark',settingsCollapsed:true,revision:4,stamps:{settingsCollapsed:{revision:0,writer:''}}});
+ const legacy=new PreferenceHub();legacy.values.set(workspacePreferenceKey,JSON.stringify(old));const loaded=new WorkspacePreferenceStore({...legacy.endpoint(),writer:'three'});expect(loaded.status().state).toBe('available');expect(loaded.get()).toMatchObject({theme:'dark',settingsCollapsed:true});
+ loaded.update({settingsCollapsed:false});expect(JSON.parse(legacy.values.get(workspacePreferenceKey)!)).toMatchObject({theme:'dark',settingsCollapsed:false,revision:5,stamps:{settingsCollapsed:{revision:5,writer:'three'}}});loaded.dispose();
+ // An unstamped value that differs from the default, or a non-boolean, is refused like every other field.
+ expect(()=>parseWorkspacePreferences({...old,settingsCollapsed:false})).toThrow('PREFERENCES_STAMP');expect(()=>parseWorkspacePreferences({...defaultWorkspacePreferences(),settingsCollapsed:'no'})).toThrow('settingsCollapsed');
+});

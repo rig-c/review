@@ -190,7 +190,7 @@ test('each panel header is the first child of its panel and carries the sticky c
  expect(firstChild('<aside class="left-panel"')).toBe('<div class="left-header parts-header">');
  const parts=between(html,'<div class="left-header parts-header">','</div>');expect(parts).toContain('<h2>PARTS</h2>');expect(parts).toContain('id="part-search"');
  expect(firstChild('<section class="inspector"')).toBe('<div class="inspector-heading sticky-header">');expect(between(html,'<div class="inspector-heading sticky-header">','</div>')).not.toContain('role="tablist"');
- const ui=await readFile(new URL('../web/workspace-ui.ts',import.meta.url),'utf8');expect(ui).toContain(`settings.innerHTML='<h2 class="sticky-header">Settings</h2>`);
+ const ui=await readFile(new URL('../web/workspace-ui.ts',import.meta.url),'utf8');expect(ui).toContain(`settingsHeader.className='sticky-header settings-header'`);expect(ui).toContain('settings.append(settingsHeader,settingsBody)');
  const sticky=ruleBodies(css,'.sticky-header');expect(sticky.length).toBe(1);expect(sticky[0]).toContain('position:sticky');expect(sticky[0]).toContain('top:0');
  const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback']});try{
   for(const panel of ['rightWidth','inspectorHeight']){const dialog=app.get('workspace-drawer-'+panel),header=dialog.children[0]!;expect(header.classes.has('sticky-header')).toBe(true);expect(header.children.some(node=>node.classes.has('workspace-drawer-close'))).toBe(true);}
@@ -222,4 +222,28 @@ test('Settings theme shows the current inspection appearance when the page suppl
   current='dark';app.get('settings-reset').click();app.flush();expect(app.get('settings-theme').value).toBe('dark');
  }finally{app.close();}
  const plain=openHost();try{expect(plain.get('settings-theme').value).toBe('system');}finally{plain.close();}
+});
+
+test('the parts header is one row: the title and the search are the only children of one flex row',async()=>{
+ const html=await indexHtml(),css=await stylesCss(),header=between(html,'<div class="left-header parts-header">','</div>').slice('<div class="left-header parts-header">'.length);
+ // Top-level elements of the header row, in order: no separate label line.
+ expect([...header.matchAll(/<([a-z0-9]+)[\s>]/g)].map(m=>m[1])).toEqual(['h2','input']);
+ expect(header).toContain('aria-label="Find slot"');expect(header).not.toContain('<label');
+ const row=ruleBodies(css,'.parts-header').join(';');expect(row).toContain('display:flex');expect(row).toContain('flex-direction:row');expect(row).toContain('flex-wrap:nowrap');
+ expect(ruleBodies(css,'.parts-header input[type=search]').join(';')).toContain('flex:1');
+});
+test('Settings collapses from its own header; the state is a workspace preference, collapsed by default',()=>{
+ const app=openHost({explorerLeft:true,tabs:['rig','playback']});try{
+  const toggle=app.get('settings-toggle'),body=app.get('settings-body');expect(toggle.parentElement!.classes.has('sticky-header')).toBe(true);expect(toggle.getAttribute('aria-controls')).toBe('settings-body');
+  expect(body.hidden).toBe(true);expect(toggle.getAttribute('aria-expanded')).toBe('false');expect(app.ui.defaults().settingsCollapsed).toBe(true);expect(app.get('settings-theme')).not.toBeNull();
+  toggle.click();expect(body.hidden).toBe(false);expect(toggle.getAttribute('aria-expanded')).toBe('true');expect(JSON.parse(app.values.get(workspacePreferenceKey)!).settingsCollapsed).toBe(false);
+  app.get('settings-reset').click();expect(body.hidden).toBe(false);
+  toggle.click();expect(body.hidden).toBe(true);expect(JSON.parse(app.values.get(workspacePreferenceKey)!).settingsCollapsed).toBe(true);
+ }finally{app.close();}
+});
+test('the footer View region body is a fixed popover above the footer, bounded by the viewport',async()=>{
+ const css=await stylesCss(),body=ruleBodies(css,'.view-region-body').join(';');
+ expect(body).toContain('position:fixed');expect(body).not.toContain('position:absolute');expect(body).toContain('bottom:calc(40px + 6px)');expect(body).toContain('right:8px');
+ expect(body).toMatch(/max-height:calc\(100dvh - 40px - \d+px\)/);expect(body).toMatch(/max-width:calc\(100vw - \d+px\)/);expect(body).toContain('overflow:auto');
+ expect(ruleBodies(css,'footer').join(';')).toContain('height:40px');
 });
