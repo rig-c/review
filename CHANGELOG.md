@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/rig-c/review/compare/v0.3.0...v0.4.0) (2026-10-19)
+
+
+### Features
+
+* **theme:** take the colour tokens from rig-c.org ([#83](https://github.com/rig-c/review/issues/83)) ([8b59b2b](https://github.com/rig-c/review/commit/8b59b2b1cd5239952caca900af71e9b6c1ec8b6c)), closes [#73](https://github.com/rig-c/review/issues/73)
+* **workspace:** rework the layout around parts, Setup/Animate/Feedback and a status footer ([#81](https://github.com/rig-c/review/issues/81)) ([d1eb71d](https://github.com/rig-c/review/commit/d1eb71d82b96cd4d651fa386ebcb439c7420d4de)), closes [#75](https://github.com/rig-c/review/issues/75) [#76](https://github.com/rig-c/review/issues/76) [#77](https://github.com/rig-c/review/issues/77) [#79](https://github.com/rig-c/review/issues/79)
+
 ## [0.3.0](https://github.com/rig-c/review/compare/v0.2.1...v0.3.0) (2026-10-19)
 
 
