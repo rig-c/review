@@ -45,7 +45,7 @@ test('polygon sampling: 32 samples from +x turning toward +y (down), each on the
 
 test('one quantization step off a point no longer matches the example',async()=>{
  const {input,text}=await sample(),doc=buildChestRegions(input);
- doc.mesh.value.contour.regions[0]!.points[1]![0]+=1/256;
+ const first=doc.mesh.value.contour.regions[0]!;if(first.shape!=='polygon')throw new Error('expected a polygon');first.points[1]![0]+=1/256;
  expect(serializeChestRegions(doc)).not.toBe(text);
 });
 
@@ -109,4 +109,51 @@ test('the rig overlay fills designation polygons only over a drawn rig',async()=
  overlays.refresh({player,bones:[],project,settings,dpr:1,regions});expect(ink()).toBeGreaterThan(1500);
  const centre=surface.getContext('2d').getImageData(100,100,1,1).data;expect([centre[0],centre[1],centre[2]]).toEqual([0,255,0]);
  overlays.redraw({project,settings,dpr:1});expect(ink()).toBe(0);
+});
+
+/** The example rebuild script's `clamp_non_overlapping` on the example's own numbers; expected values are the script's output. */
+const clampCases:[string,[number,number,number,number],[number,number,number,number],[number,number,number,number],[number,number,number,number],boolean][]=[
+ ['viewer default 1',[296,650,26,42],[438,650,28,44],[296,650,26,42],[438,650,28,44],false],
+ ['viewer default 2',[308,785,22,36],[436,785,22,36],[308,785,22,36],[436,785,22,36],false],
+ ['viewer default 3',[384,724,24,38],[514,720,25,39],[384,724,24,38],[514,720,25,39],false],
+ ['viewer default 4',[312,785,24,38],[448,785,24,38],[312,785,24,38],[448,785,24,38],false],
+ ['viewer default 5',[312,775,23,36],[435,785,23,36],[312,775,23,36],[435,785,23,36],false],
+ ['config 1',[382,732,16,73],[554,722,13,66],[382,732,16,73],[554,722,13,66],false],
+ ['config 2',[333,811,22,59],[489,809,21,51],[333,811,22,59],[489,809,21,51],false],
+ ['config 3',[319,769,19,60],[477,768,22,52],[319,769,19,60],[477,768,22,52],false],
+ ['L dragged onto R',[296,650,26,42],[330,650,28,44],[296,650,11,4],[330,650,12,5],true],
+ ['band sum over the gap',[384,724,24,38],[514,720,25,60],[384,724,24,30],[514,720,25,49],true],
+ ['Python half-even rounding',[300.5,650.5,24.5,38.5],[441.5,650.5,25.5,39.5],[300,650,24,38],[442,650,26,40],false],
+ ['r and band ranges',[296,650,3,200],[600,650,130,1],[296,650,6,120],[600,650,120,4],false],
+ ['coincident centres',[400,700,40,40],[400,700,40,40],[400,700,10,4],[400,700,10,4],true],
+ ['cores + 8 exactly at the gap',[300,700,40,4],[390,700,40,4],[300,700,40,4],[390,700,40,4],false],
+ ['cores + 8 one past the gap',[300,700,41,4],[390,700,40,4],[300,700,40,4],[390,700,39,4],true],
+];
+test('clampNonOverlapping reproduces clamp_non_overlapping on the example numbers',async()=>{
+ const {clampNonOverlapping}=await import('../src/chest-regions.ts');
+ const circle=([cx,cy,r,band]:[number,number,number,number])=>({cx,cy,r,band});
+ for(const [name,right,left,outRight,outLeft,clamped] of clampCases){
+  expect({name,...clampNonOverlapping(circle(right),circle(left))}).toEqual({name,right:circle(outRight),left:circle(outLeft),clamped});
+ }
+});
+test('pythonRound rounds halves to even like the script',async()=>{
+ const {pythonRound}=await import('../src/chest-regions.ts');
+ expect([0.5,1.5,2.5,24.5,25.5,-0.5,-1.5,2.4,2.6].map(pythonRound)).toEqual([0,2,2,24,26,0,-2,2,3]);
+});
+
+test('equal semi-axes export as the example config circles, byte for byte; unequal ones stay polygons',async()=>{
+ const contourText=(await fixture('circle-contour')).trimEnd(),contour=JSON.parse(contourText),{input}=await sample();
+ const regions=contour.regions.map((r:{name:string;bone:string;cx:number;cy:number;r:number;spacing:number;band:number})=>({name:r.name,bone:r.bone,center:[r.cx,r.cy] as [number,number],semiAxes:[r.r,r.r] as [number,number],spacing:r.spacing,band:r.band}));
+ const doc=buildChestRegions({...input,contour:{tolerance:contour.tolerance,margin:contour.margin,spacing:contour.spacing,maxEdge:contour.maxEdge,stray:contour.stray,bridges:contour.bridges},regions});
+ const lines=serializeChestRegions(doc).split('\n'),start=lines.indexOf('    "contour": {'),end=lines.indexOf('    },',start);
+ const block=['{',...lines.slice(start+1,end).map(line=>line.slice(4)),'}'].join('\n');
+ expect(block).toBe(contourText);
+ expect(doc.mesh.value.contour.regions.map(r=>Object.keys(r))).toEqual([['name','shape','cx','cy','r','bone','spacing','band'],['name','shape','cx','cy','r','bone','spacing','band']]);
+ // A medial clip or unequal axes keep #78's polygon.
+ expect(buildChestRegions({...input,regions:[{...regions[0],clip:390},regions[1]]}).mesh.value.contour.regions.map(r=>r.shape)).toEqual(['polygon','circle']);
+ expect(buildChestRegions({...input,regions:[{...regions[0],semiAxes:[16,17]},regions[1]]}).mesh.value.contour.regions.map(r=>r.shape)).toEqual(['polygon','circle']);
+ // Circles: out of crop from the core, overlap from centre distance minus cores against the band sum (172.29 − 29 = 143.29: bands 73 + 70 fit, 73 + 71 do not).
+ expect(refusal({...input,regions:[{...regions[0],center:[10,732]},regions[1]]})).toBe('CHEST_REGION_OUT_OF_CROP bust_r');
+ expect(refusal({...input,regions:[regions[0],{...regions[1],band:70}]})).toBeNull();
+ expect(refusal({...input,regions:[regions[0],{...regions[1],band:71}]})).toBe('CHEST_REGIONS_OVERLAP bust_r bust_l');
 });

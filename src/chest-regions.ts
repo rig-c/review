@@ -10,7 +10,10 @@ export const CHEST_REGIONS_SPEC = 'family-chest-regions/1';
 
 export type CropPoint = [number, number];
 export type ChestSegment = string | [string, [number, number], [number, number]];
-export interface ChestRegion { name: string; bone: string; shape: 'polygon'; points: CropPoint[]; spacing: number; band: number }
+export interface ChestPolygonRegion { name: string; bone: string; shape: 'polygon'; points: CropPoint[]; spacing: number; band: number }
+/** The examples' `config.json` circle (key order as there): core radius r at full weight, linear falloff over band. */
+export interface ChestCircleRegion { name: string; shape: 'circle'; cx: number; cy: number; r: number; bone: string; spacing: number; band: number }
+export type ChestRegion = ChestPolygonRegion | ChestCircleRegion;
 export interface ChestContour { tolerance: number; margin: number; spacing: number; maxEdge: number; stray: number; bridges: boolean; regions: ChestRegion[] }
 export interface ChestMesh { contour: ChestContour; r?: number; segments?: ChestSegment[] }
 export interface ChestRegionsDocument {
@@ -115,6 +118,48 @@ export function polygonDistance(a: CropPoint[], b: CropPoint[]): number {
 export function regionsOverlap(a: { points: CropPoint[]; band: number }, b: { points: CropPoint[]; band: number }): boolean {
   return polygonDistance(a.points, b.points) < a.band + b.band;
 }
+/** Two circles are tested exactly (centre distance minus both cores); any other pair through polygons. */
+export function chestRegionsOverlap(a: ChestRegion, b: ChestRegion): boolean {
+  if (a.shape === 'circle' && b.shape === 'circle') return Math.hypot(b.cx - a.cx, b.cy - a.cy) - a.r - b.r < a.band + b.band;
+  return regionsOverlap({ points: regionPoints(a), band: a.band }, { points: regionPoints(b), band: b.band });
+}
+export const regionPoints = (region: ChestRegion): CropPoint[] => region.shape === 'circle' ? ellipsePolygon([region.cx, region.cy], [region.r, region.r]) : region.points;
+
+/** Python's `round` (half to even), which the example's rebuild script applies before clamping. */
+export function pythonRound(value: number): number {
+  const floor = Math.floor(value), fraction = value - floor;
+  if (fraction > 0.5) return floor + 1;
+  if (fraction < 0.5) return floor;
+  return floor % 2 === 0 ? floor : floor + 1;
+}
+export interface ChestCircle { cx: number; cy: number; r: number; band: number }
+export const CHEST_CIRCLE_LIMITS = { r: [6, 120], band: [4, 120] } as const;
+const clampInt = (value: number, [low, high]: readonly [number, number]) => Math.max(low, Math.min(high, value));
+/**
+ * The example rebuild script's `clamp_non_overlapping`, reproduced: integer values, r 6–120 and band 4–120,
+ * both cores plus 8 px must fit the centre distance minus the margin (both shrink by one factor), and the band
+ * sum is limited to what remains. Pure; returns the clamped pair and whether the non-overlap rule changed it.
+ */
+export function clampNonOverlapping(right: ChestCircle, left: ChestCircle, margin = 2): { right: ChestCircle; left: ChestCircle; clamped: boolean } {
+  const integer = (c: ChestCircle): ChestCircle => ({ cx: pythonRound(c.cx), cy: pythonRound(c.cy), r: pythonRound(c.r), band: pythonRound(c.band) });
+  const r = integer(right), l = integer(left);
+  r.r = clampInt(r.r, CHEST_CIRCLE_LIMITS.r); l.r = clampInt(l.r, CHEST_CIRCLE_LIMITS.r);
+  r.band = clampInt(r.band, CHEST_CIRCLE_LIMITS.band); l.band = clampInt(l.band, CHEST_CIRCLE_LIMITS.band);
+  const dist = Math.hypot(l.cx - r.cx, l.cy - r.cy), avail = Math.max(16, dist - margin);
+  let clamped = false;
+  if (r.r + l.r + 8 > avail) {
+    const scale = Math.max(0.25, (avail - 8) / Math.max(1, r.r + l.r));
+    r.r = Math.max(6, Math.floor(r.r * scale)); l.r = Math.max(6, Math.floor(l.r * scale));
+    clamped = true;
+  }
+  const maxBandSum = Math.max(8, Math.floor(avail - (r.r + l.r))), bandSum = r.band + l.band;
+  if (bandSum > maxBandSum) {
+    const ratio = maxBandSum / Math.max(1, bandSum);
+    r.band = Math.max(4, Math.floor(r.band * ratio)); l.band = Math.max(4, maxBandSum - r.band);
+    clamped = true;
+  }
+  return { right: r, left: l, clamped };
+}
 
 function coordinatesText(crop: { w: number; h: number }, regions: ChestRegionInput[]): string {
   const [left, right] = [...regions].sort((a, b) => a.center[0] - b.center[0]);
@@ -153,11 +198,17 @@ export function buildChestRegions(input: ChestRegionsInput): ChestRegionsDocumen
     for (const [field, value] of [['center x', cx], ['center y', cy], ['band', band], ...(region.clip === undefined ? [] : [['clip', region.clip]])] as [string, number][]) {
       if (!onGrid(value)) throw new ChestRegionError('CHEST_REGION_OFF_GRID', `${name} ${field}`);
     }
+    // Equal semi-axes without a clip are the examples' circle; anything else stays the 32-sample polygon.
+    if (ax === ay && region.clip === undefined) {
+      if (cx - ax < 0 || cy - ax < 0 || cx + ax > w || cy + ax > h) throw new ChestRegionError('CHEST_REGION_OUT_OF_CROP', name);
+      regions.push({ name, shape: 'circle', cx, cy, r: ax, bone: region.bone, spacing, band });
+      continue;
+    }
     const points = ellipsePolygon([cx, cy], [ax, ay], 32, region.clip);
     if (points.some(([x, y]) => x < 0 || y < 0 || x > w || y > h)) throw new ChestRegionError('CHEST_REGION_OUT_OF_CROP', name);
     regions.push({ name, bone: region.bone, shape: 'polygon', points, spacing, band });
   }
-  if (regionsOverlap(regions[0]!, regions[1]!)) throw new ChestRegionError('CHEST_REGIONS_OVERLAP', `${regions[0]!.name} ${regions[1]!.name}`);
+  if (chestRegionsOverlap(regions[0]!, regions[1]!)) throw new ChestRegionError('CHEST_REGIONS_OVERLAP', `${regions[0]!.name} ${regions[1]!.name}`);
   const mesh: ChestMesh = { contour: { tolerance: c.tolerance, margin: c.margin, spacing: c.spacing, maxEdge: c.maxEdge, stray: c.stray, bridges: c.bridges, regions } };
   if (input.r !== undefined) mesh.r = finite(input.r, 'mesh', 'r', 0);
   if (input.segments !== undefined) mesh.segments = segmentList(input.segments);
@@ -196,7 +247,9 @@ export function serializeChestRegions(doc: ChestRegionsDocument): string {
     [`meshes.${doc.mesh.name}`]: {
       contour: {
         tolerance: contour.tolerance, margin: contour.margin, spacing: contour.spacing, maxEdge: contour.maxEdge, stray: contour.stray, bridges: contour.bridges,
-        regions: contour.regions.map(r => ({ name: r.name, bone: r.bone, shape: r.shape, points: r.points.map(([x, y]) => [{ float: x }, { float: y }]), spacing: r.spacing, band: r.band })),
+        regions: contour.regions.map((r): Emit => r.shape === 'circle'
+          ? { name: r.name, shape: r.shape, cx: r.cx, cy: r.cy, r: r.r, bone: r.bone, spacing: r.spacing, band: r.band }
+          : { name: r.name, bone: r.bone, shape: r.shape, points: r.points.map(([x, y]) => [{ float: x }, { float: y }]), spacing: r.spacing, band: r.band }),
       },
       ...(mesh.r === undefined ? {} : { r: mesh.r }),
       ...(mesh.segments === undefined ? {} : { segments: mesh.segments as Emit[] }),
