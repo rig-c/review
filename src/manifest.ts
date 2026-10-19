@@ -103,6 +103,10 @@ export async function loadReview(input: string): Promise<ReviewPackage> {
   return {root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog};
 }
 
+/** Same text for every command; `root` lets the open launcher name the refused input. */
+export class UnrecognizedOutputError extends Error {
+  constructor(readonly root:string){super('Output folder: no recognized skeleton.*, build/skeleton.model.json, motion.json, report.json, source video, pose sequence or contact strip');}
+}
 /** An adapter over an existing output directory; never writes a manifest there. */
 async function folderManifest(root:string):Promise<ReviewManifest>{
   const entries=(await readdir(root,{withFileTypes:true})).filter(v=>v.isFile()||v.isSymbolicLink()).map(v=>v.name).sort();
@@ -121,7 +125,7 @@ async function folderManifest(root:string):Promise<ReviewManifest>{
   }
   const name=basename(root);const packageId=name.replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^[^a-zA-Z0-9]+/,'').slice(0,128)||'output-bundle';
   const authoring=entries.filter(n=>n==='motion.json'||n==='report.json'||(/^skeleton\./i.test(n)&&n!=='skeleton.model.json')).map(path=>({label:path+' · read only',path}));
-  if(!references.length&&!authoring.length&&!model)throw new Error('Output folder: no recognized skeleton.*, build/skeleton.model.json, motion.json, report.json, source video, pose sequence or contact strip');
+  if(!references.length&&!authoring.length&&!model)throw new UnrecognizedOutputError(root);
   return parseManifest({schema:'rig-review/1',id:packageId,title:name,revision:'folder-adapter/1',model,motion:has('motion.json')?'motion.json':undefined,references,authoring,checkpoints:references.map(r=>({id:r.id,title:'Inspect '+r.label,reference:r.id,workspace:'motion'}))});
 }
 

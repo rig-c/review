@@ -239,9 +239,8 @@ A strip plan with one clock basis reports `plan.basis:"single"|"a"|"b"`. A compa
 
 `rig-review open <input> [--reference <local-video>] [--compare <input>]
 [--animation <name>]` hashes and validates the input, starts/reuses a fixed-binding
-background instance and prints a URL alone on stdout. Its matching read-only
-`feedback <input> --reference <same-video> [--compare <input> --animation <name>]`
-command is printed on stderr. Existing `feedback compare ...` remains supported.
+background instance and follows the [launcher contract](../README.md#launcher-contract)
+for stdout, stderr and exit codes. Existing `feedback compare ...` remains supported.
 Open animation selection uses `--animation` first, a normalized report `animation`
 second, and a unique actual model clip (or common A/B clip) last. Report metadata
 comes from the exact already-hashed recognized report bytes, never a separately
