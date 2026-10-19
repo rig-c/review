@@ -425,6 +425,16 @@ Source-bound links/drafts and explicit feedback preserve that side/slot plus exa
 
 This explorer is inspection. Producer-backed optimization and candidate Apply/undo/export remain separate work; the explorer does not generate mesh, rig or motion bytes.
 
+## Chest regions (designation only)
+
+Setup's **Chest regions** tool records two chest deformation regions in the public generator's `family-chest-regions/1` schema: per region a name, a bone chosen from the loaded model's actual bones, a core centre and semi-axes, a spacing, a linear band and an optional medial clip x, plus the contour settings (tolerance, margin, spacing, max edge, stray, bridges). Values are crop pixels, x screen-right and y down. The fields are numeric only; there are no drag handles.
+
+Each core is drawn on the rig pane as the generator's 32-sample polygon on its 1/256-pixel grid. The overlay needs the loaded model to fix the crop: its declared stage must be the crop frame with the root at its bottom centre (`x = -width/2`, `y = 0`) and the drawn root bone must sit at the world origin, so crop `(x, y)` is world `(x - width/2, height - y)`. Otherwise the tool shows `CHEST_REGION_MAPPING_UNAVAILABLE: <what is missing>`, draws nothing and still exports from a crop size you enter.
+
+**Download chest-regions.json** saves two files in the browser: `chest-regions.json`, formatted exactly as the public example files, and `chest-regions.binding.json`, which names the package source hash, the rig and motion SHA-256 values, the export time, the viewer and runtime versions and the mapping used. Export refuses `CHEST_REGION_NAME_DUPLICATE`, `CHEST_REGION_BONE_UNKNOWN <bone>`, `CHEST_REGION_OUT_OF_CROP <name>`, `CHEST_REGION_OFF_GRID` and `CHEST_REGIONS_OVERLAP <a> <b>`. The overlap test is geometric: two regions are refused when the distance between their polygons is less than the sum of their bands. The generator refuses per mesh vertex, so this check can refuse a pair it would accept, never the reverse.
+
+Field values stay in the inspection's local draft. They never enter the review session's feedback, nothing is written into the package, and an export is review evidence, not an approval. Regenerating a mesh from these regions is the producer's job (see `docs/DESIGN.md`).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
