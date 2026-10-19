@@ -69,7 +69,7 @@ Compare feedback requires side `a` or `b` and carries both package source hashes
 
 ## Feedback ownership
 
-Opening leaves status **pending**. The person explicitly saves **approved**, **changes-requested**, or **pending**, checkpoint outcomes/notes, and feedback containing an inclusive frame interval, a bone/slot/rig target, defect/quality category and one-line summary. Frame numbers are entered explicitly; the app does not invent a source FPS. The primary **리뷰 제출** action saves that explicit status and feedback. JSON and issue-ready Markdown exports carry the original source binding and reproducible inspection context. Each submission records `reviewedSource`: package revision, actual viewer/runtime versions, and separate exact-byte SHA-256 plus path for the reviewed rig and motion; an absent artifact stays null. An active compiled model is the rig identity; raw skeleton JSON is evidence with playback unavailable.
+Opening leaves status **pending**. The person explicitly saves **approved**, **changes-requested**, or **pending**, checkpoint outcomes/notes, and feedback containing an inclusive frame interval, a bone/slot/rig target, defect/quality category and one-line summary. Frame numbers are entered explicitly; the app does not invent a source FPS. **Write review**, at the top right, opens the review dialog: review status, reviewed source, selected checkpoint, structured feedback and the frame-strip export. Its **Submit review** saves that explicit status and feedback; closing the dialog keeps the unsubmitted draft. The page has no feedback export buttons: `rig-review feedback --format json` and `--format issue` (below) are the export path, and carry the original source binding and reproducible inspection context. Each submission records `reviewedSource`: package revision, actual viewer/runtime versions, and separate exact-byte SHA-256 plus path for the reviewed rig and motion; an absent artifact stays null. An active compiled model is the rig identity; raw skeleton JSON is evidence with playback unavailable.
 
 New submissions validate bone/slot names against the exact loaded model; the target field offers those names. A rig target names the package id. Source-only packages cannot validate a bone/slot target and say so explicitly. When a matching animation has a declared producer clock, the inclusive interval cannot end beyond the last declared sample at or before the actual clip end. Unknown clocks keep manual frame intervals without inventing a limit. `context.interval` records the chosen interval; inspection `time`/`frame` remain separate. Older invalid feedback stays readable with per-row warnings and exports its original evidence, but cannot be resubmitted until corrected or removed.
 
@@ -93,7 +93,7 @@ rig-review feedback /absolute/output --reference /absolute/original.mp4 --format
 rig-review feedback /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance --format issue
 ```
 
-The header counts feedback records by defect/quality and by build; blocks group by category, then exact target kind/name. Overlapping intervals and A/B sides remain distinct items. Each block retains its id, inclusive interval, one-line summary and selected/full paired provenance. Historical tool identities and validation warnings remain visible; output never migrates approval, writes state or publishes an issue. Default output and `--format json` remain the existing session JSON. Only feedback accepts `--format`, with `json` or `issue` as its value.
+The header counts feedback records by defect/quality and by build; blocks group by category, then exact target kind/name. Overlapping intervals and A/B sides remain distinct items. Each block retains its id, inclusive interval, one-line summary and selected/full paired provenance. Historical tool identities and validation warnings remain visible; output never migrates approval, writes state or publishes an issue. Default output and `--format json` remain the existing session JSON. Only feedback accepts `--format`, with `json` or `issue` as its value. These two formats are how submitted feedback leaves the tool; the browser page offers no JSON or Markdown download.
 
 ## Development
 
@@ -356,21 +356,31 @@ or corrupt saved data remains available to download, with an explicit warning;
 recovering a conflicting draft requires choosing a pending review. Storage
 errors never count as a successful save. Nothing is written to the server or
 input package merely by restoring a page. Browser storage is convenient local
-recovery, not a durable backup; export feedback separately when it must be kept.
+recovery, not a durable backup; submit the review (and retrieve it with
+`rig-review feedback`) when it must be kept.
 Control capabilities are excluded from links and browser persistence.
 
 ## Workspace settings and panels
 
 The review page has a left column (Parts explorer, with checkpoints and the
 reference select folded above it), the stage, the Inspector below it with
-**Setup**, **Animate** and **Feedback** sections, and a status footer. The
-compare page keeps sources on the left and the Parts explorer on the right.
-The page header carries the **Setup** / **Animate** mode switch next to the
-package title; it selects the same Inspector section as the tabs, and while
-**Feedback** (chosen from the Inspector tabs) is open neither mode is pressed.
-Each panel keeps its header (Parts with its search, the Inspector tabs, a
-drawer's title and close button) in place while its body scrolls. The
-per-inspection **Repeat idle** toggle sits in the Animate transport row.
+**Setup** and **Animate** sections, and a status footer. The compare page
+keeps sources on the left and the Parts explorer on the right. The page
+header carries the **Setup** / **Animate** mode switch next to the package
+title; it is the only way to change the Inspector's section. Setup is the
+mesh-review composition (selected part, part presets, modeling-review
+proposals) and holds nothing that seeks or plays; the angle inspection, the
+transport and frame navigation are in Animate. **Write review** at the top
+right opens the review dialog, a modal holding the review status, reviewed
+source, selected checkpoint, structured feedback and frame-strip export, with
+its own **Submit review**. Escape or Close dismisses it and returns focus to
+**Write review**; the draft keeps saving whether the dialog is open or not,
+and the footer and the dialog both show its state.
+The left column's header (Parts title and search) stays fixed at the top;
+the checkpoint strip, the part list and Settings scroll beneath it as one
+body. A drawer keeps its title and close button in place while its body
+scrolls. The per-inspection **Repeat idle** toggle sits in the Animate
+transport row.
 
 The view bar is one row and keeps the layer toggles in reach in every section: **Images**
 (`I`), **Mesh edges** (`M`) and **Bone points** (`B`). The keys do nothing while
@@ -382,7 +392,9 @@ and draft state; **View region** opens the numeric view. Side by side,
 Reference and Rig are in the **View** menu at the right end of the view bar,
 labelled with the current choice.
 
-The side and bottom panels are resizable. Drag a separator, or focus it
+The side and bottom panels are resizable. The separators are thin (4px)
+lines whose colour is never the scrollbar's; the grab area is wider than the
+line. Drag a separator, or focus it
 and use the arrow keys (Shift for larger steps) and Home/End. Escape, a
 cancelled pointer or window blur during a drag returns the previous size. The
 stage keeps a usable minimum. When the window is too narrow, the side columns
@@ -390,7 +402,7 @@ stage keeps a usable minimum. When the window is too narrow, the side columns
 drawers opened from buttons above the stage instead of shrinking to nothing. Responsive clamping
 never overwrites the desired size, so a wider window restores it.
 
-Settings, at the bottom of the left column, holds browser defaults: Theme, Sync cameras by
+Settings, at the end of the left column's scrolling body, holds browser defaults: Theme, Sync cameras by
 default, Repeat idle by default, and Reset layout. Defaults seed a new
 inspection only. Theme is the page's only appearance control: it shows the
 current inspection's appearance, and changing it applies it and saves it as the

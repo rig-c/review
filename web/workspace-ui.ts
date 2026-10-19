@@ -1,6 +1,6 @@
 /** Browser workspace presentation. Source selection, player clocks and review decisions stay with the page. */
 import {WorkspacePreferenceStore,panelBounds,type WorkspacePanels,type WorkspacePreferences,type WorkspaceTheme} from './workspace-preferences.ts';
-import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defaultWorkspaceColumns,InspectorScrollMemory,inspectorTabs,type InspectorTab,type WorkspaceColumns,type WorkspacePanel,type SeparatorRange} from './workspace-layout.ts';
+import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defaultWorkspaceColumns,InspectorScrollMemory,inspectorTabs,workspaceMinimums,type InspectorTab,type WorkspaceColumns,type WorkspacePanel,type SeparatorRange} from './workspace-layout.ts';
 
 /** Reachable effective bounds, accounting for the other panel's saved desired size. */
 export function workspaceResizeRange(available:{width:number;height:number},desired:WorkspacePanels,panel:WorkspacePanel,columns:WorkspaceColumns=defaultWorkspaceColumns):SeparatorRange {
@@ -16,6 +16,10 @@ export function workspaceResizeTarget(available:{width:number;height:number},des
  for(let i=0;i<48;i++){const mid=(low+high)/2,value=allocateWorkspaceLayout(available,{...desired,[panel]:mid},columns)[panel];if(value<target)low=mid;else high=mid;}
  return (low+high)/2;
 }
+/** The selected Inspector section name, from either a selected tab or a pressed header selector. */
+export function selectedInspector(root:Pick<Document,'querySelector'>=document):string|undefined {
+ return root.querySelector<HTMLElement>('[data-inspector][aria-selected=true],[data-inspector][aria-pressed=true]')?.dataset.inspector;
+}
 export interface WorkspaceUI {
  defaults:()=>WorkspacePreferences;beforeTab:()=>void;afterTab:()=>void;scroll:()=>string;restoreScroll:(value:unknown)=>void;
  revealInspector:()=>void;refresh:()=>void;dispose:()=>void;
@@ -29,11 +33,16 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
  // A parts explorer placed inside the left column makes that column the explorer: it keeps the explorer's
  // saved width and the page has no right column. Otherwise sources stay left and the explorer stays right.
  const explorerLeft=left.contains(explorer),columns:WorkspaceColumns=explorerLeft?{left:'rightWidth',right:null}:defaultWorkspaceColumns;
- const tabs=inspectorTabs.filter(tab=>document.getElementById('inspector-'+tab));if(!tabs.length)throw new Error('Missing workspace element: inspector-'+inspectorTabs.join('|inspector-'));
- const sourceList=document.createElement('div');sourceList.className='workspace-sources';sourceList.append(...left.childNodes);left.append(sourceList);
+ // A section is an Inspector panel only while it carries data-inspector-panel; the review page's Feedback
+ // section lives in the review dialog instead and keeps its id without being a panel.
+ const tabs=inspectorTabs.filter(tab=>document.getElementById('inspector-'+tab)?.dataset.inspectorPanel===tab);if(!tabs.length)throw new Error('Missing workspace element: inspector-'+inspectorTabs.join('|inspector-'));
+ // The left column is a fixed header row (a leading `.left-header`, when the page has one) and one scrolling
+ // body holding everything else, Settings included: the body is the column's only scroll container.
+ const header=[...left.children].find(node=>node.className.split(' ').includes('left-header'))??null;
+ const sourceList=document.createElement('div');sourceList.className='workspace-sources';sourceList.append(...[...left.childNodes].filter(node=>node!==header));left.append(sourceList);
  const settings=document.createElement('section');settings.className='workspace-settings';settings.setAttribute('aria-label','Settings');
  settings.innerHTML='<h2 class="sticky-header">Settings</h2><label>Theme <select id="settings-theme" data-app-preference><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><label><input id="settings-sync" data-app-preference type="checkbox">Sync cameras by default</label><label><input id="settings-idle" data-app-preference type="checkbox">Repeat idle by default</label><button id="settings-reset" type="button">Reset layout</button><p class="hint">Defaults apply to new inspections. Links and source drafts retain their explicit view.</p><p id="settings-state" class="hint" role="status"></p>';
- left.append(settings);
+ sourceList.append(settings);
  const theme=require<HTMLSelectElement>('settings-theme'),sync=require<HTMLInputElement>('settings-sync'),idle=require<HTMLInputElement>('settings-idle'),status=require('settings-state');
  const store=new WorkspacePreferenceStore({onStatus:value=>{status.textContent=value.detail;}});let desired={...store.get().panels};
  const stack=document.createElement('div');stack.className='workspace-stage-stack';for(const child of [...main.children])if(child!==inspector)stack.append(child);main.prepend(stack);
@@ -52,7 +61,7 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
   const header=document.createElement('div');header.className='sticky-header workspace-drawer-header';const title=document.createElement('span');title.textContent=labels[panel];header.append(title,close);dialog.append(header);document.body.append(dialog);dialogs[panel]=dialog;
   disposers.push(bindWorkspaceDrawer({trigger,drawer:dialog,label:labels[panel],close}));
  }
- const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
+ const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=selectedInspector() as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
  let disposed=false,frame=0,applying=false,available={width:0,height:0},effective=allocateWorkspaceLayout(available,desired,columns);
  const panelFor=(tab:InspectorTab)=>require('inspector-'+tab);
  const capture=()=>{const tab=active(),panel=panelFor(tab),saved=memory.snapshot()[tab];if(!panel.hidden&&(!saved||saved.x<=Math.max(0,panel.scrollWidth-panel.clientWidth)&&saved.y<=Math.max(0,panel.scrollHeight-panel.clientHeight)))memory.capture(tab,panel);};
@@ -72,9 +81,9 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
    available={width:Math.max(0,layout.clientWidth),height:Math.max(0,layout.clientHeight-chrome)};effective=allocateWorkspaceLayout(available,desired,columns);
    const mode=(panel:WorkspacePanel)=>effective[panel==='leftWidth'?'leftMode':panel==='rightWidth'?'rightMode':'inspectorMode'];
    for(const panel of present)dock(panel,mode(panel)==='drawer');
-   const side=(key:WorkspaceColumns['left'])=>key&&mode(key)==='panel'?{width:effective[key],separator:8}:{width:0,separator:0},l=side(columns.left),r=side(columns.right);
+   const gap=workspaceMinimums.separator,side=(key:WorkspaceColumns['left'])=>key&&mode(key)==='panel'?{width:effective[key],separator:gap}:{width:0,separator:0},l=side(columns.left),r=side(columns.right);
    layout.style.setProperty('--workspace-columns',`${l.width}px ${l.separator}px minmax(0,1fr) ${r.separator}px ${r.width}px`);
-   main.style.gridTemplateRows=`minmax(0,1fr) ${effective.inspectorMode==='panel'?8:0}px ${effective.inspectorHeight}px`;
+   main.style.gridTemplateRows=`minmax(0,1fr) ${effective.inspectorMode==='panel'?gap:0}px ${effective.inspectorHeight}px`;
    layout.dataset.stageMinimum=String(effective.stageMinimumSatisfied);for(const binding of bindings)binding.refresh();options.changed();restore();
   }finally{applying=false;}
  }

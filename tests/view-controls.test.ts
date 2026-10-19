@@ -223,6 +223,17 @@ test('the header mode switch and the inspector tabs change together from one sel
  expect(changes).toBe(4);
 });
 
+test('a header toggle that is itself the section selector uses aria-pressed and no tab semantics',async()=>{
+ const source=await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8'),a=source.indexOf('export function bindInspectorTabs(');
+ const node=(data:Record<string,string>,pressed?:boolean)=>{const attrs=new Map<string,string>();if(pressed!==undefined)attrs.set('aria-pressed',String(pressed));return {dataset:data,attrs,tabIndex:-7,hidden:false,onkeydown:undefined as unknown,setAttribute(k:string,v:string){attrs.set(k,v);},getAttribute(k:string){return attrs.get(k)??null;},focus(){}};};
+ const toggles=['rig','playback'].map((name,i)=>node({mode:name,inspector:name},i===0)),panels=['rig','playback'].map(name=>node({inspectorPanel:name}));
+ const document={querySelectorAll:(selector:string)=>selector==='[data-inspector]'||selector==='[data-mode]'?toggles:panels};
+ const bind=new Function('document',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a).replace('export function','function'))+';return bindInspectorTabs;')(document);
+ let changes=0;bind(()=>changes++);(toggles[1] as unknown as {onclick:()=>void}).onclick();
+ expect(toggles.map(t=>t.attrs.get('aria-pressed'))).toEqual(['false','true']);expect(toggles.some(t=>t.attrs.has('aria-selected'))).toBe(false);
+ expect(panels.map(p=>p.hidden)).toEqual([true,false]);expect(toggles.map(t=>t.tabIndex)).toEqual([-7,-7]);expect(toggles.every(t=>t.onkeydown===undefined)).toBe(true);expect(changes).toBe(1);
+});
+
 import {bindLayerShortcuts,describeLayerToggles,layerShortcuts,textEntryFocused} from '../web/view-controls.ts';
 /** A focusable element whose `closest` answers like the browser for the selectors the guard asks. */
 function focusTarget(kind:'text'|'search'|'number'|'textarea'|'select'|'editable'|'checkbox'|'button'|'stage'){

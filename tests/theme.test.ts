@@ -57,3 +57,20 @@ test('the tokenizer sees literals in rules and ignores token blocks, scheme medi
  expect(undefinedTokens(css+'.y{color:var(--b)}')).toEqual(['--b']);
  expect(schemeTokenDifference(':root{--a:#fff;--b:#fff}:root[data-theme=light]{--a:#000}')).toEqual({darkOnly:['--b'],lightOnly:[]});
 });
+
+/** A scheme's tokens with var() references resolved inside that scheme (light overlays the dark :root). */
+function resolvedTokens(source:string,scheme:'dark'|'light'):(name:string)=>string {
+ const rules=cssRules(source),pick=(selector:string)=>rules.filter(r=>r.selector.trim()===selector&&!r.at.length).flatMap(r=>declarations(r.body));
+ const values=new Map<string,string>();for(const d of [...pick(':root'),...(scheme==='light'?pick(':root[data-theme=light]'):[])])if(d.name.startsWith('--'))values.set(d.name,d.value);
+ const resolve=(name:string,seen:string[]=[]):string=>{if(seen.includes(name))throw new Error('token cycle '+[...seen,name].join(' > '));const value=values.get(name);if(value===undefined)throw new Error('undefined token '+name);const ref=value.match(/^var\(\s*(--[\w-]+)\s*\)$/);return ref?resolve(ref[1]!,[...seen,name]):value.toLowerCase();};
+ return name=>resolve(name);
+}
+test('styles.css: resize separators and scrollbars never share a colour, in either scheme',async()=>{
+ const source=await readFile(new URL('../web/styles.css',import.meta.url),'utf8');
+ for(const scheme of ['dark','light'] as const){
+  const token=resolvedTokens(source,scheme),separator=['--rv-separator','--rv-separator-hover'].map(token),scrollbar=['--rv-scrollbar-thumb','--rv-scrollbar-thumb-hover'].map(token);
+  for(const value of separator)expect(scrollbar,`${scheme}: ${value}`).not.toContain(value);expect(separator[0]).not.toBe(separator[1]);
+ }
+ const rules=cssRules(source),body=(selector:string)=>rules.filter(r=>r.selector.trim()===selector&&!r.at.length).map(r=>r.body).join(';');
+ expect(body('.workspace-separator')).toContain('background:var(--rv-separator)');expect(body('.workspace-separator:hover')).toContain('background:var(--rv-separator-hover)');
+});

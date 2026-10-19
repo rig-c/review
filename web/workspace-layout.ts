@@ -1,7 +1,8 @@
 /** Effective workspace geometry and local DOM bindings. Never stores source or global preferences. */
 import {parseWorkspacePanels,panelBounds,type WorkspacePanels} from './workspace-preferences.ts';
 export type WorkspacePanel=keyof WorkspacePanels;
-export const workspaceMinimums=Object.freeze({stageWidth:240,stageHeight:180,separator:8});
+/** `separator` is the drawn thickness of every resize handle in CSS pixels; its hit area is wider (styles.css `::after`). */
+export const workspaceMinimums=Object.freeze({stageWidth:240,stageHeight:180,separator:4});
 export interface SeparatorRange {min:number;max:number;value:number;enabled:boolean}
 export type WorkspaceColumnKey=Exclude<WorkspacePanel,'inspectorHeight'>;
 /** Which saved width each side column uses; null means the page has no column on that side.
