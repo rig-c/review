@@ -205,6 +205,31 @@ printed: every current instance binds only `127.0.0.1`.
 The printed feedback retrieval command uses POSIX shell quoting for literal path
 arguments. It is not a PowerShell or cmd.exe command string.
 
+### Launcher contract
+
+A launcher may start `rig-review open` as a child process and rely on its stdout,
+stderr and exit code alone:
+
+1. On success stdout is exactly one line, the URL. `open` never writes anything
+   else to stdout.
+2. On success stderr carries the human lines in this fixed order: the animation
+   diagnostic (when a clip is selected), the control notice (with `--control`),
+   then the copyable retrieval line `Review started|reused; feedback: rig-review feedback …`.
+3. A refusal exits with code 1, writes nothing to stdout, and its first stderr line
+   starts with a name, followed by a colon and the explanation:
+   - `OPEN_INPUT_MISSING <path>`: the input or `--compare` path does not exist, or is neither a directory nor a regular file.
+   - `OPEN_INPUT_UNRECOGNIZED <path>`: the folder holds no recognized model, skeleton, motion, report, reference or pose sequence, or the file is not a JSON manifest.
+   - `OPEN_REFERENCE_REQUIRED`: `--compare` was given without an explicit `--reference`.
+   - `OPEN_ANIMATION_UNKNOWN <name>`: the explicit or report-named clip (JSON-quoted) is not in the compiled model.
+   - `OPEN_ANIMATION_AMBIGUOUS`: no flag or report selects one clip, or the A/B reports conflict.
+   - `OPEN_ANIMATION_UNVALIDATABLE`: a clip was requested but no compiled model can validate it.
+   - `OPEN_OPTION_INVALID <flag>`: an unknown, duplicate, empty or value-less option.
+4. Exit codes: 0 applied, 1 refused. (`control` keeps its own exit 2 for an
+   unapplied command.)
+
+Package validation and worker startup refusals keep their existing messages; the
+named refusals above are decided before any state is written.
+
 ### Managed front and write capability
 
 `open` is **managed by default**. It ensures one detached loopback front at

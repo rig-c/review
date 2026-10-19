@@ -43,8 +43,8 @@ test('report selects dance among 32 actual clips; single worker/API, diagnostics
   }
  }
  expect(await Promise.all(sourcePaths.map(path=>readFile(path)))).toEqual(sourceBefore);
- await writeFile(join(f.producer,'report.json'),JSON.stringify({spec:'rig-pose-report/1',animation:'absent'}));expect((await cli(['open',f.producer],f.state)).stderr).toContain('no animation "absent"');
- await rm(join(f.producer,'report.json'));const ambiguous=await cli(['open',f.producer],f.state);expect(ambiguous.exit).toBe(1);expect(ambiguous.stderr).toContain('model animations: idle, dance');
+ await writeFile(join(f.producer,'report.json'),JSON.stringify({spec:'rig-pose-report/1',animation:'absent'}));const stale=await cli(['open',f.producer],f.state);expect(stale.stderr).toContain('no animation "absent"');expect(stale.stderr).toStartWith('OPEN_ANIMATION_UNKNOWN "absent": ');
+ await rm(join(f.producer,'report.json'));const ambiguous=await cli(['open',f.producer],f.state);expect(ambiguous.exit).toBe(1);expect(ambiguous.stdout).toBe('');expect(ambiguous.stderr).toContain('model animations: idle, dance');expect(ambiguous.stderr).toStartWith('OPEN_ANIMATION_AMBIGUOUS: ');
 },30000);
 
 
@@ -77,4 +77,36 @@ test('review, check and feedback help skips positional inputs and owned values b
  for(const args of [['check',a,'--animation','--help'],['feedback',a,'--animation','--help'],['feedback','compare',a,b,'--animation','--help','--reference','unprovided.mov']]){const result=await cli(args,state);expect(result.exit).toBe(1);expect(result.stdout).toBe('');expect(result.stderr).not.toContain('Usage:');}
  for(const value of ['--help','csv']){const result=await cli(['feedback',a,'--format',value],state);expect(result.exit).toBe(1);expect(result.stdout).toBe('');expect(result.stderr).toContain('feedback --format: expected json | issue');}
  expect(await readdir(root)).toEqual([]);
+},30000);
+
+
+test('launcher contract: every open refusal exits 1 with empty stdout and leads stderr with its OPEN_* name',async()=>{
+ const f=await fixture(),missing=join(f.root,'missing','dir'),absent=join(f.root,'absent'),notes=join(f.root,'notes.txt'),empty=join(f.root,'empty'),demo=join(import.meta.dir,'../examples/demo');
+ await writeFile(notes,'not a package\n');await mkdir(empty);
+ const cases:[string[],string][]=[
+  [['open',missing,'--direct'],`OPEN_INPUT_MISSING ${missing}: `],
+  [['open',notes,'--direct'],`OPEN_INPUT_UNRECOGNIZED ${notes}: `],
+  [['open',f.producer,'--compare',absent,'--reference',f.reference,'--direct'],`OPEN_INPUT_MISSING ${absent}: `],
+  [['open',empty,'--direct'],`OPEN_INPUT_UNRECOGNIZED ${empty}: Output folder: no recognized `],
+  [['open',f.producer,'--compare',empty,'--reference',f.reference,'--direct'],`OPEN_INPUT_UNRECOGNIZED ${empty}: Output folder: no recognized `],
+  [['open',f.producer,'--compare',f.producer,'--direct'],'OPEN_REFERENCE_REQUIRED: '],
+  [['open',f.producer,'--animation','absent','--direct'],'OPEN_ANIMATION_UNKNOWN "absent": model has no animation "absent"'],
+  [['open',f.producer,'--compare',f.producer,'--reference',f.reference,'--animation','absent','--direct'],'OPEN_ANIMATION_UNKNOWN "absent": side a: model has no animation "absent"'],
+  [['open',demo,'--animation','idle','--direct'],'OPEN_ANIMATION_UNVALIDATABLE: validation unavailable'],
+  [['open',f.producer,'--port','4317','--direct'],'OPEN_OPTION_INVALID --port: Unknown open option --port'],
+  [['open',f.producer,'--animation',' ','--direct'],'OPEN_OPTION_INVALID --animation: '],
+ ];
+ for(const [args,first] of cases){const result=await cli(args,f.state);expect({args,exit:result.exit,stdout:result.stdout}).toEqual({args,exit:1,stdout:''});expect(result.stderr.split('\n')[0]).toStartWith(first);}
+ // A refusal decides before any state is written.
+ expect(await readdir(f.root)).not.toContain('state');
+},30000);
+
+test('launcher contract: success prints the URL line alone; stderr is diagnostic, control notice, retrieval in that order',async()=>{
+ const f=await fixture(),url=/^http:\/\/127\.0\.0\.1:\d+\/\?input=[a-f0-9]{64}&handoff=[a-f0-9]{64}#cap=[a-f0-9]{64}\n$/;
+ const plain=await cli(['open',f.producer,'--direct','--reference',f.reference],f.state);await track(f.state);
+ expect(plain.exit).toBe(0);expect(plain.stdout).toMatch(url);
+ expect(plain.stderr.split('\n')).toEqual(['animation: inspect (from report.json)',expect.stringMatching(/^Review started; feedback: rig-review feedback /),'']);
+ const controlled=await cli(['open',f.producer,'--direct','--reference',f.reference,'--control'],f.state);await track(f.state);
+ expect(controlled.exit).toBe(0);expect(controlled.stdout).toMatch(url);
+ expect(controlled.stderr.split('\n')).toEqual(['animation: inspect (from report.json)','Inspection control enabled; query the current connected page with rig-review control and the same inputs.',expect.stringMatching(/^Review started; feedback: rig-review feedback /),'']);
 },30000);

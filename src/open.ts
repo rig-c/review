@@ -3,16 +3,16 @@ import {parseControlCommand,type ControlCommand,type ControlReceipt} from './con
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {homedir} from 'node:os';
-import {mkdir,readFile,readdir,writeFile,rename,unlink,rm,rmdir,realpath,lstat,open as openFile} from 'node:fs/promises';
+import {mkdir,readFile,readdir,writeFile,rename,unlink,rm,rmdir,realpath,lstat,stat,open as openFile} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {basename,dirname,join,relative,resolve,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {loadReferencedReview,selectedReference,assertReviewUnchanged} from './reference.ts';
-import {loadReview,type ReviewPackage} from './manifest.ts';
+import {loadReview,UnrecognizedOutputError,type ReviewPackage} from './manifest.ts';
 import {loadCompare,assertCompareUnchanged,type ComparePackage} from './compare.ts';
 import {startServer} from './server.ts';
 import {startCompareServer} from './compare-server.ts';
-import {selectAnimation,type AnimationSelection} from './animation-selection.ts';
+import {selectAnimation,AnimationSelectionError,type AnimationSelection} from './animation-selection.ts';
 import {capabilityHeader,capabilityPattern,type OpenIdentity} from './open-protocol.ts';
 import {ensureFront,frontPort} from './front.ts';
 import {playPackagePath} from './versions.ts';
@@ -74,11 +74,28 @@ export async function acquireClaim<T>(control:string,name:string,nonce:string,re
  catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}if(performance.now()>deadline)throw new Error(busy);await sleep(30);}}}
  catch(error){await rm(candidate,{recursive:true,force:true});throw error;}
 }
+/** Launcher contract (README "Launcher contract"): an `open` refusal's first line starts with a stable OPEN_* name.
+ * The shared loaders keep their check/feedback text; only this path renames them. */
+async function assertOpenInput(path:string):Promise<void>{
+ let info;try{info=await stat(path);}catch(e){if(['ENOENT','ENOTDIR','ELOOP','ENAMETOOLONG'].includes((e as NodeJS.ErrnoException).code??''))throw new Error(`OPEN_INPUT_MISSING ${path}: no such path; expected an existing output directory or review.json`);throw e;}
+ if(!info.isDirectory()&&!info.isFile())throw new Error(`OPEN_INPUT_MISSING ${path}: found a non-regular file; expected an output directory or a review.json manifest`);
+ if(info.isFile()){try{JSON.parse(await readFile(path,'utf8'));}catch(e){throw new Error(`OPEN_INPUT_UNRECOGNIZED ${path}: not a JSON manifest; expected an output directory or a review.json manifest`,{cause:e});}}
+}
+async function openRefusal(error:unknown,inputs:OpenInputs):Promise<unknown>{
+ if(error instanceof UnrecognizedOutputError){const first=await realpath(resolve(inputs.input)).catch(()=>null),path=inputs.compare!==undefined&&error.root!==first?inputs.compare:inputs.input;return new Error(`OPEN_INPUT_UNRECOGNIZED ${path}: ${error.message}`,{cause:error});}
+ if(!(error instanceof AnimationSelectionError))return error;
+ const detail=(error.label==='a'||error.label==='b'?`side ${error.label}: `:'')+error.message.replace(/^open\.(?:[a-z]+\.)?animation: /,'');
+ const name=error.kind==='empty'?'OPEN_OPTION_INVALID --animation':error.kind==='unknown'?`OPEN_ANIMATION_UNKNOWN ${JSON.stringify(error.animation)}`:error.kind==='ambiguous'?'OPEN_ANIMATION_AMBIGUOUS':'OPEN_ANIMATION_UNVALIDATABLE';
+ return new Error(`${name}: ${detail}`,{cause:error});
+}
 /** Managed is the default: the printed URL goes through the one loopback front (127.0.0.1:4318, or
  * RIG_REVIEW_FRONT_PORT) so browser storage keeps one origin across reopens. `direct` keeps the worker's own port. */
 export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idleMs?:number;direct?:boolean;frontPort?:number;frontIdleMs?:number}={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs;selection:AnimationSelection|null;direct:boolean}>{
  const direct=options.direct??inputs.direct??false,port=direct?0:frontPort(options.frontPort);
- const p=await loadOpenPackage(inputs),fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
+ for(const path of [inputs.input,...(inputs.compare!==undefined?[inputs.compare]:[])])await assertOpenInput(path);
+ if(inputs.compare!==undefined&&!inputs.reference)throw new Error('OPEN_REFERENCE_REQUIRED: compare: explicit --reference required');
+ let p:OpenPackage;try{p=await loadOpenPackage(inputs);}catch(error){throw await openRefusal(error,inputs);}
+ const fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
  const stateDir=await canonicalDestination(resolve(options.stateDir??defaultStateDir())),roots=p.mode==='single'?[p.p.root]:[p.p.a.root,p.p.b.root];
  for(const root of roots){const rel=relative(root,stateDir);if(!rel||rel!=='..'&&!rel.startsWith('..'+(process.platform==='win32'?'\\':'/'))&&!isAbsolute(rel))throw new Error('open.state: must be outside input packages');}
  const control=join(stateDir,'open');await mkdir(control,{recursive:true,mode:0o700});const canonicalControl=await realpath(control);if((await lstat(control)).isSymbolicLink())throw new Error('open.state: control directory cannot be a symlink');
