@@ -76,6 +76,19 @@ Content state stays source-bound. Each Inspector section's x/y scroll offset is 
 
 Browser storage is origin-scoped. Managed opens (the default) share one loopback front origin that routes `/instances/<key>/…` to each worker, so Settings, sizes and drafts carry across reopens; `--direct` keeps per-port origins. Because one origin cannot isolate its scripts, writes require a per-instance capability handed off only in the printed `#cap=` fragment and checked by both the front and the worker; a fragment-less copied link is read-only. Draft scopes carry the source hash, so revisions of one package never clobber each other's drafts.
 
+## Theme
+
+The palette comes from the rig-c.org site stylesheet. Its dark `:root` values (`--bg`, `--fg`, `--fg-strong`, `--fg-soft`, `--fg-muted`, `--border`, `--border-strong`, `--hover-bg`, `--active-bg`, `--link`, `--link-hover`, `--btn-fg`, `--code-*`, `--footer-bg`, `--pass`, `--warn`, `--fail`, the font stacks and `--radius`) are copied into the `:root` block of `web/styles.css` and `web/compare.css`; nothing is fetched at runtime, so the viewer stays offline. The site loads Inter and JetBrains Mono from a font CDN; the review keeps only the family stacks and falls back to local fonts. The site has no light scheme, so the light values and every review-only surface token (`--rv-*`: bars, panels, controls, fields, pressed state, focus ring, backdrop, stage) are review-local derivations of the same palette.
+
+Rules:
+
+- No literal colour (`#hex`, `rgb()`, `hsl()`) outside the `:root` token blocks of either stylesheet. Rules use `var(--…)` only.
+- Every colour token is defined for both schemes: `:root` holds dark (the default before any script runs) and `:root[data-theme=light]` redefines the same set. The appearance control resolves `system` through `prefers-color-scheme` and always writes `data-theme=dark|light` on the root element, so the stylesheets carry no per-component light overrides.
+- State colours: pressed and current selections use the `--pass` family, primary actions and links `--link`, dirty and draft notices `--warn`, errors `--fail`.
+- The stage (pane gradient, grid dots, pane labels, empty-state text, video letterbox) stays dark in both schemes so source pixels and overlays read the same; its tokens carry equal values in both blocks.
+
+`tests/theme.test.ts` enforces the first two rules.
+
 ## Comparison eligibility
 
 A layout is offered only for inputs that actually loaded and rendered. One pure decision (`src/comparison-eligibility.ts`) takes load outcomes, never declared paths: the rig counts after its first successful draw, an image after `decode()`, a pose after it parses, and a video after `seeked` at the held time with a decoded frame. A new video stays pending until then; a held time outside its duration is refused as `REFERENCE_OUT_OF_DOMAIN`, never clamped.
