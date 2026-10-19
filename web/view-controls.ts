@@ -93,10 +93,14 @@ export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,en
  return ()=>{blur();window.removeEventListener('blur',blur);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);viewport.removeEventListener('pointerdown',start);viewport.removeEventListener('pointermove',drag);viewport.removeEventListener('pointerup',end);viewport.removeEventListener('pointercancel',end);viewport.removeEventListener('lostpointercapture',end);viewport.removeEventListener('dragstart',native);};
 }
 
-/** beforeChange runs while the old panel is still visible; changed runs after the new one is shown. */
+/** beforeChange runs while the old panel is still visible; changed runs after the new one is shown.
+ * The selected tab is the one source of the mode: header `[data-mode]` buttons select the matching tab
+ * and only reflect it. A tab with no mode button (Feedback) leaves every mode button unpressed. */
 export function bindInspectorTabs(changed:()=>void,beforeChange:()=>void=()=>{}):void {
- const tabs=[...document.querySelectorAll<HTMLButtonElement>('[data-inspector]')];
- const activate=(tab:HTMLButtonElement)=>{beforeChange();for(const item of tabs){const active=item===tab;item.setAttribute('aria-selected',String(active));item.tabIndex=active?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==tab.dataset.inspector;changed();};
+ const tabs=[...document.querySelectorAll<HTMLButtonElement>('[data-inspector]')],modes=[...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
+ const reflect=()=>{if(!modes.length)return;const selected=tabs.find(item=>item.getAttribute('aria-selected')==='true')?.dataset.inspector;for(const mode of modes)mode.setAttribute('aria-pressed',String(mode.dataset.mode===selected));};
+ const activate=(tab:HTMLButtonElement)=>{beforeChange();for(const item of tabs){const active=item===tab;item.setAttribute('aria-selected',String(active));item.tabIndex=active?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==tab.dataset.inspector;reflect();changed();};
+ for(const mode of modes)mode.onclick=()=>{const tab=tabs.find(item=>item.dataset.inspector===mode.dataset.mode);if(tab)activate(tab);};reflect();
  for(const [index,tab] of tabs.entries()){tab.onclick=()=>activate(tab);tab.onkeydown=event=>{const next=event.key==='ArrowRight'?(index+1)%tabs.length:event.key==='ArrowLeft'?(index+tabs.length-1)%tabs.length:event.key==='Home'?0:event.key==='End'?tabs.length-1:null;if(next===null)return;event.preventDefault();const target=tabs[next];if(target){activate(target);target.focus();}};}
 }
 

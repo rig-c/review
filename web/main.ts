@@ -183,6 +183,7 @@ function layoutEligibility(){return singleEligibility({rig:rigInput,reference:re
 function renderLayout():void {
  const state=layoutEligibility();effectiveView=state.effective;
  for(const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')){const layout=item.dataset.view as SingleLayout,reason=state.reasons[layout]??'';item.setAttribute('aria-pressed',String(layout===state.effective));item.disabled=!!reason;item.title=reason;if(reason)item.setAttribute('aria-description',reason);else item.removeAttribute('aria-description');}
+ const menuLabels={compare:'Side by side',reference:'Reference',rig:'Rig'};text('view-menu-label',menuLabels[state.effective??state.requested]);
  el('reference-pane').hidden=state.effective!=='compare'&&state.effective!=='reference';el('rig-pane').hidden=state.effective!=='compare'&&state.effective!=='rig';
  const shown={compare:'Side by side',reference:'Reference only',rig:'Rig only'};
  text('layout-state',state.effective===null?`No input rendered · ${state.reasons.compare??''}`:state.effective===state.requested?shown[state.effective]:`${shown[state.effective]} · ${shown[state.requested]} unavailable: ${state.reasons[state.requested]??''}`);
@@ -709,7 +710,7 @@ function zoomViewport(target:CameraTarget,deltaY:number):void {zoomCamera(deltaY
 function bind(): void {
   button('strip-export').onclick = () => { void exportStrip(); };
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
-  for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => setView(item.dataset.view as typeof view);
+  for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => {setView(item.dataset.view as typeof view);const menu=document.getElementById('view-menu') as HTMLDetailsElement|null;if(menu)menu.open=false;};
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
   select('reference-select').onchange = () => { void showReference(select('reference-select').value); };
   select('person-select').onchange = () => { selectedPerson = select('person-select').value; lastPoseFrame = -1; renderSequenceFrame(); };
@@ -778,9 +779,9 @@ function bind(): void {
   button('export').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ schema: 'rig-review-feedback/1', id: session.id, revision: session.revision, sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: session.reviewedSource, status: session.status, checkpoints: session.checkpoints, feedback: session.feedback, feedbackWarnings: session.feedbackWarnings, issues: session.feedback.map(issueFields) }, null, 2) + '\n', 'application/json'); message('Exported source provenance, feedback, validation warnings and issue fields as JSON. Source files remain unchanged.'); };
   button('export-markdown').onclick = () => { const content = [`# ${markdown(session.id)} review feedback`, '', 'Reviewed source:', ...JSON.stringify({ sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: session.reviewedSource }, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(item => { const issue = issueFields(item); return [`## ${markdown(issue.title)}`, '', issue.body, '', '---', '']; })].join('\n'); download(`${session.id}-issues.md`, content, 'text/markdown'); message('Exported source provenance, validation warnings and structured issue content as Markdown.'); };
   // Saved browser defaults seed a new inspection; explicit links and source drafts restore over them.
-  workspace=bindWorkspaceUI({changed:fitCamera,defaultTheme:theme=>appearance?.set(theme)});
+  workspace=bindWorkspaceUI({changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
-  appearance=bindAppearance(select('appearance'),workspace.defaults().theme);
+  appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
   for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));

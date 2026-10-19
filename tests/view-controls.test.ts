@@ -199,11 +199,28 @@ test('inspection appearance applies source or Settings choices without touching 
 
 test('tab switching captures the old panel before hiding and restores after showing, by mouse and keyboard',async()=>{
  const source=await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8'),a=source.indexOf('export function bindInspectorTabs('),panels=[{dataset:{inspectorPanel:'view'},hidden:false},{dataset:{inspectorPanel:'rig'},hidden:true}],tabs=[{dataset:{inspector:'view'},setAttribute(){},tabIndex:0,focus(){}},{dataset:{inspector:'rig'},setAttribute(){},tabIndex:-1,focus(){}}];
- const trace:string[]=[],document={querySelectorAll:(selector:string)=>selector==='[data-inspector]'?tabs:panels};
+ const trace:string[]=[],document={querySelectorAll:(selector:string)=>selector==='[data-inspector]'?tabs:selector==='[data-mode]'?[]:panels};
  const bind=new Function('document',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a).replace('export function','function'))+';return bindInspectorTabs;')(document);
  bind(()=>trace.push('after:'+panels.map(p=>p.hidden).join(',')),()=>trace.push('before:'+panels.map(p=>p.hidden).join(',')));
  (tabs[1] as unknown as {onclick:()=>void}).onclick();expect(trace).toEqual(['before:false,true','after:true,false']);
  const key=Object.assign(new Event('keydown',{cancelable:true}),{key:'ArrowLeft'});(tabs[1] as unknown as {onkeydown:(event:Event)=>void}).onkeydown(key);expect(key.defaultPrevented).toBe(true);expect(trace.slice(2)).toEqual(['before:true,false','after:false,true']);
+});
+
+test('the header mode switch and the inspector tabs change together from one selected section',async()=>{
+ const source=await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8'),a=source.indexOf('export function bindInspectorTabs(');
+ const node=(data:Record<string,string>,selected?:boolean)=>{const attrs=new Map<string,string>();if(selected!==undefined)attrs.set('aria-selected',String(selected));return {dataset:data,attrs,tabIndex:-1,hidden:false,setAttribute(k:string,v:string){attrs.set(k,v);},getAttribute(k:string){return attrs.get(k)??null;},focus(){}};};
+ const tabs=['rig','playback','feedback'].map((name,i)=>node({inspector:name},i===0)),panels=['rig','playback','feedback'].map(name=>node({inspectorPanel:name})),modes=['rig','playback'].map(name=>node({mode:name}));
+ const document={querySelectorAll:(selector:string)=>selector==='[data-inspector]'?tabs:selector==='[data-mode]'?modes:panels};
+ const bind=new Function('document',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a).replace('export function','function'))+';return bindInspectorTabs;')(document);
+ let changes=0;bind(()=>changes++);
+ const pressed=()=>modes.map(m=>m.attrs.get('aria-pressed')),selected=()=>tabs.map(t=>t.attrs.get('aria-selected')),click=(item:object)=>(item as {onclick:()=>void}).onclick();
+ expect(pressed()).toEqual(['true','false']);
+ click(modes[1]!);expect(selected()).toEqual(['false','true','false']);expect(pressed()).toEqual(['false','true']);expect(panels.map(p=>p.hidden)).toEqual([true,false,true]);
+ // Feedback is chosen in the inspector only; the header then shows neither mode pressed.
+ click(tabs[2]!);expect(pressed()).toEqual(['false','false']);
+ click(tabs[0]!);expect(pressed()).toEqual(['true','false']);expect(selected()).toEqual(['true','false','false']);
+ const key=Object.assign(new Event('keydown',{cancelable:true}),{key:'ArrowRight'});(tabs[0] as unknown as {onkeydown:(event:Event)=>void}).onkeydown(key);expect(pressed()).toEqual(['false','true']);
+ expect(changes).toBe(4);
 });
 
 import {bindLayerShortcuts,describeLayerToggles,layerShortcuts,textEntryFocused} from '../web/view-controls.ts';

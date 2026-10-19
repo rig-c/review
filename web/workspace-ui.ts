@@ -20,7 +20,8 @@ export interface WorkspaceUI {
  defaults:()=>WorkspacePreferences;beforeTab:()=>void;afterTab:()=>void;scroll:()=>string;restoreScroll:(value:unknown)=>void;
  revealInspector:()=>void;refresh:()=>void;dispose:()=>void;
 }
-export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void}):WorkspaceUI {
+/** `currentTheme`, when given, is the appearance the Settings theme select shows; otherwise it shows the saved default. */
+export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined}):WorkspaceUI {
  const require=<T extends HTMLElement=HTMLElement>(id:string)=>{const node=document.getElementById(id);if(!node)throw new Error('Missing workspace element: '+id);return node as T;};
  const layout=document.querySelector<HTMLElement>('.layout')!,main=layout.querySelector<HTMLElement>('main')!,stage=require('stage-layout'),inspector=document.querySelector<HTMLElement>('.inspector')!,explorer=require('parts-explorer');
  layout.classList.add('workspace-layout');
@@ -31,7 +32,7 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
  const tabs=inspectorTabs.filter(tab=>document.getElementById('inspector-'+tab));if(!tabs.length)throw new Error('Missing workspace element: inspector-'+inspectorTabs.join('|inspector-'));
  const sourceList=document.createElement('div');sourceList.className='workspace-sources';sourceList.append(...left.childNodes);left.append(sourceList);
  const settings=document.createElement('section');settings.className='workspace-settings';settings.setAttribute('aria-label','Settings');
- settings.innerHTML='<h2>Settings</h2><label>Theme <select id="settings-theme" data-app-preference><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><label><input id="settings-sync" data-app-preference type="checkbox">Sync cameras by default</label><label><input id="settings-idle" data-app-preference type="checkbox">Repeat idle by default</label><button id="settings-reset" type="button">Reset layout</button><p class="hint">Defaults apply to new inspections. Links and source drafts retain their explicit view.</p><p id="settings-state" class="hint" role="status"></p>';
+ settings.innerHTML='<h2 class="sticky-header">Settings</h2><label>Theme <select id="settings-theme" data-app-preference><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><label><input id="settings-sync" data-app-preference type="checkbox">Sync cameras by default</label><label><input id="settings-idle" data-app-preference type="checkbox">Repeat idle by default</label><button id="settings-reset" type="button">Reset layout</button><p class="hint">Defaults apply to new inspections. Links and source drafts retain their explicit view.</p><p id="settings-state" class="hint" role="status"></p>';
  left.append(settings);
  const theme=require<HTMLSelectElement>('settings-theme'),sync=require<HTMLInputElement>('settings-sync'),idle=require<HTMLInputElement>('settings-idle'),status=require('settings-state');
  const store=new WorkspacePreferenceStore({onStatus:value=>{status.textContent=value.detail;}});let desired={...store.get().panels};
@@ -46,7 +47,9 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
   const handle=document.createElement('div');handle.className='workspace-separator workspace-'+panel+(sides[panel]?' workspace-side-'+sides[panel]:'');handles[panel]=handle;
   if(sides[panel]==='left')node(panel).after(handle);else if(sides[panel]==='right')node(panel).before(handle);else inspector.before(handle);
   const trigger=document.createElement('button');trigger.type='button';trigger.textContent=labels[panel];trigger.hidden=true;triggers.append(trigger);buttons[panel]=trigger;
-  const dialog=document.createElement('dialog');dialog.className='workspace-drawer';dialog.id='workspace-drawer-'+panel;dialog.dataset.panel=panel;const close=document.createElement('button');close.type='button';close.textContent='Close '+labels[panel];close.className='workspace-drawer-close';dialog.append(close);document.body.append(dialog);dialogs[panel]=dialog;
+  const dialog=document.createElement('dialog');dialog.className='workspace-drawer';dialog.id='workspace-drawer-'+panel;dialog.dataset.panel=panel;const close=document.createElement('button');close.type='button';close.textContent='Close '+labels[panel];close.className='workspace-drawer-close';
+  // The drawer's header stays above its scrolling panel: title and the close action.
+  const header=document.createElement('div');header.className='sticky-header workspace-drawer-header';const title=document.createElement('span');title.textContent=labels[panel];header.append(title,close);dialog.append(header);document.body.append(dialog);dialogs[panel]=dialog;
   disposers.push(bindWorkspaceDrawer({trigger,drawer:dialog,label:labels[panel],close}));
  }
  const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
@@ -75,7 +78,7 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
    layout.dataset.stageMinimum=String(effective.stageMinimumSatisfied);for(const binding of bindings)binding.refresh();options.changed();restore();
   }finally{applying=false;}
  }
- const renderSettings=()=>{const value=store.get();theme.value=value.theme;sync.checked=value.defaultCameraSync;idle.checked=value.defaultIdleRepeat;status.textContent=store.status().detail;};
+ const renderSettings=()=>{const value=store.get();theme.value=options.currentTheme?.()??value.theme;sync.checked=value.defaultCameraSync;idle.checked=value.defaultIdleRepeat;status.textContent=store.status().detail;};
  theme.onchange=()=>{store.update({theme:theme.value as WorkspaceTheme});options.defaultTheme(store.get().theme);};sync.onchange=()=>{store.update({defaultCameraSync:sync.checked});};idle.onchange=()=>{store.update({defaultIdleRepeat:idle.checked});};require<HTMLButtonElement>('settings-reset').onclick=()=>store.resetLayout();
  const unsubscribe=store.subscribe(value=>{desired={...value.panels};renderSettings();schedule();});renderSettings();
  for(const tab of tabs){

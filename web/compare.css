@@ -114,6 +114,7 @@ body{display:grid;grid-template-rows:auto minmax(0,1fr) auto}.layout{grid-templa
 .workspace-drawer:not([open]){display:none}.workspace-drawer[open]{display:flex;flex-direction:column;gap:8px}
 .workspace-drawer::backdrop{background:var(--rv-backdrop)}
 .workspace-drawer-close{align-self:flex-end;flex:none}
+.workspace-drawer-header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none}
 .workspace-drawer>.left-panel{display:flex!important;flex-direction:column;flex:1;overflow:hidden;min-height:0;padding:0}
 .workspace-drawer>.parts-explorer{display:block;grid-template-columns:none;flex:1;width:auto;min-width:0;min-height:0;height:auto;overflow:auto}
 .workspace-drawer>.inspector{flex:1;height:auto!important;min-height:0!important;max-height:none;overflow:hidden}

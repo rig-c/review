@@ -334,7 +334,9 @@ active pane, and each canonical camera center with visible bounds. Reloading a m
 it does not restart an idle loop or submit a review. Coordinates adapt to the
 current viewport instead of replaying another window's CSS pan offsets.
 Historical links without a sync mode restore with sync off to preserve their
-saved views; fresh inspections start with sync on. Legacy modeling/motion
+saved views; fresh inspections start with sync on. The page keeps the current
+fragment in the address bar as you inspect, so copying the address copies the
+view; there is no separate copy button. Legacy modeling/motion
 workspace selections are accepted without restoring a top-level workspace switch. A link
 for a different source binding is refused.
 
@@ -363,14 +365,22 @@ The review page has a left column (Parts explorer, with checkpoints and the
 reference select folded above it), the stage, the Inspector below it with
 **Setup**, **Animate** and **Feedback** sections, and a status footer. The
 compare page keeps sources on the left and the Parts explorer on the right.
+The page header carries the **Setup** / **Animate** mode switch next to the
+package title; it selects the same Inspector section as the tabs, and while
+**Feedback** (chosen from the Inspector tabs) is open neither mode is pressed.
+Each panel keeps its header (Parts with its search, the Inspector tabs, a
+drawer's title and close button) in place while its body scrolls. The
+per-inspection **Repeat idle** toggle sits in the Animate transport row.
 
-The view bar keeps the layer toggles in reach in every section: **Images**
+The view bar is one row and keeps the layer toggles in reach in every section: **Images**
 (`I`), **Mesh edges** (`M`) and **Bone points** (`B`). The keys do nothing while
 a text field, textarea, select or editable text has focus, with Ctrl/Alt/Cmd
 held, or on key repeat; Space stays pan and Enter stays frame entry. A disabled
 toggle shows why as a tooltip, and the footer shows the same layer status. The
 footer also gathers the message, player, layout, renderer, idle, remote control
-and draft state; **View region** opens the numeric view.
+and draft state; **View region** opens the numeric view. Side by side,
+Reference and Rig are in the **View** menu at the right end of the view bar,
+labelled with the current choice.
 
 The side and bottom panels are resizable. Drag a separator, or focus it
 and use the arrow keys (Shift for larger steps) and Home/End. Escape, a
@@ -382,7 +392,9 @@ never overwrites the desired size, so a wider window restores it.
 
 Settings, at the bottom of the left column, holds browser defaults: Theme, Sync cameras by
 default, Repeat idle by default, and Reset layout. Defaults seed a new
-inspection only. A view link or source draft keeps its own appearance, camera
+inspection only. Theme is the page's only appearance control: it shows the
+current inspection's appearance, and changing it applies it and saves it as the
+default. A view link or source draft keeps its own appearance, camera
 sync and idle choice, and restoring it neither changes the saved defaults nor
 starts playback. Reset layout restores panel sizes and nothing else.
 

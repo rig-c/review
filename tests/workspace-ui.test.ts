@@ -37,7 +37,7 @@ class Host extends EventTarget {
  setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);}
 }
 let hostDocument:{activeElement:Host|null};
-function openHost(options:{explorerLeft?:boolean;tabs?:string[]}={}){
+function openHost(options:{explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light'}={}){
  const body=new Host('body'),layout=new Host(),main=new Host('main'),left=new Host('aside'),right=new Host('aside'),stage=new Host(),inspector=new Host(),heading=new Host();layout.className='layout';left.className='left-panel';right.id='parts-explorer';stage.id='stage-layout';inspector.className='inspector';heading.clientHeight=30;
  const tabs=options.tabs??['view','rig','playback','feedback'],panels={} as Record<string,Host>;for(const tab of tabs){const panel=new Host('section'),button=new Host('button');panel.id='inspector-'+tab;panel.dataset.inspectorPanel=tab;panel.hidden=tab!==tabs[0];panel.clientHeight=200;panel.clientWidth=500;button.dataset.inspector=tab;button.attrs.set('aria-selected',String(tab===tabs[0]));panels[tab]=panel;inspector.append(button,panel);}
  main.append(heading,stage,inspector);if(options.explorerLeft){left.append(right);layout.append(left,main);}else layout.append(left,main,right);body.append(layout);
@@ -45,7 +45,7 @@ function openHost(options:{explorerLeft?:boolean;tabs?:string[]}={}){
  const document=Object.assign(new EventTarget(),{body,hidden:false,activeElement:null as Host|null,getElementById:(id:string)=>body.all().find(n=>n.id===id)??null,querySelector:(selector:string)=>body.querySelector(selector),createElement:(tag:string)=>new Host(tag)});hostDocument=document;
  const globals={document,window:events,localStorage:{getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>values.set(key,value)},requestAnimationFrame:(callback:()=>void)=>{frames.set(++handle,callback);return handle;},cancelAnimationFrame:(id:number)=>frames.delete(id),ResizeObserver:class{observe(){}disconnect(){}},MutationObserver:class{constructor(_callback:()=>void){}observe(){}disconnect(){}}};
  const old=new Map<string,PropertyDescriptor|undefined>();for(const [key,value]of Object.entries(globals)){old.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});}
- let changed=0,currentTheme='dark';const ui=bindWorkspaceUI({changed:()=>changed++,defaultTheme:value=>{currentTheme=value;}});
+ let changed=0,currentTheme='dark';const ui=bindWorkspaceUI({changed:()=>changed++,defaultTheme:value=>{currentTheme=value;},...(options.currentTheme?{currentTheme:options.currentTheme}:{})});
  const flush=()=>{for(let i=0;i<5;i++){const pending=[...frames.values()];frames.clear();for(const run of pending)run();}};flush();
  const get=(id:string)=>document.getElementById(id)!;
  const choose=(id:string,value:string|boolean)=>{const node=get(id);if(typeof value==='boolean')node.checked=value;else node.value=value;(node as unknown as {onchange:()=>void}).onchange();};
@@ -125,4 +125,58 @@ test('the parts explorer is the left column with checkpoints and reference folde
  const html=await indexHtml(),left=between(html,'<aside class="left-panel">','<main>');
  expect(left.indexOf('<details id="package-context"')).toBeLessThan(left.indexOf('<aside id="parts-explorer"'));for(const id of ['checkpoints','checkpoint-title','reference-select','person-select'])expect(between(left,'<details id="package-context"','</details>')).toContain(`id="${id}"`);
  expect(html.slice(html.indexOf('</main>'),html.indexOf('<footer'))).toBe('</main></div>');expect(html.match(/parts-explorer/g)?.length).toBe(2);
+});
+
+const stylesCss=()=>readFile(new URL('../web/styles.css',import.meta.url),'utf8');
+/** Declarations of every rule whose selector list is exactly `selector`, in source order. */
+const ruleBodies=(css:string,selector:string)=>[...css.replace(/\/\*[\s\S]*?\*\//g,'').matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(m=>m[1]!.trim()===selector).map(m=>m[2]!);
+
+test('no id appears twice in index.html; the view-bar appearance select and Copy view link are gone',async()=>{
+ const html=await indexHtml(),ids=[...html.matchAll(/\sid="([^"]+)"/g)].map(m=>m[1]!),seen=new Set<string>(),twice=ids.filter(id=>seen.has(id)||!seen.add(id));
+ expect(ids.length).toBeGreaterThan(100);expect(twice).toEqual([]);
+ for(const gone of ['id="appearance"','id="copy-view"','Copy view link','Appearance','class="view-options"','class="segmented"'])expect(html).not.toContain(gone);
+ // The page's only theme select is the one Settings builds; the per-inspection idle toggle is in Animate's transport row.
+ expect(html).not.toContain('<option value="system">');expect(html.match(/id="idle-repeat"/g)?.length).toBe(1);
+ expect(between(html,'<section id="transport"','</section>')).toContain('id="idle-repeat"');
+ expect(between(html,'<div class="viewbar">','<div id="stage-layout"')).not.toContain('idle-repeat');
+});
+
+test('each panel header is the first child of its panel and carries the sticky class',async()=>{
+ const html=await indexHtml(),css=await stylesCss();
+ const firstChild=(open:string)=>{const at=html.indexOf(open);if(at<0)throw new Error('missing '+open);const rest=html.slice(html.indexOf('>',at)+1);return rest.slice(0,rest.indexOf('>')+1);};
+ expect(firstChild('<aside id="parts-explorer"')).toBe('<div class="sticky-header parts-header">');
+ const parts=between(html,'<div class="sticky-header parts-header">','</div>');expect(parts).toContain('<h2>PARTS</h2>');expect(parts).toContain('id="part-search"');
+ expect(firstChild('<section class="inspector"')).toBe('<div class="inspector-heading sticky-header">');expect(between(html,'<div class="inspector-heading sticky-header">','</div>')).toContain('role="tablist"');
+ const ui=await readFile(new URL('../web/workspace-ui.ts',import.meta.url),'utf8');expect(ui).toContain(`settings.innerHTML='<h2 class="sticky-header">Settings</h2>`);
+ const sticky=ruleBodies(css,'.sticky-header');expect(sticky.length).toBe(1);expect(sticky[0]).toContain('position:sticky');expect(sticky[0]).toContain('top:0');
+ const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback']});try{
+  for(const panel of ['rightWidth','inspectorHeight']){const dialog=app.get('workspace-drawer-'+panel),header=dialog.children[0]!;expect(header.classes.has('sticky-header')).toBe(true);expect(header.children.some(node=>node.classes.has('workspace-drawer-close'))).toBe(true);}
+  app.layout.clientWidth=420;app.layout.clientHeight=300;app.ui.refresh();app.flush();const dialog=app.get('workspace-drawer-rightWidth');expect(dialog.children[0]!.classes.has('sticky-header')).toBe(true);expect(dialog.children[1]!.id).toBe('workspace-left');
+ }finally{app.close();}
+});
+
+test('the view bar is one row: layers, sync and zoom, then a View menu holding the three layouts',async()=>{
+ const html=await indexHtml(),css=await stylesCss(),bar=between(html,'<div class="viewbar">','<div id="stage-layout"');
+ for(const id of ['layer-images','layer-mesh','layer-bones','camera-sync','zoom-out','zoom-in','fit'])expect(bar).toContain(`id="${id}"`);
+ const menu=between(bar,'<details id="view-menu"','</details>');expect(bar.endsWith('</details></div><div id="stage-layout"')).toBe(true);
+ expect([...menu.matchAll(/data-view="([^"]+)"/g)].map(m=>m[1])).toEqual(['compare','reference','rig']);expect(html.match(/data-view=/g)?.length).toBe(3);expect(menu).toContain('id="view-menu-label"');
+ expect(ruleBodies(css,'.viewbar').at(-1)).toContain('flex-wrap:nowrap');
+});
+
+test('one thin scrollbar rule from theme tokens covers every scrolling region',async()=>{
+ const css=await stylesCss();
+ expect(ruleBodies(css,'*').join(';')).toContain('scrollbar-width:thin;scrollbar-color:var(--rv-scrollbar-thumb) var(--rv-scrollbar-track)');
+ expect(ruleBodies(css,'*::-webkit-scrollbar')).toEqual(['width:6px;height:6px']);
+ expect(ruleBodies(css,'*::-webkit-scrollbar-thumb')[0]).toContain('background:var(--rv-scrollbar-thumb)');
+ // Firefox takes the standard properties; Chromium/WebKit take the 6px pseudo-element rule, which Chromium ignores once scrollbar-width is set.
+ const bare=css.replace(/\/\*[\s\S]*?\*\//g,'');expect(bare).toContain('@supports not selector(::-webkit-scrollbar){*{scrollbar-width:thin;');
+ expect(bare.match(/scrollbar-width/g)?.length).toBe(1);expect(bare.match(/::-webkit-scrollbar\{/g)?.length).toBe(1);
+});
+
+test('Settings theme shows the current inspection appearance when the page supplies it',()=>{
+ let current:'system'|'dark'|'light'='light';const app=openHost({currentTheme:()=>current});try{
+  expect(app.ui.defaults().theme).toBe('system');expect(app.get('settings-theme').value).toBe('light');
+  current='dark';app.get('settings-reset').click();app.flush();expect(app.get('settings-theme').value).toBe('dark');
+ }finally{app.close();}
+ const plain=openHost();try{expect(plain.get('settings-theme').value).toBe('system');}finally{plain.close();}
 });
