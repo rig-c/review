@@ -1,6 +1,9 @@
 import {expect,test} from 'bun:test';
-import {allocateWorkspaceLayout,bindWorkspaceDrawer,bindWorkspaceSeparator,InspectorScrollMemory,parseInspectorScroll,type ScrollScheduler,type WorkspacePanel} from '../web/workspace-layout.ts';
+import {allocateWorkspaceLayout,bindWorkspaceDrawer,bindWorkspaceSeparator,InspectorScrollMemory,parseInspectorScroll,workspaceMinimums,type ScrollScheduler,type WorkspacePanel} from '../web/workspace-layout.ts';
 import {defaultWorkspacePanels,panelBounds,type WorkspacePanels} from '../web/workspace-preferences.ts';
+/** Drawn separator thickness the allocator charges; every expectation below derives from it. */
+const gap=workspaceMinimums.separator;
+test('resize separators are drawn 4px, half the former 8px',()=>{expect(gap).toBe(4);});
 class LayoutElement extends EventTarget {
  attrs=new Map<string,string>();dataset:Record<string,string>={};style={touchAction:'pan-y'};tabIndex=-1;captured=new Set<number>();focused=false;id='';open=false;showCalls=0;closeCalls=0;
  getAttribute(key:string){return this.attrs.get(key)??null;}setAttribute(key:string,value:string){this.attrs.set(key,value);}removeAttribute(key:string){this.attrs.delete(key);}closest(){return null;}
@@ -16,8 +19,8 @@ function separator(panel:WorkspacePanel='leftWidth',commit=true){
  return {element,events,binding,values,commits,value:()=>desired,disable:()=>{enabled=false;binding.refresh();}};
 }
 test('allocator preserves stage minima without changing desired desktop values; narrow views use drawers',()=>{
- const desired={leftWidth:420,rightWidth:550,inspectorHeight:500},large=allocateWorkspaceLayout({width:1600,height:1100},desired);expect(large).toMatchObject({...desired,stageWidth:614,stageHeight:592,leftMode:'panel',rightMode:'panel',inspectorMode:'panel',stageMinimumSatisfied:true});
- const squeezed=allocateWorkspaceLayout({width:700,height:500},desired);expect(squeezed.stageWidth).toBeCloseTo(240,8);expect(squeezed.stageHeight).toBe(180);expect(squeezed.leftWidth).toBeGreaterThanOrEqual(120);expect(squeezed.rightWidth).toBeGreaterThanOrEqual(180);expect(squeezed.leftWidth+squeezed.rightWidth+squeezed.stageWidth+16).toBeCloseTo(700,8);
+ const desired={leftWidth:420,rightWidth:550,inspectorHeight:500},large=allocateWorkspaceLayout({width:1600,height:1100},desired);expect(large).toMatchObject({...desired,stageWidth:1600-420-550-2*gap,stageHeight:1100-500-gap,leftMode:'panel',rightMode:'panel',inspectorMode:'panel',stageMinimumSatisfied:true});
+ const squeezed=allocateWorkspaceLayout({width:700,height:500},desired);expect(squeezed.stageWidth).toBeCloseTo(240,8);expect(squeezed.stageHeight).toBe(180);expect(squeezed.leftWidth).toBeGreaterThanOrEqual(120);expect(squeezed.rightWidth).toBeGreaterThanOrEqual(180);expect(squeezed.leftWidth+squeezed.rightWidth+squeezed.stageWidth+2*gap).toBeCloseTo(700,8);
  const narrow=allocateWorkspaceLayout({width:390,height:300},desired);expect(narrow).toMatchObject({leftWidth:0,rightWidth:0,inspectorHeight:0,leftMode:'drawer',rightMode:'drawer',inspectorMode:'drawer',stageWidth:390,stageHeight:300});expect(narrow.separators.leftWidth).toEqual({enabled:false,min:0,max:0,value:0});expect(allocateWorkspaceLayout({width:1600,height:1100},desired)).toEqual(large);expect(desired).toEqual({leftWidth:420,rightWidth:550,inspectorHeight:500});
  expect(allocateWorkspaceLayout({width:180,height:100},defaultWorkspacePanels).stageMinimumSatisfied).toBe(false);expect(()=>allocateWorkspaceLayout({width:NaN,height:300},desired)).toThrow('RECTANGLE');
 });
@@ -46,8 +49,8 @@ test('superseded scroll cancellation cannot cancel a newer restoration; malforme
 test('responsive boundary rectangles never overflow and preserve a positive stage whenever it fits',()=>{
  const desired={leftWidth:720,rightWidth:900,inspectorHeight:900};
  for(const width of [0,180,239,240,390,427,428,555,556,557,700,1024,1600])for(const height of [0,179,180,300,347,348,500,1000]){
-  const layout=allocateWorkspaceLayout({width,height},desired),handles=(Number(layout.leftMode==='panel')+Number(layout.rightMode==='panel'))*8;
-  expect(layout.leftWidth+layout.rightWidth+layout.stageWidth+handles).toBeCloseTo(width,8);expect(layout.inspectorHeight+layout.stageHeight+(layout.inspectorMode==='panel'?8:0)).toBeCloseTo(height,8);expect(layout.stageWidth).toBeGreaterThanOrEqual(0);expect(layout.stageHeight).toBeGreaterThanOrEqual(0);
+  const layout=allocateWorkspaceLayout({width,height},desired),handles=(Number(layout.leftMode==='panel')+Number(layout.rightMode==='panel'))*gap;
+  expect(layout.leftWidth+layout.rightWidth+layout.stageWidth+handles).toBeCloseTo(width,8);expect(layout.inspectorHeight+layout.stageHeight+(layout.inspectorMode==='panel'?gap:0)).toBeCloseTo(height,8);expect(layout.stageWidth).toBeGreaterThanOrEqual(0);expect(layout.stageHeight).toBeGreaterThanOrEqual(0);
   if(width>=240)expect(layout.stageWidth).toBeGreaterThanOrEqual(240-1e-8);if(height>=180)expect(layout.stageHeight).toBeGreaterThanOrEqual(180-1e-8);
  }
  expect(desired).toEqual({leftWidth:720,rightWidth:900,inspectorHeight:900});
@@ -92,10 +95,10 @@ test('settled programmatic clamping survives before-hide capture but intentional
 const explorerLeft={left:'rightWidth',right:null} as const;
 test('a single left column uses its own saved width and bounds; the absent side has no size or separator',()=>{
  const wide=allocateWorkspaceLayout({width:1280,height:900},defaultWorkspacePanels,explorerLeft);
- expect(wide).toMatchObject({rightWidth:260,leftWidth:0,leftMode:'absent',rightMode:'panel',stageWidth:1280-260-8});expect(wide.separators.leftWidth.enabled).toBe(false);expect(wide.separators.rightWidth).toMatchObject({min:180,value:260,enabled:true});
- const edge=180+240+8;expect(allocateWorkspaceLayout({width:edge,height:900},defaultWorkspacePanels,explorerLeft).rightMode).toBe('panel');
+ expect(wide).toMatchObject({rightWidth:260,leftWidth:0,leftMode:'absent',rightMode:'panel',stageWidth:1280-260-gap});expect(wide.separators.leftWidth.enabled).toBe(false);expect(wide.separators.rightWidth).toMatchObject({min:180,value:260,enabled:true});
+ const edge=180+240+gap;expect(allocateWorkspaceLayout({width:edge,height:900},defaultWorkspacePanels,explorerLeft).rightMode).toBe('panel');
  expect(allocateWorkspaceLayout({width:edge-1,height:900},defaultWorkspacePanels,explorerLeft)).toMatchObject({rightMode:'drawer',rightWidth:0,stageWidth:edge-1});
- for(const width of [0,239,240,427,428,429,700,980,1280,1600])for(const height of [0,180,500,900]){const layout=allocateWorkspaceLayout({width,height},{leftWidth:720,rightWidth:900,inspectorHeight:900},explorerLeft),handle=layout.rightMode==='panel'?8:0;expect(layout.leftWidth).toBe(0);expect(layout.rightWidth+layout.stageWidth+handle).toBeCloseTo(width,8);if(width>=240)expect(layout.stageWidth).toBeGreaterThanOrEqual(240-1e-8);}
+ for(const width of [0,239,240,427,428,429,700,980,1280,1600])for(const height of [0,180,500,900]){const layout=allocateWorkspaceLayout({width,height},{leftWidth:720,rightWidth:900,inspectorHeight:900},explorerLeft),handle=layout.rightMode==='panel'?gap:0;expect(layout.leftWidth).toBe(0);expect(layout.rightWidth+layout.stageWidth+handle).toBeCloseTo(width,8);if(width>=240)expect(layout.stageWidth).toBeGreaterThanOrEqual(240-1e-8);}
  expect(allocateWorkspaceLayout({width:1280,height:900},defaultWorkspacePanels)).toMatchObject({leftWidth:170,rightWidth:260,leftMode:'panel',rightMode:'panel'});
 });
 test('column maps that repeat or invent a saved width are refused by name',()=>{
