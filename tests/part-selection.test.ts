@@ -3,7 +3,8 @@ import {ComparePresentation} from '../src/compare-presentation.ts';
 import type {InspectionPlayer} from '../src/compare-playhead.ts';
 import {expect,test} from 'bun:test';
 import type {PosedFrame,SlotIdentitySnapshot} from '@rig-c/play';
-import {PartInspection,PartExplorer,copyPartFrame,copyPartIdentity,loadPartCatalog,partCatalog,partGeometry,partBounds,partIdentity,orderedParts,selectedFrame,type PartPlayer} from '../web/part-selection.ts';
+import {PartInspection,PartExplorer,copyPartFrame,copyPartIdentity,loadPartCatalog,partCatalog,partGeometry,partBounds,partIdentity,orderedParts,selectedFrame,type PartPlayer,type PartEntry} from '../web/part-selection.ts';
+import type {ControlPartIdentity} from '../src/control.ts';
 import type {Json} from '../src/manifest.ts';
 const clip={polygon:[0,0,5,0,5,5,0,5],inverse:false,convex:true};
 const frame:PosedFrame={generation:1,order:[{kind:'mesh',slot:'s',z:0,blend:'Normal',tint:[1,1,1,1],vertices:[0,0,10,0,0,10],uvs:[0,0,1,0,0,1],triangles:[0,1,2],page:'packed.png',pma:false,sequence:0,clip},{kind:'region',slot:'other',z:1,blend:'Normal',tint:[1,1,1,1],corners:[0,0,0,1,1,1,1,0],uvs:[0,0,0,1,1,1,1,0],region:'sprite',page:'packed.png',pma:false}]};
@@ -209,4 +210,61 @@ test('first row click opens in context; a later click keeps the current mode',as
  row('s').onclick!();expect(explorer.value()).toMatchObject({slot:'s',mode:'context'});expect(a.rendered.at(-1)!.order).toHaveLength(2);expect(a.rendered.length).toBeGreaterThan(draws);
  row('other').onclick!();expect(explorer.value()).toMatchObject({slot:'other',mode:'context'});
  explorer.select({...explorer.value()!,mode:'solo'});row('s').onclick!();expect(explorer.value()).toMatchObject({slot:'s',mode:'solo'});expect(a.rendered.at(-1)!.order.map(r=>r.slot)).toEqual(['s']);
+});
+
+test('clicking the selected slot again returns to Whole rig; the control value is null, not a new part',async()=>{
+ const {host,detail,Explorer}=await explorerHarness(),a=fake(),changes:unknown[]=[],explorer=new Explorer(host as unknown as HTMLElement,detail as unknown as HTMLElement,previous=>changes.push(previous),()=>{});
+ explorer.register('single',entries,a.player);explorer.present('single');const row=(slot:string)=>host.querySelector('[data-part-list]')!.querySelectorAll('button').find(item=>item.dataset.slot===slot)!;
+ row('s').onclick!();expect(explorer.value()).toMatchObject({side:'single',slot:'s',mode:'context'});expect(row('s').attributes.get('aria-pressed')).toBe('true');
+ row('s').onclick!();expect(explorer.value()).toBeNull();expect(row('s').attributes.get('aria-pressed')).toBe('false');expect(host.querySelector('[data-part-whole]')!.attributes.get('aria-pressed')).toBe('true');expect(changes.at(-1)).toMatchObject({slot:'s'});
+ // Solo is cleared with the selection; selecting another slot still switches rather than toggling off.
+ row('other').onclick!();explorer.select({...explorer.value()!,mode:'solo'});row('other').onclick!();expect(explorer.value()).toBeNull();expect(a.rendered.at(-1)!.order).toHaveLength(2);
+ row('other').onclick!();row('s').onclick!();expect(explorer.value()).toMatchObject({slot:'s'});
+});
+
+import {pageRegionTable,thumbnailPlan,thumbnailFit,PartThumbnails} from '../web/part-thumbnails.ts';
+const pagedModel={...model,pages:[{name:'packed.png',width:200,height:100,regions:[{name:'texture-one',x:10,y:20,width:30,height:40,degrees:0},{name:'texture-two',x:50,y:0,width:20,height:10,degrees:90}]}]};
+const known=(attachment:string|null,reason:ControlPartIdentity['reason']=null):ControlPartIdentity=>({attachment,skin:attachment?'default':null,reason,set:null,activeSkin:null});
+test('a thumbnail is the declared page region of the active attachment, cropped by its page UVs; anything else is the icon with a named reason',()=>{
+ const table=pageRegionTable(pagedModel),[s,other,clip]=entries as [PartEntry,PartEntry,PartEntry];
+ const crop=thumbnailPlan(table,s,known('first'));
+ expect(crop).toEqual({kind:'crop',key:JSON.stringify(['default','first']),page:'packed.png',region:'texture-one',u0:.05,v0:.2,u1:.2,v1:.6,sx:10,sy:20,sw:30,sh:40});
+ expect(thumbnailFit(30,40)).toEqual({dx:6,dy:0,dw:36,dh:48});
+ const reason=(plan:ReturnType<typeof thumbnailPlan>)=>plan.kind==='icon'?plan.reason:'crop';
+ expect(reason(thumbnailPlan(table,other,known('sprite')))).toBe('THUMBNAIL_NO_PAGE_REGION: the model declares no page region "sprite"');
+ expect(reason(thumbnailPlan(table,s,known('alternate')))).toContain('THUMBNAIL_ROTATED_REGION');
+ expect(reason(thumbnailPlan(table,clip,known('mask')))).toBe('clipping attachment draws no page image');
+ expect(reason(thumbnailPlan(table,other,known(null,'timeline-null')))).toBe('no active attachment (timeline-null)');
+ expect(reason(thumbnailPlan(table,s,null))).toBe('awaiting identity snapshot');
+ expect(reason(thumbnailPlan(pageRegionTable(model),s,known('first')))).toBe('THUMBNAIL_REGION_UNAVAILABLE: the model has no pages section');
+});
+test('thumbnails draw lazily when the row is visible, once per attachment key, and never the whole page',()=>{
+ const draws:number[][]=[],observed=new Set<unknown>();let fire:((items:{isIntersecting:boolean;target:unknown}[])=>void)|null=null;
+ class Node {children:Node[]=[];dataset:Record<string,string>={};attrs=new Map<string,string>();width=0;height=0;content='';constructor(readonly tagName:string){}
+  get textContent(){return this.content;}set textContent(v:string){this.children=[];this.content=v;}replaceChildren(...nodes:Node[]){this.children=nodes;this.content='';}
+  setAttribute(n:string,v:string){this.attrs.set(n,v);}querySelectorAll(tag:string){return this.children.filter(c=>c.tagName===tag.toUpperCase());}
+  getContext(){return {clearRect(){},drawImage:(_image:unknown,...args:number[])=>draws.push(args)};}}
+ const globals={document:{createElement:(tag:string)=>new Node(tag.toUpperCase())},IntersectionObserver:class{constructor(callback:typeof fire){fire=callback;}observe(target:unknown){observed.add(target);}unobserve(target:unknown){observed.delete(target);}disconnect(){observed.clear();}}};
+ const old=new Map<string,PropertyDescriptor|undefined>();for(const [key,value]of Object.entries(globals)){old.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});}
+ try{
+  const thumbnails=new PartThumbnails(pageRegionTable(pagedModel),new Map([['packed.png',{} as HTMLImageElement]])),one=new Node('SPAN'),two=new Node('SPAN'),none=new Node('SPAN');
+  expect(thumbnails.show(one as unknown as HTMLElement,entries[0]!,known('first'),'◈')).toBe('thumbnail: region texture-one on packed.png');
+  expect(thumbnails.show(two as unknown as HTMLElement,entries[0]!,known('first'),'◈')).toBe('thumbnail: region texture-one on packed.png');
+  expect(thumbnails.show(none as unknown as HTMLElement,entries[1]!,known('sprite'),'◇')).toContain('type icon: THUMBNAIL_NO_PAGE_REGION');expect(none.textContent).toBe('◇');expect(none.dataset.thumbnail).toBe('icon');
+  const canvas=one.children[0]!;expect(canvas.width).toBe(48);expect(canvas.height).toBe(48);expect(one.dataset.thumbnail).toBe('image');expect(draws).toEqual([]);expect(observed.size).toBe(2);
+  fire!([{isIntersecting:true,target:canvas},{isIntersecting:true,target:two.children[0]}]);
+  // One crop from the page (source rect = the region, fitted into the 48px backing store), then cache copies.
+  expect(draws.filter(args=>args.length===8)).toEqual([[10,20,30,40,6,0,36,48]]);expect(draws.filter(args=>args.length===2)).toHaveLength(2);expect(observed.size).toBe(0);
+  // Unchanged identity redraws nothing; a page that never loaded is named, not substituted.
+  thumbnails.show(one as unknown as HTMLElement,entries[0]!,known('first'),'◈');expect(one.children[0]).toBe(canvas);
+  const blank=new Node('SPAN');expect(new PartThumbnails(pageRegionTable(pagedModel),new Map()).show(blank as unknown as HTMLElement,entries[0]!,known('first'),'◈')).toContain('THUMBNAIL_PAGE_UNAVAILABLE');expect(blank.textContent).toBe('◈');
+ }finally{for(const [key,value]of old)if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}
+});
+test('the explorer puts a row thumbnail or the type icon beside unchanged row text and names the reason in the tooltip',async()=>{
+ const {host,detail,Explorer}=await explorerHarness(),a=fake(),explorer=new Explorer(host as unknown as HTMLElement,detail as unknown as HTMLElement,()=>{},()=>{});
+ const source={show:(icon:HTMLElement,entry:PartEntry,identity:ControlPartIdentity|null,glyph:string)=>{const plan=thumbnailPlan(pageRegionTable(pagedModel),entry,identity);icon.textContent=plan.kind==='crop'?'':glyph;return plan.kind==='crop'?'thumbnail: region '+plan.region:'type icon: '+plan.reason;}};
+ explorer.register('single',entries,a.player,source);explorer.present('single');const row=(slot:string)=>host.querySelector('[data-part-list]')!.querySelectorAll('button').find(item=>item.dataset.slot===slot)!;
+ expect(row('s').title).toContain('thumbnail: region texture-one');expect(row('s').textContent).toBe('s · drawn · default / first');expect(row('s').attributes.get('aria-label')).toBe('◈ s · drawn · default / first · drawn');
+ expect(row('other').title).toContain('type icon: THUMBNAIL_NO_PAGE_REGION');expect(row('other').textContent).toBe('◇other · drawn · default / sprite');
+ expect(row('clip').title).toContain('type icon: no active attachment (no-attachment)');expect(host.querySelector('[data-part-status]')!.textContent).toBe('3 declared slots · 3 results');
 });

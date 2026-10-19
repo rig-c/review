@@ -80,7 +80,12 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 #stage-layout:has(>.stage-pane[hidden]){grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 
 /* Slot explorer shares the stage row; bottom Inspector remains in the main column. */
-.layout{grid-template-columns:260px minmax(0,1fr)!important}.parts-explorer{display:block;grid-template-columns:none;gap:normal;min-width:0;min-height:0;overflow:auto;border-left:1px solid var(--border);background:var(--rv-panel);padding:12px;overscroll-behavior:contain}.parts-explorer h2{font-size:12px;margin:0 0 10px}.parts-explorer>label{display:block;font-size:11px;margin-top:12px}.parts-explorer input[type=search]{width:100%;min-width:0}.parts-explorer .part-solo{display:flex;gap:6px;align-items:center}.parts-explorer ul{list-style:none;margin:8px 0;padding:0;display:grid;gap:4px}.parts-explorer li{min-width:0}.parts-explorer li button{display:block;width:100%;text-align:left;overflow-wrap:anywhere;font-size:11px}.parts-explorer button[aria-pressed=true]{background:var(--rv-pressed-bg);border-color:var(--rv-pressed-border)}.parts-explorer h2,#selected-part h3{font-weight:600}#selected-part{margin-bottom:12px}#selected-part h3{margin:0 0 8px;overflow-wrap:anywhere}#selected-part p{overflow-wrap:anywhere}
+.layout{grid-template-columns:260px minmax(0,1fr)!important}.parts-explorer{display:block;grid-template-columns:none;gap:normal;min-width:0;min-height:0;overflow:auto;border-left:1px solid var(--border);background:var(--rv-panel);padding:12px;overscroll-behavior:contain}.parts-explorer h2{font-size:12px;margin:0 0 10px}.parts-explorer>label{display:block;font-size:11px;margin-top:12px}.parts-explorer input[type=search]{width:100%;min-width:0}.parts-explorer .part-solo{display:flex;gap:6px;align-items:center}.parts-explorer ul{list-style:none;margin:8px 0;padding:0;display:grid;gap:4px}.parts-explorer li{min-width:0}.parts-explorer li button{display:flex;align-items:center;gap:6px;width:100%;text-align:left;overflow-wrap:anywhere;font-size:11px}
+/* A slot's thumbnail: its declared page region in a 24px box, or the type icon when it has none. */
+.part-thumb{flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;overflow:hidden;border-radius:3px}
+.part-thumb canvas{display:block;width:24px;height:24px}
+.part-thumb[data-thumbnail=image]{background:var(--rv-field)}
+.part-label{min-width:0;flex:1 1 auto}.parts-explorer button[aria-pressed=true]{background:var(--rv-pressed-bg);border-color:var(--rv-pressed-border)}.parts-explorer h2,#selected-part h3{font-weight:600}#selected-part{margin-bottom:12px}#selected-part h3{margin:0 0 8px;overflow-wrap:anywhere}#selected-part p{overflow-wrap:anywhere}
 @media(max-width:1050px){.layout{grid-template-columns:200px minmax(0,1fr)!important}.parts-explorer{padding:8px}}
 @media(max-width:700px){.layout{grid-template-columns:minmax(0,1fr)!important}.left-panel{display:none!important}}
 @media(max-width:460px){.layout{grid-template-columns:minmax(0,1fr)!important}.parts-explorer{padding:6px}.parts-explorer li button{padding:6px}.parts-explorer>.hint{font-size:10px}}
@@ -165,7 +170,9 @@ footer.status-bar{flex-wrap:nowrap}
 .status-source{display:flex;align-items:center;gap:12px;margin-left:auto;flex:none;white-space:nowrap}
 .view-region{position:relative}
 .view-region>summary{cursor:pointer}
-.view-region-body{position:absolute;right:0;bottom:calc(100% + 10px);width:min(520px,90vw);max-height:60dvh;overflow:auto;padding:10px;z-index:10;background:var(--rv-panel);border:1px solid var(--border);border-radius:7px}
+/* A popover above the 40px footer, clamped to the viewport: fixed so the footer's overflow never clips it
+   and opening it never scrolls the page; its own body scrolls. */
+.view-region-body{position:fixed;right:8px;bottom:calc(40px + 6px);width:min(520px,calc(100vw - 16px));max-width:calc(100vw - 16px);max-height:calc(100dvh - 40px - 16px);box-sizing:border-box;overflow:auto;overscroll-behavior:contain;padding:10px;z-index:10;background:var(--rv-panel);border:1px solid var(--border);border-radius:7px}
 .view-region-body .numeric-view{margin:8px 0}
 
 
@@ -179,11 +186,18 @@ footer.status-bar{flex-wrap:nowrap}
 /* The left column's fixed header row: title and search never scroll and nothing sits above them. */
 .left-header{flex:none;padding:8px 10px;border-bottom:1px solid var(--border);background:var(--rv-panel)}
 .left-header h2{font-size:12px;font-weight:600;margin:0 0 6px}
-.left-header label{display:block;font-size:11px;margin:0 0 4px}
 .left-header input[type=search]{width:100%;min-width:0}
+/* Parts header is one row: the title left, the search filling the rest. */
+.parts-header{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:8px}
+.parts-header h2{flex:none;margin:0}
+.parts-header input[type=search]{flex:1 1 auto;width:auto;min-width:0}
 .workspace-sources{padding-top:0}
 .workspace-sources>.package-context{padding-top:10px}
 .workspace-settings>.sticky-header{margin:-10px -10px 8px;padding:10px 10px 6px}
+.workspace-settings[data-collapsed=true]>.sticky-header{margin-bottom:-10px}
+.settings-toggle{display:flex;align-items:center;gap:6px;width:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.settings-toggle::before{content:'▸';flex:none;color:var(--fg-muted)}
+.settings-toggle[aria-expanded=true]::before{content:'▾'}
 .workspace-drawer-header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;font-size:12px;font-weight:600}
 
 /* One thin scrollbar for every scrolling region, from the theme tokens: the standard properties for
@@ -213,4 +227,9 @@ footer.status-bar{flex-wrap:nowrap}
 .review-dialog .review-summary>label{display:block;font-size:11px;margin:10px 0 5px}
 .review-dialog .report-panel{padding:10px 0}
 @media(max-width:540px){.review-dialog-header .hint{display:none}}
+:root{--rv-bust-r:#00e5ff;--rv-bust-r-fill:rgba(0,229,255,.13);--rv-bust-l:#52ff88;--rv-bust-l-fill:rgba(82,255,136,.13);--rv-bust-overlap:#ff5252;--rv-bust-overlap-fill:rgba(255,82,82,.13);--rv-bust-handle:#ffffff;--rv-bust-ink:#111318;--rv-bust-label-bg:rgba(12,14,18,.82);--rv-bust-flash:#ffcc00}
+:root[data-theme=light]{--rv-bust-r:#00e5ff;--rv-bust-r-fill:rgba(0,229,255,.13);--rv-bust-l:#52ff88;--rv-bust-l-fill:rgba(82,255,136,.13);--rv-bust-overlap:#ff5252;--rv-bust-overlap-fill:rgba(255,82,82,.13);--rv-bust-handle:#ffffff;--rv-bust-ink:#111318;--rv-bust-label-bg:rgba(12,14,18,.82);--rv-bust-flash:#ffcc00}
+.view-tools{display:flex;gap:4px;flex:none}.view-tool{padding:5px 9px;font-size:11px;white-space:nowrap}
+.chest-editor-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;padding:6px 10px;border-bottom:1px solid var(--border);background:var(--rv-bar);font-size:11px}.chest-editor-bar[hidden]{display:none}.chest-editor-bar .bust-group{display:flex;align-items:center;gap:6px;padding-left:10px;border-left:1px solid var(--border)}.chest-editor-bar .bust-group:first-child{padding-left:0;border-left:0}.chest-editor-bar label{display:flex;align-items:center;gap:4px;color:var(--fg-muted)}.chest-editor-bar input[type=number]{width:58px;padding:3px 5px;font-size:11px}.chest-editor-bar button{padding:4px 8px;font-size:11px}.chest-editor-bar button[aria-disabled=true]{opacity:.6}.bust-tag{font-weight:700}.bust-tag-r{color:var(--rv-bust-r)}.bust-tag-l{color:var(--rv-bust-l)}#chest-editor-status{flex:1 1 220px;min-width:0}
+#rig-pane[data-chest-hover=move] .viewport{cursor:move}#rig-pane[data-chest-hover=r] .viewport,#rig-pane[data-chest-hover=band] .viewport{cursor:ew-resize}#rig-pane[data-chest-hover=band] .viewport{cursor:ns-resize}
 .environment-panel{padding:15px;border-top:1px solid var(--border);background:var(--rv-panel);font-size:11px}.environment-panel .row{margin-bottom:9px}.environment-panel .row label{display:flex;align-items:center;gap:4px;color:var(--fg-muted)}.environment-panel input[type=range]{flex:1;max-width:180px}.environment-panel input[type=number]{width:72px;padding:4px 6px;font-variant-numeric:tabular-nums}.environment-panel button{padding:4px 9px;font-size:11px}.environment-panel output{font:11px var(--font-mono);color:var(--fg-muted)}.environment-panel .hint{margin:0 0 9px}.environment-readout{display:block;margin:0 0 9px;color:var(--fg-strong)!important;overflow-wrap:anywhere}.physics-constraints summary{cursor:pointer;color:var(--fg-soft)}.physics-table-wrap{overflow-x:auto;max-height:260px;overflow-y:auto}.physics-table{width:100%;border-collapse:collapse;font:11px var(--font-mono);font-variant-numeric:tabular-nums}.physics-table th,.physics-table td{padding:3px 6px;border-top:1px solid var(--border);text-align:right;white-space:nowrap}.physics-table th{color:var(--fg-muted);font-weight:500}.physics-table th:first-child,.physics-table td:first-child,.physics-table th:nth-child(2),.physics-table td:nth-child(2){text-align:left}.physics-table .absent{color:var(--fg-muted)}
