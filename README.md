@@ -453,6 +453,25 @@ The overlay needs the loaded model to fix the crop: its declared stage must be t
 
 Field values stay in the inspection's local draft. They never enter the review session's feedback, nothing is written into the package, and an export is review evidence, not an approval (see `docs/DESIGN.md`).
 
+## Mesh edit (typed delta, preview only)
+
+In **Setup**, the view bar's **Edit mesh** button (pressed state; hidden in Animate) edits the selected slot's actual mesh attachment. With **Whole rig** selected it refuses `MESH_EDIT_SELECT_SLOT`; a slot whose active attachment is not a mesh refuses `MESH_EDIT_NO_MESH <slot>`. Entering pauses playback, turns the chest-region editor off and opens the mesh editor bar under the view bar. The rig pane dims except the slot's own triangles; the mesh is drawn at full opacity with every vertex as a handle, hull edges, interior triangulation edges and added constraint edges each in their own theme token.
+
+The bar has four sub-modes, one pressed at a time, with single keys that avoid the layer keys `I` / `M` / `B`:
+
+| Key | Sub-mode | Pointer |
+| --- | --- | --- |
+| `V` | Modify | drag a vertex, or an edge to move both ends; Shift-click adds to the selection; drag empty space to box-select; arrow keys nudge the selection 1 crop px (Shift 10) |
+| `C` | Create | click empty space to add a vertex; click an edge to split it at the click point |
+| `X` | Delete | click a vertex to remove it and its edges; click an edge to remove it (hull edges are refused, `MESH_EDIT_HULL_EDGE`) |
+| `E` | Edges | click vertex A then vertex B to add a constraint edge; click a constraint edge to remove it; a hull edge is refused and an existing edge records nothing |
+
+Hit-testing is in screen pixels through the current camera: a vertex within 6 px (8 on touch) wins over an edge within 4 px. In a sub-mode a press never pans; Space-drag still pans and the wheel still zooms. Escape leaves the sub-mode, a second Escape leaves mesh edit. **Undo** / **Redo** (Cmd/Ctrl-Z, Shift-Cmd/Ctrl-Z) step one action at a time — an edge or multi-selection drag is one action of several `move` ops. **Reset** drops the attachment's whole delta after a confirmation.
+
+Everything is a typed delta over the loaded mesh, in crop pixels (x right, y down, the chest regions' crop mapping): `{slot, skin, attachment, source:{vertexCount, triangleCount, hullLength, hash}, ops}` with ordered ops `move {v, from, to}`, `add {at, onEdge?}`, `remove {v}`, `edge {a, b}` and `unedge {a, b}`. Source vertex ids are the attachment's indices; an added vertex takes the next id; a removed id is never reused. `hullLength` is the model's `hull` (the first `hull` vertices, in order, are the hull) and `hash` is the SHA-256 of the attachment's entry in the hash-verified model. The vertices are the slot's last drawn posed vertices, so `basis` names the animation and time they were held at. The overlay previews moved, added and removed vertices and the constraint edges over the original triangulation; nothing is retriangulated in the browser (the status line says *preview only — the producer retriangulates*).
+
+**Download JSON** saves `mesh-edit.json` and `mesh-edit.binding.json` (package source hash, rig and motion SHA-256, the attachment and its hash, export time, viewer and runtime versions and the mapping). **Apply · Rebuild** refuses `MODELING_INPUT_UNAVAILABLE` as the chest editor's does. The delta rides in the inspection's local draft bound to the attachment hash (at most 300 ops per attachment); it never enters the review session and nothing is written into the package.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

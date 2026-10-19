@@ -22,7 +22,20 @@ export interface OverlayRegion {name:string;points:OverlayPoint[];stroke:string;
  * top, a label under the outer circle). Colours are theme token values.
  */
 export interface OverlayCircle {center:OverlayPoint;r:number;band:number;label?:string;/** Label rows below the outer circle, so two labels never overlap. */labelRow?:number;handles:boolean;flash?:boolean;colors:{stroke:string;fill:string;handle:string;ink:string;labelBg:string;flash:string}}
-export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[];circles?:readonly OverlayCircle[]}
+/**
+ * Mesh edit preview in rig world coordinates: the selected slot's original triangles (cut out of the veil that dims the
+ * rest of the rig), the edges after the delta by kind, moved-vertex ghosts and the vertices as handles. A box is in
+ * canvas px. It is drawn over the original triangulation; nothing here retriangulates. Colours are theme token values.
+ */
+export interface OverlayMeshEdit {
+ triangles:readonly OverlayPoint[][];
+ edges:readonly {from:OverlayPoint;to:OverlayPoint;kind:'hull'|'interior'|'constraint'|'removed';hover?:boolean}[];
+ ghosts:readonly {from:OverlayPoint;to:OverlayPoint}[];
+ vertices:readonly {at:OverlayPoint;state:'source'|'moved'|'added'|'removed';selected:boolean;hover:boolean;pending:boolean}[];
+ box?:{from:OverlayPoint;to:OverlayPoint};
+ colors:{veil:string;edge:string;hull:string;constraint:string;removed:string;vertex:string;ink:string;selected:string;added:string;hover:string;box:string;boxFill:string};
+}
+export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[];circles?:readonly OverlayCircle[];meshEdit?:OverlayMeshEdit|null}
 /** Canvas-pixel geometry of a circle designation, the same numbers the editor hit-tests against. */
 export function projectCircle(project:OverlayProject,circle:Pick<OverlayCircle,'center'|'r'|'band'>):{center:OverlayPoint;pxR:number;pxBand:number}|null {
  const {x,y}=circle.center,center=project(x,y),edge=project(x+circle.r,y),top=project(x,y+circle.r+circle.band);
@@ -106,7 +119,7 @@ export class RigOverlays {
   this.geometry=input.player?captureRigGeometry(input.player,input.bones,input.settings,input.frame,input.selectedSlot):null;
   return this.redraw(input);
  }
- redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[],circles=[]}:OverlayView):OverlaySnapshot{
+ redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[],circles=[],meshEdit=null}:OverlayView):OverlaySnapshot{
   if(this.disposed)return this.unavailable('Overlay has been disposed');
   this.host.rigRoot.style.visibility=settings.images?this.visibility:'hidden';
   const warnings=[...(this.geometry?.warnings??[])],ctx=this.host.canvas.getContext('2d');
@@ -168,9 +181,31 @@ export class RigOverlays {
    }
   }
   ctx.globalAlpha=1;
-  if(this.geometry?.selection.length){ctx.globalAlpha=1;ctx.strokeStyle='#ffbb47';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.beginPath();for(const edge of this.geometry.selection)line(edge);ctx.stroke();ctx.setLineDash([]);}
+  if(this.playerAvailable&&meshEdit)this.drawMeshEdit(ctx,meshEdit,projected,width,height);
+  if(this.geometry?.selection.length&&!meshEdit){ctx.globalAlpha=1;ctx.strokeStyle='#ffbb47';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.beginPath();for(const edge of this.geometry.selection)line(edge);ctx.stroke();ctx.setLineDash([]);}
   ctx.restore();
   return this.snapshot(true,needsCapture,warnings);
+ }
+ private drawMeshEdit(ctx:CanvasRenderingContext2D,edit:OverlayMeshEdit,projected:(p:OverlayPoint)=>OverlayPoint|null,width:number,height:number):void{
+  const c=edit.colors;ctx.save();ctx.globalAlpha=1;ctx.setLineDash([]);
+  // The rest of the rig dims; the edited slot's own triangles are cut out of the veil so its art stays at full opacity.
+  ctx.fillStyle=c.veil;ctx.fillRect(0,0,width,height);
+  ctx.globalCompositeOperation='destination-out';ctx.fillStyle=c.ink;ctx.beginPath();
+  for(const triangle of edit.triangles){const points=triangle.map(projected);if(points.length<3||points.some(p=>!p))continue;ctx.moveTo(points[0]!.x,points[0]!.y);for(const p of points.slice(1))ctx.lineTo(p!.x,p!.y);ctx.closePath();}
+  ctx.fill();ctx.globalCompositeOperation='source-over';
+  const segment=(from:OverlayPoint,to:OverlayPoint)=>{const a=projected(from),b=projected(to);if(a&&b){ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);}};
+  const stroke=(kind:OverlayMeshEdit['edges'][number]['kind'],color:string,width:number,dash:number[]=[])=>{ctx.beginPath();ctx.setLineDash(dash);ctx.strokeStyle=color;ctx.lineWidth=width;for(const e of edit.edges)if(e.kind===kind)segment(e.from,e.to);ctx.stroke();};
+  stroke('removed',c.removed,1.4,[4,3]);stroke('interior',c.edge,1);stroke('constraint',c.constraint,2.4);stroke('hull',c.hull,2.2);
+  ctx.beginPath();ctx.setLineDash([2,3]);ctx.strokeStyle=c.ink;ctx.lineWidth=1;for(const g of edit.ghosts)segment(g.from,g.to);ctx.stroke();
+  ctx.beginPath();ctx.setLineDash([]);ctx.strokeStyle=c.hover;ctx.lineWidth=3.2;for(const e of edit.edges)if(e.hover)segment(e.from,e.to);ctx.stroke();
+  for(const v of edit.vertices){
+   const p=projected(v.at);if(!p)continue;
+   if(v.state==='removed'){ctx.beginPath();ctx.strokeStyle=c.removed;ctx.lineWidth=1.6;ctx.moveTo(p.x-4,p.y-4);ctx.lineTo(p.x+4,p.y+4);ctx.moveTo(p.x+4,p.y-4);ctx.lineTo(p.x-4,p.y+4);ctx.stroke();continue;}
+   const r=v.selected?4.6:3.4;ctx.beginPath();ctx.fillStyle=v.selected?c.selected:v.state==='added'?c.added:c.vertex;ctx.strokeStyle=v.state==='moved'?c.selected:c.ink;ctx.lineWidth=v.state==='moved'?2:1.2;ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fill();ctx.stroke();
+   if(v.hover||v.pending){ctx.beginPath();ctx.strokeStyle=v.pending?c.constraint:c.hover;ctx.lineWidth=2;ctx.arc(p.x,p.y,7.5,0,Math.PI*2);ctx.stroke();}
+  }
+  if(edit.box){const {from,to}=edit.box,x=Math.min(from.x,to.x),y=Math.min(from.y,to.y),w=Math.abs(to.x-from.x),h=Math.abs(to.y-from.y);ctx.fillStyle=c.boxFill;ctx.fillRect(x,y,w,h);ctx.setLineDash([4,3]);ctx.strokeStyle=c.box;ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,w,h);}
+  ctx.restore();
  }
  clear():void{
   this.geometry=null;this.playerAvailable=false;
