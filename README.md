@@ -382,6 +382,22 @@ body. A drawer keeps its title and close button in place while its body
 scrolls. The per-inspection **Repeat idle** toggle sits in the Animate
 transport row.
 
+Animate's **Environment** block drives the player's physics while you
+inspect: a **Wind** base (−100…100), **Breeze**, a **Gust** pulse
+(peak 0…200, duration 0.1…20 s, **Repeat** every max(6, duration + 0.6) s)
+and **Gravity** (0…4), applied through `player.environment` in the same frame
+step that draws. The gust clock is the stepped player time, so pausing freezes
+it. **Jolt** sends a translate-and-return impulse through `player.moved`;
+with **Drag to trail** on, dragging the rig pane moves the rig's physics
+instead of the camera (Space still pans). **Reset physics** returns the
+runtime start values and re-poses from the current time, clearing the physics
+history. The physics constraints are listed read only as the compiled model
+declares them; `@rig-c/play` exposes no per-constraint mix, so none is offered.
+Until a control is touched the player stays at the runtime start values. The
+state is kept in the local draft and recorded in feedback as
+`context.environment`; nothing is written to the model or motion. The compare
+page does not have this block.
+
 The view bar is one row and keeps the layer toggles in reach in every section: **Images**
 (`I`), **Mesh edges** (`M`) and **Bone points** (`B`). The keys do nothing while
 a text field, textarea, select or editable text has focus, with Ctrl/Alt/Cmd
