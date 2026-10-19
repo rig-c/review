@@ -3,7 +3,9 @@ import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
 import {rendererStatus} from './renderer-status.ts';
 import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
-import {RigOverlays} from './rig-overlays.ts';
+import {RigOverlays,type OverlayRegion} from './rig-overlays.ts';
+import {chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
+import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
 import {connectControl} from './control.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
@@ -74,6 +76,7 @@ let suspendedPreview=false;
 let controlDispose:(()=>void)|null=null;
 const viewDisposers:(()=>void)[]=[];
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
+let chestMapping:CropWorldMapping={available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: no compiled model drawn'};
 let referenceSize: { width: number; height: number } | null = null;
 let video: HTMLVideoElement | null = null;
 let controlledVideoSample:{media:HTMLVideoElement;position:number;time:number}|null=null;
@@ -603,6 +606,9 @@ function propose(tool: string): void {
 }
 
 
+function download(name: string, content: string, mime: string): void {
+  const url = URL.createObjectURL(new Blob([content], { type: mime })); const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 function downloadStrip(name: string, content: Blob): void {
   const url = URL.createObjectURL(content), link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -688,6 +694,10 @@ function zoomViewport(target:CameraTarget,deltaY:number):void {zoomCamera(deltaY
 
 function bind(): void {
   button('strip-export').onclick = () => { void exportStrip(); };
+  button('chest-export').onclick = () => { void exportChest(); };
+  for (const event of ['input', 'change']) el('chest-regions').addEventListener(event, renderChest);
+  // A discarded local draft restores the form after its button's own handler; re-read the tool then.
+  el('draft-recovery').addEventListener('click', () => renderChest());
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => {setView(item.dataset.view as typeof view);const menu=document.getElementById('view-menu') as HTMLDetailsElement|null;if(menu)menu.open=false;};
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
@@ -786,12 +796,13 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
-    bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{redrawOverlay(true);const part=parts?.value();if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{redrawOverlay(true);const part=parts?.value();if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
     await initPlayer(first);
     // initPlayer keeps `player` only after its first draw succeeded; a declared model path alone never counts.
+    updateChestMapping();
     rigInput=player?{state:'loaded'}:data.manifest.model?{state:'failed',reason:el('rig-empty').textContent||'compiled player unavailable'}:{state:'absent'};renderLayout();
     if (first) await chooseCheckpoint(first,initial); else renderCheckpoint();
     activeCamera=player?'rig':'reference';if(cameraSync)alignCameras();renderTransport();fitCamera();
@@ -799,7 +810,7 @@ async function start(): Promise<void> {
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-    const restored=await setupPersistence();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();renderChest();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
@@ -819,7 +830,7 @@ function bindReviewDialog():void {
 function redrawOverlay(fresh:boolean):void {
  if(!overlays||!player)return;
  const root=el('rig-root'),project=(x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*rigScale,y:parseFloat(root.style.top||'0')-y*rigScale});
- const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers}):overlays.redraw({project,settings:layers});
+ const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions:chestRegions()}):overlays.redraw({project,settings:layers,regions:chestRegions()});
  text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
 }
 function canRepeatIdle():boolean{return !!player&&idleAvailable(assets?.animations.map(a=>a.name)??[],animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
@@ -961,5 +972,37 @@ async function setupPersistence():Promise<boolean> {
  persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
  ui:()=>({inspectorScroll:workspace?.scroll()??'{}',reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();workspace?.restoreScroll(value.inspectorScroll);},afterInputs:()=>{const target=input('feedback-target-name').value;renderFeedbackTargets(true);if(select('feedback-target-kind').value!=='rig')input('feedback-target-name').value=target;renderFeedbackRange();text('audio-volume-label',`${Math.round(Number(input('audio-volume').value)*100)}%`);},onConflict:value=>{draftConflict=value;updateSavedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;text('review-draft-state',value);}});
  return persistence.restored;
+}
+/** Setup's Chest regions tool: designation values, an overlay and a two-file client download. Nothing reaches the session's feedback or the package. */
+function chestField(id:string){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;return node?{value:node.value,...(node instanceof HTMLInputElement&&node.type==='checkbox'?{checked:node.checked}:{})}:undefined;}
+function chestEvaluation(){return evaluateChestForm(chestField,chestMapping,data.feedbackCatalog.bones);}
+function chestRegions():OverlayRegion[]{
+ const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim();
+ return chestOverlayPolygons(chestEvaluation(),chestMapping).map((region,i)=>({...region,stroke:token(i?'--rv-region-b':'--rv-region-a'),fill:token(i?'--rv-region-b-fill':'--rv-region-a-fill')}));
+}
+function populateChestBones():void {
+ const bones=data.feedbackCatalog.bones;
+ for(const row of chestRegionRows){const node=select(chestRowId(row,'bone'));node.replaceChildren(option('',bones?'Select bone':'No model bones'));for(const name of bones??[])node.append(option(name,name));node.disabled=!bones;}
+}
+function updateChestMapping():void {
+ const root=data.feedbackCatalog.bones?.[0];let at:{x:number;y:number}|null=null;
+ if(player&&root){try{const bone=player.bone(root);at={x:bone.x,y:bone.y};}catch{at=null;}}
+ chestMapping=player?cropWorldMapping(assets?.stage,at):{available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: no compiled model drawn'};
+ renderChest();
+}
+function renderChest():void {
+ for(const id of ['chest-crop-w','chest-crop-h']){const node=input(id);node.readOnly=chestMapping.available;if(chestMapping.available)node.value=String(id==='chest-crop-w'?chestMapping.crop.w:chestMapping.crop.h);}
+ text('chest-mapping',chestMapping.available?`Crop → rig world from the model: ${chestMapping.basis}.`:`${chestMapping.reason}. No overlay is drawn; enter the crop size to export.`);
+ el('chest-mapping').classList.toggle('error',!chestMapping.available);
+ const value=chestEvaluation();text('chest-status',value.ok?`${value.document.mesh.value.contour.regions.map(r=>`${r.name} → ${r.bone}`).join(' · ')} · valid for export`:value.error);
+ el('chest-status').classList.toggle('error',!value.ok);
+ redrawOverlay(false);
+}
+async function exportChest():Promise<void> {
+ const value=chestEvaluation();if(!value.ok){message(`Chest regions not exported: ${value.error}`,true);return;}
+ const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value.text)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+ const binding=chestRegionsBinding({fileSha256:digest,sourceHash:data.sourceHash,reviewedSource:data.reviewedSource,exportedAt:new Date().toISOString(),mapping:chestMapping.available?chestMapping.basis:chestMapping.reason});
+ download('chest-regions.json',value.text,'application/json');download('chest-regions.binding.json',JSON.stringify(binding,null,2)+'\n','application/json');
+ message('Downloaded chest-regions.json and chest-regions.binding.json. The regions are review evidence, not an approval; the package is unchanged.');
 }
 void start();

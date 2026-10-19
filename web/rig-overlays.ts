@@ -14,7 +14,9 @@ export interface OverlaySnapshot {
  available:boolean;needsCapture:boolean;meshEdges:number;boneCount:number;
  capabilities:{images:boolean;mesh:boolean;bones:boolean};warnings:string[];
 }
-export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number}
+/** Designation polygons in rig world coordinates (Setup's Chest regions tool); colours are theme token values. */
+export interface OverlayRegion {name:string;points:OverlayPoint[];stroke:string;fill:string}
+export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[]}
 export interface OverlayRefresh extends OverlayView {player:OverlayPlayer|null;bones:readonly BoneOverlaySpec[];frame?:PosedFrame;selectedSlot?:string|null}
 const point=(x:number,y:number):OverlayPoint=>({x,y});
 const finite=(p:OverlayPoint)=>Number.isFinite(p.x)&&Number.isFinite(p.y);
@@ -91,7 +93,7 @@ export class RigOverlays {
   this.geometry=input.player?captureRigGeometry(input.player,input.bones,input.settings,input.frame,input.selectedSlot):null;
   return this.redraw(input);
  }
- redraw({project,settings,dpr=globalThis.devicePixelRatio??1}:OverlayView):OverlaySnapshot{
+ redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[]}:OverlayView):OverlaySnapshot{
   if(this.disposed)return this.unavailable('Overlay has been disposed');
   this.host.rigRoot.style.visibility=settings.images?this.visibility:'hidden';
   const warnings=[...(this.geometry?.warnings??[])],ctx=this.host.canvas.getContext('2d');
@@ -131,6 +133,12 @@ export class RigOverlays {
     }
     ctx.fillStyle='#ffe26b';ctx.strokeStyle='#44310d';ctx.lineWidth=1;ctx.beginPath();ctx.arc(center.x,center.y,2.8,0,Math.PI*2);ctx.fill();ctx.stroke();
    }
+  }
+  // Designations are drawn over the drawn rig only; they are values the reviewer typed, not rig geometry.
+  if(this.playerAvailable)for(const region of regions){
+   const points=region.points.map(projected);if(points.length<3||points.some(p=>!p))continue;
+   ctx.globalAlpha=1;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(points[0]!.x,points[0]!.y);for(const p of points.slice(1))ctx.lineTo(p!.x,p!.y);ctx.closePath();
+   ctx.fillStyle=region.fill;ctx.fill();ctx.strokeStyle=region.stroke;ctx.lineWidth=1.6;ctx.stroke();
   }
   if(this.geometry?.selection.length){ctx.globalAlpha=1;ctx.strokeStyle='#ffbb47';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.beginPath();for(const edge of this.geometry.selection)line(edge);ctx.stroke();ctx.setLineDash([]);}
   ctx.restore();
