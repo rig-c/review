@@ -1,4 +1,5 @@
-import {PartExplorer,loadPartCatalog} from './part-selection.ts';
+import {PartExplorer,loadPartModel} from './part-selection.ts';
+import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
 import {rendererStatus} from './renderer-status.ts';
@@ -548,7 +549,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     } });
     player = new RigPlayer(el('rig-root'), assets);
     // Parts inspection is an add-on: a catalog refusal is shown in the explorer and never aborts the rig.
-    try{parts?.register('single',await loadPartCatalog(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]),player);}catch(error){parts?.refuseCatalog('single',error);}
+    try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
     player.on('event', event => { text('event-log', `Runtime event: ${event.name} · ${event.time.toFixed(2)} s`); });
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
