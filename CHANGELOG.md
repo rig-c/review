@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.0](https://github.com/rig-c/review/compare/v0.5.0...v0.6.0) (2026-10-19)
+
+
+### Features
+
+* **animate:** environment block — wind, gravity, jolt, drag-to-trail, physics reset, read-only constraints ([#97](https://github.com/rig-c/review/issues/97)) ([aa1eea4](https://github.com/rig-c/review/commit/aa1eea4606be455460a0c139331e6afa55486479)), closes [#94](https://github.com/rig-c/review/issues/94)
+* **parts:** one-row header, collapsible settings, toggle selection, minimum thumbnails, on-screen view-region popover ([#93](https://github.com/rig-c/review/issues/93)) ([480d27c](https://github.com/rig-c/review/commit/480d27cf831c48ce1d1ef0e8bd85dc6a34ebdbd9)), closes [#91](https://github.com/rig-c/review/issues/91)
+* **setup:** chest-region editor like the family example ([#96](https://github.com/rig-c/review/issues/96)) ([178cce2](https://github.com/rig-c/review/commit/178cce2c089d2307b903bbe9fc336231393f0dd2)), closes [#92](https://github.com/rig-c/review/issues/92)
+* **setup:** edit-mesh designation the way Spine's Edit Mesh works ([#98](https://github.com/rig-c/review/issues/98)) ([d12efee](https://github.com/rig-c/review/commit/d12efee6ad28ee35818ee1c8ac1a67d9b52138f6)), closes [#80](https://github.com/rig-c/review/issues/80)
+
 ## [0.5.0](https://github.com/rig-c/review/compare/v0.4.0...v0.5.0) (2026-10-19)
 
 
