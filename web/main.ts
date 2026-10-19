@@ -22,6 +22,7 @@ import { clockForAnimation, frameAtTime, lastFrame as lastProducerFrame, timeAtF
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, type FeedbackCatalog } from '../src/feedback-validation.ts';
 import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
+import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPacket,dueJolts,dragMoved,loadPhysicsConstraints,PHYSICS_FIELDS,CONSTRAINT_MIX_READONLY,environmentContext,environmentJson,type JoltStep,type WindSnapshot} from '../src/environment.ts';
 
 interface ReviewResponse { initialAnimation?:string|null; manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
 interface PoseReference { schema: 'rig-review-pose/1'; coordinateSystem: 'image-pixels-y-down'; width: number; height: number; joints: { id: string; x: number; y: number; parent?: string }[] }
@@ -92,6 +93,9 @@ let reportPage = 0;
 let selectedReportEvent: ReportEvent | null = null;
 let selectedReportTime: number | undefined;
 let selectedReportTarget: number | undefined;
+// Animate's Environment block: the wind clock advances only with the steps the player takes.
+const wind=createWindModel();
+let joltQueue:JoltStep[]=[],environmentNote='';
 
 function message(value: string, error = false): void {
   text('message', value);
@@ -527,7 +531,7 @@ function tick(now: number): void {
   if (playing) {
     const dt = lastFrame ? Math.min((now - lastFrame) / 1000, .1) : 0;
     const previous = time; time = Math.min(duration, time + dt);
-    if (player && player.current) { try { drawRig(()=>player!.frame(dt)); } catch (error) { pause(); message(errorText(error), true); } }
+    if (player && player.current) { try { stepEnvironment(dt); drawRig(()=>player!.frame(dt)); } catch (error) { pause(); message(errorText(error), true); } }
     if (video && video.readyState >= 1 && time > video.duration) { if (referenceInput.state !== 'out-of-domain') holdVideoReference(video, referenceGeneration); } else if (video && referenceInput.state === 'loaded' && Math.abs(video.currentTime - time) > .15) video.currentTime = time;
     if (input('sync-audio').checked) for (const cue of activeCues()) if ((previous < cue.time && cue.time <= time) || (previous === 0 && cue.time === 0 && dt > 0)) void audition(cue.clip);
     renderSequenceFrame(); renderTransport(); if(time>=duration){if(canRepeatIdle()&&!idleHeld){stopAudio();seek(0);player?.resume();if(video)void video.play().catch(error=>{pause();message(errorText(error),true);});}else pause();} lastFrame = now;
@@ -560,6 +564,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     select('axis-select').replaceChildren(); for (const axis of validAxes) select('axis-select').append(option(axis.id, axis.label));
     input('axis-value').disabled = !validAxes.length;
     for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;
+    enableEnvironment(modelUrl);
     describeLayerToggles(document,el('layer-state').textContent??'');
     fitCamera();
   } catch (error) { text('renderer-state',rendererStatus(null,'failed').label);player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${errorText(error)}`); message(errorText(error), true); }
@@ -697,7 +702,7 @@ function bind(): void {
   button('chest-export').onclick = () => { void exportChest(); };
   for (const event of ['input', 'change']) el('chest-regions').addEventListener(event, renderChest);
   // A discarded local draft restores the form after its button's own handler; re-read the tool then.
-  el('draft-recovery').addEventListener('click', () => renderChest());
+  el('draft-recovery').addEventListener('click', () => { renderChest(); restoreEnvironment(); });
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => {setView(item.dataset.view as typeof view);const menu=document.getElementById('view-menu') as HTMLDetailsElement|null;if(menu)menu.open=false;};
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
@@ -750,6 +755,7 @@ function bind(): void {
       camera: center ? { zoom, x: center.x, y: center.y, coordinateSystem: 'world-y-up' } : { zoom, coordinateSystem: 'reference-fit' },
       view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},
       axis: axisInspection ? { id: select('axis-select').value, value: Number(input('axis-value').value) } : null,
+      environment: feedbackEnvironment(),
       reportEvent: selectedReportEvent ? { id: selectedReportEvent.id, field: selectedReportEvent.field, source: { ...selectedReportEvent.source }, frames: selectedReportEvent.frames ? [...selectedReportEvent.frames] : null, exactTime: eventSeekTime(selectedReportEvent, selectedReportTime), targets: selectedReportEvent.targets.map(target => ({ ...target })) } : null,
     } });
     input('feedback-summary').value = ''; markDirty(); renderProposals(); message('Added structured feedback. Submit the review to save it.');
@@ -775,6 +781,7 @@ function bind(): void {
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
   viewDisposers.push(bindLayerShortcuts(document));describeLayerToggles(document,el('layer-state').textContent??'');
   input('idle-repeat').onchange=()=>{renderIdle();if(canRepeatIdle())void playPreview();};
+  bindEnvironment();
   for(const id of ['proposal-panel','checkpoint-detail'])el(id).addEventListener('focusin',pause);
   bindInspector();bindReviewDialog();
   document.addEventListener('visibilitychange',()=>{if(document.hidden){const resume=playing;pause();suspendedPreview=resume;}else if(suspendedPreview){suspendedPreview=false;void playPreview();}});
@@ -810,7 +817,7 @@ async function start(): Promise<void> {
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-    const restored=await setupPersistence();renderChest();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();renderChest();restoreEnvironment();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
@@ -1004,5 +1011,101 @@ async function exportChest():Promise<void> {
  const binding=chestRegionsBinding({fileSha256:digest,sourceHash:data.sourceHash,reviewedSource:data.reviewedSource,exportedAt:new Date().toISOString(),mapping:chestMapping.available?chestMapping.basis:chestMapping.reason});
  download('chest-regions.json',value.text,'application/json');download('chest-regions.binding.json',JSON.stringify(binding,null,2)+'\n','application/json');
  message('Downloaded chest-regions.json and chest-regions.binding.json. The regions are review evidence, not an approval; the package is unchanged.');
+}
+/** Animate · Environment. Inspection only: the player is the solver, nothing is written to the model or motion. */
+const environmentInputs=['wind-base','wind-breeze','wind-gust','wind-repeat','wind-gust-peak','wind-gust-duration','gravity','jolt','drag-trail','physics-reset'];
+function environmentApplied():boolean{return input('environment-applied').checked;}
+function gravityValue():number{return Number(input('gravity').value);}
+/** Called from `tick` right before `player.frame(dt)`: the gust clock is the stepped time, so a paused player freezes it. */
+function stepEnvironment(dt:number):void {
+ if(!player)return;
+ wind.advance(dt);
+ const {due,pending}=dueJolts(joltQueue,wind.read().time);joltQueue=pending;for(const step of due)player.moved({x:step.x,y:step.y});
+ if(environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));
+ renderEnvironment();
+}
+function applyEnvironment():void {if(player&&environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));renderEnvironment();}
+function renderEnvironment():void {
+ if(!player)return;
+ const reading=wind.read();
+ text('wind-readout',(environmentApplied()?windReadout(reading,gravityValue()):RUNTIME_START_READOUT)+environmentNote);
+ const gust=button('wind-gust');gust.disabled=reading.gusting;gust.setAttribute('aria-pressed',String(reading.gusting));gust.textContent=reading.gusting?'Gusting…':'Gust';
+ text('wind-base-label',input('wind-base').value);text('gravity-label',gravityValue().toFixed(2));
+}
+/** Every control change engages the environment; until then the player stands at the runtime start values. */
+function engage(change:()=>void):void {
+ try{change();input('environment-applied').checked=true;environmentNote='';applyEnvironment();persistence?.save();}
+ catch(error){message(`Environment unchanged: ${errorText(error)}`,true);syncEnvironmentInputs();}
+}
+function syncEnvironmentInputs():void {
+ const s=wind.snapshot();input('wind-base').value=String(s.base);input('wind-breeze').checked=s.breeze;input('wind-repeat').checked=s.repeat;input('wind-gust-peak').value=String(s.gustPeak);input('wind-gust-duration').value=String(s.gustDuration);renderEnvironment();
+}
+function bindEnvironment():void {
+ input('wind-base').oninput=()=>engage(()=>wind.setBase(Number(input('wind-base').value)));
+ input('wind-breeze').onchange=()=>engage(()=>wind.setBreeze(input('wind-breeze').checked));
+ input('wind-repeat').onchange=()=>engage(()=>wind.setRepeat(input('wind-repeat').checked));
+ input('wind-gust-peak').onchange=()=>engage(()=>wind.setGustPeak(Number(input('wind-gust-peak').value)));
+ input('wind-gust-duration').onchange=()=>engage(()=>wind.setGustDuration(Number(input('wind-gust-duration').value)));
+ input('gravity').oninput=()=>engage(()=>{environmentFor(wind.read(),gravityValue());});
+ button('wind-gust').onclick=()=>engage(()=>wind.triggerGust());
+ button('jolt').onclick=()=>{if(!player)return;joltQueue.push(...joltPacket(wind.read().time));if(!playing)message('Jolt queued · it reaches the physics on the next steps; press Play.');};
+ button('physics-reset').onclick=resetPhysics;
+ input('drag-trail').onchange=()=>{el('rig-viewport').dataset.trail=String(input('drag-trail').checked);};
+ // Drag to trail: the rig pane's pointer drag becomes `player.moved` before the pan handler sees it; Space still pans.
+ let space=false,trail:{id:number;x:number;y:number}|null=null;
+ const keys=(event:KeyboardEvent)=>{if(event.code==='Space')space=event.type==='keydown';};
+ window.addEventListener('keydown',keys);window.addEventListener('keyup',keys);window.addEventListener('blur',()=>{space=false;});
+ const pane=el('rig-pane'),viewport=el('rig-viewport');
+ pane.addEventListener('pointerdown',event=>{
+  if(!input('drag-trail').checked||space||!player||!event.isPrimary||event.button!==0)return;
+  if(event.target instanceof Element&&event.target.closest('button,input,select,textarea,a'))return;
+  event.stopPropagation();event.preventDefault();trail={id:event.pointerId,x:event.clientX,y:event.clientY};viewport.setPointerCapture(event.pointerId);
+ },{capture:true});
+ pane.addEventListener('pointermove',event=>{
+  if(!trail||event.pointerId!==trail.id)return;event.stopPropagation();
+  const motion=dragMoved(event.clientX-trail.x,event.clientY-trail.y,rigScale);trail.x=event.clientX;trail.y=event.clientY;if(motion&&player)player.moved(motion);
+ },{capture:true});
+ const end=(event:PointerEvent)=>{if(!trail||event.pointerId!==trail.id)return;event.stopPropagation();if(viewport.hasPointerCapture(trail.id))viewport.releasePointerCapture(trail.id);trail=null;};
+ pane.addEventListener('pointerup',end,{capture:true});pane.addEventListener('pointercancel',end,{capture:true});
+}
+/** Reset: the runtime's start values, then the player's reopen-then-step to the current time, so the physics history is cleared. */
+function resetPhysics():void {
+ if(!player)return;
+ joltQueue=[];wind.restore(null);input('environment-applied').checked=false;input('gravity').value='1';syncEnvironmentInputs();
+ try{player.environment(null);if(player.current){player.seek(time);drawRig(()=>player!.draw());}environmentNote=` · physics history cleared; re-posed from ${time.toFixed(3)} s`;}
+ catch(error){environmentNote='';message(`Physics reset refused: ${errorText(error)}`,true);}
+ renderEnvironment();persistence?.save();
+}
+/** Draft restore: the inputs are already back; rebuild the wind model from them (a fresh gust clock). */
+function restoreEnvironment():void {
+ const snapshot:WindSnapshot={version:1,base:Number(input('wind-base').value),breeze:input('wind-breeze').checked,repeat:input('wind-repeat').checked,gustPeak:Number(input('wind-gust-peak').value),gustDuration:Number(input('wind-gust-duration').value)};
+ try{wind.restore(snapshot);environmentFor(wind.read(),gravityValue());}
+ catch(error){wind.restore(null);input('environment-applied').checked=false;input('gravity').value='1';message(`Saved environment not restored: ${errorText(error)}`,true);}
+ syncEnvironmentInputs();el('rig-viewport').dataset.trail=String(input('drag-trail').checked);
+ if(player){if(environmentApplied())applyEnvironment();else player.environment(null);}
+}
+function feedbackEnvironment(){return player?environmentJson(environmentContext(wind.read(),gravityValue(),environmentApplied(),player.environment())):null;}
+function enableEnvironment(modelUrl:string):void {
+ for(const id of environmentInputs)el<HTMLInputElement|HTMLButtonElement>(id).disabled=false;
+ syncEnvironmentInputs();text('physics-mix-readonly',CONSTRAINT_MIX_READONLY);text('physics-constraints-state','Reading the compiled model…');
+ const rig=data.reviewedSource.rig;
+ if(!rig){renderConstraints({available:false,reason:'PHYSICS_CONSTRAINTS_UNAVAILABLE: no reviewed rig identity'});return;}
+ void loadPhysicsConstraints(modelUrl,rig.sha256).then(renderConstraints,error=>renderConstraints({available:false,reason:`PHYSICS_CONSTRAINTS_UNAVAILABLE: ${errorText(error)}`}));
+}
+function renderConstraints(value:Awaited<ReturnType<typeof loadPhysicsConstraints>>):void {
+ const area=el('physics-constraints');area.replaceChildren();
+ if(!value.available){text('physics-constraints-state',value.reason);el('physics-constraints-state').classList.add('error');return;}
+ el('physics-constraints-state').classList.remove('error');
+ text('physics-constraints-state',`${value.rows.length} physics constraints as the compiled model declares them · — = not declared (no runtime default is shown)`);
+ const table=document.createElement('table'),head=document.createElement('tr');table.className='physics-table';
+ for(const label of ['Constraint','Bone',...PHYSICS_FIELDS]){const cell=document.createElement('th');cell.scope='col';cell.textContent=label;head.append(cell);}
+ const thead=document.createElement('thead');thead.append(head);const body=document.createElement('tbody');
+ for(const row of value.rows){
+  const line=document.createElement('tr');
+  const name=document.createElement('th');name.scope='row';name.textContent=row.name;const bone=document.createElement('td');bone.textContent=row.bone??'—';line.append(name,bone);
+  for(const field of PHYSICS_FIELDS){const cell=document.createElement('td'),v=row.values[field];cell.textContent=v===undefined?'—':String(v);if(v===undefined){cell.className='absent';cell.title='Not declared';}line.append(cell);}
+  body.append(line);
+ }
+ table.append(thead,body);area.append(table);
 }
 void start();

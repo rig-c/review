@@ -4,6 +4,7 @@ import type { CompareBinding } from './compare.ts';
 import type { CompareSession } from './compare-session.ts';
 import type { FeedbackHistory, HistoryRetrieval } from './session-history.ts';
 import type { ReferenceBinding } from './reference.ts';
+import { environmentSummary, parseEnvironmentContext } from './environment.ts';
 type Category = Feedback['category'];
 type Side = 'single' | 'a' | 'b';
 type ParsedFeedbackSession = FeedbackHistory<ReviewSession | CompareSession>;
@@ -155,6 +156,12 @@ function jsonBlock(value: unknown): string {
   return `${fence}json\n${json}\n${fence}`;
 }
 
+/** "Under gust 48 / wind 30": a readable line when the record carries a valid environment; the raw context still follows. */
+function environmentLine(context: Json | undefined): string[] {
+  if (context === undefined || context === null || typeof context !== 'object' || Array.isArray(context) || !('environment' in context)) return [];
+  try { const value = parseEnvironmentContext(context.environment); return [`- Environment: ${value === null ? 'no compiled model drawn' : feedbackMarkdownText(environmentSummary(value))}`]; }
+  catch { return []; }
+}
 /** Local issue-ready text only. No issue creation, clock inference or source IO. */
 export function formatFeedbackIssues(input: ParsedFeedbackSession): string {
   const model = groupFeedbackIssues(input), md = feedbackMarkdownText;
@@ -185,7 +192,8 @@ export function formatFeedbackIssues(input: ParsedFeedbackSession): string {
           `- Target: ${md(item.target.kind)}: ${md(item.target.name)}`,
           `- Inclusive frames: ${item.frameStart}–${item.frameEnd}`,
           `- Side: ${item.side}`,
-          `- Summary: ${md(item.summary)}`, '',
+          `- Summary: ${md(item.summary)}`,
+          ...environmentLine(item.context), '',
           'Selected build identity:', '', jsonBlock(item.selectedSource));
         if (model.pairedBinding) lines.push('', 'Paired comparison binding:', '', jsonBlock(model.pairedBinding));
         if (item.warnings.length) lines.push('', 'Validation warnings (record retained):', '', jsonBlock(item.warnings));
