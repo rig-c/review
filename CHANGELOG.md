@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/rig-c/review/compare/v0.2.1...v0.3.0) (2026-10-19)
+
+
+### Features
+
+* **open:** fix the launcher contract with named refusals ([#72](https://github.com/rig-c/review/issues/72)) ([e027f28](https://github.com/rig-c/review/commit/e027f28521c71d50c070119cac54ec8aa710da6f)), closes [#71](https://github.com/rig-c/review/issues/71)
+
+
+### Bug Fixes
+
+* redact the write capability from the install smoke's output ([#69](https://github.com/rig-c/review/issues/69)) ([6cbf30d](https://github.com/rig-c/review/commit/6cbf30d23e30f0a353f4d2a16e3d73b84a52c11c)), closes [#67](https://github.com/rig-c/review/issues/67)
+
 ## [0.2.1](https://github.com/rig-c/review/compare/v0.2.0...v0.2.1) (2026-10-18)
 
 
