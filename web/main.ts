@@ -7,6 +7,8 @@ import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs
 import {RigOverlays,type OverlayCircle,type OverlayRegion} from './rig-overlays.ts';
 import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
 import {bindChestEditor,bustLabel,bustSides,rowCircle,type ChestEditor} from './chest-editor.ts';
+import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
+import {meshEditBinding,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
 import {connectControl} from './control.ts';
@@ -73,6 +75,9 @@ let playbackIntent=0,desiredPlay=false,seekingControl=false;
 let parts:PartExplorer|null=null;
 let overlays:RigOverlays|null=null;
 let chestEditor:ChestEditor|null=null;
+let meshEditor:MeshEditor|null=null;
+/** The hash-verified compiled model document the parts catalog was read from (mesh edit reads attachments from it). */
+let partModel:unknown=null;
 let appearance:ReturnType<typeof bindAppearance>|null=null;
 let workspace:WorkspaceUI|null=null;
 let idleHeld=false;
@@ -553,7 +558,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     } });
     player = new RigPlayer(el('rig-root'), assets);
     // Parts inspection is an add-on: a catalog refusal is shown in the explorer and never aborts the rig.
-    try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
+    try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);partModel=catalog.model;parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
     player.on('event', event => { text('event-log', `Runtime event: ${event.name} · ${event.time.toFixed(2)} s`); });
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
@@ -780,6 +785,7 @@ function bind(): void {
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,changed:renderChest,download:()=>{void exportChest();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
+  meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,basis:meshBasis,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},message,confirm:text=>window.confirm(text),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
   for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
@@ -807,7 +813,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{redrawOverlay(true);const part=parts?.value();if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
@@ -843,7 +849,7 @@ function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:
 function redrawOverlay(fresh:boolean):void {
  if(!overlays||!player)return;
  const project=rigProject();
- const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions:chestRegions(),circles:chestCircles()}):overlays.redraw({project,settings:layers,regions:chestRegions(),circles:chestCircles()});
+ const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions:chestRegions(),circles:chestCircles(),meshEdit:meshEditor?.overlay()}):overlays.redraw({project,settings:layers,regions:chestRegions(),circles:chestCircles(),meshEdit:meshEditor?.overlay()});
  text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
 }
 function canRepeatIdle():boolean{return !!player&&idleAvailable(assets?.animations.map(a=>a.name)??[],animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
@@ -1022,7 +1028,7 @@ function renderChest():void {
  el('chest-mapping').classList.toggle('error',!chestMapping.available);
  const value=chestEvaluation();text('chest-status',value.ok?`${value.document.mesh.value.contour.regions.map(r=>`${r.name} → ${r.bone}`).join(' · ')} · valid for export`:value.error);
  el('chest-status').classList.toggle('error',!value.ok);
- chestEditor?.sync();redrawOverlay(false);
+ chestEditor?.sync();meshEditor?.sync();redrawOverlay(false);
 }
 async function exportChest():Promise<void> {
  const value=chestEvaluation();if(!value.ok){message(`Chest regions not exported: ${value.error}`,true);return;}
@@ -1126,5 +1132,14 @@ function renderConstraints(value:Awaited<ReturnType<typeof loadPhysicsConstraint
   body.append(line);
  }
  table.append(thead,body);area.append(table);
+}
+/** Setup's mesh edit: the selected slot's actual mesh as a typed delta. A two-file client download; nothing reaches the session or the package. */
+function meshSource(){const part=parts?.value()??null,frame=parts?.frame('single');return meshEditSource({slot:part?.slot??null,activeAttachment:parts?.observation()?.activeAttachment??null,row:part?frame?.order.find(row=>row.slot===part.slot):undefined,model:partModel,mapping:chestMapping});}
+function meshBasis():string {return `posed vertices of the last drawn frame (animation ${animation?JSON.stringify(animation):'none'} at ${(player?.time??time).toFixed(4)} s; playback pauses on entering mesh edit) mapped to crop px through ${chestMapping.available?chestMapping.basis:chestMapping.reason}`;}
+async function exportMesh(doc:MeshEditDocument):Promise<void> {
+ const text=JSON.stringify(doc,null,2)+'\n',digest=await sha256Hex(text);
+ const binding=meshEditBinding({fileSha256:digest,sourceHash:data.sourceHash,reviewedSource:data.reviewedSource,exportedAt:new Date().toISOString(),mapping:chestMapping.available?chestMapping.basis:chestMapping.reason,attachment:{slot:doc.slot,skin:doc.skin,name:doc.attachment,sha256:doc.source.hash}});
+ download('mesh-edit.json',text,'application/json');download('mesh-edit.binding.json',JSON.stringify(binding,null,2)+'\n','application/json');
+ message(`Downloaded mesh-edit.json (${doc.ops.length} ops) and mesh-edit.binding.json. The delta is review evidence, not an approval; the package is unchanged and the producer retriangulates.`);
 }
 void start();

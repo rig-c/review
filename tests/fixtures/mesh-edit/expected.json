@@ -1,0 +1,21 @@
+{
+  "schema": "rig-review-mesh-edit/1",
+  "slot": "panel",
+  "skin": "default",
+  "attachment": "panel",
+  "source": {
+    "vertexCount": 5,
+    "triangleCount": 4,
+    "hullLength": 4,
+    "hash": "0000000000000000000000000000000000000000000000000000000000000abc"
+  },
+  "units": "crop px, x right, y down; vertex ids are source indices, added vertices take the next id in op order, removed ids are not reused",
+  "basis": "fixture basis",
+  "preview": "preview only — the producer retriangulates; the ops are a request over the original triangulation, not a mesh",
+  "ops": [
+    { "op": "move", "v": 4, "from": [5, 5], "to": [6.5, 4] },
+    { "op": "edge", "a": 0, "b": 2 },
+    { "op": "add", "at": [5, 0], "onEdge": [0, 1] },
+    { "op": "remove", "v": 3 }
+  ]
+}
