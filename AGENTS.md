@@ -9,4 +9,4 @@ A standalone human inspection and structured feedback app. Read README.md, docs/
 - View, Rig, Playback and Feedback are sections of one inspection workspace. Structured feedback is not an implemented mesh editor. Future modeling touch-up must preserve source provenance; motion authoring is outside this app. Do not label placeholders as working editing tools.
 - Require same-origin JSON mutations, a loopback-only server, bounded payloads and no arbitrary filesystem endpoint.
 - Run focused tests for path/state boundaries. Use the global nova-run skill for full test/build/typecheck bundles.
-- Use Conventional Commits in English. Include `Co-Authored-By: Naru <342599188+fj-naru[bot]@users.noreply.github.com>` in agent-authored commits and final squash commits. Parent agent handles Git landing; execution agents do not run Git.
+- Use Conventional Commits in English. Agent-authored commits and final squash commits carry the authoring agent's own `Co-Authored-By` trailer; this file names no single agent. Parent agent handles Git landing; execution agents do not run Git.
