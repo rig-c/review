@@ -28,6 +28,38 @@ export function bindStageLayout(area:HTMLElement,changed:()=>void):()=>void {
  const render=()=>{if(syncStageLayout(area))changed();};
  const observer=new ResizeObserver(render);observer.observe(area);render();return ()=>observer.disconnect();
 }
+/** Single-key layer toggles. Free of Space (pan), Enter (frame entry), arrows/Home/End (tabs, separators, part list). */
+export const layerShortcuts=Object.freeze([
+ Object.freeze({key:'i',id:'layer-images',label:'Images'}),
+ Object.freeze({key:'m',id:'layer-mesh',label:'Mesh edges'}),
+ Object.freeze({key:'b',id:'layer-bones',label:'Bone points'}),
+] as const);
+const nonTextInputs=new Set(['checkbox','radio','button','submit','reset','range','color','file','image']);
+/** A focused text field, textarea, select or contenteditable keeps its keys. */
+export function textEntryFocused(target:unknown):boolean {
+ const node=target as {closest?:(selector:string)=>unknown;isContentEditable?:boolean}|null;if(!node||typeof node.closest!=='function')return false;
+ if(node.isContentEditable||node.closest('textarea,select,[contenteditable]:not([contenteditable="false"])'))return true;
+ const input=node.closest('input') as {type?:string}|null;return !!input&&!nonTextInputs.has(String(input.type??'text').toLowerCase());
+}
+interface ShortcutInput {disabled:boolean;click():void}
+/** `I`/`M`/`B` click the actual checkbox, so its change handler, checked state and draft input stay the only state. */
+export function bindLayerShortcuts(root:Pick<Document,'addEventListener'|'removeEventListener'>&{getElementById(id:string):unknown}):()=>void {
+ const keyDown=(event:Event)=>{
+  const e=event as KeyboardEvent;if(e.defaultPrevented||e.repeat||e.ctrlKey||e.metaKey||e.altKey||typeof e.key!=='string'||textEntryFocused(e.target))return;
+  const shortcut=layerShortcuts.find(item=>item.key===e.key.toLowerCase());if(!shortcut)return;
+  const input=root.getElementById(shortcut.id) as ShortcutInput|null;if(!input||input.disabled)return;
+  e.preventDefault();input.click();
+ };
+ root.addEventListener('keydown',keyDown);return ()=>root.removeEventListener('keydown',keyDown);
+}
+/** Disabled toggles name their reason as a tooltip; enabled ones name their key. */
+export function describeLayerToggles(root:{getElementById(id:string):unknown},reason:string):void {
+ for(const item of layerShortcuts){
+  const input=root.getElementById(item.id) as (ShortcutInput&{closest(selector:string):{title:string}|null})|null;const label=input?.closest('label');
+  if(input&&label)label.title=input.disabled?reason:`${item.label} · key ${item.key.toUpperCase()}`;
+ }
+}
+
 // Nested or separately disposed pan binders must not restore another binder's override.
 const panVideoOverrides=new WeakMap<HTMLVideoElement,{owners:number;value:string;priority:string}>();
 export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,enabled:()=>boolean=()=>true):()=>void {
@@ -67,3 +99,4 @@ export function bindInspectorTabs(changed:()=>void,beforeChange:()=>void=()=>{})
  const activate=(tab:HTMLButtonElement)=>{beforeChange();for(const item of tabs){const active=item===tab;item.setAttribute('aria-selected',String(active));item.tabIndex=active?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==tab.dataset.inspector;changed();};
  for(const [index,tab] of tabs.entries()){tab.onclick=()=>activate(tab);tab.onkeydown=event=>{const next=event.key==='ArrowRight'?(index+1)%tabs.length:event.key==='ArrowLeft'?(index+tabs.length-1)%tabs.length:event.key==='Home'?0:event.key==='End'?tabs.length-1:null;if(next===null)return;event.preventDefault();const target=tabs[next];if(target){activate(target);target.focus();}};}
 }
+

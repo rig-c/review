@@ -359,15 +359,28 @@ Control capabilities are excluded from links and browser persistence.
 
 ## Workspace settings and panels
 
-The left, right and bottom panels are resizable. Drag a separator, or focus it
+The review page has a left column (Parts explorer, with checkpoints and the
+reference select folded above it), the stage, the Inspector below it with
+**Setup**, **Animate** and **Feedback** sections, and a status footer. The
+compare page keeps sources on the left and the Parts explorer on the right.
+
+The view bar keeps the layer toggles in reach in every section: **Images**
+(`I`), **Mesh edges** (`M`) and **Bone points** (`B`). The keys do nothing while
+a text field, textarea, select or editable text has focus, with Ctrl/Alt/Cmd
+held, or on key repeat; Space stays pan and Enter stays frame entry. A disabled
+toggle shows why as a tooltip, and the footer shows the same layer status. The
+footer also gathers the message, player, layout, renderer, idle, remote control
+and draft state; **View region** opens the numeric view.
+
+The side and bottom panels are resizable. Drag a separator, or focus it
 and use the arrow keys (Shift for larger steps) and Home/End. Escape, a
 cancelled pointer or window blur during a drag returns the previous size. The
-stage keeps a usable minimum. When the window is too narrow, the left and then
-the right panel, and when it is too short, the Inspector, become explicit
+stage keeps a usable minimum. When the window is too narrow, the side columns
+(left first on the compare page), and when it is too short, the Inspector, become explicit
 drawers opened from buttons above the stage instead of shrinking to nothing. Responsive clamping
 never overwrites the desired size, so a wider window restores it.
 
-Settings, in the lower left, holds browser defaults: Theme, Sync cameras by
+Settings, at the bottom of the left column, holds browser defaults: Theme, Sync cameras by
 default, Repeat idle by default, and Reset layout. Defaults seed a new
 inspection only. A view link or source draft keeps its own appearance, camera
 sync and idle choice, and restoring it neither changes the saved defaults nor
@@ -390,9 +403,9 @@ serving use per-port origins and keep them separate.
 
 ## Inspect a part
 
-The right Parts explorer selects an actual model slot on a specific single/A/B side. All rows follow the public held snapshot's exact draw-order z, including hidden/null slots. Search matches the exact source slot names: a row is shown when its name contains the typed text, case-sensitively, with no case folding or normalization. Arrow keys/Home/End move between result buttons, Enter/Space selects, and Escape returns to search. Whole rig restores full drawing. Selecting a drawn row fits its conservative world bounds within the existing camera zoom range; Sync cameras applies the same normalized camera action to every visible pane, while independent mode changes only that selected pane. Hidden/empty geometry reports `PART_FIT_UNAVAILABLE` and keeps the camera.
+The Parts explorer (left column; right on the compare page) selects an actual model slot on a specific single/A/B side. All rows follow the public held snapshot's exact draw-order z, including hidden/null slots. Search matches the exact source slot names: a row is shown when its name contains the typed text, case-sensitively, with no case folding or normalization. Arrow keys/Home/End move between result buttons, Enter/Space selects, and Escape returns to search. Whole rig restores full drawing. Selecting a drawn row fits its conservative world bounds within the existing camera zoom range; Sync cameras applies the same normalized camera action to every visible pane, while independent mode changes only that selected pane. Hidden/empty geometry reports `PART_FIT_UNAVAILABLE` and keeps the camera.
 
-Solo preserves the full held pose's resolved clips and filters only drawing. In context, the whole rig remains visible with an amber dashed conservative selection box; this box is geometry/clip bounds, not exact source-alpha coverage. Selection changes no track, skin, set, motion, source asset or review decision. The selected slot's side/mode survives source-bound links and local drafts. The Rig inspector shows actual posed mesh counts or region corners, page/region, current skin/set context and declared attachment candidates. **Use slot for feedback** explicitly prefills the target; selecting a row alone submits nothing.
+Solo preserves the full held pose's resolved clips and filters only drawing. In context, the whole rig remains visible with an amber dashed conservative selection box; this box is geometry/clip bounds, not exact source-alpha coverage. Selection changes no track, skin, set, motion, source asset or review decision. The selected slot's side/mode survives source-bound links and local drafts. The Setup section shows actual posed mesh counts or region corners, page/region, current skin/set context and declared attachment candidates. **Use slot for feedback** explicitly prefills the target; selecting a row alone submits nothing.
 
 The pinned published `@rig-c/play`1.12.0 supplies `slotIdentity()` and frame generation. The explorer atomically retains the public identity snapshot with the same-generation held frame: exact attachment key, owning skin, active set/skin, full z order and explicit hidden/no-attachment/timeline-null/set-hide reasons. Hidden/null slots keep null keys with their reported reason; declarations and texture/UV names never replace that public result. An identity-known attachment need not have a visible primitive or positive fit bounds. The current UI follows its selected slot as animation changes, updating the displayed identity to the actual held frame.
 

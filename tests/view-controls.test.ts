@@ -205,3 +205,46 @@ test('tab switching captures the old panel before hiding and restores after show
  (tabs[1] as unknown as {onclick:()=>void}).onclick();expect(trace).toEqual(['before:false,true','after:true,false']);
  const key=Object.assign(new Event('keydown',{cancelable:true}),{key:'ArrowLeft'});(tabs[1] as unknown as {onkeydown:(event:Event)=>void}).onkeydown(key);expect(key.defaultPrevented).toBe(true);expect(trace.slice(2)).toEqual(['before:true,false','after:false,true']);
 });
+
+import {bindLayerShortcuts,describeLayerToggles,layerShortcuts,textEntryFocused} from '../web/view-controls.ts';
+/** A focusable element whose `closest` answers like the browser for the selectors the guard asks. */
+function focusTarget(kind:'text'|'search'|'number'|'textarea'|'select'|'editable'|'checkbox'|'button'|'stage'){
+ const input=['text','search','number','checkbox'].includes(kind)?{type:kind}:null;
+ return {isContentEditable:kind==='editable',closest(selector:string){
+  if(selector==='input')return input;
+  if(selector.startsWith('textarea'))return kind==='textarea'||kind==='select'||kind==='editable'?this:null;
+  return null;
+ }};
+}
+function layerHost(){
+ const changes:string[]=[],root=new EventTarget(),label=(id:string)=>({title:'',id});
+ const inputs=Object.fromEntries(layerShortcuts.map(item=>{const owner=label(item.id);const input={id:item.id,checked:item.id==='layer-images',disabled:false,click(){this.checked=!this.checked;changes.push(item.id+':'+this.checked);},closest:(selector:string)=>selector==='label'?owner:null,owner};return [item.id,input];}));
+ const host=Object.assign(root,{getElementById:(id:string)=>inputs[id]??null});
+ const press=(key:string,target:unknown=focusTarget('stage'),extra:Record<string,unknown>={})=>{const event=Object.assign(new Event('keydown',{cancelable:true}),{key,repeat:false,ctrlKey:false,metaKey:false,altKey:false,...extra});Object.defineProperty(event,'target',{value:target});root.dispatchEvent(event);return event;};
+ return {host,inputs,changes,press};
+}
+
+test('I, M and B toggle their actual layer checkbox; text entry, modifiers, repeats and disabled layers keep the key',()=>{
+ const {host,inputs,changes,press}=layerHost();const dispose=bindLayerShortcuts(host as unknown as Document);
+ expect(layerShortcuts.map(item=>[item.key,item.id])).toEqual([['i','layer-images'],['m','layer-mesh'],['b','layer-bones']]);
+ expect(press('i').defaultPrevented).toBe(true);expect(inputs['layer-images']!.checked).toBe(false);
+ press('M');expect(inputs['layer-mesh']!.checked).toBe(true);press('b',focusTarget('checkbox'));expect(inputs['layer-bones']!.checked).toBe(true);press('b',focusTarget('button'));expect(inputs['layer-bones']!.checked).toBe(false);
+ expect(changes).toEqual(['layer-images:false','layer-mesh:true','layer-bones:true','layer-bones:false']);
+ for(const kind of ['text','search','number','textarea','select','editable'] as const){const event=press('i',focusTarget(kind));expect(event.defaultPrevented).toBe(false);expect(textEntryFocused(focusTarget(kind))).toBe(true);}
+ for(const extra of [{ctrlKey:true},{metaKey:true},{altKey:true},{repeat:true}])press('m',focusTarget('stage'),extra);
+ for(const key of [' ','Enter','ArrowLeft','x'])press(key);
+ expect(changes.length).toBe(4);
+ inputs['layer-mesh']!.disabled=true;expect(press('m').defaultPrevented).toBe(false);expect(inputs['layer-mesh']!.checked).toBe(true);
+ dispose();press('i');expect(changes.length).toBe(4);
+});
+
+test('disabled layer toggles carry the footer reason as a tooltip; enabled ones name their key',()=>{
+ const {host,inputs}=layerHost();inputs['layer-bones']!.disabled=true;describeLayerToggles(host,'No rig supplied');
+ expect(layerShortcuts.map(item=>inputs[item.id]!.owner.title)).toEqual(['Images · key I','Mesh edges · key M','No rig supplied']);
+});
+
+test('the review page view bar holds the three layer toggles with matching shortcut attributes',async()=>{
+ const html=await readFile(new URL('../web/index.html',import.meta.url),'utf8'),bar=html.slice(html.indexOf('<div class="viewbar">'),html.indexOf('<div id="stage-layout"'));
+ for(const item of layerShortcuts){const match=bar.match(new RegExp(`<label class="layer-toggle"[^>]*><input aria-keyshortcuts="([A-Z])" id="${item.id}"[^>]*><span>${item.label}</span>`));expect(match?.[1]).toBe(item.key.toUpperCase());}
+ expect(html.match(/id="layer-(images|mesh|bones)"/g)?.length).toBe(3);
+});

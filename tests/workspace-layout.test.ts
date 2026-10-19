@@ -88,3 +88,22 @@ test('settled programmatic clamping survives before-hide capture but intentional
  panel.scrollLeft=0;panel.scrollTop=0;memory.capture('view',panel,true);memory.restore('view',panel);queue.frame();queue.frame();expect(memory.snapshot().view).toEqual({x:0,y:0});expect(panel.scrollTop).toBe(0);
  memory.restore('view',panel);queue.frame();panel.scrollTop=77;memory.capture('view',panel,true);queue.frame();queue.frame();expect(panel.scrollTop).toBe(77);expect(memory.snapshot().view).toEqual({x:0,y:77});expect(memory.restoring('view')).toBe(false);memory.dispose();
 });
+
+const explorerLeft={left:'rightWidth',right:null} as const;
+test('a single left column uses its own saved width and bounds; the absent side has no size or separator',()=>{
+ const wide=allocateWorkspaceLayout({width:1280,height:900},defaultWorkspacePanels,explorerLeft);
+ expect(wide).toMatchObject({rightWidth:260,leftWidth:0,leftMode:'absent',rightMode:'panel',stageWidth:1280-260-8});expect(wide.separators.leftWidth.enabled).toBe(false);expect(wide.separators.rightWidth).toMatchObject({min:180,value:260,enabled:true});
+ const edge=180+240+8;expect(allocateWorkspaceLayout({width:edge,height:900},defaultWorkspacePanels,explorerLeft).rightMode).toBe('panel');
+ expect(allocateWorkspaceLayout({width:edge-1,height:900},defaultWorkspacePanels,explorerLeft)).toMatchObject({rightMode:'drawer',rightWidth:0,stageWidth:edge-1});
+ for(const width of [0,239,240,427,428,429,700,980,1280,1600])for(const height of [0,180,500,900]){const layout=allocateWorkspaceLayout({width,height},{leftWidth:720,rightWidth:900,inspectorHeight:900},explorerLeft),handle=layout.rightMode==='panel'?8:0;expect(layout.leftWidth).toBe(0);expect(layout.rightWidth+layout.stageWidth+handle).toBeCloseTo(width,8);if(width>=240)expect(layout.stageWidth).toBeGreaterThanOrEqual(240-1e-8);}
+ expect(allocateWorkspaceLayout({width:1280,height:900},defaultWorkspacePanels)).toMatchObject({leftWidth:170,rightWidth:260,leftMode:'panel',rightMode:'panel'});
+});
+test('column maps that repeat or invent a saved width are refused by name',()=>{
+ expect(()=>allocateWorkspaceLayout({width:900,height:600},defaultWorkspacePanels,{left:'rightWidth',right:'rightWidth'})).toThrow('WORKSPACE_COLUMNS: left rightWidth / right rightWidth; required distinct leftWidth, rightWidth or null');
+ expect(()=>allocateWorkspaceLayout({width:900,height:600},defaultWorkspacePanels,{left:'inspectorHeight',right:null} as never)).toThrow('WORKSPACE_COLUMNS: left inspectorHeight');
+});
+test('a separator follows its side, not its saved field name',()=>{
+ const element=new LayoutElement();let desired=260;
+ const binding=bindWorkspaceSeparator({element:element as unknown as HTMLElement,panel:'rightWidth',side:'left',controls:'parts',label:'Resize parts',events:null,desired:()=>desired,range:()=>({min:180,max:600,value:desired,enabled:true}),resize:value=>{desired=value;}});
+ element.emit('keydown',{key:'ArrowRight'});expect(desired).toBe(268);element.emit('pointerdown',{pointerId:1,isPrimary:true,button:0,clientX:100});element.emit('pointermove',{pointerId:1,clientX:130});expect(desired).toBe(298);element.emit('pointerup',{pointerId:1});binding.dispose();
+});
