@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0](https://github.com/rig-c/review/compare/v0.4.0...v0.5.0) (2026-10-19)
+
+
+### Features
+
+* **setup:** chest-region designation and export ([#89](https://github.com/rig-c/review/issues/89)) ([da03f37](https://github.com/rig-c/review/commit/da03f373459ab1f29aa2d352e3e4849f5e6cb1af)), closes [#78](https://github.com/rig-c/review/issues/78)
+* **workspace:** fixed left header, thinner distinct separators, Setup without animation controls, feedback as a modal ([#90](https://github.com/rig-c/review/issues/90)) ([9604e2f](https://github.com/rig-c/review/commit/9604e2f0671529f9768fae4bb2f5b85c14d382d2)), closes [#88](https://github.com/rig-c/review/issues/88)
+* **workspace:** thin scrollbars, sticky panel headers, mode switch in the top bar, one-row view bar ([#85](https://github.com/rig-c/review/issues/85)) ([c322868](https://github.com/rig-c/review/commit/c3228685e60c2ac68bed9d923b4bfc4e4b4bcc56)), closes [#84](https://github.com/rig-c/review/issues/84)
+
+
+### Bug Fixes
+
+* **view:** stop the stage bottom from shaking during playback ([#87](https://github.com/rig-c/review/issues/87)) ([892e137](https://github.com/rig-c/review/commit/892e1373af46433603da50b871dce70224997cf5)), closes [#74](https://github.com/rig-c/review/issues/74)
+
 ## [0.4.0](https://github.com/rig-c/review/compare/v0.3.0...v0.4.0) (2026-10-19)
 
 
