@@ -201,7 +201,7 @@ test('each panel header is the first child of its panel and carries the sticky c
 test('the view bar is one row: layers, sync and zoom, then a View menu holding the three layouts',async()=>{
  const html=await indexHtml(),css=await stylesCss(),bar=between(html,'<div class="viewbar">','<div id="stage-layout"');
  for(const id of ['layer-images','layer-mesh','layer-bones','camera-sync','zoom-out','zoom-in','fit'])expect(bar).toContain(`id="${id}"`);
- const menu=between(bar,'<details id="view-menu"','</details>');expect(bar.endsWith('</details></div><div id="stage-layout"')).toBe(true);
+ const menu=between(bar,'<details id="view-menu"','</details>');expect(bar).toMatch(/<\/details><\/div>(<div id="chest-editor-bar"[^]*<\/span><\/div>)?<div id="stage-layout"$/);
  expect([...menu.matchAll(/data-view="([^"]+)"/g)].map(m=>m[1])).toEqual(['compare','reference','rig']);expect(html.match(/data-view=/g)?.length).toBe(3);expect(menu).toContain('id="view-menu-label"');
  expect(ruleBodies(css,'.viewbar').at(-1)).toContain('flex-wrap:nowrap');
 });

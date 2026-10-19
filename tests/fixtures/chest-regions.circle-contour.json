@@ -1,0 +1,30 @@
+{
+  "tolerance": 2,
+  "margin": 2,
+  "spacing": 36,
+  "maxEdge": 64,
+  "stray": 400,
+  "bridges": true,
+  "regions": [
+    {
+      "name": "bust_r",
+      "shape": "circle",
+      "cx": 382,
+      "cy": 732,
+      "r": 16,
+      "bone": "boob_r",
+      "spacing": 14,
+      "band": 73
+    },
+    {
+      "name": "bust_l",
+      "shape": "circle",
+      "cx": 554,
+      "cy": 722,
+      "r": 13,
+      "bone": "boob_l",
+      "spacing": 14,
+      "band": 66
+    }
+  ]
+}

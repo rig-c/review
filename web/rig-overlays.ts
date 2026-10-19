@@ -16,7 +16,20 @@ export interface OverlaySnapshot {
 }
 /** Designation polygons in rig world coordinates (Setup's Chest regions tool); colours are theme token values. */
 export interface OverlayRegion {name:string;points:OverlayPoint[];stroke:string;fill:string}
-export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[]}
+/**
+ * A circle designation in rig world units (crop px = world px under the crop mapping): core r at full weight, dashed
+ * outer circle at r + band. With handles it is the chest editor's drawing (centre, core edge on the right, band on
+ * top, a label under the outer circle). Colours are theme token values.
+ */
+export interface OverlayCircle {center:OverlayPoint;r:number;band:number;label?:string;/** Label rows below the outer circle, so two labels never overlap. */labelRow?:number;handles:boolean;flash?:boolean;colors:{stroke:string;fill:string;handle:string;ink:string;labelBg:string;flash:string}}
+export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[];circles?:readonly OverlayCircle[]}
+/** Canvas-pixel geometry of a circle designation, the same numbers the editor hit-tests against. */
+export function projectCircle(project:OverlayProject,circle:Pick<OverlayCircle,'center'|'r'|'band'>):{center:OverlayPoint;pxR:number;pxBand:number}|null {
+ const {x,y}=circle.center,center=project(x,y),edge=project(x+circle.r,y),top=project(x,y+circle.r+circle.band);
+ if(![center,edge,top].every(finite))return null;
+ const pxR=Math.max(2,Math.hypot(edge.x-center.x,edge.y-center.y));
+ return {center,pxR,pxBand:Math.max(pxR+2,Math.hypot(top.x-center.x,top.y-center.y))};
+}
 export interface OverlayRefresh extends OverlayView {player:OverlayPlayer|null;bones:readonly BoneOverlaySpec[];frame?:PosedFrame;selectedSlot?:string|null}
 const point=(x:number,y:number):OverlayPoint=>({x,y});
 const finite=(p:OverlayPoint)=>Number.isFinite(p.x)&&Number.isFinite(p.y);
@@ -93,7 +106,7 @@ export class RigOverlays {
   this.geometry=input.player?captureRigGeometry(input.player,input.bones,input.settings,input.frame,input.selectedSlot):null;
   return this.redraw(input);
  }
- redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[]}:OverlayView):OverlaySnapshot{
+ redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[],circles=[]}:OverlayView):OverlaySnapshot{
   if(this.disposed)return this.unavailable('Overlay has been disposed');
   this.host.rigRoot.style.visibility=settings.images?this.visibility:'hidden';
   const warnings=[...(this.geometry?.warnings??[])],ctx=this.host.canvas.getContext('2d');
@@ -140,6 +153,21 @@ export class RigOverlays {
    ctx.globalAlpha=1;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(points[0]!.x,points[0]!.y);for(const p of points.slice(1))ctx.lineTo(p!.x,p!.y);ctx.closePath();
    ctx.fillStyle=region.fill;ctx.fill();ctx.strokeStyle=region.stroke;ctx.lineWidth=1.6;ctx.stroke();
   }
+  if(this.playerAvailable)for(const circle of circles){
+   const at=projectCircle(project,circle);if(!at)continue;const {center,pxR,pxBand}=at,c=circle.colors;
+   ctx.globalAlpha=.95;
+   ctx.beginPath();ctx.setLineDash([5,4]);ctx.strokeStyle=c.stroke;ctx.lineWidth=1.6;ctx.arc(center.x,center.y,pxBand,0,Math.PI*2);ctx.stroke();
+   ctx.beginPath();ctx.setLineDash([]);ctx.fillStyle=c.fill;ctx.lineWidth=2.2;ctx.arc(center.x,center.y,pxR,0,Math.PI*2);ctx.fill();ctx.stroke();
+   if(!circle.handles)continue;
+   ctx.globalAlpha=1;
+   ctx.beginPath();ctx.moveTo(center.x-7,center.y);ctx.lineTo(center.x+7,center.y);ctx.moveTo(center.x,center.y-7);ctx.lineTo(center.x,center.y+7);ctx.stroke();
+   for(const [x,y,fill,stroke] of [[center.x,center.y,c.handle,c.stroke],[center.x+pxR,center.y,c.stroke,c.ink],[center.x,center.y-pxBand,c.ink,c.stroke]] as const){ctx.beginPath();ctx.fillStyle=fill;ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.arc(x,y,4.5,0,Math.PI*2);ctx.fill();ctx.stroke();}
+   if(circle.label){
+    ctx.font='600 11px ui-monospace, monospace';const width=ctx.measureText(circle.label).width+8,lx=center.x-width/2,ly=center.y+pxBand+14+(circle.labelRow??0)*17;
+    ctx.fillStyle=circle.flash?c.flash:c.labelBg;ctx.fillRect(lx,ly-11,width,15);ctx.fillStyle=circle.flash?c.ink:c.stroke;ctx.fillText(circle.label,lx+4,ly);
+   }
+  }
+  ctx.globalAlpha=1;
   if(this.geometry?.selection.length){ctx.globalAlpha=1;ctx.strokeStyle='#ffbb47';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.beginPath();for(const edge of this.geometry.selection)line(edge);ctx.stroke();ctx.setLineDash([]);}
   ctx.restore();
   return this.snapshot(true,needsCapture,warnings);

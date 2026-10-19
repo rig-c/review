@@ -44,8 +44,13 @@ export function evaluateChestForm(read:ChestFieldReader,mapping:CropWorldMapping
  catch(error){if(error instanceof ChestRegionError)return {ok:false,error:error.message};throw error;}
 }
 
-/** Polygons in rig world coordinates for the overlay; none without a model-fixed mapping. */
-export function chestOverlayPolygons(evaluation:ChestEvaluation,mapping:CropWorldMapping):{name:string;points:{x:number;y:number}[]}[] {
+/** Polygon regions in rig world coordinates for the overlay; none without a model-fixed mapping. Circles are drawn as circles. */
+export function chestOverlayPolygons(evaluation:ChestEvaluation,mapping:CropWorldMapping):{name:string;row:number;points:{x:number;y:number}[]}[] {
  if(!evaluation.ok||!mapping.available)return [];
- return evaluation.document.mesh.value.contour.regions.map(region=>({name:region.name,points:region.points.map(([x,y])=>mapping.toWorld(x,y))}));
+ return evaluation.document.mesh.value.contour.regions.flatMap((region,row)=>region.shape==='polygon'?[{name:region.name,row,points:region.points.map(([x,y])=>mapping.toWorld(x,y))}]:[]);
+}
+/** Circle regions of a valid designation: world centre, core r and band (crop px = world px under the mapping). */
+export function chestOverlayCircles(evaluation:ChestEvaluation,mapping:CropWorldMapping):{name:string;row:number;center:{x:number;y:number};r:number;band:number}[] {
+ if(!evaluation.ok||!mapping.available)return [];
+ return evaluation.document.mesh.value.contour.regions.flatMap((region,row)=>region.shape==='circle'?[{name:region.name,row,center:mapping.toWorld(region.cx,region.cy),r:region.r,band:region.band}]:[]);
 }

@@ -4,8 +4,9 @@ import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
 import {rendererStatus} from './renderer-status.ts';
 import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
-import {RigOverlays,type OverlayRegion} from './rig-overlays.ts';
-import {chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
+import {RigOverlays,type OverlayCircle,type OverlayRegion} from './rig-overlays.ts';
+import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
+import {bindChestEditor,bustLabel,bustSides,rowCircle,type ChestEditor} from './chest-editor.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
 import {connectControl} from './control.ts';
@@ -70,6 +71,7 @@ let displayedCenter:ViewPoint|null=null;
 let playbackIntent=0,desiredPlay=false,seekingControl=false;
 let parts:PartExplorer|null=null;
 let overlays:RigOverlays|null=null;
+let chestEditor:ChestEditor|null=null;
 let appearance:ReturnType<typeof bindAppearance>|null=null;
 let workspace:WorkspaceUI|null=null;
 let idleHeld=false;
@@ -771,6 +773,7 @@ function bind(): void {
   cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
+  chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,changed:renderChest,download:()=>{void exportChest();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
   for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
@@ -828,10 +831,12 @@ function bindReviewDialog():void {
  dialog.addEventListener('toggle',()=>{if(dialog.open)button('write-review').setAttribute('aria-expanded','true');});
 }
 
+/** Rig world → rig-pane pixels for the current camera. */
+function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*rigScale,y:parseFloat(root.style.top||'0')-y*rigScale});}
 function redrawOverlay(fresh:boolean):void {
  if(!overlays||!player)return;
- const root=el('rig-root'),project=(x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*rigScale,y:parseFloat(root.style.top||'0')-y*rigScale});
- const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions:chestRegions()}):overlays.redraw({project,settings:layers,regions:chestRegions()});
+ const project=rigProject();
+ const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions:chestRegions(),circles:chestCircles()}):overlays.redraw({project,settings:layers,regions:chestRegions(),circles:chestCircles()});
  text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
 }
 function canRepeatIdle():boolean{return !!player&&idleAvailable(assets?.animations.map(a=>a.name)??[],animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
@@ -981,6 +986,19 @@ function chestRegions():OverlayRegion[]{
  const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim();
  return chestOverlayPolygons(chestEvaluation(),chestMapping).map((region,i)=>({...region,stroke:token(i?'--rv-region-b':'--rv-region-a'),fill:token(i?'--rv-region-b-fill':'--rv-region-a-fill')}));
 }
+/** Circle regions: in edit mode the editor's circles straight from the fields (handles and labels), else the valid designation's. */
+function chestCircles():OverlayCircle[]{
+ const mapping=chestMapping;if(!mapping.available)return [];
+ const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim();
+ const colors=(row:number,overlap:boolean)=>({stroke:token(overlap?'--rv-bust-overlap':row?'--rv-bust-l':'--rv-bust-r'),fill:token(overlap?'--rv-bust-overlap-fill':row?'--rv-bust-l-fill':'--rv-bust-r-fill'),handle:token('--rv-bust-handle'),ink:token('--rv-bust-ink'),labelBg:token('--rv-bust-label-bg'),flash:token('--rv-bust-flash')});
+ if(chestEditor?.active()){
+  const rows=bustSides.map(({side,row})=>({side,row,circle:rowCircle(chestField,row)})),[r,l]=[rows[0]!.circle,rows[1]!.circle];
+  // As in the example, overlapping cores turn both circles to the overlap colour.
+  const overlap=!!r&&!!l&&r.r+l.r>Math.hypot(l.cx-r.cx,l.cy-r.cy);
+  return rows.flatMap(({side,row,circle})=>circle?[{center:mapping.toWorld(circle.cx,circle.cy),r:circle.r,band:circle.band,label:bustLabel(side,circle),labelRow:row,handles:true,flash:chestEditor!.flashing(side),colors:colors(row,overlap)}]:[]);
+ }
+ return chestOverlayCircles(chestEvaluation(),mapping).map(c=>({center:c.center,r:c.r,band:c.band,handles:false,colors:colors(c.row,false)}));
+}
 function populateChestBones():void {
  const bones=data.feedbackCatalog.bones;
  for(const row of chestRegionRows){const node=select(chestRowId(row,'bone'));node.replaceChildren(option('',bones?'Select bone':'No model bones'));for(const name of bones??[])node.append(option(name,name));node.disabled=!bones;}
@@ -997,7 +1015,7 @@ function renderChest():void {
  el('chest-mapping').classList.toggle('error',!chestMapping.available);
  const value=chestEvaluation();text('chest-status',value.ok?`${value.document.mesh.value.contour.regions.map(r=>`${r.name} → ${r.bone}`).join(' · ')} · valid for export`:value.error);
  el('chest-status').classList.toggle('error',!value.ok);
- redrawOverlay(false);
+ chestEditor?.sync();redrawOverlay(false);
 }
 async function exportChest():Promise<void> {
  const value=chestEvaluation();if(!value.ok){message(`Chest regions not exported: ${value.error}`,true);return;}
