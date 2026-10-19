@@ -230,7 +230,10 @@ One origin cannot isolate scripts that run on it, so writes are bound to a
 per-instance capability rather than to the page's origin or the key in its path.
 Each worker mints a 256-bit capability kept only in its private 0600 open record.
 `open` (managed or direct) and the foreground `review`/`review compare` commands
-print it in the `#cap=` fragment, which browsers never send to a server. The page
+print it in the `#cap=` fragment, which browsers never send to a server. That
+printed link goes only to the terminal of the command that started the instance.
+Output meant for a log does not carry it: the install smoke (`bun run smoke`, whose output CI publishes) prints the same
+URL as `#cap=<redacted>` and fails if any capability value reaches its stdout. The page
 moves it into memory and that tab's `sessionStorage`, then removes the fragment
 from the address bar. Every mutation sends it as `X-Review-Capability`; the front
 checks it before forwarding and the worker compares it again in constant time
