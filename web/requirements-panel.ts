@@ -55,6 +55,21 @@ export function requirementName(kind:RequirementKind,subject:string,taken:readon
  let base=`${kind}_${subject}`.toUpperCase().replace(/[^A-Z0-9_]+/g,'_').replace(/_+/g,'_').replace(/^_|_$/g,'');if(!/^[A-Z]/.test(base))base=`R_${base}`;
  let name=base;for(let n=2;taken.includes(name);n++)name=`${base}_${n}`;return name;
 }
+/**
+ * A contact against its own bone and point, or an aim at its own bone, measures 0 by construction and the producer
+ * reports it as PASS (rig-c/review#142; the reader's refusal is asked in rig-c/parts#540). Refused here by name.
+ */
+export function selfTargetRefusal(r:{kind:RequirementKind;bone?:string;point?:BonePoint;target?:{bone:string;point:BonePoint}}):string|null {
+ if(!r.target||!r.bone)return null;
+ if(r.kind==='contact'&&r.target.bone===r.bone&&r.target.point===r.point)return `REQUIREMENTS_SELF_TARGET: contact of bone "${r.bone}" ${r.point} against itself measures 0 in every frame; pick another bone or point`;
+ if(r.kind==='aim'&&r.target.bone===r.bone)return `REQUIREMENTS_SELF_TARGET: aim of bone "${r.bone}" at its own ${r.target.point} has no line to measure; pick another target bone`;
+ return null;
+}
+/** The target a fresh form proposes: a bone other than the subject (the next one in rig order, else the first other one). */
+export function defaultTargetBone(bones:readonly string[],subject:string):string|null {
+ const i=bones.indexOf(subject),next=i>=0?bones.slice(i+1).find(b=>b!==subject):undefined;
+ return next??bones.find(b=>b!==subject)??null;
+}
 /** The measured figure a bar field is read against, from a row. */
 export function measuredFor(row:RequirementRow|undefined,field:string):number|null {
  if(!row)return null;if(field==='lo_degrees')return row.least;if(field==='hi_degrees')return row.greatest;return row.measured;
@@ -92,8 +107,10 @@ export function bindRequirementsPanel(deps:RequirementsPanelDeps):RequirementsPa
   const k=kind.value as RequirementKind,slot=deps.slot(),slotBone=slot?catalog.slotBones[slot]??null:null;
   const bones=catalog.bones,points=['origin','tip'];
   const pickBone=(id:string)=>{const s=sel(id,bones);if(slotBone&&bones.includes(slotBone))s.value=slotBone;return s;};
-  if(k==='contact'){fields.append(make('div',{className:'row'},labelled('Bone ',pickBone('bone')),labelled('point ',sel('point',points))),make('div',{className:'row'},labelled('Target bone ',sel('target-bone',bones)),labelled('point ',sel('target-point',points))));}
-  else if(k==='aim'){fields.append(make('div',{className:'row'},labelled('Bone ',pickBone('bone'))),make('div',{className:'row'},labelled('Target bone ',sel('target-bone',bones)),labelled('point ',sel('target-point',points))));}
+  /** The subject and target selects, the target defaulting to another bone and moved off the subject when the subject changes to it. */
+  const pickPair=()=>{const subject=pickBone('bone'),target=sel('target-bone',bones);const away=()=>{const d=defaultTargetBone(bones,subject.value);if(d&&target.value===subject.value)target.value=d;};away();subject.addEventListener('change',away);return [subject,target] as const;};
+  if(k==='contact'){const [b,t]=pickPair();fields.append(make('div',{className:'row'},labelled('Bone ',b),labelled('point ',sel('point',points))),make('div',{className:'row'},labelled('Target bone ',t),labelled('point ',sel('target-point',points))));}
+  else if(k==='aim'){const [b,t]=pickPair();fields.append(make('div',{className:'row'},labelled('Bone ',b)),make('div',{className:'row'},labelled('Target bone ',t),labelled('point ',sel('target-point',points))));}
   else if(k==='range'){fields.append(make('div',{className:'row'},labelled('Bone ',pickBone('bone'))));}
   else if(k==='stretch'){
    const meshSlots=catalog.slots.filter(s=>catalog!.meshes[s]?.length),slotSel=sel('slot',meshSlots);if(slot&&meshSlots.includes(slot))slotSel.value=slot;
@@ -129,6 +146,7 @@ export function bindRequirementsPanel(deps:RequirementsPanelDeps):RequirementsPa
   const bar=Object.fromEntries(BAR_FIELDS[k].map(b=>[b.field,b.initial]));const common={name:n,animation:anim};
   const target=()=>({bone:v('target-bone'),point:v('target-point') as BonePoint});
   for(const id of Object.keys(controls))if(!v(id))return `${id.replace('-',' ')} is required`;
+  if(k==='contact'||k==='aim'){const self=selfTargetRefusal({kind:k,bone:v('bone'),point:v('point') as BonePoint,target:target()});if(self)return self;}
   if(k==='contact')return {...common,kind:k,bone:v('bone'),point:v('point') as BonePoint,target:target(),within_px:bar.within_px!};
   if(k==='aim')return {...common,kind:k,bone:v('bone'),target:target(),within_degrees:bar.within_degrees!};
   if(k==='range')return {...common,kind:k,bone:v('bone'),lo_degrees:bar.lo_degrees!,hi_degrees:bar.hi_degrees!};

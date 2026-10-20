@@ -10,7 +10,7 @@ import {freshSession} from '../src/session.ts';
 import {formatFeedbackIssues} from '../src/feedback-export.ts';
 import {KIND_FIELDS,parseRequirementsContext,readRequirements,REQUIREMENT_KINDS,REQUIREMENTS_CONTEXT_SCHEMA,requirementEntry,requirementsDocument,requirementsFileText,worstFrame,type Requirement} from '../src/requirements.ts';
 import type {RequirementsJob} from '../src/requirements-run.ts';
-import {kindUnavailable,requirementName} from '../web/requirements-panel.ts';
+import {defaultTargetBone,kindUnavailable,requirementName,selfTargetRefusal} from '../web/requirements-panel.ts';
 
 /**
  * #113. A stand-in `rig-parts check --requirements` that reads the file by the producer reader's own rules, written out
@@ -163,4 +163,23 @@ test('#113: the printed lines are read when check.json carries no requirements b
  const read=readRequirements(['A'],null,['  A: FAIL — kind contact; animation idle; largest_px 2; at frame 3 (t = 0.25s); within_px 1','  requirements: 1 declared — 1 measured (0 PASS, 1 FAIL), 0 NOT MEASURABLE; not declared: follow','check: FAIL — 0 bar(s) not met, 1 declared requirement(s) not PASS']);
  expect(read.rows).toEqual([{name:'A',kind:'contact',animation:'idle',status:'FAIL',measured:null,least:null,greatest:null,worst:{frame:3,time:0.25,text:'frame 3 (t = 0.25s)'},reason:null,line:'A: FAIL — kind contact; animation idle; largest_px 2; at frame 3 (t = 0.25s); within_px 1'}]);
  expect(read.summary).toStartWith('requirements: 1 declared');expect(read.checkLine).toStartWith('check: FAIL');expect(read.refusal).toBeNull();
+});
+
+test('#142 bar 1: a contact against its own bone and point, or an aim at its own bone, is refused by name before Add', () => {
+ const contact = selfTargetRefusal({kind:'contact',bone:'root',point:'origin',target:{bone:'root',point:'origin'}});
+ expect(contact).toStartWith('REQUIREMENTS_SELF_TARGET: contact of bone "root" origin against itself');
+ expect(selfTargetRefusal({kind:'aim',bone:'arm',target:{bone:'arm',point:'tip'}})).toStartWith('REQUIREMENTS_SELF_TARGET: aim of bone "arm" at its own tip');
+ expect(selfTargetRefusal({kind:'aim',bone:'arm',target:{bone:'arm',point:'origin'}})).toStartWith('REQUIREMENTS_SELF_TARGET:');
+ // Not vacuous: a bone's tip against its own origin measures the bone's length; two different bones are read as before.
+ expect(selfTargetRefusal({kind:'contact',bone:'arm',point:'tip',target:{bone:'arm',point:'origin'}})).toBeNull();
+ expect(selfTargetRefusal({kind:'contact',bone:'arm',point:'origin',target:{bone:'hand',point:'origin'}})).toBeNull();
+ expect(selfTargetRefusal({kind:'aim',bone:'arm',target:{bone:'hand',point:'origin'}})).toBeNull();
+});
+
+test('#142 bar 2: the form proposes a target bone other than the subject', () => {
+ const bones = ['root','hip','chest','neck'];
+ for (const subject of bones) { const t = defaultTargetBone(bones, subject); expect(t).not.toBeNull(); expect(t).not.toBe(subject); }
+ expect(defaultTargetBone(bones,'root')).toBe('hip');
+ expect(defaultTargetBone(bones,'neck')).toBe('root');
+ expect(defaultTargetBone(['only'],'only')).toBeNull();
 });
