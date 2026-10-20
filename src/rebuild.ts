@@ -19,9 +19,11 @@ import { assertWholeRigBaseline, BaselineError, baselineKey, runBaseline, runIns
 import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, jsonDiff, parseConfigPatch, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
 import { checkSummary, MAX_DIFF_PATHS, type CheckSummary } from './applied-context.ts';
 import { idleKeying, idleSource, type IdleStatus } from './idle-tracks.ts';
+import { CHEST_REGIONS_MAX } from './chest-regions.ts';
+import { bustMeshEntry, deriveBust, parseBustSpec, BustSpecError, type BustSpec } from './chest-landmarks.ts';
 
 export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
-const MAX_REGIONS = 8, MAX_POINTS = 256, MAX_LINES = 4000, GRID = 256;
+const MAX_REGIONS = CHEST_REGIONS_MAX, MAX_POINTS = 256, MAX_LINES = 4000, GRID = 256;
 
 export interface ProducerInputs { config: string; parts: string; rig: string; configText: string; configHash: string; handoff: HandoffRecord }
 const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -109,13 +111,23 @@ export function parseProducerRegion(value: unknown, field: string, bones: readon
   return bad(`${field}.shape must be circle or polygon`);
 }
 
-export interface RebuildRequest { part: string; regions: ProducerRegion[]; configHash: string }
-/** `{part, regions, configHash}`: no path, no flag, no command — the server composes everything else. */
+/**
+ * `{part, regions}` (#99, the regions as written) or `{part, bust}` (#105, the `contour.bust` landmarks); `regions` of a
+ * bust request is review's derivation of the two circles (`src/chest-landmarks.ts`), recorded beside it, never sent.
+ */
+export interface RebuildRequest { part: string; regions: ProducerRegion[]; configHash: string; bust?: BustSpec }
+/** `{part, regions, configHash}` or `{part, bust, configHash}`: no path, no flag, no command — the server composes everything else. */
 export function parseRebuildRequest(input: unknown, bones: readonly string[] | null): RebuildRequest {
-  const v = object(input, 'rebuild');
-  if (Object.keys(v).sort().join(',') !== 'configHash,part,regions') bad('expected exactly {part, regions, configHash}');
+  const v = object(input, 'rebuild'), keys = Object.keys(v).sort().join(',');
+  if (keys !== 'configHash,part,regions' && keys !== 'bust,configHash,part') bad('expected exactly {part, regions, configHash} or {part, bust, configHash}');
   if (typeof v.part !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(v.part)) bad('part');
   if (typeof v.configHash !== 'string' || !/^[a-f0-9]{64}$/.test(v.configHash)) bad('configHash');
+  if ('bust' in v) {
+    // Typed as the producer's loader types it; whether the circles clear and the bones resolve is the producer's call.
+    let bust: BustSpec;
+    try { bust = parseBustSpec(v.bust); } catch (e) { if (e instanceof BustSpecError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
+    return { part: v.part as string, regions: deriveBust(bust).regions.map(r => ({ ...r })), configHash: v.configHash as string, bust };
+  }
   if (!Array.isArray(v.regions) || v.regions.length < 1 || v.regions.length > MAX_REGIONS) bad(`regions must hold 1–${MAX_REGIONS} entries`);
   const regions = (v.regions as unknown[]).map((r, i) => parseProducerRegion(r, `regions[${i}]`, bones));
   if (new Set(regions.map(r => r.name)).size !== regions.length) bad('regions: duplicate names');
@@ -130,6 +142,12 @@ export function meshEntryText(configText: string, part: string, regions: readonl
   contour.regions = regions.map(r => ({ ...r }));
   return JSON.stringify(entry, null, 1) + '\n';
 }
+/** The part's config entry with `contour.bust` in place of `contour.regions` (#105) and every other field as written. */
+export function bustEntryText(configText: string, part: string, bust: BustSpec): string {
+  const found = contourParts(configText).find(p => p.name === part);
+  if (!found) throw new RebuildError('REBUILD_PART_NOT_CONTOUR', `config meshes.${part} is not a contour entry; contour.bust applies to contour meshes only`);
+  return JSON.stringify(bustMeshEntry(found.entry, bust), null, 1) + '\n';
+}
 
 /** Deterministic: the package, the config bytes, the part, the entry bytes and both tool versions. No clock. */
 export function designationId(input: { sourceHash: string; configHash: string; part: string; entry: string; producer: string; compiler: string }): string {
@@ -142,7 +160,7 @@ export type RebuildStatus = 'running' | 'built' | 'refused' | 'failed';
 export interface RebuildBuild { model: string; modelUrl: string; modelHash: string; files: Record<string, string> }
 export interface RebuildJob {
   schema: typeof REBUILD_SCHEMA; id: string; status: RebuildStatus; reused: boolean;
-  request: { part: string; regions: ProducerRegion[]; configHash: string; entrySha256: string };
+  request: { part: string; regions: ProducerRegion[]; configHash: string; entrySha256: string; bust?: BustSpec };
   producer: { package: string; version: string }; compiler: { package: string; version: string };
   lines: string[]; producerLine: string | null; exitCode: number | null; wallMs: { remesh: number | null; compile: number | null };
   build: RebuildBuild | null;
@@ -429,7 +447,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     await options.unchanged();
     const inputs = await producerInputs(p.handoff, p.handoffReason);
     if (inputs.configHash !== request.configHash) throw new RebuildError('REBUILD_CONFIG_STALE', 'the producer config changed since the editor read it; reload');
-    const entry = meshEntryText(inputs.configText, request.part, request.regions);
+    const entry = request.bust ? bustEntryText(inputs.configText, request.part, request.bust) : meshEntryText(inputs.configText, request.part, request.regions);
     const resolved = resolveProducer(options.starts);
     if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
     const id = designationId({ sourceHash: p.sourceHash, configHash: inputs.configHash, part: request.part, entry, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });

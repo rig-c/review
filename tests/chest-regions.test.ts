@@ -60,7 +60,7 @@ test('named refusals: duplicate name, unknown bone, out of crop, overlap',async(
  expect(refusal({...input,regions:[input.regions[0]!,{...input.regions[1]!,band:36}]})).toBeNull();
  expect(refusal({...input,regions:[input.regions[0]!,{...input.regions[1]!,band:37}]})).toBe('CHEST_REGIONS_OVERLAP bust_r bust_l');
  expect(refusal({...input,regions:[input.regions[0]!,{...input.regions[1]!,center:[330,640]}]})).toBe('CHEST_REGIONS_OVERLAP bust_r bust_l');
- expect(refusal({...input,regions:[{...input.regions[0]!,band:28.001}],})).toBe('CHEST_REGIONS_COUNT 1');
+ expect(refusal({...input,regions:[]})).toBe('CHEST_REGIONS_COUNT 0 (1–8)');
  expect(refusal({...input,regions:[{...input.regions[0]!,band:28.001},input.regions[1]!]})).toBe('CHEST_REGION_OFF_GRID bust_r band');
 });
 
@@ -156,4 +156,27 @@ test('equal semi-axes export as the example config circles, byte for byte; unequ
  expect(refusal({...input,regions:[{...regions[0],center:[10,732]},regions[1]]})).toBe('CHEST_REGION_OUT_OF_CROP bust_r');
  expect(refusal({...input,regions:[regions[0],{...regions[1],band:70}]})).toBeNull();
  expect(refusal({...input,regions:[regions[0],{...regions[1],band:71}]})).toBe('CHEST_REGIONS_OVERLAP bust_r bust_l');
+});
+
+test('#118: one region exports alone, as Apply · Rebuild sends it',async()=>{
+ const {input}=await sample(),doc=buildChestRegions({...input,regions:[input.regions[0]!]});
+ expect(doc.mesh.value.contour.regions.map(r=>r.name)).toEqual(['bust_r']);
+ expect(doc.coordinates).toBe('800x2284 crop pixels, x screen-right and y down; one region, boob_r');
+ expect(serializeChestRegions(doc)).toContain('"name": "bust_r"');
+ // The editor no longer demands two rows: a row without a centre x is not designated.
+ const values:Record<string,ChestFieldValue>={'chest-crop-w':{value:'800'},'chest-crop-h':{value:'2284'},'chest-generator':{value:input.generator},'chest-tolerance':{value:'2'},'chest-margin':{value:'2'},'chest-spacing':{value:'36'},'chest-max-edge':{value:'64'},'chest-stray':{value:'400'},
+  [chestRowId(0,'name')]:{value:'bust'},[chestRowId(0,'bone')]:{value:'chest_jiggle'},[chestRowId(0,'cx')]:{value:'414'},[chestRowId(0,'cy')]:{value:'342'},[chestRowId(0,'ax')]:{value:'50'},[chestRowId(0,'ay')]:{value:'50'},[chestRowId(0,'spacing')]:{value:'13'},[chestRowId(0,'band')]:{value:'30'},[chestRowId(1,'name')]:{value:'left'}};
+ const result=evaluateChestForm(id=>values[id],cropWorldMapping(null,null),null);
+ expect(result.ok&&result.document.mesh.value.contour.regions).toEqual([{name:'bust',shape:'circle',cx:414,cy:342,r:50,bone:'chest_jiggle',spacing:13,band:30}]);
+});
+
+test('#118: eight regions export with the overlap check on every pair; nine are refused',async()=>{
+ const {input}=await sample();
+ const eight=Array.from({length:8},(_,i)=>({name:`region_${i}`,bone:`bone_${i}`,center:[60+i*95,400] as [number,number],semiAxes:[20,20] as [number,number],spacing:14,band:20}));
+ const doc=buildChestRegions({...input,regions:eight});
+ expect(doc.mesh.value.contour.regions.length).toBe(8);
+ expect(doc.coordinates).toBe(`800x2284 crop pixels, x screen-right and y down; 8 regions screen-left to screen-right: ${eight.map(r=>r.bone).join(', ')}`);
+ // The pair that overlaps is the last two, not the first: every pair is checked.
+ expect(refusal({...input,regions:[...eight.slice(0,7),{...eight[7]!,center:[660,400]}]})).toBe('CHEST_REGIONS_OVERLAP region_6 region_7');
+ expect(refusal({...input,regions:[...eight,{...eight[0]!,name:'region_8',center:[60,900]}]})).toBe('CHEST_REGIONS_COUNT 9 (1–8)');
 });

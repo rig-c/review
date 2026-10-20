@@ -4,11 +4,11 @@ import { loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBound
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
 import {rendererStatus} from './renderer-status.ts';
 import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
-import {RigOverlays,type OverlayCircle,type OverlayRegion} from './rig-overlays.ts';
+import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion} from './rig-overlays.ts';
 import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
-import {bindChestEditor,bustLabel,bustSides,rowCircle,type ChestEditor} from './chest-editor.ts';
+import {bindChestEditor,bustLabel,bustSides,LANDMARKS,landmarkInputId,rowCircle,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
-import {appliedRecord,designatedRegions,handoffText,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedPatch,type AppliedRecord,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {appliedRecord,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedPatch,type AppliedRecord,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -908,7 +908,7 @@ function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:
 function redrawOverlay(fresh:boolean):void {
  if(!overlays||!player)return;
  const project=rigProject();
- const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions:chestRegions(),circles:chestCircles(),meshEdit:meshEditor?.overlay()}):overlays.redraw({project,settings:layers,regions:chestRegions(),circles:chestCircles(),meshEdit:meshEditor?.overlay()});
+ const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions:chestRegions(),circles:chestCircles(),markers:chestMarkers(),meshEdit:meshEditor?.overlay()}):overlays.redraw({project,settings:layers,regions:chestRegions(),circles:chestCircles(),markers:chestMarkers(),meshEdit:meshEditor?.overlay()});
  text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');idlePanel?.place(duration);if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
 }
 function canRepeatIdle():boolean{return !!player&&idleAvailable(assets?.animations.map(a=>a.name)??[],animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
@@ -1063,6 +1063,12 @@ function chestCircles():OverlayCircle[]{
  const mapping=chestMapping;if(!mapping.available)return [];
  const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim();
  const colors=(row:number,overlap:boolean)=>({stroke:token(overlap?'--rv-bust-overlap':row?'--rv-bust-l':'--rv-bust-r'),fill:token(overlap?'--rv-bust-overlap-fill':row?'--rv-bust-l-fill':'--rv-bust-r-fill'),handle:token('--rv-bust-handle'),ink:token('--rv-bust-ink'),labelBg:token('--rv-bust-label-bg'),flash:token('--rv-bust-flash')});
+ if(chestEditor?.active()&&chestEditor.mode()==='landmarks'){
+  // #105: the producer's derivation drawn live; a CONFIG_BUST_CLEARANCE refusal turns both to the overlap colour.
+  const read=chestEditor.landmarks();if(!('derived' in read))return [];
+  const refused=!!read.derived.refusal;
+  return read.derived.regions.filter(r=>r.r>0&&r.band>=0).map((r,row)=>({center:mapping.toWorld(r.cx,r.cy),r:r.r,band:r.band,label:`${r.name} r:${r.r} b:${r.band}`,labelRow:row,handles:false,colors:colors(row,refused)}));
+ }
  if(chestEditor?.active()){
   const rows=bustSides.map(({side,row})=>({side,row,circle:rowCircle(chestField,row)})),[r,l]=[rows[0]!.circle,rows[1]!.circle];
   // As in the example, overlapping cores turn both circles to the overlap colour.
@@ -1071,7 +1077,17 @@ function chestCircles():OverlayCircle[]{
  }
  return chestOverlayCircles(chestEvaluation(),mapping).map(c=>({center:c.center,r:c.r,band:c.band,handles:false,colors:colors(c.row,false)}));
 }
+/** Landmark markers (#105) in Landmarks mode: apexes in the R / L colours, the cleavage with guides to both apexes. */
+function chestMarkers():OverlayMarker[]{
+ const mapping=chestMapping;if(!mapping.available||!chestEditor?.active()||chestEditor.mode()!=='landmarks')return [];
+ const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim(),armed=chestEditor.armed();
+ const at=(key:LandmarkKey)=>{const x=Number(input(landmarkInputId(key,'x')).value.trim()||NaN),y=Number(input(landmarkInputId(key,'y')).value.trim()||NaN);return Number.isFinite(x)&&Number.isFinite(y)?mapping.toWorld(x,y):null;};
+ const apexes=[at('apex_r'),at('apex_l')].filter((p):p is {x:number;y:number}=>!!p);
+ return LANDMARKS.flatMap(({key,tag})=>{const p=at(key);if(!p)return [];const stroke=token(key==='apex_r'?'--rv-bust-r':key==='apex_l'?'--rv-bust-l':'--rv-landmark');
+  return [{at:p,tag,active:armed===key,colors:{stroke,fill:stroke,ink:token('--rv-landmark-ink'),labelBg:token('--rv-bust-label-bg')},...(key==='cleavage'?{guideTo:apexes}:{})}];});
+}
 function populateChestBones():void {
+ const list=document.getElementById('lm-bones');if(list){list.replaceChildren();for(const name of data.feedbackCatalog.bones??[])list.append(option(name,name));}
  const bones=data.feedbackCatalog.bones;
  for(const row of chestRegionRows){const node=select(chestRowId(row,'bone'));node.replaceChildren(option('',bones?'Select bone':'No model bones'));for(const name of bones??[])node.append(option(name,name));node.disabled=!bones;}
 }
@@ -1215,8 +1231,8 @@ async function exportMesh(doc:MeshEditDocument):Promise<void> {
 /** `GET /api/rebuild`: whether Apply can run, and the producer config's regions to start an untouched editor from. */
 async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  try{rebuildStatus=await api<RebuildStatusView>('/api/rebuild');}catch(error){rebuildStatus=null;chestEditor?.notify(`REBUILD_STATUS_UNAVAILABLE: ${errorText(error)}`,true);return null;}
- const seed=seedFields(rebuildStatus,chestField);
- if(seed){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
+ const seed={...(seedFields(rebuildStatus,chestField)??{}),...(seedLandmarks(rebuildStatus,chestField)??{})};
+ if(Object.keys(seed).length){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
  if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,true);
  renderHandoff(rebuildStatus);refreshPhysics();
  return rebuildStatus;
@@ -1235,9 +1251,16 @@ async function applyRebuild():Promise<void> {
  if(readOnly){chestEditor?.notify(readOnly,true);return;}
  const status=rebuildStatus??await loadRebuildStatus();
  if(!status||!status.available||!status.inputs){const reason=status?.reason??'REBUILD_STATUS_UNAVAILABLE';chestEditor?.notify(reason,true,[reason]);message(reason,true);return;}
- const designated=designatedRegions(chestField);if('error' in designated){chestEditor?.notify(designated.error,true);return;}
- const part=pickPart(status,designated.regions);if(!part){chestEditor?.notify(`REBUILD_PART_AMBIGUOUS: the config states ${status.parts.length} contour meshes and the designated bones name none of them alone`,true);return;}
- const body:RebuildRequestBody={part,regions:designated.regions,configHash:status.inputs.configHash},lines:string[]=[];
+ let part:string,body:RebuildRequestBody;const lines:string[]=[];
+ if(chestEditor?.mode()==='landmarks'){
+  // #105: refused here, before anything is sent, when a point is missing or the circles would not clear.
+  const request=landmarksRequest(status,chestEditor.landmarks());if('error' in request){chestEditor.notify(request.error,true,[request.error]);message(request.error,true);return;}
+  ({part,body}=request);
+ }else{
+  const designated=designatedRegions(chestField);if('error' in designated){chestEditor?.notify(designated.error,true);return;}
+  const picked=pickPart(status,designated.regions);if(!picked){chestEditor?.notify(`REBUILD_PART_AMBIGUOUS: the config states ${status.parts.length} contour meshes and the designated bones name none of them alone`,true);return;}
+  part=picked;body={part,regions:designated.regions,configHash:status.inputs.configHash};
+ }
  rebuildBusy=true;rebuildState();chestEditor?.notify(`Rebuilding ${part} with ${status.producer?.package} ${status.producer?.version}…`,false,[]);
  try{
   const result=await runRebuild(body,{post:value=>api<RebuildJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<RebuildJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),

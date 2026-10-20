@@ -35,7 +35,12 @@ export interface OverlayMeshEdit {
  box?:{from:OverlayPoint;to:OverlayPoint};
  colors:{veil:string;edge:string;hull:string;constraint:string;removed:string;vertex:string;ink:string;selected:string;added:string;hover:string;box:string;boxFill:string};
 }
-export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[];circles?:readonly OverlayCircle[];meshEdit?:OverlayMeshEdit|null}
+/**
+ * A chest landmark (#105) in rig world units: a diamond with its tag, and a guide from the cleavage to each apex (the
+ * distance the producer derives a radius from). Colours are theme token values.
+ */
+export interface OverlayMarker {at:OverlayPoint;tag:string;active:boolean;colors:{stroke:string;fill:string;ink:string;labelBg:string};guideTo?:OverlayPoint[]}
+export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[];circles?:readonly OverlayCircle[];markers?:readonly OverlayMarker[];meshEdit?:OverlayMeshEdit|null}
 /** Canvas-pixel geometry of a circle designation, the same numbers the editor hit-tests against. */
 export function projectCircle(project:OverlayProject,circle:Pick<OverlayCircle,'center'|'r'|'band'>):{center:OverlayPoint;pxR:number;pxBand:number}|null {
  const {x,y}=circle.center,center=project(x,y),edge=project(x+circle.r,y),top=project(x,y+circle.r+circle.band);
@@ -119,7 +124,7 @@ export class RigOverlays {
   this.geometry=input.player?captureRigGeometry(input.player,input.bones,input.settings,input.frame,input.selectedSlot):null;
   return this.redraw(input);
  }
- redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[],circles=[],meshEdit=null}:OverlayView):OverlaySnapshot{
+ redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[],circles=[],markers=[],meshEdit=null}:OverlayView):OverlaySnapshot{
   if(this.disposed)return this.unavailable('Overlay has been disposed');
   this.host.rigRoot.style.visibility=settings.images?this.visibility:'hidden';
   const warnings=[...(this.geometry?.warnings??[])],ctx=this.host.canvas.getContext('2d');
@@ -179,6 +184,16 @@ export class RigOverlays {
     ctx.font='600 11px ui-monospace, monospace';const width=ctx.measureText(circle.label).width+8,lx=center.x-width/2,ly=center.y+pxBand+14+(circle.labelRow??0)*17;
     ctx.fillStyle=circle.flash?c.flash:c.labelBg;ctx.fillRect(lx,ly-11,width,15);ctx.fillStyle=circle.flash?c.ink:c.stroke;ctx.fillText(circle.label,lx+4,ly);
    }
+  }
+  if(this.playerAvailable)for(const marker of markers){
+   const at=projected(marker.at);if(!at)continue;const c=marker.colors;
+   ctx.globalAlpha=.9;ctx.setLineDash([3,3]);ctx.strokeStyle=c.stroke;ctx.lineWidth=1.2;
+   for(const to of marker.guideTo??[]){const end=projected(to);if(!end)continue;ctx.beginPath();ctx.moveTo(at.x,at.y);ctx.lineTo(end.x,end.y);ctx.stroke();}
+   ctx.setLineDash([]);ctx.globalAlpha=1;const size=marker.active?7:5.5;
+   ctx.beginPath();ctx.moveTo(at.x,at.y-size);ctx.lineTo(at.x+size,at.y);ctx.lineTo(at.x,at.y+size);ctx.lineTo(at.x-size,at.y);ctx.closePath();
+   ctx.fillStyle=c.fill;ctx.fill();ctx.strokeStyle=c.ink;ctx.lineWidth=marker.active?2.4:1.6;ctx.stroke();
+   ctx.font='600 11px ui-monospace, monospace';const width=ctx.measureText(marker.tag).width+8,lx=at.x+size+4,ly=at.y-size-2;
+   ctx.fillStyle=c.labelBg;ctx.fillRect(lx,ly-11,width,15);ctx.fillStyle=c.stroke;ctx.fillText(marker.tag,lx+4,ly);
   }
   ctx.globalAlpha=1;
   if(this.playerAvailable&&meshEdit)this.drawMeshEdit(ctx,meshEdit,projected,width,height);
