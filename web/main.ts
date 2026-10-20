@@ -12,6 +12,7 @@ import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,eval
 import {bindChestEditor,bustLabel,bustSides,LANDMARKS,landmarkInputId,rowCircle,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
+import {bindBonesPanel,type BonesPanel,type BonesCheckView} from './bones-panel.ts';
 import {appliedRecord,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedPatch,type AppliedRecord,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
@@ -92,6 +93,8 @@ let chestEditor:ChestEditor|null=null;
 let meshEditor:MeshEditor|null=null;
 /** Setup · Weights (#107): a watch layer over the selected slot's setup-pose mesh. */
 let weightsView:WeightsView|null=null;
+/** Setup · Bones (#109): the config's bone anchors on the stage, Check and a whole-rig Apply. */
+let bonesPanel:BonesPanel|null=null;
 /** The hash-verified compiled model document the parts catalog was read from (mesh edit reads attachments from it). */
 let partModel:unknown=null;
 /** Apply · Rebuild (#99): the inspected model's URL, the producer status, and the applied record while its scratch build is on the stage. */
@@ -766,7 +769,7 @@ function bind(): void {
   button('chest-export').onclick = () => { void exportChest(); };
   for (const event of ['input', 'change']) el('chest-regions').addEventListener(event, renderChest);
   // A discarded local draft restores the form after its button's own handler; re-read the tool then.
-  el('draft-recovery').addEventListener('click', () => { renderChest(); restoreEnvironment(); physicsPanel?.restore(); idlePanel?.restore(); });
+  el('draft-recovery').addEventListener('click', () => { renderChest(); restoreEnvironment(); physicsPanel?.restore(); bonesPanel?.restore(); idlePanel?.restore(); });
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => {setView(item.dataset.view as typeof view);const menu=document.getElementById('view-menu') as HTMLDetailsElement|null;if(menu)menu.open=false;};
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
@@ -851,6 +854,9 @@ function bind(): void {
    model:()=>data.manifest.model?partModel??undefined:null,setup:slot=>assets?setupPoseMesh(assets,partModel,slot,document.createElement('div')):null,changed:()=>redrawOverlay(false),
    token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
   viewDisposers.push(()=>weightsView?.dispose());weightsView.refresh();
+  bonesPanel=bindBonesPanel({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),pause,changed:()=>redrawOverlay(false),saved:()=>persistence?.save(),
+   check:checkBones,apply:async ops=>{await applyBones(ops);},reset:resetBonesBuild,token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
+  viewDisposers.push(()=>bonesPanel?.dispose());
   physicsPanel=bindPhysicsPanel({apply:async ops=>{await applyPhysics(ops);},reset:resetPhysicsBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),pane=el('rig-pane').getBoundingClientRect(),view=el('rig-root').parentElement!.getBoundingClientRect(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name),p=project(b.x,b.y);out.set(name,{x:p.x+view.left-pane.left,y:p.y+view.top-pane.top});}catch{/* a bone this model lacks is not pickable */}}return out;}});
   viewDisposers.push(()=>physicsPanel?.dispose());
@@ -905,7 +911,7 @@ async function start(): Promise<void> {
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-    const restored=await setupPersistence();await loadRebuildStatus();renderChest();restoreEnvironment();physicsPanel?.restore();idlePanel?.restore();meshPanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();await loadRebuildStatus();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();idlePanel?.restore();meshPanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
@@ -928,7 +934,7 @@ function redrawOverlay(fresh:boolean):void {
  if(!overlays||!player)return;
  const project=rigProject();
  const regions=[...chestRegions(),...(meshPanel?.overlayRegions()??[])],circles=[...chestCircles(),...(meshPanel?.overlayCircles()??[])];
- const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay()}):overlays.redraw({project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay()});
+ const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()}):overlays.redraw({project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()});
  lastOverlay=value;
  text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');idlePanel?.place(duration);if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
 }
@@ -1124,7 +1130,7 @@ function renderChest():void {
  el('chest-mapping').classList.toggle('error',!chestMapping.available);
  const value=chestEvaluation();text('chest-status',value.ok?`${value.document.mesh.value.contour.regions.map(r=>`${r.name} → ${r.bone}`).join(' · ')} · valid for export`:value.error);
  el('chest-status').classList.toggle('error',!value.ok);
- chestEditor?.sync();meshEditor?.sync();weightsView?.sync();redrawOverlay(false);
+ chestEditor?.sync();meshEditor?.sync();weightsView?.sync();bonesPanel?.sync();redrawOverlay(false);
 }
 async function exportChest():Promise<void> {
  const value=chestEvaluation();if(!value.ok){message(`Chest regions not exported: ${value.error}`,true);return;}
@@ -1256,6 +1262,7 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  if(Object.keys(seed).length){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
  if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,true);
  renderHandoff(rebuildStatus);refreshPhysics();
+ bonesPanel?.load(rebuildStatus.inputs?rebuildStatus.bones??[]:null,rebuildStatus.inputs?null:rebuildStatus.reason??'BONES_UNAVAILABLE: no producer handoff');
  meshPanel?.load(rebuildStatus.inputs?rebuildStatus.meshes??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'MESH_PANEL_UNAVAILABLE: no producer handoff');meshPanel?.select(parts?.value()?.slot??null);
  return rebuildStatus;
 }
@@ -1361,6 +1368,10 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   regions:()=>meshPanel?.regions.list()??[],addRegion:(region:import('../src/mesh-entry.ts').MeshRegion)=>meshPanel?.regions.add(region),moveRegion:(region:number,vertex:number,to:[number,number])=>meshPanel?.regions.move(region,vertex,to),drawRegions:(on:boolean)=>meshPanel?.regions.draw(on),placing:()=>meshPanel?.regions.placing()??null,
   precheck:()=>meshPanel?.precheck()??[],apply:()=>{const part=meshPanel?.part(),entry=meshPanel?.entry();return part&&entry?applyMesh(part,entry):Promise.resolve(null);},reset:()=>resetMeshBuild(),folds:()=>meshFolds(),
   overlayTriangles:(slot:string)=>lastOverlay?.meshTriangles[slot]??null,status:()=>el('mesh-status').textContent,counts:()=>[...document.querySelectorAll('#mesh-counts code')].map(c=>c.textContent),readout:()=>[...document.querySelectorAll('#mesh-readout code')].map(c=>c.textContent),pending:()=>input('mesh-pending').value,lastPatch:()=>lastMeshPatch?JSON.parse(JSON.stringify(lastMeshPatch)):null},
+ bones:{anchors:()=>bonesPanel?.anchors()??[],edits:()=>bonesPanel?.edits()??[],set:(path:string,value:[number,number])=>bonesPanel?.set(path,value),select:(name:string|null)=>bonesPanel?.select(name),
+  active:()=>bonesPanel?.active()??false,setActive:(on:boolean)=>bonesPanel?.setActive(on),handles:()=>bonesPanel?.handles()??[],check:()=>bonesPanel?.check()??Promise.resolve(null),
+  apply:()=>applyBones((bonesPanel?.edits()??[]).map(e=>({op:'replace' as const,path:e.path,value:[...e.value],name:e.name}))),reset:()=>resetBonesBuild(),
+  status:()=>el('bones-status').textContent,lines:()=>[...document.querySelectorAll('#bones-lint code, #bones-lint summary')].map(c=>c.textContent),compare:()=>[...document.querySelectorAll('#bones-compare code')].map(c=>c.textContent),pending:()=>input('bones-pending').value},
  stage:()=>({modelHash:stageModelHash,inspectedHash:inspectedModel?.sha256??null,applied:appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,animation,time:player?.time??time,playing,busy:rebuildBusy}),
 };
 /** The world as it stands now: what a physics Apply's reload resumes. */
@@ -1438,6 +1449,36 @@ function readingsContext():ReadingsContext|null {
  const job=readingsJob;if(!job)return null;
  const ticks=(build:'inspected'|'scratch')=>{const run=job.runs.find(r=>r.build===build);return run?run.results.reduce((n,r)=>n+r.frames.length,0):null;};
  return {schema:READINGS_SCHEMA,animation:job.request.animation,requests:job.request.readings,environment:job.request.environment,environmentPassed:job.environment.passed,builds:{inspected:job.runs.find(r=>r.build==='inspected')?.modelHash??'',scratch:job.runs.find(r=>r.build==='scratch')?.id??null},compiler:job.compiler,ticks:{inspected:ticks('inspected')??0,scratch:ticks('scratch')}};
+}
+/** Bones Check (#109): the pending ops go to `POST /api/bones-check` with the handoff config's hash; a refusal is shown verbatim. */
+async function checkBones(ops:PatchOp[]):Promise<BonesCheckView> {
+ const status=rebuildStatus??await loadRebuildStatus();
+ if(!status?.inputs)return {status:'refused',error:status?.reason??'REBUILD_STATUS_UNAVAILABLE'};
+ try{return await api<BonesCheckView>('/api/bones-check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ops,configHash:status.inputs.configHash})});}
+ catch(error){const text=errorText(error).replace(/^\d+: /,'');let shown=text;try{shown=(JSON.parse(text) as {error?:string}).error??text;}catch{/* not JSON */}return {status:'refused',error:shown};}
+}
+/**
+ * Bones Apply (#109): the pending ops become one config patch (`rig`, then check) against the handoff config — a
+ * whole-rig op, so the server refuses it (`EDIT_BASELINE_MISMATCH`) unless the baseline reproduced the inspected rig.
+ * On a build the re-weighted rig reloads in place (the Weights view reads the revision); a refusal is shown verbatim.
+ */
+async function applyBones(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|null> {
+ const status=rebuildStatus??await loadRebuildStatus();
+ const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
+ if(!patch){const reason=!ops.length?'BONES_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';bonesPanel?.status(reason,true);return null;}
+ bonesPanel?.busy(true);bonesPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: rig --config, compile, check…`,false);
+ try{
+  const result=await applyPatch(patch,stageWorld());
+  const outcome=patchOutcomeLine(result);bonesPanel?.status(outcome.text,outcome.error);
+  if('id' in result&&result.status==='built'){bonesPanel?.applied(result.request.patch.ops);redrawOverlay(true);}
+  return result;
+ }finally{bonesPanel?.busy(false);}
+}
+/** Bones Reset: the inspected build back on the stage (same world), and no pending op. */
+async function resetBonesBuild():Promise<void> {
+ bonesPanel?.clear();bonesPanel?.applied(null);
+ if(appliedOnStage){bonesPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{bonesPanel?.busy(false);}}
+ bonesPanel?.status('Reset: the inspected build is on the stage; no pending ops.',false);
 }
 /** Physics Reset: the inspected build back under the same world, and no pending op. */
 async function resetPhysicsBuild():Promise<void> {

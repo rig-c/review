@@ -57,7 +57,17 @@ export interface OverlayWeights {
  hover:number|null;
  colors:{veil:string;edge:string;ink:string;labelBg:string;hover:string};
 }
-export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[];circles?:readonly OverlayCircle[];markers?:readonly OverlayMarker[];meshEdit?:OverlayMeshEdit|null;weights?:OverlayWeights|null}
+/**
+ * Setup bones (#109) in rig world coordinates: every config anchor as a handle — an origin a square, a chain point a
+ * circle, a tip a diamond — joined by its chain or bone-to-tip line; a pending anchor draws a dashed ghost from the
+ * config's value; the hovered or selected anchor is ringed and labelled. Colours are theme token values.
+ */
+export interface OverlayAnchors {
+ lines:readonly {from:OverlayPoint;to:OverlayPoint}[];
+ anchors:readonly {at:OverlayPoint;from:OverlayPoint|null;kind:'at'|'point'|'tip';label:string;selected:boolean;hover:boolean}[];
+ colors:{line:string;origin:string;point:string;tip:string;pending:string;selected:string;ink:string;labelBg:string};
+}
+export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[];circles?:readonly OverlayCircle[];markers?:readonly OverlayMarker[];meshEdit?:OverlayMeshEdit|null;weights?:OverlayWeights|null;anchors?:OverlayAnchors|null}
 /** Canvas-pixel geometry of a circle designation, the same numbers the editor hit-tests against. */
 export function projectCircle(project:OverlayProject,circle:Pick<OverlayCircle,'center'|'r'|'band'>):{center:OverlayPoint;pxR:number;pxBand:number}|null {
  const {x,y}=circle.center,center=project(x,y),edge=project(x+circle.r,y),top=project(x,y+circle.r+circle.band);
@@ -142,7 +152,7 @@ export class RigOverlays {
   this.geometry=input.player?captureRigGeometry(input.player,input.bones,input.settings,input.frame,input.selectedSlot):null;
   return this.redraw(input);
  }
- redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[],circles=[],markers=[],meshEdit=null,weights=null}:OverlayView):OverlaySnapshot{
+ redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[],circles=[],markers=[],meshEdit=null,weights=null,anchors=null}:OverlayView):OverlaySnapshot{
   if(this.disposed)return this.unavailable('Overlay has been disposed');
   this.host.rigRoot.style.visibility=settings.images?this.visibility:'hidden';
   const warnings=[...(this.geometry?.warnings??[])],ctx=this.host.canvas.getContext('2d');
@@ -223,7 +233,8 @@ export class RigOverlays {
   ctx.globalAlpha=1;
   if(this.playerAvailable&&meshEdit)this.drawMeshEdit(ctx,meshEdit,projected,width,height);
   else if(this.playerAvailable&&weights)this.drawWeights(ctx,weights,projected,width,height);
-  if(this.geometry?.selection.length&&!meshEdit&&!weights){ctx.globalAlpha=1;ctx.strokeStyle='#ffbb47';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.beginPath();for(const edge of this.geometry.selection)line(edge);ctx.stroke();ctx.setLineDash([]);}
+  if(this.playerAvailable&&anchors)this.drawAnchors(ctx,anchors,projected);
+  if(this.geometry?.selection.length&&!meshEdit&&!weights&&!anchors){ctx.globalAlpha=1;ctx.strokeStyle='#ffbb47';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.beginPath();for(const edge of this.geometry.selection)line(edge);ctx.stroke();ctx.setLineDash([]);}
   ctx.restore();
   return this.snapshot(true,needsCapture,warnings);
  }
@@ -263,6 +274,31 @@ export class RigOverlays {
    ctx.font='600 11px ui-monospace, monospace';const tw=ctx.measureText(h.label).width+10,lx=Math.min(Math.max(2,hp.x+11),width-tw-2),ly=Math.max(14,hp.y-11);
    ctx.fillStyle=c.labelBg;ctx.fillRect(lx,ly-12,tw,17);ctx.fillStyle=c.hover;ctx.fillText(h.label,lx+5,ly);
   }
+  ctx.restore();
+ }
+ private drawAnchors(ctx:CanvasRenderingContext2D,b:OverlayAnchors,projected:(p:OverlayPoint)=>OverlayPoint|null):void{
+  const c=b.colors;ctx.save();ctx.globalAlpha=1;
+  ctx.setLineDash([]);ctx.lineWidth=1.6;ctx.strokeStyle=c.line;ctx.beginPath();
+  for(const l of b.lines){const from=projected(l.from),to=projected(l.to);if(from&&to){ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);}}
+  ctx.stroke();
+  ctx.setLineDash([3,3]);ctx.strokeStyle=c.pending;ctx.lineWidth=1.2;ctx.beginPath();
+  for(const a of b.anchors){if(!a.from)continue;const from=projected(a.from),to=projected(a.at);if(from&&to){ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);}}
+  ctx.stroke();ctx.setLineDash([]);
+  const labels:{at:OverlayPoint;text:string;color:string}[]=[];
+  for(const a of b.anchors){
+   const p=projected(a.at);if(!p)continue;
+   if(a.from){const g=projected(a.from);if(g){ctx.beginPath();ctx.strokeStyle=c.pending;ctx.lineWidth=1;ctx.arc(g.x,g.y,2.5,0,Math.PI*2);ctx.stroke();}}
+   const fill=a.from?c.pending:a.kind==='at'?c.origin:a.kind==='point'?c.point:c.tip,size=a.selected||a.hover?6:4.5;
+   ctx.beginPath();
+   if(a.kind==='at')ctx.rect(p.x-size,p.y-size,size*2,size*2);
+   else if(a.kind==='point')ctx.arc(p.x,p.y,size,0,Math.PI*2);
+   else{ctx.moveTo(p.x,p.y-size-1);ctx.lineTo(p.x+size+1,p.y);ctx.lineTo(p.x,p.y+size+1);ctx.lineTo(p.x-size-1,p.y);ctx.closePath();}
+   ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=c.ink;ctx.lineWidth=1.3;ctx.stroke();
+   if(a.selected||a.hover){ctx.beginPath();ctx.strokeStyle=c.selected;ctx.lineWidth=2;ctx.arc(p.x,p.y,size+4,0,Math.PI*2);ctx.stroke();}
+   if(a.selected||a.hover||a.from)labels.push({at:p,text:a.label,color:a.selected||a.hover?c.selected:c.pending});
+  }
+  ctx.font='600 11px ui-monospace, monospace';
+  for(const l of labels){const w=ctx.measureText(l.text).width+8,lx=l.at.x+10,ly=l.at.y-9;ctx.fillStyle=c.labelBg;ctx.fillRect(lx,ly-11,w,15);ctx.fillStyle=l.color;ctx.fillText(l.text,lx+4,ly);}
   ctx.restore();
  }
  clear():void{

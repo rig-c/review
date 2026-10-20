@@ -116,13 +116,14 @@ export function assertPatchFresh(patch: Pick<ConfigPatch, 'config_sha256'>, conf
   if (patch.config_sha256 !== configSha256) throw new ConfigPatchError('EDIT_PATCH_STALE', `the patch was made against config ${patch.config_sha256.slice(0, 12)}…, the handoff config is ${configSha256.slice(0, 12)}…; read the config again and remake the patch`);
 }
 
-/** Every op that records a name must address, by index, a list entry of the unpatched config holding exactly that name. */
+/** Every op that records a name must address, by index, a list entry of the unpatched config holding exactly that name (a `bones` chain: its `chain`). */
 export function assertOpNames(doc: JsonValue, ops: readonly PatchOp[]): void {
   for (const [i, op] of ops.entries()) {
     if (op.name === undefined) continue;
     const [list, index] = parsePointer(op.path), entries = isObject(doc) ? (doc as Record<string, JsonValue>)[list!] : undefined;
     const entry = Array.isArray(entries) ? entries[Number(index)] : undefined;
-    const held = isObject(entry) ? (entry as Record<string, JsonValue>).name : undefined;
+    // A `bones` chain entry (#109) names itself by `chain`; every other named entry by `name`.
+    const held = isObject(entry) ? (entry as Record<string, JsonValue>).name ?? (list === 'bones' ? (entry as Record<string, JsonValue>).chain : undefined) : undefined;
     if (held !== op.name) throw new ConfigPatchError('EDIT_PATCH_NAME_MISMATCH', `ops[${i}] ${op.path} records "${op.name}", but /${pointerToken(list!)}/${index} ${held === undefined ? 'holds no named entry' : `is "${String(held)}"`} in the handoff config`);
   }
 }
