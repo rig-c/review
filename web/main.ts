@@ -11,6 +11,7 @@ import {worstLine} from '../src/readings.ts';
 import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
 import {bindChestEditor,bustLabel,bustSides,LANDMARKS,landmarkInputId,rowCircle,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
+import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
 import {appliedRecord,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedPatch,type AppliedRecord,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
@@ -89,6 +90,8 @@ let parts:PartExplorer|null=null;
 let overlays:RigOverlays|null=null;
 let chestEditor:ChestEditor|null=null;
 let meshEditor:MeshEditor|null=null;
+/** Setup · Weights (#107): a watch layer over the selected slot's setup-pose mesh. */
+let weightsView:WeightsView|null=null;
 /** The hash-verified compiled model document the parts catalog was read from (mesh edit reads attachments from it). */
 let partModel:unknown=null;
 /** Apply · Rebuild (#99): the inspected model's URL, the producer status, and the applied record while its scratch build is on the stage. */
@@ -609,7 +612,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     } });
     player = new RigPlayer(el('rig-root'), assets);
     // Parts inspection is an add-on: a catalog refusal is shown in the explorer and never aborts the rig.
-    try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);partModel=catalog.model;parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
+    try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);partModel=catalog.model;weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
     player.on('event', event => { text('event-log', `Runtime event: ${event.name} · ${event.time.toFixed(2)} s`); });
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
@@ -844,6 +847,10 @@ function bind(): void {
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,basis:meshBasis,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},message,confirm:text=>window.confirm(text),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
+  weightsView=bindWeightsView({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,inspector:()=>selectedInspector(),slot:()=>parts?.value()?.slot??null,
+   model:()=>data.manifest.model?partModel??undefined:null,setup:slot=>assets?setupPoseMesh(assets,partModel,slot,document.createElement('div')):null,changed:()=>redrawOverlay(false),
+   token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
+  viewDisposers.push(()=>weightsView?.dispose());weightsView.refresh();
   physicsPanel=bindPhysicsPanel({apply:async ops=>{await applyPhysics(ops);},reset:resetPhysicsBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),pane=el('rig-pane').getBoundingClientRect(),view=el('rig-root').parentElement!.getBoundingClientRect(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name),p=project(b.x,b.y);out.set(name,{x:p.x+view.left-pane.left,y:p.y+view.top-pane.top});}catch{/* a bone this model lacks is not pickable */}}return out;}});
   viewDisposers.push(()=>physicsPanel?.dispose());
@@ -884,7 +891,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();meshPanel?.select(part?.slot??null);if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();meshPanel?.select(part?.slot??null);if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
@@ -921,7 +928,7 @@ function redrawOverlay(fresh:boolean):void {
  if(!overlays||!player)return;
  const project=rigProject();
  const regions=[...chestRegions(),...(meshPanel?.overlayRegions()??[])],circles=[...chestCircles(),...(meshPanel?.overlayCircles()??[])];
- const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay()}):overlays.redraw({project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay()});
+ const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay()}):overlays.redraw({project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay()});
  lastOverlay=value;
  text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');idlePanel?.place(duration);if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
 }
@@ -1117,7 +1124,7 @@ function renderChest():void {
  el('chest-mapping').classList.toggle('error',!chestMapping.available);
  const value=chestEvaluation();text('chest-status',value.ok?`${value.document.mesh.value.contour.regions.map(r=>`${r.name} → ${r.bone}`).join(' · ')} · valid for export`:value.error);
  el('chest-status').classList.toggle('error',!value.ok);
- chestEditor?.sync();meshEditor?.sync();redrawOverlay(false);
+ chestEditor?.sync();meshEditor?.sync();weightsView?.sync();redrawOverlay(false);
 }
 async function exportChest():Promise<void> {
  const value=chestEvaluation();if(!value.ok){message(`Chest regions not exported: ${value.error}`,true);return;}
@@ -1498,7 +1505,7 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}});
  pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);stageModelHash=sha256;
  player.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
- try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);partModel=catalog.model;parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
+ try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);partModel=catalog.model;weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
  if(keepSet){try{player.setSet(keepSet);}catch{select('part-set').value='';player.setSet(null);}}
  // The same world before the first pose: a physics Apply resumes the wind (clock and pulse), the pending jolts, gravity and
  // whether the controls are engaged as they stood when Apply was pressed; then the seek re-poses under that world.

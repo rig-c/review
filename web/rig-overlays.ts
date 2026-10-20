@@ -45,7 +45,19 @@ export interface OverlayMeshEdit {
  * distance the producer derives a radius from). Colours are theme token values.
  */
 export interface OverlayMarker {at:OverlayPoint;tag:string;active:boolean;colors:{stroke:string;fill:string;ink:string;labelBg:string};guideTo?:OverlayPoint[]}
-export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[];circles?:readonly OverlayCircle[];markers?:readonly OverlayMarker[];meshEdit?:OverlayMeshEdit|null}
+/**
+ * Setup weights (#107) in rig world coordinates: the selected slot's setup-pose mesh, each triangle filled with the mean
+ * of its vertices' ramp colours and each vertex a dot in its own colour, over a veil that dims the rest of the rig.
+ * `value` is the weight the colour was taken from (stored, never normalised); `hover` indexes `vertices` and draws its
+ * label. Colours are theme token values.
+ */
+export interface OverlayWeights {
+ triangles:readonly {points:readonly [number,number,number];color:string}[];
+ vertices:readonly {at:OverlayPoint;index:number;value:number;color:string;label:string}[];
+ hover:number|null;
+ colors:{veil:string;edge:string;ink:string;labelBg:string;hover:string};
+}
+export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[];circles?:readonly OverlayCircle[];markers?:readonly OverlayMarker[];meshEdit?:OverlayMeshEdit|null;weights?:OverlayWeights|null}
 /** Canvas-pixel geometry of a circle designation, the same numbers the editor hit-tests against. */
 export function projectCircle(project:OverlayProject,circle:Pick<OverlayCircle,'center'|'r'|'band'>):{center:OverlayPoint;pxR:number;pxBand:number}|null {
  const {x,y}=circle.center,center=project(x,y),edge=project(x+circle.r,y),top=project(x,y+circle.r+circle.band);
@@ -130,7 +142,7 @@ export class RigOverlays {
   this.geometry=input.player?captureRigGeometry(input.player,input.bones,input.settings,input.frame,input.selectedSlot):null;
   return this.redraw(input);
  }
- redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[],circles=[],markers=[],meshEdit=null}:OverlayView):OverlaySnapshot{
+ redraw({project,settings,dpr=globalThis.devicePixelRatio??1,regions=[],circles=[],markers=[],meshEdit=null,weights=null}:OverlayView):OverlaySnapshot{
   if(this.disposed)return this.unavailable('Overlay has been disposed');
   this.host.rigRoot.style.visibility=settings.images?this.visibility:'hidden';
   const warnings=[...(this.geometry?.warnings??[])],ctx=this.host.canvas.getContext('2d');
@@ -210,7 +222,8 @@ export class RigOverlays {
   }
   ctx.globalAlpha=1;
   if(this.playerAvailable&&meshEdit)this.drawMeshEdit(ctx,meshEdit,projected,width,height);
-  if(this.geometry?.selection.length&&!meshEdit){ctx.globalAlpha=1;ctx.strokeStyle='#ffbb47';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.beginPath();for(const edge of this.geometry.selection)line(edge);ctx.stroke();ctx.setLineDash([]);}
+  else if(this.playerAvailable&&weights)this.drawWeights(ctx,weights,projected,width,height);
+  if(this.geometry?.selection.length&&!meshEdit&&!weights){ctx.globalAlpha=1;ctx.strokeStyle='#ffbb47';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.beginPath();for(const edge of this.geometry.selection)line(edge);ctx.stroke();ctx.setLineDash([]);}
   ctx.restore();
   return this.snapshot(true,needsCapture,warnings);
  }
@@ -233,6 +246,23 @@ export class RigOverlays {
    if(v.hover||v.pending){ctx.beginPath();ctx.strokeStyle=v.pending?c.constraint:c.hover;ctx.lineWidth=2;ctx.arc(p.x,p.y,7.5,0,Math.PI*2);ctx.stroke();}
   }
   if(edit.box){const {from,to}=edit.box,x=Math.min(from.x,to.x),y=Math.min(from.y,to.y),w=Math.abs(to.x-from.x),h=Math.abs(to.y-from.y);ctx.fillStyle=c.boxFill;ctx.fillRect(x,y,w,h);ctx.setLineDash([4,3]);ctx.strokeStyle=c.box;ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,w,h);}
+  ctx.restore();
+ }
+ private drawWeights(ctx:CanvasRenderingContext2D,w:OverlayWeights,projected:(p:OverlayPoint)=>OverlayPoint|null,width:number,height:number):void{
+  const c=w.colors,points=w.vertices.map(v=>projected(v.at));ctx.save();ctx.globalAlpha=1;ctx.setLineDash([]);
+  ctx.fillStyle=c.veil;ctx.fillRect(0,0,width,height);
+  for(const t of w.triangles){
+   const [a,b,d]=t.points.map(i=>points[i]);if(!a||!b||!d)continue;
+   ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.lineTo(d.x,d.y);ctx.closePath();ctx.globalAlpha=.72;ctx.fillStyle=t.color;ctx.fill();ctx.globalAlpha=.5;ctx.strokeStyle=c.edge;ctx.lineWidth=.8;ctx.stroke();
+  }
+  ctx.globalAlpha=1;
+  w.vertices.forEach((v,i)=>{const p=points[i];if(!p)return;ctx.beginPath();ctx.fillStyle=v.color;ctx.strokeStyle=c.ink;ctx.lineWidth=1.1;ctx.arc(p.x,p.y,3.4,0,Math.PI*2);ctx.fill();ctx.stroke();});
+  const h=w.hover===null?null:w.vertices[w.hover],hp=w.hover===null?null:points[w.hover];
+  if(h&&hp){
+   ctx.beginPath();ctx.strokeStyle=c.hover;ctx.lineWidth=2;ctx.arc(hp.x,hp.y,7.5,0,Math.PI*2);ctx.stroke();
+   ctx.font='600 11px ui-monospace, monospace';const tw=ctx.measureText(h.label).width+10,lx=Math.min(Math.max(2,hp.x+11),width-tw-2),ly=Math.max(14,hp.y-11);
+   ctx.fillStyle=c.labelBg;ctx.fillRect(lx,ly-12,tw,17);ctx.fillStyle=c.hover;ctx.fillText(h.label,lx+5,ly);
+  }
   ctx.restore();
  }
  clear():void{

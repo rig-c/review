@@ -587,6 +587,18 @@ In **Setup**, under Chest regions · detail, the **Mesh** panel (`#mesh-panel`, 
 - **Reset** returns the pending entry to the config's and the stage to the inspected build.
 - **Record.** The draft keeps `#mesh-pending` (`{schema:"rig-review-mesh-entry/1", part, entry}`, only while it differs from the config). A built Apply's `context.applied` is `rig-review-applied/2` with `mesh` added: the part and its counts before and after.
 
+## Weights (setup pose, watch only)
+
+In **Setup**, after the Mesh panel, the **Weights** block (`#weights`, #107; **Weights** in the block row) shows the selected slot's mesh weights as the compiled model document stores them. **Show weights** draws the slot's mesh at the setup pose over a veil that dims the rest of the rig: each vertex is a dot and each triangle is filled with the mean of its vertices' colours.
+
+- **Bone weight.** Pick a bone (the slot's influencing bones first, then every other bone of the model): each vertex is coloured by that bone's stored weight on the weight ramp, 0 → 1 (`--rv-weight-0`, `--rv-weight-half`, `--rv-weight-1`); a bone that does not influence a vertex is 0 there. The legend shows the ramp and the bone.
+- **Max influence.** Each vertex takes its dominant bone's colour (the largest stored weight; the first stored on a tie), from `--rv-weight-bone-1` … `-6` in the influencing bones' order; the legend names each bone with its colour.
+- **Hover.** The vertex under the pointer (within 10 px) is ringed and labelled with its index, the bone and the weight drawn; the block's readout lists all of its stored influences. Values are printed as stored, never rounded or normalised.
+- **Source.** The vertices and weights are the slot's attachment at the setup pose (`skins[].attachments.<slot>.<name>.vertices` of `rigc-compiled/3`: `{weighted:true, bindings}` — per vertex `{bone, x, y, weight}` — or `{weighted:false, xy}`). An unweighted mesh is its slot's bone at 1.0, named. A linked mesh reads its source mesh. The attachment is the one a never-played player resolves for the slot, and the positions are the stored bone-space coordinates through that player's setup-pose bones with the published player's skinning formula — the stage player is not touched, so the drawing can sit apart from an animated pose on the stage.
+- **Refusals.** A package without a compiled model document refuses `WEIGHTS_MODEL_UNAVAILABLE`; no slot `WEIGHTS_SELECT_SLOT`; a slot without a mesh `WEIGHTS_NO_MESH <slot>`; a malformed attachment `WEIGHTS_MODEL_INVALID`.
+
+Nothing here edits, applies or records a weight: the block adds nothing to the draft or to feedback, and weight editing is out of scope. With **Edit mesh** on, the weights layer is not drawn.
+
 ## Mesh edit (typed delta, preview only)
 
 In **Setup**, the view bar's **Edit mesh** button (pressed state; hidden in Animate) edits the selected slot's actual mesh attachment. With **Whole rig** selected it refuses `MESH_EDIT_SELECT_SLOT`; a slot whose active attachment is not a mesh refuses `MESH_EDIT_NO_MESH <slot>`. Entering pauses playback, turns the chest-region editor off and opens the mesh editor bar under the view bar. The rig pane dims except the slot's own triangles; the mesh is drawn at full opacity with every vertex as a handle, hull edges, interior triangulation edges and added constraint edges each in their own theme token.
