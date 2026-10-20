@@ -10,6 +10,8 @@ import { createRebuilds, RebuildError } from './rebuild.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
+/** Request shapes the page or an edit card got wrong: 400. Everything else a refusal names is an outcome (200). */
+const MALFORMED=new Set(['REBUILD_REQUEST_INVALID','EDIT_PATCH_INVALID','EDIT_PATCH_OP_UNKNOWN','EDIT_PATCH_POINTER_INVALID','EDIT_PATCH_CMD_UNKNOWN','EDIT_PATCH_ARG_UNKNOWN']);
 function json(data:unknown,status=200){return Response.json(data,{status,headers});}
 async function bodyJson(req:Request,limit=1024*1024,what='Session payload exceeds 1 MiB'):Promise<unknown>{
   if(!/^application\/json(?:\s*;|$)/i.test(req.headers.get('content-type')??''))throw new Error('Expected application/json');
@@ -35,12 +37,12 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
         if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
         const input=await bodyJson(req);await unchanged();return json(await saveSession(p,input,options.stateDir));
       }
-    // Apply · Rebuild (#99): a typed designation, never a path; the server runs the installed producer into scratch.
+    // Apply · Rebuild (#99 regions, #102 {patch}): typed data, never a path; the server runs the installed producer into scratch.
     if(req.method==='POST'&&url.pathname==='/api/rebuild'){
       if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
       try{const result=await rebuilds.start(await bodyJson(req,64*1024,'REBUILD_BODY_LIMIT: maximum 64 KiB'));return json(result.body,result.status);}
       // A refusal is an outcome the page shows verbatim (200), so the managed front passes its text through; only a malformed request is a 400.
-      catch(e){if(e instanceof RebuildError)return json({status:'refused',error:e.message,producerLine:null},e.code==='REBUILD_REQUEST_INVALID'?400:200);throw e;}
+      catch(e){if(e instanceof RebuildError)return json({status:'refused',error:e.message,producerLine:null},MALFORMED.has(e.code)?400:200);throw e;}
     }
     if(req.method==='POST'&&url.pathname==='/api/strip'){
       if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);

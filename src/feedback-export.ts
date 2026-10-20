@@ -5,6 +5,7 @@ import type { CompareSession } from './compare-session.ts';
 import type { FeedbackHistory, HistoryRetrieval } from './session-history.ts';
 import type { ReferenceBinding } from './reference.ts';
 import { environmentSummary, parseEnvironmentContext } from './environment.ts';
+import { appliedSummary } from './applied-context.ts';
 type Category = Feedback['category'];
 type Side = 'single' | 'a' | 'b';
 type ParsedFeedbackSession = FeedbackHistory<ReviewSession | CompareSession>;
@@ -162,6 +163,12 @@ function environmentLine(context: Json | undefined): string[] {
   try { const value = parseEnvironmentContext(context.environment); return [`- Environment: ${value === null ? 'no compiled model drawn' : feedbackMarkdownText(environmentSummary(value))}`]; }
   catch { return []; }
 }
+/** "Applied: patch … · check PASS": the build the note was written on, when the record carries a valid applied state. */
+function appliedLine(context: Json | undefined): string[] {
+  if (context === undefined || context === null || typeof context !== 'object' || Array.isArray(context) || !('applied' in context)) return [];
+  const text = appliedSummary(context.applied);
+  return text === null ? [] : [`- Applied: ${feedbackMarkdownText(text)}`];
+}
 /** Local issue-ready text only. No issue creation, clock inference or source IO. */
 export function formatFeedbackIssues(input: ParsedFeedbackSession): string {
   const model = groupFeedbackIssues(input), md = feedbackMarkdownText;
@@ -193,7 +200,8 @@ export function formatFeedbackIssues(input: ParsedFeedbackSession): string {
           `- Inclusive frames: ${item.frameStart}–${item.frameEnd}`,
           `- Side: ${item.side}`,
           `- Summary: ${md(item.summary)}`,
-          ...environmentLine(item.context), '',
+          ...environmentLine(item.context),
+          ...appliedLine(item.context), '',
           'Selected build identity:', '', jsonBlock(item.selectedSource));
         if (model.pairedBinding) lines.push('', 'Paired comparison binding:', '', jsonBlock(model.pairedBinding));
         if (item.warnings.length) lines.push('', 'Validation warnings (record retained):', '', jsonBlock(item.warnings));

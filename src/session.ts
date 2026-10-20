@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import {referenceBinding,type ReferenceBinding} from './reference.ts';
 import { validateFeedbackSelection } from './feedback-validation.ts';
 import { parseEnvironmentContext } from './environment.ts';
+import { parseAppliedContext } from './applied-context.ts';
 import { choice, object, string, type Json, type ReviewPackage, type ReviewedSource } from './manifest.ts';
 export interface Feedback {id:string;frameStart:number;frameEnd:number;target:{kind:'bone'|'slot'|'rig';name:string};category:'defect'|'quality';summary:string;context?:Json}
 export function parseFeedback(item:unknown,strict=true):Feedback {
@@ -28,6 +29,8 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
   if(animation!==undefined&&context.animation!==undefined&&context.animation!==null&&context.animation!==animation)throw new Error('feedback.context.animation: does not match selected comparison animation');
   // Older records without an environment stay valid; a present one must have the recorded shape.
   if(context.environment!==undefined)parseEnvironmentContext(context.environment);
+  // Likewise the applied state (#99 regions, #102 patch): absent or null stays valid; a present record has its exact shape.
+  if(context.applied!==undefined)parseAppliedContext(context.applied);
   const selected=animation??(typeof context.animation==='string'?context.animation:null);
   validateFeedbackSelection(p.feedbackCatalog,{frameStart:feedback.frameStart,frameEnd:feedback.frameEnd,target:feedback.target,animation:selected});
   return {...feedback,context:{...context,...(animation===undefined?{}:{animation}),interval} as Json};

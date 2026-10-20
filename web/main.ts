@@ -8,7 +8,7 @@ import {RigOverlays,type OverlayCircle,type OverlayRegion} from './rig-overlays.
 import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
 import {bindChestEditor,bustLabel,bustSides,rowCircle,type ChestEditor} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
-import {appliedRecord,designatedRegions,handoffText,outcomeLine,pickPart,runRebuild,seedFields,type AppliedRecord,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {appliedRecord,designatedRegions,handoffText,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedPatch,type AppliedRecord,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -80,7 +80,7 @@ let meshEditor:MeshEditor|null=null;
 /** The hash-verified compiled model document the parts catalog was read from (mesh edit reads attachments from it). */
 let partModel:unknown=null;
 /** Apply · Rebuild (#99): the inspected model's URL, the producer status, and the applied record while its scratch build is on the stage. */
-let inspectedModel:{url:string;prefix:string;sha256:string}|null=null,rebuildStatus:RebuildStatusView|null=null,appliedOnStage:AppliedRecord|null=null,rebuildBusy=false;
+let inspectedModel:{url:string;prefix:string;sha256:string}|null=null,rebuildStatus:RebuildStatusView|null=null,appliedOnStage:AppliedRecord|AppliedPatch|null=null,rebuildBusy=false,stageModelHash:string|null=null;
 let appearance:ReturnType<typeof bindAppearance>|null=null;
 let workspace:WorkspaceUI|null=null;
 let idleHeld=false;
@@ -556,7 +556,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
   text('player-state', 'Loading compiled rig…');
   try {
     const modelUrl = new URL(assetUrl(data.manifest.model), location.href).href;
-    inspectedModel={url:modelUrl,prefix:access.route('/assets/'),sha256:data.reviewedSource.rig?.sha256??''};
+    inspectedModel={url:modelUrl,prefix:access.route('/assets/'),sha256:data.reviewedSource.rig?.sha256??''};stageModelHash=inspectedModel.sha256||null;
     assets = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, url) => {
       const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith(access.route('/assets/'))) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
@@ -1189,10 +1189,41 @@ async function applyRebuild():Promise<void> {
  }catch(error){chestEditor?.notify(`REBUILD_FAILED: ${errorText(error)}`,true);message(`REBUILD_FAILED: ${errorText(error)}`,true);}
  finally{rebuildBusy=false;rebuildState();}
 }
+/**
+ * Apply a config patch (#102): the same stream, in-place reload and Reset as a region Apply. The patch goes to the
+ * installed producer through `POST /api/rebuild {patch}`; on a built job the scratch build replaces the drawn rig with
+ * the same camera, animation, time, set and environment, and the draft keeps the patch, its hash, the producer's line
+ * and check's summary. A refusal leaves the stage as it was and shows the producer's line verbatim. No editing UI calls
+ * this yet (#103+); `window.rigReviewEditor.applyPatch` is its entry point.
+ */
+async function applyPatch(patch:ConfigPatch):Promise<PatchJobView|RebuildRefusal> {
+ if(rebuildBusy)return {status:'refused',error:'REBUILD_BUSY: an Apply is still running',producerLine:null};
+ if(readOnly){chestEditor?.notify(readOnly,true);return {status:'refused',error:readOnly,producerLine:null};}
+ const lines:string[]=[];
+ rebuildBusy=true;rebuildState();chestEditor?.notify(`Applying patch (${patch.op.cmd}, ${patch.ops.length} op(s))…`,false,[]);
+ try{
+  const result=await runRebuild<{patch:ConfigPatch},PatchJobView>({patch},{post:value=>api<PatchJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<PatchJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+   onLine:line=>{lines.push(line);chestEditor?.notify(line.trim()||'…',false,lines.slice(-6));}});
+  const outcome=patchOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
+  if(next.id===null||!('id' in result)){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return result;}
+  await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash);
+  appliedOnStage=patchAppliedRecord(result);
+  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
+  chestEditor?.notify(outcome.text,outcome.error,[]);message(outcome.text,outcome.error);
+  return result;
+ }catch(error){const text=`REBUILD_FAILED: ${errorText(error)}`;chestEditor?.notify(text,true);message(text,true);return {status:'refused',error:text,producerLine:null};}
+ finally{rebuildBusy=false;rebuildState();}
+}
+/** The client's edit entry point for automation and the edit cards to come: apply a patch, return to the inspected build, read the stage. */
+(window as unknown as {rigReviewEditor:unknown}).rigReviewEditor={
+ applyPatch,reset:()=>resetRebuild(),
+ status:async()=>rebuildStatus??await loadRebuildStatus(),
+ stage:()=>({modelHash:stageModelHash,inspectedHash:inspectedModel?.sha256??null,applied:appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,animation,time:player?.time??time,playing,busy:rebuildBusy}),
+};
 async function resetRebuild():Promise<void> {
  if(rebuildBusy||!appliedOnStage||!inspectedModel)return;
  rebuildBusy=true;rebuildState();
- try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256);appliedOnStage=null;chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied regions.',false);message('Reset to the inspected build.');}
+ try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256);appliedOnStage=null;chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');}
  catch(error){chestEditor?.notify(`REBUILD_RESET_FAILED: ${errorText(error)}`,true);}
  finally{rebuildBusy=false;rebuildState();}
 }
@@ -1203,7 +1234,7 @@ async function resetRebuild():Promise<void> {
 async function swapRig(modelUrl:string,prefix:string,sha256:string):Promise<void> {
  const keepAnimation=animation,keepTime=player?.time??time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
  const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}});
- pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);
+ pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);stageModelHash=sha256;
  player.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
  try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);partModel=catalog.model;parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
  if(keepSet){try{player.setSet(keepSet);}catch{select('part-set').value='';player.setSet(null);}}
