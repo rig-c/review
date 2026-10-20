@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.8.0](https://github.com/rig-c/review/compare/v0.7.1...v0.8.0) (2026-10-20)
+
+
+### Features
+
+* **animate:** use the watched wind for readings and check — export it as rigc-environment/1, run `check --environment` ([#155](https://github.com/rig-c/review/issues/155)) ([b11ac5c](https://github.com/rig-c/review/commit/b11ac5c0a7fe533f192a5302939546319e339fd0)), closes [#112](https://github.com/rig-c/review/issues/112)
+* **setup:** cloth recipe form — edit /cloth/&lt;tag&gt;, re-drafted by `propose --cloth --write-config` and built in scratch ([#156](https://github.com/rig-c/review/issues/156)) ([e3cfca6](https://github.com/rig-c/review/commit/e3cfca67acd7896209ec5110a78dd755a8042f2c)), closes [#111](https://github.com/rig-c/review/issues/111)
+
+
+### Bug Fixes
+
+* **ci:** publish an already-cut release tag by hand when its publish did not land ([#153](https://github.com/rig-c/review/issues/153)) ([c47a0dd](https://github.com/rig-c/review/commit/c47a0dd622e25c3672161eb001c4ce2f602f7840))
+
+
+### Performance Improvements
+
+* **rebuild:** a retune Apply reads retune's own revision check instead of running check again ([#157](https://github.com/rig-c/review/issues/157)) ([03dbf92](https://github.com/rig-c/review/commit/03dbf921945553de45a5ff21a0fa33f59ee5a3b9)), closes [#139](https://github.com/rig-c/review/issues/139)
+
 ## [0.7.1](https://github.com/rig-c/review/compare/v0.7.0...v0.7.1) (2026-10-20)
 
 
