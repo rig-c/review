@@ -2,7 +2,8 @@
  * What a feedback record's `context.applied` holds: the exact last applied state that was on the stage when the note was
  * written, or null. `rig-review-applied/1` is #99's region designation; `rig-review-applied/2` (#102) is a config patch
  * with its hash, the producer's line, the scratch `check.json` summary and the structural diff against the inspected
- * rig.json. Records without `applied`, or with null, stay valid. Pure.
+ * rig.json. A remesh patch from the Mesh panel (#106) adds `mesh`: the part and its vertex / triangle / hull counts before
+ * and after, as the revision's `remesh.json` states them. Records without `applied`, or with null, stay valid. Pure.
  */
 import { CONFIG_PATCH_SCHEMA, parseConfigPatch, type ConfigPatch } from './config-patch.ts';
 import { parseBustSpec } from './chest-landmarks.ts';
@@ -36,7 +37,14 @@ export interface AppliedPatch {
   check: CheckSummary | null;
   diff: { count: number; paths: string[] } | null;
   modelHash: string;
+  /** #106, a remesh patch only: `remesh.json`'s part counts. */
+  mesh?: { part: string; before: MeshCounts; after: MeshCounts };
 }
+export interface MeshCounts { vertices: number; triangles: number; hull: number }
+const meshCounts = (v: unknown, field: string) => {
+  const c = exact(v, 'hull,triangles,vertices', field);
+  if (![c.vertices, c.triangles, c.hull].every(n => Number.isSafeInteger(n) && (n as number) >= 0)) throw new Error(`${field}: vertices, triangles and hull are whole numbers`);
+};
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const hex = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
@@ -82,13 +90,18 @@ export function parseAppliedContext(value: unknown): void {
     return;
   }
   if (value.schema === APPLIED_PATCH_SCHEMA) {
-    const v = exact(value, 'buildId,check,compiler,configHash,diff,line,modelHash,patch,patchSha256,producer,schema', field);
+    const v = exact(value, `buildId,check,compiler,configHash,diff,line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,patch,patchSha256,producer,schema`, field);
     if (![v.buildId, v.configHash, v.patchSha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, patchSha256 and modelHash are SHA-256 hex`);
     let patch: ConfigPatch;
     try { patch = parseConfigPatch(v.patch); } catch (e) { throw new Error(`${field}.patch: ${e instanceof Error ? e.message : String(e)}`); }
     if (patch.config_sha256 !== v.configHash) throw new Error(`${field}: patch.config_sha256 is not configHash`);
     tool(v.producer, `${field}.producer`); tool(v.compiler, `${field}.compiler`); lineOrNull(v.line, `${field}.line`);
     parseCheck(v.check, `${field}.check`);
+    if (Object.hasOwn(v, 'mesh')) {
+      const m = exact(v.mesh, 'after,before,part', `${field}.mesh`);
+      if (patch.op.cmd !== 'remesh' || patch.op.args[patch.op.args.indexOf('--part') + 1] !== m.part) throw new Error(`${field}.mesh.part: the part the patch's remesh names`);
+      meshCounts(m.before, `${field}.mesh.before`); meshCounts(m.after, `${field}.mesh.after`);
+    }
     if (v.diff !== null) {
       const d = exact(v.diff, 'count,paths', `${field}.diff`);
       if (!Number.isSafeInteger(d.count) || (d.count as number) < 0 || !Array.isArray(d.paths) || d.paths.length > MAX_DIFF_PATHS || d.paths.length > (d.count as number) || !d.paths.every(p => typeof p === 'string')) throw new Error(`${field}.diff: {count, paths ≤ ${MAX_DIFF_PATHS}}`);
@@ -108,7 +121,8 @@ export function appliedSummary(value: unknown): string | null {
   const a = value as AppliedPatch, paths = a.patch.ops.map(o => `${o.op} ${o.path}`);
   const check = a.check ? `check ${a.check.pass === null ? 'not read' : a.check.pass ? 'PASS' : 'FAIL'}` : 'check not run';
   const diff = a.diff ? ` · rig.json differs at ${a.diff.count} path(s)` : '';
-  return `patch ${a.patchSha256.slice(0, 12)}… (${a.patch.op.cmd}; ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? `, +${paths.length - 3}` : ''}) with ${producer.package} ${producer.version} · ${check}${diff} · model ${model}…`;
+  const mesh = a.mesh ? ` · ${a.mesh.part} v ${a.mesh.before.vertices} t ${a.mesh.before.triangles} → v ${a.mesh.after.vertices} t ${a.mesh.after.triangles}` : '';
+  return `patch ${a.patchSha256.slice(0, 12)}… (${a.patch.op.cmd}; ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? `, +${paths.length - 3}` : ''}) with ${producer.package} ${producer.version} · ${check}${diff}${mesh} · model ${model}…`;
 }
 
 /**

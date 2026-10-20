@@ -24,7 +24,7 @@ console.log('rig-parts remesh: '+f('--part'));console.error('[baseline:rig] stde
 if(f('--part')==='refuse'){console.log(${JSON.stringify(REFUSAL)});console.log('refused: 1 problem(s)');process.exit(1);}
 const out=f('--out');fs.mkdirSync(out);const mesh=fs.readFileSync(f('--mesh'),'utf8');
 fs.writeFileSync(path.join(out,'rig.json'),JSON.stringify({mesh:JSON.parse(mesh)}));fs.writeFileSync(path.join(out,'motion.json'),'{}');
-fs.writeFileSync(path.join(out,'remesh.json'),JSON.stringify({spec:'rig-parts-remesh/1',request:{page_edges:'free',pack_shape:'polygon'}}));
+fs.writeFileSync(path.join(out,'remesh.json'),JSON.stringify({spec:'rig-parts-remesh/1',request:{part:f('--part'),page_edges:'free',pack_shape:'polygon'},target:{before:{vertices:178,triangles:296,hull:58},after:{vertices:181,triangles:302,hull:58}}}));
 console.log('rig-parts remesh: wrote 3 file(s) under '+out+', the provenance in remesh.json');`;
 const fakeRigc=`const fs=require('fs'),path=require('path');const a=process.argv.slice(2);const f=n=>a[a.indexOf(n)+1];
 if(process.env.FAKE_LOG)fs.appendFileSync(process.env.FAKE_LOG,'rigc '+a.join(' ')+'\\n');
@@ -188,4 +188,23 @@ test('the page turns rows into region entries, starts an untouched editor from t
  expect(appliedRecord(result as RebuildJobView)).toEqual({schema:'rig-review-applied/1',buildId:'d'.repeat(64),part:'topwear',regions:[bust],configHash:'f'.repeat(64),entrySha256:'0'.repeat(64),producer:{package:'@rig-c/parts',version:'1.42.0'},compiler:{package:'rig-c',version:'2.64.1'},line:'wrote',modelHash:'e'.repeat(64)});
  const refusal={status:'refused' as const,error:MODELING_PRODUCER_NOT_INSTALLED,producerLine:MODELING_PRODUCER_NOT_INSTALLED};
  expect(await runRebuild({part:'topwear',regions:[bust],configHash:'f'.repeat(64)},{post:async()=>refusal,get:async()=>{throw new Error('no poll');},onLine:()=>{throw new Error('no line');},sleep:async()=>{}})).toEqual(refusal);
+});
+
+import {meshPatchOps,setEntryValue,type MeshEntry} from '../src/mesh-entry.ts';
+test('#106: the status lists every meshes entry as written; a Mesh panel patch remeshes one part and the job carries remesh.json\'s counts',async()=>{
+ const {root,pkg,state,log}=await fixture();await install(root,'1.42.0');process.env.FAKE_LOG=log;
+ const p=await loadReview(pkg),before=await treeHash(pkg),server=await startServer(p,{port:0,stateDir:state,cwd:root}),base=`http://127.0.0.1:${server.port}`;
+ try{
+  const status=await (await fetch(base+'/api/rebuild')).json();
+  expect(status.meshes).toEqual(config.meshes);
+  const entry=setEntryValue(config.meshes.topwear as unknown as MeshEntry,['contour','spacing'],20);
+  const patch={schema:'rig-review-config-patch/1',config_sha256:status.inputs.configHash,ops:meshPatchOps('topwear',entry),producer:{name:'@rig-c/parts',version:'1.42.0'},op:{cmd:'remesh',args:['--part','topwear']}};
+  const started=await post(base,{patch});expect(started.status).toBe(202);
+  const job=await settle(base,await started.json()) as unknown as {status:string;id:string;remesh:unknown;request:{patch:{ops:unknown[]}};lines:string[]};
+  expect(job.status).toBe('built');expect(job.request.patch.ops).toHaveLength(1);
+  expect(job.remesh).toEqual({part:'topwear',before:{vertices:178,triangles:296,hull:58},after:{vertices:181,triangles:302,hull:58},modelTriangles:null});
+  expect(job.lines).toContain('review: remesh.json topwear: v 178 t 296 → v 181 t 302');
+  const remeshCall=(await readFile(log,'utf8')).trim().split('\n').find(l=>l.startsWith('remesh '))!;expect(remeshCall).toContain('--part topwear --mesh mesh.json --out rig');
+  expect(await treeHash(pkg)).toBe(before);
+ }finally{delete process.env.FAKE_LOG;await server.stop(true);await rm(root,{recursive:true,force:true});}
 });
