@@ -1,7 +1,8 @@
 /**
  * The chest-region editor (Setup): a view-bar toggle, an editor bar of R / L circles and direct manipulation of the
  * circles on the rig pane. The values live in the Chest regions detail block's fields (row 0 = R, row 1 = L), so the
- * draft, export and binding are the detail block's. Review never regenerates anything: Apply · Rebuild refuses by name.
+ * draft, export and binding are the detail block's. Review builds no mesh itself: Apply · Rebuild hands the rows to the
+ * host, which sends them to the installed producer (#99); this module never reaches a process or the server.
  */
 import {clampNonOverlapping,CHEST_CIRCLE_LIMITS,type ChestCircle,type CropWorldMapping} from '../src/chest-regions.ts';
 import {chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
@@ -13,7 +14,6 @@ export type BustMode='move'|'r'|'band';
 export const bustSides=[{side:'r',row:0,tag:'R'},{side:'l',row:1,tag:'L'}] as const;
 export const bustFields=['x','y','r','band'] as const;
 export const bustInputId=(side:BustSide,field:typeof bustFields[number])=>`bust-${side}-${field}`;
-export const MODELING_INPUT_UNAVAILABLE='MODELING_INPUT_UNAVAILABLE: no producer handoff — export the JSON and rebuild with the producer';
 export const CHEST_REGIONS_CLAMPED='CHEST_REGIONS_CLAMPED';
 const sideRow=(side:BustSide)=>side==='r'?0:1;
 const sideTag=(side:BustSide)=>side==='r'?'R':'L';
@@ -69,9 +69,10 @@ export function settleBust(right:ChestCircle,left:ChestCircle):{right:ChestCircl
  // `round` is the same integer/range pass without the distance rule (−∞ margin leaves every pair fitting), so only the non-overlap change flashes.
  return {right:out.right,left:out.left,clamped:(['r','l'] as const).filter(side=>!same(side==='r'?out.right:out.left,side==='r'?round.right:round.left))};
 }
-/** Apply · Rebuild: review has no producer handoff (#45), so it refuses by name and runs nothing. */
-export function requestRebuild(notify:(text:string,error:boolean)=>void):{ok:false;error:string} {
- notify(MODELING_INPUT_UNAVAILABLE,true);return {ok:false,error:MODELING_INPUT_UNAVAILABLE};
+/** The editor-bar status: a held rebuild notice (its latest line, or the producer's refusal verbatim) wins over the drag help. */
+export function editorStatus(notice:{text:string;error:boolean}|null,mapping:CropWorldMapping):{text:string;error:boolean} {
+ if(notice)return notice;
+ return mapping.available?{text:'Drag a centre to move · the right-edge handle sets r · the dashed top handle sets band · Space-drag pans',error:false}:{text:`${mapping.reason} — the values still edit and export; nothing is drawn on the stage.`,error:true};
 }
 
 export interface ChestEditorHost {
@@ -84,16 +85,26 @@ export interface ChestEditorHost {
  /** Re-render the detail block and the overlay after a value changed. */
  changed:()=>void;
  download:()=>void;
+ /** Apply · Rebuild: the host runs the installed producer on the current rows and reloads the stage. */
+ apply:()=>void;
+ /** Reset: the host reloads the inspected build. */
+ reset:()=>void;
  message:(text:string,error?:boolean)=>void;
  inspector:()=>string|undefined;
 }
-export interface ChestEditor {active:()=>boolean;flashing:(side:BustSide)=>boolean;sync:()=>void;dispose:()=>void}
+export interface ChestEditor {active:()=>boolean;flashing:(side:BustSide)=>boolean;sync:()=>void;dispose:()=>void;
+ /** Hold a status line (null clears it); `log` is the producer's latest lines. */
+ notify:(text:string|null,error?:boolean,log?:readonly string[])=>void;
+ /** Apply is disabled while a rebuild runs; Reset is enabled while a rebuilt build is on the stage. */
+ rebuildState:(state:{busy:boolean;applied:boolean})=>void}
 
 export function bindChestEditor(host:ChestEditorHost):ChestEditor {
  const node=<T extends HTMLElement>(id:string)=>document.getElementById(id) as T;
  const toggle=node<HTMLButtonElement>('chest-edit'),bar=node<HTMLElement>('chest-editor-bar'),status=node<HTMLElement>('chest-editor-status');
  const field=(id:string)=>document.getElementById(id) as HTMLInputElement|null;
  const read:ChestFieldReader=id=>{const f=field(id);return f?{value:f.value}:undefined;};
+ const log=node<HTMLElement>('chest-editor-log'),apply=node<HTMLButtonElement>('bust-apply'),reset=node<HTMLButtonElement>('bust-reset');
+ let notice:{text:string;error:boolean}|null=null;
  let active=false,space=false,drag:(BustDrag&{pointer:number;other:ChestCircle|null})|null=null,flashTimer:ReturnType<typeof setTimeout>|null=null;
  const flash=new Set<BustSide>();
  const write=(row:number,circle:Partial<ChestCircle>)=>{for(const [id,value] of Object.entries(circleFields(row,circle))){const f=field(id);if(f)f.value=value;}};
@@ -122,9 +133,8 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
    for(const f of bustFields){const input=field(bustInputId(side,f));if(input&&document.activeElement!==input)input.value=values[f];}
    const r=field(bustInputId(side,'r'));if(r)r.placeholder=circle||!(read(chestRowId(row,'ax'))?.value??'').trim()?'':'ellipse';
   }
-  const mapping=host.mapping();
-  status.textContent=mapping.available?'Drag a centre to move · the right-edge handle sets r · the dashed top handle sets band · Space-drag pans':`${mapping.reason} — the values still edit and export; nothing is drawn on the stage.`;
-  status.classList.toggle('error',!mapping.available);
+  const shown=editorStatus(notice,host.mapping());
+  status.textContent=shown.text;status.title=shown.text;status.classList.toggle('error',shown.error);
  };
  const setActive=(on:boolean)=>{active=on;toggle.setAttribute('aria-pressed',String(on));bar.hidden=!on;if(!on){drag=null;delete host.pane.dataset.chestHover;}sync();host.changed();};
  toggle.addEventListener('click',()=>setActive(!active));
@@ -146,7 +156,8 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
   commit('l',mirrorBust(right,{cx:leftX}),right);sync();host.changed();
  });
  node<HTMLButtonElement>('bust-download').addEventListener('click',()=>host.download());
- node<HTMLButtonElement>('bust-apply').addEventListener('click',()=>{const result=requestRebuild((text,error)=>host.message(text,error));status.textContent=result.error;status.classList.add('error');});
+ apply.addEventListener('click',()=>host.apply());
+ reset.addEventListener('click',()=>host.reset());
  const keyDown=(event:KeyboardEvent)=>{if(event.code==='Space'&&!textEntryFocused(event.target))space=true;};
  const keyUp=(event:KeyboardEvent)=>{if(event.code==='Space')space=false;};
  const blur=()=>{space=false;};
@@ -174,6 +185,8 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
  sync();
  return {
   active:()=>active,flashing:side=>flash.has(side),sync,
+  notify:(text,error=false,lines)=>{notice=text===null?null:{text,error};if(lines){log.textContent=lines.join('\n');log.hidden=!lines.length;log.scrollTop=log.scrollHeight;}sync();},
+  rebuildState:({busy,applied})=>{apply.disabled=busy;apply.setAttribute('aria-busy',String(busy));reset.disabled=busy||!applied;},
   dispose:()=>{observer.disconnect();if(flashTimer)clearTimeout(flashTimer);host.pane.removeEventListener('pointerdown',down,true);host.pane.removeEventListener('pointermove',move,true);for(const type of ['pointerup','pointercancel','lostpointercapture'] as const)host.pane.removeEventListener(type,end,true);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);window.removeEventListener('blur',blur);},
  };
 }

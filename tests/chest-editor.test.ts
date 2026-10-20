@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
-import {bustInputId,chestEditVisible,circleFields,dragBust,hitBustHandle,mirrorBust,MODELING_INPUT_UNAVAILABLE,requestRebuild,rowCircle,settleBust,type BustDrag} from '../web/chest-editor.ts';
+import {bustInputId,chestEditVisible,circleFields,dragBust,editorStatus,hitBustHandle,mirrorBust,rowCircle,settleBust,type BustDrag} from '../web/chest-editor.ts';
 import {chestRowId,type ChestFieldValue} from '../web/chest-regions-tool.ts';
 
 const html=()=>readFile(new URL('../web/index.html',import.meta.url),'utf8');
@@ -49,16 +49,19 @@ test('rows are circles only with equal semi-axes and no clip; r writes both semi
  expect(rowCircle(read,1)).toBeNull();
 });
 
-test('Apply · Rebuild refuses by name and runs nothing',async()=>{
- const said:[string,boolean][]=[],original=globalThis.fetch;let fetched=0;
- globalThis.fetch=(()=>{fetched++;throw new Error('no request expected');}) as unknown as typeof fetch;
- try{expect(requestRebuild((text,error)=>said.push([text,error]))).toEqual({ok:false,error:MODELING_INPUT_UNAVAILABLE});}finally{globalThis.fetch=original;}
- expect(said).toEqual([[MODELING_INPUT_UNAVAILABLE,true]]);expect(fetched).toBe(0);
- expect(MODELING_INPUT_UNAVAILABLE).toBe('MODELING_INPUT_UNAVAILABLE: no producer handoff — export the JSON and rebuild with the producer');
- // The editor module has no path to a process, a server mutation or a manifest command.
+test('Apply · Rebuild is the host\'s: the editor holds the producer\'s line over the drag help and never reaches a process or the server',async()=>{
+ const mapped={available:true,crop:{w:10,h:10},toWorld:(x:number,y:number)=>({x,y}),basis:'b'} as const,unmapped={available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: x'} as const;
+ expect(editorStatus(null,mapped)).toEqual({text:'Drag a centre to move · the right-edge handle sets r · the dashed top handle sets band · Space-drag pans',error:false});
+ expect(editorStatus(null,unmapped)).toEqual({text:'CHEST_REGION_MAPPING_UNAVAILABLE: x — the values still edit and export; nothing is drawn on the stage.',error:true});
+ const line='FAIL  REMESH_REQUEST_HELD: rig.json bones — the request changes it';
+ expect(editorStatus({text:line,error:true},mapped)).toEqual({text:line,error:true});
+ // The editor module has no path to a process, a server mutation or a manifest command; main.ts owns the request.
  const source=await readFile(new URL('../web/chest-editor.ts',import.meta.url),'utf8');
  for(const word of ['fetch(','child_process','Bun.spawn','XMLHttpRequest','/api/'])expect(source).not.toContain(word);
- expect(between(await html(),'<button id="bust-apply"','</button>')).toContain(`title="${MODELING_INPUT_UNAVAILABLE}"`);
+ const page=await html();
+ expect(between(page,'<button id="bust-apply"','</button>')).not.toContain('aria-disabled');expect(page).not.toContain('MODELING_INPUT_UNAVAILABLE');
+ expect(between(page,'<button id="bust-reset"','</button>')).toContain(' disabled>Reset');
+ expect(page).toContain('<textarea id="rebuild-applied" class="sr-only" hidden aria-hidden="true" tabindex="-1"></textarea>');
 });
 
 test('the Chest regions toggle is Setup only and starts hidden and unpressed in the view bar tool area',async()=>{

@@ -7,6 +7,8 @@
  * the producer (#45) owns the mesher. Vertex ids are stable: the source vertices keep their indices, an added vertex
  * takes the next id after every vertex that existed before it, and a removed vertex keeps its id (it is only marked).
  */
+/** Edit Mesh's Apply · Rebuild: no producer command consumes a vertex delta, so it refuses by name and runs nothing. */
+export const MODELING_TARGET_UNSUPPORTED = 'MODELING_TARGET_UNSUPPORTED: the producer has no delta operation (parts); export the delta';
 export type Vec = [number, number];
 export type MeshOp =
   | { op: 'move'; v: number; from: Vec; to: Vec }
