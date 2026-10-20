@@ -28,7 +28,9 @@ import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, type
 import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPacket,dueJolts,dragMoved,loadModelDocument,environmentContext,environmentJson,type JoltStep,type WindSnapshot,type WindState} from '../src/environment.ts';
-import {tuningRows,barLine,READOUT_BARS} from '../src/physics-tuning.ts';
+import {tuningRows,readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
+import {bindReadingsPanel,EDGE as READING_EDGE,type ReadingsJobView,type ReadingsPanel,type ReadingsRefusal} from './readings-panel.ts';
+import {READINGS_SCHEMA,type ReadingsContext} from '../src/readings.ts';
 import {appliedCheckRefusal,type CheckSummary} from '../src/applied-context.ts';
 import {bindPhysicsPanel,type PhysicsPanel} from './physics-panel.ts';
 import type {PatchOp} from '../src/config-patch.ts';
@@ -113,6 +115,8 @@ const wind=createWindModel();
 let joltQueue:JoltStep[]=[],environmentNote='';
 /** Animate · Physics tuning (#103): the panel, the inspected model document it maps against, and the check lines of the build on the stage (null: the inspected build, which review has not checked). */
 let physicsPanel:PhysicsPanel|null=null,inspectedDocument:unknown=null,inspectedDocumentReason:string|null=null,stageCheck:{lines:string[];check:CheckSummary|null}|null=null;
+/** Animate · Readings (#108): the block, the last finished job (its ticks and worst lines), and the run in flight. */
+let readingsPanel:ReadingsPanel|null=null,readingsJob:ReadingsJobView|null=null,readingsBusy=false,readingsTickKey='';
 /** The world an Apply's reload resumes: wind (clock and active pulse), pending jolts, whether the controls are engaged, gravity. */
 interface StageWorld {wind:WindState;jolts:JoltStep[];applied:boolean;gravity:number}
 
@@ -361,6 +365,15 @@ function renderTransport(): void {
   button('play').disabled = (!player && !video && !sequence) || duration <= 0;
   renderFrameTransport();
   renderFeedbackRange();
+  renderReadingTicks();
+}
+
+/** Re-lay the reading ticks only when what places them changes (renderTransport runs every played frame). */
+function renderReadingTicks(force = false): void {
+  if (!readingsPanel) return;
+  const scrub = input('scrub'), key = `${readingsJob?.id ?? ''}|${readingsJob?.runs.map(r => r.results.length).join(',')}|${animation}|${duration}|${scrub.offsetLeft},${scrub.offsetTop},${scrub.offsetWidth}`;
+  if (!force && key === readingsTickKey) return;
+  readingsTickKey = key; readingsPanel.ticks(readingsJob, animation, duration);
 }
 
 function feedbackAnimation(): string | null { return player && player.current !== animation ? null : animation || null; }
@@ -534,16 +547,30 @@ function renderReportSelection(): void {
   text('report-details', JSON.stringify({ source: event.source, frames: event.frames, times: event.times, timeInterval: event.timeInterval, durationSeconds: event.durationSeconds, targets: event.targets, provenance: event.provenance, details: event.details }, null, 2));
 }
 
+/**
+ * The timeline-marker seek: report events and reading ticks (#108) both land here — pause, switch to the marker's
+ * animation when the rig has it, refuse a time past the clip, else seek to the exact time.
+ */
+function seekMarker(clip: string | undefined, exact: number, what: string): boolean {
+  pause();
+  if (clip && player && !assets?.animations.some(item => item.name === clip)) { message(`${what} animation "${clip}" is absent from the current rig; no seek was performed.`, true); return false; }
+  if (clip && assets?.animations.some(item => item.name === clip) && animation !== clip) chooseAnimation(clip);
+  if (duration > 0 && exact > duration) { message(`Explicit time ${exact} s is outside the current range of ${duration} s. No substitute time was used.`, true); return false; }
+  seek(exact);
+  return true;
+}
 function seekReportEvent(): void {
   const event = selectedReportEvent; if (!event) return;
   const exact = eventSeekTime(event, selectedReportTime); if (exact === null) return;
-  pause();
-  const reportAnimation = data.report?.animation;
-  if (reportAnimation && player && !assets?.animations.some(item => item.name === reportAnimation)) { message(`Report animation "${reportAnimation}" is absent from the current rig; no seek was performed.`, true); return; }
-  if (reportAnimation && assets?.animations.some(item => item.name === reportAnimation) && animation !== reportAnimation) chooseAnimation(reportAnimation);
-  if (duration > 0 && exact > duration) { message(`Explicit time ${exact} s is outside the current range of ${duration} s. No substitute time was used.`, true); return; }
-  seek(exact);
+  if (!seekMarker(data.report?.animation, exact, 'Report')) return;
   message((player || video || sequence) ? `Selected report time ${exact} s.` : `Report time ${exact} s · no playback reference; time display only.`);
+}
+/** A reading tick or worst line: its frame's time (frame / fps of the reading's set) in the reading's animation. */
+function seekReading(clip: string, frame: number, exact: number | null, label: string): void {
+  if (exact === null) { message(`${label}: F${frame} has no time (the reading's set states no fps); no seek was performed.`, true); return; }
+  // The clip's last sample can sit a rounding hair past the runtime duration; that tick is the clip's end.
+  const at = duration > 0 && exact > duration && exact - duration <= READING_EDGE ? duration : exact;
+  if (seekMarker(clip, at, 'Reading')) message(`Reading · ${label} → F${frame} · ${exact.toFixed(4)} s`);
 }
 
 function tick(now: number): void {
@@ -780,6 +807,8 @@ function bind(): void {
       environment: feedbackEnvironment(),
       // The exact last applied designation and the producer's line, only while that scratch build is what is drawn.
       applied: appliedOnStage ? JSON.parse(JSON.stringify(appliedOnStage)) as Json : null,
+      // The readings chosen (#108): the pairs of the last finished run and the builds they ran on, not their results.
+      readings: readingsContext() as unknown as Json,
       reportEvent: selectedReportEvent ? { id: selectedReportEvent.id, field: selectedReportEvent.field, source: { ...selectedReportEvent.source }, frames: selectedReportEvent.frames ? [...selectedReportEvent.frames] : null, exactTime: eventSeekTime(selectedReportEvent, selectedReportTime), targets: selectedReportEvent.targets.map(target => ({ ...target })) } : null,
     } });
     input('feedback-summary').value = ''; markDirty(); renderProposals(); message('Added structured feedback. Submit the review to save it.');
@@ -805,6 +834,8 @@ function bind(): void {
   physicsPanel=bindPhysicsPanel({apply:async ops=>{await applyPhysics(ops);},reset:resetPhysicsBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),pane=el('rig-pane').getBoundingClientRect(),view=el('rig-root').parentElement!.getBoundingClientRect(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name),p=project(b.x,b.y);out.set(name,{x:p.x+view.left-pane.left,y:p.y+view.top-pane.top});}catch{/* a bone this model lacks is not pickable */}}return out;}});
   viewDisposers.push(()=>physicsPanel?.dispose());
+  readingsPanel=bindReadingsPanel({run:()=>{void runReadings();},seek:seekReading});
+  const tickResize=new ResizeObserver(()=>renderReadingTicks());tickResize.observe(el('transport'));viewDisposers.push(()=>tickResize.disconnect());
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
   for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
@@ -1132,6 +1163,7 @@ function feedbackEnvironment(){return player?environmentJson(environmentContext(
 function enableEnvironment(modelUrl:string):void {
  for(const id of environmentInputs)el<HTMLInputElement|HTMLButtonElement>(id).disabled=false;
  syncEnvironmentInputs();text('physics-panel-state','Reading the compiled model…');
+ readingsPanel?.catalog(data.feedbackCatalog.slots??[],data.feedbackCatalog.bones??[]);readingsPanel?.status('Pick readings, then Run: each runs on the inspected build and on the latest scratch build.',false);
  const rig=data.reviewedSource.rig;
  if(!rig){inspectedDocumentReason='PHYSICS_TUNING_UNAVAILABLE: no reviewed rig identity';refreshPhysics();return;}
  void loadModelDocument(modelUrl,rig.sha256).then(loaded=>{if(loaded.ok)inspectedDocument=loaded.document;else inspectedDocumentReason=`PHYSICS_TUNING_UNAVAILABLE: ${loaded.reason}`;refreshPhysics();},error=>{inspectedDocumentReason=`PHYSICS_TUNING_UNAVAILABLE: ${errorText(error)}`;refreshPhysics();});
@@ -1245,6 +1277,8 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   drawRig(()=>player!.draw());time=player.time;renderTransport();
   const posedTime=player.time;if(steps.length){if(environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));else player.environment(null);}
   return posedTime;},
+ /** Readings (#108): run (the pickers' choice, or the given readings), the last job, the ticks drawn and the worst lines shown. */
+ readings:{run:(readings?:import('../src/readings.ts').ReadingRequest[])=>runReadings(readings?{readings}:undefined),job:()=>readingsJob?JSON.parse(JSON.stringify(readingsJob)):null,ticks:()=>[...document.querySelectorAll<HTMLButtonElement>('#reading-ticks .reading-tick')].map(t=>({build:t.dataset.build,frame:Number(t.dataset.frame),left:t.style.left})),lines:()=>readingsPanel?.shownLines()??[],context:()=>readingsContext()},
  stage:()=>({modelHash:stageModelHash,inspectedHash:inspectedModel?.sha256??null,applied:appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,animation,time:player?.time??time,playing,busy:rebuildBusy}),
 };
 /** The world as it stands now: what a physics Apply's reload resumes. */
@@ -1265,10 +1299,63 @@ async function applyPhysics(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|n
   const outcome=patchOutcomeLine(result);physicsPanel?.status(outcome.text,outcome.error);
   if('id' in result&&result.status==='built'){
    physicsPanel?.applied(result.request.patch.ops);
-   physicsPanel?.readout(READOUT_BARS.map(name=>({name,before:before?barLine(name,before.lines,before.check):`${name}: not in check summary (the inspected build; review ran no check on it)`,after:barLine(name,result.lines,result.check)})));
+   // BEFORE for the inspected build is its stored background check (#108, HQ ruling); re-read while it still runs.
+   const after={lines:[...result.lines],check:result.check};
+   const show=()=>physicsPanel?.readout(readoutRows(before,before?null:inspectedCheckView(),after));
+   show();if(!before)void followInspectedCheck(show);
   }
   return result;
  }finally{physicsPanel?.busy(false);}
+}
+/** The inspected build's check as the last `GET /api/rebuild` returned it. */
+function inspectedCheckView():InspectedCheckView|null {return rebuildStatus?.inspectedCheck??null;}
+/** While the inspected check runs, re-read the status and redraw the readout once it settles. */
+async function followInspectedCheck(show:()=>void):Promise<void> {
+ for(let i=0;i<120&&(!rebuildStatus?.inspectedCheck||rebuildStatus.inspectedCheck.status==='running');i++){
+  try{rebuildStatus=await api<RebuildStatusView>('/api/rebuild');}catch{return;}
+  show();if(rebuildStatus.inspectedCheck&&rebuildStatus.inspectedCheck.status!=='running')return;
+  if(!rebuildStatus.inspectedCheck&&rebuildStatus.baseline?.status!=='running')return;
+  await new Promise(resolve=>setTimeout(resolve,3000));
+ }
+}
+/**
+ * Readings (#108): the pickers' readings of the drawn animation go to `POST /api/readings`, which runs `rigc render`
+ * once per reading on the inspected build and on the latest scratch build; the finished job's frames become ticks and
+ * its worst frames lines. The Environment block's wind and gravity go along only while its controls are applied.
+ */
+async function runReadings(override?:{readings:import('../src/readings.ts').ReadingRequest[]}):Promise<ReadingsJobView|ReadingsRefusal|null> {
+ if(!readingsPanel||readingsBusy)return null;
+ const chosen=override??readingsPanel.requests();
+ if('error' in chosen){readingsPanel.status(chosen.error,true);return {status:'refused',error:chosen.error};}
+ if(!animation){readingsPanel.status('READINGS_NO_ANIMATION: no animation is drawn',true);return null;}
+ const environment=player&&environmentApplied()?environmentFor(wind.read(),gravityValue()):null;
+ const body={animation,readings:chosen.readings,environment};
+ readingsBusy=true;readingsPanel.busy(true);readingsPanel.status(`Running ${chosen.readings.length} reading(s) of ${animation} with rigc render…`,false);
+ const started=performance.now();
+ try{
+  let job=await api<ReadingsJobView|ReadingsRefusal>('/api/readings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).catch(error=>({status:'refused' as const,error:errorText(error).replace(/^\d+: /,'')}));
+  if(!('id' in job)){const text=(()=>{try{return (JSON.parse(job.error) as {error?:string}).error??job.error;}catch{return job.error;}})();readingsPanel.status(text,true);return {status:'refused',error:text};}
+  while(job.status==='running'){
+   const done=job.runs.reduce((n,r)=>n+r.results.length,0),total=job.runs.length*job.request.readings.length;
+   readingsPanel.status(`Running readings of ${animation}: ${done} of ${total} done…`,false);
+   await new Promise(resolve=>setTimeout(resolve,800));
+   job=await api<ReadingsJobView>(`/api/readings/${job.id}`);
+  }
+  if(job.status==='failed'){readingsPanel.status(job.error??'READINGS_FAILED',true);return job;}
+  readingsJob=job;readingsPanel.lines(job);renderReadingTicks(true);
+  const ticks=job.runs.map(r=>`${r.build} ${r.results.reduce((n,x)=>n+x.frames.length,0)} tick(s)`).join(' · ');
+  const refused=job.runs.flatMap(r=>r.results).find(r=>r.status!=='read');
+  const env=job.environment.requested?(job.environment.passed?' · wind and gravity passed as --environment':' · this rigc has no --environment; the environment was not passed'):'';
+  readingsPanel.status(`${refused?`${refused.refusal} · `:''}Readings of ${job.request.animation}: ${ticks}${job.runs.length<2?' · no scratch build yet (Apply builds one)':''}${env} · ${((performance.now()-started)/1000).toFixed(1)} s`,!!refused);
+  return job;
+ }catch(error){readingsPanel.status(`READINGS_FAILED: ${errorText(error)}`,true);return null;}
+ finally{readingsBusy=false;readingsPanel.busy(false);}
+}
+/** `context.readings`: the last finished run's pairs and builds, or null when none ran. */
+function readingsContext():ReadingsContext|null {
+ const job=readingsJob;if(!job)return null;
+ const ticks=(build:'inspected'|'scratch')=>{const run=job.runs.find(r=>r.build===build);return run?run.results.reduce((n,r)=>n+r.frames.length,0):null;};
+ return {schema:READINGS_SCHEMA,animation:job.request.animation,requests:job.request.readings,environment:job.request.environment,environmentPassed:job.environment.passed,builds:{inspected:job.runs.find(r=>r.build==='inspected')?.modelHash??'',scratch:job.runs.find(r=>r.build==='scratch')?.id??null},compiler:job.compiler,ticks:{inspected:ticks('inspected')??0,scratch:ticks('scratch')}};
 }
 /** Physics Reset: the inspected build back under the same world, and no pending op. */
 async function resetPhysicsBuild():Promise<void> {

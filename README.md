@@ -429,13 +429,41 @@ pending ops are listed with a per-op **Revert** and kept in the local draft.
 **Apply** sends them as one patch (`rig`, then `check`, about 20–50 s on a real
 package); the scratch build reloads under the same wind, gust, jolt and gravity
 state Apply was pressed in, and the readout shows the `ANIMATIONS_DO_NOT_FOLD`
-and `TEXTURE_STRETCH` lines before and after (check's own lines, or "not in
-check summary" by name — review runs no check on the inspected build). A
+and `TEXTURE_STRETCH` lines before and after. BEFORE for the inspected build
+is its own check: once the baseline reproduces, review runs `rig-parts check`
+on that baseline output in the background (about 16 s on a real package) and
+stores the summary beside the baseline record, so a reload reads it; until it
+finishes the line says "check running…", a producer refusal is shown verbatim,
+and "not in check summary" remains only when the baseline did not reproduce. A
 refusal is the producer's line verbatim (`CONFIG_CONSTRAINT_*`,
 `CONFIG_NAME_RESOLVES`, rigc's `A23` for a mass of 0) and the stage is
 unchanged. **Reset** returns to the inspected build and clears the pending ops.
 Submit refuses a review written on an applied build whose check failed
 (`EDIT_SUBMIT_UNCHECKED`). Live preview before Apply waits on play#147.
+
+Below that, the **Readings** block (`#readings`) runs the compiler's own
+readings of the drawn animation: a **Folds** toggle, a **Pass-through**
+cloth:leg pair and a **Seam** slot:slot pair (slot names suggested from the
+model), an **Overlaps** toggle and an **Angle range** bone against a relative
+bone. **Run readings** sends the chosen readings (names only) to
+`POST /api/readings`; the server runs one `rigc render --animation <drawn>
+--folds | --pass-through <cloth>:<leg> | --seam <a>:<b> | --overlaps |
+--angle-range <bone>:<relative>` per reading on the inspected build and on the
+latest scratch build of the session (if an Apply built one), into scratch
+under the state directory (`readings/<package>/<build>/<key>/`; an identical
+reading on the same build and compiler is reused; about 0.5–5 s each on a real
+package). The frames each reading's JSON lists become ticks under the
+transport scrub — inspected above, scratch below, in two colours — and
+clicking a tick seeks to that frame's time (frame / fps). Each reading gets a
+worst-frame line, `<build> · <reading> <pair>: worst at frame N — <figure> ·
+<rigc's line>`, which also seeks; folds and overlaps list each folding mesh or
+moving pair under it. `--angle-range` writes no file, so its ticks are the
+lowest and highest frames its printed line names. An unknown slot or bone is
+rigc's to refuse, and its line is shown verbatim. While the Environment
+controls are applied, their current wind and gravity go along as a one-step
+`--environment` schedule (only when the installed rigc's `render --help` lists
+the flag). A reading is not a gate; nothing is written into the package. The
+pairs of the last run are recorded in feedback as `context.readings`.
 
 The view bar is one row and keeps the layer toggles in reach in every section: **Images**
 (`I`), **Mesh edges** (`M`) and **Bone points** (`B`). The keys do nothing while
@@ -502,7 +530,7 @@ On the rig pane each region is drawn as two circles: the core (full weight) and 
 
 - **Producer.** `@rig-c/parts`' `rig-parts`, resolved the way `rigc review` resolves `rig-review`: `node_modules/@rig-c/parts/package.json` in the nearest directory walking up from the package, then from the directory `rig-review open` was run in; its `bin` entry is read from that manifest, never from `PATH`. The compiler is the `rig-c` that `rig-parts` itself finds walking up from its own package. Absent: `MODELING_PRODUCER_NOT_INSTALLED: … — bun add -d @rig-c/parts`; older than the first release with `remesh` (1.40.0): `MODELING_PRODUCER_TOO_OLD <found> 1.40.0`. Review never installs anything.
 - **Inputs.** The producer handoff (`docs/REVIEW_PACKAGE.md`, *Producer handoff*): `open --config` (and `--parts`), else the review.json `producer` block, else `config.json`, then `rig/config.json` inside the opened folder, then `../config.json` beside an opened `out/`. The parts directory defaults to `out/` beside the config and holds `parts.json`, `parts/` and the inspected `rig/`. The editor bar shows, before any Apply, how the config was found (declared, discovered, or discovered outside the opened folder), its path and SHA-256, and the baseline. Without a handoff the bar shows `MODELING_INPUT_UNAVAILABLE: config.json — looked at …` and Apply refuses `MODELING_HANDOFF_MISSING`, naming `--config`. The request carries only `{part, regions, configHash}`; the server reads the config, replaces `meshes.<part>.contour.regions` with the designated regions (every other field as written) and runs `rig-parts remesh --rig <out>/rig --config <config> --parts <out> --part <part> --mesh mesh.json --out revision`, then `rigc build --profile rig-play --pack` with the revision's own `--page-edges` / `--pack-shape`, both with the scratch directory as working directory. A region row with equal semi-axes and no clip is sent as the config's circle, any other as the 32-sample polygon. An untouched editor starts from the config's own circle regions and contour numbers.
-- **Baseline.** Once per session, when the handoff and the producer both resolve, review runs `rig-parts rig --config <config> --parts <parts> --out <state>/baseline/<key>/baseline` and compares every file it writes (rig.json, motion.json, mesh_report.json, sets.json, images/*) with the inspected rig directory: `baseline: reproduced — rig.json <hash> = inspected <hash>`, or `baseline: not reproduced — <first differing path>`. The key is the package hash, the handoff record and the producer versions (no clock), so a reopen reuses the result. Ops that rebuild the whole rig refuse `EDIT_BASELINE_MISMATCH <path>` unless the baseline reproduced; `remesh` keeps its own `REMESH_BASELINE_MISMATCH`.
+- **Baseline.** Once per session, when the handoff and the producer both resolve, review runs `rig-parts rig --config <config> --parts <parts> --out <state>/baseline/<key>/baseline` and compares every file it writes (rig.json, motion.json, mesh_report.json, sets.json, images/*) with the inspected rig directory: `baseline: reproduced — rig.json <hash> = inspected <hash>`, or `baseline: not reproduced — <first differing path>`. The key is the package hash, the handoff record and the producer versions (no clock), so a reopen reuses the result. Ops that rebuild the whole rig refuse `EDIT_BASELINE_MISMATCH <path>` unless the baseline reproduced; `remesh` keeps its own `REMESH_BASELINE_MISMATCH`. Once it reproduces, `rig-parts check` runs on the baseline output in the background (into `<state>/baseline/<key>/inspected-check/`, with Apply's default `--page-edges free --pack-shape polygon`) and its summary is stored beside the baseline record as `inspected-check.json`; that is the physics readout's BEFORE for the inspected build, and a reopen reads it instead of re-running.
 - **Scratch.** `<state>/rebuild/<package source hash>/<designation hash>/` under `RIG_REVIEW_STATE_DIR` (refused inside the package), named from the package, the config bytes, the part, the entry and both tool versions — no clock. The same designation again reuses its build and says so; a new one replaces the previous scratch build. The inspected package's files are only read.
 - **Watching.** The producer's lines stream into the editor bar (the latest line and a short log); a refusal shows the producer's first named line verbatim (for example `FAIL  REMESH_REQUEST_HELD: …`) and the stage is unchanged. On success the compiled scratch build (served read-only under `/rebuild/<id>/`, its model and pages hashed) replaces the drawn rig in place with the same camera, animation, time and part set; playback resumes with physics when it was running. **Reset** returns the stage to the inspected build.
 - **Record.** The last applied state (`rig-review-applied/1`: part, regions, config hash, entry SHA-256, producer and compiler versions, the producer's line and the scratch model's SHA-256) stays in the inspection draft, and feedback added while that build is on the stage carries it as `context.applied`. The review's `reviewedSource` still names the inspected build.

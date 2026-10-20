@@ -7,6 +7,8 @@ import {assertReviewUnchanged,referenceBinding,selectedReference,safeSelectedRef
 import {openGate,staleOpenStatus,accessGate,openNonceGate,stampOpen,type OpenIdentity} from './open-protocol.ts';
 import { readSession, saveSession } from './session.ts';
 import { createRebuilds, RebuildError } from './rebuild.ts';
+import { createReadings } from './readings-run.ts';
+import { ReadingsError } from './readings.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
@@ -25,7 +27,10 @@ async function bodyJson(req:Request,limit=1024*1024,what='Session payload exceed
 export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string}={}){
   const bundle=await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
-  const rebuilds=createRebuilds(p,{stateDir:options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts:[p.root,options.cwd??process.cwd()],unchanged,bones:p.feedbackCatalog.bones});
+  const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
+  const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones});
+  // Readings (#108): rigc render's readings on the inspected build and on the latest scratch build, into scratch.
+  const readings=createReadings(p,{stateDir,starts,unchanged,latest:rebuilds.latest});
   const control=options.control?createControlServer({identity:options.control,sourceHash:p.sourceHash,mode:'single',unchanged,activity:options.activity}):null;
   const handle=async(req:Request,port:number|undefined):Promise<Response>=>{try {
       const url=new URL(req.url);const origin=`http://127.0.0.1:${port}`;
@@ -44,6 +49,11 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       // A refusal is an outcome the page shows verbatim (200), so the managed front passes its text through; only a malformed request is a 400.
       catch(e){if(e instanceof RebuildError)return json({status:'refused',error:e.message,producerLine:null},MALFORMED.has(e.code)?400:200);throw e;}
     }
+    if(req.method==='POST'&&url.pathname==='/api/readings'){
+      if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+      try{const result=await readings.start(await bodyJson(req,16*1024,'READINGS_BODY_LIMIT: maximum 16 KiB'));return json(result.body,result.status);}
+      catch(e){if(e instanceof ReadingsError)return json({status:'refused',error:e.message},e.code==='READINGS_REQUEST_INVALID'?400:200);throw e;}
+    }
     if(req.method==='POST'&&url.pathname==='/api/strip'){
       if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
       const result=await exportReviewStrip(p,await bodyJson(req));
@@ -55,6 +65,8 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       if(url.pathname==='/api/rebuild')return json(await rebuilds.describe());
       const rebuildStatus=/^\/api\/rebuild\/([a-f0-9]{64})$/.exec(url.pathname);
       if(rebuildStatus){try{return json(rebuilds.read(rebuildStatus[1]!));}catch(e){if(e instanceof RebuildError)return json({error:e.message},404);throw e;}}
+      const readingsStatus=/^\/api\/readings\/([a-f0-9]{64})$/.exec(url.pathname);
+      if(readingsStatus){try{return json(readings.read(readingsStatus[1]!));}catch(e){if(e instanceof ReadingsError)return json({error:e.message},404);throw e;}}
       const rebuildFile=/^\/rebuild\/([a-f0-9]{64})\/(.+)$/.exec(url.pathname);
       if(rebuildFile){
         let full:string;try{full=await rebuilds.file(rebuildFile[1]!,decodeURIComponent(rebuildFile[2]!));}catch(e){return json({error:e instanceof Error?e.message:'Not found'},404);}

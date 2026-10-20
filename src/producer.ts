@@ -111,3 +111,16 @@ export async function runTool(bin: string, args: readonly string[], options: { c
   const exitCode = await child.exited;
   return { exitCode, lines, wallMs: Math.round(performance.now() - started) };
 }
+
+/** #108: the compiler alone (its readings need no producer op) — beside `@rig-c/parts` when that resolves, else walking up from each start. */
+export const READINGS_COMPILER_NOT_INSTALLED = `READINGS_COMPILER_NOT_INSTALLED: ${COMPILER_PACKAGE} is not installed beside the package, beside ${PRODUCER_PACKAGE} or beside review, and review does not install it — bun add -d ${COMPILER_PACKAGE}`;
+export const readingsCompilerTooOld = (found: string, required: string) => `READINGS_COMPILER_TOO_OLD ${found} ${required}: rigc render's readings (--folds, --pass-through, --seam, --overlaps, --angle-range) need ${COMPILER_PACKAGE} ${required} or later — bun add -d ${COMPILER_PACKAGE}@latest`;
+export function resolveCompiler(starts: readonly string[], since: string, exists: (path: string) => boolean = existsSync): { ok: true; compiler: InstalledTool } | { ok: false; error: string } {
+  const pair = resolveProducer(starts, exists);
+  let compiler: InstalledTool | { error: string } | null = pair.ok ? pair.compiler : null;
+  if (!compiler) { const manifest = findPackage(COMPILER_PACKAGE, starts, exists); compiler = manifest ? readTool(manifest, COMPILER_BIN) : null; }
+  if (!compiler) return { ok: false, error: READINGS_COMPILER_NOT_INSTALLED };
+  if ('error' in compiler) return { ok: false, error: `${READINGS_COMPILER_NOT_INSTALLED} (${compiler.error})` };
+  if (!versionAtLeast(compiler.version, since)) return { ok: false, error: readingsCompilerTooOld(compiler.version || 'unknown', since) };
+  return { ok: true, compiler };
+}

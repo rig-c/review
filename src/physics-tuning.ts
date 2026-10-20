@@ -159,6 +159,26 @@ export function barLine(name: string, lines: readonly string[] | null, check: Ch
   return status ? `${name}: ${status} (status from check.json; check printed no line for it)` : `${name}: not in check summary`;
 }
 
+/** The inspected build's stored check (#108, HQ ruling) as `GET /api/rebuild` returns it. */
+export interface InspectedCheckView { status: 'running' | 'checked' | 'refused' | 'failed'; lines: string[]; check: CheckSummary | null; line: string }
+export const INSPECTED_NOT_CHECKED = (name: string) => `${name}: not in check summary (the inspected build; review ran no check on it)`;
+/**
+ * BEFORE: the build that was on the stage when Apply was pressed. A scratch build: its own check lines. The inspected
+ * build: the stored background check of it — labelled "check running…" while it runs (never a value), its line
+ * verbatim when check refused, and "not in check summary" only when no check exists (the baseline did not reproduce).
+ */
+export function beforeLine(name: string, stage: { lines: readonly string[]; check: CheckSummary | null } | null, inspected: InspectedCheckView | null): string {
+  if (stage) return barLine(name, stage.lines, stage.check);
+  if (!inspected) return INSPECTED_NOT_CHECKED(name);
+  if (inspected.status === 'running') return `${name}: check running… (rig-parts check of the inspected build, in the background)`;
+  if (inspected.status !== 'checked') return inspected.line;
+  return barLine(name, inspected.lines, inspected.check);
+}
+/** The readout rows after an Apply: BEFORE per `beforeLine`, AFTER from the job just built. */
+export function readoutRows(stage: { lines: readonly string[]; check: CheckSummary | null } | null, inspected: InspectedCheckView | null, after: { lines: readonly string[]; check: CheckSummary | null }) {
+  return READOUT_BARS.map(name => ({ name, before: beforeLine(name, stage, inspected), after: barLine(name, after.lines, after.check) }));
+}
+
 /** A control the row editor draws: a slider with its number field (a tuning field) or a toggle (a component). */
 export type RowControl =
   | { kind: 'slider'; field: TuningField; value: number; base: number; min: number; max: number; step: number; pending: boolean }
