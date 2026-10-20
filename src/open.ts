@@ -16,8 +16,11 @@ import {selectAnimation,AnimationSelectionError,type AnimationSelection} from '.
 import {capabilityHeader,capabilityPattern,type OpenIdentity} from './open-protocol.ts';
 import {ensureFront,frontPort} from './front.ts';
 import {playPackagePath} from './versions.ts';
+import {HandoffError,HANDOFF_FLAGS,type HandoffFlags} from './handoff.ts';
 /** `direct` chooses how the page is reached (own port instead of the managed front); it is not part of the instance identity. */
-export interface OpenInputs {input:string;compare?:string;reference?:string;animation?:string;control?:boolean;direct?:boolean}
+export interface OpenInputs {input:string;compare?:string;reference?:string;animation?:string;control?:boolean;direct?:boolean;config?:string;parts?:string;source?:string;full?:string;head?:string}
+/** The producer handoff flags (#101) among the inputs, or undefined when none was given. */
+export function handoffFlags(inputs:OpenInputs):HandoffFlags|undefined{const present=HANDOFF_FLAGS.filter(f=>inputs[f]!==undefined);if(!present.length)return undefined;return Object.fromEntries(present.map(f=>[f,inputs[f]])) as unknown as HandoffFlags;}
 export type OpenPackage=({mode:'single';p:ReviewPackage;inputs:OpenInputs;contentHash:string}|{mode:'compare';p:ComparePackage;inputs:OpenInputs;contentHash:string})&{selection:AnimationSelection|null};
 /** Private 0600 record. `capability` is the 256-bit page write capability, handed out only in the printed `#cap=` fragment. */
 export interface RecordFile extends OpenIdentity {schema:'rig-review-open-instance/1';pid:number;origin:string;mode:'single'|'compare';capability:string;controlToken?:string}
@@ -28,7 +31,9 @@ const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value))
 const sleep=(ms:number)=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 export const defaultStateDir=()=>process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review');
 export async function loadOpenPackage(inputs:OpenInputs):Promise<OpenPackage>{
- if(!inputs.compare){const p=await loadReferencedReview(inputs.input,inputs.reference),selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);return {mode:'single',p,selection,contentHash:p.sourceHash,inputs:{input:p.manifestPath,...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{}),...(inputs.control?{control:true}:{})}};}
+ // Handoff flags become canonical absolute paths here, so the worker and every reload read exactly these files.
+ if(!inputs.compare){const p=await loadReferencedReview(inputs.input,inputs.reference,handoffFlags(inputs)),selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);return {mode:'single',p,selection,contentHash:p.sourceHash,inputs:{input:p.manifestPath,...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{}),...(inputs.control?{control:true}:{}),...(p.handoffInputs??{})}};}
+ if(handoffFlags(inputs))throw new HandoffError('HANDOFF_FLAGS_INVALID','--config','compare takes no producer handoff; open one package with --config');
  if(!inputs.reference)throw new Error('open compare: explicit --reference required');
  const [a,b]=await Promise.all([loadReview(inputs.input),loadReview(inputs.compare)]),selection=selectAnimation([{label:'a',catalog:a.feedbackCatalog,report:a.report},{label:'b',catalog:b.feedbackCatalog,report:b.report}],inputs.animation)!;
  const p=await loadCompare({a:inputs.input,b:inputs.compare,reference:inputs.reference,animation:selection.name});
@@ -84,6 +89,7 @@ async function assertOpenInput(path:string):Promise<void>{
 }
 async function openRefusal(error:unknown,inputs:OpenInputs):Promise<unknown>{
  if(error instanceof UnrecognizedOutputError){const first=await realpath(resolve(inputs.input)).catch(()=>null),path=inputs.compare!==undefined&&error.root!==first?inputs.compare:inputs.input;return new Error(`OPEN_INPUT_UNRECOGNIZED ${path}: ${error.message}`,{cause:error});}
+ if(error instanceof HandoffError)return new Error(`OPEN_HANDOFF_INVALID ${error.field}: ${error.code}: ${error.detail}`,{cause:error});
  if(!(error instanceof AnimationSelectionError))return error;
  const detail=(error.label==='a'||error.label==='b'?`side ${error.label}: `:'')+error.message.replace(/^open\.(?:[a-z]+\.)?animation: /,'');
  const name=error.kind==='empty'?'OPEN_OPTION_INVALID --animation':error.kind==='unknown'?`OPEN_ANIMATION_UNKNOWN ${JSON.stringify(error.animation)}`:error.kind==='ambiguous'?'OPEN_ANIMATION_AMBIGUOUS':'OPEN_ANIMATION_UNVALIDATABLE';

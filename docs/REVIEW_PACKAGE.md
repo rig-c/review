@@ -30,6 +30,8 @@ The CLI also accepts an existing output directory. It reads a root `review.json`
 }
 ```
 
+An optional `producer` block declares the producer handoff: `"producer": {"config": "rig/config.json", "parts": "rig/out", "source": "inputs/painting.png", "full": "inputs/full", "head": "inputs/head"}` (only `config` is required; `source` and `full` go together, `head` only with them; no other key). See *Producer handoff* below.
+
 The illustrative `look` animation in `axes` must also be declared in `animations`. Omit axes when no real angle animation exists. All animation identifiers name actual compiled-model animations; the frontend reports runtime load/lookup errors rather than inventing them. Metadata duration is optional; the player supplies actual duration.
 
 ## Files and references
@@ -116,6 +118,31 @@ The active compiled model supplies rig identity. Without one, a known root or un
 
 `bun run feedback -- <review.json|output-directory>` reads the existing bound session JSON after the UI closes. With no saved state it emits pending and `updatedAt: null`. It never writes source or creates a review submission. JSON/Markdown exports include this identity, so another agent can tell exactly which rig, motion and viewer revision a person reviewed.
 
+
+## Producer handoff
+
+An Apply rebuilds through the installed producer from the files the inspected rig was built from: the producer config, its parts directory (`parts.json`, `parts/`) and the inspected rig directory `<parts>/rig/`. Review finds them in this order, first match wins, never by searching:
+
+1. **Declared on the command line**: `rig-review open <dir> --config <path> [--parts <dir>] [--source <png> --full <dir> [--head <dir>]]`. `feedback` and `control` take the same flags so retrieval binds the same identity. Paths are resolved from the working directory and canonicalized; the worker and every reload read exactly those files.
+2. **Declared in review.json**: the `producer` block, package-relative literal portable paths (no `..`, no absolute path, no encoding).
+3. **Discovered inside the opened folder**: `config.json`, then `rig/config.json`.
+4. **Discovered beside an opened `out/`** (the last step): `../config.json`. It is outside the opened folder, so the record says `"how": "discovered", "outside": true` and the editor bar says *discovered outside the opened folder*, with its path and SHA-256. This step runs only when the opened folder is named `out`, and only for a regular file there (a symlink is refused).
+
+Without `--parts` the parts directory is `out/` beside the config (for step 4, the opened `out/` itself). A declared or discovered path that is missing, outside its root (the package root; for step 4 the folder holding `out/`), or a symlink that leaves it is refused by name: `HANDOFF_PATH_OUTSIDE_ROOT`, `HANDOFF_SYMLINK_ESCAPE`, `HANDOFF_INPUT_MISSING`, `HANDOFF_INPUT_INVALID`, `HANDOFF_PATH_INVALID` (`open` prefixes `OPEN_HANDOFF_INVALID <flag or path>`). Nothing found is not a load error: `/api/rebuild` reports `MODELING_INPUT_UNAVAILABLE: config.json — looked at config.json, rig/config.json, ../config.json (beside an opened out/); declare it with rig-review open <dir> --config <path> [--parts <dir>] or the review.json "producer" block`, and Apply refuses `MODELING_HANDOFF_MISSING`.
+
+**Hashed files.** The config; the files the config names that the producer resolves against the config's directory (`motion.animations_from`, `generation.control.skeleton`; each must stay inside the root, a missing one is listed in `missing`); `parts.json` and every regular file directly in `parts/`; every regular file directly in the inspected `rig/` (`rig.json`, `motion.json`, `mesh_report.json`, `sets.json`, …) and `rig/images/`; with `--source`/`--full`/`--head`, that PNG and the regular files directly in those directories.
+
+**Record and identity.** `reviewedSource.handoff` (absent when there is no handoff, so earlier identities are unchanged):
+
+```json
+{"schema":"rig-review-handoff/1","how":"discovered","via":"discovery","outside":false,
+ "config":{"path":"rig/config.json","sha256":"…"},"parts":"rig/out","rig":"rig/out/rig","source":null,"full":null,"head":null,
+ "files":[{"path":"rig/config.json","sha256":"…"},{"path":"rig/out/parts.json","sha256":"…"}],"missing":[]}
+```
+
+`how` is `declared` or `discovered`, `via` is `open --config`, `review.json producer` or `discovery`, and paths are relative to the package root (`../` only for step 4). The record is part of `reviewedSource`, so it reaches `/api/review`, the session, the feedback export and the session file name: changing any handoff file's bytes starts a new pending session while `sourceHash` (the package bytes) is unchanged, and the open-managed key changes with it. The same inputs give the same record, key and URL.
+
+**Baseline.** See README, *Chest regions*: once per session `rig-parts rig --config --parts --out <state>/baseline/<key>/baseline`, compared file by file with the inspected rig; `/api/rebuild` returns `baseline` (`status` `running`, `reproduced`, `not-reproduced`, `refused` or `failed`, `firstDifference`, both rig.json and tree hashes, `wallMs`). Nothing is written into the package.
 
 ## Historical feedback retrieval
 

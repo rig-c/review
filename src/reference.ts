@@ -5,6 +5,7 @@ import {open,realpath,stat} from 'node:fs/promises';
 import {basename,resolve} from 'node:path';
 import {isDeepStrictEqual} from 'node:util';
 import {loadReview,type ReviewPackage} from './manifest.ts';
+import type {HandoffFlags} from './handoff.ts';
 export interface ReferenceBinding {packageSourceHash:string;reference:{id:string;name:string;sha256:string}}
 export interface PinnedReference {path:string;binding:ReferenceBinding}
 const pinned=Symbol('explicit CLI reference');
@@ -19,8 +20,8 @@ export async function hashLocalVideo(input:string):Promise<{path:string;name:str
  const after=await stat(path);if(await realpath(input)!==path||before.dev!==after.dev||before.ino!==after.ino||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs)throw new Error('Reference inputs changed while hashing');
  return {path,name:basename(path),sha256:hash.digest('hex')};
 }
-export async function loadReferencedReview(input:string,reference?:string):Promise<ReviewPackage>{
- const base=await loadReview(input);if(reference===undefined)return base;
+export async function loadReferencedReview(input:string,reference?:string,handoff?:HandoffFlags):Promise<ReviewPackage>{
+ const base=await loadReview(input,{handoff});if(reference===undefined)return base;
  const video=await hashLocalVideo(reference),id='open-reference-'+video.sha256;
  if(base.manifest.references.some(r=>r.id===id))throw new Error('reference: selected reference id collides with package reference');
  const binding:ReferenceBinding={packageSourceHash:base.sourceHash,reference:{id,name:video.name,sha256:video.sha256}};
@@ -28,7 +29,7 @@ export async function loadReferencedReview(input:string,reference?:string):Promi
  return {...base,sourceHash,manifest:{...base.manifest,references:[{id,label:video.name+' · selected reference',type:'video',path:'__review_selected_reference__.mp4'},...base.manifest.references]},[pinned]:{path:video.path,binding}} as ReferencedPackage;
 }
 export async function assertReviewUnchanged(p:ReviewPackage):Promise<void>{
- try{const current=await loadReferencedReview(p.manifestPath,selectedReference(p)?.path);if(current.sourceHash!==p.sourceHash||!isDeepStrictEqual(current.reviewedSource,p.reviewedSource)||!isDeepStrictEqual(referenceBinding(current),referenceBinding(p)))throw new Error('source binding differs');}
+ try{const current=await loadReferencedReview(p.manifestPath,selectedReference(p)?.path,p.handoffInputs);if(current.sourceHash!==p.sourceHash||!isDeepStrictEqual(current.reviewedSource,p.reviewedSource)||!isDeepStrictEqual(referenceBinding(current),referenceBinding(p)))throw new Error('source binding differs');}
  catch{throw new Error('Package inputs changed or are unavailable. Restart review to bind feedback to current inputs.');}
 }
 export async function safeSelectedReference(p:ReviewPackage):Promise<string>{

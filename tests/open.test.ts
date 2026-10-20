@@ -83,6 +83,7 @@ test('review, check and feedback help skips positional inputs and owned values b
 test('launcher contract: every open refusal exits 1 with empty stdout and leads stderr with its OPEN_* name',async()=>{
  const f=await fixture(),missing=join(f.root,'missing','dir'),absent=join(f.root,'absent'),notes=join(f.root,'notes.txt'),empty=join(f.root,'empty'),demo=join(import.meta.dir,'../examples/demo');
  await writeFile(notes,'not a package\n');await mkdir(empty);
+ const cfg=join(f.producer,'cfg','config.json'),outsideCfg=join(f.root,'outside-config.json');await mkdir(join(f.producer,'cfg'));await writeFile(cfg,'{}');await writeFile(outsideCfg,'{}');await symlink(outsideCfg,join(f.producer,'cfg','escape.json'));
  const cases:[string[],string][]=[
   [['open',missing,'--direct'],`OPEN_INPUT_MISSING ${missing}: `],
   [['open',notes,'--direct'],`OPEN_INPUT_UNRECOGNIZED ${notes}: `],
@@ -95,6 +96,14 @@ test('launcher contract: every open refusal exits 1 with empty stdout and leads 
   [['open',demo,'--animation','idle','--direct'],'OPEN_ANIMATION_UNVALIDATABLE: validation unavailable'],
   [['open',f.producer,'--port','4317','--direct'],'OPEN_OPTION_INVALID --port: Unknown open option --port'],
   [['open',f.producer,'--animation',' ','--direct'],'OPEN_OPTION_INVALID --animation: '],
+  // Producer handoff (#101): flags are checked before loading, paths before any state is written.
+  [['open',f.producer,'--parts',f.producer,'--direct'],'OPEN_OPTION_INVALID --parts: requires --config <path>'],
+  [['open',f.producer,'--config',cfg,'--source',cfg,'--direct'],'OPEN_OPTION_INVALID --source: --source <png> and --full <dir> are given together'],
+  [['open',f.producer,'--config',cfg,'--config',cfg,'--direct'],'OPEN_OPTION_INVALID --config: Duplicate open option --config'],
+  [['open',f.producer,'--compare',f.producer,'--reference',f.reference,'--config',cfg,'--direct'],'OPEN_OPTION_INVALID --config: compare takes no producer handoff'],
+  [['open',f.producer,'--config',outsideCfg,'--direct'],'OPEN_HANDOFF_INVALID --config: HANDOFF_PATH_OUTSIDE_ROOT: '],
+  [['open',f.producer,'--config',join(f.producer,'cfg','escape.json'),'--direct'],'OPEN_HANDOFF_INVALID --config: HANDOFF_SYMLINK_ESCAPE: '],
+  [['open',f.producer,'--config',join(f.producer,'cfg','absent.json'),'--direct'],'OPEN_HANDOFF_INVALID --config: HANDOFF_INPUT_MISSING: '],
  ];
  for(const [args,first] of cases){const result=await cli(args,f.state);expect({args,exit:result.exit,stdout:result.stdout}).toEqual({args,exit:1,stdout:''});expect(result.stderr.split('\n')[0]).toStartWith(first);}
  // A refusal decides before any state is written.
@@ -109,4 +118,20 @@ test('launcher contract: success prints the URL line alone; stderr is diagnostic
  const controlled=await cli(['open',f.producer,'--direct','--reference',f.reference,'--control'],f.state);await track(f.state);
  expect(controlled.exit).toBe(0);expect(controlled.stdout).toMatch(url);
  expect(controlled.stderr.split('\n')).toEqual(['animation: inspect (from report.json)','Inspection control enabled; query the current connected page with rig-review control and the same inputs.',expect.stringMatching(/^Review started; feedback: rig-review feedback /),'']);
+},30000);
+
+test('launcher contract with --config: the URL line alone, the same inputs reuse the same URL, retrieval carries the flag and binds the handoff',async()=>{
+ const f=await fixture(),cfg=join(f.producer,'cfg','config.json');await mkdir(join(f.producer,'cfg'));await writeFile(cfg,JSON.stringify({key:'k'}));
+ const url=/^http:\/\/127\.0\.0\.1:\d+\/\?input=[a-f0-9]{64}&handoff=[a-f0-9]{64}#cap=[a-f0-9]{64}\n$/;
+ const first=await cli(['open',f.producer,'--direct','--config',cfg],f.state);await track(f.state);
+ expect(first.exit).toBe(0);expect(first.stdout).toMatch(url);
+ expect(first.stderr.split('\n')).toEqual(['animation: inspect (from report.json)',`Review started; feedback: rig-review feedback ${[f.producer,'--animation','inspect','--config',cfg].map(shellWord).join(' ')}`,'']);
+ const again=await cli(['open',f.producer,'--direct','--config',cfg],f.state);expect(again.exit).toBe(0);expect(again.stdout).toBe(first.stdout);expect(again.stderr).toContain('Review reused');
+ const origin=new URL(first.stdout.trim()).origin,data=await (await fetch(origin+'/api/review')).json();
+ expect(data.reviewedSource.handoff).toMatchObject({how:'declared',via:'open --config',config:{path:'cfg/config.json'}});
+ const bound=await cli(['feedback',f.producer,'--config',cfg],f.state),plain=await cli(['feedback',f.producer],f.state);
+ expect(bound.exit).toBe(0);expect(JSON.parse(bound.stdout).reviewedSource).toEqual(data.reviewedSource);expect(JSON.parse(plain.stdout).reviewedSource.handoff).toBeUndefined();
+ // Changed config bytes: a different instance and a pending session.
+ await writeFile(cfg,JSON.stringify({key:'changed'}));const changed=await cli(['open',f.producer,'--direct','--config',cfg],f.state);await track(f.state);
+ expect(changed.exit).toBe(0);expect(changed.stdout).not.toBe(first.stdout);expect((await (await fetch(new URL(changed.stdout.trim()).origin+'/api/session')).json()).status).toBe('pending');
 },30000);

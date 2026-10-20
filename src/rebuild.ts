@@ -3,36 +3,41 @@
  * `rig-parts remesh` re-fits that one part of the package's gated rig into a scratch revision, `rigc build` compiles
  * the revision the way remesh's own gate did, and the compiled scratch build is served read-only for the viewer to
  * load in place. Review builds nothing itself, writes nothing into the package and takes no path from the client:
- * the package's producer inputs are found at named layouts inside its root, the scratch directory is
- * `<state>/rebuild/<package hash>/<designation hash>/` (no clock), and an identical designation reuses its build.
+ * the producer inputs are the package's resolved handoff (#101, `src/handoff.ts`: declared, else the fixed discovery
+ * order), the scratch directory is `<state>/rebuild/<package hash>/<designation hash>/` (no clock), and an identical
+ * designation reuses its build. Once per session the baseline (`src/baseline.ts`) rebuilds the whole rig from the
+ * handoff and says whether it reproduces the inspected rig.
  */
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, rm, writeFile, lstat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts';
 import { compileArgs, firstRefusal, remeshArgs, resolveProducer, runTool, type InstalledTool } from './producer.ts';
+import { HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
+import { baselineKey, runBaseline, type BaselineResult } from './baseline.ts';
 
-/** Named layouts of `rig-parts build` output beside its config, inside the package root. Not a search. */
-export const PRODUCER_LAYOUTS = [{ config: 'rig/config.json', out: 'rig/out' }, { config: 'config.json', out: 'out' }] as const;
 export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
 const MAX_REGIONS = 8, MAX_POINTS = 256, MAX_LINES = 4000, GRID = 256;
 
-export interface ProducerInputs { layout: (typeof PRODUCER_LAYOUTS)[number]; config: string; parts: string; rig: string; configText: string; configHash: string; inputs: Record<string, string> }
+export interface ProducerInputs { config: string; parts: string; rig: string; configText: string; configHash: string; handoff: HandoffRecord }
 const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
-/** The first named layout whose config, parts.json and gated rig (rig.json, motion.json, mesh_report.json) are all inside the package. */
-export async function locateProducerInputs(root: string): Promise<ProducerInputs | null> {
-  for (const layout of PRODUCER_LAYOUTS) {
-    const names = [layout.config, `${layout.out}/parts.json`, `${layout.out}/rig/rig.json`, `${layout.out}/rig/motion.json`, `${layout.out}/rig/mesh_report.json`];
-    const files: string[] = [];
-    try { for (const name of names) files.push(await safeFile(root, packagePath(name))); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
-    const inputs: Record<string, string> = {};
-    for (let i = 0; i < names.length; i++) inputs[names[i]!] = sha256(await readFile(files[i]!));
-    const configText = await readFile(files[0]!, 'utf8');
-    return { layout, config: files[0]!, parts: dirname(files[1]!), rig: dirname(files[2]!), configText, configHash: inputs[layout.config]!, inputs };
-  }
-  return null;
+/** Without any handoff, Apply refuses by this name and says which flag declares one. */
+export const modelingHandoffMissing = (reason: string | null) => `MODELING_HANDOFF_MISSING: no producer handoff — declare it with ${HANDOFF_DECLARATION}${reason ? ` (${reason})` : ''}`;
+/** What remesh needs from the handoff, or the line naming what is missing. */
+export function handoffGap(handoff: Handoff): string | null {
+  if (!handoff.parts) return `MODELING_INPUT_UNAVAILABLE: ${handoff.record.missing.join(', ')}`;
+  const missing = handoff.record.missing.filter(m => m.startsWith('parts.json') || m.startsWith('rig '));
+  return handoff.rig && !missing.length ? null : `MODELING_INPUT_UNAVAILABLE: ${missing.join(', ') || 'rig'}`;
+}
+/** The handoff's config, parts and inspected rig, the config read and checked against the bytes the session is bound to. */
+export async function producerInputs(handoff: Handoff | null, reason: string | null): Promise<ProducerInputs> {
+  if (!handoff) throw new RebuildError('MODELING_HANDOFF_MISSING', modelingHandoffMissing(reason).slice('MODELING_HANDOFF_MISSING: '.length));
+  const gap = handoffGap(handoff);
+  if (gap) throw new RebuildError('MODELING_INPUT_UNAVAILABLE', gap.slice('MODELING_INPUT_UNAVAILABLE: '.length));
+  const configText = await readFile(handoff.config, 'utf8'), configHash = sha256(configText);
+  if (configHash !== handoff.record.config.sha256) throw new RebuildError('REBUILD_INPUTS_CHANGED', `${handoff.record.config.path} changed since the review was opened; restart review`);
+  return { config: handoff.config, parts: handoff.parts!, rig: handoff.rig!, configText, configHash, handoff: handoff.record };
 }
 
 export type ProducerRegion =
@@ -124,6 +129,7 @@ export interface RebuildJob {
   build: RebuildBuild | null;
 }
 export interface RebuildOptions { stateDir: string; starts: readonly string[]; unchanged: () => Promise<void>; bones: readonly string[] | null }
+export const baselineDir = (stateDir: string, key: string) => join(stateDir, 'baseline', key);
 
 const tool = (t: InstalledTool) => ({ package: t.package, version: t.version });
 async function exists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e; } }
@@ -143,22 +149,50 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   let running: string | null = null;
   const snapshot = (job: RebuildJob): RebuildJob => ({ ...job, lines: [...job.lines] });
 
-  /** `GET /api/rebuild`: whether Apply can run here, and what the producer config holds (so the editor can start from it). */
+  /** The state directory may not sit inside the package or the handoff's root (the parent of an opened out/). */
+  function assertStateOutside(): void {
+    for (const root of [p.root, ...(p.handoff ? [p.handoff.root] : [])]) {
+      const inside = relative(root, options.stateDir);
+      if (inside === '' || !inside.startsWith('..') && !isAbsolute(inside)) throw new RebuildError('REBUILD_STATE_INSIDE_PACKAGE', 'the review state directory is inside the inspected package; set RIG_REVIEW_STATE_DIR outside it');
+    }
+  }
+  /** Once per session: the first time the handoff and the producer both resolve, the baseline starts (or is reused). */
+  let baseline: BaselineResult | null = null, baselineRun: Promise<BaselineResult> | null = null;
+  function ensureBaseline(resolved: ReturnType<typeof resolveProducer>): BaselineResult | null {
+    if (baselineRun || !p.handoff || !resolved.ok) return baseline;
+    try { assertStateOutside(); } catch { return null; }
+    const handoff = p.handoff, key = baselineKey(p.sourceHash, handoff, resolved.producer, resolved.compiler), rig = handoff.rig ?? p.root;
+    const show = (rel: string) => relative(p.root, join(rig, rel)).split(sep).join('/');
+    baseline = { schema: 'rig-review-baseline/1', key, status: 'running', producer: tool(resolved.producer), firstDifference: null, hashes: null, line: `baseline: running ${resolved.producer.package} ${resolved.producer.version} rig into scratch…`, exitCode: null, wallMs: null };
+    const started = baseline;
+    baselineRun = runBaseline(baselineDir(options.stateDir, key), key, handoff, resolved.producer, show)
+      .catch((error): BaselineResult => ({ ...started, status: 'failed', line: `baseline: failed — ${error instanceof Error ? error.message : String(error)}` }))
+      .then(result => (baseline = result));
+    return baseline;
+  }
+
+  /** `GET /api/rebuild`: whether Apply can run here, the handoff and its baseline, and what the config holds (so the editor can start from it). */
   async function describe() {
     await options.unchanged();
-    const inputs = await locateProducerInputs(p.root);
+    const handoff = p.handoff, gap = handoff ? handoffGap(handoff) : null;
+    const inputs = handoff && !gap ? await producerInputs(handoff, p.handoffReason) : null;
     const resolved = resolveProducer(options.starts);
     const parts = inputs ? contourParts(inputs.configText).map(({ name, regions }) => ({ name, regions })) : [];
     const contour = inputs ? Object.fromEntries(contourParts(inputs.configText).map(({ name, entry }) => [name, entry])) : {};
+    const reason = !handoff ? (p.handoffReason ?? modelingHandoffMissing(null)) : gap ?? (!resolved.ok ? resolved.error : parts.length ? null : 'REBUILD_INPUTS_UNAVAILABLE: the config states no contour mesh');
     return {
       schema: 'rig-review-rebuild-status/1', available: !!inputs && resolved.ok && parts.length > 0,
-      inputs: inputs ? { layout: inputs.layout, configHash: inputs.configHash } : null,
+      handoff: handoff ? handoff.record : null,
+      inputs: inputs && handoff ? { config: handoff.record.config.path, parts: handoff.record.parts, rig: handoff.record.rig, configHash: inputs.configHash } : null,
+      baseline: ensureBaseline(resolved),
       parts, contour,
       producer: resolved.ok ? tool(resolved.producer) : null, compiler: resolved.ok ? tool(resolved.compiler) : null,
-      reason: !inputs ? `REBUILD_INPUTS_UNAVAILABLE: no producer layout in the package (${PRODUCER_LAYOUTS.map(l => `${l.config} + ${l.out}/{parts.json,rig/}`).join(' or ')})` : !resolved.ok ? resolved.error : parts.length ? null : 'REBUILD_INPUTS_UNAVAILABLE: the config states no contour mesh',
+      reason,
       running,
     };
   }
+  /** The baseline once it settles (tests, and the whole-rig ops of #102/#103 through assertWholeRigBaseline). */
+  async function settledBaseline(): Promise<BaselineResult | null> { if (!baselineRun) ensureBaseline(resolveProducer(options.starts)); return baselineRun ? await baselineRun : baseline; }
 
   async function reuse(dir: string, id: string): Promise<RebuildJob | null> {
     const resultFile = join(dir, 'result.json');
@@ -190,9 +224,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       job.wallMs.compile = compile.wallMs;
       if (compile.exitCode !== 0) { job.exitCode = compile.exitCode; job.producerLine = firstRefusal(compile.lines) ?? `rigc build exited ${compile.exitCode} without a named refusal`; job.status = 'refused'; return; }
       // The package and its producer inputs must still be the bytes the request was made against.
-      await options.unchanged();
-      const after = await locateProducerInputs(p.root);
-      if (!after || JSON.stringify(after.inputs) !== JSON.stringify(inputs.inputs)) throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package producer inputs changed during the rebuild');
+      // The handoff files are in the reviewed identity, so this also catches a config, parts or rig change.
+      try { await options.unchanged(); } catch { throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild'); }
       job.build = await hashBuild(join(dir, 'build'), job.id);
       job.status = 'built';
       await writeFile(join(dir, 'result.json'), JSON.stringify({ ...job, reused: false }, null, 1) + '\n', { mode: 0o600 });
@@ -209,11 +242,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   /** `POST /api/rebuild`: refusals are returned before anything is written or run. */
   async function start(input: unknown): Promise<{ status: number; body: unknown }> {
     const request = parseRebuildRequest(input, options.bones);
-    const inside = relative(p.root, rebuildRoot(options.stateDir, p.sourceHash));
-    if (!inside.startsWith('..') && !isAbsolute(inside)) throw new RebuildError('REBUILD_STATE_INSIDE_PACKAGE', 'the review state directory is inside the inspected package; set RIG_REVIEW_STATE_DIR outside it');
+    assertStateOutside();
     await options.unchanged();
-    const inputs = await locateProducerInputs(p.root);
-    if (!inputs) throw new RebuildError('REBUILD_INPUTS_UNAVAILABLE', `no producer layout in the package (${PRODUCER_LAYOUTS.map(l => l.config).join(' or ')})`);
+    const inputs = await producerInputs(p.handoff, p.handoffReason);
     if (inputs.configHash !== request.configHash) throw new RebuildError('REBUILD_CONFIG_STALE', 'the producer config changed since the editor read it; reload');
     const entry = meshEntryText(inputs.configText, request.part, request.regions);
     const resolved = resolveProducer(options.starts);
@@ -244,5 +275,5 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     return safeFile(await realpath(join(rebuildDir(options.stateDir, p.sourceHash, id), 'build')), packagePath(name));
   }
 
-  return { describe, start, read, file, running: () => running };
+  return { describe, start, read, file, running: () => running, baseline: settledBaseline };
 }
