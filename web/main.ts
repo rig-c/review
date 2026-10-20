@@ -1,4 +1,4 @@
-import {PartExplorer,loadPartModel} from './part-selection.ts';
+import {PartExplorer,loadPartModel,partBounds} from './part-selection.ts';
 import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
 import { loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
@@ -9,7 +9,7 @@ import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
 import {assertMeshPatch,countsText,meshApplyOutcome,meshPatchOps,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
 import {worstLine} from '../src/readings.ts';
 import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
-import {bindChestEditor,bustLabel,bustSides,LANDMARKS,landmarkInputId,rowCircle,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
+import {bindChestEditor,canvasToCrop,bustLabel,bustSides,LANDMARKS,landmarkInputId,rowCircle,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
 import {bindBonesPanel,type BonesPanel,type BonesCheckView} from './bones-panel.ts';
@@ -40,6 +40,8 @@ import {READINGS_SCHEMA,type ReadingsContext} from '../src/readings.ts';
 import {appliedCheckRefusal,type CheckSummary} from '../src/applied-context.ts';
 import {bindPhysicsPanel,type PhysicsPanel} from './physics-panel.ts';
 import {bindIdlePanel,type BoneSetup,type IdlePanel} from './idle-panel.ts';
+import {bindRigFieldsPanel,type RigFieldsPanel} from './rig-fields-panel.ts';
+import {assertRigFieldOps,RIG_FIELDS_READOUT_BARS,TURN_BONE} from '../src/rig-fields.ts';
 import {IDLE_READOUT_BARS,type LocalChannel} from '../src/idle-tracks.ts';
 import type {PatchOp} from '../src/config-patch.ts';
 
@@ -129,6 +131,9 @@ let joltQueue:JoltStep[]=[],environmentNote='';
 /** Animate · Physics tuning (#103): the panel, the inspected model document it maps against, and the check lines of the build on the stage (null: the inspected build, which review has not checked). */
 /** Animate · Idle tracks (#104): the panel; its preview drives `player.adjust`. */
 let idlePanel:IdlePanel|null=null;
+/** Setup · Rig fields (#110): the panel; its turn dial and the idle preview share `player.adjust` (both run, idle first). */
+let rigFieldsPanel:RigFieldsPanel|null=null,idleAdjust:BoneAdjust|null=null,dialAdjust:BoneAdjust|null=null;
+function setAdjust():void {if(!player)return;const a=idleAdjust,b=dialAdjust;player.adjust=a&&b?bones=>{a(bones);b(bones);}:a??b;if(!playing)drawRig(()=>player!.draw());}
 /** #106: the Setup Mesh panel, and the overlay's last snapshot (bar 1 reads its per-slot triangle count). */
 let meshPanel:MeshPanel|null=null,lastOverlay:OverlaySnapshot|null=null;
 let physicsPanel:PhysicsPanel|null=null,inspectedDocument:unknown=null,inspectedDocumentReason:string|null=null,stageCheck:{lines:string[];check:CheckSummary|null}|null=null;
@@ -769,7 +774,7 @@ function bind(): void {
   button('chest-export').onclick = () => { void exportChest(); };
   for (const event of ['input', 'change']) el('chest-regions').addEventListener(event, renderChest);
   // A discarded local draft restores the form after its button's own handler; re-read the tool then.
-  el('draft-recovery').addEventListener('click', () => { renderChest(); restoreEnvironment(); physicsPanel?.restore(); bonesPanel?.restore(); idlePanel?.restore(); });
+  el('draft-recovery').addEventListener('click', () => { renderChest(); restoreEnvironment(); physicsPanel?.restore(); bonesPanel?.restore(); idlePanel?.restore(); rigFieldsPanel?.restore(); });
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => {setView(item.dataset.view as typeof view);const menu=document.getElementById('view-menu') as HTMLDetailsElement|null;if(menu)menu.open=false;};
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
@@ -865,9 +870,17 @@ function bind(): void {
    token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
   viewDisposers.push(()=>meshPanel?.dispose());
   idlePanel=bindIdlePanel({apply:async(ops,keys)=>{await applyIdle(ops,keys);},reset:resetIdleBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),clock:()=>player?.time??0,
-   preview:fn=>{if(!player)return;player.adjust=fn as BoneAdjust|null;if(!playing)drawRig(()=>player!.draw());},
+   preview:fn=>{idleAdjust=fn as BoneAdjust|null;setAdjust();},
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name);out.set(name,project(b.x,b.y));}catch{/* a bone this model lacks has no handle */}}return out;}});
   viewDisposers.push(()=>idlePanel?.dispose());
+  rigFieldsPanel=bindRigFieldsPanel({apply:async ops=>{await applyRigFields(ops);},reset:resetRigFieldsBuild,reading:async(bone,relative)=>{await runReadings({readings:[{kind:'angle-range',bone,relative}]});},
+   part:()=>parts?.value()?.slot??null,inspector:()=>selectedInspector(),pause,saved:()=>persistence?.save(),
+   toPane:(x,y)=>{if(!player||!chestMapping.available)return null;const w=chestMapping.toWorld(x,y);return rigProject()(w.x,w.y);},
+   toRig:(x,y)=>player&&chestMapping.available?canvasToCrop(rigProject(),chestMapping.toWorld,{x,y}):null,
+   slotBox:slot=>{const frame=player?.posedFrame();if(!frame)return null;try{const b=partBounds(frame,slot);if(!b)return null;const project=rigProject(),a=project(b.x,b.y),c=project(b.x+b.width,b.y+b.height);return {left:Math.min(a.x,c.x),right:Math.max(a.x,c.x),top:Math.min(a.y,c.y),bottom:Math.max(a.y,c.y)};}catch{return null;}},
+   dial:fn=>{dialAdjust=fn as BoneAdjust|null;setAdjust();},
+   hasTurn:()=>{if(!player)return false;try{player.bone(TURN_BONE);return true;}catch{return false;}}});
+  viewDisposers.push(()=>rigFieldsPanel?.dispose());
   readingsPanel=bindReadingsPanel({run:()=>{void runReadings();},seek:seekReading});
   const tickResize=new ResizeObserver(()=>renderReadingTicks());tickResize.observe(el('transport'));viewDisposers.push(()=>tickResize.disconnect());
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
@@ -911,7 +924,7 @@ async function start(): Promise<void> {
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-    const restored=await setupPersistence();await loadRebuildStatus();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();idlePanel?.restore();meshPanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();await loadRebuildStatus();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
@@ -936,7 +949,7 @@ function redrawOverlay(fresh:boolean):void {
  const regions=[...chestRegions(),...(meshPanel?.overlayRegions()??[])],circles=[...chestCircles(),...(meshPanel?.overlayCircles()??[])];
  const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()}):overlays.redraw({project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()});
  lastOverlay=value;
- text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');idlePanel?.place(duration);if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
+ text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');idlePanel?.place(duration);rigFieldsPanel?.place();if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
 }
 function canRepeatIdle():boolean{return !!player&&idleAvailable(assets?.animations.map(a=>a.name)??[],animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
 function renderIdle():void {text('idle-state',canRepeatIdle()?'Actual idle · repeat enabled':animation==='idle'?'Idle repeat paused':'Non-idle inspection · no automatic playback');}
@@ -1263,6 +1276,7 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,true);
  renderHandoff(rebuildStatus);refreshPhysics();
  bonesPanel?.load(rebuildStatus.inputs?rebuildStatus.bones??[]:null,rebuildStatus.inputs?null:rebuildStatus.reason??'BONES_UNAVAILABLE: no producer handoff');
+ rigFieldsPanel?.load(rebuildStatus.inputs?rebuildStatus.fields??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'RIG_FIELDS_UNAVAILABLE: no producer handoff');
  meshPanel?.load(rebuildStatus.inputs?rebuildStatus.meshes??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'MESH_PANEL_UNAVAILABLE: no producer handoff');meshPanel?.select(parts?.value()?.slot??null);
  return rebuildStatus;
 }
@@ -1372,6 +1386,12 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   active:()=>bonesPanel?.active()??false,setActive:(on:boolean)=>bonesPanel?.setActive(on),handles:()=>bonesPanel?.handles()??[],check:()=>bonesPanel?.check()??Promise.resolve(null),
   apply:()=>applyBones((bonesPanel?.edits()??[]).map(e=>({op:'replace' as const,path:e.path,value:[...e.value],name:e.name}))),reset:()=>resetBonesBuild(),
   status:()=>el('bones-status').textContent,lines:()=>[...document.querySelectorAll('#bones-lint code, #bones-lint summary')].map(c=>c.textContent),compare:()=>[...document.querySelectorAll('#bones-compare code')].map(c=>c.textContent),pending:()=>input('bones-pending').value},
+ /** Rig fields (#110): the block's source, edits and ops, each field's setter, the dial, the stage handles, Apply and Reset. */
+ fields:{source:()=>rigFieldsPanel?.source()??null,edits:()=>rigFieldsPanel?.edits()??[],ops:()=>rigFieldsPanel?.ops()??[],
+  region:(part:string,bone:string)=>rigFieldsPanel?.region(part,bone),still:(part:string,entry:{row:number;bone:string}|null)=>rigFieldsPanel?.still(part,entry),stop:(index:number,bounds:{inward?:number;outward?:number})=>rigFieldsPanel?.stop(index,bounds),
+  inherit:(index:number,mode:string|null,link?:string)=>rigFieldsPanel?.inherit(index,mode,link),turn:(target:{pivot:number}|{part:string;depth:number})=>rigFieldsPanel?.turn(target),
+  select:(kind:'part'|'still'|'stop'|'bone',value:string|number|null)=>rigFieldsPanel?.select(kind,value),setDial:(x:number)=>rigFieldsPanel?.setDial(x),dial:()=>rigFieldsPanel?.dialState()??null,handles:()=>rigFieldsPanel?.handles()??[],
+  apply:()=>applyRigFields(rigFieldsPanel?.ops()??[]),reset:()=>resetRigFieldsBuild(),status:()=>el('rig-fields-status').textContent,readout:()=>[...document.querySelectorAll('#rig-fields-readout code')].map(c=>c.textContent),pending:()=>input('rig-fields-pending').value},
  stage:()=>({modelHash:stageModelHash,inspectedHash:inspectedModel?.sha256??null,applied:appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,animation,time:player?.time??time,playing,busy:rebuildBusy}),
 };
 /** The world as it stands now: what a physics Apply's reload resumes. */
@@ -1479,6 +1499,37 @@ async function resetBonesBuild():Promise<void> {
  bonesPanel?.clear();bonesPanel?.applied(null);
  if(appliedOnStage){bonesPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{bonesPanel?.busy(false);}}
  bonesPanel?.status('Reset: the inspected build is on the stage; no pending ops.',false);
+}
+/**
+ * Rig fields Apply (#110): the pending ops (in the block's scope, `RIG_FIELDS_OP_OUT_OF_SCOPE` otherwise) become one
+ * config patch (`rig`, then check) against the handoff config — a whole-rig op behind the baseline guard; rig-parts has
+ * no `retune` yet. On a build the revision reloads in place and the readout shows BLINK_NO_HOLE and FEET_STAY_LEVEL
+ * before and after; a refusal shows the producer's line verbatim and leaves the stage as it was.
+ */
+async function applyRigFields(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|null> {
+ const status=rebuildStatus??await loadRebuildStatus();
+ try{assertRigFieldOps(ops);}catch(error){rigFieldsPanel?.status(errorText(error),true);return null;}
+ const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
+ if(!patch){const reason=!ops.length?'RIG_FIELDS_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';rigFieldsPanel?.status(reason,true);return null;}
+ const world=stageWorld(),before=stageCheck;
+ rigFieldsPanel?.busy(true);rigFieldsPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: rig --config, compile, check…`,false);
+ try{
+  const result=await applyPatch(patch,world);
+  const outcome=patchOutcomeLine(result);rigFieldsPanel?.status(outcome.text,outcome.error);
+  if('id' in result&&result.status==='built'){
+   rigFieldsPanel?.applied(result.request.patch.ops);
+   const after={lines:[...result.lines],check:result.check};
+   const show=()=>rigFieldsPanel?.readout(readoutRows(before,before?null:inspectedCheckView(),after,RIG_FIELDS_READOUT_BARS));
+   show();if(!before)void followInspectedCheck(show);
+  }
+  return result;
+ }finally{rigFieldsPanel?.busy(false);}
+}
+/** Rig fields Reset: the dial off, no pending op, and the inspected build back under the same world. */
+async function resetRigFieldsBuild():Promise<void> {
+ rigFieldsPanel?.setDial(0);rigFieldsPanel?.clear();rigFieldsPanel?.applied(null);rigFieldsPanel?.readout([]);
+ if(appliedOnStage){rigFieldsPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{rigFieldsPanel?.busy(false);}}
+ rigFieldsPanel?.status('Reset: the inspected build is on the stage; no pending ops; the dial is at 0.',false);
 }
 /** Physics Reset: the inspected build back under the same world, and no pending op. */
 async function resetPhysicsBuild():Promise<void> {

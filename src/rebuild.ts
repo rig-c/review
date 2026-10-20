@@ -71,6 +71,16 @@ export function configBonesList(configText: string): unknown[] | null {
   const list = object(JSON.parse(configText), 'config').bones;
   return Array.isArray(list) ? list : null;
 }
+/**
+ * The config's sections the Rig fields block edits (#110), as written: `regions`, `motion.blink`, `stops`, `bones` and
+ * `turn` (an absent section is left out). The block reads them with `rigFieldsSource` (`src/rig-fields.ts`).
+ */
+export function configFields(configText: string): Record<string, unknown> {
+  const config = object(JSON.parse(configText), 'config'), motion = config.motion, out: Record<string, unknown> = {};
+  for (const key of ['regions', 'stops', 'bones', 'turn']) if (config[key] !== undefined) out[key] = config[key];
+  if (motion && typeof motion === 'object' && !Array.isArray(motion) && (motion as Record<string, unknown>).blink !== undefined) out.motion = { blink: (motion as Record<string, unknown>).blink };
+  return out;
+}
 /** Every `meshes.<part>` entry as written (#106: the Mesh panel starts from the config's own entry). */
 export function configMeshes(configText: string): Record<string, unknown> {
   const meshes = object(JSON.parse(configText), 'config').meshes;
@@ -323,6 +333,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       constraints: inputs ? configConstraints(inputs.configText) : null,
       // #109: the config's bones as written (the Bones block drags their at / points / tip).
       bones: inputs ? configBonesList(inputs.configText) : null,
+      // #110: the sections the Rig fields block edits (regions, motion.blink, stops, bones, turn) as written.
+      fields: inputs ? configFields(inputs.configText) : null,
       // #104: the config's idle (tracks, blink, bones, chains) and where the inspected idle keys each track.
       idle: inputs ? await idleStatus(inputs) : null,
       producer: resolved.ok ? tool(resolved.producer) : null, compiler: resolved.ok ? tool(resolved.compiler) : null,
