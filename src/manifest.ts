@@ -6,6 +6,7 @@ import { parseReport, type ReportSeeds } from './report.ts';
 import { readFile, realpath, stat, lstat, readdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, posix } from 'node:path';
+import { parseHandoffDeclaration, resolveHandoff, type Handoff, type HandoffDeclaration, type HandoffFlags, type HandoffRecord } from './handoff.ts';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export interface Reference { id: string; label: string; type: 'image' | 'video' | 'pose'; path: string; width?: number; height?: number }
@@ -16,9 +17,13 @@ export interface ReviewManifest {
   checkpoints: Checkpoint[]; authoring: { label: string; path: string }[];
   axes: { id: string; label: string; animation: string; min: number; max: number }[];
   audio: { clips: { id: string; label?: string; path: string }[]; cues: { id: string; clip: string; time: number; animation?: string }[] };
+  /** Optional producer handoff (#101): package-relative literal paths; checked when the package loads. */
+  producer?: HandoffDeclaration;
 }
-export interface ReviewedSource { readonly packageRevision:string; readonly viewerVersion:string; readonly runtimeVersion:string; readonly rig:{readonly path:string;readonly sha256:string}|null; readonly motion:{readonly path:string;readonly sha256:string}|null }
-export interface ReviewPackage { root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; feedbackCatalog:FeedbackCatalog }
+export interface ReviewedSource { readonly packageRevision:string; readonly viewerVersion:string; readonly runtimeVersion:string; readonly rig:{readonly path:string;readonly sha256:string}|null; readonly motion:{readonly path:string;readonly sha256:string}|null; readonly handoff?:HandoffRecord }
+export interface ReviewPackage { root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; feedbackCatalog:FeedbackCatalog;
+  /** The resolved producer handoff (#101) and, when there is none, the refusal line naming where it was looked for. */
+  handoff: Handoff|null; handoffReason: string|null; handoffInputs?: HandoffFlags }
 function fail(field: string, expected: string): never { throw new Error(`${field}: expected ${expected}`); }
 export function object(value: unknown, field: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) fail(field, 'object'); return value as Record<string, unknown>; }
 export function string(value: unknown, field: string): string { if (typeof value !== 'string' || !value.trim() || value.length > 10000) fail(field, 'nonempty string (at most 10000 characters)'); return value; }
@@ -56,6 +61,7 @@ export function parseManifest(input: unknown): ReviewManifest {
     checkpoints: list(m.checkpoints,'checkpoints',(v,f) => ({id:id(v.id,f+'.id'),title:string(v.title,f+'.title'),time:optionalNumber(v.time,f+'.time'),animation:optionalString(v.animation,f+'.animation'),reference:optionalString(v.reference,f+'.reference'),note:optionalString(v.note,f+'.note'),workspace:v.workspace === undefined ? undefined : choice(v.workspace,['modeling','motion'] as const,f+'.workspace'),axis:v.axis===undefined?undefined:(()=>{const a=object(v.axis,f+'.axis');return {id:id(a.id,f+'.axis.id'),value:number(a.value,f+'.axis.value',-Number.MAX_VALUE)};})(),camera:v.camera === undefined ? undefined : (() => {const c=object(v.camera,f+'.camera'); const zoom=number(c.zoom,f+'.camera.zoom',Number.EPSILON); return {zoom,x:number(c.x,f+'.camera.x',-Number.MAX_VALUE),y:number(c.y,f+'.camera.y',-Number.MAX_VALUE)};})()})),
     authoring:list(m.authoring,'authoring',(v,f)=>({label:string(v.label,f+'.label'),path:packagePath(v.path,f+'.path')})),
     axes:list(m.axes,'axes',(v,f)=>({id:id(v.id,f+'.id'),label:string(v.label,f+'.label'),animation:string(v.animation,f+'.animation'),min:number(v.min,f+'.min',-Number.MAX_VALUE),max:number(v.max,f+'.max',-Number.MAX_VALUE)})),
+    ...(m.producer===undefined?{}:{producer:parseHandoffDeclaration(m.producer)}),
     audio:{clips:list(audio.clips,'audio.clips',(v,f)=>({id:id(v.id,f+'.id'),label:optionalString(v.label,f+'.label'),path:packagePath(v.path,f+'.path')})),cues:list(audio.cues,'audio.cues',(v,f)=>({id:id(v.id,f+'.id'),clip:string(v.clip,f+'.clip'),time:number(v.time,f+'.time'),animation:optionalString(v.animation,f+'.animation')}))}
   };
   if(manifest.model&&!manifest.model.endsWith('.model.json'))fail('model','compiled model path ending .model.json (the play runtime input)');
@@ -65,9 +71,10 @@ export function parseManifest(input: unknown): ReviewManifest {
   for(const c of manifest.checkpoints) if(c.axis){const a=manifest.axes.find(a=>a.id===c.axis!.id);if(!a)fail(`checkpoint ${c.id}.axis`,'declared axis id');if(c.axis.value<a.min||c.axis.value>a.max)fail(`checkpoint ${c.id}.axis.value`,`number in [${a.min}, ${a.max}]`);}
   return manifest;
 }
-export async function loadReview(input: string): Promise<ReviewPackage> {
+/** `options.handoff` are the explicit `--config …` flags; they win over the manifest block and discovery. */
+export async function loadReview(input: string, options: { handoff?: HandoffFlags } = {}): Promise<ReviewPackage> {
   const inputPath=await realpath(resolve(input));const directory=(await stat(inputPath)).isDirectory();
-  if(directory){try{await stat(resolve(inputPath,'review.json'));return loadReview(resolve(inputPath,'review.json'));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}}
+  if(directory){try{await stat(resolve(inputPath,'review.json'));return loadReview(resolve(inputPath,'review.json'),options);}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}}
   const manifestPath=inputPath;const root=directory?inputPath:await realpath(dirname(inputPath));
   const manifest=directory?await folderManifest(root):parseManifest(JSON.parse(await readFile(manifestPath,'utf8')));
   const files = new Set([...(directory?[]:[relative(root,manifestPath)]),...manifest.references.map(v=>v.path),...manifest.authoring.map(v=>v.path),...manifest.audio.clips.map(v=>v.path)]);
@@ -98,9 +105,11 @@ export async function loadReview(input: string): Promise<ReviewPackage> {
     if(p===manifest.model){if(fileHashes.get(p)!==modelBytesHash)throw new Error(`Model ${p} changed while hashing; retry with stable package inputs`);modelMetadata=object(JSON.parse(Buffer.concat(metadataChunks).toString('utf8')),'model');}
     if(p===reportPath){let value:unknown;try{value=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));}catch(e){throw new Error(`${p}: ${e instanceof Error?e.message:String(e)}`);}report=parseReport(value,p);}
   }
-  const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null};
+  // The handoff files are hashed beside the package: their record joins the reviewed identity (and so the session file).
+  const {handoff,reason:handoffReason}=await resolveHandoff(root,manifest.producer,options.handoff);
+  const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null,...(handoff?{handoff:handoff.record}:{})};
   const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations:modelAnimations(modelMetadata),clock:report?.clock??null,clockAnimation:report?.animation??null};
-  return {root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog};
+  return {root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{})};
 }
 
 /** Same text for every command; `root` lets the open launcher name the refused input. */

@@ -155,7 +155,21 @@ rig-review open /absolute/output --reference /absolute/original.mp4 --animation 
 rig-review feedback /absolute/output --reference /absolute/original.mp4
 rig-review open /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance
 rig-review feedback /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance
+# Producer handoff (single review only): the config, parts and inspected rig an Apply rebuilds from
+rig-review open /absolute/output --config /absolute/output/rig/config.json [--parts /absolute/output/rig/out] [--source <png> --full <dir> [--head <dir>]]
+rig-review feedback /absolute/output --config /absolute/output/rig/config.json
 ```
+
+`--config`, `--parts`, `--source`, `--full` and `--head` declare the producer
+handoff (see `docs/REVIEW_PACKAGE.md`, *Producer handoff*). They win over the
+review.json `producer` block, which wins over discovery (`config.json`, then
+`rig/config.json` inside the opened folder, then `../config.json` beside an opened
+`out/`, named as discovered outside the folder). Every path must sit inside the
+package root; a path outside it or a symlink that leaves it is refused by name.
+The handoff files are hashed into the reviewed identity, so `feedback` and
+`control` take the same flags to retrieve the same session, and changing the
+config bytes starts a new pending review. `--parts` and `--source`/`--full`/`--head`
+need `--config`; `--source` and `--full` go together; compare takes none of them.
 
 `open` chooses an explicit `--animation` first, then the normalized report's
 `animation` after validating actual model membership, then a unique actual clip
@@ -223,7 +237,8 @@ stderr and exit code alone:
    - `OPEN_ANIMATION_UNKNOWN <name>`: the explicit or report-named clip (JSON-quoted) is not in the compiled model.
    - `OPEN_ANIMATION_AMBIGUOUS`: no flag or report selects one clip, or the A/B reports conflict.
    - `OPEN_ANIMATION_UNVALIDATABLE`: a clip was requested but no compiled model can validate it.
-   - `OPEN_OPTION_INVALID <flag>`: an unknown, duplicate, empty or value-less option.
+   - `OPEN_OPTION_INVALID <flag>`: an unknown, duplicate, empty or value-less option, a handoff flag without `--config`, `--source` without `--full` (or the reverse), or a handoff flag with `--compare`.
+   - `OPEN_HANDOFF_INVALID <flag or path>`: a declared or discovered producer handoff path is refused — `HANDOFF_PATH_OUTSIDE_ROOT`, `HANDOFF_SYMLINK_ESCAPE`, `HANDOFF_INPUT_MISSING`, `HANDOFF_INPUT_INVALID` or `HANDOFF_PATH_INVALID`, named after the colon.
 4. Exit codes: 0 applied, 1 refused. (`control` keeps its own exit 2 for an
    unapplied command.)
 
@@ -462,7 +477,8 @@ On the rig pane each region is drawn as two circles: the core (full weight) and 
 **Apply · Rebuild** runs the installed producer on the designated regions and reloads the result on the stage, so the loop is point → rebuild → watch → repeat → submit. Review builds no mesh itself and never runs a manifest command:
 
 - **Producer.** `@rig-c/parts`' `rig-parts`, resolved the way `rigc review` resolves `rig-review`: `node_modules/@rig-c/parts/package.json` in the nearest directory walking up from the package, then from the directory `rig-review open` was run in; its `bin` entry is read from that manifest, never from `PATH`. The compiler is the `rig-c` that `rig-parts` itself finds walking up from its own package. Absent: `MODELING_PRODUCER_NOT_INSTALLED: … — bun add -d @rig-c/parts`; older than the first release with `remesh` (1.40.0): `MODELING_PRODUCER_TOO_OLD <found> 1.40.0`. Review never installs anything.
-- **Inputs.** The package must hold `rig-parts build` output beside its config at a named layout, `rig/config.json` + `rig/out/{parts.json, parts/, rig/}` or `config.json` + `out/{…}` (not a search). The request carries only `{part, regions, configHash}`; the server reads the config, replaces `meshes.<part>.contour.regions` with the designated regions (every other field as written) and runs `rig-parts remesh --rig <out>/rig --config <config> --parts <out> --part <part> --mesh mesh.json --out revision`, then `rigc build --profile rig-play --pack` with the revision's own `--page-edges` / `--pack-shape`, both with the scratch directory as working directory. A region row with equal semi-axes and no clip is sent as the config's circle, any other as the 32-sample polygon. An untouched editor starts from the config's own circle regions and contour numbers.
+- **Inputs.** The producer handoff (`docs/REVIEW_PACKAGE.md`, *Producer handoff*): `open --config` (and `--parts`), else the review.json `producer` block, else `config.json`, then `rig/config.json` inside the opened folder, then `../config.json` beside an opened `out/`. The parts directory defaults to `out/` beside the config and holds `parts.json`, `parts/` and the inspected `rig/`. The editor bar shows, before any Apply, how the config was found (declared, discovered, or discovered outside the opened folder), its path and SHA-256, and the baseline. Without a handoff the bar shows `MODELING_INPUT_UNAVAILABLE: config.json — looked at …` and Apply refuses `MODELING_HANDOFF_MISSING`, naming `--config`. The request carries only `{part, regions, configHash}`; the server reads the config, replaces `meshes.<part>.contour.regions` with the designated regions (every other field as written) and runs `rig-parts remesh --rig <out>/rig --config <config> --parts <out> --part <part> --mesh mesh.json --out revision`, then `rigc build --profile rig-play --pack` with the revision's own `--page-edges` / `--pack-shape`, both with the scratch directory as working directory. A region row with equal semi-axes and no clip is sent as the config's circle, any other as the 32-sample polygon. An untouched editor starts from the config's own circle regions and contour numbers.
+- **Baseline.** Once per session, when the handoff and the producer both resolve, review runs `rig-parts rig --config <config> --parts <parts> --out <state>/baseline/<key>/baseline` and compares every file it writes (rig.json, motion.json, mesh_report.json, sets.json, images/*) with the inspected rig directory: `baseline: reproduced — rig.json <hash> = inspected <hash>`, or `baseline: not reproduced — <first differing path>`. The key is the package hash, the handoff record and the producer versions (no clock), so a reopen reuses the result. Ops that rebuild the whole rig refuse `EDIT_BASELINE_MISMATCH <path>` unless the baseline reproduced; `remesh` keeps its own `REMESH_BASELINE_MISMATCH`.
 - **Scratch.** `<state>/rebuild/<package source hash>/<designation hash>/` under `RIG_REVIEW_STATE_DIR` (refused inside the package), named from the package, the config bytes, the part, the entry and both tool versions — no clock. The same designation again reuses its build and says so; a new one replaces the previous scratch build. The inspected package's files are only read.
 - **Watching.** The producer's lines stream into the editor bar (the latest line and a short log); a refusal shows the producer's first named line verbatim (for example `FAIL  REMESH_REQUEST_HELD: …`) and the stage is unchanged. On success the compiled scratch build (served read-only under `/rebuild/<id>/`, its model and pages hashed) replaces the drawn rig in place with the same camera, animation, time and part set; playback resumes with physics when it was running. **Reset** returns the stage to the inspected build.
 - **Record.** The last applied state (`rig-review-applied/1`: part, regions, config hash, entry SHA-256, producer and compiler versions, the producer's line and the scratch model's SHA-256) stays in the inspection draft, and feedback added while that build is on the stage carries it as `context.applied`. The review's `reviewedSource` still names the inspected build.

@@ -8,7 +8,7 @@ import {RigOverlays,type OverlayCircle,type OverlayRegion} from './rig-overlays.
 import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
 import {bindChestEditor,bustLabel,bustSides,rowCircle,type ChestEditor} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
-import {appliedRecord,designatedRegions,outcomeLine,pickPart,runRebuild,seedFields,type AppliedRecord,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {appliedRecord,designatedRegions,handoffText,outcomeLine,pickPart,runRebuild,seedFields,type AppliedRecord,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -1154,7 +1154,15 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  const seed=seedFields(rebuildStatus,chestField);
  if(seed){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
  if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,true);
+ renderHandoff(rebuildStatus);
  return rebuildStatus;
+}
+/** The handoff line (#101): path, hash and how it was found, then the baseline; re-read while the baseline runs. */
+let handoffTimer:ReturnType<typeof setTimeout>|null=null;
+function renderHandoff(status:RebuildStatusView):void {
+ const line=el('handoff-line'),shown=handoffText(status);line.textContent=shown.text;line.title=shown.text;line.classList.toggle('error',shown.error);
+ if(handoffTimer)clearTimeout(handoffTimer);handoffTimer=null;
+ if(status.baseline?.status==='running')handoffTimer=setTimeout(()=>{void api<RebuildStatusView>('/api/rebuild').then(next=>{rebuildStatus=next;renderHandoff(next);}).catch(()=>{});},2000);
 }
 function rebuildState():void {chestEditor?.rebuildState({busy:rebuildBusy,applied:!!appliedOnStage});}
 /** Apply · Rebuild: the rows go to the installed producer; on success its scratch build replaces the drawn rig in place. */

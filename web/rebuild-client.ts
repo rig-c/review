@@ -9,7 +9,10 @@ import {chestContourFields,chestRegionRows,chestRowId,type ChestFieldReader} fro
 export type RegionEntry=
  |{name:string;shape:'circle';cx:number;cy:number;r:number;bone:string;spacing:number;band:number}
  |{name:string;bone:string;shape:'polygon';points:[number,number][];spacing:number;band:number};
-export interface RebuildStatusView {available:boolean;inputs:{layout:{config:string;out:string};configHash:string}|null;parts:{name:string;regions:unknown[]}[];contour:Record<string,Record<string,unknown>>;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;reason:string|null}
+/** The producer handoff (#101) as `/api/rebuild` reports it: paths relative to the package root, how it was found. */
+export interface HandoffView {how:'declared'|'discovered';via:string;outside:boolean;config:{path:string;sha256:string};parts:string|null;rig:string|null;files:{path:string;sha256:string}[];missing:string[]}
+export interface BaselineView {status:'running'|'reproduced'|'not-reproduced'|'refused'|'failed';firstDifference:string|null;hashes:{baseline:{rigJson:string|null;tree:string};inspected:{rigJson:string|null;tree:string}}|null;line:string;wallMs:number|null}
+export interface RebuildStatusView {available:boolean;handoff:HandoffView|null;baseline:BaselineView|null;inputs:{config:string;parts:string|null;rig:string|null;configHash:string}|null;parts:{name:string;regions:unknown[]}[];contour:Record<string,Record<string,unknown>>;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;reason:string|null}
 export interface RebuildJobView {id:string;status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{remesh:number|null;compile:number|null};build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;regions:RegionEntry[];configHash:string;entrySha256:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
 export interface RebuildRefusal {status:'refused';error:string;producerLine:string|null}
 export interface RebuildRequestBody {part:string;regions:RegionEntry[];configHash:string}
@@ -80,4 +83,18 @@ export function outcomeLine(result:RebuildJobView|RebuildRefusal):{text:string;e
  if(result.status!=='built')return {text:result.producerLine??`REBUILD_FAILED: exit ${result.exitCode}`,error:true};
  const wall=[result.wallMs.remesh,result.wallMs.compile].every(v=>v!==null)?` · remesh ${(result.wallMs.remesh!/1000).toFixed(1)} s + compile ${(result.wallMs.compile!/1000).toFixed(1)} s`:'';
  return {text:`Applied ${result.request.part} with ${result.producer.package} ${result.producer.version}${result.reused?' · reused the scratch build of this exact designation':wall} · Reset returns to the inspected build`,error:false};
+}
+
+/**
+ * The editor bar's handoff line, shown before any Apply: how the config was found (declared, or discovered — and
+ * outside the opened folder when it is the `../config.json` beside an opened out/), its path and hash, then the
+ * baseline. Without a handoff it is the refusal naming where it was looked for and how to declare it.
+ */
+export function handoffText(status:Pick<RebuildStatusView,'handoff'|'baseline'|'reason'>):{text:string;error:boolean} {
+ const h=status.handoff;
+ if(!h)return {text:status.reason??'MODELING_HANDOFF_MISSING',error:true};
+ const how=h.how==='declared'?`declared (${h.via})`:h.outside?'discovered outside the opened folder':'discovered';
+ const parts=h.parts?` · parts ${h.parts==='.'?'(the opened folder)':h.parts}`:'';
+ const base=status.baseline?` · ${status.baseline.wallMs!==null&&status.baseline.status!=='running'?`${status.baseline.line} (${(status.baseline.wallMs/1000).toFixed(1)} s)`:status.baseline.line}`:' · baseline: waits for the producer';
+ return {text:`Handoff ${how}: ${h.config.path} sha256 ${h.config.sha256.slice(0,12)}…${parts}${base}`,error:!!status.baseline&&['not-reproduced','refused','failed'].includes(status.baseline.status)};
 }

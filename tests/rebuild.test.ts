@@ -19,6 +19,7 @@ const REFUSAL='  FAIL  REMESH_TARGET_MESH: refuse — a linked mesh is bound to 
 const fakeParts=`const fs=require('fs'),path=require('path');const a=process.argv.slice(2);const f=n=>a[a.indexOf(n)+1];
 if(a[0]==='--version'){console.log(process.env.FAKE_VERSION||'0');process.exit(0);}
 if(process.env.FAKE_LOG)fs.appendFileSync(process.env.FAKE_LOG,a.join(' ')+'\\n');
+if(a[0]==='rig'){const out=f('--out'),src=path.join(f('--parts'),'rig');fs.mkdirSync(out,{recursive:true});for(const n of fs.readdirSync(src))fs.copyFileSync(path.join(src,n),path.join(out,n));if(process.env.FAKE_PERTURB)fs.writeFileSync(path.join(out,'rig.json'),'{"perturbed":true}');console.log('rig-parts rig: wrote '+out);process.exit(0);}
 console.log('rig-parts remesh: '+f('--part'));console.error('[baseline:rig] stderr line');
 if(f('--part')==='refuse'){console.log(${JSON.stringify(REFUSAL)});console.log('refused: 1 problem(s)');process.exit(1);}
 const out=f('--out');fs.mkdirSync(out);const mesh=fs.readFileSync(f('--mesh'),'utf8');
@@ -99,7 +100,7 @@ test('bar 1: Apply runs remesh then the compile into <state>/rebuild/<package>/<
  const p=await loadReview(pkg),before=await treeHash(pkg),server=await startServer(p,{port:0,stateDir:state,cwd:root}),base=`http://127.0.0.1:${server.port}`;
  try{
   const status=await (await fetch(base+'/api/rebuild')).json();
-  expect(status).toMatchObject({schema:'rig-review-rebuild-status/1',available:true,reason:null,inputs:{layout:{config:'rig/config.json',out:'rig/out'},configHash:await configHash(pkg)},parts:[{name:'topwear',regions:[bust]}],producer:{package:'@rig-c/parts',version:'1.42.0'},compiler:{package:'rig-c',version:'2.64.1'}});
+  expect(status).toMatchObject({schema:'rig-review-rebuild-status/1',available:true,reason:null,inputs:{config:'rig/config.json',parts:'rig/out',rig:'rig/out/rig',configHash:await configHash(pkg)},handoff:{how:'discovered',via:'discovery',outside:false,config:{path:'rig/config.json',sha256:await configHash(pkg)}},parts:[{name:'topwear',regions:[bust]}],producer:{package:'@rig-c/parts',version:'1.42.0'},compiler:{package:'rig-c',version:'2.64.1'}});
   const moved={...bust,cx:424},request={part:'topwear',regions:[moved],configHash:status.inputs.configHash};
   const started=await post(base,request);expect(started.status).toBe(202);const job=await settle(base,await started.json());
   expect(job).toMatchObject({schema:'rig-review-rebuild/1',status:'built',reused:false,exitCode:0,producerLine:expect.stringContaining('rig-parts remesh: wrote 3 file(s)'),request:{part:'topwear',regions:[moved]},producer:{version:'1.42.0'}});
@@ -111,7 +112,7 @@ test('bar 1: Apply runs remesh then the compile into <state>/rebuild/<package>/<
   expect((await fetch(`${base}/rebuild/${job.id}/skeleton.png`)).status).toBe(200);
   for(const path of [`/rebuild/${job.id}/remesh.json`,`/rebuild/${job.id}/..%2Fmesh.json`,`/rebuild/${job.id}/%2E%2E/mesh.json`,`/rebuild/${'0'.repeat(64)}/skeleton.model.json`])expect((await fetch(base+path)).status).toBe(404);
   const calls=(await readFile(log,'utf8')).trim().split('\n');expect(calls.filter(l=>l.startsWith('remesh '))).toHaveLength(1);
-  expect(calls[0]).toBe(`remesh --rig ${join(p.root,'rig/out/rig')} --config ${join(p.root,'rig/config.json')} --parts ${join(p.root,'rig/out')} --part topwear --mesh mesh.json --out revision`);
+  expect(calls.find(l=>l.startsWith('remesh '))).toBe(`remesh --rig ${join(p.root,'rig/out/rig')} --config ${join(p.root,'rig/config.json')} --parts ${join(p.root,'rig/out')} --part topwear --mesh mesh.json --out revision`);
   // The same designation again: the same path, nothing run.
   const again=await (await post(base,request)).json();expect(again).toMatchObject({id:job.id,status:'built',reused:true});
   expect((await readFile(log,'utf8')).trim().split('\n').filter(l=>l.startsWith('remesh '))).toHaveLength(1);
