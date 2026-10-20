@@ -38,6 +38,7 @@ import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPac
 import {tuningRows,readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {bindReadingsPanel,EDGE as READING_EDGE,type ReadingsJobView,type ReadingsPanel,type ReadingsRefusal} from './readings-panel.ts';
 import {READINGS_SCHEMA,type ReadingsContext} from '../src/readings.ts';
+import {patchRoute} from '../src/retune-route.ts';
 import {appliedCheckRefusal,type CheckSummary} from '../src/applied-context.ts';
 import {bindPhysicsPanel,type PhysicsPanel} from './physics-panel.ts';
 import {bindIdlePanel,type BoneSetup,type IdlePanel} from './idle-panel.ts';
@@ -1417,7 +1418,7 @@ async function applyPhysics(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|n
  const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
  if(!patch){const reason=!ops.length?'PHYSICS_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';physicsPanel?.status(reason,true);return null;}
  const world=stageWorld(),before=stageCheck;
- physicsPanel?.busy(true);physicsPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: rig --config, compile, check…`,false);
+ physicsPanel?.busy(true);physicsPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: ${patchRoute(patch.ops,patch.producer.version)} --config, compile, check…`,false);
  try{
   const result=await applyPatch(patch,world);
   const outcome=patchOutcomeLine(result);physicsPanel?.status(outcome.text,outcome.error);
@@ -1497,7 +1498,7 @@ async function applyBones(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|nul
  const status=rebuildStatus??await loadRebuildStatus();
  const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
  if(!patch){const reason=!ops.length?'BONES_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';bonesPanel?.status(reason,true);return null;}
- bonesPanel?.busy(true);bonesPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: rig --config, compile, check…`,false);
+ bonesPanel?.busy(true);bonesPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: ${patchRoute(patch.ops,patch.producer.version)} --config, compile, check…`,false);
  try{
   const result=await applyPatch(patch,stageWorld());
   const outcome=patchOutcomeLine(result);bonesPanel?.status(outcome.text,outcome.error);
@@ -1513,8 +1514,8 @@ async function resetBonesBuild():Promise<void> {
 }
 /**
  * Rig fields Apply (#110): the pending ops (in the block's scope, `RIG_FIELDS_OP_OUT_OF_SCOPE` otherwise) become one
- * config patch (`rig`, then check) against the handoff config — a whole-rig op behind the baseline guard; rig-parts has
- * no `retune` yet. On a build the revision reloads in place and the readout shows BLINK_NO_HOLE and FEET_STAY_LEVEL
+ * config patch (`rig`, then check) against the handoff config — a whole-rig op behind the baseline guard (`/stops`,
+ * `/bones`, `/regions`, `/turn` and the blink still are outside retune's scope, #136). On a build the revision reloads in place and the readout shows BLINK_NO_HOLE and FEET_STAY_LEVEL
  * before and after; a refusal shows the producer's line verbatim and leaves the stage as it was.
  */
 async function applyRigFields(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|null> {
@@ -1523,7 +1524,7 @@ async function applyRigFields(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal
  const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
  if(!patch){const reason=!ops.length?'RIG_FIELDS_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';rigFieldsPanel?.status(reason,true);return null;}
  const world=stageWorld(),before=stageCheck;
- rigFieldsPanel?.busy(true);rigFieldsPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: rig --config, compile, check…`,false);
+ rigFieldsPanel?.busy(true);rigFieldsPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: ${patchRoute(patch.ops,patch.producer.version)} --config, compile, check…`,false);
  try{
   const result=await applyPatch(patch,world);
   const outcome=patchOutcomeLine(result);rigFieldsPanel?.status(outcome.text,outcome.error);
@@ -1559,7 +1560,7 @@ async function applyIdle(ops:PatchOp[],keys:'ctl'|'direct'|null):Promise<PatchJo
  const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig',args:keys?['--idle-keys',keys]:[]}):null;
  if(!patch){const reason=!ops.length?'IDLE_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';idlePanel?.status(reason,true);return null;}
  const world=stageWorld(),before=stageCheck;
- idlePanel?.busy(true);idlePanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: rig --config${keys?` --idle-keys ${keys}`:''}, compile, check…`,false);
+ idlePanel?.busy(true);idlePanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: ${patchRoute(patch.ops,patch.producer.version)} --config${keys?` --idle-keys ${keys}`:''}, compile, check…`,false);
  try{
   const result=await applyPatch(patch,world);
   const outcome=patchOutcomeLine(result);idlePanel?.status(outcome.text,outcome.error);

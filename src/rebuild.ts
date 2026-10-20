@@ -22,6 +22,7 @@ import { idleKeying, idleSource, type IdleStatus } from './idle-tracks.ts';
 import { CHEST_REGIONS_MAX } from './chest-regions.ts';
 import { bustMeshEntry, deriveBust, parseBustSpec, BustSpecError, type BustSpec } from './chest-landmarks.ts';
 import { modelMeshTriangles, remeshCounts, type RemeshCounts } from './mesh-entry.ts';
+import { patchRoute } from './retune-route.ts';
 
 export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
 const MAX_REGIONS = CHEST_REGIONS_MAX, MAX_POINTS = 256, MAX_LINES = 4000, GRID = 256;
@@ -193,6 +194,8 @@ export interface RebuildJob {
  */
 export interface PatchJob {
   schema: typeof REBUILD_SCHEMA; kind: 'patch'; id: string; status: RebuildStatus; reused: boolean;
+  /** #136: the producer op that ran — a `rig` patch runs `retune` when `patchRoute` routes it there, else `rig`; a remesh patch `remesh`. */
+  op: AppliedOp;
   request: { patch: ConfigPatch; patchSha256: string; configHash: string };
   producer: { package: string; version: string }; compiler: { package: string; version: string };
   lines: string[]; producerLine: string | null; exitCode: number | null; wallMs: { op: number | null; compile: number | null; check: number | null };
@@ -203,9 +206,14 @@ export interface PatchJob {
   remesh: (RemeshCounts & { modelTriangles: number | null }) | null;
   build: RebuildBuild | null;
 }
-/** Deterministic: the package, the config bytes, the patch's own bytes and both tool versions. No clock. */
-export function patchId(input: { sourceHash: string; configHash: string; patch: ConfigPatch; producer: string; compiler: string }): string {
-  return sha256(JSON.stringify([REBUILD_SCHEMA, 'patch', input.sourceHash, input.configHash, patchText(input.patch), input.producer, input.compiler]));
+/** The producer op a patch job ran (#136). */
+export type AppliedOp = 'rig' | 'retune' | 'remesh';
+/**
+ * Deterministic: the package, the config bytes, the patch's own bytes and both tool versions. No clock. A retune-routed
+ * patch adds its op (#136), so a scratch build the whole-rig path left for the same patch is never reused as retune's.
+ */
+export function patchId(input: { sourceHash: string; configHash: string; patch: ConfigPatch; producer: string; compiler: string; op?: AppliedOp }): string {
+  return sha256(JSON.stringify([REBUILD_SCHEMA, 'patch', input.sourceHash, input.configHash, patchText(input.patch), input.producer, input.compiler, ...(input.op === 'retune' ? ['retune'] : [])]));
 }
 const namedFile = (doc: unknown, keys: readonly string[]): unknown => keys.reduce<unknown>((v, k) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>)[k] : undefined), doc);
 /**
@@ -436,13 +444,22 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     });
   }
 
-  /** #102: the patched config → `rig-parts rig` (whole rig) or `remesh` (one part's patched entry) → `<dir>/rig`; the tail adds the diff and check. */
+  /**
+   * #102: the patched config → `rig-parts rig` (whole rig), `retune` (#136: the constraints and the idle spliced onto the
+   * inspected rig) or `remesh` (one part's patched entry) → `<dir>/rig`; the tail adds the diff and check.
+   */
   function executePatch(job: PatchJob, dir: string, inputs: ProducerInputs, resolved: Resolved, patched: JsonValue, part: string | null): Promise<void> {
     const args = job.request.patch.op.args, producer = resolved.producer;
     let counts: RemeshCounts | null = null;
     return apply(job, dir, inputs, resolved, {
-      cmd: job.request.patch.op.cmd, spec: 'rig',
+      cmd: job.op, spec: 'rig',
       async run(push) {
+        if (job.op === 'retune') {
+          // retune reads the inspected rig and writes only --out; what it holds it refuses by name (RETUNE_REQUEST_HELD).
+          await writeFile(join(dir, 'config.json'), scratchConfigText(inputs.config, patched), { mode: 0o600 });
+          push(`review: ${producer.package} ${producer.version} retune --rig <handoff rig> --config config.json (the handoff config with ${job.request.patch.ops.length} patch op(s)) → scratch rig`);
+          return runTool(producer.bin, ['retune', '--rig', inputs.rig, '--config', 'config.json', '--parts', inputs.parts, '--out', 'rig', ...args], { cwd: dir, onLine: push });
+        }
         if (part === null) {
           await writeFile(join(dir, 'config.json'), scratchConfigText(inputs.config, patched), { mode: 0o600 });
           push(`review: ${producer.package} ${producer.version} rig --config config.json (the handoff config with ${job.request.patch.ops.length} patch op(s)) → scratch rig`);
@@ -458,6 +475,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       },
       wallMs: ms => { job.wallMs.op = ms; },
       async flags(push) {
+        if (job.op === 'retune') {
+          const request = object(object(JSON.parse(await readFile(join(dir, 'rig', 'retune.json'), 'utf8')) as unknown, 'retune.json').request, 'retune.json request');
+          return { pageEdges: request.page_edges === 'pot' ? 'pot' : 'free', packShape: request.pack_shape === 'rect' ? 'rect' : 'polygon', note: ' (retune.json\'s pack flags)' };
+        }
         if (part === null) return { pageEdges: flagValue(args, '--page-edges', 'free') as PageEdges, packShape: flagValue(args, '--pack-shape', 'polygon') as PackShape, note: '' };
         const provenance = JSON.parse(await readFile(join(dir, 'rig', 'remesh.json'), 'utf8')) as unknown;
         const request = object(object(provenance, 'remesh.json').request, 'remesh.json request');
@@ -474,8 +495,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
 
   /**
    * `POST /api/rebuild` with `{patch}`: the patch is checked against the handoff config's bytes (`EDIT_PATCH_STALE`),
-   * applied to a scratch copy, and the op it names runs on that copy. A whole-rig op (`rig`) first needs the baseline
-   * to have reproduced the inspected rig (`EDIT_BASELINE_MISMATCH` naming the path). Refusals come before anything is run.
+   * applied to a scratch copy, and the op it names runs on that copy. A `rig` patch inside retune's scope runs `retune`
+   * on a producer that has it (#136, `src/retune-route.ts`); any other `rig` patch rebuilds the whole rig and first needs
+   * the baseline to have reproduced the inspected rig (`EDIT_BASELINE_MISMATCH` naming the path). Refusals come before anything is run.
    */
   async function startPatch(input: unknown): Promise<{ status: number; body: unknown }> {
     let patch: ConfigPatch;
@@ -495,17 +517,23 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const resolved = resolveProducer(options.starts);
     if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
     if (patch.producer.name !== resolved.producer.package || patch.producer.version !== resolved.producer.version) throw new RebuildError('EDIT_PRODUCER_MISMATCH', `the patch was made for ${patch.producer.name} ${patch.producer.version}; the installed producer is ${resolved.producer.package} ${resolved.producer.version}`);
-    if (patch.op.cmd === 'rig') {
+    // #136: the whole-rig rebuild is the fast path (~18 s) and gives the same bytes when the baseline is reproduced,
+    // so it stays the default. Only when the config cannot reproduce the inspected rig (a repaired build) does a
+    // patch inside retune's scope run retune, which holds the rest of the inspected rig itself (~52 s).
+    const route = patch.op.cmd === 'remesh' ? 'remesh' : patchRoute(patch.ops, resolved.producer.version);
+    const baselineNow = route === 'retune' ? await settledBaseline() : null;
+    const op: AppliedOp = route === 'retune' && baselineNow?.status === 'reproduced' ? 'rig' : route;
+    if (op === 'rig') {
       try { assertWholeRigBaseline(await settledBaseline()); } catch (e) { if (e instanceof BaselineError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
     }
-    const id = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
+    const id = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}`, op });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
     const reused = await reuse<PatchJob>(dir, id);
     if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
-    const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id, status: 'running', reused: false, request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null };
+    const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id, status: 'running', reused: false, op, request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null };
     jobs.set(id, job); running = id;
     void executePatch(job, dir, inputs, resolved, patched, part).finally(() => { if (running === id) running = null; });
     return { status: 202, body: snapshot(job) };
