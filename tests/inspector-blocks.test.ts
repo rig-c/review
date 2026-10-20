@@ -24,7 +24,7 @@ function rowButtons(html:string,id:string){
 
 test('every block of each Inspector section has a row button, and every row button targets a block of that section',async()=>{
  const html=await indexHtml();
- const expected={'inspector-rig':['Part','Modeling','Chest','Mesh','Weights','Bones','Fields'],'inspector-playback':['Transport','Sound','Environment','Physics','Idle tracks','Readings','Report']};
+ const expected={'inspector-rig':['Part','Modeling','Chest','Mesh','Weights','Bones','Fields'],'inspector-playback':['Transport','Sound','Environment','Physics','Idle tracks','Readings','Requirements','Report']};
  for(const [section,labels]of Object.entries(expected)){
   const children=directChildren(html,section),buttons=rowButtons(html,section);
   // The row is the section's first child, so it stays above the blocks it scrolls.

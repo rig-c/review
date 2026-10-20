@@ -386,9 +386,11 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   async function settledInspectedCheck(): Promise<InspectedCheck | null> { await settledBaseline(); return inspectedCheckRun ? await inspectedCheckRun : inspectedCheck; }
   /** The most recent built scratch build of this session (#108 readings run on it), or null. */
   let latestId: string | null = null;
-  function latest(): { id: string; build: string; modelHash: string } | null {
+  function latest(): { id: string; build: string; modelHash: string; spec: string } | null {
     const job = latestId ? jobs.get(latestId) : undefined;
-    return job && job.status === 'built' && job.build ? { id: job.id, build: join(rebuildDir(options.stateDir, p.sourceHash, job.id), 'build'), modelHash: job.build.modelHash } : null;
+    // `spec`: the rig spec directory the job's producer op wrote (#113 checks requirements on it) — a designation's `revision`, a patch's or delta's `rig`.
+    const dir = job ? rebuildDir(options.stateDir, p.sourceHash, job.id) : '';
+    return job && job.status === 'built' && job.build ? { id: job.id, build: join(dir, 'build'), modelHash: job.build.modelHash, spec: join(dir, 'kind' in job ? 'rig' : 'revision') } : null;
   }
   /** The baseline once it settles (tests, and the whole-rig ops of #102/#103 through assertWholeRigBaseline). */
   async function settledBaseline(): Promise<BaselineResult | null> { if (!baselineRun) ensureBaseline(resolveProducer(options.starts)); return baselineRun ? await baselineRun : baseline; }

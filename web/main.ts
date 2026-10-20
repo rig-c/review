@@ -38,6 +38,7 @@ import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPac
 import {tuningRows,readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {bindReadingsPanel,EDGE as READING_EDGE,type ReadingsJobView,type ReadingsPanel,type ReadingsRefusal} from './readings-panel.ts';
 import {READINGS_SCHEMA,type ReadingsContext} from '../src/readings.ts';
+import {bindRequirementsPanel,type RequirementsCatalogView,type RequirementsJobView,type RequirementsPanel,type RequirementsRefusal} from './requirements-panel.ts';
 import {patchRoute} from '../src/retune-route.ts';
 import {appliedCheckRefusal,type CheckSummary} from '../src/applied-context.ts';
 import {bindPhysicsPanel,type PhysicsPanel} from './physics-panel.ts';
@@ -140,6 +141,7 @@ function setAdjust():void {if(!player)return;const a=idleAdjust,b=dialAdjust;pla
 let meshPanel:MeshPanel|null=null,lastOverlay:OverlaySnapshot|null=null;
 let physicsPanel:PhysicsPanel|null=null,inspectedDocument:unknown=null,inspectedDocumentReason:string|null=null,stageCheck:{lines:string[];check:CheckSummary|null}|null=null;
 /** Animate · Readings (#108): the block, the last finished job (its ticks and worst lines), and the run in flight. */
+let requirementsPanel:RequirementsPanel|null=null;
 let readingsPanel:ReadingsPanel|null=null,readingsJob:ReadingsJobView|null=null,readingsBusy=false,readingsTickKey='';
 /** The world an Apply's reload resumes: wind (clock and active pulse), pending jolts, whether the controls are engaged, gravity. */
 interface StageWorld {wind:WindState;jolts:JoltStep[];applied:boolean;gravity:number}
@@ -834,6 +836,8 @@ function bind(): void {
       applied: appliedOnStage ? JSON.parse(JSON.stringify(appliedOnStage)) as Json : null,
       // The readings chosen (#108): the pairs of the last finished run and the builds they ran on, not their results.
       readings: readingsContext() as unknown as Json,
+      // The declared requirements (#113): the file by hash and content, and its last check, or null when none are declared.
+      requirements: (requirementsPanel?.context() ?? null) as unknown as Json,
       reportEvent: selectedReportEvent ? { id: selectedReportEvent.id, field: selectedReportEvent.field, source: { ...selectedReportEvent.source }, frames: selectedReportEvent.frames ? [...selectedReportEvent.frames] : null, exactTime: eventSeekTime(selectedReportEvent, selectedReportTime), targets: selectedReportEvent.targets.map(target => ({ ...target })) } : null,
     } });
     input('feedback-summary').value = ''; markDirty(); renderProposals(); message('Added structured feedback. Submit the review to save it.');
@@ -884,6 +888,7 @@ function bind(): void {
    hasTurn:()=>{if(!player)return false;try{player.bone(TURN_BONE);return true;}catch{return false;}}});
   viewDisposers.push(()=>rigFieldsPanel?.dispose());
   readingsPanel=bindReadingsPanel({run:()=>{void runReadings();},seek:seekReading});
+  requirementsPanel=bindRequirementsPanel({check:runRequirements,seek:seekReading,animation:()=>animation,slot:()=>parts?.value()?.slot??null,hash:sha256Hex});
   const tickResize=new ResizeObserver(()=>renderReadingTicks());tickResize.observe(el('transport'));viewDisposers.push(()=>tickResize.disconnect());
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
   for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));
@@ -912,7 +917,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();meshPanel?.select(part?.slot??null);if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
@@ -926,7 +931,7 @@ async function start(): Promise<void> {
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-    const restored=await setupPersistence();await loadRebuildStatus();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
@@ -1506,6 +1511,21 @@ function readingsContext():ReadingsContext|null {
  const job=readingsJob;if(!job)return null;
  const ticks=(build:'inspected'|'scratch')=>{const run=job.runs.find(r=>r.build===build);return run?run.results.reduce((n,r)=>n+r.frames.length,0):null;};
  return {schema:READINGS_SCHEMA,animation:job.request.animation,requests:job.request.readings,environment:job.request.environment,environmentPassed:job.environment.passed,builds:{inspected:job.runs.find(r=>r.build==='inspected')?.modelHash??'',scratch:job.runs.find(r=>r.build==='scratch')?.id??null},compiler:job.compiler,ticks:{inspected:ticks('inspected')??0,scratch:ticks('scratch')}};
+}
+/** Requirements (#113): what the handoff's rig spec offers the panel, or why nothing does. */
+async function loadRequirements():Promise<void> {
+ try{const catalog=await api<RequirementsCatalogView>('/api/requirements');requirementsPanel?.load(catalog,catalog.reason);}
+ catch(error){requirementsPanel?.load(null,`REQUIREMENTS_UNAVAILABLE: ${errorText(error)}`);}
+}
+/** Requirements Check (#113): typed requirements to `POST /api/requirements`, then its job until it settles; a refusal is shown verbatim. */
+async function runRequirements(body:{fps:number;build:'inspected'|'scratch';requirements:Record<string,unknown>[]}):Promise<RequirementsJobView|RequirementsRefusal|null> {
+ const unwrap=(error:unknown)=>{const text=errorText(error).replace(/^\d+: /,'');try{return (JSON.parse(text) as {error?:string}).error??text;}catch{return text;}};
+ try{
+  let job=await api<RequirementsJobView|RequirementsRefusal>('/api/requirements',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  while('id' in job&&job.status==='running'){await new Promise(resolve=>setTimeout(resolve,800));job=await api<RequirementsJobView>(`/api/requirements/${job.id}`);}
+  return job;
+ }catch(error){return {status:'refused',error:unwrap(error)};}
+ finally{void loadRequirements();}
 }
 /** Bones Check (#109): the pending ops go to `POST /api/bones-check` with the handoff config's hash; a refusal is shown verbatim. */
 async function checkBones(ops:PatchOp[]):Promise<BonesCheckView> {

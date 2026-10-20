@@ -8,6 +8,7 @@ import { validateFeedbackSelection } from './feedback-validation.ts';
 import { parseEnvironmentContext } from './environment.ts';
 import { appliedCheckRefusal, parseAppliedContext } from './applied-context.ts';
 import { parseReadingsContext } from './readings.ts';
+import { parseRequirementsContext } from './requirements.ts';
 import { choice, object, string, type Json, type ReviewPackage, type ReviewedSource } from './manifest.ts';
 export interface Feedback {id:string;frameStart:number;frameEnd:number;target:{kind:'bone'|'slot'|'rig';name:string};category:'defect'|'quality';summary:string;context?:Json}
 export function parseFeedback(item:unknown,strict=true):Feedback {
@@ -34,6 +35,8 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
   if(context.applied!==undefined){parseAppliedContext(context.applied);const unchecked=appliedCheckRefusal(context.applied);if(unchecked)throw new Error(unchecked);}
   // The readings chosen (#108): absent or null stays valid; a present record names its pairs and the builds they ran on.
   if(context.readings!==undefined)parseReadingsContext(context.readings);
+  // The declared requirements (#113): absent or null stays valid; a present record carries the file's text and its sha256, recomputed here.
+  if(context.requirements!==undefined)parseRequirementsContext(context.requirements,text=>createHash('sha256').update(text).digest('hex'));
   const selected=animation??(typeof context.animation==='string'?context.animation:null);
   validateFeedbackSelection(p.feedbackCatalog,{frameStart:feedback.frameStart,frameEnd:feedback.frameEnd,target:feedback.target,animation:selected});
   return {...feedback,context:{...context,...(animation===undefined?{}:{animation}),interval} as Json};
