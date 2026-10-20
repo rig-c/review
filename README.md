@@ -406,12 +406,36 @@ it. **Jolt** sends a translate-and-return impulse through `player.moved`;
 with **Drag to trail** on, dragging the rig pane moves the rig's physics
 instead of the camera (Space still pans). **Reset physics** returns the
 runtime start values and re-poses from the current time, clearing the physics
-history. The physics constraints are listed read only as the compiled model
-declares them; `@rig-c/play` exposes no per-constraint mix, so none is offered.
-Until a control is touched the player stays at the runtime start values. The
+history. Until a control is touched the player stays at the runtime start values. The
 state is kept in the local draft and recorded in feedback as
 `context.environment`; nothing is written to the model or motion. The compare
 page does not have this block.
+
+Below it, the **Physics tuning** panel (`#physics-panel`) edits the physics
+constraints through the producer. Each row is a constraint of the inspected
+model, matched to the handoff config's `constraints[]` entry of the same name
+and kind; a row is editable only when every field the panel edits reads the
+same on both sides. Rows the model has and the config does not declare (the
+rig stage's `turn` twins), the config's transform constraints and any row that
+does not map 1:1 are listed under **Not editable** with the reason. Picking a
+row opens its editor: a slider and number field for each of `strength`,
+`damping`, `inertia`, `mass`, `wind`, `gravity` and `mix` the config declares,
+and toggles for the `x`, `y` and `rotate` components (0 is off). A **Chain**
+(from bone parentage: links on parent bones that move the same components;
+pick one from the list or with **Pick on stage**) takes a **Ramp**: one value
+per link, linear from root to tip. Every edit is a config patch op at
+`/constraints/<i>/<field>` that also records the constraint's `name`; the
+pending ops are listed with a per-op **Revert** and kept in the local draft.
+**Apply** sends them as one patch (`rig`, then `check`, about 20–50 s on a real
+package); the scratch build reloads under the same wind, gust, jolt and gravity
+state Apply was pressed in, and the readout shows the `ANIMATIONS_DO_NOT_FOLD`
+and `TEXTURE_STRETCH` lines before and after (check's own lines, or "not in
+check summary" by name — review runs no check on the inspected build). A
+refusal is the producer's line verbatim (`CONFIG_CONSTRAINT_*`,
+`CONFIG_NAME_RESOLVES`, rigc's `A23` for a mass of 0) and the stage is
+unchanged. **Reset** returns to the inspected build and clears the pending ops.
+Submit refuses a review written on an applied build whose check failed
+(`EDIT_SUBMIT_UNCHECKED`). Live preview before Apply waits on play#147.
 
 The view bar is one row and keeps the layer toggles in reach in every section: **Images**
 (`I`), **Mesh edges** (`M`) and **Bone points** (`B`). The keys do nothing while
