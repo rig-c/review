@@ -115,7 +115,7 @@ bun run smoke
 
 `smoke` packs this tree, installs the tarball into an empty project, and runs the installed bin: `--help`, `open --help`, `check` on the bundled demo, and a served page whose browser bundle is built from the installed files. A file missing from `files` in `package.json` fails there, not after publishing.
 
-The server bundles `web/main.ts` at startup using the pinned installed runtime, with no CDN. `build` verifies that browser bundle in memory. CI checks types, focused path/state/API tests, bundling and the demo package. Follow AGENTS.md for contributor verification policy. [DESIGN.md](docs/DESIGN.md) distinguishes the runnable foundation from future modeling touch-up and preserves the illustrative screen concept.
+The server bundles `web/main.ts` at startup using the pinned installed runtime, with no CDN. `build` verifies that browser bundle in memory. CI checks types, focused path/state/API tests, bundling and the demo package. Follow AGENTS.md for contributor verification policy. For a live run against the installed producers, [docs/LIVE_FIXTURE.md](docs/LIVE_FIXTURE.md) gives the public package, the producer bench and the open line that reaches `baseline: reproduced`. [DESIGN.md](docs/DESIGN.md) distinguishes the runnable foundation from future modeling touch-up and preserves the illustrative screen concept.
 
 ### Releasing
 
