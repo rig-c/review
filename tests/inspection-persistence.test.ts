@@ -162,3 +162,11 @@ test('least-recently-written drafts beyond 32 are evicted, but never one written
  // Rewriting an old scope makes it recent, so the next eviction takes the following oldest instead.
  clock+=3*day;store(8).write(draft());clock+=1000;store(40).write(draft());expect(storage.getItem(store(8).key)).not.toBeNull();expect(storage.getItem(store(9).key)).toBeNull();expect(kept(storage)).toHaveLength(32);
 });
+
+test('the active Inspector block per section roundtrips through the stored local draft and nothing else is added',async()=>{
+ const {activeBlocksUI,restoreActiveBlocksUI}=await import('../web/inspector-blocks.ts');
+ const storage=new MemoryStorage(),store=new InspectionDraftStore('single:rig',binding,()=>{},storage),value=draft();
+ value.ui={...value.ui,...activeBlocksUI({rig:'chest-regions',playback:'physics-panel'})};expect(store.write(value)).toBe(true);
+ const read=store.read()!;expect(restoreActiveBlocksUI(read.ui)).toEqual({rig:'chest-regions',playback:'physics-panel'});
+ expect(Object.keys(read.ui).filter(key=>!Object.hasOwn(draft().ui,key))).toEqual(['inspectorBlocks']);expect(read.bookmark).toEqual(draft().bookmark);
+});
