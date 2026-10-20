@@ -14,8 +14,14 @@ export const COMPILER_PACKAGE = 'rig-c';
 export const COMPILER_BIN = 'rigc';
 /** The first `@rig-c/parts` release with `rig-parts remesh` (its CHANGELOG: 1.40.0, "remesh: re-fit one part of a gated rig"). */
 export const REMESH_SINCE = '1.40.0';
+/**
+ * The first `@rig-c/parts` release whose `rig-parts remesh` reads `--delta <mesh-edit.json>` in place of `--mesh` (its
+ * CHANGELOG: 1.43.0, "remesh: --delta replays rig-c/review's mesh edit over one part's mesh", parts#528). Edit Mesh's
+ * Apply · Rebuild (#135) needs it; the version is read off the installed producer's own `package.json`.
+ */
+export const REMESH_DELTA_SINCE = '1.43.0';
 export const MODELING_PRODUCER_NOT_INSTALLED = `MODELING_PRODUCER_NOT_INSTALLED: ${PRODUCER_PACKAGE} is not installed beside the package or beside review, and review does not install it — bun add -d ${PRODUCER_PACKAGE}`;
-export const modelingProducerTooOld = (found: string, required: string) => `MODELING_PRODUCER_TOO_OLD ${found} ${required}: rig-parts remesh needs ${PRODUCER_PACKAGE} ${required} or later — bun add -d ${PRODUCER_PACKAGE}@latest`;
+export const modelingProducerTooOld = (found: string, required: string, what = 'rig-parts remesh') => `MODELING_PRODUCER_TOO_OLD ${found} ${required}: ${what} needs ${PRODUCER_PACKAGE} ${required} or later — bun add -d ${PRODUCER_PACKAGE}@latest`;
 export const MODELING_COMPILER_NOT_INSTALLED = `MODELING_COMPILER_NOT_INSTALLED: ${COMPILER_PACKAGE} is not installed beside ${PRODUCER_PACKAGE}, which gates its rigs with it — reinstall ${PRODUCER_PACKAGE} (bun add -d ${PRODUCER_PACKAGE})`;
 
 export interface InstalledTool { package: string; version: string; root: string; bin: string }
@@ -76,6 +82,9 @@ export function resolveProducer(starts: readonly string[], exists: (path: string
 export interface RemeshRequest { rig: string; config: string; parts: string; part: string; mesh: string; out: string }
 /** `rig-parts remesh` flags as its help states them; every value a path the server composed, never a client string. */
 export const remeshArgs = (r: RemeshRequest): string[] => ['remesh', '--rig', r.rig, '--config', r.config, '--parts', r.parts, '--part', r.part, '--mesh', r.mesh, '--out', r.out];
+export interface RemeshDeltaRequest { rig: string; config: string; parts: string; part: string; delta: string; out: string }
+/** `rig-parts remesh … --delta <mesh-edit.json>` (#135): the same flags with `--delta` in place of `--mesh`, as its help states. */
+export const remeshDeltaArgs = (r: RemeshDeltaRequest): string[] => ['remesh', '--rig', r.rig, '--config', r.config, '--parts', r.parts, '--part', r.part, '--delta', r.delta, '--out', r.out];
 export interface CompileRequest { rig: string; motion: string; out: string; pageEdges: 'pot' | 'free'; packShape: 'rect' | 'polygon' }
 /** remesh writes a rig spec (rig.json + motion.json); this is the compile its own gate ran, with the revision's pack flags. */
 export const compileArgs = (r: CompileRequest): string[] => ['build', '--rig', r.rig, '--motion', r.motion, '--out', r.out, '--profile', 'rig-play', '--pack', '--page-edges', r.pageEdges, '--pack-shape', r.packShape];
