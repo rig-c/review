@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.7.0](https://github.com/rig-c/review/compare/v0.6.0...v0.7.0) (2026-10-20)
+
+
+### Features
+
+* **animate:** declare requirements and check them with `rig-parts check --requirements` ([#141](https://github.com/rig-c/review/issues/141)) ([2112cae](https://github.com/rig-c/review/commit/2112cae3b130d63c1ac7742b32ce9c80c6a657a2)), closes [#113](https://github.com/rig-c/review/issues/113)
+* **animate:** idle tracks — amp, period, phase, base, chain handles, blink — with a labelled preview and Apply ([#126](https://github.com/rig-c/review/issues/126)) ([db3be7f](https://github.com/rig-c/review/commit/db3be7fcfa0b2f3dbdebab22ada666b492f46ff3))
+* **animate:** physics tuning panel — edit declared constraints as config patches and Apply ([#122](https://github.com/rig-c/review/issues/122)) ([d7ebb46](https://github.com/rig-c/review/commit/d7ebb46ad4eeffb79fcba04a6fed698fdd1a670b)), closes [#103](https://github.com/rig-c/review/issues/103)
+* **animate:** readings as watch instruments — rigc render readings as timeline ticks ([#123](https://github.com/rig-c/review/issues/123)) ([e0553db](https://github.com/rig-c/review/commit/e0553dbcf4e762e71b194230766cac083c3c8c8c)), closes [#108](https://github.com/rig-c/review/issues/108)
+* **animate:** retarget tuning — map editor and flags, rebuilt by `rig-pose` in scratch ([#144](https://github.com/rig-c/review/issues/144)) ([2f6ec2d](https://github.com/rig-c/review/commit/2f6ec2de60371cd76a1d29f8039e9bb2f53981fb)), closes [#114](https://github.com/rig-c/review/issues/114)
+* **open:** producer handoff — declare the authoring inputs and hold the baseline ([#119](https://github.com/rig-c/review/issues/119)) ([ea3a1ef](https://github.com/rig-c/review/commit/ea3a1ef4440bfcb063a24f96489e114d147060b3)), closes [#101](https://github.com/rig-c/review/issues/101)
+* **rebuild:** config patch and the generic Apply runner ([#120](https://github.com/rig-c/review/issues/120)) ([a00e35c](https://github.com/rig-c/review/commit/a00e35cebf35201d18943c423b7a5af26d29fada)), closes [#102](https://github.com/rig-c/review/issues/102)
+* **rebuild:** patches inside retune's scope go through `rig-parts retune` on repaired builds ([#138](https://github.com/rig-c/review/issues/138)) ([52332fb](https://github.com/rig-c/review/commit/52332fb2b291a084700a9e76dff0ae207d3af2e2)), closes [#136](https://github.com/rig-c/review/issues/136)
+* **setup:** Apply · Rebuild runs the installed producer and reloads the result ([#116](https://github.com/rig-c/review/issues/116)) ([1e6c25a](https://github.com/rig-c/review/commit/1e6c25aaa80191ea74bbda162b4cc05faf542f4b)), closes [#99](https://github.com/rig-c/review/issues/99)
+* **setup:** bone anchors — drag origins, chain points and tips as config patches, checked and applied ([#133](https://github.com/rig-c/review/issues/133)) ([d9eea45](https://github.com/rig-c/review/commit/d9eea451cee01e26c72161d9a7f1b44a4163ad1a)), closes [#109](https://github.com/rig-c/review/issues/109)
+* **setup:** chest by landmarks — three points derive the producer's bust circles; export accepts 1–8 regions ([#127](https://github.com/rig-c/review/issues/127)) ([d7f5132](https://github.com/rig-c/review/commit/d7f513251316d67b618604ac4349626139341a74)), closes [#105](https://github.com/rig-c/review/issues/105) [#118](https://github.com/rig-c/review/issues/118)
+* **setup:** cuts, patches and limbs — edited on stage, rebuilt by `rig-parts build` in scratch ([#146](https://github.com/rig-c/review/issues/146)) ([070f67d](https://github.com/rig-c/review/commit/070f67d2afb107594fcbed3f55e3e2d65f2ca578))
+* **setup:** Edit Mesh Apply runs `rig-parts remesh --delta` and loads the revision ([#140](https://github.com/rig-c/review/issues/140)) ([eefc7ca](https://github.com/rig-c/review/commit/eefc7ca3d49fe69e323e8fd52e7c9e31e8dc5fe8)), closes [#135](https://github.com/rig-c/review/issues/135)
+* **setup:** Edit Mesh works in setup space from the model document ([#137](https://github.com/rig-c/review/issues/137)) ([78ca0b7](https://github.com/rig-c/review/commit/78ca0b738dc920bc3a55ea77b3b3293fb3b148fc)), closes [#100](https://github.com/rig-c/review/issues/100)
+* **setup:** mesh panel — contour and grid parameters, regions and segments as a remesh entry with Apply ([#128](https://github.com/rig-c/review/issues/128)) ([86caada](https://github.com/rig-c/review/commit/86caada5df44088c7d3257a710e285793f346d81)), closes [#106](https://github.com/rig-c/review/issues/106)
+* **setup:** rig fields — rigid part bone, blink still row, stops, inherit, turn depth and pivot ([#134](https://github.com/rig-c/review/issues/134)) ([68868eb](https://github.com/rig-c/review/commit/68868eb7095604f0003705b779b69ff7a720edff)), closes [#110](https://github.com/rig-c/review/issues/110)
+* **setup:** weights view — a bone's setup-pose weights over the selected mesh ([#132](https://github.com/rig-c/review/issues/132)) ([9267022](https://github.com/rig-c/review/commit/9267022e8bd14bb5fc9a059805de7d670abcff9c)), closes [#107](https://github.com/rig-c/review/issues/107)
+* **workspace:** sticky block row in each inspector section ([#130](https://github.com/rig-c/review/issues/130)) ([8c08513](https://github.com/rig-c/review/commit/8c0851358c51ef65c7b44414af9244c35c5fa88b)), closes [#124](https://github.com/rig-c/review/issues/124)
+
+
+### Bug Fixes
+
+* **docs:** the producer writes motion in scratch; review never authors keys ([#143](https://github.com/rig-c/review/issues/143)) ([2da25ed](https://github.com/rig-c/review/commit/2da25ed607ef9e69816896c9b57d115be6baf4fa))
+* **rebuild:** diff every document the producer writes, per file ([#129](https://github.com/rig-c/review/issues/129)) ([2903251](https://github.com/rig-c/review/commit/2903251ed9bcec3b04e08ffe63fe1c7e6d54d7d1)), closes [#125](https://github.com/rig-c/review/issues/125)
+* **requirements:** refuse a self-targeted contact or aim before Add; default the target to another bone ([#145](https://github.com/rig-c/review/issues/145)) ([076dbcf](https://github.com/rig-c/review/commit/076dbcf5c5c9a692d8c025fc87e38b1dcc4caa34)), closes [#142](https://github.com/rig-c/review/issues/142)
+
 ## [0.6.0](https://github.com/rig-c/review/compare/v0.5.0...v0.6.0) (2026-10-19)
 
 
