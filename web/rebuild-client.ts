@@ -6,8 +6,9 @@
 import {ellipsePolygon} from '../src/chest-regions.ts';
 import type {BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
-import {APPLIED_DELTA_SCHEMA,APPLIED_PATCH_SCHEMA,filesDiffText,type AppliedDelta,type AppliedPatch,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
-export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,CheckSummary,BustSpec};
+import {APPLIED_DELTA_SCHEMA,APPLIED_PATCH_SCHEMA,APPLIED_RETARGET_SCHEMA,filesDiffText,type AppliedDelta,type AppliedPatch,type AppliedRetarget,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
+import type {MotionSummary,RetargetFlags,RetargetLine,RetargetRecord} from '../src/retarget.ts';
+export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,AppliedRetarget,CheckSummary,BustSpec};
 import {chestContourFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
 import type {InspectedCheckView} from '../src/physics-tuning.ts';
 
@@ -17,7 +18,8 @@ export type RegionEntry=
 /** The producer handoff (#101) as `/api/rebuild` reports it: paths relative to the package root, how it was found. */
 export interface HandoffView {how:'declared'|'discovered';via:string;outside:boolean;config:{path:string;sha256:string};parts:string|null;rig:string|null;files:{path:string;sha256:string}[];missing:string[]}
 export interface BaselineView {status:'running'|'reproduced'|'not-reproduced'|'refused'|'failed';firstDifference:string|null;hashes:{baseline:{rigJson:string|null;tree:string};inspected:{rigJson:string|null;tree:string}}|null;line:string;wallMs:number|null}
-export interface RebuildStatusView {available:boolean;handoff:HandoffView|null;baseline:BaselineView|null;inputs:{config:string;parts:string|null;rig:string|null;configHash:string}|null;parts:{name:string;regions:unknown[]}[];contour:Record<string,Record<string,unknown>>;meshes?:Record<string,unknown>;constraints?:unknown[]|null;bones?:unknown[]|null;fields?:Record<string,unknown>|null;inspectedCheck?:InspectedCheckView|null;idle?:import('../src/idle-tracks.ts').IdleStatus|null;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;reason:string|null}
+export interface RetargetStatusView {available:boolean;reason:string|null;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;rig:string|null;sequences:{id:string;label:string;path:string;cleaned:boolean;frames:number;people:string[]}[];bones:string[];animations:string[]}
+export interface RebuildStatusView {retarget?:RetargetStatusView;available:boolean;handoff:HandoffView|null;baseline:BaselineView|null;inputs:{config:string;parts:string|null;rig:string|null;configHash:string}|null;parts:{name:string;regions:unknown[]}[];contour:Record<string,Record<string,unknown>>;meshes?:Record<string,unknown>;constraints?:unknown[]|null;bones?:unknown[]|null;fields?:Record<string,unknown>|null;inspectedCheck?:InspectedCheckView|null;idle?:import('../src/idle-tracks.ts').IdleStatus|null;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;reason:string|null}
 export interface RebuildJobView {id:string;status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{remesh:number|null;compile:number|null};build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;regions:RegionEntry[];configHash:string;entrySha256:string;bust?:BustSpec};producer:{package:string;version:string};compiler:{package:string;version:string}}
 export interface RebuildRefusal {status:'refused';error:string;producerLine:string|null}
 /** #99 regions or #105 landmarks: exactly one of `regions` and `bust`. */
@@ -109,7 +111,7 @@ export function seedLandmarks(status:Pick<RebuildStatusView,'parts'|'contour'>,r
 }
 
 export const appliedRecord=(job:RebuildJobView):AppliedRecord=>({schema:'rig-review-applied/1',buildId:job.id,part:job.request.part,regions:job.request.regions,...(job.request.bust?{bust:job.request.bust}:{}),configHash:job.request.configHash,entrySha256:job.request.entrySha256,producer:job.producer,compiler:job.compiler,line:job.producerLine,modelHash:job.build!.modelHash});
-export function parseApplied(text:string):AppliedRecord|AppliedPatch|AppliedDelta|null {try{const value=JSON.parse(text);return value?.schema==='rig-review-applied/1'||value?.schema===APPLIED_PATCH_SCHEMA||value?.schema===APPLIED_DELTA_SCHEMA?value as AppliedRecord|AppliedPatch|AppliedDelta:null;}catch{return null;}}
+export function parseApplied(text:string):AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|null {try{const value=JSON.parse(text);return value?.schema==='rig-review-applied/1'||value?.schema===APPLIED_PATCH_SCHEMA||value?.schema===APPLIED_DELTA_SCHEMA||value?.schema===APPLIED_RETARGET_SCHEMA?value as AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget:null;}catch{return null;}}
 
 /** A patch Apply's job (#102): the patch and its hash, the op/compile/check wall clocks, check's summary and the rig.json diff. */
 export interface PatchJobView {id:string;kind:'patch';op?:'rig'|'retune'|'remesh';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{op:number|null;compile:number|null;check:number|null};check:CheckSummary|null;diff:{count:number;paths:string[]}|null;files?:FilesDiff|null;remesh?:import('../src/mesh-entry.ts').RemeshCounts&{modelTriangles:number|null}|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{patch:ConfigPatch;patchSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
@@ -118,7 +120,21 @@ export interface PatchRequestBody {patch:ConfigPatch}
 export interface DeltaJobView {id:string;kind:'delta';op:'remesh';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{op:number|null;compile:number|null};files:FilesDiff|null;remesh:import('../src/mesh-entry.ts').RemeshCounts&{modelTriangles:number|null}|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;delta:Record<string,unknown>;deltaSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
 /** `{part, delta, configHash}`: the server owns every path and flag; the delta is the editor's export as it stands. */
 export interface DeltaRequestBody {part:string;delta:import('../src/mesh-edit.ts').MeshEditDocument;configHash:string}
-export type AnyJobView=RebuildJobView|PatchJobView|DeltaJobView;
+/** A retarget Apply's job (#114): clean, retarget, compile; every FAIL line of the step that refused, verbatim; the listed lines. */
+export interface RetargetJobView {id:string;kind:'retarget';op:'retarget';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;refusals:string[];exitCode:number|null;wallMs:{clean:number|null;retarget:number|null;compile:number|null};files:FilesDiff|null;motion:MotionSummary|null;readings:RetargetLine[];build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{record:RetargetRecord;recordSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
+/** `{retarget: {sequence, map, flags, configHash}}`: a declared reference id, the map by content and typed flags — no path, no flag string. */
+export interface RetargetRequestBody {retarget:{sequence:string;map:Record<string,unknown>;flags:RetargetFlags;configHash:string}}
+/** What the draft keeps and `context.applied` carries for a retarget: the record, the producer's line, the motion summary, the diff and the lines. */
+export const retargetAppliedRecord=(job:RetargetJobView):AppliedRetarget=>({schema:APPLIED_RETARGET_SCHEMA,buildId:job.id,retarget:JSON.parse(JSON.stringify(job.request.record)),recordSha256:job.request.recordSha256,configHash:job.request.configHash,producer:job.producer,compiler:job.compiler,line:job.producerLine,motion:JSON.parse(JSON.stringify(job.motion)),files:job.files,readings:job.readings.map(r=>({...r})),modelHash:job.build!.modelHash});
+/** A retarget job's status line: built (wall clocks, the new animation, the diff) or the producer's line verbatim. */
+export function retargetOutcomeLine(result:RetargetJobView|RebuildRefusal):{text:string;error:boolean} {
+ if(!('id' in result))return {text:result.producerLine??result.error,error:true};
+ if(result.status!=='built')return {text:result.producerLine??`REBUILD_FAILED: exit ${result.exitCode}`,error:true};
+ const r=result.request.record,wall=result.reused?'reused the scratch build of this exact retarget':`${r.op.clean?`clean ${seconds(result.wallMs.clean)} + `:''}retarget ${seconds(result.wallMs.retarget)} + compile ${seconds(result.wallMs.compile)}`;
+ const kept=result.motion?(result.motion.kept?'the rig\'s own animations unchanged':`changed: ${result.motion.changed.join(', ')}`):'';
+ return {text:`Retargeted "${r.flags.animation}" from ${r.sequence.reference} with ${result.producer.package} ${result.producer.version} · ${wall} · ${kept} · ${result.files?filesDiffText(result.files):'no diff'} · Reset returns to the inspected build`,error:!!result.motion&&!result.motion.kept};
+}
+export type AnyJobView=RebuildJobView|PatchJobView|DeltaJobView|RetargetJobView;
 export const isPatchJob=(job:AnyJobView):job is PatchJobView=>(job as PatchJobView).kind==='patch';
 
 export interface RebuildDeps<B=RebuildRequestBody|PatchRequestBody,J extends AnyJobView=AnyJobView> {post:(body:B)=>Promise<J|RebuildRefusal>;get:(id:string)=>Promise<J>;onLine:(line:string,index:number)=>void;sleep:(ms:number)=>Promise<void>;intervalMs?:number}

@@ -10,20 +10,21 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, realpath, rm, writeFile, lstat } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, realpath, rm, writeFile, lstat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts';
-import { compileArgs, firstRefusal, modelingProducerTooOld, REMESH_DELTA_SINCE, remeshArgs, remeshDeltaArgs, resolveProducer, runTool, versionAtLeast, type CompileRequest, type InstalledTool, type ProcessResult } from './producer.ts';
+import { compileArgs, firstRefusal, modelingProducerTooOld, REMESH_DELTA_SINCE, remeshArgs, remeshDeltaArgs, resolvePose, resolveProducer, runTool, versionAtLeast, type CompileRequest, type InstalledTool, type ProcessResult } from './producer.ts';
 import { meshEditText } from './mesh-edit.ts';
 import { CONFIG_NAMED_FILES, HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
 import { assertWholeRigBaseline, BaselineError, baselineKey, producerDiff, runBaseline, runInspectedCheck, runningInspectedCheck, type BaselineResult, type InspectedCheck } from './baseline.ts';
 import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, parseConfigPatch, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
-import { checkSummary, filesDiffText, type CheckSummary, type FilesDiff } from './applied-context.ts';
+import { checkSummary, filesDiffText, MAX_RETARGET_LINES, type CheckSummary, type FilesDiff } from './applied-context.ts';
 import { idleKeying, idleSource, type IdleStatus } from './idle-tracks.ts';
 import { CHEST_REGIONS_MAX } from './chest-regions.ts';
 import { bustMeshEntry, deriveBust, parseBustSpec, BustSpecError, type BustSpec } from './chest-landmarks.ts';
 import { modelMeshTriangles, remeshCounts, type RemeshCounts } from './mesh-entry.ts';
 import { patchRoute } from './retune-route.ts';
+import { cleanArgs, mapText, motionSummary, parseRetargetRequest, retargetArgs, retargetLines, retargetRecord, retargetRecordText, RetargetError, type MotionSummary, type RetargetLine, type RetargetRecord } from './retarget.ts';
 
 export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
 const MAX_REGIONS = CHEST_REGIONS_MAX, MAX_POINTS = 256, MAX_LINES = 4000, GRID = 256;
@@ -211,6 +212,29 @@ export interface PatchJob {
 export type AppliedOp = 'rig' | 'retune' | 'remesh';
 
 /**
+ * #114: a retarget Apply's job — `rig-pose clean` (unless skipped), `rig-pose retarget` onto the handoff rig into
+ * `<dir>/motion.json`, the handoff rig's files beside it as `<dir>/rig/` (motion.json the retarget's), then the shared
+ * tail (per-file diff, compile). `refusals` holds every `FAIL` line the failing step printed, verbatim; `readings` the
+ * run's FEET / STANCE / FLIP / SHORT / END-ON / LEG-SCALE / REACH lines with their frames; `motion` what the scratch
+ * motion holds against the inspected rig's.
+ */
+export interface RetargetJob {
+  schema: typeof REBUILD_SCHEMA; kind: 'retarget'; id: string; status: RebuildStatus; reused: boolean; op: 'retarget';
+  request: { record: RetargetRecord; recordSha256: string; configHash: string };
+  producer: { package: string; version: string }; compiler: { package: string; version: string };
+  lines: string[]; producerLine: string | null; refusals: string[]; exitCode: number | null;
+  wallMs: { clean: number | null; retarget: number | null; compile: number | null };
+  files: FilesDiff | null; motion: MotionSummary | null; readings: RetargetLine[];
+  build: RebuildBuild | null;
+}
+/** Deterministic: the package, the config bytes, the record's bytes and both tool versions. No clock. */
+export function retargetId(input: { sourceHash: string; configHash: string; record: RetargetRecord; producer: string; compiler: string }): string {
+  return sha256(JSON.stringify([REBUILD_SCHEMA, 'retarget', input.sourceHash, input.configHash, retargetRecordText(input.record), input.producer, input.compiler]));
+}
+/** A pose reference the retarget can read: a `rig-pose-sequence/1` the package declares. */
+export interface RetargetSequence { id: string; label: string; path: string; cleaned: boolean; frames: number; people: string[] }
+
+/**
  * #135: Edit Mesh's Apply · Rebuild — `{part, delta, configHash}`, the delta being the `rig-review-mesh-edit/1` document
  * the editor exports (`src/mesh-edit.ts`, `basis: "setup"`). Review checks only the envelope: the document's schema,
  * basis, source counts and hash and every op are the producer's to judge (`rig-parts remesh --delta`), and its
@@ -281,6 +305,8 @@ type PackShape = CompileRequest['packShape'];
 interface ProducerOp {
   /** The producer command, for the unnamed-refusal line. */
   cmd: string;
+  /** The producer's binary name, for the unnamed-refusal line (`rig-parts` unless stated). */
+  tool?: string;
   /** The rig spec directory the op writes under the scratch directory. */
   spec: string;
   /** Writes the op's inputs into the scratch directory, says what runs, runs it. */
@@ -311,9 +337,9 @@ async function hashBuild(build: string, id: string): Promise<RebuildBuild> {
 
 /** One rebuild at a time per review instance; finished jobs stay readable by id. */
 export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
-  const jobs = new Map<string, RebuildJob | PatchJob | DeltaJob>();
+  const jobs = new Map<string, RebuildJob | PatchJob | DeltaJob | RetargetJob>();
   let running: string | null = null;
-  const snapshot = <J extends RebuildJob | PatchJob | DeltaJob>(job: J): J => ({ ...job, lines: [...job.lines] });
+  const snapshot = <J extends RebuildJob | PatchJob | DeltaJob | RetargetJob>(job: J): J => ({ ...job, lines: [...job.lines] });
 
   /** The state directory may not sit inside the package or the handoff's root (the parent of an opened out/). */
   function assertStateOutside(): void {
@@ -378,6 +404,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       // #104: the config's idle (tracks, blink, bones, chains) and where the inspected idle keys each track.
       idle: inputs ? await idleStatus(inputs) : null,
       producer: resolved.ok ? tool(resolved.producer) : null, compiler: resolved.ok ? tool(resolved.compiler) : null,
+      // #114: what the retarget editor offers — the pose producer, the declared sequences, the rig's bones and animations.
+      retarget: await retargetStatus(inputs),
       reason,
       running,
     };
@@ -395,7 +423,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   /** The baseline once it settles (tests, and the whole-rig ops of #102/#103 through assertWholeRigBaseline). */
   async function settledBaseline(): Promise<BaselineResult | null> { if (!baselineRun) ensureBaseline(resolveProducer(options.starts)); return baselineRun ? await baselineRun : baseline; }
 
-  async function reuse<J extends RebuildJob | PatchJob | DeltaJob>(dir: string, id: string): Promise<J | null> {
+  async function reuse<J extends RebuildJob | PatchJob | DeltaJob | RetargetJob>(dir: string, id: string): Promise<J | null> {
     const resultFile = join(dir, 'result.json');
     if (!(await exists(resultFile))) return null;
     try {
@@ -413,7 +441,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * result.json written, the package's other scratch builds replaced; anything but a built job leaves nothing behind.
    * Each runner passes only its producer op and the optional steps it records.
    */
-  async function apply(job: RebuildJob | PatchJob | DeltaJob, dir: string, inputs: ProducerInputs, resolved: Resolved, op: ProducerOp, steps: ApplySteps = {}): Promise<void> {
+  async function apply(job: RebuildJob | PatchJob | DeltaJob | RetargetJob, dir: string, inputs: ProducerInputs, resolved: Resolved, op: ProducerOp, steps: ApplySteps = {}): Promise<void> {
     const push = (line: string) => { if (job.lines.length < MAX_LINES) job.lines.push(line); };
     const producer = resolved.producer;
     try {
@@ -421,7 +449,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       await mkdir(dir, { recursive: true, mode: 0o700 });
       const run = await op.run(push);
       job.exitCode = run.exitCode; op.wallMs(run.wallMs);
-      if (run.exitCode !== 0) { job.producerLine = firstRefusal(run.lines) ?? `rig-parts ${op.cmd} exited ${run.exitCode} without a named refusal`; job.status = 'refused'; return; }
+      if (run.exitCode !== 0) { job.producerLine = firstRefusal(run.lines) ?? `${op.tool ?? 'rig-parts'} ${op.cmd} exited ${run.exitCode} without a named refusal`; job.status = 'refused'; return; }
       job.producerLine = run.stdout.filter(l => l.trim()).at(-1)?.trim() ?? null;
       const { pageEdges, packShape, note } = await op.flags(push);
       if (steps.diff) {
@@ -630,8 +658,123 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     return { status: 202, body: snapshot(job) };
   }
 
+  /** The package's declared `rig-pose-sequence/1` references (validated at load), with whether clean's record is on them. */
+  async function retargetSequences(): Promise<RetargetSequence[]> {
+    const out: RetargetSequence[] = [];
+    for (const r of p.manifest.references.filter(r => r.type === 'pose')) {
+      let doc: Record<string, unknown>;
+      try { doc = object(JSON.parse(await readFile(await safeFile(p.root, r.path), 'utf8')), r.id); } catch { continue; }
+      if (doc.spec !== 'rig-pose-sequence/1' || !Array.isArray(doc.frames)) continue;
+      const people = [...new Set((doc.frames as { people?: { id?: unknown }[] }[]).flatMap(f => (f.people ?? []).map(x => String(x.id))))];
+      out.push({ id: r.id, label: r.label, path: r.path, cleaned: doc.cleaned !== undefined, frames: doc.frames.length, people });
+    }
+    return out;
+  }
+  /** `GET /api/rebuild`'s retarget section (#114): whether a retarget can run here and what the editor picks from. */
+  async function retargetStatus(inputs: ProducerInputs | null) {
+    const resolved = resolvePose(options.starts), sequences = await retargetSequences();
+    const read = async (name: string): Promise<Record<string, unknown>> => { if (!inputs) return {}; try { const v = JSON.parse(await readFile(join(inputs.rig, name), 'utf8')); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; } };
+    const rig = await read('rig.json'), motion = await read('motion.json');
+    const bones = (Array.isArray(rig.bones) ? rig.bones : []).map(b => (b && typeof b === 'object' ? (b as Record<string, unknown>).name : null)).filter((n): n is string => typeof n === 'string');
+    const animations = motion.animations && typeof motion.animations === 'object' && !Array.isArray(motion.animations) ? Object.keys(motion.animations) : [];
+    const reason = !inputs ? (p.handoff ? handoffGap(p.handoff) : p.handoffReason ?? modelingHandoffMissing(null)) : !resolved.ok ? resolved.error : sequences.length ? null : 'RETARGET_SEQUENCE_UNAVAILABLE: the package declares no rig-pose-sequence/1 reference (a pose reference in review.json, or a *pose*.json in the opened folder)';
+    return { available: reason === null, reason, producer: resolved.ok ? tool(resolved.producer) : null, compiler: resolved.ok ? tool(resolved.compiler) : null, rig: p.handoff?.record.rig ?? null, sequences, bones, animations };
+  }
+
+  /**
+   * #114: clean (unless skipped) → retarget onto the handoff rig → `<dir>/motion.json`; the handoff rig's files are
+   * copied beside it into `<dir>/rig/` so the shared tail diffs and compiles a whole rig spec. Nothing is read from or
+   * written to the package but the declared sequence, read once into scratch.
+   */
+  function executeRetarget(job: RetargetJob, dir: string, inputs: ProducerInputs, resolved: Resolved, sequence: Uint8Array): Promise<void> {
+    const pose = resolved.producer, record = job.request.record;
+    let retargetRun: ProcessResult | null = null;
+    const op: ProducerOp = {
+      cmd: 'retarget', tool: 'rig-pose', spec: 'rig',
+      async run(push) {
+        await writeFile(join(dir, 'pose.json'), sequence, { mode: 0o600 });
+        await writeFile(join(dir, 'map.json'), mapText(record.map), { mode: 0o600 });
+        let input = 'pose.json';
+        if (record.op.clean) {
+          const args = cleanArgs({ pose: 'pose.json', out: 'pose.clean.json', argv: record.op.clean });
+          push(`review: ${pose.package} ${pose.version} ${args.join(' ')}`);
+          const clean = await runTool(pose.bin, args, { cwd: dir, onLine: push });
+          job.wallMs.clean = clean.wallMs;
+          if (clean.exitCode !== 0) { op.cmd = 'clean'; job.refusals = clean.lines.filter(l => /^\s*FAIL\s/.test(l)).map(l => l.trim()); return clean; }
+          input = 'pose.clean.json';
+        } else push(`review: clean skipped — the sequence goes to retarget as the package holds it`);
+        const args = retargetArgs({ rig: inputs.rig, map: 'map.json', sequence: input, out: 'motion.json', argv: record.op.args });
+        push(`review: ${pose.package} ${pose.version} retarget --rig <handoff rig> ${args.slice(3).join(' ')}`);
+        retargetRun = await runTool(pose.bin, args, { cwd: dir, onLine: push });
+        if (retargetRun.exitCode !== 0) job.refusals = retargetRun.lines.filter(l => /^\s*FAIL\s/.test(l)).map(l => l.trim());
+        return retargetRun;
+      },
+      wallMs: ms => { if (retargetRun) job.wallMs.retarget = ms; },
+      async flags(push) {
+        // The handoff rig as a rig spec beside the retarget's motion: every regular file but motion.json, and images/.
+        const out = join(dir, 'rig');
+        await mkdir(join(out, 'images'), { recursive: true, mode: 0o700 });
+        for (const [from, to] of [[inputs.rig, out], [join(inputs.rig, 'images'), join(out, 'images')]] as const) {
+          let entries: import('node:fs').Dirent[] = [];
+          try { entries = await readdir(from, { withFileTypes: true }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
+          for (const e of entries) if (e.isFile() && !(from === inputs.rig && e.name === 'motion.json')) await copyFile(join(from, e.name), join(to, e.name));
+        }
+        const text = await readFile(join(dir, 'motion.json'), 'utf8');
+        await writeFile(join(out, 'motion.json'), text, { mode: 0o600 });
+        let frameTimes: number[] | null = null;
+        try { const report = JSON.parse(await readFile(join(dir, 'motion.report.json'), 'utf8')) as { frameTimes?: unknown }; if (Array.isArray(report.frameTimes) && report.frameTimes.every(t => typeof t === 'number')) frameTimes = report.frameTimes as number[]; } catch { /* no report: the lines' own t= */ }
+        job.readings = retargetLines(retargetRun?.lines ?? [], frameTimes).slice(0, MAX_RETARGET_LINES);
+        let inspected: unknown = null;
+        try { inspected = JSON.parse(await readFile(join(inputs.rig, 'motion.json'), 'utf8')); } catch { /* a rig without motion.json: nothing to keep */ }
+        job.motion = motionSummary(inspected, JSON.parse(text), text, record.flags.animation);
+        push(`review: motion.json holds ${job.motion.animations.length} animation(s), "${record.flags.animation}" added${job.motion.kept ? '; the rig\'s own animations unchanged' : `; changed: ${job.motion.changed.join(', ')}`}`);
+        return { pageEdges: 'free', packShape: 'polygon', note: ' (Apply\'s default pack flags)' };
+      },
+    };
+    return apply(job, dir, inputs, resolved, op, { diff: files => { job.files = files; } });
+  }
+
+  /**
+   * `POST /api/rebuild` with `{retarget: {sequence, map, flags, configHash}}` (#114): the config hash the editor read must
+   * still be the handoff's, the sequence a declared `rig-pose-sequence/1` reference, and `@rig-c/pose` installed. The
+   * map's resolution against the rig, the flags' combinations and the pose are the producer's to judge, verbatim.
+   */
+  async function startRetarget(input: unknown): Promise<{ status: number; body: unknown }> {
+    let request: ReturnType<typeof parseRetargetRequest>;
+    try { request = parseRetargetRequest(input); } catch (e) { if (e instanceof RetargetError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
+    assertStateOutside();
+    await options.unchanged();
+    const inputs = await producerInputs(p.handoff, p.handoffReason);
+    if (inputs.configHash !== request.configHash) throw new RebuildError('REBUILD_CONFIG_STALE', 'the producer config changed since the editor read it; reload');
+    const reference = p.manifest.references.find(r => r.id === request.sequence && r.type === 'pose');
+    if (!reference) throw new RebuildError('RETARGET_SEQUENCE_UNKNOWN', `${request.sequence} is not a pose reference the package declares`);
+    const sequence = await readFile(await safeFile(p.root, reference.path));
+    let spec: unknown;
+    try { spec = (JSON.parse(Buffer.from(sequence).toString('utf8')) as { spec?: unknown }).spec; } catch { spec = null; }
+    if (spec !== 'rig-pose-sequence/1') throw new RebuildError('RETARGET_SEQUENCE_UNSUPPORTED', `${reference.id} is not a rig-pose-sequence/1 (a static pose cannot be retargeted)`);
+    const resolved = resolvePose(options.starts);
+    if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
+    const rigJson = await readFile(join(inputs.rig, 'rig.json'));
+    const record = retargetRecord(request, { rig: { path: inputs.handoff.rig ?? '', sha256: sha256(rigJson) }, sequence: { path: reference.path, sha256: sha256(sequence) }, producer: { name: resolved.producer.package, version: resolved.producer.version } });
+    const id = retargetId({ sourceHash: p.sourceHash, configHash: inputs.configHash, record, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
+    const current = jobs.get(id);
+    if (current?.status === 'running') return { status: 202, body: snapshot(current) };
+    if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+    const reused = await reuse<RetargetJob>(dir, id);
+    if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
+    const job: RetargetJob = { schema: REBUILD_SCHEMA, kind: 'retarget', id, status: 'running', reused: false, op: 'retarget', request: { record, recordSha256: sha256(retargetRecordText(record)), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, refusals: [], exitCode: null, wallMs: { clean: null, retarget: null, compile: null }, files: null, motion: null, readings: [], build: null };
+    jobs.set(id, job); running = id;
+    void executeRetarget(job, dir, inputs, resolved, sequence).finally(() => { if (running === id) running = null; });
+    return { status: 202, body: snapshot(job) };
+  }
+
   /** `POST /api/rebuild`: refusals are returned before anything is written or run. */
   async function start(input: unknown): Promise<{ status: number; body: unknown }> {
+    if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'retarget')) {
+      if (Object.keys(input).length !== 1) bad('expected exactly {retarget}');
+      return startRetarget((input as { retarget: unknown }).retarget);
+    }
     if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'delta')) return startDelta(input);
     if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'patch')) {
       if (Object.keys(input).length !== 1) bad('expected exactly {patch} or {part, regions, configHash}');
@@ -658,7 +801,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     return { status: 202, body: snapshot(job) };
   }
 
-  function read(id: string): RebuildJob | PatchJob | DeltaJob {
+  function read(id: string): RebuildJob | PatchJob | DeltaJob | RetargetJob {
     const job = jobs.get(id);
     if (!job) throw new RebuildError('REBUILD_NOT_FOUND', id);
     return snapshot(job);

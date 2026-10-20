@@ -135,3 +135,24 @@ export function resolveCompiler(starts: readonly string[], since: string, exists
   if (!versionAtLeast(compiler.version, since)) return { ok: false, error: readingsCompilerTooOld(compiler.version || 'unknown', since) };
   return { ok: true, compiler };
 }
+
+/**
+ * #114: the installed pose producer (`@rig-c/pose`' `rig-pose`), resolved as `@rig-c/parts` is — walking up from the
+ * package, then from review's working directory — and the `rigc` beside it, which gates and poses its retarget and
+ * compiles its scratch motion here. Refused by name when absent; review never installs it.
+ */
+export const POSE_PACKAGE = '@rig-c/pose';
+export const POSE_BIN = 'rig-pose';
+export const RETARGET_PRODUCER_NOT_INSTALLED = `RETARGET_PRODUCER_NOT_INSTALLED: ${POSE_PACKAGE} is not installed beside the package or beside review, and review does not install it — bun add -d ${POSE_PACKAGE}`;
+export const RETARGET_COMPILER_NOT_INSTALLED = `RETARGET_COMPILER_NOT_INSTALLED: ${COMPILER_PACKAGE} is not installed beside ${POSE_PACKAGE}, which gates and poses its retarget with it — reinstall ${POSE_PACKAGE} (bun add -d ${POSE_PACKAGE})`;
+export function resolvePose(starts: readonly string[], exists: (path: string) => boolean = existsSync): ProducerResolution {
+  const manifest = findPackage(POSE_PACKAGE, starts, exists);
+  if (!manifest) return { ok: false, error: RETARGET_PRODUCER_NOT_INSTALLED };
+  const producer = readTool(manifest, POSE_BIN);
+  if ('error' in producer) return { ok: false, error: `${RETARGET_PRODUCER_NOT_INSTALLED} (${producer.error})` };
+  const compilerManifest = findPackage(COMPILER_PACKAGE, [producer.root], exists);
+  if (!compilerManifest) return { ok: false, error: RETARGET_COMPILER_NOT_INSTALLED };
+  const compiler = readTool(compilerManifest, COMPILER_BIN);
+  if ('error' in compiler) return { ok: false, error: `${RETARGET_COMPILER_NOT_INSTALLED} (${compiler.error})` };
+  return { ok: true, producer, compiler };
+}

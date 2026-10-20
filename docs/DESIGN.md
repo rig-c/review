@@ -16,6 +16,10 @@ Feedback has an inclusive integer frame interval, target `{kind: bone|slot|rig, 
 
 Identity, revision and content hash bind every decision. A submission also records separate exact rig/motion hashes and paths, packageRevision, viewerVersion and installed runtimeVersion; absent source stays null. The producing agent can retrieve the saved JSON with the read-only feedback CLI after the UI closes. Opening never means reviewed. The person explicitly approves, requests changes or returns to pending, independently of checkpoint outcomes. Changed inputs do not inherit prior approval. Feedback writes remain outside source, are bounded and atomic, and require the app's exact Origin.
 
+## Retarget tuning (#114)
+
+Animate's Retarget block edits what a pose retarget is made from — the `rig-pose-map/1` (per chain, the bone that carries each segment), the clean and retarget flags and the declared sequence — and hands them to the installed `@rig-c/pose`, which writes the motion in scratch; review authors no keys and never writes the package's `motion.json`. The block is the "point → rebuild → watch → repeat" loop of the modeling instruments applied to motion inputs: the producer's refusals come back by name, the built animation plays beside its reference, and its FEET / STANCE / FLIP / SHORT / END-ON / LEG-SCALE / REACH lines seek to their frames. Key editing stays outside the app.
+
 ## Modeling touch-up direction
 
 The chest-region editor and Edit Mesh exist for detail that cannot be said in words. Issue #99 states the loop: **point → rebuild → watch → repeat → submit**. Review builds no mesh itself; **Apply · Rebuild runs the installed producer as a child process** on the user's own designation, into a scratch build beside the inspected one, and the viewer reloads that build in place. Every applied state goes into the draft and the submitted feedback (`context.applied`), so the AI receiving the review gets the exact last applied state, not a description of it. Edit Mesh's delta has no producer operation yet and refuses by name.
