@@ -18,10 +18,11 @@ export const capabilityHeader='X-Review-Capability',openNonceHeader='X-Review-Op
 export const capabilityPattern=/^[a-f0-9]{64}$/;
 export function sameSecret(actual:string|null,expected:string):boolean{const a=Buffer.from(actual??''),b=Buffer.from(expected);return a.length===b.length&&timingSafeEqual(a,b);}
 /** Every non-GET request needs this instance's page capability, compared in constant time before any
- * Origin check. GET /api/access only says whether one is required; no endpoint ever returns it. */
-export function accessGate(req:Request,capability:string|undefined):Response|null{
+ * Origin check. GET /api/access only says whether one is required; no endpoint ever returns it. It also says
+ * whether this instance serves agent control, so a page without it never probes `/api/control/config` (#164). */
+export function accessGate(req:Request,capability:string|undefined,control=false):Response|null{
  const url=new URL(req.url),headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
- if(url.pathname==='/api/access')return req.method==='GET'||req.method==='HEAD'?Response.json({schema:'rig-review-access/1',capabilityRequired:!!capability},{headers}):Response.json({error:'Method not allowed'},{status:405,headers});
+ if(url.pathname==='/api/access')return req.method==='GET'||req.method==='HEAD'?Response.json({schema:'rig-review-access/1',capabilityRequired:!!capability,control},{headers}):Response.json({error:'Method not allowed'},{status:405,headers});
  if(!capability||req.method==='GET'||req.method==='HEAD')return null;
  return sameSecret(req.headers.get(capabilityHeader),capability)?null:Response.json({error:'REVIEW_CAPABILITY_REQUIRED: reopen with rig-review open to edit'},{status:403,headers});
 }

@@ -57,7 +57,10 @@ test('concurrent input hashing cannot enqueue an obsolete revision or duplicate 
 test('opt-in actual single server leaves source/session identity and feedback bytes unchanged',async()=>{
  const root=await mkdtemp(join(tmpdir(),'review-control-'));roots.push(root);const input=join(root,'input');await cp(join(import.meta.dir,'../examples/demo'),input,{recursive:true});const p=await loadReview(join(input,'review.json')),before=await readFile(join(input,'review.json'));
  const plain=await startServer(p,{port:0,stateDir:join(root,'state')});servers.push(plain);expect((await fetch(`http://127.0.0.1:${plain.port}/api/control/config`)).status).toBe(404);
+ // #164: /api/access says whether control is served, so a plain page never asks for the config (whose 404 is by design).
+ expect((await (await fetch(`http://127.0.0.1:${plain.port}/api/access`)).json()).control).toBe(false);
  const server=await startServer(p,{port:0,stateDir:join(root,'state'),control:{token:'private',instanceKey:'b'.repeat(64)}});servers.push(server);const origin=`http://127.0.0.1:${server.port}`,initial=await (await fetch(origin+'/api/session')).json();
+ expect((await (await fetch(origin+'/api/access')).json()).control).toBe(true);
  const page=await (await fetch(origin+'/api/control/register',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({sourceHash:p.sourceHash,inspection:state()})})).json();
  const request={schema:'rig-review-control-command/1',requestId:'readonly',pageId:page.pageId,instanceKey:'b'.repeat(64),sourceHash:p.sourceHash,expectedRevision:0,command:{type:'theme',value:'dark'}};
  expect((await fetch(origin+'/api/control/commands',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',Authorization:'Bearer private'},body:JSON.stringify(request)})).status).toBe(202);
