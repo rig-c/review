@@ -21,6 +21,7 @@ import { checkSummary, MAX_DIFF_PATHS, type CheckSummary } from './applied-conte
 import { idleKeying, idleSource, type IdleStatus } from './idle-tracks.ts';
 import { CHEST_REGIONS_MAX } from './chest-regions.ts';
 import { bustMeshEntry, deriveBust, parseBustSpec, BustSpecError, type BustSpec } from './chest-landmarks.ts';
+import { modelMeshTriangles, remeshCounts, type RemeshCounts } from './mesh-entry.ts';
 
 export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
 const MAX_REGIONS = CHEST_REGIONS_MAX, MAX_POINTS = 256, MAX_LINES = 4000, GRID = 256;
@@ -65,6 +66,11 @@ export type ProducerRegion =
   | { name: string; shape: 'circle'; cx: number; cy: number; r: number; bone: string; spacing: number; band: number }
   | { name: string; bone: string; shape: 'polygon'; points: [number, number][]; spacing: number; band: number };
 export interface ContourPart { name: string; regions: unknown[]; entry: Record<string, unknown> }
+/** Every `meshes.<part>` entry as written (#106: the Mesh panel starts from the config's own entry). */
+export function configMeshes(configText: string): Record<string, unknown> {
+  const meshes = object(JSON.parse(configText), 'config').meshes;
+  return meshes && typeof meshes === 'object' && !Array.isArray(meshes) ? meshes as Record<string, unknown> : {};
+}
 /** Config meshes whose entry is a contour (the only mode with regions); its regions as written. */
 export function contourParts(configText: string): ContourPart[] {
   const config = object(JSON.parse(configText), 'config'), meshes = config.meshes;
@@ -176,6 +182,8 @@ export interface PatchJob {
   producer: { package: string; version: string }; compiler: { package: string; version: string };
   lines: string[]; producerLine: string | null; exitCode: number | null; wallMs: { op: number | null; compile: number | null; check: number | null };
   check: CheckSummary | null; diff: { count: number; paths: string[] } | null;
+  /** #106: a remesh patch's part counts from the revision's `remesh.json`, and the compiled model's triangles for the part. */
+  remesh: (RemeshCounts & { modelTriangles: number | null }) | null;
   build: RebuildBuild | null;
 }
 /** Deterministic: the package, the config bytes, the patch's own bytes and both tool versions. No clock. */
@@ -276,6 +284,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       // #108 (HQ): the physics readout's BEFORE for the inspected build; null until the baseline reproduces.
       inspectedCheck,
       parts, contour,
+      // #106: every meshes entry as written, for the Mesh panel's selected part.
+      meshes: inputs ? configMeshes(inputs.configText) : {},
       // The config's constraints as written (#103: the physics panel patches them by index and name).
       constraints: inputs ? configConstraints(inputs.configText) : null,
       // #104: the config's idle (tracks, blink, bones, chains) and where the inspected idle keys each track.
@@ -366,9 +376,13 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       job.exitCode = op.exitCode; job.wallMs.op = op.wallMs;
       if (op.exitCode !== 0) { job.producerLine = firstRefusal(op.lines) ?? `rig-parts ${job.request.patch.op.cmd} exited ${op.exitCode} without a named refusal`; job.status = 'refused'; return; }
       job.producerLine = op.stdout.filter(l => l.trim()).at(-1)?.trim() ?? null;
+      let counts: RemeshCounts | null = null;
       if (part !== null) {
-        const request = object(object(JSON.parse(await readFile(join(dir, 'rig', 'remesh.json'), 'utf8')), 'remesh.json').request, 'remesh.json request');
+        const provenance = JSON.parse(await readFile(join(dir, 'rig', 'remesh.json'), 'utf8')) as unknown;
+        const request = object(object(provenance, 'remesh.json').request, 'remesh.json request');
         pageEdges = request.page_edges === 'pot' ? 'pot' : 'free'; packShape = request.pack_shape === 'rect' ? 'rect' : 'polygon';
+        counts = remeshCounts(provenance);
+        if (counts) push(`review: remesh.json ${counts.part}: v ${counts.before.vertices} t ${counts.before.triangles} → v ${counts.after.vertices} t ${counts.after.triangles}`);
       }
       // The structural diff against the inspected rig.json: what the patch changed in the rig, path by path.
       const paths = jsonDiff(JSON.parse(await readFile(join(inputs.rig, 'rig.json'), 'utf8')), JSON.parse(await readFile(join(dir, 'rig', 'rig.json'), 'utf8')));
@@ -387,6 +401,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       job.check = checkSummary(checkJson, check.exitCode, check.lines, firstRefusal(check.lines));
       try { await options.unchanged(); } catch { throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild'); }
       job.build = await hashBuild(join(dir, 'build'), job.id);
+      if (counts) job.remesh = { ...counts, modelTriangles: modelMeshTriangles(JSON.parse(await readFile(join(dir, 'build', 'skeleton.model.json'), 'utf8')), counts.part) };
       job.status = 'built'; latestId = job.id;
       await writeFile(join(dir, 'result.json'), JSON.stringify({ ...job, reused: false }, null, 1) + '\n', { mode: 0o600 });
       for (const sibling of await readdir(rebuildRoot(options.stateDir, p.sourceHash))) if (sibling !== job.id && /^[a-f0-9]{64}$/.test(sibling)) { await rm(join(rebuildRoot(options.stateDir, p.sourceHash), sibling), { recursive: true, force: true }); jobs.delete(sibling); }
@@ -430,7 +445,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
     const reused = await reuse<PatchJob>(dir, id);
     if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
-    const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id, status: 'running', reused: false, request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, build: null };
+    const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id, status: 'running', reused: false, request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, remesh: null, build: null };
     jobs.set(id, job); running = id;
     void executePatch(job, dir, inputs, resolved, patched, part).finally(() => { if (running === id) running = null; });
     return { status: 202, body: snapshot(job) };

@@ -9,13 +9,18 @@ export interface RigOverlaySettings {images:boolean;mesh:boolean;bones:boolean;m
 export interface OverlayPlayer extends Pick<RigPlayer,'posedFrame'|'bone'> {}
 export interface OverlayLine {from:OverlayPoint;to:OverlayPoint;slot?:string}
 export interface OverlayBone {name:string;point:OverlayPoint;xAxis:OverlayPoint;yAxis:OverlayPoint}
-export interface RigOverlayGeometry {selection:OverlayLine[];mesh:OverlayLine[];bones:OverlayLine[];joints:OverlayBone[];warnings:string[];captured:{mesh:boolean;bones:boolean}}
+/** `meshTriangles`: per slot, the triangles the mesh layer draws from the captured pose (#106 bar 1 reads it). */
+export interface RigOverlayGeometry {selection:OverlayLine[];mesh:OverlayLine[];meshTriangles:Record<string,number>;bones:OverlayLine[];joints:OverlayBone[];warnings:string[];captured:{mesh:boolean;bones:boolean}}
 export interface OverlaySnapshot {
- available:boolean;needsCapture:boolean;meshEdges:number;boneCount:number;
+ available:boolean;needsCapture:boolean;meshEdges:number;meshTriangles:Record<string,number>;boneCount:number;
  capabilities:{images:boolean;mesh:boolean;bones:boolean};warnings:string[];
 }
 /** Designation polygons in rig world coordinates (Setup's Chest regions tool); colours are theme token values. */
-export interface OverlayRegion {name:string;points:OverlayPoint[];stroke:string;fill:string}
+/**
+ * `handles` (#106, the Mesh panel's polygon regions): a square on every vertex, the `active` one filled with `handle`,
+ * and the name as a label; `open` draws the outline unclosed (a polygon still being placed).
+ */
+export interface OverlayRegion {name:string;points:OverlayPoint[];stroke:string;fill:string;handles?:boolean;active?:number|null;open?:boolean;colors?:{handle:string;ink:string;labelBg:string}}
 /**
  * A circle designation in rig world units (crop px = world px under the crop mapping): core r at full weight, dashed
  * outer circle at r + band. With handles it is the chest editor's drawing (centre, core edge on the right, band on
@@ -53,7 +58,7 @@ const point=(x:number,y:number):OverlayPoint=>({x,y});
 const finite=(p:OverlayPoint)=>Number.isFinite(p.x)&&Number.isFinite(p.y);
 const message=(error:unknown)=>error instanceof Error?error.message:String(error);
 
-function meshLines(frame:PosedFrame,warnings:string[]):OverlayLine[]{
+function meshLines(frame:PosedFrame,warnings:string[],triangles:Record<string,number>={}):OverlayLine[]{
  const lines:OverlayLine[]=[];
  for(const slot of frame.order){
   if(slot.kind!=='mesh')continue;
@@ -64,6 +69,7 @@ function meshLines(frame:PosedFrame,warnings:string[]):OverlayLine[]{
    if(ids.some(index=>!Number.isSafeInteger(index)||index<0||index*2+1>=slot.vertices.length)){warnings.push(`Mesh overlay ${slot.slot}: triangle index outside posed vertices`);continue;}
    const points=ids.map(index=>point(slot.vertices[index*2]!,slot.vertices[index*2+1]!));
    if(points.some(p=>!finite(p))){warnings.push(`Mesh overlay ${slot.slot}: nonfinite posed vertex`);continue;}
+   triangles[slot.slot]=(triangles[slot.slot]??0)+1;
    for(let edge=0;edge<3;edge++){
     const a=ids[edge]!,b=ids[(edge+1)%3]!,key=a<b?`${a}:${b}`:`${b}:${a}`;
     if(edges.has(key))continue;edges.add(key);
@@ -76,10 +82,10 @@ function meshLines(frame:PosedFrame,warnings:string[]):OverlayLine[]{
 
 /** Takes copies; later seeks cannot turn an old overlay into a prepared pose. */
 export function captureRigGeometry(player:OverlayPlayer,specs:readonly BoneOverlaySpec[],layers:Pick<RigOverlaySettings,'mesh'|'bones'>,frame?:PosedFrame,selectedSlot?:string|null):RigOverlayGeometry{
- const geometry:RigOverlayGeometry={selection:[],mesh:[],bones:[],joints:[],warnings:[],captured:{mesh:false,bones:false}};
+ const geometry:RigOverlayGeometry={selection:[],mesh:[],meshTriangles:{},bones:[],joints:[],warnings:[],captured:{mesh:false,bones:false}};
  if(selectedSlot){try{const bounds=partBounds(frame??player.posedFrame(null),selectedSlot);if(bounds){const {x,y,width,height}=bounds,points=[point(x,y),point(x+width,y),point(x+width,y+height),point(x,y+height)];geometry.selection=points.map((from,i)=>({from,to:points[(i+1)%4]!,slot:selectedSlot}));}}catch(error){geometry.warnings.push(`Selection bounds unavailable: ${message(error)}`);}}
  if(layers.mesh){
-  try{geometry.mesh=meshLines(frame??player.posedFrame(),geometry.warnings);geometry.captured.mesh=true;}
+  try{geometry.mesh=meshLines(frame??player.posedFrame(),geometry.warnings,geometry.meshTriangles);geometry.captured.mesh=true;}
   catch(error){geometry.warnings.push(`Mesh overlay unavailable: ${message(error)}`);}
  }
  if(layers.bones){
@@ -167,9 +173,16 @@ export class RigOverlays {
   }
   // Designations are drawn over the drawn rig only; they are values the reviewer typed, not rig geometry.
   if(this.playerAvailable)for(const region of regions){
-   const points=region.points.map(projected);if(points.length<3||points.some(p=>!p))continue;
-   ctx.globalAlpha=1;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(points[0]!.x,points[0]!.y);for(const p of points.slice(1))ctx.lineTo(p!.x,p!.y);ctx.closePath();
-   ctx.fillStyle=region.fill;ctx.fill();ctx.strokeStyle=region.stroke;ctx.lineWidth=1.6;ctx.stroke();
+   const points=region.points.map(projected);if(points.length<(region.open?1:3)||points.some(p=>!p))continue;
+   ctx.globalAlpha=1;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(points[0]!.x,points[0]!.y);for(const p of points.slice(1))ctx.lineTo(p!.x,p!.y);
+   if(!region.open){ctx.closePath();ctx.fillStyle=region.fill;ctx.fill();}
+   ctx.strokeStyle=region.stroke;ctx.lineWidth=1.6;ctx.stroke();
+   if(region.handles&&region.colors){
+    const c=region.colors;
+    points.forEach((p,i)=>{const size=region.active===i?5:3.5;ctx.fillStyle=region.active===i?c.handle:c.ink;ctx.strokeStyle=region.stroke;ctx.lineWidth=1.5;ctx.fillRect(p!.x-size,p!.y-size,size*2,size*2);ctx.strokeRect(p!.x-size,p!.y-size,size*2,size*2);});
+    const top=points.reduce((a,p)=>p!.y<a!.y?p:a,points[0]);
+    ctx.font='600 11px ui-monospace, monospace';const width=ctx.measureText(region.name).width+8;ctx.fillStyle=c.labelBg;ctx.fillRect(top!.x-width/2,top!.y-24,width,15);ctx.fillStyle=region.stroke;ctx.fillText(region.name,top!.x-width/2+4,top!.y-13);
+   }
   }
   if(this.playerAvailable)for(const circle of circles){
    const at=projectCircle(project,circle);if(!at)continue;const {center,pxR,pxBand}=at,c=circle.colors;
@@ -230,7 +243,7 @@ export class RigOverlays {
   if(this.disposed)return;this.clear();this.host.rigRoot.style.visibility=this.visibility;this.host.canvas.style.pointerEvents=this.pointerEvents;this.disposed=true;
  }
  private snapshot(canvasAvailable:boolean,needsCapture:boolean,warnings:string[]):OverlaySnapshot{
-  return {available:this.playerAvailable&&canvasAvailable,needsCapture,meshEdges:this.geometry?.mesh.length??0,boneCount:this.geometry?.joints.length??0,capabilities:{images:this.playerAvailable,mesh:this.playerAvailable&&canvasAvailable,bones:this.playerAvailable&&canvasAvailable},warnings};
+  return {available:this.playerAvailable&&canvasAvailable,needsCapture,meshEdges:this.geometry?.mesh.length??0,meshTriangles:{...(this.geometry?.meshTriangles??{})},boneCount:this.geometry?.joints.length??0,capabilities:{images:this.playerAvailable,mesh:this.playerAvailable&&canvasAvailable,bones:this.playerAvailable&&canvasAvailable},warnings};
  }
- private unavailable(warning:string):OverlaySnapshot{return {available:false,needsCapture:false,meshEdges:0,boneCount:0,capabilities:{images:false,mesh:false,bones:false},warnings:[warning]};}
+ private unavailable(warning:string):OverlaySnapshot{return {available:false,needsCapture:false,meshEdges:0,meshTriangles:{},boneCount:0,capabilities:{images:false,mesh:false,bones:false},warnings:[warning]};}
 }

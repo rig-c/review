@@ -4,7 +4,10 @@ import { loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBound
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
 import {rendererStatus} from './renderer-status.ts';
 import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
-import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion} from './rig-overlays.ts';
+import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
+import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
+import {assertMeshPatch,countsText,meshApplyOutcome,meshPatchOps,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
+import {worstLine} from '../src/readings.ts';
 import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
 import {bindChestEditor,bustLabel,bustSides,LANDMARKS,landmarkInputId,rowCircle,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
@@ -118,6 +121,8 @@ let joltQueue:JoltStep[]=[],environmentNote='';
 /** Animate · Physics tuning (#103): the panel, the inspected model document it maps against, and the check lines of the build on the stage (null: the inspected build, which review has not checked). */
 /** Animate · Idle tracks (#104): the panel; its preview drives `player.adjust`. */
 let idlePanel:IdlePanel|null=null;
+/** #106: the Setup Mesh panel, and the overlay's last snapshot (bar 1 reads its per-slot triangle count). */
+let meshPanel:MeshPanel|null=null,lastOverlay:OverlaySnapshot|null=null;
 let physicsPanel:PhysicsPanel|null=null,inspectedDocument:unknown=null,inspectedDocumentReason:string|null=null,stageCheck:{lines:string[];check:CheckSummary|null}|null=null;
 /** Animate · Readings (#108): the block, the last finished job (its ticks and worst lines), and the run in flight. */
 let readingsPanel:ReadingsPanel|null=null,readingsJob:ReadingsJobView|null=null,readingsBusy=false,readingsTickKey='';
@@ -839,6 +844,10 @@ function bind(): void {
   physicsPanel=bindPhysicsPanel({apply:async ops=>{await applyPhysics(ops);},reset:resetPhysicsBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),pane=el('rig-pane').getBoundingClientRect(),view=el('rig-root').parentElement!.getBoundingClientRect(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name),p=project(b.x,b.y);out.set(name,{x:p.x+view.left-pane.left,y:p.y+view.top-pane.top});}catch{/* a bone this model lacks is not pickable */}}return out;}});
   viewDisposers.push(()=>physicsPanel?.dispose());
+  meshPanel=bindMeshPanel({pane:el('rig-pane'),project:()=>player?rigProject():null,mapping:()=>chestMapping,bones:()=>data.feedbackCatalog.bones??[],
+   apply:async(part,entry)=>{await applyMesh(part,entry);},reset:resetMeshBuild,folds:async()=>{await meshFolds();},changed:()=>redrawOverlay(false),saved:()=>persistence?.save(),
+   token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
+  viewDisposers.push(()=>meshPanel?.dispose());
   idlePanel=bindIdlePanel({apply:async(ops,keys)=>{await applyIdle(ops,keys);},reset:resetIdleBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),clock:()=>player?.time??0,
    preview:fn=>{if(!player)return;player.adjust=fn as BoneAdjust|null;if(!playing)drawRig(()=>player!.draw());},
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name);out.set(name,project(b.x,b.y));}catch{/* a bone this model lacks has no handle */}}return out;}});
@@ -872,7 +881,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();meshPanel?.select(part?.slot??null);if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
@@ -886,7 +895,7 @@ async function start(): Promise<void> {
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-    const restored=await setupPersistence();await loadRebuildStatus();renderChest();restoreEnvironment();physicsPanel?.restore();idlePanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();await loadRebuildStatus();renderChest();restoreEnvironment();physicsPanel?.restore();idlePanel?.restore();meshPanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
@@ -908,7 +917,9 @@ function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:
 function redrawOverlay(fresh:boolean):void {
  if(!overlays||!player)return;
  const project=rigProject();
- const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions:chestRegions(),circles:chestCircles(),markers:chestMarkers(),meshEdit:meshEditor?.overlay()}):overlays.redraw({project,settings:layers,regions:chestRegions(),circles:chestCircles(),markers:chestMarkers(),meshEdit:meshEditor?.overlay()});
+ const regions=[...chestRegions(),...(meshPanel?.overlayRegions()??[])],circles=[...chestCircles(),...(meshPanel?.overlayCircles()??[])];
+ const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay()}):overlays.redraw({project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay()});
+ lastOverlay=value;
  text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');idlePanel?.place(duration);if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
 }
 function canRepeatIdle():boolean{return !!player&&idleAvailable(assets?.animations.map(a=>a.name)??[],animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
@@ -1235,6 +1246,7 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  if(Object.keys(seed).length){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
  if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,true);
  renderHandoff(rebuildStatus);refreshPhysics();
+ meshPanel?.load(rebuildStatus.inputs?rebuildStatus.meshes??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'MESH_PANEL_UNAVAILABLE: no producer handoff');meshPanel?.select(parts?.value()?.slot??null);
  return rebuildStatus;
 }
 /** The handoff line (#101): path, hash and how it was found, then the baseline; re-read while the baseline runs. */
@@ -1334,6 +1346,11 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   preview:()=>idlePanel?.previewing()??null,setPreview:(on:boolean)=>idlePanel?.setPreview(on),
   apply:()=>applyIdle(idlePanel?.ops()??[],idlePanel?.keying()?.keys??null),reset:()=>resetIdleBuild(),
   sample:(bone:string,dt:number,n:number)=>sampleLocals(bone,dt,n),adjustSet:()=>!!player?.adjust},
+ /** Mesh panel (#106): the selected part's pending entry, its edits, Apply, Reset, the folds reading and the overlay's triangle count per slot. */
+ mesh:{part:()=>meshPanel?.part()??null,select:(part:string)=>meshPanel?.select(part),entry:()=>meshPanel?.entry()??null,configEntry:()=>meshPanel?.configEntry()??null,set:(path:string[],value:import('../src/config-patch.ts').JsonValue|undefined)=>meshPanel?.set(path,value),setEntry:(entry:MeshEntry)=>meshPanel?.setEntry(entry),
+  regions:()=>meshPanel?.regions.list()??[],addRegion:(region:import('../src/mesh-entry.ts').MeshRegion)=>meshPanel?.regions.add(region),moveRegion:(region:number,vertex:number,to:[number,number])=>meshPanel?.regions.move(region,vertex,to),drawRegions:(on:boolean)=>meshPanel?.regions.draw(on),placing:()=>meshPanel?.regions.placing()??null,
+  precheck:()=>meshPanel?.precheck()??[],apply:()=>{const part=meshPanel?.part(),entry=meshPanel?.entry();return part&&entry?applyMesh(part,entry):Promise.resolve(null);},reset:()=>resetMeshBuild(),folds:()=>meshFolds(),
+  overlayTriangles:(slot:string)=>lastOverlay?.meshTriangles[slot]??null,status:()=>el('mesh-status').textContent,counts:()=>[...document.querySelectorAll('#mesh-counts code')].map(c=>c.textContent),readout:()=>[...document.querySelectorAll('#mesh-readout code')].map(c=>c.textContent),pending:()=>input('mesh-pending').value,lastPatch:()=>lastMeshPatch?JSON.parse(JSON.stringify(lastMeshPatch)):null},
  stage:()=>({modelHash:stageModelHash,inspectedHash:inspectedModel?.sha256??null,applied:appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,animation,time:player?.time??time,playing,busy:rebuildBusy}),
 };
 /** The world as it stands now: what a physics Apply's reload resumes. */
@@ -1490,5 +1507,58 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  // The preview (#104) drives the new player once its bone setups are read (an idle Apply cleared it first).
  stageDocumentSet=true;void loadModelDocument(modelUrl,sha256).then(loaded=>{if(loaded.ok&&stageModelHash===sha256)idlePanel?.model(boneSetup(loaded.document));});
  if(wasPlaying)void playPreview();
+}
+/**
+ * Mesh Apply (#106): the pending `meshes.<part>` entry becomes one config patch — `replace /meshes/<part>` and nothing
+ * else (bar 3) — run by `remesh --part <part>` through the patch runner (compile, check). On a build the revision
+ * reloads with the mesh edges on, and the panel shows remesh.json's counts, the revision model's and the overlay's
+ * triangle counts (bar 1) and TEXTURE_STRETCH before and after. A refusal leaves the stage and the pending entry as
+ * they were and shows the producer's line verbatim (bar 2).
+ */
+let lastMeshPatch:ConfigPatch|null=null;
+async function applyMesh(part:string,entry:MeshEntry):Promise<PatchJobView|RebuildRefusal|null> {
+ const status=rebuildStatus??await loadRebuildStatus();
+ const problems=meshPanel?.precheck()??[];
+ if(problems.length){meshPanel?.status(`${problems[0]} (review pre-check; nothing sent)`,true);return null;}
+ const patch=status?makePatch(status,meshPatchOps(part,entry),{cmd:'remesh',args:['--part',part]}):null;
+ if(!patch){meshPanel?.status(status?.reason??'REBUILD_STATUS_UNAVAILABLE',true);return null;}
+ try{assertMeshPatch(patch,part);}catch(error){meshPanel?.status(errorText(error),true);return null;}
+ lastMeshPatch=patch;
+ const world=stageWorld(),before=stageCheck;
+ meshPanel?.busy(true);meshPanel?.status(`Applying meshes.${part} with ${patch.producer.name} ${patch.producer.version}: remesh --mesh, compile, check…`,false);
+ try{
+  const result=await applyPatch(patch,world);
+  const outcome=meshApplyOutcome(result as Parameters<typeof meshApplyOutcome>[0]);meshPanel?.status(outcome.text,outcome.error);
+  if('id' in result&&result.status==='built'){
+   // The new triangulation is drawn: the mesh edges go on and the overlay captures the reloaded pose.
+   if(!layers.mesh){layers.mesh=true;input('layer-mesh').checked=true;}
+   if(player)drawRig(()=>player!.draw());redrawOverlay(true);
+   const counts=result.remesh??null,overlay=lastOverlay?.meshTriangles[part]??null,agree=triangleAgreement(counts,counts?.modelTriangles??null,overlay);
+   meshPanel?.counts([
+    ...(counts?[{label:'BEFORE',text:`${counts.part} ${countsText(counts.before)} (remesh.json)`},{label:'AFTER',text:`${counts.part} ${countsText(counts.after)} (remesh.json)`}]:[]),
+    {label:agree.ok?'AGREE':'DIFFER',text:agree.line,error:!agree.ok},
+   ]);
+   const after={lines:[...result.lines],check:result.check};
+   const show=()=>meshPanel?.readout(readoutRows(before,before?null:inspectedCheckView(),after,['TEXTURE_STRETCH']));
+   show();if(!before)void followInspectedCheck(show);
+  }
+  return result;
+ }finally{meshPanel?.busy(false);}
+}
+/** Mesh Reset: the inspected build back on the stage (same world); the panel already holds the config's entry again. */
+async function resetMeshBuild():Promise<void> {
+ meshPanel?.counts([]);meshPanel?.readout([]);
+ if(appliedOnStage){meshPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{meshPanel?.busy(false);}}
+ meshPanel?.status('Reset: the inspected build is on the stage; the pending entry is the config\'s.',false);
+}
+/** The folds reading (#108) of the drawn animation, on the inspected build and on the latest scratch build: one line per build. */
+async function meshFolds():Promise<string[]> {
+ meshPanel?.status(`Running the folds reading of ${animation||'(no animation)'}…`,false);
+ const job=await runReadings({readings:[{kind:'folds'}]});
+ if(!job||!('runs' in job)){const text=job&&'error' in job&&job.error?job.error:'READINGS_UNAVAILABLE: no reading ran';meshPanel?.status(text,true);return [text];}
+ const lines=job.runs.map(run=>{const r=run.results[0];return r?worstLine(run.build,r):`${run.build} · folds: not run`;});
+ if(job.runs.length<2)lines.push('scratch · folds: no scratch build yet (Apply builds one)');
+ meshPanel?.status(lines.join(' | '),job.runs.some(run=>run.results.some(r=>r.status!=='read')));
+ return lines;
 }
 void start();

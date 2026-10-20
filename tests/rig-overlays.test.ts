@@ -134,3 +134,19 @@ test('context selection paints conservative bounds with layers off and preserves
   overlay.refresh({player:rig.player,bones:specs,frame,selectedSlot:'not-drawn',project,settings:off,dpr:1});expect(inkBounds(h.surface).count).toBe(0);
  }finally{overlay.dispose();rig.dispose();}
 });
+
+test('#106 bar 1: the mesh layer counts the triangles it draws per slot, and a refresh after a model swap counts the new mesh, never the old',()=>{
+ const h=host(),overlay=new RigOverlays({canvas:h.canvas,rigRoot:h.root});
+ const frame=(triangles:number)=>({order:[{slot:'topwear',kind:'mesh',vertices:[0,0,10,0,0,10,10,10],triangles:Array.from({length:triangles},(_,i)=>i%2?[1,3,2]:[0,1,2]).flat()},{slot:'face',kind:'region'}]}) as unknown as PosedFrame;
+ const player=(f:PosedFrame):OverlayPlayer=>({posedFrame:()=>f,bone(){throw new Error('no bone read');}});
+ try{
+  const before=overlay.refresh({player:player(frame(296)),bones:[],project,settings:{...settings,bones:false},dpr:1});
+  expect(before.meshTriangles).toEqual({topwear:296});
+  // The revision loads: the next refresh is the new pose's triangulation.
+  const after=overlay.refresh({player:player(frame(302)),bones:[],project,settings:{...settings,bones:false},dpr:1});
+  expect(after.meshTriangles).toEqual({topwear:302});
+  // A camera redraw keeps the captured geometry (no new pose), so its count is the same capture's.
+  expect(overlay.redraw({project,settings:{...settings,bones:false},dpr:1}).meshTriangles).toEqual({topwear:302});
+  expect(overlay.refresh({player:player(frame(302)),bones:[],project,settings:{...settings,mesh:false,bones:false},dpr:1}).meshTriangles).toEqual({});
+ }finally{overlay.dispose();}
+});
