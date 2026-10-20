@@ -101,6 +101,29 @@ test('listed lines keep the text and name their first frame, timed by the report
  expect(retargetLines(lines,null)[0]).toEqual({code:'FLIP',line:lines[1]!.trim(),frame:177,time:7.375});
 });
 
+test('#161 the leg-side lines of a live run (rig-pose examples/walk onto parts examples/wind) parse to what the job listed', async () => {
+ // The real retarget output and report frameTimes of one live Apply (--leg-scale 0.9,1.05 --plant-feet --stance 0.07, a reach trunk).
+ const live=JSON.parse(await readFile(join(import.meta.dir,'fixtures/retarget-wind-walk.json'),'utf8')) as {op:{args:string[]};frameTimes:number[];lines:string[];readings:unknown[]};
+ expect(live.op.args).toEqual(['--animation','walk','--leg-scale','0.9,1.05','--plant-feet','--stance','0.07']);
+ const parsed=retargetLines(live.lines,live.frameTimes);
+ expect(parsed).toEqual(live.readings as typeof parsed);
+ const count=(code:string)=>parsed.filter(r=>r.code===code).length;
+ expect([count('FEET'),count('STANCE'),count('LEG-SCALE'),count('REACH'),parsed.length]).toEqual([12,7,4,1,24]);
+ // Each line is the producer's text, trimmed; none of the other codes (GATE, LAND, JITTER, SHEAR…) is listed.
+ for(const r of parsed)expect(live.lines.map(l=>l.trim())).toContain(r.line);
+ // The first seekable line of each leg-side code: its first `frame(s) N`, at the motion's key time for N.
+ const first=(code:string,head:string)=>{const r=parsed.find(x=>x.code===code&&x.frame!==null)!;return [r.line.startsWith(head),r.frame,r.time];};
+ expect(first('FEET','FEET   blend held on the floor: supporting foot l frames 14–16')).toEqual([true,14,0.583333]);
+ expect(first('STANCE','STANCE planted both: free foot l frames 0–3')).toEqual([true,0,0]);
+ expect(first('LEG-SCALE','LEG-SCALE chain "leg_r" bone "leg_r0"')).toEqual([true,16,0.666667]);
+ expect(first('REACH','REACH  chain "trunk" bone "chest"')).toEqual([true,18,0.75]);
+ // `frame(s) under 0.9, clamped (frames 16–20)`: the count's `frame(s)` is not a frame; the clamped span is.
+ expect(parsed.filter(r=>r.code==='LEG-SCALE').map(r=>r.frame)).toEqual([16,null,4,null]);
+ // A line naming its frames without the word `frame` (`supports: r 0–13`) or none at all lists without a seek.
+ expect(parsed.find(r=>r.line.startsWith('FEET   supports:'))).toEqual({code:'FEET',line:'FEET   supports: r 0–13, l 14–23',frame:null,time:null});
+ expect(parsed.filter(r=>r.frame!==null).map(r=>`${r.code} F${r.frame}`)).toEqual(['REACH F18','LEG-SCALE F16','LEG-SCALE F4','FEET F14','STANCE F0','STANCE F4','STANCE F9','STANCE F14','STANCE F16','STANCE F21']);
+});
+
 test('Apply · Retarget: clean → retarget → compile in scratch; bar 1 byte-equal to a direct run, bar 2 the package untouched; refusals verbatim', async () => {
  const {root,pkg,state}=await fixture();
  const p=await loadReview(pkg,{handoff:{config:join(pkg,'rig/config.json'),parts:join(pkg,'rig/out')}});
