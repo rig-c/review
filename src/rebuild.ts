@@ -1,0 +1,248 @@
+/**
+ * Apply · Rebuild (issue #99): the user's chest-region designation goes to the installed producer as one mesh entry,
+ * `rig-parts remesh` re-fits that one part of the package's gated rig into a scratch revision, `rigc build` compiles
+ * the revision the way remesh's own gate did, and the compiled scratch build is served read-only for the viewer to
+ * load in place. Review builds nothing itself, writes nothing into the package and takes no path from the client:
+ * the package's producer inputs are found at named layouts inside its root, the scratch directory is
+ * `<state>/rebuild/<package hash>/<designation hash>/` (no clock), and an identical designation reuses its build.
+ */
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, readdir, realpath, rm, writeFile, lstat } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative } from 'node:path';
+import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts';
+import { compileArgs, firstRefusal, remeshArgs, resolveProducer, runTool, type InstalledTool } from './producer.ts';
+
+/** Named layouts of `rig-parts build` output beside its config, inside the package root. Not a search. */
+export const PRODUCER_LAYOUTS = [{ config: 'rig/config.json', out: 'rig/out' }, { config: 'config.json', out: 'out' }] as const;
+export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
+const MAX_REGIONS = 8, MAX_POINTS = 256, MAX_LINES = 4000, GRID = 256;
+
+export interface ProducerInputs { layout: (typeof PRODUCER_LAYOUTS)[number]; config: string; parts: string; rig: string; configText: string; configHash: string; inputs: Record<string, string> }
+const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+
+/** The first named layout whose config, parts.json and gated rig (rig.json, motion.json, mesh_report.json) are all inside the package. */
+export async function locateProducerInputs(root: string): Promise<ProducerInputs | null> {
+  for (const layout of PRODUCER_LAYOUTS) {
+    const names = [layout.config, `${layout.out}/parts.json`, `${layout.out}/rig/rig.json`, `${layout.out}/rig/motion.json`, `${layout.out}/rig/mesh_report.json`];
+    const files: string[] = [];
+    try { for (const name of names) files.push(await safeFile(root, packagePath(name))); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+    const inputs: Record<string, string> = {};
+    for (let i = 0; i < names.length; i++) inputs[names[i]!] = sha256(await readFile(files[i]!));
+    const configText = await readFile(files[0]!, 'utf8');
+    return { layout, config: files[0]!, parts: dirname(files[1]!), rig: dirname(files[2]!), configText, configHash: inputs[layout.config]!, inputs };
+  }
+  return null;
+}
+
+export type ProducerRegion =
+  | { name: string; shape: 'circle'; cx: number; cy: number; r: number; bone: string; spacing: number; band: number }
+  | { name: string; bone: string; shape: 'polygon'; points: [number, number][]; spacing: number; band: number };
+export interface ContourPart { name: string; regions: unknown[]; entry: Record<string, unknown> }
+/** Config meshes whose entry is a contour (the only mode with regions); its regions as written. */
+export function contourParts(configText: string): ContourPart[] {
+  const config = object(JSON.parse(configText), 'config'), meshes = config.meshes;
+  if (!meshes || typeof meshes !== 'object' || Array.isArray(meshes)) return [];
+  return Object.entries(meshes as Record<string, unknown>).flatMap(([name, entry]) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+    const contour = (entry as Record<string, unknown>).contour;
+    if (!contour || typeof contour !== 'object' || Array.isArray(contour)) return [];
+    const regions = (contour as Record<string, unknown>).regions;
+    return [{ name, regions: Array.isArray(regions) ? regions : [], entry: entry as Record<string, unknown> }];
+  });
+}
+
+export class RebuildError extends Error { constructor(readonly code: string, detail: string) { super(`${code}: ${detail}`); } }
+const bad = (detail: string): never => { throw new RebuildError('REBUILD_REQUEST_INVALID', detail); };
+const finite = (value: unknown, field: string, min = -Infinity, exclusive = false): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || (exclusive ? value <= min : value < min)) bad(`${field} must be a finite number${min === -Infinity ? '' : exclusive ? ` > ${min}` : ` >= ${min}`}`);
+  return value as number;
+};
+const onGrid = (value: number, field: string) => { if (!Number.isInteger(value * GRID)) bad(`${field} is off the 1/${GRID} px grid`); return value; };
+
+/** One designated region in the producer's config shape. Geometry beyond types and the grid is the producer's to judge. */
+export function parseProducerRegion(value: unknown, field: string, bones: readonly string[] | null): ProducerRegion {
+  const v = object(value, field), keys = Object.keys(v).sort().join(',');
+  const name = v.name, bone = v.bone;
+  if (typeof name !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(name)) bad(`${field}.name`);
+  if (typeof bone !== 'string' || !bone || bone.length > 128) bad(`${field}.bone`);
+  if (bones && !bones.includes(bone as string)) throw new RebuildError('REBUILD_REGION_BONE_UNKNOWN', `${field}.bone ${String(bone)} is not a bone of the loaded model`);
+  const spacing = finite(v.spacing, `${field}.spacing`, 0, true), band = onGrid(finite(v.band, `${field}.band`, 0), `${field}.band`);
+  if (v.shape === 'circle') {
+    if (keys !== 'band,bone,cx,cy,name,r,shape,spacing') bad(`${field}: a circle holds exactly name, shape, cx, cy, r, bone, spacing, band`);
+    return { name: name as string, shape: 'circle', cx: onGrid(finite(v.cx, `${field}.cx`), `${field}.cx`), cy: onGrid(finite(v.cy, `${field}.cy`), `${field}.cy`), r: finite(v.r, `${field}.r`, 0, true), bone: bone as string, spacing, band };
+  }
+  if (v.shape === 'polygon') {
+    if (keys !== 'band,bone,name,points,shape,spacing') bad(`${field}: a polygon holds exactly name, bone, shape, points, spacing, band`);
+    if (!Array.isArray(v.points) || v.points.length < 3 || v.points.length > MAX_POINTS) bad(`${field}.points must hold 3–${MAX_POINTS} points`);
+    const points = (v.points as unknown[]).map((p, i): [number, number] => {
+      if (!Array.isArray(p) || p.length !== 2) bad(`${field}.points[${i}]`);
+      const [x, y] = p as unknown[];
+      return [onGrid(finite(x, `${field}.points[${i}].x`), `${field}.points[${i}].x`), onGrid(finite(y, `${field}.points[${i}].y`), `${field}.points[${i}].y`)];
+    });
+    return { name: name as string, bone: bone as string, shape: 'polygon', points, spacing, band };
+  }
+  return bad(`${field}.shape must be circle or polygon`);
+}
+
+export interface RebuildRequest { part: string; regions: ProducerRegion[]; configHash: string }
+/** `{part, regions, configHash}`: no path, no flag, no command — the server composes everything else. */
+export function parseRebuildRequest(input: unknown, bones: readonly string[] | null): RebuildRequest {
+  const v = object(input, 'rebuild');
+  if (Object.keys(v).sort().join(',') !== 'configHash,part,regions') bad('expected exactly {part, regions, configHash}');
+  if (typeof v.part !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(v.part)) bad('part');
+  if (typeof v.configHash !== 'string' || !/^[a-f0-9]{64}$/.test(v.configHash)) bad('configHash');
+  if (!Array.isArray(v.regions) || v.regions.length < 1 || v.regions.length > MAX_REGIONS) bad(`regions must hold 1–${MAX_REGIONS} entries`);
+  const regions = (v.regions as unknown[]).map((r, i) => parseProducerRegion(r, `regions[${i}]`, bones));
+  if (new Set(regions.map(r => r.name)).size !== regions.length) bad('regions: duplicate names');
+  return { part: v.part as string, regions, configHash: v.configHash as string };
+}
+
+/** The part's config entry with `contour.regions` replaced by the designation and every other field as written. */
+export function meshEntryText(configText: string, part: string, regions: readonly ProducerRegion[]): string {
+  const found = contourParts(configText).find(p => p.name === part);
+  if (!found) throw new RebuildError('REBUILD_PART_NOT_CONTOUR', `config meshes.${part} is not a contour entry; regions apply to contour meshes only`);
+  const entry = structuredClone(found.entry), contour = entry.contour as Record<string, unknown>;
+  contour.regions = regions.map(r => ({ ...r }));
+  return JSON.stringify(entry, null, 1) + '\n';
+}
+
+/** Deterministic: the package, the config bytes, the part, the entry bytes and both tool versions. No clock. */
+export function designationId(input: { sourceHash: string; configHash: string; part: string; entry: string; producer: string; compiler: string }): string {
+  return sha256(JSON.stringify([REBUILD_SCHEMA, input.sourceHash, input.configHash, input.part, input.entry, input.producer, input.compiler]));
+}
+export const rebuildRoot = (stateDir: string, sourceHash: string) => join(stateDir, 'rebuild', sourceHash);
+export const rebuildDir = (stateDir: string, sourceHash: string, id: string) => join(rebuildRoot(stateDir, sourceHash), id);
+
+export type RebuildStatus = 'running' | 'built' | 'refused' | 'failed';
+export interface RebuildBuild { model: string; modelUrl: string; modelHash: string; files: Record<string, string> }
+export interface RebuildJob {
+  schema: typeof REBUILD_SCHEMA; id: string; status: RebuildStatus; reused: boolean;
+  request: { part: string; regions: ProducerRegion[]; configHash: string; entrySha256: string };
+  producer: { package: string; version: string }; compiler: { package: string; version: string };
+  lines: string[]; producerLine: string | null; exitCode: number | null; wallMs: { remesh: number | null; compile: number | null };
+  build: RebuildBuild | null;
+}
+export interface RebuildOptions { stateDir: string; starts: readonly string[]; unchanged: () => Promise<void>; bones: readonly string[] | null }
+
+const tool = (t: InstalledTool) => ({ package: t.package, version: t.version });
+async function exists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e; } }
+
+/** Hash every page the compiled model names and the model itself; names are literal relative paths inside the build. */
+async function hashBuild(build: string, id: string): Promise<RebuildBuild> {
+  const dir = await realpath(build), model = 'skeleton.model.json', bytes = await readFile(await safeFile(dir, model)), doc = object(JSON.parse(bytes.toString('utf8')), 'model');
+  if (doc.spec !== 'rigc-compiled/3' || !Array.isArray(doc.pages)) throw new RebuildError('REBUILD_BUILD_INVALID', 'the compiled scratch model is not rigc-compiled/3 with pages');
+  const files: Record<string, string> = { [model]: sha256(bytes) };
+  for (const page of doc.pages) { const name = packagePath(object(page, 'model.pages[]').name, 'model.pages[].name'); files[name] = sha256(await readFile(await safeFile(dir, name))); }
+  return { model, modelUrl: `/rebuild/${id}/${model}`, modelHash: files[model]!, files };
+}
+
+/** One rebuild at a time per review instance; finished jobs stay readable by id. */
+export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
+  const jobs = new Map<string, RebuildJob>();
+  let running: string | null = null;
+  const snapshot = (job: RebuildJob): RebuildJob => ({ ...job, lines: [...job.lines] });
+
+  /** `GET /api/rebuild`: whether Apply can run here, and what the producer config holds (so the editor can start from it). */
+  async function describe() {
+    await options.unchanged();
+    const inputs = await locateProducerInputs(p.root);
+    const resolved = resolveProducer(options.starts);
+    const parts = inputs ? contourParts(inputs.configText).map(({ name, regions }) => ({ name, regions })) : [];
+    const contour = inputs ? Object.fromEntries(contourParts(inputs.configText).map(({ name, entry }) => [name, entry])) : {};
+    return {
+      schema: 'rig-review-rebuild-status/1', available: !!inputs && resolved.ok && parts.length > 0,
+      inputs: inputs ? { layout: inputs.layout, configHash: inputs.configHash } : null,
+      parts, contour,
+      producer: resolved.ok ? tool(resolved.producer) : null, compiler: resolved.ok ? tool(resolved.compiler) : null,
+      reason: !inputs ? `REBUILD_INPUTS_UNAVAILABLE: no producer layout in the package (${PRODUCER_LAYOUTS.map(l => `${l.config} + ${l.out}/{parts.json,rig/}`).join(' or ')})` : !resolved.ok ? resolved.error : parts.length ? null : 'REBUILD_INPUTS_UNAVAILABLE: the config states no contour mesh',
+      running,
+    };
+  }
+
+  async function reuse(dir: string, id: string): Promise<RebuildJob | null> {
+    const resultFile = join(dir, 'result.json');
+    if (!(await exists(resultFile))) return null;
+    try {
+      const stored = JSON.parse(await readFile(resultFile, 'utf8')) as RebuildJob;
+      if (stored.schema !== REBUILD_SCHEMA || stored.id !== id || stored.status !== 'built' || !stored.build) return null;
+      const now = await hashBuild(join(dir, 'build'), id);
+      if (JSON.stringify(now.files) !== JSON.stringify(stored.build.files)) return null;
+      return { ...stored, reused: true };
+    } catch { return null; }
+  }
+
+  async function execute(job: RebuildJob, dir: string, inputs: ProducerInputs, resolved: Extract<ReturnType<typeof resolveProducer>, { ok: true }>, entry: string): Promise<void> {
+    const push = (line: string) => { if (job.lines.length < MAX_LINES) job.lines.push(line); };
+    try {
+      await rm(dir, { recursive: true, force: true });
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      await writeFile(join(dir, 'mesh.json'), entry, { mode: 0o600 });
+      push(`review: ${resolved.producer.package} ${resolved.producer.version} remesh ${job.request.part} → scratch revision`);
+      const remesh = await runTool(resolved.producer.bin, remeshArgs({ rig: inputs.rig, config: inputs.config, parts: inputs.parts, part: job.request.part, mesh: 'mesh.json', out: 'revision' }), { cwd: dir, onLine: push });
+      job.exitCode = remesh.exitCode; job.wallMs.remesh = remesh.wallMs;
+      if (remesh.exitCode !== 0) { job.producerLine = firstRefusal(remesh.lines) ?? `rig-parts remesh exited ${remesh.exitCode} without a named refusal`; job.status = 'refused'; return; }
+      job.producerLine = remesh.lines.filter(l => l.trim()).at(-1)?.trim() ?? null;
+      const provenance = object(JSON.parse(await readFile(join(dir, 'revision', 'remesh.json'), 'utf8')), 'remesh.json'), request = object(provenance.request, 'remesh.json request');
+      const pageEdges = request.page_edges === 'pot' ? 'pot' : 'free', packShape = request.pack_shape === 'rect' ? 'rect' : 'polygon';
+      push(`review: ${resolved.compiler.package} ${resolved.compiler.version} build --profile rig-play --pack --page-edges ${pageEdges} --pack-shape ${packShape} (the revision's own pack flags)`);
+      const compile = await runTool(resolved.compiler.bin, compileArgs({ rig: 'revision/rig.json', motion: 'revision/motion.json', out: 'build', pageEdges, packShape }), { cwd: dir, onLine: push });
+      job.wallMs.compile = compile.wallMs;
+      if (compile.exitCode !== 0) { job.exitCode = compile.exitCode; job.producerLine = firstRefusal(compile.lines) ?? `rigc build exited ${compile.exitCode} without a named refusal`; job.status = 'refused'; return; }
+      // The package and its producer inputs must still be the bytes the request was made against.
+      await options.unchanged();
+      const after = await locateProducerInputs(p.root);
+      if (!after || JSON.stringify(after.inputs) !== JSON.stringify(inputs.inputs)) throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package producer inputs changed during the rebuild');
+      job.build = await hashBuild(join(dir, 'build'), job.id);
+      job.status = 'built';
+      await writeFile(join(dir, 'result.json'), JSON.stringify({ ...job, reused: false }, null, 1) + '\n', { mode: 0o600 });
+      // Each Apply replaces the previous scratch build of this package.
+      for (const sibling of await readdir(rebuildRoot(options.stateDir, p.sourceHash))) if (sibling !== job.id && /^[a-f0-9]{64}$/.test(sibling)) { await rm(join(rebuildRoot(options.stateDir, p.sourceHash), sibling), { recursive: true, force: true }); jobs.delete(sibling); }
+    } catch (error) {
+      job.status = 'failed'; job.producerLine = error instanceof Error ? error.message : String(error); push(`review: ${job.producerLine}`);
+    } finally {
+      // Only a built designation keeps its scratch directory; a refusal or failure leaves nothing behind.
+      if (job.status !== 'built') await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  /** `POST /api/rebuild`: refusals are returned before anything is written or run. */
+  async function start(input: unknown): Promise<{ status: number; body: unknown }> {
+    const request = parseRebuildRequest(input, options.bones);
+    const inside = relative(p.root, rebuildRoot(options.stateDir, p.sourceHash));
+    if (!inside.startsWith('..') && !isAbsolute(inside)) throw new RebuildError('REBUILD_STATE_INSIDE_PACKAGE', 'the review state directory is inside the inspected package; set RIG_REVIEW_STATE_DIR outside it');
+    await options.unchanged();
+    const inputs = await locateProducerInputs(p.root);
+    if (!inputs) throw new RebuildError('REBUILD_INPUTS_UNAVAILABLE', `no producer layout in the package (${PRODUCER_LAYOUTS.map(l => l.config).join(' or ')})`);
+    if (inputs.configHash !== request.configHash) throw new RebuildError('REBUILD_CONFIG_STALE', 'the producer config changed since the editor read it; reload');
+    const entry = meshEntryText(inputs.configText, request.part, request.regions);
+    const resolved = resolveProducer(options.starts);
+    if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
+    const id = designationId({ sourceHash: p.sourceHash, configHash: inputs.configHash, part: request.part, entry, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
+    const current = jobs.get(id);
+    if (current?.status === 'running') return { status: 202, body: snapshot(current) };
+    if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+    const reused = await reuse(dir, id);
+    if (reused) { jobs.set(id, reused); return { status: 200, body: snapshot(reused) }; }
+    const job: RebuildJob = { schema: REBUILD_SCHEMA, id, status: 'running', reused: false, request: { ...request, entrySha256: sha256(entry) }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { remesh: null, compile: null }, build: null };
+    jobs.set(id, job); running = id;
+    void execute(job, dir, inputs, resolved, entry).finally(() => { if (running === id) running = null; });
+    return { status: 202, body: snapshot(job) };
+  }
+
+  function read(id: string): RebuildJob {
+    const job = jobs.get(id);
+    if (!job) throw new RebuildError('REBUILD_NOT_FOUND', id);
+    return snapshot(job);
+  }
+
+  /** A served scratch file: only a built job's hashed model and pages, read-only. */
+  async function file(id: string, name: string): Promise<string> {
+    const job = jobs.get(id);
+    if (!job || job.status !== 'built' || !job.build || !Object.hasOwn(job.build.files, name)) throw new RebuildError('REBUILD_NOT_FOUND', `${id}/${name}`);
+    return safeFile(await realpath(join(rebuildDir(options.stateDir, p.sourceHash, id), 'build')), packagePath(name));
+  }
+
+  return { describe, start, read, file, running: () => running };
+}

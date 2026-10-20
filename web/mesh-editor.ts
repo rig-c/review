@@ -2,16 +2,15 @@
  * Mesh edit (Setup): a view-bar toggle, an editor bar of sub-modes (Modify / Create / Delete / Edges) and direct
  * manipulation of the selected slot's actual mesh on the rig pane. Everything is a typed delta (`src/mesh-edit.ts`)
  * previewed over the original triangulation; nothing is retriangulated, written into the package or sent to a
- * producer — Apply · Rebuild refuses by name as the chest editor's does.
+ * producer — no producer command consumes a delta, so Apply · Rebuild refuses `MODELING_TARGET_UNSUPPORTED` by name.
  */
 import type {PosedSlot} from '@rig-c/play';
 import type {CropWorldMapping} from '../src/chest-regions.ts';
 import {
- MESH_EDIT_NO_MESH,MESH_EDIT_PREVIEW_NOTE,MESH_EDIT_SELECT_SLOT,MeshEditSession,affineOf,applyAffine,applyMeshOps,attachmentHashText,draftOps,hitMesh,
+ MESH_EDIT_NO_MESH,MESH_EDIT_PREVIEW_NOTE,MODELING_TARGET_UNSUPPORTED,MESH_EDIT_SELECT_SLOT,MeshEditSession,affineOf,applyAffine,applyMeshOps,attachmentHashText,draftOps,hitMesh,
  invertAffine,meshEditDocument,parseMeshDraft,screenDeltaToCrop,verticesInBox,writeMeshDraft,type MeshEditDocument,type MeshEditResult,type MeshOp,type MeshSource,
  type MeshView,type ScreenPoint,type Vec,
 } from '../src/mesh-edit.ts';
-import {MODELING_INPUT_UNAVAILABLE,requestRebuild} from './chest-editor.ts';
 import type {OverlayMeshEdit,OverlayPoint,OverlayProject} from './rig-overlays.ts';
 import {textEntryFocused} from './view-controls.ts';
 
@@ -153,7 +152,8 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
  node<HTMLButtonElement>('mesh-undo').addEventListener('click',undo);node<HTMLButtonElement>('mesh-redo').addEventListener('click',redo);
  node<HTMLButtonElement>('mesh-reset').addEventListener('click',()=>{if(!session)return;if(!host.confirm(`Drop the whole mesh-edit delta for ${session.source.slot} / ${session.source.attachment}? This cannot be undone.`))return;session.reset();selected.clear();persist();say('delta reset');host.changed();});
  node<HTMLButtonElement>('mesh-download').addEventListener('click',()=>{if(session)host.download(meshEditDocument(session,host.basis()));});
- node<HTMLButtonElement>('mesh-apply').addEventListener('click',()=>{const result=requestRebuild((text,error)=>host.message(text,error));say(result.error,true);});
+ // No producer command consumes a vertex delta (#99): refuse by name and run nothing.
+ node<HTMLButtonElement>('mesh-apply').addEventListener('click',()=>{host.message(MODELING_TARGET_UNSUPPORTED,true);say(MODELING_TARGET_UNSUPPORTED,true);});
  const keyDown=(event:KeyboardEvent)=>{
   if(event.code==='Space'&&!textEntryFocused(event.target))space=true;
   const action=meshEditShortcut(event,{active,mode,selected:selected.size});if(!action)return;
@@ -265,4 +265,4 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
   dispose:()=>{observer.disconnect();chestObserver.disconnect();host.pane.removeEventListener('pointerdown',down,true);host.pane.removeEventListener('pointermove',move,true);for(const type of ['pointerup','pointercancel'] as const)host.pane.removeEventListener(type,end,true);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);window.removeEventListener('blur',blur);},
  };
 }
-export {MODELING_INPUT_UNAVAILABLE};
+export {MODELING_TARGET_UNSUPPORTED};

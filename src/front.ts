@@ -55,6 +55,9 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  const reads=mode==='single'?['/api/review','/review-reference']:['/api/compare','/api/compare/reference-frames','/compare-reference'];
  if(reads.includes(path))return read?get:null;
  if((mode==='single'?/^\/assets\/[^/]/:/^\/compare-assets\/(a|b)\/[^/]/).test(path))return read?get:null;
+ // Apply · Rebuild (single only): status, one typed request, a job's status and its served scratch build.
+ if(mode==='single'&&path==='/api/rebuild')return read?get:method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
+ if(mode==='single'&&(/^\/api\/rebuild\/[a-f0-9]{64}$/.test(path)||/^\/rebuild\/[a-f0-9]{64}\/[^/]/.test(path)))return read?get:null;
  return null;
 }
 async function boundedBody(req:Request,limit:number,timeoutMs=10000):Promise<ArrayBuffer>{

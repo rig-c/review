@@ -21,7 +21,8 @@ export interface OpenInputs {input:string;compare?:string;reference?:string;anim
 export type OpenPackage=({mode:'single';p:ReviewPackage;inputs:OpenInputs;contentHash:string}|{mode:'compare';p:ComparePackage;inputs:OpenInputs;contentHash:string})&{selection:AnimationSelection|null};
 /** Private 0600 record. `capability` is the 256-bit page write capability, handed out only in the printed `#cap=` fragment. */
 export interface RecordFile extends OpenIdentity {schema:'rig-review-open-instance/1';pid:number;origin:string;mode:'single'|'compare';capability:string;controlToken?:string}
-interface WorkerRequest {schema:'rig-review-open-request/1';inputs:OpenInputs;identity:OpenIdentity;stateDir:string;registry:string;request:string;idleMs:number;controlToken?:string}
+/** `cwd` is the launcher's working directory: the worker runs in the state directory, so Apply · Rebuild looks for the producer from here after the package's own directories. */
+interface WorkerRequest {schema:'rig-review-open-request/1';inputs:OpenInputs;identity:OpenIdentity;stateDir:string;registry:string;request:string;idleMs:number;controlToken?:string;cwd?:string}
 const appRoot=fileURLToPath(new URL('..',import.meta.url));
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep=(ms:number)=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
@@ -112,7 +113,7 @@ async function ensureWorker(p:OpenPackage,key:string,fingerprint:string,stateDir
  try{
   const row=await reuse();if(row)return {row,reused:true};
   const identity:OpenIdentity={key,contentHash:p.contentHash,nonce,fingerprint};request=join(canonicalControl,`${key}.${nonce}.request.json`);const log=join(canonicalControl,`${key}.${nonce}.log`);
-  const spec:WorkerRequest={schema:'rig-review-open-request/1',inputs:p.inputs,identity,stateDir,registry,request,idleMs,...(p.inputs.control?{controlToken:randomUUID()}:{} )};await writeFile(request,JSON.stringify(spec),{mode:0o600,flag:'wx'});
+  const spec:WorkerRequest={schema:'rig-review-open-request/1',inputs:p.inputs,identity,stateDir,registry,request,idleMs,cwd:process.cwd(),...(p.inputs.control?{controlToken:randomUUID()}:{} )};await writeFile(request,JSON.stringify(spec),{mode:0o600,flag:'wx'});
   const logHandle=await openFile(log,'a',0o600);let child;try{child=spawn(process.execPath,[join(appRoot,'src/open-worker.ts'),request],{cwd:canonicalControl,detached:true,stdio:['ignore',logHandle.fd,logHandle.fd],env:process.env});spawned=child;child.unref();}finally{await logHandle.close();}
   let exited:string|undefined;child.on('error',error=>{exited=error.message;});child.on('exit',(code,signal)=>{exited=`exit ${code} ${signal??''}`;});
   while(performance.now()<deadline){const record=await reuse();if(record){handedOff=true;return {row:record,reused:false};}if(exited)throw new Error(`OPEN_START: ${exited}; worker log ${log}`);await sleep(30);}throw new Error(`OPEN_TIMEOUT: worker did not become ready; log ${log}`);
@@ -125,7 +126,7 @@ export async function runOpenWorker(requestPath:string):Promise<void>{
  if(spec.inputs.control&&(!spec.controlToken||!/^[a-f0-9-]{36}$/.test(spec.controlToken)))throw new Error('open control: invalid private capability');
  // The worker mints its own page capability; it lives only in this process and the private record.
  const capability=randomBytes(32).toString('hex');let last=performance.now();const options={port:0,stateDir:spec.stateDir,open:spec.identity,capability,activity:()=>{last=performance.now();},...(spec.inputs.control?{control:{token:spec.controlToken!,instanceKey:spec.identity.key}}:{})};
- const server=p.mode==='single'?await startServer(p.p,{...options,initialAnimation:p.selection?.name}):await startCompareServer(p.p,options);
+ const server=p.mode==='single'?await startServer(p.p,{...options,initialAnimation:p.selection?.name,...(typeof spec.cwd==='string'&&isAbsolute(spec.cwd)?{cwd:spec.cwd}:{})}):await startCompareServer(p.p,options);
  const check=()=>p.mode==='single'?assertReviewUnchanged(p.p):assertCompareUnchanged(p.p);
  await check();const record:RecordFile={schema:'rig-review-open-instance/1',...spec.identity,pid:process.pid,origin:`http://127.0.0.1:${server.port}`,mode:p.mode,capability,...(spec.inputs.control?{controlToken:spec.controlToken}:{})};const tmp=spec.registry+'.'+spec.identity.nonce+'.tmp';await writeFile(tmp,JSON.stringify(record),{mode:0o600,flag:'wx'});await rename(tmp,spec.registry);
  await unlink(requestPath).catch(e=>{if(e.code!=='ENOENT')throw e;});

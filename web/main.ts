@@ -8,6 +8,7 @@ import {RigOverlays,type OverlayCircle,type OverlayRegion} from './rig-overlays.
 import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
 import {bindChestEditor,bustLabel,bustSides,rowCircle,type ChestEditor} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
+import {appliedRecord,designatedRegions,outcomeLine,pickPart,runRebuild,seedFields,type AppliedRecord,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -19,7 +20,7 @@ import {connectInspectionPersistence,serializableView,numericCamera,restoredZoom
 import {initialPlayerAnimation} from '../src/animation-selection.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import type {ReferenceBinding} from '../src/reference.ts';
-import type { Checkpoint, Reference, ReviewedSource, ReviewManifest } from '../src/manifest.ts';
+import type { Checkpoint, Json, Reference, ReviewedSource, ReviewManifest } from '../src/manifest.ts';
 import type { Feedback, ReviewSession } from '../src/session.ts';
 import type { ReportEvent, ReportSeeds } from '../src/report.ts';
 import { clockForAnimation, frameAtTime, lastFrame as lastProducerFrame, timeAtFrame } from '../src/frame-clock.ts';
@@ -78,6 +79,8 @@ let chestEditor:ChestEditor|null=null;
 let meshEditor:MeshEditor|null=null;
 /** The hash-verified compiled model document the parts catalog was read from (mesh edit reads attachments from it). */
 let partModel:unknown=null;
+/** Apply · Rebuild (#99): the inspected model's URL, the producer status, and the applied record while its scratch build is on the stage. */
+let inspectedModel:{url:string;prefix:string;sha256:string}|null=null,rebuildStatus:RebuildStatusView|null=null,appliedOnStage:AppliedRecord|null=null,rebuildBusy=false;
 let appearance:ReturnType<typeof bindAppearance>|null=null;
 let workspace:WorkspaceUI|null=null;
 let idleHeld=false;
@@ -553,6 +556,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
   text('player-state', 'Loading compiled rig…');
   try {
     const modelUrl = new URL(assetUrl(data.manifest.model), location.href).href;
+    inspectedModel={url:modelUrl,prefix:access.route('/assets/'),sha256:data.reviewedSource.rig?.sha256??''};
     assets = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, url) => {
       const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith(access.route('/assets/'))) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
@@ -764,6 +768,8 @@ function bind(): void {
       view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},
       axis: axisInspection ? { id: select('axis-select').value, value: Number(input('axis-value').value) } : null,
       environment: feedbackEnvironment(),
+      // The exact last applied designation and the producer's line, only while that scratch build is what is drawn.
+      applied: appliedOnStage ? JSON.parse(JSON.stringify(appliedOnStage)) as Json : null,
       reportEvent: selectedReportEvent ? { id: selectedReportEvent.id, field: selectedReportEvent.field, source: { ...selectedReportEvent.source }, frames: selectedReportEvent.frames ? [...selectedReportEvent.frames] : null, exactTime: eventSeekTime(selectedReportEvent, selectedReportTime), targets: selectedReportEvent.targets.map(target => ({ ...target })) } : null,
     } });
     input('feedback-summary').value = ''; markDirty(); renderProposals(); message('Added structured feedback. Submit the review to save it.');
@@ -784,7 +790,7 @@ function bind(): void {
   cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
-  chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,changed:renderChest,download:()=>{void exportChest();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
+  chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,basis:meshBasis,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},message,confirm:text=>window.confirm(text),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
   for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));
@@ -827,7 +833,7 @@ async function start(): Promise<void> {
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-    const restored=await setupPersistence();renderChest();restoreEnvironment();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();await loadRebuildStatus();renderChest();restoreEnvironment();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
@@ -1141,5 +1147,61 @@ async function exportMesh(doc:MeshEditDocument):Promise<void> {
  const binding=meshEditBinding({fileSha256:digest,sourceHash:data.sourceHash,reviewedSource:data.reviewedSource,exportedAt:new Date().toISOString(),mapping:chestMapping.available?chestMapping.basis:chestMapping.reason,attachment:{slot:doc.slot,skin:doc.skin,name:doc.attachment,sha256:doc.source.hash}});
  download('mesh-edit.json',text,'application/json');download('mesh-edit.binding.json',JSON.stringify(binding,null,2)+'\n','application/json');
  message(`Downloaded mesh-edit.json (${doc.ops.length} ops) and mesh-edit.binding.json. The delta is review evidence, not an approval; the package is unchanged and the producer retriangulates.`);
+}
+/** `GET /api/rebuild`: whether Apply can run, and the producer config's regions to start an untouched editor from. */
+async function loadRebuildStatus():Promise<RebuildStatusView|null> {
+ try{rebuildStatus=await api<RebuildStatusView>('/api/rebuild');}catch(error){rebuildStatus=null;chestEditor?.notify(`REBUILD_STATUS_UNAVAILABLE: ${errorText(error)}`,true);return null;}
+ const seed=seedFields(rebuildStatus,chestField);
+ if(seed){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
+ if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,true);
+ return rebuildStatus;
+}
+function rebuildState():void {chestEditor?.rebuildState({busy:rebuildBusy,applied:!!appliedOnStage});}
+/** Apply · Rebuild: the rows go to the installed producer; on success its scratch build replaces the drawn rig in place. */
+async function applyRebuild():Promise<void> {
+ if(rebuildBusy)return;
+ if(readOnly){chestEditor?.notify(readOnly,true);return;}
+ const status=rebuildStatus??await loadRebuildStatus();
+ if(!status||!status.available||!status.inputs){const reason=status?.reason??'REBUILD_STATUS_UNAVAILABLE';chestEditor?.notify(reason,true,[reason]);message(reason,true);return;}
+ const designated=designatedRegions(chestField);if('error' in designated){chestEditor?.notify(designated.error,true);return;}
+ const part=pickPart(status,designated.regions);if(!part){chestEditor?.notify(`REBUILD_PART_AMBIGUOUS: the config states ${status.parts.length} contour meshes and the designated bones name none of them alone`,true);return;}
+ const body:RebuildRequestBody={part,regions:designated.regions,configHash:status.inputs.configHash},lines:string[]=[];
+ rebuildBusy=true;rebuildState();chestEditor?.notify(`Rebuilding ${part} with ${status.producer?.package} ${status.producer?.version}…`,false,[]);
+ try{
+  const result=await runRebuild(body,{post:value=>api<RebuildJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<RebuildJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+   onLine:line=>{lines.push(line);chestEditor?.notify(line.trim()||'…',false,lines.slice(-6));}});
+  const outcome=outcomeLine(result);
+  // A refusal stays readable in full: the bar's status line is one line, so the log ends with the producer's line verbatim.
+  if(!('id' in result)||result.status!=='built'||!result.build){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return;}
+  await swapRig(new URL(access.route(result.build.modelUrl),location.href).href,access.route(`/rebuild/${result.id}/`),result.build.modelHash);
+  appliedOnStage=appliedRecord(result);
+  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
+  // The log closes on success so nothing floats over the rebuilt stage; a refusal keeps it open.
+  chestEditor?.notify(outcome.text,false,[]);message(outcome.text);
+ }catch(error){chestEditor?.notify(`REBUILD_FAILED: ${errorText(error)}`,true);message(`REBUILD_FAILED: ${errorText(error)}`,true);}
+ finally{rebuildBusy=false;rebuildState();}
+}
+async function resetRebuild():Promise<void> {
+ if(rebuildBusy||!appliedOnStage||!inspectedModel)return;
+ rebuildBusy=true;rebuildState();
+ try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256);appliedOnStage=null;chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied regions.',false);message('Reset to the inspected build.');}
+ catch(error){chestEditor?.notify(`REBUILD_RESET_FAILED: ${errorText(error)}`,true);}
+ finally{rebuildBusy=false;rebuildState();}
+}
+/**
+ * Replace the drawn rig in place: the new model loads first (a failure leaves the stage as it was), then the player is
+ * swapped and the same animation, time, set, camera and environment are restored; playback resumes when it was running.
+ */
+async function swapRig(modelUrl:string,prefix:string,sha256:string):Promise<void> {
+ const keepAnimation=animation,keepTime=player?.time??time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
+ const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}});
+ pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);
+ player.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
+ try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);partModel=catalog.model;parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
+ if(keepSet){try{player.setSet(keepSet);}catch{select('part-set').value='';player.setSet(null);}}
+ if(keepAnimation&&assets.animations.some(clip=>clip.name===keepAnimation)){chooseAnimation(keepAnimation);seek(keepTime);}else drawRig(()=>player!.draw());
+ if(environmentApplied())applyEnvironment();
+ updateChestMapping();fitCamera();
+ if(wasPlaying)void playPreview();
 }
 void start();

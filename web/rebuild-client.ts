@@ -1,0 +1,83 @@
+/**
+ * Apply · Rebuild, page side (#99): the chest editor's rows become the producer's region entries, one typed request
+ * goes to `/api/rebuild`, the job's lines stream back by polling, and the applied state is recorded. No DOM here
+ * (main.ts owns the elements and the player); the server owns every path and the producer's flags.
+ */
+import {ellipsePolygon} from '../src/chest-regions.ts';
+import {chestContourFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
+
+export type RegionEntry=
+ |{name:string;shape:'circle';cx:number;cy:number;r:number;bone:string;spacing:number;band:number}
+ |{name:string;bone:string;shape:'polygon';points:[number,number][];spacing:number;band:number};
+export interface RebuildStatusView {available:boolean;inputs:{layout:{config:string;out:string};configHash:string}|null;parts:{name:string;regions:unknown[]}[];contour:Record<string,Record<string,unknown>>;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;reason:string|null}
+export interface RebuildJobView {id:string;status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{remesh:number|null;compile:number|null};build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;regions:RegionEntry[];configHash:string;entrySha256:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
+export interface RebuildRefusal {status:'refused';error:string;producerLine:string|null}
+export interface RebuildRequestBody {part:string;regions:RegionEntry[];configHash:string}
+/** What the draft keeps and the feedback context carries: the exact last applied inputs and the producer's line. */
+export interface AppliedRecord {schema:'rig-review-applied/1';buildId:string;part:string;regions:RegionEntry[];configHash:string;entrySha256:string;producer:{package:string;version:string};compiler:{package:string;version:string};line:string|null;modelHash:string}
+
+const number=(read:ChestFieldReader,id:string)=>{const raw=(read(id)?.value??'').trim();if(!raw)return null;const value=Number(raw);return Number.isFinite(value)?value:Number.NaN;};
+
+/** Rows with a centre x are designated; a row with equal semi-axes and no clip is the config's circle, else the 32-sample polygon. */
+export function designatedRegions(read:ChestFieldReader):{regions:RegionEntry[]}|{error:string} {
+ const regions:RegionEntry[]=[];
+ for(const row of chestRegionRows){
+  if(number(read,chestRowId(row,'cx'))===null)continue;
+  const name=(read(chestRowId(row,'name'))?.value??'').trim(),bone=(read(chestRowId(row,'bone'))?.value??'').trim(),tag=`row ${row+1}`;
+  if(!name)return {error:`REBUILD_REGION_INCOMPLETE: ${tag} name`};if(!bone)return {error:`REBUILD_REGION_INCOMPLETE: ${name} bone`};
+  const values:Record<string,number|null>={};
+  for(const field of ['cx','cy','ax','ay','spacing','band','clip'] as const){values[field]=number(read,chestRowId(row,field));if(Number.isNaN(values[field]))return {error:`REBUILD_REGION_INCOMPLETE: ${name} ${field}`};}
+  for(const field of ['cy','ax','spacing','band'] as const)if(values[field]===null)return {error:`REBUILD_REGION_INCOMPLETE: ${name} ${field}`};
+  const {cx,cy,ax,spacing,band,clip}=values as Record<string,number>,ay=values.ay??ax;
+  if(ax===ay&&values.clip===null)regions.push({name,shape:'circle',cx,cy,r:ax,bone,spacing,band});
+  else regions.push({name,bone,shape:'polygon',points:ellipsePolygon([cx,cy],[ax,ay],32,values.clip===null?undefined:clip),spacing,band});
+ }
+ return regions.length?{regions}:{error:'REBUILD_REGION_INCOMPLETE: no region has a centre'};
+}
+
+/** The contour part to rebuild: the one whose regions name the first designated bone, else the only one, else none. */
+export function pickPart(status:Pick<RebuildStatusView,'parts'>,regions:readonly RegionEntry[]):string|null {
+ const bones=new Set(regions.map(r=>r.bone));
+ const named=status.parts.filter(p=>p.regions.some(r=>!!r&&typeof r==='object'&&bones.has(String((r as {bone?:unknown}).bone))));
+ if(named.length===1)return named[0]!.name;
+ return status.parts.length===1?status.parts[0]!.name:null;
+}
+
+/**
+ * Field values that start the editor from the producer config: the first contour part's circle regions (at most two
+ * rows) and its contour numbers. Only for an untouched editor — `null` once any row has a centre.
+ */
+export function seedFields(status:Pick<RebuildStatusView,'parts'|'contour'>,read:ChestFieldReader):Record<string,string>|null {
+ if(chestRegionRows.some(row=>(read(chestRowId(row,'cx'))?.value??'').trim()))return null;
+ const part=status.parts.find(p=>p.regions.length),entry=part?status.contour[part.name]:undefined;if(!part||!entry)return null;
+ const out:Record<string,string>={},contour=(entry.contour??{}) as Record<string,unknown>;
+ part.regions.slice(0,chestRegionRows.length).forEach((value,row)=>{
+  const r=value as Record<string,unknown>;if(r.shape!=='circle')return;
+  for(const [field,key] of [['name','name'],['bone','bone'],['cx','cx'],['cy','cy'],['ax','r'],['ay','r'],['spacing','spacing'],['band','band']] as const)if(r[key]!==undefined)out[chestRowId(row,field)]=String(r[key]);
+ });
+ for(const [key,id] of chestContourFields)if(typeof contour[key]==='number')out[id]=String(contour[key]);
+ if(typeof contour.bridges==='boolean')out['chest-bridges']=String(contour.bridges);
+ if(typeof entry.r==='number')out['chest-r']=String(entry.r);
+ if(Array.isArray(entry.segments))out['chest-segments']=JSON.stringify(entry.segments);
+ return Object.keys(out).length?out:null;
+}
+
+export const appliedRecord=(job:RebuildJobView):AppliedRecord=>({schema:'rig-review-applied/1',buildId:job.id,part:job.request.part,regions:job.request.regions,configHash:job.request.configHash,entrySha256:job.request.entrySha256,producer:job.producer,compiler:job.compiler,line:job.producerLine,modelHash:job.build!.modelHash});
+export function parseApplied(text:string):AppliedRecord|null {try{const value=JSON.parse(text);return value?.schema==='rig-review-applied/1'?value as AppliedRecord:null;}catch{return null;}}
+
+export interface RebuildDeps {post:(body:RebuildRequestBody)=>Promise<RebuildJobView|RebuildRefusal>;get:(id:string)=>Promise<RebuildJobView>;onLine:(line:string,index:number)=>void;sleep:(ms:number)=>Promise<void>;intervalMs?:number}
+/** One Apply: post, then poll until the job leaves `running`, handing every new line over once, in order. */
+export async function runRebuild(body:RebuildRequestBody,deps:RebuildDeps):Promise<RebuildJobView|RebuildRefusal> {
+ let job=await deps.post(body);if(job.status==='refused'&&!('id' in job))return job;
+ let seen=0;const deliver=(lines:string[])=>{for(;seen<lines.length;seen++)deps.onLine(lines[seen]!,seen);};
+ deliver((job as RebuildJobView).lines);
+ while(job.status==='running'){await deps.sleep(deps.intervalMs??700);job=await deps.get((job as RebuildJobView).id);deliver(job.lines);}
+ return job;
+}
+/** The status line after a job: built (with the wall clock and whether the scratch build was reused) or the producer's line verbatim. */
+export function outcomeLine(result:RebuildJobView|RebuildRefusal):{text:string;error:boolean} {
+ if(!('id' in result))return {text:result.producerLine??result.error,error:true};
+ if(result.status!=='built')return {text:result.producerLine??`REBUILD_FAILED: exit ${result.exitCode}`,error:true};
+ const wall=[result.wallMs.remesh,result.wallMs.compile].every(v=>v!==null)?` · remesh ${(result.wallMs.remesh!/1000).toFixed(1)} s + compile ${(result.wallMs.compile!/1000).toFixed(1)} s`:'';
+ return {text:`Applied ${result.request.part} with ${result.producer.package} ${result.producer.version}${result.reused?' · reused the scratch build of this exact designation':wall} · Reset returns to the inspected build`,error:false};
+}
