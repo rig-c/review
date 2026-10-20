@@ -200,11 +200,11 @@ test('the route is same-origin, typed and bounded; no compiler or one too old is
   await install(root,'2.62.0');expect((await (await post(base,'/api/readings',body)).json()).error).toStartWith('READINGS_COMPILER_TOO_OLD 2.62.0 2.63.0');
   expect((await post(base,'/api/readings',body,'http://evil.test')).status).toBe(403);
   expect((await post(base,'/api/readings',{...body,out:'/tmp'})).status).toBe(400);
-  const padded=await fetch(base+'/api/readings',{method:'POST',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify(body)+' '.repeat(17*1024)});expect(padded.status).toBe(400);
+  const padded=await fetch(base+'/api/readings',{method:'POST',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify(body)+' '.repeat(65*1024)});expect(padded.status).toBe(400);
   expect((await fetch(`${base}/api/readings/${'0'.repeat(64)}`)).status).toBe(404);
   expect(await Bun.file(join(state,'readings')).exists()).toBe(false);
  }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
- expect(frontRoute('single','POST','/api/readings')).toMatchObject({mutation:true,limit:16384});expect(frontRoute('single','GET',`/api/readings/${'a'.repeat(64)}`)).toMatchObject({mutation:false});
+ expect(frontRoute('single','POST','/api/readings')).toMatchObject({mutation:true,limit:65536});expect(frontRoute('single','GET',`/api/readings/${'a'.repeat(64)}`)).toMatchObject({mutation:false});
  expect(frontRoute('compare','POST','/api/readings')).toBeNull();expect(frontRoute('single','GET','/api/readings')).toBeNull();
 });
 

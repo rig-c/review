@@ -61,11 +61,14 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  // Bones check (#109, single only): one typed request {ops, configHash}, answered in the response.
  if(mode==='single'&&path==='/api/bones-check')return method==='POST'?{mutation:true,limit:64*1024,timeoutMs:60000,control:false}:null;
  // Readings (#108, single only): one typed request, then its job's status.
- if(mode==='single'&&path==='/api/readings')return method==='POST'?{mutation:true,limit:16*1024,timeoutMs:30000,control:false}:null;
+ if(mode==='single'&&path==='/api/readings')return method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
  if(mode==='single'&&/^\/api\/readings\/[a-f0-9]{64}$/.test(path))return read?get:null;
  // Declared requirements (#113, single only): the stage's catalog, one typed request, then its job's status.
  if(mode==='single'&&path==='/api/requirements')return read?get:method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
  if(mode==='single'&&/^\/api\/requirements\/[a-f0-9]{64}$/.test(path))return read?get:null;
+ // Check under this world (#112, single only): one typed request {build, schedule}, then its job's status.
+ if(mode==='single'&&path==='/api/environment-check')return method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
+ if(mode==='single'&&/^\/api\/environment-check\/[a-f0-9]{64}$/.test(path))return read?get:null;
  return null;
 }
 async function boundedBody(req:Request,limit:number,timeoutMs=10000):Promise<ArrayBuffer>{

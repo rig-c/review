@@ -26,6 +26,7 @@ import { modelMeshTriangles, remeshCounts, type RemeshCounts } from './mesh-entr
 import { patchRoute } from './retune-route.ts';
 import { absolutizeBuildFiles, buildLines, buildNamedFiles, buildReadout, needsBuild, newBuildFile, recompositeFigures, type RecompositeFigures } from './build-route.ts';
 import { jsonDiff } from './config-patch.ts';
+import { CHECK_ENVIRONMENT_SINCE, parseSchedule, ScheduleError, scheduleText } from './environment-schedule.ts';
 import { cleanArgs, mapText, motionSummary, parseRetargetRequest, retargetArgs, retargetLines, retargetRecord, retargetRecordText, RetargetError, type MotionSummary, type RetargetLine, type RetargetRecord } from './retarget.ts';
 
 export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
@@ -227,6 +228,15 @@ export interface PatchJob {
   build: RebuildBuild | null;
   /** #115, a `build` job only: what the assemble stage read and wrote (absent on every other op, so their jobs are unchanged). */
   assembled?: AssembledView;
+  /** #112: the `rigc-environment/1` schedule check read (`--environment`), by hash; absent when Apply ran under the default world. */
+  environment?: ApplyWorld['record'];
+}
+/** #112: the exported schedule an Apply's check reads, as written into the scratch directory, and what the job records of it. */
+export interface ApplyWorld { text: string; record: { sha256: string; steps: number } }
+/** `{patch, environment}`'s schedule: parsed as data and re-serialized, so its hash is the exported bytes'. */
+export function parseApplyWorld(value: unknown): ApplyWorld {
+  try { const schedule = parseSchedule(value), text = scheduleText(schedule); return { text, record: { sha256: sha256(text), steps: schedule.steps.length } }; }
+  catch (e) { if (e instanceof ScheduleError) throw new RebuildError('REBUILD_REQUEST_INVALID', `environment: ${e.message}`); throw e; }
 }
 /** The producer op a patch job ran (#136; `build` since #115). */
 export type AppliedOp = 'rig' | 'retune' | 'remesh' | 'build';
@@ -305,9 +315,10 @@ export interface DeltaJob {
  * Deterministic: the package, the config bytes, the patch's own bytes and both tool versions. No clock. A retune-routed
  * patch adds its op (#136), so a scratch build the whole-rig path left for the same patch is never reused as retune's.
  */
-export function patchId(input: { sourceHash: string; configHash: string; patch: ConfigPatch; producer: string; compiler: string; op?: AppliedOp; buildInputs?: string }): string {
+export function patchId(input: { sourceHash: string; configHash: string; patch: ConfigPatch; producer: string; compiler: string; op?: AppliedOp; buildInputs?: string; environment?: string }): string {
   // #115: a build-routed patch adds its op and the hash of the files assemble reads (painting, runs, named files).
-  return sha256(JSON.stringify([REBUILD_SCHEMA, 'patch', input.sourceHash, input.configHash, patchText(input.patch), input.producer, input.compiler, ...(input.op === 'retune' ? ['retune'] : []), ...(input.op === 'build' ? ['build', input.buildInputs ?? ''] : [])]));
+  // #112: an Apply whose check reads a schedule adds the schedule's hash, so a default-world build is never reused for it.
+  return sha256(JSON.stringify([REBUILD_SCHEMA, 'patch', input.sourceHash, input.configHash, patchText(input.patch), input.producer, input.compiler, ...(input.op === 'retune' ? ['retune'] : []), ...(input.op === 'build' ? ['build', input.buildInputs ?? ''] : []), ...(input.environment ? ['environment', input.environment] : [])]));
 }
 const namedFile = (doc: unknown, keys: readonly string[]): unknown => keys.reduce<unknown>((v, k) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>)[k] : undefined), doc);
 /**
@@ -362,6 +373,8 @@ interface ApplySteps {
   check?: (summary: CheckSummary, wallMs: number) => void;
   /** After the build is hashed, before result.json is written. */
   hashed?: () => Promise<void>;
+  /** #112: the schedule check reads (`--environment environment.json`, written into the scratch directory first). */
+  world?: ApplyWorld | null;
 }
 
 /** #115: what a build-routed patch runs with — the handoff's painting and runs, absolute; never from the client. */
@@ -544,8 +557,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       if (compile.exitCode !== 0) { job.exitCode = compile.exitCode; job.producerLine = firstRefusal(compile.lines) ?? `rigc build exited ${compile.exitCode} without a named refusal`; job.status = 'refused'; return; }
       if (steps.check) {
         // check measures the scratch rig; a FAIL is its judgment, recorded beside the build, not a refusal of the build.
-        push(`review: ${producer.package} ${producer.version} check --rig ${op.spec} --out check --parts <handoff parts>`);
-        const check = await runTool(producer.bin, ['check', '--rig', op.spec, '--out', 'check', '--parts', inputs.parts, '--page-edges', pageEdges, '--pack-shape', packShape], { cwd: dir, onLine: push });
+        if (steps.world) await writeFile(join(dir, 'environment.json'), steps.world.text, { mode: 0o600 });
+        push(`review: ${producer.package} ${producer.version} check --rig ${op.spec} --out check --parts <handoff parts>${steps.world ? ` --environment environment.json (the exported schedule, ${steps.world.record.steps} step(s), sha256 ${steps.world.record.sha256.slice(0, 16)})` : ''}`);
+        const check = await runTool(producer.bin, ['check', '--rig', op.spec, '--out', 'check', '--parts', inputs.parts, '--page-edges', pageEdges, '--pack-shape', packShape, ...(steps.world ? ['--environment', 'environment.json'] : [])], { cwd: dir, onLine: push });
         let checkJson: unknown = null;
         try { checkJson = JSON.parse(await readFile(join(dir, 'check', 'check.json'), 'utf8')); } catch { /* check refused before writing it; its line says why */ }
         steps.check(checkSummary(checkJson, check.exitCode, check.lines, firstRefusal(check.lines)), check.wallMs);
@@ -590,7 +604,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * #102: the patched config → `rig-parts rig` (whole rig), `retune` (#136: the constraints and the idle spliced onto the
    * inspected rig) or `remesh` (one part's patched entry) → `<dir>/rig`; the tail adds the diff and check.
    */
-  function executePatch(job: PatchJob, dir: string, inputs: ProducerInputs, resolved: Resolved, patched: JsonValue, part: string | null, plan: BuildPlan | null = null): Promise<void> {
+  function executePatch(job: PatchJob, dir: string, inputs: ProducerInputs, resolved: Resolved, patched: JsonValue, part: string | null, plan: BuildPlan | null = null, world: ApplyWorld | null = null): Promise<void> {
     const args = job.request.patch.op.args, producer = resolved.producer;
     let counts: RemeshCounts | null = null;
     let built: ProcessResult | null = null;
@@ -602,9 +616,11 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
           const doc = JSON.parse(scratchConfigText(inputs.config, patched)) as Record<string, unknown>;
           absolutizeBuildFiles(doc, value => (isAbsolute(value) ? value : resolve(dirname(inputs.config), value)));
           await writeFile(join(dir, 'config.json'), JSON.stringify(doc, null, 2) + '\n', { mode: 0o600 });
-          push(`review: ${producer.package} ${producer.version} build --config config.json (the handoff config with ${job.request.patch.ops.length} patch op(s)) --source <handoff source> --full <handoff full>${plan.head ? ' --head <handoff head>' : ''} --seam-pairs → scratch out (assemble → rig → check)`);
+          // #112: build forwards `--environment` to its check stage (rig-parts build --help, 1.48.0).
+          if (world) await writeFile(join(dir, 'environment.json'), world.text, { mode: 0o600 });
+          push(`review: ${producer.package} ${producer.version} build --config config.json (the handoff config with ${job.request.patch.ops.length} patch op(s)) --source <handoff source> --full <handoff full>${plan.head ? ' --head <handoff head>' : ''} --seam-pairs${world ? ` --environment environment.json (the exported schedule, ${world.record.steps} step(s), sha256 ${world.record.sha256.slice(0, 16)})` : ''} → scratch out (assemble → rig → check)`);
           // `--seam-pairs` (forwarded to check): the setup-pose seam split by pair on a pass too, so every Apply shows its `seam pair` lines.
-          built = await runTool(producer.bin, ['build', '--config', 'config.json', '--source', plan.source, '--full', plan.full, ...(plan.head ? ['--head', plan.head] : []), '--out', 'out', '--seam-pairs', ...args], { cwd: dir, onLine: push });
+          built = await runTool(producer.bin, ['build', '--config', 'config.json', '--source', plan.source, '--full', plan.full, ...(plan.head ? ['--head', plan.head] : []), '--out', 'out', '--seam-pairs', ...(world ? ['--environment', 'environment.json'] : []), ...args], { cwd: dir, onLine: push });
           const readout = buildReadout(built.lines);
           // A check that ran and found a bar not met is check's judgment, kept beside the build (as for a `rig` patch):
           // build prints "stopped at check; N bar(s) not met" (a check that refused its input says "no later stage ran").
@@ -661,6 +677,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       // #115: build runs check itself, on the parts it assembled; its check.json is read after the op (flags).
       ...(job.op === 'build' ? {} : { check: (summary: CheckSummary, wallMs: number) => { job.wallMs.check = wallMs; job.check = summary; } }),
       hashed: async () => { if (counts) job.remesh = { ...counts, modelTriangles: modelMeshTriangles(JSON.parse(await readFile(join(dir, 'build', 'skeleton.model.json'), 'utf8')), counts.part) }; },
+      world,
     });
   }
 
@@ -670,7 +687,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * on a producer that has it (#136, `src/retune-route.ts`); any other `rig` patch rebuilds the whole rig and first needs
    * the baseline to have reproduced the inspected rig (`EDIT_BASELINE_MISMATCH` naming the path). Refusals come before anything is run.
    */
-  async function startPatch(input: unknown): Promise<{ status: number; body: unknown }> {
+  async function startPatch(input: unknown, world: ApplyWorld | null = null): Promise<{ status: number; body: unknown }> {
     let patch: ConfigPatch;
     try { patch = parseConfigPatch(input); } catch (e) { if (e instanceof ConfigPatchError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
     assertStateOutside();
@@ -688,6 +705,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const resolved = resolveProducer(options.starts);
     if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
     if (patch.producer.name !== resolved.producer.package || patch.producer.version !== resolved.producer.version) throw new RebuildError('EDIT_PRODUCER_MISMATCH', `the patch was made for ${patch.producer.name} ${patch.producer.version}; the installed producer is ${resolved.producer.package} ${resolved.producer.version}`);
+    // #112: `check --environment` is @rig-c/parts 1.48.0's (parts#538); an older producer is refused by name, nothing run.
+    if (world && !versionAtLeast(resolved.producer.version, CHECK_ENVIRONMENT_SINCE)) { const error = modelingProducerTooOld(resolved.producer.version || 'unknown', CHECK_ENVIRONMENT_SINCE, 'rig-parts check --environment'); return { status: 200, body: { status: 'refused', error, producerLine: error } }; }
     // #136: the whole-rig rebuild is the fast path (~18 s) and gives the same bytes when the baseline is reproduced,
     // so it stays the default. Only when the config cannot reproduce the inspected rig (a repaired build) does a
     // patch inside retune's scope run retune, which holds the rest of the inspected rig itself (~52 s).
@@ -705,7 +724,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (op === 'rig' || op === 'build') {
       try { assertWholeRigBaseline(await settledBaseline()); } catch (e) { if (e instanceof BaselineError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
     }
-    const id = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}`, op, ...(plan ? { buildInputs: plan.inputsHash } : {}) });
+    const id = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}`, op, ...(plan ? { buildInputs: plan.inputsHash } : {}), ...(world ? { environment: world.record.sha256 } : {}) });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
@@ -713,9 +732,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const reused = await reuse<PatchJob>(dir, id);
     if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
     const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id, status: 'running', reused: false, op, request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null,
-      ...(plan ? { assembled: { inputs: plan.inputs, refusals: [], checkFails: [], lines: [], seam: [], seamPairs: [], recomposite: { line: null, before: null, after: null, errorMap: null }, parts: null } } : {}) };
+      ...(plan ? { assembled: { inputs: plan.inputs, refusals: [], checkFails: [], lines: [], seam: [], seamPairs: [], recomposite: { line: null, before: null, after: null, errorMap: null }, parts: null } } : {}),
+      ...(world ? { environment: world.record } : {}) };
     jobs.set(id, job); running = id;
-    void executePatch(job, dir, inputs, resolved, patched, part, plan).finally(() => { if (running === id) running = null; });
+    void executePatch(job, dir, inputs, resolved, patched, part, plan, world).finally(() => { if (running === id) running = null; });
     return { status: 202, body: snapshot(job) };
   }
 
@@ -895,8 +915,11 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     }
     if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'delta')) return startDelta(input);
     if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'patch')) {
-      if (Object.keys(input).length !== 1) bad('expected exactly {patch} or {part, regions, configHash}');
-      return startPatch((input as { patch: unknown }).patch);
+      // #112: `{patch, environment}` — the exported schedule Apply's check reads.
+      const keys = Object.keys(input).sort().join(',');
+      if (keys !== 'patch' && keys !== 'environment,patch') bad('expected exactly {patch}, {patch, environment} or {part, regions, configHash}');
+      const world = Object.hasOwn(input, 'environment') ? parseApplyWorld((input as { environment: unknown }).environment) : null;
+      return startPatch((input as { patch: unknown }).patch, world);
     }
     const request = parseRebuildRequest(input, options.bones);
     assertStateOutside();

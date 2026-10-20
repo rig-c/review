@@ -6,7 +6,7 @@
  */
 import {readingTicks,ticksOnClip,TICK_EDGE,worstLine,type ReadingBuild,type ReadingRequest,type ReadingResult,type ReadingTick} from '../src/readings.ts';
 
-export interface ReadingsJobView {id:string;status:'running'|'done'|'failed';error:string|null;request:{animation:string;readings:ReadingRequest[];environment:{wind:[number,number];gravity:[number,number]}|null};environment:{requested:boolean;flag:boolean;passed:boolean};compiler:{package:string;version:string};runs:{build:ReadingBuild;id:string;modelHash:string;results:ReadingResult[]}[]}
+export interface ReadingsJobView {id:string;status:'running'|'done'|'failed';error:string|null;request:{animation:string;readings:ReadingRequest[];environment:import('../src/readings.ts').ReadingsRequest['environment']};environment:{requested:boolean;flag:boolean;passed:boolean};compiler:{package:string;version:string};runs:{build:ReadingBuild;id:string;modelHash:string;results:ReadingResult[]}[]}
 export interface ReadingsRefusal {status:'refused';error:string}
 export interface ReadingsPanel {
  catalog(slots:readonly string[],bones:readonly string[]):void;

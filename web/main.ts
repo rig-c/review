@@ -42,6 +42,8 @@ import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPac
 import {tuningRows,readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {bindReadingsPanel,EDGE as READING_EDGE,type ReadingsJobView,type ReadingsPanel,type ReadingsRefusal} from './readings-panel.ts';
 import {READINGS_SCHEMA,type ReadingsContext} from '../src/readings.ts';
+import {environmentCheckRows,scheduleContext,worldExport,type EnvironmentCheckView,type WorldExport} from './environment-world.ts';
+import {barLine,beforeLine} from '../src/physics-tuning.ts';
 import {bindRequirementsPanel,type RequirementsCatalogView,type RequirementsJobView,type RequirementsPanel,type RequirementsRefusal} from './requirements-panel.ts';
 import {patchRoute} from '../src/retune-route.ts';
 import {appliedCheckRefusal,type CheckSummary} from '../src/applied-context.ts';
@@ -612,7 +614,7 @@ function tick(now: number): void {
     if (player && player.current) { try { stepEnvironment(dt); drawRig(()=>player!.frame(dt)); } catch (error) { pause(); message(errorText(error), true); } }
     if (video && video.readyState >= 1 && time > video.duration) { if (referenceInput.state !== 'out-of-domain') holdVideoReference(video, referenceGeneration); } else if (video && referenceInput.state === 'loaded' && Math.abs(video.currentTime - time) > .15) video.currentTime = time;
     if (input('sync-audio').checked) for (const cue of activeCues()) if ((previous < cue.time && cue.time <= time) || (previous === 0 && cue.time === 0 && dt > 0)) void audition(cue.clip);
-    renderSequenceFrame(); renderTransport(); if(time>=duration){if(canRepeatIdle()&&!idleHeld){stopAudio();seek(0);player?.resume();if(video)void video.play().catch(error=>{pause();message(errorText(error),true);});}else pause();} lastFrame = now;
+    renderSequenceFrame(); renderTransport(); if(time>=duration){if(canRepeatIdle()&&!idleHeld){stopAudio();if(useWorld())restartWindClock();seek(0);player?.resume();if(video)void video.play().catch(error=>{pause();message(errorText(error),true);});}else pause();} lastFrame = now;
   }
   requestAnimationFrame(tick);
 }
@@ -837,6 +839,8 @@ function bind(): void {
       view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},
       axis: axisInspection ? { id: select('axis-select').value, value: Number(input('axis-value').value) } : null,
       environment: feedbackEnvironment(),
+      // The exported schedule (#112): the drawn clip's rigc-environment/1 bytes and their sha256, and whether readings and Apply read them.
+      environmentSchedule: feedbackSchedule() as unknown as Json,
       // The exact last applied designation and the producer's line, only while that scratch build is what is drawn.
       applied: appliedOnStage ? JSON.parse(JSON.stringify(appliedOnStage)) as Json : null,
       // The readings chosen (#108): the pairs of the last finished run and the builds they ran on, not their results.
@@ -1170,7 +1174,7 @@ async function exportChest():Promise<void> {
  message('Downloaded chest-regions.json and chest-regions.binding.json. The regions are review evidence, not an approval; the package is unchanged.');
 }
 /** Animate · Environment. Inspection only: the player is the solver, nothing is written to the model or motion. */
-const environmentInputs=['wind-base','wind-breeze','wind-gust','wind-repeat','wind-gust-peak','wind-gust-duration','gravity','jolt','drag-trail','physics-reset'];
+const environmentInputs=['wind-base','wind-breeze','wind-gust','wind-repeat','wind-gust-peak','wind-gust-duration','gravity','jolt','drag-trail','physics-reset','environment-use','environment-export','environment-check'];
 function environmentApplied():boolean{return input('environment-applied').checked;}
 function gravityValue():number{return Number(input('gravity').value);}
 /** Called from `tick` right before `player.frame(dt)`: the gust clock is the stepped time, so a paused player freezes it. */
@@ -1188,6 +1192,55 @@ function renderEnvironment():void {
  text('wind-readout',(environmentApplied()?windReadout(reading,gravityValue()):RUNTIME_START_READOUT)+environmentNote);
  const gust=button('wind-gust');gust.disabled=reading.gusting;gust.setAttribute('aria-pressed',String(reading.gusting));gust.textContent=reading.gusting?'Gusting…':'Gust';
  text('wind-base-label',input('wind-base').value);text('gravity-label',gravityValue().toFixed(2));
+ renderSchedule();
+}
+/**
+ * #112 · Use for readings: the controls as the exported `rigc-environment/1` schedule (src/environment-schedule.ts). While
+ * on, readings send the drawn clip's schedule, Apply's check reads the checked clip's (`idle` when the rig has one, as
+ * `rig-parts check` renders it), and the wind clock restarts with the clip so the person watches the world rigc reads.
+ */
+function useWorld():boolean{return input('environment-use').checked&&environmentApplied();}
+function clipDuration(name:string):number{return assets?.animations.find(item=>item.name===name)?.duration??data.manifest.animations.find(item=>item.id===name)?.duration??0;}
+/** The clip `rig-parts check` poses its idle readings over: `idle` when the rig has one, else the drawn clip. */
+function checkAnimation():string{return assets?.animations.some(item=>item.name==='idle')?'idle':animation;}
+let worldCache:{key:string;value:WorldExport|{error:string}}|null=null;
+function worldFor(name:string):WorldExport|{error:string} {
+ const key=JSON.stringify([wind.snapshot(),gravityValue(),environmentApplied(),name,clipDuration(name)]);
+ if(worldCache?.key!==key)worldCache={key,value:worldExport(wind.snapshot(),gravityValue(),environmentApplied(),name,clipDuration(name))};
+ return worldCache.value;
+}
+/** A fresh wind clock at the same settings (a repeating gust restarts at 0); pending jolts keep their distance in time. */
+function restartWindClock():void {const now=wind.read().time;wind.restore(wind.snapshot());joltQueue=joltQueue.map(step=>({...step,at:Math.max(0,step.at-now)}));}
+let scheduleShown='';
+function renderSchedule():void {
+ const world=worldFor(animation),check=checkAnimation(),checked=check!==animation?worldFor(check):null;
+ const shown='error' in world?world.error:`${world.summary}${useWorld()?' · used for readings and Apply':''}${checked&&!('error' in checked)&&checked.sha256!==world.sha256?` · check reads ${check}'s: ${checked.summary}`:''}`;
+ if(shown!==scheduleShown){scheduleShown=shown;text('environment-schedule',shown);}
+}
+function feedbackSchedule(){if(!player||!environmentApplied())return null;const world=worldFor(animation);return 'error' in world?null:scheduleContext(world,useWorld());}
+let environmentCheckBusy=false;
+/** Check under this world: `rig-parts check --environment` on the build on the stage, beside that build's default-world check. */
+async function runEnvironmentCheck():Promise<EnvironmentCheckView|{status:'refused';error:string}|null> {
+ if(environmentCheckBusy)return null;
+ const out=el('environment-check-lines'),show=(rows:{kind:string;text:string}[])=>{out.replaceChildren(...rows.map(row=>{const line=document.createElement('div');line.className=`env-${row.kind}`;line.textContent=row.text;return line;}));};
+ const name=checkAnimation(),world=worldFor(name);
+ if('error' in world){show([{kind:'error',text:world.error}]);return {status:'refused',error:world.error};}
+ const build=appliedOnStage?'scratch':'inspected',before=stageCheck;
+ environmentCheckBusy=true;button('environment-check').disabled=true;show([{kind:'label',text:`Checking the ${build} build under ${name}'s schedule (${world.schedule.steps.length} step(s), sha256 ${world.sha256.slice(0,16)}) with rig-parts check --environment…`}]);
+ try{
+  let job=await api<EnvironmentCheckView|{status:'refused';error:string}>('/api/environment-check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build,schedule:world.schedule})}).catch(error=>({status:'refused' as const,error:errorText(error).replace(/^\d+: /,'')}));
+  if(!('id' in job)){const text=(()=>{try{return (JSON.parse(job.error) as {error?:string}).error??job.error;}catch{return job.error;}})();show([{kind:'error',text}]);return {status:'refused',error:text};}
+  const started=performance.now();
+  while(job.status==='running'){show([{kind:'label',text:`check --environment running on the ${build} build · ${((performance.now()-started)/1000).toFixed(0)} s · ${job.lines.at(-1)?.trim()??''}`}]);await new Promise(resolve=>setTimeout(resolve,1500));job=await api<EnvironmentCheckView>(`/api/environment-check/${job.id}`);}
+  const checked=job;
+  const label=build==='inspected'?'default world (the inspected build\'s own check)':`the scratch build's Apply check${appliedOnStage&&'environment' in appliedOnStage&&appliedOnStage.environment?` (under schedule sha256 ${appliedOnStage.environment.sha256.slice(0,16)})`:' (default world)'}`;
+  // No inspected check exists when the baseline did not reproduce the inspected rig; say why, verbatim (a schedule of wind [1, 0], gravity [0, 1] reads the default world).
+  const baseline=rebuildStatus?.baseline,noDefault=build==='inspected'&&!inspectedCheckView()&&baseline&&baseline.status!=='running'&&baseline.status!=='reproduced';
+  const draw=()=>show(environmentCheckRows(checked,name=>noDefault?`${name}: no default-world check — ${baseline!.line} (check a schedule of wind 1, gravity 1 for the runtime's world)`:build==='inspected'?beforeLine(name,null,inspectedCheckView()):barLine(name,before?.lines??null,before?.check??null),label));
+  draw();if(build==='inspected'&&inspectedCheckView()?.status!=='checked')void followInspectedCheck(draw);
+  return job;
+ }catch(error){show([{kind:'error',text:`ENVIRONMENT_CHECK_FAILED: ${errorText(error)}`}]);return null;}
+ finally{environmentCheckBusy=false;button('environment-check').disabled=!player;}
 }
 /** Every control change engages the environment; until then the player stands at the runtime start values. */
 function engage(change:()=>void):void {
@@ -1207,6 +1260,15 @@ function bindEnvironment():void {
  button('wind-gust').onclick=()=>engage(()=>wind.triggerGust());
  button('jolt').onclick=()=>{if(!player)return;joltQueue.push(...joltPacket(wind.read().time));if(!playing)message('Jolt queued · it reaches the physics on the next steps; press Play.');};
  button('physics-reset').onclick=resetPhysics;
+ input('environment-use').onchange=()=>{
+  if(!input('environment-use').checked){message('Use for readings is off: readings send the standing wind and gravity, Apply\'s check reads the default world.');renderSchedule();return;}
+  const world=worldFor(animation);
+  if('error' in world){input('environment-use').checked=false;message(world.error,true);renderSchedule();return;}
+  // The watched world starts where the schedule does: a fresh wind clock at the clip's first frame.
+  restartWindClock();seek(0);applyEnvironment();message(`Use for readings: ${world.summary} · the wind clock restarts with the clip.`);
+ };
+ button('environment-export').onclick=()=>{const world=worldFor(animation);if('error' in world){message(world.error,true);return;}download('rigc-environment.json',world.text,'application/json');message(`Exported ${world.summary}. The download is the bytes readings, Apply and feedback carry; the package is unchanged.`);};
+ button('environment-check').onclick=()=>{void runEnvironmentCheck();};
  input('drag-trail').onchange=()=>{el('rig-viewport').dataset.trail=String(input('drag-trail').checked);};
  // Drag to trail: the rig pane's pointer drag becomes `player.moved` before the pan handler sees it; Space still pans.
  let space=false,trail:{id:number;x:number;y:number}|null=null;
@@ -1410,7 +1472,10 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  const lines:string[]=[];
  rebuildBusy=true;rebuildState();chestEditor?.notify(`Applying patch (${patch.op.cmd}, ${patch.ops.length} op(s))…`,false,[]);
  try{
-  const result=await runRebuild<{patch:ConfigPatch},PatchJobView>({patch},{post:value=>api<PatchJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<PatchJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+  // #112: with "Use for readings" on, Apply's check reads the exported schedule of the clip check renders (its idle).
+  const scheduled=useWorld()?worldFor(checkAnimation()):null;
+  if(scheduled&&'error' in scheduled){chestEditor?.notify(scheduled.error,true);message(scheduled.error,true);return {status:'refused',error:scheduled.error,producerLine:scheduled.error};}
+  const result=await runRebuild<{patch:ConfigPatch;environment?:WorldExport['schedule']},PatchJobView>({patch,...(scheduled?{environment:scheduled.schedule}:{})},{post:value=>api<PatchJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<PatchJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
    onLine:line=>{lines.push(line);chestEditor?.notify(line.trim()||'…',false,lines.slice(-6));}});
   const outcome=patchOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
   if(next.id===null||!('id' in result)){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return result;}
@@ -1454,6 +1519,8 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   const posedTime=player.time;if(steps.length){if(environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));else player.environment(null);}
   return posedTime;},
  /** Readings (#108): run (the pickers' choice, or the given readings), the last job, the ticks drawn and the worst lines shown. */
+ /** #112: the exported schedule of a clip (the drawn one by default), Use for readings, and Check under this world. */
+ world:{schedule:(name?:string)=>{const w=worldFor(name??animation);return 'error' in w?w:{text:w.text,sha256:w.sha256,summary:w.summary,form:w.export.form,tolerance:w.export.tolerance};},use:(on:boolean)=>{input('environment-use').checked=on;input('environment-use').dispatchEvent(new Event('change'));return useWorld();},check:()=>runEnvironmentCheck(),lines:()=>[...el('environment-check-lines').children].map(c=>c.textContent??'')},
  readings:{run:(readings?:import('../src/readings.ts').ReadingRequest[])=>runReadings(readings?{readings}:undefined),job:()=>readingsJob?JSON.parse(JSON.stringify(readingsJob)):null,ticks:()=>[...document.querySelectorAll<HTMLButtonElement>('#reading-ticks .reading-tick')].map(t=>({build:t.dataset.build,frame:Number(t.dataset.frame),left:t.style.left})),lines:()=>readingsPanel?.shownLines()??[],context:()=>readingsContext()},
  /** Idle tracks (#104): the panel's state and ops, its edits, Apply and Reset, the preview, and the inspection-only `sample`. */
  idle:{state:()=>idlePanel?.state()??null,ops:()=>idlePanel?.ops()??[],source:()=>idlePanel?.source()??null,keying:()=>idlePanel?.keying()??null,refusals:()=>idlePanel?.refusals()??[],
@@ -1532,7 +1599,9 @@ async function runReadings(override?:{readings:import('../src/readings.ts').Read
  const chosen=override??readingsPanel.requests();
  if('error' in chosen){readingsPanel.status(chosen.error,true);return {status:'refused',error:chosen.error};}
  if(!animation){readingsPanel.status('READINGS_NO_ANIMATION: no animation is drawn',true);return null;}
- const environment=player&&environmentApplied()?environmentFor(wind.read(),gravityValue()):null;
+ // #112: with "Use for readings" on, the exported schedule of the drawn clip goes in place of the standing world.
+ let environment:ReturnType<typeof environmentFor>|WorldExport['schedule']|null=player&&environmentApplied()?environmentFor(wind.read(),gravityValue()):null;
+ if(environment&&useWorld()){const world=worldFor(animation);if('error' in world){readingsPanel.status(world.error,true);return {status:'refused',error:world.error};}environment=world.schedule;}
  const body={animation,readings:chosen.readings,environment};
  readingsBusy=true;readingsPanel.busy(true);readingsPanel.status(`Running ${chosen.readings.length} reading(s) of ${animation} with rigc render…`,false);
  const started=performance.now();
@@ -1549,7 +1618,8 @@ async function runReadings(override?:{readings:import('../src/readings.ts').Read
   readingsJob=job;readingsPanel.lines(job);renderReadingTicks(true);
   const ticks=job.runs.map(r=>`${r.build} ${r.results.reduce((n,x)=>n+x.frames.length,0)} tick(s)`).join(' · ');
   const refused=job.runs.flatMap(r=>r.results).find(r=>r.status!=='read');
-  const env=job.environment.requested?(job.environment.passed?' · wind and gravity passed as --environment':' · this rigc has no --environment; the environment was not passed'):'';
+  const scheduled=job.request.environment&&'spec' in job.request.environment?job.request.environment:null;
+  const env=job.environment.requested?(job.environment.passed?(scheduled?` · the exported schedule (${scheduled.steps.length} step(s)) passed as --environment`:' · wind and gravity passed as --environment'):' · this rigc has no --environment; the environment was not passed'):'';
   readingsPanel.status(`${refused?`${refused.refusal} · `:''}Readings of ${job.request.animation}: ${ticks}${job.runs.length<2?' · no scratch build yet (Apply builds one)':''}${env} · ${((performance.now()-started)/1000).toFixed(1)} s`,!!refused);
   return job;
  }catch(error){readingsPanel.status(`READINGS_FAILED: ${errorText(error)}`,true);return null;}

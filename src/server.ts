@@ -12,6 +12,7 @@ import { ReadingsError } from './readings.ts';
 import { BONES_CHECK_LIMIT, createBonesCheck } from './bones-check.ts';
 import { createRequirementsCheck } from './requirements-run.ts';
 import { REQUIREMENTS_LIMIT, RequirementsError } from './requirements.ts';
+import { createEnvironmentCheck, ENVIRONMENT_CHECK_LIMIT, EnvironmentCheckError } from './environment-check.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
@@ -38,6 +39,8 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
   const bonesCheck=createBonesCheck(p,{stateDir,starts,unchanged});
   // Declared requirements (#113): review writes the file into scratch; the installed producer's check measures it.
   const requirements=createRequirementsCheck(p,{stateDir,starts,unchanged,latest:rebuilds.latest});
+  // Check under this world (#112): the exported schedule written into scratch; the installed producer's check --environment reads it.
+  const environmentCheck=createEnvironmentCheck(p,{stateDir,starts,unchanged,latest:rebuilds.latest});
   const control=options.control?createControlServer({identity:options.control,sourceHash:p.sourceHash,mode:'single',unchanged,activity:options.activity}):null;
   const handle=async(req:Request,port:number|undefined):Promise<Response>=>{try {
       const url=new URL(req.url);const origin=`http://127.0.0.1:${port}`;
@@ -66,9 +69,14 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       try{const result=await requirements.start(await bodyJson(req,REQUIREMENTS_LIMIT,'REQUIREMENTS_BODY_LIMIT: maximum 64 KiB'));return json(result.body,result.status);}
       catch(e){if(e instanceof RequirementsError)return json({status:'refused',error:e.message},e.code==='REQUIREMENTS_REQUEST_INVALID'?400:200);throw e;}
     }
+    if(req.method==='POST'&&url.pathname==='/api/environment-check'){
+      if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+      try{const result=await environmentCheck.start(await bodyJson(req,ENVIRONMENT_CHECK_LIMIT,'ENVIRONMENT_CHECK_BODY_LIMIT: maximum 64 KiB'));return json(result.body,result.status);}
+      catch(e){if(e instanceof EnvironmentCheckError)return json({status:'refused',error:e.message},e.code==='ENVIRONMENT_CHECK_REQUEST_INVALID'?400:200);throw e;}
+    }
     if(req.method==='POST'&&url.pathname==='/api/readings'){
       if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
-      try{const result=await readings.start(await bodyJson(req,16*1024,'READINGS_BODY_LIMIT: maximum 16 KiB'));return json(result.body,result.status);}
+      try{const result=await readings.start(await bodyJson(req,64*1024,'READINGS_BODY_LIMIT: maximum 64 KiB'));return json(result.body,result.status);}
       catch(e){if(e instanceof ReadingsError)return json({status:'refused',error:e.message},e.code==='READINGS_REQUEST_INVALID'?400:200);throw e;}
     }
     if(req.method==='POST'&&url.pathname==='/api/strip'){
@@ -85,6 +93,8 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       if(url.pathname==='/api/requirements')return json(await requirements.describe());
       const requirementsStatus=/^\/api\/requirements\/([a-f0-9]{64})$/.exec(url.pathname);
       if(requirementsStatus){try{return json(requirements.read(requirementsStatus[1]!));}catch(e){if(e instanceof RequirementsError)return json({error:e.message},404);throw e;}}
+      const environmentCheckStatus=/^\/api\/environment-check\/([a-f0-9]{64})$/.exec(url.pathname);
+      if(environmentCheckStatus){try{return json(environmentCheck.read(environmentCheckStatus[1]!));}catch(e){if(e instanceof EnvironmentCheckError)return json({error:e.message},404);throw e;}}
       const readingsStatus=/^\/api\/readings\/([a-f0-9]{64})$/.exec(url.pathname);
       if(readingsStatus){try{return json(readings.read(readingsStatus[1]!));}catch(e){if(e instanceof ReadingsError)return json({error:e.message},404);throw e;}}
       const rebuildFile=/^\/rebuild\/([a-f0-9]{64})\/(.+)$/.exec(url.pathname);

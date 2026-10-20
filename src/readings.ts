@@ -7,6 +7,7 @@
  * Review judges nothing here: a reading is not a gate, and an unknown slot or bone is rigc's to refuse.
  */
 import { firstRefusal } from './producer.ts';
+import { parseSchedule, ScheduleError, standingSchedule, type EnvironmentSchedule } from './environment-schedule.ts';
 
 export const READINGS_SCHEMA = 'rig-review-readings/1';
 /** The first `rig-c` release with all five readings (its CHANGELOG: 2.63.0, "render: --overlaps names which slot covers which"). */
@@ -24,7 +25,8 @@ export type ReadingKind = ReadingRequest['kind'];
 export const READING_KINDS: readonly ReadingKind[] = ['folds', 'pass-through', 'seam', 'overlaps', 'angle-range'];
 /** The world the physics answers while the readings are posed: the Environment block's wind and gravity as they stand (x right, y down). */
 export interface ReadingEnvironment { wind: [number, number]; gravity: [number, number] }
-export interface ReadingsRequest { animation: string; readings: ReadingRequest[]; environment: ReadingEnvironment | null }
+/** #112: with "Use for readings" on, the Environment block's exported `rigc-environment/1` schedule goes in its place. */
+export interface ReadingsRequest { animation: string; readings: ReadingRequest[]; environment: ReadingEnvironment | EnvironmentSchedule | null }
 
 export class ReadingsError extends Error { constructor(readonly code: string, detail: string) { super(`${code}: ${detail}`); } }
 const bad = (detail: string): never => { throw new ReadingsError('READINGS_REQUEST_INVALID', detail); };
@@ -57,8 +59,12 @@ export function parseReadingsRequest(input: unknown): ReadingsRequest {
   const readings = (v.readings as unknown[]).map((r, i) => parseReading(r, `readings[${i}]`));
   const labels = readings.map(readingLabel);
   if (new Set(labels).size !== labels.length) bad('readings: one entry named twice');
-  let environment: ReadingEnvironment | null = null;
-  if (v.environment !== null) { const e = record(v.environment, 'environment'); exactly(e, ['wind', 'gravity'], 'environment'); environment = { wind: pair(e.wind, 'environment.wind'), gravity: pair(e.gravity, 'environment.gravity') }; }
+  let environment: ReadingsRequest['environment'] = null;
+  if (v.environment !== null) {
+    const e = record(v.environment, 'environment');
+    if (Object.hasOwn(e, 'spec')) { try { environment = parseSchedule(e); } catch (error) { if (error instanceof ScheduleError) bad(`environment: ${error.message}`); throw error; } }
+    else { exactly(e, ['wind', 'gravity'], 'environment'); environment = { wind: pair(e.wind, 'environment.wind'), gravity: pair(e.gravity, 'environment.gravity') }; }
+  }
   return { animation, readings, environment };
 }
 
@@ -88,8 +94,8 @@ export interface RenderPaths { candidate: string; out: string; environment: stri
 export function renderArgs(r: ReadingRequest, animation: string, paths: RenderPaths): string[] {
   return ['render', '--candidate', paths.candidate, '--animation', animation, ...(paths.environment ? ['--environment', paths.environment] : []), ...readingFlag(r), '--out', paths.out];
 }
-/** The schedule file `--environment` reads: the world as it stands, from t = 0. */
-export const environmentSchedule = (e: ReadingEnvironment) => ({ spec: 'rigc-environment/1', steps: [{ t: 0, wind: e.wind, gravity: e.gravity }] });
+/** The schedule file `--environment` reads: the world as it stands, from t = 0 — or, #112, the exported schedule as sent. */
+export const environmentSchedule = (e: ReadingEnvironment | EnvironmentSchedule): EnvironmentSchedule => ('spec' in e ? e : standingSchedule(e));
 /** Whether this rigc's `render --help` lists `--environment` (the schedule is passed only then). */
 export const helpHasEnvironment = (lines: readonly string[]) => lines.some(l => /^\s*--environment\s/.test(l));
 
@@ -216,7 +222,7 @@ export function ticksOnClip(ticks: readonly ReadingTick[], jobAnimation: string,
 
 /** `context.readings`: the pairs chosen and where they ran (the builds' identities), never the results' bytes. */
 export interface ReadingsContext {
-  schema: typeof READINGS_SCHEMA; animation: string; requests: ReadingRequest[]; environment: ReadingEnvironment | null; environmentPassed: boolean;
+  schema: typeof READINGS_SCHEMA; animation: string; requests: ReadingRequest[]; environment: ReadingsRequest['environment']; environmentPassed: boolean;
   builds: { inspected: string; scratch: string | null }; compiler: { package: string; version: string };
   ticks: { inspected: number; scratch: number | null };
 }
