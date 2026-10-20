@@ -51,7 +51,10 @@ export interface WindModel {
  setBase(value:number):void;setGustPeak(value:number):void;setGustDuration(value:number):void;
  setBreeze(value:boolean):void;setRepeat(value:boolean):void;triggerGust():void;
  advance(dt:number):WindReading;
+ /** The whole standing state, clock and active pulse included (#103: an Apply's reload resumes the same world). */
+ state():WindState;resume(value:WindState):void;
 }
+export interface WindState {snapshot:WindSnapshot;time:number;gustStart:number|null;gustDirection:number;nextGust:number|null;activeGustPeak:number;activeGustDuration:number}
 export const defaultWindSnapshot=():WindSnapshot=>({version:1,base:0,breeze:false,repeat:false,gustPeak:GUST_PEAK,gustDuration:GUST_DURATION});
 
 export function createWindModel():WindModel {
@@ -93,6 +96,11 @@ export function createWindModel():WindModel {
    const enabled=Boolean(value);if(enabled===repeat)return;repeat=enabled;
    if(repeat){if(read().gusting)nextGust=gustStart!+gustPeriod(activeGustDuration);else start(time);}
    else nextGust=null; // Finish the active pulse before returning to base.
+  },
+  state:()=>({snapshot:{version:1,base,breeze,repeat,gustPeak,gustDuration},time,gustStart,gustDirection,nextGust,activeGustPeak,activeGustDuration}),
+  resume(value){
+   const saved=structuredClone(value);this.restore(saved.snapshot);
+   time=saved.time;gustStart=saved.gustStart;gustDirection=saved.gustDirection;nextGust=saved.nextGust;activeGustPeak=saved.activeGustPeak;activeGustDuration=saved.activeGustDuration;
   },
   advance(dt){
    if(!Number.isFinite(dt)||dt<0||!Number.isFinite(time+dt))throw new RangeError('wind dt must be finite, non-negative and keep a finite clock');
@@ -157,14 +165,19 @@ export function physicsConstraints(document:unknown):PhysicsConstraints {
  return {available:true,rows};
 }
 
+/** The reviewed model document, its bytes hash-checked against the reviewed identity first. */
+export async function loadModelDocument(url:string,sha256:string,fetcher:typeof fetch=fetch):Promise<{ok:true;document:unknown}|{ok:false;reason:string}> {
+ const response=await fetcher(url);if(!response.ok)return {ok:false,reason:`model request failed (${response.status})`};
+ const bytes=await response.arrayBuffer();if(bytes.byteLength>128*1024*1024)return {ok:false,reason:'model exceeds 128 MiB'};
+ const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(v=>v.toString(16).padStart(2,'0')).join('');
+ if(hash!==sha256)return {ok:false,reason:'model bytes differ from reviewed SHA-256'};
+ try{return {ok:true,document:JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes))};}
+ catch(error){return {ok:false,reason:error instanceof Error?error.message:String(error)};}
+}
 /** Reads the reviewed model bytes (hash-checked against the reviewed identity) and lists its physics constraints. */
 export async function loadPhysicsConstraints(url:string,sha256:string,fetcher:typeof fetch=fetch):Promise<PhysicsConstraints> {
- const response=await fetcher(url);if(!response.ok)return {available:false,reason:`PHYSICS_CONSTRAINTS_UNAVAILABLE: model request failed (${response.status})`};
- const bytes=await response.arrayBuffer();if(bytes.byteLength>128*1024*1024)return {available:false,reason:'PHYSICS_CONSTRAINTS_UNAVAILABLE: model exceeds 128 MiB'};
- const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(v=>v.toString(16).padStart(2,'0')).join('');
- if(hash!==sha256)return {available:false,reason:'PHYSICS_CONSTRAINTS_UNAVAILABLE: model bytes differ from reviewed SHA-256'};
- try{return physicsConstraints(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));}
- catch(error){return {available:false,reason:`PHYSICS_CONSTRAINTS_UNAVAILABLE: ${error instanceof Error?error.message:String(error)}`};}
+ const loaded=await loadModelDocument(url,sha256,fetcher);
+ return loaded.ok?physicsConstraints(loaded.document):{available:false,reason:`PHYSICS_CONSTRAINTS_UNAVAILABLE: ${loaded.reason}`};
 }
 
 /** What a feedback record keeps of the environment it was written under. */

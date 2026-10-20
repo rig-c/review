@@ -8,7 +8,7 @@ import {RigOverlays,type OverlayCircle,type OverlayRegion} from './rig-overlays.
 import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
 import {bindChestEditor,bustLabel,bustSides,rowCircle,type ChestEditor} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
-import {appliedRecord,designatedRegions,handoffText,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedPatch,type AppliedRecord,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {appliedRecord,designatedRegions,handoffText,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedPatch,type AppliedRecord,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -27,7 +27,11 @@ import { clockForAnimation, frameAtTime, lastFrame as lastProducerFrame, timeAtF
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, type FeedbackCatalog } from '../src/feedback-validation.ts';
 import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
-import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPacket,dueJolts,dragMoved,loadPhysicsConstraints,PHYSICS_FIELDS,CONSTRAINT_MIX_READONLY,environmentContext,environmentJson,type JoltStep,type WindSnapshot} from '../src/environment.ts';
+import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPacket,dueJolts,dragMoved,loadModelDocument,environmentContext,environmentJson,type JoltStep,type WindSnapshot,type WindState} from '../src/environment.ts';
+import {tuningRows,barLine,READOUT_BARS} from '../src/physics-tuning.ts';
+import {appliedCheckRefusal,type CheckSummary} from '../src/applied-context.ts';
+import {bindPhysicsPanel,type PhysicsPanel} from './physics-panel.ts';
+import type {PatchOp} from '../src/config-patch.ts';
 
 interface ReviewResponse { initialAnimation?:string|null; manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
 interface PoseReference { schema: 'rig-review-pose/1'; coordinateSystem: 'image-pixels-y-down'; width: number; height: number; joints: { id: string; x: number; y: number; parent?: string }[] }
@@ -107,6 +111,10 @@ let selectedReportTarget: number | undefined;
 // Animate's Environment block: the wind clock advances only with the steps the player takes.
 const wind=createWindModel();
 let joltQueue:JoltStep[]=[],environmentNote='';
+/** Animate · Physics tuning (#103): the panel, the inspected model document it maps against, and the check lines of the build on the stage (null: the inspected build, which review has not checked). */
+let physicsPanel:PhysicsPanel|null=null,inspectedDocument:unknown=null,inspectedDocumentReason:string|null=null,stageCheck:{lines:string[];check:CheckSummary|null}|null=null;
+/** The world an Apply's reload resumes: wind (clock and active pulse), pending jolts, whether the controls are engaged, gravity. */
+interface StageWorld {wind:WindState;jolts:JoltStep[];applied:boolean;gravity:number}
 
 function message(value: string, error = false): void {
   text('message', value);
@@ -598,6 +606,8 @@ function applyAxis(): void {
 function renderProposals(): void {
   const area = el('proposal-list'); area.replaceChildren();
   const warnings = el('feedback-warnings'); warnings.hidden = session.feedbackWarnings.length === 0;
+  const unchecked = session.feedback.map(f => appliedCheckRefusal((f.context as Record<string, unknown> | undefined)?.applied)).find(Boolean) ?? null;
+  el('feedback-applied-check').hidden = !unchecked; text('feedback-applied-check', unchecked ? `${unchecked} · Submit refuses this review; delete the entry written on that build or Apply a build that passes check.` : '');
   warnings.textContent = session.feedbackWarnings.length ? `${session.feedbackWarnings.length} validation warnings in existing feedback · original records are preserved. Review the marked entries, delete them and add valid replacements before submitting. The saved session that rig-review feedback exports keeps both the original records and warnings.` : '';
   for (const feedback of session.feedback) {
     const item = document.createElement('div'); item.className = 'proposal-item'; const title = document.createElement('strong'); title.textContent = `${feedback.category} · ${feedback.target.kind}:${feedback.target.name} · F${feedback.frameStart}–${feedback.frameEnd}`; const description = document.createElement('span'); description.textContent = feedback.summary;
@@ -714,7 +724,7 @@ function bind(): void {
   button('chest-export').onclick = () => { void exportChest(); };
   for (const event of ['input', 'change']) el('chest-regions').addEventListener(event, renderChest);
   // A discarded local draft restores the form after its button's own handler; re-read the tool then.
-  el('draft-recovery').addEventListener('click', () => { renderChest(); restoreEnvironment(); });
+  el('draft-recovery').addEventListener('click', () => { renderChest(); restoreEnvironment(); physicsPanel?.restore(); });
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => {setView(item.dataset.view as typeof view);const menu=document.getElementById('view-menu') as HTMLDetailsElement|null;if(menu)menu.open=false;};
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
@@ -792,6 +802,9 @@ function bind(): void {
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,basis:meshBasis,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},message,confirm:text=>window.confirm(text),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
+  physicsPanel=bindPhysicsPanel({apply:async ops=>{await applyPhysics(ops);},reset:resetPhysicsBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
+   bonePoints:bones=>{if(!player)return null;const project=rigProject(),pane=el('rig-pane').getBoundingClientRect(),view=el('rig-root').parentElement!.getBoundingClientRect(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name),p=project(b.x,b.y);out.set(name,{x:p.x+view.left-pane.left,y:p.y+view.top-pane.top});}catch{/* a bone this model lacks is not pickable */}}return out;}});
+  viewDisposers.push(()=>physicsPanel?.dispose());
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
   for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
@@ -833,7 +846,7 @@ async function start(): Promise<void> {
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-    const restored=await setupPersistence();await loadRebuildStatus();renderChest();restoreEnvironment();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();await loadRebuildStatus();renderChest();restoreEnvironment();physicsPanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
@@ -1118,26 +1131,20 @@ function restoreEnvironment():void {
 function feedbackEnvironment(){return player?environmentJson(environmentContext(wind.read(),gravityValue(),environmentApplied(),player.environment())):null;}
 function enableEnvironment(modelUrl:string):void {
  for(const id of environmentInputs)el<HTMLInputElement|HTMLButtonElement>(id).disabled=false;
- syncEnvironmentInputs();text('physics-mix-readonly',CONSTRAINT_MIX_READONLY);text('physics-constraints-state','Reading the compiled model…');
+ syncEnvironmentInputs();text('physics-panel-state','Reading the compiled model…');
  const rig=data.reviewedSource.rig;
- if(!rig){renderConstraints({available:false,reason:'PHYSICS_CONSTRAINTS_UNAVAILABLE: no reviewed rig identity'});return;}
- void loadPhysicsConstraints(modelUrl,rig.sha256).then(renderConstraints,error=>renderConstraints({available:false,reason:`PHYSICS_CONSTRAINTS_UNAVAILABLE: ${errorText(error)}`}));
+ if(!rig){inspectedDocumentReason='PHYSICS_TUNING_UNAVAILABLE: no reviewed rig identity';refreshPhysics();return;}
+ void loadModelDocument(modelUrl,rig.sha256).then(loaded=>{if(loaded.ok)inspectedDocument=loaded.document;else inspectedDocumentReason=`PHYSICS_TUNING_UNAVAILABLE: ${loaded.reason}`;refreshPhysics();},error=>{inspectedDocumentReason=`PHYSICS_TUNING_UNAVAILABLE: ${errorText(error)}`;refreshPhysics();});
 }
-function renderConstraints(value:Awaited<ReturnType<typeof loadPhysicsConstraints>>):void {
- const area=el('physics-constraints');area.replaceChildren();
- if(!value.available){text('physics-constraints-state',value.reason);el('physics-constraints-state').classList.add('error');return;}
- el('physics-constraints-state').classList.remove('error');
- text('physics-constraints-state',`${value.rows.length} physics constraints as the compiled model declares them · — = not declared (no runtime default is shown)`);
- const table=document.createElement('table'),head=document.createElement('tr');table.className='physics-table';
- for(const label of ['Constraint','Bone',...PHYSICS_FIELDS]){const cell=document.createElement('th');cell.scope='col';cell.textContent=label;head.append(cell);}
- const thead=document.createElement('thead');thead.append(head);const body=document.createElement('tbody');
- for(const row of value.rows){
-  const line=document.createElement('tr');
-  const name=document.createElement('th');name.scope='row';name.textContent=row.name;const bone=document.createElement('td');bone.textContent=row.bone??'—';line.append(name,bone);
-  for(const field of PHYSICS_FIELDS){const cell=document.createElement('td'),v=row.values[field];cell.textContent=v===undefined?'—':String(v);if(v===undefined){cell.className='absent';cell.title='Not declared';}line.append(cell);}
-  body.append(line);
- }
- table.append(thead,body);area.append(table);
+/** The panel's rows: the inspected model's constraints against the handoff config's (both must be read). */
+function refreshPhysics():void {
+ if(!physicsPanel)return;
+ if(inspectedDocumentReason){physicsPanel.load({available:false,reason:inspectedDocumentReason},[]);return;}
+ if(!inspectedDocument)return;
+ if(!rebuildStatus){text('physics-panel-state','Reading the producer handoff…');return;}
+ if(!rebuildStatus.inputs||!rebuildStatus.producer){physicsPanel.load({available:false,reason:rebuildStatus.reason??'PHYSICS_TUNING_UNAVAILABLE: no producer handoff'},[]);return;}
+ const bones=(inspectedDocument as {bones?:unknown}).bones,list=Array.isArray(bones)?bones.filter((b):b is {name:string;parent?:string}=>!!b&&typeof (b as {name?:unknown}).name==='string'):[];
+ physicsPanel.load(tuningRows(rebuildStatus.constraints??null,inspectedDocument),list);
 }
 /** Setup's mesh edit: the selected slot's actual mesh as a typed delta. A two-file client download; nothing reaches the session or the package. */
 function meshSource(){const part=parts?.value()??null,frame=parts?.frame('single');return meshEditSource({slot:part?.slot??null,activeAttachment:parts?.observation()?.activeAttachment??null,row:part?frame?.order.find(row=>row.slot===part.slot):undefined,model:partModel,mapping:chestMapping});}
@@ -1154,7 +1161,7 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  const seed=seedFields(rebuildStatus,chestField);
  if(seed){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
  if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,true);
- renderHandoff(rebuildStatus);
+ renderHandoff(rebuildStatus);refreshPhysics();
  return rebuildStatus;
 }
 /** The handoff line (#101): path, hash and how it was found, then the baseline; re-read while the baseline runs. */
@@ -1182,7 +1189,7 @@ async function applyRebuild():Promise<void> {
   // A refusal stays readable in full: the bar's status line is one line, so the log ends with the producer's line verbatim.
   if(!('id' in result)||result.status!=='built'||!result.build){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return;}
   await swapRig(new URL(access.route(result.build.modelUrl),location.href).href,access.route(`/rebuild/${result.id}/`),result.build.modelHash);
-  appliedOnStage=appliedRecord(result);
+  appliedOnStage=appliedRecord(result);stageCheck=null;
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   // The log closes on success so nothing floats over the rebuilt stage; a refusal keeps it open.
   chestEditor?.notify(outcome.text,false,[]);message(outcome.text);
@@ -1196,7 +1203,7 @@ async function applyRebuild():Promise<void> {
  * and check's summary. A refusal leaves the stage as it was and shows the producer's line verbatim. No editing UI calls
  * this yet (#103+); `window.rigReviewEditor.applyPatch` is its entry point.
  */
-async function applyPatch(patch:ConfigPatch):Promise<PatchJobView|RebuildRefusal> {
+async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<PatchJobView|RebuildRefusal> {
  if(rebuildBusy)return {status:'refused',error:'REBUILD_BUSY: an Apply is still running',producerLine:null};
  if(readOnly){chestEditor?.notify(readOnly,true);return {status:'refused',error:readOnly,producerLine:null};}
  const lines:string[]=[];
@@ -1206,8 +1213,8 @@ async function applyPatch(patch:ConfigPatch):Promise<PatchJobView|RebuildRefusal
    onLine:line=>{lines.push(line);chestEditor?.notify(line.trim()||'…',false,lines.slice(-6));}});
   const outcome=patchOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
   if(next.id===null||!('id' in result)){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return result;}
-  await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash);
-  appliedOnStage=patchAppliedRecord(result);
+  await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
+  appliedOnStage=patchAppliedRecord(result);stageCheck={lines:[...result.lines],check:result.check};
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   chestEditor?.notify(outcome.text,outcome.error,[]);message(outcome.text,outcome.error);
   return result;
@@ -1218,12 +1225,61 @@ async function applyPatch(patch:ConfigPatch):Promise<PatchJobView|RebuildRefusal
 (window as unknown as {rigReviewEditor:unknown}).rigReviewEditor={
  applyPatch,reset:()=>resetRebuild(),
  status:async()=>rebuildStatus??await loadRebuildStatus(),
+ physics:{rows:()=>physicsPanel?.rows()??[],chains:()=>physicsPanel?.chains()??[],edits:()=>physicsPanel?.edits()??[],set:(name:string,field:Parameters<PhysicsPanel['set']>[1],value:number)=>physicsPanel?.set(name,field,value),ramp:(id:string,field:Parameters<PhysicsPanel['set']>[1],root:number,tip:number)=>physicsPanel?.ramp(id,field,root,tip),select:(name:string)=>physicsPanel?.select(name),apply:()=>applyPhysics(physicsPanel?.edits().map(e=>({op:e.op,path:e.path,value:e.value,name:e.name}))??[]),reset:()=>resetPhysicsBuild()},
+ /** Inspection only: one slot's posed world geometry on the drawn frame (what the stage drew), for comparing against `rigc render --geometry`. */
+ posed:(slot:string)=>{const frame=player?.posedFrame();const found=frame?.order.find(item=>item.slot===slot);return found?JSON.parse(JSON.stringify(found,(key,value)=>key==='bitmap'||key==='image'||key==='page'?undefined:value)):null;},
+ bone:(name:string)=>player?JSON.parse(JSON.stringify(player.bone(name))):null,
+ /** Inspection only: a world point (y up) as page client pixels on the rig pane, the projection the overlays draw with. */
+ screen:(x:number,y:number)=>{const p=rigProject()(x,y),view=el('rig-root').parentElement!.getBoundingClientRect();return {x:p.x+view.left,y:p.y+view.top};},
+ /**
+  * Inspection only, a fixed schedule: pause, reopen the track at 0 and step it `round(t/dt)` times by `dt`. With `steps`
+  * (`rigc-environment/1` steps: x right, y down) each step is set before the step that poses the first frame at or after
+  * its `t`, the way `rigc render --environment` steps a build; without, the environment as it stands. The page's own
+  * environment is put back afterwards; no jolt is replayed and the wind clock is untouched.
+  */
+ replay:(t:number,dt:number,steps:readonly {t:number;wind?:[number,number];gravity?:[number,number]}[]=[])=>{
+  if(!player?.current||!(dt>0)||!(t>=0))return null;
+  const at=(k:number)=>{for(const step of steps)if(Math.max(0,Math.ceil(step.t/dt-1e-9))===k)player!.environment({...(step.wind?{wind:step.wind}:{}),...(step.gravity?{gravity:step.gravity}:{})});};
+  pause();if(steps.length)player.environment(null);at(0);player.seek(0);player.resume();
+  try{for(let k=1,n=Math.round(t/dt);k<=n;k++){at(k);player.frame(dt);}}finally{player.pause();}
+  drawRig(()=>player!.draw());time=player.time;renderTransport();
+  const posedTime=player.time;if(steps.length){if(environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));else player.environment(null);}
+  return posedTime;},
  stage:()=>({modelHash:stageModelHash,inspectedHash:inspectedModel?.sha256??null,applied:appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,animation,time:player?.time??time,playing,busy:rebuildBusy}),
 };
-async function resetRebuild():Promise<void> {
+/** The world as it stands now: what a physics Apply's reload resumes. */
+function stageWorld():StageWorld {return {wind:wind.state(),jolts:joltQueue.map(step=>({...step})),applied:environmentApplied(),gravity:gravityValue()};}
+/**
+ * Physics Apply (#103): the pending ops become one config patch (`rig`, then check) against the handoff config; the
+ * scratch build reloads under the world Apply was pressed in, and the readout shows the two check lines before (the
+ * build that was on the stage) and after. A refusal shows the producer's line verbatim and leaves the stage as it was.
+ */
+async function applyPhysics(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|null> {
+ const status=rebuildStatus??await loadRebuildStatus();
+ const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
+ if(!patch){const reason=!ops.length?'PHYSICS_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';physicsPanel?.status(reason,true);return null;}
+ const world=stageWorld(),before=stageCheck;
+ physicsPanel?.busy(true);physicsPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: rig --config, compile, check…`,false);
+ try{
+  const result=await applyPatch(patch,world);
+  const outcome=patchOutcomeLine(result);physicsPanel?.status(outcome.text,outcome.error);
+  if('id' in result&&result.status==='built'){
+   physicsPanel?.applied(result.request.patch.ops);
+   physicsPanel?.readout(READOUT_BARS.map(name=>({name,before:before?barLine(name,before.lines,before.check):`${name}: not in check summary (the inspected build; review ran no check on it)`,after:barLine(name,result.lines,result.check)})));
+  }
+  return result;
+ }finally{physicsPanel?.busy(false);}
+}
+/** Physics Reset: the inspected build back under the same world, and no pending op. */
+async function resetPhysicsBuild():Promise<void> {
+ physicsPanel?.clear();physicsPanel?.applied(null);physicsPanel?.readout([]);
+ if(appliedOnStage){physicsPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{physicsPanel?.busy(false);}}
+ physicsPanel?.status('Reset: the inspected build is on the stage; no pending ops.',false);
+}
+async function resetRebuild(world:StageWorld|null=null):Promise<void> {
  if(rebuildBusy||!appliedOnStage||!inspectedModel)return;
  rebuildBusy=true;rebuildState();
- try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256);appliedOnStage=null;chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');}
+ try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');}
  catch(error){chestEditor?.notify(`REBUILD_RESET_FAILED: ${errorText(error)}`,true);}
  finally{rebuildBusy=false;rebuildState();}
 }
@@ -1231,13 +1287,17 @@ async function resetRebuild():Promise<void> {
  * Replace the drawn rig in place: the new model loads first (a failure leaves the stage as it was), then the player is
  * swapped and the same animation, time, set, camera and environment are restored; playback resumes when it was running.
  */
-async function swapRig(modelUrl:string,prefix:string,sha256:string):Promise<void> {
+async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWorld|null=null):Promise<void> {
  const keepAnimation=animation,keepTime=player?.time??time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
  const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}});
  pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);stageModelHash=sha256;
  player.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
  try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);partModel=catalog.model;parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
  if(keepSet){try{player.setSet(keepSet);}catch{select('part-set').value='';player.setSet(null);}}
+ // The same world before the first pose: a physics Apply resumes the wind (clock and pulse), the pending jolts, gravity and
+ // whether the controls are engaged as they stood when Apply was pressed; then the seek re-poses under that world.
+ if(world){wind.resume(world.wind);joltQueue=world.jolts.map(step=>({...step}));input('environment-applied').checked=world.applied;input('gravity').value=String(world.gravity);syncEnvironmentInputs();}
+ if(environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));
  if(keepAnimation&&assets.animations.some(clip=>clip.name===keepAnimation)){chooseAnimation(keepAnimation);seek(keepTime);}else drawRig(()=>player!.draw());
  if(environmentApplied())applyEnvironment();
  updateChestMapping();fitCamera();

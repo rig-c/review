@@ -10,7 +10,12 @@ export const CONFIG_PATCH_SCHEMA = 'rig-review-config-patch/1';
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type PatchOpName = 'replace' | 'add' | 'remove';
 export const PATCH_OPS: readonly PatchOpName[] = ['replace', 'add', 'remove'];
-export interface PatchOp { op: PatchOpName; path: string; value?: JsonValue }
+/**
+ * `name` (#103), optional: the `name` the entry at `/<list>/<index>` holds in the config the patch was made against — an
+ * edit card that addresses a named list entry by index records the name too, and the server refuses the patch
+ * (`EDIT_PATCH_NAME_MISMATCH`) unless the index resolves to that name.
+ */
+export interface PatchOp { op: PatchOpName; path: string; value?: JsonValue; name?: string }
 /** `rig` rebuilds the whole rig from the patched config; `remesh` re-fits one part from its patched `meshes.<part>` entry. */
 export type PatchCmd = 'rig' | 'remesh';
 export const PATCH_CMDS: readonly PatchCmd[] = ['rig', 'remesh'];
@@ -89,11 +94,15 @@ export function parseConfigPatch(input: unknown): ConfigPatch {
     if (!isObject(raw)) return invalid(`ops[${i}] must be an object`);
     if (!PATCH_OPS.includes(raw.op as PatchOpName)) throw new ConfigPatchError('EDIT_PATCH_OP_UNKNOWN', `ops[${i}].op ${JSON.stringify(raw.op)} (supported: ${PATCH_OPS.join(', ')})`);
     const name = raw.op as PatchOpName, want = name === 'remove' ? 'op,path' : 'op,path,value';
-    if (Object.keys(raw).sort().join(',') !== want) invalid(`ops[${i}]: ${name} holds exactly ${want.split(',').join(', ')}`);
+    const keys = Object.keys(raw).filter(k => k !== 'name').sort().join(',');
+    if (keys !== want) invalid(`ops[${i}]: ${name} holds exactly ${want.split(',').join(', ')} (and an optional name)`);
     const tokens = parsePointer(raw.path);
     if (!tokens.length) throw new ConfigPatchError('EDIT_PATCH_POINTER_INVALID', `ops[${i}].path "" would replace the whole config`);
     if (name !== 'remove' && !isJson(raw.value)) invalid(`ops[${i}].value is not JSON`);
-    return name === 'remove' ? { op: name, path: raw.path as string } : { op: name, path: raw.path as string, value: raw.value as JsonValue };
+    const entryName = Object.hasOwn(raw, 'name') ? raw.name : undefined;
+    if (entryName !== undefined && (typeof entryName !== 'string' || !entryName || entryName.length > 128 || tokens.length < 2 || !/^(0|[1-9][0-9]*)$/.test(tokens[1]!))) invalid(`ops[${i}].name must be a non-empty string naming the entry /${pointerToken(tokens[0]!)}/<index> holds`);
+    const tag = entryName === undefined ? {} : { name: entryName as string };
+    return name === 'remove' ? { op: name, path: raw.path as string, ...tag } : { op: name, path: raw.path as string, value: raw.value as JsonValue, ...tag };
   });
   return { schema: CONFIG_PATCH_SCHEMA, config_sha256: input.config_sha256 as string, ops, producer: { name: (producer as Record<string, string>).name!, version: (producer as Record<string, string>).version! }, op: { cmd: cmd as PatchCmd, args } };
 }
@@ -105,6 +114,17 @@ export const patchSha256 = (patch: ConfigPatch) => sha256(patchText(patch));
 /** `EDIT_PATCH_STALE` unless the patch was made against exactly these config bytes. */
 export function assertPatchFresh(patch: Pick<ConfigPatch, 'config_sha256'>, configSha256: string): void {
   if (patch.config_sha256 !== configSha256) throw new ConfigPatchError('EDIT_PATCH_STALE', `the patch was made against config ${patch.config_sha256.slice(0, 12)}…, the handoff config is ${configSha256.slice(0, 12)}…; read the config again and remake the patch`);
+}
+
+/** Every op that records a name must address, by index, a list entry of the unpatched config holding exactly that name. */
+export function assertOpNames(doc: JsonValue, ops: readonly PatchOp[]): void {
+  for (const [i, op] of ops.entries()) {
+    if (op.name === undefined) continue;
+    const [list, index] = parsePointer(op.path), entries = isObject(doc) ? (doc as Record<string, JsonValue>)[list!] : undefined;
+    const entry = Array.isArray(entries) ? entries[Number(index)] : undefined;
+    const held = isObject(entry) ? (entry as Record<string, JsonValue>).name : undefined;
+    if (held !== op.name) throw new ConfigPatchError('EDIT_PATCH_NAME_MISMATCH', `ops[${i}] ${op.path} records "${op.name}", but /${pointerToken(list!)}/${index} ${held === undefined ? 'holds no named entry' : `is "${String(held)}"`} in the handoff config`);
+  }
 }
 
 const arrayIndex = (token: string, length: number, allowEnd: boolean, path: string): number => {

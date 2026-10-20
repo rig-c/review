@@ -106,3 +106,16 @@ export function appliedSummary(value: unknown): string | null {
   const diff = a.diff ? ` · rig.json differs at ${a.diff.count} path(s)` : '';
   return `patch ${a.patchSha256.slice(0, 12)}… (${a.patch.op.cmd}; ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? `, +${paths.length - 3}` : ''}) with ${producer.package} ${producer.version} · ${check}${diff} · model ${model}…`;
 }
+
+/**
+ * HQ ruling on #103: a scratch build whose `rig-parts check` FAILed may be loaded and looked at, but a review whose
+ * applied state failed check is not submitted. The refusal names check's FAIL line — the summary's `check: FAIL …` line,
+ * else the first bar check.json marks FAIL — verbatim. Null when the record is not a patch or its check did not FAIL.
+ */
+export function appliedCheckRefusal(value: unknown): string | null {
+  if (!isObject(value) || value.schema !== APPLIED_PATCH_SCHEMA || !isObject(value.check) || value.check.pass !== false) return null;
+  const check = value.check as unknown as CheckSummary;
+  const bar = Object.entries(check.bars ?? {}).find(([, status]) => status === 'FAIL')?.[0];
+  const line = typeof check.line === 'string' && /\bFAIL\b/.test(check.line) ? check.line : bar ? `${bar}: FAIL` : `check exited ${check.exitCode}`;
+  return `EDIT_SUBMIT_UNCHECKED: applied build failed check — ${line}`;
+}

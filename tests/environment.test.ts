@@ -135,14 +135,18 @@ test('issue export names the environment of a note; a note without one has no en
  expect(lines).toEqual(['- Environment: wind 30 · gust 48 over 2.4 s (now 48.0) · total 78.0 · gravity 1 · standing wind [78, 0] · gravity [0, 1]']);
 });
 
-test('the page applies the environment in the drawing tick, records it in feedback and draws no mix toggle',async()=>{
+test('the page applies the environment in the drawing tick, records it in feedback and edits physics only as patch ops',async()=>{
  const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),html=await readFile(new URL('../web/index.html',import.meta.url),'utf8');
  expect(main).toContain('stepEnvironment(dt); drawRig(()=>player!.frame(dt));');
  expect(main).toContain('environment: feedbackEnvironment(),');
  expect(main).toContain('player.environment(null);if(player.current){player.seek(time);');
  const animate=html.slice(html.indexOf('<section id="inspector-playback"'),html.indexOf('</main>'));
- for(const id of ['environment','wind-base','wind-breeze','wind-gust','wind-gust-peak','wind-gust-duration','wind-repeat','wind-readout','gravity','jolt','drag-trail','physics-reset','physics-constraints'])expect(animate).toContain(`id="${id}"`);
+ for(const id of ['environment','wind-base','wind-breeze','wind-gust','wind-gust-peak','wind-gust-duration','wind-repeat','wind-readout','gravity','jolt','drag-trail','physics-reset','physics-panel','physics-rows','physics-row-editor','physics-locked','physics-pending-list','physics-apply','physics-reset-build','physics-readout','physics-pending'])expect(animate).toContain(`id="${id}"`);
  const block=animate.slice(animate.indexOf('<section id="environment"'),animate.indexOf('</section>',animate.indexOf('<section id="environment"')));
  expect(block).toContain('min="-100" max="100"');expect(block).toContain('min="0" max="4"');expect(block).toContain('min="0" max="200"');expect(block).toContain('min="0.1" max="20"');
- const list=block.slice(block.indexOf('id="physics-constraints-panel"'));expect(list).not.toMatch(/<input|<button|<select/);
+ // #103: the read-only list became the tuning panel, outside the inspection-only environment block; it says that
+ // preview before Apply waits on play#147 and the environment block itself still edits nothing in the model.
+ expect(block).not.toContain('physics-constraints');
+ const panel=animate.slice(animate.indexOf('<section id="physics-panel"'),animate.indexOf('</section>',animate.indexOf('<section id="physics-panel"')));
+ expect(panel).toContain('play#147');expect(panel).toContain('/constraints/&lt;i&gt;/&lt;field&gt;');
 });

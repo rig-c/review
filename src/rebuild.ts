@@ -16,7 +16,7 @@ import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts
 import { compileArgs, firstRefusal, remeshArgs, resolveProducer, runTool, type InstalledTool } from './producer.ts';
 import { CONFIG_NAMED_FILES, HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
 import { assertWholeRigBaseline, BaselineError, baselineKey, runBaseline, type BaselineResult } from './baseline.ts';
-import { applyConfigPatch, assertPatchFresh, ConfigPatchError, jsonDiff, parseConfigPatch, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
+import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, jsonDiff, parseConfigPatch, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
 import { checkSummary, MAX_DIFF_PATHS, type CheckSummary } from './applied-context.ts';
 
 export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
@@ -41,6 +41,12 @@ export async function producerInputs(handoff: Handoff | null, reason: string | n
   const configText = await readFile(handoff.config, 'utf8'), configHash = sha256(configText);
   if (configHash !== handoff.record.config.sha256) throw new RebuildError('REBUILD_INPUTS_CHANGED', `${handoff.record.config.path} changed since the review was opened; restart review`);
   return { config: handoff.config, parts: handoff.parts!, rig: handoff.rig!, configText, configHash, handoff: handoff.record };
+}
+
+/** The config's `constraints` list as written, or null when it has none. */
+export function configConstraints(configText: string): unknown[] | null {
+  const list = object(JSON.parse(configText), 'config').constraints;
+  return Array.isArray(list) ? list : null;
 }
 
 export type ProducerRegion =
@@ -227,6 +233,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       inputs: inputs && handoff ? { config: handoff.record.config.path, parts: handoff.record.parts, rig: handoff.record.rig, configHash: inputs.configHash } : null,
       baseline: ensureBaseline(resolved),
       parts, contour,
+      // The config's constraints as written (#103: the physics panel patches them by index and name).
+      constraints: inputs ? configConstraints(inputs.configText) : null,
       producer: resolved.ok ? tool(resolved.producer) : null, compiler: resolved.ok ? tool(resolved.compiler) : null,
       reason,
       running,
@@ -351,6 +359,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const original = JSON.parse(inputs.configText) as JsonValue;
     try {
       assertPatchFresh(patch, inputs.configHash);
+      assertOpNames(original, patch.ops);
       patched = applyConfigPatch(original, patch.ops);
       if (patch.op.cmd === 'remesh') part = remeshPart(patch);
     } catch (e) { if (e instanceof ConfigPatchError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
