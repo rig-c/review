@@ -6,8 +6,8 @@
 import {ellipsePolygon} from '../src/chest-regions.ts';
 import type {BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
-import {APPLIED_PATCH_SCHEMA,filesDiffText,type AppliedPatch,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
-export type {ConfigPatch,PatchOp,AppliedPatch,CheckSummary,BustSpec};
+import {APPLIED_DELTA_SCHEMA,APPLIED_PATCH_SCHEMA,filesDiffText,type AppliedDelta,type AppliedPatch,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
+export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,CheckSummary,BustSpec};
 import {chestContourFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
 import type {InspectedCheckView} from '../src/physics-tuning.ts';
 
@@ -109,12 +109,16 @@ export function seedLandmarks(status:Pick<RebuildStatusView,'parts'|'contour'>,r
 }
 
 export const appliedRecord=(job:RebuildJobView):AppliedRecord=>({schema:'rig-review-applied/1',buildId:job.id,part:job.request.part,regions:job.request.regions,...(job.request.bust?{bust:job.request.bust}:{}),configHash:job.request.configHash,entrySha256:job.request.entrySha256,producer:job.producer,compiler:job.compiler,line:job.producerLine,modelHash:job.build!.modelHash});
-export function parseApplied(text:string):AppliedRecord|AppliedPatch|null {try{const value=JSON.parse(text);return value?.schema==='rig-review-applied/1'||value?.schema===APPLIED_PATCH_SCHEMA?value as AppliedRecord|AppliedPatch:null;}catch{return null;}}
+export function parseApplied(text:string):AppliedRecord|AppliedPatch|AppliedDelta|null {try{const value=JSON.parse(text);return value?.schema==='rig-review-applied/1'||value?.schema===APPLIED_PATCH_SCHEMA||value?.schema===APPLIED_DELTA_SCHEMA?value as AppliedRecord|AppliedPatch|AppliedDelta:null;}catch{return null;}}
 
 /** A patch Apply's job (#102): the patch and its hash, the op/compile/check wall clocks, check's summary and the rig.json diff. */
 export interface PatchJobView {id:string;kind:'patch';op?:'rig'|'retune'|'remesh';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{op:number|null;compile:number|null;check:number|null};check:CheckSummary|null;diff:{count:number;paths:string[]}|null;files?:FilesDiff|null;remesh?:import('../src/mesh-entry.ts').RemeshCounts&{modelTriangles:number|null}|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{patch:ConfigPatch;patchSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
 export interface PatchRequestBody {patch:ConfigPatch}
-export type AnyJobView=RebuildJobView|PatchJobView;
+/** Edit Mesh's delta Apply (#135): `remesh --delta`, the per-file diff and the part's counts; remesh's own gate holds check. */
+export interface DeltaJobView {id:string;kind:'delta';op:'remesh';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{op:number|null;compile:number|null};files:FilesDiff|null;remesh:import('../src/mesh-entry.ts').RemeshCounts&{modelTriangles:number|null}|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;delta:Record<string,unknown>;deltaSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
+/** `{part, delta, configHash}`: the server owns every path and flag; the delta is the editor's export as it stands. */
+export interface DeltaRequestBody {part:string;delta:import('../src/mesh-edit.ts').MeshEditDocument;configHash:string}
+export type AnyJobView=RebuildJobView|PatchJobView|DeltaJobView;
 export const isPatchJob=(job:AnyJobView):job is PatchJobView=>(job as PatchJobView).kind==='patch';
 
 export interface RebuildDeps<B=RebuildRequestBody|PatchRequestBody,J extends AnyJobView=AnyJobView> {post:(body:B)=>Promise<J|RebuildRefusal>;get:(id:string)=>Promise<J>;onLine:(line:string,index:number)=>void;sleep:(ms:number)=>Promise<void>;intervalMs?:number}
@@ -137,6 +141,17 @@ export function makePatch(status:Pick<RebuildStatusView,'inputs'|'producer'>,ops
 }
 /** What the draft keeps and `context.applied` carries for a patch: the patch, its hash, the producer's line and check's summary. */
 export const patchAppliedRecord=(job:PatchJobView):AppliedPatch=>({schema:APPLIED_PATCH_SCHEMA,buildId:job.id,patch:job.request.patch,patchSha256:job.request.patchSha256,configHash:job.request.configHash,producer:job.producer,compiler:job.compiler,line:job.producerLine,check:job.check,diff:job.diff,...(job.files?{files:job.files}:{}),modelHash:job.build!.modelHash,...(job.op?{op:job.op}:{}),...(job.remesh?{mesh:{part:job.remesh.part,before:{...job.remesh.before},after:{...job.remesh.after}}}:{})});
+/** What the draft keeps and `context.applied` carries for a delta: the document and its hash, the producer's line, op "remesh", the diff and the counts. */
+export const deltaAppliedRecord=(job:DeltaJobView):AppliedDelta=>({schema:APPLIED_DELTA_SCHEMA,buildId:job.id,part:job.request.part,delta:JSON.parse(JSON.stringify(job.request.delta)),deltaSha256:job.request.deltaSha256,configHash:job.request.configHash,producer:job.producer,compiler:job.compiler,line:job.producerLine,op:'remesh',files:job.files,...(job.remesh?{mesh:{part:job.remesh.part,before:{...job.remesh.before},after:{...job.remesh.after}}}:{}),modelHash:job.build!.modelHash});
+/** A delta job's status line: built (wall clocks, counts, the per-file diff) or the producer's line verbatim. */
+export function deltaOutcomeLine(result:DeltaJobView|RebuildRefusal):{text:string;error:boolean} {
+ if(!('id' in result))return {text:result.producerLine??result.error,error:true};
+ if(result.status!=='built')return {text:result.producerLine??`REBUILD_FAILED: exit ${result.exitCode}`,error:true};
+ const ops=Array.isArray(result.request.delta.ops)?result.request.delta.ops.length:0;
+ const wall=result.reused?'reused the scratch build of this exact delta':`remesh --delta ${seconds(result.wallMs.op)} + compile ${seconds(result.wallMs.compile)}`;
+ const counts=result.remesh?` · ${result.remesh.part} v ${result.remesh.before.vertices} t ${result.remesh.before.triangles} → v ${result.remesh.after.vertices} t ${result.remesh.after.triangles}`:'';
+ return {text:`Applied mesh edit ${result.request.deltaSha256.slice(0,12)}… (${ops} op(s) on ${result.request.part}) with ${result.producer.package} ${result.producer.version} · ${wall}${counts} · ${result.files?filesDiffText(result.files):'no diff'} · Reset returns to the inspected build`,error:false};
+}
 /**
  * What the stage draws after an Apply: the scratch build when the job built one, else what it drew before — a
  * refusal, a failure or a busy reply leaves the stage's model (and its hash) as it was.

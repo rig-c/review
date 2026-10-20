@@ -13,7 +13,8 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, realpath, rm, writeFile, lstat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts';
-import { compileArgs, firstRefusal, remeshArgs, resolveProducer, runTool, type CompileRequest, type InstalledTool, type ProcessResult } from './producer.ts';
+import { compileArgs, firstRefusal, modelingProducerTooOld, REMESH_DELTA_SINCE, remeshArgs, remeshDeltaArgs, resolveProducer, runTool, versionAtLeast, type CompileRequest, type InstalledTool, type ProcessResult } from './producer.ts';
+import { meshEditText } from './mesh-edit.ts';
 import { CONFIG_NAMED_FILES, HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
 import { assertWholeRigBaseline, BaselineError, baselineKey, producerDiff, runBaseline, runInspectedCheck, runningInspectedCheck, type BaselineResult, type InspectedCheck } from './baseline.ts';
 import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, parseConfigPatch, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
@@ -208,6 +209,37 @@ export interface PatchJob {
 }
 /** The producer op a patch job ran (#136). */
 export type AppliedOp = 'rig' | 'retune' | 'remesh';
+
+/**
+ * #135: Edit Mesh's Apply · Rebuild — `{part, delta, configHash}`, the delta being the `rig-review-mesh-edit/1` document
+ * the editor exports (`src/mesh-edit.ts`, `basis: "setup"`). Review checks only the envelope: the document's schema,
+ * basis, source counts and hash and every op are the producer's to judge (`rig-parts remesh --delta`), and its
+ * `REMESH_DELTA_*` / `REMESH_*` line comes back verbatim. The delta is written as `meshEditText` writes the download,
+ * so `deltaSha256` is the `mesh-edit.binding.json` file hash of the same document.
+ */
+export interface DeltaRequest { part: string; delta: Record<string, unknown>; configHash: string }
+export function parseDeltaRequest(input: unknown): DeltaRequest {
+  const v = object(input, 'rebuild'), keys = Object.keys(v).sort().join(',');
+  if (keys !== 'configHash,delta,part') bad('expected exactly {part, delta, configHash}');
+  if (typeof v.part !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(v.part)) bad('part');
+  if (typeof v.configHash !== 'string' || !/^[a-f0-9]{64}$/.test(v.configHash)) bad('configHash');
+  if (!v.delta || typeof v.delta !== 'object' || Array.isArray(v.delta)) bad('delta must be one rig-review-mesh-edit/1 document');
+  return { part: v.part as string, delta: v.delta as Record<string, unknown>, configHash: v.configHash as string };
+}
+/** Deterministic: the package, the config bytes, the part, the delta's bytes and both tool versions. No clock. */
+export function deltaId(input: { sourceHash: string; configHash: string; part: string; deltaText: string; producer: string; compiler: string }): string {
+  return sha256(JSON.stringify([REBUILD_SCHEMA, 'delta', input.sourceHash, input.configHash, input.part, input.deltaText, input.producer, input.compiler]));
+}
+/** A delta Apply's job (#135): `remesh --delta`, then the shared tail with the per-file diff (#125); remesh's own gate holds check. */
+export interface DeltaJob {
+  schema: typeof REBUILD_SCHEMA; kind: 'delta'; id: string; status: RebuildStatus; reused: boolean; op: 'remesh';
+  request: { part: string; delta: Record<string, unknown>; deltaSha256: string; configHash: string };
+  producer: { package: string; version: string }; compiler: { package: string; version: string };
+  lines: string[]; producerLine: string | null; exitCode: number | null; wallMs: { op: number | null; compile: number | null };
+  files: FilesDiff | null;
+  remesh: (RemeshCounts & { modelTriangles: number | null }) | null;
+  build: RebuildBuild | null;
+}
 /**
  * Deterministic: the package, the config bytes, the patch's own bytes and both tool versions. No clock. A retune-routed
  * patch adds its op (#136), so a scratch build the whole-rig path left for the same patch is never reused as retune's.
@@ -279,9 +311,9 @@ async function hashBuild(build: string, id: string): Promise<RebuildBuild> {
 
 /** One rebuild at a time per review instance; finished jobs stay readable by id. */
 export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
-  const jobs = new Map<string, RebuildJob | PatchJob>();
+  const jobs = new Map<string, RebuildJob | PatchJob | DeltaJob>();
   let running: string | null = null;
-  const snapshot = <J extends RebuildJob | PatchJob>(job: J): J => ({ ...job, lines: [...job.lines] });
+  const snapshot = <J extends RebuildJob | PatchJob | DeltaJob>(job: J): J => ({ ...job, lines: [...job.lines] });
 
   /** The state directory may not sit inside the package or the handoff's root (the parent of an opened out/). */
   function assertStateOutside(): void {
@@ -361,7 +393,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   /** The baseline once it settles (tests, and the whole-rig ops of #102/#103 through assertWholeRigBaseline). */
   async function settledBaseline(): Promise<BaselineResult | null> { if (!baselineRun) ensureBaseline(resolveProducer(options.starts)); return baselineRun ? await baselineRun : baseline; }
 
-  async function reuse<J extends RebuildJob | PatchJob>(dir: string, id: string): Promise<J | null> {
+  async function reuse<J extends RebuildJob | PatchJob | DeltaJob>(dir: string, id: string): Promise<J | null> {
     const resultFile = join(dir, 'result.json');
     if (!(await exists(resultFile))) return null;
     try {
@@ -379,7 +411,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * result.json written, the package's other scratch builds replaced; anything but a built job leaves nothing behind.
    * Each runner passes only its producer op and the optional steps it records.
    */
-  async function apply(job: RebuildJob | PatchJob, dir: string, inputs: ProducerInputs, resolved: Resolved, op: ProducerOp, steps: ApplySteps = {}): Promise<void> {
+  async function apply(job: RebuildJob | PatchJob | DeltaJob, dir: string, inputs: ProducerInputs, resolved: Resolved, op: ProducerOp, steps: ApplySteps = {}): Promise<void> {
     const push = (line: string) => { if (job.lines.length < MAX_LINES) job.lines.push(line); };
     const producer = resolved.producer;
     try {
@@ -539,8 +571,66 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     return { status: 202, body: snapshot(job) };
   }
 
+  /** #135: the delta → `rig-parts remesh --delta mesh-edit.json --part <part>` → `<dir>/rig`; the tail adds the per-file diff. */
+  function executeDelta(job: DeltaJob, dir: string, inputs: ProducerInputs, resolved: Resolved, text: string): Promise<void> {
+    const producer = resolved.producer, part = job.request.part;
+    let counts: RemeshCounts | null = null;
+    return apply(job, dir, inputs, resolved, {
+      cmd: 'remesh', spec: 'rig',
+      async run(push) {
+        await writeFile(join(dir, 'mesh-edit.json'), text, { mode: 0o600 });
+        const ops = Array.isArray(job.request.delta.ops) ? job.request.delta.ops.length : '?';
+        push(`review: ${producer.package} ${producer.version} remesh --delta mesh-edit.json --part ${part} (Edit Mesh's delta, ${ops} op(s), sha256 ${job.request.deltaSha256.slice(0, 12)}…) → scratch rig`);
+        return runTool(producer.bin, remeshDeltaArgs({ rig: inputs.rig, config: inputs.config, parts: inputs.parts, part, delta: 'mesh-edit.json', out: 'rig' }), { cwd: dir, onLine: push });
+      },
+      wallMs: ms => { job.wallMs.op = ms; },
+      async flags(push) {
+        const provenance = JSON.parse(await readFile(join(dir, 'rig', 'remesh.json'), 'utf8')) as unknown;
+        const request = object(object(provenance, 'remesh.json').request, 'remesh.json request');
+        counts = remeshCounts(provenance);
+        if (counts) push(`review: remesh.json ${counts.part}: v ${counts.before.vertices} t ${counts.before.triangles} → v ${counts.after.vertices} t ${counts.after.triangles}`);
+        return { pageEdges: request.page_edges === 'pot' ? 'pot' : 'free', packShape: request.pack_shape === 'rect' ? 'rect' : 'polygon', note: ' (remesh.json\'s pack flags)' };
+      },
+    }, {
+      diff: files => { job.files = files; },
+      hashed: async () => { if (counts) job.remesh = { ...counts, modelTriangles: modelMeshTriangles(JSON.parse(await readFile(join(dir, 'build', 'skeleton.model.json'), 'utf8')), counts.part) }; },
+    });
+  }
+
+  /**
+   * `POST /api/rebuild` with `{part, delta, configHash}` (#135): the config hash the editor read must still be the
+   * handoff's (`REBUILD_CONFIG_STALE`), and the installed producer must read `--delta` (`MODELING_PRODUCER_TOO_OLD`,
+   * the version from its own manifest). Everything about the delta itself is the producer's judgment, verbatim.
+   */
+  async function startDelta(input: unknown): Promise<{ status: number; body: unknown }> {
+    const request = parseDeltaRequest(input);
+    assertStateOutside();
+    await options.unchanged();
+    const inputs = await producerInputs(p.handoff, p.handoffReason);
+    if (inputs.configHash !== request.configHash) throw new RebuildError('REBUILD_CONFIG_STALE', 'the producer config changed since the editor read it; reload');
+    const resolved = resolveProducer(options.starts);
+    if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
+    if (!versionAtLeast(resolved.producer.version, REMESH_DELTA_SINCE)) {
+      const error = modelingProducerTooOld(resolved.producer.version || 'unknown', REMESH_DELTA_SINCE, 'rig-parts remesh --delta');
+      return { status: 200, body: { status: 'refused', error, producerLine: error } };
+    }
+    const text = meshEditText(request.delta);
+    const id = deltaId({ sourceHash: p.sourceHash, configHash: inputs.configHash, part: request.part, deltaText: text, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
+    const current = jobs.get(id);
+    if (current?.status === 'running') return { status: 202, body: snapshot(current) };
+    if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+    const reused = await reuse<DeltaJob>(dir, id);
+    if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
+    const job: DeltaJob = { schema: REBUILD_SCHEMA, kind: 'delta', id, status: 'running', reused: false, op: 'remesh', request: { part: request.part, delta: request.delta, deltaSha256: sha256(text), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null }, files: null, remesh: null, build: null };
+    jobs.set(id, job); running = id;
+    void executeDelta(job, dir, inputs, resolved, text).finally(() => { if (running === id) running = null; });
+    return { status: 202, body: snapshot(job) };
+  }
+
   /** `POST /api/rebuild`: refusals are returned before anything is written or run. */
   async function start(input: unknown): Promise<{ status: number; body: unknown }> {
+    if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'delta')) return startDelta(input);
     if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'patch')) {
       if (Object.keys(input).length !== 1) bad('expected exactly {patch} or {part, regions, configHash}');
       return startPatch((input as { patch: unknown }).patch);
@@ -566,7 +656,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     return { status: 202, body: snapshot(job) };
   }
 
-  function read(id: string): RebuildJob | PatchJob {
+  function read(id: string): RebuildJob | PatchJob | DeltaJob {
     const job = jobs.get(id);
     if (!job) throw new RebuildError('REBUILD_NOT_FOUND', id);
     return snapshot(job);

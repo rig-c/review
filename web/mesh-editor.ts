@@ -4,13 +4,16 @@
  * model document at the **setup pose** (#100): the stored vertices placed through the setup-pose bones of a never-played
  * player (`web/setup-pose.ts`, shared with Setup · Weights) and drawn over the stage with the stage's own camera — the
  * stage itself stays paused at the pose it held, under the veil. Everything is a typed delta (`src/mesh-edit.ts`,
- * `basis: "setup"`) previewed over the original triangulation; nothing is retriangulated, written into the package or
- * sent to a producer from here — Apply · Rebuild still refuses `MODELING_TARGET_UNSUPPORTED` by name.
+ * `basis: "setup"`) previewed over the original triangulation; nothing is retriangulated or written into the package
+ * from here. Apply · Rebuild (#135) hands the exported document to the host, which sends it through the shared runner as
+ * `rig-parts remesh --delta`; a built revision loads in place and the editor re-reads the revision's setup mesh, a
+ * refusal leaves the stage and the delta as they were. While a delta revision is on the stage, Reset returns to the
+ * inspected build, and the local draft keeps the applied delta (edits over the revision are not written to it).
  */
 import type {CropWorldMapping} from '../src/chest-regions.ts';
 import {placeSetupMesh,readSetupMesh,setupModel} from '../src/setup-mesh.ts';
 import {
- MESH_EDIT_CODES,MESH_EDIT_NO_MESH,MESH_EDIT_PREVIEW_NOTE,MESH_EDIT_RIG_UNAVAILABLE,MODELING_TARGET_UNSUPPORTED,MESH_EDIT_SELECT_SLOT,MeshEditSession,affineOf,applyAffine,applyMeshOps,attachmentHashText,draftOps,hitMesh,
+ MESH_EDIT_CODES,MESH_EDIT_NO_MESH,MESH_EDIT_PREVIEW_NOTE,MESH_EDIT_RIG_UNAVAILABLE,MESH_EDIT_SELECT_SLOT,MeshEditSession,affineOf,applyAffine,applyMeshOps,attachmentHashText,draftOps,hitMesh,
  invertAffine,meshEditDocument,parseMeshDraft,screenDeltaToCrop,verticesInBox,writeMeshDraft,type MeshEditDocument,type MeshEditResult,type MeshOp,type MeshSource,
  type MeshView,type ScreenPoint,type Vec,
 } from '../src/mesh-edit.ts';
@@ -75,6 +78,8 @@ export function meshEditSource(input:{slot:string|null;model:unknown;pose:(slot:
  const vertices:Vec[]=[];for(let i=0;i<world.length;i+=2)vertices.push(toCrop(world[i]!,world[i+1]!));
  return {ok:true,source:{slot,skin:mesh.skin,attachment:mesh.attachment,vertices,triangles:mesh.triangles,hull:mesh.hull},entry:mesh.entry,world};
 }
+/** Apply · Rebuild with an empty delta: nothing is sent. */
+export const MESH_EDIT_NOTHING_PENDING='MESH_EDIT_NOTHING_PENDING: the delta holds no op; nothing is sent';
 export async function sha256Hex(text:string):Promise<string> {return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))].map(b=>b.toString(16).padStart(2,'0')).join('');}
 
 export interface MeshEditorHost {
@@ -88,6 +93,12 @@ export interface MeshEditorHost {
  pause:()=>void;
  changed:()=>void;
  download:(document:MeshEditDocument)=>void;
+ /** Apply · Rebuild (#135): send the delta through the shared runner; `built` when the revision is on the stage. Lines stream to `line`. */
+ apply:(document:MeshEditDocument,line:(text:string)=>void)=>Promise<{built:boolean;text:string;error:boolean}>;
+ /** Whether the stage holds a revision this editor's Apply built. */
+ applied:()=>boolean;
+ /** Return the stage to the inspected build. */
+ resetBuild:()=>Promise<void>;
  message:(text:string,error?:boolean)=>void;
  confirm:(text:string)=>boolean;
  token:(name:string)=>string;
@@ -100,7 +111,7 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
  const node=<T extends HTMLElement>(id:string)=>document.getElementById(id) as T;
  const toggle=node<HTMLButtonElement>('mesh-edit'),bar=node<HTMLElement>('mesh-editor-bar'),status=node<HTMLElement>('mesh-editor-status'),draft=node<HTMLTextAreaElement>('mesh-edit-draft');
  const chestToggle=document.getElementById('chest-edit') as HTMLButtonElement|null;
- let active=false,entering=false,mode:MeshMode|null=null,session:MeshEditSession|null=null,space=false,drag:Drag|null=null,pending:number|null=null,hover:ReturnType<typeof hitMesh>=null,note='',noteError=false;
+ let active=false,entering=false,applying=false,mode:MeshMode|null=null,session:MeshEditSession|null=null,space=false,drag:Drag|null=null,pending:number|null=null,hover:ReturnType<typeof hitMesh>=null,note='',noteError=false;
  let preview:MeshView|null=null;const selected=new Set<number>();
  const view=()=>preview??session?.view()??null;
  const cropToScreen=()=>{const project=host.project(),mapping=host.mapping();if(!project||!mapping.available)return null;return affineOf((x,y)=>{const w=mapping.toWorld(x,y);return project(w.x,w.y);});};
@@ -118,7 +129,7 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
   if(!visible&&active){setActive(false);return;}
   toggle.setAttribute('aria-pressed',String(active));bar.hidden=!active;
   for(const button of bar.querySelectorAll<HTMLButtonElement>('[data-mesh-mode]'))button.setAttribute('aria-pressed',String(button.dataset.meshMode===mode));
-  node<HTMLButtonElement>('mesh-undo').disabled=!session?.canUndo();node<HTMLButtonElement>('mesh-redo').disabled=!session?.canRedo();node<HTMLButtonElement>('mesh-reset').disabled=!session?.canUndo()&&!session?.ops().length;
+  node<HTMLButtonElement>('mesh-undo').disabled=!session?.canUndo();node<HTMLButtonElement>('mesh-redo').disabled=!session?.canRedo();node<HTMLButtonElement>('mesh-reset').disabled=!session?.canUndo()&&!session?.ops().length&&!host.applied();node<HTMLButtonElement>('mesh-apply').disabled=applying;
   if(!session){status.textContent='';return;}
   const s=session.source,count=session.ops().length;
   status.textContent=`${note?note+' · ':''}${count} op${count===1?'':'s'} · setup pose · ${MESH_EDIT_PREVIEW_NOTE} · ${mode?hint[mode]:'no sub-mode — Escape again leaves mesh edit'} · Space-drag pans`;
@@ -127,7 +138,8 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
   if(mode)host.pane.dataset.meshMode=mode;else delete host.pane.dataset.meshMode;
  };
  const say=(text:string,error=false)=>{note=text;noteError=error;if(text)host.message(text,error);sync();};
- const persist=()=>{if(!session)return;const text=writeMeshDraft(parseMeshDraft(draft.value),session.source,session.ops());if(text.length>32768){say('MESH_EDIT_DRAFT_LIMIT: the local draft is full — download the JSON; edits after this are not kept on reload',true);return;}draft.value=text;draft.dispatchEvent(new Event('input',{bubbles:true}));};
+ // While a delta revision is on the stage the draft keeps the delta that built it: edits over the revision are not written.
+ const persist=()=>{if(!session||host.applied())return;const text=writeMeshDraft(parseMeshDraft(draft.value),session.source,session.ops());if(text.length>32768){say('MESH_EDIT_DRAFT_LIMIT: the local draft is full — download the JSON; edits after this are not kept on reload',true);return;}draft.value=text;draft.dispatchEvent(new Event('input',{bubbles:true}));};
  /** Reports a step: a refusal by its code, a no-op by its reason, a change by what it did. */
  const after=(result:MeshEditResult,what:()=>string)=>{
   if(!result.ok)say(result.code,true);
@@ -155,10 +167,29 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
  const undo=()=>{if(session?.undo()){selected.clear();persist();say('');host.changed();}};
  const redo=()=>{if(session?.redo()){selected.clear();persist();say('');host.changed();}};
  node<HTMLButtonElement>('mesh-undo').addEventListener('click',undo);node<HTMLButtonElement>('mesh-redo').addEventListener('click',redo);
- node<HTMLButtonElement>('mesh-reset').addEventListener('click',()=>{if(!session)return;if(!host.confirm(`Drop the whole mesh-edit delta for ${session.source.slot} / ${session.source.attachment}? This cannot be undone.`))return;session.reset();selected.clear();persist();say('delta reset');host.changed();});
+ /** Leave and re-read the selected slot's setup mesh from whatever model the stage now draws (the draft restores by hash). */
+ const reenter=async()=>{leave();sync();await enter();};
+ node<HTMLButtonElement>('mesh-reset').addEventListener('click',()=>{
+  if(!session||applying)return;
+  // A delta revision on the stage: Reset returns to the inspected build, whose setup mesh the draft's delta was drawn over.
+  if(host.applied()){if(!host.confirm('Return to the inspected build? The applied delta stays in the local draft.'))return;void (async()=>{applying=true;sync();try{await host.resetBuild();await reenter();say('Reset: the inspected build is on the stage; the draft\'s delta is restored over its setup mesh');}finally{applying=false;sync();}})();return;}
+  if(!host.confirm(`Drop the whole mesh-edit delta for ${session.source.slot} / ${session.source.attachment}? This cannot be undone.`))return;session.reset();selected.clear();persist();say('delta reset');host.changed();
+ });
  node<HTMLButtonElement>('mesh-download').addEventListener('click',()=>{if(session)host.download(meshEditDocument(session));});
- // No producer command consumes a vertex delta (#99): refuse by name and run nothing.
- node<HTMLButtonElement>('mesh-apply').addEventListener('click',()=>{host.message(MODELING_TARGET_UNSUPPORTED,true);say(MODELING_TARGET_UNSUPPORTED,true);});
+ // #135: the delta goes to the producer (`rig-parts remesh --delta`) through the host's shared runner; a built revision
+ // loads in place and the editor re-reads its setup mesh; a refusal shows the producer's line verbatim and keeps the delta.
+ node<HTMLButtonElement>('mesh-apply').addEventListener('click',()=>{
+  if(!session||applying)return;
+  if(!session.ops().length){say(MESH_EDIT_NOTHING_PENDING,true);return;}
+  const doc=meshEditDocument(session);applying=true;say(`Applying ${doc.ops.length} op(s) on ${doc.slot}: remesh --delta, compile…`);
+  void (async()=>{
+   try{const result=await host.apply(doc,line=>{if(line.trim()){note=line.trim();noteError=false;sync();}});
+    if(result.built)await reenter();
+    say(result.text,result.error);
+   }catch(error){say(`REBUILD_FAILED: ${error instanceof Error?error.message:String(error)}`,true);}
+   finally{applying=false;sync();}
+  })();
+ });
  const keyDown=(event:KeyboardEvent)=>{
   if(event.code==='Space'&&!textEntryFocused(event.target))space=true;
   const action=meshEditShortcut(event,{active,mode,selected:selected.size});if(!action)return;
@@ -270,4 +301,3 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
   dispose:()=>{observer.disconnect();chestObserver.disconnect();host.pane.removeEventListener('pointerdown',down,true);host.pane.removeEventListener('pointermove',move,true);for(const type of ['pointerup','pointercancel'] as const)host.pane.removeEventListener(type,end,true);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);window.removeEventListener('blur',blur);},
  };
 }
-export {MODELING_TARGET_UNSUPPORTED};

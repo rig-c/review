@@ -13,8 +13,6 @@
  * vertex that ends a constraint edge is removed only after that edge is.
  */
 import type {SetupMeshCodes} from './setup-mesh.ts';
-/** Edit Mesh's Apply · Rebuild: no producer command consumes a vertex delta, so it refuses by name and runs nothing. */
-export const MODELING_TARGET_UNSUPPORTED = 'MODELING_TARGET_UNSUPPORTED: the producer has no delta operation (parts); export the delta';
 export type Vec = [number, number];
 export type MeshOp =
   | { op: 'move'; v: number; from: Vec; to: Vec }
@@ -271,6 +269,11 @@ export function meshEditDocument(session: MeshEditSession): MeshEditDocument {
     ops: session.ops(),
   };
 }
+/**
+ * The delta's bytes: what Download JSON saves and what Apply · Rebuild (#135) writes as the producer's
+ * `mesh-edit.json`, so the binding's `file.sha256` and the applied record's `deltaSha256` name the same bytes.
+ */
+export const meshEditText = (document: unknown) => JSON.stringify(document, null, 2) + '\n';
 export function meshEditBinding(input: { fileSha256: string; sourceHash: string; reviewedSource: { viewerVersion: string; runtimeVersion: string; rig: { sha256: string } | null; motion: { sha256: string } | null }; exportedAt: string; mapping: string; attachment: { slot: string; skin: string; name: string; sha256: string } }) {
   return {
     schema: MESH_EDIT_BINDING_SCHEMA,

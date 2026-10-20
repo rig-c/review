@@ -6,14 +6,19 @@
  * and after, as the revision's `remesh.json` states them. #125 adds `files`: the diff of every document the producer
  * writes (`src/producer-files.ts`), per file, and its images by hash; records without it (older ones) stay valid. #136
  * adds `op`: the producer op that ran (`rig`, `retune` or `remesh`); records without it stay valid.
+ * `rig-review-applied/3` (#135) is Edit Mesh's delta, run by `rig-parts remesh --delta`: the `rig-review-mesh-edit/1`
+ * document as sent (by content) and the SHA-256 of its bytes (`deltaSha256`, the download's file hash), the part, the
+ * producer's line, `op` "remesh", the per-file diff and the part's counts.
  * Records without `applied`, or with null, stay valid. Pure.
  */
 import { CONFIG_PATCH_SCHEMA, parseConfigPatch, type ConfigPatch } from './config-patch.ts';
 import { parseBustSpec } from './chest-landmarks.ts';
 import { PRODUCER_DOCUMENTS, type ProducerDocument } from './producer-files.ts';
+import { MESH_EDIT_BASIS, MESH_EDIT_MAX_OPS, MESH_EDIT_SCHEMA } from './mesh-edit.ts';
 
 export const APPLIED_REGIONS_SCHEMA = 'rig-review-applied/1';
 export const APPLIED_PATCH_SCHEMA = 'rig-review-applied/2';
+export const APPLIED_DELTA_SCHEMA = 'rig-review-applied/3';
 export const CHECK_SUMMARY_SCHEMA = 'rig-review-check-summary/1';
 /** At most this many differing paths are listed; `count` always holds the full number. */
 export const MAX_DIFF_PATHS = 200;
@@ -48,6 +53,23 @@ export interface AppliedPatch {
   files?: FilesDiff | null;
   /** #136: the producer op that ran — `retune` or `rig` for a `rig` patch, `remesh` for a remesh patch. Absent in older records. */
   op?: 'rig' | 'retune' | 'remesh';
+}
+/** #135: Edit Mesh's delta as applied by `rig-parts remesh --delta`. */
+export interface AppliedDelta {
+  schema: typeof APPLIED_DELTA_SCHEMA;
+  buildId: string;
+  part: string;
+  /** The `rig-review-mesh-edit/1` document as sent to the producer. */
+  delta: Record<string, unknown>;
+  /** SHA-256 of the delta's bytes as written (`meshEditText`): the binding's `file.sha256` for the same document. */
+  deltaSha256: string;
+  configHash: string;
+  producer: Tool; compiler: Tool;
+  line: string | null;
+  op: 'remesh';
+  files: FilesDiff | null;
+  mesh?: { part: string; before: MeshCounts; after: MeshCounts };
+  modelHash: string;
 }
 /** One producer document against the inspected one: `count` differing JSON Pointers, the first `MAX_DIFF_PATHS` listed. */
 export interface DocumentDiff { file: ProducerDocument; count: number; paths: string[] }
@@ -150,7 +172,23 @@ export function parseAppliedContext(value: unknown): void {
     }
     return;
   }
-  throw new Error(`${field}.schema: expected ${APPLIED_REGIONS_SCHEMA} or ${APPLIED_PATCH_SCHEMA} (patch ${CONFIG_PATCH_SCHEMA})`);
+  if (value.schema === APPLIED_DELTA_SCHEMA) {
+    const v = exact(value, `buildId,compiler,configHash,delta,deltaSha256,files,line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,op,part,producer,schema`, field);
+    if (![v.buildId, v.configHash, v.deltaSha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, deltaSha256 and modelHash are SHA-256 hex`);
+    if (typeof v.part !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(v.part)) throw new Error(`${field}.part: the part remesh --delta ran on`);
+    const d = v.delta;
+    if (!isObject(d) || d.schema !== MESH_EDIT_SCHEMA || d.basis !== MESH_EDIT_BASIS || d.slot !== v.part || !isObject(d.source) || !hex(d.source.hash) || !Array.isArray(d.ops) || d.ops.length > MESH_EDIT_MAX_OPS) throw new Error(`${field}.delta: a ${MESH_EDIT_SCHEMA} document (basis "${MESH_EDIT_BASIS}", slot the part, source.hash, at most ${MESH_EDIT_MAX_OPS} ops)`);
+    if (v.op !== 'remesh') throw new Error(`${field}.op: "remesh" for a mesh-edit delta`);
+    tool(v.producer, `${field}.producer`); tool(v.compiler, `${field}.compiler`); lineOrNull(v.line, `${field}.line`);
+    parseFilesDiff(v.files, `${field}.files`);
+    if (Object.hasOwn(v, 'mesh')) {
+      const m = exact(v.mesh, 'after,before,part', `${field}.mesh`);
+      if (m.part !== v.part) throw new Error(`${field}.mesh.part: the delta's part`);
+      meshCounts(m.before, `${field}.mesh.before`); meshCounts(m.after, `${field}.mesh.after`);
+    }
+    return;
+  }
+  throw new Error(`${field}.schema: expected ${APPLIED_REGIONS_SCHEMA}, ${APPLIED_PATCH_SCHEMA} (patch ${CONFIG_PATCH_SCHEMA}) or ${APPLIED_DELTA_SCHEMA} (mesh-edit delta)`);
 }
 
 /** The export's one readable line for a valid applied record; the raw context still follows it. */
@@ -160,6 +198,11 @@ export function appliedSummary(value: unknown): string | null {
   const v = value as Record<string, unknown>, producer = v.producer as Tool, model = String(v.modelHash).slice(0, 12);
   if (v.schema === APPLIED_REGIONS_SCHEMA && v.bust) return `contour.bust landmarks on ${String(v.part)} with ${producer.package} ${producer.version} · model ${model}…`;
   if (v.schema === APPLIED_REGIONS_SCHEMA) return `regions on ${String(v.part)} with ${producer.package} ${producer.version} · model ${model}…`;
+  if (v.schema === APPLIED_DELTA_SCHEMA) {
+    const d = value as AppliedDelta, ops = (d.delta.ops as unknown[]).length;
+    const mesh = d.mesh ? ` · ${d.mesh.part} v ${d.mesh.before.vertices} t ${d.mesh.before.triangles} → v ${d.mesh.after.vertices} t ${d.mesh.after.triangles}` : '';
+    return `mesh edit ${d.deltaSha256.slice(0, 12)}… (remesh --delta; ${ops} op(s) on ${d.part}) with ${producer.package} ${producer.version}${d.files ? ` · ${filesDiffText(d.files)}` : ''}${mesh} · model ${model}…`;
+  }
   const a = value as AppliedPatch, paths = a.patch.ops.map(o => `${o.op} ${o.path}`);
   const check = a.check ? `check ${a.check.pass === null ? 'not read' : a.check.pass ? 'PASS' : 'FAIL'}` : 'check not run';
   const diff = a.files ? ` · ${filesDiffText(a.files)}` : a.diff ? ` · rig.json differs at ${a.diff.count} path(s)` : '';

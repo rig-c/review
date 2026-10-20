@@ -14,8 +14,8 @@ import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-ed
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
 import {modelBoneNames,readSetupPose} from './setup-pose.ts';
 import {bindBonesPanel,type BonesPanel,type BonesCheckView} from './bones-panel.ts';
-import {appliedRecord,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedPatch,type AppliedRecord,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
-import {meshEditBinding,type MeshEditDocument} from '../src/mesh-edit.ts';
+import {appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
 import {bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
@@ -102,7 +102,7 @@ let bonesPanel:BonesPanel|null=null;
 /** The hash-verified compiled model document the parts catalog was read from (mesh edit reads attachments from it). */
 let partModel:unknown=null;
 /** Apply · Rebuild (#99): the inspected model's URL, the producer status, and the applied record while its scratch build is on the stage. */
-let inspectedModel:{url:string;prefix:string;sha256:string}|null=null,rebuildStatus:RebuildStatusView|null=null,appliedOnStage:AppliedRecord|AppliedPatch|null=null,rebuildBusy=false,stageModelHash:string|null=null;
+let inspectedModel:{url:string;prefix:string;sha256:string}|null=null,rebuildStatus:RebuildStatusView|null=null,appliedOnStage:AppliedRecord|AppliedPatch|AppliedDelta|null=null,rebuildBusy=false,stageModelHash:string|null=null;
 let appearance:ReturnType<typeof bindAppearance>|null=null;
 let workspace:WorkspaceUI|null=null;
 let inspectorBlocks:InspectorBlocks|null=null;
@@ -856,7 +856,7 @@ function bind(): void {
   inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],changed:()=>persistence?.save()});
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
-  meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},message,confirm:text=>window.confirm(text),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
+  meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(text),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
   weightsView=bindWeightsView({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,inspector:()=>selectedInspector(),slot:()=>parts?.value()?.slot??null,
    model:()=>data.manifest.model?partModel??undefined:null,setup:slot=>assets?setupPoseMesh(assets,partModel,slot,document.createElement('div')):null,changed:()=>redrawOverlay(false),
    token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
@@ -1268,10 +1268,35 @@ function meshSource(){
  return meshEditSource({slot:parts?.value()?.slot??null,model:data.manifest.model?partModel:null,pose:slot=>assets?readSetupPose(assets,slot,modelBoneNames(partModel),document.createElement('div')):null,mapping:chestMapping});
 }
 async function exportMesh(doc:MeshEditDocument):Promise<void> {
- const text=JSON.stringify(doc,null,2)+'\n',digest=await sha256Hex(text);
+ const text=meshEditText(doc),digest=await sha256Hex(text);
  const binding=meshEditBinding({fileSha256:digest,sourceHash:data.sourceHash,reviewedSource:data.reviewedSource,exportedAt:new Date().toISOString(),mapping:chestMapping.available?chestMapping.basis:chestMapping.reason,attachment:{slot:doc.slot,skin:doc.skin,name:doc.attachment,sha256:doc.source.hash}});
  download('mesh-edit.json',text,'application/json');download('mesh-edit.binding.json',JSON.stringify(binding,null,2)+'\n','application/json');
  message(`Downloaded mesh-edit.json (${doc.ops.length} ops) and mesh-edit.binding.json. The delta is review evidence, not an approval; the package is unchanged and the producer retriangulates.`);
+}
+/**
+ * Edit Mesh's Apply · Rebuild (#135): `{part, delta, configHash}` to `/api/rebuild`, where the server runs
+ * `rig-parts remesh --delta` and the shared tail; on a built job the revision replaces the drawn rig in place under the
+ * same world, and the draft keeps the applied delta (by content and hash), the producer's line, op "remesh", the
+ * per-file diff and the part's counts. A refusal leaves the stage as it was and returns the producer's line verbatim.
+ */
+async function applyMeshDelta(doc:MeshEditDocument,line:(text:string)=>void):Promise<{built:boolean;text:string;error:boolean}> {
+ if(rebuildBusy)return {built:false,text:'REBUILD_BUSY: an Apply is still running',error:true};
+ if(readOnly)return {built:false,text:readOnly,error:true};
+ const status=rebuildStatus??await loadRebuildStatus();
+ if(!status?.inputs)return {built:false,text:status?.reason??'REBUILD_STATUS_UNAVAILABLE',error:true};
+ const body:DeltaRequestBody={part:doc.slot,delta:doc,configHash:status.inputs.configHash},world=stageWorld();
+ rebuildBusy=true;rebuildState();
+ try{
+  const result=await runRebuild<DeltaRequestBody,DeltaJobView>(body,{post:value=>api<DeltaJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<DeltaJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),onLine:text=>line(text)});
+  const outcome=deltaOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
+  if(next.id===null||!('id' in result)){message(outcome.text,true);return {built:false,text:outcome.text,error:true};}
+  await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
+  appliedOnStage=deltaAppliedRecord(result);stageCheck=null;
+  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
+  message(outcome.text);
+  return {built:true,text:outcome.text,error:false};
+ }catch(error){const text=`REBUILD_FAILED: ${errorText(error)}`;message(text,true);return {built:false,text,error:true};}
+ finally{rebuildBusy=false;rebuildState();}
 }
 /** `GET /api/rebuild`: whether Apply can run, and the producer config's regions to start an untouched editor from. */
 async function loadRebuildStatus():Promise<RebuildStatusView|null> {

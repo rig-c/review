@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {
- MESH_EDIT_BASIS,MESH_EDIT_CONSTRAINT_END,MESH_EDIT_HULL_EDGE,MESH_EDIT_INVALID_OP,MESH_EDIT_MODEL_UNAVAILABLE,MESH_EDIT_TRIANGULATION_EDGE,MESH_EDIT_PREVIEW_NOTE,MODELING_TARGET_UNSUPPORTED,MeshEditSession,affineOf,applyMeshOps,draftOps,edgeKey,hitMesh,meshEditBinding,meshEditDocument,
+ MESH_EDIT_BASIS,MESH_EDIT_CONSTRAINT_END,MESH_EDIT_HULL_EDGE,MESH_EDIT_INVALID_OP,MESH_EDIT_MODEL_UNAVAILABLE,MESH_EDIT_TRIANGULATION_EDGE,MESH_EDIT_PREVIEW_NOTE,MeshEditSession,affineOf,applyMeshOps,draftOps,edgeKey,hitMesh,meshEditBinding,meshEditDocument,
  parseMeshDraft,screenDeltaToCrop,sourceEdges,verticesInBox,writeMeshDraft,type MeshSource,
 } from '../src/mesh-edit.ts';
 import {meshEditShortcut,meshEditSource,meshEditVisible,meshModeKeys} from '../web/mesh-editor.ts';
@@ -184,14 +184,14 @@ test('the producer owns the triangulation: Delete removes only an added constrai
  expect(session.ops()).toEqual([{op:'edge',a:0,b:2},{op:'unedge',a:2,b:0},{op:'remove',v:2}]);
 });
 
-test('the Edit mesh toggle and bar sit in the view-bar tool area; Apply · Rebuild refuses by name; the editor has no path to a process or the server',async()=>{
+test('the Edit mesh toggle and bar sit in the view-bar tool area; Apply · Rebuild is live (#135, remesh --delta through the host); the editor has no path to a process or the server',async()=>{
  const page=await html(),bar=between(page,'<div class="viewbar">','<div id="stage-layout"'),tools=between(bar,'<div class="view-tools">','</div>');
  expect(tools).toMatch(/<button id="mesh-edit" type="button"[^>]* aria-pressed="false"[^>]* hidden>Edit mesh<\/button>/);
  const editor=between(bar,'<div id="mesh-editor-bar"','<span id="mesh-editor-status"');expect(editor).toContain(' hidden>');
  expect([...editor.matchAll(/data-mesh-mode="([a-z]+)"[^>]*aria-keyshortcuts="([A-Z])"/g)].map(m=>[m[1],m[2]])).toEqual([['modify','V'],['create','C'],['delete','X'],['edges','E']]);
  for(const id of ['mesh-undo','mesh-redo','mesh-reset','mesh-download','mesh-edit-draft'])expect(editor).toContain(`id="${id}"`);
- expect(between(editor,'<button id="mesh-apply"','</button>')).toContain(`title="${MODELING_TARGET_UNSUPPORTED}"`);
- expect(MODELING_TARGET_UNSUPPORTED).toBe('MODELING_TARGET_UNSUPPORTED: the producer has no delta operation (parts); export the delta');
+ const apply=between(editor,'<button id="mesh-apply"','</button>');expect(apply).toContain('remesh --delta');expect(apply).not.toContain('aria-disabled');expect(apply).not.toContain('MODELING_TARGET_UNSUPPORTED');
+ const editorSource=await readFile(new URL('../web/mesh-editor.ts',import.meta.url),'utf8');expect(editorSource).not.toContain('MODELING_TARGET_UNSUPPORTED');expect(editorSource).toContain('host.apply(doc,');
  for(const file of ['../web/mesh-editor.ts','../src/mesh-edit.ts']){const source=await readFile(new URL(file,import.meta.url),'utf8');for(const word of ['fetch(','child_process','Bun.spawn','XMLHttpRequest','/api/','writeFile'])expect(source).not.toContain(word);}
 });
 
