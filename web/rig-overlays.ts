@@ -1,5 +1,6 @@
 /** Inspection graphics from the last successfully drawn public player pose. */
 import {partBounds} from './part-selection.ts';
+import {placeLabels} from './label-placement.ts';
 import type {BoneWorld,PosedFrame,RigPlayer} from '@rig-c/play';
 
 export interface OverlayPoint {x:number;y:number}
@@ -221,15 +222,29 @@ export class RigOverlays {
     ctx.fillStyle=circle.flash?c.flash:c.labelBg;ctx.fillRect(lx,ly-11,width,15);ctx.fillStyle=circle.flash?c.ink:c.stroke;ctx.fillText(circle.label,lx+4,ly);
    }
   }
-  if(this.playerAvailable)for(const marker of markers){
-   const at=projected(marker.at);if(!at)continue;const c=marker.colors;
-   ctx.globalAlpha=.9;ctx.setLineDash([3,3]);ctx.strokeStyle=c.stroke;ctx.lineWidth=1.2;
-   for(const to of marker.guideTo??[]){const end=projected(to);if(!end)continue;ctx.beginPath();ctx.moveTo(at.x,at.y);ctx.lineTo(end.x,end.y);ctx.stroke();}
-   ctx.setLineDash([]);ctx.globalAlpha=1;const size=marker.active?7:5.5;
-   ctx.beginPath();ctx.moveTo(at.x,at.y-size);ctx.lineTo(at.x+size,at.y);ctx.lineTo(at.x,at.y+size);ctx.lineTo(at.x-size,at.y);ctx.closePath();
-   ctx.fillStyle=c.fill;ctx.fill();ctx.strokeStyle=c.ink;ctx.lineWidth=marker.active?2.4:1.6;ctx.stroke();
-   ctx.font='600 11px ui-monospace, monospace';const width=ctx.measureText(marker.tag).width+8,lx=at.x+size+4,ly=at.y-size-2;
-   ctx.fillStyle=c.labelBg;ctx.fillRect(lx,ly-11,width,15);ctx.fillStyle=c.stroke;ctx.fillText(marker.tag,lx+4,ly);
+  if(this.playerAvailable){
+   const drawn:{marker:OverlayMarker;at:OverlayPoint}[]=[];
+   for(const marker of markers){
+    const at=projected(marker.at);if(!at)continue;const c=marker.colors;drawn.push({marker,at});
+    ctx.globalAlpha=.9;ctx.setLineDash([3,3]);ctx.strokeStyle=c.stroke;ctx.lineWidth=1.2;
+    for(const to of marker.guideTo??[]){const end=projected(to);if(!end)continue;ctx.beginPath();ctx.moveTo(at.x,at.y);ctx.lineTo(end.x,end.y);ctx.stroke();}
+    ctx.setLineDash([]);ctx.globalAlpha=1;const size=marker.active?7:5.5;
+    ctx.beginPath();ctx.moveTo(at.x,at.y-size);ctx.lineTo(at.x+size,at.y);ctx.lineTo(at.x,at.y+size);ctx.lineTo(at.x-size,at.y);ctx.closePath();
+    ctx.fillStyle=c.fill;ctx.fill();ctx.strokeStyle=c.ink;ctx.lineWidth=marker.active?2.4:1.6;ctx.stroke();
+   }
+   // Labels avoid each other (#147): a moved label keeps a leader to its point; one with no free slot shows on hover only.
+   ctx.font='600 11px ui-monospace, monospace';
+   const placed=placeLabels(drawn.map(({marker,at})=>({at,width:ctx.measureText(marker.tag).width+8,pinned:marker.active})),{gap:10,rise:3,bounds:{width,height},obstacles:drawn.map(({marker,at})=>{const r=marker.active?8:6.5;return {x:at.x-r,y:at.y-r,w:r*2,h:r*2};})});
+   // Leaders first, so no leader crosses another joint's label.
+   drawn.forEach(({marker,at},i)=>{
+    const {box,visible,moved}=placed[i]!;if(!visible||!moved)return;
+    const ex=Math.min(Math.max(at.x,box.x),box.x+box.w),ey=Math.min(Math.max(at.y,box.y),box.y+box.h);
+    ctx.globalAlpha=.85;ctx.strokeStyle=marker.colors.stroke;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(at.x,at.y);ctx.lineTo(ex,ey);ctx.stroke();ctx.globalAlpha=1;
+   });
+   drawn.forEach(({marker},i)=>{
+    const {box,visible}=placed[i]!,c=marker.colors;if(!visible)return;
+    ctx.fillStyle=c.labelBg;ctx.fillRect(box.x,box.y,box.w,box.h);ctx.fillStyle=c.stroke;ctx.fillText(marker.tag,box.x+4,box.y+11);
+   });
   }
   ctx.globalAlpha=1;
   if(this.playerAvailable&&meshEdit)this.drawMeshEdit(ctx,meshEdit,projected,width,height);
