@@ -2,7 +2,7 @@
 
 A reusable local workspace for a person to inspect an agent's rig output, compare source references, and export feedback ready to become an issue. The person receives a package or opens an existing output folder; the agent does not build a new viewer for each rig.
 
-The app provides one inspection workspace for setup geometry and motion, compiled-model playback through `@rig-c/play`, local image, video and pose-sequence references, checkpoints, audio audition, and saved structured feedback. **Motion is view, annotate and export only.** Navigation changes inspection time; it never retimes, authors keys, or writes `motion.json`. Modeling touch-up remains a design goal; this starter does not edit meshes, weights or source art.
+The app provides one inspection workspace for setup geometry and motion, compiled-model playback through `@rig-c/play`, local image, video and pose-sequence references, checkpoints, audio audition, and saved structured feedback. **The producer writes motion in scratch; review never authors keys.** Navigation changes inspection time; it never retimes, and review never writes the package's `motion.json`: motion edits are data (config patches, pose maps, retarget flags) the installed producer turns into a scratch build. Modeling touch-up remains a design goal; this starter does not edit meshes, weights or source art.
 
 ## Place in the toolchain
 
