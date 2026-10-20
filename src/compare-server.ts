@@ -36,7 +36,7 @@ export async function startCompareServer(p:ComparePackage,options:{port?:number;
   const handle=async(req:Request,port:number|undefined):Promise<Response>=>{try{
     const url=new URL(req.url),origin=`http://127.0.0.1:${port}`;
     if(url.origin!==origin)return json({error:'Loopback host required'},403);
-    const refused=openNonceGate(req,options.open)??accessGate(req,options.capability);if(refused)return refused;
+    const refused=openNonceGate(req,options.open)??accessGate(req,options.capability,!!control);if(refused)return refused;
     const controlled=await control?.(req,origin);if(controlled)return controlled;
     options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await assertCompareUnchanged(p);}catch{return staleOpenStatus(options.open!);}}return gate;}
     if(req.method==='PUT'&&url.pathname==='/api/compare/session'){

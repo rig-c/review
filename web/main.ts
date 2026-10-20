@@ -35,7 +35,7 @@ import type {ReferenceBinding} from '../src/reference.ts';
 import type { Checkpoint, Json, Reference, ReviewedSource, ReviewManifest } from '../src/manifest.ts';
 import type { Feedback, ReviewSession } from '../src/session.ts';
 import type { ReportEvent, ReportSeeds } from '../src/report.ts';
-import { clockForAnimation, frameAtTime, lastFrame as lastProducerFrame, timeAtFrame } from '../src/frame-clock.ts';
+import { frameAtTime, lastFrame as lastProducerFrame, rigPaneLabel, samplesClock, timeAtFrame, transportClock, type StageClock } from '../src/frame-clock.ts';
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, type FeedbackCatalog } from '../src/feedback-validation.ts';
 import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
@@ -85,6 +85,8 @@ let player: RigPlayer | null = null;
 let animation = '';
 let playing = false;
 let time = 0;
+/** The clock a scratch build on the stage states for its own animation (a retarget's report frameTimes, #164). */
+let stageClock: StageClock | null = null;
 let duration = 0;
 let lastFrame = 0;
 type CameraTarget='rig'|'reference';
@@ -434,13 +436,14 @@ function renderFeedbackTargets(preserve = false): void {
 }
 
 function renderFrameTransport(): void {
-  const clock = activeFrameClock();
+  const active = activeTransportClock(), clock = active?.clock ?? null;
   const last = lastProducerFrame(clock), frame = frameAtTime(clock, time);
+  text('rig-label', rigPaneLabel({ hasPlayer: !!player, animation: player?.current ?? animation, time, frame }));
   el('frame-controls').hidden = last === null;
   if (!clock) { text('frame-label', data.report?.clock ? data.report.animation ? 'Frame unknown · report and current clip do not match' : 'Frame unknown · report animation not supplied' : 'rate unknown'); return; }
   if (last === null) { text('frame-label', 'F? / ? · frame range unknown'); return; }
   text('frame-label', `F${frame === null ? '?' : frame} / ${last}${frame === null ? ' · Out of range' : ''}`);
-  text('frame-clock-label', clock.kind === 'uniform' ? `${clock.fps} fps · frame0 ${clock.frame0} s` : `frameTimes · ${clock.frameTimes.length} explicit times`);
+  text('frame-clock-label', (clock.kind === 'uniform' ? `${clock.fps} fps · frame0 ${clock.frame0} s` : `frameTimes · ${clock.frameTimes.length} explicit times`) + (active?.source === 'stage' ? " · this build's report" : ''));
   input('frame-number').max = String(last);
   if (document.activeElement !== input('frame-number')) input('frame-number').value = frame === null ? '' : String(frame);
   input('frame-scrub').max = String(last); input('frame-scrub').hidden = frame === null;
@@ -449,10 +452,11 @@ function renderFrameTransport(): void {
   el('frame-outside').hidden = frame !== null;
 }
 
-function activeFrameClock() {
+function activeTransportClock() {
   const active = player && player.current !== animation ? '' : animation;
-  return clockForAnimation(data.report?.clock, data.report?.animation, active, !!player);
+  return transportClock({ clock: data.report?.clock, animation: data.report?.animation }, active, !!player, stageClock, stageModelHash);
 }
+function activeFrameClock() { return activeTransportClock()?.clock ?? null; }
 
 function seekFrame(frame: number): void {
   const exact = timeAtFrame(activeFrameClock(), frame);
@@ -926,8 +930,8 @@ function bind(): void {
 
 async function start(): Promise<void> {
   try {
-    let writes: { capabilityRequired: boolean };
-    [data, session, writes] = await Promise.all([api<ReviewResponse>('/api/review'), api<ReviewSession>('/api/session'), api<{ capabilityRequired: boolean }>('/api/access')]);
+    let writes: { capabilityRequired: boolean; control?: boolean };
+    [data, session, writes] = await Promise.all([api<ReviewResponse>('/api/review'), api<ReviewSession>('/api/session'), api<{ capabilityRequired: boolean; control?: boolean }>('/api/access')]);
     readOnly = readOnlyReason(access, writes.capabilityRequired);
     submittedBaseline=structuredClone(session);
     text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; select('feedback-target-kind').value = 'rig'; input('feedback-target-name').value = data.manifest.id;
@@ -952,7 +956,8 @@ async function start(): Promise<void> {
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
     const restored=await setupPersistence();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
-    if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
+    // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
+    if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
 /** `feedback` is the review dialog, not an Inspector section: a user action opens it; a restored older bookmark that saved it selects nothing. */
@@ -1377,6 +1382,8 @@ async function applyRetarget(body:{sequence:string;map:PoseMap;flags:RetargetFla
   retargetPanel?.result(result);retargetPanel?.status(outcome.text,outcome.error);
   if(next.id===null||!('id' in result)){message(outcome.text,true);return result;}
   await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
+  // The new animation's own clock (the run's report frameTimes), bound to this build: the transport counter and the rig pane read it.
+  const own=samplesClock(result.frameTimes);stageClock=own?{animation:result.request.record.flags.animation,modelHash:next.hash,clock:own}:null;
   appliedOnStage=retargetAppliedRecord(result);stageCheck=null;
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   // The new animation plays against the reference: choose it, and show the sequence it was made from beside it.

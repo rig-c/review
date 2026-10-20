@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test';
-import { clockForAnimation, frameAtTime, lastFrame, timeAtFrame, type FrameClock } from '../src/frame-clock.ts';
+import { clockForAnimation, frameAtTime, lastFrame, MAX_STAGE_FRAME_TIMES, rigPaneLabel, samplesClock, timeAtFrame, transportClock, type FrameClock, type StageClock } from '../src/frame-clock.ts';
 import { parseReport } from '../src/report.ts';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 test('explicit 24fps clock shows F100 at its exact sample and floors only in-domain',()=>{
  const clock=parseReport({spec:'rig-pose-report/1',frames:313,fps:24,frame0:0})!.clock;
@@ -31,4 +33,33 @@ test('legacy report frame count, duration and event pairs supply no clock or con
 test('declared clocks validate paired offsets, frame count and representable sample endpoints',()=>{
  for(const [body,field] of [[{fps:24},'frame0'],[{frame0:0},'fps'],[{fps:0,frame0:0},'fps'],[{frames:3,frameTimes:[0,1]},'frameTimes'],[{frames:2,fps:Number.MIN_VALUE,frame0:0},'fps'],[{frames:2,fps:1e20,frame0:1e20},'fps'],[{frames:4,fps:1.5,frame0:4503599627370496},'fps']] as const)expect(()=>parseReport({spec:'rig-pose-report/1',...body})).toThrow('report.json.'+field);
  expect(parseReport({spec:'rig-pose-report/1',fps:10,frame0:2})!.clock).toEqual({kind:'uniform',fps:10,frame0:2});
+});
+
+// #164: a retarget's own report clock for the transport counter and the rig pane header.
+test('samplesClock keeps only a bounded, finite, strictly increasing frameTimes list',()=>{
+ expect(samplesClock([0,0.041667,0.083333])).toEqual({kind:'samples',frameTimes:[0,0.041667,0.083333]});
+ for(const bad of [null,undefined,[],[0,0],[0.1,0.05],[0,Number.NaN],[0,'1'],{0:0},Array.from({length:MAX_STAGE_FRAME_TIMES+1},(_,i)=>i)])expect(samplesClock(bad)).toBeNull();
+ const source=[0,1];const clock=samplesClock(source)!;source.push(2);expect(clock).toEqual({kind:'samples',frameTimes:[0,1]});
+});
+test('transportClock prefers the report for its animation, else the stage build\'s clock for the animation on the stage',async()=>{
+ const walk=JSON.parse(await readFile(join(import.meta.dir,'fixtures/retarget-wind-walk.json'),'utf8')) as {frameTimes:number[]};
+ const stageClock=samplesClock(walk.frameTimes)!,stage:StageClock={animation:'walk',modelHash:'h1',clock:stageClock};
+ const none={clock:null,animation:undefined},report:FrameClock={kind:'uniform',fps:30,frame0:0,frameCount:10};
+ expect(transportClock(none,'walk',true,stage,'h1')).toEqual({clock:stageClock,source:'stage'});
+ expect(transportClock({clock:report,animation:'walk'},'walk',true,stage,'h1')).toEqual({clock:report,source:'report'});
+ // A report bound to another clip does not hide the stage's own clock for the active one.
+ expect(transportClock({clock:report,animation:'idle'},'walk',true,stage,'h1')).toEqual({clock:stageClock,source:'stage'});
+ expect(transportClock(none,'idle',true,stage,'h1')).toBeNull();
+ expect(transportClock(none,'walk',true,stage,'h2')).toBeNull();
+ expect(transportClock(none,'walk',false,stage,'h1')).toBeNull();
+ expect(transportClock(none,'',true,{...stage,animation:''},'h1')).toBeNull();
+ expect(transportClock(none,'walk',true,null,'h1')).toBeNull();
+ // The FEET line's frame: F14 at the run's frameTimes[14].
+ const clock=transportClock(none,'walk',true,stage,'h1')!.clock;expect(timeAtFrame(clock,14)).toBe(0.583333);expect(frameAtTime(clock,0.583333)).toBe(14);expect(lastFrame(clock)).toBe(23);
+});
+test('rigPaneLabel names the animation, frame and time of the drawn pose',()=>{
+ expect(rigPaneLabel({hasPlayer:true,animation:'walk',time:0.583333,frame:14})).toBe('Generated rig · walk · F14 · 0.583 s');
+ expect(rigPaneLabel({hasPlayer:true,animation:'idle',time:1.25,frame:null})).toBe('Generated rig · idle · 1.250 s');
+ expect(rigPaneLabel({hasPlayer:true,animation:'',time:0,frame:null})).toBe('Generated rig · no animation · 0.000 s');
+ expect(rigPaneLabel({hasPlayer:false,animation:'walk',time:0.5,frame:3})).toBe('Generated rig · read only');
 });

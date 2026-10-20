@@ -65,7 +65,7 @@ test('page A holding instance B key cannot mutate B; only B capability can, and 
  const registered=await fetch(bBase+'api/control/register',{method:'POST',headers:own,body:JSON.stringify({sourceHash:rb.contentHash,inspection:{theme:'system',layout:'auto',effectiveLayout:'row',cameras:{rig:{zoom:1,pan:{x:0,y:0}},reference:{zoom:1,pan:{x:0,y:0}}},animation:'inspect',time:0,playing:false,loop:'off',layers:{images:true,meshes:false,bones:false},ready:true,seeking:false,dirty:false,busy:false,feedbackEligible:true,capabilities:{camera:true,referenceCamera:true,animation:true,time:true,playback:true,layers:{images:true,meshes:true,bones:true}}}})});expect(registered.status).toBe(201);
  // A copied view link without the fragment: the page finds no capability and the server requires one.
  const copied=new URL(b.url);copied.hash='';const storage=new Map<string,string>(),store={getItem:(k:string)=>storage.get(k)??null,setItem:(k:string,v:string)=>{storage.set(k,v);}};
- const access=await (await fetch(bBase+'api/access')).json();expect(access).toEqual({schema:'rig-review-access/1',capabilityRequired:true});
+ const access=await (await fetch(bBase+'api/access')).json();expect(access).toEqual({schema:'rig-review-access/1',capabilityRequired:true,control:true});
  const view=instanceAccess(copied.href,store,()=>{throw new Error('no fragment to strip');});expect(view.capability).toBeNull();expect(readOnlyReason(view,access.capabilityRequired)).toBe('Read-only view: reopen with rig-review open to edit.');
  expect((await fetch(copied)).status).toBe(200);
 },60000);

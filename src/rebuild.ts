@@ -29,6 +29,7 @@ import { absolutizeBuildFiles, buildLines, buildNamedFiles, buildReadout, MAX_BU
 import { jsonDiff } from './config-patch.ts';
 import { CLOTH_KEYPOINTS_UNDECLARED, CLOTH_PATCH_MIXED, CLOTH_SOURCE_UNAVAILABLE, CLOTH_WRITE_SINCE, clothLinks, clothPatchKind, readClothTargets, writtenDiff, type ClothTagView, type WrittenDiff } from './cloth-recipe.ts';
 import { CHECK_ENVIRONMENT_SINCE, parseSchedule, ScheduleError, scheduleText } from './environment-schedule.ts';
+import { samplesClock } from './frame-clock.ts';
 import { cleanArgs, mapText, motionSummary, parseRetargetRequest, retargetArgs, retargetLines, retargetRecord, retargetRecordText, RetargetError, type MotionSummary, type RetargetLine, type RetargetRecord } from './retarget.ts';
 
 export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
@@ -302,6 +303,8 @@ export interface RetargetJob {
   lines: string[]; producerLine: string | null; refusals: string[]; exitCode: number | null;
   wallMs: { clean: number | null; retarget: number | null; compile: number | null };
   files: FilesDiff | null; motion: MotionSummary | null; readings: RetargetLine[];
+  /** The run's report `frameTimes` (`motion.report.json`): the new animation's own clock, null when absent or malformed (#164). */
+  frameTimes: number[] | null;
   build: RebuildBuild | null;
 }
 /** Deterministic: the package, the config bytes, the record's bytes and both tool versions. No clock. */
@@ -592,7 +595,14 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       if (stored.schema !== REBUILD_SCHEMA || stored.id !== id || stored.status !== 'built' || !stored.build) return null;
       const now = await hashBuild(join(dir, 'build'), id);
       if (JSON.stringify(now.files) !== JSON.stringify(stored.build.files)) return null;
-      return { ...stored, reused: true };
+      const job = { ...stored, reused: true };
+      // A retarget built before the job carried its report's frameTimes (#164): read them from the build's own report.
+      if ('kind' in job && job.kind === 'retarget' && (job as RetargetJob).frameTimes === undefined) {
+        let times: unknown = null;
+        try { times = (JSON.parse(await readFile(join(dir, 'motion.report.json'), 'utf8')) as { frameTimes?: unknown }).frameTimes; } catch { /* no report: no clock */ }
+        const clock = samplesClock(times); (job as RetargetJob).frameTimes = clock?.kind === 'samples' ? clock.frameTimes : null;
+      }
+      return job;
     } catch { return null; }
   }
 
@@ -991,6 +1001,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         await writeFile(join(out, 'motion.json'), text, { mode: 0o600 });
         let frameTimes: number[] | null = null;
         try { const report = JSON.parse(await readFile(join(dir, 'motion.report.json'), 'utf8')) as { frameTimes?: unknown }; if (Array.isArray(report.frameTimes) && report.frameTimes.every(t => typeof t === 'number')) frameTimes = report.frameTimes as number[]; } catch { /* no report: the lines' own t= */ }
+        const clock = samplesClock(frameTimes); job.frameTimes = clock?.kind === 'samples' ? clock.frameTimes : null;
         job.readings = retargetLines(retargetRun?.lines ?? [], frameTimes).slice(0, MAX_RETARGET_LINES);
         let inspected: unknown = null;
         try { inspected = JSON.parse(await readFile(join(inputs.rig, 'motion.json'), 'utf8')); } catch { /* a rig without motion.json: nothing to keep */ }
@@ -1031,7 +1042,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
     const reused = await reuse<RetargetJob>(dir, id);
     if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
-    const job: RetargetJob = { schema: REBUILD_SCHEMA, kind: 'retarget', id, status: 'running', reused: false, op: 'retarget', request: { record, recordSha256: sha256(retargetRecordText(record)), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, refusals: [], exitCode: null, wallMs: { clean: null, retarget: null, compile: null }, files: null, motion: null, readings: [], build: null };
+    const job: RetargetJob = { schema: REBUILD_SCHEMA, kind: 'retarget', id, status: 'running', reused: false, op: 'retarget', request: { record, recordSha256: sha256(retargetRecordText(record)), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, refusals: [], exitCode: null, wallMs: { clean: null, retarget: null, compile: null }, files: null, motion: null, readings: [], frameTimes: null, build: null };
     jobs.set(id, job); running = id;
     void executeRetarget(job, dir, inputs, resolved, sequence).finally(() => { if (running === id) running = null; });
     return { status: 202, body: snapshot(job) };

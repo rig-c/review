@@ -147,6 +147,9 @@ test('Apply · Retarget: clean → retarget → compile in scratch; bar 1 byte-e
   expect(job.files.documents.map(d=>[d.file,d.count,d.paths])).toEqual([['rig.json',0,[]],['motion.json',1,['/animations/dance']],['sets.json',0,[]],['mesh_report.json',0,[]]]);
   expect(job.readings).toEqual([{code:'FLIP',line:'FLIP   chain "arm_r" bone "arm0" turned +40.0° from frame 1 to 2 (t=0.040–0.080s), over 30° in one frame; spread over frames 1–2 (h=1)',frame:1,time:0.04}]);
   const scratch=join(state,'rebuild',p.sourceHash,job.id);
+  // #164: the job carries its report's frameTimes, the new animation's own clock for the transport and the rig pane.
+  const ownReport=JSON.parse(await readFile(join(scratch,'motion.report.json'),'utf8')) as {frameTimes:number[]};
+  expect(ownReport.frameTimes.length).toBeGreaterThan(1);expect((job as unknown as {frameTimes:unknown}).frameTimes).toEqual(ownReport.frameTimes);
   const served=await fetch(`${base}/rebuild/${job.id}/skeleton.model.json`);expect(served.status).toBe(200);
 
   // Bar 1: the same producer run directly with the record's flags writes the same motion, byte for byte.
