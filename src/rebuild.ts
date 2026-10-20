@@ -555,10 +555,12 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       try { await options.unchanged(); } catch { throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild'); }
       job.build = await hashBuild(join(dir, 'build'), job.id);
       if (steps.hashed) await steps.hashed();
-      job.status = 'built'; latestId = job.id;
-      await writeFile(join(dir, 'result.json'), JSON.stringify({ ...job, reused: false }, null, 1) + '\n', { mode: 0o600 });
+      latestId = job.id;
+      await writeFile(join(dir, 'result.json'), JSON.stringify({ ...job, status: 'built', reused: false }, null, 1) + '\n', { mode: 0o600 });
       // Each Apply replaces the previous scratch build of this package.
       for (const sibling of await readdir(rebuildRoot(options.stateDir, p.sourceHash))) if (sibling !== job.id && /^[a-f0-9]{64}$/.test(sibling)) { await rm(join(rebuildRoot(options.stateDir, p.sourceHash), sibling), { recursive: true, force: true }); jobs.delete(sibling); }
+      // "built" is published last: a reader that sees it finds the scratch root already settled (no sibling mid-removal).
+      job.status = 'built';
     } catch (error) {
       job.status = 'failed'; job.producerLine = error instanceof Error ? error.message : String(error); push(`review: ${job.producerLine}`);
     } finally {
