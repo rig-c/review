@@ -7,6 +7,8 @@
 /** The generator's coordinate grid: every point is a multiple of 1/256 crop pixel. */
 export const CHEST_REGION_GRID = 256;
 export const CHEST_REGIONS_SPEC = 'family-chest-regions/1';
+/** An export holds 1–8 regions, the same set Apply · Rebuild accepts (#118); the public examples hold two. */
+export const CHEST_REGIONS_MAX = 8;
 
 export type CropPoint = [number, number];
 export type ChestSegment = string | [string, [number, number], [number, number]];
@@ -161,9 +163,11 @@ export function clampNonOverlapping(right: ChestCircle, left: ChestCircle, margi
   return { right: r, left: l, clamped };
 }
 
+/** The examples' sentence for their two regions; any other count lists the bones from screen-left to screen-right. */
 function coordinatesText(crop: { w: number; h: number }, regions: ChestRegionInput[]): string {
-  const [left, right] = [...regions].sort((a, b) => a.center[0] - b.center[0]);
-  return `${crop.w}x${crop.h} crop pixels, x screen-right and y down; ${left!.bone} screen-left, ${right!.bone} screen-right`;
+  const sorted = [...regions].sort((a, b) => a.center[0] - b.center[0]), frame = `${crop.w}x${crop.h} crop pixels, x screen-right and y down`;
+  if (sorted.length === 2) return `${frame}; ${sorted[0]!.bone} screen-left, ${sorted[1]!.bone} screen-right`;
+  return `${frame}; ${sorted.length === 1 ? `one region, ${sorted[0]!.bone}` : `${sorted.length} regions screen-left to screen-right: ${sorted.map(r => r.bone).join(', ')}`}`;
 }
 
 function segmentList(value: unknown): ChestSegment[] {
@@ -179,7 +183,7 @@ function segmentList(value: unknown): ChestSegment[] {
 export function buildChestRegions(input: ChestRegionsInput): ChestRegionsDocument {
   const w = finite(input.crop?.w, 'crop', 'w', 0, false), h = finite(input.crop?.h, 'crop', 'h', 0, false);
   if (typeof input.generator !== 'string' || !input.generator.trim()) throw new ChestRegionError('CHEST_REGIONS_GENERATOR_MISSING', '');
-  if (input.regions.length !== 2) throw new ChestRegionError('CHEST_REGIONS_COUNT', String(input.regions.length));
+  if (input.regions.length < 1 || input.regions.length > CHEST_REGIONS_MAX) throw new ChestRegionError('CHEST_REGIONS_COUNT', `${input.regions.length} (1–${CHEST_REGIONS_MAX})`);
   const c = input.contour;
   for (const field of ['tolerance', 'margin', 'spacing', 'maxEdge', 'stray'] as const) finite(c[field], 'contour', field, 0);
   if (typeof c.bridges !== 'boolean') throw new ChestRegionError('CHEST_REGION_VALUE_INVALID', 'contour bridges');
@@ -208,7 +212,9 @@ export function buildChestRegions(input: ChestRegionsInput): ChestRegionsDocumen
     if (points.some(([x, y]) => x < 0 || y < 0 || x > w || y > h)) throw new ChestRegionError('CHEST_REGION_OUT_OF_CROP', name);
     regions.push({ name, bone: region.bone, shape: 'polygon', points, spacing, band });
   }
-  if (chestRegionsOverlap(regions[0]!, regions[1]!)) throw new ChestRegionError('CHEST_REGIONS_OVERLAP', `${regions[0]!.name} ${regions[1]!.name}`);
+  for (let i = 0; i < regions.length; i++) for (let j = i + 1; j < regions.length; j++) {
+    if (chestRegionsOverlap(regions[i]!, regions[j]!)) throw new ChestRegionError('CHEST_REGIONS_OVERLAP', `${regions[i]!.name} ${regions[j]!.name}`);
+  }
   const mesh: ChestMesh = { contour: { tolerance: c.tolerance, margin: c.margin, spacing: c.spacing, maxEdge: c.maxEdge, stray: c.stray, bridges: c.bridges, regions } };
   if (input.r !== undefined) mesh.r = finite(input.r, 'mesh', 'r', 0);
   if (input.segments !== undefined) mesh.segments = segmentList(input.segments);

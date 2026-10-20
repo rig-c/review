@@ -27,7 +27,8 @@ export function readChestForm(read:ChestFieldReader,mapping:CropWorldMapping,bon
  const crop=mapping.available?mapping.crop:{w:numberField(read,'chest-crop-w','crop w')!,h:numberField(read,'chest-crop-h','crop h')!};
  const contour={tolerance:0,margin:0,spacing:0,maxEdge:0,stray:0,bridges:read('chest-bridges')?.checked===true};
  for(const [key,id] of chestContourFields)contour[key]=numberField(read,id,`contour ${key}`)!;
- const regions=chestRegionRows.map(row=>{
+ // A row without a centre x is not designated (#118): one row exports alone, as Apply · Rebuild sends it.
+ const regions=chestRegionRows.filter(row=>(read(chestRowId(row,'cx'))?.value??'').trim()).map(row=>{
   const name=(read(chestRowId(row,'name'))?.value??'').trim()||`row ${row+1}`,num=(field:typeof chestRegionFields[number],optional=false)=>numberField(read,chestRowId(row,field),`${name} ${field}`,optional);
   const clip=num('clip',true);
   return {name:(read(chestRowId(row,'name'))?.value??'').trim(),bone:read(chestRowId(row,'bone'))?.value??'',center:[num('cx')!,num('cy')!] as [number,number],semiAxes:[num('ax')!,num('ay')!] as [number,number],spacing:num('spacing')!,band:num('band')!,...(clip===undefined?{}:{clip})};

@@ -4,9 +4,10 @@
  * (main.ts owns the elements and the player); the server owns every path and the producer's flags.
  */
 import {ellipsePolygon} from '../src/chest-regions.ts';
+import type {BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
 import {APPLIED_PATCH_SCHEMA,type AppliedPatch,type CheckSummary} from '../src/applied-context.ts';
-export type {ConfigPatch,PatchOp,AppliedPatch,CheckSummary};
+export type {ConfigPatch,PatchOp,AppliedPatch,CheckSummary,BustSpec};
 import {chestContourFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
 import type {InspectedCheckView} from '../src/physics-tuning.ts';
 
@@ -17,11 +18,12 @@ export type RegionEntry=
 export interface HandoffView {how:'declared'|'discovered';via:string;outside:boolean;config:{path:string;sha256:string};parts:string|null;rig:string|null;files:{path:string;sha256:string}[];missing:string[]}
 export interface BaselineView {status:'running'|'reproduced'|'not-reproduced'|'refused'|'failed';firstDifference:string|null;hashes:{baseline:{rigJson:string|null;tree:string};inspected:{rigJson:string|null;tree:string}}|null;line:string;wallMs:number|null}
 export interface RebuildStatusView {available:boolean;handoff:HandoffView|null;baseline:BaselineView|null;inputs:{config:string;parts:string|null;rig:string|null;configHash:string}|null;parts:{name:string;regions:unknown[]}[];contour:Record<string,Record<string,unknown>>;constraints?:unknown[]|null;inspectedCheck?:InspectedCheckView|null;idle?:import('../src/idle-tracks.ts').IdleStatus|null;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;reason:string|null}
-export interface RebuildJobView {id:string;status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{remesh:number|null;compile:number|null};build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;regions:RegionEntry[];configHash:string;entrySha256:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
+export interface RebuildJobView {id:string;status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{remesh:number|null;compile:number|null};build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;regions:RegionEntry[];configHash:string;entrySha256:string;bust?:BustSpec};producer:{package:string;version:string};compiler:{package:string;version:string}}
 export interface RebuildRefusal {status:'refused';error:string;producerLine:string|null}
-export interface RebuildRequestBody {part:string;regions:RegionEntry[];configHash:string}
+/** #99 regions or #105 landmarks: exactly one of `regions` and `bust`. */
+export type RebuildRequestBody={part:string;regions:RegionEntry[];configHash:string}|{part:string;bust:BustSpec;configHash:string};
 /** What the draft keeps and the feedback context carries: the exact last applied inputs and the producer's line. */
-export interface AppliedRecord {schema:'rig-review-applied/1';buildId:string;part:string;regions:RegionEntry[];configHash:string;entrySha256:string;producer:{package:string;version:string};compiler:{package:string;version:string};line:string|null;modelHash:string}
+export interface AppliedRecord {schema:'rig-review-applied/1';buildId:string;part:string;regions:RegionEntry[];bust?:BustSpec;configHash:string;entrySha256:string;producer:{package:string;version:string};compiler:{package:string;version:string};line:string|null;modelHash:string}
 
 const number=(read:ChestFieldReader,id:string)=>{const raw=(read(id)?.value??'').trim();if(!raw)return null;const value=Number(raw);return Number.isFinite(value)?value:Number.NaN;};
 
@@ -50,6 +52,26 @@ export function pickPart(status:Pick<RebuildStatusView,'parts'>,regions:readonly
  return status.parts.length===1?status.parts[0]!.name:null;
 }
 
+/** The part a landmarks Apply rebuilds: the contour part whose entry already states `contour.bust`, else as for regions. */
+export function pickBustPart(status:Pick<RebuildStatusView,'parts'|'contour'>,derived:readonly RegionEntry[]):string|null {
+ const stated=status.parts.filter(p=>{const c=status.contour[p.name]?.contour;return !!c&&typeof c==='object'&&'bust' in (c as Record<string,unknown>);});
+ return stated.length===1?stated[0]!.name:pickPart(status,derived);
+}
+/**
+ * A landmarks Apply (#105): `{part, bust, configHash}`, or the line that refuses it before anything is sent — a point not
+ * placed, or review's pre-check of the producer's `CONFIG_BUST_CLEARANCE` on the same numbers. Bone names are the
+ * producer's to resolve (`CONFIG_NAME_RESOLVES` comes back verbatim).
+ */
+export function landmarksRequest(status:Pick<RebuildStatusView,'parts'|'contour'|'inputs'>,read:import('./chest-editor.ts').LandmarkRead):{body:RebuildRequestBody;part:string}|{error:string} {
+ if('error' in read)return {error:read.error};
+ if('missing' in read)return {error:`LANDMARKS_INCOMPLETE: place ${read.missing.join(', ')}`};
+ if(read.derived.refusal)return {error:read.derived.refusal};
+ if(!status.inputs)return {error:'REBUILD_STATUS_UNAVAILABLE'};
+ const part=pickBustPart(status,read.derived.regions);
+ if(!part)return {error:`REBUILD_PART_AMBIGUOUS: the config states ${status.parts.length} contour meshes and the landmark bones name none of them alone`};
+ return {part,body:{part,bust:read.spec,configHash:status.inputs.configHash}};
+}
+
 /**
  * Field values that start the editor from the producer config: the first contour part's circle regions (at most two
  * rows) and its contour numbers. Only for an untouched editor — `null` once any row has a centre.
@@ -69,7 +91,24 @@ export function seedFields(status:Pick<RebuildStatusView,'parts'|'contour'>,read
  return Object.keys(out).length?out:null;
 }
 
-export const appliedRecord=(job:RebuildJobView):AppliedRecord=>({schema:'rig-review-applied/1',buildId:job.id,part:job.request.part,regions:job.request.regions,configHash:job.request.configHash,entrySha256:job.request.entrySha256,producer:job.producer,compiler:job.compiler,line:job.producerLine,modelHash:job.build!.modelHash});
+/**
+ * Landmark field values (#105) from a config entry that already states `contour.bust`, for an untouched Landmarks mode
+ * only (`null` once any landmark has a value). Absent alpha / clearance seed the producer's defaults.
+ */
+export function seedLandmarks(status:Pick<RebuildStatusView,'parts'|'contour'>,read:ChestFieldReader):Record<string,string>|null {
+ if(['apex_r','apex_l','cleavage'].some(k=>(read(`lm-${k}-x`)?.value??'').trim()||(read(`lm-${k}-y`)?.value??'').trim()))return null;
+ for(const p of status.parts){
+  const bust=(status.contour[p.name]?.contour as Record<string,unknown>|undefined)?.bust as Record<string,unknown>|undefined;if(!bust||typeof bust!=='object')continue;
+  const out:Record<string,string>={};
+  for(const k of ['apex_r','apex_l','cleavage'])if(Array.isArray(bust[k])&&(bust[k] as unknown[]).length===2){out[`lm-${k}-x`]=String((bust[k] as number[])[0]);out[`lm-${k}-y`]=String((bust[k] as number[])[1]);}
+  for(const k of ['alpha','clearance'])if(typeof bust[k]==='number')out[`lm-${k}`]=String(bust[k]);
+  for(const k of ['bone_r','bone_l'])if(typeof bust[k]==='string')out[`lm-${k}`]=bust[k] as string;
+  return Object.keys(out).length?out:null;
+ }
+ return null;
+}
+
+export const appliedRecord=(job:RebuildJobView):AppliedRecord=>({schema:'rig-review-applied/1',buildId:job.id,part:job.request.part,regions:job.request.regions,...(job.request.bust?{bust:job.request.bust}:{}),configHash:job.request.configHash,entrySha256:job.request.entrySha256,producer:job.producer,compiler:job.compiler,line:job.producerLine,modelHash:job.build!.modelHash});
 export function parseApplied(text:string):AppliedRecord|AppliedPatch|null {try{const value=JSON.parse(text);return value?.schema==='rig-review-applied/1'||value?.schema===APPLIED_PATCH_SCHEMA?value as AppliedRecord|AppliedPatch:null;}catch{return null;}}
 
 /** A patch Apply's job (#102): the patch and its hash, the op/compile/check wall clocks, check's summary and the rig.json diff. */

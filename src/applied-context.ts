@@ -5,6 +5,7 @@
  * rig.json. Records without `applied`, or with null, stay valid. Pure.
  */
 import { CONFIG_PATCH_SCHEMA, parseConfigPatch, type ConfigPatch } from './config-patch.ts';
+import { parseBustSpec } from './chest-landmarks.ts';
 
 export const APPLIED_REGIONS_SCHEMA = 'rig-review-applied/1';
 export const APPLIED_PATCH_SCHEMA = 'rig-review-applied/2';
@@ -72,7 +73,9 @@ export function parseAppliedContext(value: unknown): void {
   if (!isObject(value)) throw new Error('feedback.context.applied: expected an applied record or null');
   const field = 'feedback.context.applied';
   if (value.schema === APPLIED_REGIONS_SCHEMA) {
-    const v = exact(value, 'buildId,compiler,configHash,entrySha256,line,modelHash,part,producer,regions,schema', field);
+    // #105: a landmarks Apply adds `bust` (the contour.bust entry as sent); its `regions` are review's derived circles.
+    const v = exact(value, Object.hasOwn(value, 'bust') ? 'buildId,bust,compiler,configHash,entrySha256,line,modelHash,part,producer,regions,schema' : 'buildId,compiler,configHash,entrySha256,line,modelHash,part,producer,regions,schema', field);
+    if (Object.hasOwn(v, 'bust')) { try { parseBustSpec(v.bust, `${field}.bust`); } catch (e) { throw new Error(e instanceof Error ? e.message : String(e)); } }
     if (![v.buildId, v.configHash, v.entrySha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, entrySha256 and modelHash are SHA-256 hex`);
     if (typeof v.part !== 'string' || !Array.isArray(v.regions)) throw new Error(`${field}: part and regions`);
     tool(v.producer, `${field}.producer`); tool(v.compiler, `${field}.compiler`); lineOrNull(v.line, `${field}.line`);
@@ -100,6 +103,7 @@ export function appliedSummary(value: unknown): string | null {
   try { parseAppliedContext(value); } catch { return null; }
   if (value === null) return 'the inspected build (nothing applied)';
   const v = value as Record<string, unknown>, producer = v.producer as Tool, model = String(v.modelHash).slice(0, 12);
+  if (v.schema === APPLIED_REGIONS_SCHEMA && v.bust) return `contour.bust landmarks on ${String(v.part)} with ${producer.package} ${producer.version} · model ${model}…`;
   if (v.schema === APPLIED_REGIONS_SCHEMA) return `regions on ${String(v.part)} with ${producer.package} ${producer.version} · model ${model}…`;
   const a = value as AppliedPatch, paths = a.patch.ops.map(o => `${o.op} ${o.path}`);
   const check = a.check ? `check ${a.check.pass === null ? 'not read' : a.check.pass ? 'PASS' : 'FAIL'}` : 'check not run';
