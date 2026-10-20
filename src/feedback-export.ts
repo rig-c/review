@@ -6,6 +6,7 @@ import type { FeedbackHistory, HistoryRetrieval } from './session-history.ts';
 import type { ReferenceBinding } from './reference.ts';
 import { environmentSummary, parseEnvironmentContext } from './environment.ts';
 import { appliedSummary } from './applied-context.ts';
+import { requirementsSummaryLine } from './requirements.ts';
 type Category = Feedback['category'];
 type Side = 'single' | 'a' | 'b';
 type ParsedFeedbackSession = FeedbackHistory<ReviewSession | CompareSession>;
@@ -169,6 +170,12 @@ function appliedLine(context: Json | undefined): string[] {
   const text = appliedSummary(context.applied);
   return text === null ? [] : [`- Applied: ${feedbackMarkdownText(text)}`];
 }
+/** "Requirements: 3 declared · requirements file sha256 … · requirements: …": the declared requirements the note carries (#113). */
+function requirementsLine(context: Json | undefined): string[] {
+  if (context === undefined || context === null || typeof context !== 'object' || Array.isArray(context) || !('requirements' in context)) return [];
+  const text = requirementsSummaryLine(context.requirements);
+  return text === null ? [] : [`- Requirements: ${feedbackMarkdownText(text)}`];
+}
 /** Local issue-ready text only. No issue creation, clock inference or source IO. */
 export function formatFeedbackIssues(input: ParsedFeedbackSession): string {
   const model = groupFeedbackIssues(input), md = feedbackMarkdownText;
@@ -201,7 +208,8 @@ export function formatFeedbackIssues(input: ParsedFeedbackSession): string {
           `- Side: ${item.side}`,
           `- Summary: ${md(item.summary)}`,
           ...environmentLine(item.context),
-          ...appliedLine(item.context), '',
+          ...appliedLine(item.context),
+          ...requirementsLine(item.context), '',
           'Selected build identity:', '', jsonBlock(item.selectedSource));
         if (model.pairedBinding) lines.push('', 'Paired comparison binding:', '', jsonBlock(model.pairedBinding));
         if (item.warnings.length) lines.push('', 'Validation warnings (record retained):', '', jsonBlock(item.warnings));

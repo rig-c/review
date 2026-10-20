@@ -492,6 +492,23 @@ controls are applied, their current wind and gravity go along as a one-step
 the flag). A reading is not a gate; nothing is written into the package. The
 pairs of the last run are recorded in feedback as `context.readings`.
 
+Below Readings, the **Requirements** block (`#requirements`) declares what the
+scene asks of the motion (issue #113): pick a kind (contact, follow, aim,
+range, stretch, seam), an animation and the subject — the slot picked on the
+stage pre-fills the slot, its mesh attachment and its bone — then set each
+bar on a slider whose track marks the last measured value. **Check** sends the
+typed requirements (names and numbers only) to `POST /api/requirements`;
+review writes them as a `spine-parts-requirements/1` file (`spec`, `fps`,
+`requirements`; never `may_fold`, scene targets or the part exception lists)
+into scratch and runs the installed producer's `rig-parts check --rig <rig>
+--out out --parts <handoff parts> --requirements requirements.json` on the
+inspected rig spec or the latest scratch build. Each requirement gets one
+line with its worst frame (click to seek); `REQUIREMENTS_*`,
+`CHECK_REQUIREMENT_MET` and `CHECK_REQUIREMENT_MEASURABLE` lines are shown
+verbatim. A kind the rig spec cannot offer (no mesh slot, no ik or transform
+constraint, fewer than two slots) is disabled with the reason. The file rides
+submitted feedback by hash and content as `context.requirements`.
+
 The view bar is one row and keeps the layer toggles in reach in every section: **Images**
 (`I`), **Mesh edges** (`M`) and **Bone points** (`B`). The keys do nothing while
 a text field, textarea, select or editable text has focus, with Ctrl/Alt/Cmd
