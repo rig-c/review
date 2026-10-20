@@ -14,6 +14,9 @@ import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-ed
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
 import {modelBoneNames,readSetupPose} from './setup-pose.ts';
 import {bindBonesPanel,type BonesPanel,type BonesCheckView} from './bones-panel.ts';
+import {retargetAppliedRecord,retargetOutcomeLine,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
+import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
+import type {RetargetFlags} from '../src/retarget.ts';
 import {appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
@@ -103,7 +106,7 @@ let bonesPanel:BonesPanel|null=null;
 /** The hash-verified compiled model document the parts catalog was read from (mesh edit reads attachments from it). */
 let partModel:unknown=null;
 /** Apply · Rebuild (#99): the inspected model's URL, the producer status, and the applied record while its scratch build is on the stage. */
-let inspectedModel:{url:string;prefix:string;sha256:string}|null=null,rebuildStatus:RebuildStatusView|null=null,appliedOnStage:AppliedRecord|AppliedPatch|AppliedDelta|null=null,rebuildBusy=false,stageModelHash:string|null=null;
+let inspectedModel:{url:string;prefix:string;sha256:string}|null=null,rebuildStatus:RebuildStatusView|null=null,appliedOnStage:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|null=null,rebuildBusy=false,stageModelHash:string|null=null;
 let appearance:ReturnType<typeof bindAppearance>|null=null;
 let workspace:WorkspaceUI|null=null;
 let inspectorBlocks:InspectorBlocks|null=null;
@@ -141,7 +144,7 @@ function setAdjust():void {if(!player)return;const a=idleAdjust,b=dialAdjust;pla
 let meshPanel:MeshPanel|null=null,lastOverlay:OverlaySnapshot|null=null;
 let physicsPanel:PhysicsPanel|null=null,inspectedDocument:unknown=null,inspectedDocumentReason:string|null=null,stageCheck:{lines:string[];check:CheckSummary|null}|null=null;
 /** Animate · Readings (#108): the block, the last finished job (its ticks and worst lines), and the run in flight. */
-let requirementsPanel:RequirementsPanel|null=null;
+let requirementsPanel:RequirementsPanel|null=null,retargetPanel:RetargetPanel|null=null;
 let readingsPanel:ReadingsPanel|null=null,readingsJob:ReadingsJobView|null=null,readingsBusy=false,readingsTickKey='';
 /** The world an Apply's reload resumes: wind (clock and active pulse), pending jolts, whether the controls are engaged, gravity. */
 interface StageWorld {wind:WindState;jolts:JoltStep[];applied:boolean;gravity:number}
@@ -888,6 +891,7 @@ function bind(): void {
    hasTurn:()=>{if(!player)return false;try{player.bone(TURN_BONE);return true;}catch{return false;}}});
   viewDisposers.push(()=>rigFieldsPanel?.dispose());
   readingsPanel=bindReadingsPanel({run:()=>{void runReadings();},seek:seekReading});
+  retargetPanel=bindRetargetPanel({apply:body=>applyRetarget(body),reset:()=>{void resetRebuild(stageWorld());},seek:seekReading});
   requirementsPanel=bindRequirementsPanel({check:runRequirements,seek:seekReading,animation:()=>animation,slot:()=>parts?.value()?.slot??null,hash:sha256Hex});
   const tickResize=new ResizeObserver(()=>renderReadingTicks());tickResize.observe(el('transport'));viewDisposers.push(()=>tickResize.disconnect());
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
@@ -1279,6 +1283,37 @@ async function exportMesh(doc:MeshEditDocument):Promise<void> {
  message(`Downloaded mesh-edit.json (${doc.ops.length} ops) and mesh-edit.binding.json. The delta is review evidence, not an approval; the package is unchanged and the producer retriangulates.`);
 }
 /**
+ * Retarget Apply (#114): `{retarget: {sequence, map, flags, configHash}}` to `/api/rebuild`, where the server runs the
+ * installed `rig-pose clean` and `rig-pose retarget` and the shared tail into scratch. On a built job the scratch build
+ * replaces the drawn rig in place, the new animation is chosen and the sequence is shown as the reference beside it; the
+ * draft keeps the record (map by content, flags and their argv), the producer's line, the motion summary and the lines.
+ * A refusal leaves the stage as it was and shows every FAIL line verbatim.
+ */
+async function applyRetarget(body:{sequence:string;map:PoseMap;flags:RetargetFlags}):Promise<RetargetJobView|RebuildRefusal|null> {
+ if(rebuildBusy){retargetPanel?.status('REBUILD_BUSY: an Apply is still running',true);return null;}
+ if(readOnly){retargetPanel?.status(readOnly,true);return null;}
+ const status=rebuildStatus??await loadRebuildStatus();
+ if(!status?.inputs){retargetPanel?.status(status?.reason??'REBUILD_STATUS_UNAVAILABLE',true);return null;}
+ const request:RetargetRequestBody={retarget:{...body,configHash:status.inputs.configHash}},world=stageWorld();
+ rebuildBusy=true;rebuildState();retargetPanel?.busy(true);retargetPanel?.result(null);
+ retargetPanel?.status(`Retargeting ${body.sequence} as "${body.flags.animation}" with ${status.retarget?.producer?.package??'@rig-c/pose'} ${status.retarget?.producer?.version??''}: ${body.flags.clean?'clean, ':''}retarget, compile…`,false);
+ try{
+  const result=await runRebuild<RetargetRequestBody,RetargetJobView>(request,{post:value=>api<RetargetJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<RetargetJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),onLine:text=>retargetPanel?.line(text)});
+  const outcome=retargetOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
+  retargetPanel?.result(result);retargetPanel?.status(outcome.text,outcome.error);
+  if(next.id===null||!('id' in result)){message(outcome.text,true);return result;}
+  await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
+  appliedOnStage=retargetAppliedRecord(result);stageCheck=null;
+  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
+  // The new animation plays against the reference: choose it, and show the sequence it was made from beside it.
+  const name=result.request.record.flags.animation;if(assets?.animations.some(clip=>clip.name===name))chooseAnimation(name);
+  const ref=result.request.record.sequence.reference;if(data.manifest.references.some(r=>r.id===ref)&&select('reference-select').value!==ref){select('reference-select').value=ref;await showReference(ref);}
+  message(outcome.text,outcome.error);
+  return result;
+ }catch(error){const text=`REBUILD_FAILED: ${errorText(error)}`;retargetPanel?.status(text,true);message(text,true);return {status:'refused',error:text,producerLine:null};}
+ finally{rebuildBusy=false;rebuildState();retargetPanel?.busy(false);}
+}
+/**
  * Edit Mesh's Apply · Rebuild (#135): `{part, delta, configHash}` to `/api/rebuild`, where the server runs
  * `rig-parts remesh --delta` and the shared tail; on a built job the revision replaces the drawn rig in place under the
  * same world, and the draft keeps the applied delta (by content and hash), the producer's line, op "remesh", the
@@ -1310,6 +1345,7 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  if(Object.keys(seed).length){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
  if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,true);
  renderHandoff(rebuildStatus);refreshPhysics();
+ retargetPanel?.load(rebuildStatus.retarget??null,rebuildStatus.reason);
  bonesPanel?.load(rebuildStatus.inputs?rebuildStatus.bones??[]:null,rebuildStatus.inputs?null:rebuildStatus.reason??'BONES_UNAVAILABLE: no producer handoff');
  rigFieldsPanel?.load(rebuildStatus.inputs?rebuildStatus.fields??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'RIG_FIELDS_UNAVAILABLE: no producer handoff');
  meshPanel?.load(rebuildStatus.inputs?rebuildStatus.meshes??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'MESH_PANEL_UNAVAILABLE: no producer handoff');meshPanel?.select(parts?.value()?.slot??null);
@@ -1434,6 +1470,8 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   inherit:(index:number,mode:string|null,link?:string)=>rigFieldsPanel?.inherit(index,mode,link),turn:(target:{pivot:number}|{part:string;depth:number})=>rigFieldsPanel?.turn(target),
   select:(kind:'part'|'still'|'stop'|'bone',value:string|number|null)=>rigFieldsPanel?.select(kind,value),setDial:(x:number)=>rigFieldsPanel?.setDial(x),dial:()=>rigFieldsPanel?.dialState()??null,handles:()=>rigFieldsPanel?.handles()??[],
   apply:()=>applyRigFields(rigFieldsPanel?.ops()??[]),reset:()=>resetRigFieldsBuild(),status:()=>el('rig-fields-status').textContent,readout:()=>[...document.querySelectorAll('#rig-fields-readout code')].map(c=>c.textContent),pending:()=>input('rig-fields-pending').value},
+ /** Retarget (#114): the editor's map and flags, Apply (through the panel's own pre-check) and the listed lines shown. */
+ retarget:{map:()=>retargetPanel?.map()??null,setMap:(map:PoseMap)=>retargetPanel?.setMap(map),include:(chain:string,on:boolean)=>retargetPanel?.include(chain,on),pick:(chain:string,index:number,bone:string)=>retargetPanel?.pick(chain,index,bone),flags:()=>retargetPanel?.flags()??null,setFlags:(flags:Partial<RetargetFlags>)=>retargetPanel?.setFlags(flags),apply:()=>{const button=document.getElementById('retarget-apply') as HTMLButtonElement|null;button?.click();},status:()=>el('retarget-status').textContent,lines:()=>retargetPanel?.shownLines()??[],refusals:()=>[...document.querySelectorAll('#retarget-refusals code')].map(c=>c.textContent)},
  stage:()=>({modelHash:stageModelHash,inspectedHash:inspectedModel?.sha256??null,applied:appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,animation,time:player?.time??time,playing,busy:rebuildBusy}),
 };
 /** The world as it stands now: what a physics Apply's reload resumes. */
@@ -1653,6 +1691,8 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  const keepAnimation=animation,keepTime=player?.time??time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
  const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}});
  pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);stageModelHash=sha256;
+ // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
+ {const animations=select('animation-select');animations.replaceChildren(...assets.animations.map(item=>option(item.name,data.manifest.animations.find(a=>a.id===item.name)?.label??item.name)));animations.disabled=assets.animations.length===0;}
  player.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
  try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);partModel=catalog.model;weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
  if(keepSet){try{player.setSet(keepSet);}catch{select('part-set').value='';player.setSet(null);}}

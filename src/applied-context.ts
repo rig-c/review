@@ -9,16 +9,24 @@
  * `rig-review-applied/3` (#135) is Edit Mesh's delta, run by `rig-parts remesh --delta`: the `rig-review-mesh-edit/1`
  * document as sent (by content) and the SHA-256 of its bytes (`deltaSha256`, the download's file hash), the part, the
  * producer's line, `op` "remesh", the per-file diff and the part's counts.
+ * `rig-review-applied/4` (#114) is a retarget: the `rig-review-retarget/1` record (the sequence by reference, path and
+ * hash; the map by content and hash; the typed flags and their argv in `op`), the producer's line, what the scratch
+ * motion holds against the inspected rig's (`motion`), the per-file diff and the run's FEET / STANCE / FLIP / SHORT /
+ * END-ON / LEG-SCALE / REACH lines with their frames.
  * Records without `applied`, or with null, stay valid. Pure.
  */
 import { CONFIG_PATCH_SCHEMA, parseConfigPatch, type ConfigPatch } from './config-patch.ts';
 import { parseBustSpec } from './chest-landmarks.ts';
 import { PRODUCER_DOCUMENTS, type ProducerDocument } from './producer-files.ts';
 import { MESH_EDIT_BASIS, MESH_EDIT_MAX_OPS, MESH_EDIT_SCHEMA } from './mesh-edit.ts';
+import { assertRetargetRecord, RETARGET_LINE_CODES, type MotionSummary, type RetargetLine, type RetargetRecord } from './retarget.ts';
 
 export const APPLIED_REGIONS_SCHEMA = 'rig-review-applied/1';
 export const APPLIED_PATCH_SCHEMA = 'rig-review-applied/2';
 export const APPLIED_DELTA_SCHEMA = 'rig-review-applied/3';
+export const APPLIED_RETARGET_SCHEMA = 'rig-review-applied/4';
+/** At most this many retarget lines are kept in a record. */
+export const MAX_RETARGET_LINES = 200;
 export const CHECK_SUMMARY_SCHEMA = 'rig-review-check-summary/1';
 /** At most this many differing paths are listed; `count` always holds the full number. */
 export const MAX_DIFF_PATHS = 200;
@@ -69,6 +77,21 @@ export interface AppliedDelta {
   op: 'remesh';
   files: FilesDiff | null;
   mesh?: { part: string; before: MeshCounts; after: MeshCounts };
+  modelHash: string;
+}
+/** #114: a retarget as applied by `rig-pose clean` + `rig-pose retarget`, compiled in scratch. */
+export interface AppliedRetarget {
+  schema: typeof APPLIED_RETARGET_SCHEMA;
+  buildId: string;
+  retarget: RetargetRecord;
+  /** SHA-256 of the record's bytes as review hashes them (`retargetRecordText`). */
+  recordSha256: string;
+  configHash: string;
+  producer: Tool; compiler: Tool;
+  line: string | null;
+  motion: MotionSummary;
+  files: FilesDiff | null;
+  readings: RetargetLine[];
   modelHash: string;
 }
 /** One producer document against the inspected one: `count` differing JSON Pointers, the first `MAX_DIFF_PATHS` listed. */
@@ -188,7 +211,23 @@ export function parseAppliedContext(value: unknown): void {
     }
     return;
   }
-  throw new Error(`${field}.schema: expected ${APPLIED_REGIONS_SCHEMA}, ${APPLIED_PATCH_SCHEMA} (patch ${CONFIG_PATCH_SCHEMA}) or ${APPLIED_DELTA_SCHEMA} (mesh-edit delta)`);
+  if (value.schema === APPLIED_RETARGET_SCHEMA) {
+    const v = exact(value, 'buildId,compiler,configHash,files,line,modelHash,motion,producer,readings,recordSha256,retarget,schema', field);
+    if (![v.buildId, v.configHash, v.recordSha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, recordSha256 and modelHash are SHA-256 hex`);
+    const record = assertRetargetRecord(v.retarget, `${field}.retarget`);
+    if (record.config_sha256 !== v.configHash) throw new Error(`${field}: retarget.config_sha256 is not configHash`);
+    tool(v.producer, `${field}.producer`); tool(v.compiler, `${field}.compiler`); lineOrNull(v.line, `${field}.line`);
+    const m = exact(v.motion, 'animation,animationSha256,animations,changed,kept,motionSha256', `${field}.motion`);
+    if (m.animation !== record.flags.animation || typeof m.kept !== 'boolean' || !hex(m.motionSha256) || (m.animationSha256 !== null && !hex(m.animationSha256)) || !Array.isArray(m.animations) || !m.animations.every(a => typeof a === 'string') || !Array.isArray(m.changed) || !m.changed.every(a => typeof a === 'string')) throw new Error(`${field}.motion: {animation (the record's), animations, kept, changed, animationSha256, motionSha256}`);
+    parseFilesDiff(v.files, `${field}.files`);
+    if (!Array.isArray(v.readings) || v.readings.length > MAX_RETARGET_LINES) throw new Error(`${field}.readings: at most ${MAX_RETARGET_LINES} lines`);
+    for (const [i, r] of v.readings.entries()) {
+      const x = exact(r, 'code,frame,line,time', `${field}.readings[${i}]`);
+      if (!(RETARGET_LINE_CODES as readonly string[]).includes(x.code as string) || typeof x.line !== 'string' || x.line.length > 4000 || (x.frame !== null && !count(x.frame)) || (x.time !== null && (typeof x.time !== 'number' || !Number.isFinite(x.time)))) throw new Error(`${field}.readings[${i}]: {code, line, frame, time}`);
+    }
+    return;
+  }
+  throw new Error(`${field}.schema: expected ${APPLIED_REGIONS_SCHEMA}, ${APPLIED_PATCH_SCHEMA} (patch ${CONFIG_PATCH_SCHEMA}), ${APPLIED_DELTA_SCHEMA} (mesh-edit delta) or ${APPLIED_RETARGET_SCHEMA} (retarget)`);
 }
 
 /** The export's one readable line for a valid applied record; the raw context still follows it. */
@@ -198,6 +237,10 @@ export function appliedSummary(value: unknown): string | null {
   const v = value as Record<string, unknown>, producer = v.producer as Tool, model = String(v.modelHash).slice(0, 12);
   if (v.schema === APPLIED_REGIONS_SCHEMA && v.bust) return `contour.bust landmarks on ${String(v.part)} with ${producer.package} ${producer.version} · model ${model}…`;
   if (v.schema === APPLIED_REGIONS_SCHEMA) return `regions on ${String(v.part)} with ${producer.package} ${producer.version} · model ${model}…`;
+  if (v.schema === APPLIED_RETARGET_SCHEMA) {
+    const r = value as AppliedRetarget, seq = r.retarget.sequence;
+    return `retarget "${r.motion.animation}" from ${seq.reference} (${seq.sha256.slice(0, 12)}…) with map ${r.retarget.map_sha256.slice(0, 12)}… and ${producer.package} ${producer.version} (${r.retarget.op.clean ? 'clean, ' : ''}retarget ${r.retarget.op.args.join(' ')})${r.motion.kept ? '' : ` · changed ${r.motion.changed.join(', ')}`} · ${r.readings.length} line(s) · model ${model}…`;
+  }
   if (v.schema === APPLIED_DELTA_SCHEMA) {
     const d = value as AppliedDelta, ops = (d.delta.ops as unknown[]).length;
     const mesh = d.mesh ? ` · ${d.mesh.part} v ${d.mesh.before.vertices} t ${d.mesh.before.triangles} → v ${d.mesh.after.vertices} t ${d.mesh.after.triangles}` : '';
