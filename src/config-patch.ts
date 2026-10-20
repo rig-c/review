@@ -122,8 +122,8 @@ export function assertOpNames(doc: JsonValue, ops: readonly PatchOp[]): void {
     if (op.name === undefined) continue;
     const [list, index] = parsePointer(op.path), entries = isObject(doc) ? (doc as Record<string, JsonValue>)[list!] : undefined;
     const entry = Array.isArray(entries) ? entries[Number(index)] : undefined;
-    // A `bones` chain entry (#109) names itself by `chain`; every other named entry by `name`.
-    const held = isObject(entry) ? (entry as Record<string, JsonValue>).name ?? (list === 'bones' ? (entry as Record<string, JsonValue>).chain : undefined) : undefined;
+    // A `bones` chain entry (#109) and a `stops` entry (#110) name themselves by `chain`; every other named entry by `name`.
+    const held = isObject(entry) ? (entry as Record<string, JsonValue>).name ?? (list === 'bones' || list === 'stops' ? (entry as Record<string, JsonValue>).chain : undefined) : undefined;
     if (held !== op.name) throw new ConfigPatchError('EDIT_PATCH_NAME_MISMATCH', `ops[${i}] ${op.path} records "${op.name}", but /${pointerToken(list!)}/${index} ${held === undefined ? 'holds no named entry' : `is "${String(held)}"`} in the handoff config`);
   }
 }
