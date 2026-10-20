@@ -3,7 +3,7 @@
 A standalone human inspection and structured feedback app. Read README.md, docs/REVIEW_PACKAGE.md and docs/DESIGN.md before changing the delivery contract.
 
 - Work here; do not edit rigc, parts or play core repositories as part of review changes.
-- Keep supplied source assets and compiled models immutable. Motion is view/annotate/export only; never author keys or write motion.json. Store feedback separately, bound to package identity, revision and actual input hash. Opening a package never approves it.
+- Keep supplied source assets and compiled models immutable. Review itself authors no keys and writes no motion.json: motion edits (idle tracks, blink) are config patches the installed producer builds into a scratch build, and a labelled preview before Apply is never recorded or submitted. Store feedback separately, bound to package identity, revision and actual input hash. Opening a package never approves it.
 - All package assets must remain inside the package directory, with literal portable paths and no symlink escape. Never execute a manifest command or fetch a remote asset on its behalf.
 - Playback uses the published `@rig-c/play` API. A loaded model is not proof of the upstream compiler's gate. State source provenance and missing capabilities honestly.
 - View, Rig, Playback and Feedback are sections of one inspection workspace. Motion authoring is outside this app. Do not label placeholders as working editing tools.
