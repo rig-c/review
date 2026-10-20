@@ -10,7 +10,7 @@ import {freshSession} from '../src/session.ts';
 import {formatFeedbackIssues} from '../src/feedback-export.ts';
 import {KIND_FIELDS,parseRequirementsContext,readRequirements,REQUIREMENT_KINDS,REQUIREMENTS_CONTEXT_SCHEMA,requirementEntry,requirementsDocument,requirementsFileText,worstFrame,type Requirement} from '../src/requirements.ts';
 import type {RequirementsJob} from '../src/requirements-run.ts';
-import {defaultTargetBone,kindUnavailable,requirementName,selfTargetRefusal} from '../web/requirements-panel.ts';
+import {defaultTargetBone,kindUnavailable,readyCatalog,requirementName,selfTargetRefusal} from '../web/requirements-panel.ts';
 
 /**
  * #113. A stand-in `rig-parts check --requirements` that reads the file by the producer reader's own rules, written out
@@ -182,4 +182,12 @@ test('#142 bar 2: the form proposes a target bone other than the subject', () =>
  expect(defaultTargetBone(bones,'root')).toBe('hip');
  expect(defaultTargetBone(bones,'neck')).toBe('root');
  expect(defaultTargetBone(['only'],'only')).toBeNull();
+});
+
+test('#150: an unavailable rig spec (no producer handoff) is no catalog, so a part pick renders no requirement fields', () => {
+ const empty = { reason: 'MODELING_HANDOFF_MISSING: no producer handoff', bones: [], slots: [], meshes: {}, slotBones: {}, constraints: [], animations: [], scratch: null };
+ expect(readyCatalog({ status: 'unavailable' as const, ...empty })).toBeNull();
+ expect(readyCatalog(null)).toBeNull();
+ const ready = { status: 'ready' as const, ...empty, reason: null };
+ expect(readyCatalog(ready)).toBe(ready);
 });

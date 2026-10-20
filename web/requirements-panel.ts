@@ -65,6 +65,8 @@ export function selfTargetRefusal(r:{kind:RequirementKind;bone?:string;point?:Bo
  if(r.kind==='aim'&&r.target.bone===r.bone)return `REQUIREMENTS_SELF_TARGET: aim of bone "${r.bone}" at its own ${r.target.point} has no line to measure; pick another target bone`;
  return null;
 }
+/** The catalog the form renders from: only a ready rig spec. An unavailable one (no producer handoff) is no catalog, so picking a part with no handoff never renders fields from it (#150). */
+export function readyCatalog<C extends {status:'ready'|'unavailable'}>(next:C|null):C|null {return next&&next.status==='ready'?next:null;}
 /** The target a fresh form proposes: a bone other than the subject (the next one in rig order, else the first other one). */
 export function defaultTargetBone(bones:readonly string[],subject:string):string|null {
  const i=bones.indexOf(subject),next=i>=0?bones.slice(i+1).find(b=>b!==subject):undefined;
@@ -201,7 +203,8 @@ export function bindRequirementsPanel(deps:RequirementsPanelDeps):RequirementsPa
 
  const panel:RequirementsPanel={
   load(next,reason){
-   catalog=next;
+   // Only a ready spec is a catalog: an unavailable one (no producer handoff, #150) leaves the form empty, so selecting a part never renders fields from it.
+   catalog=readyCatalog(next);
    if(!next||next.status!=='ready'){state.textContent=reason??next?.reason??'REQUIREMENTS_UNAVAILABLE: no producer handoff';state.classList.add('error');kind.disabled=animation.disabled=true;add.disabled=check.disabled=true;fields.replaceChildren();return;}
    state.textContent=`Rig spec: ${next.bones.length} bones, ${next.slots.length} slots, ${Object.keys(next.meshes).length} mesh slot(s), ${next.constraints.length} ik/transform constraint(s), ${next.animations.length} animation(s)${next.scratch?' · a scratch build exists':''}.`;state.classList.remove('error');
    kind.disabled=animation.disabled=false;
