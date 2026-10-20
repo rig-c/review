@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1](https://github.com/rig-c/review/compare/v0.8.0...v0.8.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **overlay:** marker labels avoid each other on the stage ([#158](https://github.com/rig-c/review/issues/158)) ([784f52e](https://github.com/rig-c/review/commit/784f52ed66c44a44fb0709d3c86281504e884d39)), closes [#147](https://github.com/rig-c/review/issues/147)
+* **view:** the rig pane names the frame it shows; the counter reads a retarget build's own clock; no control probe without --control ([#165](https://github.com/rig-c/review/issues/165)) ([ad3bb7a](https://github.com/rig-c/review/commit/ad3bb7a560a8cbf390f4da3011044d7de4b4689e)), closes [#164](https://github.com/rig-c/review/issues/164)
+
 ## [0.8.0](https://github.com/rig-c/review/compare/v0.7.1...v0.8.0) (2026-10-20)
 
 
