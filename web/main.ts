@@ -14,6 +14,7 @@ import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-ed
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
 import {modelBoneNames,readSetupPose} from './setup-pose.ts';
 import {bindBonesPanel,type BonesPanel,type BonesCheckView} from './bones-panel.ts';
+import {bindCutsPanel,type CutsPanel} from './cuts-panel.ts';
 import {retargetAppliedRecord,retargetOutcomeLine,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
@@ -103,6 +104,7 @@ let meshEditor:MeshEditor|null=null;
 let weightsView:WeightsView|null=null;
 /** Setup · Bones (#109): the config's bone anchors on the stage, Check and a whole-rig Apply. */
 let bonesPanel:BonesPanel|null=null;
+let cutsPanel:CutsPanel|null=null;
 /** The hash-verified compiled model document the parts catalog was read from (mesh edit reads attachments from it). */
 let partModel:unknown=null;
 /** Apply · Rebuild (#99): the inspected model's URL, the producer status, and the applied record while its scratch build is on the stage. */
@@ -781,7 +783,7 @@ function bind(): void {
   button('chest-export').onclick = () => { void exportChest(); };
   for (const event of ['input', 'change']) el('chest-regions').addEventListener(event, renderChest);
   // A discarded local draft restores the form after its button's own handler; re-read the tool then.
-  el('draft-recovery').addEventListener('click', () => { renderChest(); restoreEnvironment(); physicsPanel?.restore(); bonesPanel?.restore(); idlePanel?.restore(); rigFieldsPanel?.restore(); });
+  el('draft-recovery').addEventListener('click', () => { renderChest(); restoreEnvironment(); physicsPanel?.restore(); bonesPanel?.restore(); cutsPanel?.restore(); idlePanel?.restore(); rigFieldsPanel?.restore(); });
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => {setView(item.dataset.view as typeof view);const menu=document.getElementById('view-menu') as HTMLDetailsElement|null;if(menu)menu.open=false;};
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
@@ -871,6 +873,10 @@ function bind(): void {
   bonesPanel=bindBonesPanel({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),pause,changed:()=>redrawOverlay(false),saved:()=>persistence?.save(),
    check:checkBones,apply:async ops=>{await applyBones(ops);},reset:resetBonesBuild,token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
   viewDisposers.push(()=>bonesPanel?.dispose());
+  // #115: cuts, patches and limb joints on the stage; Apply runs rig-parts build through the patch runner.
+  cutsPanel=bindCutsPanel({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),pause,changed:()=>redrawOverlay(false),saved:()=>persistence?.save(),
+   apply:applyCuts,reset:resetCutsBuild,token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim(),route:path=>access.route(path)});
+  viewDisposers.push(()=>cutsPanel?.dispose());
   physicsPanel=bindPhysicsPanel({apply:async ops=>{await applyPhysics(ops);},reset:resetPhysicsBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),pane=el('rig-pane').getBoundingClientRect(),view=el('rig-root').parentElement!.getBoundingClientRect(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name),p=project(b.x,b.y);out.set(name,{x:p.x+view.left-pane.left,y:p.y+view.top-pane.top});}catch{/* a bone this model lacks is not pickable */}}return out;}});
   viewDisposers.push(()=>physicsPanel?.dispose());
@@ -935,7 +941,7 @@ async function start(): Promise<void> {
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-    const restored=await setupPersistence();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     if(!readOnly)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
@@ -957,8 +963,8 @@ function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:
 function redrawOverlay(fresh:boolean):void {
  if(!overlays||!player)return;
  const project=rigProject();
- const regions=[...chestRegions(),...(meshPanel?.overlayRegions()??[])],circles=[...chestCircles(),...(meshPanel?.overlayCircles()??[])];
- const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()}):overlays.redraw({project,settings:layers,regions,circles,markers:chestMarkers(),meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()});
+ const regions=[...chestRegions(),...(meshPanel?.overlayRegions()??[]),...(cutsPanel?.overlayRegions()??[])],circles=[...chestCircles(),...(meshPanel?.overlayCircles()??[])],markers=[...chestMarkers(),...(cutsPanel?.overlayMarkers()??[])];
+ const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions,circles,markers,meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()}):overlays.redraw({project,settings:layers,regions,circles,markers,meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()});
  lastOverlay=value;
  text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');idlePanel?.place(duration);rigFieldsPanel?.place();if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
 }
@@ -1154,7 +1160,7 @@ function renderChest():void {
  el('chest-mapping').classList.toggle('error',!chestMapping.available);
  const value=chestEvaluation();text('chest-status',value.ok?`${value.document.mesh.value.contour.regions.map(r=>`${r.name} → ${r.bone}`).join(' · ')} · valid for export`:value.error);
  el('chest-status').classList.toggle('error',!value.ok);
- chestEditor?.sync();meshEditor?.sync();weightsView?.sync();bonesPanel?.sync();redrawOverlay(false);
+ chestEditor?.sync();meshEditor?.sync();weightsView?.sync();bonesPanel?.sync();cutsPanel?.sync();redrawOverlay(false);
 }
 async function exportChest():Promise<void> {
  const value=chestEvaluation();if(!value.ok){message(`Chest regions not exported: ${value.error}`,true);return;}
@@ -1348,6 +1354,7 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  retargetPanel?.load(rebuildStatus.retarget??null,rebuildStatus.reason);
  bonesPanel?.load(rebuildStatus.inputs?rebuildStatus.bones??[]:null,rebuildStatus.inputs?null:rebuildStatus.reason??'BONES_UNAVAILABLE: no producer handoff');
  rigFieldsPanel?.load(rebuildStatus.inputs?rebuildStatus.fields??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'RIG_FIELDS_UNAVAILABLE: no producer handoff');
+ cutsPanel?.load(rebuildStatus.inputs&&rebuildStatus.cuts?rebuildStatus.cuts.config:null,rebuildStatus.bones??[],rebuildStatus.inputs?null:rebuildStatus.reason??'CUTS_UNAVAILABLE: no producer handoff',rebuildStatus.cuts?.build??null);
  meshPanel?.load(rebuildStatus.inputs?rebuildStatus.meshes??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'MESH_PANEL_UNAVAILABLE: no producer handoff');meshPanel?.select(parts?.value()?.slot??null);
  return rebuildStatus;
 }
@@ -1460,6 +1467,10 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   regions:()=>meshPanel?.regions.list()??[],addRegion:(region:import('../src/mesh-entry.ts').MeshRegion)=>meshPanel?.regions.add(region),moveRegion:(region:number,vertex:number,to:[number,number])=>meshPanel?.regions.move(region,vertex,to),drawRegions:(on:boolean)=>meshPanel?.regions.draw(on),placing:()=>meshPanel?.regions.placing()??null,
   precheck:()=>meshPanel?.precheck()??[],apply:()=>{const part=meshPanel?.part(),entry=meshPanel?.entry();return part&&entry?applyMesh(part,entry):Promise.resolve(null);},reset:()=>resetMeshBuild(),folds:()=>meshFolds(),
   overlayTriangles:(slot:string)=>lastOverlay?.meshTriangles[slot]??null,status:()=>el('mesh-status').textContent,counts:()=>[...document.querySelectorAll('#mesh-counts code')].map(c=>c.textContent),readout:()=>[...document.querySelectorAll('#mesh-readout code')].map(c=>c.textContent),pending:()=>input('mesh-pending').value,lastPatch:()=>lastMeshPatch?JSON.parse(JSON.stringify(lastMeshPatch)):null},
+ /** #115: the Cuts block — its handles as client pixels (for a real-pointer drag), its ops, Apply and Reset. */
+ cuts:{source:()=>cutsPanel?.source()??null,ops:()=>cutsPanel?.ops()??[],handles:()=>cutsPanel?.handles()??[],active:()=>cutsPanel?.active()??false,setActive:(on:boolean)=>cutsPanel?.setActive(on),
+  setVertex:(cut:number,k:number,value:[number,number])=>cutsPanel?.setVertex(cut,k,value),setBox:(i:number,value:[number,number,number,number])=>cutsPanel?.setBox(i,value),setRange:(limb:string,k:number,value:[number,number]|null)=>cutsPanel?.setRange(limb,k,value),
+  apply:()=>cutsPanel?.apply()??Promise.resolve(null),reset:()=>resetCutsBuild()},
  bones:{anchors:()=>bonesPanel?.anchors()??[],edits:()=>bonesPanel?.edits()??[],set:(path:string,value:[number,number])=>bonesPanel?.set(path,value),select:(name:string|null)=>bonesPanel?.select(name),
   active:()=>bonesPanel?.active()??false,setActive:(on:boolean)=>bonesPanel?.setActive(on),handles:()=>bonesPanel?.handles()??[],check:()=>bonesPanel?.check()??Promise.resolve(null),
   apply:()=>applyBones((bonesPanel?.edits()??[]).map(e=>({op:'replace' as const,path:e.path,value:[...e.value],name:e.name}))),reset:()=>resetBonesBuild(),
@@ -1588,6 +1599,29 @@ async function applyBones(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|nul
   if('id' in result&&result.status==='built'){bonesPanel?.applied(result.request.patch.ops);redrawOverlay(true);}
   return result;
  }finally{bonesPanel?.busy(false);}
+}
+/**
+ * Cuts Apply (#115): the pending cut / patch / range / joint ops become one `rig` patch, which the server runs as
+ * `rig-parts build` (assemble → rig → check) from the handoff's painting and runs; the scratch build reloads in place
+ * and the panel shows the refusals, the recomposite, the seam pairs and the build's wall clock.
+ */
+async function applyCuts(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|null> {
+ const status=rebuildStatus??await loadRebuildStatus();
+ const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
+ if(!patch){const reason=!ops.length?'CUTS_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';cutsPanel?.status(reason,true);return null;}
+ cutsPanel?.busy(true);cutsPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: build (assemble → rig → check), compile… (a full build takes minutes)`,false);
+ try{
+  const result=await applyPatch(patch,stageWorld());
+  const outcome=patchOutcomeLine(result);cutsPanel?.status(outcome.text,outcome.error);
+  if('id' in result&&result.status==='built')redrawOverlay(true);
+  return result;
+ }finally{cutsPanel?.busy(false);}
+}
+/** Cuts Reset: the inspected build back on the stage (same world), and no pending op. */
+async function resetCutsBuild():Promise<void> {
+ cutsPanel?.clear();cutsPanel?.shown(null);
+ if(appliedOnStage){cutsPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{cutsPanel?.busy(false);}}
+ cutsPanel?.status('Reset: the inspected build is on the stage; no pending ops.',false);
 }
 /** Bones Reset: the inspected build back on the stage (same world), and no pending op. */
 async function resetBonesBuild():Promise<void> {

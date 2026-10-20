@@ -100,7 +100,7 @@ export function parseConfigPatch(input: unknown): ConfigPatch {
     if (!tokens.length) throw new ConfigPatchError('EDIT_PATCH_POINTER_INVALID', `ops[${i}].path "" would replace the whole config`);
     if (name !== 'remove' && !isJson(raw.value)) invalid(`ops[${i}].value is not JSON`);
     const entryName = Object.hasOwn(raw, 'name') ? raw.name : undefined;
-    if (entryName !== undefined && (typeof entryName !== 'string' || !entryName || entryName.length > 128 || tokens.length < 2 || !/^(0|[1-9][0-9]*)$/.test(tokens[1]!))) invalid(`ops[${i}].name must be a non-empty string naming the entry /${pointerToken(tokens[0]!)}/<index> holds`);
+    if (entryName !== undefined && (typeof entryName !== 'string' || !entryName || entryName.length > 128 || !namedEntry(tokens))) invalid(`ops[${i}].name must be a non-empty string naming the entry ${namedListText(tokens)} holds`);
     const tag = entryName === undefined ? {} : { name: entryName as string };
     return name === 'remove' ? { op: name, path: raw.path as string, ...tag } : { op: name, path: raw.path as string, value: raw.value as JsonValue, ...tag };
   });
@@ -116,15 +116,35 @@ export function assertPatchFresh(patch: Pick<ConfigPatch, 'config_sha256'>, conf
   if (patch.config_sha256 !== configSha256) throw new ConfigPatchError('EDIT_PATCH_STALE', `the patch was made against config ${patch.config_sha256.slice(0, 12)}…, the handoff config is ${configSha256.slice(0, 12)}…; read the config again and remake the patch`);
 }
 
+const INDEX = /^(0|[1-9][0-9]*)$/;
+/**
+ * The named list entry a pointer addresses, as `{list, index, key}`: a top-level list `/<list>/<i>` (named by `name`;
+ * a `bones` chain and a `stops` entry by `chain`), and since #115 `/assemble/cuts/<i>` (named by its `into`),
+ * `/assemble/patches/<i>` (by `name`) and `/limbs/<limb>/segments/<k>` (by its `part`). Null for any other pointer.
+ */
+export function namedEntry(tokens: readonly string[]): { list: string[]; index: number; keys: string[] } | null {
+  if (tokens[0] === 'assemble' && (tokens[1] === 'cuts' || tokens[1] === 'patches')) return tokens.length >= 3 && INDEX.test(tokens[2]!) ? { list: tokens.slice(0, 2), index: Number(tokens[2]), keys: [tokens[1] === 'cuts' ? 'into' : 'name'] } : null;
+  if (tokens[0] === 'limbs') return tokens.length >= 4 && tokens[2] === 'segments' && INDEX.test(tokens[3]!) ? { list: tokens.slice(0, 3), index: Number(tokens[3]), keys: ['part'] } : null;
+  if (tokens.length < 2 || !INDEX.test(tokens[1]!)) return null;
+  // A `bones` chain entry (#109) and a `stops` entry (#110) name themselves by `chain`; every other named entry by `name`.
+  return { list: tokens.slice(0, 1), index: Number(tokens[1]), keys: tokens[0] === 'bones' || tokens[0] === 'stops' ? ['name', 'chain'] : ['name'] };
+}
+const namedListText = (tokens: readonly string[]) => {
+  const tail = tokens[0] === 'assemble' ? '/assemble/cuts|patches/<index>' : tokens[0] === 'limbs' ? '/limbs/<limb>/segments/<index>' : `/${pointerToken(tokens[0] ?? '')}/<index>`;
+  return tail;
+};
+
 /** Every op that records a name must address, by index, a list entry of the unpatched config holding exactly that name (a `bones` chain: its `chain`). */
 export function assertOpNames(doc: JsonValue, ops: readonly PatchOp[]): void {
   for (const [i, op] of ops.entries()) {
     if (op.name === undefined) continue;
-    const [list, index] = parsePointer(op.path), entries = isObject(doc) ? (doc as Record<string, JsonValue>)[list!] : undefined;
-    const entry = Array.isArray(entries) ? entries[Number(index)] : undefined;
-    // A `bones` chain entry (#109) and a `stops` entry (#110) name themselves by `chain`; every other named entry by `name`.
-    const held = isObject(entry) ? (entry as Record<string, JsonValue>).name ?? (list === 'bones' || list === 'stops' ? (entry as Record<string, JsonValue>).chain : undefined) : undefined;
-    if (held !== op.name) throw new ConfigPatchError('EDIT_PATCH_NAME_MISMATCH', `ops[${i}] ${op.path} records "${op.name}", but /${pointerToken(list!)}/${index} ${held === undefined ? 'holds no named entry' : `is "${String(held)}"`} in the handoff config`);
+    const at = namedEntry(parsePointer(op.path));
+    if (!at) throw new ConfigPatchError('EDIT_PATCH_NAME_MISMATCH', `ops[${i}] ${op.path} records "${op.name}", but it addresses no named list entry`);
+    let entries: JsonValue | undefined = doc;
+    for (const t of at.list) entries = isObject(entries) ? (entries as Record<string, JsonValue>)[t] : undefined;
+    const entry = Array.isArray(entries) ? entries[at.index] : undefined;
+    const held = isObject(entry) ? at.keys.map(k => (entry as Record<string, JsonValue>)[k]).find(v => v !== undefined) : undefined;
+    if (held !== op.name) throw new ConfigPatchError('EDIT_PATCH_NAME_MISMATCH', `ops[${i}] ${op.path} records "${op.name}", but ${formatPointer([...at.list, at.index])} ${held === undefined ? 'holds no named entry' : `is "${String(held)}"`} in the handoff config`);
   }
 }
 

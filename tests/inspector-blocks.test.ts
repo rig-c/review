@@ -24,7 +24,7 @@ function rowButtons(html:string,id:string){
 
 test('every block of each Inspector section has a row button, and every row button targets a block of that section',async()=>{
  const html=await indexHtml();
- const expected={'inspector-rig':['Part','Modeling','Chest','Mesh','Weights','Bones','Fields'],'inspector-playback':['Transport','Sound','Environment','Physics','Idle tracks','Readings','Requirements','Retarget','Report']};
+ const expected={'inspector-rig':['Part','Modeling','Chest','Mesh','Weights','Bones','Fields','Cuts'],'inspector-playback':['Transport','Sound','Environment','Physics','Idle tracks','Readings','Requirements','Retarget','Report']};
  for(const [section,labels]of Object.entries(expected)){
   const children=directChildren(html,section),buttons=rowButtons(html,section);
   // The row is the section's first child, so it stays above the blocks it scrolls.
@@ -38,7 +38,7 @@ test('every block of each Inspector section has a row button, and every row butt
   const order=blocks as string[];for(const [i,button]of buttons.entries()){const at=order.indexOf(button.target),next=i+1<buttons.length?order.indexOf(buttons[i+1]!.target):order.length;expect(at).toBeLessThan(next);for(const id of button.includes){const k=order.indexOf(id);expect(k>at&&k<next).toBe(true);}}
  }
  // The row ids are new; each kept block id still appears exactly once.
- for(const id of ['transport','environment','physics-panel','idle-tracks','readings','sound-panel','report-panel','selected-part','modeling-tools','chest-regions','mesh-panel','weights','bones-panel','rig-fields'])expect(html.split(` id="${id}"`).length).toBe(2);
+ for(const id of ['transport','environment','physics-panel','idle-tracks','readings','sound-panel','report-panel','selected-part','modeling-tools','chest-regions','mesh-panel','weights','bones-panel','rig-fields','cuts-panel'])expect(html.split(` id="${id}"`).length).toBe(2);
 });
 
 /** Minimal element: layout comes from explicit `top`/`height`, relative to the section's scroll. */

@@ -59,8 +59,22 @@ export interface AppliedPatch {
   mesh?: { part: string; before: MeshCounts; after: MeshCounts };
   /** #125: every producer document's diff, per file, and the images by hash. Absent in older records. */
   files?: FilesDiff | null;
-  /** #136: the producer op that ran — `retune` or `rig` for a `rig` patch, `remesh` for a remesh patch. Absent in older records. */
-  op?: 'rig' | 'retune' | 'remesh';
+  /** #136: the producer op that ran — `retune`, `rig` or (#115) `build` for a `rig` patch, `remesh` for a remesh patch. Absent in older records. */
+  op?: 'rig' | 'retune' | 'remesh' | 'build';
+  /** #115, a `build` op only: the build's wall clock, the recomposite figures before and after, the parts it changed and its `seam pair` lines. */
+  assembled?: AppliedAssembled;
+}
+/** #115: what a `rig-parts build` Apply measured, recorded per Apply. `wallMs` is the build's own wall clock (assemble → rig → check). */
+export interface AppliedAssembled { wallMs: number | null; recomposite: { before: Record<string, number> | null; after: Record<string, number> | null }; partsChanged: string[]; seamPairs: string[] }
+export const MAX_SEAM_PAIR_LINES = 64;
+const RECOMPOSITE_KEYS = 'error_px,hole_count,mean_abs,uncovered_error_px,within_share';
+function parseAssembled(v: unknown, field: string): void {
+  const a = exact(v, 'partsChanged,recomposite,seamPairs,wallMs', field);
+  if (a.wallMs !== null && !count(a.wallMs)) throw new Error(`${field}.wallMs: whole ms or null`);
+  const r = exact(a.recomposite, 'after,before', `${field}.recomposite`);
+  for (const side of ['before', 'after'] as const) if (r[side] !== null) { const f = exact(r[side], RECOMPOSITE_KEYS, `${field}.recomposite.${side}`); if (!Object.values(f).every(n => typeof n === 'number' && Number.isFinite(n))) throw new Error(`${field}.recomposite.${side}: numbers`); }
+  if (!Array.isArray(a.partsChanged) || a.partsChanged.length > MAX_DIFF_PATHS || !a.partsChanged.every(n => typeof n === 'string')) throw new Error(`${field}.partsChanged: at most ${MAX_DIFF_PATHS} part names`);
+  if (!Array.isArray(a.seamPairs) || a.seamPairs.length > MAX_SEAM_PAIR_LINES || !a.seamPairs.every(l => typeof l === 'string' && l.length <= 4000)) throw new Error(`${field}.seamPairs: at most ${MAX_SEAM_PAIR_LINES} lines`);
 }
 /** #135: Edit Mesh's delta as applied by `rig-parts remesh --delta`. */
 export interface AppliedDelta {
@@ -174,7 +188,7 @@ export function parseAppliedContext(value: unknown): void {
     return;
   }
   if (value.schema === APPLIED_PATCH_SCHEMA) {
-    const v = exact(value, `buildId,check,compiler,configHash,diff,${Object.hasOwn(value, 'files') ? 'files,' : ''}line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,${Object.hasOwn(value, 'op') ? 'op,' : ''}patch,patchSha256,producer,schema`, field);
+    const v = exact(value, `${Object.hasOwn(value, 'assembled') ? 'assembled,' : ''}buildId,check,compiler,configHash,diff,${Object.hasOwn(value, 'files') ? 'files,' : ''}line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,${Object.hasOwn(value, 'op') ? 'op,' : ''}patch,patchSha256,producer,schema`, field);
     if (![v.buildId, v.configHash, v.patchSha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, patchSha256 and modelHash are SHA-256 hex`);
     let patch: ConfigPatch;
     try { patch = parseConfigPatch(v.patch); } catch (e) { throw new Error(`${field}.patch: ${e instanceof Error ? e.message : String(e)}`); }
@@ -187,8 +201,11 @@ export function parseAppliedContext(value: unknown): void {
       meshCounts(m.before, `${field}.mesh.before`); meshCounts(m.after, `${field}.mesh.after`);
     }
     if (Object.hasOwn(v, 'files')) parseFilesDiff(v.files, `${field}.files`);
-    // #136: a remesh patch ran remesh; a rig patch ran rig or retune.
-    if (Object.hasOwn(v, 'op') && !(patch.op.cmd === 'remesh' ? ['remesh'] : ['rig', 'retune']).includes(v.op as string)) throw new Error(`${field}.op: ${patch.op.cmd === 'remesh' ? '"remesh" for a remesh patch' : '"rig" or "retune" for a rig patch'}`);
+    // #136: a remesh patch ran remesh; a rig patch ran rig, retune or (#115) build.
+    if (Object.hasOwn(v, 'op') && !(patch.op.cmd === 'remesh' ? ['remesh'] : ['rig', 'retune', 'build']).includes(v.op as string)) throw new Error(`${field}.op: ${patch.op.cmd === 'remesh' ? '"remesh" for a remesh patch' : '"rig", "retune" or "build" for a rig patch'}`);
+    // #115: the build's measurements ride with a build op only, and a build op carries them.
+    if (Object.hasOwn(v, 'assembled') !== (v.op === 'build')) throw new Error(`${field}.assembled: present exactly when op is "build"`);
+    if (Object.hasOwn(v, 'assembled')) parseAssembled(v.assembled, `${field}.assembled`);
     if (v.diff !== null) {
       const d = exact(v.diff, 'count,paths', `${field}.diff`);
       if (!Number.isSafeInteger(d.count) || (d.count as number) < 0 || !Array.isArray(d.paths) || d.paths.length > MAX_DIFF_PATHS || d.paths.length > (d.count as number) || !d.paths.every(p => typeof p === 'string')) throw new Error(`${field}.diff: {count, paths ≤ ${MAX_DIFF_PATHS}}`);
@@ -250,7 +267,8 @@ export function appliedSummary(value: unknown): string | null {
   const check = a.check ? `check ${a.check.pass === null ? 'not read' : a.check.pass ? 'PASS' : 'FAIL'}` : 'check not run';
   const diff = a.files ? ` · ${filesDiffText(a.files)}` : a.diff ? ` · rig.json differs at ${a.diff.count} path(s)` : '';
   const mesh = a.mesh ? ` · ${a.mesh.part} v ${a.mesh.before.vertices} t ${a.mesh.before.triangles} → v ${a.mesh.after.vertices} t ${a.mesh.after.triangles}` : '';
-  return `patch ${a.patchSha256.slice(0, 12)}… (${a.op ?? a.patch.op.cmd}; ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? `, +${paths.length - 3}` : ''}) with ${producer.package} ${producer.version} · ${check}${diff}${mesh} · model ${model}…`;
+  const assembled = a.assembled ? ` · build ${a.assembled.wallMs === null ? '—' : `${(a.assembled.wallMs / 1000).toFixed(1)} s`}${a.assembled.partsChanged.length ? ` · parts changed: ${a.assembled.partsChanged.slice(0, 6).join(', ')}${a.assembled.partsChanged.length > 6 ? ', …' : ''}` : ''}${a.assembled.recomposite.before && a.assembled.recomposite.after ? ` · recomposite error px ${a.assembled.recomposite.before.error_px} → ${a.assembled.recomposite.after.error_px}` : ''}` : '';
+  return `patch ${a.patchSha256.slice(0, 12)}… (${a.op ?? a.patch.op.cmd}; ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? `, +${paths.length - 3}` : ''}) with ${producer.package} ${producer.version} · ${check}${diff}${mesh}${assembled} · model ${model}…`;
 }
 
 /**

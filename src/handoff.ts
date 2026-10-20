@@ -42,7 +42,8 @@ export interface HandoffRecord {
 }
 /** The record plus the absolute paths the producer is run with (never served, never in the identity). */
 /** `source` (#109): the declared source painting's absolute path, which `propose --from-config` reads; null when none was declared. */
-export interface Handoff { record: HandoffRecord; config: string; parts: string | null; rig: string | null; root: string; flags?: HandoffFlags; source?: string | null }
+/** `full` / `head` (#115): the declared See-through runs' absolute paths, which `rig-parts build` reads; null when none was declared. */
+export interface Handoff { record: HandoffRecord; config: string; parts: string | null; rig: string | null; root: string; flags?: HandoffFlags; source?: string | null; full?: string | null; head?: string | null }
 
 export class HandoffError extends Error {
   constructor(readonly code: string, readonly field: string, readonly detail: string) { super(`${code} ${field}: ${detail}`); }
@@ -156,7 +157,7 @@ async function record(root: string, base: string, how: HandoffRecord['how'], via
   const sorted = [...files].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([path, hash]) => ({ path, sha256: hash }));
   return {
     record: { schema: HANDOFF_SCHEMA, how, via, outside: !inside(root, config), config: { path: show(config), sha256: files.get(show(config))! }, parts: parts ? show(parts) : null, rig: rig ? show(rig) : null, source, full: extra.full ? show(extra.full) : null, head: extra.head ? show(extra.head) : null, files: sorted, missing },
-    config, parts, rig, root: base, source: extra.source ?? null,
+    config, parts, rig, root: base, source: extra.source ?? null, full: extra.full ?? null, head: extra.head ?? null,
   };
 }
 
