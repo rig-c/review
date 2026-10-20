@@ -15,7 +15,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts';
 import { compileArgs, firstRefusal, remeshArgs, resolveProducer, runTool, type InstalledTool } from './producer.ts';
 import { CONFIG_NAMED_FILES, HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
-import { assertWholeRigBaseline, BaselineError, baselineKey, runBaseline, type BaselineResult } from './baseline.ts';
+import { assertWholeRigBaseline, BaselineError, baselineKey, runBaseline, runInspectedCheck, runningInspectedCheck, type BaselineResult, type InspectedCheck } from './baseline.ts';
 import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, jsonDiff, parseConfigPatch, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
 import { checkSummary, MAX_DIFF_PATHS, type CheckSummary } from './applied-context.ts';
 
@@ -205,6 +205,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   }
   /** Once per session: the first time the handoff and the producer both resolve, the baseline starts (or is reused). */
   let baseline: BaselineResult | null = null, baselineRun: Promise<BaselineResult> | null = null;
+  /** #108 (HQ): the inspected build's check, started once the baseline reproduces; stored beside the baseline record. */
+  let inspectedCheck: InspectedCheck | null = null, inspectedCheckRun: Promise<InspectedCheck> | null = null;
   function ensureBaseline(resolved: ReturnType<typeof resolveProducer>): BaselineResult | null {
     if (baselineRun || !p.handoff || !resolved.ok) return baseline;
     try { assertStateOutside(); } catch { return null; }
@@ -214,7 +216,18 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const started = baseline;
     baselineRun = runBaseline(baselineDir(options.stateDir, key), key, handoff, resolved.producer, show)
       .catch((error): BaselineResult => ({ ...started, status: 'failed', line: `baseline: failed — ${error instanceof Error ? error.message : String(error)}` }))
-      .then(result => (baseline = result));
+      .then(result => {
+        baseline = result;
+        // Only a reproduced baseline is the inspected rig; its check is the inspected build's check.
+        if (result.status === 'reproduced' && handoff.parts) {
+          inspectedCheck = runningInspectedCheck(key);
+          const parts = handoff.parts, dir = baselineDir(options.stateDir, key);
+          inspectedCheckRun = runInspectedCheck(dir, key, parts, resolved.producer)
+            .catch((error): InspectedCheck => ({ ...runningInspectedCheck(key), status: 'failed', line: `inspected check: failed — ${error instanceof Error ? error.message : String(error)}` }))
+            .then(checked => (inspectedCheck = checked));
+        }
+        return result;
+      });
     return baseline;
   }
 
@@ -232,6 +245,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       handoff: handoff ? handoff.record : null,
       inputs: inputs && handoff ? { config: handoff.record.config.path, parts: handoff.record.parts, rig: handoff.record.rig, configHash: inputs.configHash } : null,
       baseline: ensureBaseline(resolved),
+      // #108 (HQ): the physics readout's BEFORE for the inspected build; null until the baseline reproduces.
+      inspectedCheck,
       parts, contour,
       // The config's constraints as written (#103: the physics panel patches them by index and name).
       constraints: inputs ? configConstraints(inputs.configText) : null,
@@ -239,6 +254,14 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       reason,
       running,
     };
+  }
+  /** The inspected build's check once it settles (tests); null when the baseline did not reproduce. */
+  async function settledInspectedCheck(): Promise<InspectedCheck | null> { await settledBaseline(); return inspectedCheckRun ? await inspectedCheckRun : inspectedCheck; }
+  /** The most recent built scratch build of this session (#108 readings run on it), or null. */
+  let latestId: string | null = null;
+  function latest(): { id: string; build: string; modelHash: string } | null {
+    const job = latestId ? jobs.get(latestId) : undefined;
+    return job && job.status === 'built' && job.build ? { id: job.id, build: join(rebuildDir(options.stateDir, p.sourceHash, job.id), 'build'), modelHash: job.build.modelHash } : null;
   }
   /** The baseline once it settles (tests, and the whole-rig ops of #102/#103 through assertWholeRigBaseline). */
   async function settledBaseline(): Promise<BaselineResult | null> { if (!baselineRun) ensureBaseline(resolveProducer(options.starts)); return baselineRun ? await baselineRun : baseline; }
@@ -276,7 +299,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       // The handoff files are in the reviewed identity, so this also catches a config, parts or rig change.
       try { await options.unchanged(); } catch { throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild'); }
       job.build = await hashBuild(join(dir, 'build'), job.id);
-      job.status = 'built';
+      job.status = 'built'; latestId = job.id;
       await writeFile(join(dir, 'result.json'), JSON.stringify({ ...job, reused: false }, null, 1) + '\n', { mode: 0o600 });
       // Each Apply replaces the previous scratch build of this package.
       for (const sibling of await readdir(rebuildRoot(options.stateDir, p.sourceHash))) if (sibling !== job.id && /^[a-f0-9]{64}$/.test(sibling)) { await rm(join(rebuildRoot(options.stateDir, p.sourceHash), sibling), { recursive: true, force: true }); jobs.delete(sibling); }
@@ -334,7 +357,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       job.check = checkSummary(checkJson, check.exitCode, check.lines, firstRefusal(check.lines));
       try { await options.unchanged(); } catch { throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild'); }
       job.build = await hashBuild(join(dir, 'build'), job.id);
-      job.status = 'built';
+      job.status = 'built'; latestId = job.id;
       await writeFile(join(dir, 'result.json'), JSON.stringify({ ...job, reused: false }, null, 1) + '\n', { mode: 0o600 });
       for (const sibling of await readdir(rebuildRoot(options.stateDir, p.sourceHash))) if (sibling !== job.id && /^[a-f0-9]{64}$/.test(sibling)) { await rm(join(rebuildRoot(options.stateDir, p.sourceHash), sibling), { recursive: true, force: true }); jobs.delete(sibling); }
     } catch (error) {
@@ -376,7 +399,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
     const reused = await reuse<PatchJob>(dir, id);
-    if (reused) { jobs.set(id, reused); return { status: 200, body: snapshot(reused) }; }
+    if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
     const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id, status: 'running', reused: false, request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, build: null };
     jobs.set(id, job); running = id;
     void executePatch(job, dir, inputs, resolved, patched, part).finally(() => { if (running === id) running = null; });
@@ -403,7 +426,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
     const reused = await reuse(dir, id);
-    if (reused) { jobs.set(id, reused); return { status: 200, body: snapshot(reused) }; }
+    if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
     const job: RebuildJob = { schema: REBUILD_SCHEMA, id, status: 'running', reused: false, request: { ...request, entrySha256: sha256(entry) }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { remesh: null, compile: null }, build: null };
     jobs.set(id, job); running = id;
     void execute(job, dir, inputs, resolved, entry).finally(() => { if (running === id) running = null; });
@@ -423,5 +446,5 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     return safeFile(await realpath(join(rebuildDir(options.stateDir, p.sourceHash, id), 'build')), packagePath(name));
   }
 
-  return { describe, start, read, file, running: () => running, baseline: settledBaseline };
+  return { describe, start, read, file, running: () => running, baseline: settledBaseline, inspectedCheck: settledInspectedCheck, latest };
 }

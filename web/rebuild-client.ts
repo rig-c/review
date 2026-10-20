@@ -8,6 +8,7 @@ import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '.
 import {APPLIED_PATCH_SCHEMA,type AppliedPatch,type CheckSummary} from '../src/applied-context.ts';
 export type {ConfigPatch,PatchOp,AppliedPatch,CheckSummary};
 import {chestContourFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
+import type {InspectedCheckView} from '../src/physics-tuning.ts';
 
 export type RegionEntry=
  |{name:string;shape:'circle';cx:number;cy:number;r:number;bone:string;spacing:number;band:number}
@@ -15,7 +16,7 @@ export type RegionEntry=
 /** The producer handoff (#101) as `/api/rebuild` reports it: paths relative to the package root, how it was found. */
 export interface HandoffView {how:'declared'|'discovered';via:string;outside:boolean;config:{path:string;sha256:string};parts:string|null;rig:string|null;files:{path:string;sha256:string}[];missing:string[]}
 export interface BaselineView {status:'running'|'reproduced'|'not-reproduced'|'refused'|'failed';firstDifference:string|null;hashes:{baseline:{rigJson:string|null;tree:string};inspected:{rigJson:string|null;tree:string}}|null;line:string;wallMs:number|null}
-export interface RebuildStatusView {available:boolean;handoff:HandoffView|null;baseline:BaselineView|null;inputs:{config:string;parts:string|null;rig:string|null;configHash:string}|null;parts:{name:string;regions:unknown[]}[];contour:Record<string,Record<string,unknown>>;constraints?:unknown[]|null;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;reason:string|null}
+export interface RebuildStatusView {available:boolean;handoff:HandoffView|null;baseline:BaselineView|null;inputs:{config:string;parts:string|null;rig:string|null;configHash:string}|null;parts:{name:string;regions:unknown[]}[];contour:Record<string,Record<string,unknown>>;constraints?:unknown[]|null;inspectedCheck?:InspectedCheckView|null;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;reason:string|null}
 export interface RebuildJobView {id:string;status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{remesh:number|null;compile:number|null};build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;regions:RegionEntry[];configHash:string;entrySha256:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
 export interface RebuildRefusal {status:'refused';error:string;producerLine:string|null}
 export interface RebuildRequestBody {part:string;regions:RegionEntry[];configHash:string}

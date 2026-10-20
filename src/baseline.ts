@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import type { Handoff } from './handoff.ts';
 import { RIG_FILES } from './handoff.ts';
 import { firstRefusal, runTool, type InstalledTool } from './producer.ts';
+import { checkSummary, type CheckSummary } from './applied-context.ts';
 
 export const BASELINE_SCHEMA = 'rig-review-baseline/1';
 export type BaselineStatus = 'running' | 'reproduced' | 'not-reproduced' | 'refused' | 'failed';
@@ -99,5 +100,51 @@ export async function runBaseline(dir: string, key: string, handoff: Handoff, pr
   const result: BaselineResult = { ...base, ...compared, line: '', exitCode: 0, wallMs: run.wallMs };
   result.line = baselineLine(result);
   await writeFile(resultFile, JSON.stringify(result, null, 1) + '\n', { mode: 0o600 });
+  return result;
+}
+
+/**
+ * The inspected build's own check (#108, HQ ruling): once the baseline reproduces the inspected rig, `rig-parts check`
+ * runs on that baseline output — byte-identical to the inspected rig, so nothing reads or writes the package — into
+ * `<baseline dir>/inspected-check/`, with Apply's default pack flags (`--page-edges free --pack-shape polygon`). The
+ * summary is stored beside the baseline record (`inspected-check.json`) so a reload reads it instead of re-running.
+ * It is what the physics readout's BEFORE line quotes while the inspected build is on the stage.
+ */
+export const INSPECTED_CHECK_SCHEMA = 'rig-review-inspected-check/1';
+export type InspectedCheckStatus = 'running' | 'checked' | 'refused' | 'failed';
+export interface InspectedCheck {
+  schema: typeof INSPECTED_CHECK_SCHEMA; key: string; status: InspectedCheckStatus;
+  /** check's printed lines (the per-bar lines the readout quotes), capped. */
+  lines: string[]; check: CheckSummary | null;
+  /** The line to show: check's summary line, its named refusal verbatim, or "check running…". */
+  line: string; exitCode: number | null; wallMs: number | null;
+}
+export const INSPECTED_CHECK_FILE = 'inspected-check.json';
+export const INSPECTED_CHECK_RUNNING = 'check running… (rig-parts check of the inspected build, in the background)';
+export const inspectedCheckArgs = (parts: string): string[] => ['check', '--rig', 'baseline', '--out', 'inspected-check', '--parts', parts, '--page-edges', 'free', '--pack-shape', 'polygon'];
+export const runningInspectedCheck = (key: string): InspectedCheck => ({ schema: INSPECTED_CHECK_SCHEMA, key, status: 'running', lines: [], check: null, line: INSPECTED_CHECK_RUNNING, exitCode: null, wallMs: null });
+/** The stored record when it belongs to this baseline key and finished; null otherwise. */
+export async function storedInspectedCheck(dir: string, key: string): Promise<InspectedCheck | null> {
+  try {
+    const stored = JSON.parse(await readFile(join(dir, INSPECTED_CHECK_FILE), 'utf8')) as InspectedCheck;
+    return stored.schema === INSPECTED_CHECK_SCHEMA && stored.key === key && (stored.status === 'checked' || stored.status === 'refused') ? stored : null;
+  } catch { return null; }
+}
+/** Run (or reuse) the inspected build's check in `dir` (the baseline's directory, whose `baseline/` reproduced the inspected rig). */
+export async function runInspectedCheck(dir: string, key: string, parts: string, producer: InstalledTool): Promise<InspectedCheck> {
+  const stored = await storedInspectedCheck(dir, key);
+  if (stored) return stored;
+  await rm(join(dir, 'inspected-check'), { recursive: true, force: true });
+  const run = await runTool(producer.bin, inspectedCheckArgs(parts), { cwd: dir });
+  let json: unknown = null;
+  try { json = JSON.parse(await readFile(join(dir, 'inspected-check', 'check.json'), 'utf8')); } catch { /* check refused before writing it; its line says why */ }
+  const refusal = firstRefusal(run.lines), check = checkSummary(json, run.exitCode, run.lines, refusal);
+  const refused = json === null && run.exitCode !== 0;
+  const result: InspectedCheck = {
+    schema: INSPECTED_CHECK_SCHEMA, key, status: refused ? 'refused' : 'checked', lines: run.lines.slice(-4000), check: refused ? null : check,
+    line: refused ? refusal ?? `rig-parts check exited ${run.exitCode} without a named refusal` : check.line ?? `rig-parts check exited ${run.exitCode}`,
+    exitCode: run.exitCode, wallMs: run.wallMs,
+  };
+  await writeFile(join(dir, INSPECTED_CHECK_FILE), JSON.stringify(result, null, 1) + '\n', { mode: 0o600 });
   return result;
 }
