@@ -60,11 +60,24 @@ export interface AppliedPatch {
   /** #125: every producer document's diff, per file, and the images by hash. Absent in older records. */
   files?: FilesDiff | null;
   /** #136: the producer op that ran — `retune`, `rig` or (#115) `build` for a `rig` patch, `remesh` for a remesh patch. Absent in older records. */
-  op?: 'rig' | 'retune' | 'remesh' | 'build';
+  op?: 'rig' | 'retune' | 'remesh' | 'build' | 'cloth';
+  /** #111, a `cloth` op only: how the config propose wrote was built, the keypoints it read and where the written config differs from its input. */
+  cloth?: AppliedCloth;
   /** #115, a `build` op only: the build's wall clock, the recomposite figures before and after, the parts it changed and its `seam pair` lines. */
   assembled?: AppliedAssembled;
   /** #112: the `rigc-environment/1` schedule the Apply's check read (`--environment`), by hash and step count. Absent: the default world. */
   environment?: { sha256: string; steps: number };
+}
+/** #111: a cloth recipe Apply — the route the written config took, the keypoint file propose read and the written diff. */
+export interface AppliedCloth { route: 'build' | 'rig'; keypoints: { path: string; sha256: string }; written: { count: number; paths: string[] } }
+function parseCloth(v: unknown, field: string): AppliedCloth {
+  const c = exact(v, 'keypoints,route,written', field);
+  if (c.route !== 'build' && c.route !== 'rig') throw new Error(`${field}.route: "build" or "rig"`);
+  const k = exact(c.keypoints, 'path,sha256', `${field}.keypoints`);
+  if (typeof k.path !== 'string' || !k.path || !hex(k.sha256)) throw new Error(`${field}.keypoints: {path, sha256 (SHA-256 hex)}`);
+  const w = exact(c.written, 'count,paths', `${field}.written`);
+  if (!count(w.count) || !Array.isArray(w.paths) || w.paths.length > MAX_DIFF_PATHS || w.paths.length > (w.count as number) || !w.paths.every(p => typeof p === 'string')) throw new Error(`${field}.written: {count, paths ≤ ${MAX_DIFF_PATHS}}`);
+  return c as unknown as AppliedCloth;
 }
 /** #115: what a `rig-parts build` Apply measured, recorded per Apply. `wallMs` is the build's own wall clock (assemble → rig → check). */
 export interface AppliedAssembled { wallMs: number | null; recomposite: { before: Record<string, number> | null; after: Record<string, number> | null }; partsChanged: string[]; seamPairs: string[] }
@@ -190,7 +203,7 @@ export function parseAppliedContext(value: unknown): void {
     return;
   }
   if (value.schema === APPLIED_PATCH_SCHEMA) {
-    const v = exact(value, `${Object.hasOwn(value, 'assembled') ? 'assembled,' : ''}buildId,check,compiler,configHash,diff,${Object.hasOwn(value, 'environment') ? 'environment,' : ''}${Object.hasOwn(value, 'files') ? 'files,' : ''}line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,${Object.hasOwn(value, 'op') ? 'op,' : ''}patch,patchSha256,producer,schema`, field);
+    const v = exact(value, `${Object.hasOwn(value, 'assembled') ? 'assembled,' : ''}buildId,check,${Object.hasOwn(value, 'cloth') ? 'cloth,' : ''}compiler,configHash,diff,${Object.hasOwn(value, 'environment') ? 'environment,' : ''}${Object.hasOwn(value, 'files') ? 'files,' : ''}line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,${Object.hasOwn(value, 'op') ? 'op,' : ''}patch,patchSha256,producer,schema`, field);
     if (![v.buildId, v.configHash, v.patchSha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, patchSha256 and modelHash are SHA-256 hex`);
     let patch: ConfigPatch;
     try { patch = parseConfigPatch(v.patch); } catch (e) { throw new Error(`${field}.patch: ${e instanceof Error ? e.message : String(e)}`); }
@@ -205,9 +218,13 @@ export function parseAppliedContext(value: unknown): void {
     if (Object.hasOwn(v, 'files')) parseFilesDiff(v.files, `${field}.files`);
     if (Object.hasOwn(v, 'environment')) { const e = exact(v.environment, 'sha256,steps', `${field}.environment`); if (!hex(e.sha256) || !Number.isSafeInteger(e.steps) || (e.steps as number) < 1) throw new Error(`${field}.environment: {sha256 (SHA-256 hex), steps ≥ 1}`); }
     // #136: a remesh patch ran remesh; a rig patch ran rig, retune or (#115) build.
-    if (Object.hasOwn(v, 'op') && !(patch.op.cmd === 'remesh' ? ['remesh'] : ['rig', 'retune', 'build']).includes(v.op as string)) throw new Error(`${field}.op: ${patch.op.cmd === 'remesh' ? '"remesh" for a remesh patch' : '"rig", "retune" or "build" for a rig patch'}`);
-    // #115: the build's measurements ride with a build op only, and a build op carries them.
-    if (Object.hasOwn(v, 'assembled') !== (v.op === 'build')) throw new Error(`${field}.assembled: present exactly when op is "build"`);
+    if (Object.hasOwn(v, 'op') && !(patch.op.cmd === 'remesh' ? ['remesh'] : ['rig', 'retune', 'build', 'cloth']).includes(v.op as string)) throw new Error(`${field}.op: ${patch.op.cmd === 'remesh' ? '"remesh" for a remesh patch' : '"rig", "retune", "build" or "cloth" for a rig patch'}`);
+    // #111: a cloth op carries its record, and only a cloth op; its ops are all under /cloth.
+    if (Object.hasOwn(v, 'cloth') !== (v.op === 'cloth')) throw new Error(`${field}.cloth: present exactly when op is "cloth"`);
+    const cloth = Object.hasOwn(v, 'cloth') ? parseCloth(v.cloth, `${field}.cloth`) : null;
+    if (cloth && !patch.ops.every(o => o.path.split('/')[1] === 'cloth')) throw new Error(`${field}.patch: a cloth op's patch edits /cloth only`);
+    // #115: the build's measurements ride with a build op only (and #111, a cloth op built as build), and such an op carries them.
+    if (Object.hasOwn(v, 'assembled') !== (v.op === 'build' || cloth?.route === 'build')) throw new Error(`${field}.assembled: present exactly when op is "build" (or "cloth" built as build)`);
     if (Object.hasOwn(v, 'assembled')) parseAssembled(v.assembled, `${field}.assembled`);
     if (v.diff !== null) {
       const d = exact(v.diff, 'count,paths', `${field}.diff`);
@@ -271,7 +288,8 @@ export function appliedSummary(value: unknown): string | null {
   const diff = a.files ? ` · ${filesDiffText(a.files)}` : a.diff ? ` · rig.json differs at ${a.diff.count} path(s)` : '';
   const mesh = a.mesh ? ` · ${a.mesh.part} v ${a.mesh.before.vertices} t ${a.mesh.before.triangles} → v ${a.mesh.after.vertices} t ${a.mesh.after.triangles}` : '';
   const assembled = a.assembled ? ` · build ${a.assembled.wallMs === null ? '—' : `${(a.assembled.wallMs / 1000).toFixed(1)} s`}${a.assembled.partsChanged.length ? ` · parts changed: ${a.assembled.partsChanged.slice(0, 6).join(', ')}${a.assembled.partsChanged.length > 6 ? ', …' : ''}` : ''}${a.assembled.recomposite.before && a.assembled.recomposite.after ? ` · recomposite error px ${a.assembled.recomposite.before.error_px} → ${a.assembled.recomposite.after.error_px}` : ''}` : '';
-  return `patch ${a.patchSha256.slice(0, 12)}… (${a.op ?? a.patch.op.cmd}; ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? `, +${paths.length - 3}` : ''}) with ${producer.package} ${producer.version} · ${check}${diff}${mesh}${assembled} · model ${model}…`;
+  const cloth = a.cloth ? ` · propose --cloth wrote a config differing at ${a.cloth.written.count} path(s), built by ${a.cloth.route === 'build' ? 'build' : 'rig --config'} · keypoints ${a.cloth.keypoints.path} (${a.cloth.keypoints.sha256.slice(0, 12)}…)` : '';
+  return `patch ${a.patchSha256.slice(0, 12)}… (${a.op ?? a.patch.op.cmd}; ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? `, +${paths.length - 3}` : ''}) with ${producer.package} ${producer.version} · ${check}${diff}${mesh}${cloth}${assembled} · model ${model}…`;
 }
 
 /**

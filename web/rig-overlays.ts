@@ -203,7 +203,8 @@ export class RigOverlays {
     const c=region.colors;
     points.forEach((p,i)=>{const size=region.active===i?5:3.5;ctx.fillStyle=region.active===i?c.handle:c.ink;ctx.strokeStyle=region.stroke;ctx.lineWidth=1.5;ctx.fillRect(p!.x-size,p!.y-size,size*2,size*2);ctx.strokeRect(p!.x-size,p!.y-size,size*2,size*2);});
     const top=points.reduce((a,p)=>p!.y<a!.y?p:a,points[0]);
-    ctx.font='600 11px ui-monospace, monospace';const width=ctx.measureText(region.name).width+8;ctx.fillStyle=c.labelBg;ctx.fillRect(top!.x-width/2,top!.y-24,width,15);ctx.fillStyle=region.stroke;ctx.fillText(region.name,top!.x-width/2+4,top!.y-13);
+    // An empty name draws no label (#111: one label per chain set, not per chain).
+    if(region.name){ctx.font='600 11px ui-monospace, monospace';const width=ctx.measureText(region.name).width+8;ctx.fillStyle=c.labelBg;ctx.fillRect(top!.x-width/2,top!.y-24,width,15);ctx.fillStyle=region.stroke;ctx.fillText(region.name,top!.x-width/2+4,top!.y-13);}
    }
   }
   if(this.playerAvailable)for(const circle of circles){

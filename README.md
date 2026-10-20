@@ -156,11 +156,11 @@ rig-review feedback /absolute/output --reference /absolute/original.mp4
 rig-review open /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance
 rig-review feedback /absolute/a --compare /absolute/b --reference /absolute/original.mp4 --animation dance
 # Producer handoff (single review only): the config, parts and inspected rig an Apply rebuilds from
-rig-review open /absolute/output --config /absolute/output/rig/config.json [--parts /absolute/output/rig/out] [--source <png> --full <dir> [--head <dir>]]
+rig-review open /absolute/output --config /absolute/output/rig/config.json [--parts /absolute/output/rig/out] [--source <png> --full <dir> [--head <dir>]] [--keypoints <file>]
 rig-review feedback /absolute/output --config /absolute/output/rig/config.json
 ```
 
-`--config`, `--parts`, `--source`, `--full` and `--head` declare the producer
+`--config`, `--parts`, `--source`, `--full`, `--head` and `--keypoints` declare the producer
 handoff (see `docs/REVIEW_PACKAGE.md`, *Producer handoff*). They win over the
 review.json `producer` block, which wins over discovery (`config.json`, then
 `rig/config.json` inside the opened folder, then `../config.json` beside an opened
@@ -168,8 +168,10 @@ review.json `producer` block, which wins over discovery (`config.json`, then
 package root; a path outside it or a symlink that leaves it is refused by name.
 The handoff files are hashed into the reviewed identity, so `feedback` and
 `control` take the same flags to retrieve the same session, and changing the
-config bytes starts a new pending review. `--parts` and `--source`/`--full`/`--head`
-need `--config`; `--source` and `--full` go together; compare takes none of them.
+config bytes starts a new pending review. `--keypoints` (#111) is the body-18 keypoint
+file a cloth recipe Apply hands to `rig-parts propose`; it is hashed into the identity
+only when declared, so a handoff without it keeps its identity. `--parts`,
+`--source`/`--full`/`--head` and `--keypoints` need `--config`; `--source` and `--full` go together; compare takes none of them.
 
 `open` chooses an explicit `--animation` first, then the normalized report's
 `animation` after validating actual model membership, then a unique actual clip

@@ -25,9 +25,9 @@ export const CONFIG_NAMED_FILES = [['motion', 'animations_from'], ['generation',
 export const RIG_FILES = ['rig.json', 'motion.json', 'mesh_report.json'] as const;
 const MAX_LISTED = 4096;
 
-export interface HandoffDeclaration { config: string; parts?: string; source?: string; full?: string; head?: string }
+export interface HandoffDeclaration { config: string; parts?: string; source?: string; full?: string; head?: string; keypoints?: string }
 export type HandoffFlags = HandoffDeclaration;
-export const HANDOFF_FLAGS = ['config', 'parts', 'source', 'full', 'head'] as const;
+export const HANDOFF_FLAGS = ['config', 'parts', 'source', 'full', 'head', 'keypoints'] as const;
 export interface HandoffFile { path: string; sha256: string }
 /** The identity record: paths relative to the package root (`../` only for the discovered parent config), every hashed file. */
 export interface HandoffRecord {
@@ -37,13 +37,16 @@ export interface HandoffRecord {
   outside: boolean;
   config: HandoffFile;
   parts: string | null; rig: string | null; source: HandoffFile | null; full: string | null; head: string | null;
+  /** #111: the declared body-18 keypoint file `rig-parts propose --keypoints` reads; the key is absent when none is declared, so an undeclared handoff's identity is unchanged. */
+  keypoints?: HandoffFile;
   files: HandoffFile[];
   missing: string[];
 }
 /** The record plus the absolute paths the producer is run with (never served, never in the identity). */
 /** `source` (#109): the declared source painting's absolute path, which `propose --from-config` reads; null when none was declared. */
 /** `full` / `head` (#115): the declared See-through runs' absolute paths, which `rig-parts build` reads; null when none was declared. */
-export interface Handoff { record: HandoffRecord; config: string; parts: string | null; rig: string | null; root: string; flags?: HandoffFlags; source?: string | null; full?: string | null; head?: string | null }
+/** `keypoints` (#111): the declared keypoint file's absolute path, which a cloth recipe Apply's `propose --keypoints` reads; null when none was declared. */
+export interface Handoff { record: HandoffRecord; config: string; parts: string | null; rig: string | null; root: string; flags?: HandoffFlags; source?: string | null; full?: string | null; head?: string | null; keypoints?: string | null }
 
 export class HandoffError extends Error {
   constructor(readonly code: string, readonly field: string, readonly detail: string) { super(`${code} ${field}: ${detail}`); }
@@ -87,15 +90,15 @@ async function blockPath(root: string, value: unknown, field: string, kind: 'fil
   return contained(root, join(root, value), field, kind, true);
 }
 
-/** `producer: {config, parts?, source?, full?, head?}` — strings only, no other key. Paths are checked at load. */
+/** `producer: {config, parts?, source?, full?, head?, keypoints?}` — strings only, no other key. Paths are checked at load. */
 export function parseHandoffDeclaration(value: unknown): HandoffDeclaration | undefined {
   if (value === undefined) return undefined;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HandoffError('HANDOFF_PATH_INVALID', 'producer', 'expected an object {config, parts?, source?, full?, head?}');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HandoffError('HANDOFF_PATH_INVALID', 'producer', 'expected an object {config, parts?, source?, full?, head?, keypoints?}');
   const v = value as Record<string, unknown>;
-  for (const key of Object.keys(v)) if (!(HANDOFF_FLAGS as readonly string[]).includes(key)) throw new HandoffError('HANDOFF_PATH_INVALID', `producer.${key}`, 'unknown key; expected config, parts, source, full, head');
+  for (const key of Object.keys(v)) if (!(HANDOFF_FLAGS as readonly string[]).includes(key)) throw new HandoffError('HANDOFF_PATH_INVALID', `producer.${key}`, 'unknown key; expected config, parts, source, full, head, keypoints');
   if (typeof v.config !== 'string') throw new HandoffError('HANDOFF_PATH_INVALID', 'producer.config', 'required: the producer config path');
   const out: HandoffDeclaration = { config: v.config };
-  for (const key of ['parts', 'source', 'full', 'head'] as const) if (v[key] !== undefined) { if (typeof v[key] !== 'string') throw new HandoffError('HANDOFF_PATH_INVALID', `producer.${key}`, 'expected a string path'); out[key] = v[key] as string; }
+  for (const key of ['parts', 'source', 'full', 'head', 'keypoints'] as const) if (v[key] !== undefined) { if (typeof v[key] !== 'string') throw new HandoffError('HANDOFF_PATH_INVALID', `producer.${key}`, 'expected a string path'); out[key] = v[key] as string; }
   return out;
 }
 /** `--source` and `--full` travel together, `--head` only with them, and everything else only with `--config`. */
@@ -119,7 +122,7 @@ async function listed(base: string, dir: string, field: string): Promise<string[
 }
 
 /** Hash every handoff file and build the record. `root` is the package root (display paths are relative to it). */
-async function record(root: string, base: string, how: HandoffRecord['how'], via: HandoffRecord['via'], config: string, partsPath: string | null, extra: { source?: string; full?: string; head?: string }, partsDeclared: boolean): Promise<Handoff> {
+async function record(root: string, base: string, how: HandoffRecord['how'], via: HandoffRecord['via'], config: string, partsPath: string | null, extra: { source?: string; full?: string; head?: string; keypoints?: string }, partsDeclared: boolean): Promise<Handoff> {
   const show = (path: string) => relative(root, path).split(sep).join('/') || '.';
   const files = new Map<string, string>(), missing: string[] = [];
   const add = async (path: string) => { files.set(show(path), await hashFile(path)); };
@@ -154,10 +157,12 @@ async function record(root: string, base: string, how: HandoffRecord['how'], via
   let source: HandoffFile | null = null;
   if (extra.source) { await add(extra.source); source = { path: show(extra.source), sha256: files.get(show(extra.source))! }; }
   for (const dir of [extra.full, extra.head]) if (dir) for (const file of await listed(base, dir, show(dir))) await add(file);
+  // #111: hashed only when declared — an undeclared handoff's record (and so its identity) holds no keypoints key at all.
+  if (extra.keypoints) await add(extra.keypoints);
   const sorted = [...files].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([path, hash]) => ({ path, sha256: hash }));
   return {
-    record: { schema: HANDOFF_SCHEMA, how, via, outside: !inside(root, config), config: { path: show(config), sha256: files.get(show(config))! }, parts: parts ? show(parts) : null, rig: rig ? show(rig) : null, source, full: extra.full ? show(extra.full) : null, head: extra.head ? show(extra.head) : null, files: sorted, missing },
-    config, parts, rig, root: base, source: extra.source ?? null, full: extra.full ?? null, head: extra.head ?? null,
+    record: { schema: HANDOFF_SCHEMA, how, via, outside: !inside(root, config), config: { path: show(config), sha256: files.get(show(config))! }, parts: parts ? show(parts) : null, rig: rig ? show(rig) : null, source, full: extra.full ? show(extra.full) : null, head: extra.head ? show(extra.head) : null, ...(extra.keypoints ? { keypoints: { path: show(extra.keypoints), sha256: files.get(show(extra.keypoints))! } } : {}), files: sorted, missing },
+    config, parts, rig, root: base, source: extra.source ?? null, full: extra.full ?? null, head: extra.head ?? null, keypoints: extra.keypoints ?? null,
   };
 }
 
@@ -175,9 +180,10 @@ export async function resolveHandoff(root: string, declared: HandoffDeclaration 
     const source = flags.source !== undefined ? await flagPath(root, flags.source, '--source', 'file') : undefined;
     const full = flags.full !== undefined ? await flagPath(root, flags.full, '--full', 'dir') : undefined;
     const head = flags.head !== undefined ? await flagPath(root, flags.head, '--head', 'dir') : undefined;
-    const handoff = await record(root, root, 'declared', 'open --config', config, parts, { source, full, head }, flags.parts !== undefined);
+    const keypoints = flags.keypoints !== undefined ? await flagPath(root, flags.keypoints, '--keypoints', 'file') : undefined;
+    const handoff = await record(root, root, 'declared', 'open --config', config, parts, { source, full, head, keypoints }, flags.parts !== undefined);
     // Canonical absolute flags: the background worker and later reloads read exactly these.
-    handoff.flags = { config, ...(flags.parts !== undefined ? { parts } : {}), ...(source ? { source } : {}), ...(full ? { full } : {}), ...(head ? { head } : {}) };
+    handoff.flags = { config, ...(flags.parts !== undefined ? { parts } : {}), ...(source ? { source } : {}), ...(full ? { full } : {}), ...(head ? { head } : {}), ...(keypoints ? { keypoints } : {}) };
     return { handoff, reason: null };
   }
   if (declared) {
@@ -186,8 +192,9 @@ export async function resolveHandoff(root: string, declared: HandoffDeclaration 
     const source = declared.source !== undefined ? await blockPath(root, declared.source, 'producer.source', 'file') : undefined;
     const full = declared.full !== undefined ? await blockPath(root, declared.full, 'producer.full', 'dir') : undefined;
     const head = declared.head !== undefined ? await blockPath(root, declared.head, 'producer.head', 'dir') : undefined;
+    const keypoints = declared.keypoints !== undefined ? await blockPath(root, declared.keypoints, 'producer.keypoints', 'file') : undefined;
     if ((source === undefined) !== (full === undefined) || (head !== undefined && full === undefined)) throw new HandoffError('HANDOFF_FLAGS_INVALID', 'producer', 'source and full are given together, head only with them');
-    return { handoff: await record(root, root, 'declared', 'review.json producer', config, parts, { source, full, head }, declared.parts !== undefined), reason: null };
+    return { handoff: await record(root, root, 'declared', 'review.json producer', config, parts, { source, full, head, keypoints }, declared.parts !== undefined), reason: null };
   }
   for (const name of ['config.json', 'rig/config.json']) {
     const path = join(root, name);

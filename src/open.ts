@@ -18,7 +18,7 @@ import {ensureFront,frontPort} from './front.ts';
 import {playPackagePath} from './versions.ts';
 import {HandoffError,HANDOFF_FLAGS,type HandoffFlags} from './handoff.ts';
 /** `direct` chooses how the page is reached (own port instead of the managed front); it is not part of the instance identity. */
-export interface OpenInputs {input:string;compare?:string;reference?:string;animation?:string;control?:boolean;direct?:boolean;config?:string;parts?:string;source?:string;full?:string;head?:string}
+export interface OpenInputs {input:string;compare?:string;reference?:string;animation?:string;control?:boolean;direct?:boolean;config?:string;parts?:string;source?:string;full?:string;head?:string;keypoints?:string}
 /** The producer handoff flags (#101) among the inputs, or undefined when none was given. */
 export function handoffFlags(inputs:OpenInputs):HandoffFlags|undefined{const present=HANDOFF_FLAGS.filter(f=>inputs[f]!==undefined);if(!present.length)return undefined;return Object.fromEntries(present.map(f=>[f,inputs[f]])) as unknown as HandoffFlags;}
 export type OpenPackage=({mode:'single';p:ReviewPackage;inputs:OpenInputs;contentHash:string}|{mode:'compare';p:ComparePackage;inputs:OpenInputs;contentHash:string})&{selection:AnimationSelection|null};

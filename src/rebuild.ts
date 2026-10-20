@@ -24,8 +24,9 @@ import { CHEST_REGIONS_MAX } from './chest-regions.ts';
 import { bustMeshEntry, deriveBust, parseBustSpec, BustSpecError, type BustSpec } from './chest-landmarks.ts';
 import { modelMeshTriangles, remeshCounts, type RemeshCounts } from './mesh-entry.ts';
 import { patchRoute } from './retune-route.ts';
-import { absolutizeBuildFiles, buildLines, buildNamedFiles, buildReadout, needsBuild, newBuildFile, recompositeFigures, type RecompositeFigures } from './build-route.ts';
+import { absolutizeBuildFiles, buildLines, buildNamedFiles, buildReadout, MAX_BUILD_READOUT, needsBuild, newBuildFile, recompositeFigures, type RecompositeFigures } from './build-route.ts';
 import { jsonDiff } from './config-patch.ts';
+import { CLOTH_KEYPOINTS_UNDECLARED, CLOTH_PATCH_MIXED, CLOTH_SOURCE_UNAVAILABLE, CLOTH_WRITE_SINCE, clothLinks, clothPatchKind, readClothTargets, writtenDiff, type ClothTagView, type WrittenDiff } from './cloth-recipe.ts';
 import { CHECK_ENVIRONMENT_SINCE, parseSchedule, ScheduleError, scheduleText } from './environment-schedule.ts';
 import { cleanArgs, mapText, motionSummary, parseRetargetRequest, retargetArgs, retargetLines, retargetRecord, retargetRecordText, RetargetError, type MotionSummary, type RetargetLine, type RetargetRecord } from './retarget.ts';
 
@@ -230,7 +231,35 @@ export interface PatchJob {
   assembled?: AssembledView;
   /** #112: the `rigc-environment/1` schedule check read (`--environment`), by hash; absent when Apply ran under the default world. */
   environment?: ApplyWorld['record'];
+  /** #111, a `cloth` job only: what `propose --cloth --write-config` wrote and how the written config was built. */
+  cloth?: ClothJob;
 }
+/**
+ * #111: a cloth recipe Apply — `rig-parts propose --cloth cloth.json --write-config config.json` on the handoff's parts,
+ * painting and keypoints, then the written config built as `build` (the config declares `limbs`) or `rig --config`.
+ * `refusals`: every FAIL line propose printed, verbatim; `line`: propose's own `wrote config.json: …` line; `written`:
+ * every JSON Pointer at which the written config differs from cloth.json (the patched handoff config), and those outside
+ * the sections propose splices (none, or the Apply is refused); `links`: the written config's chains per tag.
+ */
+export interface ClothJob {
+  route: 'build' | 'rig';
+  inputs: { source: string; keypoints: { path: string; sha256: string } };
+  refusals: string[]; line: string | null; written: WrittenDiff | null; links: ClothTagView[];
+  wallMs: { propose: number | null; build: number | null };
+}
+/** #111: what a cloth Apply runs with — the handoff's painting and keypoints (absolute), parts.json and the reader's tags; never from the client. */
+export interface ClothPlan { source: string; keypoints: string; partsJson: unknown; targets: string[] }
+/**
+ * The tags the installed reader accepts, read off its own source (`src/cloth.ts`'s `CLOTH_TARGETS`); when that text
+ * does not state them, the tags the config's `cloth` block already declares (and `read: false`).
+ */
+export async function clothTargets(producerRoot: string | null, configText: string): Promise<{ tags: string[]; read: boolean }> {
+  if (producerRoot) { try { const tags = readClothTargets(await readFile(join(producerRoot, 'src', 'cloth.ts'), 'utf8')); if (tags) return { tags, read: true }; } catch { /* not readable: fall back */ } }
+  const cloth = object(JSON.parse(configText), 'config').cloth;
+  return { tags: cloth && typeof cloth === 'object' && !Array.isArray(cloth) ? Object.keys(cloth).filter(k => k !== 'note' && !k.endsWith('_note') && !k.startsWith('x-')) : [], read: false };
+}
+/** A written config that differs from its input outside the drafted sections is not built (bar 1, #111). */
+export const CLOTH_WRITTEN_OUTSIDE_DRAFTED = 'CLOTH_WRITTEN_OUTSIDE_DRAFTED';
 /** #112: the exported schedule an Apply's check reads, as written into the scratch directory, and what the job records of it. */
 export interface ApplyWorld { text: string; record: { sha256: string; steps: number } }
 /** `{patch, environment}`'s schedule: parsed as data and re-serialized, so its hash is the exported bytes'. */
@@ -239,7 +268,7 @@ export function parseApplyWorld(value: unknown): ApplyWorld {
   catch (e) { if (e instanceof ScheduleError) throw new RebuildError('REBUILD_REQUEST_INVALID', `environment: ${e.message}`); throw e; }
 }
 /** The producer op a patch job ran (#136; `build` since #115). */
-export type AppliedOp = 'rig' | 'retune' | 'remesh' | 'build';
+export type AppliedOp = 'rig' | 'retune' | 'remesh' | 'build' | 'cloth';
 /**
  * #115: a `rig-parts build` job's assemble readout — the inputs it was run with (paths relative to the package root, the
  * assemble-read config files by hash), every FAIL line verbatim, the `cut:` / `limb cut:` / `limb cap:` / uncovered-hole
@@ -315,10 +344,10 @@ export interface DeltaJob {
  * Deterministic: the package, the config bytes, the patch's own bytes and both tool versions. No clock. A retune-routed
  * patch adds its op (#136), so a scratch build the whole-rig path left for the same patch is never reused as retune's.
  */
-export function patchId(input: { sourceHash: string; configHash: string; patch: ConfigPatch; producer: string; compiler: string; op?: AppliedOp; buildInputs?: string; environment?: string }): string {
+export function patchId(input: { sourceHash: string; configHash: string; patch: ConfigPatch; producer: string; compiler: string; op?: AppliedOp; buildInputs?: string; environment?: string; cloth?: string }): string {
   // #115: a build-routed patch adds its op and the hash of the files assemble reads (painting, runs, named files).
   // #112: an Apply whose check reads a schedule adds the schedule's hash, so a default-world build is never reused for it.
-  return sha256(JSON.stringify([REBUILD_SCHEMA, 'patch', input.sourceHash, input.configHash, patchText(input.patch), input.producer, input.compiler, ...(input.op === 'retune' ? ['retune'] : []), ...(input.op === 'build' ? ['build', input.buildInputs ?? ''] : []), ...(input.environment ? ['environment', input.environment] : [])]));
+  return sha256(JSON.stringify([REBUILD_SCHEMA, 'patch', input.sourceHash, input.configHash, patchText(input.patch), input.producer, input.compiler, ...(input.op === 'retune' ? ['retune'] : []), ...(input.op === 'build' ? ['build', input.buildInputs ?? ''] : []), ...(input.op === 'cloth' ? ['cloth', input.cloth ?? '', input.buildInputs ?? ''] : []), ...(input.environment ? ['environment', input.environment] : [])]));
 }
 const namedFile = (doc: unknown, keys: readonly string[]): unknown => keys.reduce<unknown>((v, k) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>)[k] : undefined), doc);
 /**
@@ -494,12 +523,28 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       cuts: inputs ? { config: configCuts(inputs.configText), build: buildGap(handoff) } : null,
       // #104: the config's idle (tracks, blink, bones, chains) and where the inspected idle keys each track.
       idle: inputs ? await idleStatus(inputs) : null,
+      // #111: the cloth recipe form — the reader's tags, the config's recipes as written, each tag's parts and chains (the
+      // link preview) and why a cloth Apply cannot run here (no keypoints, no painting, an older producer), or null.
+      cloth: inputs && handoff ? await clothStatus(handoff, inputs, resolved) : null,
       producer: resolved.ok ? tool(resolved.producer) : null, compiler: resolved.ok ? tool(resolved.compiler) : null,
       // #114: what the retarget editor offers — the pose producer, the declared sequences, the rig's bones and animations.
       retarget: await retargetStatus(inputs),
       reason,
       running,
     };
+  }
+  /** #111: what the cloth recipe form starts from. */
+  async function clothStatus(handoff: Handoff, inputs: ProducerInputs, resolved: ReturnType<typeof resolveProducer>) {
+    const config = object(JSON.parse(inputs.configText), 'config');
+    let partsJson: unknown = null;
+    try { partsJson = JSON.parse(await readFile(join(inputs.parts, 'parts.json'), 'utf8')); } catch { /* none: no tag lists its parts */ }
+    const targets = await clothTargets(resolved.ok ? resolved.producer.root : null, inputs.configText);
+    const reason = !handoff.keypoints || !handoff.record.keypoints ? CLOTH_KEYPOINTS_UNDECLARED
+      : !resolved.ok ? resolved.error
+      : !versionAtLeast(resolved.producer.version, CLOTH_WRITE_SINCE) ? modelingProducerTooOld(resolved.producer.version || 'unknown', CLOTH_WRITE_SINCE, 'rig-parts propose --cloth --write-config (entry by entry)')
+      : !handoff.source ? CLOTH_SOURCE_UNAVAILABLE
+      : config.limbs !== undefined && !handoff.full ? BUILD_SOURCE_UNAVAILABLE : null;
+    return { targets: targets.tags, targetsRead: targets.read, recipes: config.cloth ?? null, tags: clothLinks(config, partsJson, targets.tags), keypoints: handoff.record.keypoints ?? null, route: config.limbs !== undefined ? 'build' : 'rig', reason };
   }
   /** The inspected build's check once it settles (tests); null when the baseline did not reproduce. */
   async function settledInspectedCheck(): Promise<InspectedCheck | null> { await settledBaseline(); return inspectedCheckRun ? await inspectedCheckRun : inspectedCheck; }
@@ -509,7 +554,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const job = latestId ? jobs.get(latestId) : undefined;
     // `spec`: the rig spec directory the job's producer op wrote (#113 checks requirements on it) — a designation's `revision`, a patch's or delta's `rig`.
     const dir = job ? rebuildDir(options.stateDir, p.sourceHash, job.id) : '';
-    return job && job.status === 'built' && job.build ? { id: job.id, build: join(dir, 'build'), modelHash: job.build.modelHash, spec: join(dir, !('kind' in job) ? 'revision' : job.op === 'build' ? 'out/rig' : 'rig') } : null;
+    return job && job.status === 'built' && job.build ? { id: job.id, build: join(dir, 'build'), modelHash: job.build.modelHash, spec: join(dir, !('kind' in job) ? 'revision' : job.op === 'build' || (job.kind === 'patch' && job.cloth?.route === 'build') ? 'out/rig' : 'rig') } : null;
   }
   /** The baseline once it settles (tests, and the whole-rig ops of #102/#103 through assertWholeRigBaseline). */
   async function settledBaseline(): Promise<BaselineResult | null> { if (!baselineRun) ensureBaseline(resolveProducer(options.starts)); return baselineRun ? await baselineRun : baseline; }
@@ -604,30 +649,68 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * #102: the patched config → `rig-parts rig` (whole rig), `retune` (#136: the constraints and the idle spliced onto the
    * inspected rig) or `remesh` (one part's patched entry) → `<dir>/rig`; the tail adds the diff and check.
    */
-  function executePatch(job: PatchJob, dir: string, inputs: ProducerInputs, resolved: Resolved, patched: JsonValue, part: string | null, plan: BuildPlan | null = null, world: ApplyWorld | null = null): Promise<void> {
+  function executePatch(job: PatchJob, dir: string, inputs: ProducerInputs, resolved: Resolved, patched: JsonValue, part: string | null, plan: BuildPlan | null = null, world: ApplyWorld | null = null, cloth: ClothPlan | null = null): Promise<void> {
     const args = job.request.patch.op.args, producer = resolved.producer;
     let counts: RemeshCounts | null = null;
     let built: ProcessResult | null = null;
+    /** #111: a cloth job whose written config declares limbs is built as `build` does; otherwise as `rig --config`. */
+    const building = job.op === 'build' || (job.op === 'cloth' && job.cloth?.route === 'build');
+    /** #115 (and #111's build route): assemble → rig → check on `config.json`, already written into the scratch directory. */
+    async function runBuild(push: (line: string) => void, what: string): Promise<ProcessResult> {
+      // #112: build forwards `--environment` to its check stage (rig-parts build --help, 1.48.0).
+      if (world) await writeFile(join(dir, 'environment.json'), world.text, { mode: 0o600 });
+      push(`review: ${producer.package} ${producer.version} build --config config.json (${what}) --source <handoff source> --full <handoff full>${plan!.head ? ' --head <handoff head>' : ''} --seam-pairs${world ? ` --environment environment.json (the exported schedule, ${world.record.steps} step(s), sha256 ${world.record.sha256.slice(0, 16)})` : ''} → scratch out (assemble → rig → check)`);
+      // `--seam-pairs` (forwarded to check): the setup-pose seam split by pair on a pass too, so every Apply shows its `seam pair` lines.
+      built = await runTool(producer.bin, ['build', '--config', 'config.json', '--source', plan!.source, '--full', plan!.full, ...(plan!.head ? ['--head', plan!.head] : []), '--out', 'out', '--seam-pairs', ...(world ? ['--environment', 'environment.json'] : []), ...args], { cwd: dir, onLine: push });
+      const readout = buildReadout(built.lines);
+      // A check that ran and found a bar not met is check's judgment, kept beside the build (as for a `rig` patch):
+      // build prints "stopped at check; N bar(s) not met" (a check that refused its input says "no later stage ran").
+      const stoppedAtCheck = built.exitCode !== 0 && built.lines.some(l => /^build: stopped at check; \d+ bar\(s\) not met/.test(l.trim())) && (await exists(join(dir, 'out', 'rig', 'rig.json')));
+      job.assembled = { ...job.assembled!, refusals: stoppedAtCheck ? [] : readout.refusals, checkFails: stoppedAtCheck ? readout.refusals : [], lines: readout.assemble, seam: readout.seam, seamPairs: readout.seamPairs, recomposite: { ...job.assembled!.recomposite, line: readout.recomposite } };
+      const lines = buildLines(built.lines);
+      return { ...built, exitCode: stoppedAtCheck ? 0 : built.exitCode, lines, stdout: lines };
+    }
+    /** #111: propose writes the config, review checks the written diff, then the written config is built. */
+    async function runCloth(push: (line: string) => void): Promise<ProcessResult> {
+      const c = job.cloth!, plan2 = cloth!;
+      // cloth.json: the patched handoff config with every path it names made absolute (the scratch copy reads the
+      // handoff's files), so the config propose writes beside it builds from the same files.
+      const input = JSON.parse(scratchConfigText(inputs.config, patched)) as Record<string, unknown>;
+      absolutizeBuildFiles(input, value => (isAbsolute(value) ? value : resolve(dirname(inputs.config), value)));
+      await writeFile(join(dir, 'cloth.json'), JSON.stringify(input, null, 2) + '\n', { mode: 0o600 });
+      push(`review: ${producer.package} ${producer.version} propose --parts <handoff parts> --source <handoff source> --keypoints <handoff keypoints> --out propose --cloth cloth.json (the handoff config with ${job.request.patch.ops.length} patch op(s)) --write-config config.json`);
+      const proposed = await runTool(producer.bin, ['propose', '--parts', inputs.parts, '--source', plan2.source, '--keypoints', plan2.keypoints, '--out', 'propose', '--cloth', 'cloth.json', '--write-config', 'config.json'], { cwd: dir, onLine: push });
+      c.wallMs.propose = proposed.wallMs;
+      if (proposed.exitCode !== 0) { c.refusals = proposed.lines.filter(l => /^\s*FAIL\s/.test(l)).map(l => l.trim()).slice(0, MAX_BUILD_READOUT); return proposed; }
+      c.line = proposed.stdout.map(l => l.trim()).find(l => l.startsWith('wrote config.json:')) ?? null;
+      const written = JSON.parse(await readFile(join(dir, 'config.json'), 'utf8')) as unknown;
+      c.written = writtenDiff(input, written);
+      c.links = clothLinks(written, plan2.partsJson, plan2.targets);
+      if (c.written.outside.length) {
+        const line = `${CLOTH_WRITTEN_OUTSIDE_DRAFTED}: the config propose wrote differs from cloth.json outside the sections it splices, at ${c.written.outside.slice(0, 8).join(', ')}${c.written.outside.length > 8 ? ', …' : ''}; not built`;
+        push(`review: ${line}`);
+        return { exitCode: 1, lines: [line], stdout: [], wallMs: proposed.wallMs };
+      }
+      push(`review: the written config differs from cloth.json at ${c.written.count} path(s), every one under the sections propose splices${c.written.sections.length ? ` (${c.written.sections.join(', ')})` : ''}`);
+      let op: ProcessResult;
+      if (c.route === 'build') op = await runBuild(push, 'the config propose wrote');
+      else {
+        push(`review: ${producer.package} ${producer.version} rig --config config.json (the config propose wrote) → scratch rig`);
+        op = await runTool(producer.bin, ['rig', '--config', 'config.json', '--parts', inputs.parts, '--out', 'rig', ...args], { cwd: dir, onLine: push });
+      }
+      c.wallMs.build = op.wallMs;
+      return { ...op, wallMs: proposed.wallMs + op.wallMs };
+    }
     return apply(job, dir, inputs, resolved, {
-      cmd: job.op, spec: job.op === 'build' ? 'out/rig' : 'rig',
+      cmd: job.op === 'cloth' ? 'propose' : job.op, spec: building ? 'out/rig' : 'rig',
       async run(push) {
+        if (job.op === 'cloth' && cloth) return runCloth(push);
         if (job.op === 'build' && plan) {
           // #115: assemble → rig → check from the painting and the runs, the patched config's assemble-read files absolute.
           const doc = JSON.parse(scratchConfigText(inputs.config, patched)) as Record<string, unknown>;
           absolutizeBuildFiles(doc, value => (isAbsolute(value) ? value : resolve(dirname(inputs.config), value)));
           await writeFile(join(dir, 'config.json'), JSON.stringify(doc, null, 2) + '\n', { mode: 0o600 });
-          // #112: build forwards `--environment` to its check stage (rig-parts build --help, 1.48.0).
-          if (world) await writeFile(join(dir, 'environment.json'), world.text, { mode: 0o600 });
-          push(`review: ${producer.package} ${producer.version} build --config config.json (the handoff config with ${job.request.patch.ops.length} patch op(s)) --source <handoff source> --full <handoff full>${plan.head ? ' --head <handoff head>' : ''} --seam-pairs${world ? ` --environment environment.json (the exported schedule, ${world.record.steps} step(s), sha256 ${world.record.sha256.slice(0, 16)})` : ''} → scratch out (assemble → rig → check)`);
-          // `--seam-pairs` (forwarded to check): the setup-pose seam split by pair on a pass too, so every Apply shows its `seam pair` lines.
-          built = await runTool(producer.bin, ['build', '--config', 'config.json', '--source', plan.source, '--full', plan.full, ...(plan.head ? ['--head', plan.head] : []), '--out', 'out', '--seam-pairs', ...(world ? ['--environment', 'environment.json'] : []), ...args], { cwd: dir, onLine: push });
-          const readout = buildReadout(built.lines);
-          // A check that ran and found a bar not met is check's judgment, kept beside the build (as for a `rig` patch):
-          // build prints "stopped at check; N bar(s) not met" (a check that refused its input says "no later stage ran").
-          const stoppedAtCheck = built.exitCode !== 0 && built.lines.some(l => /^build: stopped at check; \d+ bar\(s\) not met/.test(l.trim())) && (await exists(join(dir, 'out', 'rig', 'rig.json')));
-          job.assembled = { ...job.assembled!, refusals: stoppedAtCheck ? [] : readout.refusals, checkFails: stoppedAtCheck ? readout.refusals : [], lines: readout.assemble, seam: readout.seam, seamPairs: readout.seamPairs, recomposite: { ...job.assembled!.recomposite, line: readout.recomposite } };
-          const lines = buildLines(built.lines);
-          return { ...built, exitCode: stoppedAtCheck ? 0 : built.exitCode, lines, stdout: lines };
+          return runBuild(push, `the handoff config with ${job.request.patch.ops.length} patch op(s)`);
         }
         if (job.op === 'retune') {
           // retune reads the inspected rig and writes only --out; what it holds it refuses by name (RETUNE_REQUEST_HELD).
@@ -650,7 +733,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       },
       wallMs: ms => { job.wallMs.op = ms; },
       async flags(push) {
-        if (job.op === 'build' && built) {
+        if (building && built) {
           job.exitCode = built.exitCode;
           const lines = buildLines(built.lines);
           job.producerLine = lines.filter(l => /^build:\s/.test(l)).at(-1) ?? job.producerLine;
@@ -675,7 +758,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     }, {
       diff: files => { const rigJson = files.documents.find(d => d.file === 'rig.json'); job.files = files; job.diff = rigJson ? { count: rigJson.count, paths: rigJson.paths } : null; },
       // #115: build runs check itself, on the parts it assembled; its check.json is read after the op (flags).
-      ...(job.op === 'build' ? {} : { check: (summary: CheckSummary, wallMs: number) => { job.wallMs.check = wallMs; job.check = summary; } }),
+      ...(building ? {} : { check: (summary: CheckSummary, wallMs: number) => { job.wallMs.check = wallMs; job.check = summary; } }),
       hashed: async () => { if (counts) job.remesh = { ...counts, modelTriangles: modelMeshTriangles(JSON.parse(await readFile(join(dir, 'build', 'skeleton.model.json'), 'utf8')), counts.part) }; },
       world,
     });
@@ -702,6 +785,12 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       if (patch.op.cmd === 'remesh') part = remeshPart(patch);
     } catch (e) { if (e instanceof ConfigPatchError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
     assertNamedFilesHeld(original, patched);
+    // #111: a cloth recipe patch (every op under /cloth) runs propose --cloth --write-config, then builds what it wrote.
+    // Decision 1: without the declared keypoints the draft moves the body bones, so it is refused before anything else.
+    const clothKind = clothPatchKind(patch.ops);
+    if (clothKind === 'mixed') throw new RebuildError('CLOTH_PATCH_MIXED', CLOTH_PATCH_MIXED.slice('CLOTH_PATCH_MIXED: '.length));
+    const clothing = clothKind === 'cloth' && patch.op.cmd === 'rig';
+    if (clothing && (!p.handoff!.keypoints || !p.handoff!.record.keypoints)) throw new RebuildError('CLOTH_KEYPOINTS_UNDECLARED', CLOTH_KEYPOINTS_UNDECLARED.slice('CLOTH_KEYPOINTS_UNDECLARED: '.length));
     const resolved = resolveProducer(options.starts);
     if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
     if (patch.producer.name !== resolved.producer.package || patch.producer.version !== resolved.producer.version) throw new RebuildError('EDIT_PRODUCER_MISMATCH', `the patch was made for ${patch.producer.name} ${patch.producer.version}; the installed producer is ${resolved.producer.package} ${resolved.producer.version}`);
@@ -711,20 +800,29 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     // so it stays the default. Only when the config cannot reproduce the inspected rig (a repaired build) does a
     // patch inside retune's scope run retune, which holds the rest of the inspected rig itself (~52 s).
     // #115: a cut, patch or limb edit (or a bone edit on a config with limbs) is read by assemble, so it runs `build`.
-    const building = patch.op.cmd === 'rig' && needsBuild(patch.ops, original);
+    let clothPlan: ClothPlan | null = null;
+    if (clothing) {
+      if (!versionAtLeast(resolved.producer.version, CLOTH_WRITE_SINCE)) { const error = modelingProducerTooOld(resolved.producer.version || 'unknown', CLOTH_WRITE_SINCE, 'rig-parts propose --cloth --write-config (entry by entry)'); return { status: 200, body: { status: 'refused', error, producerLine: error } }; }
+      if (!p.handoff!.source) throw new RebuildError('MODELING_INPUT_UNAVAILABLE', CLOTH_SOURCE_UNAVAILABLE.slice('MODELING_INPUT_UNAVAILABLE: '.length));
+      let partsJson: unknown = null;
+      try { partsJson = JSON.parse(await readFile(join(inputs.parts, 'parts.json'), 'utf8')); } catch { /* propose reads parts.json itself and refuses by name */ }
+      clothPlan = { source: p.handoff!.source, keypoints: p.handoff!.keypoints!, partsJson, targets: (await clothTargets(resolved.producer.root, inputs.configText)).tags };
+    }
+    // Decision 2 (#111): the written config is built as #115 builds when it declares limbs, else by `rig --config`.
+    const building = patch.op.cmd === 'rig' && (needsBuild(patch.ops, original) || (clothing && !!original && typeof original === 'object' && !Array.isArray(original) && (original as Record<string, unknown>).limbs !== undefined));
     let plan: BuildPlan | null = null;
     if (building) {
       const held = newBuildFile(original, patched);
       if (held) throw new RebuildError('EDIT_PATCH_PATH_HELD', `${held} names a file the handoff config does not; a patch may not name a new file (review sends no path)`);
       plan = await buildPlan(p.handoff!, patched, abs => relative(p.root, abs).split(sep).join('/'));
     }
-    const route = patch.op.cmd === 'remesh' ? 'remesh' : building ? 'build' : patchRoute(patch.ops, resolved.producer.version);
+    const route = patch.op.cmd === 'remesh' ? 'remesh' : clothing ? 'cloth' : building ? 'build' : patchRoute(patch.ops, resolved.producer.version);
     const baselineNow = route === 'retune' ? await settledBaseline() : null;
     const op: AppliedOp = route === 'retune' && baselineNow?.status === 'reproduced' ? 'rig' : route;
-    if (op === 'rig' || op === 'build') {
+    if (op === 'rig' || op === 'build' || op === 'cloth') {
       try { assertWholeRigBaseline(await settledBaseline()); } catch (e) { if (e instanceof BaselineError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
     }
-    const id = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}`, op, ...(plan ? { buildInputs: plan.inputsHash } : {}), ...(world ? { environment: world.record.sha256 } : {}) });
+    const id = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}`, op, ...(plan ? { buildInputs: plan.inputsHash } : {}), ...(world ? { environment: world.record.sha256 } : {}), ...(clothPlan ? { cloth: p.handoff!.record.keypoints!.sha256 } : {}) });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
@@ -733,9 +831,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
     const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id, status: 'running', reused: false, op, request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null,
       ...(plan ? { assembled: { inputs: plan.inputs, refusals: [], checkFails: [], lines: [], seam: [], seamPairs: [], recomposite: { line: null, before: null, after: null, errorMap: null }, parts: null } } : {}),
-      ...(world ? { environment: world.record } : {}) };
+      ...(world ? { environment: world.record } : {}),
+      ...(clothPlan ? { cloth: { route: building ? 'build' as const : 'rig' as const, inputs: { source: p.handoff!.record.source?.path ?? '', keypoints: { ...p.handoff!.record.keypoints! } }, refusals: [], line: null, written: null, links: [], wallMs: { propose: null, build: null } } } : {}) };
     jobs.set(id, job); running = id;
-    void executePatch(job, dir, inputs, resolved, patched, part, plan, world).finally(() => { if (running === id) running = null; });
+    void executePatch(job, dir, inputs, resolved, patched, part, plan, world, clothPlan).finally(() => { if (running === id) running = null; });
     return { status: 202, body: snapshot(job) };
   }
 
