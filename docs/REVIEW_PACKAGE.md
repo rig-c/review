@@ -198,6 +198,27 @@ The issue export adds an `Applied:` line for a valid record (`patch <hash>… (r
 
 **Rig fields (#110).** `GET /api/rebuild` also returns `fields`: the handoff config's `regions`, `motion.blink` (as `{motion:{blink}}`), `stops`, `bones` and `turn` as written, an absent section left out (or `null` without a handoff). The Rig fields block's edits are ordinary config patch ops, each at its field's pointer (rig-parts AUTHORING §3): `{op:"replace", path:"/regions/<part>", value:<bone>}`; `{op:"add", path:"/motion/blink/still/<part>", value:{row, bone}}` (preceded by `{op:"add", path:"/motion/blink/still", value:{}}` when the config states no `still`) or `{op:"remove", path:"/motion/blink/still/<part>"}`; `{op:"replace", path:"/stops/<i>", value:<the entry with inward / outward changed>, name:<its chain>}`; `{op:"add"|"remove", path:"/bones/<i>/inherit", value:<mode>, name}` or `path:"/bones/<i>/link_inherit", value:{<link>: mode}`; `{op:"replace", path:"/turn/pivot"|"/turn/depths/<part>", value:<number>}`. A `stops` entry is named by its `chain` and `EDIT_PATCH_NAME_MISMATCH` checks it as it checks a `bones` entry. The page refuses anything else before sending (`RIG_FIELDS_OP_OUT_OF_SCOPE`; `turn.deform` is out of scope) and sends the ops as one `rig` patch (no flag), so it needs the reproduced baseline; there is no `retune` op in rig-parts yet. The producer judges every value and its refusal comes back verbatim as the job's `producerLine`. The turn dial is play's `adjust` on the drawn build's `turn` bone; it is not a patch op and nothing records it. Nothing is written into the package.
 
+## Mesh edit export
+
+Edit Mesh's **Download JSON** (#80, setup space since #100) saves two files; neither is written into the package and neither enters the review session.
+
+`mesh-edit.json` is the delta, in the shape the producer's `rig-parts remesh --delta <mesh-edit.json>` reads (rig-c/parts 1.44.0) without conversion:
+
+```json
+{"schema":"rig-review-mesh-edit/1","slot":"panel","skin":"default","attachment":"panel",
+ "source":{"vertexCount":5,"triangleCount":4,"hullLength":4,"hash":"<sha256>"},
+ "units":"setup-pose crop px of the rig canvas, x right, y down; …","basis":"setup",
+ "preview":"preview only — the producer retriangulates; …",
+ "ops":[{"op":"move","v":4,"from":[5,5],"to":[6.5,4]},{"op":"edge","a":0,"b":2},{"op":"add","at":[5,0],"onEdge":[0,1]},{"op":"remove","v":3}]}
+```
+
+- **Space.** Every position is a setup-pose crop pixel of the rig canvas, x right, y down: the attachment's stored vertices in the compiled model document (`skeleton.model.json`), placed through the setup-pose bones and mapped by the model stage (`world = (x − width/2, height − y)`, root at the world origin). `basis` is always `"setup"`; the producer refuses any other basis (`REMESH_DELTA_BASIS`). A package without the model document has no setup mesh: Edit Mesh refuses `MESH_EDIT_MODEL_UNAVAILABLE` and exports nothing.
+- **Source.** `vertexCount`, `triangleCount` and `hullLength` are the stored entry's (`uvs`/`vertices`, `triangles`, `hull`; the first `hull` vertices, in order, are the outline). `hash` is the SHA-256 of `JSON.stringify` of the attachment's entry (`skins[name].attachments.<slot>.<attachment>`) in the hash-verified model document. The producer holds both to the input part's own (`REMESH_DELTA_SOURCE`) and requires `skin` `"default"` with `slot` and `attachment` the part's name. A linked mesh is not editable (edit its source).
+- **Ops**, in order, at most 300: `move {v, from, to}` — `from` is the vertex's exact current position, unrounded (the producer refuses a `from` more than 1e-3 px off), `to` rounded to 0.01 px; `add {at, onEdge?}` — the next id, splitting edge `onEdge` when given; `remove {v}` — the vertex and its triangulation edges, never a vertex that ends a constraint edge; `edge {a, b}` — a constraint edge; `unedge {a, b}` — only a constraint edge this delta added (hull and triangulation edges are the producer's; review refuses `MESH_EDIT_HULL_EDGE`, `MESH_EDIT_TRIANGULATION_EDGE` and `MESH_EDIT_CONSTRAINT_END` before recording). Vertex ids are the attachment's indices; an added vertex takes the next id; a removed id is never reused. Each op carries exactly these keys.
+- `units` and `preview` are text for a reader; nothing reads them.
+
+`mesh-edit.binding.json` (`rig-review-mesh-edit-binding/1`) binds the delta: `file {name, sha256}`, the package source hash, the model and motion SHA-256, `attachment {slot, skin, name, sha256}` (the same `hash`), `exportedAt`, the viewer and runtime versions, `mapping` (the crop mapping's basis) and an evidence note. Apply · Rebuild does not send the delta yet; it refuses `MODELING_TARGET_UNSUPPORTED` by name.
+
 ## Historical feedback retrieval
 
 `feedback` and `feedback compare` first return the exact current-tool stored session, including an explicitly saved pending decision. A corrupt current record is refused rather than replaced with an older approval. Current-file reads use an explicit present/missing result, and the CLI rechecks current state before returning history so a concurrently saved pending review wins without relying on its timestamp. If the current file is absent, these CLI commands search prior saved submissions for the same immutable content. HTTP session reads and all saves retain their existing strict current-tool binding; history is not approval migration.

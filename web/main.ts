@@ -12,6 +12,7 @@ import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,eval
 import {bindChestEditor,canvasToCrop,bustLabel,bustSides,LANDMARKS,landmarkInputId,rowCircle,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
+import {modelBoneNames,readSetupPose} from './setup-pose.ts';
 import {bindBonesPanel,type BonesPanel,type BonesCheckView} from './bones-panel.ts';
 import {appliedRecord,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedPatch,type AppliedRecord,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,type MeshEditDocument} from '../src/mesh-edit.ts';
@@ -854,7 +855,7 @@ function bind(): void {
   inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],changed:()=>persistence?.save()});
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
-  meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,basis:meshBasis,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},message,confirm:text=>window.confirm(text),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
+  meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},message,confirm:text=>window.confirm(text),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
   weightsView=bindWeightsView({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,inspector:()=>selectedInspector(),slot:()=>parts?.value()?.slot??null,
    model:()=>data.manifest.model?partModel??undefined:null,setup:slot=>assets?setupPoseMesh(assets,partModel,slot,document.createElement('div')):null,changed:()=>redrawOverlay(false),
    token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
@@ -1260,8 +1261,11 @@ function boneSetup(document:unknown):BoneSetup {
 /** After a seek the held pose is re-posed through the preview's adjust at the restored track time (a seek's replay steps a track the player's time does not read). */
 function reposePreview():void {if(player?.adjust)player.repose();}
 /** Setup's mesh edit: the selected slot's actual mesh as a typed delta. A two-file client download; nothing reaches the session or the package. */
-function meshSource(){const part=parts?.value()??null,frame=parts?.frame('single');return meshEditSource({slot:part?.slot??null,activeAttachment:parts?.observation()?.activeAttachment??null,row:part?frame?.order.find(row=>row.slot===part.slot):undefined,model:partModel,mapping:chestMapping});}
-function meshBasis():string {return `posed vertices of the last drawn frame (animation ${animation?JSON.stringify(animation):'none'} at ${(player?.time??time).toFixed(4)} s; playback pauses on entering mesh edit) mapped to crop px through ${chestMapping.available?chestMapping.basis:chestMapping.reason}`;}
+/** Edit Mesh's source (#100): the selected slot's mesh in the model document at the setup pose (a never-played player's bones). */
+function meshSource(){
+ if(data.manifest.model&&!partModel)return {ok:false as const,code:'MESH_EDIT_RIG_UNAVAILABLE: the compiled model document is still loading'};
+ return meshEditSource({slot:parts?.value()?.slot??null,model:data.manifest.model?partModel:null,pose:slot=>assets?readSetupPose(assets,slot,modelBoneNames(partModel),document.createElement('div')):null,mapping:chestMapping});
+}
 async function exportMesh(doc:MeshEditDocument):Promise<void> {
  const text=JSON.stringify(doc,null,2)+'\n',digest=await sha256Hex(text);
  const binding=meshEditBinding({fileSha256:digest,sourceHash:data.sourceHash,reviewedSource:data.reviewedSource,exportedAt:new Date().toISOString(),mapping:chestMapping.available?chestMapping.basis:chestMapping.reason,attachment:{slot:doc.slot,skin:doc.skin,name:doc.attachment,sha256:doc.source.hash}});
@@ -1352,6 +1356,13 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  /** Inspection only: one slot's posed world geometry on the drawn frame (what the stage drew), for comparing against `rigc render --geometry`. */
  posed:(slot:string)=>{const frame=player?.posedFrame();const found=frame?.order.find(item=>item.slot===slot);return found?JSON.parse(JSON.stringify(found,(key,value)=>key==='bitmap'||key==='image'||key==='page'?undefined:value)):null;},
  bone:(name:string)=>player?JSON.parse(JSON.stringify(player.bone(name))):null,
+ /** Inspection only (#100): Edit Mesh's setup-space source (crop px per vertex, unrounded) and its drawn vertices as page client pixels. */
+ meshEdit:()=>{
+  const session=meshEditor?.session(),overlay=meshEditor?.overlay();if(!session||!overlay)return null;
+  const s=session.source,project=rigProject(),view=el('rig-root').parentElement!.getBoundingClientRect();
+  return {slot:s.slot,skin:s.skin,attachment:s.attachment,hash:s.hash,hull:s.hull,triangles:s.triangles.length/3,vertices:s.vertices,ops:session.ops(),
+   drawn:overlay.vertices.map(v=>{const p=project(v.at.x,v.at.y);return {x:p.x+view.left,y:p.y+view.top,state:v.state};})};
+ },
  /** Inspection only: a world point (y up) as page client pixels on the rig pane, the projection the overlays draw with. */
  screen:(x:number,y:number)=>{const p=rigProject()(x,y),view=el('rig-root').parentElement!.getBoundingClientRect();return {x:p.x+view.left,y:p.y+view.top};},
  /**

@@ -7,6 +7,8 @@ import {loadReview} from '../src/manifest.ts';
 import {WEIGHTS_MODEL_UNAVAILABLE,dominantInfluence,meshWeights,rampColor,weightOf} from '../src/weights.ts';
 import {RigOverlays} from '../web/rig-overlays.ts';
 import {hitVertex,setupPoseMesh,weightsOverlay,type WeightsMode} from '../web/weights-view.ts';
+import {meshEditSource} from '../web/mesh-editor.ts';
+import {modelBoneNames,readSetupPose} from '../web/setup-pose.ts';
 
 const base=new URL('./fixtures/strip-probe/build/',import.meta.url);
 /** Stored weights of the derived fixture: vertex i is `mesh` at W[i] and `root` at 1 − W[i], placed where the unweighted mesh sits. */
@@ -91,6 +93,19 @@ test('max influence colours each vertex by its dominant stored bone; hover finds
   const project=(x:number,y:number)=>({x:180+x*4,y:150-y*4});
   expect(hitVertex(overlay,project,{x:180+28*4+3,y:150-10*4-2})).toBe(2);
   expect(hitVertex(overlay,project,{x:180+18*4,y:150})).toBeNull();
+ }finally{dispose();}
+});
+
+test('one setup-space reader (#100): Edit Mesh places exactly the vertices the weights layer draws, from the same document',async()=>{
+ const {weighted}=await documents(),{assets,dispose}=await load(weighted);
+ try{
+  const {setup}=overlayOf(weighted,assets,'bone','mesh');
+  const mapping={available:true as const,crop:{w:80,h:64},toWorld:(x:number,y:number)=>({x:x-40,y:64-y}),basis:'fixture'};
+  const edit=meshEditSource({slot:'mesh',model:weighted,pose:slot=>readSetupPose(assets,slot,modelBoneNames(weighted),root(),'canvas'),mapping});
+  if(!edit.ok)throw new Error(edit.code);
+  expect(edit.world).toEqual(setup.vertices);
+  expect(edit.source.vertices).toEqual(Array.from({length:setup.vertices.length/2},(_,i)=>[setup.vertices[i*2]!+40,64-setup.vertices[i*2+1]!]));
+  expect(edit.source.triangles).toEqual(setup.triangles);
  }finally{dispose();}
 });
 

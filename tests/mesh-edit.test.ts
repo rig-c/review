@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {
- MESH_EDIT_HULL_EDGE,MESH_EDIT_INVALID_OP,MESH_EDIT_PREVIEW_NOTE,MODELING_TARGET_UNSUPPORTED,MeshEditSession,affineOf,applyMeshOps,draftOps,edgeKey,hitMesh,meshEditBinding,meshEditDocument,
+ MESH_EDIT_BASIS,MESH_EDIT_CONSTRAINT_END,MESH_EDIT_HULL_EDGE,MESH_EDIT_INVALID_OP,MESH_EDIT_MODEL_UNAVAILABLE,MESH_EDIT_TRIANGULATION_EDGE,MESH_EDIT_PREVIEW_NOTE,MODELING_TARGET_UNSUPPORTED,MeshEditSession,affineOf,applyMeshOps,draftOps,edgeKey,hitMesh,meshEditBinding,meshEditDocument,
  parseMeshDraft,screenDeltaToCrop,sourceEdges,verticesInBox,writeMeshDraft,type MeshSource,
 } from '../src/mesh-edit.ts';
 import {meshEditShortcut,meshEditSource,meshEditVisible,meshModeKeys} from '../web/mesh-editor.ts';
@@ -81,8 +81,9 @@ test('the export has the spec shape against a fixture, and the binding names the
  const session=new MeshEditSession(square());
  session.record(session.moveOps([4],1.5,-1));session.toggleConstraint(0,2);session.addVertex([5,0],[0,1]);session.removeVertex(3);
  const expected=JSON.parse(await readFile(new URL('./fixtures/mesh-edit/expected.json',import.meta.url),'utf8'));
- expect(JSON.parse(JSON.stringify(meshEditDocument(session,'fixture basis')))).toEqual(expected);
- expect(meshEditDocument(session,'b').preview.startsWith(MESH_EDIT_PREVIEW_NOTE)).toBe(true);
+ expect(JSON.parse(JSON.stringify(meshEditDocument(session)))).toEqual(expected);
+ expect(meshEditDocument(session).basis).toBe('setup');expect(MESH_EDIT_BASIS).toBe('setup');
+ expect(meshEditDocument(session).preview.startsWith(MESH_EDIT_PREVIEW_NOTE)).toBe(true);
  const binding=meshEditBinding({fileSha256:'f'.repeat(64),sourceHash:'p'.repeat(64),reviewedSource:{viewerVersion:'1',runtimeVersion:'2',rig:{sha256:'r'.repeat(64)},motion:null},exportedAt:'2026-10-20T00:00:00.000Z',mapping:'m',attachment:{slot:'panel',skin:'default',name:'panel',sha256:square().hash}});
  expect(binding).toMatchObject({schema:'rig-review-mesh-edit-binding/1',file:{name:'mesh-edit.json',sha256:'f'.repeat(64)},package:'p'.repeat(64),model:'r'.repeat(64),motion:null,attachment:{slot:'panel',skin:'default',name:'panel',sha256:square().hash}});
 });
@@ -94,6 +95,8 @@ test('the draft is bound to the attachment hash and never restores ops for anoth
  expect(draftOps(parseMeshDraft(text),{...square(),hash:'1'.repeat(64)})).toBeNull();
  expect(writeMeshDraft(parseMeshDraft(text),square(),[])).toBe('');
  expect(parseMeshDraft('{not json').entries).toEqual({});
+ // A pre-#100 draft (posed basis) is not restored over the setup-space source.
+ expect(draftOps(parseMeshDraft(text.replace('rig-review-mesh-edit-draft/2','rig-review-mesh-edit-draft/1')),square())).toBeNull();
 });
 
 test('screen offsets become crop offsets through the camera and the crop mapping',()=>{
@@ -127,17 +130,58 @@ test('keys: V/C/X/E pick a sub-mode, Escape, Cmd/Ctrl-Z and Shift-Cmd-Z, arrows 
  expect(meshEditShortcut(key('Escape',{target:element('dialog[open]')}),on)).toBeNull();
 });
 
-test('the source is the selected slot\'s actual mesh attachment; whole rig and a non-mesh slot refuse by name',()=>{
- const mapping={available:true as const,crop:{w:20,h:20},toWorld:(x:number,y:number)=>({x:x-10,y:20-y}),basis:'b'};
- const entry={kind:'mesh',uvs:[0,0,1,0,1,1,0,1,.5,.5],triangles:[0,1,4,1,2,4,2,3,4,3,0,4],hull:4};
- const model={skins:[{name:'default',attachments:{panel:{panel:entry},badge:{badge:{kind:'region'}}}}]};
- const row={kind:'mesh',slot:'panel',vertices:[-10,20,0,20,0,10,-10,10,-5,15],triangles:[...entry.triangles]} as never;
- expect(meshEditSource({slot:null,activeAttachment:null,row:undefined,model,mapping})).toMatchObject({ok:false,code:expect.stringMatching(/^MESH_EDIT_SELECT_SLOT: /)});
- expect(meshEditSource({slot:'badge',activeAttachment:{skin:'default',attachment:'badge'},row:{kind:'region'} as never,model,mapping})).toMatchObject({ok:false,code:expect.stringMatching(/^MESH_EDIT_NO_MESH badge: /)});
- const ok=meshEditSource({slot:'panel',activeAttachment:{skin:'default',attachment:'panel'},row,model,mapping});
- expect(ok).toMatchObject({ok:true,source:{slot:'panel',skin:'default',attachment:'panel',hull:4,vertices:[[0,0],[10,0],[10,10],[0,10],[5,5]]},entry});
- expect(meshEditSource({slot:'panel',activeAttachment:{skin:'default',attachment:'panel'},row:{...(row as object),vertices:[0,0]} as never,model,mapping})).toMatchObject({ok:false,code:expect.stringMatching(/^MESH_EDIT_SOURCE_MISMATCH/)});
+/** A rigc-compiled/3 document: `panel` an unweighted mesh on `arm` (setup at (3, 4)), `badge` a region, `tag` a linked mesh of panel. */
+const setupModel=()=>({spec:'rigc-compiled/3',bones:[{name:'root'},{name:'arm'}],slots:[{name:'panel',bone:'arm'},{name:'badge',bone:'root'},{name:'tag',bone:'arm'}],
+ skins:[{name:'default',attachments:{panel:{panel:{kind:'mesh',uvs:[0,0,1,0,1,1,0,1,.5,.5],triangles:[0,1,4,1,2,4,2,3,4,3,0,4],hull:4,vertices:{weighted:false,xy:[-5,5,5,5,5,-5,-5,-5,.123456,-.654321]},width:10,height:10}},badge:{badge:{kind:'region'}},tag:{tag:{kind:'linkedmesh',skin:'default',slot:'panel',source:'panel'}}}}]});
+/** The setup pose: `arm` at world (3, 4), unrotated. */
+const armPose=(identity:{skin:string;attachment:string}|null)=>({identity,world:(bone:string)=>{if(bone!=='arm')throw new Error('unread bone '+bone);return {x:3,y:4,a:1,b:0,c:0,d:1};}});
+const cropMapping={available:true as const,crop:{w:20,h:20},toWorld:(x:number,y:number)=>({x:x-10,y:20-y}),basis:'b'};
+
+test('#100 bar 1 (unit): the source is the slot\'s mesh in the model document at the setup pose, mapped to crop px unrounded',()=>{
+ const model=setupModel(),entry=model.skins[0]!.attachments.panel.panel;
+ const ok=meshEditSource({slot:'panel',model,pose:()=>armPose({skin:'default',attachment:'panel'}),mapping:cropMapping});
+ if(!ok.ok)throw new Error(ok.code);
+ // Stored xy + the arm's setup world (3, 4) = world; crop = (wx + 10, 20 − wy). Exactly, not rounded to 0.01.
+ const xy=entry.vertices.xy,world=xy.map((v,i)=>i%2?Math.fround(v)+4:Math.fround(v)+3);
+ expect(ok.world).toEqual(world);
+ expect(ok.source.vertices).toEqual([[8,11],[18,11],[18,21],[8,21],[Math.fround(.123456)+3+10,20-(Math.fround(-.654321)+4)]]);
+ expect(ok.source.vertices[4]![0]).not.toBe(Math.round(ok.source.vertices[4]![0]*100)/100);
+ expect(ok).toMatchObject({source:{slot:'panel',skin:'default',attachment:'panel',hull:4,triangles:entry.triangles},entry});
+ // Without a setup identity the slot's mesh named like the slot is read.
+ expect(meshEditSource({slot:'panel',model,pose:()=>armPose(null),mapping:cropMapping})).toMatchObject({ok:true,source:{attachment:'panel'}});
+});
+
+test('#100 bar 2 (unit): no model document refuses MESH_EDIT_MODEL_UNAVAILABLE before anything else, and no setup pose is read',()=>{
+ let posed=0;const pose=()=>{posed++;return armPose(null);};
+ for(const slot of [null,'panel'])for(const model of [null,undefined]){
+  const result=meshEditSource({slot,model,pose,mapping:cropMapping}),code=result.ok?'':result.code;
+  expect(result.ok).toBe(false);expect(code.split(':')[0]).toBe(MESH_EDIT_MODEL_UNAVAILABLE);
+  expect(code).toMatch(/^MESH_EDIT_MODEL_UNAVAILABLE: the package supplies no compiled model document \(skeleton\.model\.json\); the setup mesh is read from it$/);
+ }
+ expect(meshEditSource({slot:'panel',model:{spec:'spine'},pose,mapping:cropMapping})).toMatchObject({ok:false,code:expect.stringMatching(/^MESH_EDIT_MODEL_UNAVAILABLE: /)});
+ expect(posed).toBe(0);
+});
+
+test('the source refuses by name: whole rig, a non-mesh slot, a linked mesh, no rig, no mapping',()=>{
+ const model=setupModel(),pose=(slot:string)=>armPose({skin:'default',attachment:slot});
+ expect(meshEditSource({slot:null,model,pose,mapping:cropMapping})).toMatchObject({ok:false,code:expect.stringMatching(/^MESH_EDIT_SELECT_SLOT: /)});
+ expect(meshEditSource({slot:'badge',model,pose,mapping:cropMapping})).toMatchObject({ok:false,code:expect.stringMatching(/^MESH_EDIT_NO_MESH badge: /)});
+ expect(meshEditSource({slot:'tag',model,pose,mapping:cropMapping})).toMatchObject({ok:false,code:expect.stringMatching(/^MESH_EDIT_NO_MESH tag: .*linked mesh/)});
+ expect(meshEditSource({slot:'panel',model,pose:()=>null,mapping:cropMapping})).toMatchObject({ok:false,code:expect.stringMatching(/^MESH_EDIT_RIG_UNAVAILABLE: /)});
+ expect(meshEditSource({slot:'panel',model,pose,mapping:{available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: x'}})).toMatchObject({ok:false,code:expect.stringMatching(/^CHEST_REGION_MAPPING_UNAVAILABLE: x: /)});
  expect(meshEditVisible('rig')).toBe(true);for(const other of ['playback','feedback',undefined])expect(meshEditVisible(other)).toBe(false);
+});
+
+test('the producer owns the triangulation: Delete removes only an added constraint edge, and a constraint end only after its edge',()=>{
+ const session=new MeshEditSession(square());
+ expect(session.deleteEdge(0,4)).toEqual({ok:false,code:expect.stringMatching(new RegExp(`^${MESH_EDIT_TRIANGULATION_EDGE}: 0-4 `))});
+ expect(session.ops()).toEqual([]);
+ expect(()=>applyMeshOps(square(),[{op:'unedge',a:0,b:4}])).toThrow('removes triangulation edge 0-4');
+ expect(session.toggleConstraint(0,2)).toEqual({ok:true,changed:true});
+ expect(session.removeVertex(2)).toEqual({ok:false,code:expect.stringMatching(new RegExp(`^${MESH_EDIT_CONSTRAINT_END}: vertex 2 ends constraint edge 0-2`))});
+ expect(()=>applyMeshOps(square(),[{op:'edge',a:0,b:2},{op:'remove',v:0}])).toThrow('an end of constraint edge 0-2');
+ expect(session.deleteEdge(2,0)).toEqual({ok:true,changed:true});expect(session.removeVertex(2)).toEqual({ok:true,changed:true});
+ expect(session.ops()).toEqual([{op:'edge',a:0,b:2},{op:'unedge',a:2,b:0},{op:'remove',v:2}]);
 });
 
 test('the Edit mesh toggle and bar sit in the view-bar tool area; Apply · Rebuild refuses by name; the editor has no path to a process or the server',async()=>{

@@ -2,11 +2,14 @@
  * Setup · Weights (#107): a watch layer over the selected slot's setup-pose mesh. Pick a bone and every vertex is
  * coloured by that bone's stored weight on the theme's ramp (0 → 1), or switch to max influence and every vertex takes
  * its dominant bone's colour; hovering a vertex reads its stored value. Weights come from the compiled model document
- * (`src/weights.ts`); vertex positions come from the published player's setup pose (a second `RigPlayer` over the
- * same assets that never plays). Nothing is edited, applied, recorded or sent.
+ * (`src/weights.ts` over the shared reader `src/setup-mesh.ts`); vertex positions come from the published player's
+ * setup pose (`web/setup-pose.ts`, a second `RigPlayer` over the same assets that never plays — the same placement
+ * Edit Mesh uses). Nothing is edited, applied, recorded or sent.
  */
-import {RigPlayer,type ModelAssets,type RenderMode} from '@rig-c/play';
-import {WEIGHTS_SELECT_SLOT,dominantInfluence,meanColor,meshWeights,rampColor,skinVertex,weightOf,weightText,weightsModel,type MeshWeights,type WorldTransform} from '../src/weights.ts';
+import type {ModelAssets,RenderMode} from '@rig-c/play';
+import {placeSetupMesh} from '../src/setup-mesh.ts';
+import {WEIGHTS_SELECT_SLOT,dominantInfluence,meanColor,meshWeights,rampColor,weightOf,weightText,weightsModel,type MeshWeights} from '../src/weights.ts';
+import {modelBoneNames,readSetupPose} from './setup-pose.ts';
 import type {OverlayPoint,OverlayProject,OverlayWeights} from './rig-overlays.ts';
 
 export type WeightsMode='bone'|'max';
@@ -20,22 +23,17 @@ export const WEIGHTS_RIG_UNAVAILABLE='WEIGHTS_RIG_UNAVAILABLE';
 export interface SetupMesh {slot:string;vertices:number[];triangles:number[];identity:{skin:string;attachment:string}|null}
 export type SetupMeshResult={ok:true;mesh:SetupMesh;weights:MeshWeights}|{ok:false;code:string};
 /**
- * A throwaway player over the loaded assets that never plays, so its `bone()` and `slotIdentity()` read the setup pose
- * (the published player's `posedFrame()` is empty before `play`). The slot's attachment is the one it resolves there;
- * its stored vertices are placed through those bones (`skinVertex`). The stage player is not touched.
+ * The slot's attachment is the one the setup pose resolves (`readSetupPose`); its stored vertices are placed through
+ * the setup-pose bones (`placeSetupMesh`). The stage player is not touched.
  */
 export function setupPoseMesh(assets:ModelAssets,model:unknown,slot:string,root:HTMLElement,mode:RenderMode='dom'):SetupMeshResult {
  const available=weightsModel(model);if(!available.ok)return available;
- const player=new RigPlayer(root,assets,{mode,slots:[slot]});
  try{
-  const row=player.slotIdentity().slots.find(r=>r.slot===slot),identity=row&&row.attachment&&row.skin?{skin:row.skin,attachment:row.attachment}:null;
-  const result=meshWeights(model,slot,identity);if(!result.ok)return result;
-  const world=new Map<string,WorldTransform>(),read=(bone:string)=>{let t=world.get(bone);if(!t){const b=player.bone(bone);t={x:b.x,y:b.y,a:b.a,b:b.b,c:b.c,d:b.d};world.set(bone,t);}return t;};
-  const vertices:number[]=[];
-  for(const influences of result.weights.vertices){const p=skinVertex(influences,read,result.weights.weighted);if(!Number.isFinite(p.x)||!Number.isFinite(p.y))return {ok:false,code:`${WEIGHTS_SOURCE_MISMATCH}: ${slot} has a non-finite setup-pose vertex`};vertices.push(p.x,p.y);}
-  return {ok:true,weights:result.weights,mesh:{slot,vertices,triangles:result.weights.triangles,identity}};
+  const pose=readSetupPose(assets,slot,modelBoneNames(model),root,mode);
+  const result=meshWeights(model,slot,pose.identity);if(!result.ok)return result;
+  const vertices=placeSetupMesh(result.weights,pose.world);if(!vertices)return {ok:false,code:`${WEIGHTS_SOURCE_MISMATCH}: ${slot} has a non-finite setup-pose vertex`};
+  return {ok:true,weights:result.weights,mesh:{slot,vertices,triangles:result.weights.triangles,identity:pose.identity}};
  }catch(error){return {ok:false,code:`${WEIGHTS_RIG_UNAVAILABLE}: ${error instanceof Error?error.message:String(error)}`};}
- finally{player.dispose();}
 }
 
 export interface WeightsOverlayInput {
@@ -93,7 +91,7 @@ export function bindWeightsView(host:WeightsViewHost):WeightsView {
  let on=false,hover:number|null=null,weights:MeshWeights|null=null,mesh:SetupMesh|null=null,loadCode:string|null=null,code:string|null=null,current:OverlayWeights|null=null,loaded:{slot:string|null;model:unknown}|null=null;
  const mode=():WeightsMode=>modeSelect.value==='max'?'max':'bone';
  const option=(value:string,label=value)=>{const o=document.createElement('option');o.value=value;o.textContent=label;return o;};
- const allBones=():string[]=>{const list=(host.model() as {bones?:unknown}|null)?.bones;return Array.isArray(list)?list.map(b=>b&&typeof (b as {name?:unknown}).name==='string'?(b as {name:string}).name:'').filter(Boolean):[];};
+ const allBones=():string[]=>modelBoneNames(host.model());
  /** Re-read the slot's weights and setup mesh when the slot or the model changed. */
  function load():void {
   const slot=host.slot(),model=host.model();
