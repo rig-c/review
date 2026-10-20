@@ -1,0 +1,1076 @@
+[
+ {
+  "name": "designation remesh (#99), built",
+  "response": {
+   "schema": "rig-review-rebuild/1",
+   "id": "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560",
+   "status": "built",
+   "reused": false,
+   "request": {
+    "part": "topwear",
+    "regions": [
+     {
+      "name": "bust",
+      "shape": "circle",
+      "cx": 424,
+      "cy": 342,
+      "r": 50,
+      "bone": "chest_jiggle",
+      "spacing": 13,
+      "band": 30
+     }
+    ],
+    "configHash": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064",
+    "entrySha256": "1c88f3df20bc4855fbf8d7763f8abfa4353f91f4e4d010d460730aae2e5666ba"
+   },
+   "producer": {
+    "package": "@rig-c/parts",
+    "version": "1.42.0"
+   },
+   "compiler": {
+    "package": "rig-c",
+    "version": "2.64.1"
+   },
+   "lines": [
+    "review: @rig-c/parts 1.42.0 remesh topwear → scratch revision",
+    "rig-parts remesh: topwear",
+    "rig-parts remesh: wrote under revision",
+    "review: rig-c 2.64.1 build --profile rig-play --pack --page-edges pot --pack-shape rect (the revision's own pack flags)",
+    "rigc: wrote"
+   ],
+   "producerLine": "rig-parts remesh: wrote under revision",
+   "exitCode": 0,
+   "wallMs": {
+    "remesh": "ms",
+    "compile": "ms"
+   },
+   "build": {
+    "model": "skeleton.model.json",
+    "modelUrl": "/rebuild/c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/skeleton.model.json",
+    "modelHash": "88f2c0a9d299b3b75b926c1babcf297bc8ac6f2fdbd9d93e21d2e90363953ba0",
+    "files": {
+     "skeleton.model.json": "88f2c0a9d299b3b75b926c1babcf297bc8ac6f2fdbd9d93e21d2e90363953ba0",
+     "skeleton.png": "f141f8aa9e4299b74de67f25d3b4fbe467938bf41e7aed1b3a7869bad8189886"
+    }
+   }
+  },
+  "tree": {
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/": null,
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/build/": null,
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/build/skeleton.model.json": "0163262134e60c9fde3908b1434b5a66",
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/build/skeleton.png": "51d18855d161c292c835e28bed8502a3",
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/mesh.json": "fffa0e82d4cee768eba10310c17c530f",
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/result.json": {
+    "schema": "rig-review-rebuild/1",
+    "id": "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560",
+    "status": "built",
+    "reused": false,
+    "request": {
+     "part": "topwear",
+     "regions": [
+      {
+       "name": "bust",
+       "shape": "circle",
+       "cx": 424,
+       "cy": 342,
+       "r": 50,
+       "bone": "chest_jiggle",
+       "spacing": 13,
+       "band": 30
+      }
+     ],
+     "configHash": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064",
+     "entrySha256": "1c88f3df20bc4855fbf8d7763f8abfa4353f91f4e4d010d460730aae2e5666ba"
+    },
+    "producer": {
+     "package": "@rig-c/parts",
+     "version": "1.42.0"
+    },
+    "compiler": {
+     "package": "rig-c",
+     "version": "2.64.1"
+    },
+    "lines": [
+     "review: @rig-c/parts 1.42.0 remesh topwear → scratch revision",
+     "rig-parts remesh: topwear",
+     "rig-parts remesh: wrote under revision",
+     "review: rig-c 2.64.1 build --profile rig-play --pack --page-edges pot --pack-shape rect (the revision's own pack flags)",
+     "rigc: wrote"
+    ],
+    "producerLine": "rig-parts remesh: wrote under revision",
+    "exitCode": 0,
+    "wallMs": {
+     "remesh": "ms",
+     "compile": "ms"
+    },
+    "build": {
+     "model": "skeleton.model.json",
+     "modelUrl": "/rebuild/c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/skeleton.model.json",
+     "modelHash": "88f2c0a9d299b3b75b926c1babcf297bc8ac6f2fdbd9d93e21d2e90363953ba0",
+     "files": {
+      "skeleton.model.json": "88f2c0a9d299b3b75b926c1babcf297bc8ac6f2fdbd9d93e21d2e90363953ba0",
+      "skeleton.png": "f141f8aa9e4299b74de67f25d3b4fbe467938bf41e7aed1b3a7869bad8189886"
+     }
+    }
+   },
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/revision/": null,
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/revision/images/": null,
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/revision/images/chest.png": "f4afab8a3653d557032265655c95c765",
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/revision/images/topwear.png": "8045726e2e551cce35e8aa3c788ad5c5",
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/revision/mesh_report.json": "1ca2069691edf1c92b79013187529521",
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/revision/motion.json": "0b6981811e6743325032a9c03ff8f1f6",
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/revision/remesh.json": "583196cf9bd5144483a64d199bc1f235",
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/revision/rig.json": "763053980f7920821d19215924b5c2c1",
+   "c9cc59adeff8ff5989463d3ff9120935d0b5206025dfac544079054adcd21560/revision/sets.json": "6cf13978580ae529cafed47382cc6b9c"
+  }
+ },
+ {
+  "name": "patch rig (#102), built",
+  "response": {
+   "schema": "rig-review-rebuild/1",
+   "kind": "patch",
+   "id": "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac",
+   "status": "built",
+   "reused": false,
+   "request": {
+    "patch": {
+     "schema": "rig-review-config-patch/1",
+     "config_sha256": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064",
+     "ops": [
+      {
+       "op": "replace",
+       "path": "/constraints/0/damping",
+       "value": 0.8
+      }
+     ],
+     "producer": {
+      "name": "@rig-c/parts",
+      "version": "1.42.0"
+     },
+     "op": {
+      "cmd": "rig",
+      "args": [
+       "--page-edges",
+       "pot"
+      ]
+     }
+    },
+    "patchSha256": "acd6acba68712f4a772cd8a6d783c8f7db3c6951acd449f2b181765451efaa28",
+    "configHash": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064"
+   },
+   "producer": {
+    "package": "@rig-c/parts",
+    "version": "1.42.0"
+   },
+   "compiler": {
+    "package": "rig-c",
+    "version": "2.64.1"
+   },
+   "lines": [
+    "review: @rig-c/parts 1.42.0 rig --config config.json (the handoff config with 1 patch op(s)) → scratch rig",
+    "rig-parts rig: wrote rig.json under rig",
+    "review: against the inspected rig — rig.json differs at 1 path(s) · motion.json, sets.json, mesh_report.json unchanged · 2 images unchanged",
+    "review: rig.json: /constraints/0/damping",
+    "review: rig-c 2.64.1 build --profile rig-play --pack --page-edges pot --pack-shape polygon",
+    "rigc: wrote",
+    "review: @rig-c/parts 1.42.0 check --rig rig --out check --parts <handoff parts>",
+    "check: PASS; 1 of 1 bar(s) measured"
+   ],
+   "producerLine": "rig-parts rig: wrote rig.json under rig",
+   "exitCode": 0,
+   "wallMs": {
+    "op": "ms",
+    "compile": "ms",
+    "check": "ms"
+   },
+   "check": {
+    "schema": "rig-review-check-summary/1",
+    "pass": true,
+    "exitCode": 0,
+    "line": "check: PASS; 1 of 1 bar(s) measured",
+    "bars": {
+     "TEXTURE_STRETCH": "PASS"
+    },
+    "gate": true
+   },
+   "diff": {
+    "count": 1,
+    "paths": [
+     "/constraints/0/damping"
+    ]
+   },
+   "files": {
+    "documents": [
+     {
+      "file": "rig.json",
+      "count": 1,
+      "paths": [
+       "/constraints/0/damping"
+      ]
+     },
+     {
+      "file": "motion.json",
+      "count": 0,
+      "paths": []
+     },
+     {
+      "file": "sets.json",
+      "count": 0,
+      "paths": []
+     },
+     {
+      "file": "mesh_report.json",
+      "count": 0,
+      "paths": []
+     }
+    ],
+    "images": {
+     "changed": 0,
+     "unchanged": 2,
+     "names": []
+    }
+   },
+   "remesh": null,
+   "build": {
+    "model": "skeleton.model.json",
+    "modelUrl": "/rebuild/de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/skeleton.model.json",
+    "modelHash": "e4be36cc25d1f2c3ea330199dc09bbc83489afa1fbb1b0f6acb8ff94d346de25",
+    "files": {
+     "skeleton.model.json": "e4be36cc25d1f2c3ea330199dc09bbc83489afa1fbb1b0f6acb8ff94d346de25",
+     "skeleton.png": "d5f7f0c0d130f7deff2d602b6677e6d113c7b61bc2d50bc94ed47a2c40d6a458"
+    }
+   }
+  },
+  "tree": {
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/": null,
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/build/": null,
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/build/skeleton.model.json": "4c5732bea2505dfc6902dea2db7ac308",
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/build/skeleton.png": "e59efd77d202a40a920f182f7f4e6d41",
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/check/": null,
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/check/check.json": "8ada2d9e53c690f3777e38dca123312a",
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/config.json": "f37a1d2f5fba16ed2178db14bd27bf7e",
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/result.json": {
+    "schema": "rig-review-rebuild/1",
+    "kind": "patch",
+    "id": "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac",
+    "status": "built",
+    "reused": false,
+    "request": {
+     "patch": {
+      "schema": "rig-review-config-patch/1",
+      "config_sha256": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064",
+      "ops": [
+       {
+        "op": "replace",
+        "path": "/constraints/0/damping",
+        "value": 0.8
+       }
+      ],
+      "producer": {
+       "name": "@rig-c/parts",
+       "version": "1.42.0"
+      },
+      "op": {
+       "cmd": "rig",
+       "args": [
+        "--page-edges",
+        "pot"
+       ]
+      }
+     },
+     "patchSha256": "acd6acba68712f4a772cd8a6d783c8f7db3c6951acd449f2b181765451efaa28",
+     "configHash": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064"
+    },
+    "producer": {
+     "package": "@rig-c/parts",
+     "version": "1.42.0"
+    },
+    "compiler": {
+     "package": "rig-c",
+     "version": "2.64.1"
+    },
+    "lines": [
+     "review: @rig-c/parts 1.42.0 rig --config config.json (the handoff config with 1 patch op(s)) → scratch rig",
+     "rig-parts rig: wrote rig.json under rig",
+     "review: against the inspected rig — rig.json differs at 1 path(s) · motion.json, sets.json, mesh_report.json unchanged · 2 images unchanged",
+     "review: rig.json: /constraints/0/damping",
+     "review: rig-c 2.64.1 build --profile rig-play --pack --page-edges pot --pack-shape polygon",
+     "rigc: wrote",
+     "review: @rig-c/parts 1.42.0 check --rig rig --out check --parts <handoff parts>",
+     "check: PASS; 1 of 1 bar(s) measured"
+    ],
+    "producerLine": "rig-parts rig: wrote rig.json under rig",
+    "exitCode": 0,
+    "wallMs": {
+     "op": "ms",
+     "compile": "ms",
+     "check": "ms"
+    },
+    "check": {
+     "schema": "rig-review-check-summary/1",
+     "pass": true,
+     "exitCode": 0,
+     "line": "check: PASS; 1 of 1 bar(s) measured",
+     "bars": {
+      "TEXTURE_STRETCH": "PASS"
+     },
+     "gate": true
+    },
+    "diff": {
+     "count": 1,
+     "paths": [
+      "/constraints/0/damping"
+     ]
+    },
+    "files": {
+     "documents": [
+      {
+       "file": "rig.json",
+       "count": 1,
+       "paths": [
+        "/constraints/0/damping"
+       ]
+      },
+      {
+       "file": "motion.json",
+       "count": 0,
+       "paths": []
+      },
+      {
+       "file": "sets.json",
+       "count": 0,
+       "paths": []
+      },
+      {
+       "file": "mesh_report.json",
+       "count": 0,
+       "paths": []
+      }
+     ],
+     "images": {
+      "changed": 0,
+      "unchanged": 2,
+      "names": []
+     }
+    },
+    "remesh": null,
+    "build": {
+     "model": "skeleton.model.json",
+     "modelUrl": "/rebuild/de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/skeleton.model.json",
+     "modelHash": "e4be36cc25d1f2c3ea330199dc09bbc83489afa1fbb1b0f6acb8ff94d346de25",
+     "files": {
+      "skeleton.model.json": "e4be36cc25d1f2c3ea330199dc09bbc83489afa1fbb1b0f6acb8ff94d346de25",
+      "skeleton.png": "d5f7f0c0d130f7deff2d602b6677e6d113c7b61bc2d50bc94ed47a2c40d6a458"
+     }
+    }
+   },
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/rig/": null,
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/rig/images/": null,
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/rig/images/chest.png": "f4afab8a3653d557032265655c95c765",
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/rig/images/topwear.png": "8045726e2e551cce35e8aa3c788ad5c5",
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/rig/mesh_report.json": "367262b6f60f4c97b74680304d50b550",
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/rig/motion.json": "0b6981811e6743325032a9c03ff8f1f6",
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/rig/rig.json": "e2db06d4aef3decbd393b6142eacb30f",
+   "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac/rig/sets.json": "6cf13978580ae529cafed47382cc6b9c"
+  }
+ },
+ {
+  "name": "patch remesh (#106), built",
+  "response": {
+   "schema": "rig-review-rebuild/1",
+   "kind": "patch",
+   "id": "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad",
+   "status": "built",
+   "reused": false,
+   "request": {
+    "patch": {
+     "schema": "rig-review-config-patch/1",
+     "config_sha256": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064",
+     "ops": [
+      {
+       "op": "replace",
+       "path": "/meshes/topwear/contour/spacing",
+       "value": 20
+      }
+     ],
+     "producer": {
+      "name": "@rig-c/parts",
+      "version": "1.42.0"
+     },
+     "op": {
+      "cmd": "remesh",
+      "args": [
+       "--part",
+       "topwear"
+      ]
+     }
+    },
+    "patchSha256": "c631ce66ed886ab1dcca6a0c8002fd4dec8bdfa9da6455185419d0f61adba5ac",
+    "configHash": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064"
+   },
+   "producer": {
+    "package": "@rig-c/parts",
+    "version": "1.42.0"
+   },
+   "compiler": {
+    "package": "rig-c",
+    "version": "2.64.1"
+   },
+   "lines": [
+    "review: @rig-c/parts 1.42.0 remesh topwear (its patched meshes entry) → scratch rig",
+    "rig-parts remesh: topwear",
+    "rig-parts remesh: wrote under rig",
+    "review: remesh.json topwear: v 178 t 296 → v 250 t 415",
+    "review: against the inspected rig — rig.json differs at 1 path(s) · mesh_report.json differs at 2 path(s) · motion.json, sets.json unchanged · 2 images unchanged",
+    "review: rig.json: /mesh",
+    "review: mesh_report.json: /parts/topwear/triangles, /parts/topwear/vertices",
+    "review: rig-c 2.64.1 build --profile rig-play --pack --page-edges pot --pack-shape rect",
+    "rigc: wrote",
+    "review: @rig-c/parts 1.42.0 check --rig rig --out check --parts <handoff parts>",
+    "check: PASS; 1 of 1 bar(s) measured"
+   ],
+   "producerLine": "rig-parts remesh: wrote under rig",
+   "exitCode": 0,
+   "wallMs": {
+    "op": "ms",
+    "compile": "ms",
+    "check": "ms"
+   },
+   "check": {
+    "schema": "rig-review-check-summary/1",
+    "pass": true,
+    "exitCode": 0,
+    "line": "check: PASS; 1 of 1 bar(s) measured",
+    "bars": {
+     "TEXTURE_STRETCH": "PASS"
+    },
+    "gate": true
+   },
+   "diff": {
+    "count": 1,
+    "paths": [
+     "/mesh"
+    ]
+   },
+   "files": {
+    "documents": [
+     {
+      "file": "rig.json",
+      "count": 1,
+      "paths": [
+       "/mesh"
+      ]
+     },
+     {
+      "file": "motion.json",
+      "count": 0,
+      "paths": []
+     },
+     {
+      "file": "sets.json",
+      "count": 0,
+      "paths": []
+     },
+     {
+      "file": "mesh_report.json",
+      "count": 2,
+      "paths": [
+       "/parts/topwear/triangles",
+       "/parts/topwear/vertices"
+      ]
+     }
+    ],
+    "images": {
+     "changed": 0,
+     "unchanged": 2,
+     "names": []
+    }
+   },
+   "remesh": {
+    "part": "topwear",
+    "before": {
+     "vertices": 178,
+     "triangles": 296,
+     "hull": 58
+    },
+    "after": {
+     "vertices": 250,
+     "triangles": 415,
+     "hull": 58
+    },
+    "modelTriangles": null
+   },
+   "build": {
+    "model": "skeleton.model.json",
+    "modelUrl": "/rebuild/bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/skeleton.model.json",
+    "modelHash": "84bfb8f1c55e4c2c26be9f54b33a82384f764a3db5cfefb52c6217c8a7256a45",
+    "files": {
+     "skeleton.model.json": "84bfb8f1c55e4c2c26be9f54b33a82384f764a3db5cfefb52c6217c8a7256a45",
+     "skeleton.png": "f141f8aa9e4299b74de67f25d3b4fbe467938bf41e7aed1b3a7869bad8189886"
+    }
+   }
+  },
+  "tree": {
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/build/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/build/skeleton.model.json": "ef17d132a7d5ef0529851e3102d312ca",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/build/skeleton.png": "51d18855d161c292c835e28bed8502a3",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/check/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/check/check.json": "8ada2d9e53c690f3777e38dca123312a",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/mesh.json": "08fd831c5c7d1a49e31363ee49d1ea8c",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/result.json": {
+    "schema": "rig-review-rebuild/1",
+    "kind": "patch",
+    "id": "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad",
+    "status": "built",
+    "reused": false,
+    "request": {
+     "patch": {
+      "schema": "rig-review-config-patch/1",
+      "config_sha256": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064",
+      "ops": [
+       {
+        "op": "replace",
+        "path": "/meshes/topwear/contour/spacing",
+        "value": 20
+       }
+      ],
+      "producer": {
+       "name": "@rig-c/parts",
+       "version": "1.42.0"
+      },
+      "op": {
+       "cmd": "remesh",
+       "args": [
+        "--part",
+        "topwear"
+       ]
+      }
+     },
+     "patchSha256": "c631ce66ed886ab1dcca6a0c8002fd4dec8bdfa9da6455185419d0f61adba5ac",
+     "configHash": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064"
+    },
+    "producer": {
+     "package": "@rig-c/parts",
+     "version": "1.42.0"
+    },
+    "compiler": {
+     "package": "rig-c",
+     "version": "2.64.1"
+    },
+    "lines": [
+     "review: @rig-c/parts 1.42.0 remesh topwear (its patched meshes entry) → scratch rig",
+     "rig-parts remesh: topwear",
+     "rig-parts remesh: wrote under rig",
+     "review: remesh.json topwear: v 178 t 296 → v 250 t 415",
+     "review: against the inspected rig — rig.json differs at 1 path(s) · mesh_report.json differs at 2 path(s) · motion.json, sets.json unchanged · 2 images unchanged",
+     "review: rig.json: /mesh",
+     "review: mesh_report.json: /parts/topwear/triangles, /parts/topwear/vertices",
+     "review: rig-c 2.64.1 build --profile rig-play --pack --page-edges pot --pack-shape rect",
+     "rigc: wrote",
+     "review: @rig-c/parts 1.42.0 check --rig rig --out check --parts <handoff parts>",
+     "check: PASS; 1 of 1 bar(s) measured"
+    ],
+    "producerLine": "rig-parts remesh: wrote under rig",
+    "exitCode": 0,
+    "wallMs": {
+     "op": "ms",
+     "compile": "ms",
+     "check": "ms"
+    },
+    "check": {
+     "schema": "rig-review-check-summary/1",
+     "pass": true,
+     "exitCode": 0,
+     "line": "check: PASS; 1 of 1 bar(s) measured",
+     "bars": {
+      "TEXTURE_STRETCH": "PASS"
+     },
+     "gate": true
+    },
+    "diff": {
+     "count": 1,
+     "paths": [
+      "/mesh"
+     ]
+    },
+    "files": {
+     "documents": [
+      {
+       "file": "rig.json",
+       "count": 1,
+       "paths": [
+        "/mesh"
+       ]
+      },
+      {
+       "file": "motion.json",
+       "count": 0,
+       "paths": []
+      },
+      {
+       "file": "sets.json",
+       "count": 0,
+       "paths": []
+      },
+      {
+       "file": "mesh_report.json",
+       "count": 2,
+       "paths": [
+        "/parts/topwear/triangles",
+        "/parts/topwear/vertices"
+       ]
+      }
+     ],
+     "images": {
+      "changed": 0,
+      "unchanged": 2,
+      "names": []
+     }
+    },
+    "remesh": {
+     "part": "topwear",
+     "before": {
+      "vertices": 178,
+      "triangles": 296,
+      "hull": 58
+     },
+     "after": {
+      "vertices": 250,
+      "triangles": 415,
+      "hull": 58
+     },
+     "modelTriangles": null
+    },
+    "build": {
+     "model": "skeleton.model.json",
+     "modelUrl": "/rebuild/bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/skeleton.model.json",
+     "modelHash": "84bfb8f1c55e4c2c26be9f54b33a82384f764a3db5cfefb52c6217c8a7256a45",
+     "files": {
+      "skeleton.model.json": "84bfb8f1c55e4c2c26be9f54b33a82384f764a3db5cfefb52c6217c8a7256a45",
+      "skeleton.png": "f141f8aa9e4299b74de67f25d3b4fbe467938bf41e7aed1b3a7869bad8189886"
+     }
+    }
+   },
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/images/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/images/chest.png": "f4afab8a3653d557032265655c95c765",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/images/topwear.png": "8045726e2e551cce35e8aa3c788ad5c5",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/mesh_report.json": "657dad621e9a9a23dd6727dfc7a98942",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/motion.json": "0b6981811e6743325032a9c03ff8f1f6",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/remesh.json": "ffd0ed10beb85effefb21db41f2a2992",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/rig.json": "03a2c49cd067e4b4ae209eed27769f81",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/sets.json": "6cf13978580ae529cafed47382cc6b9c"
+  }
+ },
+ {
+  "name": "designation remesh (#99), refused",
+  "response": {
+   "schema": "rig-review-rebuild/1",
+   "id": "1a995d98791e822b1462e1e343d574cce991b1621ee2b9d4f052328f5d062ea8",
+   "status": "refused",
+   "reused": false,
+   "request": {
+    "part": "refuse",
+    "regions": [
+     {
+      "name": "bust",
+      "shape": "circle",
+      "cx": 414,
+      "cy": 342,
+      "r": 50,
+      "bone": "chest_jiggle",
+      "spacing": 13,
+      "band": 30
+     }
+    ],
+    "configHash": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064",
+    "entrySha256": "10b07c0a101a68284784da9f0a4c03c1c5389f95899575cb6a30228eb5efc60a"
+   },
+   "producer": {
+    "package": "@rig-c/parts",
+    "version": "1.42.0"
+   },
+   "compiler": {
+    "package": "rig-c",
+    "version": "2.64.1"
+   },
+   "lines": [
+    "review: @rig-c/parts 1.42.0 remesh refuse → scratch revision",
+    "rig-parts remesh: refuse",
+    "  FAIL  REMESH_TARGET_MESH: refuse — a linked mesh is bound to it",
+    "refused: 1 problem(s)"
+   ],
+   "producerLine": "FAIL  REMESH_TARGET_MESH: refuse — a linked mesh is bound to it",
+   "exitCode": 1,
+   "wallMs": {
+    "remesh": "ms",
+    "compile": null
+   },
+   "build": null
+  },
+  "tree": {
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/build/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/build/skeleton.model.json": "ef17d132a7d5ef0529851e3102d312ca",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/build/skeleton.png": "51d18855d161c292c835e28bed8502a3",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/check/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/check/check.json": "8ada2d9e53c690f3777e38dca123312a",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/mesh.json": "08fd831c5c7d1a49e31363ee49d1ea8c",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/result.json": {
+    "schema": "rig-review-rebuild/1",
+    "kind": "patch",
+    "id": "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad",
+    "status": "built",
+    "reused": false,
+    "request": {
+     "patch": {
+      "schema": "rig-review-config-patch/1",
+      "config_sha256": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064",
+      "ops": [
+       {
+        "op": "replace",
+        "path": "/meshes/topwear/contour/spacing",
+        "value": 20
+       }
+      ],
+      "producer": {
+       "name": "@rig-c/parts",
+       "version": "1.42.0"
+      },
+      "op": {
+       "cmd": "remesh",
+       "args": [
+        "--part",
+        "topwear"
+       ]
+      }
+     },
+     "patchSha256": "c631ce66ed886ab1dcca6a0c8002fd4dec8bdfa9da6455185419d0f61adba5ac",
+     "configHash": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064"
+    },
+    "producer": {
+     "package": "@rig-c/parts",
+     "version": "1.42.0"
+    },
+    "compiler": {
+     "package": "rig-c",
+     "version": "2.64.1"
+    },
+    "lines": [
+     "review: @rig-c/parts 1.42.0 remesh topwear (its patched meshes entry) → scratch rig",
+     "rig-parts remesh: topwear",
+     "rig-parts remesh: wrote under rig",
+     "review: remesh.json topwear: v 178 t 296 → v 250 t 415",
+     "review: against the inspected rig — rig.json differs at 1 path(s) · mesh_report.json differs at 2 path(s) · motion.json, sets.json unchanged · 2 images unchanged",
+     "review: rig.json: /mesh",
+     "review: mesh_report.json: /parts/topwear/triangles, /parts/topwear/vertices",
+     "review: rig-c 2.64.1 build --profile rig-play --pack --page-edges pot --pack-shape rect",
+     "rigc: wrote",
+     "review: @rig-c/parts 1.42.0 check --rig rig --out check --parts <handoff parts>",
+     "check: PASS; 1 of 1 bar(s) measured"
+    ],
+    "producerLine": "rig-parts remesh: wrote under rig",
+    "exitCode": 0,
+    "wallMs": {
+     "op": "ms",
+     "compile": "ms",
+     "check": "ms"
+    },
+    "check": {
+     "schema": "rig-review-check-summary/1",
+     "pass": true,
+     "exitCode": 0,
+     "line": "check: PASS; 1 of 1 bar(s) measured",
+     "bars": {
+      "TEXTURE_STRETCH": "PASS"
+     },
+     "gate": true
+    },
+    "diff": {
+     "count": 1,
+     "paths": [
+      "/mesh"
+     ]
+    },
+    "files": {
+     "documents": [
+      {
+       "file": "rig.json",
+       "count": 1,
+       "paths": [
+        "/mesh"
+       ]
+      },
+      {
+       "file": "motion.json",
+       "count": 0,
+       "paths": []
+      },
+      {
+       "file": "sets.json",
+       "count": 0,
+       "paths": []
+      },
+      {
+       "file": "mesh_report.json",
+       "count": 2,
+       "paths": [
+        "/parts/topwear/triangles",
+        "/parts/topwear/vertices"
+       ]
+      }
+     ],
+     "images": {
+      "changed": 0,
+      "unchanged": 2,
+      "names": []
+     }
+    },
+    "remesh": {
+     "part": "topwear",
+     "before": {
+      "vertices": 178,
+      "triangles": 296,
+      "hull": 58
+     },
+     "after": {
+      "vertices": 250,
+      "triangles": 415,
+      "hull": 58
+     },
+     "modelTriangles": null
+    },
+    "build": {
+     "model": "skeleton.model.json",
+     "modelUrl": "/rebuild/bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/skeleton.model.json",
+     "modelHash": "84bfb8f1c55e4c2c26be9f54b33a82384f764a3db5cfefb52c6217c8a7256a45",
+     "files": {
+      "skeleton.model.json": "84bfb8f1c55e4c2c26be9f54b33a82384f764a3db5cfefb52c6217c8a7256a45",
+      "skeleton.png": "f141f8aa9e4299b74de67f25d3b4fbe467938bf41e7aed1b3a7869bad8189886"
+     }
+    }
+   },
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/images/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/images/chest.png": "f4afab8a3653d557032265655c95c765",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/images/topwear.png": "8045726e2e551cce35e8aa3c788ad5c5",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/mesh_report.json": "657dad621e9a9a23dd6727dfc7a98942",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/motion.json": "0b6981811e6743325032a9c03ff8f1f6",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/remesh.json": "ffd0ed10beb85effefb21db41f2a2992",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/rig.json": "03a2c49cd067e4b4ae209eed27769f81",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/sets.json": "6cf13978580ae529cafed47382cc6b9c"
+  }
+ },
+ {
+  "name": "patch rig (#102), refused",
+  "response": {
+   "schema": "rig-review-rebuild/1",
+   "kind": "patch",
+   "id": "2f04d3a5eede9ee96dccba652f8bd45fcf3e4b70c29e8a9c9beddac66c669e7c",
+   "status": "refused",
+   "reused": false,
+   "request": {
+    "patch": {
+     "schema": "rig-review-config-patch/1",
+     "config_sha256": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064",
+     "ops": [
+      {
+       "op": "replace",
+       "path": "/constraints/0/damping",
+       "value": 7
+      }
+     ],
+     "producer": {
+      "name": "@rig-c/parts",
+      "version": "1.42.0"
+     },
+     "op": {
+      "cmd": "rig",
+      "args": []
+     }
+    },
+    "patchSha256": "cf32864410196c8716fe8c13de4e602b5d0f60117a8b226d0646ce4caf1dd4e0",
+    "configHash": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064"
+   },
+   "producer": {
+    "package": "@rig-c/parts",
+    "version": "1.42.0"
+   },
+   "compiler": {
+    "package": "rig-c",
+    "version": "2.64.1"
+   },
+   "lines": [
+    "review: @rig-c/parts 1.42.0 rig --config config.json (the handoff config with 1 patch op(s)) → scratch rig",
+    "[rig] reading",
+    "  FAIL  CONFIG_CONSTRAINT_RANGE: constraints[0].damping is outside 0..1",
+    "refused: 1 problem(s)"
+   ],
+   "producerLine": "FAIL  CONFIG_CONSTRAINT_RANGE: constraints[0].damping is outside 0..1",
+   "exitCode": 1,
+   "wallMs": {
+    "op": "ms",
+    "compile": null,
+    "check": null
+   },
+   "check": null,
+   "diff": null,
+   "files": null,
+   "remesh": null,
+   "build": null
+  },
+  "tree": {
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/build/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/build/skeleton.model.json": "ef17d132a7d5ef0529851e3102d312ca",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/build/skeleton.png": "51d18855d161c292c835e28bed8502a3",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/check/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/check/check.json": "8ada2d9e53c690f3777e38dca123312a",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/mesh.json": "08fd831c5c7d1a49e31363ee49d1ea8c",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/result.json": {
+    "schema": "rig-review-rebuild/1",
+    "kind": "patch",
+    "id": "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad",
+    "status": "built",
+    "reused": false,
+    "request": {
+     "patch": {
+      "schema": "rig-review-config-patch/1",
+      "config_sha256": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064",
+      "ops": [
+       {
+        "op": "replace",
+        "path": "/meshes/topwear/contour/spacing",
+        "value": 20
+       }
+      ],
+      "producer": {
+       "name": "@rig-c/parts",
+       "version": "1.42.0"
+      },
+      "op": {
+       "cmd": "remesh",
+       "args": [
+        "--part",
+        "topwear"
+       ]
+      }
+     },
+     "patchSha256": "c631ce66ed886ab1dcca6a0c8002fd4dec8bdfa9da6455185419d0f61adba5ac",
+     "configHash": "8ce6d0ced99591ade9864e0944e1e6e6ca310ec996136fd7fd85cc80d5bf6064"
+    },
+    "producer": {
+     "package": "@rig-c/parts",
+     "version": "1.42.0"
+    },
+    "compiler": {
+     "package": "rig-c",
+     "version": "2.64.1"
+    },
+    "lines": [
+     "review: @rig-c/parts 1.42.0 remesh topwear (its patched meshes entry) → scratch rig",
+     "rig-parts remesh: topwear",
+     "rig-parts remesh: wrote under rig",
+     "review: remesh.json topwear: v 178 t 296 → v 250 t 415",
+     "review: against the inspected rig — rig.json differs at 1 path(s) · mesh_report.json differs at 2 path(s) · motion.json, sets.json unchanged · 2 images unchanged",
+     "review: rig.json: /mesh",
+     "review: mesh_report.json: /parts/topwear/triangles, /parts/topwear/vertices",
+     "review: rig-c 2.64.1 build --profile rig-play --pack --page-edges pot --pack-shape rect",
+     "rigc: wrote",
+     "review: @rig-c/parts 1.42.0 check --rig rig --out check --parts <handoff parts>",
+     "check: PASS; 1 of 1 bar(s) measured"
+    ],
+    "producerLine": "rig-parts remesh: wrote under rig",
+    "exitCode": 0,
+    "wallMs": {
+     "op": "ms",
+     "compile": "ms",
+     "check": "ms"
+    },
+    "check": {
+     "schema": "rig-review-check-summary/1",
+     "pass": true,
+     "exitCode": 0,
+     "line": "check: PASS; 1 of 1 bar(s) measured",
+     "bars": {
+      "TEXTURE_STRETCH": "PASS"
+     },
+     "gate": true
+    },
+    "diff": {
+     "count": 1,
+     "paths": [
+      "/mesh"
+     ]
+    },
+    "files": {
+     "documents": [
+      {
+       "file": "rig.json",
+       "count": 1,
+       "paths": [
+        "/mesh"
+       ]
+      },
+      {
+       "file": "motion.json",
+       "count": 0,
+       "paths": []
+      },
+      {
+       "file": "sets.json",
+       "count": 0,
+       "paths": []
+      },
+      {
+       "file": "mesh_report.json",
+       "count": 2,
+       "paths": [
+        "/parts/topwear/triangles",
+        "/parts/topwear/vertices"
+       ]
+      }
+     ],
+     "images": {
+      "changed": 0,
+      "unchanged": 2,
+      "names": []
+     }
+    },
+    "remesh": {
+     "part": "topwear",
+     "before": {
+      "vertices": 178,
+      "triangles": 296,
+      "hull": 58
+     },
+     "after": {
+      "vertices": 250,
+      "triangles": 415,
+      "hull": 58
+     },
+     "modelTriangles": null
+    },
+    "build": {
+     "model": "skeleton.model.json",
+     "modelUrl": "/rebuild/bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/skeleton.model.json",
+     "modelHash": "84bfb8f1c55e4c2c26be9f54b33a82384f764a3db5cfefb52c6217c8a7256a45",
+     "files": {
+      "skeleton.model.json": "84bfb8f1c55e4c2c26be9f54b33a82384f764a3db5cfefb52c6217c8a7256a45",
+      "skeleton.png": "f141f8aa9e4299b74de67f25d3b4fbe467938bf41e7aed1b3a7869bad8189886"
+     }
+    }
+   },
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/images/": null,
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/images/chest.png": "f4afab8a3653d557032265655c95c765",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/images/topwear.png": "8045726e2e551cce35e8aa3c788ad5c5",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/mesh_report.json": "657dad621e9a9a23dd6727dfc7a98942",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/motion.json": "0b6981811e6743325032a9c03ff8f1f6",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/remesh.json": "ffd0ed10beb85effefb21db41f2a2992",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/rig.json": "03a2c49cd067e4b4ae209eed27769f81",
+   "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad/rig/sets.json": "6cf13978580ae529cafed47382cc6b9c"
+  }
+ }
+]

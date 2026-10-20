@@ -13,7 +13,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, realpath, rm, writeFile, lstat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts';
-import { compileArgs, firstRefusal, remeshArgs, resolveProducer, runTool, type InstalledTool } from './producer.ts';
+import { compileArgs, firstRefusal, remeshArgs, resolveProducer, runTool, type CompileRequest, type InstalledTool, type ProcessResult } from './producer.ts';
 import { CONFIG_NAMED_FILES, HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
 import { assertWholeRigBaseline, BaselineError, baselineKey, producerDiff, runBaseline, runInspectedCheck, runningInspectedCheck, type BaselineResult, type InspectedCheck } from './baseline.ts';
 import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, parseConfigPatch, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
@@ -219,6 +219,32 @@ export const baselineDir = (stateDir: string, key: string) => join(stateDir, 'ba
 const tool = (t: InstalledTool) => ({ package: t.package, version: t.version });
 async function exists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e; } }
 
+type Resolved = Extract<ReturnType<typeof resolveProducer>, { ok: true }>;
+type PageEdges = CompileRequest['pageEdges'];
+type PackShape = CompileRequest['packShape'];
+/** A runner's producer op (#121): the one step the two Apply paths do not share. */
+interface ProducerOp {
+  /** The producer command, for the unnamed-refusal line. */
+  cmd: string;
+  /** The rig spec directory the op writes under the scratch directory. */
+  spec: string;
+  /** Writes the op's inputs into the scratch directory, says what runs, runs it. */
+  run: (push: (line: string) => void) => Promise<ProcessResult>;
+  /** Where the job records the op's wall clock. */
+  wallMs: (ms: number) => void;
+  /** After a clean op: the pack flags the build compiles with, and what the compile line adds about them. */
+  flags: (push: (line: string) => void) => Promise<{ pageEdges: PageEdges; packShape: PackShape; note: string }>;
+}
+/** The tail's optional steps; each receives what it measured for the job to record. */
+interface ApplySteps {
+  /** #125: diff every producer document against the inspected rig, before the compile. */
+  diff?: (files: FilesDiff) => void;
+  /** #102: check the scratch rig after the compile. */
+  check?: (summary: CheckSummary, wallMs: number) => void;
+  /** After the build is hashed, before result.json is written. */
+  hashed?: () => Promise<void>;
+}
+
 /** Hash every page the compiled model names and the model itself; names are literal relative paths inside the build. */
 async function hashBuild(build: string, id: string): Promise<RebuildBuild> {
   const dir = await realpath(build), model = 'skeleton.model.json', bytes = await readFile(await safeFile(dir, model)), doc = object(JSON.parse(bytes.toString('utf8')), 'model');
@@ -320,27 +346,48 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     } catch { return null; }
   }
 
-  async function execute(job: RebuildJob, dir: string, inputs: ProducerInputs, resolved: Extract<ReturnType<typeof resolveProducer>, { ok: true }>, entry: string): Promise<void> {
+  /**
+   * The tail every Apply shares (#121), once its producer op has written a rig spec into `<dir>/<op.spec>`: the per-file
+   * diff when asked (#125), the compile with the revision's own pack flags, check when asked (#102), the build hashed,
+   * result.json written, the package's other scratch builds replaced; anything but a built job leaves nothing behind.
+   * Each runner passes only its producer op and the optional steps it records.
+   */
+  async function apply(job: RebuildJob | PatchJob, dir: string, inputs: ProducerInputs, resolved: Resolved, op: ProducerOp, steps: ApplySteps = {}): Promise<void> {
     const push = (line: string) => { if (job.lines.length < MAX_LINES) job.lines.push(line); };
+    const producer = resolved.producer;
     try {
       await rm(dir, { recursive: true, force: true });
       await mkdir(dir, { recursive: true, mode: 0o700 });
-      await writeFile(join(dir, 'mesh.json'), entry, { mode: 0o600 });
-      push(`review: ${resolved.producer.package} ${resolved.producer.version} remesh ${job.request.part} → scratch revision`);
-      const remesh = await runTool(resolved.producer.bin, remeshArgs({ rig: inputs.rig, config: inputs.config, parts: inputs.parts, part: job.request.part, mesh: 'mesh.json', out: 'revision' }), { cwd: dir, onLine: push });
-      job.exitCode = remesh.exitCode; job.wallMs.remesh = remesh.wallMs;
-      if (remesh.exitCode !== 0) { job.producerLine = firstRefusal(remesh.lines) ?? `rig-parts remesh exited ${remesh.exitCode} without a named refusal`; job.status = 'refused'; return; }
-      job.producerLine = remesh.stdout.filter(l => l.trim()).at(-1)?.trim() ?? null;
-      const provenance = object(JSON.parse(await readFile(join(dir, 'revision', 'remesh.json'), 'utf8')), 'remesh.json'), request = object(provenance.request, 'remesh.json request');
-      const pageEdges = request.page_edges === 'pot' ? 'pot' : 'free', packShape = request.pack_shape === 'rect' ? 'rect' : 'polygon';
-      push(`review: ${resolved.compiler.package} ${resolved.compiler.version} build --profile rig-play --pack --page-edges ${pageEdges} --pack-shape ${packShape} (the revision's own pack flags)`);
-      const compile = await runTool(resolved.compiler.bin, compileArgs({ rig: 'revision/rig.json', motion: 'revision/motion.json', out: 'build', pageEdges, packShape }), { cwd: dir, onLine: push });
+      const run = await op.run(push);
+      job.exitCode = run.exitCode; op.wallMs(run.wallMs);
+      if (run.exitCode !== 0) { job.producerLine = firstRefusal(run.lines) ?? `rig-parts ${op.cmd} exited ${run.exitCode} without a named refusal`; job.status = 'refused'; return; }
+      job.producerLine = run.stdout.filter(l => l.trim()).at(-1)?.trim() ?? null;
+      const { pageEdges, packShape, note } = await op.flags(push);
+      if (steps.diff) {
+        // #125: the structural diff of every document the producer writes against the inspected rig's, file by file.
+        const files = await producerDiff(inputs.rig, join(dir, op.spec));
+        steps.diff(files);
+        push(`review: against the inspected rig — ${filesDiffText(files)}`);
+        for (const d of files.documents) if (d.count) push(`review: ${d.file}: ${d.paths.slice(0, 8).join(', ')}${d.count > 8 ? ', …' : ''}`);
+        if (files.images.changed) push(`review: images changed: ${files.images.names.slice(0, 8).join(', ')}${files.images.changed > 8 ? ', …' : ''}`);
+      }
+      push(`review: ${resolved.compiler.package} ${resolved.compiler.version} build --profile rig-play --pack --page-edges ${pageEdges} --pack-shape ${packShape}${note}`);
+      const compile = await runTool(resolved.compiler.bin, compileArgs({ rig: `${op.spec}/rig.json`, motion: `${op.spec}/motion.json`, out: 'build', pageEdges, packShape }), { cwd: dir, onLine: push });
       job.wallMs.compile = compile.wallMs;
       if (compile.exitCode !== 0) { job.exitCode = compile.exitCode; job.producerLine = firstRefusal(compile.lines) ?? `rigc build exited ${compile.exitCode} without a named refusal`; job.status = 'refused'; return; }
+      if (steps.check) {
+        // check measures the scratch rig; a FAIL is its judgment, recorded beside the build, not a refusal of the build.
+        push(`review: ${producer.package} ${producer.version} check --rig ${op.spec} --out check --parts <handoff parts>`);
+        const check = await runTool(producer.bin, ['check', '--rig', op.spec, '--out', 'check', '--parts', inputs.parts, '--page-edges', pageEdges, '--pack-shape', packShape], { cwd: dir, onLine: push });
+        let checkJson: unknown = null;
+        try { checkJson = JSON.parse(await readFile(join(dir, 'check', 'check.json'), 'utf8')); } catch { /* check refused before writing it; its line says why */ }
+        steps.check(checkSummary(checkJson, check.exitCode, check.lines, firstRefusal(check.lines)), check.wallMs);
+      }
       // The package and its producer inputs must still be the bytes the request was made against.
       // The handoff files are in the reviewed identity, so this also catches a config, parts or rig change.
       try { await options.unchanged(); } catch { throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild'); }
       job.build = await hashBuild(join(dir, 'build'), job.id);
+      if (steps.hashed) await steps.hashed();
       job.status = 'built'; latestId = job.id;
       await writeFile(join(dir, 'result.json'), JSON.stringify({ ...job, reused: false }, null, 1) + '\n', { mode: 0o600 });
       // Each Apply replaces the previous scratch build of this package.
@@ -348,72 +395,62 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     } catch (error) {
       job.status = 'failed'; job.producerLine = error instanceof Error ? error.message : String(error); push(`review: ${job.producerLine}`);
     } finally {
-      // Only a built designation keeps its scratch directory; a refusal or failure leaves nothing behind.
+      // Only a built Apply keeps its scratch directory; a refusal or failure leaves nothing behind.
       if (job.status !== 'built') await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
   }
 
-  /** The tail every Apply shares once its producer op has written a rig spec into `<dir>/rig`: compile, check, hash, keep. */
-  async function executePatch(job: PatchJob, dir: string, inputs: ProducerInputs, resolved: Extract<ReturnType<typeof resolveProducer>, { ok: true }>, patched: JsonValue, part: string | null): Promise<void> {
-    const push = (line: string) => { if (job.lines.length < MAX_LINES) job.lines.push(line); };
+  /** #99: the designation's entry → `rig-parts remesh` → a scratch revision, compiled with the revision's own pack flags. */
+  function execute(job: RebuildJob, dir: string, inputs: ProducerInputs, resolved: Resolved, entry: string): Promise<void> {
+    return apply(job, dir, inputs, resolved, {
+      cmd: 'remesh', spec: 'revision',
+      async run(push) {
+        await writeFile(join(dir, 'mesh.json'), entry, { mode: 0o600 });
+        push(`review: ${resolved.producer.package} ${resolved.producer.version} remesh ${job.request.part} → scratch revision`);
+        return runTool(resolved.producer.bin, remeshArgs({ rig: inputs.rig, config: inputs.config, parts: inputs.parts, part: job.request.part, mesh: 'mesh.json', out: 'revision' }), { cwd: dir, onLine: push });
+      },
+      wallMs: ms => { job.wallMs.remesh = ms; },
+      async flags() {
+        const provenance = object(JSON.parse(await readFile(join(dir, 'revision', 'remesh.json'), 'utf8')), 'remesh.json'), request = object(provenance.request, 'remesh.json request');
+        return { pageEdges: request.page_edges === 'pot' ? 'pot' : 'free', packShape: request.pack_shape === 'rect' ? 'rect' : 'polygon', note: ' (the revision\'s own pack flags)' };
+      },
+    });
+  }
+
+  /** #102: the patched config → `rig-parts rig` (whole rig) or `remesh` (one part's patched entry) → `<dir>/rig`; the tail adds the diff and check. */
+  function executePatch(job: PatchJob, dir: string, inputs: ProducerInputs, resolved: Resolved, patched: JsonValue, part: string | null): Promise<void> {
     const args = job.request.patch.op.args, producer = resolved.producer;
-    try {
-      await rm(dir, { recursive: true, force: true });
-      await mkdir(dir, { recursive: true, mode: 0o700 });
-      let pageEdges = flagValue(args, '--page-edges', 'free'), packShape = flagValue(args, '--pack-shape', 'polygon');
-      let op: Awaited<ReturnType<typeof runTool>>;
-      if (part === null) {
-        await writeFile(join(dir, 'config.json'), scratchConfigText(inputs.config, patched), { mode: 0o600 });
-        push(`review: ${producer.package} ${producer.version} rig --config config.json (the handoff config with ${job.request.patch.ops.length} patch op(s)) → scratch rig`);
-        op = await runTool(producer.bin, ['rig', '--config', 'config.json', '--parts', inputs.parts, '--out', 'rig', ...args], { cwd: dir, onLine: push });
-      } else {
+    let counts: RemeshCounts | null = null;
+    return apply(job, dir, inputs, resolved, {
+      cmd: job.request.patch.op.cmd, spec: 'rig',
+      async run(push) {
+        if (part === null) {
+          await writeFile(join(dir, 'config.json'), scratchConfigText(inputs.config, patched), { mode: 0o600 });
+          push(`review: ${producer.package} ${producer.version} rig --config config.json (the handoff config with ${job.request.patch.ops.length} patch op(s)) → scratch rig`);
+          return runTool(producer.bin, ['rig', '--config', 'config.json', '--parts', inputs.parts, '--out', 'rig', ...args], { cwd: dir, onLine: push });
+        }
         // remesh takes the one entry and reads the handoff config as written (REMESH_BASELINE_MISMATCH otherwise).
         const entry = (patched as Record<string, Record<string, JsonValue>>).meshes?.[part];
         if (entry === undefined) throw new RebuildError('EDIT_PATCH_PATH_MISSING', `the patched config has no meshes.${part}`);
         await writeFile(join(dir, 'mesh.json'), JSON.stringify(entry, null, 1) + '\n', { mode: 0o600 });
         const rest = args.filter((_, i) => args[i] !== '--part' && args[i - 1] !== '--part');
         push(`review: ${producer.package} ${producer.version} remesh ${part} (its patched meshes entry) → scratch rig`);
-        op = await runTool(producer.bin, [...remeshArgs({ rig: inputs.rig, config: inputs.config, parts: inputs.parts, part, mesh: 'mesh.json', out: 'rig' }), ...rest], { cwd: dir, onLine: push });
-      }
-      job.exitCode = op.exitCode; job.wallMs.op = op.wallMs;
-      if (op.exitCode !== 0) { job.producerLine = firstRefusal(op.lines) ?? `rig-parts ${job.request.patch.op.cmd} exited ${op.exitCode} without a named refusal`; job.status = 'refused'; return; }
-      job.producerLine = op.stdout.filter(l => l.trim()).at(-1)?.trim() ?? null;
-      let counts: RemeshCounts | null = null;
-      if (part !== null) {
+        return runTool(producer.bin, [...remeshArgs({ rig: inputs.rig, config: inputs.config, parts: inputs.parts, part, mesh: 'mesh.json', out: 'rig' }), ...rest], { cwd: dir, onLine: push });
+      },
+      wallMs: ms => { job.wallMs.op = ms; },
+      async flags(push) {
+        if (part === null) return { pageEdges: flagValue(args, '--page-edges', 'free') as PageEdges, packShape: flagValue(args, '--pack-shape', 'polygon') as PackShape, note: '' };
         const provenance = JSON.parse(await readFile(join(dir, 'rig', 'remesh.json'), 'utf8')) as unknown;
         const request = object(object(provenance, 'remesh.json').request, 'remesh.json request');
-        pageEdges = request.page_edges === 'pot' ? 'pot' : 'free'; packShape = request.pack_shape === 'rect' ? 'rect' : 'polygon';
         counts = remeshCounts(provenance);
         if (counts) push(`review: remesh.json ${counts.part}: v ${counts.before.vertices} t ${counts.before.triangles} → v ${counts.after.vertices} t ${counts.after.triangles}`);
-      }
-      // #125: the structural diff of every document the producer writes against the inspected rig's, file by file.
-      const files = await producerDiff(inputs.rig, join(dir, 'rig')), rigJson = files.documents.find(d => d.file === 'rig.json');
-      job.files = files; job.diff = rigJson ? { count: rigJson.count, paths: rigJson.paths } : null;
-      push(`review: against the inspected rig — ${filesDiffText(files)}`);
-      for (const d of files.documents) if (d.count) push(`review: ${d.file}: ${d.paths.slice(0, 8).join(', ')}${d.count > 8 ? ', …' : ''}`);
-      if (files.images.changed) push(`review: images changed: ${files.images.names.slice(0, 8).join(', ')}${files.images.changed > 8 ? ', …' : ''}`);
-      push(`review: ${resolved.compiler.package} ${resolved.compiler.version} build --profile rig-play --pack --page-edges ${pageEdges} --pack-shape ${packShape}`);
-      const compile = await runTool(resolved.compiler.bin, compileArgs({ rig: 'rig/rig.json', motion: 'rig/motion.json', out: 'build', pageEdges: pageEdges as 'pot' | 'free', packShape: packShape as 'rect' | 'polygon' }), { cwd: dir, onLine: push });
-      job.wallMs.compile = compile.wallMs;
-      if (compile.exitCode !== 0) { job.exitCode = compile.exitCode; job.producerLine = firstRefusal(compile.lines) ?? `rigc build exited ${compile.exitCode} without a named refusal`; job.status = 'refused'; return; }
-      // check measures the scratch rig; a FAIL is its judgment, recorded beside the build, not a refusal of the build.
-      push(`review: ${producer.package} ${producer.version} check --rig rig --out check --parts <handoff parts>`);
-      const check = await runTool(producer.bin, ['check', '--rig', 'rig', '--out', 'check', '--parts', inputs.parts, '--page-edges', pageEdges, '--pack-shape', packShape], { cwd: dir, onLine: push });
-      job.wallMs.check = check.wallMs;
-      let checkJson: unknown = null;
-      try { checkJson = JSON.parse(await readFile(join(dir, 'check', 'check.json'), 'utf8')); } catch { /* check refused before writing it; its line says why */ }
-      job.check = checkSummary(checkJson, check.exitCode, check.lines, firstRefusal(check.lines));
-      try { await options.unchanged(); } catch { throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild'); }
-      job.build = await hashBuild(join(dir, 'build'), job.id);
-      if (counts) job.remesh = { ...counts, modelTriangles: modelMeshTriangles(JSON.parse(await readFile(join(dir, 'build', 'skeleton.model.json'), 'utf8')), counts.part) };
-      job.status = 'built'; latestId = job.id;
-      await writeFile(join(dir, 'result.json'), JSON.stringify({ ...job, reused: false }, null, 1) + '\n', { mode: 0o600 });
-      for (const sibling of await readdir(rebuildRoot(options.stateDir, p.sourceHash))) if (sibling !== job.id && /^[a-f0-9]{64}$/.test(sibling)) { await rm(join(rebuildRoot(options.stateDir, p.sourceHash), sibling), { recursive: true, force: true }); jobs.delete(sibling); }
-    } catch (error) {
-      job.status = 'failed'; job.producerLine = error instanceof Error ? error.message : String(error); push(`review: ${job.producerLine}`);
-    } finally {
-      if (job.status !== 'built') await rm(dir, { recursive: true, force: true }).catch(() => {});
-    }
+        return { pageEdges: request.page_edges === 'pot' ? 'pot' : 'free', packShape: request.pack_shape === 'rect' ? 'rect' : 'polygon', note: '' };
+      },
+    }, {
+      diff: files => { const rigJson = files.documents.find(d => d.file === 'rig.json'); job.files = files; job.diff = rigJson ? { count: rigJson.count, paths: rigJson.paths } : null; },
+      check: (summary, wallMs) => { job.wallMs.check = wallMs; job.check = summary; },
+      hashed: async () => { if (counts) job.remesh = { ...counts, modelTriangles: modelMeshTriangles(JSON.parse(await readFile(join(dir, 'build', 'skeleton.model.json'), 'utf8')), counts.part) }; },
+    });
   }
 
   /**
