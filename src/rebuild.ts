@@ -24,6 +24,7 @@ import { CHEST_REGIONS_MAX } from './chest-regions.ts';
 import { bustMeshEntry, deriveBust, parseBustSpec, BustSpecError, type BustSpec } from './chest-landmarks.ts';
 import { modelMeshTriangles, remeshCounts, type RemeshCounts } from './mesh-entry.ts';
 import { patchRoute } from './retune-route.ts';
+import { carriedCheck, RETUNE_CHECK_SINCE, RETUNE_FILE, retuneCheckSummary, revisionBinding } from './retune-check.ts';
 import { absolutizeBuildFiles, buildLines, buildNamedFiles, buildReadout, MAX_BUILD_READOUT, needsBuild, newBuildFile, recompositeFigures, type RecompositeFigures } from './build-route.ts';
 import { jsonDiff } from './config-patch.ts';
 import { CLOTH_KEYPOINTS_UNDECLARED, CLOTH_PATCH_MIXED, CLOTH_SOURCE_UNAVAILABLE, CLOTH_WRITE_SINCE, clothLinks, clothPatchKind, readClothTargets, writtenDiff, type ClothTagView, type WrittenDiff } from './cloth-recipe.ts';
@@ -399,11 +400,35 @@ interface ApplySteps {
   /** #125: diff every producer document against the inspected rig, before the compile. */
   diff?: (files: FilesDiff) => void;
   /** #102: check the scratch rig after the compile. */
-  check?: (summary: CheckSummary, wallMs: number) => void;
+  check?: (summary: CheckSummary, wallMs: number | null) => void;
+  /**
+   * #139: the check the producer op already ran on the spec it wrote, read instead of running check again: a summary
+   * (recorded through `check`, no wall clock), a refusal line (nothing recorded, the build refused), or null — the op
+   * carries none, so check runs as for any other Apply.
+   */
+  carried?: (push: (line: string) => void) => Promise<{ summary: CheckSummary } | { refused: string } | null>;
   /** After the build is hashed, before result.json is written. */
   hashed?: () => Promise<void>;
   /** #112: the schedule check reads (`--environment environment.json`, written into the scratch directory first). */
   world?: ApplyWorld | null;
+}
+
+/**
+ * #139: the check `rig-parts retune` ran on the revision it wrote into `spec`, as review's check summary, bound to the
+ * revision's files by `retune.json`'s hash rows (`RETUNE_CHECK_STALE` refuses the Apply). Null — check runs as before —
+ * when the Apply checks under an exported world (retune's check read the default one) or `retune.json` carries no
+ * `line` / `status` (a producer before `RETUNE_CHECK_SINCE`).
+ */
+async function retuneCarried(spec: string, world: ApplyWorld | null, push: (line: string) => void): Promise<{ summary: CheckSummary } | { refused: string } | null> {
+  if (world) { push('review: retune\'s own check read the default world and this Apply checks under the exported schedule, so check runs on the revision'); return null; }
+  const retune = JSON.parse(await readFile(join(spec, RETUNE_FILE), 'utf8')) as unknown;
+  const carried = carriedCheck(retune);
+  if (!carried) { push(`review: ${RETUNE_FILE} carries no check line or block statuses (@rig-c/parts before ${RETUNE_CHECK_SINCE}), so check runs on the revision`); return null; }
+  const stale = await revisionBinding(spec, retune);
+  if (stale) return { refused: stale };
+  const rows = (retune as { revision: unknown[] }).revision.length;
+  push(`review: check not run again — ${RETUNE_FILE} carries retune's check of this revision, bound to it by ${rows} revision hash row(s): ${carried.line}`);
+  return { summary: retuneCheckSummary(carried) };
 }
 
 /** #115: what a build-routed patch runs with — the handoff's painting and runs, absolute; never from the client. */
@@ -600,7 +625,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       const compile = await runTool(resolved.compiler.bin, compileArgs({ rig: `${op.spec}/rig.json`, motion: `${op.spec}/motion.json`, out: 'build', pageEdges, packShape }), { cwd: dir, onLine: push });
       job.wallMs.compile = compile.wallMs;
       if (compile.exitCode !== 0) { job.exitCode = compile.exitCode; job.producerLine = firstRefusal(compile.lines) ?? `rigc build exited ${compile.exitCode} without a named refusal`; job.status = 'refused'; return; }
-      if (steps.check) {
+      const carried = steps.check && steps.carried ? await steps.carried(push) : null;
+      if (carried && 'refused' in carried) { job.producerLine = carried.refused; job.status = 'refused'; push(`review: ${carried.refused}`); return; }
+      if (steps.check && carried) steps.check(carried.summary, null);
+      else if (steps.check) {
         // check measures the scratch rig; a FAIL is its judgment, recorded beside the build, not a refusal of the build.
         if (steps.world) await writeFile(join(dir, 'environment.json'), steps.world.text, { mode: 0o600 });
         push(`review: ${producer.package} ${producer.version} check --rig ${op.spec} --out check --parts <handoff parts>${steps.world ? ` --environment environment.json (the exported schedule, ${steps.world.record.steps} step(s), sha256 ${steps.world.record.sha256.slice(0, 16)})` : ''}`);
@@ -758,7 +786,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     }, {
       diff: files => { const rigJson = files.documents.find(d => d.file === 'rig.json'); job.files = files; job.diff = rigJson ? { count: rigJson.count, paths: rigJson.paths } : null; },
       // #115: build runs check itself, on the parts it assembled; its check.json is read after the op (flags).
-      ...(building ? {} : { check: (summary: CheckSummary, wallMs: number) => { job.wallMs.check = wallMs; job.check = summary; } }),
+      ...(building ? {} : { check: (summary: CheckSummary, wallMs: number | null) => { job.wallMs.check = wallMs; job.check = summary; } }),
+      // #139: a retune Apply reads the check retune ran on its revision (retune.json, bound by its hash rows) unless the
+      // Apply checks under an exported world (retune's check reads the default one) or the producer carries no line.
+      ...(job.op === 'retune' ? { carried: (push: (line: string) => void) => retuneCarried(join(dir, 'rig'), world, push) } : {}),
       hashed: async () => { if (counts) job.remesh = { ...counts, modelTriangles: modelMeshTriangles(JSON.parse(await readFile(join(dir, 'build', 'skeleton.model.json'), 'utf8')), counts.part) }; },
       world,
     });
