@@ -15,9 +15,9 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts';
 import { compileArgs, firstRefusal, remeshArgs, resolveProducer, runTool, type InstalledTool } from './producer.ts';
 import { CONFIG_NAMED_FILES, HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
-import { assertWholeRigBaseline, BaselineError, baselineKey, runBaseline, runInspectedCheck, runningInspectedCheck, type BaselineResult, type InspectedCheck } from './baseline.ts';
-import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, jsonDiff, parseConfigPatch, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
-import { checkSummary, MAX_DIFF_PATHS, type CheckSummary } from './applied-context.ts';
+import { assertWholeRigBaseline, BaselineError, baselineKey, producerDiff, runBaseline, runInspectedCheck, runningInspectedCheck, type BaselineResult, type InspectedCheck } from './baseline.ts';
+import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, parseConfigPatch, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
+import { checkSummary, filesDiffText, type CheckSummary, type FilesDiff } from './applied-context.ts';
 import { idleKeying, idleSource, type IdleStatus } from './idle-tracks.ts';
 import { CHEST_REGIONS_MAX } from './chest-regions.ts';
 import { bustMeshEntry, deriveBust, parseBustSpec, BustSpecError, type BustSpec } from './chest-landmarks.ts';
@@ -174,7 +174,7 @@ export interface RebuildJob {
 /**
  * A patch Apply (#102): the config patch, its hash and the config bytes it was made against; the op's, the compile's
  * and check's wall clocks; check's summary; and every JSON Pointer at which the scratch rig.json differs from the
- * inspected one.
+ * inspected one (`diff`) — and, #125, every document the producer writes, per file, with the images by hash (`files`).
  */
 export interface PatchJob {
   schema: typeof REBUILD_SCHEMA; kind: 'patch'; id: string; status: RebuildStatus; reused: boolean;
@@ -182,6 +182,8 @@ export interface PatchJob {
   producer: { package: string; version: string }; compiler: { package: string; version: string };
   lines: string[]; producerLine: string | null; exitCode: number | null; wallMs: { op: number | null; compile: number | null; check: number | null };
   check: CheckSummary | null; diff: { count: number; paths: string[] } | null;
+  /** #125: the per-file diff of every producer document (`src/producer-files.ts`) and the images by hash. */
+  files: FilesDiff | null;
   /** #106: a remesh patch's part counts from the revision's `remesh.json`, and the compiled model's triangles for the part. */
   remesh: (RemeshCounts & { modelTriangles: number | null }) | null;
   build: RebuildBuild | null;
@@ -384,10 +386,12 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         counts = remeshCounts(provenance);
         if (counts) push(`review: remesh.json ${counts.part}: v ${counts.before.vertices} t ${counts.before.triangles} → v ${counts.after.vertices} t ${counts.after.triangles}`);
       }
-      // The structural diff against the inspected rig.json: what the patch changed in the rig, path by path.
-      const paths = jsonDiff(JSON.parse(await readFile(join(inputs.rig, 'rig.json'), 'utf8')), JSON.parse(await readFile(join(dir, 'rig', 'rig.json'), 'utf8')));
-      job.diff = { count: paths.length, paths: paths.slice(0, MAX_DIFF_PATHS) };
-      push(`review: rig.json differs from the inspected rig at ${paths.length} path(s)${paths.length ? `: ${paths.slice(0, 8).join(', ')}${paths.length > 8 ? ', …' : ''}` : ''}`);
+      // #125: the structural diff of every document the producer writes against the inspected rig's, file by file.
+      const files = await producerDiff(inputs.rig, join(dir, 'rig')), rigJson = files.documents.find(d => d.file === 'rig.json');
+      job.files = files; job.diff = rigJson ? { count: rigJson.count, paths: rigJson.paths } : null;
+      push(`review: against the inspected rig — ${filesDiffText(files)}`);
+      for (const d of files.documents) if (d.count) push(`review: ${d.file}: ${d.paths.slice(0, 8).join(', ')}${d.count > 8 ? ', …' : ''}`);
+      if (files.images.changed) push(`review: images changed: ${files.images.names.slice(0, 8).join(', ')}${files.images.changed > 8 ? ', …' : ''}`);
       push(`review: ${resolved.compiler.package} ${resolved.compiler.version} build --profile rig-play --pack --page-edges ${pageEdges} --pack-shape ${packShape}`);
       const compile = await runTool(resolved.compiler.bin, compileArgs({ rig: 'rig/rig.json', motion: 'rig/motion.json', out: 'build', pageEdges: pageEdges as 'pot' | 'free', packShape: packShape as 'rect' | 'polygon' }), { cwd: dir, onLine: push });
       job.wallMs.compile = compile.wallMs;
@@ -445,7 +449,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
     const reused = await reuse<PatchJob>(dir, id);
     if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
-    const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id, status: 'running', reused: false, request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, remesh: null, build: null };
+    const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id, status: 'running', reused: false, request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null };
     jobs.set(id, job); running = id;
     void executePatch(job, dir, inputs, resolved, patched, part).finally(() => { if (running === id) running = null; });
     return { status: 202, body: snapshot(job) };

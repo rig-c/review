@@ -1,17 +1,18 @@
 /**
  * Baseline hold (#101): once per session, when the handoff and the producer both resolve, `rig-parts rig --config
  * <config> --parts <parts> --out <scratch>/baseline` rebuilds the whole rig from the handoff into scratch under the review
- * state directory, and what it writes (rig.json, motion.json, mesh_report.json, images/*) is compared with the inspected
- * rig directory, file by file. Reproduced means the handoff is what the inspected rig was built from, so an op that
+ * state directory, and what it writes (`PRODUCER_DOCUMENTS` and images/*, `src/producer-files.ts` — the same list the
+ * applied-state diff reads) is compared with the inspected rig directory, file by file. Reproduced means the handoff is what the inspected rig was built from, so an op that
  * rebuilds the whole rig may run; otherwise the first differing path is named. Nothing is written into the package.
  */
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Handoff } from './handoff.ts';
-import { RIG_FILES } from './handoff.ts';
+import { isProducerFile, PRODUCER_DOCUMENTS, PRODUCER_IMAGES_DIR } from './producer-files.ts';
 import { firstRefusal, runTool, type InstalledTool } from './producer.ts';
-import { checkSummary, type CheckSummary } from './applied-context.ts';
+import { checkSummary, MAX_DIFF_PATHS, type CheckSummary, type FilesDiff } from './applied-context.ts';
+import { jsonDiff } from './config-patch.ts';
 
 export const BASELINE_SCHEMA = 'rig-review-baseline/1';
 export type BaselineStatus = 'running' | 'reproduced' | 'not-reproduced' | 'refused' | 'failed';
@@ -31,21 +32,45 @@ async function present(path: string): Promise<boolean> { try { await lstat(path)
 export async function rigTree(dir: string): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (const e of (await readdir(dir, { withFileTypes: true })).filter(e => e.isFile()).map(e => e.name).sort()) out[e] = sha256(await readFile(join(dir, e)));
-  const images = join(dir, 'images');
-  if (await present(images)) for (const e of (await readdir(images, { withFileTypes: true })).filter(e => e.isFile()).map(e => e.name).sort()) out[`images/${e}`] = sha256(await readFile(join(images, e)));
+  const images = join(dir, PRODUCER_IMAGES_DIR);
+  if (await present(images)) for (const e of (await readdir(images, { withFileTypes: true })).filter(e => e.isFile()).map(e => e.name).sort()) out[`${PRODUCER_IMAGES_DIR}/${e}`] = sha256(await readFile(join(images, e)));
   return out;
 }
 export const treeHash = (tree: Record<string, string>) => sha256(JSON.stringify(Object.keys(tree).sort().map(k => [k, tree[k]])));
 /**
  * The first path, in sorted order, whose hash differs or that one side lacks; null when the two match. Compared: every
- * file the baseline wrote, and on the inspected side the rig files and images (a file there that rig never writes, such
- * as a note, is not the producer's to reproduce).
+ * file the baseline wrote, and on the inspected side the producer's documents and images (`isProducerFile`; a file there
+ * that rig never writes, such as a note, is not the producer's to reproduce).
  */
 export function firstDifference(baseline: Record<string, string>, inspected: Record<string, string>): string | null {
-  const own = Object.keys(inspected).filter(k => (RIG_FILES as readonly string[]).includes(k) || k.startsWith('images/'));
+  const own = Object.keys(inspected).filter(isProducerFile);
   for (const path of [...new Set([...Object.keys(baseline), ...own])].sort()) if (baseline[path] !== inspected[path]) return path;
   if (!Object.keys(baseline).length) return 'rig.json';
   return null;
+}
+/**
+ * The applied-state diff (#125): every producer document (`PRODUCER_DOCUMENTS`, the baseline's list) of a scratch rig
+ * directory against the inspected one, as JSON Pointers per file, and the images by hash only. A document neither side
+ * has is left out; one only one side has, or that does not parse as JSON on a side, differs at `""` (the whole
+ * document) unless its bytes are equal. Paths are capped at `MAX_DIFF_PATHS` per file; `count` is the full number.
+ */
+export async function producerDiff(inspectedDir: string, scratchDir: string): Promise<FilesDiff> {
+  const read = async (dir: string, name: string): Promise<{ bytes: Buffer | null; doc: unknown; parsed: boolean }> => {
+    let bytes: Buffer;
+    try { bytes = await readFile(join(dir, name)); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { bytes: null, doc: undefined, parsed: false }; throw e; }
+    try { return { bytes, doc: JSON.parse(bytes.toString('utf8')) as unknown, parsed: true }; } catch { return { bytes, doc: undefined, parsed: false }; }
+  };
+  const documents: FilesDiff['documents'] = [];
+  for (const file of PRODUCER_DOCUMENTS) {
+    const before = await read(inspectedDir, file), after = await read(scratchDir, file);
+    if (!before.bytes && !after.bytes) continue;
+    const paths = before.parsed && after.parsed ? jsonDiff(before.doc, after.doc) : before.bytes && after.bytes && before.bytes.equals(after.bytes) ? [] : [''];
+    documents.push({ file, count: paths.length, paths: paths.slice(0, MAX_DIFF_PATHS) });
+  }
+  const images = async (dir: string) => Object.fromEntries(Object.entries(await rigTree(dir)).filter(([k]) => k.startsWith(`${PRODUCER_IMAGES_DIR}/`)));
+  const a = await images(inspectedDir), b = await images(scratchDir);
+  const names = [...new Set([...Object.keys(a), ...Object.keys(b)])].sort(), changed = names.filter(n => a[n] !== b[n]);
+  return { documents, images: { changed: changed.length, unchanged: names.length - changed.length, names: changed.slice(0, MAX_DIFF_PATHS) } };
 }
 /** The editor bar's line. */
 export function baselineLine(r: Pick<BaselineResult, 'status' | 'firstDifference' | 'hashes' | 'line'>): string {

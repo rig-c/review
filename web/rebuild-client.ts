@@ -6,7 +6,7 @@
 import {ellipsePolygon} from '../src/chest-regions.ts';
 import type {BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
-import {APPLIED_PATCH_SCHEMA,type AppliedPatch,type CheckSummary} from '../src/applied-context.ts';
+import {APPLIED_PATCH_SCHEMA,filesDiffText,type AppliedPatch,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
 export type {ConfigPatch,PatchOp,AppliedPatch,CheckSummary,BustSpec};
 import {chestContourFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
 import type {InspectedCheckView} from '../src/physics-tuning.ts';
@@ -112,7 +112,7 @@ export const appliedRecord=(job:RebuildJobView):AppliedRecord=>({schema:'rig-rev
 export function parseApplied(text:string):AppliedRecord|AppliedPatch|null {try{const value=JSON.parse(text);return value?.schema==='rig-review-applied/1'||value?.schema===APPLIED_PATCH_SCHEMA?value as AppliedRecord|AppliedPatch:null;}catch{return null;}}
 
 /** A patch Apply's job (#102): the patch and its hash, the op/compile/check wall clocks, check's summary and the rig.json diff. */
-export interface PatchJobView {id:string;kind:'patch';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{op:number|null;compile:number|null;check:number|null};check:CheckSummary|null;diff:{count:number;paths:string[]}|null;remesh?:import('../src/mesh-entry.ts').RemeshCounts&{modelTriangles:number|null}|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{patch:ConfigPatch;patchSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
+export interface PatchJobView {id:string;kind:'patch';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{op:number|null;compile:number|null;check:number|null};check:CheckSummary|null;diff:{count:number;paths:string[]}|null;files?:FilesDiff|null;remesh?:import('../src/mesh-entry.ts').RemeshCounts&{modelTriangles:number|null}|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{patch:ConfigPatch;patchSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
 export interface PatchRequestBody {patch:ConfigPatch}
 export type AnyJobView=RebuildJobView|PatchJobView;
 export const isPatchJob=(job:AnyJobView):job is PatchJobView=>(job as PatchJobView).kind==='patch';
@@ -136,7 +136,7 @@ export function makePatch(status:Pick<RebuildStatusView,'inputs'|'producer'>,ops
  return {schema:CONFIG_PATCH_SCHEMA,config_sha256:status.inputs.configHash,ops:ops.map(o=>({...o})),producer:{name:status.producer.package,version:status.producer.version},op:{cmd:op.cmd,args:[...(op.args??[])]}};
 }
 /** What the draft keeps and `context.applied` carries for a patch: the patch, its hash, the producer's line and check's summary. */
-export const patchAppliedRecord=(job:PatchJobView):AppliedPatch=>({schema:APPLIED_PATCH_SCHEMA,buildId:job.id,patch:job.request.patch,patchSha256:job.request.patchSha256,configHash:job.request.configHash,producer:job.producer,compiler:job.compiler,line:job.producerLine,check:job.check,diff:job.diff,modelHash:job.build!.modelHash,...(job.remesh?{mesh:{part:job.remesh.part,before:{...job.remesh.before},after:{...job.remesh.after}}}:{})});
+export const patchAppliedRecord=(job:PatchJobView):AppliedPatch=>({schema:APPLIED_PATCH_SCHEMA,buildId:job.id,patch:job.request.patch,patchSha256:job.request.patchSha256,configHash:job.request.configHash,producer:job.producer,compiler:job.compiler,line:job.producerLine,check:job.check,diff:job.diff,...(job.files?{files:job.files}:{}),modelHash:job.build!.modelHash,...(job.remesh?{mesh:{part:job.remesh.part,before:{...job.remesh.before},after:{...job.remesh.after}}}:{})});
 /**
  * What the stage draws after an Apply: the scratch build when the job built one, else what it drew before — a
  * refusal, a failure or a busy reply leaves the stage's model (and its hash) as it was.
@@ -146,13 +146,13 @@ export function stageModel(result:AnyJobView|RebuildRefusal,current:{url:string;
  return {...current,id:null};
 }
 const seconds=(ms:number|null)=>ms===null?'—':`${(ms/1000).toFixed(1)} s`;
-/** A patch job's status line: built (wall clocks, check's verdict, the diff count) or the producer's line verbatim. */
+/** A patch job's status line: built (wall clocks, check's verdict, the per-file diff — #125) or the producer's line verbatim. */
 export function patchOutcomeLine(result:PatchJobView|RebuildRefusal):{text:string;error:boolean} {
  if(!('id' in result))return {text:result.producerLine??result.error,error:true};
  if(result.status!=='built')return {text:result.producerLine??`REBUILD_FAILED: exit ${result.exitCode}`,error:true};
  const check=result.check?(result.check.pass===null?`check refused: ${result.check.line??`exit ${result.check.exitCode}`}`:`check ${result.check.pass?'PASS':'FAIL'}`):'check not run';
  const wall=result.reused?'reused the scratch build of this exact patch':`${result.request.patch.op.cmd} ${seconds(result.wallMs.op)} + compile ${seconds(result.wallMs.compile)} + check ${seconds(result.wallMs.check)}`;
- return {text:`Applied patch ${result.request.patchSha256.slice(0,12)}… (${result.request.patch.ops.length} op(s)) with ${result.producer.package} ${result.producer.version} · ${wall} · ${check} · rig.json differs at ${result.diff?.count??'?'} path(s) · Reset returns to the inspected build`,error:!!result.check&&result.check.pass!==true};
+ return {text:`Applied patch ${result.request.patchSha256.slice(0,12)}… (${result.request.patch.ops.length} op(s)) with ${result.producer.package} ${result.producer.version} · ${wall} · ${check} · ${result.files?filesDiffText(result.files):`rig.json differs at ${result.diff?.count??'?'} path(s)`} · Reset returns to the inspected build`,error:!!result.check&&result.check.pass!==true};
 }
 /** The status line after a job: built (with the wall clock and whether the scratch build was reused) or the producer's line verbatim. */
 export function outcomeLine(result:RebuildJobView|RebuildRefusal):{text:string;error:boolean} {

@@ -3,10 +3,13 @@
  * written, or null. `rig-review-applied/1` is #99's region designation; `rig-review-applied/2` (#102) is a config patch
  * with its hash, the producer's line, the scratch `check.json` summary and the structural diff against the inspected
  * rig.json. A remesh patch from the Mesh panel (#106) adds `mesh`: the part and its vertex / triangle / hull counts before
- * and after, as the revision's `remesh.json` states them. Records without `applied`, or with null, stay valid. Pure.
+ * and after, as the revision's `remesh.json` states them. #125 adds `files`: the diff of every document the producer
+ * writes (`src/producer-files.ts`), per file, and its images by hash; records without it (older ones) stay valid.
+ * Records without `applied`, or with null, stay valid. Pure.
  */
 import { CONFIG_PATCH_SCHEMA, parseConfigPatch, type ConfigPatch } from './config-patch.ts';
 import { parseBustSpec } from './chest-landmarks.ts';
+import { PRODUCER_DOCUMENTS, type ProducerDocument } from './producer-files.ts';
 
 export const APPLIED_REGIONS_SCHEMA = 'rig-review-applied/1';
 export const APPLIED_PATCH_SCHEMA = 'rig-review-applied/2';
@@ -35,10 +38,43 @@ export interface AppliedPatch {
   producer: Tool; compiler: Tool;
   line: string | null;
   check: CheckSummary | null;
+  /** rig.json's diff (#102), kept as it was for older readers; `files` carries it too. */
   diff: { count: number; paths: string[] } | null;
   modelHash: string;
   /** #106, a remesh patch only: `remesh.json`'s part counts. */
   mesh?: { part: string; before: MeshCounts; after: MeshCounts };
+  /** #125: every producer document's diff, per file, and the images by hash. Absent in older records. */
+  files?: FilesDiff | null;
+}
+/** One producer document against the inspected one: `count` differing JSON Pointers, the first `MAX_DIFF_PATHS` listed. */
+export interface DocumentDiff { file: ProducerDocument; count: number; paths: string[] }
+/** #125: the documents in `PRODUCER_DOCUMENTS` order (a document neither side has is left out) and the images by hash. */
+export interface FilesDiff { documents: DocumentDiff[]; images: { changed: number; unchanged: number; names: string[] } }
+const count = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0;
+function parseFilesDiff(v: unknown, field: string): void {
+  if (v === null) return;
+  const f = exact(v, 'documents,images', field);
+  if (!Array.isArray(f.documents)) throw new Error(`${field}.documents: expected [{file, count, paths}]`);
+  const seen = new Set<string>();
+  for (const [i, entry] of f.documents.entries()) {
+    const d = exact(entry, 'count,file,paths', `${field}.documents[${i}]`);
+    if (typeof d.file !== 'string' || !(PRODUCER_DOCUMENTS as readonly string[]).includes(d.file) || seen.has(d.file)) throw new Error(`${field}.documents[${i}].file: one of ${PRODUCER_DOCUMENTS.join(', ')}, each once`);
+    seen.add(d.file);
+    if (!count(d.count) || !Array.isArray(d.paths) || d.paths.length > MAX_DIFF_PATHS || d.paths.length > (d.count as number) || !d.paths.every(p => typeof p === 'string')) throw new Error(`${field}.documents[${i}]: {count, paths ≤ ${MAX_DIFF_PATHS}}`);
+  }
+  const m = exact(f.images, 'changed,names,unchanged', `${field}.images`);
+  if (!count(m.changed) || !count(m.unchanged) || !Array.isArray(m.names) || m.names.length > MAX_DIFF_PATHS || m.names.length > (m.changed as number) || !m.names.every(n => typeof n === 'string')) throw new Error(`${field}.images: {changed, unchanged, names ≤ ${MAX_DIFF_PATHS}}`);
+}
+/**
+ * The diff in one line, e.g. `motion.json differs at 2 path(s) · rig.json, sets.json, mesh_report.json unchanged · 31
+ * images unchanged`: each differing document by name, then the unchanged ones, then the images.
+ */
+export function filesDiffText(files: FilesDiff): string {
+  const differs = files.documents.filter(d => d.count > 0).map(d => `${d.file} differs at ${d.count} path(s)`);
+  const same = files.documents.filter(d => d.count === 0).map(d => d.file);
+  const { changed, unchanged } = files.images;
+  const images = changed ? `${changed} image(s) changed, ${unchanged} unchanged` : `${unchanged} images unchanged`;
+  return [...differs, ...(same.length ? [`${same.join(', ')} unchanged`] : []), images].join(' · ');
 }
 export interface MeshCounts { vertices: number; triangles: number; hull: number }
 const meshCounts = (v: unknown, field: string) => {
@@ -90,7 +126,7 @@ export function parseAppliedContext(value: unknown): void {
     return;
   }
   if (value.schema === APPLIED_PATCH_SCHEMA) {
-    const v = exact(value, `buildId,check,compiler,configHash,diff,line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,patch,patchSha256,producer,schema`, field);
+    const v = exact(value, `buildId,check,compiler,configHash,diff,${Object.hasOwn(value, 'files') ? 'files,' : ''}line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,patch,patchSha256,producer,schema`, field);
     if (![v.buildId, v.configHash, v.patchSha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, patchSha256 and modelHash are SHA-256 hex`);
     let patch: ConfigPatch;
     try { patch = parseConfigPatch(v.patch); } catch (e) { throw new Error(`${field}.patch: ${e instanceof Error ? e.message : String(e)}`); }
@@ -102,6 +138,7 @@ export function parseAppliedContext(value: unknown): void {
       if (patch.op.cmd !== 'remesh' || patch.op.args[patch.op.args.indexOf('--part') + 1] !== m.part) throw new Error(`${field}.mesh.part: the part the patch's remesh names`);
       meshCounts(m.before, `${field}.mesh.before`); meshCounts(m.after, `${field}.mesh.after`);
     }
+    if (Object.hasOwn(v, 'files')) parseFilesDiff(v.files, `${field}.files`);
     if (v.diff !== null) {
       const d = exact(v.diff, 'count,paths', `${field}.diff`);
       if (!Number.isSafeInteger(d.count) || (d.count as number) < 0 || !Array.isArray(d.paths) || d.paths.length > MAX_DIFF_PATHS || d.paths.length > (d.count as number) || !d.paths.every(p => typeof p === 'string')) throw new Error(`${field}.diff: {count, paths ≤ ${MAX_DIFF_PATHS}}`);
@@ -120,7 +157,7 @@ export function appliedSummary(value: unknown): string | null {
   if (v.schema === APPLIED_REGIONS_SCHEMA) return `regions on ${String(v.part)} with ${producer.package} ${producer.version} · model ${model}…`;
   const a = value as AppliedPatch, paths = a.patch.ops.map(o => `${o.op} ${o.path}`);
   const check = a.check ? `check ${a.check.pass === null ? 'not read' : a.check.pass ? 'PASS' : 'FAIL'}` : 'check not run';
-  const diff = a.diff ? ` · rig.json differs at ${a.diff.count} path(s)` : '';
+  const diff = a.files ? ` · ${filesDiffText(a.files)}` : a.diff ? ` · rig.json differs at ${a.diff.count} path(s)` : '';
   const mesh = a.mesh ? ` · ${a.mesh.part} v ${a.mesh.before.vertices} t ${a.mesh.before.triangles} → v ${a.mesh.after.vertices} t ${a.mesh.after.triangles}` : '';
   return `patch ${a.patchSha256.slice(0, 12)}… (${a.patch.op.cmd}; ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? `, +${paths.length - 3}` : ''}) with ${producer.package} ${producer.version} · ${check}${diff}${mesh} · model ${model}…`;
 }
