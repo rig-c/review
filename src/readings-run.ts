@@ -10,6 +10,7 @@ import { copyFile, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promise
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { safeFile, type ReviewPackage } from './manifest.ts';
 import { resolveCompiler, runTool, type InstalledTool } from './producer.ts';
+import { scheduleText, type EnvironmentSchedule } from './environment-schedule.ts';
 import { environmentSchedule, helpHasEnvironment, parseReadingsRequest, READING_FILE, readingLabel, readingResult, READINGS_SCHEMA, READINGS_SINCE, ReadingsError, renderArgs, type ReadingBuild, type ReadingRequest, type ReadingResult, type ReadingsRequest } from './readings.ts';
 
 const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -39,7 +40,7 @@ export async function runReading(r: ReadingRequest, animation: string, candidate
   try { const stored = JSON.parse(await readFile(resultFile, 'utf8')) as { key: string; result: ReadingResult }; if (stored.key === key) return stored.result; } catch { /* not run yet */ }
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  if (schedule) await writeFile(join(dir, 'environment.json'), JSON.stringify(schedule, null, 1) + '\n', { mode: 0o600 });
+  if (schedule) await writeFile(join(dir, 'environment.json'), scheduleText(schedule as EnvironmentSchedule), { mode: 0o600 });
   const run = await runTool(compiler.bin, renderArgs(r, animation, { candidate, out: 'render', environment: schedule ? 'environment.json' : null }), { cwd: dir });
   let json: unknown = null, fps: number | null = null;
   if (run.exitCode === 0) {

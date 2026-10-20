@@ -492,6 +492,21 @@ controls are applied, their current wind and gravity go along as a one-step
 the flag). A reading is not a gate; nothing is written into the package. The
 pairs of the last run are recorded in feedback as `context.readings`.
 
+In the Environment block, **Use for readings** (issue #112) turns the controls
+into a `rigc-environment/1` schedule from the clip's first frame — one step when
+the wind is steady, else one step per 12 fps frame carrying the breeze and the
+repeating gust (equal to the panel's wind at every frame time; between frames
+rigc holds the frame's value, and the panel states how far that can be from the
+live wind) — and sends it with readings and with Apply, whose check then runs
+`rig-parts check --environment`. The wind clock restarts with the clip, so what
+you watch is the world the readings and bars are taken in. **Export schedule**
+downloads the same bytes; **Check under this world** runs `rig-parts check
+--environment` on the build on the stage (needs `@rig-c/parts` 1.48.0) and shows
+its `ANIMATIONS_DO_NOT_FOLD` and `TEXTURE_STRETCH` lines beside the same build's
+default-world check. A refused schedule (`CHECK_ENVIRONMENT`) is shown verbatim.
+Feedback records the schedule's bytes and sha256 as `context.environmentSchedule`;
+nothing is authored into the rig.
+
 Below Readings, the **Requirements** block (`#requirements`) declares what the
 scene asks of the motion (issue #113): pick a kind (contact, follow, aim,
 range, stretch, seam), an animation and the subject — the slot picked on the

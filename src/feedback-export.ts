@@ -7,6 +7,7 @@ import type { ReferenceBinding } from './reference.ts';
 import { environmentSummary, parseEnvironmentContext } from './environment.ts';
 import { appliedSummary } from './applied-context.ts';
 import { requirementsSummaryLine } from './requirements.ts';
+import { scheduleContextLine } from './environment-schedule.ts';
 type Category = Feedback['category'];
 type Side = 'single' | 'a' | 'b';
 type ParsedFeedbackSession = FeedbackHistory<ReviewSession | CompareSession>;
@@ -176,6 +177,12 @@ function requirementsLine(context: Json | undefined): string[] {
   const text = requirementsSummaryLine(context.requirements);
   return text === null ? [] : [`- Requirements: ${feedbackMarkdownText(text)}`];
 }
+/** "Environment schedule: rigc-environment/1, 41 step(s) · schedule sha256 …": the exported world the note carries (#112). */
+function scheduleLine(context: Json | undefined): string[] {
+  if (context === undefined || context === null || typeof context !== 'object' || Array.isArray(context) || !('environmentSchedule' in context)) return [];
+  const text = scheduleContextLine(context.environmentSchedule);
+  return text === null ? [] : [`- Environment schedule: ${feedbackMarkdownText(text)}`];
+}
 /** Local issue-ready text only. No issue creation, clock inference or source IO. */
 export function formatFeedbackIssues(input: ParsedFeedbackSession): string {
   const model = groupFeedbackIssues(input), md = feedbackMarkdownText;
@@ -209,7 +216,7 @@ export function formatFeedbackIssues(input: ParsedFeedbackSession): string {
           `- Summary: ${md(item.summary)}`,
           ...environmentLine(item.context),
           ...appliedLine(item.context),
-          ...requirementsLine(item.context), '',
+          ...requirementsLine(item.context), ...scheduleLine(item.context), '',
           'Selected build identity:', '', jsonBlock(item.selectedSource));
         if (model.pairedBinding) lines.push('', 'Paired comparison binding:', '', jsonBlock(model.pairedBinding));
         if (item.warnings.length) lines.push('', 'Validation warnings (record retained):', '', jsonBlock(item.warnings));

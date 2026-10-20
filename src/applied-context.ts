@@ -63,6 +63,8 @@ export interface AppliedPatch {
   op?: 'rig' | 'retune' | 'remesh' | 'build';
   /** #115, a `build` op only: the build's wall clock, the recomposite figures before and after, the parts it changed and its `seam pair` lines. */
   assembled?: AppliedAssembled;
+  /** #112: the `rigc-environment/1` schedule the Apply's check read (`--environment`), by hash and step count. Absent: the default world. */
+  environment?: { sha256: string; steps: number };
 }
 /** #115: what a `rig-parts build` Apply measured, recorded per Apply. `wallMs` is the build's own wall clock (assemble → rig → check). */
 export interface AppliedAssembled { wallMs: number | null; recomposite: { before: Record<string, number> | null; after: Record<string, number> | null }; partsChanged: string[]; seamPairs: string[] }
@@ -188,7 +190,7 @@ export function parseAppliedContext(value: unknown): void {
     return;
   }
   if (value.schema === APPLIED_PATCH_SCHEMA) {
-    const v = exact(value, `${Object.hasOwn(value, 'assembled') ? 'assembled,' : ''}buildId,check,compiler,configHash,diff,${Object.hasOwn(value, 'files') ? 'files,' : ''}line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,${Object.hasOwn(value, 'op') ? 'op,' : ''}patch,patchSha256,producer,schema`, field);
+    const v = exact(value, `${Object.hasOwn(value, 'assembled') ? 'assembled,' : ''}buildId,check,compiler,configHash,diff,${Object.hasOwn(value, 'environment') ? 'environment,' : ''}${Object.hasOwn(value, 'files') ? 'files,' : ''}line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,${Object.hasOwn(value, 'op') ? 'op,' : ''}patch,patchSha256,producer,schema`, field);
     if (![v.buildId, v.configHash, v.patchSha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, patchSha256 and modelHash are SHA-256 hex`);
     let patch: ConfigPatch;
     try { patch = parseConfigPatch(v.patch); } catch (e) { throw new Error(`${field}.patch: ${e instanceof Error ? e.message : String(e)}`); }
@@ -201,6 +203,7 @@ export function parseAppliedContext(value: unknown): void {
       meshCounts(m.before, `${field}.mesh.before`); meshCounts(m.after, `${field}.mesh.after`);
     }
     if (Object.hasOwn(v, 'files')) parseFilesDiff(v.files, `${field}.files`);
+    if (Object.hasOwn(v, 'environment')) { const e = exact(v.environment, 'sha256,steps', `${field}.environment`); if (!hex(e.sha256) || !Number.isSafeInteger(e.steps) || (e.steps as number) < 1) throw new Error(`${field}.environment: {sha256 (SHA-256 hex), steps ≥ 1}`); }
     // #136: a remesh patch ran remesh; a rig patch ran rig, retune or (#115) build.
     if (Object.hasOwn(v, 'op') && !(patch.op.cmd === 'remesh' ? ['remesh'] : ['rig', 'retune', 'build']).includes(v.op as string)) throw new Error(`${field}.op: ${patch.op.cmd === 'remesh' ? '"remesh" for a remesh patch' : '"rig", "retune" or "build" for a rig patch'}`);
     // #115: the build's measurements ride with a build op only, and a build op carries them.
