@@ -66,6 +66,11 @@ export type ProducerRegion =
   | { name: string; shape: 'circle'; cx: number; cy: number; r: number; bone: string; spacing: number; band: number }
   | { name: string; bone: string; shape: 'polygon'; points: [number, number][]; spacing: number; band: number };
 export interface ContourPart { name: string; regions: unknown[]; entry: Record<string, unknown> }
+/** The config's `bones` list as written (#109), or null when it states none. */
+export function configBonesList(configText: string): unknown[] | null {
+  const list = object(JSON.parse(configText), 'config').bones;
+  return Array.isArray(list) ? list : null;
+}
 /** Every `meshes.<part>` entry as written (#106: the Mesh panel starts from the config's own entry). */
 export function configMeshes(configText: string): Record<string, unknown> {
   const meshes = object(JSON.parse(configText), 'config').meshes;
@@ -316,6 +321,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       meshes: inputs ? configMeshes(inputs.configText) : {},
       // The config's constraints as written (#103: the physics panel patches them by index and name).
       constraints: inputs ? configConstraints(inputs.configText) : null,
+      // #109: the config's bones as written (the Bones block drags their at / points / tip).
+      bones: inputs ? configBonesList(inputs.configText) : null,
       // #104: the config's idle (tracks, blink, bones, chains) and where the inspected idle keys each track.
       idle: inputs ? await idleStatus(inputs) : null,
       producer: resolved.ok ? tool(resolved.producer) : null, compiler: resolved.ok ? tool(resolved.compiler) : null,

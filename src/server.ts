@@ -9,11 +9,12 @@ import { readSession, saveSession } from './session.ts';
 import { createRebuilds, RebuildError } from './rebuild.ts';
 import { createReadings } from './readings-run.ts';
 import { ReadingsError } from './readings.ts';
+import { BONES_CHECK_LIMIT, createBonesCheck } from './bones-check.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
 /** Request shapes the page or an edit card got wrong: 400. Everything else a refusal names is an outcome (200). */
-const MALFORMED=new Set(['REBUILD_REQUEST_INVALID','EDIT_PATCH_INVALID','EDIT_PATCH_OP_UNKNOWN','EDIT_PATCH_POINTER_INVALID','EDIT_PATCH_CMD_UNKNOWN','EDIT_PATCH_ARG_UNKNOWN']);
+const MALFORMED=new Set(['REBUILD_REQUEST_INVALID','EDIT_PATCH_INVALID','EDIT_PATCH_OP_UNKNOWN','EDIT_PATCH_POINTER_INVALID','EDIT_PATCH_CMD_UNKNOWN','EDIT_PATCH_ARG_UNKNOWN','BONES_OP_OUT_OF_SCOPE']);
 function json(data:unknown,status=200){return Response.json(data,{status,headers});}
 async function bodyJson(req:Request,limit=1024*1024,what='Session payload exceeds 1 MiB'):Promise<unknown>{
   if(!/^application\/json(?:\s*;|$)/i.test(req.headers.get('content-type')??''))throw new Error('Expected application/json');
@@ -31,6 +32,8 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
   const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones});
   // Readings (#108): rigc render's readings on the inspected build and on the latest scratch build, into scratch.
   const readings=createReadings(p,{stateDir,starts,unchanged,latest:rebuilds.latest});
+  // Bones check (#109): propose --from-config and compare on a scratch copy of the patched handoff config.
+  const bonesCheck=createBonesCheck(p,{stateDir,starts,unchanged});
   const control=options.control?createControlServer({identity:options.control,sourceHash:p.sourceHash,mode:'single',unchanged,activity:options.activity}):null;
   const handle=async(req:Request,port:number|undefined):Promise<Response>=>{try {
       const url=new URL(req.url);const origin=`http://127.0.0.1:${port}`;
@@ -48,6 +51,11 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       try{const result=await rebuilds.start(await bodyJson(req,64*1024,'REBUILD_BODY_LIMIT: maximum 64 KiB'));return json(result.body,result.status);}
       // A refusal is an outcome the page shows verbatim (200), so the managed front passes its text through; only a malformed request is a 400.
       catch(e){if(e instanceof RebuildError)return json({status:'refused',error:e.message,producerLine:null},MALFORMED.has(e.code)?400:200);throw e;}
+    }
+    if(req.method==='POST'&&url.pathname==='/api/bones-check'){
+      if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+      try{return json(await bonesCheck.run(await bodyJson(req,BONES_CHECK_LIMIT,'BONES_CHECK_BODY_LIMIT: maximum 64 KiB')));}
+      catch(e){if(e instanceof RebuildError)return json({status:'refused',error:e.message},MALFORMED.has(e.code)?400:200);throw e;}
     }
     if(req.method==='POST'&&url.pathname==='/api/readings'){
       if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
