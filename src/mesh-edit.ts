@@ -1,12 +1,18 @@
 /**
  * Mesh edit (Setup): a typed delta over the actual loaded mesh attachment of one slot. Pure — no DOM, no I/O.
  *
- * The source is the attachment the hash-verified model declares, with its vertices taken from the last drawn pose of
- * that slot and mapped to crop pixels (x right, y down) through the same crop mapping as the chest regions. Ops are
+ * The source is the attachment's entry in the hash-verified compiled model document, in **setup space** (#100): its
+ * stored setup-pose vertices (`src/setup-mesh.ts`, the reader Setup · Weights shares) placed through the setup-pose
+ * bones and mapped to crop pixels of the rig canvas (x right, y down) through the same crop mapping as the chest
+ * regions — the space the producer's `rig-parts remesh --delta` binds positions in, so the delta is a producer input
+ * as it is (`basis: "setup"`). A package without the model document refuses `MESH_EDIT_MODEL_UNAVAILABLE`. Ops are
  * recorded in order; nothing is retriangulated here — the preview draws the delta over the original triangulation and
- * the producer (#45) owns the mesher. Vertex ids are stable: the source vertices keep their indices, an added vertex
- * takes the next id after every vertex that existed before it, and a removed vertex keeps its id (it is only marked).
+ * the producer owns the mesher. Vertex ids are stable: the source vertices keep their indices, an added vertex takes
+ * the next id after every vertex that existed before it, and a removed vertex keeps its id (it is only marked). The
+ * producer owns every triangulation edge: only a constraint edge this delta added can be removed (`unedge`), and a
+ * vertex that ends a constraint edge is removed only after that edge is.
  */
+import type {SetupMeshCodes} from './setup-mesh.ts';
 /** Edit Mesh's Apply · Rebuild: no producer command consumes a vertex delta, so it refuses by name and runs nothing. */
 export const MODELING_TARGET_UNSUPPORTED = 'MODELING_TARGET_UNSUPPORTED: the producer has no delta operation (parts); export the delta';
 export type Vec = [number, number];
@@ -20,12 +26,12 @@ export type EdgeKind = 'hull' | 'interior' | 'constraint';
 export interface MeshEdge { a: number; b: number; kind: EdgeKind }
 export interface MeshSource {
   slot: string; skin: string; attachment: string;
-  /** Crop px, x right, y down, one per source vertex. */
+  /** Setup-pose crop px of the rig canvas, x right, y down, one per source vertex, unrounded (the producer holds `move.from` to 1e-3 px). */
   vertices: readonly Vec[];
   triangles: readonly number[];
   /** The model's `hull`: the first `hull` vertices, in order, are the hull. */
   hull: number;
-  /** SHA-256 of the attachment's entry in the hash-verified model (see `attachmentHashText`). */
+  /** SHA-256 of the attachment's entry in the hash-verified model document (see `attachmentHashText`). */
   hash: string;
 }
 export interface MeshView {
@@ -43,9 +49,19 @@ export type MeshEditResult = { ok: true; changed: boolean; code?: string } | { o
 
 export const MESH_EDIT_SCHEMA = 'rig-review-mesh-edit/1';
 export const MESH_EDIT_BINDING_SCHEMA = 'rig-review-mesh-edit-binding/1';
-export const MESH_EDIT_DRAFT_SCHEMA = 'rig-review-mesh-edit-draft/1';
+/** `/2` since #100: a `/1` draft holds ops drawn over a posed basis, which are not restored over the setup-space source. */
+export const MESH_EDIT_DRAFT_SCHEMA = 'rig-review-mesh-edit-draft/2';
 export const MESH_EDIT_SELECT_SLOT = 'MESH_EDIT_SELECT_SLOT';
 export const MESH_EDIT_NO_MESH = 'MESH_EDIT_NO_MESH';
+/** The package supplies no compiled model document (a Spine export without `skeleton.model.json`): no setup mesh to edit. */
+export const MESH_EDIT_MODEL_UNAVAILABLE = 'MESH_EDIT_MODEL_UNAVAILABLE';
+export const MESH_EDIT_MODEL_INVALID = 'MESH_EDIT_MODEL_INVALID';
+export const MESH_EDIT_RIG_UNAVAILABLE = 'MESH_EDIT_RIG_UNAVAILABLE';
+export const MESH_EDIT_CONSTRAINT_END = 'MESH_EDIT_CONSTRAINT_END';
+/** The export's `basis`: the producer's delta reader accepts exactly this (rig-c/parts `remesh --delta`). */
+export const MESH_EDIT_BASIS = 'setup';
+/** Edit Mesh's refusals over the shared setup-space reader. */
+export const MESH_EDIT_CODES: SetupMeshCodes = Object.freeze({ unavailable: MESH_EDIT_MODEL_UNAVAILABLE, select: MESH_EDIT_SELECT_SLOT, noMesh: MESH_EDIT_NO_MESH, invalid: MESH_EDIT_MODEL_INVALID, subject: 'the setup mesh is', selectText: 'select one slot in the parts list; whole-rig mesh edit is not a thing' });
 export const MESH_EDIT_HULL_EDGE = 'MESH_EDIT_HULL_EDGE';
 export const MESH_EDIT_EDGE_EXISTS = 'MESH_EDIT_EDGE_EXISTS';
 export const MESH_EDIT_TRIANGULATION_EDGE = 'MESH_EDIT_TRIANGULATION_EDGE';
@@ -102,7 +118,9 @@ export function applyMeshOps(source: MeshSource, ops: readonly MeshOp[]): MeshVi
         view.added.add(id); break;
       }
       case 'remove': {
-        const v = live(op.v, i); view.vertices[v] = null; view.removed.add(v); view.moved.delete(v);
+        const v = live(op.v, i);
+        for (const edge of edges.values()) if (edge.kind === 'constraint' && (edge.a === v || edge.b === v)) fail(i, `removes vertex ${v}, an end of constraint edge ${edge.a}-${edge.b}; unedge it first`);
+        view.vertices[v] = null; view.removed.add(v); view.moved.delete(v);
         for (const [key, edge] of [...edges]) if (edge.a === v || edge.b === v) removeEdge(key);
         break;
       }
@@ -114,6 +132,7 @@ export function applyMeshOps(source: MeshSource, ops: readonly MeshOp[]): MeshVi
       case 'unedge': {
         const a = live(op.a, i), b = live(op.b, i), edge = edges.get(edgeKey(a, b));
         if (!edge) fail(i, `removes a missing edge ${a}-${b}`); if (edge!.kind === 'hull') fail(i, `removes hull edge ${a}-${b}`);
+        if (edge!.kind !== 'constraint') fail(i, `removes triangulation edge ${a}-${b}; only a constraint edge this delta added can be removed`);
         removeEdge(edgeKey(a, b)); break;
       }
       default: fail(i, 'has an unknown op');
@@ -163,12 +182,17 @@ export class MeshEditSession {
   }
   /** Create: a vertex on empty space, or a split of an edge at the click point. */
   addVertex(at: Vec, onEdge?: [number, number]): MeshEditResult { return this.record([{ op: 'add', at: roundVec(at), ...(onEdge ? { onEdge: [onEdge[0], onEdge[1]] as [number, number] } : {}) }]); }
-  /** Delete on a vertex: the vertex and its edges. */
-  removeVertex(v: number): MeshEditResult { return this.record([{ op: 'remove', v }]); }
-  /** Delete on an edge: any edge but a hull edge. */
+  /** Delete on a vertex: the vertex and its triangulation edges; a vertex that ends a constraint edge is refused until that edge is removed. */
+  removeVertex(v: number): MeshEditResult {
+    const held = this.current.edges.find(e => e.kind === 'constraint' && (e.a === v || e.b === v));
+    if (held) return { ok: false, code: `${MESH_EDIT_CONSTRAINT_END}: vertex ${v} ends constraint edge ${held.a}-${held.b} — remove that edge first` };
+    return this.record([{ op: 'remove', v }]);
+  }
+  /** Delete on an edge: only a constraint edge this delta added; hull and triangulation edges are the producer's. */
   deleteEdge(a: number, b: number): MeshEditResult {
     const edge = this.findEdge(a, b); if (!edge) return { ok: false, code: `${MESH_EDIT_INVALID_OP}: no edge ${a}-${b}` };
     if (edge.kind === 'hull') return { ok: false, code: `${MESH_EDIT_HULL_EDGE}: ${a}-${b} is a hull edge and cannot be removed` };
+    if (edge.kind !== 'constraint') return { ok: false, code: `${MESH_EDIT_TRIANGULATION_EDGE}: ${a}-${b} is a triangulation edge — the producer retriangulates; only an added constraint edge can be removed` };
     return this.record([{ op: 'unedge', a, b }]);
   }
   /**
@@ -233,16 +257,17 @@ export interface MeshEditDocument {
   schema: typeof MESH_EDIT_SCHEMA;
   slot: string; skin: string; attachment: string;
   source: { vertexCount: number; triangleCount: number; hullLength: number; hash: string };
-  units: string; basis: string; preview: string;
+  units: string; basis: typeof MESH_EDIT_BASIS; preview: string;
   ops: MeshOp[];
 }
-export function meshEditDocument(session: MeshEditSession, basis: string): MeshEditDocument {
+/** The export: `rig-review-mesh-edit/1`, `basis: "setup"`, as rig-c/parts `remesh --delta` reads it. */
+export function meshEditDocument(session: MeshEditSession): MeshEditDocument {
   const s = session.source;
   return {
     schema: MESH_EDIT_SCHEMA, slot: s.slot, skin: s.skin, attachment: s.attachment,
     source: { vertexCount: s.vertices.length, triangleCount: Math.floor(s.triangles.length / 3), hullLength: s.hull, hash: s.hash },
-    units: 'crop px, x right, y down; vertex ids are source indices, added vertices take the next id in op order, removed ids are not reused',
-    basis, preview: `${MESH_EDIT_PREVIEW_NOTE}; the ops are a request over the original triangulation, not a mesh`,
+    units: 'setup-pose crop px of the rig canvas, x right, y down; vertex ids are source indices, added vertices take the next id in op order, removed ids are not reused',
+    basis: MESH_EDIT_BASIS, preview: `${MESH_EDIT_PREVIEW_NOTE}; the ops are a request over the original triangulation, not a mesh`,
     ops: session.ops(),
   };
 }

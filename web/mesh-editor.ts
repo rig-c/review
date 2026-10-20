@@ -1,17 +1,21 @@
 /**
  * Mesh edit (Setup): a view-bar toggle, an editor bar of sub-modes (Modify / Create / Delete / Edges) and direct
- * manipulation of the selected slot's actual mesh on the rig pane. Everything is a typed delta (`src/mesh-edit.ts`)
- * previewed over the original triangulation; nothing is retriangulated, written into the package or sent to a
- * producer — no producer command consumes a delta, so Apply · Rebuild refuses `MODELING_TARGET_UNSUPPORTED` by name.
+ * manipulation of the selected slot's actual mesh on the rig pane. The mesh is the slot's attachment in the compiled
+ * model document at the **setup pose** (#100): the stored vertices placed through the setup-pose bones of a never-played
+ * player (`web/setup-pose.ts`, shared with Setup · Weights) and drawn over the stage with the stage's own camera — the
+ * stage itself stays paused at the pose it held, under the veil. Everything is a typed delta (`src/mesh-edit.ts`,
+ * `basis: "setup"`) previewed over the original triangulation; nothing is retriangulated, written into the package or
+ * sent to a producer from here — Apply · Rebuild still refuses `MODELING_TARGET_UNSUPPORTED` by name.
  */
-import type {PosedSlot} from '@rig-c/play';
 import type {CropWorldMapping} from '../src/chest-regions.ts';
+import {placeSetupMesh,readSetupMesh,setupModel} from '../src/setup-mesh.ts';
 import {
- MESH_EDIT_NO_MESH,MESH_EDIT_PREVIEW_NOTE,MODELING_TARGET_UNSUPPORTED,MESH_EDIT_SELECT_SLOT,MeshEditSession,affineOf,applyAffine,applyMeshOps,attachmentHashText,draftOps,hitMesh,
+ MESH_EDIT_CODES,MESH_EDIT_NO_MESH,MESH_EDIT_PREVIEW_NOTE,MESH_EDIT_RIG_UNAVAILABLE,MODELING_TARGET_UNSUPPORTED,MESH_EDIT_SELECT_SLOT,MeshEditSession,affineOf,applyAffine,applyMeshOps,attachmentHashText,draftOps,hitMesh,
  invertAffine,meshEditDocument,parseMeshDraft,screenDeltaToCrop,verticesInBox,writeMeshDraft,type MeshEditDocument,type MeshEditResult,type MeshOp,type MeshSource,
  type MeshView,type ScreenPoint,type Vec,
 } from '../src/mesh-edit.ts';
 import type {OverlayMeshEdit,OverlayPoint,OverlayProject} from './rig-overlays.ts';
+import type {SetupPose} from './setup-pose.ts';
 import {textEntryFocused} from './view-controls.ts';
 
 export type MeshMode='modify'|'create'|'delete'|'edges';
@@ -41,32 +45,35 @@ export function meshEditShortcut(event:KeyLike,state:{active:boolean;mode:MeshMo
  const mode=meshModeKeys[key];return mode?{type:'mode',mode}:null;
 }
 
-/** World → crop through the inverse of the crop mapping (crop px, x right, y down). */
+/** World → crop through the inverse of the crop mapping (crop px, x right, y down), unrounded: the producer holds a `move.from` to 1e-3 px. */
 export function cropFromWorld(mapping:Extract<CropWorldMapping,{available:true}>):((x:number,y:number)=>Vec)|null {
  const inverse=invertAffine(affineOf((x,y)=>mapping.toWorld(x,y)));if(!inverse)return null;
- return (x,y)=>{const p=applyAffine(inverse,x,y);return [Math.round(p.x*100)/100,Math.round(p.y*100)/100];};
+ return (x,y)=>{const p=applyAffine(inverse,x,y);return [p.x,p.y];};
 }
-type SourceResult={ok:true;source:Omit<MeshSource,'hash'>;entry:unknown}|{ok:false;code:string};
+type SourceResult={ok:true;source:Omit<MeshSource,'hash'>;entry:unknown;world:number[]}|{ok:false;code:string};
 /**
- * The actual mesh of the selected slot: the active attachment's entry in the hash-verified model, and the slot's last
- * drawn posed vertices mapped to crop px. A count or triangle mismatch between the two is refused.
+ * The selected slot's mesh in setup space: its attachment's entry in the hash-verified compiled model document (the
+ * attachment the setup pose resolves), its stored vertices placed through the setup-pose bones (`world`, flat x, y)
+ * and mapped to crop px. Refuses, in order: no model document (`MESH_EDIT_MODEL_UNAVAILABLE`), whole rig, no setup pose,
+ * a non-mesh or linked attachment, no crop mapping.
  */
-export function meshEditSource(input:{slot:string|null;activeAttachment:{skin:string;attachment:string}|null;row:PosedSlot|undefined;model:unknown;mapping:CropWorldMapping}):SourceResult {
- const {slot}=input;if(!slot)return {ok:false,code:`${MESH_EDIT_SELECT_SLOT}: select one slot in the parts list; whole-rig mesh edit is not a thing`};
- const noMesh=(why:string)=>({ok:false as const,code:`${MESH_EDIT_NO_MESH} ${slot}: ${why}`});
- const active=input.activeAttachment;if(!active)return noMesh('no active attachment at the held pose');
- const model=input.model as {skins?:{name?:unknown;attachments?:Record<string,Record<string,unknown>>}[]}|null;
- const entry=model?.skins?.find(skin=>skin.name===active.skin)?.attachments?.[slot]?.[active.attachment] as {kind?:unknown;uvs?:unknown;triangles?:unknown;hull?:unknown}|undefined;
- if(!entry||entry.kind!=='mesh')return noMesh(`${active.skin} / ${active.attachment} is not a mesh attachment`);
- if(!input.row||input.row.kind!=='mesh')return noMesh('the slot is not drawn as a mesh at the held pose');
+export function meshEditSource(input:{slot:string|null;model:unknown;pose:(slot:string)=>SetupPose|null;mapping:CropWorldMapping}):SourceResult {
+ const available=setupModel(input.model,MESH_EDIT_CODES);if(!available.ok)return available;
+ const {slot}=input;if(!slot)return {ok:false,code:`${MESH_EDIT_SELECT_SLOT}: ${MESH_EDIT_CODES.selectText}`};
+ let pose:SetupPose|null;
+ try{pose=input.pose(slot);}catch(error){return {ok:false,code:`${MESH_EDIT_RIG_UNAVAILABLE}: ${error instanceof Error?error.message:String(error)}`};}
+ if(!pose)return {ok:false,code:`${MESH_EDIT_RIG_UNAVAILABLE}: no rig loaded`};
+ const read=readSetupMesh(input.model,slot,pose.identity,MESH_EDIT_CODES);if(!read.ok)return read;
+ const mesh=read.mesh,noMesh=(why:string)=>({ok:false as const,code:`${MESH_EDIT_NO_MESH} ${slot}: ${why}`});
+ if(mesh.linked)return noMesh(`${mesh.skin} / ${mesh.attachment} is a linked mesh of ${mesh.source.slot} / ${mesh.source.attachment}; edit its source mesh`);
+ if(mesh.hull===null)return noMesh('the model entry stores no hull');
  if(!input.mapping.available)return {ok:false,code:`${input.mapping.reason}: mesh edit needs the crop mapping`};
- const triangles=entry.triangles,uvs=entry.uvs,hull=entry.hull;
- if(!Array.isArray(triangles)||!Array.isArray(uvs)||typeof hull!=='number'||!Number.isSafeInteger(hull)||hull<0)return noMesh('the model entry has no triangles, uvs or hull');
- const count=uvs.length/2,posed=input.row.vertices;
- if(posed.length/2!==count||hull>count||input.row.triangles.length!==triangles.length||input.row.triangles.some((v,i)=>v!==triangles[i]))return {ok:false,code:`MESH_EDIT_SOURCE_MISMATCH: ${slot} drawn mesh (${posed.length/2} vertices) differs from the model attachment (${count})`};
+ let world:number[]|null;
+ try{world=placeSetupMesh(mesh,pose.world);}catch(error){return {ok:false,code:`${MESH_EDIT_RIG_UNAVAILABLE}: ${error instanceof Error?error.message:String(error)}`};}
+ if(!world)return {ok:false,code:`MESH_EDIT_SOURCE_MISMATCH: ${slot} has a non-finite setup-pose vertex`};
  const toCrop=cropFromWorld(input.mapping);if(!toCrop)return {ok:false,code:'MESH_EDIT_MAPPING_SINGULAR'};
- const vertices:Vec[]=[];for(let i=0;i<posed.length;i+=2)vertices.push(toCrop(posed[i]!,posed[i+1]!));
- return {ok:true,source:{slot,skin:active.skin,attachment:active.attachment,vertices,triangles:[...triangles] as number[],hull},entry};
+ const vertices:Vec[]=[];for(let i=0;i<world.length;i+=2)vertices.push(toCrop(world[i]!,world[i+1]!));
+ return {ok:true,source:{slot,skin:mesh.skin,attachment:mesh.attachment,vertices,triangles:mesh.triangles,hull:mesh.hull},entry:mesh.entry,world};
 }
 export async function sha256Hex(text:string):Promise<string> {return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))].map(b=>b.toString(16).padStart(2,'0')).join('');}
 
@@ -75,11 +82,9 @@ export interface MeshEditorHost {
  project:()=>OverlayProject|null;
  mapping:()=>CropWorldMapping;
  inspector:()=>string|undefined;
- /** The selected slot's source, or the refusal that names why there is none. */
+ /** The selected slot's setup-space source, or the refusal that names why there is none. */
  source:()=>SourceResult;
- /** How the vertices were obtained (pose, mapping), for the export. */
- basis:()=>string;
- /** Hold the pose being edited still. */
+ /** Hold the stage still under the setup-pose overlay. */
  pause:()=>void;
  changed:()=>void;
  download:(document:MeshEditDocument)=>void;
@@ -105,7 +110,7 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
  const hint:Record<MeshMode,string>={
   modify:'drag a vertex or edge · Shift-click selects more · drag empty space to box-select · arrows nudge 1 px (Shift 10)',
   create:'click empty space to add a vertex · click an edge to split it',
-  delete:'click a vertex (with its edges) or an edge to remove it · hull edges stay',
+  delete:'click a vertex (with its edges) or an added constraint edge to remove it · hull and triangulation edges are the producer\'s',
   edges:'click vertex A then vertex B to add a constraint edge · click a constraint edge to remove it',
  };
  const sync=()=>{
@@ -116,7 +121,7 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
   node<HTMLButtonElement>('mesh-undo').disabled=!session?.canUndo();node<HTMLButtonElement>('mesh-redo').disabled=!session?.canRedo();node<HTMLButtonElement>('mesh-reset').disabled=!session?.canUndo()&&!session?.ops().length;
   if(!session){status.textContent='';return;}
   const s=session.source,count=session.ops().length;
-  status.textContent=`${note?note+' · ':''}${count} op${count===1?'':'s'} · ${MESH_EDIT_PREVIEW_NOTE} · ${mode?hint[mode]:'no sub-mode — Escape again leaves mesh edit'} · Space-drag pans`;
+  status.textContent=`${note?note+' · ':''}${count} op${count===1?'':'s'} · setup pose · ${MESH_EDIT_PREVIEW_NOTE} · ${mode?hint[mode]:'no sub-mode — Escape again leaves mesh edit'} · Space-drag pans`;
   status.title=`${s.slot} / ${s.skin} / ${s.attachment} · ${s.vertices.length} vertices · ${s.triangles.length/3} triangles · hull ${s.hull} · ${status.textContent}`;
   status.classList.toggle('error',noteError);
   if(mode)host.pane.dataset.meshMode=mode;else delete host.pane.dataset.meshMode;
@@ -151,7 +156,7 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
  const redo=()=>{if(session?.redo()){selected.clear();persist();say('');host.changed();}};
  node<HTMLButtonElement>('mesh-undo').addEventListener('click',undo);node<HTMLButtonElement>('mesh-redo').addEventListener('click',redo);
  node<HTMLButtonElement>('mesh-reset').addEventListener('click',()=>{if(!session)return;if(!host.confirm(`Drop the whole mesh-edit delta for ${session.source.slot} / ${session.source.attachment}? This cannot be undone.`))return;session.reset();selected.clear();persist();say('delta reset');host.changed();});
- node<HTMLButtonElement>('mesh-download').addEventListener('click',()=>{if(session)host.download(meshEditDocument(session,host.basis()));});
+ node<HTMLButtonElement>('mesh-download').addEventListener('click',()=>{if(session)host.download(meshEditDocument(session));});
  // No producer command consumes a vertex delta (#99): refuse by name and run nothing.
  node<HTMLButtonElement>('mesh-apply').addEventListener('click',()=>{host.message(MODELING_TARGET_UNSUPPORTED,true);say(MODELING_TARGET_UNSUPPORTED,true);});
  const keyDown=(event:KeyboardEvent)=>{
