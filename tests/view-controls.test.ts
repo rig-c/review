@@ -124,7 +124,8 @@ test('actual single video inspection acknowledges decoded PTS, repeats that actu
   cancelVideoFrameCallback(id:number){this.callbacks.delete(id);}
   get pending(){return this.callbacks.size;}
  }
- const script=`function open(video,hasPlayer){let time=.1,duration=2,controlledVideoSample=null,axisInspection=false;const player=hasPlayer?{time:.1,seek(value){this.time=value;},draw(){}}:null;let draws=0;const drawRig=action=>{action();draws++;},renderSequenceFrame=()=>{},renderTransport=()=>{},message=()=>{},errorText=error=>error instanceof Error?error.message:String(error);${functions};return {seek:target=>inspectControlTime(target,new AbortController().signal),state:()=>({time,pose:player?.time??null,draws}),abort:()=>{const controller=new AbortController();controller.abort();return inspectControlTime(.6,controller.signal);}};}`;
+ const script=`function reposePreview(){}
+function open(video,hasPlayer){let time=.1,duration=2,controlledVideoSample=null,axisInspection=false;const player=hasPlayer?{time:.1,seek(value){this.time=value;},draw(){}}:null;let draws=0;const drawRig=action=>{action();draws++;},renderSequenceFrame=()=>{},renderTransport=()=>{},message=()=>{},errorText=error=>error instanceof Error?error.message:String(error);${functions};return {seek:target=>inspectControlTime(target,new AbortController().signal),state:()=>({time,pose:player?.time??null,draws}),abort:()=>{const controller=new AbortController();controller.abort();return inspectControlTime(.6,controller.signal);}};}`;
  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script);
  type App={seek(value:number):Promise<void>;state():{time:number;pose:number|null;draws:number};abort():Promise<void>};
  for(const hasPlayer of [true,false]){

@@ -441,6 +441,33 @@ unchanged. **Reset** returns to the inspected build and clears the pending ops.
 Submit refuses a review written on an applied build whose check failed
 (`EDIT_SUBMIT_UNCHECKED`). Live preview before Apply waits on play#147.
 
+Below it, the **Idle tracks** panel (`#idle-tracks`) edits the idle through
+the producer. It lists the handoff config's `motion.tracks`: a single track
+opens amp, period, phase and base (base can be added or taken out); a chain
+track opens one amp per link and lag, and draws a handle at each link on the
+stage (drag up or down; arrow keys step 0.05°). Period is a select of the
+divisors of `motion.duration` (`duration / 1 … 12`) — the only periods the
+producer accepts — beside a field for typing one, which review's pre-check
+refuses with the producer's own line (`CONFIG_PERIOD_DIVIDES_DURATION`). A
+track is added by bone + property or by chain (it starts still: amplitude 0,
+the whole idle's period) and removed with **Remove**; a second track on a
+property already keyed (a chain link's `rotate`, a blink member) is refused
+before Apply by the producer's `CONFIG_BONE_PROPERTY_KEYED_ONCE`. The blink's
+`t` is a marker above the transport scrub, dragged along the timeline (arrow
+keys step one 12 fps frame), with `squash` and `brow_drop` sliders. The
+pending ops (`/motion/tracks/<i>/…`, `/motion/blink/…`) are listed with a
+per-op **Revert** and kept in the local draft. While edits are pending the
+**preview** drives the edited bones through the player's `adjust` with the
+producer's sine on the bone the idle keys (`<bone>_ctl` under ctl keys, read
+off the handoff rig), labelled "preview — Apply decides"; it is never
+recorded or submitted, and a property the inspected idle does not key yet is
+not previewed (`IDLE_PREVIEW_TARGET_UNKNOWN`). **Apply** clears the preview and
+sends one patch (`rig --idle-keys <the inspected rig's>`, then `check`, about
+30 s on a real package); the built idle replaces the preview, and the
+readout shows the `CHAIN_LAG`, `TIP_OVER_ROOT` and `BREATH_VISIBLE` lines and
+check's `loop:` line before and after. **Reset** clears the preview and the
+pending ops and returns to the inspected build.
+
 Below that, the **Readings** block (`#readings`) runs the compiler's own
 readings of the drawn animation: a **Folds** toggle, a **Pass-through**
 cloth:leg pair and a **Seam** slot:slot pair (slot names suggested from the

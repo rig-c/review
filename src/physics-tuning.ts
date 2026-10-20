@@ -174,9 +174,9 @@ export function beforeLine(name: string, stage: { lines: readonly string[]; chec
   if (inspected.status !== 'checked') return inspected.line;
   return barLine(name, inspected.lines, inspected.check);
 }
-/** The readout rows after an Apply: BEFORE per `beforeLine`, AFTER from the job just built. */
-export function readoutRows(stage: { lines: readonly string[]; check: CheckSummary | null } | null, inspected: InspectedCheckView | null, after: { lines: readonly string[]; check: CheckSummary | null }) {
-  return READOUT_BARS.map(name => ({ name, before: beforeLine(name, stage, inspected), after: barLine(name, after.lines, after.check) }));
+/** The readout rows after an Apply: BEFORE per `beforeLine`, AFTER from the job just built; `bars` defaults to the physics panel's. */
+export function readoutRows(stage: { lines: readonly string[]; check: CheckSummary | null } | null, inspected: InspectedCheckView | null, after: { lines: readonly string[]; check: CheckSummary | null }, bars: readonly string[] = READOUT_BARS) {
+  return bars.map(name => ({ name, before: beforeLine(name, stage, inspected), after: barLine(name, after.lines, after.check) }));
 }
 
 /** A control the row editor draws: a slider with its number field (a tuning field) or a toggle (a component). */

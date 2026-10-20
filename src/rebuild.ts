@@ -18,6 +18,7 @@ import { CONFIG_NAMED_FILES, HANDOFF_DECLARATION, type Handoff, type HandoffReco
 import { assertWholeRigBaseline, BaselineError, baselineKey, runBaseline, runInspectedCheck, runningInspectedCheck, type BaselineResult, type InspectedCheck } from './baseline.ts';
 import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, jsonDiff, parseConfigPatch, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
 import { checkSummary, MAX_DIFF_PATHS, type CheckSummary } from './applied-context.ts';
+import { idleKeying, idleSource, type IdleStatus } from './idle-tracks.ts';
 
 export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
 const MAX_REGIONS = 8, MAX_POINTS = 256, MAX_LINES = 4000, GRID = 256;
@@ -47,6 +48,15 @@ export async function producerInputs(handoff: Handoff | null, reason: string | n
 export function configConstraints(configText: string): unknown[] | null {
   const list = object(JSON.parse(configText), 'config').constraints;
   return Array.isArray(list) ? list : null;
+}
+
+/**
+ * The idle the Idle tracks panel edits (#104): the config's motion as written (shapes read by `idleSource`) and where
+ * the inspected idle keys each track (`idleKeying`, read off the handoff rig's rig.json and motion.json).
+ */
+export async function idleStatus(inputs: Pick<ProducerInputs, 'configText' | 'rig'>): Promise<IdleStatus> {
+  const read = async (name: string): Promise<unknown> => { try { return JSON.parse(await readFile(join(inputs.rig, name), 'utf8')); } catch { return null; } };
+  return { source: idleSource(JSON.parse(inputs.configText)), keying: idleKeying(await read('rig.json'), await read('motion.json')) };
 }
 
 export type ProducerRegion =
@@ -250,6 +260,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       parts, contour,
       // The config's constraints as written (#103: the physics panel patches them by index and name).
       constraints: inputs ? configConstraints(inputs.configText) : null,
+      // #104: the config's idle (tracks, blink, bones, chains) and where the inspected idle keys each track.
+      idle: inputs ? await idleStatus(inputs) : null,
       producer: resolved.ok ? tool(resolved.producer) : null, compiler: resolved.ok ? tool(resolved.compiler) : null,
       reason,
       running,
@@ -288,7 +300,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       const remesh = await runTool(resolved.producer.bin, remeshArgs({ rig: inputs.rig, config: inputs.config, parts: inputs.parts, part: job.request.part, mesh: 'mesh.json', out: 'revision' }), { cwd: dir, onLine: push });
       job.exitCode = remesh.exitCode; job.wallMs.remesh = remesh.wallMs;
       if (remesh.exitCode !== 0) { job.producerLine = firstRefusal(remesh.lines) ?? `rig-parts remesh exited ${remesh.exitCode} without a named refusal`; job.status = 'refused'; return; }
-      job.producerLine = remesh.lines.filter(l => l.trim()).at(-1)?.trim() ?? null;
+      job.producerLine = remesh.stdout.filter(l => l.trim()).at(-1)?.trim() ?? null;
       const provenance = object(JSON.parse(await readFile(join(dir, 'revision', 'remesh.json'), 'utf8')), 'remesh.json'), request = object(provenance.request, 'remesh.json request');
       const pageEdges = request.page_edges === 'pot' ? 'pot' : 'free', packShape = request.pack_shape === 'rect' ? 'rect' : 'polygon';
       push(`review: ${resolved.compiler.package} ${resolved.compiler.version} build --profile rig-play --pack --page-edges ${pageEdges} --pack-shape ${packShape} (the revision's own pack flags)`);
@@ -335,7 +347,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       }
       job.exitCode = op.exitCode; job.wallMs.op = op.wallMs;
       if (op.exitCode !== 0) { job.producerLine = firstRefusal(op.lines) ?? `rig-parts ${job.request.patch.op.cmd} exited ${op.exitCode} without a named refusal`; job.status = 'refused'; return; }
-      job.producerLine = op.lines.filter(l => l.trim()).at(-1)?.trim() ?? null;
+      job.producerLine = op.stdout.filter(l => l.trim()).at(-1)?.trim() ?? null;
       if (part !== null) {
         const request = object(object(JSON.parse(await readFile(join(dir, 'rig', 'remesh.json'), 'utf8')), 'remesh.json').request, 'remesh.json request');
         pageEdges = request.page_edges === 'pot' ? 'pot' : 'free'; packShape = request.pack_shape === 'rect' ? 'rect' : 'polygon';
