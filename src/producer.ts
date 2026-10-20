@@ -88,28 +88,30 @@ export function firstRefusal(lines: readonly string[]): string | null {
   return null;
 }
 
-export interface ProcessResult { exitCode: number; lines: string[]; wallMs: number }
+export interface ProcessResult { exitCode: number; lines: string[]; stdout: string[]; wallMs: number }
 /**
  * One child process: `bun <bin> …args` with cwd = the scratch directory, stdout and stderr read line by line (each
  * line handed to `onLine` as it arrives), the exit code and a wall-clock duration. Nothing is read from a manifest.
  */
 export async function runTool(bin: string, args: readonly string[], options: { cwd: string; onLine?: (line: string) => void; env?: Record<string, string | undefined> }): Promise<ProcessResult> {
-  const started = performance.now(), lines: string[] = [];
+  const started = performance.now(), lines: string[] = [], stdout: string[] = [];
   const child = Bun.spawn([process.execPath, bin, ...args], { cwd: options.cwd, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', env: options.env ?? process.env });
-  const pump = async (stream: ReadableStream<Uint8Array>) => {
+  const pump = async (stream: ReadableStream<Uint8Array>, own: string[] | null) => {
     const decoder = new TextDecoder(); let rest = '';
     const reader = stream.getReader();
     for (let next = await reader.read(); !next.done; next = await reader.read()) {
       rest += decoder.decode(next.value, { stream: true });
       let at: number;
-      while ((at = rest.indexOf('\n')) >= 0) { const line = rest.slice(0, at).replace(/\r$/, ''); rest = rest.slice(at + 1); lines.push(line); options.onLine?.(line); }
+      while ((at = rest.indexOf('\n')) >= 0) { const line = rest.slice(0, at).replace(/\r$/, ''); rest = rest.slice(at + 1); lines.push(line); own?.push(line); options.onLine?.(line); }
     }
     rest += decoder.decode();
-    if (rest) { lines.push(rest); options.onLine?.(rest); }
+    if (rest) { lines.push(rest); own?.push(rest); options.onLine?.(rest); }
   };
-  await Promise.all([pump(child.stdout), pump(child.stderr)]);
+  await Promise.all([pump(child.stdout, stdout), pump(child.stderr, null)]);
   const exitCode = await child.exited;
-  return { exitCode, lines, wallMs: Math.round(performance.now() - started) };
+  // `lines` is the merged stream in arrival order (what the status area shows); `stdout` keeps the tool's own
+  // report channel apart so a last line is never a stderr line that happened to arrive late.
+  return { exitCode, lines, stdout, wallMs: Math.round(performance.now() - started) };
 }
 
 /** #108: the compiler alone (its readings need no producer op) — beside `@rig-c/parts` when that resolves, else walking up from each start. */

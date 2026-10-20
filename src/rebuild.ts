@@ -300,7 +300,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       const remesh = await runTool(resolved.producer.bin, remeshArgs({ rig: inputs.rig, config: inputs.config, parts: inputs.parts, part: job.request.part, mesh: 'mesh.json', out: 'revision' }), { cwd: dir, onLine: push });
       job.exitCode = remesh.exitCode; job.wallMs.remesh = remesh.wallMs;
       if (remesh.exitCode !== 0) { job.producerLine = firstRefusal(remesh.lines) ?? `rig-parts remesh exited ${remesh.exitCode} without a named refusal`; job.status = 'refused'; return; }
-      job.producerLine = remesh.lines.filter(l => l.trim()).at(-1)?.trim() ?? null;
+      job.producerLine = remesh.stdout.filter(l => l.trim()).at(-1)?.trim() ?? null;
       const provenance = object(JSON.parse(await readFile(join(dir, 'revision', 'remesh.json'), 'utf8')), 'remesh.json'), request = object(provenance.request, 'remesh.json request');
       const pageEdges = request.page_edges === 'pot' ? 'pot' : 'free', packShape = request.pack_shape === 'rect' ? 'rect' : 'polygon';
       push(`review: ${resolved.compiler.package} ${resolved.compiler.version} build --profile rig-play --pack --page-edges ${pageEdges} --pack-shape ${packShape} (the revision's own pack flags)`);
@@ -347,7 +347,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       }
       job.exitCode = op.exitCode; job.wallMs.op = op.wallMs;
       if (op.exitCode !== 0) { job.producerLine = firstRefusal(op.lines) ?? `rig-parts ${job.request.patch.op.cmd} exited ${op.exitCode} without a named refusal`; job.status = 'refused'; return; }
-      job.producerLine = op.lines.filter(l => l.trim()).at(-1)?.trim() ?? null;
+      job.producerLine = op.stdout.filter(l => l.trim()).at(-1)?.trim() ?? null;
       if (part !== null) {
         const request = object(object(JSON.parse(await readFile(join(dir, 'rig', 'remesh.json'), 'utf8')), 'remesh.json').request, 'remesh.json request');
         pageEdges = request.page_edges === 'pot' ? 'pot' : 'free'; packShape = request.pack_shape === 'rect' ? 'rect' : 'polygon';
