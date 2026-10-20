@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/rig-c/review/compare/v0.7.0...v0.7.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **requirements:** picking a part without a producer handoff no longer throws ([#151](https://github.com/rig-c/review/issues/151)) ([00e8276](https://github.com/rig-c/review/commit/00e82761002a109e4888ab51195b8e6c40a01fe5)), closes [#150](https://github.com/rig-c/review/issues/150)
+
 ## [0.7.0](https://github.com/rig-c/review/compare/v0.6.0...v0.7.0) (2026-10-20)
 
 
