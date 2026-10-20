@@ -132,6 +132,7 @@
    "id": "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac",
    "status": "built",
    "reused": false,
+   "op": "rig",
    "request": {
     "patch": {
      "schema": "rig-review-config-patch/1",
@@ -255,6 +256,7 @@
     "id": "de2f2b3670871b31f8665545fa8f6ffe7d73fdc61f9867f719603fb76402b2ac",
     "status": "built",
     "reused": false,
+    "op": "rig",
     "request": {
      "patch": {
       "schema": "rig-review-config-patch/1",
@@ -382,6 +384,7 @@
    "id": "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad",
    "status": "built",
    "reused": false,
+   "op": "remesh",
    "request": {
     "patch": {
      "schema": "rig-review-config-patch/1",
@@ -524,6 +527,7 @@
     "id": "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad",
     "status": "built",
     "reused": false,
+    "op": "remesh",
     "request": {
      "patch": {
       "schema": "rig-review-config-patch/1",
@@ -723,6 +727,7 @@
     "id": "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad",
     "status": "built",
     "reused": false,
+    "op": "remesh",
     "request": {
      "patch": {
       "schema": "rig-review-config-patch/1",
@@ -870,6 +875,7 @@
    "id": "2f04d3a5eede9ee96dccba652f8bd45fcf3e4b70c29e8a9c9beddac66c669e7c",
    "status": "refused",
    "reused": false,
+   "op": "rig",
    "request": {
     "patch": {
      "schema": "rig-review-config-patch/1",
@@ -934,6 +940,7 @@
     "id": "bf9cc1c360b78fbc8c192b89de3a2e51a807998d320f41612590c5438cf32cad",
     "status": "built",
     "reused": false,
+    "op": "remesh",
     "request": {
      "patch": {
       "schema": "rig-review-config-patch/1",
