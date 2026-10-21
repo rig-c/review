@@ -28,7 +28,9 @@ on:
   # same gate on the tagged tree and publishes from this same file, so the
   # trusted publisher and provenance are unchanged. It refuses a tag with no
   # GitHub release, a release release-please did not create, a tag whose commit
-  # is not on main, and a version the registry already serves.
+  # is not on main, a version the registry already serves, and a run whose
+  # GITHUB_SHA is not the tag's commit (npm provenance names GITHUB_SHA, #198):
+  # dispatch it on the tag, `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`.
   workflow_dispatch:
     inputs:
       tag:
@@ -103,6 +105,10 @@ jobs:
           if ! tag_sha="$(git rev-parse --verify --quiet "refs/tags/$INPUT_TAG^{commit}")"; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: tag $INPUT_TAG does not resolve to a commit"; exit 1; fi
           if ! git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: origin/main was not fetched"; exit 1; fi
           if ! git merge-base --is-ancestor "$tag_sha" refs/remotes/origin/main; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: $INPUT_TAG ($tag_sha) is not reachable from origin/main"; exit 1; fi
+          # npm provenance records GITHUB_SHA, not the checked-out HEAD (#198). A dispatch whose run SHA is not the tag's
+          # commit would publish provenance naming a commit it did not build, so it is refused: dispatch on the tag itself
+          # (`gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`), which only a tag cut after this check can carry.
+          if [ "$GITHUB_SHA" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $INPUT_TAG's commit $tag_sha, and npm provenance would name the former; dispatch with --ref $INPUT_TAG"; exit 1; fi
           version="${INPUT_TAG#v}"
           if served="$(npm view "@rig-c/review@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/review@$version"; exit 1; fi
           echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
