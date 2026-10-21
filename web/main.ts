@@ -14,7 +14,7 @@ import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,eval
 import {bindChestEditor,canvasToCrop,bustLabel,bustSides,LANDMARKS,landmarkInputId,rowCircle,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
-import {modelBoneNames,readSetupPose} from './setup-pose.ts';
+import {readSetupPose} from './setup-pose.ts';
 import {bindBonesPanel,type BonesPanel,type BonesCheckView} from './bones-panel.ts';
 import {bindCutsPanel,type CutsPanel} from './cuts-panel.ts';
 import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
@@ -1367,7 +1367,7 @@ function reposePreview():void {if(player?.adjust)player.repose();}
 /** Edit Mesh's source (#100): the selected slot's mesh in the model document at the setup pose (a never-played player's bones). */
 function meshSource(){
  if(data.manifest.model&&!partModel)return {ok:false as const,code:'MESH_EDIT_RIG_UNAVAILABLE: the compiled model document is still loading'};
- return meshEditSource({slot:parts?.value()?.slot??null,model:data.manifest.model?partModel:null,pose:slot=>assets?readSetupPose(assets,slot,modelBoneNames(partModel),document.createElement('div')):null,mapping:chestMapping});
+ return meshEditSource({slot:parts?.value()?.slot??null,model:data.manifest.model?partModel:null,pose:slot=>assets?readSetupPose(assets,slot,document.createElement('div')):null,mapping:chestMapping});
 }
 async function exportMesh(doc:MeshEditDocument):Promise<void> {
  const text=meshEditText(doc),digest=await sha256Hex(text);

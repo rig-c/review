@@ -2,14 +2,13 @@
  * Setup-space mesh weights (#107), read from the compiled model document as stored. Watch-only: nothing here edits,
  * normalises or infers a weight. The reader itself is shared with Edit Mesh (#100): `src/setup-mesh.ts`.
  */
-import {readSetupMesh,setupModel,type SetupMeshCodes,type WeightInfluence} from './setup-mesh.ts';
+import {readStoredSetupMesh,setupModel,type SetupMeshCodes,type WeightInfluence} from './setup-mesh.ts';
 export const WEIGHTS_MODEL_UNAVAILABLE='WEIGHTS_MODEL_UNAVAILABLE';
 export const WEIGHTS_SELECT_SLOT='WEIGHTS_SELECT_SLOT';
 export const WEIGHTS_NO_MESH='WEIGHTS_NO_MESH';
 export const WEIGHTS_MODEL_INVALID='WEIGHTS_MODEL_INVALID';
 
-export type {WeightInfluence,WorldTransform} from './setup-mesh.ts';
-export {skinVertex} from './setup-mesh.ts';
+export type {WeightInfluence} from './setup-mesh.ts';
 export interface MeshWeights {
  slot:string;skin:string;attachment:string;
  /** Where the vertices were read: the attachment itself, or a linked mesh's source. */
@@ -31,11 +30,11 @@ export const WEIGHTS_CODES:SetupMeshCodes=Object.freeze({unavailable:WEIGHTS_MOD
 export const weightsModel=(model:unknown)=>setupModel(model,WEIGHTS_CODES);
 
 /**
- * The setup-pose weights of `slot`'s mesh attachment `active` (the identity the held pose resolved; null takes the
- * slot's mesh named like the slot, else its only one). Weights are returned exactly as stored.
+ * The setup-pose weights of `slot`'s mesh attachment `active` (the identity the setup pose resolved; null preserves its
+ * absence as reported by the public setup identity). Weights are returned exactly as stored.
  */
 export function meshWeights(model:unknown,slot:string|null,active:{skin:string;attachment:string}|null):WeightsResult {
- const read=readSetupMesh(model,slot,active,WEIGHTS_CODES);if(!read.ok)return read;
+ const read=readStoredSetupMesh(model,slot,active,WEIGHTS_CODES);if(!read.ok)return read;
  const {slot:s,skin,attachment,source,weighted,vertices,bones,triangles}=read.mesh;
  return {ok:true,weights:{slot:s,skin,attachment,source,weighted,vertices,bones,triangles}};
 }

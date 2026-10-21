@@ -3,11 +3,10 @@
  * coloured by that bone's stored weight on the theme's ramp (0 → 1), or switch to max influence and every vertex takes
  * its dominant bone's colour; hovering a vertex reads its stored value. Weights come from the compiled model document
  * (`src/weights.ts` over the shared reader `src/setup-mesh.ts`); vertex positions come from the published player's
- * setup pose (`web/setup-pose.ts`, a second `RigPlayer` over the same assets that never plays — the same placement
- * Edit Mesh uses). Nothing is edited, applied, recorded or sent.
+ * readSetupMesh API (`web/setup-pose.ts`, shared with Edit Mesh). A never-played player reads setup identity only.
+ * Nothing is edited, applied, recorded or sent.
  */
-import type {ModelAssets,RenderMode} from '@rig-c/play';
-import {placeSetupMesh} from '../src/setup-mesh.ts';
+import type {ModelAssets,RenderMode,SetupMesh as PlaySetupMesh} from '@rig-c/play';
 import {WEIGHTS_SELECT_SLOT,dominantInfluence,meanColor,meshWeights,rampColor,weightOf,weightText,weightsModel,type MeshWeights} from '../src/weights.ts';
 import {modelBoneNames,readSetupPose} from './setup-pose.ts';
 import type {OverlayPoint,OverlayProject,OverlayWeights} from './rig-overlays.ts';
@@ -20,19 +19,20 @@ export const WEIGHTS_SOURCE_MISMATCH='WEIGHTS_SOURCE_MISMATCH';
 export const WEIGHTS_RIG_UNAVAILABLE='WEIGHTS_RIG_UNAVAILABLE';
 
 /** The selected slot's mesh at the setup pose: world vertices (one per stored vertex), triangles and identity. */
-export interface SetupMesh {slot:string;vertices:number[];triangles:number[];identity:{skin:string;attachment:string}|null}
+export interface SetupMesh extends PlaySetupMesh {identity:{skin:string;attachment:string}|null}
 export type SetupMeshResult={ok:true;mesh:SetupMesh;weights:MeshWeights}|{ok:false;code:string};
 /**
- * The slot's attachment is the one the setup pose resolves (`readSetupPose`); its stored vertices are placed through
- * the setup-pose bones (`placeSetupMesh`). The stage player is not touched.
+ * The public setup identity names the target. Play owns its setup coordinates, topology, hull and deform.
+ * The active skin selection is passed independently of the identity's supplying table; the stage is not touched.
  */
-export function setupPoseMesh(assets:ModelAssets,model:unknown,slot:string,root:HTMLElement,mode:RenderMode='dom'):SetupMeshResult {
+export function setupPoseMesh(assets:ModelAssets,model:unknown,slot:string,root:HTMLElement,mode:RenderMode='dom',skin?:string):SetupMeshResult {
  const available=weightsModel(model);if(!available.ok)return available;
  try{
-  const pose=readSetupPose(assets,slot,modelBoneNames(model),root,mode);
-  const result=meshWeights(model,slot,pose.identity);if(!result.ok)return result;
-  const vertices=placeSetupMesh(result.weights,pose.world);if(!vertices)return {ok:false,code:`${WEIGHTS_SOURCE_MISMATCH}: ${slot} has a non-finite setup-pose vertex`};
-  return {ok:true,weights:result.weights,mesh:{slot,vertices,triangles:result.weights.triangles,identity:pose.identity}};
+  const pose=readSetupPose(assets,slot,root,mode,skin);
+  const result=meshWeights(model,slot,pose.identity);if(!result.ok)return !pose.identity&&pose.reason?{ok:false,code:`${result.code} (${pose.reason})`}:result;
+  const mesh=pose.readMesh();
+  if(!mesh||mesh.slot!==slot||mesh.skin!==result.weights.skin||mesh.attachment!==result.weights.attachment||mesh.vertices.length!==result.weights.vertices.length*2)return {ok:false,code:`${WEIGHTS_SOURCE_MISMATCH}: ${slot} setup geometry does not match its stored identity or vertex count`};
+  return {ok:true,weights:result.weights,mesh:{...mesh,identity:pose.identity}};
  }catch(error){return {ok:false,code:`${WEIGHTS_RIG_UNAVAILABLE}: ${error instanceof Error?error.message:String(error)}`};}
 }
 
