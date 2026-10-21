@@ -30,6 +30,8 @@ import { absolutizeBuildFiles, buildLines, buildNamedFiles, buildReadout, MAX_BU
 import { jsonDiff } from './config-patch.ts';
 import { CLOTH_KEYPOINTS_UNDECLARED, CLOTH_PATCH_MIXED, CLOTH_SOURCE_UNAVAILABLE, CLOTH_WRITE_SINCE, clothLinks, clothPatchKind, readClothTargets, writtenDiff, type ClothTagView, type WrittenDiff } from './cloth-recipe.ts';
 import { CHECK_ENVIRONMENT_SINCE, parseSchedule, ScheduleError, scheduleText } from './environment-schedule.ts';
+import { availableParallelism } from 'node:os';
+import { candidateRow, DENSITY_STRIP_SCHEMA, DensityStripError, stripLabels, stripPatches, stripShape, type DensityField, type StripRow } from './density-strip.ts';
 import { samplesClock } from './frame-clock.ts';
 import { cleanArgs, mapText, motionSummary, parseRetargetRequest, retargetArgs, retargetLines, retargetRecord, retargetRecordText, RetargetError, type MotionSummary, type RetargetLine, type RetargetRecord } from './retarget.ts';
 
@@ -400,7 +402,24 @@ export function assertNamedFilesHeld(before: unknown, after: unknown): void {
 /** The value of a flag in the patch's args, or the producer's default. */
 const flagValue = (args: readonly string[], flag: string, fallback: string) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1]! : fallback; };
 
-export interface RebuildOptions { stateDir: string; starts: readonly string[]; unchanged: () => Promise<void>; bones: readonly string[] | null }
+export interface RebuildOptions {
+  stateDir: string; starts: readonly string[]; unchanged: () => Promise<void>; bones: readonly string[] | null;
+  /** #173: how many strip candidates run at once (default max(1, floor(cores / 2))). */
+  stripConcurrency?: number;
+}
+/** #173: a density strip's scratch — one folder per package, holding at most the one strip on screen. */
+export const stripRoot = (stateDir: string, sourceHash: string) => join(stateDir, 'density-strip', sourceHash);
+export const defaultStripConcurrency = () => Math.max(1, Math.floor(availableParallelism() / 2));
+/** Deterministic: the package, the config bytes, every candidate's patch bytes in order and both tool versions. */
+export function stripId(input: { sourceHash: string; configHash: string; patches: readonly ConfigPatch[]; producer: string; compiler: string }): string {
+  return sha256(JSON.stringify([DENSITY_STRIP_SCHEMA, input.sourceHash, input.configHash, input.patches.map(patchText), input.producer, input.compiler]));
+}
+/** `GET /api/density-strip/<id>`: the strip, one row per candidate in the request's order, and the two labels. */
+export interface DensityStripView {
+  schema: typeof DENSITY_STRIP_SCHEMA; id: string; status: 'running' | 'done'; part: string; field: DensityField;
+  concurrency: number; configHash: string; producer: { package: string; version: string }; compiler: { package: string; version: string };
+  wallMs: number | null; rows: StripRow[]; labels: { fewest: number | null; widest: number | null };
+}
 export const baselineDir = (stateDir: string, key: string) => join(stateDir, 'baseline', key);
 
 const tool = (t: InstalledTool) => ({ package: t.package, version: t.version });
@@ -440,6 +459,11 @@ interface ApplySteps {
   hashed?: () => Promise<void>;
   /** #112: the schedule check reads (`--environment environment.json`, written into the scratch directory first). */
   world?: ApplyWorld | null;
+  /**
+   * #173: a density strip's candidate — built and hashed and its result.json written exactly as an Apply's, but it does
+   * not land: no applied record, no stage, no scratch-root arrangement. Its build waits in the strip's own folder.
+   */
+  candidate?: boolean;
 }
 
 /**
@@ -513,6 +537,11 @@ async function hashBuild(build: string, id: string): Promise<RebuildBuild> {
 export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   const jobs = new Map<string, RebuildJob | PatchJob | DeltaJob | RetargetJob>();
   let running: string | null = null;
+  /** #173: the density strip on screen (at most one per review): its candidates run beside each other, none of them applied. */
+  interface StripCandidate { value: number; id: string; entry: JsonValue; dir: string; job: PatchJob; applied: boolean }
+  let strip: { id: string; status: 'running' | 'done'; part: string; field: DensityField; concurrency: number; configHash: string; producer: { package: string; version: string }; compiler: { package: string; version: string }; started: number; wallMs: number | null; candidates: StripCandidate[] } | null = null;
+  /** One producer workload at a time per review: an Apply (or undo's re-run) or a strip; the line refusing the other. */
+  const busy = (): string | null => (running ? `REBUILD_BUSY: rebuild ${running} is still running` : strip?.status === 'running' ? `REBUILD_BUSY: density strip ${strip.id} is still running` : null);
   /** #166: the session's applied records, in order; the last is on the stage. The request bodies by job id. */
   const stack: AppliedEntry[] = [];
   const bodies = new Map<string, unknown>();
@@ -696,7 +725,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const v = object(input, 'undo');
     if (Object.keys(v).join(',') !== 'from' || typeof v.from !== 'string' || !/^[a-f0-9]{64}$/.test(v.from)) bad('expected exactly {from: <the build id on the stage>}');
     assertStateOutside();
-    if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
     const top = stack.at(-1);
     if (!top) throw new RebuildError('UNDO_NOTHING_APPLIED', 'no Apply is on the stage; the inspected build is');
     if (top.id !== v.from) throw new RebuildError('UNDO_STALE', `the stage's last Apply is ${top.id.slice(0, 12)}…, not ${String(v.from).slice(0, 12)}…; reload`);
@@ -808,13 +837,13 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       job.build = await hashBuild(join(dir, 'build'), job.id);
       if (steps.hashed) await steps.hashed();
       // #166: an undo's re-run must reproduce the build its record names, file for file; otherwise it is refused, not guessed.
-      const changed = restoredDifference(job.id, job.build.files);
+      const changed = steps.candidate ? null : restoredDifference(job.id, job.build.files);
       if (changed) { job.producerLine = changed; job.status = 'refused'; push(`review: ${changed}`); return; }
-      latestId = job.id;
+      if (!steps.candidate) latestId = job.id;
       await writeFile(join(dir, 'result.json'), JSON.stringify({ ...job, status: 'built', reused: false }, null, 1) + '\n', { mode: 0o600 });
       // Each Apply replaces the previous scratch build of this package in the scratch root; #166 keeps the applied records'
-      // earlier builds beside it (keptRoot) for undo.
-      await landed({ ...job, status: 'built' });
+      // earlier builds beside it (keptRoot) for undo. #173: a strip candidate lands nowhere until its row is Applied.
+      if (!steps.candidate) await landed({ ...job, status: 'built' });
       // "built" is published last: a reader that sees it finds the scratch root already settled (no sibling mid-removal).
       job.status = 'built';
     } catch (error) {
@@ -847,7 +876,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * #102: the patched config → `rig-parts rig` (whole rig), `retune` (#136: the constraints and the idle spliced onto the
    * inspected rig) or `remesh` (one part's patched entry) → `<dir>/rig`; the tail adds the diff and check.
    */
-  function executePatch(job: PatchJob, dir: string, inputs: ProducerInputs, resolved: Resolved, patched: JsonValue, part: string | null, plan: BuildPlan | null = null, world: ApplyWorld | null = null, cloth: ClothPlan | null = null): Promise<void> {
+  function executePatch(job: PatchJob, dir: string, inputs: ProducerInputs, resolved: Resolved, patched: JsonValue, part: string | null, plan: BuildPlan | null = null, world: ApplyWorld | null = null, cloth: ClothPlan | null = null, candidate = false): Promise<void> {
     const args = job.request.patch.op.args, producer = resolved.producer;
     let counts: RemeshCounts | null = null;
     let built: ProcessResult | null = null;
@@ -964,6 +993,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       ...(job.op === 'retune' || job.op === 'remesh' ? { carried: (push: (line: string) => void) => opCarried(job.op as CarryingOp, join(dir, 'rig'), world, push) } : {}),
       hashed: async () => { if (counts) job.remesh = { ...counts, modelTriangles: modelMeshTriangles(JSON.parse(await readFile(join(dir, 'build', 'skeleton.model.json'), 'utf8')), counts.part) }; },
       world,
+      ...(candidate ? { candidate: true } : {}),
     });
   }
 
@@ -1028,9 +1058,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const id = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}`, op, ...(plan ? { buildInputs: plan.inputsHash } : {}), ...(world ? { environment: world.record.sha256 } : {}), ...(clothPlan ? { cloth: p.handoff!.record.keypoints!.sha256 } : {}) });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
-    if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
     guardRestore(id);
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+    await adopt(id);
     await unkeep(id);
     const reused = await reuse<PatchJob>(dir, id);
     if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, body); await landed(reused); return { status: 200, body: snapshot(reused) }; }
@@ -1041,6 +1072,114 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     jobs.set(id, job); running = id; bodies.set(id, body);
     void executePatch(job, dir, inputs, resolved, patched, part, plan, world, clothPlan).finally(() => { if (running === id) running = null; });
     return { status: 202, body: snapshot(job) };
+  }
+
+  /**
+   * #173 · `POST /api/density-strip` with `{patches}`: 2–5 Mesh-panel patches for one part that differ only at its density
+   * field (`src/density-strip.ts`). Each is checked as an Apply checks it (fresh config bytes, names, held files, the
+   * installed producer) and runs through the same patch runner — remesh, the compile, #174's carried check — into its own
+   * folder under `stripRoot`, at most `concurrency` at once. Nothing lands: no applied record, no stage, no undo entry.
+   * A new strip replaces the folder of the one before it; refused while an Apply runs (and an Apply is refused while a
+   * strip runs: `REBUILD_BUSY`).
+   */
+  async function startStrip(input: unknown): Promise<{ status: number; body: unknown }> {
+    let patches: ConfigPatch[];
+    try { patches = stripPatches(input).map(parseConfigPatch); }
+    catch (e) { if (e instanceof ConfigPatchError || e instanceof DensityStripError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
+    let shape: ReturnType<typeof stripShape>;
+    try { shape = stripShape(patches); } catch (e) { if (e instanceof DensityStripError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
+    assertStateOutside();
+    await options.unchanged();
+    const inputs = await producerInputs(p.handoff, p.handoffReason);
+    const original = JSON.parse(inputs.configText) as JsonValue;
+    const planned: { patch: ConfigPatch; patched: JsonValue }[] = [];
+    for (const patch of patches) {
+      let patched: JsonValue;
+      try { assertPatchFresh(patch, inputs.configHash); assertOpNames(original, patch.ops); patched = applyConfigPatch(original, patch.ops); remeshPart(patch); }
+      catch (e) { if (e instanceof ConfigPatchError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
+      assertNamedFilesHeld(original, patched);
+      planned.push({ patch, patched });
+    }
+    const resolved = resolveProducer(options.starts);
+    if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
+    const first = patches[0]!;
+    if (first.producer.name !== resolved.producer.package || first.producer.version !== resolved.producer.version) throw new RebuildError('EDIT_PRODUCER_MISMATCH', `the patch was made for ${first.producer.name} ${first.producer.version}; the installed producer is ${resolved.producer.package} ${resolved.producer.version}`);
+    const producer = `${resolved.producer.package}@${resolved.producer.version}`, compiler = `${resolved.compiler.package}@${resolved.compiler.version}`;
+    const id = stripId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patches, producer, compiler });
+    if (strip?.id === id) return { status: strip.status === 'running' ? 202 : 200, body: stripView() };
+    const refusal = busy();
+    if (refusal) return { status: 200, body: { status: 'refused', error: refusal, producerLine: null } };
+    // Bounded disk: the strip on screen is the only one this package keeps; its predecessor's folder goes first.
+    const root = stripRoot(options.stateDir, p.sourceHash);
+    await rm(root, { recursive: true, force: true });
+    const concurrency = Math.max(1, Math.floor(options.stripConcurrency ?? defaultStripConcurrency()));
+    const candidates: StripCandidate[] = planned.map(({ patch }, i) => {
+      const cid = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer, compiler, op: 'remesh' });
+      const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id: cid, status: 'running', reused: false, op: 'remesh', request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null };
+      return { value: shape.values[i]!, id: cid, entry: shape.entries[i]!, dir: join(root, id, cid), job, applied: false };
+    });
+    const current = { id, status: 'running' as const, part: shape.part, field: shape.field, concurrency, configHash: inputs.configHash, producer: tool(resolved.producer), compiler: tool(resolved.compiler), started: performance.now(), wallMs: null, candidates };
+    strip = current;
+    // A bounded pool: each worker takes the next candidate in order; the strip is done when every candidate settled.
+    let next = 0;
+    const worker = async () => {
+      for (let i = next++; i < candidates.length; i = next++) {
+        const c = candidates[i]!;
+        await executePatch(c.job, c.dir, inputs, resolved, planned[i]!.patched, shape.part, null, null, null, true).catch(() => {});
+      }
+    };
+    void Promise.all(Array.from({ length: Math.min(concurrency, candidates.length) }, worker)).finally(() => {
+      if (strip === current) { (current as { status: 'running' | 'done' }).status = 'done'; (current as { wallMs: number | null }).wallMs = Math.round(performance.now() - current.started); }
+    });
+    return { status: 202, body: stripView() };
+  }
+  function stripView(): DensityStripView | null {
+    if (!strip) return null;
+    const s = strip;
+    const rows = s.candidates.map(c => candidateRow({ value: c.value, id: c.id, entry: c.entry, job: c.job, part: s.part, modelUrl: c.job.build ? `/density-strip/${s.id}/${c.id}/${c.job.build.model}` : null, applied: c.applied }));
+    return { schema: DENSITY_STRIP_SCHEMA, id: s.id, status: s.status, part: s.part, field: s.field, concurrency: s.concurrency, configHash: s.configHash, producer: s.producer, compiler: s.compiler, wallMs: s.wallMs, rows, labels: s.status === 'done' ? stripLabels(rows) : { fewest: null, widest: null } };
+  }
+  /** `GET /api/density-strip/<id>` (and `GET /api/density-strip`: the strip on screen, or null). */
+  function readStrip(id?: string): DensityStripView | null {
+    if (id !== undefined && strip?.id !== id) throw new RebuildError('DENSITY_STRIP_NOT_FOUND', id);
+    return stripView();
+  }
+  /** A candidate's job as it settled (its lines in full), for the row's log. */
+  function stripJob(id: string, cid: string): PatchJob {
+    const c = strip?.id === id ? strip.candidates.find(x => x.id === cid) : undefined;
+    if (!c) throw new RebuildError('DENSITY_STRIP_NOT_FOUND', `${id}/${cid}`);
+    return snapshot(c.job);
+  }
+  /** `POST /api/density-strip/close` with `{id}`: the strip's folder is removed; refused while its candidates run. */
+  async function closeStrip(input: unknown): Promise<{ status: number; body: unknown }> {
+    const v = object(input, 'density strip close');
+    if (Object.keys(v).join(',') !== 'id' || typeof v.id !== 'string' || !/^[a-f0-9]{64}$/.test(v.id)) throw new RebuildError('REBUILD_REQUEST_INVALID', 'expected exactly {id: <the strip id>}');
+    if (strip?.id !== v.id) throw new RebuildError('DENSITY_STRIP_NOT_FOUND', `${v.id.slice(0, 12)}… is not the strip on screen`);
+    if (strip.status === 'running') return { status: 200, body: { status: 'refused', error: `DENSITY_STRIP_BUSY: strip ${strip.id} is still running; close it when its candidates settle`, producerLine: null } };
+    const applied = strip.candidates.filter(c => c.applied).length;
+    strip = null;
+    await rm(stripRoot(options.stateDir, p.sourceHash), { recursive: true, force: true });
+    return { status: 200, body: { status: 'closed', id: v.id, applied } };
+  }
+  /** A served candidate file: only a built, not-applied candidate's hashed model and pages, read-only. */
+  async function stripFile(id: string, cid: string, name: string): Promise<string> {
+    const c = strip?.id === id ? strip.candidates.find(x => x.id === cid) : undefined;
+    if (!c || c.applied || c.job.status !== 'built' || !c.job.build || !Object.hasOwn(c.job.build.files, name)) throw new RebuildError('DENSITY_STRIP_NOT_FOUND', `${id}/${cid}/${name}`);
+    return safeFile(await realpath(join(c.dir, 'build')), packagePath(name));
+  }
+  /**
+   * #173: an Apply whose build id is a settled strip candidate's takes that candidate's build: the folder moves into the
+   * scratch root, where the ordinary reuse reads and re-hashes it and lands it as any Apply lands. The row then reads
+   * "applied" and is no longer served from the strip.
+   */
+  async function adopt(id: string): Promise<void> {
+    const c = strip && strip.status === 'done' ? strip.candidates.find(x => x.id === id && !x.applied && x.job.status === 'built') : undefined;
+    if (!c) return;
+    const to = rebuildDir(options.stateDir, p.sourceHash, id);
+    if (await exists(to)) return;
+    await mkdir(rebuildRoot(options.stateDir, p.sourceHash), { recursive: true, mode: 0o700 });
+    await rename(c.dir, to);
+    c.applied = true;
   }
 
   /** #135: the delta → `rig-parts remesh --delta mesh-edit.json --part <part>` → `<dir>/rig`; the tail adds the per-file diff. */
@@ -1090,9 +1229,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const id = deltaId({ sourceHash: p.sourceHash, configHash: inputs.configHash, part: request.part, deltaText: text, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
-    if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
     guardRestore(id);
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+    await adopt(id);
     await unkeep(id);
     const reused = await reuse<DeltaJob>(dir, id);
     if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, input); await landed(reused); return { status: 200, body: snapshot(reused) }; }
@@ -1204,9 +1344,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const id = retargetId({ sourceHash: p.sourceHash, configHash: inputs.configHash, record, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
-    if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
     guardRestore(id);
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+    await adopt(id);
     await unkeep(id);
     const reused = await reuse<RetargetJob>(dir, id);
     if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, body); await landed(reused); return { status: 200, body: snapshot(reused) }; }
@@ -1241,9 +1382,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const id = designationId({ sourceHash: p.sourceHash, configHash: inputs.configHash, part: request.part, entry, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
-    if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
     guardRestore(id);
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+    await adopt(id);
     await unkeep(id);
     const reused = await reuse(dir, id);
     if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, input); await landed(reused); return { status: 200, body: snapshot(reused) }; }
@@ -1268,5 +1410,5 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     return safeFile(await realpath(join(rebuildDir(options.stateDir, p.sourceHash, id), 'build')), packagePath(name));
   }
 
-  return { describe, start, read, file, running: () => running, baseline: settledBaseline, inspectedCheck: settledInspectedCheck, latest, undo, history };
+  return { describe, start, read, file, running: () => running, baseline: settledBaseline, inspectedCheck: settledInspectedCheck, latest, undo, history, startStrip, readStrip, stripJob, closeStrip, stripFile };
 }

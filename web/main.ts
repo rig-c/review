@@ -6,7 +6,9 @@ import {rendererStatus} from './renderer-status.ts';
 import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
 import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
 import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
-import {assertMeshPatch,countsText,meshApplyOutcome,meshPatchOps,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
+import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from './density-strip-panel.ts';
+import {densityField,densityPath} from '../src/density-strip.ts';
+import {assertMeshPatch,countsText,meshApplyOutcome,meshPatchOps,setEntryValue,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
 import {worstLine} from '../src/readings.ts';
 import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
 import {bindChestEditor,canvasToCrop,bustLabel,bustSides,LANDMARKS,landmarkInputId,rowCircle,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
@@ -150,7 +152,7 @@ let idlePanel:IdlePanel|null=null;
 let rigFieldsPanel:RigFieldsPanel|null=null,idleAdjust:BoneAdjust|null=null,dialAdjust:BoneAdjust|null=null;
 function setAdjust():void {if(!player)return;const a=idleAdjust,b=dialAdjust;player.adjust=a&&b?bones=>{a(bones);b(bones);}:a??b;if(!playing)drawRig(()=>player!.draw());}
 /** #106: the Setup Mesh panel, and the overlay's last snapshot (bar 1 reads its per-slot triangle count). */
-let meshPanel:MeshPanel|null=null,lastOverlay:OverlaySnapshot|null=null;
+let meshPanel:MeshPanel|null=null,lastOverlay:OverlaySnapshot|null=null,densityStrip:DensityStripPanel|null=null;
 let physicsPanel:PhysicsPanel|null=null,inspectedDocument:unknown=null,inspectedDocumentReason:string|null=null,stageCheck:{lines:string[];check:CheckSummary|null}|null=null;
 /** Animate · Readings (#108): the block, the last finished job (its ticks and worst lines), and the run in flight. */
 let requirementsPanel:RequirementsPanel|null=null,retargetPanel:RetargetPanel|null=null;
@@ -896,9 +898,11 @@ function bind(): void {
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),pane=el('rig-pane').getBoundingClientRect(),view=el('rig-root').parentElement!.getBoundingClientRect(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name),p=project(b.x,b.y);out.set(name,{x:p.x+view.left-pane.left,y:p.y+view.top-pane.top});}catch{/* a bone this model lacks is not pickable */}}return out;}});
   viewDisposers.push(()=>physicsPanel?.dispose());
   meshPanel=bindMeshPanel({pane:el('rig-pane'),project:()=>player?rigProject():null,mapping:()=>chestMapping,bones:()=>data.feedbackCatalog.bones??[],
-   apply:async(part,entry)=>{await applyMesh(part,entry);},reset:resetMeshBuild,folds:async()=>{await meshFolds();},changed:()=>redrawOverlay(false),saved:()=>persistence?.save(),
+   apply:async(part,entry)=>{await applyMesh(part,entry);},reset:resetMeshBuild,folds:async()=>{await meshFolds();},changed:()=>{redrawOverlay(false);densityStrip?.changed();},saved:()=>persistence?.save(),
    token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
   viewDisposers.push(()=>meshPanel?.dispose());
+  // #173: the density strip beside the Mesh panel's density field.
+  densityStrip=bindDensityStrip({part:()=>meshPanel?.part()??null,entry:()=>meshPanel?.entry()??null,build:async values=>{await buildDensityStrip(values);},load:async i=>{await loadStripRow(i);},back:async()=>{await stripBack();},close:async()=>{await closeDensityStrip();}});
   idlePanel=bindIdlePanel({apply:async(ops,keys)=>{await applyIdle(ops,keys);},reset:resetIdleBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),clock:()=>player?.time??0,
    preview:fn=>{idleAdjust=fn as BoneAdjust|null;setAdjust();},
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name);out.set(name,project(b.x,b.y));}catch{/* a bone this model lacks has no handle */}}return out;}});
@@ -956,7 +960,7 @@ async function start(): Promise<void> {
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-    const restored=await setupPersistence();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
     if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
@@ -1610,7 +1614,10 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  mesh:{part:()=>meshPanel?.part()??null,select:(part:string)=>meshPanel?.select(part),entry:()=>meshPanel?.entry()??null,configEntry:()=>meshPanel?.configEntry()??null,set:(path:string[],value:import('../src/config-patch.ts').JsonValue|undefined)=>meshPanel?.set(path,value),setEntry:(entry:MeshEntry)=>meshPanel?.setEntry(entry),
   regions:()=>meshPanel?.regions.list()??[],addRegion:(region:import('../src/mesh-entry.ts').MeshRegion)=>meshPanel?.regions.add(region),moveRegion:(region:number,vertex:number,to:[number,number])=>meshPanel?.regions.move(region,vertex,to),drawRegions:(on:boolean)=>meshPanel?.regions.draw(on),placing:()=>meshPanel?.regions.placing()??null,
   precheck:()=>meshPanel?.precheck()??[],apply:()=>{const part=meshPanel?.part(),entry=meshPanel?.entry();return part&&entry?applyMesh(part,entry):Promise.resolve(null);},reset:()=>resetMeshBuild(),folds:()=>meshFolds(),
-  overlayTriangles:(slot:string)=>lastOverlay?.meshTriangles[slot]??null,status:()=>el('mesh-status').textContent,counts:()=>[...document.querySelectorAll('#mesh-counts code')].map(c=>c.textContent),readout:()=>[...document.querySelectorAll('#mesh-readout code')].map(c=>c.textContent),pending:()=>input('mesh-pending').value,lastPatch:()=>lastMeshPatch?JSON.parse(JSON.stringify(lastMeshPatch)):null},
+  overlayTriangles:(slot:string)=>lastOverlay?.meshTriangles[slot]??null,status:()=>el('mesh-status').textContent,counts:()=>[...document.querySelectorAll('#mesh-counts code')].map(c=>c.textContent),readout:()=>[...document.querySelectorAll('#mesh-readout code')].map(c=>c.textContent),pending:()=>input('mesh-pending').value,lastPatch:()=>lastMeshPatch?JSON.parse(JSON.stringify(lastMeshPatch)):null,
+  /** #173: the density strip — build N values, the view, load a row as pending, back, close. */
+  strip:{build:(values:number[])=>buildDensityStrip(values),view:()=>stripView?JSON.parse(JSON.stringify(stripView)):null,load:(i:number)=>loadStripRow(i),back:()=>stripBack(),close:()=>closeDensityStrip(),pending:()=>stripPending?{index:stripPending.index,candidate:stripPending.candidate}:null,
+   applied:()=>appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,stageHash:()=>stageModelHash}},
  /** #115: the Cuts block — its handles as client pixels (for a real-pointer drag), its ops, Apply and Reset. */
  cuts:{source:()=>cutsPanel?.source()??null,ops:()=>cutsPanel?.ops()??[],handles:()=>cutsPanel?.handles()??[],active:()=>cutsPanel?.active()??false,setActive:(on:boolean)=>cutsPanel?.setActive(on),
   setVertex:(cut:number,k:number,value:[number,number])=>cutsPanel?.setVertex(cut,k,value),setBox:(i:number,value:[number,number,number,number])=>cutsPanel?.setBox(i,value),setRange:(limb:string,k:number,value:[number,number]|null)=>cutsPanel?.setRange(limb,k,value),
@@ -1884,9 +1891,9 @@ function sampleLocals(bone:string,dt:number,n:number):{t:number;rotation:number;
  return [...rows.values()].sort((a,b)=>a.t-b.t);
 }
 async function resetRebuild(world:StageWorld|null=null):Promise<void> {
- if(rebuildBusy||!appliedOnStage||!inspectedModel)return;
+ if(rebuildBusy||(!appliedOnStage&&!stripPending)||!inspectedModel)return;
  rebuildBusy=true;rebuildState();
- try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');}
+ try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;if(stripPending){stripPending=null;renderStrip();}chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');}
  catch(error){chestEditor?.notify(`REBUILD_RESET_FAILED: ${errorText(error)}`,true);}
  finally{rebuildBusy=false;rebuildState();}
 }
@@ -1894,10 +1901,11 @@ async function resetRebuild(world:StageWorld|null=null):Promise<void> {
  * Replace the drawn rig in place: the new model loads first (a failure leaves the stage as it was), then the player is
  * swapped and the same animation, time, set, camera and environment are restored; playback resumes when it was running.
  */
+let stageSource:{url:string;prefix:string;hash:string}|null=null;
 async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWorld|null=null):Promise<void> {
  const keepAnimation=animation,keepTime=player?.time??time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
  const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}});
- pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);stageModelHash=sha256;
+ pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
  {const animations=select('animation-select');animations.replaceChildren(...assets.animations.map(item=>option(item.name,data.manifest.animations.find(a=>a.id===item.name)?.label??item.name)));animations.disabled=assets.animations.length===0;}
  player.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
@@ -1936,6 +1944,8 @@ async function applyMesh(part:string,entry:MeshEntry):Promise<PatchJobView|Rebui
   const result=await applyPatch(patch,world);
   const outcome=meshApplyOutcome(result as Parameters<typeof meshApplyOutcome>[0]);meshPanel?.status(outcome.text,outcome.error);
   if('id' in result&&result.status==='built'){
+   // #173: a strip row on the stage as pending is now (or was replaced by) an applied record; Back has nothing to return to.
+   if(stripPending){stripPending=null;void refreshDensityStrip();}
    // The new triangulation is drawn: the mesh edges go on and the overlay captures the reloaded pose.
    if(!layers.mesh){layers.mesh=true;input('layer-mesh').checked=true;}
    if(player)drawRig(()=>player!.draw());redrawOverlay(true);
@@ -1954,8 +1964,93 @@ async function applyMesh(part:string,entry:MeshEntry):Promise<PatchJobView|Rebui
 /** Mesh Reset: the inspected build back on the stage (same world); the panel already holds the config's entry again. */
 async function resetMeshBuild():Promise<void> {
  meshPanel?.counts([]);meshPanel?.readout([]);
- if(appliedOnStage){meshPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{meshPanel?.busy(false);}}
+ if(appliedOnStage||stripPending){meshPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{meshPanel?.busy(false);}}
  meshPanel?.status('Reset: the inspected build is on the stage; the pending entry is the config\'s.',false);
+}
+/**
+ * #173 · Density strip. Build: one Mesh-panel patch per value (the pending entry with its density field at that value),
+ * sent together to `POST /api/density-strip` and polled until every candidate settles. Load: a built row's revision on
+ * the stage as pending — the applied record, the undo stack and the feedback context's applied state are left alone
+ * (the context reads null while a pending row is on the stage: nothing applied is on it), and Undo is unavailable until
+ * Back returns the stage to what it showed or the Mesh panel's Apply applies the row (reusing its build). Close removes
+ * the strip's scratch.
+ */
+let stripView:DensityStripViewLike|null=null,densityBusy=false;
+let stripPending:{index:number;id:string;candidate:string;back:{url:string;prefix:string;hash:string;applied:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|null;check:{lines:string[];check:CheckSummary|null}|null}}|null=null;
+const densityLine=(text:string,error=false)=>{densityStrip?.status(text,error);if(error)message(text,true);};
+const renderStrip=()=>densityStrip?.show(stripView,stripPending&&stripView?.id===stripPending.id?stripPending.index:null,densityBusy||rebuildBusy||!!readOnly);
+async function refreshDensityStrip():Promise<void>{try{const r=await api<{strip:DensityStripViewLike|null}>('/api/density-strip');stripView=r.strip;}catch{/* keep the last view */}renderStrip();}
+async function buildDensityStrip(values:number[]):Promise<DensityStripViewLike|{error:string}>{
+ if(densityBusy)return {error:'DENSITY_STRIP_BUSY: a strip is still building'};
+ if(readOnly){densityLine(readOnly,true);return {error:readOnly};}
+ const status=rebuildStatus??await loadRebuildStatus(),part=meshPanel?.part()??null,entry=meshPanel?.entry()??null;
+ if(!status||!part||!entry){const t=status?.reason??'MESH_PANEL_NO_PART: select a mesh part';densityLine(t,true);return {error:t};}
+ const problems=meshPanel?.precheck()??[];if(problems.length){const t=`${problems[0]} (review pre-check; nothing sent)`;densityLine(t,true);return {error:t};}
+ let patches:ConfigPatch[];
+ try{const field=densityField(entry,part);patches=values.map(v=>{const patch=makePatch(status,meshPatchOps(part,setEntryValue(entry,densityPath(field),v)),{cmd:'remesh',args:['--part',part]});if(!patch)throw new Error(status.reason??'REBUILD_STATUS_UNAVAILABLE');assertMeshPatch(patch,part);return patch;});}
+ catch(error){const t=errorText(error);densityLine(t,true);return {error:t};}
+ // A pending row goes back first: the strip it came from is about to be replaced.
+ if(stripPending)await stripBack();
+ densityBusy=true;renderStrip();densityLine(`Building a strip of ${values.length} on ${part}: ${values.join(', ')} — remesh, compile and remesh's own check per value…`);
+ const t0=performance.now();
+ try{
+  let view:DensityStripViewLike|{status:string;error:string};
+  try{view=await api<DensityStripViewLike|{status:string;error:string}>('/api/density-strip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patches})});}
+  catch(error){const t=errorText(error);densityLine(t,true);return {error:t};}
+  if('error' in view){densityLine(view.error,true);return {error:view.error};}
+  stripView=view;renderStrip();
+  while(stripView.status==='running'){await new Promise(resolve=>setTimeout(resolve,1500));stripView=await api<DensityStripViewLike>(`/api/density-strip/${stripView.id}`);renderStrip();
+   const settled=stripView.rows.filter(r=>r.status!=='running').length;densityLine(`Strip ${stripView.id.slice(0,12)}…: ${settled} of ${stripView.rows.length} settled · ${((performance.now()-t0)/1000).toFixed(0)} s`);}
+  const passing=stripView.rows.filter(r=>r.verdict==='PASS').length;
+  densityLine(`Strip of ${stripView.rows.length} on ${stripView.part} settled in ${((stripView.wallMs??0)/1000).toFixed(1)} s (at most ${stripView.concurrency} at once): ${passing} passing, ${stripView.rows.length-passing} refused or failing. Labels only — nothing is applied; Load puts a row on the stage as pending.`);
+  return stripView;
+ }finally{densityBusy=false;renderStrip();}
+}
+async function loadStripRow(index:number):Promise<{line:string;ok:boolean}|{error:string}>{
+ const view=stripView,row=view?.rows[index];
+ if(!view||!row)return {error:'DENSITY_STRIP_NOT_FOUND'};
+ if(!row.modelUrl||!row.modelHash){const t=`DENSITY_STRIP_ROW_NOT_LOADABLE: ${row.value} — ${row.applied?'applied already':row.verdict}`;densityLine(t,true);return {error:t};}
+ if(rebuildBusy||densityBusy)return {error:'REBUILD_BUSY'};
+ const back=stripPending?.back??{url:stageSource?.url??inspectedModel!.url,prefix:stageSource?.prefix??inspectedModel!.prefix,hash:stageSource?.hash??inspectedModel!.sha256,applied:appliedOnStage,check:stageCheck};
+ rebuildBusy=true;rebuildState();
+ try{
+  await swapRig(new URL(access.route(row.modelUrl),location.href).href,access.route(`/density-strip/${view.id}/${row.id}/`),row.modelHash,stageWorld());
+  stripPending={index,id:view.id,candidate:row.id,back};
+  // Pending, not applied: no record, no undo entry; the feedback context names no applied state while it is on the stage.
+  appliedOnStage=null;stageCheck=null;
+  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value='';draft.dispatchEvent(new Event('input',{bubbles:true}));
+  meshPanel?.setEntry(row.entry as MeshEntry);
+  if(!layers.mesh){layers.mesh=true;input('layer-mesh').checked=true;}
+  if(player)drawRig(()=>player!.draw());redrawOverlay(true);
+  const c=row.counts?{vertices:row.counts.vertices,triangles:row.counts.triangles,hull:0}:null;
+  const agree=triangleAgreement(c?{part:view.part,before:c,after:c}:null,row.modelTriangles,lastOverlay?.meshTriangles[view.part]??null);
+  meshPanel?.counts([{label:'PENDING',text:`${view.field} ${row.value} · ${row.counts?`v ${row.counts.vertices} · t ${row.counts.triangles}`:'no counts'} (remesh.json) — not applied`},{label:agree.ok?'AGREE':'DIFFER',text:agree.line,error:!agree.ok}]);
+  const line=`Pending on the stage: ${view.part} ${view.field} ${row.value} (strip row ${index+1}) — not applied. The Mesh panel's Apply applies it; Back returns the stage. ${agree.line}`;
+  densityLine(line,!agree.ok);
+  return {line:agree.line,ok:agree.ok};
+ }catch(error){const t=`DENSITY_STRIP_LOAD_FAILED: ${errorText(error)}`;densityLine(t,true);return {error:t};}
+ finally{rebuildBusy=false;rebuildState();renderStrip();}
+}
+async function stripBack():Promise<void>{
+ const pending=stripPending;if(!pending||rebuildBusy)return;
+ rebuildBusy=true;rebuildState();
+ try{
+  await swapRig(pending.back.url,pending.back.prefix,pending.back.hash,stageWorld());
+  appliedOnStage=pending.back.applied;stageCheck=pending.back.check;stripPending=null;
+  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=appliedOnStage?JSON.stringify(appliedOnStage):'';draft.dispatchEvent(new Event('input',{bubbles:true}));
+  meshPanel?.counts([]);redrawOverlay(true);
+  densityLine(`Back: the stage shows ${appliedOnStage?`the last applied record (model ${pending.back.hash.slice(0,12)}…)`:`the inspected build (model ${pending.back.hash.slice(0,12)}…)`}.`);
+ }catch(error){densityLine(`DENSITY_STRIP_BACK_FAILED: ${errorText(error)}`,true);}
+ finally{rebuildBusy=false;rebuildState();renderStrip();}
+}
+async function closeDensityStrip():Promise<{status:string;error?:string}>{
+ const view=stripView;if(!view)return {status:'closed'};
+ if(stripPending&&stripPending.id===view.id)await stripBack();
+ try{
+  const r=await api<{status:string;error?:string}>('/api/density-strip/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:view.id})});
+  if(r.status!=='closed'){densityLine(r.error??'DENSITY_STRIP_CLOSE_REFUSED',true);return r;}
+  stripView=null;renderStrip();densityLine('Strip closed; its scratch is removed.');return r;
+ }catch(error){const t=errorText(error);densityLine(t,true);return {status:'refused',error:t};}
 }
 /** The folds reading (#108) of the drawn animation, on the inspected build and on the latest scratch build: one line per build. */
 async function meshFolds():Promise<string[]> {
