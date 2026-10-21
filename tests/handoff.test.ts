@@ -176,7 +176,7 @@ test('bar 1 + bar 4: the baseline reproduces the inspected rig with both hashes;
   try{
    await fetch(`http://127.0.0.1:${again.port}/api/rebuild`);let b=(await (await fetch(`http://127.0.0.1:${again.port}/api/rebuild`)).json()).baseline;
    for(let i=0;b.status==='running'&&i<200;i++){await Bun.sleep(25);b=(await (await fetch(`http://127.0.0.1:${again.port}/api/rebuild`)).json()).baseline;}
-   expect(b).toMatchObject({status:'not-reproduced',firstDifference:'rig/out/rig/rig.json',line:'baseline: not reproduced — rig/out/rig/rig.json'});
+   expect(b).toMatchObject({status:'not-reproduced',firstDifference:'rig/out/rig/rig.json',line:expect.stringMatching(/^baseline: not reproduced — rig\/out\/rig\/rig\.json · /)});
   }finally{delete process.env.FAKE_PERTURB;await again.stop(true);}
   expect(await treeMd5(dir)).toBe(before);
   expect(await rigTree(join(dir,'rig/out/rig'))).toEqual({'rig.json':expect.any(String),'motion.json':expect.any(String),'mesh_report.json':expect.any(String)});

@@ -24,6 +24,7 @@ import { CHEST_REGIONS_MAX } from './chest-regions.ts';
 import { bustMeshEntry, deriveBust, parseBustSpec, BustSpecError, type BustSpec } from './chest-landmarks.ts';
 import { modelMeshTriangles, remeshCounts, type RemeshCounts } from './mesh-entry.ts';
 import { patchRoute } from './retune-route.ts';
+import { producerHint } from './baseline-reach.ts';
 import { carriedCheck, RETUNE_CHECK_SINCE, RETUNE_FILE, retuneCheckSummary, revisionBinding } from './retune-check.ts';
 import { absolutizeBuildFiles, buildLines, buildNamedFiles, buildReadout, MAX_BUILD_READOUT, needsBuild, newBuildFile, recompositeFigures, type RecompositeFigures } from './build-route.ts';
 import { jsonDiff } from './config-patch.ts';
@@ -210,6 +211,8 @@ export interface RebuildJob {
   producer: { package: string; version: string }; compiler: { package: string; version: string };
   lines: string[]; producerLine: string | null; exitCode: number | null; wallMs: { remesh: number | null; compile: number | null };
   build: RebuildBuild | null;
+  /** #148: review's reading of a producer refusal it can explain (`producerHint`), beside the producer's line; absent otherwise. */
+  hint?: string;
 }
 /**
  * A patch Apply (#102): the config patch, its hash and the config bytes it was made against; the op's, the compile's
@@ -223,6 +226,8 @@ export interface PatchJob {
   request: { patch: ConfigPatch; patchSha256: string; configHash: string };
   producer: { package: string; version: string }; compiler: { package: string; version: string };
   lines: string[]; producerLine: string | null; exitCode: number | null; wallMs: { op: number | null; compile: number | null; check: number | null };
+  /** #148: as `RebuildJob.hint`. */
+  hint?: string;
   check: CheckSummary | null; diff: { count: number; paths: string[] } | null;
   /** #125: the per-file diff of every producer document (`src/producer-files.ts`) and the images by hash. */
   files: FilesDiff | null;
@@ -340,6 +345,8 @@ export interface DeltaJob {
   request: { part: string; delta: Record<string, unknown>; deltaSha256: string; configHash: string };
   producer: { package: string; version: string }; compiler: { package: string; version: string };
   lines: string[]; producerLine: string | null; exitCode: number | null; wallMs: { op: number | null; compile: number | null };
+  /** #148: as `RebuildJob.hint`. */
+  hint?: string;
   files: FilesDiff | null;
   remesh: (RemeshCounts & { modelTriangles: number | null }) | null;
   build: RebuildBuild | null;
@@ -503,7 +510,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     try { assertStateOutside(); } catch { return null; }
     const handoff = p.handoff, key = baselineKey(p.sourceHash, handoff, resolved.producer, resolved.compiler), rig = handoff.rig ?? p.root;
     const show = (rel: string) => relative(p.root, join(rig, rel)).split(sep).join('/');
-    baseline = { schema: 'rig-review-baseline/1', key, status: 'running', producer: tool(resolved.producer), firstDifference: null, hashes: null, line: `baseline: running ${resolved.producer.package} ${resolved.producer.version} rig into scratch…`, exitCode: null, wallMs: null };
+    baseline = { schema: 'rig-review-baseline/1', key, status: 'running', producer: tool(resolved.producer), firstDifference: null, hashes: null, reach: null, line: `baseline: running ${resolved.producer.package} ${resolved.producer.version} rig into scratch…`, exitCode: null, wallMs: null };
     const started = baseline;
     baselineRun = runBaseline(baselineDir(options.stateDir, key), key, handoff, resolved.producer, show)
       .catch((error): BaselineResult => ({ ...started, status: 'failed', line: `baseline: failed — ${error instanceof Error ? error.message : String(error)}` }))
@@ -620,7 +627,13 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       await mkdir(dir, { recursive: true, mode: 0o700 });
       const run = await op.run(push);
       job.exitCode = run.exitCode; op.wallMs(run.wallMs);
-      if (run.exitCode !== 0) { job.producerLine = firstRefusal(run.lines) ?? `${op.tool ?? 'rig-parts'} ${op.cmd} exited ${run.exitCode} without a named refusal`; job.status = 'refused'; return; }
+      if (run.exitCode !== 0) {
+        job.producerLine = firstRefusal(run.lines) ?? `${op.tool ?? 'rig-parts'} ${op.cmd} exited ${run.exitCode} without a named refusal`;
+        // #148: the producer's line stays as printed; review adds what it means here, when it knows.
+        const hint = producerHint(job.producerLine);
+        if (hint && !('refusals' in job)) { (job as RebuildJob | PatchJob | DeltaJob).hint = hint; push(`review: ${hint}`); }
+        job.status = 'refused'; return;
+      }
       job.producerLine = run.stdout.filter(l => l.trim()).at(-1)?.trim() ?? null;
       const { pageEdges, packShape, note } = await op.flags(push);
       if (steps.diff) {

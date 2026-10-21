@@ -13,6 +13,7 @@ import { isProducerFile, PRODUCER_DOCUMENTS, PRODUCER_IMAGES_DIR } from './produ
 import { firstRefusal, runTool, type InstalledTool } from './producer.ts';
 import { checkSummary, MAX_DIFF_PATHS, type CheckSummary, type FilesDiff } from './applied-context.ts';
 import { jsonDiff } from './config-patch.ts';
+import { baselineReach, reachOps, type BaselineReach } from './baseline-reach.ts';
 
 export const BASELINE_SCHEMA = 'rig-review-baseline/1';
 export type BaselineStatus = 'running' | 'reproduced' | 'not-reproduced' | 'refused' | 'failed';
@@ -23,6 +24,8 @@ export interface BaselineResult {
   firstDifference: string | null;
   /** Both sides: the rig.json SHA-256 and the SHA-256 of the sorted {path: sha256} table of every compared file. */
   hashes: { baseline: { rigJson: string | null; tree: string }; inspected: { rigJson: string | null; tree: string } } | null;
+  /** #148: what Apply can still do when not reproduced (`src/baseline-reach.ts`); null otherwise. */
+  reach?: BaselineReach | null;
   line: string; exitCode: number | null; wallMs: number | null;
 }
 const sha256 = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
@@ -73,9 +76,9 @@ export async function producerDiff(inspectedDir: string, scratchDir: string): Pr
   return { documents, images: { changed: changed.length, unchanged: names.length - changed.length, names: changed.slice(0, MAX_DIFF_PATHS) } };
 }
 /** The editor bar's line. */
-export function baselineLine(r: Pick<BaselineResult, 'status' | 'firstDifference' | 'hashes' | 'line'>): string {
+export function baselineLine(r: Pick<BaselineResult, 'status' | 'firstDifference' | 'hashes' | 'line'> & { reach?: BaselineReach | null }): string {
   if (r.status === 'reproduced' && r.hashes) return `baseline: reproduced — rig.json ${r.hashes.baseline.rigJson?.slice(0, 12)}… = inspected ${r.hashes.inspected.rigJson?.slice(0, 12)}…`;
-  if (r.status === 'not-reproduced') return `baseline: not reproduced — ${r.firstDifference}`;
+  if (r.status === 'not-reproduced') return `baseline: not reproduced — ${r.firstDifference}${r.reach ? ` · ${r.reach.text}` : ''}`;
   return r.line;
 }
 /**
@@ -86,7 +89,7 @@ export class BaselineError extends Error { constructor(readonly code: string, de
 export function assertWholeRigBaseline(result: BaselineResult | null): void {
   if (!result) throw new BaselineError('EDIT_BASELINE_MISMATCH', 'no baseline was run: the handoff or the producer did not resolve');
   if (result.status === 'running') throw new BaselineError('EDIT_BASELINE_PENDING', 'the baseline rebuild is still running');
-  if (result.status !== 'reproduced') throw new BaselineError('EDIT_BASELINE_MISMATCH', result.firstDifference ?? result.line);
+  if (result.status !== 'reproduced') throw new BaselineError('EDIT_BASELINE_MISMATCH', result.firstDifference ? `${result.firstDifference}${result.reach ? ` — ${result.reach.text}` : ''}` : result.line);
 }
 
 /** Deterministic: the package, the handoff record and the producer. No clock. */
@@ -94,9 +97,11 @@ export const baselineKey = (sourceHash: string, handoff: Handoff, producer: Inst
   sha256(JSON.stringify([BASELINE_SCHEMA, sourceHash, handoff.record, `${producer.package}@${producer.version}`, `${compiler.package}@${compiler.version}`]));
 
 /** Compare a finished `<dir>/baseline` with the inspected rig; `show` turns a rig-relative path into the package-relative one. */
-export async function compareBaseline(out: string, inspectedRig: string, show: (rel: string) => string): Promise<Pick<BaselineResult, 'status' | 'firstDifference' | 'hashes'>> {
+export async function compareBaseline(out: string, inspectedRig: string, show: (rel: string) => string, producerVersion: string | null = null): Promise<Pick<BaselineResult, 'status' | 'firstDifference' | 'hashes' | 'reach'>> {
   const baseline = await rigTree(out), inspected = await rigTree(inspectedRig), first = firstDifference(baseline, inspected);
-  return { status: first === null ? 'reproduced' : 'not-reproduced', firstDifference: first === null ? null : show(first), hashes: { baseline: { rigJson: baseline['rig.json'] ?? null, tree: treeHash(baseline) }, inspected: { rigJson: inspected['rig.json'] ?? null, tree: treeHash(inspected) } } };
+  // #148: a build the config does not reproduce says, per op, what the producer will still take.
+  const reach = first === null ? null : await baselineReach(out, inspectedRig, baseline, inspected, show, reachOps(producerVersion));
+  return { status: first === null ? 'reproduced' : 'not-reproduced', firstDifference: first === null ? null : show(first), hashes: { baseline: { rigJson: baseline['rig.json'] ?? null, tree: treeHash(baseline) }, inspected: { rigJson: inspected['rig.json'] ?? null, tree: treeHash(inspected) } }, reach };
 }
 
 /**
@@ -106,11 +111,11 @@ export async function compareBaseline(out: string, inspectedRig: string, show: (
 export async function runBaseline(dir: string, key: string, handoff: Handoff, producer: InstalledTool, show: (rel: string) => string): Promise<BaselineResult> {
   const base = { schema: BASELINE_SCHEMA, key, producer: { package: producer.package, version: producer.version } } as const;
   const out = join(dir, 'baseline'), resultFile = join(dir, 'result.json');
-  if (!handoff.parts || !handoff.rig) return { ...base, status: 'refused', firstDifference: null, hashes: null, line: `baseline: unavailable — MODELING_INPUT_UNAVAILABLE: ${handoff.record.missing.join(', ')}`, exitCode: null, wallMs: null };
+  if (!handoff.parts || !handoff.rig) return { ...base, status: 'refused', firstDifference: null, hashes: null, reach: null, line: `baseline: unavailable — MODELING_INPUT_UNAVAILABLE: ${handoff.record.missing.join(', ')}`, exitCode: null, wallMs: null };
   try {
     const stored = JSON.parse(await readFile(resultFile, 'utf8')) as BaselineResult;
     if (stored.schema === BASELINE_SCHEMA && stored.key === key && (stored.status === 'reproduced' || stored.status === 'not-reproduced')) {
-      const now = await compareBaseline(out, handoff.rig, show);
+      const now = await compareBaseline(out, handoff.rig, show, producer.version);
       if (now.hashes?.baseline.tree === stored.hashes?.baseline.tree) return { ...stored, ...now, line: baselineLine({ ...stored, ...now }) };
     }
   } catch { /* no reusable result */ }
@@ -119,9 +124,9 @@ export async function runBaseline(dir: string, key: string, handoff: Handoff, pr
   const run = await runTool(producer.bin, ['rig', '--config', handoff.config, '--parts', handoff.parts, '--out', out], { cwd: dir });
   if (run.exitCode !== 0) {
     const named = firstRefusal(run.lines) ?? `rig-parts rig exited ${run.exitCode} without a named refusal`;
-    return { ...base, status: 'refused', firstDifference: null, hashes: null, line: `baseline: not run — ${named}`, exitCode: run.exitCode, wallMs: run.wallMs };
+    return { ...base, status: 'refused', firstDifference: null, hashes: null, reach: null, line: `baseline: not run — ${named}`, exitCode: run.exitCode, wallMs: run.wallMs };
   }
-  const compared = await compareBaseline(out, handoff.rig, show);
+  const compared = await compareBaseline(out, handoff.rig, show, producer.version);
   const result: BaselineResult = { ...base, ...compared, line: '', exitCode: 0, wallMs: run.wallMs };
   result.line = baselineLine(result);
   await writeFile(resultFile, JSON.stringify(result, null, 1) + '\n', { mode: 0o600 });
