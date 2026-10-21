@@ -135,7 +135,7 @@ test('issue export names the environment of a note; a note without one has no en
  expect(lines).toEqual(['- Environment: wind 30 · gust 48 over 2.4 s (now 48.0) · total 78.0 · gravity 1 · standing wind [78, 0] · gravity [0, 1]']);
 });
 
-test('the page applies the environment in the drawing tick, records it in feedback and edits physics only as patch ops',async()=>{
+test('the page records its evaluated environment; physics preview is explicit and Apply keeps the producer patch path',async()=>{
  const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),html=await readFile(new URL('../web/index.html',import.meta.url),'utf8');
  expect(main).toContain('stepEnvironment(dt); drawRig(()=>player!.frame(dt));');
  expect(main).toContain('environment: feedbackEnvironment(),');
@@ -144,9 +144,20 @@ test('the page applies the environment in the drawing tick, records it in feedba
  for(const id of ['environment','wind-base','wind-breeze','wind-gust','wind-gust-peak','wind-gust-duration','wind-repeat','wind-readout','gravity','jolt','drag-trail','physics-reset','physics-panel','physics-rows','physics-row-editor','physics-locked','physics-pending-list','physics-apply','physics-reset-build','physics-readout','physics-pending'])expect(animate).toContain(`id="${id}"`);
  const block=animate.slice(animate.indexOf('<section id="environment"'),animate.indexOf('</section>',animate.indexOf('<section id="environment"')));
  expect(block).toContain('min="-100" max="100"');expect(block).toContain('min="0" max="4"');expect(block).toContain('min="0" max="200"');expect(block).toContain('min="0.1" max="20"');
- // #103: the read-only list became the tuning panel, outside the inspection-only environment block; it says that
- // preview before Apply waits on play#147 and the environment block itself still edits nothing in the model.
+ // #103/#206: tuning stays outside the inspection-only environment block. Live preview now exists through Play's
+ // six-field API; the pending config patch and its producer Apply remain the source-writing contract.
  expect(block).not.toContain('physics-constraints');
  const panel=animate.slice(animate.indexOf('<section id="physics-panel"'),animate.indexOf('</section>',animate.indexOf('<section id="physics-panel"')));
- expect(panel).toContain('play#147');expect(panel).toContain('/constraints/&lt;i&gt;/&lt;field&gt;');
+ expect(panel).toContain('/constraints/&lt;i&gt;/&lt;field&gt;');
+ expect(panel).toContain('data-physics-preview type="checkbox" checked');
+ for(const id of ['physics-preview-clear','physics-preview-label'])expect(panel).toContain(`id="${id}"`);
+ expect(panel).not.toContain('id="physics-preview"'); // transient preview is not a persisted form input
+ expect(panel).toContain('strength, damping, inertia, wind, gravity and mix on the next evaluation');
+ expect(panel).toContain('mass and component toggles require Apply');
+ expect(panel).toContain('Clear resumes authored values without resetting integrated history');
+ const preview=await readFile(new URL('../web/preview.ts',import.meta.url),'utf8');
+ for(const method of ['setPhysicsParameters','readPhysicsParameters','clearPhysicsParameters'])expect(preview).toContain(`.${method}(`);
+ expect(main).toContain("makePatch(status,ops,{cmd:'rig'})");
+ expect(main).toContain('const result=await applyPatch(patch,world);');
+ expect(main).toContain('physicsPanel?.clearPreview();');
 });
