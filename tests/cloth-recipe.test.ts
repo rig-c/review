@@ -85,3 +85,15 @@ test('#111 bar 3: the cloth runner and route never read or reference the produce
   expect({file,reads:text.match(/join\([^)]*['"]propose['"][^)]*\)/g)}).toEqual({file,reads:null});
  }
 });
+
+test('#185: clearing an object field\'s last known key removes the object, and keeps it while an unknown key stays',()=>{
+ const base={links:3,wind:[0,1],gravity:[0,1]};
+ const cleared=(rec:Record<string,unknown>)=>{const v=values(rec);v['split.at']='';return recipeOps({cloth:{t:rec}},'t',recipeFromFields(v));};
+ const apply=(rec:Record<string,unknown>)=>(applyConfigPatch({cloth:{t:rec}} as unknown as JsonValue,cleared(rec)) as {cloth:{t:Record<string,unknown>}}).cloth.t;
+ // Only known keys: the parent goes, never `split: {}`.
+ expect(cleared({...base,split:{at:1}})).toEqual([{op:'remove',path:'/cloth/t/split'}]);
+ expect(apply({...base,split:{at:1}})).toEqual(base);
+ // An unknown child key is kept, so only the cleared field is removed.
+ expect(cleared({...base,split:{at:1,note:'x'}})).toEqual([{op:'remove',path:'/cloth/t/split/at'}]);
+ expect(apply({...base,split:{at:1,note:'x'}})).toEqual({...base,split:{note:'x'}});
+});

@@ -134,8 +134,12 @@ export function rowOf(name: string, line: Record<string, unknown>, printed: stri
     // The producer prints the bar as `range_degrees: [lo, hi]`.
     const bar = Array.isArray(line.range_degrees) ? line.range_degrees : [line.lo_degrees, line.hi_degrees];
     const lo = num(bar[0]), hi = num(bar[1]);
-    // The end that breaks its bar, else the end with less room to its bar.
-    const lowSide = least !== null && lo !== null && (least < lo || (greatest === null || hi === null || least - lo < hi - greatest));
+    // The end that breaks its bar by more (either may, or both), else the end with less room to its bar.
+    const lowBreak = least !== null && lo !== null && least < lo ? lo - least : 0;
+    const highBreak = greatest !== null && hi !== null && greatest > hi ? greatest - hi : 0;
+    const lowSide = least !== null && lo !== null && (lowBreak > 0 || highBreak > 0
+      ? lowBreak >= highBreak
+      : greatest === null || hi === null || least - lo < hi - greatest);
     worst = worstFrame(lowSide ? line.least_at : line.greatest_at) ?? worstFrame(line.least_at);
   } else if (kind === 'follow') { measured = num(line.fraction_measured); worst = worstFrame(line.largest_residual_at) ?? worstFrame(line.largest_drive_at); }
   const reason = typeof line.reason === 'string' ? line.reason : null;

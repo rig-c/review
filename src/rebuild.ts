@@ -489,16 +489,50 @@ async function opCarried(op: CarryingOp, spec: string, world: ApplyWorld | null,
   return { summary: carriedCheckSummary(carried, op) };
 }
 
+/** #185: the most files, and the deepest nesting, a config-named run directory may hold to be hashed into the build inputs. */
+export const MAX_NAMED_DIR_FILES = 4096, MAX_NAMED_DIR_DEPTH = 8;
+/**
+ * #185: a config-named run directory (an alternate's `full` / `head`) as one digest: every regular file under it, at most
+ * `MAX_NAMED_DIR_DEPTH` levels down and `MAX_NAMED_DIR_FILES` in all, each resolved and held inside the package root and
+ * hashed, in path order. Over the bound refuses (`BUILD_INPUT_TOO_LARGE`) rather than hash part of it.
+ */
+async function namedDirDigest(root: string, dir: string, field: string): Promise<string> {
+  const rows: [string, string][] = [];
+  const walk = async (at: string, depth: number): Promise<void> => {
+    const entries = (await readdir(at, { withFileTypes: true })).map(e => e.name).sort();
+    for (const name of entries) {
+      const lexical = join(at, name);
+      const real = await realpath(lexical);
+      const rel = relative(root, real);
+      if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) throw new RebuildError('BUILD_INPUT_OUTSIDE_ROOT', `config ${field} holds ${relative(dir, lexical).split(sep).join('/')}, which resolves outside the package root`);
+      const st = await lstat(real);
+      if (st.isDirectory()) {
+        if (depth >= MAX_NAMED_DIR_DEPTH) throw new RebuildError('BUILD_INPUT_TOO_LARGE', `config ${field} nests deeper than ${MAX_NAMED_DIR_DEPTH} levels`);
+        await walk(lexical, depth + 1);
+      } else if (st.isFile()) {
+        if (rows.length >= MAX_NAMED_DIR_FILES) throw new RebuildError('BUILD_INPUT_TOO_LARGE', `config ${field} holds more than ${MAX_NAMED_DIR_FILES} files`);
+        rows.push([relative(dir, lexical).split(sep).join('/'), sha256(await readFile(real))]);
+      }
+    }
+  };
+  await walk(dir, 1);
+  return sha256(JSON.stringify(rows));
+}
+
 /** #115: what a build-routed patch runs with — the handoff's painting and runs, absolute; never from the client. */
 export interface BuildPlan { source: string; full: string; head: string | null; inputsHash: string; inputs: AssembledView['inputs'] }
 /**
  * The build's inputs for a patch (`null` refusal line when the handoff declares no painting and full run): the painting
  * and the runs, and every config-relative file the patched config names for assemble, each resolved against the handoff
- * config's directory and held inside the handoff root (`BUILD_INPUT_OUTSIDE_ROOT`, `BUILD_INPUT_MISSING`) and hashed.
+ * config's directory and held inside the handoff root (`BUILD_INPUT_OUTSIDE_ROOT`, `BUILD_INPUT_MISSING`) and hashed — a named
+ * directory outside the declared runs by its contents (`namedDirDigest`, #185); a declared run is in the record already.
  */
 export async function buildPlan(handoff: Handoff, patched: JsonValue, show: (abs: string) => string): Promise<BuildPlan> {
   if (!handoff.source || !handoff.full) throw new RebuildError('MODELING_INPUT_UNAVAILABLE', BUILD_SOURCE_UNAVAILABLE.slice('MODELING_INPUT_UNAVAILABLE: '.length));
   const root = await realpath(handoff.root), configDir = dirname(handoff.config), named: AssembledView['inputs']['named'] = [];
+  // The declared runs' files are already in the handoff record (and so in the hash below); any other named directory is hashed here.
+  const declaredRuns = new Set<string>();
+  for (const run of [handoff.full, handoff.head]) if (run) declaredRuns.add(await realpath(run).catch(() => resolve(run)));
   for (const f of buildNamedFiles(patched)) {
     if (isAbsolute(f.value)) throw new RebuildError('BUILD_INPUT_OUTSIDE_ROOT', `config ${f.field} is an absolute path; the handoff config names its files relative to its own directory`);
     const lexical = resolve(configDir, f.value);
@@ -506,7 +540,7 @@ export async function buildPlan(handoff: Handoff, patched: JsonValue, show: (abs
     try { real = await realpath(lexical); } catch { throw new RebuildError('BUILD_INPUT_MISSING', `config ${f.field} names ${show(lexical)}, which does not exist`); }
     const rel = relative(root, real);
     if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) throw new RebuildError('BUILD_INPUT_OUTSIDE_ROOT', `config ${f.field} resolves outside the package root`);
-    named.push({ field: f.field, path: show(real), sha256: f.kind === 'file' ? sha256(await readFile(real)) : null });
+    named.push({ field: f.field, path: show(real), sha256: f.kind === 'file' ? sha256(await readFile(real)) : declaredRuns.has(real) ? null : await namedDirDigest(root, real, f.field) });
   }
   const inputs = { source: handoff.record.source?.path ?? show(handoff.source), full: handoff.record.full ?? show(handoff.full), head: handoff.head ? handoff.record.head ?? show(handoff.head) : null, named };
   // The painting, the runs' hashed files (the handoff record's) and the named files: an identical build reuses its scratch build.

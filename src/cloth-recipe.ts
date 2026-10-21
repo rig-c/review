@@ -129,19 +129,23 @@ export function recipeOps(config: unknown, tag: string, next: Record<string, Jso
     if (!known.has(key)) continue;
     const was = current[key], now = next[key];
     if (same(was, now)) continue;
-    if (now === undefined) { ops.push({ op: 'remove', path: at(key) }); continue; }
-    if (was === undefined) { ops.push({ op: 'add', path: at(key), value: now }); continue; }
-    // An object field (split, strength, swing, influence) is edited key by key, so its other keys keep their place.
-    if (isObject(was) && isObject(now)) {
-      for (const sub of [...new Set([...Object.keys(was), ...Object.keys(now)])]) {
-        if (same(was[sub], now[sub])) continue;
+    // An object field (split, strength, swing, influence) is edited key by key, so its other keys keep their place;
+    // cleared to nothing (no field left, no unknown key to keep), the object itself is removed rather than left `{}`.
+    if (isObject(was) && (now === undefined || isObject(now))) {
+      const to: Record<string, JsonValue> = now ?? {}, left: Record<string, unknown> = { ...was }, subOps: PatchOp[] = [];
+      for (const sub of [...new Set([...Object.keys(was), ...Object.keys(to)])]) {
+        if (same(was[sub], to[sub])) continue;
         const known2 = RECIPE_FIELDS.some(f => f.path[0] === key && f.path[1] === sub);
         if (!known2) continue;
-        if (now[sub] === undefined) ops.push({ op: 'remove', path: at(key, sub) });
-        else ops.push({ op: was[sub] === undefined ? 'add' : 'replace', path: at(key, sub), value: now[sub] as JsonValue });
+        if (to[sub] === undefined) { subOps.push({ op: 'remove', path: at(key, sub) }); delete left[sub]; }
+        else { subOps.push({ op: was[sub] === undefined ? 'add' : 'replace', path: at(key, sub), value: to[sub] as JsonValue }); left[sub] = to[sub] as JsonValue; }
       }
+      if (Object.keys(left).length === 0) ops.push({ op: 'remove', path: at(key) });
+      else ops.push(...subOps);
       continue;
     }
+    if (now === undefined) { ops.push({ op: 'remove', path: at(key) }); continue; }
+    if (was === undefined) { ops.push({ op: 'add', path: at(key), value: now }); continue; }
     ops.push({ op: 'replace', path: at(key), value: now });
   }
   return ops;

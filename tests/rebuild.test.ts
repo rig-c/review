@@ -1,13 +1,13 @@
 import {expect,test} from 'bun:test';
 import {createHash} from 'node:crypto';
-import {mkdir,mkdtemp,readdir,readFile,rm,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readdir,readFile,realpath,rm,writeFile} from 'node:fs/promises';
 import {join,relative} from 'node:path';
 import {tmpdir} from 'node:os';
 import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
 import {frontRoute} from '../src/front.ts';
 import {compileArgs,firstRefusal,MODELING_PRODUCER_NOT_INSTALLED,remeshArgs,resolveProducer,REMESH_SINCE,versionAtLeast} from '../src/producer.ts';
-import {designationId,meshEntryText,parseRebuildRequest,RebuildError} from '../src/rebuild.ts';
+import {buildPlan,designationId,meshEntryText,parseRebuildRequest,RebuildError} from '../src/rebuild.ts';
 import {appliedRecord,designatedRegions,outcomeLine,pickPart,runRebuild,seedFields,type RebuildJobView} from '../web/rebuild-client.ts';
 import {chestRowId,type ChestFieldValue} from '../web/chest-regions-tool.ts';
 
@@ -207,4 +207,28 @@ test('#106: the status lists every meshes entry as written; a Mesh panel patch r
   const remeshCall=(await readFile(log,'utf8')).trim().split('\n').find(l=>l.startsWith('remesh '))!;expect(remeshCall).toContain('--part topwear --mesh mesh.json --out rig');
   expect(await treeHash(pkg)).toBe(before);
  }finally{delete process.env.FAKE_LOG;await server.stop(true);await rm(root,{recursive:true,force:true});}
+});
+
+test('#185: a full/head run an alternate names outside the declared runs is hashed into the build inputs',async()=>{
+ const root=await realpath(await mkdtemp(join(tmpdir(),'review-named-dir-')));
+ try{
+  await mkdir(join(root,'runs','full'),{recursive:true});await mkdir(join(root,'alt','full','sub'),{recursive:true});
+  await writeFile(join(root,'config.json'),'{}');await writeFile(join(root,'source.png'),'src');await writeFile(join(root,'runs','full','a.png'),'a');
+  await writeFile(join(root,'alt','full','arm.png'),'arm-1');await writeFile(join(root,'alt','full','sub','hand.png'),'hand-1');
+  const record={schema:'rig-review-handoff/1',how:'declared',via:'open --config',outside:false,config:{path:'config.json',sha256:'c'},parts:null,rig:null,source:{path:'source.png',sha256:'s'},full:'runs/full',head:null,files:[],missing:[]};
+  const handoff={record,config:join(root,'config.json'),parts:null,rig:null,root,source:join(root,'source.png'),full:join(root,'runs','full'),head:null} as unknown as Parameters<typeof buildPlan>[0];
+  const patched={assemble:{alternates:[{name:'alt',full:'alt/full'}]}};
+  const show=(abs:string)=>relative(root,abs);
+  const first=await buildPlan(handoff,patched,show);
+  expect(first.inputs.named.map(n=>[n.field,n.path])).toEqual([['assemble.alternates[0].full','alt/full']]);
+  // Same contents: the same inputs; a changed image (nested too) is a different build.
+  expect((await buildPlan(handoff,patched,show)).inputsHash).toBe(first.inputsHash);
+  await writeFile(join(root,'alt','full','sub','hand.png'),'hand-2');
+  const second=await buildPlan(handoff,patched,show);
+  expect(second.inputsHash).not.toBe(first.inputsHash);
+  await writeFile(join(root,'alt','full','arm.png'),'arm-2');
+  expect((await buildPlan(handoff,patched,show)).inputsHash).not.toBe(second.inputsHash);
+  // The directory's digest is recorded in place of null.
+  expect(second.inputs.named[0]!.sha256).toMatch(/^[0-9a-f]{64}$/);
+ }finally{await rm(root,{recursive:true,force:true});}
 });
