@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1](https://github.com/rig-c/review/compare/v0.10.0...v0.10.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **cuts:** adding a cut or patch keeps the config's existing regions ([#190](https://github.com/rig-c/review/issues/190)) ([b2adf48](https://github.com/rig-c/review/commit/b2adf488dfaa98b5f145c0cf47b7777c113e5a3e)), closes [#184](https://github.com/rig-c/review/issues/184)
+* **rebuild:** publish "refused" or "failed" only after the job's scratch is removed ([#181](https://github.com/rig-c/review/issues/181)) ([dd71585](https://github.com/rig-c/review/commit/dd715853e1343ddcc3ca1de5e8b63bff38fdc173)), closes [#180](https://github.com/rig-c/review/issues/180)
+
 ## [0.10.0](https://github.com/rig-c/review/compare/v0.9.0...v0.10.0) (2026-10-21)
 
 
