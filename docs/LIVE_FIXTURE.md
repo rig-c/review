@@ -16,12 +16,19 @@ It is public, so a PR may name it. Pin it to a parts tag; `examples/wind` is unc
 
 ## 1. The producer bench
 
+The blocks below run in order in one shell. Start in an empty folder; every later path hangs off `BASE`, so a block works wherever the previous one left the shell.
+
+```sh
+BASE="$(pwd)"
+```
+
 Review runs the installed producers and never installs them. Keep one folder that holds the versions a card needs, and start review from it (`rig-review open` resolves the producers from its working directory):
 
 ```sh
-mkdir review-producer && cd review-producer
+mkdir "$BASE/review-producer" && cd "$BASE/review-producer"
 npm init -y
 npm i -D @rig-c/review@0.8.0 @rig-c/parts@1.49.1 rig-c@2.64.1 @rig-c/pose@0.37.0
+cd "$BASE"
 ```
 
 Bump a version here when a card needs a newer producer. Review refuses an older one by name where a flag needs it, for example `MODELING_PRODUCER_TOO_OLD` for `check --environment`.
@@ -31,15 +38,16 @@ Bump a version here when a card needs a newer producer. Review refuses an older 
 The example's heavy inputs live in rig-c/parts-examples. A parts clone copies them in with `bun run fetch-examples`:
 
 ```sh
-git clone --branch v1.49.1 https://github.com/rig-c/parts.git
-cd parts && bun install && bun run fetch-examples
+git clone --branch v1.49.1 https://github.com/rig-c/parts.git "$BASE/parts"
+cd "$BASE/parts" && bun install && bun run fetch-examples
+cd "$BASE"
 ```
 
 Copy the example into a scratch folder, because review refuses handoff paths outside the folder it opens. `pose.json` is needed: the config names it as `generation.control.skeleton`, and `assemble` refuses `CONFIG_FILE_PRESENT` without it.
 
 ```sh
-W=parts/examples/wind
-P=scratch/wind
+W="$BASE/parts/examples/wind"
+P="$BASE/scratch/wind"
 mkdir -p "$P"
 cp "$W/config.json" "$W/keypoints.json" "$W/pose.json" "$P/"
 cp -R "$W/inputs" "$P/inputs"
@@ -48,7 +56,7 @@ cp -R "$W/inputs" "$P/inputs"
 Build it from the bench, then put the checked compiled model where the folder adapter looks (`build/skeleton.model.json`):
 
 ```sh
-cd review-producer
+cd "$BASE/review-producer"
 npx rig-parts build --config "$P/config.json" --source "$P/inputs/painting.png" \
   --full "$P/inputs/layers/full" --head "$P/inputs/layers/head" --out "$P/out"
 cp -R "$P/out/check/build" "$P/build"
@@ -61,6 +69,7 @@ The build takes about two minutes and ends with `build: PASS`. `out/parts.json`,
 From the bench folder:
 
 ```sh
+cd "$BASE/review-producer"
 npx rig-review open "$P" --config "$P/config.json" --parts "$P/out" \
   --source "$P/inputs/painting.png" --full "$P/inputs/layers/full" --head "$P/inputs/layers/head" \
   --keypoints "$P/keypoints.json" --animation idle
