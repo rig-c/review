@@ -1,5 +1,6 @@
 import {expect,test} from 'bun:test';
 import {chmodSync,existsSync,mkdirSync,mkdtempSync,readFileSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
@@ -8,37 +9,66 @@ type Workflow={on:unknown;permissions:unknown;concurrency:unknown;jobs:{release:
 const workflow=Bun.YAML.parse(readFileSync(new URL('../.github/workflows/release.yml',import.meta.url),'utf8')) as Workflow;
 const steps=workflow.jobs.release.steps;
 const target=steps.find(step=>step.id==='target')!;
-const tag='v0.11.1',commitSha='a'.repeat(40),oldSha='b'.repeat(40),tagObjectSha='c'.repeat(40);
-const recovery=`gh workflow run release.yml --ref ${tag} -f tag=${tag}`;
+const tag='v0.11.1',commitSha='a'.repeat(40),oldSha='b'.repeat(40);
 type Fixture={
- event?:string;created?:string;cutTag?:string;inputTag?:string;runSha?:string;
- refObject?:{type:string;sha:string};commitResponse?:{sha:unknown};apiExit?:number;apiOutput?:string;
+ event?:string;created?:string;cutTag?:string;inputTag?:string;runSha?:string;repo?:string;
+ commitSha?:string;apiResponses?:Record<string,ApiResponse>;apiExit?:number;
  author?:string;releaseExit?:number;tagExit?:number;mainExit?:number;ancestorExit?:number;served?:string;
 };
 type Call={command:string;args:string[]};
+type ApiResponse={status:number;body:string};
+type ApiCall={endpoint:string;status:number;bodySha256:string};
+type Capture={id:string;file:string;endpoint:string;status:number;bodyBytes:number;bodySha256:string};
+type CapturedCase={repo:string;tag:string;full:string;short?:string;ref?:string};
+const fixtureDir=new URL('./fixtures/release-provenance/',import.meta.url);
+const provenance=JSON.parse(readFileSync(new URL('provenance.json',fixtureDir),'utf8')) as {
+ responses:Capture[];cases:Record<'lightweight'|'annotated',CapturedCase>;
+};
+const sha256=(bytes:Uint8Array|string)=>createHash('sha256').update(bytes).digest('hex');
+function capture(id:string){
+ const metadata=provenance.responses.find(row=>row.id===id)!;
+ const body=readFileSync(new URL(metadata.file,fixtureDir),'utf8');
+ return {...metadata,body};
+}
+function observedCase(kind:'lightweight'|'annotated'){
+ const observed=provenance.cases[kind],full=capture(observed.full);
+ const expectedCommit=JSON.parse(full.body).sha as string;
+ const apiResponses=Object.fromEntries([observed.full,observed.short].filter((id):id is string=>!!id).map(id=>{
+  const row=capture(id);return [row.endpoint,{status:row.status,body:row.body}];
+ }));
+ return {...observed,expectedCommit,fixture:{repo:observed.repo,cutTag:observed.tag,
+  runSha:expectedCommit,apiResponses} satisfies Fixture};
+}
+
 
 // Only these stubs and grep exist on PATH. The extracted workflow runs with no repository,
 // inherited credentials, real gh/git/npm, network client, publish or dispatch command.
 const stub=String.raw`
 import {appendFileSync,readFileSync} from 'node:fs';
 import {basename} from 'node:path';
+import {createHash} from 'node:crypto';
 const f=JSON.parse(readFileSync(process.env.FIXTURE,'utf8'));
 const command=basename(process.argv[1]),args=process.argv.slice(2);
 appendFileSync(process.env.TRACE,JSON.stringify({command,args})+'\n');
 const is=(...expected)=>JSON.stringify(args)===JSON.stringify(expected);
 const reply=(value,code=0)=>{if(value!==undefined)console.log(value);process.exit(code);};
 if(command==='gh'){
- if(is('api','repos/rig-c/review/commits/tags%2F'+f.cutTag,'--jq','.sha')){
-  if(f.apiExit)reply(f.apiOutput,f.apiExit);
-  // The commit API response has a commit SHA even when the Git ref points to a tag object.
-  reply(f.apiOutput!==undefined?f.apiOutput:f.commitResponse.sha);
+ if(args.length===4&&args[0]==='api'&&args[2]==='--jq'&&args[3]==='.sha'&&Object.hasOwn(f.apiResponses,args[1])){
+  // Route by the exact requested endpoint, never by the desired fixture kind.
+  const response=f.apiResponses[args[1]],data=JSON.parse(response.body);
+  appendFileSync(process.env.API_TRACE,JSON.stringify({endpoint:args[1],status:response.status,
+   bodySha256:createHash('sha256').update(response.body).digest('hex')})+'\n');
+  if(response.status>=400){console.error('gh: '+data.message+' (HTTP '+response.status+')');process.exit(1);}
+  // gh api --jq .sha: parse the actual JSON body and emit its top-level .sha.
+  // apiExit is a deliberate transport-failure injection, not recorded API behavior.
+  reply(data.sha??null,f.apiExit);
  }
  if(is('release','view',f.inputTag,'--repo','rig-c/review','--json','author','--jq','.author.login'))reply(f.author,f.releaseExit);
 }
 if(command==='git'){
- if(is('rev-parse','--verify','--quiet','refs/tags/'+f.inputTag+'^{commit}'))reply(f.commitResponse.sha,f.tagExit);
- if(is('rev-parse','--verify','--quiet','refs/remotes/origin/main'))reply(f.commitResponse.sha,f.mainExit);
- if(is('merge-base','--is-ancestor',f.commitResponse.sha,'refs/remotes/origin/main'))reply(undefined,f.ancestorExit);
+ if(is('rev-parse','--verify','--quiet','refs/tags/'+f.inputTag+'^{commit}'))reply(f.commitSha,f.tagExit);
+ if(is('rev-parse','--verify','--quiet','refs/remotes/origin/main'))reply(f.commitSha,f.mainExit);
+ if(is('merge-base','--is-ancestor',f.commitSha,'refs/remotes/origin/main'))reply(undefined,f.ancestorExit);
 }
 if(command==='npm'&&is('view','@rig-c/review@'+f.inputTag.slice(1),'version'))reply(f.served,f.served?0:1);
 console.error('UNEXPECTED_STUB_COMMAND',command,JSON.stringify(args));process.exit(97);
@@ -48,10 +78,14 @@ function resolveTag(name:string,overrides:Fixture={}){
  const root=mkdtempSync(join(tmpdir(),'review-release-provenance-'));
  try{
   const bin=join(root,'bin');mkdirSync(bin);
-  const fixture={event:'push',created:'true',cutTag:tag,inputTag:tag,runSha:commitSha,
-   refObject:{type:'commit',sha:commitSha},commitResponse:{sha:commitSha},author:'github-actions[bot]',...overrides};
+  // Ordinary guard probes use synthetic JSON; observed tag cases override the entire
+  // endpoint table with exact recorded bodies, with no short/full alias fallback.
+  const fixture={event:'push',created:'true',cutTag:tag,inputTag:tag,runSha:commitSha,repo:'rig-c/review',
+   commitSha,apiResponses:{[`repos/rig-c/review/commits/refs%2Ftags%2F${tag}`]:{status:200,body:JSON.stringify({sha:commitSha})}},
+   author:'github-actions[bot]',...overrides};
   writeFileSync(join(root,'fixture.json'),JSON.stringify(fixture));
-  const output=join(root,'output'),trace=join(root,'trace');writeFileSync(output,'');writeFileSync(trace,'');
+  const output=join(root,'output'),trace=join(root,'trace'),apiTrace=join(root,'api-trace');
+  writeFileSync(output,'');writeFileSync(trace,'');writeFileSync(apiTrace,'');
   for(const command of ['gh','git','npm']){
    const path=join(bin,command);writeFileSync(path,`#!${process.execPath}\n${stub}`);chmodSync(path,0o755);
   }
@@ -60,21 +94,22 @@ function resolveTag(name:string,overrides:Fixture={}){
   const result=Bun.spawnSync(['/bin/bash','--noprofile','--norc','-c',target.run!],{
    cwd:root,timeout:10000,
    env:{PATH:bin,HOME:root,EVENT:fixture.event,CREATED:fixture.created,CUT_TAG:fixture.cutTag,
-    INPUT_TAG:fixture.inputTag,GITHUB_SHA:fixture.runSha,GITHUB_OUTPUT:output,REPO:'rig-c/review',
-    RELEASE_AUTHOR:target.env!.RELEASE_AUTHOR!,FIXTURE:join(root,'fixture.json'),TRACE:trace},
+    INPUT_TAG:fixture.inputTag,GITHUB_SHA:fixture.runSha,GITHUB_OUTPUT:output,REPO:fixture.repo,
+    RELEASE_AUTHOR:target.env!.RELEASE_AUTHOR!,FIXTURE:join(root,'fixture.json'),TRACE:trace,API_TRACE:apiTrace},
   });
   const stdout=result.stdout.toString(),stderr=result.stderr.toString();
   const outputText=readFileSync(output,'utf8');
   const traceText=readFileSync(trace,'utf8');
   const calls:Call[]=traceText.trim()?traceText.trim().split('\n').map(line=>JSON.parse(line)):[];
+  const apiCalls:ApiCall[]=readFileSync(apiTrace,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
   // Optional raw evidence is external to the repository and includes the fake GITHUB_OUTPUT.
-  const evidence=process.env.REVIEW_208_EVIDENCE_DIR;
+  const evidence=process.env.REVIEW_212_EVIDENCE_DIR??process.env.REVIEW_208_EVIDENCE_DIR;
   if(evidence){
    mkdirSync(evidence,{recursive:true});
-   writeFileSync(join(evidence,`${name}.json`),JSON.stringify({fixture,exitCode:result.exitCode,stdout,stderr,output:outputText,calls},null,2)+'\n');
+   writeFileSync(join(evidence,`${name}.json`),JSON.stringify({fixture,exitCode:result.exitCode,stdout,stderr,output:outputText,calls,apiCalls},null,2)+'\n');
   }
   expect(stdout+stderr).not.toContain('UNEXPECTED_STUB_COMMAND');
-  return {exitCode:result.exitCode,text:stdout+stderr,output:outputText,calls,
+  return {exitCode:result.exitCode,text:stdout+stderr,output:outputText,calls,apiCalls,
    outputs:Object.fromEntries(outputText.trim().split('\n').filter(Boolean).map(line=>line.split('=')))};
  }finally{rmSync(root,{recursive:true,force:true});}
 }
@@ -84,8 +119,8 @@ function refused(result:ReturnType<typeof resolveTag>,code:string){
  expect(result.output).not.toContain('publish=true');
  expect(result.outputs.sha).toBeUndefined();
 }
-function onlyCommitLookup(calls:Call[]){
- expect(calls).toEqual([{command:'gh',args:['api',`repos/rig-c/review/commits/tags%2F${tag}`,'--jq','.sha']}]);
+function onlyCommitLookup(calls:Call[],repo='rig-c/review',cutTag=tag){
+ expect(calls).toEqual([{command:'gh',args:['api',`repos/${repo}/commits/refs%2Ftags%2F${cutTag}`,'--jq','.sha']}]);
 }
 
 test('parsed YAML preserves release authority, triggers and gates, and checks out only the validated commit',()=>{
@@ -106,25 +141,49 @@ test('parsed YAML preserves release authority, triggers and gates, and checks ou
  expect(steps.filter(step=>step.run?.includes('npm publish')).map(step=>step.run?.trim())).toEqual(['npm publish --provenance --access public']);
 });
 
-for(const kind of ['lightweight','annotated']){
+test('recorded API bodies retain exact byte hashes, HTTP statuses and annotated identity',()=>{
+ for(const row of provenance.responses){
+  const bytes=readFileSync(new URL(row.file,fixtureDir));
+  expect(bytes.length).toBe(row.bodyBytes);expect(sha256(bytes)).toBe(row.bodySha256);
+ }
+ const observed=observedCase('annotated'),ref=JSON.parse(capture(observed.ref!).body);
+ expect(ref.ref).toBe(`refs/tags/${observed.tag}`);expect(ref.object.type).toBe('tag');
+ expect(ref.object.sha).toMatch(/^[0-9a-f]{40}$/);expect(ref.object.sha).not.toBe(observed.expectedCommit);
+ const short=capture(observed.short!),full=capture(observed.full);
+ expect(short.status).toBe(422);expect(JSON.parse(short.body)).toMatchObject({message:`No commit found for SHA: tags/${observed.tag}`,status:'422'});
+ expect(full.status).toBe(200);expect(observed.expectedCommit).toMatch(/^[0-9a-f]{40}$/);
+ expect(capture(provenance.cases.lightweight.full).status).toBe(200);
+});
+
+test('normal push resolves the matching commit without a checkout',()=>{
+ const result=resolveTag('push-normal');
+ expect(result.exitCode).toBe(0);expect(result.outputs).toEqual({publish:'true',tag,sha:commitSha});
+ onlyCommitLookup(result.calls);
+});
+for(const kind of ['lightweight','annotated'] as const){
+ const observed=observedCase(kind);
  test(`push ${kind} tag resolves to the commit without a checkout`,()=>{
-  const result=resolveTag(`push-${kind}`,{refObject:{type:kind==='annotated'?'tag':'commit',sha:kind==='annotated'?tagObjectSha:commitSha}});
+  const result=resolveTag(`push-${kind}`,observed.fixture);
   expect(result.exitCode).toBe(0);
-  expect(result.outputs).toEqual({publish:'true',tag,sha:commitSha});
-  onlyCommitLookup(result.calls);
+  expect(result.outputs).toEqual({publish:'true',tag:observed.tag,sha:observed.expectedCommit});
+  onlyCommitLookup(result.calls,observed.repo,observed.tag);
+  const full=capture(observed.full);
+  expect(result.apiCalls).toEqual([{endpoint:full.endpoint,status:200,bodySha256:full.bodySha256}]);
  });
  test(`push rerun ${kind} mismatch refuses before publishing and names both SHAs and exact recovery`,()=>{
-  const result=resolveTag(`mismatch-${kind}`,{runSha:oldSha,refObject:{type:kind==='annotated'?'tag':'commit',sha:kind==='annotated'?tagObjectSha:commitSha}});
+  const result=resolveTag(`mismatch-${kind}`,{...observed.fixture,runSha:oldSha});
   refused(result,'PROVENANCE_SHA_MISMATCH');
-  expect(result.text).toContain(oldSha);expect(result.text).toContain(commitSha);
-  expect(result.text).toContain(recovery);expect(result.text).toContain('the tag remains cut');
-  expect(result.output).toBe('');onlyCommitLookup(result.calls);
+  expect(result.text).toContain(oldSha);expect(result.text).toContain(observed.expectedCommit);
+  expect(result.text).toContain(`gh workflow run release.yml --ref ${observed.tag} -f tag=${observed.tag}`);
+  expect(result.text).toContain('the tag remains cut');
+  expect(result.output).toBe('');onlyCommitLookup(result.calls,observed.repo,observed.tag);
  });
 }
 test('annotated tag object SHA cannot pass as the provenance commit',()=>{
- const result=resolveTag('annotated-object-is-not-commit',{runSha:tagObjectSha,refObject:{type:'tag',sha:tagObjectSha}});
- refused(result,'PROVENANCE_SHA_MISMATCH');expect(result.text).toContain(commitSha);expect(result.text).toContain(tagObjectSha);
- onlyCommitLookup(result.calls);
+ const observed=observedCase('annotated'),objectSha=JSON.parse(capture(observed.ref!).body).object.sha;
+ const result=resolveTag('annotated-object-is-not-commit',{...observed.fixture,runSha:objectSha});
+ refused(result,'PROVENANCE_SHA_MISMATCH');expect(result.text).toContain(observed.expectedCommit);expect(result.text).toContain(objectSha);
+ onlyCommitLookup(result.calls,observed.repo,observed.tag);
 });
 for(const created of ['false','']){
  test(`push with release_created=${JSON.stringify(created)} does not resolve a tag or publish`,()=>{
@@ -133,12 +192,14 @@ for(const created of ['false','']){
  });
 }
 test('push tag resolution error fails closed even if an API error emits a plausible SHA',()=>{
- const result=resolveTag('api-error',{apiExit:1,apiOutput:commitSha});
+ const result=resolveTag('api-error',{apiExit:1});
  refused(result,'RELEASE_TAG_UNRESOLVED');expect(result.output).toBe('');onlyCommitLookup(result.calls);
 });
 for(const [name,apiOutput] of [['empty',''],['null','null'],['short',commitSha.slice(0,7)],['multiline',`${commitSha}\n${oldSha}`],['object','{"sha":"bad"}']]){
  test(`push refuses ${name} commit resolution`,()=>{
-  const result=resolveTag(`invalid-sha-${name}`,{apiOutput});
+  const result=resolveTag(`invalid-sha-${name}`,{apiResponses:{
+   [`repos/rig-c/review/commits/refs%2Ftags%2F${tag}`]:{status:200,body:JSON.stringify({sha:name==='null'?null:apiOutput})},
+  }});
   refused(result,'RELEASE_TAG_UNRESOLVED');expect(result.output).toBe('');onlyCommitLookup(result.calls);
  });
 }

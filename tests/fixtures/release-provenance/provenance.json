@@ -1,0 +1,101 @@
+{
+  "schema": "release-provenance-captures/1",
+  "reviewIssue": "https://github.com/rig-c/review/issues/212",
+  "coreIssue": "https://github.com/rig-c/core/issues/1551",
+  "origin": "Recorded read-only GitHub API captures associated with core#1551; original capture hashes verified before extracting exact body bytes. No new endpoint capture.",
+  "extraction": "Exact JSON byte slice from recorded HTTP capture, without reformatting or appended newline; HTTP headers and trailing gh CLI diagnostic are excluded. Source offsets and hashes permit exact recovery.",
+  "scope": "Only these recorded endpoints are replayed. No response is inferred for an uncaptured lightweight short ref. No live release or universal API behavior claim.",
+  "lightweightKindProvenance": "Core#1551 identifies the public rig-c/core v2.67.1 release as lightweight; no lightweight git/ref response was recorded.",
+  "responses": [
+    {
+      "id": "annotated-shortref-422",
+      "file": "core1551-annotated-shortref-422.json",
+      "method": "GET",
+      "endpoint": "repos/git/git/commits/tags%2Fv2.45.0",
+      "status": 422,
+      "httpDate": "Wed, 21 Oct 2026 14:47:07 GMT",
+      "bodyBytes": 146,
+      "bodySha256": "250716c94042004cfbaff1dc10298bab8fa6260e4b8fcd58a5011520cf168f7b",
+      "recordedSource": {
+        "rawBytes": 1487,
+        "rawSha256": "a40668f772de900c9cfe3331057bd9ccae556cf43a0891bfca7f666f4cf39534",
+        "bodyByteOffset": 1288,
+        "bodyByteLength": 146,
+        "parentRawExit": 1,
+        "trailingGhDiagnosticExcluded": true,
+        "captureFile": "core1551-annotated-shortref-422.txt"
+      }
+    },
+    {
+      "id": "annotated-ref",
+      "file": "core1551-annotated-ref.json",
+      "method": "GET",
+      "endpoint": "repos/git/git/git/ref/tags/v2.45.0",
+      "status": 200,
+      "httpDate": "Wed, 21 Oct 2026 14:47:08 GMT",
+      "bodyBytes": 315,
+      "bodySha256": "c1835eb508bbb0ca82ec9c4d6d3416ae5084ce97ea709ba659b94229f081b5c0",
+      "recordedSource": {
+        "rawBytes": 1804,
+        "rawSha256": "cb63ff6f4c22dc140fcb0617dd925c23616006b9836e653d74b47bd70742008e",
+        "bodyByteOffset": 1489,
+        "bodyByteLength": 315,
+        "parentRawExit": 0,
+        "trailingGhDiagnosticExcluded": false,
+        "captureFile": "core1551-annotated-ref.txt"
+      }
+    },
+    {
+      "id": "annotated-fullref-200",
+      "file": "core1551-annotated-fullref-200.json",
+      "method": "GET",
+      "endpoint": "repos/git/git/commits/refs%2Ftags%2Fv2.45.0",
+      "status": 200,
+      "httpDate": "Wed, 21 Oct 2026 14:47:08 GMT",
+      "bodyBytes": 3804,
+      "bodySha256": "b8b979e788de9e8dd80b6f699a1f3b70a8d2c2109fad0b8d0d3d21bf505e0869",
+      "recordedSource": {
+        "rawBytes": 5268,
+        "rawSha256": "2478bccaa3703b4973397d52ffffd7b23d623d4d21fae8ca6afbfd987e1a4d30",
+        "bodyByteOffset": 1464,
+        "bodyByteLength": 3804,
+        "parentRawExit": 0,
+        "trailingGhDiagnosticExcluded": false,
+        "captureFile": "core1551-annotated-fullref-200.txt"
+      }
+    },
+    {
+      "id": "lightweight-fullref-200",
+      "file": "core1551-lightweight-fullref-200.json",
+      "method": "GET",
+      "endpoint": "repos/rig-c/core/commits/refs%2Ftags%2Fv2.67.1",
+      "status": 200,
+      "httpDate": "Wed, 21 Oct 2026 14:47:08 GMT",
+      "bodyBytes": 7150,
+      "bodySha256": "ad1c7699fab4c8d9a7733d7663bdbefb6d20bef777d136c586bd39acf0edfecd",
+      "recordedSource": {
+        "rawBytes": 8613,
+        "rawSha256": "01ad3f7f5d32511c40256b3599835fd6b18c3b5bef2df7f77097592d64b59ee2",
+        "bodyByteOffset": 1463,
+        "bodyByteLength": 7150,
+        "parentRawExit": 0,
+        "trailingGhDiagnosticExcluded": false,
+        "captureFile": "core1551-lightweight-fullref-200.txt"
+      }
+    }
+  ],
+  "cases": {
+    "annotated": {
+      "repo": "git/git",
+      "tag": "v2.45.0",
+      "full": "annotated-fullref-200",
+      "short": "annotated-shortref-422",
+      "ref": "annotated-ref"
+    },
+    "lightweight": {
+      "repo": "rig-c/core",
+      "tag": "v2.67.1",
+      "full": "lightweight-fullref-200"
+    }
+  }
+}
