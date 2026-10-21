@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.5](https://github.com/rig-c/review/compare/v0.10.4...v0.10.5) (2026-10-21)
+
+
+### Bug Fixes
+
+* **mesh:** read setup geometry through the published Play API ([#204](https://github.com/rig-c/review/issues/204)) ([1f0a879](https://github.com/rig-c/review/commit/1f0a8798a1a0cec0f809436f3ddc72bc5665d844))
+
 ## [0.10.4](https://github.com/rig-c/review/compare/v0.10.3...v0.10.4) (2026-10-21)
 
 
