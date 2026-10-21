@@ -105,13 +105,14 @@ jobs:
           if ! git merge-base --is-ancestor "$tag_sha" refs/remotes/origin/main; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: $INPUT_TAG ($tag_sha) is not reachable from origin/main"; exit 1; fi
           version="${INPUT_TAG#v}"
           if served="$(npm view "@rig-c/review@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/review@$version"; exit 1; fi
-          echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
 
       # Everything below runs only when a tag is to be published.
       - uses: actions/checkout@v4
         if: ${{ steps.target.outputs.publish == 'true' }}
         with:
-          ref: ${{ steps.target.outputs.tag }}
+          # A dispatch checks out the commit that passed the ancestry check, not the (mutable) tag name.
+          ref: ${{ steps.target.outputs.sha || steps.target.outputs.tag }}
 
       - uses: oven-sh/setup-bun@v2
         if: ${{ steps.target.outputs.publish == 'true' }}
