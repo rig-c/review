@@ -7,6 +7,7 @@ import {assertReviewUnchanged,referenceBinding,selectedReference,safeSelectedRef
 import {openGate,staleOpenStatus,accessGate,openNonceGate,stampOpen,type OpenIdentity} from './open-protocol.ts';
 import { readSession, saveSession } from './session.ts';
 import { createRebuilds, RebuildError } from './rebuild.ts';
+import { DENSITY_STRIP_LIMIT } from './density-strip.ts';
 import { createReadings } from './readings-run.ts';
 import { ReadingsError } from './readings.ts';
 import { BONES_CHECK_LIMIT, createBonesCheck } from './bones-check.ts';
@@ -17,7 +18,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
 /** Request shapes the page or an edit card got wrong: 400. Everything else a refusal names is an outcome (200). */
-const MALFORMED=new Set(['REBUILD_REQUEST_INVALID','EDIT_PATCH_INVALID','EDIT_PATCH_OP_UNKNOWN','EDIT_PATCH_POINTER_INVALID','EDIT_PATCH_CMD_UNKNOWN','EDIT_PATCH_ARG_UNKNOWN','BONES_OP_OUT_OF_SCOPE','RETARGET_REQUEST_INVALID']);
+const MALFORMED=new Set(['REBUILD_REQUEST_INVALID','DENSITY_STRIP_REQUEST_INVALID','DENSITY_STRIP_FIELD','MESH_PATCH_SCOPE','EDIT_PATCH_INVALID','EDIT_PATCH_OP_UNKNOWN','EDIT_PATCH_POINTER_INVALID','EDIT_PATCH_CMD_UNKNOWN','EDIT_PATCH_ARG_UNKNOWN','BONES_OP_OUT_OF_SCOPE','RETARGET_REQUEST_INVALID']);
 function json(data:unknown,status=200){return Response.json(data,{status,headers});}
 async function bodyJson(req:Request,limit=1024*1024,what='Session payload exceeds 1 MiB'):Promise<unknown>{
   if(!/^application\/json(?:\s*;|$)/i.test(req.headers.get('content-type')??''))throw new Error('Expected application/json');
@@ -28,11 +29,11 @@ async function bodyJson(req:Request,limit=1024*1024,what='Session payload exceed
 }
 /** `capability` (open workers and foreground CLI serving) gates every non-GET request; tests may omit it.
  * `cwd` is where the producer is looked for after the package's own directories (review's working directory by default). */
-export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string}={}){
+export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string;stripConcurrency?:number}={}){
   const bundle=await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
-  const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones});
+  const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones,...(options.stripConcurrency?{stripConcurrency:options.stripConcurrency}:{})});
   // Readings (#108): rigc render's readings on the inspected build and on the latest scratch build, into scratch.
   const readings=createReadings(p,{stateDir,starts,unchanged,latest:rebuilds.latest});
   // Bones check (#109): propose --from-config and compare on a scratch copy of the patched handoff config.
@@ -65,6 +66,17 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       try{const result=await rebuilds.undo(await bodyJson(req,1024,'REBUILD_BODY_LIMIT: maximum 1 KiB'));return json(result.body,result.status);}
       catch(e){if(e instanceof RebuildError)return json({status:'refused',error:e.message,producerLine:null},MALFORMED.has(e.code)?400:200);throw e;}
     }
+    // #173: a density strip — 2–5 Mesh-panel patches built side by side, none applied; and closing it (its scratch removed).
+    if(req.method==='POST'&&url.pathname==='/api/density-strip'){
+      if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+      try{const result=await rebuilds.startStrip(await bodyJson(req,DENSITY_STRIP_LIMIT,'DENSITY_STRIP_BODY_LIMIT: maximum 320 KiB'));return json(result.body,result.status);}
+      catch(e){if(e instanceof RebuildError)return json({status:'refused',error:e.message,producerLine:null},MALFORMED.has(e.code)?400:200);throw e;}
+    }
+    if(req.method==='POST'&&url.pathname==='/api/density-strip/close'){
+      if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+      try{const result=await rebuilds.closeStrip(await bodyJson(req,1024,'DENSITY_STRIP_BODY_LIMIT: maximum 1 KiB'));return json(result.body,result.status);}
+      catch(e){if(e instanceof RebuildError)return json({status:'refused',error:e.message,producerLine:null},MALFORMED.has(e.code)?400:200);throw e;}
+    }
     if(req.method==='POST'&&url.pathname==='/api/bones-check'){
       if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
       try{return json(await bonesCheck.run(await bodyJson(req,BONES_CHECK_LIMIT,'BONES_CHECK_BODY_LIMIT: maximum 64 KiB')));}
@@ -95,6 +107,14 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       if(url.pathname==='/api/session'){await unchanged();return json(await readSession(p,options.stateDir));}
       if(url.pathname==='/api/rebuild')return json(await rebuilds.describe());
       if(url.pathname==='/api/rebuild/history')return json(await rebuilds.history());
+      if(url.pathname==='/api/density-strip')return json({strip:rebuilds.readStrip()});
+      const stripStatus=/^\/api\/density-strip\/([a-f0-9]{64})(?:\/([a-f0-9]{64}))?$/.exec(url.pathname);
+      if(stripStatus){try{return json(stripStatus[2]?rebuilds.stripJob(stripStatus[1]!,stripStatus[2]):rebuilds.readStrip(stripStatus[1]!));}catch(e){if(e instanceof RebuildError)return json({error:e.message},404);throw e;}}
+      const stripFile=/^\/density-strip\/([a-f0-9]{64})\/([a-f0-9]{64})\/(.+)$/.exec(url.pathname);
+      if(stripFile){
+        let full:string;try{full=await rebuilds.stripFile(stripFile[1]!,stripFile[2]!,decodeURIComponent(stripFile[3]!));}catch(e){return json({error:e instanceof Error?e.message:'Not found'},404);}
+        const file=Bun.file(full);return new Response(req.method==='HEAD'?null:file,{headers:{...headers,'Content-Security-Policy':"default-src 'none'; script-src 'none'; sandbox",'Content-Type':file.type||'application/octet-stream','Content-Length':String(file.size)}});
+      }
       const rebuildStatus=/^\/api\/rebuild\/([a-f0-9]{64})$/.exec(url.pathname);
       if(rebuildStatus){try{return json(rebuilds.read(rebuildStatus[1]!));}catch(e){if(e instanceof RebuildError)return json({error:e.message},404);throw e;}}
       if(url.pathname==='/api/requirements')return json(await requirements.describe());
