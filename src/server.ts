@@ -59,6 +59,12 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       // A refusal is an outcome the page shows verbatim (200), so the managed front passes its text through; only a malformed request is a 400.
       catch(e){if(e instanceof RebuildError)return json({status:'refused',error:e.message,producerLine:null},MALFORMED.has(e.code)?400:200);throw e;}
     }
+    // #166: undo the last Apply — {from: <the build id on the stage>}; nothing is read from the client but that id.
+    if(req.method==='POST'&&url.pathname==='/api/rebuild/undo'){
+      if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+      try{const result=await rebuilds.undo(await bodyJson(req,1024,'REBUILD_BODY_LIMIT: maximum 1 KiB'));return json(result.body,result.status);}
+      catch(e){if(e instanceof RebuildError)return json({status:'refused',error:e.message,producerLine:null},MALFORMED.has(e.code)?400:200);throw e;}
+    }
     if(req.method==='POST'&&url.pathname==='/api/bones-check'){
       if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
       try{return json(await bonesCheck.run(await bodyJson(req,BONES_CHECK_LIMIT,'BONES_CHECK_BODY_LIMIT: maximum 64 KiB')));}
@@ -88,6 +94,7 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,initialAnimation:options.initialAnimation??null,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,...(referenceBinding(p)?{referenceBinding:referenceBinding(p),explicitReference:{...referenceBinding(p)!.reference,url:'/review-reference'}}:{}),report:p.report,feedbackCatalog:p.feedbackCatalog,assetsBase:'/assets/',capabilities:{playback:!!p.manifest.model,modeling:false,motion:false,feedback:true,audio:true}});}
       if(url.pathname==='/api/session'){await unchanged();return json(await readSession(p,options.stateDir));}
       if(url.pathname==='/api/rebuild')return json(await rebuilds.describe());
+      if(url.pathname==='/api/rebuild/history')return json(await rebuilds.history());
       const rebuildStatus=/^\/api\/rebuild\/([a-f0-9]{64})$/.exec(url.pathname);
       if(rebuildStatus){try{return json(rebuilds.read(rebuildStatus[1]!));}catch(e){if(e instanceof RebuildError)return json({error:e.message},404);throw e;}}
       if(url.pathname==='/api/requirements')return json(await requirements.describe());

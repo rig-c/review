@@ -10,7 +10,7 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, readFile, readdir, realpath, rm, writeFile, lstat } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, realpath, rename, rm, writeFile, lstat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts';
 import { compileArgs, firstRefusal, modelingProducerTooOld, REMESH_DELTA_SINCE, remeshArgs, remeshDeltaArgs, resolvePose, resolveProducer, runTool, versionAtLeast, type CompileRequest, type InstalledTool, type ProcessResult } from './producer.ts';
@@ -202,6 +202,25 @@ export function designationId(input: { sourceHash: string; configHash: string; p
 }
 export const rebuildRoot = (stateDir: string, sourceHash: string) => join(stateDir, 'rebuild', sourceHash);
 export const rebuildDir = (stateDir: string, sourceHash: string, id: string) => join(rebuildRoot(stateDir, sourceHash), id);
+/**
+ * #166: where the applied records' earlier builds wait for an undo — outside the scratch root, so the scratch root still
+ * holds only the build on the stage. At most `MAX_KEPT_BUILDS` builds are on disk per package (the stage's included);
+ * an older record's build is evicted, and undoing to it re-runs its producer step from the record.
+ */
+export const keptRoot = (stateDir: string, sourceHash: string) => join(stateDir, 'rebuild-kept', sourceHash);
+export const MAX_KEPT_BUILDS = 8;
+/** The undo refusal: the predecessor cannot be restored byte for byte, and review does not guess. */
+export const UNDO_PREDECESSOR_CHANGED = 'UNDO_PREDECESSOR_CHANGED';
+/** One applied record of the session's stack (#166): the request as sent (to re-run it), its inputs and its build by hash. */
+export interface AppliedEntry {
+  id: string; body: unknown; configHash: string;
+  producer: { package: string; version: string }; compiler: { package: string; version: string };
+  files: Record<string, string>; modelHash: string;
+  /** The job as it settled, served back on undo. */
+  job: RebuildJob | PatchJob | DeltaJob | RetargetJob;
+}
+/** `GET /api/rebuild/history`: the applied records in order, the last one on the stage; `kept`: its build is still on disk. */
+export interface AppliedHistory { schema: 'rig-review-applied-history/1'; depth: number; records: { id: string; kind: 'regions' | 'patch' | 'delta' | 'retarget'; op: string; what: string; modelHash: string; kept: boolean }[] }
 
 export type RebuildStatus = 'running' | 'built' | 'refused' | 'failed';
 export interface RebuildBuild { model: string; modelUrl: string; modelHash: string; files: Record<string, string> }
@@ -492,6 +511,11 @@ async function hashBuild(build: string, id: string): Promise<RebuildBuild> {
 export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   const jobs = new Map<string, RebuildJob | PatchJob | DeltaJob | RetargetJob>();
   let running: string | null = null;
+  /** #166: the session's applied records, in order; the last is on the stage. The request bodies by job id. */
+  const stack: AppliedEntry[] = [];
+  const bodies = new Map<string, unknown>();
+  /** #166: an undo re-running an evicted predecessor: its id and the build files it must reproduce. */
+  let restoring: { id: string; files: Record<string, string> } | null = null;
   const snapshot = <J extends RebuildJob | PatchJob | DeltaJob | RetargetJob>(job: J): J => ({ ...job, lines: [...job.lines] });
 
   /** The state directory may not sit inside the package or the handoff's root (the parent of an opened out/). */
@@ -591,6 +615,121 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const dir = job ? rebuildDir(options.stateDir, p.sourceHash, job.id) : '';
     return job && job.status === 'built' && job.build ? { id: job.id, build: join(dir, 'build'), modelHash: job.build.modelHash, spec: join(dir, !('kind' in job) ? 'revision' : job.op === 'build' || (job.kind === 'patch' && job.cloth?.route === 'build') ? 'out/rig' : 'rig') } : null;
   }
+  /**
+   * #166: the line refusing an undo's re-run whose build is not the one its record names (the first differing file by
+   * hash), or null — also null for any job that is not an undo's re-run.
+   */
+  function restoredDifference(id: string, files: Record<string, string>): string | null {
+    if (restoring?.id !== id) return null;
+    const names = [...new Set([...Object.keys(restoring.files), ...Object.keys(files)])].sort();
+    const file = names.find(n => restoring!.files[n] !== files[n]);
+    if (!file) return null;
+    const side = (h: string | undefined) => (h ? `${h.slice(0, 12)}…` : 'absent'), recorded = restoring.files[file];
+    restoring = null;
+    return `${UNDO_PREDECESSOR_CHANGED}: ${file} — the record's build has sha256 ${side(recorded)}, the re-run wrote ${side(files[file])}; the predecessor cannot be restored byte for byte, so the stage stays on the last Apply`;
+  }
+  /** #166: an undo's re-run computed another build id than its record's — some input it hashes is not what it was. */
+  function guardRestore(id: string): void {
+    if (!restoring || restoring.id === id) return;
+    const was = restoring.id; restoring = null;
+    throw new RebuildError(UNDO_PREDECESSOR_CHANGED, `build id ${was.slice(0, 12)}… → ${id.slice(0, 12)}… — an input the record's build id hashes (the package, the handoff config, the build's painting, runs or named files, the keypoints, the producer or the compiler) is not what it was; the stage stays on the last Apply`);
+  }
+  /** #166: a kept build asked for again moves back into the scratch root (where reuse reads it). */
+  async function unkeep(id: string): Promise<void> {
+    const from = join(keptRoot(options.stateDir, p.sourceHash), id), to = rebuildDir(options.stateDir, p.sourceHash, id);
+    if (!(await exists(from))) return;
+    if (await exists(to)) { await rm(from, { recursive: true, force: true }); return; }
+    await mkdir(rebuildRoot(options.stateDir, p.sourceHash), { recursive: true, mode: 0o700 });
+    await rename(from, to);
+  }
+  /**
+   * #166: a built (or reused) Apply lands on the stack — or, for an undo's re-run or reuse of the predecessor, the undone
+   * record leaves it — and the scratch tree is arranged: the stage's build in the scratch root, the other records' most
+   * recent `MAX_KEPT_BUILDS - 1` builds in keptRoot, every other build removed.
+   */
+  async function landed(job: RebuildJob | PatchJob | DeltaJob | RetargetJob): Promise<void> {
+    if (restoring?.id === job.id) { stack.pop(); restoring = null; }
+    else if (stack.at(-1)?.id !== job.id && job.build) stack.push({ id: job.id, body: bodies.get(job.id) ?? null, configHash: job.request.configHash, producer: { ...job.producer }, compiler: { ...job.compiler }, files: { ...job.build.files }, modelHash: job.build.modelHash, job: snapshot(job) });
+    latestId = stack.at(-1)?.id ?? null;
+    await arrange();
+  }
+  async function arrange(): Promise<void> {
+    const root = rebuildRoot(options.stateDir, p.sourceHash), kept = keptRoot(options.stateDir, p.sourceHash);
+    const top = stack.at(-1)?.id ?? null, order: string[] = [];
+    for (let i = stack.length - 2; i >= 0; i--) { const id = stack[i]!.id; if (id !== top && !order.includes(id)) order.push(id); }
+    const keep = new Set(order.slice(0, MAX_KEPT_BUILDS - 1));
+    const list = async (dir: string) => { try { return (await readdir(dir)).filter(n => /^[a-f0-9]{64}$/.test(n)); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return []; throw e; } };
+    if (top) await unkeep(top);
+    for (const id of await list(root)) {
+      if (id === top) continue;
+      if (keep.has(id) && !(await exists(join(kept, id)))) { await mkdir(kept, { recursive: true, mode: 0o700 }); await rename(join(root, id), join(kept, id)); }
+      else await rm(join(root, id), { recursive: true, force: true });
+      jobs.delete(id);
+    }
+    for (const id of await list(kept)) if (!keep.has(id)) await rm(join(kept, id), { recursive: true, force: true });
+  }
+  /** `GET /api/rebuild/history` (#166). */
+  async function history(): Promise<AppliedHistory> {
+    const records: AppliedHistory['records'] = [];
+    for (const [i, e] of stack.entries()) {
+      const job = e.job, last = i === stack.length - 1;
+      const kind = !('kind' in job) ? 'regions' as const : job.kind;
+      const what = !('kind' in job) ? `${job.request.bust ? 'contour.bust landmarks' : `${job.request.regions.length} region(s)`} on ${job.request.part}`
+        : job.kind === 'patch' ? job.request.patch.ops.map(o => `${o.op} ${o.path}`).slice(0, 3).join(', ') + (job.request.patch.ops.length > 3 ? `, +${job.request.patch.ops.length - 3}` : '')
+        : job.kind === 'delta' ? `mesh edit on ${job.request.part}` : `retarget "${job.request.record.flags.animation}"`;
+      const kept = await exists(join(last ? rebuildRoot(options.stateDir, p.sourceHash) : keptRoot(options.stateDir, p.sourceHash), e.id));
+      records.push({ id: e.id, kind, op: 'op' in job ? job.op : 'remesh', what, modelHash: e.modelHash, kept });
+    }
+    return { schema: 'rig-review-applied-history/1', depth: stack.length, records };
+  }
+  /**
+   * `POST /api/rebuild/undo` with `{from}` (#166): the last applied record leaves the stack and the stage returns to its
+   * predecessor's build, or to the inspected build when none is left. `from` is the record the page shows on the stage
+   * (`UNDO_STALE` otherwise). A kept predecessor is restored from disk after its files are re-hashed against its record;
+   * an evicted one re-runs its recorded request through the same runner, refused before anything runs when the handoff
+   * config or a tool version is not the record's, and refused after when the build is not byte-identical — either way
+   * `UNDO_PREDECESSOR_CHANGED: <what>`, the stage left on the last Apply. Undo writes nothing into the package.
+   */
+  async function undo(input: unknown): Promise<{ status: number; body: unknown }> {
+    const v = object(input, 'undo');
+    if (Object.keys(v).join(',') !== 'from' || typeof v.from !== 'string' || !/^[a-f0-9]{64}$/.test(v.from)) bad('expected exactly {from: <the build id on the stage>}');
+    assertStateOutside();
+    if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    const top = stack.at(-1);
+    if (!top) throw new RebuildError('UNDO_NOTHING_APPLIED', 'no Apply is on the stage; the inspected build is');
+    if (top.id !== v.from) throw new RebuildError('UNDO_STALE', `the stage's last Apply is ${top.id.slice(0, 12)}…, not ${String(v.from).slice(0, 12)}…; reload`);
+    const pred = stack.at(-2);
+    if (!pred) { stack.pop(); latestId = null; await arrange(); return { status: 200, body: { status: 'inspected', undone: top.id, history: await history() } }; }
+    // (i) the kept build: back into the scratch root, re-hashed against result.json and against the record.
+    await unkeep(pred.id);
+    const dir = rebuildDir(options.stateDir, p.sourceHash, pred.id);
+    const kept = await reuse<RebuildJob | PatchJob | DeltaJob | RetargetJob>(dir, pred.id);
+    if (kept && JSON.stringify(kept.build!.files) === JSON.stringify(pred.files)) {
+      jobs.set(pred.id, kept); stack.pop(); latestId = pred.id; await arrange();
+      return { status: 200, body: { status: 'built', undone: top.id, job: snapshot(kept), history: await history() } };
+    }
+    await rm(dir, { recursive: true, force: true });
+    // (ii) evicted (or not its record's bytes): re-run the record's request, only on the inputs it was built from.
+    if (pred.body === null) throw new RebuildError(UNDO_PREDECESSOR_CHANGED, `${pred.id.slice(0, 12)}… — the record carries no request to re-run and its build is gone`);
+    const handoff = p.handoff;
+    if (handoff) {
+      let now = 'unreadable';
+      try { now = sha256(await readFile(handoff.config)); } catch { /* named below */ }
+      if (now !== pred.configHash) throw new RebuildError(UNDO_PREDECESSOR_CHANGED, `${handoff.record.config.path} sha256 ${pred.configHash.slice(0, 12)}… → ${now === 'unreadable' ? now : `${now.slice(0, 12)}…`}; the evicted build was made from the config as it was`);
+    }
+    const retargeting = 'kind' in pred.job && pred.job.kind === 'retarget';
+    const resolved = retargeting ? resolvePose(options.starts) : resolveProducer(options.starts);
+    if (!resolved.ok) throw new RebuildError(UNDO_PREDECESSOR_CHANGED, `${pred.producer.package} ${pred.producer.version} → ${resolved.error}`);
+    for (const [was, now] of [[pred.producer, resolved.producer], [pred.compiler, resolved.compiler]] as const) {
+      if (was.package !== now.package || was.version !== now.version) throw new RebuildError(UNDO_PREDECESSOR_CHANGED, `${was.package} ${was.version} → ${now.package} ${now.version}; the evicted build was made with the version its record names`);
+    }
+    restoring = { id: pred.id, files: { ...pred.files } };
+    let started: { status: number; body: unknown };
+    try { started = await start(pred.body); } catch (e) { restoring = null; throw e; }
+    const body = started.body as { id?: string; status?: string };
+    if (body.id !== pred.id) { restoring = null; return started; }
+    return { status: started.status, body: { status: body.status === 'running' ? 'running' : body.status, undone: top.id, job: body, ...(body.status === 'running' ? {} : { history: await history() }) } };
+  }
   /** The baseline once it settles (tests, and the whole-rig ops of #102/#103 through assertWholeRigBaseline). */
   async function settledBaseline(): Promise<BaselineResult | null> { if (!baselineRun) ensureBaseline(resolveProducer(options.starts)); return baselineRun ? await baselineRun : baseline; }
 
@@ -616,7 +755,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   /**
    * The tail every Apply shares (#121), once its producer op has written a rig spec into `<dir>/<op.spec>`: the per-file
    * diff when asked (#125), the compile with the revision's own pack flags, check when asked (#102), the build hashed,
-   * result.json written, the package's other scratch builds replaced; anything but a built job leaves nothing behind.
+   * result.json written, the package's other scratch builds replaced (#166: the applied records' earlier builds kept
+   * beside the scratch root for undo); anything but a built job leaves nothing behind.
    * Each runner passes only its producer op and the optional steps it records.
    */
   async function apply(job: RebuildJob | PatchJob | DeltaJob | RetargetJob, dir: string, inputs: ProducerInputs, resolved: Resolved, op: ProducerOp, steps: ApplySteps = {}): Promise<void> {
@@ -665,15 +805,20 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       try { await options.unchanged(); } catch { throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild'); }
       job.build = await hashBuild(join(dir, 'build'), job.id);
       if (steps.hashed) await steps.hashed();
+      // #166: an undo's re-run must reproduce the build its record names, file for file; otherwise it is refused, not guessed.
+      const changed = restoredDifference(job.id, job.build.files);
+      if (changed) { job.producerLine = changed; job.status = 'refused'; push(`review: ${changed}`); return; }
       latestId = job.id;
       await writeFile(join(dir, 'result.json'), JSON.stringify({ ...job, status: 'built', reused: false }, null, 1) + '\n', { mode: 0o600 });
-      // Each Apply replaces the previous scratch build of this package.
-      for (const sibling of await readdir(rebuildRoot(options.stateDir, p.sourceHash))) if (sibling !== job.id && /^[a-f0-9]{64}$/.test(sibling)) { await rm(join(rebuildRoot(options.stateDir, p.sourceHash), sibling), { recursive: true, force: true }); jobs.delete(sibling); }
+      // Each Apply replaces the previous scratch build of this package in the scratch root; #166 keeps the applied records'
+      // earlier builds beside it (keptRoot) for undo.
+      await landed({ ...job, status: 'built' });
       // "built" is published last: a reader that sees it finds the scratch root already settled (no sibling mid-removal).
       job.status = 'built';
     } catch (error) {
       job.status = 'failed'; job.producerLine = error instanceof Error ? error.message : String(error); push(`review: ${job.producerLine}`);
     } finally {
+      if (restoring?.id === job.id && job.status !== 'built') restoring = null;
       // Only a built Apply keeps its scratch directory; a refusal or failure leaves nothing behind.
       if (job.status !== 'built') await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
@@ -824,7 +969,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * on a producer that has it (#136, `src/retune-route.ts`); any other `rig` patch rebuilds the whole rig and first needs
    * the baseline to have reproduced the inspected rig (`EDIT_BASELINE_MISMATCH` naming the path). Refusals come before anything is run.
    */
-  async function startPatch(input: unknown, world: ApplyWorld | null = null): Promise<{ status: number; body: unknown }> {
+  async function startPatch(input: unknown, world: ApplyWorld | null = null, body: unknown = { patch: input }): Promise<{ status: number; body: unknown }> {
     let patch: ConfigPatch;
     try { patch = parseConfigPatch(input); } catch (e) { if (e instanceof ConfigPatchError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
     assertStateOutside();
@@ -880,14 +1025,16 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    guardRestore(id);
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+    await unkeep(id);
     const reused = await reuse<PatchJob>(dir, id);
-    if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
+    if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, body); await landed(reused); return { status: 200, body: snapshot(reused) }; }
     const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id, status: 'running', reused: false, op, request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null,
       ...(plan ? { assembled: { inputs: plan.inputs, refusals: [], checkFails: [], lines: [], seam: [], seamPairs: [], recomposite: { line: null, before: null, after: null, errorMap: null }, parts: null } } : {}),
       ...(world ? { environment: world.record } : {}),
       ...(clothPlan ? { cloth: { route: building ? 'build' as const : 'rig' as const, inputs: { source: p.handoff!.record.source?.path ?? '', keypoints: { ...p.handoff!.record.keypoints! } }, refusals: [], line: null, written: null, links: [], wallMs: { propose: null, build: null } } } : {}) };
-    jobs.set(id, job); running = id;
+    jobs.set(id, job); running = id; bodies.set(id, body);
     void executePatch(job, dir, inputs, resolved, patched, part, plan, world, clothPlan).finally(() => { if (running === id) running = null; });
     return { status: 202, body: snapshot(job) };
   }
@@ -940,11 +1087,13 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    guardRestore(id);
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+    await unkeep(id);
     const reused = await reuse<DeltaJob>(dir, id);
-    if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
+    if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, input); await landed(reused); return { status: 200, body: snapshot(reused) }; }
     const job: DeltaJob = { schema: REBUILD_SCHEMA, kind: 'delta', id, status: 'running', reused: false, op: 'remesh', request: { part: request.part, delta: request.delta, deltaSha256: sha256(text), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null }, files: null, remesh: null, build: null };
-    jobs.set(id, job); running = id;
+    jobs.set(id, job); running = id; bodies.set(id, input);
     void executeDelta(job, dir, inputs, resolved, text).finally(() => { if (running === id) running = null; });
     return { status: 202, body: snapshot(job) };
   }
@@ -1031,7 +1180,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * still be the handoff's, the sequence a declared `rig-pose-sequence/1` reference, and `@rig-c/pose` installed. The
    * map's resolution against the rig, the flags' combinations and the pose are the producer's to judge, verbatim.
    */
-  async function startRetarget(input: unknown): Promise<{ status: number; body: unknown }> {
+  async function startRetarget(input: unknown, body: unknown = { retarget: input }): Promise<{ status: number; body: unknown }> {
     let request: ReturnType<typeof parseRetargetRequest>;
     try { request = parseRetargetRequest(input); } catch (e) { if (e instanceof RetargetError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
     assertStateOutside();
@@ -1052,11 +1201,13 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    guardRestore(id);
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+    await unkeep(id);
     const reused = await reuse<RetargetJob>(dir, id);
-    if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
+    if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, body); await landed(reused); return { status: 200, body: snapshot(reused) }; }
     const job: RetargetJob = { schema: REBUILD_SCHEMA, kind: 'retarget', id, status: 'running', reused: false, op: 'retarget', request: { record, recordSha256: sha256(retargetRecordText(record)), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, refusals: [], exitCode: null, wallMs: { clean: null, retarget: null, compile: null }, files: null, motion: null, readings: [], frameTimes: null, build: null };
-    jobs.set(id, job); running = id;
+    jobs.set(id, job); running = id; bodies.set(id, body);
     void executeRetarget(job, dir, inputs, resolved, sequence).finally(() => { if (running === id) running = null; });
     return { status: 202, body: snapshot(job) };
   }
@@ -1065,7 +1216,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   async function start(input: unknown): Promise<{ status: number; body: unknown }> {
     if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'retarget')) {
       if (Object.keys(input).length !== 1) bad('expected exactly {retarget}');
-      return startRetarget((input as { retarget: unknown }).retarget);
+      return startRetarget((input as { retarget: unknown }).retarget, input);
     }
     if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'delta')) return startDelta(input);
     if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'patch')) {
@@ -1073,7 +1224,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       const keys = Object.keys(input).sort().join(',');
       if (keys !== 'patch' && keys !== 'environment,patch') bad('expected exactly {patch}, {patch, environment} or {part, regions, configHash}');
       const world = Object.hasOwn(input, 'environment') ? parseApplyWorld((input as { environment: unknown }).environment) : null;
-      return startPatch((input as { patch: unknown }).patch, world);
+      return startPatch((input as { patch: unknown }).patch, world, input);
     }
     const request = parseRebuildRequest(input, options.bones);
     assertStateOutside();
@@ -1087,11 +1238,13 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (running) return { status: 200, body: { status: 'refused', error: `REBUILD_BUSY: rebuild ${running} is still running`, producerLine: null } };
+    guardRestore(id);
     const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+    await unkeep(id);
     const reused = await reuse(dir, id);
-    if (reused) { jobs.set(id, reused); latestId = id; return { status: 200, body: snapshot(reused) }; }
+    if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, input); await landed(reused); return { status: 200, body: snapshot(reused) }; }
     const job: RebuildJob = { schema: REBUILD_SCHEMA, id, status: 'running', reused: false, request: { ...request, entrySha256: sha256(entry) }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { remesh: null, compile: null }, build: null };
-    jobs.set(id, job); running = id;
+    jobs.set(id, job); running = id; bodies.set(id, input);
     void execute(job, dir, inputs, resolved, entry).finally(() => { if (running === id) running = null; });
     return { status: 202, body: snapshot(job) };
   }
@@ -1111,5 +1264,5 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     return safeFile(await realpath(join(rebuildDir(options.stateDir, p.sourceHash, id), 'build')), packagePath(name));
   }
 
-  return { describe, start, read, file, running: () => running, baseline: settledBaseline, inspectedCheck: settledInspectedCheck, latest };
+  return { describe, start, read, file, running: () => running, baseline: settledBaseline, inspectedCheck: settledInspectedCheck, latest, undo, history };
 }
