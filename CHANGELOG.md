@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/rig-c/review/compare/v0.11.0...v0.11.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **ci:** refuse push releases with mismatched provenance SHA ([#210](https://github.com/rig-c/review/issues/210)) ([0dfab63](https://github.com/rig-c/review/commit/0dfab63522178ae92951b9554a99dd0969ac5a1a))
+
 ## [0.11.0](https://github.com/rig-c/review/compare/v0.10.5...v0.11.0) (2026-10-21)
 
 
