@@ -480,9 +480,11 @@ function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): voi
   const runtimeAnimation = assets?.animations.find(item => item.name === name);
   duration = runtimeAnimation?.duration ?? data.manifest.animations.find(item => item.id === name)?.duration ?? 0;
   select('animation-select').value = name;
+  // #191: the wind restarts before the clip's first frame is drawn, so the paused stage shows the schedule's t=0 world.
+  time = 0; clipMoved(move);
   if (player && runtimeAnimation) { drawRig(()=>{player!.play(name,{loop:false});player!.pause();player!.draw();}); }
   else if (player && name){text('renderer-state',rendererStatus(null,'failed').label);message(`Animation "${name}" is not present in the rig.`, true);}
-  time = 0; clipMoved(move); renderTransport(); renderCues();renderIdle();
+  renderTransport(); renderCues();renderIdle();
 }
 
 function seek(value: number, move?: ClipMove): void {
@@ -1023,6 +1025,8 @@ async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<v
 }
 async function inspectControlTime(target:number,signal:AbortSignal):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
+ // #191: a control seek is a clip move like the transport's: a seek to 0 restarts the wind clock while the exported world is in use.
+ clipMoved({kind:'seek',to:target});
  const media=video;
  if(!media){if(player){player.seek(target);reposePreview();drawRig(()=>player!.draw());}time=target;renderSequenceFrame();renderTransport();return;}
  if(media.readyState<1||target>media.duration)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');
