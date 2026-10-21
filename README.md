@@ -119,7 +119,7 @@ The server bundles `web/main.ts` at startup using the pinned installed runtime, 
 
 ### Releasing
 
-Releases are cut by `.github/workflows/release.yml`. On every push to main, release-please keeps a `release: vX.Y.Z` pull request whose version comes from the conventional-commit subjects since the last release. Merging it tags the version, creates the GitHub release, runs typecheck and the install smoke on the tagged tree, and publishes to npm through trusted publishing (OIDC) with provenance. No npm token is stored. Nothing is published until a release PR is merged. A manual dispatch only re-publishes an existing tag whose GitHub release release-please created, whose commit is on main, and whose version the registry does not serve yet.
+Releases are cut by `.github/workflows/release.yml`. On every push to main, release-please keeps a `release: vX.Y.Z` pull request whose version comes from the conventional-commit subjects since the last release. Merging it tags the version, creates the GitHub release, runs typecheck and the install smoke on the tagged tree, and publishes to npm through trusted publishing (OIDC) with provenance. No npm token is stored. Nothing is published until a release PR is merged. A manual dispatch only re-publishes an existing tag whose GitHub release release-please created, whose commit is on main, and whose version the registry does not serve yet. It must be dispatched on the tag itself (`gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`): npm provenance names the run's commit, so a run whose commit is not the tag's is refused `PROVENANCE_SHA_MISMATCH`. Only a tag cut after that check carries it.
 
 ## Frame strip export
 
