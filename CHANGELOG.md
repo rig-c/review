@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.2](https://github.com/rig-c/review/compare/v0.10.1...v0.10.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **ci:** a dispatched publish requires a release-please release and a tag on main ([#193](https://github.com/rig-c/review/issues/193)) ([7977d88](https://github.com/rig-c/review/commit/7977d8864ad64f14dd6fd2687d14cec87f0b18c9))
+* range worst frame, nested cloth fields, part image in baseline reach, named build dirs hashed ([#196](https://github.com/rig-c/review/issues/196)) ([b6353f1](https://github.com/rig-c/review/commit/b6353f18f68a5f13bd530a1cc3a161133e7e943a)), closes [#185](https://github.com/rig-c/review/issues/185)
+* **state:** one canonical containment check for the review state directory ([#192](https://github.com/rig-c/review/issues/192)) ([c0eae97](https://github.com/rig-c/review/commit/c0eae97b5892532b699dd25560fefb5bf6fe85ff))
+* strip ownership race, stale strip pending, last environment frame, wind clock restart (Codex P1s) ([#191](https://github.com/rig-c/review/issues/191)) ([b8792e3](https://github.com/rig-c/review/commit/b8792e396e2ae109004086c227ab5afeeb1359d1))
+* **view:** editor UI state — retarget clean flag and seek, undo restores retarget clip, stale label and readouts, off-canvas labels (Codex P2s) ([#197](https://github.com/rig-c/review/issues/197)) ([de04fd2](https://github.com/rig-c/review/commit/de04fd27226eadae7d5910f99b7d3f9d256ac3d8))
+
 ## [0.10.1](https://github.com/rig-c/review/compare/v0.10.0...v0.10.1) (2026-10-21)
 
 
