@@ -83,3 +83,16 @@ test('#187 bar 4: existing layouts are unchanged — the bundled demo and the LI
  expect(stateDirInside(state,stateRoots(live))).toBeNull();
  expect(stateDirInside(join(b.proj,'state'),stateRoots(live))?.kind).toBe('package');
 });
+
+test('#192: a build root opened through the review.json in its check/ keeps its buildRoot, so state inside it is refused', async () => {
+ const base = await scratch(), out = join(base, 'out'), check = join(out, 'check');
+ await mkdir(join(out, 'rig'), {recursive:true}); await mkdir(join(check, 'build'), {recursive:true});
+ await writeFile(join(out, 'parts.json'), '{}'); await writeFile(join(out, 'rig', 'rig.json'), '{}'); await writeFile(join(check, 'build', 'skeleton.model.json'), '{}');
+ await cp(new URL('../examples/demo', import.meta.url).pathname, check, {recursive:true});
+ for (const opened of [check, join(check, 'review.json')]) {
+  const p = await loadReview(opened);
+  expect(p.root).toBe(check);
+  expect(p.buildRoot).toBe(out);
+  expect(stateDirInside(canonicalStatePath(join(out, '.review-state')), stateRoots(p))).not.toBeNull();
+ }
+});
