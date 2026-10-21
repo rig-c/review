@@ -13,7 +13,7 @@ import {freshSession} from '../src/session.ts';
 import {formatFeedbackIssues} from '../src/feedback-export.ts';
 import {environmentCheckArgs,type EnvironmentCheckJob} from '../src/environment-check.ts';
 import {parseAppliedContext} from '../src/applied-context.ts';
-import {environmentCheckRows,scheduleContext,worldExport,ENVIRONMENT_NOT_APPLIED} from '../web/environment-world.ts';
+import {environmentCheckRows,restartsWindClock,scheduleContext,worldExport,ENVIRONMENT_NOT_APPLIED} from '../web/environment-world.ts';
 
 /**
  * #112. Bar 1: the exported schedule, read the way rigc reads it (each step set before the physics step that ends on
@@ -234,4 +234,40 @@ test('#112 bar 2: feedback carries the schedule\'s sha256 and bytes through save
   // The applied record's optional environment is validated by shape.
   expect(()=>parseAppliedContext({schema:'rig-review-applied/2',environment:{sha256:'x',steps:1}})).toThrow();
  }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
+});
+
+test('#183: the sampled schedule ends on the last frame inside the clip (floor, not round); an on-grid clip keeps its last frame',()=>{
+ const s=snap({base:10,breeze:true});
+ // [duration, last frame index]: 0.8 s is off the 12 fps grid (9.6 frames) -> frame 9; 0.75 s and 1 s are on it.
+ const rows:[number,number][]=[[0.8,9],[0.75,9],[1.0,12],[10/12,10],[10/3,40]];
+ for(const [duration,last] of rows){
+  const e=windSchedule(s,1,duration),steps=e.schedule.steps,end=steps.at(-1)!.t;
+  console.log(`#183 duration ${duration} s: ${steps.length} steps, last t ${end} (frame ${environmentFrame(end,SCHEDULE_FPS)})`);
+  expect(steps.length).toBe(last+1);
+  expect(end).toBe(last/SCHEDULE_FPS);
+  expect(end).toBeLessThanOrEqual(duration);
+ }
+});
+
+test('#183: the wind clock restarts on every clip restart while the schedule is watched — animation change, seek to 0, replay after the end — and not on a reload or a mid-clip seek',()=>{
+ const rows:[Parameters<typeof restartsWindClock>[0],boolean,boolean][]=[
+  [{kind:'choose'},true,true],            // another animation chosen
+  [{kind:'seek',to:0},true,true],         // scrub / seek to the first frame
+  [{kind:'replay'},true,true],            // Play after the end (seeks 0) and idle repeat's loop
+  [{kind:'seek',to:1.25},true,false],     // a mid-clip seek is not a restart
+  [{kind:'reload'},true,false],           // an Apply's reload keeps animation and time and resumes its world
+  [{kind:'choose'},false,false],          // not watched: the panel clock runs free, as before
+  [{kind:'seek',to:0},false,false],
+ ];
+ for(const [move,watched,expected] of rows){
+  const got=restartsWindClock(move,watched);
+  console.log(`#183 ${JSON.stringify(move)} watched=${watched}: restart ${got}`);
+  expect(got).toBe(expected);
+ }
+ // After a restart the panel's clock and the exported schedule agree again at t = 0 (fresh restore, as restartWindClock does).
+ const s=snap({base:10,breeze:true,repeat:true}),e=windSchedule(s,1,10/3);
+ const model=createWindModel();model.restore(s);for(let i=0;i<97;i++)model.advance(1/60);
+ expect(Math.abs(model.read().wind-scheduleWorldAt(e.schedule,0).wind[0])).toBeGreaterThan(1e-6);
+ model.restore(model.snapshot());
+ expect(Math.abs(model.read().wind-scheduleWorldAt(e.schedule,0).wind[0])).toBeLessThan(1e-9);
 });

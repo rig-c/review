@@ -249,3 +249,19 @@ export function undoControl(history:AppliedHistoryView|null,stageId:string|null,
  const back=depth>1?`record ${depth-1} (model ${history!.records[depth-2]!.modelHash.slice(0,12)}…)`:'the inspected build';
  return {label,enabled:!busy,title:`Return the stage to ${back}; the package is unchanged`};
 }
+/**
+ * #183: a density-strip row pending on the stage after a stage change. Every landed Apply — whichever block sent it
+ * (regions, any patch block, Edit Mesh's delta, retarget) — and every Reset and Undo replaces the stage the row was
+ * loaded over and moves the server's stack, so the row stops being pending and Back has nothing to return to (returning
+ * would restore a stale stage over the applied record). A refused or failed step leaves the stage, and the row, as they
+ * were; only Load puts a row on the stage.
+ */
+export type StageChange<P>=
+ |{kind:'apply';via:'regions'|'mesh'|'physics'|'idle'|'cuts'|'cloth'|'rig-fields'|'bones'|'patch'|'delta'|'retarget'}
+ |{kind:'reset'}|{kind:'undo'}|{kind:'refused'}
+ |{kind:'load';row:P};
+export function stripPendingAfter<P>(pending:P|null,change:StageChange<P>):P|null {
+ if(change.kind==='load')return change.row;
+ if(change.kind==='refused')return pending;
+ return null;
+}

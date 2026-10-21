@@ -8,6 +8,7 @@ import {startServer} from '../src/server.ts';
 import {frontRoute} from '../src/front.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch} from '../src/config-patch.ts';
 import {defaultStripConcurrency} from '../src/rebuild.ts';
+import {stripPendingAfter} from '../web/rebuild-client.ts';
 import {candidateRow,DENSITY_STRIP_LIMIT,DensityStripError,refineValues,stripFigures,stripLabels,stripShape,stripValues,type StripRow} from '../src/density-strip.ts';
 
 /**
@@ -216,4 +217,45 @@ test('#173 cleanup, busy and request rules: a strip replaces its predecessor\'s 
  expect(frontRoute('single','GET',`/density-strip/${'a'.repeat(64)}/${'b'.repeat(64)}/skeleton.model.json`)).toMatchObject({mutation:false});
  expect(frontRoute('single','PUT','/api/density-strip')).toBeNull();
  expect(frontRoute('compare','POST','/api/density-strip')).toBeNull();
+});
+
+test('#183 ownership: two strips, or a strip and an Apply, sent at once — exactly one starts, the other is refused REBUILD_BUSY; the started strip keeps its scratch',async()=>{
+ await session(async({base,hash,sourceHash,state})=>{
+  const root=join(state,'density-strip',sourceHash);
+  // Two strips at once.
+  const [a,b]=await Promise.all([post(base,'/api/density-strip',{patches:[40,60].map(v=>patchFor(hash,v))}),post(base,'/api/density-strip',{patches:[50,70].map(v=>patchFor(hash,v))})]);
+  const views=[await a.json() as View&{status:string;error?:string},await b.json() as View&{status:string;error?:string}];
+  console.log('#183 two strips at once: '+views.map(v=>v.status+(v.error?` (${v.error.slice(0,40)}…)`:'')).join(' | '));
+  const running=views.filter(v=>v.status==='running'),refused=views.filter(v=>v.status==='refused');
+  expect(running.length).toBe(1);expect(refused.length).toBe(1);
+  expect(refused[0]!.error).toMatch(/^REBUILD_BUSY: density strip [a-f0-9]{64} is still running$/);
+  const done=await settle(base,new Response(JSON.stringify(running[0])));
+  expect(done.status).toBe('done');expect(await ls(root)).toEqual([done.id]);
+  expect(done.rows.every(r=>r.status==='built')).toBe(true);
+  // A strip and an Apply at once.
+  const [s,r]=await Promise.all([post(base,'/api/density-strip',{patches:[44,66].map(v=>patchFor(hash,v))}),post(base,'/api/rebuild',{patch:patchFor(hash,33)})]);
+  const sv=await s.json() as {status:string;error?:string;id?:string},rv=await r.json() as {status:string;error?:string;id?:string};
+  console.log(`#183 strip + Apply at once: strip ${sv.status}${sv.error?` (${sv.error.slice(0,40)}…)`:''} | Apply ${rv.status}${rv.error?` (${rv.error.slice(0,40)}…)`:''}`);
+  expect([sv.status,rv.status].filter(x=>x==='refused').length).toBe(1);
+  expect((sv.status==='refused'?sv:rv).error).toMatch(/^REBUILD_BUSY: /);
+  if(sv.status==='running')await settle(base,new Response(JSON.stringify(sv)));
+  else for(let i=0;i<800;i++){const j=await (await fetch(`${base}/api/rebuild/${rv.id}`)).json() as {status:string};if(j.status!=='running')break;await Bun.sleep(25);}
+ },{stripConcurrency:2});
+});
+
+test('#183 pending strip state: every landed Apply (any block), Reset and Undo clears the pending row and Back; a refusal and a Load do not',()=>{
+ const pending={index:1,id:'s'.repeat(64),candidate:'c'.repeat(64)},other={index:0,id:'s'.repeat(64),candidate:'d'.repeat(64)};
+ // The Apply paths that share the stage: regions, every patch block (Mesh, Physics, Idle, Cuts, Cloth, Rig fields, Bones), Edit Mesh's delta, retarget.
+ for(const via of ['regions','mesh','physics','idle','cuts','cloth','rig-fields','bones','delta','retarget'] as const){
+  const after=stripPendingAfter(pending,{kind:'apply',via});
+  console.log(`#183 Apply via ${via}: pending ${after===null?'cleared':'kept'}`);
+  expect(after).toBeNull();
+ }
+ expect(stripPendingAfter(pending,{kind:'reset'})).toBeNull();
+ expect(stripPendingAfter(pending,{kind:'undo'})).toBeNull();
+ // A refused or failed step leaves the stage, and the row on it, as they were.
+ expect(stripPendingAfter(pending,{kind:'refused'})).toBe(pending);
+ // Load puts a row on the stage; nothing pending stays nothing pending.
+ expect(stripPendingAfter(pending,{kind:'load',row:other})).toBe(other);
+ expect(stripPendingAfter(null,{kind:'apply',via:'physics'})).toBeNull();
 });

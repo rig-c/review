@@ -543,7 +543,18 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   interface StripCandidate { value: number; id: string; entry: JsonValue; dir: string; job: PatchJob; applied: boolean }
   let strip: { id: string; status: 'running' | 'done'; part: string; field: DensityField; concurrency: number; configHash: string; producer: { package: string; version: string }; compiler: { package: string; version: string }; started: number; wallMs: number | null; candidates: StripCandidate[] } | null = null;
   /** One producer workload at a time per review: an Apply (or undo's re-run) or a strip; the line refusing the other. */
-  const busy = (): string | null => (running ? `REBUILD_BUSY: rebuild ${running} is still running` : strip?.status === 'running' ? `REBUILD_BUSY: density strip ${strip.id} is still running` : null);
+  /**
+   * #183: a workload that passed `busy()` and has not yet set `running` or `strip` (its awaits — adopt, unkeep, reuse, the
+   * strip's scratch removal — come between). Taken synchronously right after `busy()`, so no second workload passes in that
+   * window; released when the workload is set or refused. Holds the line `busy()` refuses others with.
+   */
+  let reserved: string | null = null;
+  const busy = (): string | null => (running ? `REBUILD_BUSY: rebuild ${running} is still running` : reserved ?? (strip?.status === 'running' ? `REBUILD_BUSY: density strip ${strip.id} is still running` : null));
+  /** #183: run `body` holding the reservation; `body` sets `running` / `strip` synchronously before it returns. */
+  async function reserve<T>(line: string, body: () => Promise<T>): Promise<T> {
+    reserved = line;
+    try { return await body(); } finally { if (reserved === line) reserved = null; }
+  }
   /** #166: the session's applied records, in order; the last is on the stage. The request bodies by job id. */
   const stack: AppliedEntry[] = [];
   const bodies = new Map<string, unknown>();
@@ -1065,19 +1076,21 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
-    guardRestore(id);
-    const dir = rebuildDir(options.stateDir, p.sourceHash, id);
-    await adopt(id);
-    await unkeep(id);
-    const reused = await reuse<PatchJob>(dir, id);
-    if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, body); await landed(reused); return { status: 200, body: snapshot(reused) }; }
-    const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id, status: 'running', reused: false, op, request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null,
-      ...(plan ? { assembled: { inputs: plan.inputs, refusals: [], checkFails: [], lines: [], seam: [], seamPairs: [], recomposite: { line: null, before: null, after: null, errorMap: null }, parts: null } } : {}),
-      ...(world ? { environment: world.record } : {}),
-      ...(clothPlan ? { cloth: { route: building ? 'build' as const : 'rig' as const, inputs: { source: p.handoff!.record.source?.path ?? '', keypoints: { ...p.handoff!.record.keypoints! } }, refusals: [], line: null, written: null, links: [], wallMs: { propose: null, build: null } } } : {}) };
-    jobs.set(id, job); running = id; bodies.set(id, body);
-    void executePatch(job, dir, inputs, resolved, patched, part, plan, world, clothPlan).finally(() => { if (running === id) running = null; });
-    return { status: 202, body: snapshot(job) };
+    return reserve(`REBUILD_BUSY: rebuild ${id} is still running`, async () => {
+      guardRestore(id);
+      const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+      await adopt(id);
+      await unkeep(id);
+      const reused = await reuse<PatchJob>(dir, id);
+      if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, body); await landed(reused); return { status: 200, body: snapshot(reused) }; }
+      const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id, status: 'running', reused: false, op, request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null,
+        ...(plan ? { assembled: { inputs: plan.inputs, refusals: [], checkFails: [], lines: [], seam: [], seamPairs: [], recomposite: { line: null, before: null, after: null, errorMap: null }, parts: null } } : {}),
+        ...(world ? { environment: world.record } : {}),
+        ...(clothPlan ? { cloth: { route: building ? 'build' as const : 'rig' as const, inputs: { source: p.handoff!.record.source?.path ?? '', keypoints: { ...p.handoff!.record.keypoints! } }, refusals: [], line: null, written: null, links: [], wallMs: { propose: null, build: null } } } : {}) };
+      jobs.set(id, job); running = id; bodies.set(id, body);
+      void executePatch(job, dir, inputs, resolved, patched, part, plan, world, clothPlan).finally(() => { if (running === id) running = null; });
+      return { status: 202, body: snapshot(job) };
+    });
   }
 
   /**
@@ -1115,29 +1128,32 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (strip?.id === id) return { status: strip.status === 'running' ? 202 : 200, body: stripView() };
     const refusal = busy();
     if (refusal) return { status: 200, body: { status: 'refused', error: refusal, producerLine: null } };
-    // Bounded disk: the strip on screen is the only one this package keeps; its predecessor's folder goes first.
-    const root = stripRoot(options.stateDir, p.sourceHash);
-    await rm(root, { recursive: true, force: true });
-    const concurrency = Math.max(1, Math.floor(options.stripConcurrency ?? defaultStripConcurrency()));
-    const candidates: StripCandidate[] = planned.map(({ patch }, i) => {
-      const cid = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer, compiler, op: 'remesh' });
-      const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id: cid, status: 'running', reused: false, op: 'remesh', request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null };
-      return { value: shape.values[i]!, id: cid, entry: shape.entries[i]!, dir: join(root, id, cid), job, applied: false };
+    // #183: own the workload before the first await below; `strip = current` takes over before the reservation ends.
+    return reserve(`REBUILD_BUSY: density strip ${id} is still running`, async () => {
+      // Bounded disk: the strip on screen is the only one this package keeps; its predecessor's folder goes first.
+      const root = stripRoot(options.stateDir, p.sourceHash);
+      await rm(root, { recursive: true, force: true });
+      const concurrency = Math.max(1, Math.floor(options.stripConcurrency ?? defaultStripConcurrency()));
+      const candidates: StripCandidate[] = planned.map(({ patch }, i) => {
+        const cid = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer, compiler, op: 'remesh' });
+        const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id: cid, status: 'running', reused: false, op: 'remesh', request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null };
+        return { value: shape.values[i]!, id: cid, entry: shape.entries[i]!, dir: join(root, id, cid), job, applied: false };
+      });
+      const current = { id, status: 'running' as const, part: shape.part, field: shape.field, concurrency, configHash: inputs.configHash, producer: tool(resolved.producer), compiler: tool(resolved.compiler), started: performance.now(), wallMs: null, candidates };
+      strip = current;
+      // A bounded pool: each worker takes the next candidate in order; the strip is done when every candidate settled.
+      let next = 0;
+      const worker = async () => {
+        for (let i = next++; i < candidates.length; i = next++) {
+          const c = candidates[i]!;
+          await executePatch(c.job, c.dir, inputs, resolved, planned[i]!.patched, shape.part, null, null, null, true).catch(() => {});
+        }
+      };
+      void Promise.all(Array.from({ length: Math.min(concurrency, candidates.length) }, worker)).finally(() => {
+        if (strip === current) { (current as { status: 'running' | 'done' }).status = 'done'; (current as { wallMs: number | null }).wallMs = Math.round(performance.now() - current.started); }
+      });
+      return { status: 202, body: stripView() };
     });
-    const current = { id, status: 'running' as const, part: shape.part, field: shape.field, concurrency, configHash: inputs.configHash, producer: tool(resolved.producer), compiler: tool(resolved.compiler), started: performance.now(), wallMs: null, candidates };
-    strip = current;
-    // A bounded pool: each worker takes the next candidate in order; the strip is done when every candidate settled.
-    let next = 0;
-    const worker = async () => {
-      for (let i = next++; i < candidates.length; i = next++) {
-        const c = candidates[i]!;
-        await executePatch(c.job, c.dir, inputs, resolved, planned[i]!.patched, shape.part, null, null, null, true).catch(() => {});
-      }
-    };
-    void Promise.all(Array.from({ length: Math.min(concurrency, candidates.length) }, worker)).finally(() => {
-      if (strip === current) { (current as { status: 'running' | 'done' }).status = 'done'; (current as { wallMs: number | null }).wallMs = Math.round(performance.now() - current.started); }
-    });
-    return { status: 202, body: stripView() };
   }
   function stripView(): DensityStripView | null {
     if (!strip) return null;
@@ -1236,16 +1252,18 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
-    guardRestore(id);
-    const dir = rebuildDir(options.stateDir, p.sourceHash, id);
-    await adopt(id);
-    await unkeep(id);
-    const reused = await reuse<DeltaJob>(dir, id);
-    if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, input); await landed(reused); return { status: 200, body: snapshot(reused) }; }
-    const job: DeltaJob = { schema: REBUILD_SCHEMA, kind: 'delta', id, status: 'running', reused: false, op: 'remesh', request: { part: request.part, delta: request.delta, deltaSha256: sha256(text), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null }, files: null, remesh: null, build: null };
-    jobs.set(id, job); running = id; bodies.set(id, input);
-    void executeDelta(job, dir, inputs, resolved, text).finally(() => { if (running === id) running = null; });
-    return { status: 202, body: snapshot(job) };
+    return reserve(`REBUILD_BUSY: rebuild ${id} is still running`, async () => {
+      guardRestore(id);
+      const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+      await adopt(id);
+      await unkeep(id);
+      const reused = await reuse<DeltaJob>(dir, id);
+      if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, input); await landed(reused); return { status: 200, body: snapshot(reused) }; }
+      const job: DeltaJob = { schema: REBUILD_SCHEMA, kind: 'delta', id, status: 'running', reused: false, op: 'remesh', request: { part: request.part, delta: request.delta, deltaSha256: sha256(text), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null }, files: null, remesh: null, build: null };
+      jobs.set(id, job); running = id; bodies.set(id, input);
+      void executeDelta(job, dir, inputs, resolved, text).finally(() => { if (running === id) running = null; });
+      return { status: 202, body: snapshot(job) };
+    });
   }
 
   /** The package's declared `rig-pose-sequence/1` references (validated at load), with whether clean's record is on them. */
@@ -1351,16 +1369,18 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
-    guardRestore(id);
-    const dir = rebuildDir(options.stateDir, p.sourceHash, id);
-    await adopt(id);
-    await unkeep(id);
-    const reused = await reuse<RetargetJob>(dir, id);
-    if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, body); await landed(reused); return { status: 200, body: snapshot(reused) }; }
-    const job: RetargetJob = { schema: REBUILD_SCHEMA, kind: 'retarget', id, status: 'running', reused: false, op: 'retarget', request: { record, recordSha256: sha256(retargetRecordText(record)), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, refusals: [], exitCode: null, wallMs: { clean: null, retarget: null, compile: null }, files: null, motion: null, readings: [], frameTimes: null, build: null };
-    jobs.set(id, job); running = id; bodies.set(id, body);
-    void executeRetarget(job, dir, inputs, resolved, sequence).finally(() => { if (running === id) running = null; });
-    return { status: 202, body: snapshot(job) };
+    return reserve(`REBUILD_BUSY: rebuild ${id} is still running`, async () => {
+      guardRestore(id);
+      const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+      await adopt(id);
+      await unkeep(id);
+      const reused = await reuse<RetargetJob>(dir, id);
+      if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, body); await landed(reused); return { status: 200, body: snapshot(reused) }; }
+      const job: RetargetJob = { schema: REBUILD_SCHEMA, kind: 'retarget', id, status: 'running', reused: false, op: 'retarget', request: { record, recordSha256: sha256(retargetRecordText(record)), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, refusals: [], exitCode: null, wallMs: { clean: null, retarget: null, compile: null }, files: null, motion: null, readings: [], frameTimes: null, build: null };
+      jobs.set(id, job); running = id; bodies.set(id, body);
+      void executeRetarget(job, dir, inputs, resolved, sequence).finally(() => { if (running === id) running = null; });
+      return { status: 202, body: snapshot(job) };
+    });
   }
 
   /** `POST /api/rebuild`: refusals are returned before anything is written or run. */
@@ -1389,16 +1409,18 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
-    guardRestore(id);
-    const dir = rebuildDir(options.stateDir, p.sourceHash, id);
-    await adopt(id);
-    await unkeep(id);
-    const reused = await reuse(dir, id);
-    if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, input); await landed(reused); return { status: 200, body: snapshot(reused) }; }
-    const job: RebuildJob = { schema: REBUILD_SCHEMA, id, status: 'running', reused: false, request: { ...request, entrySha256: sha256(entry) }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { remesh: null, compile: null }, build: null };
-    jobs.set(id, job); running = id; bodies.set(id, input);
-    void execute(job, dir, inputs, resolved, entry).finally(() => { if (running === id) running = null; });
-    return { status: 202, body: snapshot(job) };
+    return reserve(`REBUILD_BUSY: rebuild ${id} is still running`, async () => {
+      guardRestore(id);
+      const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+      await adopt(id);
+      await unkeep(id);
+      const reused = await reuse(dir, id);
+      if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, input); await landed(reused); return { status: 200, body: snapshot(reused) }; }
+      const job: RebuildJob = { schema: REBUILD_SCHEMA, id, status: 'running', reused: false, request: { ...request, entrySha256: sha256(entry) }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { remesh: null, compile: null }, build: null };
+      jobs.set(id, job); running = id; bodies.set(id, input);
+      void execute(job, dir, inputs, resolved, entry).finally(() => { if (running === id) running = null; });
+      return { status: 202, body: snapshot(job) };
+    });
   }
 
   function read(id: string): RebuildJob | PatchJob | DeltaJob | RetargetJob {

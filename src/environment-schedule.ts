@@ -65,7 +65,9 @@ export function windSchedule(s: WindSnapshot, gravity: number, duration: number,
   const g: [number, number] = [0, gravity];
   if (!windVaries(s)) return { schedule: standingSchedule({ wind: [s.base, 0], gravity: g }), form: 'step', tolerance: 0, fps, duration };
   if (!(duration > 0) || !Number.isFinite(duration)) throw new ScheduleError('ENVIRONMENT_SCHEDULE_NO_CLIP', 'a breeze or a repeating gust is sampled over a clip; no clip with a duration is drawn');
-  const last = Math.round(duration * fps);
+  // The last frame inside the clip: floor, so an off-grid clip (0.8 s = 9.6 frames) ends on frame 9, not a step after it
+  // (rigc refuses that); the epsilon keeps an on-grid duration whose product lands a hair under the integer on its frame.
+  const last = Math.floor(duration * fps + 1e-9);
   if (last + 1 > MAX_SCHEDULE_STEPS) throw new ScheduleError('ENVIRONMENT_SCHEDULE_TOO_LONG', `${duration} s at ${fps} fps is ${last + 1} steps; at most ${MAX_SCHEDULE_STEPS}`);
   const steps: EnvironmentStep[] = [];
   let previous = NaN;
