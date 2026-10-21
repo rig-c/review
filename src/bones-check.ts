@@ -9,13 +9,14 @@
  * scratch directory is removed after the run.
  */
 import { createHash } from 'node:crypto';
-import { isAbsolute, join, relative } from 'node:path';
+import { join } from 'node:path';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import type { ReviewPackage } from './manifest.ts';
 import { firstRefusal, resolveProducer, runTool, type InstalledTool } from './producer.ts';
 import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, CONFIG_PATCH_SCHEMA, parseConfigPatch, type JsonValue, type PatchOp } from './config-patch.ts';
 import { assertNamedFilesHeld, producerInputs, RebuildError, scratchConfigText } from './rebuild.ts';
 import { assertBoneOps, BoneAnchorError, compareOrigins, proposeLines, type OriginRow } from './bone-anchors.ts';
+import { assertStateOutside as assertStateDirOutside } from './state-dir.ts';
 
 export const BONES_CHECK_SCHEMA = 'rig-review-bones-check/1';
 export const BONES_CHECK_LIMIT = 64 * 1024;
@@ -60,10 +61,7 @@ export function createBonesCheck(p: ReviewPackage, options: { stateDir: string; 
   let running = false;
   async function run(input: unknown): Promise<BonesCheckResult> {
     const { ops, configHash } = parseBonesCheck(input);
-    for (const root of [p.root, ...(p.handoff ? [p.handoff.root] : [])]) {
-      const inside = relative(root, options.stateDir);
-      if (inside === '' || !inside.startsWith('..') && !isAbsolute(inside)) throw new RebuildError('REBUILD_STATE_INSIDE_PACKAGE', 'the review state directory is inside the inspected package; set RIG_REVIEW_STATE_DIR outside it');
-    }
+    assertStateDirOutside(options.stateDir, p, message => new RebuildError('REBUILD_STATE_INSIDE_PACKAGE', message));
     await options.unchanged();
     const inputs = await producerInputs(p.handoff, p.handoffReason);
     const original = JSON.parse(inputs.configText) as JsonValue;

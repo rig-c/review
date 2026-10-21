@@ -34,6 +34,7 @@ import { availableParallelism } from 'node:os';
 import { candidateRow, DENSITY_STRIP_SCHEMA, DensityStripError, stripLabels, stripPatches, stripShape, type DensityField, type StripRow } from './density-strip.ts';
 import { samplesClock } from './frame-clock.ts';
 import { cleanArgs, mapText, motionSummary, parseRetargetRequest, retargetArgs, retargetLines, retargetRecord, retargetRecordText, RetargetError, type MotionSummary, type RetargetLine, type RetargetRecord } from './retarget.ts';
+import { assertStateOutside as assertStateDirOutside } from './state-dir.ts';
 
 export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
 const MAX_REGIONS = CHEST_REGIONS_MAX, MAX_POINTS = 256, MAX_LINES = 4000, GRID = 256;
@@ -564,10 +565,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
 
   /** The state directory may not sit inside the package or the handoff's root (the parent of an opened out/). */
   function assertStateOutside(): void {
-    for (const root of [p.root, ...(p.handoff ? [p.handoff.root] : [])]) {
-      const inside = relative(root, options.stateDir);
-      if (inside === '' || !inside.startsWith('..') && !isAbsolute(inside)) throw new RebuildError('REBUILD_STATE_INSIDE_PACKAGE', 'the review state directory is inside the inspected package; set RIG_REVIEW_STATE_DIR outside it');
-    }
+    assertStateDirOutside(options.stateDir, p, message => new RebuildError('REBUILD_STATE_INSIDE_PACKAGE', message));
   }
   /** Once per session: the first time the handoff and the producer both resolve, the baseline starts (or is reused). */
   let baseline: BaselineResult | null = null, baselineRun: Promise<BaselineResult> | null = null;

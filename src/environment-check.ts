@@ -11,7 +11,7 @@
  * back. The client sends `{build, schedule}` only — never a path or a flag. Nothing is written into the package.
  */
 import { createHash } from 'node:crypto';
-import { isAbsolute, join, relative } from 'node:path';
+import { join } from 'node:path';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import type { ReviewPackage } from './manifest.ts';
 import { firstRefusal, modelingProducerTooOld, resolveProducer, runTool, versionAtLeast } from './producer.ts';
@@ -19,6 +19,7 @@ import { producerInputs, RebuildError } from './rebuild.ts';
 import { checkSummary, type CheckSummary } from './applied-context.ts';
 import { barLine, READOUT_BARS } from './physics-tuning.ts';
 import { CHECK_ENVIRONMENT_SINCE, parseSchedule, ScheduleError, scheduleText } from './environment-schedule.ts';
+import { assertStateOutside as assertStateDirOutside } from './state-dir.ts';
 
 export const ENVIRONMENT_CHECK_SCHEMA = 'rig-review-environment-check/1';
 export const ENVIRONMENT_CHECK_LIMIT = 64 * 1024;
@@ -78,10 +79,7 @@ export function createEnvironmentCheck(p: ReviewPackage, options: EnvironmentChe
   let running: string | null = null;
   const snapshot = (job: EnvironmentCheckJob): EnvironmentCheckJob => JSON.parse(JSON.stringify(job)) as EnvironmentCheckJob;
   function assertStateOutside(): void {
-    for (const root of [p.root, ...(p.handoff ? [p.handoff.root] : [])]) {
-      const inside = relative(root, options.stateDir);
-      if (inside === '' || !inside.startsWith('..') && !isAbsolute(inside)) throw new EnvironmentCheckError('ENVIRONMENT_CHECK_STATE_INSIDE_PACKAGE', 'the review state directory is inside the inspected package; set RIG_REVIEW_STATE_DIR outside it');
-    }
+    assertStateDirOutside(options.stateDir, p, message => new EnvironmentCheckError('ENVIRONMENT_CHECK_STATE_INSIDE_PACKAGE', message));
   }
 
   async function execute(job: EnvironmentCheckJob, dir: string, bin: string, rig: string, parts: string, text: string): Promise<void> {

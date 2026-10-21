@@ -7,11 +7,12 @@
  */
 import { createHash } from 'node:crypto';
 import { copyFile, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { dirname, join } from 'node:path';
 import { safeFile, type ReviewPackage } from './manifest.ts';
 import { resolveCompiler, runTool, type InstalledTool } from './producer.ts';
 import { scheduleText, type EnvironmentSchedule } from './environment-schedule.ts';
 import { environmentSchedule, helpHasEnvironment, parseReadingsRequest, READING_FILE, readingLabel, readingResult, READINGS_SCHEMA, READINGS_SINCE, ReadingsError, renderArgs, type ReadingBuild, type ReadingRequest, type ReadingResult, type ReadingsRequest } from './readings.ts';
+import { assertStateOutside as assertStateDirOutside } from './state-dir.ts';
 
 const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 async function exists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e; } }
@@ -67,10 +68,7 @@ export function createReadings(p: ReviewPackage, options: ReadingsOptions) {
   let running: string | null = null;
   const snapshot = (job: ReadingsJob): ReadingsJob => JSON.parse(JSON.stringify(job)) as ReadingsJob;
   function assertStateOutside(): void {
-    for (const root of [p.root, ...(p.handoff ? [p.handoff.root] : [])]) {
-      const inside = relative(root, options.stateDir);
-      if (inside === '' || !inside.startsWith('..') && !isAbsolute(inside)) throw new ReadingsError('READINGS_STATE_INSIDE_PACKAGE', 'the review state directory is inside the inspected package; set RIG_REVIEW_STATE_DIR outside it');
-    }
+    assertStateDirOutside(options.stateDir, p, message => new ReadingsError('READINGS_STATE_INSIDE_PACKAGE', message));
   }
   /** Whether this rigc's `render --help` lists `--environment`, asked once per compiler. */
   async function environmentFlag(compiler: InstalledTool): Promise<boolean> {

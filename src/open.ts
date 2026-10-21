@@ -5,7 +5,7 @@ import {spawn} from 'node:child_process';
 import {homedir} from 'node:os';
 import {mkdir,readFile,readdir,writeFile,rename,unlink,rm,rmdir,realpath,lstat,stat,open as openFile} from 'node:fs/promises';
 import {constants} from 'node:fs';
-import {basename,dirname,join,relative,resolve,isAbsolute} from 'node:path';
+import {basename,dirname,join,resolve,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {loadReferencedReview,selectedReference,assertReviewUnchanged} from './reference.ts';
 import {loadReview,UnrecognizedOutputError,type ReviewPackage} from './manifest.ts';
@@ -17,6 +17,7 @@ import {capabilityHeader,capabilityPattern,type OpenIdentity} from './open-proto
 import {ensureFront,frontPort} from './front.ts';
 import {playPackagePath} from './versions.ts';
 import {HandoffError,HANDOFF_FLAGS,isBuildRoot,type HandoffFlags,type HandoffRecord} from './handoff.ts';
+import {stateDirInside,stateRoots} from './state-dir.ts';
 /** #149: an opened rig-parts build check package — its canonical path and the handoff record (or the refusal line). */
 export interface BuildOpen {package:string;handoff:HandoffRecord|null;reason:string|null}
 /** The stderr diagnostic for {@link BuildOpen}: the package opened, then how the config was found, its package-relative path and full SHA-256. */
@@ -110,8 +111,9 @@ export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idl
  if(inputs.compare!==undefined&&!inputs.reference)throw new Error('OPEN_REFERENCE_REQUIRED: compare: explicit --reference required');
  let p:OpenPackage;try{p=await loadOpenPackage(inputs);}catch(error){throw await openRefusal(error,inputs);}
  const fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
- const stateDir=await canonicalDestination(resolve(options.stateDir??defaultStateDir())),roots=p.mode==='single'?[p.p.root]:[p.p.a.root,p.p.b.root];
- for(const root of roots){const rel=relative(root,stateDir);if(!rel||rel!=='..'&&!rel.startsWith('..'+(process.platform==='win32'?'\\':'/'))&&!isAbsolute(rel))throw new Error('open.state: must be outside input packages');}
+ // #187: canonical (symlinks and ancestors resolved) and outside every supplied folder: the package, the build root a check package belongs to, the handoff root.
+ const stateDir=await canonicalDestination(resolve(options.stateDir??defaultStateDir())),roots=p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
+ const inside=stateDirInside(stateDir,roots);if(inside)throw new Error(`OPEN_STATE_INSIDE_PACKAGE ${inside.kind}: the review state directory must be outside input packages; it is inside the ${inside.kind}; set RIG_REVIEW_STATE_DIR outside it`);
  const control=join(stateDir,'open');await mkdir(control,{recursive:true,mode:0o700});const canonicalControl=await realpath(control);if((await lstat(control)).isSymbolicLink())throw new Error('open.state: control directory cannot be a symlink');
  const worker=await ensureWorker(p,key,fingerprint,stateDir,canonicalControl,options.idleMs??30*60*1000);
  const url=direct?openUrl(worker.row):openUrl(worker.row,await ensureFront({control:canonicalControl,port,fingerprint,idleMs:options.frontIdleMs}));
