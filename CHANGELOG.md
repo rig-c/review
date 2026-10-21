@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/rig-c/review/compare/v0.11.1...v0.11.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **ci:** resolve annotated release tags through full refs ([#213](https://github.com/rig-c/review/issues/213)) ([e1e8969](https://github.com/rig-c/review/commit/e1e896942ee8625d5cff1168c96742676bf3b5e6))
+
 ## [0.11.1](https://github.com/rig-c/review/compare/v0.11.0...v0.11.1) (2026-10-21)
 
 
