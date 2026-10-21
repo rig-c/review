@@ -31,3 +31,5 @@ export function initialPlayerAnimation(names:readonly string[],selected:string|u
  const name=checkpoint?.animation??selected;if(name!==undefined){if(!names.includes(name))throw new Error(`initial.animation: model has no animation ${JSON.stringify(name)}`);return name;}
  return names[0]??null;
 }
+/** The animation a model swap keeps (#186): the staged one when the new model has it, else none — never a removed clip's name. */
+export function keptAnimation(staged:string,names:readonly string[]):string {return staged&&names.includes(staged)?staged:'';}

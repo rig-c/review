@@ -6,6 +6,8 @@
  * tries its home box (right of the point, rising from it), then the box left of the point, then both sides shifted up
  * and down by one row at a time; it takes the first box that intersects no box already placed nor an obstacle (the point
  * glyphs) and stays inside the bounds. A label with no free box within `rows` is hidden; a pinned label is never hidden and falls back to its home box.
+ * With bounds, a label whose point is outside them (a joint panned or zoomed off the canvas, its glyph clipped) is not
+ * placed at all, pinned or not (#186): a tag and leader for a joint that is not drawn would be a phantom annotation.
  */
 export interface LabelPoint {x:number;y:number}
 export interface LabelInput {at:LabelPoint;width:number;pinned?:boolean}
@@ -34,9 +36,11 @@ export function labelCandidates(input:LabelInput,options:LabelPlacementOptions={
 export function placeLabels(inputs:readonly LabelInput[],options:LabelPlacementOptions={}):PlacedLabel[]{
  const order=inputs.map((_,i)=>i).sort((a,b)=>Number(!!inputs[b]!.pinned)-Number(!!inputs[a]!.pinned)||a-b);
  const inside=(b:LabelBox)=>!options.bounds||(b.x>=0&&b.y>=0&&b.x+b.w<=options.bounds.width&&b.y+b.h<=options.bounds.height);
+ const onCanvas=(p:LabelPoint)=>!options.bounds||(p.x>=0&&p.y>=0&&p.x<=options.bounds.width&&p.y<=options.bounds.height);
  const placed:LabelBox[]=[...(options.obstacles??[])],out:PlacedLabel[]=new Array(inputs.length);
  for(const i of order){
   const input=inputs[i]!,candidates=labelCandidates(input,options),home=candidates[0]!;
+  if(!onCanvas(input.at)){out[i]={box:home,visible:false,moved:false};continue;}
   const index=candidates.findIndex(b=>inside(b)&&!placed.some(p=>boxesIntersect(b,p)));
   if(index>=0){const box=candidates[index]!;placed.push(box);out[i]={box,visible:true,moved:index>0};}
   else if(input.pinned){placed.push(home);out[i]={box:home,visible:true,moved:false};}

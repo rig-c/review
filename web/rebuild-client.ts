@@ -11,6 +11,7 @@ import type {MotionSummary,RetargetFlags,RetargetLine,RetargetRecord} from '../s
 export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,AppliedRetarget,CheckSummary,BustSpec};
 import {chestContourFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
 import type {InspectedCheckView} from '../src/physics-tuning.ts';
+import {samplesClock,type StageClock} from '../src/frame-clock.ts';
 
 export type RegionEntry=
  |{name:string;shape:'circle';cx:number;cy:number;r:number;bone:string;spacing:number;band:number}
@@ -234,6 +235,16 @@ export type UndoView=
 export function recordFor(job:AnyJobView):AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget {
  const kind=(job as {kind?:string}).kind;
  return kind==='patch'?patchAppliedRecord(job as PatchJobView):kind==='delta'?deltaAppliedRecord(job as DeltaJobView):kind==='retarget'?retargetAppliedRecord(job as RetargetJobView):appliedRecord(job as RebuildJobView);
+}
+/**
+ * What a retarget build on the stage sets beside its model (#164, #186): its new animation, to select, and that
+ * animation's own clock (the run's report frameTimes) bound to the build's model hash. The same for an Apply and for an
+ * Undo that restores a retarget build; null for any other job (it restores no retarget selection or clock).
+ */
+export function retargetStage(job:AnyJobView,modelHash:string):{animation:string;clock:StageClock|null}|null {
+ if((job as {kind?:string}).kind!=='retarget')return null;
+ const r=job as RetargetJobView,animation=r.request.record.flags.animation,own=samplesClock(r.frameTimes);
+ return {animation,clock:own?{animation,modelHash,clock:own}:null};
 }
 /** #166: one record's line in the list: its place, what it applied, the op and the model; the stage's last is marked. */
 export function historyRow(history:AppliedHistoryView,index:number):string {

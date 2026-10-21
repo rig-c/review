@@ -65,3 +65,16 @@ test('obstacles: no shown label covers a point glyph',()=>{
  expect(pairsIntersecting(placed)).toEqual([]);
  for(const p of placed.filter(p=>p.visible))for(const g of glyphs)expect(boxesIntersect(p.box,g)).toBe(false);
 });
+
+test('#186: a label whose anchor is off the canvas is not placed, pinned or not',()=>{
+ const bounds={width:800,height:600};
+ // Just past the right and the top edge: a candidate on the opposite side would still fit inside the canvas.
+ const off:LabelInput[]=[{at:{x:805,y:300},width:60},{at:{x:400,y:-4},width:60,pinned:true},{at:{x:400,y:300},width:60}];
+ const placed=placeLabels(off,{bounds});
+ expect(placed[0]!.visible).toBe(false);
+ expect(placed[1]!.visible).toBe(false);
+ // The on-canvas label keeps its home slot: an excluded anchor takes no slot from it.
+ expect(placed[2]).toEqual({box:labelCandidates(off[2]!)[0]!,visible:true,moved:false});
+ // Without bounds nothing is off-canvas.
+ expect(placeLabels(off).every(p=>p.visible)).toBe(true);
+});

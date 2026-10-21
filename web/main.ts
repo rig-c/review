@@ -21,7 +21,7 @@ import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
 import {retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type StageChange,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {historyRow,isPatchJob,recordFor,refusedText,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {historyRow,isPatchJob,recordFor,refusedText,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -31,26 +31,26 @@ import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
 import {controlComparison,type ControlCommand,type ControlInspection,type ControlView} from '../src/control.ts';
 import {singleEligibility,videoReferenceAt,type InputState,type SingleLayout} from '../src/comparison-eligibility.ts';
 import {connectInspectionPersistence,serializableView,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
-import {initialPlayerAnimation} from '../src/animation-selection.ts';
+import {initialPlayerAnimation,keptAnimation} from '../src/animation-selection.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import type {ReferenceBinding} from '../src/reference.ts';
 import type { Checkpoint, Json, Reference, ReviewedSource, ReviewManifest } from '../src/manifest.ts';
 import type { Feedback, ReviewSession } from '../src/session.ts';
 import type { ReportEvent, ReportSeeds } from '../src/report.ts';
-import { frameAtTime, lastFrame as lastProducerFrame, rigPaneLabel, samplesClock, timeAtFrame, transportClock, type StageClock } from '../src/frame-clock.ts';
+import { frameAtTime, lastFrame as lastProducerFrame, rigPaneLabel, timeAtFrame, transportClock, type StageClock } from '../src/frame-clock.ts';
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, type FeedbackCatalog } from '../src/feedback-validation.ts';
 import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPacket,dueJolts,dragMoved,loadModelDocument,environmentContext,environmentJson,type JoltStep,type WindSnapshot,type WindState} from '../src/environment.ts';
 import {tuningRows,readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
-import {bindReadingsPanel,EDGE as READING_EDGE,type ReadingsJobView,type ReadingsPanel,type ReadingsRefusal} from './readings-panel.ts';
-import {READINGS_SCHEMA,type ReadingsContext} from '../src/readings.ts';
+import {bindReadingsPanel,type ReadingsJobView,type ReadingsPanel,type ReadingsRefusal} from './readings-panel.ts';
+import {READINGS_SCHEMA,readingSeekTime,type ReadingsContext} from '../src/readings.ts';
 import {restartsWindClock,type ClipMove,environmentCheckRows,scheduleContext,worldExport,type EnvironmentCheckView,type WorldExport} from './environment-world.ts';
 import {barLine,beforeLine} from '../src/physics-tuning.ts';
 import {bindRequirementsPanel,type RequirementsCatalogView,type RequirementsJobView,type RequirementsPanel,type RequirementsRefusal} from './requirements-panel.ts';
 import {patchRoute} from '../src/retune-route.ts';
 import {appliedCheckRefusal,type CheckSummary} from '../src/applied-context.ts';
-import {appliedBlockOps,recordBlock} from '../src/applied-blocks.ts';
+import {appliedBlockOps,recordBlock,staleReadouts} from '../src/applied-blocks.ts';
 import {bindPhysicsPanel,type PhysicsPanel} from './physics-panel.ts';
 import {bindIdlePanel,type BoneSetup,type IdlePanel} from './idle-panel.ts';
 import {bindRigFieldsPanel,type RigFieldsPanel} from './rig-fields-panel.ts';
@@ -478,7 +478,7 @@ function drawRig(action:()=>void):void {
 function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): void {
   pause(); animation = name; axisInspection = false; el('angle-panel').hidden = true;
   const runtimeAnimation = assets?.animations.find(item => item.name === name);
-  duration = runtimeAnimation?.duration ?? data.manifest.animations.find(item => item.id === name)?.duration ?? 0;
+  duration = clipDuration(name);
   select('animation-select').value = name;
   // #191: the wind restarts before the clip's first frame is drawn, so the paused stage shows the schedule's t=0 world.
   time = 0; clipMoved(move);
@@ -614,8 +614,9 @@ function seekReportEvent(): void {
 /** A reading tick or worst line: its frame's time (frame / fps of the reading's set) in the reading's animation. */
 function seekReading(clip: string, frame: number, exact: number | null, label: string): void {
   if (exact === null) { message(`${label}: F${frame} has no time (the reading's set states no fps); no seek was performed.`, true); return; }
-  // The clip's last sample can sit a rounding hair past the runtime duration; that tick is the clip's end.
-  const at = duration > 0 && exact > duration && exact - duration <= READING_EDGE ? duration : exact;
+  // The clip's last sample can sit a rounding hair past the runtime duration; that tick is the clip's end — the end of
+  // the reading's clip, the one the seek switches to (#186), not the clip drawn now.
+  const at = readingSeekTime(exact, clipDuration(clip));
   if (seekMarker(clip, at, 'Reading')) message(`Reading · ${label} → F${frame} · ${exact.toFixed(4)} s`);
 }
 
@@ -1396,7 +1397,7 @@ async function applyRetarget(body:{sequence:string;map:PoseMap;flags:RetargetFla
   if(next.id===null||!('id' in result)){message(outcome.text,true);return result;}
   await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
   // The new animation's own clock (the run's report frameTimes), bound to this build: the transport counter and the rig pane read it.
-  const own=samplesClock(result.frameTimes);stageClock=own?{animation:result.request.record.flags.animation,modelHash:next.hash,clock:own}:null;
+  stageClock=retargetStage(result,next.hash)?.clock??null;
   appliedOnStage=retargetAppliedRecord(result);stageCheck=null;stageChanged({kind:'apply',via:'retarget'});
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   // The new animation plays against the reference: choose it, and show the sequence it was made from beside it.
@@ -1463,7 +1464,13 @@ async function refreshApplied():Promise<void> {
  renderApplied();
 }
 /** #172: the Cuts and Cloth blocks mark as applied only the ops the stage's applied record holds (none on the inspected build). */
-function renderAppliedBlocks():void {const on=appliedBlockOps(appliedOnStage);cutsPanel?.applied(on.cuts);clothPanel?.applied(on.cloth);}
+let readoutStage:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|null=null;
+function renderAppliedBlocks():void {
+ const on=appliedBlockOps(appliedOnStage);cutsPanel?.applied(on.cuts);clothPanel?.applied(on.cloth);
+ // #186: when the stage record changes, a Cuts / Cloth readout the new record is not that block's names an older build.
+ for(const block of staleReadouts(readoutStage,appliedOnStage))(block==='cuts'?cutsPanel:clothPanel)?.shown(null);
+ readoutStage=appliedOnStage;
+}
 function renderApplied():void {
  renderAppliedBlocks();
  const section=document.getElementById('applied-records');if(!section)return;
@@ -1500,6 +1507,9 @@ async function undoApply():Promise<UndoView|null> {
    await swapRig(new URL(access.route(job.build.modelUrl),location.href).href,access.route(`/rebuild/${job.id}/`),job.build.modelHash,world);
    appliedOnStage=recordFor(job);stageCheck=(job as PatchJobView).kind==='patch'?{lines:[...job.lines],check:(job as PatchJobView).check}:null;
    if((job as PatchJobView).kind==='patch')ops=(job as PatchJobView).request.patch.ops;
+   // #186: a restored retarget build gets what its Apply set — its own clock, then its animation selected.
+   const retarget=retargetStage(job,job.build.modelHash);stageClock=retarget?.clock??null;
+   if(retarget&&assets?.animations.some(clip=>clip.name===retarget.animation))chooseAnimation(retarget.animation);
   }
   stageChanged({kind:'undo'});
   // The panels mark the ops the stage's build applied; the pending edits stay as they are.
@@ -1923,7 +1933,10 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  // whether the controls are engaged as they stood when Apply was pressed; then the seek re-poses under that world.
  if(world){wind.resume(world.wind);joltQueue=world.jolts.map(step=>({...step}));input('environment-applied').checked=world.applied;input('gravity').value=String(world.gravity);syncEnvironmentInputs();}
  if(environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));
- if(keepAnimation&&assets.animations.some(clip=>clip.name===keepAnimation)){chooseAnimation(keepAnimation,{kind:'reload'});seek(keepTime,{kind:'reload'});}else drawRig(()=>player!.draw());
+ // #186: a model without the staged animation (Reset after a retarget, a rebuild without that clip) clears it, so the
+ // rig pane and the transport name the setup pose drawn, not the removed clip.
+ if(keptAnimation(keepAnimation,assets.animations.map(clip=>clip.name))){chooseAnimation(keepAnimation,{kind:'reload'});seek(keepTime,{kind:'reload'});}
+ else{drawRig(()=>player!.draw());if(keepAnimation){animation='';duration=0;time=0;select('animation-select').value='';renderTransport();renderCues();renderIdle();}}
  if(environmentApplied())applyEnvironment();
  updateChestMapping();fitCamera();
  // The preview (#104) drives the new player once its bone setups are read (an idle Apply cleared it first).
