@@ -176,7 +176,7 @@ test('whole-rig ops need the reproduced baseline (EDIT_BASELINE_MISMATCH names t
  try{
   process.env.FAKE_PERTURB='1';
   const p=await loadReview(pkg),server=await startServer(p,{port:0,stateDir:state,cwd:root}),base=`http://127.0.0.1:${server.port}`;
-  try{expect(await (await post(base,{patch:damping(sha(await readFile(join(pkg,'rig/config.json'))))})).json()).toMatchObject({status:'refused',error:'EDIT_BASELINE_MISMATCH: rig/out/rig/rig.json'});}
+  try{expect(await (await post(base,{patch:damping(sha(await readFile(join(pkg,'rig/config.json'))))})).json()).toMatchObject({status:'refused',error:expect.stringMatching(/^EDIT_BASELINE_MISMATCH: rig\/out\/rig\/rig\.json — .*whole-rig edits refuse \(EDIT_BASELINE_MISMATCH\); /)});}
   finally{await server.stop(true);}
  }finally{delete process.env.FAKE_PERTURB;await rm(root,{recursive:true,force:true});}
 });

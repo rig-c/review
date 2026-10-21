@@ -79,5 +79,5 @@ baseline: reproduced — rig.json d19892a32cec… = inspected d19892a32cec…
 ## Routes worth knowing
 
 - **Whole rig.** On a reproduced baseline, a physics patch runs `rig --config` (#136).
-- **Retune.** To exercise retune (#136, #139), change one number in `$P/out/rig/rig.json` (a +0.001 nudge is enough), so the baseline is not reproduced. Then a patch inside retune's scope routes to `rig-parts retune`.
+- **Retune.** To exercise retune (#136, #139), change one number in `$P/out/rig/rig.json` (a +0.001 nudge is enough), so the baseline is not reproduced. Then a patch inside retune's scope routes to `rig-parts retune`. Keep the file the writer's text (edit the number in place, or re-serialise with `JSON.stringify(value, null, 1)` and a closing newline): any other text refuses `RETUNE_INPUT_WRITTEN` (#148). A nudge in an image, not in rig.json, refuses every retune `RETUNE_REQUEST_HELD` instead.
 - **Build.** A patch under `/assemble`, `/limbs`, or `/bones` on a config with `limbs` runs `rig-parts build` (#115). So does a cloth Apply (#111).

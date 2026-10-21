@@ -191,7 +191,7 @@ test('bar 3: only a reproduced baseline lets a bones Apply rebuild the whole rig
   const p=await loadReview(pkg),server=await startServer(p,{port:0,stateDir:state,cwd:root}),base=`http://127.0.0.1:${server.port}`;
   try{
    const body=await (await postPatch(base,patchFor(sha(await readFile(join(pkg,'rig/config.json'))),ops))).json();
-   expect(body).toMatchObject({status:'refused',error:'EDIT_BASELINE_MISMATCH: rig/out/rig/rig.json'});
+   expect(body).toMatchObject({status:'refused',error:expect.stringMatching(/^EDIT_BASELINE_MISMATCH: rig\/out\/rig\/rig\.json — .*whole-rig edits refuse \(EDIT_BASELINE_MISMATCH\); /)});
    expect((await readFile(log,'utf8')).split('\n').filter(l=>l.startsWith('rig --config config.json'))).toEqual([]);
   }finally{await server.stop(true);}
   delete process.env.FAKE_PERTURB;await rm(log,{force:true});await rm(state,{recursive:true,force:true});

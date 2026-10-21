@@ -22,7 +22,7 @@ export interface RetargetStatusView {available:boolean;reason:string|null;produc
 export interface RebuildStatusView {retarget?:RetargetStatusView;available:boolean;handoff:HandoffView|null;baseline:BaselineView|null;inputs:{config:string;parts:string|null;rig:string|null;configHash:string}|null;parts:{name:string;regions:unknown[]}[];contour:Record<string,Record<string,unknown>>;meshes?:Record<string,unknown>;constraints?:unknown[]|null;bones?:unknown[]|null;fields?:Record<string,unknown>|null;cuts?:{config:Record<string,unknown>;build:string|null}|null;inspectedCheck?:InspectedCheckView|null;idle?:import('../src/idle-tracks.ts').IdleStatus|null;cloth?:ClothStatusView|null;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;reason:string|null}
 /** #111: the cloth recipe form's status — the reader's tags, the recipes as written, each tag's parts and chains, the keypoints, the route and why Apply cannot run. */
 export interface ClothStatusView {targets:string[];targetsRead:boolean;recipes:Record<string,unknown>|null;tags:import('../src/cloth-recipe.ts').ClothTagView[];keypoints:{path:string;sha256:string}|null;route:'build'|'rig';reason:string|null}
-export interface RebuildJobView {id:string;status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{remesh:number|null;compile:number|null};build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;regions:RegionEntry[];configHash:string;entrySha256:string;bust?:BustSpec};producer:{package:string;version:string};compiler:{package:string;version:string}}
+export interface RebuildJobView {id:string;status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;hint?:string;exitCode:number|null;wallMs:{remesh:number|null;compile:number|null};build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;regions:RegionEntry[];configHash:string;entrySha256:string;bust?:BustSpec};producer:{package:string;version:string};compiler:{package:string;version:string}}
 export interface RebuildRefusal {status:'refused';error:string;producerLine:string|null}
 /** #99 regions or #105 landmarks: exactly one of `regions` and `bust`. */
 export type RebuildRequestBody={part:string;regions:RegionEntry[];configHash:string}|{part:string;bust:BustSpec;configHash:string};
@@ -118,11 +118,11 @@ export function parseApplied(text:string):AppliedRecord|AppliedPatch|AppliedDelt
 /** A patch Apply's job (#102): the patch and its hash, the op/compile/check wall clocks, check's summary and the rig.json diff. */
 /** #115: a build job's assemble readout (`AssembledView` in src/rebuild.ts). */
 export type AssembledJobView=import('../src/rebuild.ts').AssembledView;
-export interface PatchJobView {id:string;kind:'patch';op?:'rig'|'retune'|'remesh'|'build'|'cloth';assembled?:AssembledJobView;cloth?:import('../src/rebuild.ts').ClothJob;status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{op:number|null;compile:number|null;check:number|null};check:CheckSummary|null;diff:{count:number;paths:string[]}|null;files?:FilesDiff|null;remesh?:import('../src/mesh-entry.ts').RemeshCounts&{modelTriangles:number|null}|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{patch:ConfigPatch;patchSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string};environment?:{sha256:string;steps:number}}
+export interface PatchJobView {id:string;kind:'patch';op?:'rig'|'retune'|'remesh'|'build'|'cloth';assembled?:AssembledJobView;cloth?:import('../src/rebuild.ts').ClothJob;status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;hint?:string;exitCode:number|null;wallMs:{op:number|null;compile:number|null;check:number|null};check:CheckSummary|null;diff:{count:number;paths:string[]}|null;files?:FilesDiff|null;remesh?:import('../src/mesh-entry.ts').RemeshCounts&{modelTriangles:number|null}|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{patch:ConfigPatch;patchSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string};environment?:{sha256:string;steps:number}}
 /** #112: `environment` is the exported `rigc-environment/1` schedule Apply's check reads, when "Use for readings" is on. */
 export interface PatchRequestBody {patch:ConfigPatch;environment?:import('../src/environment-schedule.ts').EnvironmentSchedule}
 /** Edit Mesh's delta Apply (#135): `remesh --delta`, the per-file diff and the part's counts; remesh's own gate holds check. */
-export interface DeltaJobView {id:string;kind:'delta';op:'remesh';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;exitCode:number|null;wallMs:{op:number|null;compile:number|null};files:FilesDiff|null;remesh:import('../src/mesh-entry.ts').RemeshCounts&{modelTriangles:number|null}|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;delta:Record<string,unknown>;deltaSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
+export interface DeltaJobView {id:string;kind:'delta';op:'remesh';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;hint?:string;exitCode:number|null;wallMs:{op:number|null;compile:number|null};files:FilesDiff|null;remesh:import('../src/mesh-entry.ts').RemeshCounts&{modelTriangles:number|null}|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;delta:Record<string,unknown>;deltaSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
 /** `{part, delta, configHash}`: the server owns every path and flag; the delta is the editor's export as it stands. */
 export interface DeltaRequestBody {part:string;delta:import('../src/mesh-edit.ts').MeshEditDocument;configHash:string}
 /** A retarget Apply's job (#114): clean, retarget, compile; every FAIL line of the step that refused, verbatim; the listed lines. */
@@ -172,7 +172,7 @@ export const deltaAppliedRecord=(job:DeltaJobView):AppliedDelta=>({schema:APPLIE
 /** A delta job's status line: built (wall clocks, counts, the per-file diff) or the producer's line verbatim. */
 export function deltaOutcomeLine(result:DeltaJobView|RebuildRefusal):{text:string;error:boolean} {
  if(!('id' in result))return {text:result.producerLine??result.error,error:true};
- if(result.status!=='built')return {text:result.producerLine??`REBUILD_FAILED: exit ${result.exitCode}`,error:true};
+ if(result.status!=='built')return {text:refusedText(result),error:true};
  const ops=Array.isArray(result.request.delta.ops)?result.request.delta.ops.length:0;
  const wall=result.reused?'reused the scratch build of this exact delta':`remesh --delta ${seconds(result.wallMs.op)} + compile ${seconds(result.wallMs.compile)}`;
  const counts=result.remesh?` · ${result.remesh.part} v ${result.remesh.before.vertices} t ${result.remesh.before.triangles} → v ${result.remesh.after.vertices} t ${result.remesh.after.triangles}`:'';
@@ -186,11 +186,13 @@ export function stageModel(result:AnyJobView|RebuildRefusal,current:{url:string;
  if('id' in result&&result.status==='built'&&result.build)return {url:result.build.modelUrl,hash:result.build.modelHash,id:result.id};
  return {...current,id:null};
 }
+/** #148: a refused job's line — the producer's line as printed, then review's reading of it when the server added one. */
+export const refusedText=(job:{producerLine:string|null;exitCode:number|null;hint?:string}):string=>`${job.producerLine??`REBUILD_FAILED: exit ${job.exitCode}`}${job.hint?` · review: ${job.hint}`:''}`;
 const seconds=(ms:number|null)=>ms===null?'—':`${(ms/1000).toFixed(1)} s`;
 /** A patch job's status line: built (wall clocks, check's verdict, the per-file diff — #125) or the producer's line verbatim. */
 export function patchOutcomeLine(result:PatchJobView|RebuildRefusal):{text:string;error:boolean} {
  if(!('id' in result))return {text:result.producerLine??result.error,error:true};
- if(result.status!=='built')return {text:result.producerLine??`REBUILD_FAILED: exit ${result.exitCode}`,error:true};
+ if(result.status!=='built')return {text:refusedText(result),error:true};
  const check=result.check?(result.check.pass===null?`check refused: ${result.check.line??`exit ${result.check.exitCode}`}`:`check ${result.check.pass?'PASS':'FAIL'}${result.check.source==='retune'?' (retune\'s own check of this revision, not run again)':''}`):'check not run';
  // #115: a build's own wall clock covers assemble, rig and check; the recorded figure is the same number.
  const building=result.op==='build'||(result.op==='cloth'&&result.cloth?.route==='build');
@@ -201,7 +203,7 @@ export function patchOutcomeLine(result:PatchJobView|RebuildRefusal):{text:strin
 /** The status line after a job: built (with the wall clock and whether the scratch build was reused) or the producer's line verbatim. */
 export function outcomeLine(result:RebuildJobView|RebuildRefusal):{text:string;error:boolean} {
  if(!('id' in result))return {text:result.producerLine??result.error,error:true};
- if(result.status!=='built')return {text:result.producerLine??`REBUILD_FAILED: exit ${result.exitCode}`,error:true};
+ if(result.status!=='built')return {text:refusedText(result),error:true};
  const wall=[result.wallMs.remesh,result.wallMs.compile].every(v=>v!==null)?` · remesh ${(result.wallMs.remesh!/1000).toFixed(1)} s + compile ${(result.wallMs.compile!/1000).toFixed(1)} s`:'';
  return {text:`Applied ${result.request.part} with ${result.producer.package} ${result.producer.version}${result.reused?' · reused the scratch build of this exact designation':wall} · Reset returns to the inspected build`,error:false};
 }
