@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.4](https://github.com/rig-c/review/compare/v0.10.3...v0.10.4) (2026-10-21)
+
+
+### Performance Improvements
+
+* **mesh:** share the input check across density candidates ([#201](https://github.com/rig-c/review/issues/201)) ([1f47006](https://github.com/rig-c/review/commit/1f47006c092602aaf7985ee0ade27198b73d6c88))
+
 ## [0.10.3](https://github.com/rig-c/review/compare/v0.10.2...v0.10.3) (2026-10-21)
 
 
