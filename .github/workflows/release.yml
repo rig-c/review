@@ -27,7 +27,8 @@ on:
   # land (a registry or signing outage after the tag was made). It re-runs the
   # same gate on the tagged tree and publishes from this same file, so the
   # trusted publisher and provenance are unchanged. It refuses a tag with no
-  # GitHub release, and a version the registry already serves.
+  # GitHub release, a release release-please did not create, a tag whose commit
+  # is not on main, and a version the registry already serves.
   workflow_dispatch:
     inputs:
       tag:
@@ -63,8 +64,20 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      # A dispatch must prove its tag is on main, so it needs main's history
+      # and the tags before anything is resolved. The push path skips this.
+      - uses: actions/checkout@v4
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
       # What to publish: the tag release-please just cut, or a dispatched tag
-      # that has a GitHub release and is not on the registry yet.
+      # whose GitHub release release-please created, whose commit is on main,
+      # and which is not on the registry yet. Write access alone can create a
+      # tag and a release at an unreviewed commit; the merge to protected main
+      # and the release-please author are what that access cannot fake.
       - name: Resolve the tag to publish
         id: target
         env:
@@ -74,6 +87,10 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          # release-please runs on GITHUB_TOKEN here, so its releases are
+          # authored by this login (every release through v0.10.1 is). If
+          # RELEASE_PLEASE_TOKEN is ever set, this must name that token's owner.
+          RELEASE_AUTHOR: github-actions[bot]
         run: |
           set -euo pipefail
           if [ "$EVENT" = push ]; then
@@ -81,7 +98,11 @@ jobs:
             exit 0
           fi
           if ! printf '%s' "$INPUT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then echo "::error::RELEASE_TAG_FORM: \"$INPUT_TAG\" is not vX.Y.Z"; exit 1; fi
-          if ! gh release view "$INPUT_TAG" --repo "$REPO" >/dev/null 2>&1; then echo "::error::RELEASE_TAG_UNRELEASED: $INPUT_TAG has no GitHub release; only a tag release-please cut is published"; exit 1; fi
+          if ! author="$(gh release view "$INPUT_TAG" --repo "$REPO" --json author --jq .author.login 2>/dev/null)"; then echo "::error::RELEASE_TAG_UNRELEASED: $INPUT_TAG has no GitHub release; only a tag release-please cut is published"; exit 1; fi
+          if [ "$author" != "$RELEASE_AUTHOR" ]; then echo "::error::RELEASE_NOT_RELEASE_PLEASE: the $INPUT_TAG release was created by \"$author\", not $RELEASE_AUTHOR"; exit 1; fi
+          if ! tag_sha="$(git rev-parse --verify --quiet "refs/tags/$INPUT_TAG^{commit}")"; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: tag $INPUT_TAG does not resolve to a commit"; exit 1; fi
+          if ! git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: origin/main was not fetched"; exit 1; fi
+          if ! git merge-base --is-ancestor "$tag_sha" refs/remotes/origin/main; then echo "::error::RELEASE_TAG_NOT_ON_MAIN: $INPUT_TAG ($tag_sha) is not reachable from origin/main"; exit 1; fi
           version="${INPUT_TAG#v}"
           if served="$(npm view "@rig-c/review@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/review@$version"; exit 1; fi
           echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
