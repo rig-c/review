@@ -45,8 +45,9 @@ test('literal setup-slider deform reaches both views exactly; unselected mesh an
   // First vertex moves by the slider's interpolated [2,3]; the literals retain every output bit.
   expect(api.vertices).toEqual([9.999999698333657,9.999999999999996,4.9999998375642765,6.999999999999998,4.99999965192345,10.999999999999996]);
   if(!edit.ok)throw new Error(edit.code);
+  if(api.hull===null)throw new Error('The literal fixture must declare its hull');
   expect(edit.world).toEqual(api.vertices);expect(edit.source.triangles).toEqual(api.triangles);expect(edit.source.hull).toBe(api.hull);
-  expect(edit.source.vertices).toEqual(api.vertices.reduce<number[][]>((rows,_,i,xy)=>{if(i%2===0)rows.push([xy[i]!+10,20-xy[i+1]!]);return rows;},[]));
+  expect(edit.source.vertices).toEqual(api.vertices.reduce<[number,number][]>((rows,_,i,xy)=>{if(i%2===0)rows.push([xy[i]!+10,20-xy[i+1]!]);return rows;},[]));
   expect(weights.weights.vertices[0]).toEqual([{bone:'a',x:3,y:0,weight:1}]);
   for(const attachment of ['alternate','linked','independent'])expect(readSetupMesh(assets,{slot:'s',attachment}).vertices).toEqual([7.9999998375642765,6.999999999999998,4.9999998375642765,6.999999999999998,4.99999965192345,10.999999999999996]);
   expect(JSON.stringify(model)).toBe(before);
