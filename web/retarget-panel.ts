@@ -132,7 +132,12 @@ export function bindRetargetPanel(deps:RetargetPanelDeps):RetargetPanel {
  template.onclick=()=>setMap(templateMap());
  file.onchange=()=>{const f=file.files?.[0];if(!f)return;void f.text().then(text=>{const read=readMap(text);if('error' in read)say(read.error,true);else{setMap(read.map);say(`Map loaded from ${f.name} (by content; nothing is sent until Apply).`,false);}file.value='';});};
  useJson.onclick=()=>{const read=readMap(json.value);if('error' in read)say(read.error,true);else{setMap(read.map);say('Map taken from the JSON field.',false);}};
- sequence.onchange=()=>{people();syncApply();};
+ // #186: `clean first` follows the selected sequence whenever the selection changes — on for a raw one (the producer
+ // refuses an uncleaned sequence, POSE_NOT_CLEANED), off for one already cleaned. A reload that keeps the selection keeps
+ // the reviewer's own choice.
+ let cleanFor:string|null=null;
+ function deriveClean(){const id=sequence.value;if(id===cleanFor)return;cleanFor=id;const s=status?.sequences.find(x=>x.id===id);if(s)clean.checked=!s.cleaned;}
+ sequence.onchange=()=>{deriveClean();people();syncApply();};
  reset.onclick=()=>deps.reset();
 
  function flags():RetargetFlags|{error:string}{
@@ -176,7 +181,7 @@ export function bindRetargetPanel(deps:RetargetPanelDeps):RetargetPanel {
    status=next;const prior=sequence.value;
    sequence.replaceChildren(...(next?.sequences??[]).map(s=>make('option',{value:s.id,textContent:`${s.label} · ${s.frames} frame(s) · ${s.cleaned?'cleaned':'raw'}`})));
    if(prior&&next?.sequences.some(s=>s.id===prior))sequence.value=prior;
-   const s=next?.sequences.find(x=>x.id===sequence.value);if(s?.cleaned&&!prior)clean.checked=false;
+   deriveClean();
    people();if(!entries.length)setMap(templateMap());else render();
    say(next?.available?`${next.producer?.package} ${next.producer?.version} with ${next.compiler?.package} ${next.compiler?.version} on the handoff rig${next.rig?` (${next.rig})`:''} · ${next.bones.length} bone(s), animations ${next.animations.join(', ')||'none'}`:(next?.reason??reason??'RETARGET_UNAVAILABLE'),!next?.available);
    syncApply();

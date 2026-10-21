@@ -214,6 +214,14 @@ export function readingTicks(runs: readonly { build: ReadingBuild; results: read
 
 /** rigc samples the last frame at frame / fps; the runtime's clip duration can round a hair below it. Within this, the tick is the clip's end. */
 export const TICK_EDGE = 1e-4;
+/**
+ * A reading's seek time on its clip (#186): within TICK_EDGE past the clip's end, the clip's end. `clipDuration` is the
+ * duration of the clip the reading names (the one the seek switches to), never the clip drawn before the switch; a time
+ * further past is returned unchanged for the seek to refuse by name.
+ */
+export function readingSeekTime(exact: number, clipDuration: number): number {
+  return clipDuration > 0 && exact > clipDuration && exact - clipDuration <= TICK_EDGE ? clipDuration : exact;
+}
 /** The ticks the scrub draws: the job's animation is the one drawn, each with a time inside the clip (the last sample kept). */
 export function ticksOnClip(ticks: readonly ReadingTick[], jobAnimation: string, animation: string, duration: number): ReadingTick[] {
   if (jobAnimation !== animation || !(duration > 0)) return [];

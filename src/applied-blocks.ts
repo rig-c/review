@@ -46,3 +46,17 @@ export function itemApplied(itemOps: readonly PatchOp[], applied: readonly Patch
   const keys = new Set(applied.map(opKey));
   return itemOps.every(o => keys.has(opKey(o)));
 }
+
+/** The stage's identity for a readout: the applied record's build id, or null on the inspected build. */
+const stageId = (record: unknown): string | null => isObject(record) && typeof record.buildId === 'string' ? record.buildId : null;
+
+/**
+ * #186: the blocks whose result readout goes stale when the stage changes from `previous` to `next` — every block the
+ * new stage record does not belong to (a Cuts readout after a Cloth Apply, both after a Reset or another kind of Apply).
+ * Nothing while the stage is unchanged, so a refused Apply's readout stays; the owning block shows its own new job.
+ */
+export function staleReadouts(previous: unknown, next: unknown): AppliedBlock[] {
+  if (stageId(previous) === stageId(next)) return [];
+  const owner = recordBlock(next);
+  return APPLIED_BLOCKS.filter(b => b !== owner);
+}
