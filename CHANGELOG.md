@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.0](https://github.com/rig-c/review/compare/v0.9.0...v0.10.0) (2026-10-21)
+
+
+### Features
+
+* **mesh:** a density strip — N candidates of the part's density field side by side, refine between ([#178](https://github.com/rig-c/review/issues/178)) ([c067082](https://github.com/rig-c/review/commit/c067082e001374039beee3aaeac6c45db92ec542)), closes [#173](https://github.com/rig-c/review/issues/173)
+
+
+### Bug Fixes
+
+* **view:** the Cuts and Cloth blocks mark as applied only the ops of the record on the stage ([#175](https://github.com/rig-c/review/issues/175)) ([312ba57](https://github.com/rig-c/review/commit/312ba570a6070c299c6202aebebc176287d465fc))
+
+
+### Performance Improvements
+
+* **rebuild:** a patch-remesh Apply reads remesh's own revision check instead of running check a third time ([#176](https://github.com/rig-c/review/issues/176)) ([67e2548](https://github.com/rig-c/review/commit/67e25481432134d1baf61f509f1ea5b6926ed955)), closes [#174](https://github.com/rig-c/review/issues/174)
+
 ## [0.9.0](https://github.com/rig-c/review/compare/v0.8.1...v0.9.0) (2026-10-21)
 
 
