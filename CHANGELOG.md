@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/rig-c/review/compare/v0.10.5...v0.11.0) (2026-10-21)
+
+
+### Features
+
+* **preview:** consume Play context and live physics parameters ([#207](https://github.com/rig-c/review/issues/207)) ([e1ba857](https://github.com/rig-c/review/commit/e1ba85722bb06c063c05c91565dab946de397915))
+
 ## [0.10.5](https://github.com/rig-c/review/compare/v0.10.4...v0.10.5) (2026-10-21)
 
 
