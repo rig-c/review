@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.0](https://github.com/rig-c/review/compare/v0.8.1...v0.9.0) (2026-10-21)
+
+
+### Features
+
+* **open:** open a rig-parts build root and take the build's own config ([#168](https://github.com/rig-c/review/issues/168)) ([84168f4](https://github.com/rig-c/review/commit/84168f41b90db7a19b4f08a7f9809ad6af8c1f6f)), closes [#149](https://github.com/rig-c/review/issues/149)
+* **rebuild:** undo across Applies, N deep, from the applied records ([#171](https://github.com/rig-c/review/issues/171)) ([1161706](https://github.com/rig-c/review/commit/11617062d46cec654cf4a9d86c848efbab465fb7)), closes [#166](https://github.com/rig-c/review/issues/166)
+
+
+### Bug Fixes
+
+* **rebuild:** say what Apply can still do on a hand-repaired build; correct the retune claim ([#170](https://github.com/rig-c/review/issues/170)) ([6880381](https://github.com/rig-c/review/commit/688038195a5ef4b154b22c7ec6b5a97f81885142)), closes [#148](https://github.com/rig-c/review/issues/148)
+
 ## [0.8.1](https://github.com/rig-c/review/compare/v0.8.0...v0.8.1) (2026-10-20)
 
 
