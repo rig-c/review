@@ -1936,7 +1936,9 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  // #186: a model without the staged animation (Reset after a retarget, a rebuild without that clip) clears it, so the
  // rig pane and the transport name the setup pose drawn, not the removed clip.
  if(keptAnimation(keepAnimation,assets.animations.map(clip=>clip.name))){chooseAnimation(keepAnimation,{kind:'reload'});seek(keepTime,{kind:'reload'});}
- else{drawRig(()=>player!.draw());if(keepAnimation){animation='';duration=0;time=0;select('animation-select').value='';renderTransport();renderCues();renderIdle();}}
+ // #197: the picker was just refilled (which selects its first option), so it is cleared whenever no clip is kept — even
+ // when none was staged — and nothing claims a clip the stage is not drawing.
+ else{drawRig(()=>player!.draw());animation='';duration=0;time=0;select('animation-select').value='';renderTransport();renderCues();renderIdle();}
  if(environmentApplied())applyEnvironment();
  updateChestMapping();fitCamera();
  // The preview (#104) drives the new player once its bone setups are read (an idle Apply cleared it first).
