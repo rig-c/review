@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/rig-c/review/compare/v0.10.2...v0.10.3) (2026-10-21)
+
+
+### Bug Fixes
+
+* **ci:** a dispatched publish refuses when the run's commit is not the tag's (provenance) ([#199](https://github.com/rig-c/review/issues/199)) ([4c9b363](https://github.com/rig-c/review/commit/4c9b3634243c37b917961f79a1382906dd52c065)), closes [#198](https://github.com/rig-c/review/issues/198)
+
 ## [0.10.2](https://github.com/rig-c/review/compare/v0.10.1...v0.10.2) (2026-10-21)
 
 
