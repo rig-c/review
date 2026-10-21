@@ -1,5 +1,9 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
+import {readFileSync} from 'node:fs';
+import {readSetupMesh} from '@rig-c/play';
+import {readSetupPose} from '../web/setup-pose.ts';
+import {loadSetupAssets,setupRoot} from './helpers/setup-mesh.ts';
 import {
  MESH_EDIT_BASIS,MESH_EDIT_CONSTRAINT_END,MESH_EDIT_HULL_EDGE,MESH_EDIT_INVALID_OP,MESH_EDIT_MODEL_UNAVAILABLE,MESH_EDIT_TRIANGULATION_EDGE,MESH_EDIT_PREVIEW_NOTE,MeshEditSession,affineOf,applyMeshOps,draftOps,edgeKey,hitMesh,meshEditBinding,meshEditDocument,
  parseMeshDraft,screenDeltaToCrop,sourceEdges,verticesInBox,writeMeshDraft,type MeshSource,
@@ -130,29 +134,31 @@ test('keys: V/C/X/E pick a sub-mode, Escape, Cmd/Ctrl-Z and Shift-Cmd-Z, arrows 
  expect(meshEditShortcut(key('Escape',{target:element('dialog[open]')}),on)).toBeNull();
 });
 
-/** A rigc-compiled/3 document: `panel` an unweighted mesh on `arm` (setup at (3, 4)), `badge` a region, `tag` a linked mesh of panel. */
-const setupModel=()=>({spec:'rigc-compiled/3',bones:[{name:'root'},{name:'arm'}],slots:[{name:'panel',bone:'arm'},{name:'badge',bone:'root'},{name:'tag',bone:'arm'}],
- skins:[{name:'default',attachments:{panel:{panel:{kind:'mesh',uvs:[0,0,1,0,1,1,0,1,.5,.5],triangles:[0,1,4,1,2,4,2,3,4,3,0,4],hull:4,vertices:{weighted:false,xy:[-5,5,5,5,5,-5,-5,-5,.123456,-.654321]},width:10,height:10}},badge:{badge:{kind:'region'}},tag:{tag:{kind:'linkedmesh',skin:'default',slot:'panel',source:'panel'}}}}]});
-/** The setup pose: `arm` at world (3, 4), unrotated. */
-const armPose=(identity:{skin:string;attachment:string}|null)=>({identity,world:(bone:string)=>{if(bone!=='arm')throw new Error('unread bone '+bone);return {x:3,y:4,a:1,b:0,c:0,d:1};}});
+/** A complete loader-valid model: panel on arm, badge a region, tag a linked mesh of panel. */
+const setupModel=()=>{
+ const model=JSON.parse(readFileSync(new URL('./fixtures/strip-probe/build/skeleton.model.json',import.meta.url),'utf8'));
+ model.bones=[{name:'root'},{name:'arm',parent:'root',x:3,y:4}];
+ model.slots=[{name:'panel',bone:'arm',setup:'panel'},{name:'badge',bone:'root',setup:'badge'},{name:'tag',bone:'arm',setup:'tag'}];
+ model.skins=[{name:'default',bones:[],constraints:{},attachments:{panel:{panel:{kind:'mesh',path:'mesh',uvs:[0,0,1,0,1,1,0,1,.5,.5],triangles:[0,1,4,1,2,4,2,3,4,3,0,4],hull:4,vertices:{weighted:false,xy:[-5,5,5,5,5,-5,-5,-5,.123456,-.654321]},width:10,height:10}},badge:{badge:{kind:'region',path:'rigid',width:20,height:20,atlas:{width:20,height:20,offsetX:0,offsetY:0,originalWidth:20,originalHeight:20}}},tag:{tag:{kind:'linkedmesh',path:'mesh',skin:'default',slot:'panel',source:'panel',timelines:true}}}}];
+ model.animations=[];model.editorOrder={skins:[{name:'default',slots:['panel','badge','tag']}],animations:[]};return model;
+};
 const cropMapping={available:true as const,crop:{w:20,h:20},toWorld:(x:number,y:number)=>({x:x-10,y:20-y}),basis:'b'};
 
-test('#100 bar 1 (unit): the source is the slot\'s mesh in the model document at the setup pose, mapped to crop px unrounded',()=>{
- const model=setupModel(),entry=model.skins[0]!.attachments.panel.panel;
- const ok=meshEditSource({slot:'panel',model,pose:()=>armPose({skin:'default',attachment:'panel'}),mapping:cropMapping});
- if(!ok.ok)throw new Error(ok.code);
- // Stored xy + the arm's setup world (3, 4) = world; crop = (wx + 10, 20 − wy). Exactly, not rounded to 0.01.
- const xy=entry.vertices.xy,world=xy.map((v,i)=>i%2?Math.fround(v)+4:Math.fround(v)+3);
- expect(ok.world).toEqual(world);
- expect(ok.source.vertices).toEqual([[8,11],[18,11],[18,21],[8,21],[Math.fround(.123456)+3+10,20-(Math.fround(-.654321)+4)]]);
- expect(ok.source.vertices[4]![0]).not.toBe(Math.round(ok.source.vertices[4]![0]*100)/100);
- expect(ok).toMatchObject({source:{slot:'panel',skin:'default',attachment:'panel',hull:4,triangles:entry.triangles},entry});
- // Without a setup identity the slot's mesh named like the slot is read.
- expect(meshEditSource({slot:'panel',model,pose:()=>armPose(null),mapping:cropMapping})).toMatchObject({ok:true,source:{attachment:'panel'}});
+test('#100 bar 1: source coordinates equal the published setup API exactly, then map to crop px unrounded',async()=>{
+ const model=setupModel(),entry=model.skins[0].attachments.panel.panel,{assets,dispose}=await loadSetupAssets(model);
+ try{
+  const ok=meshEditSource({slot:'panel',model,pose:slot=>readSetupPose(assets,slot,setupRoot(),'canvas'),mapping:cropMapping});
+  if(!ok.ok)throw new Error(ok.code);
+  const api=readSetupMesh(assets,{slot:'panel',attachment:'panel'});
+  expect(ok.world).toEqual(api.vertices);
+  expect(ok.source.vertices).toEqual(Array.from({length:api.vertices.length/2},(_,i)=>[api.vertices[i*2]!+10,20-api.vertices[i*2+1]!]));
+  expect(ok.source.vertices[4]![0]).not.toBe(Math.round(ok.source.vertices[4]![0]*100)/100);
+  expect(ok).toMatchObject({source:{slot:'panel',skin:'default',attachment:'panel',hull:api.hull,triangles:api.triangles},entry});
+ }finally{dispose();}
 });
 
 test('#100 bar 2 (unit): no model document refuses MESH_EDIT_MODEL_UNAVAILABLE before anything else, and no setup pose is read',()=>{
- let posed=0;const pose=()=>{posed++;return armPose(null);};
+ let posed=0;const pose=()=>{posed++;throw new Error('must not read a pose without a model');};
  for(const slot of [null,'panel'])for(const model of [null,undefined]){
   const result=meshEditSource({slot,model,pose,mapping:cropMapping}),code=result.ok?'':result.code;
   expect(result.ok).toBe(false);expect(code.split(':')[0]).toBe(MESH_EDIT_MODEL_UNAVAILABLE);
@@ -162,14 +168,17 @@ test('#100 bar 2 (unit): no model document refuses MESH_EDIT_MODEL_UNAVAILABLE b
  expect(posed).toBe(0);
 });
 
-test('the source refuses by name: whole rig, a non-mesh slot, a linked mesh, no rig, no mapping',()=>{
- const model=setupModel(),pose=(slot:string)=>armPose({skin:'default',attachment:slot});
+test('the source refuses by name: whole rig, a non-mesh slot, a linked mesh, no rig, no mapping',async()=>{
+ const model=setupModel(),{assets,dispose}=await loadSetupAssets(model);
+ try{
+ const pose=(slot:string)=>readSetupPose(assets,slot,setupRoot(),'canvas');
  expect(meshEditSource({slot:null,model,pose,mapping:cropMapping})).toMatchObject({ok:false,code:expect.stringMatching(/^MESH_EDIT_SELECT_SLOT: /)});
  expect(meshEditSource({slot:'badge',model,pose,mapping:cropMapping})).toMatchObject({ok:false,code:expect.stringMatching(/^MESH_EDIT_NO_MESH badge: /)});
  expect(meshEditSource({slot:'tag',model,pose,mapping:cropMapping})).toMatchObject({ok:false,code:expect.stringMatching(/^MESH_EDIT_NO_MESH tag: .*linked mesh/)});
  expect(meshEditSource({slot:'panel',model,pose:()=>null,mapping:cropMapping})).toMatchObject({ok:false,code:expect.stringMatching(/^MESH_EDIT_RIG_UNAVAILABLE: /)});
  expect(meshEditSource({slot:'panel',model,pose,mapping:{available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: x'}})).toMatchObject({ok:false,code:expect.stringMatching(/^CHEST_REGION_MAPPING_UNAVAILABLE: x: /)});
  expect(meshEditVisible('rig')).toBe(true);for(const other of ['playback','feedback',undefined])expect(meshEditVisible(other)).toBe(false);
+ }finally{dispose();}
 });
 
 test('the producer owns the triangulation: Delete removes only an added constraint edge, and a constraint end only after its edge',()=>{

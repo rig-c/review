@@ -1,26 +1,27 @@
 /**
- * The setup pose, read from the published player: a throwaway `RigPlayer` over the loaded assets that never plays, so
- * its `bone()` and `slotIdentity()` answer the setup pose (the published `posedFrame()` is empty before `play`). Shared
- * by Setup · Weights (#107) and Edit Mesh (#100). The stage player is never touched; the throwaway one is disposed
- * before this returns, so every bone the caller may ask for is read here.
+ * Setup identity through the published player, followed by named geometry through Play's public readSetupMesh.
+ * The short-lived player reads identity only: setup sliders can select an attachment different from slot.setup.
+ * It never plays or reads bone matrices, and never touches the stage player.
  */
-import {RigPlayer,type ModelAssets,type RenderMode} from '@rig-c/play';
-import type {WorldTransform} from '../src/setup-mesh.ts';
+import {RigPlayer,readSetupMesh,type ModelAssets,type RenderMode,type SetupMesh,type SlotIdentityReason} from '@rig-c/play';
 
 export interface SetupPose {
- /** The slot's attachment at the setup pose, or null when it shows none there. */
+ /** Exact supplying table/key, or the public null identity (never guessed from declarations). */
  identity:{skin:string;attachment:string}|null;
- /** A named bone's setup-pose world transform; throws for a bone that was not read. */
- world:(bone:string)=>WorldTransform;
+ /** Active skin selection, distinct from the supplying table in identity.skin. Null means a fresh no-skin player. */
+ skin:string|null;
+ reason:SlotIdentityReason|null;
+ /** Detached geometry from the public API; lazy so callers can name non-mesh/linked refusals first. */
+ readMesh:()=>SetupMesh|null;
 }
-/** Reads `slot`'s setup-pose identity and every bone in `bones` (unknown names are skipped). Throws what the player throws. */
-export function readSetupPose(assets:ModelAssets,slot:string,bones:readonly string[],root:HTMLElement,mode:RenderMode='dom'):SetupPose {
- const player=new RigPlayer(root,assets,{mode,slots:[slot]});
+/** Reads setup identity without advancing time. Throws public setup/identity/geometry refusals unchanged. */
+export function readSetupPose(assets:ModelAssets,slot:string,root:HTMLElement,mode:RenderMode='dom',skin?:string):SetupPose {
+ const player=new RigPlayer(root,assets,{mode,slots:[slot],...(skin===undefined?{}:{skin})});
  try{
-  const row=player.slotIdentity().slots.find(r=>r.slot===slot),identity=row&&row.attachment&&row.skin?{skin:row.skin,attachment:row.attachment}:null;
-  const map=new Map<string,WorldTransform>();
-  for(const name of bones){try{const b=player.bone(name);map.set(name,{x:b.x,y:b.y,a:b.a,b:b.b,c:b.c,d:b.d});}catch{/* not a bone of this rig */}}
-  return {identity,world:name=>{const t=map.get(name);if(!t)throw new Error(`no setup-pose transform for bone ${name}`);return t;}};
+  const snapshot=player.slotIdentity(),row=snapshot.slots.find(r=>r.slot===slot);
+  const identity=row&&row.attachment!==null&&row.skin!==null?{skin:row.skin,attachment:row.attachment}:null;
+  return {identity,skin:snapshot.skin,reason:row?.reason??null,
+   readMesh:()=>identity?readSetupMesh(assets,{slot,attachment:identity.attachment,skin:snapshot.skin}):null};
  }finally{player.dispose();}
 }
 /** The bone names a compiled model document declares, in stored order. */

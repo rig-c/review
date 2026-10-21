@@ -1,8 +1,8 @@
 /**
  * Mesh edit (Setup): a view-bar toggle, an editor bar of sub-modes (Modify / Create / Delete / Edges) and direct
  * manipulation of the selected slot's actual mesh on the rig pane. The mesh is the slot's attachment in the compiled
- * model document at the **setup pose** (#100): the stored vertices placed through the setup-pose bones of a never-played
- * player (`web/setup-pose.ts`, shared with Setup · Weights) and drawn over the stage with the stage's own camera — the
+ * model document at the **setup pose** (#100): Play's public readSetupMesh coordinates, topology and hull
+ * (`web/setup-pose.ts`, shared with Setup · Weights), drawn over the stage with the stage's own camera — the
  * stage itself stays paused at the pose it held, under the veil. Everything is a typed delta (`src/mesh-edit.ts`,
  * `basis: "setup"`) previewed over the original triangulation; nothing is retriangulated or written into the package
  * from here. Apply · Rebuild (#135) hands the exported document to the host, which sends it through the shared runner as
@@ -11,7 +11,7 @@
  * inspected build, and the local draft keeps the applied delta (edits over the revision are not written to it).
  */
 import type {CropWorldMapping} from '../src/chest-regions.ts';
-import {placeSetupMesh,readSetupMesh,setupModel} from '../src/setup-mesh.ts';
+import {readStoredSetupMesh,setupModel} from '../src/setup-mesh.ts';
 import {
  MESH_EDIT_CODES,MESH_EDIT_NO_MESH,MESH_EDIT_PREVIEW_NOTE,MESH_EDIT_RIG_UNAVAILABLE,MESH_EDIT_SELECT_SLOT,MeshEditSession,affineOf,applyAffine,applyMeshOps,attachmentHashText,draftOps,hitMesh,
  invertAffine,meshEditDocument,parseMeshDraft,screenDeltaToCrop,verticesInBox,writeMeshDraft,type MeshEditDocument,type MeshEditResult,type MeshOp,type MeshSource,
@@ -56,7 +56,7 @@ export function cropFromWorld(mapping:Extract<CropWorldMapping,{available:true}>
 type SourceResult={ok:true;source:Omit<MeshSource,'hash'>;entry:unknown;world:number[]}|{ok:false;code:string};
 /**
  * The selected slot's mesh in setup space: its attachment's entry in the hash-verified compiled model document (the
- * attachment the setup pose resolves), its stored vertices placed through the setup-pose bones (`world`, flat x, y)
+ * attachment the public setup identity resolves), its public readSetupMesh vertices (`world`, flat x, y)
  * and mapped to crop px. Refuses, in order: no model document (`MESH_EDIT_MODEL_UNAVAILABLE`), whole rig, no setup pose,
  * a non-mesh or linked attachment, no crop mapping.
  */
@@ -66,17 +66,18 @@ export function meshEditSource(input:{slot:string|null;model:unknown;pose:(slot:
  let pose:SetupPose|null;
  try{pose=input.pose(slot);}catch(error){return {ok:false,code:`${MESH_EDIT_RIG_UNAVAILABLE}: ${error instanceof Error?error.message:String(error)}`};}
  if(!pose)return {ok:false,code:`${MESH_EDIT_RIG_UNAVAILABLE}: no rig loaded`};
- const read=readSetupMesh(input.model,slot,pose.identity,MESH_EDIT_CODES);if(!read.ok)return read;
+ const read=readStoredSetupMesh(input.model,slot,pose.identity,MESH_EDIT_CODES);if(!read.ok)return !pose.identity&&pose.reason?{ok:false,code:`${read.code} (${pose.reason})`}:read;
  const mesh=read.mesh,noMesh=(why:string)=>({ok:false as const,code:`${MESH_EDIT_NO_MESH} ${slot}: ${why}`});
  if(mesh.linked)return noMesh(`${mesh.skin} / ${mesh.attachment} is a linked mesh of ${mesh.source.slot} / ${mesh.source.attachment}; edit its source mesh`);
- if(mesh.hull===null)return noMesh('the model entry stores no hull');
  if(!input.mapping.available)return {ok:false,code:`${input.mapping.reason}: mesh edit needs the crop mapping`};
- let world:number[]|null;
- try{world=placeSetupMesh(mesh,pose.world);}catch(error){return {ok:false,code:`${MESH_EDIT_RIG_UNAVAILABLE}: ${error instanceof Error?error.message:String(error)}`};}
- if(!world)return {ok:false,code:`MESH_EDIT_SOURCE_MISMATCH: ${slot} has a non-finite setup-pose vertex`};
+ let geometry:ReturnType<SetupPose['readMesh']>;
+ try{geometry=pose.readMesh();}catch(error){return {ok:false,code:`${MESH_EDIT_RIG_UNAVAILABLE}: ${error instanceof Error?error.message:String(error)}`};}
+ if(!geometry||geometry.slot!==slot||geometry.skin!==mesh.skin||geometry.attachment!==mesh.attachment||geometry.vertices.length!==mesh.vertices.length*2)return {ok:false,code:`MESH_EDIT_SOURCE_MISMATCH: ${slot} setup geometry does not match its stored identity or vertex count`};
+ if(geometry.hull===null)return noMesh('the model entry stores no hull');
+ const world=geometry.vertices;
  const toCrop=cropFromWorld(input.mapping);if(!toCrop)return {ok:false,code:'MESH_EDIT_MAPPING_SINGULAR'};
  const vertices:Vec[]=[];for(let i=0;i<world.length;i+=2)vertices.push(toCrop(world[i]!,world[i+1]!));
- return {ok:true,source:{slot,skin:mesh.skin,attachment:mesh.attachment,vertices,triangles:mesh.triangles,hull:mesh.hull},entry:mesh.entry,world};
+ return {ok:true,source:{slot,skin:mesh.skin,attachment:mesh.attachment,vertices,triangles:geometry.triangles,hull:geometry.hull},entry:mesh.entry,world};
 }
 /** Apply · Rebuild with an empty delta: nothing is sent. */
 export const MESH_EDIT_NOTHING_PENDING='MESH_EDIT_NOTHING_PENDING: the delta holds no op; nothing is sent';

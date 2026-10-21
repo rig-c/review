@@ -1,6 +1,6 @@
 /**
  * The setup-space mesh reader shared by Setup · Weights (#107) and Edit Mesh (#100): one slot's mesh attachment read
- * from the compiled model document as stored, plus the published player's skinning formula that places it. Pure — no
+ * from the compiled model document as stored. Geometry is read separately through Play's public readSetupMesh. Pure — no
  * DOM, no I/O; nothing here edits, normalises or infers a vertex or a weight.
  *
  * `rigc-compiled/3` stores a mesh attachment's setup-pose vertices at `skins[].attachments.<slot>.<name>.vertices`:
@@ -66,28 +66,15 @@ function attachmentOf(model:Obj,skin:string,slot:string,name:string):Obj|undefin
  const entry=isObject(slots)?slots[name]:undefined;
  return isObject(entry)?entry:undefined;
 }
-/** Without an identity: the slot's mesh attachment named like the slot, else its only mesh (first skin that has it). */
-function guessFree(model:Obj,slot:string):{skin:string;attachment:string}|null {
- const found:{skin:string;attachment:string}[]=[];
- for(const s of Array.isArray(model.skins)?model.skins:[]){
-  if(!isObject(s)||typeof s.name!=='string'||!isObject(s.attachments)||!isObject(s.attachments[slot]))continue;
-  for(const [name,a]of Object.entries(s.attachments[slot] as Obj))if(isObject(a)&&(a.kind==='mesh'||a.kind==='linkedmesh'))found.push({skin:s.name,attachment:name});
- }
- return found.find(f=>f.attachment===slot)??(found.length===1?found[0]!:null);
-}
-
-/**
- * The setup-pose mesh of `slot`'s attachment `active` (the identity the setup pose resolved; null takes the slot's mesh
- * named like the slot, else its only one), exactly as stored.
- */
-export function readSetupMesh(model:unknown,slot:string|null,active:{skin:string;attachment:string}|null,codes:SetupMeshCodes):SetupMeshReadResult {
+/** Stored metadata for the exact supplying table/key reported by the public setup identity. Null is never guessed. */
+export function readStoredSetupMesh(model:unknown,slot:string|null,active:{skin:string;attachment:string}|null,codes:SetupMeshCodes):SetupMeshReadResult {
  const doc=setupModel(model,codes);if(!doc.ok)return doc;
  if(!slot)return {ok:false,code:`${codes.select}: ${codes.selectText}`};
  const slots=Array.isArray(doc.model.slots)?doc.model.slots:[];
  const slotEntry=slots.find(s=>isObject(s)&&s.name===slot) as Obj|undefined;
  if(!slotEntry||typeof slotEntry.bone!=='string')return {ok:false,code:`${codes.noMesh} ${slot}: the model has no such slot`};
- const key=active??guessFree(doc.model,slot);
- if(!key)return {ok:false,code:`${codes.noMesh} ${slot}: no mesh attachment`};
+ const key=active;
+ if(!key)return {ok:false,code:`${codes.noMesh} ${slot}: no mesh attachment at the setup pose`};
  const own=attachmentOf(doc.model,key.skin,slot,key.attachment);let entry=own,source={skin:key.skin,slot,attachment:key.attachment};
  if(entry?.kind==='linkedmesh'){
   if(typeof entry.skin!=='string'||typeof entry.slot!=='string'||typeof entry.source!=='string')return {ok:false,code:`${codes.invalid}: ${slot} / ${key.attachment} is a linked mesh without skin, slot and source`};
@@ -119,26 +106,4 @@ export function readSetupMesh(model:unknown,slot:string|null,active:{skin:string
  const hull=Number.isSafeInteger(entry.hull)&&(entry.hull as number)>=0&&(entry.hull as number)<=vertices.length?entry.hull as number:null;
  const order:string[]=[];for(const row of vertices)for(const i of row)if(!order.includes(i.bone))order.push(i.bone);
  return {ok:true,mesh:{slot,skin:key.skin,attachment:key.attachment,source,linked:own.kind==='linkedmesh',weighted:v.weighted,vertices,bones:order,triangles:[...triangles] as number[],hull,entry:own}};
-}
-
-/** A bone's world transform as the published player reports it (`BoneWorld`'s x, y, a, b, c, d). */
-export interface WorldTransform {x:number;y:number;a:number;b:number;c:number;d:number}
-/**
- * One vertex's world position from its stored influences and the bones' world transforms: the published player's own
- * skinning formula (`worldVertices` in `@rig-c/play`: coordinates and weights through `Math.fround`, each influence
- * `(x·a + y·b + worldX, x·c + y·d + worldY) · weight`, summed; an unweighted vertex is its slot bone's transform at 1).
- */
-export function skinVertex(influences:readonly WeightInfluence[],world:(bone:string)=>WorldTransform,weighted:boolean):{x:number;y:number} {
- let wx=0,wy=0;
- for(const i of influences){
-  const t=world(i.bone),x=Math.fround(i.x),y=Math.fround(i.y),w=weighted?Math.fround(i.weight):1;
-  wx+=(x*t.a+y*t.b+t.x)*w;wy+=(x*t.c+y*t.d+t.y)*w;
- }
- return {x:wx,y:wy};
-}
-/** Every vertex of a read mesh placed in world space through `world` (flat x, y pairs), or null when one is not finite. */
-export function placeSetupMesh(mesh:Pick<SetupMeshRead,'vertices'|'weighted'>,world:(bone:string)=>WorldTransform):number[]|null {
- const out:number[]=[];
- for(const influences of mesh.vertices){const p=skinVertex(influences,world,mesh.weighted);if(!Number.isFinite(p.x)||!Number.isFinite(p.y))return null;out.push(p.x,p.y);}
- return out;
 }

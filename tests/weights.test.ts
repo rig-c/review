@@ -1,14 +1,16 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {createCanvas,Image} from '@napi-rs/canvas';
-import {loadModel,type ModelAssets} from '@rig-c/play';
+import {createCanvas} from '@napi-rs/canvas';
+import {readSetupMesh,type ModelAssets} from '@rig-c/play';
 import {loadReview} from '../src/manifest.ts';
 import {WEIGHTS_MODEL_UNAVAILABLE,dominantInfluence,meshWeights,rampColor,weightOf} from '../src/weights.ts';
 import {RigOverlays} from '../web/rig-overlays.ts';
 import {hitVertex,setupPoseMesh,weightsOverlay,type WeightsMode} from '../web/weights-view.ts';
 import {meshEditSource} from '../web/mesh-editor.ts';
-import {modelBoneNames,readSetupPose} from '../web/setup-pose.ts';
+import {readSetupPose} from '../web/setup-pose.ts';
+
+import {loadSetupAssets as load,setupRoot as root} from './helpers/setup-mesh.ts';
 
 const base=new URL('./fixtures/strip-probe/build/',import.meta.url);
 /** Stored weights of the derived fixture: vertex i is `mesh` at W[i] and `root` at 1 − W[i], placed where the unweighted mesh sits. */
@@ -22,23 +24,6 @@ async function documents(){
 }
 const ramp=['#000000','#808080','#ffffff'],boneColors=['#ff0000','#00ff00'],colors={veil:'rgba(0,0,0,0)',edge:'#123456',ink:'#010101',labelBg:'#202020',hover:'#fefefe'};
 
-/** The published loader and player over an in-memory model document (native canvas; the fixture's own pages). */
-async function load(doc:unknown):Promise<{assets:ModelAssets;dispose:()=>void}> {
- const pageBytes=new Map<string,Buffer>();for(const name of ['rigid.png','mesh.png'])pageBytes.set('https://weights.invalid/'+name,await readFile(new URL(name,base)));
- const globals=globalThis as unknown as Record<string,unknown>,saved=new Map(['document','Image'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
- const restore=()=>{for(const [key,descriptor] of saved)if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globals[key];};
- const src=Object.getOwnPropertyDescriptor(Image.prototype,'src')!;
- class LocalImage extends Image {}
- Object.defineProperty(LocalImage.prototype,'src',{get(){return src.get!.call(this);},set(value:unknown){const image=typeof value==='string'?pageBytes.get(value):undefined;if(!image)throw new Error('Undeclared fixture image');src.set!.call(this,image);}});
- globals.Image=LocalImage;
- globals.document={baseURI:'https://weights.invalid/',createElement(tag:string){if(tag!=='canvas')throw new Error('Unexpected native host element '+tag);return Object.assign(createCanvas(1,1),{style:{},remove(){}});}};
- const bytes=new TextEncoder().encode(JSON.stringify(doc));
- try{
-  const assets=await loadModel({modelUrl:'https://weights.invalid/skeleton.model.json',setsUrl:null,regions:'none',resolvePage:name=>'https://weights.invalid/'+name,fetch:new Proxy(fetch,{apply:(_t,_s,args:Parameters<typeof fetch>)=>String(args[0])==='https://weights.invalid/skeleton.model.json'?Promise.resolve(new Response(bytes)):Promise.reject(new Error('Undeclared fixture fetch'))})});
-  return {assets,dispose(){try{assets.dispose();}finally{restore();}}};
- }catch(error){restore();throw error;}
-}
-const root=()=>({style:{clipPath:''},appendChild(node:unknown){return node;}}) as unknown as HTMLElement;
 function overlayOf(doc:unknown,assets:ModelAssets,mode:WeightsMode,bone:string|null,hover:number|null=null){
  const setup=setupPoseMesh(assets,doc,'mesh',root(),'canvas');if(!setup.ok)throw new Error(setup.code);
  const result=weightsOverlay({weights:setup.weights,mesh:setup.mesh,mode,bone,hover,ramp,boneColors,colors});if(!result.ok)throw new Error(result.code);
@@ -56,8 +41,7 @@ test('bar 1: every drawn vertex weight is the model document\'s stored weight fo
   expect(overlay.vertices.map(v=>v.value)).toEqual(W);
   expect(overlayOf(weighted,assets,'bone','root').overlay.vertices.map(v=>v.value)).toEqual(W.map(w=>1-w));
   expect(overlayOf(weighted,assets,'bone','rigid').overlay.vertices.map(v=>v.value)).toEqual([0,0,0,0]);
-  // Setup-pose world positions from the published player: the mesh bone at (18, 0), local corners ±10.
-  expect(overlay.vertices.map(v=>[Math.round(v.at.x*1e4)/1e4,Math.round(v.at.y*1e4)/1e4])).toEqual([[8,-10],[8,10],[28,10],[28,-10]]);
+  expect(overlay.vertices.flatMap(v=>[v.at.x,v.at.y])).toEqual(readSetupMesh(assets,{slot:'mesh',attachment:'mesh'}).vertices);
   expect(overlay.vertices[1]!.label).toBe('#1 mesh 0.625');
   // Drawn: the dot's centre pixel is the ramp colour of the stored weight.
   const surface=createCanvas(400,300);Object.assign(surface,{style:{pointerEvents:'auto'},clientWidth:400,clientHeight:300});
@@ -101,7 +85,7 @@ test('one setup-space reader (#100): Edit Mesh places exactly the vertices the w
  try{
   const {setup}=overlayOf(weighted,assets,'bone','mesh');
   const mapping={available:true as const,crop:{w:80,h:64},toWorld:(x:number,y:number)=>({x:x-40,y:64-y}),basis:'fixture'};
-  const edit=meshEditSource({slot:'mesh',model:weighted,pose:slot=>readSetupPose(assets,slot,modelBoneNames(weighted),root(),'canvas'),mapping});
+  const edit=meshEditSource({slot:'mesh',model:weighted,pose:slot=>readSetupPose(assets,slot,root(),'canvas'),mapping});
   if(!edit.ok)throw new Error(edit.code);
   expect(edit.world).toEqual(setup.vertices);
   expect(edit.source.vertices).toEqual(Array.from({length:setup.vertices.length/2},(_,i)=>[setup.vertices[i*2]!+40,64-setup.vertices[i*2+1]!]));
