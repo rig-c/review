@@ -7,7 +7,8 @@ import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
 import {frontRoute} from '../src/front.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch} from '../src/config-patch.ts';
-import {defaultStripConcurrency} from '../src/rebuild.ts';
+import {boundedStripConcurrency,defaultStripConcurrency} from '../src/rebuild.ts';
+import {revisionBinding} from '../src/retune-check.ts';
 import {stripPendingAfter} from '../web/rebuild-client.ts';
 import {candidateRow,DENSITY_STRIP_LIMIT,DensityStripError,refineValues,stripFigures,stripLabels,stripShape,stripValues,type StripRow} from '../src/density-strip.ts';
 
@@ -26,8 +27,13 @@ const fakeParts=`const fs=require('fs'),path=require('path'),crypto=require('cry
 const sha=b=>crypto.createHash('sha256').update(b).digest('hex');const runs=path.join(__dirname,'runs');
 const tree=root=>{const out=[];const walk=d=>{for(const n of fs.readdirSync(d).sort()){const p=path.join(d,n);if(fs.statSync(p).isDirectory())walk(p);else out.push(path.relative(root,p).split(path.sep).join('/'));}};walk(root);return out.sort();};
 const copy=(src,out)=>{for(const r of tree(src)){fs.mkdirSync(path.dirname(path.join(out,r)),{recursive:true});fs.copyFileSync(path.join(src,r),path.join(out,r));}};
-if(a[0]==='remesh'){fs.appendFileSync(runs,'S\\n');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,300);
+if(a[0]==='remesh'){fs.appendFileSync(path.join(__dirname,'args'),JSON.stringify(a)+'\\n');fs.appendFileSync(runs,'S\\n');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,300);
  const out=f('--out'),input=f('--rig'),part=f('--part'),e=JSON.parse(fs.readFileSync(f('--mesh'),'utf8')),g=e.grid;
+ const parts=f('--parts'),binding={versions:{parts:JSON.parse(fs.readFileSync(path.join(__dirname,'../package.json'))).version,rigc:'2.64.1'},options:{page_edges:a.includes('--page-edges')?f('--page-edges'):'free',pack_shape:a.includes('--pack-shape')?f('--pack-shape'):'polygon',requirements:null},rig:{dir:path.resolve(input),files:tree(input).map(p=>[p,sha(fs.readFileSync(path.join(input,p)))])},parts:{dir:path.resolve(parts),files:[['parts.json',sha(fs.readFileSync(path.join(parts,'parts.json')))]]}};
+ if(a.includes('--input-check')){let record;try{record=JSON.parse(fs.readFileSync(f('--input-check'),'utf8'));if(record.spec!=='rig-parts-input-check/1'||!record.rig||!record.parts||!record.check)throw Error();}catch{console.log('  FAIL  REMESH_INPUT_CHECK_FILE: invalid input-check.json');fs.appendFileSync(runs,'E\\n');process.exit(1);}
+ if(JSON.stringify({versions:record.versions,options:record.options,rig:record.rig,parts:record.parts})!==JSON.stringify(binding)){console.log('  FAIL  REMESH_INPUT_CHECK_BOUND: rig.dir or input hash row differs');fs.appendFileSync(runs,'E\\n');process.exit(1);}
+ console.log('  check-input: not run — recorded check bound to this input');
+ }else fs.appendFileSync(path.join(__dirname,'input-check-runs'),'x\\n');
  const tris=g>=80?44:Math.round(4000/g),verts=Math.round(tris*0.7),ratio=+(3-g/60).toFixed(3),sev=+(1+10/g).toFixed(3),pass=ratio>=${FLOOR};
  console.log('rig-parts remesh: '+part);console.log('  '+part+': v=130 t=204 hull=54 -> v='+verts+' t='+tris+' hull=40');
  console.log('[check-revision]   TIP_OVER_ROOT: '+(pass?'PASS':'FAIL')+' — instrument geometry; parts part forearm_l, unmeasured a limb segment (config.limbs.arm_l), rigid on its one bone "sleeve_l1" | part '+part+', root_rig_px 2.545, tip_rig_px 5.078, ratio '+ratio+'; ratio_floor ${FLOOR}');
@@ -39,6 +45,8 @@ if(a[0]==='remesh'){fs.appendFileSync(runs,'S\\n');Atomics.wait(new Int32Array(n
  const rows=tree(out).map(p=>{const b=fs.readFileSync(path.join(out,p));return {path:p,bytes:b.length,sha256:sha(b)};});
  const status={gate:'PASS',loop:'PASS',seam:'PASS',TIP_OVER_ROOT:'PASS',TEXTURE_STRETCH:'PASS',ANIMATIONS_DO_NOT_FOLD:'PASS'};
  fs.writeFileSync(path.join(out,'remesh.json'),JSON.stringify({spec:'rig-parts-remesh/1',request:{part,mesh:e,page_edges:'free',pack_shape:'polygon'},target:{before:{vertices:130,triangles:204,hull:54},after:{vertices:verts,triangles:tris,hull:40}},revision:rows,check:{input:{pass:true,line:'check: PASS; 3 of 3 bar(s) measured',status},revision:{pass:true,line,status}}},null,2)+'\\n');
+ if(a.includes('--record-input-check')){const mode=fs.existsSync(path.join(__dirname,'record-mode'))?fs.readFileSync(path.join(__dirname,'record-mode'),'utf8'):'';
+ if(mode!=='missing'){if(mode==='mismatch')binding.rig.dir+='-other';fs.writeFileSync(path.join(out,'input-check.json'),mode==='malformed'?'not json':JSON.stringify({spec:'rig-parts-input-check/1',...binding,check:{pass:true,line:'check: PASS; 3 of 3 bar(s) measured',status}}));}}
  console.log('rig-parts remesh: wrote '+rows.length+' file(s), the provenance in remesh.json');fs.appendFileSync(runs,'E\\n');process.exit(0);}
 if(a[0]==='check'){fs.appendFileSync(path.join(__dirname,'check-runs'),'x\\n');process.exit(1);}
 process.exit(3);`;
@@ -47,7 +55,7 @@ const out=f('--out');fs.mkdirSync(out,{recursive:true});const rig=JSON.parse(fs.
 fs.writeFileSync(path.join(out,'skeleton.model.json'),JSON.stringify({spec:'rigc-compiled/3',pages:[{name:'skeleton.png'}],skins:[{attachments:{bottomwear:{bottomwear:{kind:'mesh',triangles:Array(3*(rig.tris||0)).fill(0)}}}}],g:rig.mesh?rig.mesh.grid:null}));
 fs.writeFileSync(path.join(out,'skeleton.png'),'png-'+(rig.mesh?rig.mesh.grid:0));console.log('rigc: wrote');`;
 
-async function fixture(){
+async function fixture(version='1.49.1',recordMode=''){
  const root=await realpath(await mkdtemp(join(tmpdir(),'review-density-strip-'))),pkg=join(root,'pkg'),rig=join(pkg,'rig/out/rig');
  await mkdir(join(rig,'images'),{recursive:true});await mkdir(join(pkg,'rig/out/parts'),{recursive:true});
  await writeFile(join(pkg,'rig/config.json'),JSON.stringify(config,null,1));await writeFile(join(pkg,'rig/out/parts.json'),'{}');
@@ -56,26 +64,105 @@ async function fixture(){
  await writeFile(join(pkg,'motion.json'),'{}');
  const bin=join(root,'node_modules/@rig-c/parts/bin');
  await mkdir(bin,{recursive:true});await mkdir(join(root,'node_modules/rig-c/bin'),{recursive:true});
- await writeFile(join(root,'node_modules/@rig-c/parts/package.json'),JSON.stringify({name:'@rig-c/parts',version:'1.49.1',bin:{'rig-parts':'./bin/rig-parts.cjs'}}));
+ await writeFile(join(root,'node_modules/@rig-c/parts/package.json'),JSON.stringify({name:'@rig-c/parts',version,bin:{'rig-parts':'./bin/rig-parts.cjs'}}));
  await writeFile(join(bin,'rig-parts.cjs'),fakeParts);
+ await writeFile(join(bin,'record-mode'),recordMode);
  await writeFile(join(root,'node_modules/rig-c/package.json'),JSON.stringify({name:'rig-c',version:'2.64.1',bin:{rigc:'./bin/rigc.cjs'}}));
  await writeFile(join(root,'node_modules/rig-c/bin/rigc.cjs'),fakeRigc);
  return {root,pkg,state:join(root,'state'),runs:join(bin,'runs'),checkRuns:join(bin,'check-runs')};
 }
 const sha=(b:Uint8Array|string)=>createHash('sha256').update(b).digest('hex');
-const patchFor=(hash:string,grid:number,extra:Record<string,unknown>={}):ConfigPatch=>({schema:CONFIG_PATCH_SCHEMA,config_sha256:hash,ops:[{op:'replace',path:'/meshes/bottomwear',value:{...entry,grid,...extra}}],producer:{name:'@rig-c/parts',version:'1.49.1'},op:{cmd:'remesh',args:['--part','bottomwear']}});
+const patchFor=(hash:string,grid:number,extra:Record<string,unknown>={},version='1.49.1'):ConfigPatch=>({schema:CONFIG_PATCH_SCHEMA,config_sha256:hash,ops:[{op:'replace',path:'/meshes/bottomwear',value:{...entry,grid,...extra}}],producer:{name:'@rig-c/parts',version},op:{cmd:'remesh',args:['--part','bottomwear']}});
 interface View {id:string;status:string;concurrency:number;wallMs:number|null;rows:StripRow[];labels:{fewest:number|null;widest:number|null};error?:string}
 /** The most runs open at once in the S/E log. */
 const overlap=(log:string)=>{let open=0,max=0;for(const c of log.trim().split('\n')){open+=c==='S'?1:-1;max=Math.max(max,open);}return max;};
 
-async function session(run:(s:{base:string;hash:string;sourceHash:string;state:string;runs:string;checkRuns:string;root:string})=>Promise<void>,options:{stripConcurrency?:number;capability?:string}={}){
- const f=await fixture(),p=await loadReview(f.pkg),server=await startServer(p,{port:0,stateDir:f.state,cwd:f.root,...options}),base=`http://127.0.0.1:${server.port}`;
+async function session(run:(s:{base:string;hash:string;sourceHash:string;state:string;runs:string;checkRuns:string;root:string})=>Promise<void>,options:{stripConcurrency?:number;capability?:string;version?:string;recordMode?:string}={}){
+ const f=await fixture(options.version,options.recordMode),p=await loadReview(f.pkg),server=await startServer(p,{port:0,stateDir:f.state,cwd:f.root,...options}),base=`http://127.0.0.1:${server.port}`;
  try{const status=await (await fetch(base+'/api/rebuild')).json() as {inputs:{configHash:string}};await run({base,hash:status.inputs.configHash,sourceHash:p.sourceHash,state:f.state,runs:f.runs,checkRuns:f.checkRuns,root:f.root});}
  finally{await server.stop(true);await rm(f.root,{recursive:true,force:true});}
 }
 const post=(base:string,path:string,body:unknown,headers:Record<string,string>={Origin:base})=>fetch(base+path,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify(body)});
 async function settle(base:string,started:Response):Promise<View>{let view=await started.json() as View;for(let i=0;view.status==='running'&&i<800;i++){await Bun.sleep(25);view=await (await fetch(`${base}/api/density-strip/${view.id}`)).json() as View;}return view;}
 const ls=async(dir:string)=>{try{return (await readdir(dir)).sort();}catch{return [];}};
+const calls=async(root:string):Promise<string[][]> => (await readFile(join(root,'node_modules/@rig-c/parts/bin/args'),'utf8')).trim().split('\n').map(l=>JSON.parse(l));
+const inputChecks=async(root:string) => (await readFile(join(root,'node_modules/@rig-c/parts/bin/input-check-runs'),'utf8')).trim().split('\n').length;
+
+test('#179: one input check, same inspected directories, at most four candidates, and the shared record never enters a revision or public route',async()=>{
+ await session(async({base,hash,state,sourceHash,root,runs,checkRuns})=>{
+  const patch=(g:number)=>patchFor(hash,g,{},'1.55.0');
+  const view=await settle(base,await post(base,'/api/density-strip',{patches:[40,50,60,70,80].map(patch)}));
+  expect(view.rows.every(r=>r.status==='built')).toBe(true);
+  expect(view.concurrency).toBe(4);expect(overlap(await readFile(runs,'utf8'))).toBe(4);
+  const argv=await calls(root);
+  expect(argv.filter(a=>a.includes('--record-input-check'))).toHaveLength(1);
+  expect(argv.filter(a=>a.includes('--input-check'))).toHaveLength(4);
+  expect(await inputChecks(root)).toBe(1);expect(await ls(checkRuns)).toEqual([]);
+  for(const flag of ['--rig','--parts'])expect(new Set(argv.map(a=>a[a.indexOf(flag)+1])).size).toBe(1);
+  const dir=join(state,'density-strip',sourceHash,view.id),record=await readFile(join(dir,'input-check.json'),'utf8');
+  expect(JSON.parse(record).rig.dir).toBe(join(root,'pkg/rig/out/rig'));
+  for(const row of view.rows){
+   expect(await ls(join(dir,row.id,'rig'))).not.toContain('input-check.json');
+   expect((await fetch(`${base}/density-strip/${view.id}/${row.id}/input-check.json`)).status).toBe(404);
+  }
+  expect((await fetch(`${base}/density-strip/${view.id}/input-check.json`)).status).toBe(404);
+  // The ordinary revision binding remains strict: an unrelated extra file is still a named stale refusal.
+  const revision=join(dir,view.rows[0]!.id,'rig'),provenance=JSON.parse(await readFile(join(revision,'remesh.json'),'utf8'));
+  await writeFile(join(revision,'unexpected.json'),'{}');
+  expect(await revisionBinding(revision,provenance,'remesh')).toMatch(/^REMESH_CHECK_STALE: unexpected.json /);
+  await rm(join(revision,'unexpected.json'));
+  const applied=await (await post(base,'/api/rebuild',{patch:patch(40)})).json() as {status:string;reused:boolean};
+  expect(applied).toMatchObject({status:'built',reused:true});
+  expect(await readFile(join(dir,'input-check.json'),'utf8')).toBe(record);
+  const next=await settle(base,await post(base,'/api/density-strip',{patches:[42,62].map(patch)}));
+  expect(next.rows.every(r=>r.status==='built')).toBe(true);expect(await inputChecks(root)).toBe(2);
+  expect(await ls(join(state,'density-strip',sourceHash))).toEqual([next.id]);
+  await post(base,'/api/density-strip/close',{id:next.id});
+  expect(await ls(join(state,'density-strip'))).toEqual([]);
+  expect((await loadReview(join(root,'pkg'))).sourceHash).toBe(sourceHash);
+ },{version:'1.55.0',stripConcurrency:99});
+});
+
+test('#179: a refused first candidate keeps its line; the next candidate seeds the remaining pool; all-refused and single-slot strips settle',async()=>{
+ await session(async({base,hash,root})=>{
+  const patch=(g:number)=>patchFor(hash,g,{},'1.55.0');
+  const view=await settle(base,await post(base,'/api/density-strip',{patches:[120,40,60].map(patch)}));
+  expect(view.rows.map(r=>r.status)).toEqual(['refused','built','built']);
+  expect(view.rows[0]!.verdict).toMatch(/^FAIL  REMESH_CHECK_HELD: check bar TIP_OVER_ROOT/);
+  const argv=await calls(root);
+  expect(argv.map(a=>a.includes('--record-input-check'))).toEqual([true,true,false]);
+  expect(await inputChecks(root)).toBe(2);
+  const refused=await settle(base,await post(base,'/api/density-strip',{patches:[120,130].map(patch)}));
+  expect(refused.status).toBe('done');expect(refused.rows.every(r=>r.status==='refused')).toBe(true);
+ },{version:'1.55.0',stripConcurrency:1});
+});
+
+test('#179: missing output record refuses by name without falling back or starting any remaining producer',async()=>{
+ await session(async({base,hash,root,state,sourceHash})=>{
+  const view=await settle(base,await post(base,'/api/density-strip',{patches:[40,60,80].map(g=>patchFor(hash,g,{},'1.55.0'))}));
+  expect(view.rows.every(r=>r.status==='refused'&&r.verdict.startsWith('DENSITY_STRIP_INPUT_CHECK_MISSING:'))).toBe(true);
+  expect(await calls(root)).toHaveLength(1);expect(await inputChecks(root)).toBe(1);
+  expect(await ls(join(state,'density-strip',sourceHash,view.id))).toEqual([]);
+ },{version:'1.55.0',recordMode:'missing'});
+});
+
+for(const [mode,code] of [['malformed','REMESH_INPUT_CHECK_FILE'],['mismatch','REMESH_INPUT_CHECK_BOUND']])test(`#179: ${mode} record preserves ${code}, with no unrecorded retry`,async()=>{
+ await session(async({base,hash,root})=>{
+  const view=await settle(base,await post(base,'/api/density-strip',{patches:[40,60,80].map(g=>patchFor(hash,g,{},'1.55.0'))}));
+  expect(view.rows.map(r=>r.status)).toEqual(['built','refused','refused']);
+  expect(view.rows.slice(1).every(r=>r.verdict.startsWith(`FAIL  ${code}:`))).toBe(true);
+  expect(await calls(root)).toHaveLength(3);expect(await inputChecks(root)).toBe(1);
+ },{version:'1.55.0',recordMode:mode});
+});
+
+test('#179: older producer receives no input-check flags and measures each candidate independently',async()=>{
+ await session(async({base,hash,root})=>{
+  const view=await settle(base,await post(base,'/api/density-strip',{patches:[40,60].map(g=>patchFor(hash,g))}));
+  expect(view.rows.every(r=>r.status==='built')).toBe(true);
+  expect((await calls(root)).every(a=>!a.includes('--record-input-check')&&!a.includes('--input-check'))).toBe(true);
+  expect(await inputChecks(root)).toBe(2);
+ });
+});
 
 test('#173 pure: the values of a strip and of a refined strip, the shape a strip may have, and the default concurrency',()=>{
  expect(stripValues(40,120,5,true)).toEqual([40,60,80,100,120]);
@@ -89,7 +176,9 @@ test('#173 pure: the values of a strip and of a refined strip, the shape a strip
  expect(()=>stripShape([patchFor(h,40),patchFor(h,60,{r:9})])).toThrow('DENSITY_STRIP_FIELD');
  expect(()=>stripShape([patchFor(h,40),patchFor(h,40)])).toThrow(DensityStripError);
  expect(()=>stripShape([patchFor(h,40),{...patchFor(h,60),ops:[{op:'replace',path:'/meshes/bottomwear/grid',value:60}]}])).toThrow('MESH_PATCH_SCOPE');
- expect(defaultStripConcurrency()).toBe(Math.max(1,Math.floor(require('node:os').availableParallelism()/2)));
+ expect(defaultStripConcurrency()).toBe(Math.min(4,Math.max(1,Math.floor(require('node:os').availableParallelism()/2))));
+ expect([0,2.9,5,100].map(boundedStripConcurrency)).toEqual([1,2,4,4]);
+ expect(boundedStripConcurrency(NaN)).toBe(defaultStripConcurrency());
  expect(DENSITY_STRIP_LIMIT).toBe(5*64*1024);
 });
 
