@@ -79,6 +79,15 @@ function meshAttachments(rig: Json): Map<string, Json> {
   for (const [slot, atts] of Object.entries(skin)) if (isObject(atts) && isObject(atts[slot]) && (atts[slot] as Record<string, Json>).type === 'mesh') out.set(slot, atts[slot]);
   return out;
 }
+/**
+ * The rig-relative image a part's mesh attachment draws: the rig's `images` directory and the attachment's `image`
+ * (`images/shirt.png` for `topwear` drawing `shirt.png`); `images/<part>.png` only when the attachment names none.
+ */
+function attachmentImage(rig: Json, att: Json, part: string): string {
+  const dir = isObject(rig) && typeof rig.images === 'string' && rig.images ? rig.images.replace(/\/+$/, '') : PRODUCER_IMAGES_DIR;
+  const image = isObject(att) && typeof att.image === 'string' && att.image ? att.image : `${part}.png`;
+  return `${dir}/${image}`;
+}
 const reportRow = (report: Json, part: string): Json => Array.isArray(report) ? report.find(r => isObject(r) && r.part === part) : undefined;
 
 export interface RigDocuments { rig: Json; motion: Json; report: Json; texts: Record<string, string | null> }
@@ -114,7 +123,9 @@ export function reachOf(baseline: RigDocuments, inspected: RigDocuments, baselin
   const bonesDiffer = !jsonEqual(rigI.bones, rigB.bones), motionDiffers = !jsonEqual(inspected.motion, baseline.motion);
   const remeshRefused = meshParts.filter(part => {
     const row = reportRow(inspected.report, part);
-    return !jsonEqual(attsI.get(part), attsB.get(part)) || images.includes(`${PRODUCER_IMAGES_DIR}/${part}.png`) || !jsonEqual(row, reportRow(baseline.report, part)) || (isObject(row) && row.mode === 'auto' && motionDiffers);
+    // The image each side's attachment draws (#185), compared in the trees, so a renamed image is not missed.
+    const imageDiffers = [attachmentImage(inspected.rig, attsI.get(part), part), attachmentImage(baseline.rig, attsB.get(part), part)].some(k => baselineTree[k] !== inspectedTree[k]);
+    return !jsonEqual(attsI.get(part), attsB.get(part)) || imageDiffers || !jsonEqual(row, reportRow(baseline.report, part)) || (isObject(row) && row.mode === 'auto' && motionDiffers);
   });
   const reach: BaselineReach = { schema: BASELINE_REACH_SCHEMA, notWriterText: notWritten.map(show), images: images.map(show), retuneHeld: retuneHeld === null ? null : retuneHeld.startsWith(`${PRODUCER_IMAGES_DIR}/`) ? show(retuneHeld) : retuneHeld, remeshRefused, meshParts, bonesDiffer, ops, text: '' };
   reach.text = reachText(reach, show);

@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {mkdir,mkdtemp,realpath,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {isWriterText,producerHint,writerText} from '../src/baseline-reach.ts';
+import {isWriterText,producerHint,reachOf,writerText} from '../src/baseline-reach.ts';
 import {assertWholeRigBaseline,baselineLine,compareBaseline,type BaselineResult} from '../src/baseline.ts';
 import {refusedText} from '../web/rebuild-client.ts';
 
@@ -89,4 +89,18 @@ test('#148: review\'s line beside INPUT_WRITTEN and an image RETUNE_REQUEST_HELD
  expect(refusedText({producerLine:RETUNE_WRITTEN,exitCode:1,hint:producerHint(RETUNE_WRITTEN)!})).toBe(`${RETUNE_WRITTEN} · review: ${producerHint(RETUNE_WRITTEN)}`);
  expect(refusedText({producerLine:REMESH_WRITTEN,exitCode:1})).toBe(REMESH_WRITTEN);
  expect(refusedText({producerLine:null,exitCode:2})).toBe('REBUILD_FAILED: exit 2');
+});
+
+test('#185: remesh reach reads a part\'s image off its mesh attachment, not images/<part>.png',()=>{
+ const named=(image:string)=>({...att([1,2,3]),image});
+ const rig={...rigDoc([1,2,3]),skins:{default:{neck:{neck:att([1,2,3])},topwear:{topwear:named('shirt.png')}}}};
+ const docs={rig,motion:motionDoc,report:reportDoc(1),texts:{'rig.json':writerText(rig),'motion.json':writerText(motionDoc),'mesh_report.json':writerText(reportDoc(1))}};
+ const tree=(shirt:string,topwear:string)=>({'rig.json':'r','images/neck.png':'n','images/shirt.png':shirt,'images/topwear.png':topwear});
+ // The attachment draws images/shirt.png, and that image differs: topwear is held, so it cannot be re-fit.
+ const held=reachOf(docs,docs,tree('a','t'),tree('b','t'),show);
+ expect(held.images).toEqual(['out/rig/images/shirt.png']);
+ expect(held.remeshRefused).toEqual(['topwear']);
+ expect(held.text).toContain('topwear is refused (REMESH_BASELINE_MISMATCH');
+ // An unrelated images/topwear.png differing does not hold the part whose attachment draws shirt.png.
+ expect(reachOf(docs,docs,tree('a','t'),tree('a','u'),show).remeshRefused).toEqual([]);
 });

@@ -8,7 +8,7 @@ import {startServer} from '../src/server.ts';
 import {frontRoute} from '../src/front.ts';
 import {freshSession} from '../src/session.ts';
 import {formatFeedbackIssues} from '../src/feedback-export.ts';
-import {KIND_FIELDS,parseRequirementsContext,readRequirements,REQUIREMENT_KINDS,REQUIREMENTS_CONTEXT_SCHEMA,requirementEntry,requirementsDocument,requirementsFileText,worstFrame,type Requirement} from '../src/requirements.ts';
+import {KIND_FIELDS,parseRequirementsContext,readRequirements,rowOf,REQUIREMENT_KINDS,REQUIREMENTS_CONTEXT_SCHEMA,requirementEntry,requirementsDocument,requirementsFileText,worstFrame,type Requirement} from '../src/requirements.ts';
 import type {RequirementsJob} from '../src/requirements-run.ts';
 import {defaultTargetBone,kindUnavailable,readyCatalog,requirementName,selfTargetRefusal} from '../web/requirements-panel.ts';
 
@@ -190,4 +190,15 @@ test('#150: an unavailable rig spec (no producer handoff) is no catalog, so a pa
  expect(readyCatalog(null)).toBeNull();
  const ready = { status: 'ready' as const, ...empty, reason: null };
  expect(readyCatalog(ready)).toBe(ready);
+});
+
+test('a range broken on both sides names the frame of the larger violation (#185)',()=>{
+ const line=(least:number,greatest:number)=>({kind:'range',animation:'a',status:'FAIL',least_degrees:least,least_at:'frame 1 (t = 0.1s)',greatest_degrees:greatest,greatest_at:'frame 9 (t = 0.9s)',range_degrees:[-45,45]});
+ // lo − least = 1, greatest − hi = 55 → the greatest end is the worst.
+ expect(rowOf('R',line(-46,100),null).worst?.frame).toBe(9);
+ // lo − least = 55, greatest − hi = 1 → the least end.
+ expect(rowOf('R',line(-100,46),null).worst?.frame).toBe(1);
+ // One side only, either way.
+ expect(rowOf('R',line(-46,10),null).worst?.frame).toBe(1);
+ expect(rowOf('R',line(-10,46),null).worst?.frame).toBe(9);
 });
