@@ -793,6 +793,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   async function apply(job: RebuildJob | PatchJob | DeltaJob | RetargetJob, dir: string, inputs: ProducerInputs, resolved: Resolved, op: ProducerOp, steps: ApplySteps = {}): Promise<void> {
     const push = (line: string) => { if (job.lines.length < MAX_LINES) job.lines.push(line); };
     const producer = resolved.producer;
+    // #180: a refusal or failure is published only after its scratch is removed (as "built" is published last, #146),
+    // so a reader that sees the outcome never finds a folder mid-removal.
+    let outcome: RebuildStatus | null = null;
     try {
       await rm(dir, { recursive: true, force: true });
       await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -803,7 +806,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         // #148: the producer's line stays as printed; review adds what it means here, when it knows.
         const hint = producerHint(job.producerLine);
         if (hint && !('refusals' in job)) { (job as RebuildJob | PatchJob | DeltaJob).hint = hint; push(`review: ${hint}`); }
-        job.status = 'refused'; return;
+        outcome = 'refused'; return;
       }
       job.producerLine = run.stdout.filter(l => l.trim()).at(-1)?.trim() ?? null;
       const { pageEdges, packShape, note } = await op.flags(push);
@@ -818,9 +821,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       push(`review: ${resolved.compiler.package} ${resolved.compiler.version} build --profile rig-play --pack --page-edges ${pageEdges} --pack-shape ${packShape}${note}`);
       const compile = await runTool(resolved.compiler.bin, compileArgs({ rig: `${op.spec}/rig.json`, motion: `${op.spec}/motion.json`, out: 'build', pageEdges, packShape }), { cwd: dir, onLine: push });
       job.wallMs.compile = compile.wallMs;
-      if (compile.exitCode !== 0) { job.exitCode = compile.exitCode; job.producerLine = firstRefusal(compile.lines) ?? `rigc build exited ${compile.exitCode} without a named refusal`; job.status = 'refused'; return; }
+      if (compile.exitCode !== 0) { job.exitCode = compile.exitCode; job.producerLine = firstRefusal(compile.lines) ?? `rigc build exited ${compile.exitCode} without a named refusal`; outcome = 'refused'; return; }
       const carried = steps.check && steps.carried ? await steps.carried(push) : null;
-      if (carried && 'refused' in carried) { job.producerLine = carried.refused; job.status = 'refused'; push(`review: ${carried.refused}`); return; }
+      if (carried && 'refused' in carried) { job.producerLine = carried.refused; outcome = 'refused'; push(`review: ${carried.refused}`); return; }
       if (steps.check && carried) steps.check(carried.summary, null);
       else if (steps.check) {
         // check measures the scratch rig; a FAIL is its judgment, recorded beside the build, not a refusal of the build.
@@ -838,7 +841,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       if (steps.hashed) await steps.hashed();
       // #166: an undo's re-run must reproduce the build its record names, file for file; otherwise it is refused, not guessed.
       const changed = steps.candidate ? null : restoredDifference(job.id, job.build.files);
-      if (changed) { job.producerLine = changed; job.status = 'refused'; push(`review: ${changed}`); return; }
+      if (changed) { job.producerLine = changed; outcome = 'refused'; push(`review: ${changed}`); return; }
       if (!steps.candidate) latestId = job.id;
       await writeFile(join(dir, 'result.json'), JSON.stringify({ ...job, status: 'built', reused: false }, null, 1) + '\n', { mode: 0o600 });
       // Each Apply replaces the previous scratch build of this package in the scratch root; #166 keeps the applied records'
@@ -847,11 +850,12 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       // "built" is published last: a reader that sees it finds the scratch root already settled (no sibling mid-removal).
       job.status = 'built';
     } catch (error) {
-      job.status = 'failed'; job.producerLine = error instanceof Error ? error.message : String(error); push(`review: ${job.producerLine}`);
+      outcome = 'failed'; job.producerLine = error instanceof Error ? error.message : String(error); push(`review: ${job.producerLine}`);
     } finally {
-      if (restoring?.id === job.id && job.status !== 'built') restoring = null;
-      // Only a built Apply keeps its scratch directory; a refusal or failure leaves nothing behind.
-      if (job.status !== 'built') await rm(dir, { recursive: true, force: true }).catch(() => {});
+      const built = job.status === 'built';
+      if (restoring?.id === job.id && !built) restoring = null;
+      // Only a built Apply keeps its scratch directory; a refusal or failure leaves nothing behind — removed before it is published.
+      if (!built) { await rm(dir, { recursive: true, force: true }).catch(() => {}); job.status = outcome ?? 'failed'; }
     }
   }
 
