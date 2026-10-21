@@ -9,6 +9,13 @@
  * package root; for the `../config.json` step, the folder that holds `out/`); a symlink that leaves it is refused by name.
  * The record (paths relative to the package root, hashes, how it was found) is part of `reviewedSource`, so changing a
  * handoff file's bytes starts a new pending session.
+ *
+ * A rig-parts build root (#149, {@link isBuildRoot}) opens as its `check/` package. For that package the producer's own
+ * config for the build is the regular file `config.json` in the build root, else in the folder that holds it — the two
+ * places `rig-parts build --config <dir>/config.json --out <dir>/out` leaves it. The build writes no record of its
+ * config, so this is a location rule bounded by the build's own files, not a proof: the session baseline (the producer
+ * rebuilding the inspected rig from that config) is the check. Discovered there, or declared with `--config` at exactly
+ * one of those two files, the handoff's root is that file's folder and the parts directory is the build root.
  */
 import { createHash } from 'node:crypto';
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
@@ -19,6 +26,9 @@ export const HANDOFF_SCHEMA = 'rig-review-handoff/1';
 export const DISCOVERY_PLACES = ['config.json', 'rig/config.json', '../config.json (beside an opened out/)'] as const;
 export const HANDOFF_DECLARATION = 'rig-review open <dir> --config <path> [--parts <dir>] or the review.json "producer" block';
 export const MODELING_INPUT_UNAVAILABLE = `MODELING_INPUT_UNAVAILABLE: config.json — looked at ${DISCOVERY_PLACES.join(', ')}; declare it with ${HANDOFF_DECLARATION}`;
+/** #149: the places looked at for the check package of a rig-parts build root, after the in-folder ones. */
+export const BUILD_DISCOVERY_PLACES = ['../config.json (in the build root)', '../../config.json (beside the build root)'] as const;
+export const BUILD_MODELING_INPUT_UNAVAILABLE = `MODELING_INPUT_UNAVAILABLE: config.json — looked at ${[...DISCOVERY_PLACES.slice(0, 2), ...BUILD_DISCOVERY_PLACES].join(', ')}; declare it with ${HANDOFF_DECLARATION}`;
 /** Files the producer reads by the config's own naming, resolved against the config's directory (rig-parts `relativeConfigPaths`). */
 export const CONFIG_NAMED_FILES = [['motion', 'animations_from'], ['generation', 'control', 'skeleton']] as const;
 /** What `rig-parts rig` writes into its --out and remesh reads from --rig: the rig spec, its motion, the mesh report and the part images. */
@@ -55,6 +65,33 @@ const sha256 = (bytes: Uint8Array | string) => createHash('sha256').update(bytes
 const inside = (base: string, path: string, allowSelf = false) => { const rel = relative(base, path); return rel === '' ? allowSelf : rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel); };
 const code = (e: unknown) => (e as NodeJS.ErrnoException).code ?? '';
 async function exists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch (e) { if (code(e) === 'ENOENT' || code(e) === 'ENOTDIR') return false; throw e; } }
+
+/** A path's own entry (never followed) is of this kind; absent or another kind is false. */
+async function entryIs(path: string, kind: 'file' | 'dir'): Promise<boolean> {
+  try { const info = await lstat(path); return kind === 'file' ? info.isFile() : info.isDirectory(); } catch (e) { if (code(e) === 'ENOENT' || code(e) === 'ENOTDIR') return false; throw e; }
+}
+/**
+ * #149: a rig-parts build root — the folder `rig-parts build --out` wrote — recognised by fixed names the build owns, never
+ * by a search: regular `parts.json` and `rig/rig.json`, a real (not symlinked) `check/` directory, and an existing
+ * `check/build/skeleton.model.json` entry (its validity is the package adapter's to refuse). A folder lacking any of
+ * these is not a build root.
+ */
+export async function isBuildRoot(dir: string): Promise<boolean> {
+  if (!(await entryIs(join(dir, 'parts.json'), 'file')) || !(await entryIs(join(dir, 'rig'), 'dir')) || !(await entryIs(join(dir, 'rig', 'rig.json'), 'file')) || !(await entryIs(join(dir, 'check'), 'dir'))) return false;
+  return exists(join(dir, 'check', 'build', 'skeleton.model.json'));
+}
+/** The producer's own config places for the build whose check package is `root` (canonical), or null when `root` is not one. */
+interface BuildPlace { config: string; base: string; field: string }
+async function buildPlaces(root: string): Promise<{ build: string; places: BuildPlace[] } | null> {
+  if (basename(root) !== 'check' || !(await isBuildRoot(dirname(root)))) return null;
+  const build = dirname(root);
+  return { build, places: [{ config: join(build, 'config.json'), base: build, field: '../config.json' }, { config: join(dirname(build), 'config.json'), base: dirname(build), field: '../../config.json' }] };
+}
+/** The path as written with its parent chain canonicalized (so /tmp → /private/tmp is not an escape); null when the parent is missing. */
+async function writtenPath(value: string): Promise<string | null> {
+  const lexical = resolve(value);
+  try { return join(await realpath(dirname(lexical)), basename(lexical)); } catch (e) { if (code(e) === 'ENOENT' || code(e) === 'ENOTDIR') return null; throw e; }
+}
 
 /**
  * One handoff path: it must exist, its canonical location must stay inside `base`, and it must be the expected kind.
@@ -175,13 +212,17 @@ export async function resolveHandoff(root: string, declared: HandoffDeclaration 
   if (flags) {
     const problem = checkHandoffFlags(flags);
     if (problem) throw new HandoffError('HANDOFF_FLAGS_INVALID', problem.split(':')[0]!, problem);
-    const config = await flagPath(root, flags.config, '--config', 'file');
-    const parts = flags.parts !== undefined ? await flagPath(root, flags.parts, '--parts', 'dir') : join(dirname(config), 'out');
-    const source = flags.source !== undefined ? await flagPath(root, flags.source, '--source', 'file') : undefined;
-    const full = flags.full !== undefined ? await flagPath(root, flags.full, '--full', 'dir') : undefined;
-    const head = flags.head !== undefined ? await flagPath(root, flags.head, '--head', 'dir') : undefined;
-    const keypoints = flags.keypoints !== undefined ? await flagPath(root, flags.keypoints, '--keypoints', 'file') : undefined;
-    const handoff = await record(root, root, 'declared', 'open --config', config, parts, { source, full, head, keypoints }, flags.parts !== undefined);
+    // #149: a --config written as exactly one of the build's own config places takes that place's folder as its root.
+    const build = await buildPlaces(root), written = build ? await writtenPath(flags.config) : null;
+    const place = build?.places.find(p => p.config === written) ?? null, base = place?.base ?? root;
+    const config = await flagPath(base, flags.config, '--config', 'file');
+    if (place && config !== place.config) throw new HandoffError('HANDOFF_SYMLINK_ESCAPE', '--config', `${flags.config} is a symlink; only the build's own ${place.field} is taken`);
+    const parts = flags.parts !== undefined ? await flagPath(base, flags.parts, '--parts', 'dir') : place ? build!.build : join(dirname(config), 'out');
+    const source = flags.source !== undefined ? await flagPath(base, flags.source, '--source', 'file') : undefined;
+    const full = flags.full !== undefined ? await flagPath(base, flags.full, '--full', 'dir') : undefined;
+    const head = flags.head !== undefined ? await flagPath(base, flags.head, '--head', 'dir') : undefined;
+    const keypoints = flags.keypoints !== undefined ? await flagPath(base, flags.keypoints, '--keypoints', 'file') : undefined;
+    const handoff = await record(root, base, 'declared', 'open --config', config, parts, { source, full, head, keypoints }, flags.parts !== undefined);
     // Canonical absolute flags: the background worker and later reloads read exactly these.
     handoff.flags = { config, ...(flags.parts !== undefined ? { parts } : {}), ...(source ? { source } : {}), ...(full ? { full } : {}), ...(head ? { head } : {}), ...(keypoints ? { keypoints } : {}) };
     return { handoff, reason: null };
@@ -201,6 +242,17 @@ export async function resolveHandoff(root: string, declared: HandoffDeclaration 
     if (!(await exists(path))) continue;
     const config = await contained(root, path, name, 'file', true);
     return { handoff: await record(root, root, 'discovered', 'discovery', config, join(dirname(path), 'out'), {}, false), reason: null };
+  }
+  // #149: the check package of a rig-parts build root — the build's own config, in the build root, else beside it.
+  const build = await buildPlaces(root);
+  if (build) {
+    for (const place of build.places) {
+      if (!(await exists(place.config))) continue;
+      const config = await contained(place.base, place.config, place.field, 'file', true);
+      if (config !== place.config) throw new HandoffError('HANDOFF_SYMLINK_ESCAPE', place.field, `${place.config} is a symlink; only the build's own config file is discovered`);
+      return { handoff: await record(root, place.base, 'discovered', 'discovery', config, build.build, {}, false), reason: null };
+    }
+    return { handoff: null, reason: BUILD_MODELING_INPUT_UNAVAILABLE };
   }
   // The last step: an opened `out/` whose config sits beside it, one level up. Outside the folder, so named.
   if (basename(root) === 'out') {

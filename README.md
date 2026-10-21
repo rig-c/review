@@ -39,7 +39,7 @@ bun run check -- /absolute/path/to/output
 bun run review -- /absolute/path/to/output
 ```
 
-The adapter recognizes root `skeleton.model.json` or the fixed rigc build layout `build/skeleton.model.json` (root model takes precedence), root `motion.json`, `report.json`, `skeleton.json`/`.skel`/`.atlas`, source videos (`.mp4`, `.webm`, `.mov`), image filenames containing `strip`, `contact`, `sheet`, `filmstrip` or `띠`, and canonical `*pose*.json` sequences. Model discovery checks only those two named paths; it never recursively searches directories. Model page images resolve relative to the selected model, while motion and references remain relative to the opened folder. It builds the normalized review manifest in memory and reads source files without changing them. Motion/report/skeleton evidence links are read only. A recognized `rig-pose-report/1` also supplies read-only event markers: frame-only events retain their producer interval and explicitly lack seek until a declared clock is present; explicit event seconds can seek. Empty reported categories show none, while missing fields remain missing. Report markers prefill known feedback coordinates and actual bone/slot names without creating a review decision or motion keys. It exposes each matching video/strip separately, without guessing synchronization or source-to-rig bindings.
+The adapter recognizes root `skeleton.model.json` or the fixed rigc build layout `build/skeleton.model.json` (root model takes precedence), root `motion.json`, `report.json`, `skeleton.json`/`.skel`/`.atlas`, source videos (`.mp4`, `.webm`, `.mov`), image filenames containing `strip`, `contact`, `sheet`, `filmstrip` or `띠`, and canonical `*pose*.json` sequences. Model discovery checks only those two named paths; it never recursively searches directories. A `rig-parts build` output root (`out/`: regular `parts.json` and `rig/rig.json`, a real `check/` directory and `check/build/skeleton.model.json`) that has neither model path itself opens as its `check/` package — the same package, identity and session as opening `out/check` — so `rig-review open <out>` works on a fresh build without copying `check/build` anywhere. Model page images resolve relative to the selected model, while motion and references remain relative to the opened folder. It builds the normalized review manifest in memory and reads source files without changing them. Motion/report/skeleton evidence links are read only. A recognized `rig-pose-report/1` also supplies read-only event markers: frame-only events retain their producer interval and explicitly lack seek until a declared clock is present; explicit event seconds can seek. Empty reported categories show none, while missing fields remain missing. Report markers prefill known feedback coordinates and actual bone/slot names without creating a review decision or motion keys. It exposes each matching video/strip separately, without guessing synchronization or source-to-rig bindings.
 
 When the report declares `fps` plus `frame0` (seconds offset) and a frame count, or exact `frameTimes[]`, the matching animation also shows a producer-frame readout and frame seek controls. Without a bounded declared clock it shows `rate unknown`; current unchanged v19 has no clock. Sample times come only from the report, and feedback context records the recalculated frame or null.
 
@@ -164,7 +164,12 @@ rig-review feedback /absolute/output --config /absolute/output/rig/config.json
 handoff (see `docs/REVIEW_PACKAGE.md`, *Producer handoff*). They win over the
 review.json `producer` block, which wins over discovery (`config.json`, then
 `rig/config.json` inside the opened folder, then `../config.json` beside an opened
-`out/`, named as discovered outside the folder). Every path must sit inside the
+`out/`, named as discovered outside the folder). For the `check/` package of a
+`rig-parts build` output the next places are the build's own config: `config.json`
+in the build root, else beside it (`<out>/../config.json`, where `rig-parts build
+--config <dir>/config.json --out <dir>/out` leaves it); the parts directory is the
+build root. Declaring `--config` at exactly one of those two files is taken the same
+way, and that file's folder is then the root for the other flags. Every other path must sit inside the
 package root; a path outside it or a symlink that leaves it is refused by name.
 The handoff files are hashed into the reviewed identity, so `feedback` and
 `control` take the same flags to retrieve the same session, and changing the
@@ -228,13 +233,15 @@ stderr and exit code alone:
 
 1. On success stdout is exactly one line, the URL. `open` never writes anything
    else to stdout.
-2. On success stderr carries the human lines in this fixed order: the animation
-   diagnostic (when a clip is selected), the control notice (with `--control`),
+2. On success stderr carries the human lines in this fixed order: for the `check/`
+   package of a `rig-parts build` output, `Package: rig-parts build check package <path>`
+   and the handoff line (`Handoff <how>: <config path> sha256 <hash> · parts <dir>`, or
+   `Handoff: <refusal>`); the animation diagnostic (when a clip is selected), the control notice (with `--control`),
    then the copyable retrieval line `Review started|reused; feedback: rig-review feedback …`.
 3. A refusal exits with code 1, writes nothing to stdout, and its first stderr line
    starts with a name, followed by a colon and the explanation:
    - `OPEN_INPUT_MISSING <path>`: the input or `--compare` path does not exist, or is neither a directory nor a regular file.
-   - `OPEN_INPUT_UNRECOGNIZED <path>`: the folder holds no recognized model, skeleton, motion, report, reference or pose sequence, or the file is not a JSON manifest.
+   - `OPEN_INPUT_UNRECOGNIZED <path>`: the folder holds no recognized model, skeleton, motion, report, reference or pose sequence and is not a `rig-parts build` output root, or the file is not a JSON manifest.
    - `OPEN_REFERENCE_REQUIRED`: `--compare` was given without an explicit `--reference`.
    - `OPEN_ANIMATION_UNKNOWN <name>`: the explicit or report-named clip (JSON-quoted) is not in the compiled model.
    - `OPEN_ANIMATION_AMBIGUOUS`: no flag or report selects one clip, or the A/B reports conflict.
