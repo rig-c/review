@@ -19,7 +19,7 @@ import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
 import {retargetAppliedRecord,retargetOutcomeLine,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {historyRow,recordFor,refusedText,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {historyRow,isPatchJob,recordFor,refusedText,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -48,6 +48,7 @@ import {barLine,beforeLine} from '../src/physics-tuning.ts';
 import {bindRequirementsPanel,type RequirementsCatalogView,type RequirementsJobView,type RequirementsPanel,type RequirementsRefusal} from './requirements-panel.ts';
 import {patchRoute} from '../src/retune-route.ts';
 import {appliedCheckRefusal,type CheckSummary} from '../src/applied-context.ts';
+import {appliedBlockOps,recordBlock} from '../src/applied-blocks.ts';
 import {bindPhysicsPanel,type PhysicsPanel} from './physics-panel.ts';
 import {bindIdlePanel,type BoneSetup,type IdlePanel} from './idle-panel.ts';
 import {bindRigFieldsPanel,type RigFieldsPanel} from './rig-fields-panel.ts';
@@ -1450,7 +1451,10 @@ async function refreshApplied():Promise<void> {
  try{appliedHistory=await api<AppliedHistoryView>('/api/rebuild/history');}catch{return;}
  renderApplied();
 }
+/** #172: the Cuts and Cloth blocks mark as applied only the ops the stage's applied record holds (none on the inspected build). */
+function renderAppliedBlocks():void {const on=appliedBlockOps(appliedOnStage);cutsPanel?.applied(on.cuts);clothPanel?.applied(on.cloth);}
 function renderApplied():void {
+ renderAppliedBlocks();
  const section=document.getElementById('applied-records');if(!section)return;
  const h=appliedHistory;section.hidden=!h||h.depth===0;
  const list=el('applied-list');list.replaceChildren(...(h?.records??[]).map((r,i)=>{const li=document.createElement('li');li.textContent=historyRow(h!,i);li.dataset.buildId=r.id;li.classList.toggle('on-stage',i===h!.records.length-1&&appliedOnStage?.buildId===r.id);return li;}));
@@ -1488,6 +1492,9 @@ async function undoApply():Promise<UndoView|null> {
   }
   // The panels mark the ops the stage's build applied; the pending edits stay as they are.
   physicsPanel?.applied(ops);idlePanel?.applied(ops);rigFieldsPanel?.applied(ops);bonesPanel?.applied(ops);
+  // #172: the Cuts and Cloth readouts show the restored build's job when it is theirs, else nothing (never the reverted one).
+  const restored=result.status==='built'&&isPatchJob(result.job)?result.job:null,block=recordBlock(appliedOnStage);
+  cutsPanel?.shown(block==='cuts'?restored:null);clothPanel?.shown(block==='cloth'?restored:null);
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=appliedOnStage?JSON.stringify(appliedOnStage):'';draft.dispatchEvent(new Event('input',{bubbles:true}));
   appliedHistory=result.history;
   const text=`Undid ${result.undone.slice(0,12)}… · the stage is ${result.status==='inspected'?`the inspected build (model ${inspectedModel.sha256.slice(0,12)}…)`:`record ${result.history.depth} (model ${stageModelHash?.slice(0,12)}…)`} · ${result.history.depth} applied record(s) left`;
@@ -1607,10 +1614,10 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  /** #115: the Cuts block — its handles as client pixels (for a real-pointer drag), its ops, Apply and Reset. */
  cuts:{source:()=>cutsPanel?.source()??null,ops:()=>cutsPanel?.ops()??[],handles:()=>cutsPanel?.handles()??[],active:()=>cutsPanel?.active()??false,setActive:(on:boolean)=>cutsPanel?.setActive(on),
   setVertex:(cut:number,k:number,value:[number,number])=>cutsPanel?.setVertex(cut,k,value),setBox:(i:number,value:[number,number,number,number])=>cutsPanel?.setBox(i,value),setRange:(limb:string,k:number,value:[number,number]|null)=>cutsPanel?.setRange(limb,k,value),
-  apply:()=>cutsPanel?.apply()??Promise.resolve(null),reset:()=>resetCutsBuild()},
+  apply:()=>cutsPanel?.apply()??Promise.resolve(null),reset:()=>resetCutsBuild(),applied:()=>cutsPanel?.appliedItems()??[]},
  /** #111: the Cloth block — the selected tag, its form values, the pending ops, the link preview, Apply and Reset. */
  cloth:{tag:()=>clothPanel?.tag()??'',select:(tag:string)=>clothPanel?.select(tag),values:(tag?:string)=>clothPanel?.values(tag)??{},set:(key:string,text:string,tag?:string)=>clothPanel?.set(key,text,tag),declare:(on:boolean,tag?:string)=>clothPanel?.declare(on,tag),
-  ops:()=>clothPanel?.ops()??[],links:()=>clothPanel?.links()??null,active:()=>clothPanel?.active()??false,setActive:(on:boolean)=>clothPanel?.setActive(on),apply:()=>clothPanel?.apply()??Promise.resolve(null),reset:()=>resetClothBuild(),status:()=>el('cloth-status').textContent,readout:()=>[...document.querySelectorAll('#cloth-readout code')].map(c=>c.textContent)},
+  ops:()=>clothPanel?.ops()??[],links:()=>clothPanel?.links()??null,active:()=>clothPanel?.active()??false,setActive:(on:boolean)=>clothPanel?.setActive(on),apply:()=>clothPanel?.apply()??Promise.resolve(null),reset:()=>resetClothBuild(),applied:()=>clothPanel?.appliedItems()??[],status:()=>el('cloth-status').textContent,readout:()=>[...document.querySelectorAll('#cloth-readout code')].map(c=>c.textContent)},
  bones:{anchors:()=>bonesPanel?.anchors()??[],edits:()=>bonesPanel?.edits()??[],set:(path:string,value:[number,number])=>bonesPanel?.set(path,value),select:(name:string|null)=>bonesPanel?.select(name),
   active:()=>bonesPanel?.active()??false,setActive:(on:boolean)=>bonesPanel?.setActive(on),handles:()=>bonesPanel?.handles()??[],check:()=>bonesPanel?.check()??Promise.resolve(null),
   apply:()=>applyBones((bonesPanel?.edits()??[]).map(e=>({op:'replace' as const,path:e.path,value:[...e.value],name:e.name}))),reset:()=>resetBonesBuild(),

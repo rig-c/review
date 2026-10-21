@@ -12,6 +12,7 @@
  */
 import {ClothFieldError,fieldText,recipeFromFields,recipeOps,RECIPE_FIELDS,type ClothTagView,type RecipeField} from '../src/cloth-recipe.ts';
 import type {PatchOp} from '../src/config-patch.ts';
+import {itemApplied} from '../src/applied-blocks.ts';
 import type {CropWorldMapping} from '../src/chest-regions.ts';
 import type {OverlayPoint,OverlayProject,OverlayRegion} from './rig-overlays.ts';
 import type {ClothStatusView,PatchJobView,RebuildRefusal} from './rebuild-client.ts';
@@ -33,6 +34,10 @@ export interface ClothPanel {
  links():{tag:string;inspected:ClothTagView|null;drafted:ClothTagView|null};
  apply():Promise<PatchJobView|RebuildRefusal|null>;
  shown(job:PatchJobView|RebuildRefusal|null):void;
+ /** #172: the ops of the stage's applied record this block owns (`appliedBlockOps`); a pending op among them is marked applied. */
+ applied(ops:readonly PatchOp[]|null):void;
+ /** #172: the pending ops marked applied, by their op line. */
+ appliedItems():string[];
  status(text:string,error:boolean):void;busy(value:boolean):void;
  restore():void;clear():void;sync():void;dispose():void;
 }
@@ -43,7 +48,7 @@ const isObject=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'
 export function bindClothPanel(deps:ClothPanelDeps):ClothPanel {
  const state=node('cloth-panel-state'),toggle=node<HTMLButtonElement>('cloth-links'),picker=node<HTMLSelectElement>('cloth-tag'),declared=node<HTMLInputElement>('cloth-declared'),fields=node('cloth-fields'),pending=node('cloth-pending-list');
  const applyButton=node<HTMLButtonElement>('cloth-apply'),resetButton=node<HTMLButtonElement>('cloth-reset'),statusOut=node('cloth-status'),readout=node('cloth-readout'),draft=node<HTMLTextAreaElement>('cloth-pending');
- let status:ClothStatusView|null=null,reason:string|null=null,selected='',active=false,busy=false;
+ let status:ClothStatusView|null=null,reason:string|null=null,selected='',active=false,busy=false,appliedOps:PatchOp[]=[];
  /** Per touched tag: every form field's text, and whether the tag's recipe is declared. */
  let edits=new Map<string,{declared:boolean;values:Record<string,string>}>();
  let drafted:ClothTagView[]=[];
@@ -78,7 +83,8 @@ export function bindClothPanel(deps:ClothPanelDeps):ClothPanel {
  function renderPending(){
   let ops:PatchOp[]=[],error:string|null=null;
   try{ops=allOps();}catch(err){if(err instanceof ClothFieldError)error=err.message;else throw err;}
-  const items=ops.map(o=>make('li',{},make('code',{textContent:`${o.op} ${o.path}`}),o.op==='remove'?'':` → ${JSON.stringify(o.value)}`));
+  // #172: an op is marked applied only while the stage's applied record holds it.
+  const items=ops.map(o=>{const on=itemApplied([o],appliedOps);return make('li',{className:on?'applied':''},make('code',{textContent:`${o.op} ${o.path}`}),`${o.op==='remove'?'':` → ${JSON.stringify(o.value)}`}${on?' · applied':''}`);});
   const revert=[...edits.keys()].filter(touched).map(tag=>{const b=make('button',{type:'button',textContent:`Revert ${tag}`,disabled:busy});b.onclick=()=>{edits.delete(tag);change();};return make('li',{},b);});
   pending.replaceChildren(...(error?[make('li',{className:'error',textContent:error})]:[]),...(items.length?items:[make('li',{className:'hint',textContent:'No pending ops.'})]),...revert);
   applyButton.disabled=busy||!items.length||!!error||!!reason||!!status?.reason;resetButton.disabled=busy;
@@ -156,6 +162,8 @@ export function bindClothPanel(deps:ClothPanelDeps):ClothPanel {
    drafted=job.status==='built'&&c?c.links:[];
    readout.replaceChildren(...lines);deps.changed();
   },
+  applied(ops){appliedOps=(ops??[]).map(o=>({...o}));renderPending();},
+  appliedItems(){return [...pending.querySelectorAll('li.applied code')].map(c=>c.textContent??'');},
   status:panelStatus,
   busy(value){busy=value;render();},
   restore(){restore();render();deps.changed();},
