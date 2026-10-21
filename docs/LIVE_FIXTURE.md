@@ -74,6 +74,8 @@ baseline: reproduced — rig.json d19892a32cec… = inspected d19892a32cec…
 
 `--parts` is the build's output root (`out/`), not `out/parts`.
 
+**Shorter form (#149).** `rig-review open "$P/out"` opens the build root directly, without copying `out/check/build` to `build/`. Review opens `out/check` and discovers the build's own `config.json` beside `out/`, and the open line prints its path and sha256. `--source`, `--full`, `--head` and `--keypoints` are not recorded by the build, so declare them when a card needs them, as in step 3 (`--source "$P/inputs/painting.png"`, and so on).
+
 ## Routes worth knowing
 
 - **Whole rig.** On a reproduced baseline, a physics patch runs `rig --config` (#136).

@@ -16,7 +16,14 @@ import {selectAnimation,AnimationSelectionError,type AnimationSelection} from '.
 import {capabilityHeader,capabilityPattern,type OpenIdentity} from './open-protocol.ts';
 import {ensureFront,frontPort} from './front.ts';
 import {playPackagePath} from './versions.ts';
-import {HandoffError,HANDOFF_FLAGS,type HandoffFlags} from './handoff.ts';
+import {HandoffError,HANDOFF_FLAGS,isBuildRoot,type HandoffFlags,type HandoffRecord} from './handoff.ts';
+/** #149: an opened rig-parts build check package — its canonical path and the handoff record (or the refusal line). */
+export interface BuildOpen {package:string;handoff:HandoffRecord|null;reason:string|null}
+/** The stderr diagnostic for {@link BuildOpen}: the package opened, then how the config was found, its package-relative path and full SHA-256. */
+export function buildOpenDiagnostic(build:BuildOpen):string{
+ const h=build.handoff,how=!h?'':h.how==='declared'?`declared (${h.via})`:h.outside?'discovered outside the opened folder':'discovered';
+ return `Package: rig-parts build check package ${build.package}\n${h?`Handoff ${how}: ${h.config.path} sha256 ${h.config.sha256}${h.parts?` · parts ${h.parts}`:''}`:`Handoff: ${build.reason??'none'}`}`;
+}
 /** `direct` chooses how the page is reached (own port instead of the managed front); it is not part of the instance identity. */
 export interface OpenInputs {input:string;compare?:string;reference?:string;animation?:string;control?:boolean;direct?:boolean;config?:string;parts?:string;source?:string;full?:string;head?:string;keypoints?:string}
 /** The producer handoff flags (#101) among the inputs, or undefined when none was given. */
@@ -97,7 +104,7 @@ async function openRefusal(error:unknown,inputs:OpenInputs):Promise<unknown>{
 }
 /** Managed is the default: the printed URL goes through the one loopback front (127.0.0.1:4318, or
  * RIG_REVIEW_FRONT_PORT) so browser storage keeps one origin across reopens. `direct` keeps the worker's own port. */
-export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idleMs?:number;direct?:boolean;frontPort?:number;frontIdleMs?:number}={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs;selection:AnimationSelection|null;direct:boolean}>{
+export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idleMs?:number;direct?:boolean;frontPort?:number;frontIdleMs?:number}={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs;selection:AnimationSelection|null;direct:boolean;build:BuildOpen|null}>{
  const direct=options.direct??inputs.direct??false,port=direct?0:frontPort(options.frontPort);
  for(const path of [inputs.input,...(inputs.compare!==undefined?[inputs.compare]:[])])await assertOpenInput(path);
  if(inputs.compare!==undefined&&!inputs.reference)throw new Error('OPEN_REFERENCE_REQUIRED: compare: explicit --reference required');
@@ -108,7 +115,9 @@ export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idl
  const control=join(stateDir,'open');await mkdir(control,{recursive:true,mode:0o700});const canonicalControl=await realpath(control);if((await lstat(control)).isSymbolicLink())throw new Error('open.state: control directory cannot be a symlink');
  const worker=await ensureWorker(p,key,fingerprint,stateDir,canonicalControl,options.idleMs??30*60*1000);
  const url=direct?openUrl(worker.row):openUrl(worker.row,await ensureFront({control:canonicalControl,port,fingerprint,idleMs:options.frontIdleMs}));
- return {url,reused:worker.reused,nonce:worker.row.nonce,inputs:p.inputs,selection:p.selection,direct};
+ // #149: the check package of a rig-parts build root says which package it opened and which config the handoff took.
+ const build=p.mode==='single'&&basename(p.p.root)==='check'&&await isBuildRoot(dirname(p.p.root))?{package:p.p.root,handoff:p.p.reviewedSource.handoff??null,reason:p.p.handoffReason}:null;
+ return {url,reused:worker.reused,nonce:worker.row.nonce,inputs:p.inputs,selection:p.selection,direct,build};
 }
 async function ensureWorker(p:OpenPackage,key:string,fingerprint:string,stateDir:string,canonicalControl:string,idleMs:number):Promise<{row:RecordFile;reused:boolean}>{
  const registry=join(canonicalControl,key+'.json'),claim=join(canonicalControl,key+'.claim'),nonce=randomUUID(),deadline=performance.now()+20000;

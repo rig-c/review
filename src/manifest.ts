@@ -6,7 +6,7 @@ import { parseReport, type ReportSeeds } from './report.ts';
 import { readFile, realpath, stat, lstat, readdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, posix } from 'node:path';
-import { parseHandoffDeclaration, resolveHandoff, type Handoff, type HandoffDeclaration, type HandoffFlags, type HandoffRecord } from './handoff.ts';
+import { isBuildRoot, parseHandoffDeclaration, resolveHandoff, type Handoff, type HandoffDeclaration, type HandoffFlags, type HandoffRecord } from './handoff.ts';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export interface Reference { id: string; label: string; type: 'image' | 'video' | 'pose'; path: string; width?: number; height?: number }
@@ -74,7 +74,9 @@ export function parseManifest(input: unknown): ReviewManifest {
 /** `options.handoff` are the explicit `--config …` flags; they win over the manifest block and discovery. */
 export async function loadReview(input: string, options: { handoff?: HandoffFlags } = {}): Promise<ReviewPackage> {
   const inputPath=await realpath(resolve(input));const directory=(await stat(inputPath)).isDirectory();
-  if(directory){try{await stat(resolve(inputPath,'review.json'));return loadReview(resolve(inputPath,'review.json'),options);}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}}
+  if(directory){try{await stat(resolve(inputPath,'review.json'));return loadReview(resolve(inputPath,'review.json'),options);}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
+    // #149: a rig-parts build root without a model of its own opens as its check package, exactly as opening check/ does.
+    const check=await buildCheckPackage(inputPath);if(check)return loadReview(check,options);}
   const manifestPath=inputPath;const root=directory?inputPath:await realpath(dirname(inputPath));
   const manifest=directory?await folderManifest(root):parseManifest(JSON.parse(await readFile(manifestPath,'utf8')));
   const files = new Set([...(directory?[]:[relative(root,manifestPath)]),...manifest.references.map(v=>v.path),...manifest.authoring.map(v=>v.path),...manifest.audio.clips.map(v=>v.path)]);
@@ -112,9 +114,17 @@ export async function loadReview(input: string, options: { handoff?: HandoffFlag
   return {root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{})};
 }
 
+/**
+ * #149: the `check/` package of a rig-parts build root ({@link isBuildRoot}), when the folder has neither of the two
+ * adapter model paths itself (a folder that does keeps opening as before). Fixed names, no search.
+ */
+export async function buildCheckPackage(dir:string):Promise<string|null>{
+  for(const candidate of ['skeleton.model.json','build/skeleton.model.json']){try{await lstat(resolve(dir,candidate));return null;}catch(e){if(!['ENOENT','ENOTDIR'].includes((e as NodeJS.ErrnoException).code??''))throw e;}}
+  return await isBuildRoot(dir)?resolve(dir,'check'):null;
+}
 /** Same text for every command; `root` lets the open launcher name the refused input. */
 export class UnrecognizedOutputError extends Error {
-  constructor(readonly root:string){super('Output folder: no recognized skeleton.*, build/skeleton.model.json, motion.json, report.json, source video, pose sequence or contact strip');}
+  constructor(readonly root:string){super('Output folder: no recognized skeleton.*, build/skeleton.model.json, rig-parts build root (check/build/skeleton.model.json), motion.json, report.json, source video, pose sequence or contact strip');}
 }
 /** An adapter over an existing output directory; never writes a manifest there. */
 async function folderManifest(root:string):Promise<ReviewManifest>{
