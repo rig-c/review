@@ -69,3 +69,19 @@ test('#115: drags snap to whole rig px; the range arc turns counter-clockwise on
  const moved=cutsSource({...config,assemble:{...config.assemble,cuts:[{...config.assemble.cuts[0]!,polygon:[[368,450],[393,450],[390,742],[364,742]]}]}});
  expect(cutsDraft(cutsDraftText(edits,[]),moved).edits.size).toBe(0);
 });
+
+test('#184: adding a cut keeps the config\'s existing regions (the Cuts status carries them, so no `add /regions {}`)', async () => {
+ const {configCuts} = await import('../src/rebuild.ts');
+ const full = {assemble:{cuts:[]}, regions:{hairpin:'head', neck:'neck_b'}, meshes:{}} as unknown as JsonValue;
+ const status = configCuts(JSON.stringify(full));
+ expect(status.regions).toEqual({hairpin:'head', neck:'neck_b'});
+ const add = {kind:'cut' as const, from:'topwear', into:'sash', polygon:[[0,0],[10,0],[10,10]] as [number,number][], draw:'above' as never, overlap:2, bone:'chest'};
+ const ops = cutOps(new Map(), [add], status);
+ expect(ops.map(o=>o.path)).not.toContain('/regions');
+ const patched = applyConfigPatch(full, ops) as {regions: Record<string,string>};
+ expect(patched.regions).toEqual({hairpin:'head', neck:'neck_b', sash:'chest'});
+ // Without regions in the status (today's bug), the same add replaces the object.
+ const { regions: _dropped, ...withoutRegions } = status;
+ const lossy = applyConfigPatch(full, cutOps(new Map(), [add], withoutRegions)) as {regions: Record<string,string>};
+ expect(lossy.regions).toEqual({sash:'chest'});
+});
