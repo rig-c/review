@@ -9,12 +9,13 @@
  * The client sends typed requirements only — never a path or a flag. Nothing is written into the package.
  */
 import { createHash } from 'node:crypto';
-import { isAbsolute, join, relative } from 'node:path';
+import { join } from 'node:path';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import type { ReviewPackage } from './manifest.ts';
 import { resolveProducer, runTool } from './producer.ts';
 import { producerInputs, RebuildError } from './rebuild.ts';
 import { parseRequirementsRequest, readRequirements, requirementsCheckArgs, requirementsDocument, requirementsFileText, RequirementsError, REQUIREMENTS_RUN_SCHEMA, type RequirementRow, type RequirementsBuild } from './requirements.ts';
+import { assertStateOutside as assertStateDirOutside } from './state-dir.ts';
 
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 const MAX_LINES = 4000;
@@ -89,10 +90,7 @@ export function createRequirementsCheck(p: ReviewPackage, options: RequirementsO
   let running: string | null = null;
   const snapshot = (job: RequirementsJob): RequirementsJob => JSON.parse(JSON.stringify(job)) as RequirementsJob;
   function assertStateOutside(): void {
-    for (const root of [p.root, ...(p.handoff ? [p.handoff.root] : [])]) {
-      const inside = relative(root, options.stateDir);
-      if (inside === '' || !inside.startsWith('..') && !isAbsolute(inside)) throw new RequirementsError('REQUIREMENTS_STATE_INSIDE_PACKAGE', 'the review state directory is inside the inspected package; set RIG_REVIEW_STATE_DIR outside it');
-    }
+    assertStateDirOutside(options.stateDir, p, message => new RequirementsError('REQUIREMENTS_STATE_INSIDE_PACKAGE', message));
   }
   const asRequirements = (e: unknown): never => { if (e instanceof RebuildError) throw new RequirementsError(e.code, e.message.slice(e.code.length + 2)); throw e; };
 

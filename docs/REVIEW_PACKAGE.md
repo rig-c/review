@@ -458,8 +458,13 @@ Registry/request/log/claim files are private tool-state files; a per-binding cla
 serializes startup, stale records are not reused, and no unrelated process is
 terminated. Workers expire after 30 minutes without requests and clean only their
 own nonce's registration. Startup waiting is bounded. `RIG_REVIEW_STATE_DIR`
-changes the tool state root but cannot place it inside a source package, including
-through a symlink alias. No package manifest, source video, motion or compiled
+changes the tool state root but cannot place it inside a source package, the
+`rig-parts build` root a check package belongs to, or the producer handoff's root,
+including through a symlink alias of the directory or an ancestor
+(`OPEN_STATE_INSIDE_PACKAGE <package | build root | handoff root>`). Every runner that
+writes state (rebuild, strip, bones check, readings, requirements, environment check)
+applies the same canonical check and refuses with its own `*_STATE_INSIDE_PACKAGE`
+code naming the folder. No package manifest, source video, motion or compiled
 model is written by open. There is no browser launch or new LAN exposure.
 
 The printed feedback retrieval command uses POSIX shell quoting for literal path
