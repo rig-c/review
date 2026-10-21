@@ -18,7 +18,7 @@ import {modelBoneNames,readSetupPose} from './setup-pose.ts';
 import {bindBonesPanel,type BonesPanel,type BonesCheckView} from './bones-panel.ts';
 import {bindCutsPanel,type CutsPanel} from './cuts-panel.ts';
 import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
-import {retargetAppliedRecord,retargetOutcomeLine,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
+import {retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type StageChange,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
 import {historyRow,isPatchJob,recordFor,refusedText,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
@@ -45,7 +45,7 @@ import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPac
 import {tuningRows,readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {bindReadingsPanel,EDGE as READING_EDGE,type ReadingsJobView,type ReadingsPanel,type ReadingsRefusal} from './readings-panel.ts';
 import {READINGS_SCHEMA,type ReadingsContext} from '../src/readings.ts';
-import {environmentCheckRows,scheduleContext,worldExport,type EnvironmentCheckView,type WorldExport} from './environment-world.ts';
+import {restartsWindClock,type ClipMove,environmentCheckRows,scheduleContext,worldExport,type EnvironmentCheckView,type WorldExport} from './environment-world.ts';
 import {barLine,beforeLine} from '../src/physics-tuning.ts';
 import {bindRequirementsPanel,type RequirementsCatalogView,type RequirementsJobView,type RequirementsPanel,type RequirementsRefusal} from './requirements-panel.ts';
 import {patchRoute} from '../src/retune-route.ts';
@@ -475,18 +475,21 @@ function drawRig(action:()=>void):void {
  catch(error){overlays?.clear();text('renderer-state',rendererStatus(null,'failed').label);throw error;}
 }
 
-function chooseAnimation(name: string): void {
+function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): void {
   pause(); animation = name; axisInspection = false; el('angle-panel').hidden = true;
   const runtimeAnimation = assets?.animations.find(item => item.name === name);
   duration = runtimeAnimation?.duration ?? data.manifest.animations.find(item => item.id === name)?.duration ?? 0;
   select('animation-select').value = name;
+  // #191: the wind restarts before the clip's first frame is drawn, so the paused stage shows the schedule's t=0 world.
+  time = 0; clipMoved(move);
   if (player && runtimeAnimation) { drawRig(()=>{player!.play(name,{loop:false});player!.pause();player!.draw();}); }
   else if (player && name){text('renderer-state',rendererStatus(null,'failed').label);message(`Animation "${name}" is not present in the rig.`, true);}
-  time = 0; renderTransport(); renderCues();renderIdle();
+  renderTransport(); renderCues();renderIdle();
 }
 
-function seek(value: number): void {
+function seek(value: number, move?: ClipMove): void {
   time = duration > 0 ? Math.min(Math.max(0, value), duration) : Math.max(0, value);
+  clipMoved(move ?? { kind: 'seek', to: time });
   if (player && player.current) { try { player.seek(time); reposePreview(); drawRig(()=>player!.draw()); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } }
   if (video && video.readyState >= 1) holdVideoReference(video, referenceGeneration);
   renderSequenceFrame(); renderTransport();
@@ -623,7 +626,7 @@ function tick(now: number): void {
     if (player && player.current) { try { stepEnvironment(dt); drawRig(()=>player!.frame(dt)); } catch (error) { pause(); message(errorText(error), true); } }
     if (video && video.readyState >= 1 && time > video.duration) { if (referenceInput.state !== 'out-of-domain') holdVideoReference(video, referenceGeneration); } else if (video && referenceInput.state === 'loaded' && Math.abs(video.currentTime - time) > .15) video.currentTime = time;
     if (input('sync-audio').checked) for (const cue of activeCues()) if ((previous < cue.time && cue.time <= time) || (previous === 0 && cue.time === 0 && dt > 0)) void audition(cue.clip);
-    renderSequenceFrame(); renderTransport(); if(time>=duration){if(canRepeatIdle()&&!idleHeld){stopAudio();if(useWorld())restartWindClock();seek(0);player?.resume();if(video)void video.play().catch(error=>{pause();message(errorText(error),true);});}else pause();} lastFrame = now;
+    renderSequenceFrame(); renderTransport(); if(time>=duration){if(canRepeatIdle()&&!idleHeld){stopAudio();seek(0,{kind:'replay'});player?.resume();if(video)void video.play().catch(error=>{pause();message(errorText(error),true);});}else pause();} lastFrame = now;
   }
   requestAnimationFrame(tick);
 }
@@ -992,7 +995,7 @@ function canRepeatIdle():boolean{return !!player&&idleAvailable(assets?.animatio
 function renderIdle():void {text('idle-state',canRepeatIdle()?'Actual idle · repeat enabled':animation==='idle'?'Idle repeat paused':'Non-idle inspection · no automatic playback');}
 async function playPreview():Promise<void> {
  if((!player&&!video&&!sequence)||duration<=0)return;
- const intent=++playbackIntent;desiredPlay=true;idleHeld=false;if(time>=duration)seek(0);
+ const intent=++playbackIntent;desiredPlay=true;idleHeld=false;if(time>=duration)seek(0,{kind:'replay'});
  if(video&&referenceInput.state==='loaded'){try{await video.play();}catch(error){pause();message(`Playback is paused: ${errorText(error)}. Use Play to retry.`,true);return;}}
  if(intent!==playbackIntent||!desiredPlay){if(!desiredPlay)video?.pause();return;}playing=true;lastFrame=0;player?.resume();button('play').textContent='Ⅱ';button('play').setAttribute('aria-label','Pause');
 }
@@ -1022,6 +1025,8 @@ async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<v
 }
 async function inspectControlTime(target:number,signal:AbortSignal):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
+ // #191: a control seek is a clip move like the transport's: a seek to 0 restarts the wind clock while the exported world is in use.
+ clipMoved({kind:'seek',to:target});
  const media=video;
  if(!media){if(player){player.seek(target);reposePreview();drawRig(()=>player!.draw());}time=target;renderSequenceFrame();renderTransport();return;}
  if(media.readyState<1||target>media.duration)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');
@@ -1227,6 +1232,8 @@ function worldFor(name:string):WorldExport|{error:string} {
 }
 /** A fresh wind clock at the same settings (a repeating gust restarts at 0); pending jolts keep their distance in time. */
 function restartWindClock():void {const now=wind.read().time;wind.restore(wind.snapshot());joltQueue=joltQueue.map(step=>({...step,at:Math.max(0,step.at-now)}));}
+/** #183: every clip restart (`restartsWindClock`) restarts the wind clock while the schedule is watched, not only the checkbox. */
+function clipMoved(move:ClipMove):void {if(player&&restartsWindClock(move,useWorld())){restartWindClock();applyEnvironment();}}
 let scheduleShown='';
 function renderSchedule():void {
  const world=worldFor(animation),check=checkAnimation(),checked=check!==animation?worldFor(check):null;
@@ -1390,7 +1397,7 @@ async function applyRetarget(body:{sequence:string;map:PoseMap;flags:RetargetFla
   await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
   // The new animation's own clock (the run's report frameTimes), bound to this build: the transport counter and the rig pane read it.
   const own=samplesClock(result.frameTimes);stageClock=own?{animation:result.request.record.flags.animation,modelHash:next.hash,clock:own}:null;
-  appliedOnStage=retargetAppliedRecord(result);stageCheck=null;
+  appliedOnStage=retargetAppliedRecord(result);stageCheck=null;stageChanged({kind:'apply',via:'retarget'});
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   // The new animation plays against the reference: choose it, and show the sequence it was made from beside it.
   const name=result.request.record.flags.animation;if(assets?.animations.some(clip=>clip.name===name))chooseAnimation(name);
@@ -1418,7 +1425,7 @@ async function applyMeshDelta(doc:MeshEditDocument,line:(text:string)=>void):Pro
   const outcome=deltaOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
   if(next.id===null||!('id' in result)){message(outcome.text,true);return {built:false,text:outcome.text,error:true};}
   await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
-  appliedOnStage=deltaAppliedRecord(result);stageCheck=null;
+  appliedOnStage=deltaAppliedRecord(result);stageCheck=null;stageChanged({kind:'apply',via:'delta'});
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   message(outcome.text);
   return {built:true,text:outcome.text,error:false};
@@ -1494,6 +1501,7 @@ async function undoApply():Promise<UndoView|null> {
    appliedOnStage=recordFor(job);stageCheck=(job as PatchJobView).kind==='patch'?{lines:[...job.lines],check:(job as PatchJobView).check}:null;
    if((job as PatchJobView).kind==='patch')ops=(job as PatchJobView).request.patch.ops;
   }
+  stageChanged({kind:'undo'});
   // The panels mark the ops the stage's build applied; the pending edits stay as they are.
   physicsPanel?.applied(ops);idlePanel?.applied(ops);rigFieldsPanel?.applied(ops);bonesPanel?.applied(ops);
   // #172: the Cuts and Cloth readouts show the restored build's job when it is theirs, else nothing (never the reverted one).
@@ -1531,7 +1539,7 @@ async function applyRebuild():Promise<void> {
   // A refusal stays readable in full: the bar's status line is one line, so the log ends with the producer's line verbatim.
   if(!('id' in result)||result.status!=='built'||!result.build){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return;}
   await swapRig(new URL(access.route(result.build.modelUrl),location.href).href,access.route(`/rebuild/${result.id}/`),result.build.modelHash);
-  appliedOnStage=appliedRecord(result);stageCheck=null;
+  appliedOnStage=appliedRecord(result);stageCheck=null;stageChanged({kind:'apply',via:'regions'});
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   // The log closes on success so nothing floats over the rebuilt stage; a refusal keeps it open.
   chestEditor?.notify(outcome.text,false,[]);message(outcome.text);
@@ -1559,7 +1567,7 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   const outcome=patchOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
   if(next.id===null||!('id' in result)){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return result;}
   await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
-  appliedOnStage=patchAppliedRecord(result);stageCheck={lines:[...result.lines],check:result.check};
+  appliedOnStage=patchAppliedRecord(result);stageCheck={lines:[...result.lines],check:result.check};stageChanged({kind:'apply',via:'patch'});
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   chestEditor?.notify(outcome.text,outcome.error,[]);message(outcome.text,outcome.error);
   return result;
@@ -1893,7 +1901,7 @@ function sampleLocals(bone:string,dt:number,n:number):{t:number;rotation:number;
 async function resetRebuild(world:StageWorld|null=null):Promise<void> {
  if(rebuildBusy||(!appliedOnStage&&!stripPending)||!inspectedModel)return;
  rebuildBusy=true;rebuildState();
- try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;if(stripPending){stripPending=null;renderStrip();}chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');}
+ try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;stageChanged({kind:'reset'});chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');}
  catch(error){chestEditor?.notify(`REBUILD_RESET_FAILED: ${errorText(error)}`,true);}
  finally{rebuildBusy=false;rebuildState();}
 }
@@ -1915,7 +1923,7 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  // whether the controls are engaged as they stood when Apply was pressed; then the seek re-poses under that world.
  if(world){wind.resume(world.wind);joltQueue=world.jolts.map(step=>({...step}));input('environment-applied').checked=world.applied;input('gravity').value=String(world.gravity);syncEnvironmentInputs();}
  if(environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));
- if(keepAnimation&&assets.animations.some(clip=>clip.name===keepAnimation)){chooseAnimation(keepAnimation);seek(keepTime);}else drawRig(()=>player!.draw());
+ if(keepAnimation&&assets.animations.some(clip=>clip.name===keepAnimation)){chooseAnimation(keepAnimation,{kind:'reload'});seek(keepTime,{kind:'reload'});}else drawRig(()=>player!.draw());
  if(environmentApplied())applyEnvironment();
  updateChestMapping();fitCamera();
  // The preview (#104) drives the new player once its bone setups are read (an idle Apply cleared it first).
@@ -1944,8 +1952,7 @@ async function applyMesh(part:string,entry:MeshEntry):Promise<PatchJobView|Rebui
   const result=await applyPatch(patch,world);
   const outcome=meshApplyOutcome(result as Parameters<typeof meshApplyOutcome>[0]);meshPanel?.status(outcome.text,outcome.error);
   if('id' in result&&result.status==='built'){
-   // #173: a strip row on the stage as pending is now (or was replaced by) an applied record; Back has nothing to return to.
-   if(stripPending){stripPending=null;void refreshDensityStrip();}
+   // #173 / #183: the pending strip row (if any) was cleared by applyPatch's landing, as after every Apply.
    // The new triangulation is drawn: the mesh edges go on and the overlay captures the reloaded pose.
    if(!layers.mesh){layers.mesh=true;input('layer-mesh').checked=true;}
    if(player)drawRig(()=>player!.draw());redrawOverlay(true);
@@ -1972,11 +1979,13 @@ async function resetMeshBuild():Promise<void> {
  * sent together to `POST /api/density-strip` and polled until every candidate settles. Load: a built row's revision on
  * the stage as pending — the applied record, the undo stack and the feedback context's applied state are left alone
  * (the context reads null while a pending row is on the stage: nothing applied is on it), and Undo is unavailable until
- * Back returns the stage to what it showed or the Mesh panel's Apply applies the row (reusing its build). Close removes
+ * Back returns the stage to what it showed or an Apply lands (the Mesh panel's reuses the row's build; any Apply, Reset or Undo clears the pending row, #183). Close removes
  * the strip's scratch.
  */
 let stripView:DensityStripViewLike|null=null,densityBusy=false;
 let stripPending:{index:number;id:string;candidate:string;back:{url:string;prefix:string;hash:string;applied:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|null;check:{lines:string[];check:CheckSummary|null}|null}}|null=null;
+/** #183: after every landed Apply, Reset or Undo the pending row and Back go (`stripPendingAfter`); the strip re-reads (a row Applied is marked). */
+function stageChanged(change:StageChange<NonNullable<typeof stripPending>>):void {const next=stripPendingAfter(stripPending,change);if(next===stripPending)return;stripPending=next;void refreshDensityStrip();}
 const densityLine=(text:string,error=false)=>{densityStrip?.status(text,error);if(error)message(text,true);};
 const renderStrip=()=>densityStrip?.show(stripView,stripPending&&stripView?.id===stripPending.id?stripPending.index:null,densityBusy||rebuildBusy||!!readOnly);
 async function refreshDensityStrip():Promise<void>{try{const r=await api<{strip:DensityStripViewLike|null}>('/api/density-strip');stripView=r.strip;}catch{/* keep the last view */}renderStrip();}

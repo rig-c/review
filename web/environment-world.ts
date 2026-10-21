@@ -40,3 +40,18 @@ export function environmentCheckRows(job: EnvironmentCheckView, defaultLine: (na
   if (job.check?.line) rows.push({ kind: 'label', text: `this world · ${job.check.line}` });
   return rows;
 }
+
+/**
+ * #183: a move of the drawn clip, as the page makes it — another animation chosen, a seek (scrub, cue, reading, control),
+ * a replay from the end (Play after the clip ended, idle repeat's loop), or an Apply's reload, which keeps the animation
+ * and time and resumes the world it had.
+ */
+export type ClipMove = { kind: 'choose' } | { kind: 'seek'; to: number } | { kind: 'replay' } | { kind: 'reload' };
+/**
+ * Whether the move restarts the clip and so, while the schedule is watched (Use for readings), the wind clock restarts
+ * with it: the exported schedule starts at t = 0 on the clip's first frame, so the stage must too.
+ */
+export function restartsWindClock(move: ClipMove, watched: boolean): boolean {
+  if (!watched) return false;
+  return move.kind === 'choose' || move.kind === 'replay' || (move.kind === 'seek' && move.to <= 0);
+}
