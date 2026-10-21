@@ -11,6 +11,7 @@
  */
 import {anchorAt,boneAnchors,configBones,setAnchor,type BoneAnchor,type BoneEdit} from '../src/bone-anchors.ts';
 import type {PatchOp} from '../src/config-patch.ts';
+import {itemApplied} from '../src/applied-blocks.ts';
 import type {CropWorldMapping} from '../src/chest-regions.ts';
 import {
  boxAt,CutEditError,cutOps,cutsDraft,cutsDraftText,cutsSource,dragPoint,rangeArc,rangeAt,setBox,setRange,setVertex,vertexAt,
@@ -42,6 +43,10 @@ export interface CutsPanel {
  overlayRegions():OverlayRegion[];overlayMarkers():OverlayMarker[];
  apply():Promise<PatchJobView|RebuildRefusal|null>;
  shown(job:PatchJobView|RebuildRefusal|null):void;
+ /** #172: the ops of the stage's applied record this block owns (`appliedBlockOps`); a pending op among them is marked applied. */
+ applied(ops:readonly PatchOp[]|null):void;
+ /** #172: the pending items marked applied, by their op line. */
+ appliedItems():string[];
  status(text:string,error:boolean):void;busy(value:boolean):void;
  restore():void;clear():void;sync():void;dispose():void;
 }
@@ -62,7 +67,7 @@ export function bindCutsPanel(deps:CutsPanelDeps):CutsPanel {
  const addForm=node('cuts-add');
  let config:unknown=null,source:CutsSource={cuts:[],patches:[],segments:[],plan:[],skipped:[]},anchors:BoneAnchor[]=[],buildReason:string|null=null,loaded=false;
  let edits=new Map<string,CutEdit>(),joints=new Map<string,BoneEdit>(),adds:CutAdd[]=[];
- let selected='',active=false,busy=false,space=false,hover:string|null=null;
+ let selected='',active=false,busy=false,space=false,hover:string|null=null,appliedOps:PatchOp[]=[];
  let drag:{id:string;pointer:number;start:RigPoint;from:RigPoint}|null=null;
  let placing:{kind:'cut'|'patch';points:RigPoint[]}|null=null;
 
@@ -121,12 +126,16 @@ export function bindCutsPanel(deps:CutsPanelDeps):CutsPanel {
  }
  function renderPending(){
   const items:HTMLElement[]=[];
+  // #172: an item is marked applied only while the stage's applied record holds every op it sends.
+  const opsOf=(build:()=>PatchOp[])=>{try{return build();}catch(error){if(error instanceof CutEditError)return [];throw error;}};
+  const item=(sent:PatchOp[],code:HTMLElement,text:string,revert:HTMLElement)=>{const on=itemApplied(sent,appliedOps);return make('li',{className:on?'applied':''},code,text+(on?' · applied':''),revert);};
   for(const e of edits.values()){const revert=make('button',{type:'button',textContent:'Revert',disabled:busy});revert.onclick=()=>{edits.delete(e.path);change();};
-   items.push(make('li',{},make('code',{textContent:`${e.kind==='range'&&e.value===null?'remove':e.kind==='range'&&e.from===null?'add':'replace'} ${e.path}`}),` ${e.from?fmt(e.from):'—'} → ${e.value?fmt(e.value):'—'} · ${e.name}`,revert));}
+   items.push(item(opsOf(()=>cutOps(new Map([[e.path,e]]),[],config)),make('code',{textContent:`${e.kind==='range'&&e.value===null?'remove':e.kind==='range'&&e.from===null?'add':'replace'} ${e.path}`}),` ${e.from?fmt(e.from):'—'} → ${e.value?fmt(e.value):'—'} · ${e.name}`,revert));}
   for(const e of joints.values()){const revert=make('button',{type:'button',textContent:'Revert',disabled:busy});revert.onclick=()=>{joints.delete(e.path);change();};
-   items.push(make('li',{},make('code',{textContent:`replace ${e.path}`}),` ${fmt(e.from)} → ${fmt(e.value)} · ${e.name} (a joint is its bone's origin)`,revert));}
+   items.push(item([{op:'replace',path:e.path,value:[...e.value],name:e.name}],make('code',{textContent:`replace ${e.path}`}),` ${fmt(e.from)} → ${fmt(e.value)} · ${e.name} (a joint is its bone's origin)`,revert));}
   adds.forEach((a,i)=>{const revert=make('button',{type:'button',textContent:'Revert',disabled:busy});revert.onclick=()=>{adds.splice(i,1);change();};
-   items.push(make('li',{},make('code',{textContent:`add /assemble/${a.kind==='cut'?'cuts':'patches'}/-`}),` ${a.kind==='cut'?`cut ${a.into} ← ${a.from}, ${a.polygon.length} point(s)`:`patch ${a.name} ${fmt(a.box)}`} · regions → ${a.bone}`,revert));});
+   const sent=opsOf(()=>{const before=cutOps(new Map(),adds.slice(0,i),config).length;return cutOps(new Map(),adds.slice(0,i+1),config).slice(before);});
+   items.push(item(sent,make('code',{textContent:`add /assemble/${a.kind==='cut'?'cuts':'patches'}/-`}),` ${a.kind==='cut'?`cut ${a.into} ← ${a.from}, ${a.polygon.length} point(s)`:`patch ${a.name} ${fmt(a.box)}`} · regions → ${a.bone}`,revert));});
   pending.replaceChildren(...(items.length?items:[make('li',{className:'hint',textContent:'No pending ops.'})]));
   applyButton.disabled=busy||!items.length||!!buildReason;resetButton.disabled=busy;
   toggle.disabled=!loaded;toggle.setAttribute('aria-pressed',String(active));
@@ -254,6 +263,8 @@ export function bindCutsPanel(deps:CutsPanelDeps):CutsPanel {
    const map=a?.recomposite.errorMap;
    readout.replaceChildren(...lines,...(map&&job.status==='built'?[make('figure',{className:'cuts-error-map'},make('img',{src:deps.route(map.url),alt:'Recomposite error map of the scratch build: red is painting no part holds, blue a part more than 40 off'}),make('figcaption',{textContent:`recomposite_error_rig.png · sha256 ${map.sha256.slice(0,12)}…`}))]:[]));
   },
+  applied(ops){appliedOps=(ops??[]).map(o=>({...o}));renderPending();},
+  appliedItems(){return [...pending.querySelectorAll('li.applied code')].map(c=>c.textContent??'');},
   status:panelStatus,
   busy(value){busy=value;render();},
   restore(){restore();render();deps.changed();},
