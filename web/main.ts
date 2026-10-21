@@ -19,7 +19,7 @@ import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
 import {retargetAppliedRecord,retargetOutcomeLine,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {historyRow,recordFor,refusedText,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -1271,6 +1271,7 @@ function bindEnvironment():void {
  button('wind-gust').onclick=()=>engage(()=>wind.triggerGust());
  button('jolt').onclick=()=>{if(!player)return;joltQueue.push(...joltPacket(wind.read().time));if(!playing)message('Jolt queued · it reaches the physics on the next steps; press Play.');};
  button('physics-reset').onclick=resetPhysics;
+ button('applied-undo').onclick=()=>{void undoApply();};
  input('environment-use').onchange=()=>{
   if(!input('environment-use').checked){message('Use for readings is off: readings send the standing wind and gravity, Apply\'s check reads the default world.');renderSchedule();return;}
   const world=worldFor(animation);
@@ -1441,7 +1442,60 @@ function renderHandoff(status:RebuildStatusView):void {
  if(handoffTimer)clearTimeout(handoffTimer);handoffTimer=null;
  if(status.baseline?.status==='running')handoffTimer=setTimeout(()=>{void api<RebuildStatusView>('/api/rebuild').then(next=>{rebuildStatus=next;renderHandoff(next);}).catch(()=>{});},2000);
 }
-function rebuildState():void {chestEditor?.rebuildState({busy:rebuildBusy,applied:!!appliedOnStage});}
+function rebuildState():void {chestEditor?.rebuildState({busy:rebuildBusy,applied:!!appliedOnStage});renderApplied();if(!rebuildBusy)void refreshApplied();}
+/** #166: the session's applied records (the server's stack), the last one on the stage when the stage shows it. */
+let appliedHistory:AppliedHistoryView|null=null;
+async function refreshApplied():Promise<void> {
+ if(!inspectedModel)return;
+ try{appliedHistory=await api<AppliedHistoryView>('/api/rebuild/history');}catch{return;}
+ renderApplied();
+}
+function renderApplied():void {
+ const section=document.getElementById('applied-records');if(!section)return;
+ const h=appliedHistory;section.hidden=!h||h.depth===0;
+ const list=el('applied-list');list.replaceChildren(...(h?.records??[]).map((r,i)=>{const li=document.createElement('li');li.textContent=historyRow(h!,i);li.dataset.buildId=r.id;li.classList.toggle('on-stage',i===h!.records.length-1&&appliedOnStage?.buildId===r.id);return li;}));
+ const control=undoControl(h,appliedOnStage?.buildId??null,rebuildBusy||!!readOnly),undo=button('applied-undo');
+ undo.textContent=control.label;undo.disabled=!control.enabled;undo.title=control.title;
+}
+function appliedStatus(text:string,error=false):void {const node=el('applied-status');node.textContent=text;node.classList.toggle('error',error);}
+/**
+ * #166: Undo last Apply — the last record leaves the server's stack and the stage returns to its predecessor's build
+ * (kept on disk, or re-run from its record when evicted) or to the inspected build, under the same world. The feedback
+ * context then carries the post-undo record (or null), never the reverted one. A refusal leaves the stage as it was.
+ */
+async function undoApply():Promise<UndoView|null> {
+ const from=appliedOnStage?.buildId;
+ if(rebuildBusy||readOnly||!from||!inspectedModel)return null;
+ const world=stageWorld();
+ rebuildBusy=true;rebuildState();appliedStatus('Undoing the last Apply…');
+ try{
+  let result=await api<UndoView>('/api/rebuild/undo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from})});
+  if(result.status==='running'){
+   // An evicted predecessor re-runs its recorded step; its lines stream like an Apply's.
+   let job=result.job as AnyJobView;const undone=result.undone;let seen=0;
+   while(job.status==='running'){await new Promise(resolve=>setTimeout(resolve,700));job=await api<AnyJobView>(`/api/rebuild/${job.id}`);for(;seen<job.lines.length;seen++)appliedStatus(job.lines[seen]!.trim()||'…');}
+   if(job.status!=='built'){const text=refusedText(job);appliedStatus(text,true);message(text,true);return {status:'refused',error:text,producerLine:job.producerLine};}
+   result={status:'built',undone,job,history:await api<AppliedHistoryView>('/api/rebuild/history')};
+  }
+  if(result.status==='refused'){appliedStatus(result.error,true);message(result.error,true);return result;}
+  let ops:import('../src/config-patch.ts').PatchOp[]|null=null;
+  if(result.status==='inspected'){await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;}
+  else{
+   const job=result.job;if(!job.build)throw new Error('the restored job carries no build');
+   await swapRig(new URL(access.route(job.build.modelUrl),location.href).href,access.route(`/rebuild/${job.id}/`),job.build.modelHash,world);
+   appliedOnStage=recordFor(job);stageCheck=(job as PatchJobView).kind==='patch'?{lines:[...job.lines],check:(job as PatchJobView).check}:null;
+   if((job as PatchJobView).kind==='patch')ops=(job as PatchJobView).request.patch.ops;
+  }
+  // The panels mark the ops the stage's build applied; the pending edits stay as they are.
+  physicsPanel?.applied(ops);idlePanel?.applied(ops);rigFieldsPanel?.applied(ops);bonesPanel?.applied(ops);
+  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=appliedOnStage?JSON.stringify(appliedOnStage):'';draft.dispatchEvent(new Event('input',{bubbles:true}));
+  appliedHistory=result.history;
+  const text=`Undid ${result.undone.slice(0,12)}… · the stage is ${result.status==='inspected'?`the inspected build (model ${inspectedModel.sha256.slice(0,12)}…)`:`record ${result.history.depth} (model ${stageModelHash?.slice(0,12)}…)`} · ${result.history.depth} applied record(s) left`;
+  appliedStatus(text);message(text);redrawOverlay(true);
+  return result;
+ }catch(error){const text=`UNDO_FAILED: ${errorText(error)}`;appliedStatus(text,true);message(text,true);return {status:'refused',error:text,producerLine:null};}
+ finally{rebuildBusy=false;rebuildState();}
+}
 /** Apply · Rebuild: the rows go to the installed producer; on success its scratch build replaces the drawn rig in place. */
 async function applyRebuild():Promise<void> {
  if(rebuildBusy)return;
@@ -1504,6 +1558,8 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
 /** The client's edit entry point for automation and the edit cards to come: apply a patch, return to the inspected build, read the stage. */
 (window as unknown as {rigReviewEditor:unknown}).rigReviewEditor={
  applyPatch,reset:()=>resetRebuild(),
+ /** #166: undo the last Apply, and the applied records as the server holds them. */
+ undo:()=>undoApply(),history:()=>appliedHistory?JSON.parse(JSON.stringify(appliedHistory)):null,
  status:async()=>rebuildStatus??await loadRebuildStatus(),
  physics:{rows:()=>physicsPanel?.rows()??[],chains:()=>physicsPanel?.chains()??[],edits:()=>physicsPanel?.edits()??[],set:(name:string,field:Parameters<PhysicsPanel['set']>[1],value:number)=>physicsPanel?.set(name,field,value),ramp:(id:string,field:Parameters<PhysicsPanel['set']>[1],root:number,tip:number)=>physicsPanel?.ramp(id,field,root,tip),select:(name:string)=>physicsPanel?.select(name),apply:()=>applyPhysics(physicsPanel?.edits().map(e=>({op:e.op,path:e.path,value:e.value,name:e.name}))??[]),reset:()=>resetPhysicsBuild()},
  /** Inspection only: one slot's posed world geometry on the drawn frame (what the stage drew), for comparing against `rigc render --geometry`. */

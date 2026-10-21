@@ -221,3 +221,31 @@ export function handoffText(status:Pick<RebuildStatusView,'handoff'|'baseline'|'
  const base=status.baseline?` · ${status.baseline.wallMs!==null&&status.baseline.status!=='running'?`${status.baseline.line} (${(status.baseline.wallMs/1000).toFixed(1)} s)`:status.baseline.line}`:' · baseline: waits for the producer';
  return {text:`Handoff ${how}: ${h.config.path} sha256 ${h.config.sha256.slice(0,12)}…${parts}${base}`,error:!!status.baseline&&['not-reproduced','refused','failed'].includes(status.baseline.status)};
 }
+
+/** #166: `GET /api/rebuild/history` — the session's applied records in order; the last is on the stage; `kept`: its build is on disk. */
+export interface AppliedHistoryView {schema:'rig-review-applied-history/1';depth:number;records:{id:string;kind:'regions'|'patch'|'delta'|'retarget';op:string;what:string;modelHash:string;kept:boolean}[]}
+/** #166: `POST /api/rebuild/undo {from}` — the predecessor's build (kept, or re-run and still running), the inspected build, or a refusal. */
+export type UndoView=
+ |{status:'inspected';undone:string;history:AppliedHistoryView}
+ |{status:'built';undone:string;job:AnyJobView;history:AppliedHistoryView}
+ |{status:'running';undone:string;job:AnyJobView}
+ |RebuildRefusal;
+/** #166: the applied record a job carries into `context.applied` (the same shapes each Apply records). */
+export function recordFor(job:AnyJobView):AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget {
+ const kind=(job as {kind?:string}).kind;
+ return kind==='patch'?patchAppliedRecord(job as PatchJobView):kind==='delta'?deltaAppliedRecord(job as DeltaJobView):kind==='retarget'?retargetAppliedRecord(job as RetargetJobView):appliedRecord(job as RebuildJobView);
+}
+/** #166: one record's line in the list: its place, what it applied, the op and the model; the stage's last is marked. */
+export function historyRow(history:AppliedHistoryView,index:number):string {
+ const r=history.records[index]!,last=index===history.records.length-1;
+ return `${index+1}. ${r.kind} (${r.op}) · ${r.what} · model ${r.modelHash.slice(0,12)}…${last?' · on the stage':r.kept?'':' · build evicted, an undo to it re-runs its step'}`;
+}
+/** #166: the Undo control's label and whether it can run: the depth, and what the stage returns to. */
+export function undoControl(history:AppliedHistoryView|null,stageId:string|null,busy:boolean):{label:string;enabled:boolean;title:string} {
+ const depth=history?.depth??0,top=history?.records.at(-1)??null;
+ const label=`Undo last Apply (${depth} deep)`;
+ if(!top)return {label,enabled:false,title:'No Apply is on the stage'};
+ if(stageId!==top.id)return {label,enabled:false,title:'The stage does not show the last Apply (Reset shows the inspected build); undo acts on the last Apply only'};
+ const back=depth>1?`record ${depth-1} (model ${history!.records[depth-2]!.modelHash.slice(0,12)}…)`:'the inspected build';
+ return {label,enabled:!busy,title:`Return the stage to ${back}; the package is unchanged`};
+}

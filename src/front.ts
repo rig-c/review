@@ -57,6 +57,9 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  if((mode==='single'?/^\/assets\/[^/]/:/^\/compare-assets\/(a|b)\/[^/]/).test(path))return read?get:null;
  // Apply · Rebuild (single only): status, one typed request, a job's status and its served scratch build.
  if(mode==='single'&&path==='/api/rebuild')return read?get:method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
+ // #166 (single only): the applied records, and undo of the last one ({from}).
+ if(mode==='single'&&path==='/api/rebuild/history')return read?get:null;
+ if(mode==='single'&&path==='/api/rebuild/undo')return method==='POST'?{mutation:true,limit:1024,timeoutMs:30000,control:false}:null;
  if(mode==='single'&&(/^\/api\/rebuild\/[a-f0-9]{64}$/.test(path)||/^\/rebuild\/[a-f0-9]{64}\/[^/]/.test(path)))return read?get:null;
  // Bones check (#109, single only): one typed request {ops, configHash}, answered in the response.
  if(mode==='single'&&path==='/api/bones-check')return method==='POST'?{mutation:true,limit:64*1024,timeoutMs:60000,control:false}:null;
