@@ -407,12 +407,18 @@ const flagValue = (args: readonly string[], flag: string, fallback: string) => {
 
 export interface RebuildOptions {
   stateDir: string; starts: readonly string[]; unchanged: () => Promise<void>; bones: readonly string[] | null;
-  /** #173: how many strip candidates run at once (default max(1, floor(cores / 2))). */
+  /** #179: how many strip candidates run at once, at most four including the recording candidate. */
   stripConcurrency?: number;
 }
 /** #173: a density strip's scratch — one folder per package, holding at most the one strip on screen. */
 export const stripRoot = (stateDir: string, sourceHash: string) => join(stateDir, 'density-strip', sourceHash);
-export const defaultStripConcurrency = () => Math.max(1, Math.floor(availableParallelism() / 2));
+export const defaultStripConcurrency = () => Math.min(4, Math.max(1, Math.floor(availableParallelism() / 2)));
+export const boundedStripConcurrency = (value = defaultStripConcurrency()) => Number.isFinite(value) ? Math.min(4, Math.max(1, Math.floor(value))) : defaultStripConcurrency();
+/** parts#617: the input check is reusable only over the same inspected directories, bytes, options and tools. */
+const INPUT_CHECK_SINCE = '1.55.0';
+interface StripInputCheck {
+  path: string; record: boolean; recorded?: () => void; problem?: string;
+}
 /** Deterministic: the package, the config bytes, every candidate's patch bytes in order and both tool versions. */
 export function stripId(input: { sourceHash: string; configHash: string; patches: readonly ConfigPatch[]; producer: string; compiler: string }): string {
   return sha256(JSON.stringify([DENSITY_STRIP_SCHEMA, input.sourceHash, input.configHash, input.patches.map(patchText), input.producer, input.compiler]));
@@ -925,7 +931,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * #102: the patched config → `rig-parts rig` (whole rig), `retune` (#136: the constraints and the idle spliced onto the
    * inspected rig) or `remesh` (one part's patched entry) → `<dir>/rig`; the tail adds the diff and check.
    */
-  function executePatch(job: PatchJob, dir: string, inputs: ProducerInputs, resolved: Resolved, patched: JsonValue, part: string | null, plan: BuildPlan | null = null, world: ApplyWorld | null = null, cloth: ClothPlan | null = null, candidate = false): Promise<void> {
+  function executePatch(job: PatchJob, dir: string, inputs: ProducerInputs, resolved: Resolved, patched: JsonValue, part: string | null, plan: BuildPlan | null = null, world: ApplyWorld | null = null, cloth: ClothPlan | null = null, candidate = false, inputCheck?: StripInputCheck): Promise<void> {
     const args = job.request.patch.op.args, producer = resolved.producer;
     let counts: RemeshCounts | null = null;
     let built: ProcessResult | null = null;
@@ -1005,7 +1011,24 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         await writeFile(join(dir, 'mesh.json'), JSON.stringify(entry, null, 1) + '\n', { mode: 0o600 });
         const rest = args.filter((_, i) => args[i] !== '--part' && args[i - 1] !== '--part');
         push(`review: ${producer.package} ${producer.version} remesh ${part} (its patched meshes entry) → scratch rig`);
-        return runTool(producer.bin, [...remeshArgs({ rig: inputs.rig, config: inputs.config, parts: inputs.parts, part, mesh: 'mesh.json', out: 'rig' }), ...rest], { cwd: dir, onLine: push });
+        const checkArgs = inputCheck ? inputCheck.record ? ['--record-input-check'] : ['--input-check', inputCheck.path] : [];
+        const run = await runTool(producer.bin, [...remeshArgs({ rig: inputs.rig, config: inputs.config, parts: inputs.parts, part, mesh: 'mesh.json', out: 'rig' }), ...rest, ...checkArgs], { cwd: dir, onLine: push });
+        if (run.exitCode === 0 && inputCheck?.record) {
+          // The record is beside remesh.json but is not in its revision hash rows. Move only this auxiliary file;
+          // revisionBinding must still reject every extra or changed revision file. Keep it outside any candidate,
+          // so a failed compile's cleanup or a later Apply's adoption cannot remove the shared input check.
+          try {
+            const record = join(dir, 'rig', 'input-check.json');
+            if (!(await lstat(record)).isFile()) throw new Error('not a regular file');
+            await rename(record, inputCheck.path);
+          } catch {
+            const line = 'DENSITY_STRIP_INPUT_CHECK_MISSING: the producer succeeded without an available regular input-check.json; no unrecorded retry was run';
+            inputCheck.problem = line; push(line);
+            return { ...run, exitCode: 1, lines: [...run.lines, line] };
+          }
+          inputCheck.recorded?.();
+        }
+        return run;
       },
       wallMs: ms => { job.wallMs.op = ms; },
       async flags(push) {
@@ -1165,7 +1188,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       // Bounded disk: the strip on screen is the only one this package keeps; its predecessor's folder goes first.
       const root = stripRoot(options.stateDir, p.sourceHash);
       await rm(root, { recursive: true, force: true });
-      const concurrency = Math.max(1, Math.floor(options.stripConcurrency ?? defaultStripConcurrency()));
+      const concurrency = boundedStripConcurrency(options.stripConcurrency);
       const candidates: StripCandidate[] = planned.map(({ patch }, i) => {
         const cid = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer, compiler, op: 'remesh' });
         const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id: cid, status: 'running', reused: false, op: 'remesh', request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null };
@@ -1175,13 +1198,44 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       strip = current;
       // A bounded pool: each worker takes the next candidate in order; the strip is done when every candidate settled.
       let next = 0;
+      const shared = versionAtLeast(resolved.producer.version, INPUT_CHECK_SINCE) ? join(root, id, 'input-check.json') : null;
+      const runCandidate = (i: number, check?: StripInputCheck) => {
+        const c = candidates[i]!;
+        return executePatch(c.job, c.dir, inputs, resolved, planned[i]!.patched, shape.part, null, null, null, true, check);
+      };
       const worker = async () => {
         for (let i = next++; i < candidates.length; i = next++) {
-          const c = candidates[i]!;
-          await executePatch(c.job, c.dir, inputs, resolved, planned[i]!.patched, shape.part, null, null, null, true).catch(() => {});
+          await runCandidate(i, shared ? { path: shared, record: false } : undefined);
         }
       };
-      void Promise.all(Array.from({ length: Math.min(concurrency, candidates.length) }, worker)).finally(() => {
+      const runStrip = async () => {
+        if (!shared) { await Promise.all(Array.from({ length: Math.min(concurrency, candidates.length) }, worker)); return; }
+        let ready!: (recorded: boolean) => void;
+        const recorded = new Promise<boolean>(resolve => { ready = resolve; });
+        // A refused revision writes no record. Preserve its refusal and let the next candidate try to record.
+        // Once a producer succeeds, release the other slots before its Review compile finishes (still at most four).
+        const seed = (async () => {
+          for (let i = next++; i < candidates.length; i = next++) {
+            let hasRecord = false;
+            const check: StripInputCheck = { path: shared, record: true, recorded: () => { hasRecord = true; ready(true); } };
+            await runCandidate(i, check);
+            if (hasRecord) return;
+            if (check.problem) {
+              for (; next < candidates.length; next++) {
+                const job = candidates[next]!.job;
+                job.status = 'refused'; job.producerLine = check.problem; job.lines.push(check.problem);
+              }
+              return;
+            }
+          }
+        })().finally(() => ready(false));
+        if (await recorded) {
+          const others = Array.from({ length: Math.min(concurrency - 1, candidates.length - next) }, worker);
+          await seed;
+          await Promise.all([...others, worker()]);
+        } else await seed;
+      };
+      void runStrip().finally(() => {
         if (strip === current) { (current as { status: 'running' | 'done' }).status = 'done'; (current as { wallMs: number | null }).wallMs = Math.round(performance.now() - current.started); }
       });
       return { status: 202, body: stripView() };
