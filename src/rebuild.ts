@@ -25,7 +25,7 @@ import { bustMeshEntry, deriveBust, parseBustSpec, BustSpecError, type BustSpec 
 import { modelMeshTriangles, remeshCounts, type RemeshCounts } from './mesh-entry.ts';
 import { patchRoute } from './retune-route.ts';
 import { producerHint } from './baseline-reach.ts';
-import { carriedCheck, RETUNE_CHECK_SINCE, RETUNE_FILE, retuneCheckSummary, revisionBinding } from './retune-check.ts';
+import { carriedCheck, carriedCheckSummary, type CarryingOp, provenanceFile, REMESH_CHECK_SINCE, RETUNE_CHECK_SINCE, revisionBinding } from './retune-check.ts';
 import { absolutizeBuildFiles, buildLines, buildNamedFiles, buildReadout, MAX_BUILD_READOUT, needsBuild, newBuildFile, recompositeFigures, type RecompositeFigures } from './build-route.ts';
 import { jsonDiff } from './config-patch.ts';
 import { CLOTH_KEYPOINTS_UNDECLARED, CLOTH_PATCH_MIXED, CLOTH_SOURCE_UNAVAILABLE, CLOTH_WRITE_SINCE, clothLinks, clothPatchKind, readClothTargets, writtenDiff, type ClothTagView, type WrittenDiff } from './cloth-recipe.ts';
@@ -431,7 +431,7 @@ interface ApplySteps {
   /** #102: check the scratch rig after the compile. */
   check?: (summary: CheckSummary, wallMs: number | null) => void;
   /**
-   * #139: the check the producer op already ran on the spec it wrote, read instead of running check again: a summary
+   * #139 / #174: the check the producer op (retune, remesh) already ran on the spec it wrote, read instead of running check again: a summary
    * (recorded through `check`, no wall clock), a refusal line (nothing recorded, the build refused), or null — the op
    * carries none, so check runs as for any other Apply.
    */
@@ -443,21 +443,23 @@ interface ApplySteps {
 }
 
 /**
- * #139: the check `rig-parts retune` ran on the revision it wrote into `spec`, as review's check summary, bound to the
- * revision's files by `retune.json`'s hash rows (`RETUNE_CHECK_STALE` refuses the Apply). Null — check runs as before —
- * when the Apply checks under an exported world (retune's check read the default one) or `retune.json` carries no
- * `line` / `status` (a producer before `RETUNE_CHECK_SINCE`).
+ * #139 / #174: the check `rig-parts retune` (or `remesh`) ran on the revision it wrote into `spec`, as review's check
+ * summary, bound to the revision's files by the provenance's hash rows (`RETUNE_CHECK_STALE` / `REMESH_CHECK_STALE`
+ * refuses the Apply). Null — check runs as before — when the Apply checks under an exported world (the op's check read
+ * the default one) or the provenance carries no `line` / `status` (a producer before `RETUNE_CHECK_SINCE` /
+ * `REMESH_CHECK_SINCE`, both 1.49.0).
  */
-async function retuneCarried(spec: string, world: ApplyWorld | null, push: (line: string) => void): Promise<{ summary: CheckSummary } | { refused: string } | null> {
-  if (world) { push('review: retune\'s own check read the default world and this Apply checks under the exported schedule, so check runs on the revision'); return null; }
-  const retune = JSON.parse(await readFile(join(spec, RETUNE_FILE), 'utf8')) as unknown;
-  const carried = carriedCheck(retune);
-  if (!carried) { push(`review: ${RETUNE_FILE} carries no check line or block statuses (@rig-c/parts before ${RETUNE_CHECK_SINCE}), so check runs on the revision`); return null; }
-  const stale = await revisionBinding(spec, retune);
+async function opCarried(op: CarryingOp, spec: string, world: ApplyWorld | null, push: (line: string) => void): Promise<{ summary: CheckSummary } | { refused: string } | null> {
+  const file = provenanceFile(op);
+  if (world) { push(`review: ${op}'s own check read the default world and this Apply checks under the exported schedule, so check runs on the revision`); return null; }
+  const provenance = JSON.parse(await readFile(join(spec, file), 'utf8')) as unknown;
+  const carried = carriedCheck(provenance, op);
+  if (!carried) { push(`review: ${file} carries no check line or block statuses (@rig-c/parts before ${op === 'retune' ? RETUNE_CHECK_SINCE : REMESH_CHECK_SINCE}), so check runs on the revision`); return null; }
+  const stale = await revisionBinding(spec, provenance, op);
   if (stale) return { refused: stale };
-  const rows = (retune as { revision: unknown[] }).revision.length;
-  push(`review: check not run again — ${RETUNE_FILE} carries retune's check of this revision, bound to it by ${rows} revision hash row(s): ${carried.line}`);
-  return { summary: retuneCheckSummary(carried) };
+  const rows = (provenance as { revision: unknown[] }).revision.length;
+  push(`review: check not run again — ${file} carries ${op}'s check of this revision, bound to it by ${rows} revision hash row(s): ${carried.line}`);
+  return { summary: carriedCheckSummary(carried, op) };
 }
 
 /** #115: what a build-routed patch runs with — the handoff's painting and runs, absolute; never from the client. */
@@ -957,7 +959,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       ...(building ? {} : { check: (summary: CheckSummary, wallMs: number | null) => { job.wallMs.check = wallMs; job.check = summary; } }),
       // #139: a retune Apply reads the check retune ran on its revision (retune.json, bound by its hash rows) unless the
       // Apply checks under an exported world (retune's check reads the default one) or the producer carries no line.
-      ...(job.op === 'retune' ? { carried: (push: (line: string) => void) => retuneCarried(join(dir, 'rig'), world, push) } : {}),
+      // #174: a remesh patch the same, from remesh.json — remesh checked the revision with the request's pack flags,
+      // the ones `flags` reads for review's own check, and the same `--parts`; a patch passes no `--requirements`.
+      ...(job.op === 'retune' || job.op === 'remesh' ? { carried: (push: (line: string) => void) => opCarried(job.op as CarryingOp, join(dir, 'rig'), world, push) } : {}),
       hashed: async () => { if (counts) job.remesh = { ...counts, modelTriangles: modelMeshTriangles(JSON.parse(await readFile(join(dir, 'build', 'skeleton.model.json'), 'utf8')), counts.part) }; },
       world,
     });

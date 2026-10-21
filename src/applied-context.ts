@@ -44,9 +44,10 @@ export interface CheckSummary {
   /**
    * #139: where the summary came from. Absent: review read check's own output (`check.json` and its stdout). `"retune"`:
    * the check `rig-parts retune` ran on the revision it wrote, carried in `retune.json`'s `check.revision` (parts 1.49.0+)
-   * and bound to the revision's files by its hash rows; no second check ran.
+   * and bound to the revision's files by its hash rows; no second check ran. `"remesh"` (#174): the same, from the check
+   * `rig-parts remesh` ran, carried in `remesh.json`.
    */
-  source?: 'retune' | 'check';
+  source?: 'retune' | 'remesh' | 'check';
 }
 export interface Tool { package: string; version: string }
 export interface AppliedPatch {
@@ -186,7 +187,7 @@ export function checkSummary(checkJson: unknown, exitCode: number, lines: readon
 function parseCheck(v: unknown, field: string): void {
   if (v === null) return;
   const c = exact(v, isObject(v) && Object.hasOwn(v, 'source') ? 'bars,exitCode,gate,line,pass,schema,source' : 'bars,exitCode,gate,line,pass,schema', field);
-  if (Object.hasOwn(c, 'source') && c.source !== 'retune' && c.source !== 'check') throw new Error(`${field}.source: "retune" or "check"`);
+  if (Object.hasOwn(c, 'source') && c.source !== 'retune' && c.source !== 'remesh' && c.source !== 'check') throw new Error(`${field}.source: "retune", "remesh" or "check"`);
   if (c.schema !== CHECK_SUMMARY_SCHEMA) throw new Error(`${field}.schema: expected ${CHECK_SUMMARY_SCHEMA}`);
   if (c.pass !== null && typeof c.pass !== 'boolean') throw new Error(`${field}.pass: boolean or null`);
   if (c.gate !== null && typeof c.gate !== 'boolean') throw new Error(`${field}.gate: boolean or null`);

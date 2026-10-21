@@ -429,6 +429,7 @@
     "review: mesh_report.json: /parts/topwear/triangles, /parts/topwear/vertices",
     "review: rig-c 2.64.1 build --profile rig-play --pack --page-edges pot --pack-shape rect",
     "rigc: wrote",
+    "review: remesh.json carries no check line or block statuses (@rig-c/parts before 1.49.0), so check runs on the revision",
     "review: @rig-c/parts 1.42.0 check --rig rig --out check --parts <handoff parts>",
     "check: PASS; 1 of 1 bar(s) measured"
    ],
@@ -572,6 +573,7 @@
      "review: mesh_report.json: /parts/topwear/triangles, /parts/topwear/vertices",
      "review: rig-c 2.64.1 build --profile rig-play --pack --page-edges pot --pack-shape rect",
      "rigc: wrote",
+     "review: remesh.json carries no check line or block statuses (@rig-c/parts before 1.49.0), so check runs on the revision",
      "review: @rig-c/parts 1.42.0 check --rig rig --out check --parts <handoff parts>",
      "check: PASS; 1 of 1 bar(s) measured"
     ],
@@ -772,6 +774,7 @@
      "review: mesh_report.json: /parts/topwear/triangles, /parts/topwear/vertices",
      "review: rig-c 2.64.1 build --profile rig-play --pack --page-edges pot --pack-shape rect",
      "rigc: wrote",
+     "review: remesh.json carries no check line or block statuses (@rig-c/parts before 1.49.0), so check runs on the revision",
      "review: @rig-c/parts 1.42.0 check --rig rig --out check --parts <handoff parts>",
      "check: PASS; 1 of 1 bar(s) measured"
     ],
@@ -985,6 +988,7 @@
      "review: mesh_report.json: /parts/topwear/triangles, /parts/topwear/vertices",
      "review: rig-c 2.64.1 build --profile rig-play --pack --page-edges pot --pack-shape rect",
      "rigc: wrote",
+     "review: remesh.json carries no check line or block statuses (@rig-c/parts before 1.49.0), so check runs on the revision",
      "review: @rig-c/parts 1.42.0 check --rig rig --out check --parts <handoff parts>",
      "check: PASS; 1 of 1 bar(s) measured"
     ],
