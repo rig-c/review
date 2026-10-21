@@ -100,7 +100,7 @@ jobs:
             if [[ ! "$CUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::RELEASE_TAG_FORM: \"$CUT_TAG\" is not vX.Y.Z"; exit 1; fi
             # Push has no checkout yet. The commit API resolves both lightweight and annotated tags to a commit,
             # rather than returning an annotated tag object's SHA. Use an explicit tag ref to avoid branch ambiguity.
-            if ! tag_sha="$(gh api "repos/$REPO/commits/tags%2F$CUT_TAG" --jq .sha)"; then echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $CUT_TAG to a commit"; exit 1; fi
+            if ! tag_sha="$(gh api "repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG" --jq .sha)"; then echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $CUT_TAG to a commit"; exit 1; fi
             if [[ ! "$tag_sha" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: $CUT_TAG did not resolve to a full commit SHA"; exit 1; fi
             # A re-run may cut a tag at a newer main commit while npm provenance still names the original run SHA.
             if [ "$GITHUB_SHA" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $CUT_TAG's commit $tag_sha; the tag remains cut; recover with gh workflow run release.yml --ref $CUT_TAG -f tag=$CUT_TAG"; exit 1; fi
