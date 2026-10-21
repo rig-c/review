@@ -7,19 +7,19 @@
  * "preview — Apply decides"; it is cleared on Apply and Reset and is never recorded: the source draft keeps only the
  * pending ops (`#idle-pending`) and the panel's own inputs carry no ids.
  */
-import {AMP_RANGE,addTrack,entryChanged,idleDraftState,idleDraftText,idleOps,initialState,isChain,orderedEntries,periodFits,periodOffers,precheck,previewLocal,previewPlan,removeTrack,setBlink,stateFromOps,setField,setLinkAmp,SETUP_DEFAULT,SINGLE_PROPS,type BlinkField,type ChainField,type IdleKeying,type IdleSource,type IdleState,type IdleStatus,type LocalChannel,type PreviewPlan,type SingleField} from '../src/idle-tracks.ts';
+import {AMP_RANGE,addTrack,entryChanged,idleDraftState,idleDraftText,idleOps,initialState,isChain,orderedEntries,periodFits,periodOffers,precheck,previewPlan,removeTrack,setBlink,stateFromOps,setField,setLinkAmp,SINGLE_PROPS,type BlinkField,type ChainField,type IdleKeying,type IdleSource,type IdleState,type IdleStatus,type PreviewPlan,type SingleField} from '../src/idle-tracks.ts';
 import type {PatchOp} from '../src/config-patch.ts';
+import type {BoneAdjust} from '@rig-c/play';
+import {idlePreviewAdjust,type BoneSetup} from './preview.ts';
+export type {BoneSetup} from './preview.ts';
 
-export interface BoneSetup {names:readonly string[];get(bone:string):Partial<Record<LocalChannel,number>>|undefined}
 /** play's `BoneAdjust`, as the panel writes it. */
-export type IdleAdjust=(bones:{bone(name:string):Record<LocalChannel,number>})=>void;
+export type IdleAdjust=BoneAdjust;
 export interface IdlePanelDeps {
  apply:(ops:PatchOp[],keys:'ctl'|'direct'|null)=>Promise<void>;
  reset:()=>Promise<void>;
  /** Hand the preview to the player (`player.adjust`), or null to clear it; the caller re-poses and draws. */
  preview:(fn:IdleAdjust|null)=>void;
- /** The player's time, read inside `adjust` (the pose being posed). */
- clock:()=>number;
  /** Bones as pane pixels on the drawn frame, for the chain handles; null when nothing is drawn. */
  bonePoints:(bones:readonly string[])=>Map<string,{x:number;y:number}>|null;
  pane:HTMLElement;
@@ -75,13 +75,12 @@ export function bindIdlePanel(deps:IdlePanelDeps):IdlePanel {
  const tryChange=(make:()=>IdleState)=>{try{change(make());}catch(error){panelStatus(error instanceof Error?error.message:String(error),true);}};
 
  // ---- preview ----
- /** The adjust for the current plan: each write holds its bone's channel at the sine's value at the player's time. */
+ /** Each write uses Play's current evaluation track time, including during seek replay. */
  function drivePreview(){
   plan=null;
   if(!previewOn||!source||!state||!keying||!setup){deps.preview(null);renderLabel();return;}
   const current=previewPlan(source,state,keying,new Set(setup.names));plan=current;
-  const duration=source.duration,writes=current.writes.map(w=>({w,setup:setup!.get(w.bone)?.[w.channel]??SETUP_DEFAULT[w.channel]}));
-  deps.preview(writes.length?bones=>{const t=deps.clock()%duration;for(const {w,setup:s} of writes)bones.bone(w.bone)[w.channel]=previewLocal(w,s,t);}:null);
+  deps.preview(idlePreviewAdjust(current,setup));
   renderLabel();
  }
  function stopPreview(){previewOn=false;plan=null;deps.preview(null);renderLabel();}

@@ -453,7 +453,28 @@ refusal is the producer's line verbatim (`CONFIG_CONSTRAINT_*`,
 `CONFIG_NAME_RESOLVES`, rigc's `A23` for a mass of 0) and the stage is
 unchanged. **Reset** returns to the inspected build and clears the pending ops.
 Submit refuses a review written on an applied build whose check failed
-(`EDIT_SUBMIT_UNCHECKED`). Live preview before Apply waits on play#147.
+(`EDIT_SUBMIT_UNCHECKED`).
+
+With pinned published Play **1.14.0**, **Preview pending physics** previews
+`strength`, `damping`, `inertia`, `wind`, `gravity` and `mix` through the live
+player's public `setPhysicsParameters` / `readPhysicsParameters` /
+`clearPhysicsParameters`. Slider input updates the standing patch while dragging;
+the label separates the pending override from the last evaluated effective values.
+The next evaluation uses it after authored keys and sliders, before physics. While
+paused, the page explicitly re-poses the held time and draws; it never seeks or
+resets history to preview. `mass` and `x` / `y` / `rotate` stay Apply-only.
+**Clear preview** disables preview and removes its overrides, keeping the pending
+ops and their Apply bytes. Authored values resume on the next evaluation; the
+integrated history is retained, so clearing does not undo motion caused earlier.
+Apply and a model replacement clear the preview; Reset clears both preview and
+pending ops. Preview state is never recorded as applied or submitted.
+
+Play retains the current standing patch across play and seek, with no history of
+patch changes. A backward seek after an edit recomputes the past using the patch
+standing now, rather than reproducing the old trajectory. A newly opened track
+first evaluates its ordinary authored pose, then receives the patch as pending;
+at seek time 0 its effective values can therefore still be authored until the next
+evaluation. No live track means a named refusal; preview never creates one.
 
 Below it, the **Idle tracks** panel (`#idle-tracks`) edits the idle through
 the producer. It lists the handoff config's `motion.tracks`: a single track
@@ -473,7 +494,11 @@ pending ops (`/motion/tracks/<i>/…`, `/motion/blink/…`) are listed with a
 per-op **Revert** and kept in the local draft. While edits are pending the
 **preview** drives the edited bones through the player's `adjust` with the
 producer's sine on the bone the idle keys (`<bone>_ctl` under ctl keys, read
-off the handoff rig), labelled "preview — Apply decides"; it is never
+off the handoff rig). It evaluates from Play's `BoneAdjust` context's
+`trackTime`, including seek replay, and the turn dial receives the same context.
+It reads no displayed player clock and adds no compensating re-pose after seek.
+With unchanged patch, animation, environment, reset and step partition, seek and
+continuous evaluation agree bit for bit. It is labelled "preview — Apply decides"; it is never
 recorded or submitted, and a property the inspected idle does not key yet is
 not previewed (`IDLE_PREVIEW_TARGET_UNKNOWN`). **Apply** clears the preview and
 sends one patch (`rig --idle-keys <the inspected rig's>`, then `check`, about
@@ -587,7 +612,7 @@ The Parts explorer (left column; right on the compare page) selects an actual mo
 
 Solo preserves the full held pose's resolved clips and filters only drawing. In context, the whole rig remains visible with an amber dashed conservative selection box; this box is geometry/clip bounds, not exact source-alpha coverage. Selection changes no track, skin, set, motion, source asset or review decision. The selected slot's side/mode survives source-bound links and local drafts. The Setup section shows actual posed mesh counts or region corners, page/region, current skin/set context and declared attachment candidates. **Use slot for feedback** explicitly prefills the target; selecting a row alone submits nothing.
 
-The pinned published `@rig-c/play`1.13.0 supplies `slotIdentity()` and frame generation. The explorer atomically retains the public identity snapshot with the same-generation held frame: exact attachment key, owning skin, active set/skin, full z order and explicit hidden/no-attachment/timeline-null/set-hide reasons. Hidden/null slots keep null keys with their reported reason; declarations and texture/UV names never replace that public result. An identity-known attachment need not have a visible primitive or positive fit bounds. The current UI follows its selected slot as animation changes, updating the displayed identity to the actual held frame.
+The pinned published `@rig-c/play`1.14.0 supplies `slotIdentity()` and frame generation. The explorer atomically retains the public identity snapshot with the same-generation held frame: exact attachment key, owning skin, active set/skin, full z order and explicit hidden/no-attachment/timeline-null/set-hide reasons. Hidden/null slots keep null keys with their reported reason; declarations and texture/UV names never replace that public result. An identity-known attachment need not have a visible primitive or positive fit bounds. The current UI follows its selected slot as animation changes, updating the displayed identity to the actual held frame.
 
 Source-bound links/drafts and explicit feedback preserve that side/slot plus exact attachment/owning skin/set/active skin/null reason. A restored explicit target is checked after restoring its animation/time/set and drawing; `PART_IDENTITY_MISMATCH` rolls back rather than silently substituting another key. Older slot-only links remain readable and resolve from the current authoritative snapshot. Runtime generation is current observation/feedback evidence, never a persistent identity. Named vertex weights and original source alpha remain unavailable in this inspection; packed pages are not original part images.
 
@@ -640,7 +665,7 @@ In **Setup**, after the Mesh panel, the **Weights** block (`#weights`, #107; **W
 - **Bone weight.** Pick a bone (the slot's influencing bones first, then every other bone of the model): each vertex is coloured by that bone's stored weight on the weight ramp, 0 → 1 (`--rv-weight-0`, `--rv-weight-half`, `--rv-weight-1`); a bone that does not influence a vertex is 0 there. The legend shows the ramp and the bone.
 - **Max influence.** Each vertex takes its dominant bone's colour (the largest stored weight; the first stored on a tie), from `--rv-weight-bone-1` … `-6` in the influencing bones' order; the legend names each bone with its colour.
 - **Hover.** The vertex under the pointer (within 10 px) is ringed and labelled with its index, the bone and the weight drawn; the block's readout lists all of its stored influences. Values are printed as stored, never rounded or normalised.
-- **Source.** The vertices and weights are the slot's attachment at the setup pose (`skins[].attachments.<slot>.<name>.vertices` of `rigc-compiled/3`: `{weighted:true, bindings}` — per vertex `{bone, x, y, weight}` — or `{weighted:false, xy}`). An unweighted mesh is its slot's bone at 1.0, named. A linked mesh reads its source mesh. A never-played player reads only the public setup identity, including any setup-slider attachment switch. Positions, triangles and hull come directly from published Play 1.13.0's `readSetupMesh`, which includes selected setup-slider deform; Review supplies no skinning formula. Its active skin selection (null for a fresh player) stays distinct from the supplying table used for stored metadata. Hidden/null identities keep their public reason and are never guessed from declarations. The stage player is not touched, so the drawing can sit apart from an animated pose on the stage.
+- **Source.** The vertices and weights are the slot's attachment at the setup pose (`skins[].attachments.<slot>.<name>.vertices` of `rigc-compiled/3`: `{weighted:true, bindings}` — per vertex `{bone, x, y, weight}` — or `{weighted:false, xy}`). An unweighted mesh is its slot's bone at 1.0, named. A linked mesh reads its source mesh. A never-played player reads only the public setup identity, including any setup-slider attachment switch. Positions, triangles and hull come directly from published Play 1.14.0's `readSetupMesh`, which includes selected setup-slider deform; Review supplies no skinning formula. Its active skin selection (null for a fresh player) stays distinct from the supplying table used for stored metadata. Hidden/null identities keep their public reason and are never guessed from declarations. The stage player is not touched, so the drawing can sit apart from an animated pose on the stage.
 - **Refusals.** A package without a compiled model document refuses `WEIGHTS_MODEL_UNAVAILABLE`; no slot `WEIGHTS_SELECT_SLOT`; a slot without a mesh `WEIGHTS_NO_MESH <slot>`; a malformed attachment `WEIGHTS_MODEL_INVALID`.
 
 Nothing here edits, applies or records a weight: the block adds nothing to the draft or to feedback, and weight editing is out of scope. With **Edit mesh** on, the weights layer is not drawn.
@@ -680,7 +705,7 @@ Review paints no image: a new cut names no `under`, and a patch may only keep, m
 
 ## Mesh edit (typed delta, preview only)
 
-In **Setup**, the view bar's **Edit mesh** button (pressed state; hidden in Animate) edits the selected slot's actual mesh attachment **in setup space**: the attachment's entry in the compiled model document (`skeleton.model.json`), its full-double setup world coordinates, triangles and hull from published Play 1.13.0's `readSetupMesh(assets, {slot, attachment, skin})`, shared with Weights. A never-played player reads only the public setup identity, including any setup-slider attachment switch; the named geometry read owns setup-slider deform. Its active skin selection (null for a fresh player) is distinct from the supplying table returned as `skin`. Hidden/null identities remain unavailable with the public reason; Review never guesses a mesh from declarations. A package without the model document (a Spine export alone, or the bundled demo) refuses `MESH_EDIT_MODEL_UNAVAILABLE` and the editor does not open. With **Whole rig** selected it refuses `MESH_EDIT_SELECT_SLOT`; a slot whose setup attachment is not a mesh refuses `MESH_EDIT_NO_MESH <slot>`, and so does a linked mesh (edit its source mesh). Entering pauses playback (the stage keeps the pose it held, under the veil; the mesh is drawn at the setup pose with the stage's own camera), turns the chest-region editor off and opens the mesh editor bar under the view bar. The rig pane dims except the slot's own triangles; the mesh is drawn at full opacity with every vertex as a handle, hull edges, interior triangulation edges and added constraint edges each in their own theme token.
+In **Setup**, the view bar's **Edit mesh** button (pressed state; hidden in Animate) edits the selected slot's actual mesh attachment **in setup space**: the attachment's entry in the compiled model document (`skeleton.model.json`), its full-double setup world coordinates, triangles and hull from published Play 1.14.0's `readSetupMesh(assets, {slot, attachment, skin})`, shared with Weights. A never-played player reads only the public setup identity, including any setup-slider attachment switch; the named geometry read owns setup-slider deform. Its active skin selection (null for a fresh player) is distinct from the supplying table returned as `skin`. Hidden/null identities remain unavailable with the public reason; Review never guesses a mesh from declarations. A package without the model document (a Spine export alone, or the bundled demo) refuses `MESH_EDIT_MODEL_UNAVAILABLE` and the editor does not open. With **Whole rig** selected it refuses `MESH_EDIT_SELECT_SLOT`; a slot whose setup attachment is not a mesh refuses `MESH_EDIT_NO_MESH <slot>`, and so does a linked mesh (edit its source mesh). Entering pauses playback (the stage keeps the pose it held, under the veil; the mesh is drawn at the setup pose with the stage's own camera), turns the chest-region editor off and opens the mesh editor bar under the view bar. The rig pane dims except the slot's own triangles; the mesh is drawn at full opacity with every vertex as a handle, hull edges, interior triangulation edges and added constraint edges each in their own theme token.
 
 The bar has four sub-modes, one pressed at a time, with single keys that avoid the layer keys `I` / `M` / `B`:
 

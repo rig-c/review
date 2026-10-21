@@ -53,6 +53,7 @@ import {appliedCheckRefusal,type CheckSummary} from '../src/applied-context.ts';
 import {appliedBlockOps,recordBlock,staleReadouts} from '../src/applied-blocks.ts';
 import {bindPhysicsPanel,type PhysicsPanel} from './physics-panel.ts';
 import {bindIdlePanel,type BoneSetup,type IdlePanel} from './idle-panel.ts';
+import {composeAdjust,PhysicsPreview} from './preview.ts';
 import {bindRigFieldsPanel,type RigFieldsPanel} from './rig-fields-panel.ts';
 import {assertRigFieldOps,RIG_FIELDS_READOUT_BARS,TURN_BONE} from '../src/rig-fields.ts';
 import {IDLE_READOUT_BARS,type LocalChannel} from '../src/idle-tracks.ts';
@@ -150,9 +151,10 @@ let joltQueue:JoltStep[]=[],environmentNote='';
 let idlePanel:IdlePanel|null=null;
 /** Setup · Rig fields (#110): the panel; its turn dial and the idle preview share `player.adjust` (both run, idle first). */
 let rigFieldsPanel:RigFieldsPanel|null=null,idleAdjust:BoneAdjust|null=null,dialAdjust:BoneAdjust|null=null;
-function setAdjust():void {if(!player)return;const a=idleAdjust,b=dialAdjust;player.adjust=a&&b?bones=>{a(bones);b(bones);}:a??b;if(!playing)drawRig(()=>player!.draw());}
+function setAdjust():void {if(!player)return;player.adjust=composeAdjust(idleAdjust,dialAdjust);if(!playing)drawRig(()=>player!.draw());}
 /** #106: the Setup Mesh panel, and the overlay's last snapshot (bar 1 reads its per-slot triangle count). */
 let meshPanel:MeshPanel|null=null,lastOverlay:OverlaySnapshot|null=null,densityStrip:DensityStripPanel|null=null;
+const physicsPreview=new PhysicsPreview();
 let physicsPanel:PhysicsPanel|null=null,inspectedDocument:unknown=null,inspectedDocumentReason:string|null=null,stageCheck:{lines:string[];check:CheckSummary|null}|null=null;
 /** Animate · Readings (#108): the block, the last finished job (its ticks and worst lines), and the run in flight. */
 let requirementsPanel:RequirementsPanel|null=null,retargetPanel:RetargetPanel|null=null;
@@ -406,7 +408,7 @@ function renderTransport(): void {
   renderFrameTransport();
   renderFeedbackRange();
   renderReadingTicks();
-  idlePanel?.place(duration);
+  idlePanel?.place(duration);physicsPanel?.refreshPreview();
 }
 
 /** Re-lay the reading ticks only when what places them changes (renderTransport runs every played frame). */
@@ -490,7 +492,7 @@ function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): voi
 function seek(value: number, move?: ClipMove): void {
   time = duration > 0 ? Math.min(Math.max(0, value), duration) : Math.max(0, value);
   clipMoved(move ?? { kind: 'seek', to: time });
-  if (player && player.current) { try { player.seek(time); reposePreview(); drawRig(()=>player!.draw()); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } }
+  if (player && player.current) { try { player.seek(time); drawRig(()=>player!.draw()); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } }
   if (video && video.readyState >= 1) holdVideoReference(video, referenceGeneration);
   renderSequenceFrame(); renderTransport();
 }
@@ -898,7 +900,7 @@ function bind(): void {
   clothPanel=bindClothPanel({project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),pause,changed:()=>redrawOverlay(false),saved:()=>persistence?.save(),
    apply:applyCloth,reset:resetClothBuild,token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
   viewDisposers.push(()=>clothPanel?.dispose());
-  physicsPanel=bindPhysicsPanel({apply:async ops=>{await applyPhysics(ops);},reset:resetPhysicsBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
+  physicsPanel=bindPhysicsPanel({preview:edits=>{const before=JSON.stringify(physicsPreview.read()),next=physicsPreview.sync(player,edits);if(player?.current&&!playing&&before!==JSON.stringify(next)){player.repose();drawRig(()=>player!.draw());}return physicsPreview.read();},previewRead:()=>physicsPreview.read(),apply:async ops=>{await applyPhysics(ops);},reset:resetPhysicsBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),pane=el('rig-pane').getBoundingClientRect(),view=el('rig-root').parentElement!.getBoundingClientRect(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name),p=project(b.x,b.y);out.set(name,{x:p.x+view.left-pane.left,y:p.y+view.top-pane.top});}catch{/* a bone this model lacks is not pickable */}}return out;}});
   viewDisposers.push(()=>physicsPanel?.dispose());
   meshPanel=bindMeshPanel({pane:el('rig-pane'),project:()=>player?rigProject():null,mapping:()=>chestMapping,bones:()=>data.feedbackCatalog.bones??[],
@@ -907,8 +909,8 @@ function bind(): void {
   viewDisposers.push(()=>meshPanel?.dispose());
   // #173: the density strip beside the Mesh panel's density field.
   densityStrip=bindDensityStrip({part:()=>meshPanel?.part()??null,entry:()=>meshPanel?.entry()??null,build:async values=>{await buildDensityStrip(values);},load:async i=>{await loadStripRow(i);},back:async()=>{await stripBack();},close:async()=>{await closeDensityStrip();}});
-  idlePanel=bindIdlePanel({apply:async(ops,keys)=>{await applyIdle(ops,keys);},reset:resetIdleBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),clock:()=>player?.time??0,
-   preview:fn=>{idleAdjust=fn as BoneAdjust|null;setAdjust();},
+  idlePanel=bindIdlePanel({apply:async(ops,keys)=>{await applyIdle(ops,keys);},reset:resetIdleBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
+   preview:fn=>{idleAdjust=fn;setAdjust();},
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name);out.set(name,project(b.x,b.y));}catch{/* a bone this model lacks has no handle */}}return out;}});
   viewDisposers.push(()=>idlePanel?.dispose());
   rigFieldsPanel=bindRigFieldsPanel({apply:async ops=>{await applyRigFields(ops);},reset:resetRigFieldsBuild,reading:async(bone,relative)=>{await runReadings({readings:[{kind:'angle-range',bone,relative}]});},
@@ -1029,13 +1031,13 @@ async function inspectControlTime(target:number,signal:AbortSignal):Promise<void
  // #191: a control seek is a clip move like the transport's: a seek to 0 restarts the wind clock while the exported world is in use.
  clipMoved({kind:'seek',to:target});
  const media=video;
- if(!media){if(player){player.seek(target);reposePreview();drawRig(()=>player!.draw());}time=target;renderSequenceFrame();renderTransport();return;}
+ if(!media){if(player){player.seek(target);drawRig(()=>player!.draw());}time=target;renderSequenceFrame();renderTransport();return;}
  if(media.readyState<1||target>media.duration)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');
  const previousPosition=media.currentTime;
  const commit=(actual:number)=>{
   if(signal.aborted||media!==video)throw new Error('CONTROL_SUPERSEDED');
   if(!Number.isFinite(actual)||actual<0||actual>duration)throw new Error('CONTROL_TIME_OUTSIDE_DOMAIN');
-  if(player){player.seek(actual);reposePreview();drawRig(()=>player!.draw());}time=actual;
+  if(player){player.seek(actual);drawRig(()=>player!.draw());}time=actual;
   controlledVideoSample={media,position:media.currentTime,time:actual};if(axisInspection&&duration>0){const axis=data.manifest.axes.find(item=>item.id===select('axis-select').value&&item.animation===animation);if(axis){const value=axis.min+actual/duration*(axis.max-axis.min);input('axis-value').value=String(value);text('axis-value-label',value.toFixed(3));}}renderSequenceFrame();renderTransport();
  };
  try{const actual=await decodedControlTime(media,target,signal);if(signal.aborted||media!==video)throw new Error('CONTROL_SUPERSEDED');commit(actual);if(Math.abs(actual-target)>1e-6)message(`Reference decoded ${actual.toFixed(4)} s · requested ${target.toFixed(4)} s. The rig and saved view use the decoded timestamp.`);}
@@ -1361,8 +1363,6 @@ function boneSetup(document:unknown):BoneSetup {
  for(const b of Array.isArray(list)?list:[]){if(!b||typeof (b as {name?:unknown}).name!=='string')continue;const o=b as Record<string,unknown>,v:Partial<Record<LocalChannel,number>>={};for(const c of ['rotation','x','y','scaleX','scaleY','shearX','shearY'] as const)if(typeof o[c]==='number')v[c]=o[c] as number;map.set(o.name as string,v);}
  return {names:[...map.keys()],get:bone=>map.get(bone)};
 }
-/** After a seek the held pose is re-posed through the preview's adjust at the restored track time (a seek's replay steps a track the player's time does not read). */
-function reposePreview():void {if(player?.adjust)player.repose();}
 /** Setup's mesh edit: the selected slot's actual mesh as a typed delta. A two-file client download; nothing reaches the session or the package. */
 /** Edit Mesh's source (#100): the selected slot's mesh in the model document at the setup pose (a never-played player's bones). */
 function meshSource(){
@@ -1590,7 +1590,7 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  /** #166: undo the last Apply, and the applied records as the server holds them. */
  undo:()=>undoApply(),history:()=>appliedHistory?JSON.parse(JSON.stringify(appliedHistory)):null,
  status:async()=>rebuildStatus??await loadRebuildStatus(),
- physics:{rows:()=>physicsPanel?.rows()??[],chains:()=>physicsPanel?.chains()??[],edits:()=>physicsPanel?.edits()??[],set:(name:string,field:Parameters<PhysicsPanel['set']>[1],value:number)=>physicsPanel?.set(name,field,value),ramp:(id:string,field:Parameters<PhysicsPanel['set']>[1],root:number,tip:number)=>physicsPanel?.ramp(id,field,root,tip),select:(name:string)=>physicsPanel?.select(name),apply:()=>applyPhysics(physicsPanel?.edits().map(e=>({op:e.op,path:e.path,value:e.value,name:e.name}))??[]),reset:()=>resetPhysicsBuild()},
+ physics:{rows:()=>physicsPanel?.rows()??[],chains:()=>physicsPanel?.chains()??[],edits:()=>physicsPanel?.edits()??[],preview:()=>physicsPreview.read(),clearPreview:()=>physicsPanel?.clearPreview(),set:(name:string,field:Parameters<PhysicsPanel['set']>[1],value:number)=>physicsPanel?.set(name,field,value),ramp:(id:string,field:Parameters<PhysicsPanel['set']>[1],root:number,tip:number)=>physicsPanel?.ramp(id,field,root,tip),select:(name:string)=>physicsPanel?.select(name),apply:()=>applyPhysics(physicsPanel?.edits().map(e=>({op:e.op,path:e.path,value:e.value,name:e.name}))??[]),reset:()=>resetPhysicsBuild()},
  /** Inspection only: one slot's posed world geometry on the drawn frame (what the stage drew), for comparing against `rigc render --geometry`. */
  posed:(slot:string)=>{const frame=player?.posedFrame();const found=frame?.order.find(item=>item.slot===slot);return found?JSON.parse(JSON.stringify(found,(key,value)=>key==='bitmap'||key==='image'||key==='page'?undefined:value)):null;},
  bone:(name:string)=>player?JSON.parse(JSON.stringify(player.bone(name))):null,
@@ -1612,7 +1612,7 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  replay:(t:number,dt:number,steps:readonly {t:number;wind?:[number,number];gravity?:[number,number]}[]=[])=>{
   if(!player?.current||!(dt>0)||!(t>=0))return null;
   const at=(k:number)=>{for(const step of steps)if(Math.max(0,Math.ceil(step.t/dt-1e-9))===k)player!.environment({...(step.wind?{wind:step.wind}:{}),...(step.gravity?{gravity:step.gravity}:{})});};
-  pause();if(steps.length)player.environment(null);at(0);player.seek(0);reposePreview();player.resume();
+  pause();if(steps.length)player.environment(null);at(0);player.seek(0);player.resume();
   try{for(let k=1,n=Math.round(t/dt);k<=n;k++){at(k);player.frame(dt);}}finally{player.pause();}
   drawRig(()=>player!.draw());time=player.time;renderTransport();
   const posedTime=player.time;if(steps.length){if(environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));else player.environment(null);}
@@ -1668,6 +1668,7 @@ async function applyPhysics(ops:PatchOp[]):Promise<PatchJobView|RebuildRefusal|n
  const status=rebuildStatus??await loadRebuildStatus();
  const patch=status&&ops.length?makePatch(status,ops,{cmd:'rig'}):null;
  if(!patch){const reason=!ops.length?'PHYSICS_NOTHING_PENDING: no pending ops':status?.reason??'REBUILD_STATUS_UNAVAILABLE';physicsPanel?.status(reason,true);return null;}
+ physicsPanel?.clearPreview();
  const world=stageWorld(),before=stageCheck;
  physicsPanel?.busy(true);physicsPanel?.status(`Applying ${ops.length} op(s) with ${patch.producer.name} ${patch.producer.version}: ${patchRoute(patch.ops,patch.producer.version)} --config, compile, check…`,false);
  try{
@@ -1902,7 +1903,7 @@ function sampleLocals(bone:string,dt:number,n:number):{t:number;rotation:number;
  if(!player?.current||!(dt>0)||!Number.isInteger(n)||n<0)return null;
  const p=player,inner=p.adjust,rows=new Map<number,{t:number;rotation:number;x:number;y:number;scaleX:number;scaleY:number;shearX:number;shearY:number}>();
  let recording=false;
- const read:BoneAdjust=bones=>{inner?.(bones);if(!recording)return;const l=bones.bone(bone);rows.set(p.time,{t:p.time,rotation:l.rotation,x:l.x,y:l.y,scaleX:l.scaleX,scaleY:l.scaleY,shearX:l.shearX,shearY:l.shearY});};
+ const read:BoneAdjust=(bones,ctx)=>{inner?.(bones,ctx);if(!recording)return;const l=bones.bone(bone);rows.set(ctx.trackTime??0,{t:ctx.trackTime??0,rotation:l.rotation,x:l.x,y:l.y,scaleX:l.scaleX,scaleY:l.scaleY,shearX:l.shearX,shearY:l.shearY});};
  pause();p.adjust=read;
  try{p.seek(0);recording=true;p.repose();p.resume();for(let k=1;k<=n;k++)p.frame(dt);}
  finally{recording=false;p.pause();p.adjust=inner;drawRig(()=>p.draw());time=p.time;renderTransport();}
@@ -1923,6 +1924,7 @@ let stageSource:{url:string;prefix:string;hash:string}|null=null;
 async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWorld|null=null):Promise<void> {
  const keepAnimation=animation,keepTime=player?.time??time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
  const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}});
+ physicsPanel?.clearPreview();
  pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
  {const animations=select('animation-select');animations.replaceChildren(...assets.animations.map(item=>option(item.name,data.manifest.animations.find(a=>a.id===item.name)?.label??item.name)));animations.disabled=assets.animations.length===0;}
