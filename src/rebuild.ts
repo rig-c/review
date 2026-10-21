@@ -105,6 +105,8 @@ export function configCuts(configText: string): Record<string, unknown> {
     out.assemble = kept;
   }
   if (config.limbs !== undefined) out.limbs = config.limbs;
+  // #184: the Cuts panel must see the config's `regions`, or a new part's `add /regions {}` replaces every existing one.
+  if (config.regions !== undefined) out.regions = config.regions;
   return out;
 }
 /** #115: why a build-routed Apply cannot run here (the handoff declares no painting and full run), or null. */
