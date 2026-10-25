@@ -8,7 +8,7 @@ import {startServer} from '../src/server.ts';
 import {inspectionControl,fixedTimes,matrixAnimations} from '../tests/helpers/animation-inspection.ts';
 const fieldsSupported=(name:string)=>['rotate','translate','translatex','translatey','scale','scalex','scaley','shear','shearx','sheary'].includes(name);
 const args=new Map<string,string>();for(let i=2;i<process.argv.length;i+=2)args.set(process.argv[i]!,process.argv[i+1]!);
-const out=resolve(args.get('--out')??'.review-state/215/browser-evidence'),synthetic=!args.has('--package'),focused=args.get('--focused')==='paused-clip';await mkdir(out,{recursive:true});
+const out=resolve(args.get('--out')??'.review-state/215/browser-evidence'),synthetic=!args.has('--package'),focused=['paused-clip','solo-whole'].includes(args.get('--focused')??'');await mkdir(out,{recursive:true});
 let input=resolve(args.get('--package')??join(out,'package'));
 if(synthetic){
  await mkdir(input,{recursive:true});const control=await inspectionControl(),doc=JSON.parse(await readFile('tests/fixtures/strip-probe/build/skeleton.model.json','utf8'));
@@ -24,10 +24,11 @@ const failures:string[]=[],errors:string[]=[],report:Record<string,unknown>={sta
 page.on('pageerror',(e:Error)=>errors.push(e.message));
 const oracle=await Bun.build({entrypoints:['scripts/animation-inspection-browser-oracle.ts'],target:'browser',format:'esm'});if(!oracle.success)throw new Error(oracle.logs.map(l=>l.message).join('\n'));const oracleText=await oracle.outputs[0]!.text();
 async function inspectionBundle(plant:boolean|string=false){
- const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format:'esm',plugins:[{name:'inspection-acceptance-only',setup(build){build.onLoad({filter:/(?:web\/main|src\/animation-inspection)\.ts$/},async({path})=>{let source=await readFile(path,'utf8');if(path.endsWith('/web/main.ts'))source+='\nObject.assign(window,{__testSwap:swapRig,__testDraw:drawRig,__testHeld:()=>({time:player?.time,animation:player?.current,playing})});';else if(plant==='recurrence'){if(!source.includes('(p0-2*p1+p2)*0.03'))throw new Error('RECURRENCE_TARGET_NOT_FOUND');source=source.replace('(p0-2*p1+p2)*0.03','(p0-2*p1+p2)*0.031');}else if(plant){const original="return {name,duration:typeof a.duration==='number'?a.duration:0,bones,slots,tracks};";if(!source.includes(original))throw new Error('PLANT_TARGET_NOT_FOUND');source=source.replace(original,"return {name,duration:typeof a.duration==='number'?a.duration:0,bones,slots,tracks:tracks.map(track=>({...track,keys:track.keys.map(k=>({...k,curve:Array.isArray(k.curve)?[...k.curve.slice(2,4),...k.curve.slice(0,2),...k.curve.slice(4)]:k.curve}))}))};");}if(args.get('--binding-order-plant')==='true'&&path.endsWith('/web/main.ts'))source=source.replace('player!.pause();refreshAnimationInspection();player!.draw();','player!.pause();player!.draw();');return {contents:source,loader:'ts'};});}}]});if(!built.success)throw new Error(built.logs.map(l=>l.message).join('\n'));return built.outputs[0]!.text();
+ const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format:'esm',plugins:[{name:'inspection-acceptance-only',setup(build){build.onLoad({filter:/(?:web\/main|src\/animation-inspection)\.ts$/},async({path})=>{let source=await readFile(path,'utf8');if(path.endsWith('/web/main.ts')&&args.get('--parts-frame-plant')==='true'){source=await readFile('.review-state/215/review-snapshot-final-2/web/main.ts','utf8');if(createHash('sha256').update(source).digest('hex')!=='8631892f6305c354e6a738bbf51228ac416d2880fd4c6620f17cbeb4bc5720bc')throw new Error('COMMITTED_CALLBACK_PLANT_SOURCE_CHANGED');}if(path.endsWith('/web/main.ts'))source+='\nObject.assign(window,{__testSwap:swapRig,__testDraw:drawRig,__testHeld:()=>({time:player?.time,animation:player?.current,playing,generation:player?.generation,windTime:wind.read().time}),__testFullRows:()=>player?.posedFrame().order.map(row=>JSON.parse(JSON.stringify(row,(key,value)=>key==="bitmap"||key==="image"||key==="page"?undefined:value))),__testVisibleSlots:()=>parts?.frame("single")?.order.map(row=>row.slot)});';else if(plant==='recurrence'){if(!source.includes('(p0-2*p1+p2)*0.03'))throw new Error('RECURRENCE_TARGET_NOT_FOUND');source=source.replace('(p0-2*p1+p2)*0.03','(p0-2*p1+p2)*0.031');}else if(plant){const original="return {name,duration:typeof a.duration==='number'?a.duration:0,bones,slots,tracks};";if(!source.includes(original))throw new Error('PLANT_TARGET_NOT_FOUND');source=source.replace(original,"return {name,duration:typeof a.duration==='number'?a.duration:0,bones,slots,tracks:tracks.map(track=>({...track,keys:track.keys.map(k=>({...k,curve:Array.isArray(k.curve)?[...k.curve.slice(2,4),...k.curve.slice(0,2),...k.curve.slice(4)]:k.curve}))}))};");}if(args.get('--binding-order-plant')==='true'&&path.endsWith('/web/main.ts'))source=source.replace('player!.pause();refreshAnimationInspection();player!.draw();','player!.pause();player!.draw();');return {contents:source,loader:'ts'};});}}]});if(!built.success)throw new Error(built.logs.map(l=>l.message).join('\n'));return built.outputs[0]!.text();
 }
 const normalBundle=await inspectionBundle();await page.route('**/main.js',(route:any)=>route.fulfill({contentType:'text/javascript',body:normalBundle}));
 const controlsBundle=await Bun.build({entrypoints:['scripts/animation-inspection-panel-controls.ts'],target:'browser',format:'esm'});if(!controlsBundle.success)throw new Error('PANEL_CONTROLS_BUNDLE_FAILED');await page.route('**/215-panel-controls.js',async(route:any)=>route.fulfill({contentType:'text/javascript',body:await controlsBundle.outputs[0]!.text()}));
+const soloControls=await Bun.build({entrypoints:['scripts/animation-inspection-solo-controls.ts'],target:'browser',format:'esm'});if(!soloControls.success)throw new Error('SOLO_CONTROLS_BUNDLE_FAILED');await page.route('**/215-solo-controls.js',async(route:any)=>route.fulfill({contentType:'text/javascript',body:await soloControls.outputs[0]!.text()}));
 await page.route('**/215-oracle.js',(route:any)=>route.fulfill({contentType:'text/javascript',body:oracleText}));
 try{
  await page.goto(`http://127.0.0.1:${app.port}/`);await page.waitForFunction(()=>document.querySelectorAll('.animation-key').length>0||document.body.textContent?.includes('Rig load failed'),null,{timeout:30000});
@@ -57,6 +58,39 @@ try{
  if(await page.locator('#idle-repeat').isChecked())await page.locator('label').filter({has:page.locator('#idle-repeat')}).click();
  for(const clip of [raw.animations.find((a:any)=>a.name!==animation)?.name,animation].filter(Boolean)){
   await page.selectOption('#animation-select',clip);(report.pausedClips as unknown[]).push(await pausedClip('paused clip change'));
+ }
+ {
+ // Paused Parts rendering must update the pickable frame before another transport draw.
+ await page.locator('[data-part-whole]').click();
+ const shown=raw.slots.some((s:any)=>s.name==='topwear')?'topwear':raw.slots.find((s:any)=>s.setup)?.name;
+ if(!shown)throw new Error('SOLO_CONTROL_NEEDS_DRAWN_SLOT');
+ await page.locator(`[data-part-list] button[data-slot="${shown}"]`).click();
+ let probe:any=null;
+ for(let attempt=0;attempt<12;attempt++){
+  probe=await page.evaluate(async(shown:string)=>{const path='/215-solo-controls.js',m=await import(path);return m.otherSlotProbe(shown);},shown);
+  if(probe)break;await page.locator('#zoom-out').click();
+ }
+ if(!probe)throw new Error('SOLO_CONTROL_NO_REACHABLE_DISJOINT_SLOT');
+ const unchanged=async(before:any,label:string)=>{const after=await page.evaluate(()=>(window as any).__testHeld());if(JSON.stringify(before)!==JSON.stringify(after))throw new Error('SOLO_SELECTION_CHANGED_POSE_HISTORY '+label);};
+ const problems:string[]=[],held=await page.evaluate(()=>(window as any).__testHeld());
+ if(held.playing)throw new Error('SOLO_CONTROL_NOT_PAUSED');
+ await page.locator('label').filter({has:page.locator('[data-part-solo]')}).click();await unchanged(held,'enable Solo');
+ const soloSlots=await page.evaluate(()=>(window as any).__testVisibleSlots());if(!soloSlots.length||soloSlots.some((s:string)=>s!==shown))throw new Error('SOLO_CONTROL_NOT_SOLO_RENDERED');
+ await page.mouse.click(probe.x,probe.y);await unchanged(held,'hidden slot pick');
+ const hiddenSelected=await page.locator('#rig-viewport').getAttribute('data-selected-name');
+ if(hiddenSelected!==shown)problems.push('SOLO_HIDDEN_SLOT_SELECTED: '+probe.slot);
+ // Restore the chosen Solo part even on the planted old callback, then capture a real transport draw in Solo.
+ if(hiddenSelected!==shown)await page.locator(`[data-part-list] button[data-slot="${shown}"]`).click();
+ await page.locator('[data-animation-view="curve"]').click();await page.locator('[data-curve-time]').fill(String(held.time));await page.locator('[data-curve-seek]').click();
+ const drawnSolo=await page.evaluate(()=>(window as any).__testHeld());if(drawnSolo.time!==held.time||drawnSolo.playing)throw new Error('SOLO_TRANSPORT_DRAW_CHANGED_TIME');
+ await page.locator('[data-part-whole]').click();await unchanged(drawnSolo,'Whole after Solo draw');
+ const wholeSlots=await page.evaluate(()=>(window as any).__testVisibleSlots());if(!wholeSlots.includes(probe.slot))throw new Error('WHOLE_CONTROL_NOT_RESTORED');
+ const restored=await page.evaluate(async(slot:string)=>{const path='/215-solo-controls.js',m=await import(path);return m.otherSlotProbe(null,slot);},probe.slot);
+ if(!restored)throw new Error('WHOLE_CONTROL_NO_REACHABLE_RESTORED_SLOT');await page.mouse.click(restored.x,restored.y);await unchanged(drawnSolo,'restored visible slot pick');
+ const restoredSelected=await page.locator('#rig-viewport').getAttribute('data-selected-name');if(restoredSelected!==probe.slot)problems.push('WHOLE_VISIBLE_SLOT_NOT_SELECTED: '+probe.slot);
+ report.soloWhole={shownSlot:shown,hiddenSlot:probe.slot,hiddenSlotRejected:hiddenSelected===shown,soloDrawnSlots:soloSlots,transportDrawInSolo:true,wholeRestoresVisibleSlot:wholeSlots.includes(probe.slot),restoredSlotSelected:restoredSelected===probe.slot,timeUnchanged:true,generationAndWindUnchangedBySelection:true,problems};
+ if(problems.length)throw new Error(problems.join('; '));
+ await page.locator('[data-part-whole]').click();
  }
  await page.locator('[data-animation-view="timeline"]').click();
  const source=raw.animations.find((a:any)=>a.name===animation),expected=source.bones.flatMap((b:any)=>b.timelines.flatMap((t:any)=>t.keys.map((k:any,i:number)=>['bone',b.name,t.name,i,k.time]))).concat(source.slots.flatMap((b:any)=>b.timelines.flatMap((t:any)=>t.keys.map((k:any,i:number)=>['slot',b.name,t.name,i,k.time]))));
@@ -92,7 +126,7 @@ try{
    console.log(JSON.stringify({completedChannel:option.label,animation:clip.name,samples:result.length}));
   }matrix.push({animation:clip.name,channels:options.length,samples:samples.length-begin});if(failures.length)break;
  }
- report.curve={skipped:focused?'focused paused-clip validation; reuse frozen scalar receipts':false,channels:totalChannels,samples:samples.length,tolerance:0,matrix,failed:samples.filter(x=>!x.ok)};await writeFile(join(out,'samples.json'),JSON.stringify(samples)+'\n');await page.selectOption('#animation-select',animation);
+ report.curve={skipped:focused?'focused selection/paused validation; reuse frozen scalar receipts':false,channels:totalChannels,samples:samples.length,tolerance:0,matrix,failed:samples.filter(x=>!x.ok)};await writeFile(join(out,'samples.json'),JSON.stringify(samples)+'\n');await page.selectOption('#animation-select',animation);
  // Each actual selection surface drives the other two; bone-without-slots and Whole remain explicit.
  const slot=raw.slots.find((s:any)=>s.setup)?.name??raw.slots[0]?.name,bone=raw.slots.find((s:any)=>s.name===slot)?.bone;
  await page.locator('[data-animation-view="tree"]').click();
