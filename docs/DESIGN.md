@@ -73,6 +73,12 @@ The single review page is one inspection workspace: a left column, the stage, th
 
 The compare page keeps its own markup and stylesheet: sources left, Parts explorer right, its four Inspector sections, its export buttons and its separator colour. It shares the workspace coordinator, so its separators are drawn at the same 4px.
 
+## Stored animation inspection
+
+Animate’s read-only block under Transport reads the hash-verified compiled skeleton of the build on stage. Timeline, Curves and Bone tree share transport and page-local bone/slot selection. A bone selection highlights its directly attached Parts rows; it never picks an arbitrary child slot. Stage picking uses held drawn geometry and resolved clips. Source-bound slot identity and every existing output/patch format remain unchanged.
+
+The curve path and handles are the stored numbers, without refitting or replacement keys. A separate runtime evaluation cursor/readout applies Play’s Float32 key conversion and ten-piece Bézier evaluation at held player time, then setup addition or scale multiplication in timeline order. Its authored locals precede constraints and previews, so it is not a final world pose. No second evaluated curve is drawn. See [the validation contract](ANIMATION_INSPECTION.md).
+
 ## Inspection strips
 
 An inclusive annotation interval can also become a derived frame strip. The single view selects one declared source video; compare retains its explicit shared video and chooses a producer clock basis for each interval. A batch preserves separate feedback intervals and side provenance. Source rows run down the sheet and requested producer frames run across it. A vertical batch repeats this grid rather than merging overlapping annotations.

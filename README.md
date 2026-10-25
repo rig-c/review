@@ -606,6 +606,12 @@ Settings, panel sizes and drafts carry across reopens. `--direct` and foreground
 serving use per-port origins and keep them separate.
 
 
+## Inspect animation keys
+
+Animate → **Transport** opens the read-only Timeline, Curves and Bone tree views of the build currently on stage. The timeline preserves every stored bone/slot track and key time; click a key to seek, or scrub the transport to move its playhead. Bone selection filters its direct tracks. Tree, Parts and stage selections stay synchronized; enable **Bone points** to pick a bone on stage. Selecting a bone highlights all directly attached Parts rows without inventing a selected slot.
+
+Curves show the compiled skeleton’s exact linear, stepped or cubic Bézier segments and stored handles. The separately labeled **Runtime evaluation** cursor/readout uses Play’s ten-piece Float32 interpolation, which can differ from the cubic. Its local value includes setup rotation/translation and scale multiplication, in stored timeline order, before constraints and previews. Rotation is unwrapped local degrees. **Inspect time** accepts exact seconds; frame labels require the existing explicit clock. These views author no keys and change no package, motion, patch or review format. See [animation inspection](docs/ANIMATION_INSPECTION.md) for the numeric validation and reproduction commands.
+
 ## Inspect a part
 
 The Parts explorer (left column; right on the compare page) selects an actual model slot on a specific single/A/B side. All rows follow the public held snapshot's exact draw-order z, including hidden/null slots. Search matches the exact source slot names: a row is shown when its name contains the typed text, case-sensitively, with no case folding or normalization. Arrow keys/Home/End move between result buttons, Enter/Space selects, and Escape returns to search. Whole rig restores full drawing. Selecting a drawn row fits its conservative world bounds within the existing camera zoom range; Sync cameras applies the same normalized camera action to every visible pane, while independent mode changes only that selected pane. Hidden/empty geometry reports `PART_FIT_UNAVAILABLE` and keeps the camera.

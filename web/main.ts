@@ -1,4 +1,5 @@
 import {PartExplorer,loadPartModel,partBounds} from './part-selection.ts';
+import {AnimationInspectionPanel} from './animation-inspection.ts';
 import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
 import { loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
@@ -106,6 +107,9 @@ let rigScale=1,referenceScale=1,referenceZoom=1;
 let displayedCenter:ViewPoint|null=null;
 let playbackIntent=0,desiredPlay=false,seekingControl=false;
 let parts:PartExplorer|null=null;
+let animationPanel:AnimationInspectionPanel|null=null;
+let inspectionSourceState:'ready'|'pending'|'failed'='ready';
+function refreshAnimationInspection(){if(inspectionSourceState!=='ready'){animationPanel?.unavailable(`ANIMATION_INSPECTION_SOURCE_${inspectionSourceState.toUpperCase()}: current model source is unavailable`);return;}animationPanel?.update(player?.time??time,duration);animationPanel?.model(partModel,player?.current??'');animationPanel?.update(player?.time??time,duration);}
 let overlays:RigOverlays|null=null;
 let chestEditor:ChestEditor|null=null;
 let meshEditor:MeshEditor|null=null;
@@ -401,6 +405,7 @@ function fitCamera(): void {
 }
 
 function renderTransport(): void {
+  refreshAnimationInspection();
   const end = duration > 0 ? ` / ${duration.toFixed(4)}` : '';
   text('time-label', sequence ? `Source ${(time + sequence.frames[0]!.t).toFixed(4)} ↔ ${time.toFixed(4)}${end} s` : `${time.toFixed(4)}${end} s`);
   input('scrub').max = String(Math.max(duration, .001)); input('scrub').value = String(time); input('scrub').disabled = duration <= 0;
@@ -473,8 +478,8 @@ function seekFrame(frame: number): void {
 }
 
 function drawRig(action:()=>void):void {
- try{action();parts?.present('single');text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);}
- catch(error){overlays?.clear();text('renderer-state',rendererStatus(null,'failed').label);throw error;}
+ try{action();parts?.present('single');if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);}
+ catch(error){animationPanel?.capture(null,undefined);overlays?.clear();text('renderer-state',rendererStatus(null,'failed').label);throw error;}
 }
 
 function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): void {
@@ -484,7 +489,7 @@ function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): voi
   select('animation-select').value = name;
   // #191: the wind restarts before the clip's first frame is drawn, so the paused stage shows the schedule's t=0 world.
   time = 0; clipMoved(move);
-  if (player && runtimeAnimation) { drawRig(()=>{player!.play(name,{loop:false});player!.pause();player!.draw();}); }
+  if (player && runtimeAnimation) { drawRig(()=>{player!.play(name,{loop:false});player!.pause();refreshAnimationInspection();player!.draw();}); }
   else if (player && name){text('renderer-state',rendererStatus(null,'failed').label);message(`Animation "${name}" is not present in the rig.`, true);}
   renderTransport(); renderCues();renderIdle();
 }
@@ -646,7 +651,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     } });
     player = new RigPlayer(el('rig-root'), assets);
     // Parts inspection is an add-on: a catalog refusal is shown in the explorer and never aborts the rig.
-    try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);partModel=catalog.model;weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
+    try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
     player.on('event', event => { text('event-log', `Runtime event: ${event.name} · ${event.time.toFixed(2)} s`); });
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
@@ -952,7 +957,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();if(part){activeCamera='rig';if(view==='reference')setView('rig');showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();if(part){activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
@@ -987,6 +992,7 @@ function bindReviewDialog():void {
 /** Rig world → rig-pane pixels for the current camera. */
 function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*rigScale,y:parseFloat(root.style.top||'0')-y*rigScale});}
 function redrawOverlay(fresh:boolean):void {
+ animationPanel?.redraw(layers.bones);
  if(!overlays||!player)return;
  const project=rigProject();
  const regions=[...chestRegions(),...(meshPanel?.overlayRegions()??[]),...(cutsPanel?.overlayRegions()??[]),...(clothPanel?.overlayRegions()??[])],circles=[...chestCircles(),...(meshPanel?.overlayCircles()??[])],markers=[...chestMarkers(),...(cutsPanel?.overlayMarkers()??[])];
@@ -1923,13 +1929,14 @@ async function resetRebuild(world:StageWorld|null=null):Promise<void> {
 let stageSource:{url:string;prefix:string;hash:string}|null=null;
 async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWorld|null=null):Promise<void> {
  const keepAnimation=animation,keepTime=player?.time??time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
- const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}});
+ inspectionSourceState='pending';partModel=null;pause();refreshAnimationInspection();
+ const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}}).catch(error=>{inspectionSourceState='failed';refreshAnimationInspection();throw error;});
  physicsPanel?.clearPreview();
  pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
  {const animations=select('animation-select');animations.replaceChildren(...assets.animations.map(item=>option(item.name,data.manifest.animations.find(a=>a.id===item.name)?.label??item.name)));animations.disabled=assets.animations.length===0;}
  player.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
- try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);partModel=catalog.model;weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){parts?.refuseCatalog('single',error);}
+ try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
  if(keepSet){try{player.setSet(keepSet);}catch{select('part-set').value='';player.setSet(null);}}
  // The same world before the first pose: a physics Apply resumes the wind (clock and pulse), the pending jolts, gravity and
  // whether the controls are engaged as they stood when Apply was pressed; then the seek re-poses under that world.
