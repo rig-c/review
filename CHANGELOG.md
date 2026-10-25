@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/rig-c/review/compare/v0.11.2...v0.12.0) (2026-10-25)
+
+
+### Features
+
+* inspect animation keys, curves and bone hierarchy ([#216](https://github.com/rig-c/review/issues/216)) ([86a790c](https://github.com/rig-c/review/commit/86a790c91fb8b46d450f9bde2e7b1fcc01a86ae6))
+
 ## [0.11.2](https://github.com/rig-c/review/compare/v0.11.1...v0.11.2) (2026-10-21)
 
 
