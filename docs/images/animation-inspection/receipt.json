@@ -1,0 +1,103 @@
+{
+  "schema": "animation-inspection-acceptance/1",
+  "modelSha256": "746b27b042e1812afc6d077766cc38588c794b231d8a4e678de9991fa3bcc98d",
+  "packageSourceHash": "49c8fd0cc40ac4077c78f6118b7bb586cf2a0afa3f3896ded96d68202a70e067",
+  "guideCommit": "ce926769373977558da470973afb52fe7c32d7fc",
+  "inputCommit": "01436ee3f02c189fe1a1e9656fe62068889837f5",
+  "producers": {
+    "parts": "1.64.0",
+    "core": "2.70.0"
+  },
+  "browser": "151.0.7922.34",
+  "timeline": {
+    "tracks": 18,
+    "keys": 2070,
+    "exact": true
+  },
+  "runtimeSamples": 22820,
+  "tolerance": 0,
+  "sourceUnchanged": true,
+  "screenshots": {
+    "timeline.png": {
+      "sha256": "7b3625ab39be19cee972ba3348b740e194aa8725fc79593bb9d22d8dfec9f538",
+      "bytes": 379989
+    },
+    "curve.png": {
+      "sha256": "d2de289570cbbe7aa4f1ab7947f54b920f6d8038637077b4be6374d6011374cd",
+      "bytes": 370664
+    },
+    "bone-tree.png": {
+      "sha256": "c6a7039c9ea78b15d0f88dfaf66aa7ebc18eb4bf3ba74c7c6c07b5864e265aa3",
+      "bytes": 359299
+    }
+  },
+  "animations": {
+    "timeline": "hello",
+    "curve": "idle",
+    "bone-tree": "hello"
+  },
+  "absentGuideInterpolation": [
+    "stepped"
+  ],
+  "helloInterpolation": [
+    "linear"
+  ],
+  "idleInterpolation": [
+    "linear",
+    "bezier"
+  ],
+  "installedPlay": {
+    "installedPackage": "@rig-c/play",
+    "installedVersion": "1.14.0",
+    "registryIntegrity": "sha512-uy+7oOuG3rG23QWU87VaybW9T/0KhGPiZK8X6IP3ePhNkhqwrOWxlvOIHULFWl8HNB/pAuUFRwgXdEA3683T7w==",
+    "integrityVerified": true,
+    "installedFilesMatchPublishedTarball": {
+      "dist/index.js": "c109f43f032ac1c8773828b571d4e2553482eb0e28eed68d135cb165cd9f0b4f",
+      "dist/index.js.map": "9d52d63420a05bb920cbe4eb8822cf4292610c9487779a3c0d57435f2d24789f"
+    },
+    "installedAnimationSourceSha256": "c3f47b31cf3775061617ce63bae9f558de298b2ce9daf1b25fe3f864e806472e",
+    "verifiedCoreReference": "v2.67.0/src/core/animation.ts",
+    "installedSourceMatchesReference": true,
+    "authority": "Installed published implementation is the oracle; production reader has no version/drift refusal."
+  },
+  "pausedClipAcceptance": {
+    "initialAndSwitches": [
+      {
+        "label": "initial load",
+        "animation": "hello",
+        "time": 0,
+        "playing": false,
+        "selectedBone": "chest",
+        "stageMarker": true,
+        "stageSlot": true,
+        "boneRelations": true,
+        "noSeekOrRepose": true
+      },
+      {
+        "label": "paused clip change",
+        "animation": "idle",
+        "time": 0,
+        "playing": false,
+        "selectedBone": "chest",
+        "stageMarker": true,
+        "stageSlot": true,
+        "boneRelations": true,
+        "noSeekOrRepose": true
+      },
+      {
+        "label": "paused clip change",
+        "animation": "hello",
+        "time": 0,
+        "playing": false,
+        "selectedBone": "chest",
+        "stageMarker": true,
+        "stageSlot": true,
+        "boneRelations": true,
+        "noSeekOrRepose": true
+      }
+    ],
+    "sourceUnchanged": true,
+    "numericReceiptReused": true,
+    "reason": "Only clip binding/draw order changed; the stored evaluator, curve/readout implementation, installed Play and model bytes are unchanged."
+  }
+}
