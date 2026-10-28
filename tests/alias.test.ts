@@ -10,7 +10,7 @@ const ROOT = join(import.meta.dir, '..');
 const script = join(ROOT, 'scripts/alias_tarball.ts');
 const work = mkdtempSync(join(tmpdir(), 'review-alias-test-'));
 const fixture = join(work, 'fixture');
-const manifest = { name: '@rig-c/review', version: '1.2.3', files: ['payload.bin'], bin: { 'rig-review': './payload.bin' }, scripts: { prepack: 'node -e "process.exit(23)"', prepare: 'node -e "process.exit(24)"' } };
+const manifest = { name: '@rig-c/review', version: '1.2.3', files: ['payload.bin'], bin: { 'rig-review': './payload.bin' }, scripts: { prepack: 'node -e "process.exit(23)"', prepare: 'node -e "process.exit(24)"', postpack: 'node -e "process.exit(25)"' } };
 let primary: string;
 let alias: string;
 const run = (cmd: string, args: string[], cwd = ROOT, env = process.env) => {
@@ -39,6 +39,52 @@ beforeAll(() => {
   primary = packInto(fixture, work);
 });
 afterAll(() => rmSync(work, { recursive: true, force: true }));
+
+test('native npm pack reaches the prepare refusal when lifecycle scripts are enabled', () => {
+  const dir = join(work, 'prepare-control');
+  mkdirSync(dir);
+  const text = `${JSON.stringify({ ...manifest, scripts: { prepare: manifest.scripts.prepare } }, null, 2)}\n`;
+  writeFileSync(join(dir, 'package.json'), text);
+  writeFileSync(join(dir, 'payload.bin'), Buffer.from([0, 1, 2, 255]));
+  const made = run('npm', ['pack', '.', '--ignore-scripts=false', '--dry-run=false', '--script-shell=/bin/sh', '--pack-destination', work], dir);
+  expect(made.status, made.out).toBe(24);
+  expect(made.out).toContain('prepare');
+  expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(text);
+  console.log(`PREPARE_PLANT: native npm pack exit ${made.status}\n${made.out.trim()}`);
+});
+
+test('pack keeps manifest bytes and caller config while suppressing every lifecycle from an unrelated cwd', () => {
+  const before = readFileSync(join(fixture, 'package.json'));
+  const dir = join(work, 'caller');
+  mkdirSync(dir);
+  // These fake local settings are intentionally offline. No token is read or printed.
+  const config = join(dir, 'caller.npmrc');
+  const configText = `registry=https://registry.invalid/\n//registry.invalid/:_authToken=fixture-only\ncache=${join(dir, 'cache')}\nscript-shell=/does/not/exist\n`;
+  writeFileSync(config, configText);
+  const probe = join(dir, 'probe.ts');
+  const destination = join(dir, 'packed with space');
+  writeFileSync(probe, `
+    import { packInto } from ${JSON.stringify(script)};
+    import { readFileSync } from 'node:fs';
+    const before = JSON.stringify(process.env);
+    const tgz = packInto('../fixture', './packed with space');
+    if (JSON.stringify(process.env) !== before) throw new Error('caller environment changed');
+    console.log(tgz);
+  `);
+  const made = run(process.execPath, [probe], dir, {
+    ...process.env, npm_config_userconfig: config, npm_config_dry_run: 'true',
+    npm_config_ignore_scripts: 'false', npm_config_script_shell: '/does/not/exist',
+  });
+  expect(made.status, made.out).toBe(0);
+  expect(made.stdout.trim()).toBe(join(destination, 'rig-c-review-1.2.3.tgz'));
+  expect(readFileSync(join(fixture, 'package.json')).equals(before)).toBe(true);
+  expect(readFileSync(config, 'utf8')).toBe(configText);
+  const unpacked = join(dir, 'unpacked');
+  mkdirSync(unpacked);
+  expect(run('tar', ['-xzf', made.stdout.trim(), '-C', unpacked]).status).toBe(0);
+  expect(readFileSync(join(unpacked, 'package/package.json')).equals(before)).toBe(true);
+  expect(readFileSync(join(unpacked, 'package/payload.bin'))).toEqual(Buffer.from([0, 1, 2, 255]));
+});
 
 test('pack control: same files and bytes except the name; source stays unchanged', () => {
   const before = readFileSync(join(fixture, 'package.json'), 'utf8');

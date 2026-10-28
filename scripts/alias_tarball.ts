@@ -155,16 +155,28 @@ export function compareTarballs(packageTgz: string, aliasTgz: string): AliasComp
  * Read the tarball npm actually wrote, independent of its stdout JSON shape.
  * A publish dry-run still needs private test tarballs; override only that pack
  * setting, keeping the caller's registry, authentication and cache configuration.
+ * npm 10's directory fetcher runs prepare even with ignore-scripts. Give this
+ * pack alone an empty script shell as well: lifecycle text is never evaluated,
+ * including on that path. The manifest and installed npm stay untouched.
  */
 export function packInto(dir: string, into: string): string {
-  mkdirSync(into, { recursive: true });
-  const before = new Set(readdirSync(into));
-  const packed = run('npm', ['pack', dir, '--ignore-scripts', '--dry-run=false', '--pack-destination', into, '--loglevel=error'], into);
-  const made = readdirSync(into).filter((f) => f.endsWith('.tgz') && !before.has(f));
-  if (packed.status !== 0 || made.length !== 1) {
-    throw new AliasTarballError(`\`npm pack ${dir}\` exited ${packed.status} and left ${made.length} new tarball(s); one was required. ${packed.out.trim().slice(0, 2000)}`);
+  const source = resolve(dir);
+  const destination = resolve(into);
+  mkdirSync(destination, { recursive: true });
+  const before = new Set(readdirSync(destination));
+  const shellDir = mkdtempSync(join(tmpdir(), 'rig-review-pack-shell-'));
+  try {
+    const shell = join(shellDir, 'skip-lifecycle');
+    writeFileSync(shell, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    const packed = run('npm', ['pack', '.', '--ignore-scripts', '--dry-run=false', '--script-shell', shell, '--pack-destination', destination, '--loglevel=error'], source);
+    const made = readdirSync(destination).filter((f) => f.endsWith('.tgz') && !before.has(f));
+    if (packed.status !== 0 || made.length !== 1) {
+      throw new AliasTarballError(`\`npm pack ${dir}\` exited ${packed.status} and left ${made.length} new tarball(s); one was required. ${packed.out.trim().slice(0, 2000)}`);
+    }
+    return join(destination, made[0]);
+  } finally {
+    rmSync(shellDir, { recursive: true, force: true });
   }
-  return join(into, made[0]);
 }
 
 /**

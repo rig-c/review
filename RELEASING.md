@@ -26,13 +26,22 @@ Publishing the tarball does not rerun the checkout's gate.
 `scripts/alias_tarball.ts pack --name rig-review --out <directory>` writes the
 alias; `compare <scoped.tgz> <alias.tgz>` checks its paths and bytes. A content
 difference exits 1 and names its path. Bad arguments or a failed pack/extraction
-exit 2. Internal packs pass `--ignore-scripts --dry-run=false` and read the one
-new tarball file, independent of npm's stdout JSON shape. The install smoke keeps
-its npm 12 object / earlier array parser; its internal pack also skips scripts
+exit 2. Alias packs run `npm pack .` in the source directory with
+`--ignore-scripts --dry-run=false` and a private no-op `--script-shell`. npm
+10.9.9's pack directory fetcher otherwise executes `prepare` despite `--ignore-scripts`;
+the no-op shell prevents lifecycle text from executing on that path too. It is
+removed after the pack. Neither package.json nor installed npm files are edited.
+The helper reads the one new tarball file, independent of npm's stdout JSON shape.
+The install smoke keeps its npm 12 object / earlier array parser; its internal pack
+also passes `--ignore-scripts`
 and overrides dry-run, and its empty install overrides dry-run. Registry,
 authentication and cache settings remain inherited. Tests include real npm
 `prepublishOnly` lifecycle controls with the release flags, with and without
 dry-run, and planted byte, missing, extra, version and formatting differences.
+The focused alias regression pairs a native pack control that must reach the planted `prepare` exit 24, while helper
+packs retain the manifest's exact bytes and suppress prepack, prepare and postpack.
+An unrelated caller directory, inherited dry-run and script-shell settings, and
+unchanged registry/auth/cache configuration are covered alongside that control.
 
 After publishing, confirmation waits for both names at the release version,
 then installs `rig-review@<version>` into an empty project, checks its manifest's
