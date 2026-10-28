@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/rig-c/review/compare/v0.12.0...v0.13.0) (2026-10-28)
+
+
+### Features
+
+* **release:** publish the convenience alias rig-review from the same release, like rig-parts, rig-play and rig-pose ([#219](https://github.com/rig-c/review/issues/219)) ([6a0e732](https://github.com/rig-c/review/commit/6a0e732c89d7de025993b184b5bdb2b5c3f4d0bd))
+
 ## [0.12.0](https://github.com/rig-c/review/compare/v0.11.2...v0.12.0) (2026-10-25)
 
 
