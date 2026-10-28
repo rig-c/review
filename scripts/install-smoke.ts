@@ -3,6 +3,8 @@
  * Packs this tree, installs the tarball into an empty project, then runs the installed bin:
  * help, `check` on the bundled demo, and a served page whose browser bundle is built from the
  * installed `web/` against the installed `@rig-c/play`. A file missing from `files` fails here.
+ * Internal packs skip lifecycle scripts and override inherited dry-run, as does the empty install.
+ * Registry, authentication and cache settings stay with the caller.
  * CI publishes this output, so every line goes through `log`, which redacts the `#cap=` value.
  */
 import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
@@ -23,14 +25,15 @@ function packResult(value:unknown,name:string):PackResult{
 function step(name:string,ok:boolean,detail=''){log(`${ok?'ok  ':'FAIL'} ${name}${detail?' · '+detail:''}`);if(!ok)failed=true;return ok;}
 async function run(cmd:string[],cwd:string){const child=Bun.spawn(cmd,{cwd,stdout:'pipe',stderr:'pipe',env:{...process.env,RIG_REVIEW_STATE_DIR:join(work,'state')}});const [stdout,stderr,exit]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);return {stdout,stderr,exit};}
 try{
- const packed=await run(['npm','pack','--json','--pack-destination',work],root);
+ const packed=await run(['npm','pack','--json','--ignore-scripts','--dry-run=false','--pack-destination',work],root);
  if(!step('npm pack',packed.exit===0,packed.stderr.trim().split('\n').at(-1)))throw new Error('pack');
  const info=packResult(JSON.parse(packed.stdout),manifest.name);const files=info.files.map(f=>f.path);
  step('tarball carries the bin, web, demo and licence',['src/cli.ts','web/main.ts','web/index.html','examples/demo/review.json','LICENSE'].every(f=>files.includes(f)),`${files.length} files`);
  step('tarball carries no tests or fixtures',!files.some(f=>f.startsWith('tests/')||f.startsWith('node_modules/')));
  await Bun.$`mkdir -p ${app}`;await writeFile(join(app,'package.json'),JSON.stringify({name:'rig-review-smoke',private:true})+'\n');
- const installed=await run(['npm','i','-D','--no-audit','--no-fund',join(work,info!.filename)],app);
+ const installed=await run(['npm','i','-D','--dry-run=false','--no-audit','--no-fund',join(work,info!.filename)],app);
  if(!step('npm i -D <tarball> into an empty project',installed.exit===0,installed.stderr.trim().split('\n').at(-1)))throw new Error('install');
+ await writeFile(join(app,'node_modules/.metadata_never_index'),'');
  const help=await run(['npx','--no-install','rig-review','--help'],app);step('npx rig-review --help',help.exit===0&&help.stdout.includes('Usage'));
  const openHelp=await run(['npx','--no-install','rig-review','open','--help'],app);step('npx rig-review open --help',openHelp.exit===0&&openHelp.stdout.includes('rig-review open <dir>'));
  const demo=join(app,'node_modules/@rig-c/review/examples/demo/review.json');
