@@ -1,5 +1,5 @@
 /**
- * The installed producer (`@rig-c/parts`' `rig-parts`) and the compiler it gates with (`rig-c`'s `rigc`), resolved the
+ * The installed producer (`@rig-c/parts`' `rig-parts`) and the compiler it gates with (`@rig-c/core`'s `rigc`, or legacy `rig-c`), resolved the
  * way `rigc review` resolves `rig-review`: the package's own `package.json` under the nearest `node_modules` walking
  * up from each start directory, its `bin` entry read from that manifest. No PATH lookup, no install, no prompt.
  * Review builds nothing itself: it runs these binaries as child processes with arguments it composes from a typed
@@ -10,7 +10,8 @@ import { dirname, join, resolve } from 'node:path';
 
 export const PRODUCER_PACKAGE = '@rig-c/parts';
 export const PRODUCER_BIN = 'rig-parts';
-export const COMPILER_PACKAGE = 'rig-c';
+export const COMPILER_PACKAGE = '@rig-c/core';
+const LEGACY_COMPILER_PACKAGE = 'rig-c';
 export const COMPILER_BIN = 'rigc';
 /** The first `@rig-c/parts` release with `rig-parts remesh` (its CHANGELOG: 1.40.0, "remesh: re-fit one part of a gated rig"). */
 export const REMESH_SINCE = '1.40.0';
@@ -37,6 +38,11 @@ export function findPackage(name: string, starts: readonly string[], exists: (pa
     }
   }
   return null;
+}
+
+/** Prefer the canonical package across the search roots; use the legacy name only when it is absent. */
+function findCompiler(starts: readonly string[], exists: (path: string) => boolean): string | null {
+  return findPackage(COMPILER_PACKAGE, starts, exists) ?? findPackage(LEGACY_COMPILER_PACKAGE, starts, exists);
 }
 
 /** `X.Y.Z` → [X, Y, Z]; anything else is null (a pre-release tag is not compared, it is refused as unread). */
@@ -72,7 +78,7 @@ export function resolveProducer(starts: readonly string[], exists: (path: string
   const producer = readTool(manifest, PRODUCER_BIN);
   if ('error' in producer) return { ok: false, error: `${MODELING_PRODUCER_NOT_INSTALLED} (${producer.error})` };
   if (!versionAtLeast(producer.version, REMESH_SINCE)) return { ok: false, error: modelingProducerTooOld(producer.version || 'unknown', REMESH_SINCE) };
-  const compilerManifest = findPackage(COMPILER_PACKAGE, [producer.root], exists);
+  const compilerManifest = findCompiler([producer.root], exists);
   if (!compilerManifest) return { ok: false, error: MODELING_COMPILER_NOT_INSTALLED };
   const compiler = readTool(compilerManifest, COMPILER_BIN);
   if ('error' in compiler) return { ok: false, error: `${MODELING_COMPILER_NOT_INSTALLED} (${compiler.error})` };
@@ -129,7 +135,7 @@ export const readingsCompilerTooOld = (found: string, required: string) => `READ
 export function resolveCompiler(starts: readonly string[], since: string, exists: (path: string) => boolean = existsSync): { ok: true; compiler: InstalledTool } | { ok: false; error: string } {
   const pair = resolveProducer(starts, exists);
   let compiler: InstalledTool | { error: string } | null = pair.ok ? pair.compiler : null;
-  if (!compiler) { const manifest = findPackage(COMPILER_PACKAGE, starts, exists); compiler = manifest ? readTool(manifest, COMPILER_BIN) : null; }
+  if (!compiler) { const manifest = findCompiler(starts, exists); compiler = manifest ? readTool(manifest, COMPILER_BIN) : null; }
   if (!compiler) return { ok: false, error: READINGS_COMPILER_NOT_INSTALLED };
   if ('error' in compiler) return { ok: false, error: `${READINGS_COMPILER_NOT_INSTALLED} (${compiler.error})` };
   if (!versionAtLeast(compiler.version, since)) return { ok: false, error: readingsCompilerTooOld(compiler.version || 'unknown', since) };
@@ -150,7 +156,7 @@ export function resolvePose(starts: readonly string[], exists: (path: string) =>
   if (!manifest) return { ok: false, error: RETARGET_PRODUCER_NOT_INSTALLED };
   const producer = readTool(manifest, POSE_BIN);
   if ('error' in producer) return { ok: false, error: `${RETARGET_PRODUCER_NOT_INSTALLED} (${producer.error})` };
-  const compilerManifest = findPackage(COMPILER_PACKAGE, [producer.root], exists);
+  const compilerManifest = findCompiler([producer.root], exists);
   if (!compilerManifest) return { ok: false, error: RETARGET_COMPILER_NOT_INSTALLED };
   const compiler = readTool(compilerManifest, COMPILER_BIN);
   if ('error' in compiler) return { ok: false, error: `${RETARGET_COMPILER_NOT_INSTALLED} (${compiler.error})` };

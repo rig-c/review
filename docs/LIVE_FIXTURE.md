@@ -27,15 +27,24 @@ Review runs the installed producers and never installs them. Keep one folder tha
 ```sh
 mkdir "$BASE/review-producer" && cd "$BASE/review-producer"
 npm init -y
-npm i -D @rig-c/review@0.8.0 @rig-c/parts@1.49.1 rig-c@2.64.1 @rig-c/pose@0.37.0
+npm i -D @rig-c/review@0.13.0 @rig-c/parts@1.78.0 @rig-c/core@2.81.0 @rig-c/pose@1.5.3
 cd "$BASE"
 ```
+
+**Scoped compiler prerequisite (#221).** Published Review 0.13.0 still resolves
+only `rig-c`; the scoped-only bench above needs the fixed Review checkout
+containing #221, or a later release that includes it. Until that release, run
+`bun /absolute/path/to/review/src/cli.ts open …` from the bench in step 3 instead
+of `npx rig-review open …` (install that checkout's dependencies first). After
+release, replace the Review pin with that released version. The producer pins
+above were checked against npm on 2026-10-30; both parts and pose depend on
+`@rig-c/core`.
 
 Bump a version here when a card needs a newer producer. Review refuses an older one by name where a flag needs it, for example `MODELING_PRODUCER_TOO_OLD` for `check --environment`.
 
 ## 2. The package, built in scratch
 
-The example's heavy inputs live in rig-c/parts-examples. A parts clone copies them in with `bun run fetch-examples`:
+The pinned parts checkout fetches the example's heavy inputs with `bun run fetch-examples`:
 
 ```sh
 git clone --branch v1.49.1 https://github.com/rig-c/parts.git "$BASE/parts"
@@ -62,7 +71,10 @@ npx rig-parts build --config "$P/config.json" --source "$P/inputs/painting.png" 
 cp -R "$P/out/check/build" "$P/build"
 ```
 
-The build takes about two minutes and ends with `build: PASS`. `out/parts.json`, `out/rig/motion.json` and `out/rig/mesh_report.json` are byte-equal to `expected/`.
+The original measurement with parts 1.49.1 and rig-c 2.64.1 took about two
+minutes and ended with `build: PASS`; `out/parts.json`, `out/rig/motion.json` and
+`out/rig/mesh_report.json` were byte-equal to `expected/`. That timing and byte
+comparison have not been re-measured for the current producer pins.
 
 ## 3. Open it with the handoff
 
@@ -75,7 +87,8 @@ npx rig-review open "$P" --config "$P/config.json" --parts "$P/out" \
   --keypoints "$P/keypoints.json" --animation idle
 ```
 
-Inside a review clone, `bun src/cli.ts open …` is the same command. Once the session baseline settles (about two minutes), the editor bar reads:
+Inside a review clone, `bun src/cli.ts open …` is the same command. In the original measurement, once the session baseline settled (about two
+minutes), the editor bar read (re-measure with the current pins):
 
 ```
 baseline: reproduced — rig.json d19892a32cec… = inspected d19892a32cec…
