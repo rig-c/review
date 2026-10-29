@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/rig-c/review/compare/v0.13.0...v0.13.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **producer:** resolve the compiler under @rig-c/core as well as rig-c, and refresh package guidance ([#222](https://github.com/rig-c/review/issues/222)) ([42c437b](https://github.com/rig-c/review/commit/42c437b1de57f4e470706efed30af0d162830c93)), closes [#221](https://github.com/rig-c/review/issues/221)
+
 ## [0.13.0](https://github.com/rig-c/review/compare/v0.12.0...v0.13.0) (2026-10-28)
 
 
