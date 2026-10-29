@@ -47,12 +47,15 @@ After publishing, confirmation waits for both names at the release version,
 then installs `rig-review@<version>` into an empty project, checks its manifest's
 name and version, and runs the installed `rig-review --help`.
 
-## First alias publish: owner only, once
+## First alias publish: completed 2026-10-29
 
-The first `rig-review` package cannot use a trusted publisher until it exists.
-This change publishes nothing. Choose the stable release tag containing this
-script whose scoped publish has passed. From a clean checkout of that tag, the
-owner runs (replace `vX.Y.Z`):
+The owner completed the one-time `rig-review` bootstrap on 2026-10-29 at
+**0.13.0**. That account publish has no attestation; scoped
+`@rig-c/review@0.13.0` has one. Subsequent releases use the two-name workflow
+above. The procedure below is retained as the bootstrap record, not a step to
+repeat for an existing version. Before a package existed it could not have a
+trusted publisher; the owner used a clean stable tag whose scoped publish had
+passed (replace `vX.Y.Z`):
 
 ```sh
 set -euo pipefail
@@ -84,11 +87,10 @@ enter these case-sensitive fields separately from the scoped package's publisher
 
 Set Publishing access to **Require two-factor authentication and disallow
 tokens**. Subsequent releases publish both names through the workflow. The
-one-time account publish has no workflow provenance; later OIDC publishes do.
+one-time account publish had no workflow provenance; OIDC publishes carry it.
 
 If the first cut stops at the alias step after the scoped publish, finish the
 owner bootstrap, then confirm both registry versions and run
 `bun scripts/confirm-alias.ts X.Y.Z` from the release checkout. The workflow's
 `tag` recovery refuses an already published scoped version; it is not an
-alias-only retry. README install recommendations wait for a later change after
-the first alias publish and empty-install confirmation have been verified.
+alias-only retry. README now lists the published convenience name.
