@@ -40,99 +40,43 @@ Example stdout from `open` (instance values vary):
 http://127.0.0.1:4318/instances/<key>/?input=…&handoff=…#cap=…
 ```
 
-## Existing output handoff
+## What you can do
 
-Use `check` and `review` to inspect an existing folder or curated package; see [the reference](docs/WORKFLOWS.md#existing-output-handoff).
-
-## Compare two outputs
-
-Compare two compiled packages against one selected local video; see [the reference](docs/WORKFLOWS.md#compare-two-outputs).
-
-## Feedback ownership
-
-Retrieve an explicitly submitted review with `feedback`; see [the reference](docs/WORKFLOWS.md#feedback-ownership).
-
-## Development
-
-Build, test and release from a clone; see [the reference](https://github.com/rig-c/review/blob/main/CONTRIBUTING.md#development).
-
-### Releasing
-
-See the [release workflow](https://github.com/rig-c/review/blob/main/CONTRIBUTING.md#releasing).
-
-## Frame strip export
-
-Export inclusive feedback intervals with `strip`; see [the reference](docs/WORKFLOWS.md#frame-strip-export).
-
-## One-command owner handoff
-
-Start or reuse a fixed inspection with `open`; see [the reference](docs/WORKFLOWS.md#one-command-owner-handoff).
-
-### Launcher contract
-
-See the [launcher contract](docs/WORKFLOWS.md#launcher-contract).
-
-### Managed front and write capability
-
-See the [managed front and write capability](docs/WORKFLOWS.md#managed-front-and-write-capability).
-
-## Control the current inspection page
-
-Observe or control an opted-in inspection with `control`; see [the reference](docs/WORKFLOWS.md#control-the-current-inspection-page).
-
-## Keep and share an inspection
-
-Restore a source-bound view link or local draft; see [the reference](docs/WORKFLOWS.md#keep-and-share-an-inspection).
-
-## Workspace settings and panels
-
-Navigate Setup, Animate, Settings and the review dialog; see [the reference](docs/PANELS.md#workspace-settings-and-panels).
-
-## Inspect animation keys
-
-Inspect the stored Timeline, Curves and Bone tree; see [the reference](docs/PANELS.md#inspect-animation-keys).
-
-## Inspect a part
-
-Select, fit and inspect an actual model slot; see [the reference](docs/PANELS.md#inspect-a-part).
-
-## Chest regions (designate, rebuild, watch)
-
-Designate chest regions and rebuild through the installed producer; see [the reference](docs/PANELS.md#chest-regions-designate-rebuild-watch).
-
-## Mesh panel (density, regions, segments → remesh)
-
-Rebuild a selected part from mesh parameters; see [the reference](docs/PANELS.md#mesh-panel-density-regions-segments--remesh).
-
-## Weights (setup pose, watch only)
-
-Inspect stored setup-pose weights; see [the reference](docs/PANELS.md#weights-setup-pose-watch-only).
-
-## Bones (config anchors, check, rebuild)
-
-Check and rebuild producer config anchors; see [the reference](docs/PANELS.md#bones-config-anchors-check-rebuild).
-
-## Rig fields (regions, still row, stops, inherit, turn)
-
-Adjust producer config fields through scratch rebuilds; see [the reference](docs/PANELS.md#rig-fields-regions-still-row-stops-inherit-turn).
-
-## Cuts (cut polygons, patch boxes, limb joints → rig-parts build)
-
-Send cut, patch and limb designations to the producer; see [the reference](docs/PANELS.md#cuts-cut-polygons-patch-boxes-limb-joints--rig-parts-build).
-
-## Mesh edit (typed delta, preview only)
-
-Preview a typed setup-space delta and rebuild through the producer; see [the reference](docs/PANELS.md#mesh-edit-typed-delta-preview-only).
-
-## Retarget (map, flags → rig-pose, watch)
-
-Retarget a declared pose sequence through the installed producer; see [the reference](docs/PANELS.md#retarget-map-flags--rig-pose-watch).
+| Task | Command or panel | Destination |
+| --- | --- | --- |
+| **Hand off and compare** | | |
+| <a id="one-command-owner-handoff"></a>Open an inspection | `open` | [Owner handoff — WORKFLOWS](docs/WORKFLOWS.md#one-command-owner-handoff) |
+| <a id="existing-output-handoff"></a>Inspect an existing folder | `check`, `review` | [Existing output handoff — WORKFLOWS](docs/WORKFLOWS.md#existing-output-handoff) |
+| <a id="compare-two-outputs"></a>Compare two builds against a video | `compare` | [Compare two outputs — WORKFLOWS](docs/WORKFLOWS.md#compare-two-outputs) |
+| <a id="feedback-ownership"></a>Retrieve submitted feedback | `feedback` | [Feedback ownership — WORKFLOWS](docs/WORKFLOWS.md#feedback-ownership) |
+| <a id="frame-strip-export"></a>Export feedback intervals as strips | `strip` | [Frame strip export — WORKFLOWS](docs/WORKFLOWS.md#frame-strip-export) |
+| **Inspect** | | |
+| <a id="workspace-settings-and-panels"></a>Navigate the workspace | Setup, Animate, Settings | [Workspace panels — PANELS](docs/PANELS.md#workspace-settings-and-panels) |
+| <a id="inspect-animation-keys"></a>Inspect stored animation keys | Timeline, Curves, Bone tree | [Animation keys — PANELS](docs/PANELS.md#inspect-animation-keys) |
+| <a id="inspect-a-part"></a>Select and fit a model slot | Parts explorer | [Part inspection — PANELS](docs/PANELS.md#inspect-a-part) |
+| <a id="weights-setup-pose-watch-only"></a>Inspect setup-pose weights | Weights | [Weights — PANELS](docs/PANELS.md#weights-setup-pose-watch-only) |
+| **Edit through the producer** | | |
+| <a id="chest-regions-designate-rebuild-watch"></a>Designate chest regions and rebuild | Chest regions | [Chest regions — PANELS](docs/PANELS.md#chest-regions-designate-rebuild-watch) |
+| <a id="mesh-panel-density-regions-segments--remesh"></a>Rebuild a part from mesh parameters | Mesh | [Mesh parameters — PANELS](docs/PANELS.md#mesh-panel-density-regions-segments--remesh) |
+| <a id="bones-config-anchors-check-rebuild"></a>Check and rebuild config anchors | Bones | [Bones — PANELS](docs/PANELS.md#bones-config-anchors-check-rebuild) |
+| <a id="rig-fields-regions-still-row-stops-inherit-turn"></a>Adjust producer config fields | Rig fields | [Rig fields — PANELS](docs/PANELS.md#rig-fields-regions-still-row-stops-inherit-turn) |
+| <a id="cuts-cut-polygons-patch-boxes-limb-joints--rig-parts-build"></a>Designate cuts, patches and limb joints | Cuts | [Cuts — PANELS](docs/PANELS.md#cuts-cut-polygons-patch-boxes-limb-joints--rig-parts-build) |
+| <a id="mesh-edit-typed-delta-preview-only"></a>Preview a setup-space delta and rebuild | Edit Mesh | [Mesh edit — PANELS](docs/PANELS.md#mesh-edit-typed-delta-preview-only) |
+| <a id="retarget-map-flags--rig-pose-watch"></a>Retarget a declared pose sequence | Retarget | [Retarget — PANELS](docs/PANELS.md#retarget-map-flags--rig-pose-watch) |
+| **Control and share** | | |
+| <a id="control-the-current-inspection-page"></a>Control an opted-in inspection | `control` | [Inspection control — WORKFLOWS](docs/WORKFLOWS.md#control-the-current-inspection-page) |
+| <a id="keep-and-share-an-inspection"></a>Restore a view link or local draft | View link, draft | [Keep and share — WORKFLOWS](docs/WORKFLOWS.md#keep-and-share-an-inspection) |
+| <a id="launcher-contract"></a>Start or reuse the launcher | `open` | [Launcher contract — WORKFLOWS](docs/WORKFLOWS.md#launcher-contract) |
+| <a id="managed-front-and-write-capability"></a>Use the managed front and write capability | `open` | [Managed front — WORKFLOWS](docs/WORKFLOWS.md#managed-front-and-write-capability) |
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
 
 ## Links
+
+<a id="development"></a><a id="releasing"></a>
+Development and releasing: [Contributing workflows](https://github.com/rig-c/review/blob/main/CONTRIBUTING.md#development).
 
 - [Package contract](docs/REVIEW_PACKAGE.md)
 - [Product design](docs/DESIGN.md)
