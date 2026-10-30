@@ -24,6 +24,12 @@ const mutants = [
   {name: 'table-date', code: 'README_TABLE_DATE', text: '| Host | Date |\n| --- | --- |\n| sample | 2026-10-30 |'},
   {name: 'table-date-no-edge-pipes', code: 'README_TABLE_DATE', text: 'Date | Value\n--- | ---\n2026-10-30 | 7'},
   {name: 'table-header-date', code: 'README_TABLE_DATE', text: '| 2026-10-30 | Value |\n| --- | --- |\n| sample | 7 |'},
+  {name: 'duplicate-link-text', code: 'README_DUPLICATE_LINK_TEXT', text: '[Compare outputs](a.md) and [Compare outputs](b.md)'},
+  {name: 'duplicate-visible-link-text', code: 'README_DUPLICATE_LINK_TEXT', text: '[**Compare** outputs](a.md) and [compare outputs][compare]\n\n[compare]: b.md'},
+  {name: 'generic-reference', code: 'README_GENERIC_LINK_TEXT', text: '[reference](a.md)'},
+  {name: 'generic-here', code: 'README_GENERIC_LINK_TEXT', text: '[*Here*](a.md)'},
+  {name: 'generic-docs', code: 'README_GENERIC_LINK_TEXT', text: '[DOCS][destination]\n\n[destination]: a.md'},
+  {name: 'generic-the-reference', code: 'README_GENERIC_LINK_TEXT', text: '[the reference](a.md)'},
 ] as const;
 
 for (const mutant of mutants) test(`#224 planted ${mutant.name} refuses by name`, () => {
@@ -59,11 +65,12 @@ function headings(text: string): Set<string> {
     if (line.startsWith('```')) { fenced = !fenced; continue; }
     const heading = !fenced && /^#{1,6} (.+)$/u.exec(line)?.[1];
     if (heading) ids.add(slug(heading));
+    if (!fenced) for (const match of line.matchAll(/<a id="([^"]+)"><\/a>/gu)) ids.add(match[1]!);
   }
   return ids;
 }
 
-test('#224: inbound README headings and their reference destinations still resolve', () => {
+test('#227: all historical README anchors and their reference destinations still resolve', () => {
   const fixture = JSON.parse(read('tests/fixtures/readme-headings.json')) as {headings: {text: string; id: string}[]};
   for (const heading of fixture.headings) {
     expect(slug(heading.text)).toBe(heading.id);
@@ -72,7 +79,13 @@ test('#224: inbound README headings and their reference destinations still resol
   // Site content/docs/review.md links these six README fragments; REVIEW_PACKAGE links launcher-contract.
   const inbound = ['place-in-the-toolchain', 'existing-output-handoff', 'compare-two-outputs',
     'feedback-ownership', 'chest-regions-designate-rebuild-watch', 'one-command-owner-handoff', 'launcher-contract'];
-  for (const anchor of inbound) expect(headings(readme).has(anchor)).toBe(true);
+  for (const anchor of inbound) {
+    expect(headings(readme).has(anchor)).toBe(true);
+    // Exactly one target: a live heading's slug or an explicit id, never both (a duplicate id).
+    const fromHeading = [...readme.matchAll(/^#{1,6}\s+(.+?)\s*$/gmu)].some(([, text]) => slug(text!) === anchor);
+    const explicit = readme.split(`<a id="${anchor}"></a>`).length - 1;
+    expect(Number(fromHeading) + explicit).toBe(1);
+  }
   for (const match of readme.matchAll(/\]\(([^)]+)\)/g)) {
     const target = match[1]!;
     if (target.startsWith('#')) { expect(headings(readme).has(target.slice(1))).toBe(true); continue; }
@@ -89,6 +102,9 @@ test('#224: installed README reference links ship, unshipped contributor links a
   for (const document of ['README.md', 'docs/WORKFLOWS.md', 'docs/PANELS.md', 'docs/REVIEW_PACKAGE.md',
     'docs/DESIGN.md', 'docs/ANIMATION_INSPECTION.md', 'docs/LIVE_FIXTURE.md', 'LICENSE']) expect(files).toContain(document);
   expect(readme).toContain('https://github.com/rig-c/review/blob/main/CONTRIBUTING.md#development');
+  const links = readme.split('## Links')[1]!;
+  expect(links).toContain('Development and releasing:');
+  expect(links).toContain('CONTRIBUTING.md#development');
   for (const document of ['docs/WORKFLOWS.md', 'docs/PANELS.md']) {
     for (const match of read(document).matchAll(/\]\(([^)]+)\)/g)) {
       const target = match[1]!;
@@ -99,4 +115,32 @@ test('#224: installed README reference links ship, unshipped contributor links a
       if (resolved.hash) expect(headings(read(path)).has(resolved.hash.slice(1))).toBe(true);
     }
   }
+});
+
+test('#227: one task table replaces the stubs, retaining all WORKFLOWS/PANELS targets', () => {
+  const section = readme.split('## What you can do\n')[1]!.split('## License')[0]!;
+  expect([...readme.matchAll(/^## (.+)$/gmu)].map(match => match[1])).toEqual([...README_HEADINGS]);
+  expect(section.match(/^\| --- \| --- \| --- \|$/gmu)?.length).toBe(1);
+  const rows = section.split('\n').filter(line => line.startsWith('|'));
+  const groups = rows.filter(line => line.includes('**')).map(line => /\*\*(.+?)\*\*/u.exec(line)![1]);
+  expect(groups).toEqual(['Hand off and compare', 'Inspect', 'Edit through the producer', 'Control and share']);
+  const fixture = JSON.parse(read('tests/fixtures/readme-headings.json')) as {headings: {id: string}[]};
+  const expected = fixture.headings.slice(3, -1).filter(({id}) => !['development', 'releasing'].includes(id));
+  const targets = [...section.matchAll(/\]\((docs\/(?:WORKFLOWS|PANELS)\.md#[^)]+)\)/gu)].map(match => match[1]!);
+  expect(targets).toHaveLength(20);
+  for (const {id} of expected) expect(targets.filter(target => target.endsWith('#' + id))).toHaveLength(1);
+  for (const row of rows.slice(2).filter(line => !line.includes('**'))) {
+    const cells = row.split('|').slice(1, -1).map(cell => cell.trim());
+    expect(cells).toHaveLength(3);
+    expect(cells.every(Boolean)).toBe(true);
+    expect(cells[2]).toMatch(/^\[[^\]]+ — (?:WORKFLOWS|PANELS)\]\(docs\//u);
+  }
+});
+
+test('#227: distinct named links, empty legacy anchors and code examples remain usable', () => {
+  expect(checkReadme('[Compare outputs](a.md) and [Inspect a part](b.md)')).toEqual([]);
+  expect(checkReadme('<a id="old"></a><a id="older"></a> [Named destination](a.md)')).toEqual([]);
+  expect(checkReadme('```md\n[here](a.md) [here](b.md)\n```')).toEqual([]);
+  expect(checkReadme('[Fish & chips](a.md) [Fish &amp; chips](b.md)')).toEqual(['README_DUPLICATE_LINK_TEXT: fish & chips']);
+  expect(checkReadme('<a href="a.md">Docs</a>')).toEqual(['README_GENERIC_LINK_TEXT: docs']);
 });

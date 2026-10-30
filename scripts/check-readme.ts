@@ -3,15 +3,7 @@ import {readFileSync} from 'node:fs';
 // #224: post-cut words + 10%, rounded up to 50; the earlier 2,500-word limit wins.
 export const README_WORD_CAP = 800;
 export const README_HEADINGS = [
-  'Links', 'Place in the toolchain', 'Start', 'Existing output handoff', 'Compare two outputs',
-  'Feedback ownership', 'Development', 'Frame strip export', 'One-command owner handoff',
-  'Control the current inspection page', 'Keep and share an inspection',
-  'Workspace settings and panels', 'Inspect animation keys', 'Inspect a part',
-  'Chest regions (designate, rebuild, watch)', 'Mesh panel (density, regions, segments → remesh)',
-  'Weights (setup pose, watch only)', 'Bones (config anchors, check, rebuild)',
-  'Rig fields (regions, still row, stops, inherit, turn)',
-  'Cuts (cut polygons, patch boxes, limb joints → rig-parts build)',
-  'Mesh edit (typed delta, preview only)', 'Retarget (map, flags → rig-pose, watch)', 'License',
+  'Place in the toolchain', 'Start', 'What you can do', 'License', 'Links',
 ] as const;
 
 export function readmeWords(text: string): number {
@@ -38,6 +30,19 @@ export function checkReadme(text: string): string[] {
     const heading = /^ {0,3}##[\t ]+(.+?)(?:[\t ]+#+)?[\t ]*$/u.exec(line)?.[1];
     if (heading && !README_HEADINGS.some(allowed => allowed === heading)) failures.push(`README_HEADING: line ${i + 1}: ${heading}`);
     lines.push({text: line, line: i + 1});
+  }
+  // Render Markdown first so inline, reference-style and HTML links share visible labels.
+  const entities: Record<string, string> = {amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' '};
+  const labels = new Set<string>();
+  for (const match of Bun.markdown.html(text).matchAll(/<a\b[^>]*\bhref\s*=[^>]*>([\s\S]*?)<\/a>/giu)) {
+    const label = match[1]!.replace(/<[^>]*>/gu, '').replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/giu, (_, entity: string) => {
+      if (!entity.startsWith('#')) return entities[entity.toLowerCase()]!;
+      const value = entity[1]?.toLowerCase() === 'x' ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
+      return value > 0 && value <= 0x10ffff ? String.fromCodePoint(value) : '\uFFFD';
+    }).normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
+    if (/^(?:the reference|reference|here|docs)$/u.test(label)) failures.push(`README_GENERIC_LINK_TEXT: ${label}`);
+    if (labels.has(label)) failures.push(`README_DUPLICATE_LINK_TEXT: ${label}`);
+    labels.add(label);
   }
   // GFM tables may omit the leading/trailing pipes. A delimiter row establishes the table.
   const cells = (line: string) => line.trim().replace(/^\|/u, '').replace(/\|$/u, '').split('|').map(cell => cell.trim());
