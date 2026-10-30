@@ -6,13 +6,13 @@ const read = (path: string) => readFileSync(new URL('../' + path, import.meta.ur
 const manifest = JSON.parse(read('package.json'));
 
 test('#221: published package guidance distinguishes canonical, convenience and compiler names', () => {
-  const readme = read('README.md'), contract = read('docs/REVIEW_PACKAGE.md');
+  const readme = read('README.md'), contract = read('docs/REVIEW_PACKAGE.md'), panels = read('docs/PANELS.md');
   expect(readme).toContain('The package is 0.x:');
   expect(readme).toContain('npm i -D rig-review');
   for (const name of ['@rig-c/pixi', '@rig-c/phaser', '@rig-c/three']) expect(readme).toContain(name);
   expect(readme).not.toContain('unreleased adapter API');
   expect(contract).toContain(`this checkout consumes pinned ${manifest.dependencies['@rig-c/play']}.`);
-  for (const text of [readme, contract]) { expect(text).toContain(COMPILER_PACKAGE); expect(text).toContain('legacy `rig-c` only when'); }
+  for (const text of [panels, contract]) { expect(text).toContain(COMPILER_PACKAGE); expect(text).toContain('legacy `rig-c` only when'); }
 });
 
 test('#221: the guide pins scoped producers and names the released Review limitation', () => {
