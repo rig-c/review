@@ -1,0 +1,111 @@
+{
+  "source": "https://api.github.com/repos/rig-c/review/readme?ref=0f9f2373a6b61def1024f63dada9f3df948a0a66",
+  "accept": "application/vnd.github.html+json",
+  "renderedSha256": "2216599d38c46a9e7a4cdc1b470e2c5045949ffcd47d1813b889bde0c8a194f0",
+  "headings": [
+    {
+      "text": "review",
+      "id": "review"
+    },
+    {
+      "text": "Place in the toolchain",
+      "id": "place-in-the-toolchain"
+    },
+    {
+      "text": "Start",
+      "id": "start"
+    },
+    {
+      "text": "Existing output handoff",
+      "id": "existing-output-handoff"
+    },
+    {
+      "text": "Compare two outputs",
+      "id": "compare-two-outputs"
+    },
+    {
+      "text": "Feedback ownership",
+      "id": "feedback-ownership"
+    },
+    {
+      "text": "Development",
+      "id": "development"
+    },
+    {
+      "text": "Releasing",
+      "id": "releasing"
+    },
+    {
+      "text": "Frame strip export",
+      "id": "frame-strip-export"
+    },
+    {
+      "text": "One-command owner handoff",
+      "id": "one-command-owner-handoff"
+    },
+    {
+      "text": "Launcher contract",
+      "id": "launcher-contract"
+    },
+    {
+      "text": "Managed front and write capability",
+      "id": "managed-front-and-write-capability"
+    },
+    {
+      "text": "Control the current inspection page",
+      "id": "control-the-current-inspection-page"
+    },
+    {
+      "text": "Keep and share an inspection",
+      "id": "keep-and-share-an-inspection"
+    },
+    {
+      "text": "Workspace settings and panels",
+      "id": "workspace-settings-and-panels"
+    },
+    {
+      "text": "Inspect animation keys",
+      "id": "inspect-animation-keys"
+    },
+    {
+      "text": "Inspect a part",
+      "id": "inspect-a-part"
+    },
+    {
+      "text": "Chest regions (designate, rebuild, watch)",
+      "id": "chest-regions-designate-rebuild-watch"
+    },
+    {
+      "text": "Mesh panel (density, regions, segments → remesh)",
+      "id": "mesh-panel-density-regions-segments--remesh"
+    },
+    {
+      "text": "Weights (setup pose, watch only)",
+      "id": "weights-setup-pose-watch-only"
+    },
+    {
+      "text": "Bones (config anchors, check, rebuild)",
+      "id": "bones-config-anchors-check-rebuild"
+    },
+    {
+      "text": "Rig fields (regions, still row, stops, inherit, turn)",
+      "id": "rig-fields-regions-still-row-stops-inherit-turn"
+    },
+    {
+      "text": "Cuts (cut polygons, patch boxes, limb joints → rig-parts build)",
+      "id": "cuts-cut-polygons-patch-boxes-limb-joints--rig-parts-build"
+    },
+    {
+      "text": "Mesh edit (typed delta, preview only)",
+      "id": "mesh-edit-typed-delta-preview-only"
+    },
+    {
+      "text": "Retarget (map, flags → rig-pose, watch)",
+      "id": "retarget-map-flags--rig-pose-watch"
+    },
+    {
+      "text": "License",
+      "id": "license"
+    }
+  ]
+}
