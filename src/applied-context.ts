@@ -142,6 +142,8 @@ export interface AppliedAnimation {
   animationsFrom: { path: string; beforeSha256: string; afterSha256: string };
   ops: AnimationSourceOp[];
   opsSha256: string;
+  /** The rig flags this Apply passed, empty when none; they are part of what rebuilds this state. */
+  args: string[];
   producer: Tool; compiler: Tool;
   line: string | null;
   check: CheckSummary | null;
@@ -291,12 +293,13 @@ export function parseAppliedContext(value: unknown): void {
     return;
   }
   if (value.schema === APPLIED_ANIMATION_SCHEMA) {
-    const v = exact(value, 'animationsFrom,buildId,check,compiler,configHash,files,line,modelHash,ops,opsSha256,producer,schema', field);
+    const v = exact(value, 'animationsFrom,args,buildId,check,compiler,configHash,files,line,modelHash,ops,opsSha256,producer,schema', field);
     if (![v.buildId, v.configHash, v.opsSha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, opsSha256 and modelHash are SHA-256 hex`);
     const af = exact(v.animationsFrom, 'afterSha256,beforeSha256,path', `${field}.animationsFrom`);
     if (typeof af.path !== 'string' || !af.path || !hex(af.beforeSha256) || !hex(af.afterSha256)) throw new Error(`${field}.animationsFrom: {path, beforeSha256, afterSha256 (SHA-256 hex)}`);
     if (!Array.isArray(v.ops) || v.ops.length < 1 || v.ops.length > MAX_ANIMATION_OPS) throw new Error(`${field}.ops: 1–${MAX_ANIMATION_OPS} animation ops`);
     for (const [i, op] of v.ops.entries()) parseAnimationSourceOp(op, `${field}.ops[${i}]`);
+    if (!Array.isArray(v.args) || v.args.length > 16 || !v.args.every(a => typeof a === 'string')) throw new Error(`${field}.args: at most 16 strings`);
     tool(v.producer, `${field}.producer`); tool(v.compiler, `${field}.compiler`); lineOrNull(v.line, `${field}.line`);
     parseCheck(v.check, `${field}.check`);
     parseFilesDiff(v.files, `${field}.files`);

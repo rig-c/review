@@ -1561,8 +1561,11 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const motion = configDoc.motion && typeof configDoc.motion === 'object' && !Array.isArray(configDoc.motion) ? configDoc.motion as Record<string, unknown> : null;
     const relFrom = typeof motion?.animations_from === 'string' && motion.animations_from ? motion.animations_from : null;
     if (!relFrom) throw new RebuildError('ANIMATION_SOURCE_MISSING', 'the handoff config declares no motion.animations_from');
-    const absFrom = resolve(dirname(inputs.config), relFrom);
-    const showFrom = relative(p.root, absFrom).split(sep).join('/') || '.';
+    // The handoff records a named file's canonical path, so an alias inside the package reads as the file it names.
+    let absFrom: string;
+    try { absFrom = await realpath(resolve(dirname(inputs.config), relFrom)); }
+    catch { throw new RebuildError('ANIMATION_SOURCE_MISSING', `config motion.animations_from (${relFrom}) does not exist`); }
+    const showFrom = relative(await realpath(p.root), absFrom).split(sep).join('/') || '.';
     const handoffFile = inputs.handoff.files.find(f => f.path === showFrom);
     if (!handoffFile) throw new RebuildError('ANIMATION_SOURCE_MISSING', `config motion.animations_from (${showFrom}) is missing from the handoff`);
     const baseAnimText = await readFile(absFrom, 'utf8'), baseAnimHash = sha256(baseAnimText);

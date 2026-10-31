@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { readAnimationInspection } from '../src/animation-inspection.ts';
@@ -505,6 +505,7 @@ test('Slice 2 Apply: retime, delete, insert, value, curve match H5; cumulative s
         // Verify AppliedAnimation schema ('rig-review-applied/5') & client helpers
         const record = animationAppliedRecord(job);
         expect(record.schema).toBe(APPLIED_ANIMATION_SCHEMA);
+        expect(record.args).toEqual([]);
         expect(recordFor(job)).toEqual(record);
         expect(parseApplied(JSON.stringify(record))).toEqual(record);
         expect(() => parseAppliedContext(record)).not.toThrow();
@@ -653,6 +654,9 @@ test('Slice 2 Apply: retime, delete, insert, value, curve match H5; cumulative s
       expect(customFlagsJob.status).toBe('built');
       expect(customFlagsJob.request.args).toEqual(['--page-edges', 'pot', '--pack-shape', 'rect']);
       expect(customFlagsJob.lines.some((l) => l.includes('page-edges=pot, pack-shape=rect'))).toBe(true);
+      const customRecord = animationAppliedRecord(customFlagsJob);
+      expect(customRecord.args).toEqual(['--page-edges', 'pot', '--pack-shape', 'rect']);
+      expect(parseApplied(JSON.stringify(customRecord))).toEqual(customRecord);
       await api('/api/rebuild/undo', { from: customFlagsJob.id });
     } finally {
       server.stop();
@@ -711,6 +715,47 @@ test('Slice 2 Apply: retime, delete, insert, value, curve match H5; cumulative s
       expect(treeSha256(sideB.pkgDir)).toBe(beforeBTree);
     } finally {
       cmpServer.stop();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an animations_from alias inside the package applies to its canonical handoff file', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'review-anim-alias-'));
+  try {
+    installStandinProducer(root);
+    const { pkgDir, animationsFromHash, demoAnimText } = createAnimationApplyFixture(root, 'pkg');
+    symlinkSync('animations.json', join(pkgDir, 'alias.json'));
+    const configText = JSON.stringify({ key: 'demo', motion: { animations_from: 'alias.json' }, meshes: {} }, null, 2) + '\n';
+    writeFileSync(join(pkgDir, 'config.json'), configText);
+
+    const pkg = await loadReview(pkgDir);
+    const server = await startServer(pkg, { port: 0, stateDir: join(root, 'state'), cwd: root });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      const res = await fetch(`${base}/api/rebuild`, {
+        method: 'POST',
+        headers: { Origin: base, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          animation: {
+            configHash: sha256(configText),
+            animationsFromHash,
+            ops: [{ op: 'set_key_time', animation: 'tilt', track: 0, key: 1, time: 0.42 }],
+          },
+        }),
+      });
+      let job = (await res.json()) as AnimationJobView;
+      for (let i = 0; job.status === 'running' && i < 200; i++) {
+        await Bun.sleep(20);
+        job = (await (await fetch(`${base}/api/rebuild/${job.id}`, { headers: { Origin: base } })).json()) as AnimationJobView;
+      }
+      expect((job as unknown as { error?: string }).error).toBeUndefined();
+      expect(job.status).toBe('built');
+      expect(job.request.animationsFrom.path).toBe('animations.json');
+      expect(readFileSync(join(pkgDir, 'animations.json'), 'utf8')).toBe(demoAnimText);
+    } finally {
+      server.stop();
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
