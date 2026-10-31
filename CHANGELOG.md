@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/rig-c/review/compare/v0.15.1...v0.16.0) (2026-10-31)
+
+
+### Features
+
+* **parts:** fixed tools, thumbnails in compare, one-line rows ([#241](https://github.com/rig-c/review/issues/241)) ([8d7615b](https://github.com/rig-c/review/commit/8d7615b83d3ecfca918fb47683ee33414ab2490d)), closes [#233](https://github.com/rig-c/review/issues/233)
+
 ## [0.15.1](https://github.com/rig-c/review/compare/v0.15.0...v0.15.1) (2026-10-31)
 
 
