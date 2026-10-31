@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
+import {requireFeedbackFrames} from './stage-comment.ts';
+import {commentCropPaths} from './comment-crops.ts';
 import {randomBytes} from 'node:crypto';
 import {parseControlCommand} from './control.ts';
 import { loadReview } from './manifest.ts';
-import { formatFeedbackIssues } from './feedback-export.ts';
+import { formatFeedbackIssues,feedbackWithCommentGroups } from './feedback-export.ts';
 import {loadReferencedReview,selectedReference,assertReviewUnchanged} from './reference.ts';
 import {animationDiagnostic,selectAnimation} from './animation-selection.ts';
 import {shellWord} from './open-shell.ts';
@@ -29,7 +31,7 @@ async function stripCommand(args:string[],options:{stateDir?:string}){
   let intervals:StripInterval[]=[];
   if(range){const match=/^(\d+):(\d+)$/.exec(range);if(!match)throw new Error('strip --frames: expected inclusive FIRST:LAST');if(compare&&!basis)throw new Error('strip --basis: explicitly select a | b');intervals=[{id:'selection',basis:compare?basis!:'single',frameStart:Number(match[1]),frameEnd:Number(match[2])}];}
   const request=(hash:string):StripRequest=>({format:jsonOnly?'json':'png',sourceHash:hash,animation:animation!,...(compare?{}:{referenceId:reference}),intervals});
-  const fromFeedback=(feedback:(Feedback&{side?:'a'|'b'})[])=>feedback.map(f=>{const context=f.context;if(!context||typeof context!=='object'||Array.isArray(context)||context.animation!==animation)throw new Error('strip --all-feedback: every interval must identify the selected animation');return {id:f.id,feedbackId:f.id,basis:compare?f.side!:'single' as const,frameStart:f.frameStart,frameEnd:f.frameEnd};});
+  const fromFeedback=(feedback:(Feedback&{side?:'a'|'b'})[])=>feedback.map(f=>{const context=f.context;if(!context||typeof context!=='object'||Array.isArray(context)||context.animation!==animation)throw new Error('strip --all-feedback: every interval must identify the selected animation');return {id:f.id,feedbackId:f.id,basis:compare?f.side!:'single' as const,...requireFeedbackFrames(f)};});
   let result,roots:string[];
   if(compare){if(referenceVideo)throw new Error('strip compare: use --reference local-video');const p=await loadCompare({a,b:b!,reference:reference!,animation});roots=[p.a.root,p.b.root];if(all)intervals=fromFeedback((await readCompareSession(p,options.stateDir)).feedback);if(output){await validateStripOutput(output,roots);if(!jsonOnly)await validateStripOutput(output+'.json',roots);}result=await exportCompareStrip(p,request(p.response.sourceHash));}
   else {if(basis)throw new Error('strip --basis: single package uses single basis');const p=await loadReferencedReview(a,referenceVideo);if(!reference)reference=selectedReference(p)?.binding.reference.id;roots=[p.root];if(all)intervals=fromFeedback((await readSession(p,options.stateDir)).feedback);if(output){await validateStripOutput(output,roots);if(!jsonOnly)await validateStripOutput(output+'.json',roots);}result=await exportReviewStrip(p,request(p.sourceHash));}
@@ -100,7 +102,7 @@ export async function main(args:string[],options:{stateDir?:string}={}){
   let format:'json'|'issue'='json';if(command==='feedback'){const parsed=feedbackFormat(args);args=parsed.args;format=parsed.format;}
   // Feedback formatting assigns --format/value ownership before the help pass.
   if(commandHelpRequested(args,command)){console.log(usage);return;}
-  const printFeedback=(session:Parameters<typeof formatFeedbackIssues>[0])=>console.log(format==='issue'?formatFeedbackIssues(session).trimEnd():JSON.stringify(session,null,2));
+  const printFeedback=(session:Parameters<typeof formatFeedbackIssues>[0])=>{const exported=commentCropPaths(session,options.stateDir);console.log(format==='issue'?formatFeedbackIssues(exported).trimEnd():JSON.stringify(feedbackWithCommentGroups(exported),null,2));};
   if(args[0]==='compare'){
     args.shift();const a=args.shift(),b=args.shift();if(!a||!b)throw new Error(usage);let reference:string|undefined,animation:string|undefined,port=4317;
     while(args.length){const flag=args.shift(),value=args.shift();if(!value)throw new Error(`Missing value for ${flag}`);if(flag==='--reference')reference=value;else if(flag==='--animation')animation=value;else if(flag==='--port'){port=Number(value);if(!Number.isInteger(port)||port<0||port>65535)throw new Error('--port: expected integer 0…65535');}else throw new Error(`Unknown compare option ${flag}`);}

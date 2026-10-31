@@ -1,9 +1,11 @@
+import {timeOnlyBasis,feedbackTimingLabel,requireFeedbackFrames,isTimeOnlyFeedback} from '../src/stage-comment.ts';
+import {bindStageComments,type CommentPose} from './stage-comments.ts';
 import {discoverTurnDials,TurnState} from '../src/turn-pad.ts';
 import {bindTurnPad,type TurnPad} from './turn-pad.ts';
 import {PartExplorer,loadPartModel,partBounds} from './part-selection.ts';
 import {AnimationInspectionPanel} from './animation-inspection.ts';
 import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
-import { loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBounds } from '@rig-c/play';
+import { CanvasRenderer, loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
 import {rendererStatus} from './renderer-status.ts';
 import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
@@ -33,7 +35,7 @@ import {connectControl} from './control.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
 import {controlComparison,type ControlCommand,type ControlInspection,type ControlView} from '../src/control.ts';
 import {singleEligibility,videoReferenceAt,type InputState,type SingleLayout} from '../src/comparison-eligibility.ts';
-import {connectInspectionPersistence,serializableView,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
+import {parseBookmark,connectInspectionPersistence,serializableView,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
 import {initialPlayerAnimation,keptAnimation} from '../src/animation-selection.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import type {ReferenceBinding} from '../src/reference.ts';
@@ -62,7 +64,7 @@ import {assertRigFieldOps,RIG_FIELDS_READOUT_BARS,TURN_BONE} from '../src/rig-fi
 import {IDLE_READOUT_BARS,type LocalChannel} from '../src/idle-tracks.ts';
 import type {PatchOp} from '../src/config-patch.ts';
 
-interface ReviewResponse { initialAnimation?:string|null; manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
+interface ReviewResponse { referenceHashes?:Record<string,string>; initialAnimation?:string|null; manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
 interface PoseReference { schema: 'rig-review-pose/1'; coordinateSystem: 'image-pixels-y-down'; width: number; height: number; joints: { id: string; x: number; y: number; parent?: string }[] }
 interface SequenceJoint { state: 'observed' | 'occluded' | 'missing' | 'inferred'; at?: [number, number]; score?: number }
 interface PoseSequence { spec: 'rig-pose-sequence/1'; space: { units: 'picture-px'; origin: 'top-left'; y: 'down' }; width: number; height: number; source?: string; frames: { t: number; people: { id: string; joints: Record<string, SequenceJoint> }[] }[]; camera?: { s: number; tx: number; ty: number; inliers: number }[]; cameraSource?: unknown }
@@ -99,6 +101,7 @@ let lastFrame = 0;
 type CameraTarget='rig'|'reference';
 let cameraSync=true,activeCamera:CameraTarget='rig',cameraRestoring=false,cameraLayout='';
 const cameraFrames:Partial<Record<CameraTarget,CameraFrame>>={};
+let comments:ReturnType<typeof bindStageComments>|null=null;
 let view: 'compare' | 'reference' | 'rig' = 'compare';
 // Requested layout persists in the source-bound draft; the effective one follows actual load events only.
 let rigInput:InputState={state:'pending'},referenceInput:InputState={state:'absent'},effectiveView:SingleLayout|null=null;
@@ -696,18 +699,19 @@ function applyAxis(): void {
 }
 
 function renderProposals(): void {
+  comments?.refresh();
   const area = el('proposal-list'); area.replaceChildren();
   const warnings = el('feedback-warnings'); warnings.hidden = session.feedbackWarnings.length === 0;
   const unchecked = session.feedback.map(f => appliedCheckRefusal((f.context as Record<string, unknown> | undefined)?.applied)).find(Boolean) ?? null;
   el('feedback-applied-check').hidden = !unchecked; text('feedback-applied-check', unchecked ? `${unchecked} · Submit refuses this review; delete the entry written on that build or Apply a build that passes check.` : '');
   warnings.textContent = session.feedbackWarnings.length ? `${session.feedbackWarnings.length} validation warnings in existing feedback · original records are preserved. Review the marked entries, delete them and add valid replacements before submitting. The saved session that rig-review feedback exports keeps both the original records and warnings.` : '';
   for (const feedback of session.feedback) {
-    const item = document.createElement('div'); item.className = 'proposal-item'; const title = document.createElement('strong'); title.textContent = `${feedback.category} · ${feedback.target.kind}:${feedback.target.name} · F${feedback.frameStart}–${feedback.frameEnd}`; const description = document.createElement('span'); description.textContent = feedback.summary;
+    const item = document.createElement('div'); item.className = 'proposal-item'; const title = document.createElement('strong'); title.textContent = `${feedback.category} · ${feedback.target.kind}:${feedback.target.name} · ${feedbackTimingLabel(feedback)}`; const description = document.createElement('span'); description.textContent = feedback.summary;
     item.append(title, description);
     for (const warning of session.feedbackWarnings.filter(value => value.id === feedback.id)) { const note = document.createElement('p'); note.className = 'hint'; note.textContent = `Validation warning · ${warning.error}`; item.append(note); }
     const details = document.createElement('details'), summary = document.createElement('summary'), source = document.createElement('pre'); summary.textContent = 'Saved feedback and inspection context'; source.textContent = JSON.stringify(feedback, null, 2); details.append(summary, source);
     const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Delete'; remove.onclick = () => { session.feedback = session.feedback.filter(item => item.id !== feedback.id); session.feedbackWarnings = session.feedbackWarnings.filter(warning => warning.id !== feedback.id); markDirty(); renderProposals(); };
-    item.append(details, remove); area.append(item);
+    item.append(details);if((feedback.context as any)?.comment?.schema!=='rig-review-comment/1'||!submittedBaseline?.feedback.some(f=>f.id===feedback.id))item.append(remove); area.append(item);
   }
   updateSavedState();
 }
@@ -753,7 +757,7 @@ async function exportStrip(): Promise<void> {
       for (const feedback of session.feedback) {
         const context = feedback.context;
         if (!context || typeof context !== 'object' || Array.isArray(context) || context.animation !== selectedAnimation) throw new Error(`Feedback ${feedback.id}: Its animation is missing or differs from the selected animation. Batch export supports ranges from the same animation only.`);
-        intervals.push({ id: feedback.id, feedbackId: feedback.id, basis: 'single', frameStart: feedback.frameStart, frameEnd: feedback.frameEnd });
+        intervals.push({ id: feedback.id, feedbackId: feedback.id, basis: 'single', ...requireFeedbackFrames(feedback) });
       }
     } else {
       const start = input('feedback-start').value.trim(), end = input('feedback-end').value.trim();
@@ -889,7 +893,7 @@ function bind(): void {
     saving = true; updateSavedState(); const savedPayload = JSON.stringify(session);
     try { const saved = await api<ReviewSession>('/api/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: savedPayload });
       if (JSON.stringify(session) === savedPayload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;
-      await persistence?.submitted(saved);renderProvenance();
+      submittedBaseline=structuredClone(saved);comments?.refresh();await persistence?.submitted(saved);renderProvenance();renderProposals();
       message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status, feedback and source provenance.');
     } catch (error) { message(`Submission failed: ${errorText(error)}`, true); } finally { saving = false; updateSavedState(); }
   };
@@ -942,7 +946,7 @@ function bind(): void {
   requirementsPanel=bindRequirementsPanel({check:runRequirements,seek:seekReading,animation:()=>animation,slot:()=>parts?.value()?.slot??null,hash:sha256Hex});
   const tickResize=new ResizeObserver(()=>renderReadingTicks());tickResize.observe(el('transport'));viewDisposers.push(()=>tickResize.disconnect());
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
-  for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));
+  for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy)),()=>!comments?.active()));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
   viewDisposers.push(bindLayerShortcuts(document));describeLayerToggles(document,el('layer-state').textContent??'');
   input('idle-repeat').onchange=()=>{renderIdle();if(canRepeatIdle())void playPreview();};
@@ -952,7 +956,7 @@ function bind(): void {
   document.addEventListener('visibilitychange',()=>{if(document.hidden){const resume=playing;pause();suspendedPreview=resume;}else if(suspendedPreview){suspendedPreview=false;void playPreview();}});
   const resize = new ResizeObserver(fitCamera); resize.observe(el('rig-viewport')); resize.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { persistence?.dispose();turnPad?.dispose();workspace?.dispose();pause();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());overlays?.dispose(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
+  window.addEventListener('pagehide', () => { comments?.dispose();persistence?.dispose();turnPad?.dispose();workspace?.dispose();pause();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());overlays?.dispose(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
 }
 
 async function start(): Promise<void> {
@@ -982,13 +986,13 @@ async function start(): Promise<void> {
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-    const restored=await setupPersistence();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();setupComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
     if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
 /** `feedback` is the review dialog, not an Inspector section: a user action opens it; a restored older bookmark that saved it selects nothing. */
-function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)workspace?.revealInspector();document.querySelector<HTMLButtonElement>(`[data-inspector="${name}"]`)?.click();}
+function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)workspace?.revealInspector();const selector=document.querySelector<HTMLButtonElement>(`[data-inspector="${name}"]`);if(selector&&selector.getAttribute('aria-pressed')!=='true'&&selector.getAttribute('aria-selected')!=='true')selector.click();}
 function bindInspector():void {bindInspectorTabs(()=>{workspace?.afterTab();fitCamera();},()=>workspace?.beforeTab());}
 /** Opening the review pauses playback, as selecting Feedback did. Its inputs stay in the document whether or not it is open, so the draft keeps them. */
 function openReview():void {const dialog=el<HTMLDialogElement>('review-dialog');for(const drawer of document.querySelectorAll<HTMLDialogElement>('dialog.workspace-drawer[open]'))drawer.close();pause();if(!dialog.open)dialog.showModal();}
@@ -1019,7 +1023,7 @@ async function playPreview():Promise<void> {
  if(video&&referenceInput.state==='loaded'){try{await video.play();}catch(error){pause();message(`Playback is paused: ${errorText(error)}. Use Play to retry.`,true);return;}}
  if(intent!==playbackIntent||!desiredPlay){if(!desiredPlay)video?.pause();return;}playing=true;lastFrame=0;player?.resume();button('play').textContent='Ⅱ';button('play').setAttribute('aria-label','Pause');
 }
-function localDraft():boolean{return dirty||!!input('feedback-summary').value.trim()||!!input('feedback-start').value.trim()||!!input('feedback-end').value.trim()||!!select('feedback-category').value||!!input('feedback-target-name').value.trim()&&input('feedback-target-name').value!==data.manifest.id;}
+function localDraft():boolean{return !!comments?.draft()||dirty||!!input('feedback-summary').value.trim()||!!input('feedback-start').value.trim()||!!input('feedback-end').value.trim()||!!select('feedback-category').value||!!input('feedback-target-name').value.trim()&&input('feedback-target-name').value!==data.manifest.id;}
 function controlState():ControlInspection {
  const box=assets?.stage??player?.bounds(),center=box?{x:box.x+box.width/2,y:box.y+box.height/2}:null;
  return {part:parts?.value()??null,partGeneration:parts?.observation()?.generation??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?zoom:1,pan:{x:center&&cameraCenter?(center.x-cameraCenter.x)*rigScale:0,y:center&&cameraCenter?(cameraCenter.y-center.y)*rigScale:0}},reference:{zoom:referenceSize?referenceZoom:1,pan:{x:referenceSize&&referenceCenter?(referenceSize.width/2-referenceCenter.x)*referenceScale:0,y:referenceSize&&referenceCenter?(referenceSize.height/2-referenceCenter.y)*referenceScale:0}}},animation:animation||null,time:player?.time??time,playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!!data,seeking:seekingControl||!!video?.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring(),comparison:controlComparison(layoutEligibility()),capabilities:{camera:!!player,referenceCamera:!!referenceSize,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
@@ -1043,7 +1047,7 @@ async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<v
   pause();seekingControl=true;try{await inspectControlTime(command.seconds,signal);}finally{seekingControl=false;}
  }
 }
-async function inspectControlTime(target:number,signal:AbortSignal):Promise<void> {
+async function inspectControlTime(target:number,signal:AbortSignal,preserveSeconds=false):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
  // #191: a control seek is a clip move like the transport's: a seek to 0 restarts the wind clock while the exported world is in use.
  clipMoved({kind:'seek',to:target});
@@ -1054,7 +1058,8 @@ async function inspectControlTime(target:number,signal:AbortSignal):Promise<void
  const commit=(actual:number)=>{
   if(signal.aborted||media!==video)throw new Error('CONTROL_SUPERSEDED');
   if(!Number.isFinite(actual)||actual<0||actual>duration)throw new Error('CONTROL_TIME_OUTSIDE_DOMAIN');
-  if(player){player.seek(actual);drawRig(()=>player!.draw());}time=actual;
+  const seconds=preserveSeconds?target:actual;
+  if(player){player.seek(seconds);drawRig(()=>player!.draw());}time=seconds;
   controlledVideoSample={media,position:media.currentTime,time:actual};if(axisInspection&&duration>0){const axis=data.manifest.axes.find(item=>item.id===select('axis-select').value&&item.animation===animation);if(axis){const value=axis.min+actual/duration*(axis.max-axis.min);input('axis-value').value=String(value);text('axis-value-label',value.toFixed(3));}}renderSequenceFrame();renderTransport();
  };
  try{const actual=await decodedControlTime(media,target,signal);if(signal.aborted||media!==video)throw new Error('CONTROL_SUPERSEDED');commit(actual);if(Math.abs(actual-target)>1e-6)message(`Reference decoded ${actual.toFixed(4)} s · requested ${target.toFixed(4)} s. The rig and saved view use the decoded timestamp.`);}
@@ -1088,8 +1093,8 @@ function numericView():ControlView {
 function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data.sourceHash,rigs:[data.reviewedSource.rig?.sha256??null]};}
 function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time:player?.time??time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:selectedInspector()??'view',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
-async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
- await restoreTransaction(()=>prepareInspection(bookmark,signal),()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
+async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false):Promise<void> {
+ await restoreTransaction(()=>prepareInspection(bookmark,signal),()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal,preserveSeconds),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
 }
 /** Read the SELECTED reference without replacing the currently inspected DOM/player. */
 async function inspectionReferenceInfo(id:string|null,signal:AbortSignal):Promise<{width:number;height:number;duration:number|null;people:string[]}> {
@@ -1123,7 +1128,7 @@ async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal)
  // Range fitting belongs to the transactional apply after that layout is measured.
  if(signal.aborted)throw new Error('Inspection restore superseded');
 }
-async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
+async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false):Promise<void> {
  cameraRestoring=true;try{
  const selection=bookmark.selection;
  if(turnPad){if(selection.turn)turnPad.restore(selection.turn);else{turnPad.state.reset();turnPad.restore(turnPad.snapshot());}}
@@ -1134,12 +1139,15 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
  if(bookmark.animation&&player)chooseAnimation(bookmark.animation);
  if(selection.axis){select('axis-select').value=selection.axis.id;chooseAxis();input('axis-value').value=String(selection.axis.value);applyAxis();}
  if(selection.partSet!==undefined&&player){if(selection.partSet||player.sets().length)player.setSet(selection.partSet||null);select('part-set').value=selection.partSet??'';}
- if(bookmark.time!==null){if(video&&video.readyState<1)await waitReferenceMetadata(video,signal);await inspectControlTime(bookmark.time,signal);}
+ if(bookmark.time!==null){if(video&&video.readyState<1)await waitReferenceMetadata(video,signal);await inspectControlTime(bookmark.time,signal,preserveSeconds);}
  if(selection.person!==undefined){selectedPerson=selection.person??'';select('person-select').value=selectedPerson;lastPoseFrame=-1;renderSequenceFrame();}
  if(selection.view)setView(selection.view);
  appearance?.set(bookmark.theme);
  Object.assign(layers,{images:bookmark.layers.images,mesh:bookmark.layers.meshes,bones:bookmark.layers.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;
- if(selection.inspector)showInspector(selection.inspector,false);syncStageLayout(el('stage-layout'));fitCamera();
+ if(selection.inspector)showInspector(selection.inspector,false);syncStageLayout(el('stage-layout'));
+ // Mode changes schedule workspace layout and resize observers. Settle them
+ // while restoration is held, before measuring/applying the saved pane camera.
+ await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));if(signal.aborted)throw new Error('Inspection restore superseded');fitCamera();
  const camera=bookmark.view.cameras.rig,ref=bookmark.view.cameras.reference,rigViewport=el('rig-viewport'),referenceViewport=el('reference-viewport');
  const nextZoom=camera&&player&&rigViewport.clientWidth&&rigViewport.clientHeight?restoredZoom(camera,rigScale/zoom,rigViewport.clientWidth,rigViewport.clientHeight):camera?.zoom??null;
  const nextReferenceZoom=ref&&referenceSize&&referenceViewport.clientWidth&&referenceViewport.clientHeight?restoredZoom(ref,referenceScale/referenceZoom,referenceViewport.clientWidth,referenceViewport.clientHeight):ref?.zoom??null;
@@ -1151,7 +1159,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
 }
 async function waitReferenceMetadata(media:HTMLVideoElement,signal:AbortSignal):Promise<void> {if(media.readyState>=1)return;await new Promise<void>((resolve,reject)=>{const clean=()=>{clearTimeout(timer);media.removeEventListener('loadedmetadata',ready);media.removeEventListener('error',fail);signal.removeEventListener('abort',fail);};const ready=()=>{clean();resolve();},fail=()=>{clean();reject(new Error('Saved reference metadata unavailable'));};const timer=setTimeout(fail,10000);media.addEventListener('loadedmetadata',ready,{once:true});media.addEventListener('error',fail,{once:true});signal.addEventListener('abort',fail,{once:true});});}
 async function setupPersistence():Promise<boolean> {
- persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
+ persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:(b,s)=>restoreInspection(b,s,session.feedback.some(f=>isTimeOnlyFeedback(f)&&JSON.stringify((f.context as any).comment.bookmark)===JSON.stringify(b))),
  ui:()=>({inspectorScroll:workspace?.scroll()??'{}',...(inspectorBlocks?activeBlocksUI(inspectorBlocks.state()):{}),reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();workspace?.restoreScroll(value.inspectorScroll);inspectorBlocks?.restore(restoreActiveBlocksUI(value));},afterInputs:()=>{const target=input('feedback-target-name').value;renderFeedbackTargets(true);if(select('feedback-target-kind').value!=='rig')input('feedback-target-name').value=target;renderFeedbackRange();text('audio-volume-label',`${Math.round(Number(input('audio-volume').value)*100)}%`);},onConflict:value=>{draftConflict=value;updateSavedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;text('review-draft-state',value);}});
  return persistence.restored;
 }
@@ -2109,3 +2117,28 @@ async function meshFolds():Promise<string[]> {
  return lines;
 }
 void start();
+
+
+/** Only live, unrecorded authoring effects block capture; unsent form ops alone do not. */
+function commentCaptureRefusal():string|null {
+ if(appliedOnStage)return 'COMMENT_APPLIED_BUILD_UNSUPPORTED: return to the inspected source before commenting on this applied scratch build';
+ if(rebuildBusy)return 'COMMENT_SOURCE_BUSY: wait for the rebuild or candidate model replacement before commenting';
+ const preview=idleAdjust?'Idle tracks':dialAdjust?'Rig fields turn dial':physicsPreview.read().length?'Physics live overrides':stripPending?'Density strip candidate':
+  meshEditor?.overlay()?'Edit Mesh':bonesPanel?.overlay()?'Bones anchors':cutsPanel&&(cutsPanel.overlayRegions().length||cutsPanel.overlayMarkers().length)?'Cuts/patches/joints':
+  clothPanel?.overlayRegions().length?'Cloth links':meshPanel&&(meshPanel.overlayRegions().length||meshPanel.overlayCircles().length)?'Mesh regions':
+  chestRegions().length||chestCircles().length||chestMarkers().length?'Chest regions/landmarks':rigFieldsPanel?.handles().length?'Rig fields stage handles':
+  (()=>{const handles=document.getElementById('idle-handles');return handles&&!handles.hidden&&handles.childElementCount>0;})()?'Idle tracks stage handles':null;
+ return preview?`COMMENT_UNAPPLIED_PREVIEW: ${preview} is active; leave or disable that preview before commenting (nothing is cleared or applied automatically)`:null;
+}
+function setupComments():void {
+ comments=bindStageComments({toolbar:el('stage-comment').parentElement!,viewports:{rig:el('rig-viewport'),reference:el('reference-viewport')},
+  pose:view=>{
+   if(view!=='rig'&&view!=='reference')return null;const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;const camera=numericView().cameras[view],pane=el(view+'-viewport');if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;
+   const renderer=player?.renderer;const current=player?.time??time,index=frameAtTime(activeFrameClock(),current),referenceId=view==='reference'?select('reference-select').value||null:null,referenceHash=referenceId?data.referenceHashes?.[referenceId]??(data.explicitReference?.id===referenceId?data.explicitReference.sha256:null):null;
+   return {mode:workspaceMode==='playback'?'animate':'setup',capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:{posed:parts?.frame('single'),assets:assets??undefined})} as CommentPose;
+  },
+  pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(player?.time??time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:inspectionBookmark,restore:(b,timed)=>restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal,!!timed),feedback:()=>session.feedback,
+  locked:id=>!!submittedBaseline?.updatedAt&&submittedBaseline.feedback.some(f=>f.id===id),add:f=>session.feedback.push(f),changed:()=>{markDirty();renderProposals();persistence?.save();},error:value=>message(value,true),
+  refusal:commentCaptureRefusal,blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
+ });
+}

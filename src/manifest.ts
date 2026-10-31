@@ -22,7 +22,7 @@ export interface ReviewManifest {
   producer?: HandoffDeclaration;
 }
 export interface ReviewedSource { readonly packageRevision:string; readonly viewerVersion:string; readonly runtimeVersion:string; readonly rig:{readonly path:string;readonly sha256:string}|null; readonly motion:{readonly path:string;readonly sha256:string}|null; readonly handoff?:HandoffRecord }
-export interface ReviewPackage { root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; feedbackCatalog:FeedbackCatalog;
+export interface ReviewPackage { referenceHashes?:Record<string,string>; root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; feedbackCatalog:FeedbackCatalog;
   /** The resolved producer handoff (#101) and, when there is none, the refusal line naming where it was looked for. */
   handoff: Handoff|null; handoffReason: string|null; handoffInputs?: HandoffFlags;
   /** #187: the rig-parts build root ({@link isBuildRoot}) whose `check/` this package is, however it was opened; review state stays outside it. */
@@ -116,7 +116,7 @@ export async function loadReview(input: string, options: { handoff?: HandoffFlag
   const buildRoot=basename(root)==='check'&&await isBuildRoot(dirname(root))?dirname(root):undefined;
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null,...(handoff?{handoff:handoff.record}:{})};
   const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations:modelAnimations(modelMetadata),clock:report?.clock??null,clockAnimation:report?.animation??null,...(discoverTurnDials(modelMetadata).length?{turnDials:discoverTurnDials(modelMetadata)}:{})};
-  return {root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{})};
+  return {referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{})};
 }
 
 /**

@@ -335,3 +335,9 @@ recovery, not a durable backup; submit the review (and retrieve it with
 `rig-review feedback`) when it must be kept.
 Control capabilities are excluded from links and browser persistence.
 
+
+## Comment on a detail
+
+On the view you are inspecting, choose **Comment · C**, drag over the detail, type, and press Enter. Use **Comments** to restore, edit or delete before submitting through the existing review flow. No target, interval or category form is required. [Panel behavior](PANELS.md#stage-comments) explains pins and frame availability.
+
+`rig-review feedback <input> --format json` and `--format issue` retain these comments in the existing feedback report. Compare uses the same A/B/reference/animation arguments as its open command. Each comment includes source hashes, viewport, frame basis, animation, `context.turn`, camera, screen/world region, nearest-first drawn slots, and crop path/SHA-256/dimensions. Derived CLI reports omit the inline PNG; the private draft and submitted session retain it. The CLI resolves the PNG's derived crop path under the review state directory so an agent can open it without a browser. Crop files are created on submission, outside the input package. Unsubmitted UI drafts stay local. No comment field or output byte is added to a review without comments.

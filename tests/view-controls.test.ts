@@ -126,9 +126,9 @@ test('actual single video inspection acknowledges decoded PTS, repeats that actu
  }
  const script=`function reposePreview(){}
 function clipMoved(){}
-function open(video,hasPlayer){let time=.1,duration=2,controlledVideoSample=null,axisInspection=false;const player=hasPlayer?{time:.1,seek(value){this.time=value;},draw(){}}:null;let draws=0;const drawRig=action=>{action();draws++;},renderSequenceFrame=()=>{},renderTransport=()=>{},message=()=>{},errorText=error=>error instanceof Error?error.message:String(error);${functions};return {seek:target=>inspectControlTime(target,new AbortController().signal),state:()=>({time,pose:player?.time??null,draws}),abort:()=>{const controller=new AbortController();controller.abort();return inspectControlTime(.6,controller.signal);}};}`;
+function open(video,hasPlayer){let time=.1,duration=2,controlledVideoSample=null,axisInspection=false;const player=hasPlayer?{time:.1,seek(value){this.time=value;},draw(){}}:null;let draws=0;const drawRig=action=>{action();draws++;},renderSequenceFrame=()=>{},renderTransport=()=>{},message=()=>{},errorText=error=>error instanceof Error?error.message:String(error);${functions};return {seek:(target,preserveSeconds=false)=>inspectControlTime(target,new AbortController().signal,preserveSeconds),state:()=>({time,pose:player?.time??null,draws}),abort:()=>{const controller=new AbortController();controller.abort();return inspectControlTime(.6,controller.signal);}};}`;
  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script);
- type App={seek(value:number):Promise<void>;state():{time:number;pose:number|null;draws:number};abort():Promise<void>};
+ type App={seek(value:number,preserveSeconds?:boolean):Promise<void>;state():{time:number;pose:number|null;draws:number};abort():Promise<void>};
  for(const hasPlayer of [true,false]){
   const media=new Media(),app=new Function('video','hasPlayer',code+';return open(video,hasPlayer);')(media,hasPlayer) as App;
   await app.seek(.3);expect(app.state()).toMatchObject({time:.25,pose:hasPlayer ? .25 : null});expect(media.currentTime).toBe(.3);expect(media.pending).toBe(0);
@@ -136,6 +136,9 @@ function open(video,hasPlayer){let time=.1,duration=2,controlledVideoSample=null
   await expect(app.seek(1)).rejects.toThrow('CONTROL_TIME_OUTSIDE_DOMAIN');expect(media.currentTime).toBe(.3);expect(app.state()).toMatchObject({time:.25,pose:hasPlayer ? .25 : null});expect(media.pending).toBe(0);
   await expect(app.abort()).rejects.toThrow('CONTROL_SUPERSEDED');expect(media.currentTime).toBe(.3);
   await app.seek(.75);expect(app.state()).toMatchObject({time:.75,pose:hasPlayer ? .75 : null});expect(media.pending).toBe(0);
+  await app.seek(.3,true);expect(app.state()).toMatchObject({time:.3,pose:hasPlayer ? .3 : null});expect(media.currentTime).toBe(.3);
+  // A seconds-only bookmark retains its exact seconds without relabelling the decoded PTS.
+  await app.seek(.3);expect(app.state()).toMatchObject({time:.25,pose:hasPlayer ? .25 : null});expect(media.pending).toBe(0);
  }
  // Source-only readback must use the acknowledged actual sample, not the
  // browser's requested currentTime (which can be between decoded frames).
