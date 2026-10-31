@@ -20,11 +20,15 @@ import { parseBustSpec } from './chest-landmarks.ts';
 import { PRODUCER_DOCUMENTS, type ProducerDocument } from './producer-files.ts';
 import { MESH_EDIT_BASIS, MESH_EDIT_MAX_OPS, MESH_EDIT_SCHEMA } from './mesh-edit.ts';
 import { assertRetargetRecord, RETARGET_LINE_CODES, type MotionSummary, type RetargetLine, type RetargetRecord } from './retarget.ts';
+import { parseAnimationSourceOp, type AnimationSourceOp } from './animation-ops.ts';
 
 export const APPLIED_REGIONS_SCHEMA = 'rig-review-applied/1';
 export const APPLIED_PATCH_SCHEMA = 'rig-review-applied/2';
 export const APPLIED_DELTA_SCHEMA = 'rig-review-applied/3';
 export const APPLIED_RETARGET_SCHEMA = 'rig-review-applied/4';
+export const APPLIED_ANIMATION_SCHEMA = 'rig-review-applied/5';
+/** At most this many animation source ops are kept in a record. */
+export const MAX_ANIMATION_OPS = 200;
 /** At most this many retarget lines are kept in a record. */
 export const MAX_RETARGET_LINES = 200;
 export const CHECK_SUMMARY_SCHEMA = 'rig-review-check-summary/1';
@@ -128,6 +132,20 @@ export interface AppliedRetarget {
   motion: MotionSummary;
   files: FilesDiff | null;
   readings: RetargetLine[];
+  modelHash: string;
+}
+/** #235: keyed animation edits applied to a scratch copy of `config.motion.animations_from`, rebuilt with `rig-parts rig` and `check`. */
+export interface AppliedAnimation {
+  schema: typeof APPLIED_ANIMATION_SCHEMA;
+  buildId: string;
+  configHash: string;
+  animationsFrom: { path: string; beforeSha256: string; afterSha256: string };
+  ops: AnimationSourceOp[];
+  opsSha256: string;
+  producer: Tool; compiler: Tool;
+  line: string | null;
+  check: CheckSummary | null;
+  files: FilesDiff | null;
   modelHash: string;
 }
 /** One producer document against the inspected one: `count` differing JSON Pointers, the first `MAX_DIFF_PATHS` listed. */
@@ -272,7 +290,19 @@ export function parseAppliedContext(value: unknown): void {
     }
     return;
   }
-  throw new Error(`${field}.schema: expected ${APPLIED_REGIONS_SCHEMA}, ${APPLIED_PATCH_SCHEMA} (patch ${CONFIG_PATCH_SCHEMA}), ${APPLIED_DELTA_SCHEMA} (mesh-edit delta) or ${APPLIED_RETARGET_SCHEMA} (retarget)`);
+  if (value.schema === APPLIED_ANIMATION_SCHEMA) {
+    const v = exact(value, 'animationsFrom,buildId,check,compiler,configHash,files,line,modelHash,ops,opsSha256,producer,schema', field);
+    if (![v.buildId, v.configHash, v.opsSha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, opsSha256 and modelHash are SHA-256 hex`);
+    const af = exact(v.animationsFrom, 'afterSha256,beforeSha256,path', `${field}.animationsFrom`);
+    if (typeof af.path !== 'string' || !af.path || !hex(af.beforeSha256) || !hex(af.afterSha256)) throw new Error(`${field}.animationsFrom: {path, beforeSha256, afterSha256 (SHA-256 hex)}`);
+    if (!Array.isArray(v.ops) || v.ops.length < 1 || v.ops.length > MAX_ANIMATION_OPS) throw new Error(`${field}.ops: 1–${MAX_ANIMATION_OPS} animation ops`);
+    for (const [i, op] of v.ops.entries()) parseAnimationSourceOp(op, `${field}.ops[${i}]`);
+    tool(v.producer, `${field}.producer`); tool(v.compiler, `${field}.compiler`); lineOrNull(v.line, `${field}.line`);
+    parseCheck(v.check, `${field}.check`);
+    parseFilesDiff(v.files, `${field}.files`);
+    return;
+  }
+  throw new Error(`${field}.schema: expected ${APPLIED_REGIONS_SCHEMA}, ${APPLIED_PATCH_SCHEMA} (patch ${CONFIG_PATCH_SCHEMA}), ${APPLIED_DELTA_SCHEMA} (mesh-edit delta), ${APPLIED_RETARGET_SCHEMA} (retarget) or ${APPLIED_ANIMATION_SCHEMA} (animation)`);
 }
 
 /** The export's one readable line for a valid applied record; the raw context still follows it. */
@@ -291,6 +321,13 @@ export function appliedSummary(value: unknown): string | null {
     const mesh = d.mesh ? ` · ${d.mesh.part} v ${d.mesh.before.vertices} t ${d.mesh.before.triangles} → v ${d.mesh.after.vertices} t ${d.mesh.after.triangles}` : '';
     return `mesh edit ${d.deltaSha256.slice(0, 12)}… (remesh --delta; ${ops} op(s) on ${d.part}) with ${producer.package} ${producer.version}${d.files ? ` · ${filesDiffText(d.files)}` : ''}${mesh} · model ${model}…`;
   }
+  if (v.schema === APPLIED_ANIMATION_SCHEMA) {
+    const a = value as AppliedAnimation;
+    const anims = [...new Set(a.ops.map(o => o.animation))];
+    const check = a.check ? `check ${a.check.pass === null ? 'not read' : a.check.pass ? 'PASS' : 'FAIL'}` : 'check not run';
+    const diff = a.files ? ` · ${filesDiffText(a.files)}` : '';
+    return `animation ${a.opsSha256.slice(0, 12)}… (${a.ops.length} op(s) on ${anims.join(', ')}; ${a.animationsFrom.path} ${a.animationsFrom.beforeSha256.slice(0, 12)}… → ${a.animationsFrom.afterSha256.slice(0, 12)}…) with ${producer.package} ${producer.version} · ${check}${diff} · model ${model}…`;
+  }
   const a = value as AppliedPatch, paths = a.patch.ops.map(o => `${o.op} ${o.path}`);
   const check = a.check ? `check ${a.check.pass === null ? 'not read' : a.check.pass ? 'PASS' : 'FAIL'}` : 'check not run';
   const diff = a.files ? ` · ${filesDiffText(a.files)}` : a.diff ? ` · rig.json differs at ${a.diff.count} path(s)` : '';
@@ -306,7 +343,7 @@ export function appliedSummary(value: unknown): string | null {
  * else the first bar check.json marks FAIL — verbatim. Null when the record is not a patch or its check did not FAIL.
  */
 export function appliedCheckRefusal(value: unknown): string | null {
-  if (!isObject(value) || value.schema !== APPLIED_PATCH_SCHEMA || !isObject(value.check) || value.check.pass !== false) return null;
+  if (!isObject(value) || (value.schema !== APPLIED_PATCH_SCHEMA && value.schema !== APPLIED_ANIMATION_SCHEMA) || !isObject(value.check) || value.check.pass !== false) return null;
   const check = value.check as unknown as CheckSummary;
   const bar = Object.entries(check.bars ?? {}).find(([, status]) => status === 'FAIL')?.[0];
   const line = typeof check.line === 'string' && /\bFAIL\b/.test(check.line) ? check.line : bar ? `${bar}: FAIL` : `check exited ${check.exitCode}`;

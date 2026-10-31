@@ -44,7 +44,7 @@ import {
   appliedRecord, deltaAppliedRecord, deltaOutcomeLine, designatedRegions, handoffText,
   landmarksRequest, seedLandmarks, makePatch, outcomeLine, patchAppliedRecord, patchOutcomeLine,
   pickPart, runRebuild, seedFields, stageModel, retargetAppliedRecord, retargetOutcomeLine, stripPendingAfter,
-  type AppliedHistoryView, type UndoView, type AnyJobView, type AppliedDelta, type AppliedPatch,
+  type AppliedHistoryView, type UndoView, type AnyJobView, type AppliedAnimation, type AppliedDelta, type AppliedPatch,
   type AppliedRecord, type AppliedRetarget, type DeltaJobView, type DeltaRequestBody, type ConfigPatch,
   type PatchJobView, type RebuildJobView, type RebuildRefusal, type RebuildRequestBody, type RebuildStatusView,
   type RetargetJobView, type RetargetRequestBody, type StageChange,
@@ -79,8 +79,8 @@ interface SideBuildState {
   inspectedDocument: unknown | null;
   inspectedDocumentReason: string | null;
   rebuildStatus: RebuildStatusView | null;
-  appliedOnStage: AppliedRecord | AppliedPatch | AppliedDelta | AppliedRetarget | null;
-  readoutStage: AppliedRecord | AppliedPatch | AppliedDelta | AppliedRetarget | null;
+  appliedOnStage: AppliedRecord | AppliedPatch | AppliedDelta | AppliedRetarget | AppliedAnimation | null;
+  readoutStage: AppliedRecord | AppliedPatch | AppliedDelta | AppliedRetarget | AppliedAnimation | null;
   appliedHistory: AppliedHistoryView | null;
   stageCheck: { lines: string[]; check: CheckSummary | null } | null;
   chestInputs: Record<string, string> | null;
@@ -94,7 +94,7 @@ interface SideBuildState {
       url: string;
       prefix: string;
       hash: string;
-      applied: AppliedRecord | AppliedPatch | AppliedDelta | AppliedRetarget | null;
+      applied: AppliedRecord | AppliedPatch | AppliedDelta | AppliedRetarget | AppliedAnimation | null;
       check: { lines: string[]; check: CheckSummary | null } | null;
     };
   } | null;
@@ -178,7 +178,7 @@ export interface ComparePickedTools {
   commentRefusal: () => string | null;
   shortcutBlocked: () => boolean;
   busy: () => boolean;
-  appliedFor: (side: Side) => AppliedRecord | AppliedPatch | AppliedDelta | AppliedRetarget | null;
+  appliedFor: (side: Side) => AppliedRecord | AppliedPatch | AppliedDelta | AppliedRetarget | AppliedAnimation | null;
   modelHashFor: (side: Side) => string | null;
   seekMode: (target: number, continuing: boolean) => 'settle' | 'seek';
   stepSide: (mode: 'present' | 'settle' | 'seek', side: Side, target: number) => void;

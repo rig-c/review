@@ -1397,14 +1397,251 @@ export function applyAnimationOps(
   text: string,
   ops: readonly AnimationSourceOp[],
 ): AppliedAnimationOpsResult {
-  let current = text;
+  const builder = new AnimationOpBuilder(text);
   const allSpans: { start: number; end: number }[] = [];
   for (const op of ops) {
-    const res = applyAnimationOp(current, op, text);
-    current = res.text;
+    const res = builder.apply(op);
     allSpans.push(...res.changedSpans);
   }
-  return { text: current, changedSpans: allSpans };
+  return { text: builder.text, changedSpans: builder.dirty ? allSpans : [] };
+}
+
+/** Canonical serialized form of an `AnimationSourceOp[]` list for deterministic hashing. */
+export function animationOpsText(ops: readonly AnimationSourceOp[]): string {
+  return JSON.stringify(ops);
+}
+
+/** Validate and normalize one `AnimationSourceOp` from an untrusted request or applied record. */
+export function parseAnimationSourceOp(value: unknown, field = 'op'): AnimationSourceOp {
+  if (!isRecord(value) || typeof value.op !== 'string') {
+    throw new Error(`${field}: expected an animation op object`);
+  }
+  const checkBase = () => {
+    if (typeof value.animation !== 'string' || !value.animation) {
+      throw new Error(`${field}.animation: expected non-empty string`);
+    }
+    if (!Number.isSafeInteger(value.track) || (value.track as number) < 0) {
+      throw new Error(`${field}.track: expected non-negative integer`);
+    }
+  };
+  const checkKey = () => {
+    if (!Number.isSafeInteger(value.key) || (value.key as number) < 0) {
+      throw new Error(`${field}.key: expected non-negative integer`);
+    }
+  };
+  const keys = Object.keys(value).sort().join(',');
+
+  if (value.op === 'set_key_time') {
+    if (keys !== 'animation,key,op,time,track') {
+      throw new Error(`${field}: set_key_time expects {op, animation, track, key, time}`);
+    }
+    checkBase();
+    checkKey();
+    if (typeof value.time !== 'number' || !Number.isFinite(value.time) || value.time < 0) {
+      throw new Error(`${field}.time: expected finite number >= 0`);
+    }
+    return {
+      op: 'set_key_time',
+      animation: value.animation as string,
+      track: value.track as number,
+      key: value.key as number,
+      time: value.time,
+    };
+  }
+
+  if (value.op === 'set_key_value') {
+    if (keys !== 'animation,key,op,track,value' && keys !== 'animation,channel,key,op,track,value') {
+      throw new Error(`${field}: set_key_value expects {op, animation, track, key, channel?, value}`);
+    }
+    checkBase();
+    checkKey();
+    if (value.channel !== undefined) {
+      if (!Number.isSafeInteger(value.channel) || (value.channel as number) < 0) {
+        throw new Error(`${field}.channel: expected non-negative integer`);
+      }
+      if (typeof value.value !== 'number' || !Number.isFinite(value.value)) {
+        throw new Error(`${field}.value: expected finite number when channel is given`);
+      }
+      return {
+        op: 'set_key_value',
+        animation: value.animation as string,
+        track: value.track as number,
+        key: value.key as number,
+        channel: value.channel as number,
+        value: value.value,
+      };
+    }
+    if (
+      !Array.isArray(value.value) ||
+      value.value.length === 0 ||
+      !value.value.every((n) => typeof n === 'number' && Number.isFinite(n))
+    ) {
+      throw new Error(`${field}.value: expected non-empty array of finite numbers`);
+    }
+    return {
+      op: 'set_key_value',
+      animation: value.animation as string,
+      track: value.track as number,
+      key: value.key as number,
+      value: [...(value.value as number[])],
+    };
+  }
+
+  if (value.op === 'set_key_curve') {
+    if (keys !== 'animation,curve,key,op,track') {
+      throw new Error(`${field}: set_key_curve expects {op, animation, track, key, curve}`);
+    }
+    checkBase();
+    checkKey();
+    const c = value.curve;
+    if (
+      c !== null &&
+      c !== 'stepped' &&
+      (!Array.isArray(c) || c.length === 0 || !c.every((n) => typeof n === 'number' && Number.isFinite(n)))
+    ) {
+      throw new Error(`${field}.curve: expected "stepped", null, or array of finite numbers`);
+    }
+    return {
+      op: 'set_key_curve',
+      animation: value.animation as string,
+      track: value.track as number,
+      key: value.key as number,
+      curve: Array.isArray(c) ? [...(c as number[])] : (c as 'stepped' | null),
+    };
+  }
+
+  if (value.op === 'set_key_ease') {
+    if (keys !== 'animation,ease,key,op,track') {
+      throw new Error(`${field}: set_key_ease expects {op, animation, track, key, ease}`);
+    }
+    checkBase();
+    checkKey();
+    if (value.ease !== null && (typeof value.ease !== 'string' || !value.ease)) {
+      throw new Error(`${field}.ease: expected non-empty string or null`);
+    }
+    return {
+      op: 'set_key_ease',
+      animation: value.animation as string,
+      track: value.track as number,
+      key: value.key as number,
+      ease: value.ease as string | null,
+    };
+  }
+
+  if (value.op === 'insert_key') {
+    const allowed = new Set(['op', 'animation', 'track', 'time', 'value', 'curve', 'ease']);
+    if (
+      !Object.keys(value).every((k) => allowed.has(k)) ||
+      !Object.hasOwn(value, 'time') ||
+      !Object.hasOwn(value, 'value')
+    ) {
+      throw new Error(`${field}: insert_key expects {op, animation, track, time, value, curve?, ease?}`);
+    }
+    checkBase();
+    if (typeof value.time !== 'number' || !Number.isFinite(value.time) || value.time < 0) {
+      throw new Error(`${field}.time: expected finite number >= 0`);
+    }
+    if (
+      !Array.isArray(value.value) ||
+      value.value.length === 0 ||
+      !value.value.every((n) => typeof n === 'number' && Number.isFinite(n))
+    ) {
+      throw new Error(`${field}.value: expected non-empty array of finite numbers`);
+    }
+    if (value.curve !== undefined) {
+      const c = value.curve;
+      if (
+        c !== 'stepped' &&
+        (!Array.isArray(c) || c.length === 0 || !c.every((n) => typeof n === 'number' && Number.isFinite(n)))
+      ) {
+        throw new Error(`${field}.curve: expected "stepped" or array of finite numbers`);
+      }
+    }
+    if (value.ease !== undefined && (typeof value.ease !== 'string' || !value.ease)) {
+      throw new Error(`${field}.ease: expected non-empty string`);
+    }
+    return {
+      op: 'insert_key',
+      animation: value.animation as string,
+      track: value.track as number,
+      time: value.time,
+      value: [...(value.value as number[])],
+      ...(value.curve !== undefined
+        ? { curve: Array.isArray(value.curve) ? [...(value.curve as number[])] : 'stepped' }
+        : {}),
+      ...(value.ease !== undefined ? { ease: value.ease as string } : {}),
+    };
+  }
+
+  if (value.op === 'delete_key') {
+    if (keys !== 'animation,key,op,track') {
+      throw new Error(`${field}: delete_key expects {op, animation, track, key}`);
+    }
+    checkBase();
+    checkKey();
+    return {
+      op: 'delete_key',
+      animation: value.animation as string,
+      track: value.track as number,
+      key: value.key as number,
+    };
+  }
+
+  throw new Error(`${field}.op: unknown operation "${String(value.op)}"`);
+}
+
+function coalesceSetKeyValueOp(
+  textBefore: string,
+  prevOp: Extract<AnimationSourceOp, { op: 'set_key_value' }>,
+  nextOp: Extract<AnimationSourceOp, { op: 'set_key_value' }>,
+): Extract<AnimationSourceOp, { op: 'set_key_value' }> {
+  if (nextOp.channel === undefined || prevOp.channel === nextOp.channel) {
+    return nextOp;
+  }
+  const { classification, keys } = resolveEditableTrack(
+    textBefore,
+    nextOp.animation,
+    nextOp.track,
+  );
+  const channels = classification.channels;
+  const baseKey = keys[nextOp.key];
+  if (!baseKey) return nextOp;
+  const merged = [...baseKey.v];
+  if (prevOp.channel !== undefined) {
+    if (
+      Number.isInteger(prevOp.channel) &&
+      prevOp.channel >= 0 &&
+      prevOp.channel < channels &&
+      typeof prevOp.value === 'number' &&
+      Number.isFinite(prevOp.value)
+    ) {
+      merged[prevOp.channel] = cleanMotionNumber(prevOp.value);
+    }
+  } else if (Array.isArray(prevOp.value) && prevOp.value.length === channels) {
+    for (let c = 0; c < channels; c++) {
+      const v = prevOp.value[c];
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        merged[c] = cleanMotionNumber(v);
+      }
+    }
+  }
+  if (
+    !Number.isInteger(nextOp.channel) ||
+    nextOp.channel < 0 ||
+    nextOp.channel >= channels ||
+    typeof nextOp.value !== 'number' ||
+    !Number.isFinite(nextOp.value)
+  ) {
+    return nextOp;
+  }
+  merged[nextOp.channel] = cleanMotionNumber(nextOp.value);
+  return {
+    op: 'set_key_value',
+    animation: nextOp.animation,
+    track: nextOp.track,
+    key: nextOp.key,
+    value: merged,
+  };
 }
 
 /**
@@ -1435,7 +1672,50 @@ export class AnimationOpBuilder {
   }
 
   apply(op: AnimationSourceOp): AppliedAnimationOpsResult {
+    const last = this.history.at(-1);
+    const sameKeyTarget =
+      last !== undefined &&
+      last.op.animation === op.animation &&
+      last.op.track === op.track &&
+      'key' in last.op &&
+      'key' in op &&
+      last.op.key === op.key;
+
+    if (
+      sameKeyTarget &&
+      ((op.op === 'set_key_time' && last.op.op === 'set_key_time') ||
+        (op.op === 'set_key_value' && last.op.op === 'set_key_value'))
+    ) {
+      const replayFrom = last.textBefore;
+      const coalescedOp =
+        op.op === 'set_key_value' && last.op.op === 'set_key_value'
+          ? coalesceSetKeyValueOp(replayFrom, last.op, op)
+          : op;
+      const res = applyAnimationOp(replayFrom, coalescedOp, this.baseText);
+      this.history.pop();
+      if (res.text === this.baseText) {
+        this.history.length = 0;
+        this.currentText = this.baseText;
+        return { text: this.baseText, changedSpans: [] };
+      }
+      if (res.text === replayFrom) {
+        this.currentText = replayFrom;
+        return { text: replayFrom, changedSpans: [] };
+      }
+      this.history.push({ op: coalescedOp, textBefore: replayFrom });
+      this.currentText = res.text;
+      return res;
+    }
+
     const res = applyAnimationOp(this.currentText, op, this.baseText);
+    if (res.text === this.baseText) {
+      this.history.length = 0;
+      this.currentText = this.baseText;
+      return { text: this.baseText, changedSpans: [] };
+    }
+    if (res.text === this.currentText) {
+      return { text: this.currentText, changedSpans: [] };
+    }
     this.history.push({ op, textBefore: this.currentText });
     this.currentText = res.text;
     return res;

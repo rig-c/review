@@ -6,9 +6,10 @@
 import {ellipsePolygon} from '../src/chest-regions.ts';
 import type {BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
-import {APPLIED_DELTA_SCHEMA,APPLIED_PATCH_SCHEMA,APPLIED_RETARGET_SCHEMA,filesDiffText,type AppliedAssembled,type AppliedDelta,type AppliedPatch,type AppliedRetarget,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
+import {APPLIED_ANIMATION_SCHEMA,APPLIED_DELTA_SCHEMA,APPLIED_PATCH_SCHEMA,APPLIED_RETARGET_SCHEMA,filesDiffText,type AppliedAnimation,type AppliedAssembled,type AppliedDelta,type AppliedPatch,type AppliedRetarget,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
+import type {AnimationSourceOp} from '../src/animation-ops.ts';
 import type {MotionSummary,RetargetFlags,RetargetLine,RetargetRecord} from '../src/retarget.ts';
-export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,AppliedRetarget,CheckSummary,BustSpec};
+export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,AppliedRetarget,AppliedAnimation,AnimationSourceOp,CheckSummary,BustSpec};
 import {chestContourFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
 import type {InspectedCheckView} from '../src/physics-tuning.ts';
 import {samplesClock,type StageClock} from '../src/frame-clock.ts';
@@ -114,7 +115,7 @@ export function seedLandmarks(status:Pick<RebuildStatusView,'parts'|'contour'>,r
 }
 
 export const appliedRecord=(job:RebuildJobView):AppliedRecord=>({schema:'rig-review-applied/1',buildId:job.id,part:job.request.part,regions:job.request.regions,...(job.request.bust?{bust:job.request.bust}:{}),configHash:job.request.configHash,entrySha256:job.request.entrySha256,producer:job.producer,compiler:job.compiler,line:job.producerLine,modelHash:job.build!.modelHash});
-export function parseApplied(text:string):AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|null {try{const value=JSON.parse(text);return value?.schema==='rig-review-applied/1'||value?.schema===APPLIED_PATCH_SCHEMA||value?.schema===APPLIED_DELTA_SCHEMA||value?.schema===APPLIED_RETARGET_SCHEMA?value as AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget:null;}catch{return null;}}
+export function parseApplied(text:string):AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation|null {try{const value=JSON.parse(text);return value?.schema==='rig-review-applied/1'||value?.schema===APPLIED_PATCH_SCHEMA||value?.schema===APPLIED_DELTA_SCHEMA||value?.schema===APPLIED_RETARGET_SCHEMA||value?.schema===APPLIED_ANIMATION_SCHEMA?value as AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation:null;}catch{return null;}}
 
 /** A patch Apply's job (#102): the patch and its hash, the op/compile/check wall clocks, check's summary and the rig.json diff. */
 /** #115: a build job's assemble readout (`AssembledView` in src/rebuild.ts). */
@@ -140,7 +141,19 @@ export function retargetOutcomeLine(result:RetargetJobView|RebuildRefusal):{text
  const kept=result.motion?(result.motion.kept?'the rig\'s own animations unchanged':`changed: ${result.motion.changed.join(', ')}`):'';
  return {text:`Retargeted "${r.flags.animation}" from ${r.sequence.reference} with ${result.producer.package} ${result.producer.version} · ${wall} · ${kept} · ${result.files?filesDiffText(result.files):'no diff'} · Reset returns to the inspected build`,error:!!result.motion&&!result.motion.kept};
 }
-export type AnyJobView=RebuildJobView|PatchJobView|DeltaJobView|RetargetJobView;
+/** A keyed animation Apply's job (#235): spliced animations_from, `rig-parts rig`, compile, `rig-parts check`, per-file diff. */
+export interface AnimationJobView {id:string;kind:'animation';op:'rig';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;hint?:string;exitCode:number|null;wallMs:{op:number|null;compile:number|null;check:number|null};check:CheckSummary|null;files:FilesDiff|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{configHash:string;animationsFrom:{path:string;beforeSha256:string;afterSha256:string};ops:AnimationSourceOp[];opsSha256:string;args?:string[]};producer:{package:string;version:string};compiler:{package:string;version:string}}
+export interface AnimationRequestBody {animation:{configHash:string;animationsFromHash:string;ops:AnimationSourceOp[];args?:string[]}}
+export const animationAppliedRecord=(job:AnimationJobView):AppliedAnimation=>({schema:APPLIED_ANIMATION_SCHEMA,buildId:job.id,configHash:job.request.configHash,animationsFrom:{...job.request.animationsFrom},ops:JSON.parse(JSON.stringify(job.request.ops)),opsSha256:job.request.opsSha256,producer:job.producer,compiler:job.compiler,line:job.producerLine,check:job.check,files:job.files,modelHash:job.build!.modelHash});
+export function animationOutcomeLine(result:AnimationJobView|RebuildRefusal):{text:string;error:boolean} {
+ if(!('id' in result))return {text:result.producerLine??result.error,error:true};
+ if(result.status!=='built')return {text:refusedText(result),error:true};
+ const check=result.check?(result.check.pass===null?`check refused: ${result.check.line??`exit ${result.check.exitCode}`}`:`check ${result.check.pass?'PASS':'FAIL'}`):'check not run';
+ const wall=result.reused?'reused the scratch build of this exact animation edit':`rig ${seconds(result.wallMs.op)} + compile ${seconds(result.wallMs.compile)} + check ${seconds(result.wallMs.check)}`;
+ const anims=[...new Set(result.request.ops.map(o=>o.animation))];
+ return {text:`Applied animation ${result.request.opsSha256.slice(0,12)}… (${result.request.ops.length} op(s) on ${anims.join(', ')}) with ${result.producer.package} ${result.producer.version} · ${wall} · ${check} · ${result.files?filesDiffText(result.files):'no diff'} · Reset returns to the inspected build`,error:!!result.check&&result.check.pass!==true};
+}
+export type AnyJobView=RebuildJobView|PatchJobView|DeltaJobView|RetargetJobView|AnimationJobView;
 export const isPatchJob=(job:AnyJobView):job is PatchJobView=>(job as PatchJobView).kind==='patch';
 
 export interface RebuildDeps<B=RebuildRequestBody|PatchRequestBody,J extends AnyJobView=AnyJobView> {post:(body:B)=>Promise<J|RebuildRefusal>;get:(id:string)=>Promise<J>;onLine:(line:string,index:number)=>void;sleep:(ms:number)=>Promise<void>;intervalMs?:number}
@@ -224,7 +237,7 @@ export function handoffText(status:Pick<RebuildStatusView,'handoff'|'baseline'|'
 }
 
 /** #166: `GET /api/rebuild/history` — the session's applied records in order; the last is on the stage; `kept`: its build is on disk. */
-export interface AppliedHistoryView {schema:'rig-review-applied-history/1';depth:number;records:{id:string;kind:'regions'|'patch'|'delta'|'retarget';op:string;what:string;modelHash:string;kept:boolean}[]}
+export interface AppliedHistoryView {schema:'rig-review-applied-history/1';depth:number;records:{id:string;kind:'regions'|'patch'|'delta'|'retarget'|'animation';op:string;what:string;modelHash:string;kept:boolean}[]}
 /** #166: `POST /api/rebuild/undo {from}` — the predecessor's build (kept, or re-run and still running), the inspected build, or a refusal. */
 export type UndoView=
  |{status:'inspected';undone:string;history:AppliedHistoryView}
@@ -232,9 +245,9 @@ export type UndoView=
  |{status:'running';undone:string;job:AnyJobView}
  |RebuildRefusal;
 /** #166: the applied record a job carries into `context.applied` (the same shapes each Apply records). */
-export function recordFor(job:AnyJobView):AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget {
+export function recordFor(job:AnyJobView):AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation {
  const kind=(job as {kind?:string}).kind;
- return kind==='patch'?patchAppliedRecord(job as PatchJobView):kind==='delta'?deltaAppliedRecord(job as DeltaJobView):kind==='retarget'?retargetAppliedRecord(job as RetargetJobView):appliedRecord(job as RebuildJobView);
+ return kind==='patch'?patchAppliedRecord(job as PatchJobView):kind==='delta'?deltaAppliedRecord(job as DeltaJobView):kind==='retarget'?retargetAppliedRecord(job as RetargetJobView):kind==='animation'?animationAppliedRecord(job as AnimationJobView):appliedRecord(job as RebuildJobView);
 }
 /**
  * What a retarget build on the stage sets beside its model (#164, #186): its new animation, to select, and that
@@ -268,7 +281,7 @@ export function undoControl(history:AppliedHistoryView|null,stageId:string|null,
  * were; only Load puts a row on the stage.
  */
 export type StageChange<P>=
- |{kind:'apply';via:'regions'|'mesh'|'physics'|'idle'|'cuts'|'cloth'|'rig-fields'|'bones'|'patch'|'delta'|'retarget'}
+ |{kind:'apply';via:'regions'|'mesh'|'physics'|'idle'|'cuts'|'cloth'|'rig-fields'|'bones'|'patch'|'delta'|'retarget'|'animation'}
  |{kind:'reset'}|{kind:'undo'}|{kind:'refused'}
  |{kind:'load';row:P};
 export function stripPendingAfter<P>(pending:P|null,change:StageChange<P>):P|null {

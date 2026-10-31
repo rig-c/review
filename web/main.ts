@@ -23,7 +23,7 @@ import {readSetupPose} from './setup-pose.ts';
 import {bindBonesPanel,type BonesPanel,type BonesCheckView} from './bones-panel.ts';
 import {bindCutsPanel,type CutsPanel} from './cuts-panel.ts';
 import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
-import {retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type StageChange,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
+import {retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
 import {historyRow,isPatchJob,recordFor,refusedText,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
@@ -130,7 +130,7 @@ let clothPanel:ClothPanel|null=null;
 /** The hash-verified compiled model document the parts catalog was read from (mesh edit reads attachments from it). */
 let partModel:unknown=null;
 /** Apply · Rebuild (#99): the inspected model's URL, the producer status, and the applied record while its scratch build is on the stage. */
-let inspectedModel:{url:string;prefix:string;sha256:string}|null=null,rebuildStatus:RebuildStatusView|null=null,appliedOnStage:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|null=null,rebuildBusy=false,stageModelHash:string|null=null;
+let inspectedModel:{url:string;prefix:string;sha256:string}|null=null,rebuildStatus:RebuildStatusView|null=null,appliedOnStage:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation|null=null,rebuildBusy=false,stageModelHash:string|null=null;
 let appearance:ReturnType<typeof bindAppearance>|null=null;
 let workspace:WorkspaceUI|null=null;
 let inspectorBlocks:InspectorBlocks|null=null;
@@ -1495,7 +1495,7 @@ async function refreshApplied():Promise<void> {
  renderApplied();
 }
 /** #172: the Cuts and Cloth blocks mark as applied only the ops the stage's applied record holds (none on the inspected build). */
-let readoutStage:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|null=null;
+let readoutStage:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation|null=null;
 function renderAppliedBlocks():void {
  const on=appliedBlockOps(appliedOnStage);cutsPanel?.applied(on.cuts);clothPanel?.applied(on.cloth);
  // #186: when the stage record changes, a Cuts / Cloth readout the new record is not that block's names an older build.
@@ -2032,7 +2032,7 @@ async function resetMeshBuild():Promise<void> {
  * the strip's scratch.
  */
 let stripView:DensityStripViewLike|null=null,densityBusy=false;
-let stripPending:{index:number;id:string;candidate:string;back:{url:string;prefix:string;hash:string;applied:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|null;check:{lines:string[];check:CheckSummary|null}|null}}|null=null;
+let stripPending:{index:number;id:string;candidate:string;back:{url:string;prefix:string;hash:string;applied:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation|null;check:{lines:string[];check:CheckSummary|null}|null}}|null=null;
 /** #183: after every landed Apply, Reset or Undo the pending row and Back go (`stripPendingAfter`); the strip re-reads (a row Applied is marked). */
 function stageChanged(change:StageChange<NonNullable<typeof stripPending>>):void {const next=stripPendingAfter(stripPending,change);if(next===stripPending)return;stripPending=next;void refreshDensityStrip();}
 const densityLine=(text:string,error=false)=>{densityStrip?.status(text,error);if(error)message(text,true);};
