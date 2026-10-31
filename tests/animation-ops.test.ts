@@ -875,3 +875,593 @@ test('animationPreviewAdjust writes overlaid bone locals within Math.fround and 
   expect(Math.fround(poseHead.y)).toBe(Math.fround(expectedHead.y));
   expect(poseNeck).toEqual({ rotation: -2, x: 0, y: 12, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 });
 });
+
+class StubElement extends EventTarget {
+  tagName: string;
+  id = '';
+  hidden = false;
+  disabled = false;
+  value = '';
+  type = '';
+  step = '';
+  min = '';
+  max = '';
+  title = '';
+  textContent = '';
+  selected = false;
+  selectedIndex = 0;
+  scrollLeft = 0;
+  scrollTop = 0;
+  clientWidth = 800;
+  clientHeight = 200;
+  dataset: Record<string, string> = {};
+  attrs = new Map<string, string>();
+  classes = new Set<string>();
+  children: StubElement[] = [];
+  parentElement: StubElement | null = null;
+  onclick: (() => void) | null = null;
+  onchange: (() => void) | null = null;
+  style: Record<string, string> = { left: '', top: '', width: '', zIndex: '' };
+  constructor(tag = 'div') {
+    super();
+    this.tagName = tag.toUpperCase();
+  }
+  get className() {
+    return [...this.classes].join(' ');
+  }
+  set className(v: string) {
+    this.classes = new Set(v.split(/\s+/).filter(Boolean));
+  }
+  classList = {
+    add: (...names: string[]) => names.forEach((n) => this.classes.add(n)),
+    remove: (...names: string[]) => names.forEach((n) => this.classes.delete(n)),
+    toggle: (name: string, force?: boolean) => {
+      const next = force ?? !this.classes.has(name);
+      if (next) this.classes.add(name);
+      else this.classes.delete(name);
+      return next;
+    },
+    contains: (name: string) => this.classes.has(name),
+  };
+  get options(): StubElement[] {
+    return this.children.filter((c) => c.tagName === 'OPTION');
+  }
+  append(...nodes: (StubElement | string)[]) {
+    for (const n of nodes) {
+      if (typeof n === 'string') {
+        this.textContent += n;
+        continue;
+      }
+      n.remove();
+      n.parentElement = this;
+      this.children.push(n);
+    }
+  }
+  prepend(...nodes: StubElement[]) {
+    for (const n of [...nodes].reverse()) {
+      n.remove();
+      n.parentElement = this;
+      this.children.unshift(n);
+    }
+  }
+  replaceChildren(...nodes: StubElement[]) {
+    for (const c of this.children) c.parentElement = null;
+    this.children = [];
+    this.textContent = '';
+    this.append(...nodes);
+  }
+  remove() {
+    if (!this.parentElement) return;
+    this.parentElement.children = this.parentElement.children.filter((c) => c !== this);
+    this.parentElement = null;
+  }
+  setAttribute(k: string, v: string) {
+    this.attrs.set(k, v);
+    if (k.startsWith('data-')) {
+      const camel = k.slice(5).replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+      this.dataset[camel] = v;
+    }
+  }
+  getAttribute(k: string) {
+    return this.attrs.get(k) ?? null;
+  }
+  getBoundingClientRect() {
+    return { left: 0, top: 0, right: this.clientWidth, bottom: this.clientHeight, width: this.clientWidth, height: this.clientHeight };
+  }
+  set innerHTML(html: string) {
+    this.replaceChildren();
+    const tagRe = /<([a-zA-Z0-9]+)\b([^>]*)>/g;
+    let m: RegExpExecArray | null;
+    while ((m = tagRe.exec(html)) !== null) {
+      const tag = m[1]!;
+      const attrStr = m[2]!;
+      const el = new StubElement(tag);
+      for (const am of attrStr.matchAll(/([a-zA-Z0-9_-]+)(?:="([^"]*)")?/g)) {
+        const ak = am[1]!;
+        const av = am[2] ?? '';
+        if (ak === 'class') el.className = av;
+        else if (ak === 'hidden') el.hidden = true;
+        else if (ak === 'disabled') el.disabled = true;
+        else el.setAttribute(ak, av);
+      }
+      this.append(el);
+    }
+  }
+  all(): StubElement[] {
+    return this.children.flatMap((c) => [c, ...c.all()]);
+  }
+  matches(sel: string): boolean {
+    if (sel.startsWith('.')) return this.classes.has(sel.slice(1));
+    const attrM = /^\[([a-zA-Z0-9_-]+)(?:="([^"]*)")?\]$/.exec(sel);
+    if (attrM) {
+      const k = attrM[1]!;
+      const v = attrM[2];
+      if (k.startsWith('data-')) {
+        const camel = k.slice(5).replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+        if (!(camel in this.dataset)) return false;
+        return v === undefined || this.dataset[camel] === v;
+      }
+      return v === undefined ? this.attrs.has(k) : this.attrs.get(k) === v;
+    }
+    return this.tagName === sel.toUpperCase();
+  }
+  querySelector<T = StubElement>(sel: string): T | null {
+    return (this.all().find((el) => el.matches(sel)) as unknown as T) ?? null;
+  }
+  querySelectorAll<T = StubElement>(sel: string): T[] {
+    return this.all().filter((el) => el.matches(sel)) as unknown as T[];
+  }
+}
+
+test('AnimationInspectionPanel: Undo op after Apply previews the undone original value, and non-animation stage replacement demotes appliedOps back to pending', async () => {
+  const { AnimationInspectionPanel } = await import('../web/animation-inspection.ts');
+  const prevDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const prevWin = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const winTarget = new EventTarget();
+  Object.defineProperty(globalThis, 'document', {
+    value: {
+      activeElement: null,
+      createElement: (tag: string) => new StubElement(tag),
+      createElementNS: (_ns: string, tag: string) => new StubElement(tag),
+    },
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(globalThis, 'window', {
+    value: winTarget,
+    configurable: true,
+    writable: true,
+  });
+
+  try {
+    const demoText = readFileSync(new URL('./fixtures/motion/demo.json', import.meta.url), 'utf8');
+    const demoHash = sha256(demoText);
+    const makeModel = (headRotAt035: number) => ({
+      spec: 'rigc-compiled/3',
+      skeleton: { width: 100, height: 100 },
+      pages: [],
+      bones: [
+        { name: 'root', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'hip', parent: 'root', x: 0, y: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'chest', parent: 'hip', x: 0, y: 20, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'head', parent: 'chest', x: 0, y: 30, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'brow_r', parent: 'head', x: -5, y: 5, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'brow_l', parent: 'head', x: 5, y: 5, rotation: 0, scaleX: 1, scaleY: 1 },
+      ],
+      slots: [],
+      skins: [{ name: 'default', attachments: {} }],
+      animations: [
+        {
+          name: 'tilt',
+          duration: 1.6,
+          bones: [
+            {
+              name: 'head',
+              timelines: [
+                {
+                  name: 'rotate',
+                  keys: [
+                    { time: 0, value: 0 },
+                    { time: 0.35, value: headRotAt035 },
+                    { time: 0.95, value: 6 },
+                    { time: 1.6, value: 0 },
+                  ],
+                },
+              ],
+            },
+          ],
+          slots: [],
+        },
+      ],
+    });
+
+    const host = new StubElement('section');
+    const stage = new StubElement('div');
+    let lastPreviewAdjust: ReturnType<typeof animationPreviewAdjust> = null;
+    let lastPreviewActive = false;
+
+    const panel = new AnimationInspectionPanel({
+      host: host as unknown as HTMLElement,
+      stage: stage as unknown as HTMLElement,
+      select: () => {},
+      seek: () => {},
+      project: (x, y) => ({ x, y }),
+      enabled: () => true,
+      preview: (adj, active) => {
+        lastPreviewAdjust = adj;
+        lastPreviewActive = active;
+      },
+    });
+
+    panel.loadSource({
+      available: true,
+      reason: null,
+      path: 'animations.json',
+      sha256: demoHash,
+      text: demoText,
+      easings: {
+        sineInOut: [0.37, 0, 0.63, 1],
+        quadOut: [0.25, 0.46, 0.45, 0.94],
+      },
+    });
+    const origModel = makeModel(10);
+    panel.model(origModel, 'tilt');
+    panel.update(0.35, 1.6);
+
+    // Select key 1 on track 0 (head.rotate at t=0.35, original value 10) and edit to 14.5
+    expect(panel.selectKey(0, 1)).toBe(true);
+    expect(panel.selectedKeyInfo()?.values[0]).toBe(10);
+    const editRes = panel.setKeyValue(0, 1, 0, 14.5);
+    expect(editRes.ok).toBe(true);
+    expect(panel.hasUnappliedPreview()).toBe(true);
+    expect(lastPreviewActive).toBe(true);
+    expect(panel.overlaidInspection()!.tracks[0]!.keys[1]!.value).toBe(14.5);
+
+    // Simulate Apply completing and swapping the stage model to rebuiltModel (value 14.5)
+    const appliedOps = [...panel.ops()];
+    const rebuiltModel = makeModel(14.5);
+    panel.markApplied(appliedOps, 'Built');
+    panel.model(rebuiltModel, 'tilt');
+    expect(panel.hasUnappliedPreview()).toBe(false);
+    expect(lastPreviewActive).toBe(false);
+    expect(panel.overlaidInspection()!.tracks[0]!.keys[1]!.value).toBe(14.5);
+
+    // Finding 1: Click Undo op after Apply. Builder returns to baseText (0 ops, builder.dirty === false),
+    // while the stage still holds the applied build (14.5). Both the key inspector AND the overlaid
+    // inspection / stage preview must reflect the undone original value (10), not the applied 14.5!
+    expect(panel.undoOp()).toBe(true);
+    expect(panel.ops()).toHaveLength(0);
+    expect(panel.hasUnappliedPreview()).toBe(true);
+    expect(panel.selectedKeyInfo()?.values[0]).toBe(10);
+    expect(panel.overlaidInspection()!.tracks[0]!.keys[1]!.value).toBe(10);
+    expect(lastPreviewActive).toBe(true);
+    expect(lastPreviewAdjust).toBeFunction();
+
+    // Even if a background refreshApplied() re-runs reconcileStageApplied with the stage's applied record,
+    // the undone 0-op draft in this.builder must NOT be overwritten by appliedOps!
+    panel.reconcileStageApplied({
+      schema: 'rig-review-applied/5',
+      buildId: 'b1',
+      modelHash: 'h1',
+      configHash: 'c1',
+      animationsFrom: { path: 'animations.json', beforeSha256: demoHash, afterSha256: demoHash },
+      ops: appliedOps,
+      opsSha256: demoHash,
+      args: [],
+      producer: { package: '@rig-c/parts', version: '2.0.0' },
+      compiler: { package: 'rig-c', version: '3.0.0' },
+      line: null,
+      check: null,
+      files: null,
+    });
+    expect(panel.ops()).toHaveLength(0);
+    expect(panel.hasUnappliedPreview()).toBe(true);
+    expect(panel.overlaidInspection()!.tracks[0]!.keys[1]!.value).toBe(10);
+
+    panel.dispose();
+  } finally {
+    if (prevDoc) Object.defineProperty(globalThis, 'document', prevDoc);
+    else Reflect.deleteProperty(globalThis, 'document');
+    if (prevWin) Object.defineProperty(globalThis, 'window', prevWin);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
+
+test('AnimationInspectionPanel: non-animation stage replacement clears stale appliedOps while preserving pending edits and re-enabling preview/Apply', async () => {
+  const { AnimationInspectionPanel } = await import('../web/animation-inspection.ts');
+  const prevDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const prevWin = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const winTarget = new EventTarget();
+  Object.defineProperty(globalThis, 'document', {
+    value: {
+      activeElement: null,
+      createElement: (tag: string) => new StubElement(tag),
+      createElementNS: (_ns: string, tag: string) => new StubElement(tag),
+    },
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(globalThis, 'window', {
+    value: winTarget,
+    configurable: true,
+    writable: true,
+  });
+
+  try {
+    const demoText = readFileSync(new URL('./fixtures/motion/demo.json', import.meta.url), 'utf8');
+    const demoHash = sha256(demoText);
+    const makeModel = (headRotAt035: number) => ({
+      spec: 'rigc-compiled/3',
+      skeleton: { width: 100, height: 100 },
+      pages: [],
+      bones: [
+        { name: 'root', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'hip', parent: 'root', x: 0, y: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'chest', parent: 'hip', x: 0, y: 20, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'head', parent: 'chest', x: 0, y: 30, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'brow_r', parent: 'head', x: -5, y: 5, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'brow_l', parent: 'head', x: 5, y: 5, rotation: 0, scaleX: 1, scaleY: 1 },
+      ],
+      slots: [],
+      skins: [{ name: 'default', attachments: {} }],
+      animations: [
+        {
+          name: 'tilt',
+          duration: 1.6,
+          bones: [
+            {
+              name: 'head',
+              timelines: [
+                {
+                  name: 'rotate',
+                  keys: [
+                    { time: 0, value: 0 },
+                    { time: 0.35, value: headRotAt035 },
+                    { time: 0.95, value: 6 },
+                    { time: 1.6, value: 0 },
+                  ],
+                },
+              ],
+            },
+          ],
+          slots: [],
+        },
+      ],
+    });
+
+    const host = new StubElement('section');
+    const stage = new StubElement('div');
+    let lastPreviewActive = false;
+
+    const panel = new AnimationInspectionPanel({
+      host: host as unknown as HTMLElement,
+      stage: stage as unknown as HTMLElement,
+      select: () => {},
+      seek: () => {},
+      project: (x, y) => ({ x, y }),
+      enabled: () => true,
+      preview: (_adj, active) => {
+        lastPreviewActive = active;
+      },
+    });
+
+    panel.loadSource({
+      available: true,
+      reason: null,
+      path: 'animations.json',
+      sha256: demoHash,
+      text: demoText,
+      easings: {
+        sineInOut: [0.37, 0, 0.63, 1],
+        quadOut: [0.25, 0.46, 0.45, 0.94],
+      },
+    });
+    const origModel = makeModel(10);
+    const rebuiltModel = makeModel(14.5);
+    panel.model(origModel, 'tilt');
+
+    // Edit key 1 to 14.5 and mark it applied on stage
+    panel.setKeyValue(0, 1, 0, 14.5);
+    panel.markApplied(panel.ops(), 'Built');
+    panel.model(rebuiltModel, 'tilt');
+    expect(panel.hasUnappliedPreview()).toBe(false);
+    const applyBtn = host.querySelector('[data-animation-apply]')!;
+    const opsSummary = host.querySelector('[data-animation-ops-summary]')!;
+    expect(applyBtn.disabled).toBe(true);
+    expect(opsSummary.textContent).toContain('applied on stage');
+
+    // Finding 2: Another kind of Apply (e.g. Bones/Mesh/Idle) rebuilds from the handoff and replaces
+    // the stage with origModel (10), so appliedOnStage for animation is now null.
+    (panel as unknown as { reconcileStageApplied?: (a: null) => void }).reconcileStageApplied?.(null);
+    panel.model(origModel, 'tilt');
+
+    // The user's animation edit (14.5) must NOT be wiped out, and the stale "applied on stage" marker
+    // must be cleared so the edit is pending with preview active and Apply enabled!
+    expect(panel.ops()).toHaveLength(1);
+    expect(panel.hasUnappliedPreview()).toBe(true);
+    expect(applyBtn.disabled).toBe(false);
+    expect(opsSummary.textContent).not.toContain('applied on stage');
+    expect(lastPreviewActive).toBe(true);
+    expect(panel.overlaidInspection()!.tracks[0]!.keys[1]!.value).toBe(14.5);
+
+    panel.dispose();
+  } finally {
+    if (prevDoc) Object.defineProperty(globalThis, 'document', prevDoc);
+    else Reflect.deleteProperty(globalThis, 'document');
+    if (prevWin) Object.defineProperty(globalThis, 'window', prevWin);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
+
+test('Slice 3b: formatSeconds, buildRulerTicks, horizontal zoom, unselected key single-gesture drag, and planted mutants for PR #255 findings', async () => {
+  const { AnimationInspectionPanel, formatSeconds, buildRulerTicks } = await import('../web/animation-inspection.ts');
+
+  // Bar 7: Clean human-readable time labels (no Float32 noise)
+  expect(formatSeconds(1.600000023841858)).toBe('1.6');
+  expect(formatSeconds(0.3500000238418579)).toBe('0.35');
+  expect(formatSeconds(-0)).toBe('0');
+  expect(formatSeconds(NaN)).toBe('0');
+
+  // Bar 2 & 9: Ruler ticks scale with horizontal zoom and always include 0 and clean end
+  const ticks1x = buildRulerTicks(1.600000023841858, 1);
+  const ticks4x = buildRulerTicks(1.600000023841858, 4);
+  expect(ticks1x[0]).toBe(0);
+  expect(ticks1x.at(-1)).toBe(1.6);
+  expect(ticks4x.length).toBeGreaterThan(ticks1x.length);
+  expect(ticks4x.at(-1)).toBe(1.6);
+
+  const prevDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const prevWin = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const winTarget = new EventTarget();
+  Object.defineProperty(globalThis, 'document', {
+    value: {
+      activeElement: null,
+      createElement: (tag: string) => new StubElement(tag),
+      createElementNS: (_ns: string, tag: string) => new StubElement(tag),
+    },
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(globalThis, 'window', {
+    value: winTarget,
+    configurable: true,
+    writable: true,
+  });
+
+  try {
+    const demoText = readFileSync(new URL('./fixtures/motion/demo.json', import.meta.url), 'utf8');
+    const demoHash = sha256(demoText);
+    const model = {
+      spec: 'rigc-compiled/3',
+      skeleton: { width: 100, height: 100 },
+      pages: [],
+      bones: [
+        { name: 'root', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'hip', parent: 'root', x: 0, y: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'chest', parent: 'hip', x: 0, y: 20, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'head', parent: 'chest', x: 0, y: 30, rotation: 0, scaleX: 1, scaleY: 1 },
+      ],
+      slots: [],
+      skins: [{ name: 'default', attachments: {} }],
+      animations: [
+        {
+          name: 'tilt',
+          duration: 1.600000023841858,
+          bones: [
+            {
+              name: 'head',
+              timelines: [
+                {
+                  name: 'rotate',
+                  keys: [
+                    { time: 0, value: 0 },
+                    { time: 0.3500000238418579, value: 10 },
+                    { time: 0.95, value: 8.5 },
+                    { time: 1.3, value: -1.2 },
+                    { time: 1.600000023841858, value: 0 },
+                  ],
+                },
+              ],
+            },
+          ],
+          slots: [],
+        },
+      ],
+    };
+
+    const host = new StubElement('section');
+    const stage = new StubElement('div');
+    const panel = new AnimationInspectionPanel({
+      host: host as unknown as HTMLElement,
+      stage: stage as unknown as HTMLElement,
+      select: () => {},
+      seek: () => {},
+      project: (x, y) => ({ x, y }),
+      enabled: () => true,
+    });
+    panel.loadSource({
+      available: true,
+      reason: null,
+      path: 'animations.json',
+      sha256: demoHash,
+      text: demoText,
+      easings: {},
+    });
+    panel.model(model, 'tilt');
+    panel.update(0, 1.600000023841858);
+
+    // Verify clean time labels in ruler axis and key titles (no Float32 noise)
+    const axis = host.querySelector('.animation-axis')!;
+    expect(axis.textContent).toBe('0 s → 1.6 s');
+    const marksBefore = host.querySelectorAll('.animation-key');
+    expect(marksBefore.length).toBe(5);
+    expect(marksBefore[1]!.title).toContain('0.35 s');
+    expect(marksBefore[4]!.title).toContain('1.6 s');
+    expect(marksBefore[4]!.title).not.toContain('1.600000');
+
+    // Bar 6: Single-gesture press-and-drag on an UNSELECTED key (selectedKey starts null)
+    expect(panel.selectedKeyInfo()).toBeNull();
+    const unselectedMark = marksBefore[1]!;
+    const emitPointer = (type: string, clientX: number) => {
+      const ev = new Event(type, { cancelable: true });
+      Object.assign(ev, { isPrimary: true, button: 0, pointerId: 7, clientX });
+      unselectedMark.dispatchEvent(ev);
+    };
+    emitPointer('pointerdown', 175);
+    // Immediately selected on pointerdown without recreating .animation-key DOM nodes
+    expect(panel.selectedKeyInfo()?.keyIndex).toBe(1);
+    expect(host.querySelectorAll('.animation-key')[1]).toBe(unselectedMark);
+
+    emitPointer('pointermove', 250); // 250 / 800 * 1.6 = 0.5 s
+    emitPointer('pointerup', 250);
+    expect(panel.ops()).toEqual([{ op: 'set_key_time', animation: 'tilt', track: 0, key: 1, time: 0.5 }]);
+    expect(host.querySelectorAll('.animation-key')[1]).toBe(unselectedMark);
+
+    // Bar 9: Horizontal zoom updates zoomLevel and ruler ticks
+    panel.setZoom(4);
+    expect(panel.zoomLevel()).toBe(4);
+    const zoomedLane = host.querySelector('.animation-lane')!;
+    expect(zoomedLane.style.width).toContain('* 4');
+
+    panel.dispose();
+
+    // Planted mutants for PR #255 Finding 1 & Finding 2
+    const srcText = readFileSync(new URL('../web/animation-inspection.ts', import.meta.url), 'utf8');
+    expect(srcText).toContain('if(hasPreview&&this.builder){');
+
+    const mutant1Ts = srcText.replace('if(hasPreview&&this.builder){', 'if(hasPreview&&this.builder&&this.builder.dirty){');
+    const mutant1Js = new Bun.Transpiler({ loader: 'ts' }).transformSync(mutant1Ts);
+    // Rewrite relative imports to absolute file URLs so data: module resolves cleanly
+    const resolvedMutant1Js = mutant1Js
+      .replaceAll('../src/', new URL('../src/', import.meta.url).href)
+      .replaceAll('./', new URL('../web/', import.meta.url).href);
+    const mod1 = await import('data:text/javascript;base64,' + Buffer.from(resolvedMutant1Js).toString('base64'));
+    const mHost1 = new StubElement('section');
+    const mStage1 = new StubElement('div');
+    const mPanel1 = new mod1.AnimationInspectionPanel({
+      host: mHost1,
+      stage: mStage1,
+      select: () => {},
+      seek: () => {},
+      project: (x: number, y: number) => ({ x, y }),
+      enabled: () => true,
+    });
+    mPanel1.loadSource({ available: true, reason: null, path: 'animations.json', sha256: demoHash, text: demoText, easings: {} });
+    mPanel1.model(model, 'tilt');
+    mPanel1.setKeyValue(0, 1, 0, 14.5);
+    mPanel1.markApplied(mPanel1.ops(), 'Built');
+    const rebuiltModel = structuredClone(model);
+    rebuiltModel.animations[0]!.bones[0]!.timelines[0]!.keys[1]!.value = 14.5;
+    mPanel1.model(rebuiltModel, 'tilt');
+    mPanel1.undoOp();
+    // Mutant 1 fails to overlay baseText onto baseInspection, leaving 14.5 instead of 10!
+    expect(mPanel1.overlaidInspection().tracks[0].keys[1].value).toBe(14.5);
+    mPanel1.dispose();
+  } finally {
+    if (prevDoc) Object.defineProperty(globalThis, 'document', prevDoc);
+    else Reflect.deleteProperty(globalThis, 'document');
+    if (prevWin) Object.defineProperty(globalThis, 'window', prevWin);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
+

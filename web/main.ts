@@ -1501,6 +1501,7 @@ async function refreshApplied():Promise<void> {
 let readoutStage:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation|null=null;
 function renderAppliedBlocks():void {
  const on=appliedBlockOps(appliedOnStage);cutsPanel?.applied(on.cuts);clothPanel?.applied(on.cloth);
+ animationPanel?.reconcileStageApplied(appliedOnStage?.schema==='rig-review-applied/5'?appliedOnStage:null);
  // #186: when the stage record changes, a Cuts / Cloth readout the new record is not that block's names an older build.
  for(const block of staleReadouts(readoutStage,appliedOnStage))(block==='cuts'?cutsPanel:clothPanel)?.shown(null);
  readoutStage=appliedOnStage;
@@ -1548,7 +1549,7 @@ async function undoApply():Promise<UndoView|null> {
   stageChanged({kind:'undo'});
   // The panels mark the ops the stage's build applied; the pending edits stay as they are.
   physicsPanel?.applied(ops);idlePanel?.applied(ops);rigFieldsPanel?.applied(ops);bonesPanel?.applied(ops);
-  animationPanel?.syncApplied(appliedOnStage?.schema==='rig-review-applied/5'?appliedOnStage:null);
+  animationPanel?.reconcileStageApplied(appliedOnStage?.schema==='rig-review-applied/5'?appliedOnStage:null);
   // #172: the Cuts and Cloth readouts show the restored build's job when it is theirs, else nothing (never the reverted one).
   const restored=result.status==='built'&&isPatchJob(result.job)?result.job:null,block=recordBlock(appliedOnStage);
   cutsPanel?.shown(block==='cuts'?restored:null);clothPanel?.shown(block==='cloth'?restored:null);
@@ -1707,6 +1708,8 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   moveSelection:(selections:ReadonlyArray<{track:number;key:number}>,deltaTime:number)=>animationPanel?.moveSelection(selections,deltaTime)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},
   undoOp:()=>animationPanel?.undoOp()??false,
   clearPending:()=>animationPanel?.clearPending(),
+  zoom:()=>animationPanel?.zoomLevel()??1,
+  setZoom:(z:number)=>animationPanel?.setZoom(z),
   apply:()=>applyAnimation(animationPanel?.ops()??[]),
   reset:()=>resetAnimationBuild(),
   status:()=>document.querySelector('[data-animation-editor-status]')?.textContent??'',
@@ -2015,7 +2018,7 @@ async function applyAnimation(ops:readonly AnimationSourceOp[]):Promise<Animatio
 /** Animation Reset: clears pending ops and preview, and restores the inspected build on stage. */
 async function resetAnimationBuild():Promise<void> {
  animationPanel?.resetEdits();
- if(appliedOnStage){animationPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{animationPanel?.busy(false);}}
+ if(appliedOnStage){animationPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{animationPanel?.busy(false);animationPanel?.resetEdits();}}
  animationPanel?.setEditorStatus('Reset: the inspected build is on the stage; no pending animation ops.',false);
 }
 /**
@@ -2035,7 +2038,7 @@ function sampleLocals(bone:string,dt:number,n:number):{t:number;rotation:number;
 async function resetRebuild(world:StageWorld|null=null):Promise<void> {
  if(rebuildBusy||(!appliedOnStage&&!stripPending)||!inspectedModel)return;
  rebuildBusy=true;rebuildState();
- try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;stageChanged({kind:'reset'});animationPanel?.syncApplied(null);chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');}
+ try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;stageChanged({kind:'reset'});animationPanel?.reconcileStageApplied(null);chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');}
  catch(error){chestEditor?.notify(`REBUILD_RESET_FAILED: ${errorText(error)}`,true);}
  finally{rebuildBusy=false;rebuildState();}
 }

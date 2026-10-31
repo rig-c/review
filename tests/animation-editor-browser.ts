@@ -727,7 +727,8 @@ async function main() {
   const session = await launchCdpSession(profileDir);
 
   try {
-    await session.setViewport(1440, 960);
+    // Slice 3b Bar 2: Exact 1440x900 viewport
+    await session.setViewport(1440, 900);
     await session.goto(`http://127.0.0.1:${server.port}`);
 
     // Wait for player and rebuild status (animations_from source) to load, and switch to Animate (playback) inspector
@@ -753,7 +754,7 @@ async function main() {
         animSelect.value = 'tilt';
         animSelect.dispatchEvent(new Event('change'));
       }
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 60));
       return {
         playerState: document.getElementById('player-state')?.textContent ?? '',
         rigEmpty: document.getElementById('rig-empty')?.textContent ?? '',
@@ -764,6 +765,100 @@ async function main() {
     })()`);
     if (initDiag.playerState === 'Rig load failed' || !initDiag.animOptions.includes('tilt')) {
       throw new Error(`Player initialization failed: ${JSON.stringify(initDiag)}`);
+    }
+
+    // Slice 3b Bar 1, Bar 2, Bar 7: Verify at 1440x900 with zero page/inspector scroll:
+    // - stage is visible above the dock
+    // - Play, scrub, time ruler with ticks, playhead, track names column, key lanes, key inspector fields, pending/Apply bar are ALL in viewport without scrolling
+    // - time labels have zero Float32 noise
+    const slice3bDockCheck = await session.evaluate<{
+      viewportWidth: number;
+      viewportHeight: number;
+      windowScrollY: number;
+      docScrollTop: number;
+      inspectorScrollTop: number;
+      stageRect: { top: number; bottom: number; height: number };
+      dockRect: { top: number; bottom: number; height: number };
+      allInViewport: boolean;
+      rects: Record<string, { left: number; top: number; right: number; bottom: number; width: number; height: number } | null>;
+      axisText: string;
+      rulerTicks: string[];
+      keyTitles: string[];
+      hasFloat32Noise: boolean;
+    }>(`(() => {
+      const box = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return {
+          left: Math.round(r.left * 100) / 100,
+          top: Math.round(r.top * 100) / 100,
+          right: Math.round(r.right * 100) / 100,
+          bottom: Math.round(r.bottom * 100) / 100,
+          width: Math.round(r.width * 100) / 100,
+          height: Math.round(r.height * 100) / 100,
+        };
+      };
+      const selectors = {
+        stage: '#stage-layout',
+        dock: '.inspector',
+        play: '#play',
+        scrub: '#scrub',
+        ruler: '[data-animation-ruler]',
+        rulerTick: '[data-ruler-tick]',
+        playhead: '.animation-key-lane [data-playhead]',
+        trackHead: '[data-lane-head]',
+        keyLane: '.animation-key-lane',
+        keyMark: '.animation-key[data-source-track="0"][data-key-index="1"]',
+        keyInspector: '[data-key-inspector]',
+        keyTimeInput: '[data-key-time-input]',
+        keyChannelInput: '[data-key-channel="0"]',
+        pendingSummary: '[data-animation-ops-summary]',
+        applyButton: '[data-animation-apply]',
+      };
+      const rects = {};
+      let allInViewport = true;
+      for (const [k, sel] of Object.entries(selectors)) {
+        const r = box(sel);
+        rects[k] = r;
+        if (!r || r.width <= 0 || r.height <= 0 || r.left < 0 || r.top < 0 || r.right > 1440 || r.bottom > 900) {
+          allInViewport = false;
+        }
+      }
+      const inspPanel = document.querySelector('[data-inspector-panel="playback"]');
+      const axisText = document.querySelector('.animation-axis')?.textContent ?? '';
+      const rulerTicks = [...document.querySelectorAll('[data-ruler-tick]')].map((n) => n.textContent ?? '');
+      const keyTitles = [...document.querySelectorAll('.animation-key')].map((n) => n.getAttribute('title') ?? '');
+      const hasFloat32Noise = [axisText, ...rulerTicks, ...keyTitles].some((s) => /\\d\\.\\d{5,}/.test(s));
+      return {
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        windowScrollY: window.scrollY,
+        docScrollTop: document.documentElement.scrollTop,
+        inspectorScrollTop: inspPanel?.scrollTop ?? -1,
+        stageRect: rects.stage,
+        dockRect: rects.dock,
+        allInViewport,
+        rects,
+        axisText,
+        rulerTicks,
+        keyTitles,
+        hasFloat32Noise,
+      };
+    })()`);
+
+    if (
+      slice3bDockCheck.viewportWidth !== 1440 ||
+      slice3bDockCheck.viewportHeight !== 900 ||
+      slice3bDockCheck.windowScrollY !== 0 ||
+      slice3bDockCheck.docScrollTop !== 0 ||
+      slice3bDockCheck.inspectorScrollTop !== 0 ||
+      !slice3bDockCheck.allInViewport ||
+      slice3bDockCheck.stageRect.height < 400 ||
+      slice3bDockCheck.stageRect.bottom > slice3bDockCheck.dockRect.top ||
+      slice3bDockCheck.hasFloat32Noise
+    ) {
+      throw new Error(`Slice 3b Bar 1/2/7 1440x900 dock verification failed: ${JSON.stringify(slice3bDockCheck, null, 2)}`);
     }
 
     // Bar 6: Verify Apply isolation note (Ruling H2)
@@ -807,7 +902,7 @@ async function main() {
       const idleEditableLanes = document.querySelectorAll('.animation-lane[data-editable="true"]').length;
       const idleReadOnlyBadges = [...document.querySelectorAll('[data-readonly-badge]')].map((n) => n.textContent ?? '');
 
-      // Switch back to 'tilt'
+      // Switch back to 'tilt' (leaves selectedKey === null!)
       animSelect.value = 'tilt';
       animSelect.dispatchEvent(new Event('change'));
       await new Promise((r) => setTimeout(r, 40));
@@ -836,43 +931,130 @@ async function main() {
       throw new Error(`Bar 5 failed on read-only / idle checks: ${JSON.stringify(bar5Result)}`);
     }
 
-    // Bar 1 & Bar 2: Dopesheet key select, pointer drag in time, inspector channel value edit, add key, delete key
-    // First click key 1 on track 0 (head.rotate) and drag it horizontally in the dopesheet
-    const key1Coords = await session.evaluate<{ x: number; y: number; laneLeft: number; laneWidth: number }>(`(() => {
-      const pane = document.querySelector('[data-inspector-panel="playback"]');
+    // Slice 3b Bar 5 & Bar 6 + Slice 3 Bar 1 & Bar 2:
+    // - Confirm selectedKey is currently null (unselected!).
+    // - Record bounding rects of stage, dock, key inspector, lanes, ruler, and EVERY .animation-key BEFORE gesture.
+    // - Perform a SINGLE-GESTURE press-and-drag on unselected key 1 of track 0 without any scrollIntoView or pre-click.
+    // - Measure bounding rects AFTER drag and AFTER inspector value edit: prove 0.00px layout jitter!
+    const preDragSnapshot = await session.evaluate<{
+      selectedKeyBefore: any;
+      inspectorScrollTop: number;
+      x: number;
+      y: number;
+      laneLeft: number;
+      laneWidth: number;
+      stageRect: any;
+      lanesRect: any;
+      keyInspectorRect: any;
+      keyRects: Array<{ id: string; left: number; top: number; width: number; height: number }>;
+    }>(`(() => {
+      const ed = window.rigReviewEditor.animation;
+      const inspPanel = document.querySelector('[data-inspector-panel="playback"]');
       const mark = document.querySelector('.animation-key[data-source-track="0"][data-key-index="1"]');
-      mark.scrollIntoView({ block: 'center' });
       const r = mark.getBoundingClientRect();
       const lane = mark.parentElement.getBoundingClientRect();
+      const rectOf = (el) => {
+        const b = el.getBoundingClientRect();
+        return { left: b.left, top: b.top, width: b.width, height: b.height };
+      };
+      const keyRects = [...document.querySelectorAll('.animation-key')].map((k) => ({
+        id: (k.dataset.sourceTrack ?? k.dataset.track) + ':' + k.dataset.keyIndex,
+        ...rectOf(k),
+      }));
       return {
+        selectedKeyBefore: ed.selectedKey(),
+        inspectorScrollTop: inspPanel?.scrollTop ?? -1,
         x: r.left + r.width / 2,
         y: r.top + r.height / 2,
         laneLeft: lane.left,
         laneWidth: lane.width,
+        stageRect: rectOf(document.getElementById('stage-layout')),
+        lanesRect: rectOf(document.querySelector('.animation-lanes')),
+        keyInspectorRect: rectOf(document.querySelector('[data-key-inspector]')),
+        keyRects,
       };
     })()`);
 
-    // Drag key 1 from t=0.35s to ~t=0.45s across two pointermove steps to verify real pointer drag + coalescing
-    const targetX1 = key1Coords.laneLeft + (0.42 / 1.6) * key1Coords.laneWidth;
-    const targetX2 = key1Coords.laneLeft + (0.45 / 1.6) * key1Coords.laneWidth;
-    await session.dispatchMouseEvent({ type: 'mousePressed', x: key1Coords.x, y: key1Coords.y, button: 'left', buttons: 1 });
-    await session.dispatchMouseEvent({ type: 'mouseMoved', x: targetX1, y: key1Coords.y, button: 'left', buttons: 1 });
-    await session.dispatchMouseEvent({ type: 'mouseMoved', x: targetX2, y: key1Coords.y, button: 'left', buttons: 1 });
-    await session.dispatchMouseEvent({ type: 'mouseReleased', x: targetX2, y: key1Coords.y, button: 'left', buttons: 0 });
+    if (preDragSnapshot.selectedKeyBefore !== null || preDragSnapshot.inspectorScrollTop !== 0) {
+      throw new Error(`Expected unselected state with scrollTop=0 before single-gesture drag: ${JSON.stringify(preDragSnapshot)}`);
+    }
+
+    // Single-gesture press-and-drag on UNSELECTED key 1 from t=0.35s to ~t=0.45s across two pointermove steps
+    const targetX1 = preDragSnapshot.laneLeft + (0.42 / 1.6) * preDragSnapshot.laneWidth;
+    const targetX2 = preDragSnapshot.laneLeft + (0.45 / 1.6) * preDragSnapshot.laneWidth;
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: preDragSnapshot.x, y: preDragSnapshot.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: targetX1, y: preDragSnapshot.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: targetX2, y: preDragSnapshot.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: targetX2, y: preDragSnapshot.y, button: 'left', buttons: 0 });
 
     const bar1And2Result = await session.evaluate<{
       afterDragOps: any[];
       selectedAfterDrag: any;
+      jitterAfterDrag: {
+        stageDeltaPx: number;
+        lanesDeltaPx: number;
+        keyInspectorDeltaPx: number;
+        maxUneditedKeyDeltaPx: number;
+        draggedKeyVerticalDeltaPx: number;
+        inspectorScrollTop: number;
+      };
       afterExactTimeOps: any[];
       afterInspectorValOps: any[];
+      jitterAfterValueEdit: {
+        stageDeltaPx: number;
+        lanesDeltaPx: number;
+        keyInspectorDeltaPx: number;
+        maxUneditedKeyDeltaPx: number;
+      };
       afterInsertOps: any[];
       afterDeleteOps: any[];
       previewBadgeVisible: boolean;
       previewBadgeText: string;
     }>(`(async () => {
+      const pre = ${JSON.stringify(preDragSnapshot)};
       const ed = window.rigReviewEditor.animation;
       const afterDragOps = ed.ops();
       const selectedAfterDrag = ed.selectedKey();
+      const rectOf = (el) => {
+        const b = el.getBoundingClientRect();
+        return { left: b.left, top: b.top, width: b.width, height: b.height };
+      };
+      const boxDiff = (a, b) =>
+        Math.max(
+          Math.abs(a.left - b.left),
+          Math.abs(a.top - b.top),
+          Math.abs(a.width - b.width),
+          Math.abs(a.height - b.height),
+        );
+      const measureJitter = () => {
+        const stageDeltaPx = boxDiff(pre.stageRect, rectOf(document.getElementById('stage-layout')));
+        const lanesDeltaPx = boxDiff(pre.lanesRect, rectOf(document.querySelector('.animation-lanes')));
+        const keyInspectorDeltaPx = boxDiff(pre.keyInspectorRect, rectOf(document.querySelector('[data-key-inspector]')));
+        let maxUneditedKeyDeltaPx = 0;
+        let draggedKeyVerticalDeltaPx = 0;
+        const currentKeys = [...document.querySelectorAll('.animation-key')];
+        for (let i = 0; i < pre.keyRects.length; i++) {
+          const pk = pre.keyRects[i];
+          const ck = rectOf(currentKeys[i]);
+          if (pk.id === '0:1') {
+            draggedKeyVerticalDeltaPx = Math.max(Math.abs(pk.top - ck.top), Math.abs(pk.height - ck.height));
+          } else {
+            const d = boxDiff(pk, ck);
+            if (d > maxUneditedKeyDeltaPx) maxUneditedKeyDeltaPx = d;
+          }
+        }
+        const inspPanel = document.querySelector('[data-inspector-panel="playback"]');
+        return {
+          stageDeltaPx: Math.round(stageDeltaPx * 1000) / 1000,
+          lanesDeltaPx: Math.round(lanesDeltaPx * 1000) / 1000,
+          keyInspectorDeltaPx: Math.round(keyInspectorDeltaPx * 1000) / 1000,
+          maxUneditedKeyDeltaPx: Math.round(maxUneditedKeyDeltaPx * 1000) / 1000,
+          draggedKeyVerticalDeltaPx: Math.round(draggedKeyVerticalDeltaPx * 1000) / 1000,
+          inspectorScrollTop: inspPanel?.scrollTop ?? -1,
+        };
+      };
+
+      const jitterAfterDrag = measureJitter();
 
       // Set exact key time via inspector [data-key-time-input] to 0.42s (coalesces with the drag set_key_time!)
       const timeInput = document.querySelector('[data-key-time-input]');
@@ -885,6 +1067,7 @@ async function main() {
       chInput.value = '14.5';
       chInput.dispatchEvent(new Event('change'));
       const afterInspectorValOps = ed.ops();
+      const jitterAfterValueEdit = measureJitter();
 
       // Bar 1: Add a key on track 1 (head.translate) at t=0.65s via [+ Add key] in inspector
       const trackSel = document.querySelector('[data-insert-track]');
@@ -899,14 +1082,18 @@ async function main() {
       ed.selectKey(2, 2);
       const delBtn = document.querySelector('[data-delete-key]');
       delBtn.click();
+      // Re-select track 0 key 1 so the screenshot shows its active fields in the key bar
+      ed.selectKey(0, 1);
       const afterDeleteOps = ed.ops();
 
       const badge = document.querySelector('[data-animation-preview-badge]');
       return {
         afterDragOps,
         selectedAfterDrag,
+        jitterAfterDrag,
         afterExactTimeOps,
         afterInspectorValOps,
+        jitterAfterValueEdit,
         afterInsertOps,
         afterDeleteOps,
         previewBadgeVisible: badge ? !badge.hidden : false,
@@ -917,6 +1104,18 @@ async function main() {
     if (
       bar1And2Result.afterDragOps.length !== 1 ||
       bar1And2Result.afterDragOps[0].op !== 'set_key_time' ||
+      bar1And2Result.selectedAfterDrag?.trackIndex !== 0 ||
+      bar1And2Result.selectedAfterDrag?.keyIndex !== 1 ||
+      bar1And2Result.jitterAfterDrag.stageDeltaPx !== 0 ||
+      bar1And2Result.jitterAfterDrag.lanesDeltaPx !== 0 ||
+      bar1And2Result.jitterAfterDrag.keyInspectorDeltaPx !== 0 ||
+      bar1And2Result.jitterAfterDrag.maxUneditedKeyDeltaPx !== 0 ||
+      bar1And2Result.jitterAfterDrag.draggedKeyVerticalDeltaPx !== 0 ||
+      bar1And2Result.jitterAfterDrag.inspectorScrollTop !== 0 ||
+      bar1And2Result.jitterAfterValueEdit.stageDeltaPx !== 0 ||
+      bar1And2Result.jitterAfterValueEdit.lanesDeltaPx !== 0 ||
+      bar1And2Result.jitterAfterValueEdit.keyInspectorDeltaPx !== 0 ||
+      bar1And2Result.jitterAfterValueEdit.maxUneditedKeyDeltaPx !== 0 ||
       bar1And2Result.afterExactTimeOps.length !== 1 ||
       bar1And2Result.afterExactTimeOps[0].time !== 0.42 ||
       bar1And2Result.afterInspectorValOps.length !== 2 ||
@@ -928,11 +1127,13 @@ async function main() {
       bar1And2Result.afterDeleteOps[3].op !== 'delete_key' ||
       !bar1And2Result.previewBadgeVisible
     ) {
-      throw new Error(`Bar 1 / Bar 2 verification failed: ${JSON.stringify(bar1And2Result, null, 2)}`);
+      throw new Error(`Bar 1 / Bar 2 / Slice 3b Bar 5 & 6 verification failed: ${JSON.stringify(bar1And2Result, null, 2)}`);
     }
 
     if (screenshotDir) {
-      await writeFile(join(screenshotDir, 'slice3-dopesheet-preview.png'), await session.screenshot());
+      const demoPng = await session.screenshot();
+      await writeFile(join(screenshotDir, 'slice3-dopesheet-preview.png'), demoPng);
+      await writeFile(join(screenshotDir, 'slice3b-dock-demo-1440x900.png'), demoPng);
     }
 
     // Bar 3: Measure pending preview stage pose BEFORE Apply vs compiled build pose AFTER Apply across sample times
@@ -994,7 +1195,7 @@ async function main() {
         for (const b of boneNames) {
           const pb = prev.bones[b];
           const cb = ed.bone(b);
-          for (const f of ['x', 'y', 'rotation', 'scaleX', 'scaleY', 'shearX', 'shearY', 'worldX', 'worldY', 'a', 'b', 'c', 'd']) {
+          for (const f of ['x', 'y', 'rotationX', 'rotationY', 'scaleX', 'scaleY', 'a', 'b', 'c', 'd']) {
             if (typeof pb?.[f] === 'number' && typeof cb?.[f] === 'number') {
               const diff = Math.abs(Math.fround(pb[f]) - Math.fround(cb[f]));
               if (diff > maxFroundDiff) maxFroundDiff = diff;
@@ -1112,6 +1313,105 @@ async function main() {
       throw new Error(`Bar 8 verification failed: ${JSON.stringify(bar8Result, null, 2)}`);
     }
 
+    // PR #255 Review Findings 1 & 2 live browser verification:
+    // - Reset to clean baseline, edit head.rotate key 1 on 'tilt' from 10 to 22.5, and Apply.
+    // - Finding 1: Click [data-animation-undo-op] so builder returns to baseText (0 ops, builder.dirty=false) while
+    //   stage still holds the applied build (22.5). Verify hasPreview()===true and stage head local rotation at t=0.35s
+    //   immediately previews the undone original value (10) instead of staying at 22.5!
+    // - Finding 2: Re-edit key 1 to 22.5 and Apply, then displace the stage build via ed.reset() (stage returns to
+    //   inspected build, appliedOnStage=null). Verify ops() still holds the edit (not wiped!), hasPreview()===true,
+    //   [data-animation-apply] is enabled, opsSummary does NOT say 'applied on stage', and stage previews 22.5!
+    const pr255Findings = await session.evaluate<{
+      finding1: {
+        appliedRotationAt035: number;
+        opsAfterUndoOp: number;
+        hasPreviewAfterUndoOp: boolean;
+        undoneRotationAt035: number;
+        inspectorChannelVal: string;
+      };
+      finding2: {
+        opsAfterStageDisplaced: number;
+        hasPreviewAfterStageDisplaced: boolean;
+        applyBtnDisabled: boolean;
+        opsSummaryText: string;
+        previewRotationAt035: number;
+      };
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      await ed.animation.reset();
+      const animSelect = document.getElementById('animation-select');
+      animSelect.value = 'tilt';
+      animSelect.dispatchEvent(new Event('change'));
+      await new Promise((r) => setTimeout(r, 40));
+
+      const scrub = document.getElementById('scrub');
+      const seekTo = (t) => {
+        scrub.value = String(t);
+        scrub.dispatchEvent(new Event('input'));
+      };
+      const headLocalRot = () =>
+        Math.round((ed.bone('head').rotationX - ed.bone('chest').rotationX) * 100) / 100;
+
+      ed.animation.selectKey(0, 1);
+      ed.animation.setKeyValue(0, 1, 0, 22.5);
+      await ed.animation.apply();
+      seekTo(0.35);
+      const appliedRotationAt035 = headLocalRot();
+
+      // Finding 1: Undo op after Apply
+      const undoOpBtn = document.querySelector('[data-animation-undo-op]');
+      undoOpBtn.click();
+      seekTo(0.35);
+      const opsAfterUndoOp = ed.animation.ops().length;
+      const hasPreviewAfterUndoOp = ed.animation.hasPreview();
+      const undoneRotationAt035 = headLocalRot();
+      const inspectorChannelVal = document.querySelector('[data-key-channel="0"]')?.value ?? '';
+
+      // Finding 2: Re-apply 22.5 on stage, then displace the stage build so appliedOnStage becomes null
+      ed.animation.setKeyValue(0, 1, 0, 22.5);
+      await ed.animation.apply();
+      await ed.reset();
+      seekTo(0.35);
+      const opsAfterStageDisplaced = ed.animation.ops().length;
+      const hasPreviewAfterStageDisplaced = ed.animation.hasPreview();
+      const applyBtnDisabled = document.querySelector('[data-animation-apply]').disabled;
+      const opsSummaryText = document.querySelector('[data-animation-ops-summary]')?.textContent ?? '';
+      const previewRotationAt035 = headLocalRot();
+
+      ed.animation.clearPending();
+      return {
+        finding1: {
+          appliedRotationAt035,
+          opsAfterUndoOp,
+          hasPreviewAfterUndoOp,
+          undoneRotationAt035,
+          inspectorChannelVal,
+        },
+        finding2: {
+          opsAfterStageDisplaced,
+          hasPreviewAfterStageDisplaced,
+          applyBtnDisabled,
+          opsSummaryText,
+          previewRotationAt035,
+        },
+      };
+    })()`);
+
+    if (
+      pr255Findings.finding1.appliedRotationAt035 !== 22.5 ||
+      pr255Findings.finding1.opsAfterUndoOp !== 0 ||
+      pr255Findings.finding1.hasPreviewAfterUndoOp !== true ||
+      pr255Findings.finding1.undoneRotationAt035 !== 10 ||
+      pr255Findings.finding1.inspectorChannelVal !== '10' ||
+      pr255Findings.finding2.opsAfterStageDisplaced !== 1 ||
+      pr255Findings.finding2.hasPreviewAfterStageDisplaced !== true ||
+      pr255Findings.finding2.applyBtnDisabled !== false ||
+      pr255Findings.finding2.opsSummaryText.includes('applied on stage') ||
+      pr255Findings.finding2.previewRotationAt035 !== 22.5
+    ) {
+      throw new Error(`PR #255 Finding 1 / Finding 2 browser verification failed: ${JSON.stringify(pr255Findings, null, 2)}`);
+    }
+
     // Bar 7: U2 measurement (MAX_ANIMATION_OPS = 200 on 'hello': 16 tracks × 115 keys = 1,840 keys)
     const bar7Result = await session.evaluate<{
       totalTracks: number;
@@ -1210,14 +1510,130 @@ async function main() {
       throw new Error(`Bar 7 verification failed: ${JSON.stringify(bar7Result, null, 2)}`);
     }
 
+    // Slice 3b Bar 3, Bar 4, Bar 9 on 'hello' (16 lanes × 115 keys):
+    // - Test horizontal zoom 4×, internal lane vertical & horizontal scroll, sticky ruler at top, sticky track head at left.
+    // - Test dragging the dock separator (.workspace-inspectorHeight) upward by 70px and verify dock + lanes height grow and preference saves.
+    const sepBefore = await session.evaluate<{
+      sepX: number;
+      sepY: number;
+      dockHeightBefore: number;
+      lanesHeightBefore: number;
+    }>(`(() => {
+      const sep = document.querySelector('.workspace-inspectorHeight');
+      const r = sep.getBoundingClientRect();
+      const dock = document.querySelector('.inspector').getBoundingClientRect();
+      const lanes = document.querySelector('.animation-lanes').getBoundingClientRect();
+      return {
+        sepX: r.left + r.width / 2,
+        sepY: r.top + r.height / 2,
+        dockHeightBefore: Math.round(dock.height),
+        lanesHeightBefore: Math.round(lanes.height),
+      };
+    })()`);
+
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: sepBefore.sepX, y: sepBefore.sepY, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: sepBefore.sepX, y: sepBefore.sepY - 70, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: sepBefore.sepX, y: sepBefore.sepY - 70, button: 'left', buttons: 0 });
+
+    const slice3bHelloResult = await session.evaluate<{
+      totalRenderedLanes: number;
+      zoomLevel: number;
+      lanesScrollTop: number;
+      lanesScrollLeft: number;
+      inspectorScrollTop: number;
+      rulerStickyTopDiffPx: number;
+      headStickyLeftDiffPx: number;
+      lastLaneVisibleInLanesBox: boolean;
+      dockHeightBefore: number;
+      dockHeightAfter: number;
+      lanesHeightBefore: number;
+      lanesHeightAfter: number;
+      savedInspectorHeight: number;
+    }>(`(async () => {
+      const ed = window.rigReviewEditor.animation;
+      // Click 4× horizontal zoom button
+      const zoom4Btn = document.querySelector('[data-animation-zoom="4"]');
+      zoom4Btn.click();
+      ed.selectKey(0, 10);
+      await new Promise((r) => setTimeout(r, 40));
+
+      const lanes = document.querySelector('.animation-lanes');
+      const allLanes = [...lanes.querySelectorAll('.animation-lane, .animation-readonly-lane')];
+      // Scroll lanes vertically to bottom and horizontally by 160px
+      lanes.scrollTop = lanes.scrollHeight;
+      lanes.scrollLeft = 160;
+      await new Promise((r) => setTimeout(r, 20));
+
+      const lanesRect = lanes.getBoundingClientRect();
+      const rulerRect = lanes.querySelector('[data-animation-ruler]').getBoundingClientRect();
+      const lastLane = allLanes.at(-1);
+      const lastLaneRect = lastLane.getBoundingClientRect();
+      const lastHeadRect = lastLane.querySelector('[data-lane-head]').getBoundingClientRect();
+      const dockRect = document.querySelector('.inspector').getBoundingClientRect();
+      const inspPanel = document.querySelector('[data-inspector-panel="playback"]');
+      const savedPrefs = JSON.parse(localStorage.getItem('rig-review-preferences/1') || '{}');
+
+      return {
+        totalRenderedLanes: allLanes.length,
+        zoomLevel: ed.zoom(),
+        lanesScrollTop: Math.round(lanes.scrollTop),
+        lanesScrollLeft: Math.round(lanes.scrollLeft),
+        inspectorScrollTop: inspPanel?.scrollTop ?? -1,
+        rulerStickyTopDiffPx: Math.round(Math.abs(rulerRect.top - lanesRect.top) * 100) / 100,
+        headStickyLeftDiffPx: Math.round(Math.abs(lastHeadRect.left - lanesRect.left) * 100) / 100,
+        lastLaneVisibleInLanesBox: lastLaneRect.bottom <= lanesRect.bottom + 2 && lastLaneRect.top >= lanesRect.top,
+        dockHeightBefore: ${sepBefore.dockHeightBefore},
+        dockHeightAfter: Math.round(dockRect.height),
+        lanesHeightBefore: ${sepBefore.lanesHeightBefore},
+        lanesHeightAfter: Math.round(lanesRect.height),
+        savedInspectorHeight: Math.round(savedPrefs?.panels?.inspectorHeight ?? 0),
+      };
+    })()`);
+
+    if (
+      slice3bHelloResult.totalRenderedLanes !== 16 ||
+      slice3bHelloResult.zoomLevel !== 4 ||
+      slice3bHelloResult.lanesScrollTop <= 0 ||
+      slice3bHelloResult.lanesScrollLeft <= 0 ||
+      slice3bHelloResult.inspectorScrollTop !== 0 ||
+      slice3bHelloResult.rulerStickyTopDiffPx > 2 ||
+      slice3bHelloResult.headStickyLeftDiffPx > 2 ||
+      !slice3bHelloResult.lastLaneVisibleInLanesBox ||
+      slice3bHelloResult.dockHeightAfter < slice3bHelloResult.dockHeightBefore + 50 ||
+      slice3bHelloResult.lanesHeightAfter < slice3bHelloResult.lanesHeightBefore + 50 ||
+      slice3bHelloResult.savedInspectorHeight !== slice3bHelloResult.dockHeightAfter
+    ) {
+      throw new Error(`Slice 3b Bar 3/4/9 hello verification failed: ${JSON.stringify(slice3bHelloResult, null, 2)}`);
+    }
+
     if (screenshotDir) {
-      await writeFile(join(screenshotDir, 'slice3-hello-cap-refusal.png'), await session.screenshot());
+      const helloPng = await session.screenshot();
+      await writeFile(join(screenshotDir, 'slice3-hello-cap-refusal.png'), helloPng);
+      await writeFile(join(screenshotDir, 'slice3b-dock-hello-1440x900.png'), helloPng);
     }
 
     console.log(
       JSON.stringify(
         {
           ok: true,
+          slice3bDock1440x900: {
+            viewport: `${slice3bDockCheck.viewportWidth}x${slice3bDockCheck.viewportHeight}`,
+            windowScrollY: slice3bDockCheck.windowScrollY,
+            inspectorScrollTop: slice3bDockCheck.inspectorScrollTop,
+            allInViewport: slice3bDockCheck.allInViewport,
+            stageRect: slice3bDockCheck.stageRect,
+            dockRect: slice3bDockCheck.dockRect,
+            axisText: slice3bDockCheck.axisText,
+            hasFloat32Noise: slice3bDockCheck.hasFloat32Noise,
+          },
+          slice3bZeroJitterAndSingleGestureDrag: {
+            selectedKeyBefore: preDragSnapshot.selectedKeyBefore,
+            selectedAfterDrag: bar1And2Result.selectedAfterDrag,
+            jitterAfterDrag: bar1And2Result.jitterAfterDrag,
+            jitterAfterValueEdit: bar1And2Result.jitterAfterValueEdit,
+          },
+          slice3bHelloScrollStickyZoomResize: slice3bHelloResult,
+          pr255Findings,
           bar1And2: {
             dragCoalescedOps: bar1And2Result.afterDragOps.length,
             exactTimeVal: bar1And2Result.afterExactTimeOps[0].time,
