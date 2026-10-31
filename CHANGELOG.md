@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/rig-c/review/compare/v0.14.0...v0.15.0) (2026-10-31)
+
+
+### Features
+
+* **review:** comment on the stage by marking a region on the current view ([#237](https://github.com/rig-c/review/issues/237)) ([6256501](https://github.com/rig-c/review/commit/6256501b2e4ac3c3ec59989db3330fbc0151951e))
+
 ## [0.14.0](https://github.com/rig-c/review/compare/v0.13.1...v0.14.0) (2026-10-31)
 
 
