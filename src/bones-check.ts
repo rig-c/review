@@ -89,7 +89,7 @@ export function createBonesCheck(p: ReviewPackage, options: { stateDir: string; 
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
   }
-  return { run };
+  return { run, running: () => running };
 }
 
 /** `propose --from-config` on the scratch config, or the line naming the missing source painting. */

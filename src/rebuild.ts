@@ -1524,5 +1524,5 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     return safeFile(await realpath(join(rebuildDir(options.stateDir, p.sourceHash, id), 'build')), packagePath(name));
   }
 
-  return { describe, start, read, file, running: () => running, baseline: settledBaseline, inspectedCheck: settledInspectedCheck, latest, undo, history, startStrip, readStrip, stripJob, closeStrip, stripFile };
+  return { describe, start, read, file, running: () => running, busy: () => busy() !== null, baseline: settledBaseline, inspectedCheck: settledInspectedCheck, latest, undo, history, startStrip, readStrip, stripJob, closeStrip, stripFile };
 }

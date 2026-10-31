@@ -112,7 +112,9 @@ export async function main(args:string[],options:{stateDir?:string}={}){
     const p=await loadCompare({a,b,reference,animation});
     if(command==='feedback'){printFeedback(await readFeedbackCompareSession(p,options.stateDir));return;}
     if(command==='check'){console.log(`Comparison valid: ${p.response.title}\nSource SHA-256: ${p.response.sourceHash}\nAnimation: ${animation}\nReference SHA-256: ${p.response.reference.sha256}\nPlayback: two compiled models present`);return;}
-    const capability=randomBytes(32).toString('hex'),server=await startCompareServer(p,{port,stateDir:options.stateDir,capability});console.log(`Compare ready: http://127.0.0.1:${server.port}/#cap=${capability}\nComparison: ${p.response.title}\nSource SHA-256: ${p.response.sourceHash}\nPress Ctrl+C to stop.`);return;
+    const capability=randomBytes(32).toString('hex'),server=await startCompareServer(p,{port,stateDir:options.stateDir,capability,exitOnClose:true});
+    const stop=(sig:string)=>{server.stop(true);console.log(`review compare: exiting — received ${sig}.`);process.exit(0);};process.once('SIGINT',()=>stop('SIGINT'));process.once('SIGTERM',()=>stop('SIGTERM'));
+    console.log(`Compare ready: http://127.0.0.1:${server.port}/#cap=${capability}\nComparison: ${p.response.title}\nSource SHA-256: ${p.response.sourceHash}\nPress Ctrl+C to stop.`);return;
   }
   const input=args.shift();if(!input)throw new Error(usage);let port=4317;let checkpoint:string|undefined,reference:string|undefined,compare:string|undefined,animation:string|undefined;const handoff:OpenInputs={input};
   while(args.length){const flag=args.shift();const value=args.shift();if(!value)throw new Error(`Missing value for ${flag}`);if(handoffOption(flag!)){handoff[handoffOption(flag!)!]=value;continue;}if(flag==='--port'){port=Number(value);if(!Number.isInteger(port)||port<0||port>65535)throw new Error('--port: expected integer 0…65535');}else if(flag==='--checkpoint')checkpoint=value;else if(flag==='--reference')reference=value;else if(flag==='--compare')compare=value;else if(flag==='--animation')animation=value;else throw new Error(`Unknown option ${flag}\n${usage}`);}
@@ -123,7 +125,8 @@ export async function main(args:string[],options:{stateDir?:string}={}){
   const selection=animation!==undefined||fromReport?selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],animation,true):null;const initialAnimation=selection?.name;if(command==='feedback'){const saved=await readFeedbackSession(p,options.stateDir);await assertReviewUnchanged(p);printFeedback(saved);return;}if(command==='check'){console.log(`Package valid: ${p.manifest.title}\nRevision: ${p.manifest.revision}\nSource SHA-256: ${p.sourceHash}\nDeclared files: ${p.files.size}\nPlayback: ${p.manifest.model?'compiled model present':'unavailable (no model)'}`);return;}
   if(checkpoint&&!p.manifest.checkpoints.some(v=>v.id===checkpoint))throw new Error(`Unknown checkpoint ${checkpoint}`);
   // Foreground serving uses the same `#cap=` fragment handoff as open: the printed link alone can submit.
-  const capability=randomBytes(32).toString('hex'),server=await startServer(p,{port,stateDir:options.stateDir,initialAnimation,capability});const url=new URL(`http://127.0.0.1:${server.port}/`);if(checkpoint)url.searchParams.set('checkpoint',checkpoint);url.hash='cap='+capability;
+  const capability=randomBytes(32).toString('hex'),server=await startServer(p,{port,stateDir:options.stateDir,initialAnimation,capability,exitOnClose:true});const url=new URL(`http://127.0.0.1:${server.port}/`);if(checkpoint)url.searchParams.set('checkpoint',checkpoint);url.hash='cap='+capability;
+  const stop=(sig:string)=>{server.stop(true);console.log(`review: exiting — received ${sig}.`);process.exit(0);};process.once('SIGINT',()=>stop('SIGINT'));process.once('SIGTERM',()=>stop('SIGTERM'));
   if(fromReport&&selection)console.error(animationDiagnostic(selection));
   console.log(`Review ready: ${url}\nPackage: ${p.manifest.title} (${p.manifest.revision})\nSource SHA-256: ${p.sourceHash}\nPress Ctrl+C to stop.`);
 }
