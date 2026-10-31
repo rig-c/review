@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/rig-c/review/compare/v0.15.0...v0.15.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **compare:** hold the pane footers still during playback ([#239](https://github.com/rig-c/review/issues/239)) ([3779641](https://github.com/rig-c/review/commit/377964103393b91c31685d4e706df763ce15f1a8)), closes [#232](https://github.com/rig-c/review/issues/232)
+
 ## [0.15.0](https://github.com/rig-c/review/compare/v0.14.0...v0.15.0) (2026-10-31)
 
 
