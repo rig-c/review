@@ -17,8 +17,9 @@ import { compileArgs, firstRefusal, modelingProducerTooOld, REMESH_DELTA_SINCE, 
 import { meshEditText } from './mesh-edit.ts';
 import { CONFIG_NAMED_FILES, HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
 import { assertWholeRigBaseline, BaselineError, baselineKey, producerDiff, runBaseline, runInspectedCheck, runningInspectedCheck, type BaselineResult, type InspectedCheck } from './baseline.ts';
-import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, parseConfigPatch, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
-import { checkSummary, filesDiffText, MAX_RETARGET_LINES, type CheckSummary, type FilesDiff } from './applied-context.ts';
+import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, parseConfigPatch, PATCH_FLAGS, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
+import { checkSummary, filesDiffText, MAX_ANIMATION_OPS, MAX_RETARGET_LINES, type CheckSummary, type FilesDiff } from './applied-context.ts';
+import { AnimationOpBuilder, animationOpsText, parseAnimationSourceOp, type AnimationSourceOp } from './animation-ops.ts';
 import { idleKeying, idleSource, type IdleStatus } from './idle-tracks.ts';
 import { CHEST_REGIONS_MAX } from './chest-regions.ts';
 import { bustMeshEntry, deriveBust, parseBustSpec, BustSpecError, type BustSpec } from './chest-landmarks.ts';
@@ -222,10 +223,10 @@ export interface AppliedEntry {
   producer: { package: string; version: string }; compiler: { package: string; version: string };
   files: Record<string, string>; modelHash: string;
   /** The job as it settled, served back on undo. */
-  job: RebuildJob | PatchJob | DeltaJob | RetargetJob;
+  job: RebuildJob | PatchJob | DeltaJob | RetargetJob | AnimationJob;
 }
 /** `GET /api/rebuild/history`: the applied records in order, the last one on the stage; `kept`: its build is still on disk. */
-export interface AppliedHistory { schema: 'rig-review-applied-history/1'; depth: number; records: { id: string; kind: 'regions' | 'patch' | 'delta' | 'retarget'; op: string; what: string; modelHash: string; kept: boolean }[] }
+export interface AppliedHistory { schema: 'rig-review-applied-history/1'; depth: number; records: { id: string; kind: 'regions' | 'patch' | 'delta' | 'retarget' | 'animation'; op: string; what: string; modelHash: string; kept: boolean }[] }
 
 export type RebuildStatus = 'running' | 'built' | 'refused' | 'failed';
 export interface RebuildBuild { model: string; modelUrl: string; modelHash: string; files: Record<string, string> }
@@ -373,6 +374,53 @@ export interface DeltaJob {
   hint?: string;
   files: FilesDiff | null;
   remesh: (RemeshCounts & { modelTriangles: number | null }) | null;
+  build: RebuildBuild | null;
+}
+
+/** #235: keyed animation Apply — `{animation: {configHash, animationsFromHash, ops, args?}}`, spliced onto a scratch copy of `animations_from` and built with `rig-parts rig` + `check`. */
+export interface AnimationRequest { configHash: string; animationsFromHash: string; ops: AnimationSourceOp[]; args: string[] }
+function parseAnimationArgs(args: unknown): string[] {
+  if (args === undefined) return [];
+  if (!Array.isArray(args) || args.length > 16 || !args.every(a => typeof a === 'string')) bad('args must be an array of at most 16 strings');
+  const list = args as string[], seen = new Set<string>();
+  for (let i = 0; i < list.length; i += 2) {
+    const flag = list[i]!, value = list[i + 1];
+    if (seen.has(flag)) bad(`args: ${flag} given twice`);
+    seen.add(flag);
+    if (value === undefined) bad(`args: ${flag} has no value`);
+    const allowed = PATCH_FLAGS[flag];
+    if (!allowed) bad(`args: ${flag} is not a flag an animation Apply may pass to rig (allowed: ${Object.keys(PATCH_FLAGS).join(', ')})`);
+    if (!allowed.includes(value)) bad(`args: ${flag} ${value} (allowed: ${allowed.join(' | ')})`);
+  }
+  return [...list];
+}
+export function parseAnimationRequest(input: unknown): AnimationRequest {
+  const v = object(input, 'animation'), keys = Object.keys(v).sort().join(',');
+  if (keys !== 'animationsFromHash,configHash,ops' && keys !== 'animationsFromHash,args,configHash,ops') bad('expected {configHash, animationsFromHash, ops, args?}');
+  if (typeof v.configHash !== 'string' || !/^[a-f0-9]{64}$/.test(v.configHash)) bad('configHash');
+  if (typeof v.animationsFromHash !== 'string' || !/^[a-f0-9]{64}$/.test(v.animationsFromHash)) bad('animationsFromHash');
+  const args = parseAnimationArgs(v.args);
+  if (!Array.isArray(v.ops)) return bad('ops must be an array');
+  if (v.ops.length > MAX_ANIMATION_OPS) return bad(`ops must hold at most ${MAX_ANIMATION_OPS} entries`);
+  if (v.ops.length === 0) throw new RebuildError('ANIMATION_OPS_EMPTY', 'ops must hold at least 1 operation; nothing to apply');
+  const ops = v.ops.map((op, i) => {
+    try { return parseAnimationSourceOp(op, `ops[${i}]`); }
+    catch (e) { return bad(e instanceof Error ? e.message : String(e)); }
+  });
+  return { configHash: v.configHash as string, animationsFromHash: v.animationsFromHash as string, ops, args };
+}
+/** Deterministic: the package, the config bytes, the handoff animations_from bytes, the canonical ops bytes, both tool versions and any non-default rig flags. No clock. */
+export function animationId(input: { sourceHash: string; configHash: string; animationsFromHash: string; opsText: string; producer: string; compiler: string; args?: readonly string[] }): string {
+  return sha256(JSON.stringify([REBUILD_SCHEMA, 'animation', input.sourceHash, input.configHash, input.animationsFromHash, input.opsText, input.producer, input.compiler, ...(input.args?.length ? [input.args] : [])]));
+}
+export interface AnimationJob {
+  schema: typeof REBUILD_SCHEMA; kind: 'animation'; id: string; status: RebuildStatus; reused: boolean; op: 'rig';
+  request: { configHash: string; animationsFrom: { path: string; beforeSha256: string; afterSha256: string }; ops: AnimationSourceOp[]; opsSha256: string; args?: string[] };
+  producer: { package: string; version: string }; compiler: { package: string; version: string };
+  lines: string[]; producerLine: string | null; exitCode: number | null; wallMs: { op: number | null; compile: number | null; check: number | null };
+  hint?: string;
+  check: CheckSummary | null;
+  files: FilesDiff | null;
   build: RebuildBuild | null;
 }
 /**
@@ -581,7 +629,7 @@ async function hashBuild(build: string, id: string, assetPrefix = '/rebuild'): P
 /** One rebuild at a time per review instance; finished jobs stay readable by id. */
 export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   const assetPrefix = options.assetPrefix ?? '/rebuild', stripPrefix = options.stripPrefix ?? '/density-strip';
-  const jobs = new Map<string, RebuildJob | PatchJob | DeltaJob | RetargetJob>();
+  const jobs = new Map<string, RebuildJob | PatchJob | DeltaJob | RetargetJob | AnimationJob>();
   let running: string | null = null;
   /** #173: the density strip on screen (at most one per review): its candidates run beside each other, none of them applied. */
   interface StripCandidate { value: number; id: string; entry: JsonValue; dir: string; job: PatchJob; applied: boolean }
@@ -604,7 +652,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   const bodies = new Map<string, unknown>();
   /** #166: an undo re-running an evicted predecessor: its id and the build files it must reproduce. */
   let restoring: { id: string; files: Record<string, string> } | null = null;
-  const snapshot = <J extends RebuildJob | PatchJob | DeltaJob | RetargetJob>(job: J): J => ({ ...job, lines: [...job.lines] });
+  const snapshot = <J extends RebuildJob | PatchJob | DeltaJob | RetargetJob | AnimationJob>(job: J): J => ({ ...job, lines: [...job.lines] });
 
   /** The state directory may not sit inside the package or the handoff's root (the parent of an opened out/). */
   function assertStateOutside(): void {
@@ -732,7 +780,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * record leaves it — and the scratch tree is arranged: the stage's build in the scratch root, the other records' most
    * recent `MAX_KEPT_BUILDS - 1` builds in keptRoot, every other build removed.
    */
-  async function landed(job: RebuildJob | PatchJob | DeltaJob | RetargetJob): Promise<void> {
+  async function landed(job: RebuildJob | PatchJob | DeltaJob | RetargetJob | AnimationJob): Promise<void> {
     if (restoring?.id === job.id) { stack.pop(); restoring = null; }
     else if (stack.at(-1)?.id !== job.id && job.build) stack.push({ id: job.id, body: bodies.get(job.id) ?? null, configHash: job.request.configHash, producer: { ...job.producer }, compiler: { ...job.compiler }, files: { ...job.build.files }, modelHash: job.build.modelHash, job: snapshot(job) });
     latestId = stack.at(-1)?.id ?? null;
@@ -761,7 +809,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       const kind = !('kind' in job) ? 'regions' as const : job.kind;
       const what = !('kind' in job) ? `${job.request.bust ? 'contour.bust landmarks' : `${job.request.regions.length} region(s)`} on ${job.request.part}`
         : job.kind === 'patch' ? job.request.patch.ops.map(o => `${o.op} ${o.path}`).slice(0, 3).join(', ') + (job.request.patch.ops.length > 3 ? `, +${job.request.patch.ops.length - 3}` : '')
-        : job.kind === 'delta' ? `mesh edit on ${job.request.part}` : `retarget "${job.request.record.flags.animation}"`;
+        : job.kind === 'delta' ? `mesh edit on ${job.request.part}`
+        : job.kind === 'animation' ? `${job.request.ops.length} op(s) on ${[...new Set(job.request.ops.map(o => o.animation))].join(', ')}`
+        : `retarget "${job.request.record.flags.animation}"`;
       const kept = await exists(join(last ? rebuildRoot(options.stateDir, p.sourceHash) : keptRoot(options.stateDir, p.sourceHash), e.id));
       records.push({ id: e.id, kind, op: 'op' in job ? job.op : 'remesh', what, modelHash: e.modelHash, kept });
     }
@@ -788,7 +838,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     // (i) the kept build: back into the scratch root, re-hashed against result.json and against the record.
     await unkeep(pred.id);
     const dir = rebuildDir(options.stateDir, p.sourceHash, pred.id);
-    const kept = await reuse<RebuildJob | PatchJob | DeltaJob | RetargetJob>(dir, pred.id);
+    const kept = await reuse<RebuildJob | PatchJob | DeltaJob | RetargetJob | AnimationJob>(dir, pred.id);
     if (kept && JSON.stringify(kept.build!.files) === JSON.stringify(pred.files)) {
       jobs.set(pred.id, kept); stack.pop(); latestId = pred.id; await arrange();
       return { status: 200, body: { status: 'built', undone: top.id, job: snapshot(kept), history: await history() } };
@@ -818,7 +868,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   /** The baseline once it settles (tests, and the whole-rig ops of #102/#103 through assertWholeRigBaseline). */
   async function settledBaseline(): Promise<BaselineResult | null> { if (!baselineRun) ensureBaseline(resolveProducer(options.starts)); return baselineRun ? await baselineRun : baseline; }
 
-  async function reuse<J extends RebuildJob | PatchJob | DeltaJob | RetargetJob>(dir: string, id: string): Promise<J | null> {
+  async function reuse<J extends RebuildJob | PatchJob | DeltaJob | RetargetJob | AnimationJob>(dir: string, id: string): Promise<J | null> {
     const resultFile = join(dir, 'result.json');
     if (!(await exists(resultFile))) return null;
     try {
@@ -844,7 +894,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * beside the scratch root for undo); anything but a built job leaves nothing behind.
    * Each runner passes only its producer op and the optional steps it records.
    */
-  async function apply(job: RebuildJob | PatchJob | DeltaJob | RetargetJob, dir: string, inputs: ProducerInputs, resolved: Resolved, op: ProducerOp, steps: ApplySteps = {}): Promise<void> {
+  async function apply(job: RebuildJob | PatchJob | DeltaJob | RetargetJob | AnimationJob, dir: string, inputs: ProducerInputs, resolved: Resolved, op: ProducerOp, steps: ApplySteps = {}): Promise<void> {
     const push = (line: string) => { if (job.lines.length < MAX_LINES) job.lines.push(line); };
     const producer = resolved.producer;
     // #180: a refusal or failure is published only after its scratch is removed (as "built" is published last, #146),
@@ -859,7 +909,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         job.producerLine = firstRefusal(run.lines) ?? `${op.tool ?? 'rig-parts'} ${op.cmd} exited ${run.exitCode} without a named refusal`;
         // #148: the producer's line stays as printed; review adds what it means here, when it knows.
         const hint = producerHint(job.producerLine);
-        if (hint && !('refusals' in job)) { (job as RebuildJob | PatchJob | DeltaJob).hint = hint; push(`review: ${hint}`); }
+        if (hint && !('refusals' in job)) { (job as RebuildJob | PatchJob | DeltaJob | AnimationJob).hint = hint; push(`review: ${hint}`); }
         outcome = 'refused'; return;
       }
       job.producerLine = run.stdout.filter(l => l.trim()).at(-1)?.trim() ?? null;
@@ -1472,8 +1522,149 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     });
   }
 
+  /** #235: spliced `animations_from` → `<dir>/animations.json`, `<dir>/config.json` pointing at it → `rig-parts rig` → compile → `rig-parts check`. */
+  function executeAnimation(job: AnimationJob, dir: string, inputs: ProducerInputs, resolved: Resolved, scratchConfig: string, splicedAnimations: string): Promise<void> {
+    const args = job.request.args ?? [], producer = resolved.producer;
+    return apply(job, dir, inputs, resolved, {
+      cmd: 'rig', spec: 'rig',
+      async run(push) {
+        await writeFile(join(dir, 'animations.json'), splicedAnimations, { mode: 0o600 });
+        await writeFile(join(dir, 'config.json'), scratchConfig, { mode: 0o600 });
+        const anims = [...new Set(job.request.ops.map(o => o.animation))];
+        push(`review: ${producer.package} ${producer.version} rig --config config.json (${job.request.ops.length} animation op(s) on ${anims.join(', ')}; ${job.request.animationsFrom.path} ${job.request.animationsFrom.beforeSha256.slice(0, 12)}… → ${job.request.animationsFrom.afterSha256.slice(0, 12)}…) → scratch rig`);
+        return runTool(producer.bin, ['rig', '--config', 'config.json', '--parts', inputs.parts, '--out', 'rig', ...args], { cwd: dir, onLine: push });
+      },
+      wallMs: ms => { job.wallMs.op = ms; },
+      async flags() {
+        return { pageEdges: flagValue(args, '--page-edges', 'free') as PageEdges, packShape: flagValue(args, '--pack-shape', 'polygon') as PackShape, note: '' };
+      },
+    }, {
+      diff: files => { job.files = files; },
+      check: (summary: CheckSummary, wallMs: number | null) => { job.wallMs.check = wallMs; job.check = summary; },
+    });
+  }
+
+  /**
+   * `POST /api/rebuild` with `{animation: {configHash, animationsFromHash, ops, args?}}` (#235): applies the cumulative
+   * span-preserving ops directly to the handoff's `motion.animations_from` text (`REBUILD_ANIMATIONS_STALE` when
+   * `animationsFromHash` does not match the handoff file), writes `<dir>/animations.json` and `<dir>/config.json` in
+   * scratch, and runs `rig-parts rig` + `rigc build` + `check`. Empty or no-op ops (leaving `animations_from` equal to
+   * the handoff text) are refused before anything is written or run; producer refusals return by name with nothing landed.
+   */
+  async function startAnimation(input: unknown): Promise<{ status: number; body: unknown }> {
+    const request = parseAnimationRequest(input);
+    assertStateOutside();
+    await options.unchanged();
+    const inputs = await producerInputs(p.handoff, p.handoffReason);
+    if (inputs.configHash !== request.configHash) throw new RebuildError('REBUILD_CONFIG_STALE', 'the producer config changed since the editor read it; reload');
+    const configDoc = object(JSON.parse(inputs.configText), 'config');
+    const motion = configDoc.motion && typeof configDoc.motion === 'object' && !Array.isArray(configDoc.motion) ? configDoc.motion as Record<string, unknown> : null;
+    const relFrom = typeof motion?.animations_from === 'string' && motion.animations_from ? motion.animations_from : null;
+    if (!relFrom) throw new RebuildError('ANIMATION_SOURCE_MISSING', 'the handoff config declares no motion.animations_from');
+    // The handoff records a named file's canonical path, so an alias inside the package reads as the file it names.
+    let absFrom: string;
+    try { absFrom = await realpath(resolve(dirname(inputs.config), relFrom)); }
+    catch { throw new RebuildError('ANIMATION_SOURCE_MISSING', `config motion.animations_from (${relFrom}) does not exist`); }
+    const showFrom = relative(await realpath(p.root), absFrom).split(sep).join('/') || '.';
+    const handoffFile = inputs.handoff.files.find(f => f.path === showFrom);
+    if (!handoffFile) throw new RebuildError('ANIMATION_SOURCE_MISSING', `config motion.animations_from (${showFrom}) is missing from the handoff`);
+    const baseAnimText = await readFile(absFrom, 'utf8'), baseAnimHash = sha256(baseAnimText);
+    if (baseAnimHash !== handoffFile.sha256) throw new RebuildError('REBUILD_INPUTS_CHANGED', `${showFrom} changed since the review was opened; restart review`);
+    if (request.animationsFromHash !== baseAnimHash) {
+      throw new RebuildError('REBUILD_ANIMATIONS_STALE', 'the animations_from file changed since the editor read it; reload');
+    }
+
+    const builder = new AnimationOpBuilder(baseAnimText);
+    try {
+      for (const op of request.ops) builder.apply(op);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const colon = msg.indexOf(': ');
+      if (colon > 0 && /^[A-Z][A-Z0-9_]+$/.test(msg.slice(0, colon))) {
+        throw new RebuildError(msg.slice(0, colon), msg.slice(colon + 2));
+      }
+      throw new RebuildError('ANIMATION_OP_FAILED', msg);
+    }
+
+    const splicedAnimText = builder.text;
+    const effectiveOps = [...builder.ops];
+    if (!builder.dirty || splicedAnimText === baseAnimText || effectiveOps.length === 0) {
+      throw new RebuildError('ANIMATION_OPS_NOOP', 'the animation operations leave animations_from byte-identical; nothing to apply');
+    }
+
+    const resolved = resolveProducer(options.starts);
+    if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
+    try { assertWholeRigBaseline(await settledBaseline()); } catch (e) { if (e instanceof BaselineError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
+
+    const opsText = animationOpsText(effectiveOps), opsSha256 = sha256(opsText), afterSha256 = sha256(splicedAnimText);
+    const id = animationId({
+      sourceHash: p.sourceHash,
+      configHash: inputs.configHash,
+      animationsFromHash: baseAnimHash,
+      opsText,
+      producer: `${resolved.producer.package}@${resolved.producer.version}`,
+      compiler: `${resolved.compiler.package}@${resolved.compiler.version}`,
+      args: request.args,
+    });
+    const current = jobs.get(id);
+    if (current?.status === 'running') return { status: 202, body: snapshot(current) };
+    if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
+
+    const scratchDoc = JSON.parse(scratchConfigText(inputs.config, configDoc as unknown as JsonValue)) as Record<string, unknown>;
+    (scratchDoc.motion as Record<string, unknown>).animations_from = 'animations.json';
+    const scratchCfgText = JSON.stringify(scratchDoc, null, 2) + '\n';
+    const recordedBody = {
+      animation: {
+        configHash: inputs.configHash,
+        animationsFromHash: baseAnimHash,
+        ops: effectiveOps,
+        ...(request.args.length ? { args: request.args } : {}),
+      },
+    };
+
+    return reserve(`REBUILD_BUSY: rebuild ${id} is still running`, async () => {
+      guardRestore(id);
+      const dir = rebuildDir(options.stateDir, p.sourceHash, id);
+      await adopt(id);
+      await unkeep(id);
+      const reused = await reuse<AnimationJob>(dir, id);
+      if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, recordedBody); await landed(reused); return { status: 200, body: snapshot(reused) }; }
+      const job: AnimationJob = {
+        schema: REBUILD_SCHEMA,
+        kind: 'animation',
+        id,
+        status: 'running',
+        reused: false,
+        op: 'rig',
+        request: {
+          configHash: inputs.configHash,
+          animationsFrom: { path: showFrom, beforeSha256: baseAnimHash, afterSha256 },
+          ops: effectiveOps,
+          opsSha256,
+          ...(request.args.length ? { args: [...request.args] } : {}),
+        },
+        producer: tool(resolved.producer),
+        compiler: tool(resolved.compiler),
+        lines: [],
+        producerLine: null,
+        exitCode: null,
+        wallMs: { op: null, compile: null, check: null },
+        check: null,
+        files: null,
+        build: null,
+      };
+      jobs.set(id, job); running = id; bodies.set(id, recordedBody);
+      void executeAnimation(job, dir, inputs, resolved, scratchCfgText, splicedAnimText).finally(() => { if (running === id) running = null; });
+      return { status: 202, body: snapshot(job) };
+    });
+  }
+
   /** `POST /api/rebuild`: refusals are returned before anything is written or run. */
   async function start(input: unknown): Promise<{ status: number; body: unknown }> {
+    if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'animation')) {
+      if (Object.keys(input).length !== 1) bad('expected exactly {animation}');
+      return startAnimation((input as { animation: unknown }).animation);
+    }
     if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'retarget')) {
       if (Object.keys(input).length !== 1) bad('expected exactly {retarget}');
       return startRetarget((input as { retarget: unknown }).retarget, input);
@@ -1512,7 +1703,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     });
   }
 
-  function read(id: string): RebuildJob | PatchJob | DeltaJob | RetargetJob {
+  function read(id: string): RebuildJob | PatchJob | DeltaJob | RetargetJob | AnimationJob {
     const job = jobs.get(id);
     if (!job) throw new RebuildError('REBUILD_NOT_FOUND', id);
     return snapshot(job);

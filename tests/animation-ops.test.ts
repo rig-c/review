@@ -688,3 +688,65 @@ test('a number past twelve significant digits survives a retime that does not ch
   expect(moved).toContain('0.987654321098765');
   expect(sha256(applyAnimationOps(text, [retime(2), retime(1)]).text)).toBe(sha256(text));
 });
+
+test('AnimationOpBuilder coalesces consecutive set_key_time and set_key_value on the same key, replays from before the first, and drops ops returning to base with >12-digit handles', () => {
+  const text = `{
+  "spec": "rigc-motion/1",
+  "animations": {
+    "a": {
+      "duration": 3,
+      "loop": false,
+      "tracks": [
+        {
+          "bone": "b",
+          "property": "translate",
+          "keys": [
+            {"t": 0, "v": [0, 0], "curve": [0.212345678901234, 0.123456789012345, 0.876543210987654, 0.987654321098765, 0.312345678901234, 1.123456789012345, 0.776543210987654, 2.987654321098765]},
+            {"t": 1, "v": [1, 2], "curve": [1.512345678901234, 1.111111111111111, 2.512345678901234, 2.222222222222222, 1.612345678901234, 2.111111111111111, 2.612345678901234, 3.222222222222222]},
+            {"t": 3, "v": [2, 4]}
+          ]
+        }
+      ]
+    }
+  }
+}
+`;
+  const baseHash = sha256(text);
+  const builder = new AnimationOpBuilder(text);
+
+  // 1. Consecutive set_key_time on key 1: 1 -> 1.7 -> 2.1 replaces the first op and replays from before it
+  builder.apply({ op: 'set_key_time', animation: 'a', track: 0, key: 1, time: 1.7 });
+  expect(builder.ops).toHaveLength(1);
+  builder.apply({ op: 'set_key_time', animation: 'a', track: 0, key: 1, time: 2.1 });
+  expect(builder.ops).toEqual([{ op: 'set_key_time', animation: 'a', track: 0, key: 1, time: 2.1 }]);
+  expect(builder.text).toBe(
+    applyAnimationOp(text, { op: 'set_key_time', animation: 'a', track: 0, key: 1, time: 2.1 }, text).text,
+  );
+
+  // Dragging back to original time 1 drops the op and restores >12-digit cx handles byte-identically
+  builder.apply({ op: 'set_key_time', animation: 'a', track: 0, key: 1, time: 1 });
+  expect(builder.ops).toEqual([]);
+  expect(builder.dirty).toBe(false);
+  expect(builder.text).toBe(text);
+  expect(sha256(builder.text)).toBe(baseHash);
+
+  // 2. Consecutive set_key_value on key 1: dragging value away and back drops the op and restores >12-digit cy handles
+  builder.apply({ op: 'set_key_value', animation: 'a', track: 0, key: 1, channel: 0, value: 4.3 });
+  expect(builder.ops).toHaveLength(1);
+  builder.apply({ op: 'set_key_value', animation: 'a', track: 0, key: 1, channel: 0, value: 6.7 });
+  expect(builder.ops).toEqual([{ op: 'set_key_value', animation: 'a', track: 0, key: 1, channel: 0, value: 6.7 }]);
+  builder.apply({ op: 'set_key_value', animation: 'a', track: 0, key: 1, channel: 0, value: 1 });
+  expect(builder.ops).toEqual([]);
+  expect(builder.dirty).toBe(false);
+  expect(builder.text).toBe(text);
+  expect(sha256(builder.text)).toBe(baseHash);
+
+  // 3. Multi-channel set_key_value coalescing on the same key across channels 0 and 1, then returning to [1, 2]
+  builder.apply({ op: 'set_key_value', animation: 'a', track: 0, key: 1, channel: 0, value: 5 });
+  builder.apply({ op: 'set_key_value', animation: 'a', track: 0, key: 1, channel: 1, value: 9 });
+  expect(builder.ops).toEqual([{ op: 'set_key_value', animation: 'a', track: 0, key: 1, value: [5, 9] }]);
+  builder.apply({ op: 'set_key_value', animation: 'a', track: 0, key: 1, value: [1, 2] });
+  expect(builder.ops).toEqual([]);
+  expect(builder.dirty).toBe(false);
+  expect(sha256(builder.text)).toBe(baseHash);
+});
