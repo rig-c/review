@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/rig-c/review/compare/v0.19.0...v0.20.0) (2026-10-31)
+
+
+### Features
+
+* **animate:** Apply a keyed animation edit as a scratch rebuild ([#253](https://github.com/rig-c/review/issues/253)) ([81b4964](https://github.com/rig-c/review/commit/81b49642480c37b40e4057c975bcc162dd5371a4))
+
 ## [0.19.0](https://github.com/rig-c/review/compare/v0.18.1...v0.19.0) (2026-10-31)
 
 
