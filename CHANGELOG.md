@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/rig-c/review/compare/v0.18.1...v0.19.0) (2026-10-31)
+
+
+### Features
+
+* **animate:** pure source ops for editing keyed animations ([#251](https://github.com/rig-c/review/issues/251)) ([138d7de](https://github.com/rig-c/review/commit/138d7de80228f0288e9e03d520c3891930ad356c))
+
 ## [0.18.1](https://github.com/rig-c/review/compare/v0.18.0...v0.18.1) (2026-10-31)
 
 
