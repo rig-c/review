@@ -3,13 +3,16 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { readAnimationInspection } from '../src/animation-inspection.ts';
+import { evaluateBoneLocals, readAnimationInspection } from '../src/animation-inspection.ts';
 import {
   animationOpsText,
   applyAnimationOps,
   draftTrackToInspectionTrack,
+  MAX_ANIMATION_OPS,
+  overlayDraftOnInspection,
   type AnimationSourceOp,
 } from '../src/animation-ops.ts';
+import { animationPreviewAdjust } from '../web/preview.ts';
 import {
   APPLIED_ANIMATION_SCHEMA,
   appliedCheckRefusal,
@@ -298,6 +301,50 @@ function createAnimationApplyFixture(root: string, pkgName = 'pkg'): {
     join(pkgDir, 'out', 'rig', 'mesh_report.json'),
     JSON.stringify({ spec: 'rig-parts-mesh-report/1', parts: {} }, null, 2),
   );
+  const motionDoc = JSON.parse(demoAnimText) as {
+    easings?: Record<string, readonly [number, number, number, number]>;
+    animations: Record<string, { duration?: number; tracks?: Array<{ bone?: string; property: string; keys: Array<{ t: number; v: number[]; curve?: number[] | 'stepped'; ease?: string }> }> }>;
+  };
+  const f32 = (n: number) => Math.fround(Number(n));
+  const keyTime = (n: number) => f32(Math.round(Number(n) * 360000) / 360000);
+  const initialAnimations = Object.entries(motionDoc.animations).map(([name, anim]) => {
+    const bonesMap: Record<string, Array<{ name: string; keys: unknown[] }>> = {};
+    for (const track of anim.tracks ?? []) {
+      if (!track.bone) continue;
+      const keys = track.keys.map((k, idx) => {
+        const entry: Record<string, unknown> = { time: keyTime(k.t) };
+        if (track.property === 'translate' || track.property === 'scale' || track.property === 'shear') {
+          entry.x = f32(k.v[0]!);
+          entry.y = f32(k.v[1]!);
+        } else {
+          entry.value = f32(k.v[0]!);
+        }
+        const next = track.keys[idx + 1];
+        if (next) {
+          if (k.curve === 'stepped') entry.curve = 'stepped';
+          else if (Array.isArray(k.curve)) entry.curve = k.curve.map(f32);
+          else if (typeof k.ease === 'string' && motionDoc.easings?.[k.ease]) {
+            const [hx1, hy1, hx2, hy2] = motionDoc.easings[k.ease]!;
+            const dt = next.t - k.t;
+            const cArr: number[] = [];
+            for (let c = 0; c < k.v.length; c++) {
+              const v1 = k.v[c]!, dv = next.v[c]! - v1;
+              cArr.push(f32(k.t + dt * hx1), f32(v1 + dv * hy1), f32(k.t + dt * hx2), f32(v1 + dv * hy2));
+            }
+            entry.curve = cArr;
+          }
+        }
+        return entry;
+      });
+      (bonesMap[track.bone] ??= []).push({ name: track.property, keys });
+    }
+    return {
+      name,
+      duration: f32(anim.duration ?? 0),
+      bones: Object.entries(bonesMap).map(([bName, timelines]) => ({ name: bName, timelines })),
+      slots: [],
+    };
+  });
   const initialModel = {
     spec: 'rigc-compiled/3',
     skeleton: { width: 100, height: 100 },
@@ -305,7 +352,7 @@ function createAnimationApplyFixture(root: string, pkgName = 'pkg'): {
     bones,
     slots: [],
     skins: [{ name: 'default', attachments: {} }],
-    animations: [{ name: 'tilt', duration: Math.fround(1.6), bones: [], slots: [] }],
+    animations: initialAnimations,
   };
   writeFileSync(join(pkgDir, 'skeleton.model.json'), JSON.stringify(initialModel));
   writeFileSync(join(pkgDir, 'skeleton.png'), 'png');
@@ -363,7 +410,33 @@ test('Slice 2 Apply: retime, delete, insert, value, curve match H5; cumulative s
         return cur;
       };
 
-      // 1. Required animationsFromHash validation, stale hash refusal, and no-op Apply refusals
+      // 0. GET /api/rebuild returns animations source status (path, sha256, text) for Slice 3 dopesheet editing
+      const rebuildDescribe = await api<{
+        animations: { available: boolean; reason: string | null; path: string | null; sha256: string | null; text: string | null };
+      }>('/api/rebuild');
+      expect(rebuildDescribe.animations.available).toBe(true);
+      expect(rebuildDescribe.animations.reason).toBeNull();
+      expect(rebuildDescribe.animations.path).toBe('animations.json');
+      expect(rebuildDescribe.animations.sha256).toBe(animationsFromHash);
+      expect(rebuildDescribe.animations.text).toBe(demoAnimText);
+
+      // 1. Required animationsFromHash validation, stale hash refusal, MAX_ANIMATION_OPS cap, and no-op Apply refusals
+      const tooManyOpsReply = await api<{ status: string; error: string }>('/api/rebuild', {
+        animation: {
+          configHash,
+          animationsFromHash,
+          ops: Array.from({ length: MAX_ANIMATION_OPS + 1 }, (_, i) => ({
+            op: 'set_key_value' as const,
+            animation: 'tilt',
+            track: 0,
+            key: 1,
+            channel: 0,
+            value: 5 + i * 0.01,
+          })),
+        },
+      });
+      expect(tooManyOpsReply.status).toBe('refused');
+      expect(tooManyOpsReply.error).toStartWith('ANIMATION_OPS_TOO_MANY:');
       const missingHashReply = await api<{ status: string; error: string }>('/api/rebuild', {
         animation: {
           configHash,
@@ -501,6 +574,52 @@ test('Slice 2 Apply: retime, delete, insert, value, curve match H5; cumulative s
 
         const compiledModel = await (await fetch(`${base}${job.build!.modelUrl}`)).json();
         assertCompiledMatchesDraftUnderH5(compiledModel, expectedText, item.anim, item.track);
+
+        // Slice 3 Bar 3: Pending preview pose (overlayDraftOnInspection + animationPreviewAdjust on the base model)
+        // matches the post-Apply compiled model's bone locals within Math.fround (0 ULP difference) at all sample times
+        const baseModel = JSON.parse(readFileSync(join(pkgDir, 'skeleton.model.json'), 'utf8'));
+        const baseInsp = readAnimationInspection(baseModel, item.anim);
+        const overlaidInsp = overlayDraftOnInspection(baseInsp, expectedText);
+        const compiledInsp = readAnimationInspection(compiledModel, item.anim);
+        const previewAdjust = animationPreviewAdjust(
+          overlaidInsp,
+          new Set(compiledInsp.bones.map((b) => b.name)),
+          false,
+        )!;
+        expect(previewAdjust).toBeFunction();
+        for (let stepIdx = 0; stepIdx <= 20; stepIdx++) {
+          const sampleT = Number(((stepIdx / 20) * 1.2).toFixed(4));
+          const previewBones = new Map(
+            baseInsp.bones.map((b) => [
+              b.name,
+              {
+                rotation: b.rotation ?? 0,
+                x: b.x ?? 0,
+                y: b.y ?? 0,
+                scaleX: b.scaleX ?? 1,
+                scaleY: b.scaleY ?? 1,
+                shearX: b.shearX ?? 0,
+                shearY: b.shearY ?? 0,
+              },
+            ]),
+          );
+          previewAdjust(
+            {
+              names: [...previewBones.keys()],
+              bone: (name: string) => previewBones.get(name)!,
+            },
+            { animation: item.anim, trackTime: sampleT, globalTime: sampleT },
+          );
+          for (const b of compiledInsp.bones) {
+            const pLocals = previewBones.get(b.name)!;
+            const cLocals = evaluateBoneLocals(compiledInsp, b.name, sampleT);
+            for (const ch of ['rotation', 'x', 'y', 'scaleX', 'scaleY', 'shearX', 'shearY'] as const) {
+              expect(Math.fround(pLocals[ch]), `${item.label} ${b.name}.${ch} at t=${sampleT}`).toBe(
+                Math.fround(cLocals[ch]),
+              );
+            }
+          }
+        }
 
         // Verify AppliedAnimation schema ('rig-review-applied/5') & client helpers
         const record = animationAppliedRecord(job);

@@ -1,5 +1,6 @@
 /** Review's preview adapters. All posing, parameter validation and history belong to published Play. */
 import type {BoneAdjust,PhysicsParameterPatch,PhysicsParameterRead,RigPlayer} from '@rig-c/play';
+import {evaluateBoneLocals,type AnimationInspection} from '../src/animation-inspection.ts';
 import {previewLocal,SETUP_DEFAULT,type LocalChannel,type PreviewPlan} from '../src/idle-tracks.ts';
 import type {PendingEdit} from '../src/physics-tuning.ts';
 
@@ -8,6 +9,36 @@ export interface BoneSetup {names:readonly string[];get(bone:string):Partial<Rec
 /** Preserve the core's evaluation context through the idle + turn composition. */
 export function composeAdjust(a:BoneAdjust|null,b:BoneAdjust|null):BoneAdjust|null {
  return a&&b?(bones,ctx)=>{a(bones,ctx);b(bones,ctx);}:a??b;
+}
+
+/**
+ * #235: live pending-op preview for keyed animations via `player.adjust`.
+ * Evaluates `overlaidInspection` (`overlayDraftOnInspection`) through the single
+ * `evaluateBoneLocals` evaluator before world transforms and constraints run.
+ */
+export function animationPreviewAdjust(
+ overlaidInspection:AnimationInspection|null,
+ editedBones:ReadonlySet<string>,
+ loop=false,
+):BoneAdjust|null {
+ if(!overlaidInspection||editedBones.size===0)return null;
+ const bonesList=[...editedBones];
+ return (bones,ctx)=>{
+  if(ctx.trackTime===null||ctx.animation!==overlaidInspection.name)return;
+  const d=overlaidInspection.duration;
+  const t=loop&&d>0?ctx.trackTime%d:ctx.trackTime;
+  for(const name of bonesList){
+   const locals=evaluateBoneLocals(overlaidInspection,name,t);
+   const b=bones.bone(name);
+   b.rotation=locals.rotation;
+   b.x=locals.x;
+   b.y=locals.y;
+   b.scaleX=locals.scaleX;
+   b.scaleY=locals.scaleY;
+   b.shearX=locals.shearX;
+   b.shearY=locals.shearY;
+  }
+ };
 }
 
 /** Uses the existing idle preview conversion; no player clock or seek compensation. */

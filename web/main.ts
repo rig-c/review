@@ -23,7 +23,7 @@ import {readSetupPose} from './setup-pose.ts';
 import {bindBonesPanel,type BonesPanel,type BonesCheckView} from './bones-panel.ts';
 import {bindCutsPanel,type CutsPanel} from './cuts-panel.ts';
 import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
-import {retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
+import {animationAppliedRecord,animationOutcomeLine,retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type AnimationJobView,type AnimationRequestBody,type AnimationSourceOp,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
 import {historyRow,isPatchJob,recordFor,refusedText,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
@@ -163,8 +163,8 @@ let joltQueue:JoltStep[]=[],environmentNote='';
 let idlePanel:IdlePanel|null=null;
 /** Setup · Rig fields (#110): the panel; its turn dial and the idle preview share `player.adjust` (both run, idle first). */
 let rigFieldsPanel:RigFieldsPanel|null=null,idleAdjust:BoneAdjust|null=null,dialAdjust:BoneAdjust|null=null;
-let turnPad:TurnPad|null=null,turnAdjust:BoneAdjust|null=null;
-function setAdjust():void {if(!player)return;player.adjust=composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust);if(!playing)drawRig(()=>player!.draw());}
+let turnPad:TurnPad|null=null,turnAdjust:BoneAdjust|null=null,animAdjust:BoneAdjust|null=null,inDrawRig=false;
+function setAdjust():void {if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!playing&&!inDrawRig)drawRig(()=>player!.draw());}
 /** #106: the Setup Mesh panel, and the overlay's last snapshot (bar 1 reads its per-slot triangle count). */
 let meshPanel:MeshPanel|null=null,lastOverlay:OverlaySnapshot|null=null,densityStrip:DensityStripPanel|null=null;
 const physicsPreview=new PhysicsPreview();
@@ -487,8 +487,10 @@ function seekFrame(frame: number): void {
 }
 
 function drawRig(action:()=>void):void {
+ inDrawRig=true;
  try{action();parts?.present('single');if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);}
  catch(error){animationPanel?.capture(null,undefined);overlays?.clear();text('renderer-state',rendererStatus(null,'failed').label);throw error;}
+ finally{inDrawRig=false;}
 }
 
 function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): void {
@@ -976,7 +978,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();if(part){activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();if(part){activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){player.seek(time);drawRig(()=>player!.draw());}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
@@ -1477,6 +1479,7 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  clothPanel?.load(rebuildStatus.inputs?rebuildStatus.cloth??null:null,rebuildStatus.inputs?null:rebuildStatus.reason??'CLOTH_UNAVAILABLE: no producer handoff');
  cutsPanel?.load(rebuildStatus.inputs&&rebuildStatus.cuts?rebuildStatus.cuts.config:null,rebuildStatus.bones??[],rebuildStatus.inputs?null:rebuildStatus.reason??'CUTS_UNAVAILABLE: no producer handoff',rebuildStatus.cuts?.build??null);
  meshPanel?.load(rebuildStatus.inputs?rebuildStatus.meshes??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'MESH_PANEL_UNAVAILABLE: no producer handoff');meshPanel?.select(parts?.value()?.slot??null);
+ animationPanel?.loadSource(rebuildStatus.animations??null,rebuildStatus.reason);
  return rebuildStatus;
 }
 /** The handoff line (#101): path, hash and how it was found, then the baseline; re-read while the baseline runs. */
@@ -1545,6 +1548,7 @@ async function undoApply():Promise<UndoView|null> {
   stageChanged({kind:'undo'});
   // The panels mark the ops the stage's build applied; the pending edits stay as they are.
   physicsPanel?.applied(ops);idlePanel?.applied(ops);rigFieldsPanel?.applied(ops);bonesPanel?.applied(ops);
+  animationPanel?.syncApplied(appliedOnStage?.schema==='rig-review-applied/5'?appliedOnStage:null);
   // #172: the Cuts and Cloth readouts show the restored build's job when it is theirs, else nothing (never the reverted one).
   const restored=result.status==='built'&&isPatchJob(result.job)?result.job:null,block=recordBlock(appliedOnStage);
   cutsPanel?.shown(block==='cuts'?restored:null);clothPanel?.shown(block==='cloth'?restored:null);
@@ -1686,6 +1690,27 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   apply:()=>applyRigFields(rigFieldsPanel?.ops()??[]),reset:()=>resetRigFieldsBuild(),status:()=>el('rig-fields-status').textContent,readout:()=>[...document.querySelectorAll('#rig-fields-readout code')].map(c=>c.textContent),pending:()=>input('rig-fields-pending').value},
  /** Retarget (#114): the editor's map and flags, Apply (through the panel's own pre-check) and the listed lines shown. */
  retarget:{map:()=>retargetPanel?.map()??null,setMap:(map:PoseMap)=>retargetPanel?.setMap(map),include:(chain:string,on:boolean)=>retargetPanel?.include(chain,on),pick:(chain:string,index:number,bone:string)=>retargetPanel?.pick(chain,index,bone),flags:()=>retargetPanel?.flags()??null,setFlags:(flags:Partial<RetargetFlags>)=>retargetPanel?.setFlags(flags),apply:()=>{const button=document.getElementById('retarget-apply') as HTMLButtonElement|null;button?.click();},status:()=>el('retarget-status').textContent,lines:()=>retargetPanel?.shownLines()??[],refusals:()=>[...document.querySelectorAll('#retarget-refusals code')].map(c=>c.textContent)},
+ /** Keyed animation editor (#235): the single pending op list, dopesheet/inspector actions, preview state, Apply and Reset. */
+ animation:{
+  ops:()=>animationPanel?.ops()??[],
+  unappliedOps:()=>animationPanel?.unappliedOps()??[],
+  hasPreview:()=>animationPanel?.hasUnappliedPreview()??false,
+  source:()=>animationPanel?.sourceInfo()??null,
+  gate:()=>animationPanel?.gateInfo()??null,
+  tracks:()=>animationPanel?.tracksInfo()??[],
+  selectedKey:()=>animationPanel?.selectedKeyInfo()??null,
+  selectKey:(track:number,key:number)=>animationPanel?.selectKey(track,key)??false,
+  setKeyTime:(track:number,key:number,t:number)=>animationPanel?.setKeyTime(track,key,t)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},
+  setKeyValue:(track:number,key:number,channel:number|undefined,value:number|readonly number[])=>animationPanel?.setKeyValue(track,key,channel,value)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},
+  insertKey:(track:number,t:number,value?:readonly number[])=>animationPanel?.insertKey(track,t,value)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},
+  deleteKey:(track:number,key:number)=>animationPanel?.deleteKey(track,key)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},
+  moveSelection:(selections:ReadonlyArray<{track:number;key:number}>,deltaTime:number)=>animationPanel?.moveSelection(selections,deltaTime)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},
+  undoOp:()=>animationPanel?.undoOp()??false,
+  clearPending:()=>animationPanel?.clearPending(),
+  apply:()=>applyAnimation(animationPanel?.ops()??[]),
+  reset:()=>resetAnimationBuild(),
+  status:()=>document.querySelector('[data-animation-editor-status]')?.textContent??'',
+ },
  stage:()=>({modelHash:stageModelHash,inspectedHash:inspectedModel?.sha256??null,applied:appliedOnStage?JSON.parse(JSON.stringify(appliedOnStage)):null,animation,time:player?.time??time,playing,busy:rebuildBusy}),
 };
 /** The world as it stands now: what a physics Apply's reload resumes. */
@@ -1927,6 +1952,73 @@ async function resetIdleBuild():Promise<void> {
  idlePanel?.status('Reset: the inspected build is on the stage; no pending ops; the preview is cleared.',false);
 }
 /**
+ * Keyed animation Apply (#235): sends the entire cumulative pending op list with the handoff's `configHash` and
+ * `animationsFromHash` to `POST /api/rebuild {animation}`. A second Apply sends the first edits too. On a built job the
+ * scratch build reloads in place under the same world and the pending preview is cleared; a refusal leaves the stage and
+ * the pending op list as they were and shows the producer/compiler refusal verbatim.
+ */
+async function applyAnimation(ops:readonly AnimationSourceOp[]):Promise<AnimationJobView|RebuildRefusal|null> {
+ if(rebuildBusy){animationPanel?.setEditorStatus('REBUILD_BUSY: an Apply is still running',true);return null;}
+ if(readOnly){animationPanel?.setEditorStatus(readOnly,true);return null;}
+ if(!ops.length){animationPanel?.setEditorStatus('ANIMATION_OPS_EMPTY: no pending animation ops to apply',true);return null;}
+ const status=rebuildStatus??await loadRebuildStatus();
+ if(!status?.inputs){const r=status?.reason??'REBUILD_STATUS_UNAVAILABLE';animationPanel?.setEditorStatus(r,true);return null;}
+ const animSource=status.animations;
+ if(!animSource?.available||!animSource.sha256){
+  const r=animSource?.reason??'ANIMATION_SOURCE_MISSING: config.json does not declare an "animations_from" motion spec file.';
+  animationPanel?.setEditorStatus(r,true);return null;
+ }
+ const scheduled=useWorld()?worldFor(checkAnimation()):null;
+ if(scheduled&&'error' in scheduled){animationPanel?.setEditorStatus(scheduled.error,true);message(scheduled.error,true);return {status:'refused',error:scheduled.error,producerLine:scheduled.error};}
+ const keying=status.idle?.keying,keys=keying&&'keys' in keying?keying.keys:null;
+ const request:AnimationRequestBody={
+  animation:{
+   configHash:status.inputs.configHash,
+   animationsFromHash:animSource.sha256,
+   ops:[...ops],
+   ...(keys?{args:['--idle-keys',keys]}:{}),
+  },
+  ...(scheduled?{environment:scheduled.schedule}:{}),
+ };
+ const world=stageWorld();
+ rebuildBusy=true;rebuildState();animationPanel?.busy(true);
+ animationPanel?.setEditorStatus(`Applying ${ops.length} animation op(s) on ${animSource.path??'animations_from'} (rig-parts rig → rigc build → rig-parts check)…`,false);
+ try{
+  const result=await runRebuild<AnimationRequestBody,AnimationJobView>(request,{
+   post:value=>api<AnimationJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),
+   get:id=>api<AnimationJobView>(`/api/rebuild/${id}`),
+   sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+   onLine:line=>animationPanel?.setEditorStatus(line.trim()||'…',false),
+  });
+  const outcome=animationOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
+  if(next.id===null||!('id' in result)){
+   animationPanel?.setEditorStatus(outcome.text,true);
+   message(outcome.text,true);
+   return result;
+  }
+  animationPanel?.markApplied(ops,outcome.text,outcome.error);
+  await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
+  appliedOnStage=animationAppliedRecord(result);stageCheck={lines:[...result.lines],check:result.check};stageChanged({kind:'apply',via:'animation'});
+  const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
+  animationPanel?.setEditorStatus(outcome.text,outcome.error);
+  message(outcome.text,outcome.error);
+  return result;
+ }catch(error){
+  const text=`REBUILD_FAILED: ${errorText(error)}`;
+  animationPanel?.setEditorStatus(text,true);
+  message(text,true);
+  return {status:'refused',error:text,producerLine:null};
+ }finally{
+  rebuildBusy=false;rebuildState();animationPanel?.busy(false);
+ }
+}
+/** Animation Reset: clears pending ops and preview, and restores the inspected build on stage. */
+async function resetAnimationBuild():Promise<void> {
+ animationPanel?.resetEdits();
+ if(appliedOnStage){animationPanel?.busy(true);try{await resetRebuild(stageWorld());}finally{animationPanel?.busy(false);}}
+ animationPanel?.setEditorStatus('Reset: the inspected build is on the stage; no pending animation ops.',false);
+}
+/**
  * Inspection only (#104 bar 1): pause, reopen the track at 0 and step it `n` times by `dt`, reading `bone`'s locals on
  * every pose after the timelines and the preview's adjust (when one is set) — what the pose holds before constraints.
  */
@@ -1943,7 +2035,7 @@ function sampleLocals(bone:string,dt:number,n:number):{t:number;rotation:number;
 async function resetRebuild(world:StageWorld|null=null):Promise<void> {
  if(rebuildBusy||(!appliedOnStage&&!stripPending)||!inspectedModel)return;
  rebuildBusy=true;rebuildState();
- try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;stageChanged({kind:'reset'});chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');}
+ try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;stageChanged({kind:'reset'});animationPanel?.syncApplied(null);chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');}
  catch(error){chestEditor?.notify(`REBUILD_RESET_FAILED: ${errorText(error)}`,true);}
  finally{rebuildBusy=false;rebuildState();}
 }
@@ -2127,7 +2219,7 @@ void start();
 function commentCaptureRefusal():string|null {
  if(appliedOnStage)return 'COMMENT_APPLIED_BUILD_UNSUPPORTED: return to the inspected source before commenting on this applied scratch build';
  if(rebuildBusy)return 'COMMENT_SOURCE_BUSY: wait for the rebuild or candidate model replacement before commenting';
- const preview=idleAdjust?'Idle tracks':dialAdjust?'Rig fields turn dial':physicsPreview.read().length?'Physics live overrides':stripPending?'Density strip candidate':
+ const preview=idleAdjust?'Idle tracks':typeof animAdjust!=='undefined'&&animAdjust?'Keyed animation preview':dialAdjust?'Rig fields turn dial':physicsPreview.read().length?'Physics live overrides':stripPending?'Density strip candidate':
   meshEditor?.overlay()?'Edit Mesh':bonesPanel?.overlay()?'Bones anchors':cutsPanel&&(cutsPanel.overlayRegions().length||cutsPanel.overlayMarkers().length)?'Cuts/patches/joints':
   clothPanel?.overlayRegions().length?'Cloth links':meshPanel&&(meshPanel.overlayRegions().length||meshPanel.overlayCircles().length)?'Mesh regions':
   chestRegions().length||chestCircles().length||chestMarkers().length?'Chest regions/landmarks':rigFieldsPanel?.handles().length?'Rig fields stage handles':

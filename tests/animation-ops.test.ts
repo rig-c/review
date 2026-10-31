@@ -15,11 +15,13 @@ import {
   cleanMotionNumber,
   draftTrackToInspectionTrack,
   jsonValueSpan,
+  MAX_ANIMATION_OPS,
   overlayDraftOnInspection,
   retimeCurveX,
   seedCubicCurve,
   translateCurveY,
 } from '../src/animation-ops.ts';
+import { animationPreviewAdjust } from '../web/preview.ts';
 
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
 
@@ -749,4 +751,127 @@ test('AnimationOpBuilder coalesces consecutive set_key_time and set_key_value on
   expect(builder.ops).toEqual([]);
   expect(builder.dirty).toBe(false);
   expect(sha256(builder.text)).toBe(baseHash);
+});
+
+test('MAX_ANIMATION_OPS = 200 cap and moveSelection on a 16-track × 115-key (1,840-key) hello clip refuse >200 keys atomically', () => {
+  expect(MAX_ANIMATION_OPS).toBe(200);
+  // Build a 16-track × 115-key = 1,840-key motion fixture (same dimensions as hello.anim.json: 14 bone tracks + 2 group tracks at indices 3 and 4, 115 keys each, no curves)
+  const makeKeys = (dim: 1 | 2) =>
+    Array.from({ length: 115 }, (_, k) => ({
+      t: Number((k / 24).toFixed(4)),
+      v: dim === 1 ? [k * 0.5] : [k * 0.25, -k * 0.25],
+    }));
+  const tracks = [
+    { bone: 'hip', property: 'translate', keys: makeKeys(2) },
+    { bone: 'chest', property: 'rotate', keys: makeKeys(1) },
+    { bone: 'head', property: 'rotate', keys: makeKeys(1) },
+    { group: 'brows', property: 'translatey', keys: makeKeys(1) },
+    { group: 'eyes', property: 'scaley', keys: makeKeys(1) },
+    { bone: 'arm_r0', property: 'rotate', keys: makeKeys(1) },
+    { bone: 'arm_r1', property: 'rotate', keys: makeKeys(1) },
+    { bone: 'arm_l0', property: 'rotate', keys: makeKeys(1) },
+    { bone: 'arm_l1', property: 'rotate', keys: makeKeys(1) },
+    { bone: 'hair_0', property: 'rotate', keys: makeKeys(1) },
+    { bone: 'hair_1', property: 'rotate', keys: makeKeys(1) },
+    { bone: 'skirt_0', property: 'rotate', keys: makeKeys(1) },
+    { bone: 'skirt_1', property: 'rotate', keys: makeKeys(1) },
+    { bone: 'leg_r', property: 'rotate', keys: makeKeys(1) },
+    { bone: 'leg_l', property: 'rotate', keys: makeKeys(1) },
+    { bone: 'ribbon', property: 'translate', keys: makeKeys(2) },
+  ];
+  const helloText = JSON.stringify({
+    spec: 'rigc-motion/1',
+    animations: {
+      hello: {
+        duration: 4.75,
+        loop: false,
+        tracks,
+      },
+    },
+  });
+  expect(tracks).toHaveLength(16);
+  expect(tracks.reduce((sum, tr) => sum + tr.keys.length, 0)).toBe(1840);
+  const clss = classifyAnimationTracks(JSON.parse(helloText), 'hello');
+  const editable = clss.filter((c) => c.editable);
+  expect(editable).toHaveLength(14);
+
+  const builder = new AnimationOpBuilder(helloText);
+
+  // 1. Moving 1 full editable track (115 keys <= 200) forward by +0.005s succeeds without neighbor collision
+  const sel115 = Array.from({ length: 115 }, (_, k) => ({ track: 0, key: k }));
+  builder.moveSelection('hello', sel115, 0.005);
+  expect(builder.ops).toHaveLength(115);
+
+  // Moving those 115 keys back by -0.005s coalesces all 115 ops back to base (0 ops!)
+  builder.moveSelection('hello', sel115, -0.005);
+  expect(builder.ops).toHaveLength(0);
+  expect(builder.dirty).toBe(false);
+  expect(builder.text).toBe(helloText);
+
+  // 2. Moving a 14-frame window across all 14 editable tracks (14 × 14 = 196 keys <= 200) succeeds
+  const sel196: Array<{ track: number; key: number }> = [];
+  for (const et of editable) {
+    for (let k = 10; k < 24; k++) sel196.push({ track: et.trackIndex, key: k });
+  }
+  expect(sel196).toHaveLength(196);
+  builder.moveSelection('hello', sel196, 0.005);
+  expect(builder.ops).toHaveLength(196);
+  builder.revert();
+
+  // 3. Moving a 15-frame window across all 14 editable tracks (14 × 15 = 210 keys > 200) refuses with ANIMATION_OPS_TOO_MANY
+  const sel210: Array<{ track: number; key: number }> = [];
+  for (const et of editable) {
+    for (let k = 10; k < 25; k++) sel210.push({ track: et.trackIndex, key: k });
+  }
+  expect(sel210).toHaveLength(210);
+  expect(() => builder.moveSelection('hello', sel210, 0.005)).toThrow(/ANIMATION_OPS_TOO_MANY/);
+  expect(builder.ops).toHaveLength(0);
+  expect(builder.text).toBe(helloText);
+
+  // 4. Moving 2 full editable tracks (2 × 115 = 230 keys > 200) or all 14 editable tracks (1,610 keys > 200) refuses
+  const sel230 = [
+    ...Array.from({ length: 115 }, (_, k) => ({ track: 0, key: k })),
+    ...Array.from({ length: 115 }, (_, k) => ({ track: 1, key: k })),
+  ];
+  expect(() => builder.moveSelection('hello', sel230, 0.005)).toThrow(/ANIMATION_OPS_TOO_MANY/);
+  const sel1610 = editable.flatMap((et) => Array.from({ length: 115 }, (_, k) => ({ track: et.trackIndex, key: k })));
+  expect(sel1610).toHaveLength(1610);
+  expect(() => builder.moveSelection('hello', sel1610, 0.005)).toThrow(/ANIMATION_OPS_TOO_MANY/);
+  expect(builder.ops).toHaveLength(0);
+  expect(builder.text).toBe(helloText);
+});
+
+test('animationPreviewAdjust writes overlaid bone locals within Math.fround and leaves unedited bones untouched', () => {
+  const baseText = readFileSync(new URL('./fixtures/motion/demo.json', import.meta.url), 'utf8');
+  const baseInspection: AnimationInspection = {
+    name: 'smile',
+    duration: 0.7,
+    bones: [
+      { name: 'head', rotation: 5, x: 10, y: -4, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 },
+      { name: 'neck', rotation: -2, x: 0, y: 12, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 },
+    ],
+    slots: [],
+    tracks: [],
+  };
+  const builder = new AnimationOpBuilder(baseText);
+  // Track 0 on smile is head.rotate
+  builder.apply({ op: 'set_key_value', animation: 'smile', track: 0, key: 1, channel: 0, value: 18.5 });
+  const overlaid = overlayDraftOnInspection(baseInspection, builder.text);
+  const adjust = animationPreviewAdjust(overlaid, new Set(['head']), false)!;
+  expect(adjust).toBeFunction();
+
+  const poseHead = { rotation: 0, x: 0, y: 0, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 };
+  const poseNeck = { rotation: -2, x: 0, y: 12, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 };
+  adjust(
+    {
+      names: ['head', 'neck'],
+      bone: (name: string) => (name === 'head' ? poseHead : poseNeck),
+    },
+    { animation: 'smile', trackTime: 0.25, globalTime: 0.25 },
+  );
+  const expectedHead = evaluateBoneLocals(overlaid, 'head', 0.25);
+  expect(Math.fround(poseHead.rotation)).toBe(Math.fround(expectedHead.rotation));
+  expect(Math.fround(poseHead.x)).toBe(Math.fround(expectedHead.x));
+  expect(Math.fround(poseHead.y)).toBe(Math.fround(expectedHead.y));
+  expect(poseNeck).toEqual({ rotation: -2, x: 0, y: 12, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 });
 });

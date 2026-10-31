@@ -6,6 +6,7 @@ import {
 } from './animation-inspection.ts';
 
 export const MOTION_SPEC_VERSION = 'rigc-motion/1';
+export const MAX_ANIMATION_OPS = 200;
 
 export type EasingTuple = readonly [number, number, number, number];
 
@@ -1039,6 +1040,7 @@ export function applyAnimationOp(
   text: string,
   op: AnimationSourceOp,
   baseText?: string,
+  fallbackEasings?: Readonly<Record<string, EasingTuple>>,
 ): AppliedAnimationOpsResult {
   const { doc, classification, keys } = resolveEditableTrack(text, op.animation, op.track);
   const channels = classification.channels;
@@ -1217,7 +1219,10 @@ export function applyAnimationOp(
       if (op.ease === 'stepped') {
         throw new Error('ANIMATION_EASING_STEPPED_USE_CURVE: "stepped" is a curve mode; use curve: "stepped"');
       }
-      const easings = isRecord(doc.easings) ? doc.easings : {};
+      const easings = {
+        ...(fallbackEasings ?? {}),
+        ...(isRecord(doc.easings) ? doc.easings : {}),
+      };
       if (!Array.isArray(easings[op.ease])) {
         throw new Error(`ANIMATION_EASING_UNKNOWN: unknown easing "${op.ease}"`);
       }
@@ -1267,7 +1272,10 @@ export function applyAnimationOp(
       if (op.ease === 'stepped') {
         throw new Error('ANIMATION_EASING_STEPPED_USE_CURVE: "stepped" is a curve mode; use curve: "stepped"');
       }
-      const easings = isRecord(doc.easings) ? doc.easings : {};
+      const easings = {
+        ...(fallbackEasings ?? {}),
+        ...(isRecord(doc.easings) ? doc.easings : {}),
+      };
       if (!Array.isArray(easings[op.ease])) {
         throw new Error(`ANIMATION_EASING_UNKNOWN: unknown easing "${op.ease}"`);
       }
@@ -1651,11 +1659,13 @@ function coalesceSetKeyValueOp(
  */
 export class AnimationOpBuilder {
   readonly baseText: string;
+  readonly fallbackEasings?: Readonly<Record<string, EasingTuple>>;
   private currentText: string;
   private readonly history: Array<{ op: AnimationSourceOp; textBefore: string }> = [];
 
-  constructor(baseText: string) {
+  constructor(baseText: string, fallbackEasings?: Readonly<Record<string, EasingTuple>>) {
     this.baseText = baseText;
+    this.fallbackEasings = fallbackEasings;
     this.currentText = baseText;
   }
 
@@ -1691,7 +1701,7 @@ export class AnimationOpBuilder {
         op.op === 'set_key_value' && last.op.op === 'set_key_value'
           ? coalesceSetKeyValueOp(replayFrom, last.op, op)
           : op;
-      const res = applyAnimationOp(replayFrom, coalescedOp, this.baseText);
+      const res = applyAnimationOp(replayFrom, coalescedOp, this.baseText, this.fallbackEasings);
       this.history.pop();
       if (res.text === this.baseText) {
         this.history.length = 0;
@@ -1707,7 +1717,7 @@ export class AnimationOpBuilder {
       return res;
     }
 
-    const res = applyAnimationOp(this.currentText, op, this.baseText);
+    const res = applyAnimationOp(this.currentText, op, this.baseText, this.fallbackEasings);
     if (res.text === this.baseText) {
       this.history.length = 0;
       this.currentText = this.baseText;
@@ -1716,9 +1726,109 @@ export class AnimationOpBuilder {
     if (res.text === this.currentText) {
       return { text: this.currentText, changedSpans: [] };
     }
+    if (this.history.length >= MAX_ANIMATION_OPS) {
+      throw new Error(
+        `ANIMATION_OPS_TOO_MANY: pending operations cannot exceed MAX_ANIMATION_OPS (${MAX_ANIMATION_OPS})`,
+      );
+    }
     this.history.push({ op, textBefore: this.currentText });
     this.currentText = res.text;
     return res;
+  }
+
+  /**
+   * Move a selection of `(track, key)` pairs in `animation` by `deltaTime` seconds
+   * atomically. When `deltaTime > 0`, keys on the same track are moved from right to left
+   * so an earlier key does not collide with its not-yet-moved right neighbor; when
+   * `deltaTime < 0`, from left to right. Refuses with `ANIMATION_OPS_TOO_MANY` (restoring
+   * the builder's prior state) if the move would exceed `MAX_ANIMATION_OPS`.
+   */
+  moveSelection(
+    animation: string,
+    selections: ReadonlyArray<{ track: number; key: number }>,
+    deltaTime: number,
+  ): AppliedAnimationOpsResult {
+    if (!Number.isFinite(deltaTime)) {
+      throw new Error(`ANIMATION_KEY_TIME_INVALID: deltaTime must be finite, got ${String(deltaTime)}`);
+    }
+    if (selections.length === 0 || deltaTime === 0) {
+      return { text: this.currentText, changedSpans: [] };
+    }
+    const byTrack = new Map<number, number[]>();
+    for (const sel of selections) {
+      let arr = byTrack.get(sel.track);
+      if (!arr) {
+        arr = [];
+        byTrack.set(sel.track, arr);
+      }
+      if (!arr.includes(sel.key)) arr.push(sel.key);
+    }
+    const totalSelected = [...byTrack.values()].reduce((acc, a) => acc + a.length, 0);
+    if (totalSelected > MAX_ANIMATION_OPS) {
+      throw new Error(
+        `ANIMATION_OPS_TOO_MANY: selection move of ${totalSelected} keys exceeds MAX_ANIMATION_OPS (${MAX_ANIMATION_OPS})`,
+      );
+    }
+    const savedText = this.currentText;
+    const savedHistory = this.history.map((h) => ({ ...h }));
+    const changedSpans: { start: number; end: number }[] = [];
+    try {
+      const sortedTracks = [...byTrack.keys()].sort((a, b) => a - b);
+      const targetTimes = new Map<string, number>();
+      for (const track of sortedTracks) {
+        const { keys } = resolveEditableTrack(this.currentText, animation, track);
+        for (const key of byTrack.get(track)!) {
+          const k = keys[key];
+          if (!k) {
+            throw new Error(`ANIMATION_KEY_OUT_OF_RANGE: key index ${key} out of [0, ${keys.length - 1}]`);
+          }
+          targetTimes.set(`${track}:${key}`, cleanMotionNumber(k.t + deltaTime));
+        }
+      }
+
+      // Coalesce with a trailing batch of set_key_time ops on the same selection
+      let suffixStart = this.history.length;
+      while (suffixStart > 0) {
+        const prev = this.history[suffixStart - 1]!.op;
+        if (
+          prev.op === 'set_key_time' &&
+          prev.animation === animation &&
+          targetTimes.has(`${prev.track}:${prev.key}`)
+        ) {
+          suffixStart--;
+        } else {
+          break;
+        }
+      }
+      if (suffixStart < this.history.length) {
+        this.currentText = this.history[suffixStart]!.textBefore;
+        this.history.length = suffixStart;
+      }
+
+      for (const track of sortedTracks) {
+        const { keys } = resolveEditableTrack(this.currentText, animation, track);
+        const keyIndices = [...byTrack.get(track)!].sort((a, b) => {
+          const shiftA = targetTimes.get(`${track}:${a}`)! - keys[a]!.t;
+          return shiftA >= 0 ? b - a : a - b;
+        });
+        for (const key of keyIndices) {
+          const res = this.apply({
+            op: 'set_key_time',
+            animation,
+            track,
+            key,
+            time: targetTimes.get(`${track}:${key}`)!,
+          });
+          changedSpans.push(...res.changedSpans);
+        }
+      }
+      return { text: this.currentText, changedSpans };
+    } catch (err) {
+      this.currentText = savedText;
+      this.history.length = 0;
+      this.history.push(...savedHistory);
+      throw err;
+    }
   }
 
   undo(): boolean {
@@ -1739,8 +1849,19 @@ export class AnimationOpBuilder {
 // Pending-preview adapter into src/animation-inspection.ts (Correction 7)
 // ---------------------------------------------------------------------------
 
+const KEY_TIME_GRID = 360000;
+
 function f32(n: number): number {
   return Math.fround(n);
+}
+
+/**
+ * Match `@rig-c/core/src/compile.ts` `keyTime(n)`: snap times within 5e-7 of the
+ * 1/360000s grid before Float32 rounding so preview keys match compiled keys.
+ */
+export function compiledKeyTime(n: number): number {
+  const grid = Math.round(n * KEY_TIME_GRID) / KEY_TIME_GRID;
+  return f32(Math.abs(n - grid) <= 5e-7 ? grid : n);
 }
 
 function resolveKeyCurveForInspection(
@@ -1750,7 +1871,7 @@ function resolveKeyCurveForInspection(
 ): number[] | 'stepped' | undefined {
   if (!nextKey) return undefined;
   if (key.curve !== undefined) {
-    return key.curve === 'stepped' ? 'stepped' : [...key.curve];
+    return key.curve === 'stepped' ? 'stepped' : key.curve.map(f32);
   }
   if (key.ease === undefined) return undefined;
   if (key.ease === 'stepped') return 'stepped';
@@ -1766,10 +1887,10 @@ function resolveKeyCurveForInspection(
     const v1 = key.v[c]!;
     const dv = nextKey.v[c]! - v1;
     out.push(
-      cleanMotionNumber(key.t + dt * hx1),
-      cleanMotionNumber(v1 + dv * hy1),
-      cleanMotionNumber(key.t + dt * hx2),
-      cleanMotionNumber(v1 + dv * hy2),
+      f32(key.t + dt * hx1),
+      f32(v1 + dv * hy1),
+      f32(key.t + dt * hx2),
+      f32(v1 + dv * hy2),
     );
   }
   return out;
@@ -1799,9 +1920,9 @@ export function draftTrackToInspectionTrack(
     throw new Error(`ANIMATION_TRACK_READ_ONLY: unsupported bone property "${track.property}"`);
   }
   const storedKeys: StoredKey[] = track.keys.map((k, idx) => {
-    const entry: StoredKey = { time: k.t };
+    const entry: StoredKey = { time: compiledKeyTime(k.t) };
     channelSpec.forEach((ch, c) => {
-      entry[ch.field] = k.v[c]!;
+      entry[ch.field] = f32(k.v[c]!);
     });
     const curve = resolveKeyCurveForInspection(k, track.keys[idx + 1], easings);
     if (curve !== undefined) {
@@ -1826,6 +1947,7 @@ export function draftTrackToInspectionTrack(
 export function overlayDraftOnInspection(
   inspection: AnimationInspection,
   draftMotionText: string,
+  fallbackEasings?: Readonly<Record<string, EasingTuple>>,
 ): AnimationInspection {
   const doc = JSON.parse(draftMotionText) as Record<string, unknown>;
   if (!isRecord(doc.animations)) return inspection;
@@ -1833,9 +1955,13 @@ export function overlayDraftOnInspection(
   if (!isRecord(anim) || !Array.isArray(anim.tracks)) return inspection;
   const rawTracks = anim.tracks as unknown[];
 
-  const easings = isRecord(doc.easings)
-    ? (doc.easings as Readonly<Record<string, EasingTuple>>)
-    : undefined;
+  const easings: Readonly<Record<string, EasingTuple>> | undefined =
+    isRecord(doc.easings) || fallbackEasings
+      ? {
+          ...(fallbackEasings ?? {}),
+          ...(isRecord(doc.easings) ? (doc.easings as Readonly<Record<string, EasingTuple>>) : {}),
+        }
+      : undefined;
   const classifications = classifyAnimationTracks(doc, inspection.name);
   const replacementByKey = new Map<string, InspectionTrack>();
 

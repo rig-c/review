@@ -1,6 +1,6 @@
 # Read-only animation inspection
 
-Animate → Transport offers a timeline, a stored-curve view and a bone tree for the current compiled build. These are inspection controls: no key authoring, motion.json writes, producer operations or output/patch schema changes. Two-build comparison is outside this feature.
+Animate → Transport offers a timeline, a stored-curve view and a bone tree for the current compiled build. The bone value tracks of `motion.animations_from` are editable (#235): an edit is a pending op, and Apply builds it through the installed producer into scratch. The package's files are never written. Two-build comparison is outside this feature.
 
 The timeline lists bone groups followed by slot groups, one lane per stored timeline, with a mark per key including simultaneous keys. Key times remain exact seconds. Clicking a mark seeks through the existing transport; transport movement updates its playhead. No FPS is inferred. A selected bone filters its direct bone tracks; a selected slot filters that slot's tracks. Whole rig clears the filter.
 

@@ -11,8 +11,8 @@ The app provides one inspection workspace for setup geometry and motion, compile
 [Play](https://github.com/rig-c/play) → **Adapter** (consumer integration).
 
 Review is the human inspection and source-bound feedback gate in this delivery
-flow. It inspects the upstream build without replacing Core's compiler gate or
-authoring motion. Review itself uses the published Play runtime for previews;
+flow. It inspects the upstream build without replacing Core's compiler gate, and
+its motion edits are data the installed producer builds in scratch. Review itself uses the published Play runtime for previews;
 the chain describes delivery and feedback responsibilities, not runtime import
 order. Adapter denotes downstream consumer integration, without depending on the
 published adapters (`@rig-c/pixi`, `@rig-c/phaser`, `@rig-c/three`) or changing
