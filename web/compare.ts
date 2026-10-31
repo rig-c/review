@@ -2,7 +2,8 @@ import {requireFeedbackFrames} from '../src/stage-comment.ts';
 import {bindStageComments,type CommentPose} from './stage-comments.ts';
 import {sharedTurnDials,type TurnDial} from '../src/turn-pad.ts';
 import {bindTurnPad,type TurnPad} from './turn-pad.ts';
-import {PartExplorer,loadPartCatalog} from './part-selection.ts';
+import {PartExplorer,loadPartModel} from './part-selection.ts';
+import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature,type PaneCamera} from './camera-view.ts';
 import { CanvasRenderer, loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import type { CompareResponse, CompareSide } from '../src/compare.ts';
@@ -47,6 +48,7 @@ let idleHeld=true,loopRestarting=false,suspendedPreview=false;
 let appearance:ReturnType<typeof bindAppearance>|null=null,controlDispose:(()=>void)|null=null,workspace:WorkspaceUI|null=null;
 const viewDisposers:(()=>void)[]=[];
 let parts:PartExplorer|null=null,turnPad:TurnPad|null=null;
+const thumbnails:Partial<Record<Side,PartThumbnails>>={};
 let comments:ReturnType<typeof bindStageComments>|null=null;
 const overlays:Partial<Record<Side,RigOverlays>>={};
 function inspectionPlayer(side:Side):InspectionPlayer {const player=players[side];if(!player)throw new Error('Part player unavailable');return {get time(){return player.time;},pause:()=>player.pause(),seek:time=>player.seek(time),draw:()=>{player.draw();parts?.present(side);}};}
@@ -247,8 +249,8 @@ async function loadSide(side: Side, value: CompareSide): Promise<number> {
   assets[side] = loaded; const clip = loaded.animations.find(item => item.name === data.animation); if (!clip) throw new Error(`${side.toUpperCase()}: animation "${data.animation}" Not supplied`);
   const player = new RigPlayer(el(`${side}-root`), loaded, { seekStep: compareSeekStep });
   // A side counts as loaded only after its first successful draw; a parts catalog refusal never fails the side.
-  try { players[side] = player;try{parts?.register(side,await loadPartCatalog(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]),player);}catch(error){parts?.refuseCatalog(side,error);} player.environment(null); player.play(data.animation, { loop: false }); player.pause(); player.draw(); }
-  catch (error) { delete players[side]; player.dispose(); throw error; }
+  try { players[side] = player;try{const catalog=await loadPartModel(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]);thumbnails[side]?.dispose();thumbnails[side]=new PartThumbnails(pageRegionTable(catalog.model),loaded.pageImages);parts?.register(side,catalog.entries,player,thumbnails[side]);}catch(error){parts?.refuseCatalog(side,error);} player.environment(null); player.play(data.animation, { loop: false }); player.pause(); player.draw(); }
+  catch (error) { thumbnails[side]?.dispose(); delete thumbnails[side]; delete players[side]; player.dispose(); throw error; }
   el(`${side}-empty`).hidden = true; return clip.duration;
 }
 
@@ -405,7 +407,7 @@ function bind(): void {
   document.addEventListener('visibilitychange',()=>{if(document.hidden){suspendedPreview=!video.paused;stop();}else if(suspendedPreview&&!idleHeld){suspendedPreview=false;void playComparison().catch(error=>message(describe(error),true));}});
   const observer = new ResizeObserver(fit); observer.observe(el('a-viewport')); observer.observe(el('b-viewport'));observer.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { comments?.dispose();persistence?.dispose();turnPad?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
+  window.addEventListener('pagehide', () => { comments?.dispose();persistence?.dispose();turnPad?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { thumbnails[side]?.dispose(); players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
 }
 
 async function start(): Promise<void> {
@@ -444,7 +446,7 @@ type PairEligibilityState=ReturnType<typeof pairEligibility>;
 /** Static single-pane inspection of whatever actually loaded. No synchronized pair, playback or feedback. */
 function showSurvivors():void {
  invalidateTrace('Comparison unavailable · no synchronized pair');
- for(const side of ['a','b'] as const){if(pairInputs[side].state==='loaded'&&players[side])text(`${side}-renderer`,rendererBadges[side].succeeded(players[side]!.renderer).label);else{assets[side]?.dispose();delete assets[side];text(`${side}-empty`,`${side.toUpperCase()} unavailable · ${pairInputs[side].state==='failed'?(pairInputs[side] as {reason:string}).reason:'not loaded'}`);text(`${side}-renderer`,rendererBadges[side].failed().label);}}
+ for(const side of ['a','b'] as const){if(pairInputs[side].state==='loaded'&&players[side])text(`${side}-renderer`,rendererBadges[side].succeeded(players[side]!.renderer).label);else{thumbnails[side]?.dispose();delete thumbnails[side];assets[side]?.dispose();delete assets[side];text(`${side}-empty`,`${side.toUpperCase()} unavailable · ${pairInputs[side].state==='failed'?(pairInputs[side] as {reason:string}).reason:'not loaded'}`);text(`${side}-renderer`,rendererBadges[side].failed().label);}}
  if(pairInputs.reference.state!=='loaded')text('reference-empty','Reference video unavailable.');
  updateFeedbackAvailability();
  const state=renderPairLayout();activeCamera=state.effective==='b'?'b':state.effective==='reference'?'reference':'a';fit();
