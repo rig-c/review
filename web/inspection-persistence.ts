@@ -1,3 +1,4 @@
+import {isTimeOnlyFeedback,hasStageComment,parseStageComment} from '../src/stage-comment.ts';
 import {parseTurnSnapshot,type TurnSnapshot} from '../src/turn-pad.ts';
 /** Versioned local drafts and public numeric view links. No capability or review decision is put in a URL. */
 import {parseControlPart,parseControlView,type ControlPart,type ControlView} from '../src/control.ts';
@@ -76,6 +77,9 @@ export function numericCamera(space:'world'|'image',center:{x:number;y:number},z
 }
 /** Restore saved source-region coverage under a different viewport aspect, without pixel-pan guesses. */
 export function restoredZoom(camera:NonNullable<ControlView['cameras']['rig']>,baseScale:number,width:number,height:number):number {
+ // Reuse the captured value when the same pane/fit reproduces its exact region.
+ // Inverting visible extent can otherwise lose one ULP on each bookmark jump.
+ if(camera.viewport.width===width&&camera.viewport.height===height&&camera.zoom>=.25&&camera.zoom<=8){const current=numericCamera(camera.space,camera.center,camera.zoom,baseScale*camera.zoom,width,height);if(current&&JSON.stringify(current.visible)===JSON.stringify(camera.visible))return camera.zoom;}
  const scale=Math.min(width/camera.visible.width,height/camera.visible.height),zoom=scale/baseScale;
  if(!Number.isFinite(zoom)||zoom<.25||zoom>8)throw new Error('VIEW_CAMERA_RANGE: saved region cannot fit within zoom 0.25..8');return zoom;
 }
@@ -105,7 +109,7 @@ export function recoverSession<T extends {id:string;revision:string;sourceHash:s
  if(!value||typeof value!=='object'||Array.isArray(value))return null;const o=value as Record<string,unknown>;for(const key of Object.keys(o))if(!Object.keys(baseline).includes(key))return null;
  for(const k of ['id','revision','sourceHash','reviewedSource','referenceBinding','binding'])if(JSON.stringify(o[k])!==JSON.stringify((baseline as Record<string,unknown>)[k]))return null;
  if(!['pending','approved','changes-requested'].includes(String(o.status))||!Array.isArray(o.feedback)||!Array.isArray(o.feedbackWarnings))return null;
- for(const item of o.feedback){if(!item||typeof item!=='object')return null;const f=item as Record<string,unknown>,target=f.target as Record<string,unknown>|undefined;if(typeof f.id!=='string'||typeof f.summary!=='string'||!Number.isInteger(f.frameStart)||!Number.isInteger(f.frameEnd)||!target||!['bone','slot','rig'].includes(String(target.kind))||typeof target.name!=='string'||!['defect','quality'].includes(String(f.category)))return null;}
+ for(const item of o.feedback){if(!item||typeof item!=='object')return null;const f=item as Record<string,unknown>,target=f.target as Record<string,unknown>|undefined;const comment=(f.context as any)?.comment;if(hasStageComment(comment)){try{parseStageComment(comment);}catch{return null;}}if(hasStageComment(comment)&&(comment.frame===null||comment.timeBasis!==undefined)&&!isTimeOnlyFeedback(f))return null;if(typeof f.id!=='string'||typeof f.summary!=='string'||(!Number.isInteger(f.frameStart)||!Number.isInteger(f.frameEnd))&&!isTimeOnlyFeedback(f)||!target||!['bone','slot','rig'].includes(String(target.kind))||typeof target.name!=='string'||!['defect','quality'].includes(String(f.category)))return null;}
  if('checkpoints'in baseline){if(!o.checkpoints||typeof o.checkpoints!=='object'||Array.isArray(o.checkpoints))return null;for(const value of Object.values(o.checkpoints)){if(!value||typeof value!=='object'||Array.isArray(value))return null;const item=value as Record<string,unknown>;if(!['pending','pass','fail'].includes(String(item.outcome))||typeof item.note!=='string'||item.note.length>32768)return null;}}
  return o as T;
 }

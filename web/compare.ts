@@ -1,8 +1,10 @@
+import {requireFeedbackFrames} from '../src/stage-comment.ts';
+import {bindStageComments,type CommentPose} from './stage-comments.ts';
 import {sharedTurnDials,type TurnDial} from '../src/turn-pad.ts';
 import {bindTurnPad,type TurnPad} from './turn-pad.ts';
 import {PartExplorer,loadPartCatalog} from './part-selection.ts';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature,type PaneCamera} from './camera-view.ts';
-import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
+import { CanvasRenderer, loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import type { CompareResponse, CompareSide } from '../src/compare.ts';
 import type { CompareFeedback, CompareSession } from '../src/compare-session.ts';
 import { clockForAnimation, lastFrame, timeAtFrame } from '../src/frame-clock.ts';
@@ -17,7 +19,7 @@ import {connectControl} from './control.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
 import {controlComparison,type ControlCommand,type ControlInspection,type ControlView} from '../src/control.ts';
 import {pairEligibility,type InputState,type PairDomain} from '../src/comparison-eligibility.ts';
-import {connectInspectionPersistence,serializableView,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
+import {parseBookmark,connectInspectionPersistence,serializableView,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
 import {RendererBadge} from './renderer-status.ts';
 import {ComparePresentation,type PresentationState} from '../src/compare-presentation.ts';
 import {nextReferenceInterval,ReferenceSelectionUnavailable,inspectionReferenceFrame,lastSupportedReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,type ReferenceFrameIndex,type VideoInfo,type VideoFrame} from '../src/reference-frames.ts';
@@ -44,6 +46,7 @@ let idleHeld=true,loopRestarting=false,suspendedPreview=false;
 let appearance:ReturnType<typeof bindAppearance>|null=null,controlDispose:(()=>void)|null=null,workspace:WorkspaceUI|null=null;
 const viewDisposers:(()=>void)[]=[];
 let parts:PartExplorer|null=null,turnPad:TurnPad|null=null;
+let comments:ReturnType<typeof bindStageComments>|null=null;
 const overlays:Partial<Record<Side,RigOverlays>>={};
 function inspectionPlayer(side:Side):InspectionPlayer {const player=players[side];if(!player)throw new Error('Part player unavailable');return {get time(){return player.time;},pause:()=>player.pause(),seek:time=>player.seek(time),draw:()=>{player.draw();parts?.present(side);}};}
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
@@ -290,6 +293,7 @@ function renderFeedbackSelection(): void {
 }
 
 function renderFeedback(): void {
+  comments?.refresh();
   const list = el('feedback-list'); list.replaceChildren();
   const warnings = el('feedback-warnings'); warnings.hidden = session.feedbackWarnings.length === 0;
   warnings.textContent = session.feedbackWarnings.length ? `${session.feedbackWarnings.length} validation warnings in existing feedback · original records are preserved. Review the marked entries, delete them and add valid replacements before submitting. JSON and Markdown exports preserve both the original records and warnings.` : '';
@@ -299,7 +303,7 @@ function renderFeedback(): void {
     for (const warning of session.feedbackWarnings.filter(value => value.id === feedback.id)) { const note = document.createElement('p'); note.className = 'hint'; note.textContent = `Validation warning · ${warning.error}`; row.append(note); }
     const details = document.createElement('details'), heading = document.createElement('summary'), source = document.createElement('pre'); heading.textContent = 'Saved feedback and inspection context'; source.textContent = JSON.stringify(feedback, null, 2); details.append(heading, source);
     const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Delete'; remove.onclick = () => { session.feedback = session.feedback.filter(value => value.id !== feedback.id); session.feedbackWarnings = session.feedbackWarnings.filter(warning => warning.id !== feedback.id); renderFeedback(); markDirty(); };
-    row.append(details, remove); list.append(row);
+    row.append(details);if((feedback.context as any)?.comment?.schema!=='rig-review-comment/1'||!submittedBaseline?.feedback.some(f=>f.id===feedback.id))row.append(remove); list.append(row);
   }
   savedState();
 }
@@ -324,7 +328,7 @@ async function exportStrip(): Promise<void> {
       for (const feedback of session.feedback) {
         const context = feedback.context;
         if (!context || typeof context !== 'object' || Array.isArray(context) || context.animation !== data.animation) throw new Error(`Feedback ${feedback.id}: Its animation is missing or differs from the comparison animation. The range was not reassigned to another animation.`);
-        intervals.push({ id: feedback.id, feedbackId: feedback.id, basis: feedback.side, frameStart: feedback.frameStart, frameEnd: feedback.frameEnd });
+        intervals.push({ id: feedback.id, feedbackId: feedback.id, basis: feedback.side, ...requireFeedbackFrames(feedback) });
       }
     } else {
       const basis = select('strip-basis').value, start = input('frame-start').value.trim(), end = input('frame-end').value.trim();
@@ -383,7 +387,7 @@ function bind(): void {
     session.feedback.push({ id: crypto.randomUUID(), side, frameStart, frameEnd, target, category: category as CompareFeedback['category'], summary, context: { ...(turnPad?{turn:JSON.parse(JSON.stringify(turnPad.snapshot()))}:{}),interval: { frameStart, frameEnd, inclusive: true }, animation: data.animation, mediaTime: inspected.reference, clockSource: inspected.source, frame: currentFrame(side), frames: { a: currentFrame('a'), b: currentFrame('b') }, playheads: { reference: inspected.reference, a: inspected.a, b: inspected.b },reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,part:parts?.feedback()??null,view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},decodedIndex:referenceFrames?referenceFrameAtTime(referenceFrames,inspected.reference)?.index??null:null } });
     input('summary').value = ''; markDirty(); renderFeedback(); message('Added feedback bound to the target build and both reviewed sources.');
   };
-  button('submit').onclick = async () => { if(readOnly){message(readOnly,true);return;}if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; } saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;await persistence?.submitted(saved); message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status and A/B/reference-video provenance.'); } catch (error) { message(`Submission failed: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
+  button('submit').onclick = async () => { if(readOnly){message(readOnly,true);return;}if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; } saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;submittedBaseline=structuredClone(saved);comments?.refresh();await persistence?.submitted(saved);renderFeedback(); message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status and A/B/reference-video provenance.'); } catch (error) { message(`Submission failed: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
   button('export-json').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ ...session, schema: 'rig-review-compare-feedback/1', issues: session.feedback.map(issue) }, null, 2) + '\n', 'application/json'); };
   button('export-markdown').onclick = () => { download(`${session.id}-issues.md`, [`# ${md(data.title)}`, '', 'Ordered A/B and reference provenance:', ...JSON.stringify(session.binding, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(feedback => { const entry = issue(feedback); return [`## ${md(entry.title)}`, '', entry.body, '', '---', '']; })].join('\n'), 'text/markdown'); };
   // Saved browser defaults seed a new inspection; explicit links and source drafts restore over them.
@@ -391,7 +395,7 @@ function bind(): void {
   cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('appearance'),workspace.defaults().theme);
   for(const side of ['a','b'] as const)overlays[side]=new RigOverlays({canvas:el<HTMLCanvasElement>(side+'-overlay'),rigRoot:el(side+'-root')});
-  for(const target of ['a','b','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy))));
+  for(const target of ['a','b','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy)),()=>!comments?.active()));
   viewDisposers.push(bindStageLayout(el('stage-layout'),fit));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlays(false);};
   input('idle-repeat').onchange=()=>{renderIdle();if(canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));};
@@ -400,7 +404,7 @@ function bind(): void {
   document.addEventListener('visibilitychange',()=>{if(document.hidden){suspendedPreview=!video.paused;stop();}else if(suspendedPreview&&!idleHeld){suspendedPreview=false;void playComparison().catch(error=>message(describe(error),true));}});
   const observer = new ResizeObserver(fit); observer.observe(el('a-viewport')); observer.observe(el('b-viewport'));observer.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { persistence?.dispose();turnPad?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
+  window.addEventListener('pagehide', () => { comments?.dispose();persistence?.dispose();turnPad?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
 }
 
 async function start(): Promise<void> {
@@ -421,7 +425,7 @@ async function start(): Promise<void> {
     void loadFrameIndex();
     input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;
-    await seekTo(0);configureTurnPad();activeCamera='a';if(cameraSync)alignCameras();fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
+    await seekTo(0);configureTurnPad();activeCamera='a';if(cameraSync)alignCameras();fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();setupComments();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
     if(!readOnly&&controlServed)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { failPair(error); for (const side of ['a', 'b'] as const) if (!players[side]) text(`${side}-empty`, `${side.toUpperCase()} Could not open comparison rig.`); text('reference-empty', 'Check the reference video and comparison inputs.'); }
 }
@@ -499,7 +503,7 @@ async function restartIdle():Promise<void> {
  try{await seekTo(0,null,null,true);if(!idleHeld&&canRepeatIdle()&&!disposed&&!document.hidden&&trace)await playComparison();}
  catch(error){idleHeld=true;message(describe(error),true);}finally{loopRestarting=false;}
 }
-function localDraft():boolean{return dirty||!!input('summary').value.trim()||!!input('frame-start').value.trim()||!!input('frame-end').value.trim()||!!input('target-name').value.trim()||!!select('category').value;}
+function localDraft():boolean{return !!comments?.draft()||dirty||!!input('summary').value.trim()||!!input('frame-start').value.trim()||!!input('frame-end').value.trim()||!!input('target-name').value.trim()||!!select('category').value;}
 function controlState():ControlInspection {
  const css=(target:CameraTarget)=>{const frame=paneFrame(target,true);if(!frame)return {zoom:1,pan:{x:0,y:0}};const value=cameraSignature(cameras[target],frame);return {zoom:value.zoom,pan:{x:value.pan.x*frame.width,y:value.pan.y*frame.height}};};
  return {part:parts?.value()??null,partGeneration:parts?.observation()?.generation??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:css('a'),a:css('a'),b:css('b'),reference:css('reference')},animation:data.animation,time:trace?.reference??null,playing:!video.paused,loop:canRepeatIdle()?'idle':'off',layers:{images:!!players.a&&layers.images,meshes:!!players.a&&layers.mesh,bones:!!players.a&&layers.bones},ready,seeking:seeking||video.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring()&&pairEligibility(pairInputs).feedback&&!!feedbackTrace(ready,seeking||video.seeking,trace),comparison:controlComparison(pairEligibility(pairInputs)),capabilities:{camera:!!players.a&&!!players.b,referenceCamera:video.readyState>=1,animation:false,time:ready,playback:ready&&pairEligibility(pairInputs).playback,layers:{images:!!players.a&&!!players.b,meshes:!!players.a&&!!players.b,bones:!!players.a&&!!players.b}}};
@@ -557,4 +561,21 @@ async function setupPersistence():Promise<boolean> {
  ui:()=>({inspectorScroll:workspace?.scroll()??'{}',frameBasis:select('frame-basis').value}),restoreUI:value=>{if(value.frameBasis==='a'||value.frameBasis==='b')select('frame-basis').value=value.frameBasis;frameControls();workspace?.restoreScroll(value.inspectorScroll);},afterInputs:()=>{video.muted=!input('reference-audio').checked;const name=input('target-name').value;renderFeedbackSelection();input('target-name').value=name;},onConflict:value=>{draftConflict=value;savedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
  return persistence.restored;
 }
+
+function setupComments():void {
+ comments=bindStageComments({toolbar:el('stage-comment').parentElement!,viewports:{a:el('a-viewport'),b:el('b-viewport'),reference:el('reference-viewport')},
+  pose:view=>{
+   if(view==='rig'||!trace)return null;const side=view==='b'?'b':'a',camera=numericView().cameras[view];if(!camera||hostHidden(el(view+'-viewport')))return null;
+   const raw=currentReviewFrame(side)??currentFrame(side),decoded=referenceFrames?referenceFrameAtTime(referenceFrames,trace.reference):null;
+   const renderer=players[side]?.renderer;const index=view==='reference'?decoded?.index:raw??decoded?.index,basis=view==='reference'||raw===null?'reference':'producer';
+   return {mode:'compare',capture:{pane:el(view+'-viewport'),root:view==='reference'?undefined:el(side+'-root'),images:view==='reference'||layers.images,canvas:view!=='reference'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null||index===undefined?null:{index,basis},time:trace.reference,animation:data.animation,turn:turnPad?.snapshot()??null,sourceHash:data[side].sourceHash,modelHash:view==='reference'?null:data[side].reviewedSource.rig?.sha256??null,referenceHash:data.reference.sha256,referenceId:data.reference.sha256,rig:data[side].manifest.id,side,...(view==='reference'?{media:video}:{posed:parts?.frame(side),assets:assets[side]})} as CommentPose;
+  },
+  pause:async()=>{idleHeld=true;const running=!video.paused,at=trace?.reference??lastPresented?.time;stop();if(running&&at!==undefined){await seekTo(at);if(!trace)throw new Error('COMMENT_INSPECTION_UNAVAILABLE');}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},
+  bookmark:inspectionBookmark,restore:b=>restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal),feedback:()=>session.feedback,
+  locked:id=>!!submittedBaseline?.updatedAt&&submittedBaseline.feedback.some(f=>f.id===id),
+  add:(f,side)=>session.feedback.push({...f,side:side??'a'}),changed:()=>{markDirty();renderFeedback();persistence?.save();},error:value=>message(value,true),blocked:()=>saving||seeking||video.seeking||!!persistence?.restoring()||!ready
+ });
+}
+function hostHidden(node:HTMLElement):boolean{return node.clientWidth<=0||node.clientHeight<=0;}
+
 void start();

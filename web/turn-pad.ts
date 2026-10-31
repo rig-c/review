@@ -1,5 +1,5 @@
 import {TurnState,type TurnDial,type TurnSnapshot,type TurnAxis,pointerPosition} from '../src/turn-pad.ts';
-export interface TurnPad {state:TurnState;snapshot():TurnSnapshot;restore(value:unknown):void;dispose():void}
+export interface TurnPad {state:TurnState;snapshot():TurnSnapshot;restore(value:unknown,redraw?:boolean):void;dispose():void}
 /** One pad owns the shared values. It never touches the model document or writes animation keys. */
 export function bindTurnPad(options:{host:HTMLElement;stages:HTMLElement[];dials:readonly TurnDial[];draw:(state:TurnState)=>void;save:()=>void;blocked?:()=>boolean;error:(text:string)=>void}):TurnPad|null {
  const {host,stages,dials}=options;if(!dials.length)return null;
@@ -22,5 +22,5 @@ export function bindTurnPad(options:{host:HTMLElement;stages:HTMLElement[];dials
  let disposed=false,last=0,raf=0;
  const step=(now:number)=>{if(disposed)return;if(!document.hidden&&!options.blocked?.()&&state.step(last?Math.min((now-last)/1000,.1):0))commit();last=now;raf=requestAnimationFrame(step);};
  host.append(panel);commit();raf=requestAnimationFrame(step);
- return {state,snapshot:()=>state.snapshot(),restore(value){state.restore(value);commit();},dispose(){disposed=true;if(saveTimer)clearTimeout(saveTimer);cancelAnimationFrame(raf);for(const stage of stages)stage.removeEventListener('pointermove',move);panel.remove();}};
+ return {state,snapshot:()=>state.snapshot(),restore(value,redraw=true){state.restore(value);if(redraw)commit();else{render();options.save();}},dispose(){disposed=true;if(saveTimer)clearTimeout(saveTimer);cancelAnimationFrame(raf);for(const stage of stages)stage.removeEventListener('pointermove',move);panel.remove();}};
 }

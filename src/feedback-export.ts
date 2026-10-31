@@ -1,3 +1,4 @@
+import {feedbackTimingLabel,hasStageComment,stageCommentMode,commentModes,type CommentMode} from './stage-comment.ts';
 import type { Json, ReviewedSource } from './manifest.ts';
 import type { Feedback, FeedbackWarning, ReviewSession } from './session.ts';
 import type { CompareBinding } from './compare.ts';
@@ -21,8 +22,8 @@ interface BuildCount {
 interface ExportItem {
   id: string;
   side: Side;
-  frameStart: number;
-  frameEnd: number;
+  frameStart: number|null;
+  frameEnd: number|null;
   target: Feedback['target'];
   category: Category;
   summary: string;
@@ -52,6 +53,7 @@ export interface FeedbackIssueExport {
   counts: Counts;
   builds: BuildCount[];
   categories: CategoryGroup[];
+  commentModes?: {mode:CommentMode;items:ExportItem[]}[];
   pairedBinding: CompareBinding | null;
   referenceBinding: ReferenceBinding | null;
   feedbackWarnings: FeedbackWarning[];
@@ -62,6 +64,11 @@ const categories: readonly Category[] = ['defect', 'quality'];
 const sideOrder: Record<Side, number> = { single: 0, a: 1, b: 2 };
 const compareText = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
 const emptyCounts = (): Counts => ({ defect: 0, quality: 0, total: 0 });
+/** A derived index into canonical feedback, never a second persisted store. */
+export function feedbackWithCommentGroups<T extends {feedback:Feedback[]}>(session:T):T&{commentGroups?:{schema:'rig-review-comment-groups/1';canonical:'feedback';modes:{mode:CommentMode;feedbackIds:string[]}[]}} {
+ const groups=commentModes.map(mode=>({mode,feedbackIds:session.feedback.filter(f=>hasStageComment((f.context as any)?.comment)&&stageCommentMode((f.context as any).comment)===mode).map(f=>f.id)})).filter(g=>g.feedbackIds.length);
+ return groups.length?{...session,commentGroups:{schema:'rig-review-comment-groups/1',canonical:'feedback',modes:groups}}:session;
+}
 function cloneSource(source: ReviewedSource): ReviewedSource {
   return { ...source, rig: source.rig ? { ...source.rig } : null, motion: source.motion ? { ...source.motion } : null };
 }
@@ -126,10 +133,11 @@ export function groupFeedbackIssues(input: ParsedFeedbackSession): FeedbackIssue
     for (const target of targets) target.items.sort((a, b) => sideOrder[a.side] - sideOrder[b.side] || compareText(a.id, b.id));
     return { category, count: counts[category], targets };
   });
+  const comments=commentModes.map(mode=>({mode,items:categoryGroups.flatMap(c=>c.targets.flatMap(t=>t.items)).filter(f=>hasStageComment((f.context as any)?.comment)&&stageCommentMode((f.context as any).comment)===mode)})).filter(g=>g.items.length);
   return {
     schema: 'rig-review-issue-export/1',
     session: { schema: input.schema, id: input.id, revision: input.revision, sourceHash: input.sourceHash, status: input.status, updatedAt: input.updatedAt },
-    counts, builds, categories: categoryGroups, pairedBinding, referenceBinding,
+    counts, builds, categories: categoryGroups, ...(comments.length?{commentModes:comments}:{}), pairedBinding, referenceBinding,
     feedbackWarnings: input.feedbackWarnings.map(warning => ({ ...warning })).sort((a, b) => compareText(a.id, b.id) || compareText(a.error, b.error)),
     ...(input.retrieval ? { retrieval: { ...input.retrieval, currentTools: 'a' in input.retrieval.currentTools ? { a: { ...input.retrieval.currentTools.a }, b: { ...input.retrieval.currentTools.b } } : { ...input.retrieval.currentTools } } } : {}),
     historyWarnings: (input.historyWarnings ?? []).map(warning => ({ ...warning })).sort((a, b) => compareText(a.file, b.file) || compareText(a.error, b.error)),
@@ -202,8 +210,17 @@ export function formatFeedbackIssues(input: ParsedFeedbackSession): string {
   // Keep the complete warning list, including unmatched ids, without duplicating
   // issue items or quietly hiding evidence supplied by the parsed reader.
   if (model.feedbackWarnings.length) lines.push('', '## Feedback validation warnings', '', jsonBlock(model.feedbackWarnings));
-  for (const category of model.categories) {
-    lines.push('', `## ${category.category} (${category.count})`);
+  const sections=model.categories.map(category=>{
+    const targets=category.targets.map(t=>({...t,items:t.items.filter(f=>!hasStageComment((f.context as any)?.comment))})).filter(t=>t.items.length);
+    return {heading:`${category.category} (${targets.reduce((n,t)=>n+t.items.length,0)})`,targets};
+  });
+  for(const group of model.commentModes??[]){
+    const targets:TargetGroup[]=[];
+    for(const item of group.items){let target=targets.find(t=>t.target.kind===item.target.kind&&t.target.name===item.target.name);if(!target){target={target:item.target,items:[]};targets.push(target);}target.items.push(item);}
+    sections.push({heading:`Comments · ${group.mode} (${group.items.length})`,targets});
+  }
+  for (const category of sections) {
+    lines.push('', `## ${category.heading}`);
     if (!category.targets.length) lines.push('', 'No feedback items.');
     for (const group of category.targets) {
       lines.push('', `### ${md(group.target.kind)}: ${md(group.target.name)}`);
@@ -211,9 +228,10 @@ export function formatFeedbackIssues(input: ParsedFeedbackSession): string {
         lines.push('', `#### Feedback ${md(item.id)}`, '',
           `- Category: ${item.category}`,
           `- Target: ${md(item.target.kind)}: ${md(item.target.name)}`,
-          `- Inclusive frames: ${item.frameStart}–${item.frameEnd}`,
+          item.frameStart===null?`- Time-only comment: ${md(feedbackTimingLabel(item))}`:`- Inclusive frames: ${item.frameStart}–${item.frameEnd}`,
           `- Side: ${item.side}`,
           `- Summary: ${md(item.summary)}`,
+          ...((item.context as any)?.comment?.schema==='rig-review-comment/1'&&typeof (item.context as any)?.comment?.crop?.path==='string' ? [`- Comment crop: ${md((item.context as any).comment.crop.path)}`,`- Viewport: ${md((item.context as any).comment.viewport)} · ${(item.context as any).comment.frame===null?'time basis':'frame basis'}: ${md(((item.context as any).comment.frame?.basis??(item.context as any).comment.timeBasis?.basis))}`] : []),
           ...environmentLine(item.context),
           ...appliedLine(item.context),
           ...requirementsLine(item.context), ...scheduleLine(item.context), '',
