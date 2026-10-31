@@ -1,5 +1,5 @@
 import {createControlServer,type ControlIdentity} from './control-server.ts';
-import {openGate,staleOpenStatus,accessGate,openNonceGate,stampOpen,type OpenIdentity} from './open-protocol.ts';
+import {openGate,staleOpenStatus,accessGate,openNonceGate,openNonceHeader,sameSecret,stampOpen,type OpenIdentity} from './open-protocol.ts';
 import { readFile } from 'node:fs/promises';
 import { appRoot, buildWeb } from './build.ts';
 import { packagePath, safeFile } from './manifest.ts';
@@ -8,6 +8,7 @@ import { serveReference } from './reference.ts';
 import {referenceFrameIndex} from './reference-frame-index.ts';
 import { exportCompareStrip, stripJson } from './strip-export.ts';
 import { readCompareSession, saveCompareSession } from './compare-session.ts';
+import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
 
 const headers={'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
 const json=(value:unknown,status=200)=>Response.json(value,{status,headers});
@@ -29,16 +30,33 @@ function serveAsset(req:Request,path:string):Response{
   return new Response(req.method==='HEAD'?null:file,{headers:{...assetHeaders,'Content-Length':String(size)}});
 }
 /** `capability` (open workers and foreground CLI serving) gates every non-GET request; tests may omit it. */
-export async function startCompareServer(p:ComparePackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;activity?:()=>void;control?:ControlIdentity;capability?:string}={}){
+export async function startCompareServer(p:ComparePackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;activity?:()=>void;control?:ControlIdentity;capability?:string;graceMs?:number;unopenedTimeoutMs?:number;exitOnClose?:boolean;onClose?:(info:LiveExitInfo)=>void|Promise<void>;log?:(line:string)=>void}={}){
   const bundle=await buildWeb('compare');
   const frames=referenceFrameIndex(p.referencePath,p.response.binding.reference.sha256,p.response.sourceHash);
   const control=options.control?createControlServer({identity:options.control,sourceHash:p.response.sourceHash,mode:'compare',unchanged:()=>assertCompareUnchanged(p),activity:options.activity}):null;
-  const handle=async(req:Request,port:number|undefined):Promise<Response>=>{try{
+  let rawStop:((closeActiveConnections?:boolean)=>void)|null=null;
+  const live=createLiveLifecycle({
+    label:'review compare',
+    graceMs:options.graceMs,
+    unopenedTimeoutMs:options.unopenedTimeoutMs,
+    exitOnClose:options.exitOnClose,
+    onClose:options.onClose,
+    log:options.log,
+    stopServer:()=>{rawStop?.(true);},
+  });
+  const handle=async(req:Request,port:number|undefined,srv:UpgradableServer):Promise<Response|undefined>=>{try{
     const url=new URL(req.url),origin=`http://127.0.0.1:${port}`;
     if(url.origin!==origin)return json({error:'Loopback host required'},403);
     const refused=openNonceGate(req,options.open)??accessGate(req,options.capability,!!control);if(refused)return refused;
+    if(req.method==='GET'&&url.pathname===LIVE_PATH){
+      const fromFront=Boolean(options.open&&sameSecret(req.headers.get(openNonceHeader),options.open.nonce)&&req.headers.get('origin')===null);
+      if(!fromFront&&req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+      options.activity?.();return live.upgrade(req,srv,headers,options.open?.key);
+    }
+    live.onRequestStart(url.pathname);
+    try {
     const controlled=await control?.(req,origin);if(controlled)return controlled;
-    options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await assertCompareUnchanged(p);}catch{return staleOpenStatus(options.open!);}}return gate;}
+    options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await assertCompareUnchanged(p);}catch{return staleOpenStatus(options.open!);}if(!live.rearmUnopened())return json({error:'Server is closing'},503);}return gate;}
     if(req.method==='PUT'&&url.pathname==='/api/compare/session'){
       if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
       return json(await saveCompareSession(p,await bodyJson(req),options.stateDir));
@@ -58,6 +76,10 @@ export async function startCompareServer(p:ComparePackage,options:{port?:number;
     if(url.pathname==='/'||url.pathname==='/index.html')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/compare.html'),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
     if(url.pathname==='/styles.css')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/compare.css'),{headers:{...headers,'Content-Type':'text/css'}});
     return json({error:'Not found'},404);
+    } finally { live.onRequestEnd(url.pathname); }
   }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message.includes('inputs changed')?409:400);}};
-  return Bun.serve({hostname:'127.0.0.1',port:options.port??4317,async fetch(req,server){return stampOpen(req,await handle(req,server.port),options.open);}});
+  const server=Bun.serve({hostname:'127.0.0.1',port:options.port??4317,websocket:live.websocket,async fetch(req,srv){const res=await handle(req,srv.port,srv);if(!res)return undefined as unknown as Response;return stampOpen(req,res,options.open);}});
+  rawStop=server.stop.bind(server);
+  server.stop=((closeActiveConnections?:boolean)=>{live.stop();return rawStop!(closeActiveConnections);}) as typeof server.stop;
+  return Object.assign(server,{live});
 }

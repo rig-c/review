@@ -160,10 +160,17 @@ rig-review strip /absolute/output --reference-video /absolute/original.mp4 --ani
 Only tool-owned instances with matching content, canonical input locations, tool
 fingerprint and a private capability handshake are reused. The URL hash is
 checked before serving the app; a stale link never selects another instance's
-package. Input hashes are freshly computed, not trusted from mtime caches. Idle
-open-managed workers stop after 30 minutes. Their private registry, requests and
-logs live beside feedback under `~/.local/state/rig-c-review/open/`; nothing is
-written into supplied folders. `RIG_REVIEW_STATE_DIR` selects another state root
+package. Input hashes are freshly computed, not trusted from mtime caches. In both
+`open` and foreground `review` / `review compare`, each open window holds a live
+WebSocket connection (`/api/live`); once the last window closes and stays at zero connections
+for the 3-second grace period, or if no window ever connects within 30 minutes
+(reusing a windowless worker via `open` gives it a fresh 30-minute unopened window),
+the server finishes any in-flight request or Apply, flushes state, prints one line
+stating why it exited, and exits `0`. A browser that unloads a background tab to
+save memory looks the same as a closed tab, so the server stops; saved feedback
+survives and `open` brings it back. Their
+private registry, requests and logs live beside feedback under
+`~/.local/state/rig-c-review/open/`; nothing is written into supplied folders. `RIG_REVIEW_STATE_DIR` selects another state root
 outside all input packages, judged by its canonical location (symlinks in the path
 and its existing ancestors resolved). Existing foreground review commands still work.
 
@@ -216,7 +223,7 @@ request, and refuses an unknown, expired or replaced instance by name
 (`FRONT_INSTANCE_UNKNOWN`, `FRONT_INSTANCE_EXPIRED`, `FRONT_INSTANCE_REPLACED`).
 Worker error text is not passed through; failures become named `FRONT_*` codes.
 Package assets keep their `sandbox` CSP through the front. It never reads packages.
-Idle fronts exit after 30 minutes once no live instance remains.
+Idle fronts exit after the 3-second grace period once no live instance remains.
 
 If another listener holds the front port, `open` fails with
 `FRONT_PORT_BUSY: 127.0.0.1:4318 is held by another listener; use --direct` and

@@ -17,6 +17,7 @@ import {bindAppearance,bindPan,bindStageLayout,bindInspectorTabs,syncStageLayout
 import {RigOverlays} from './rig-overlays.ts';
 import {bindWorkspaceUI,type WorkspaceUI} from './workspace-ui.ts';
 import {connectControl} from './control.ts';
+import {connectLiveWindow} from './live-connection.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
 import {controlComparison,type ControlCommand,type ControlInspection,type ControlView} from '../src/control.ts';
 import {pairEligibility,type InputState,type PairDomain} from '../src/comparison-eligibility.ts';
@@ -56,7 +57,7 @@ const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let stripBusy = false;
 let persistence:PersistenceConnection|null=null,submittedBaseline:CompareSession|null=null,draftConflict=false;
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
-const access=pageInstanceAccess();let readOnly:string|null=null;
+const access=pageInstanceAccess();connectLiveWindow(access);let readOnly:string|null=null;
 /** Whether this instance serves agent control (`/api/access`); a plain open is never probed for it (#164). */
 let controlServed=true;
 let referenceFrames:VideoInfo|null=null;

@@ -4,7 +4,7 @@ import { appRoot, buildWeb } from './build.ts';
 import { packagePath, safeFile, type ReviewPackage } from './manifest.ts';
 import { exportReviewStrip, stripJson } from './strip-export.ts';
 import {assertReviewUnchanged,referenceBinding,selectedReference,safeSelectedReference,serveReference} from './reference.ts';
-import {openGate,staleOpenStatus,accessGate,openNonceGate,stampOpen,type OpenIdentity} from './open-protocol.ts';
+import {openGate,staleOpenStatus,accessGate,openNonceGate,openNonceHeader,sameSecret,stampOpen,type OpenIdentity} from './open-protocol.ts';
 import { readSession, saveSession } from './session.ts';
 import { createRebuilds, RebuildError } from './rebuild.ts';
 import { DENSITY_STRIP_LIMIT } from './density-strip.ts';
@@ -14,6 +14,7 @@ import { BONES_CHECK_LIMIT, createBonesCheck } from './bones-check.ts';
 import { createRequirementsCheck } from './requirements-run.ts';
 import { REQUIREMENTS_LIMIT, RequirementsError } from './requirements.ts';
 import { createEnvironmentCheck, ENVIRONMENT_CHECK_LIMIT, EnvironmentCheckError } from './environment-check.ts';
+import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
@@ -29,7 +30,7 @@ async function bodyJson(req:Request,limit=1024*1024,what='Session payload exceed
 }
 /** `capability` (open workers and foreground CLI serving) gates every non-GET request; tests may omit it.
  * `cwd` is where the producer is looked for after the package's own directories (review's working directory by default). */
-export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string;stripConcurrency?:number}={}){
+export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string;stripConcurrency?:number;graceMs?:number;unopenedTimeoutMs?:number;exitOnClose?:boolean;onClose?:(info:LiveExitInfo)=>void|Promise<void>;log?:(line:string)=>void}={}){
   const bundle=await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
@@ -43,12 +44,30 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
   // Check under this world (#112): the exported schedule written into scratch; the installed producer's check --environment reads it.
   const environmentCheck=createEnvironmentCheck(p,{stateDir,starts,unchanged,latest:rebuilds.latest});
   const control=options.control?createControlServer({identity:options.control,sourceHash:p.sourceHash,mode:'single',unchanged,activity:options.activity}):null;
-  const handle=async(req:Request,port:number|undefined):Promise<Response>=>{try {
+  let rawStop:((closeActiveConnections?:boolean)=>void)|null=null;
+  const live=createLiveLifecycle({
+    label:'review',
+    graceMs:options.graceMs,
+    unopenedTimeoutMs:options.unopenedTimeoutMs,
+    exitOnClose:options.exitOnClose,
+    onClose:options.onClose,
+    log:options.log,
+    busy:()=>Boolean(rebuilds.busy()||readings.running()||requirements.running()||environmentCheck.running()||bonesCheck.running()),
+    stopServer:()=>{rawStop?.(true);},
+  });
+  const handle=async(req:Request,port:number|undefined,srv:UpgradableServer):Promise<Response|undefined>=>{try {
       const url=new URL(req.url);const origin=`http://127.0.0.1:${port}`;
       if(url.origin!==origin)return json({error:'Loopback host required'},403);
       const refused=openNonceGate(req,options.open)??accessGate(req,options.capability,!!control);if(refused)return refused;
+      if(req.method==='GET'&&url.pathname===LIVE_PATH){
+        const fromFront=Boolean(options.open&&sameSecret(req.headers.get(openNonceHeader),options.open.nonce)&&req.headers.get('origin')===null);
+        if(!fromFront&&req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+        options.activity?.();return live.upgrade(req,srv,headers,options.open?.key);
+      }
+      live.onRequestStart(url.pathname);
+      try {
       const controlled=await control?.(req,origin);if(controlled)return controlled;
-      options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await unchanged();}catch{return staleOpenStatus(options.open!);}}return gate;}
+      options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await unchanged();}catch{return staleOpenStatus(options.open!);}if(!live.rearmUnopened())return json({error:'Server is closing'},503);}return gate;}
       if(req.method==='PUT'&&url.pathname==='/api/session'){
         if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
         const input=await bodyJson(req);await unchanged();return json(await saveSession(p,input,options.stateDir));
@@ -148,6 +167,10 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       if(url.pathname==='/'||url.pathname==='/index.html')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/index.html'),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
       if(url.pathname==='/styles.css')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/styles.css'),{headers:{...headers,'Content-Type':'text/css'}});
       return json({error:'Not found'},404);
+      } finally { live.onRequestEnd(url.pathname); }
     }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message.includes('inputs changed')?409:400);}};
-  return Bun.serve({hostname:'127.0.0.1',port:options.port??4317,async fetch(req,server){return stampOpen(req,await handle(req,server.port),options.open);}});
+  const server=Bun.serve({hostname:'127.0.0.1',port:options.port??4317,websocket:live.websocket,async fetch(req,srv){const res=await handle(req,srv.port,srv);if(!res)return undefined as unknown as Response;return stampOpen(req,res,options.open);}});
+  rawStop=server.stop.bind(server);
+  server.stop=((closeActiveConnections?:boolean)=>{live.stop();return rawStop!(closeActiveConnections);}) as typeof server.stop;
+  return Object.assign(server,{live});
 }

@@ -32,6 +32,7 @@ import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
 import {bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
 import {connectControl} from './control.ts';
+import {connectLiveWindow} from './live-connection.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
 import {controlComparison,type ControlCommand,type ControlInspection,type ControlView} from '../src/control.ts';
 import {singleEligibility,videoReferenceAt,type InputState,type SingleLayout} from '../src/comparison-eligibility.ts';
@@ -82,6 +83,7 @@ const option = (value: string, label: string) => { const item = document.createE
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
 const access = pageInstanceAccess();
+connectLiveWindow(access);
 let readOnly: string | null = null;
 let data: ReviewResponse;
 let session: ReviewSession;

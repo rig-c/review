@@ -18,6 +18,7 @@ import {ensureFront,frontPort} from './front.ts';
 import {playPackagePath} from './versions.ts';
 import {HandoffError,HANDOFF_FLAGS,isBuildRoot,type HandoffFlags,type HandoffRecord} from './handoff.ts';
 import {stateDirInside,stateRoots} from './state-dir.ts';
+import {DEFAULT_UNOPENED_TIMEOUT_MS} from './live-lifecycle.ts';
 /** #149: an opened rig-parts build check package — its canonical path and the handoff record (or the refusal line). */
 export interface BuildOpen {package:string;handoff:HandoffRecord|null;reason:string|null}
 /** The stderr diagnostic for {@link BuildOpen}: the package opened, then how the config was found, its package-relative path and full SHA-256. */
@@ -33,7 +34,7 @@ export type OpenPackage=({mode:'single';p:ReviewPackage;inputs:OpenInputs;conten
 /** Private 0600 record. `capability` is the 256-bit page write capability, handed out only in the printed `#cap=` fragment. */
 export interface RecordFile extends OpenIdentity {schema:'rig-review-open-instance/1';pid:number;origin:string;mode:'single'|'compare';capability:string;controlToken?:string}
 /** `cwd` is the launcher's working directory: the worker runs in the state directory, so Apply · Rebuild looks for the producer from here after the package's own directories. */
-interface WorkerRequest {schema:'rig-review-open-request/1';inputs:OpenInputs;identity:OpenIdentity;stateDir:string;registry:string;request:string;idleMs:number;controlToken?:string;cwd?:string}
+interface WorkerRequest {schema:'rig-review-open-request/1';inputs:OpenInputs;identity:OpenIdentity;stateDir:string;registry:string;request:string;idleMs:number;graceMs?:number;controlToken?:string;cwd?:string}
 const appRoot=fileURLToPath(new URL('..',import.meta.url));
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep=(ms:number)=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
@@ -105,7 +106,7 @@ async function openRefusal(error:unknown,inputs:OpenInputs):Promise<unknown>{
 }
 /** Managed is the default: the printed URL goes through the one loopback front (127.0.0.1:4318, or
  * RIG_REVIEW_FRONT_PORT) so browser storage keeps one origin across reopens. `direct` keeps the worker's own port. */
-export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idleMs?:number;direct?:boolean;frontPort?:number;frontIdleMs?:number}={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs;selection:AnimationSelection|null;direct:boolean;build:BuildOpen|null}>{
+export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idleMs?:number;graceMs?:number;direct?:boolean;frontPort?:number;frontIdleMs?:number}={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs;selection:AnimationSelection|null;direct:boolean;build:BuildOpen|null}>{
  const direct=options.direct??inputs.direct??false,port=direct?0:frontPort(options.frontPort);
  for(const path of [inputs.input,...(inputs.compare!==undefined?[inputs.compare]:[])])await assertOpenInput(path);
  if(inputs.compare!==undefined&&!inputs.reference)throw new Error('OPEN_REFERENCE_REQUIRED: compare: explicit --reference required');
@@ -115,13 +116,13 @@ export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idl
  const stateDir=await canonicalDestination(resolve(options.stateDir??defaultStateDir())),roots=p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
  const inside=stateDirInside(stateDir,roots);if(inside)throw new Error(`OPEN_STATE_INSIDE_PACKAGE ${inside.kind}: the review state directory must be outside input packages; it is inside the ${inside.kind}; set RIG_REVIEW_STATE_DIR outside it`);
  const control=join(stateDir,'open');await mkdir(control,{recursive:true,mode:0o700});const canonicalControl=await realpath(control);if((await lstat(control)).isSymbolicLink())throw new Error('open.state: control directory cannot be a symlink');
- const worker=await ensureWorker(p,key,fingerprint,stateDir,canonicalControl,options.idleMs??30*60*1000);
+ const worker=await ensureWorker(p,key,fingerprint,stateDir,canonicalControl,options.idleMs??DEFAULT_UNOPENED_TIMEOUT_MS,options.graceMs);
  const url=direct?openUrl(worker.row):openUrl(worker.row,await ensureFront({control:canonicalControl,port,fingerprint,idleMs:options.frontIdleMs}));
  // #149: the check package of a rig-parts build root says which package it opened and which config the handoff took.
  const build=p.mode==='single'&&basename(p.p.root)==='check'&&await isBuildRoot(dirname(p.p.root))?{package:p.p.root,handoff:p.p.reviewedSource.handoff??null,reason:p.p.handoffReason}:null;
  return {url,reused:worker.reused,nonce:worker.row.nonce,inputs:p.inputs,selection:p.selection,direct,build};
 }
-async function ensureWorker(p:OpenPackage,key:string,fingerprint:string,stateDir:string,canonicalControl:string,idleMs:number):Promise<{row:RecordFile;reused:boolean}>{
+async function ensureWorker(p:OpenPackage,key:string,fingerprint:string,stateDir:string,canonicalControl:string,idleMs:number,graceMs?:number):Promise<{row:RecordFile;reused:boolean}>{
  const registry=join(canonicalControl,key+'.json'),claim=join(canonicalControl,key+'.claim'),nonce=randomUUID(),deadline=performance.now()+20000;
  const reuse=async()=>{const row=await readRecord(registry,key);return row&&row.fingerprint===fingerprint&&row.contentHash===p.contentHash&&row.mode===p.mode&&await alive(row)?row:null;};
  const ready=await reuse();if(ready)return {row:ready,reused:true};
@@ -130,7 +131,7 @@ async function ensureWorker(p:OpenPackage,key:string,fingerprint:string,stateDir
  try{
   const row=await reuse();if(row)return {row,reused:true};
   const identity:OpenIdentity={key,contentHash:p.contentHash,nonce,fingerprint};request=join(canonicalControl,`${key}.${nonce}.request.json`);const log=join(canonicalControl,`${key}.${nonce}.log`);
-  const spec:WorkerRequest={schema:'rig-review-open-request/1',inputs:p.inputs,identity,stateDir,registry,request,idleMs,cwd:process.cwd(),...(p.inputs.control?{controlToken:randomUUID()}:{} )};await writeFile(request,JSON.stringify(spec),{mode:0o600,flag:'wx'});
+  const spec:WorkerRequest={schema:'rig-review-open-request/1',inputs:p.inputs,identity,stateDir,registry,request,idleMs,...(graceMs!==undefined?{graceMs}:{}),cwd:process.cwd(),...(p.inputs.control?{controlToken:randomUUID()}:{} )};await writeFile(request,JSON.stringify(spec),{mode:0o600,flag:'wx'});
   const logHandle=await openFile(log,'a',0o600);let child;try{child=spawn(process.execPath,[join(appRoot,'src/open-worker.ts'),request],{cwd:canonicalControl,detached:true,stdio:['ignore',logHandle.fd,logHandle.fd],env:process.env});spawned=child;child.unref();}finally{await logHandle.close();}
   let exited:string|undefined;child.on('error',error=>{exited=error.message;});child.on('exit',(code,signal)=>{exited=`exit ${code} ${signal??''}`;});
   while(performance.now()<deadline){const record=await reuse();if(record){handedOff=true;return {row:record,reused:false};}if(exited)throw new Error(`OPEN_START: ${exited}; worker log ${log}`);await sleep(30);}throw new Error(`OPEN_TIMEOUT: worker did not become ready; log ${log}`);
@@ -142,13 +143,14 @@ export async function runOpenWorker(requestPath:string):Promise<void>{
  const p=await loadOpenPackage(spec.inputs),fingerprint=await openFingerprint();if(fingerprint!==spec.identity.fingerprint||openKey(p,fingerprint)!==spec.identity.key||p.contentHash!==spec.identity.contentHash)throw new Error('open worker: inputs changed before startup');
  if(spec.inputs.control&&(!spec.controlToken||!/^[a-f0-9-]{36}$/.test(spec.controlToken)))throw new Error('open control: invalid private capability');
  // The worker mints its own page capability; it lives only in this process and the private record.
- const capability=randomBytes(32).toString('hex');let last=performance.now();const options={port:0,stateDir:spec.stateDir,open:spec.identity,capability,activity:()=>{last=performance.now();},...(spec.inputs.control?{control:{token:spec.controlToken!,instanceKey:spec.identity.key}}:{})};
+ const removeRecord=async()=>{const current=await readRecord(spec.registry,spec.identity.key);if(current?.nonce===spec.identity.nonce)await unlink(spec.registry).catch(()=>{});};
+ const capability=randomBytes(32).toString('hex');const options={port:0,stateDir:spec.stateDir,open:spec.identity,capability,unopenedTimeoutMs:spec.idleMs,...(spec.graceMs!==undefined?{graceMs:spec.graceMs}:{}),exitOnClose:true,onClose:removeRecord,...(spec.inputs.control?{control:{token:spec.controlToken!,instanceKey:spec.identity.key}}:{})};
  const server=p.mode==='single'?await startServer(p.p,{...options,initialAnimation:p.selection?.name,...(typeof spec.cwd==='string'&&isAbsolute(spec.cwd)?{cwd:spec.cwd}:{})}):await startCompareServer(p.p,options);
  const check=()=>p.mode==='single'?assertReviewUnchanged(p.p):assertCompareUnchanged(p.p);
  await check();const record:RecordFile={schema:'rig-review-open-instance/1',...spec.identity,pid:process.pid,origin:`http://127.0.0.1:${server.port}`,mode:p.mode,capability,...(spec.inputs.control?{controlToken:spec.controlToken}:{})};const tmp=spec.registry+'.'+spec.identity.nonce+'.tmp';await writeFile(tmp,JSON.stringify(record),{mode:0o600,flag:'wx'});await rename(tmp,spec.registry);
  await unlink(requestPath).catch(e=>{if(e.code!=='ENOENT')throw e;});
- let stopped=false;const stop=async()=>{if(stopped)return;stopped=true;server.stop(true);clearInterval(timer);const current=await readRecord(spec.registry,spec.identity.key);if(current?.nonce===spec.identity.nonce)await unlink(spec.registry).catch(()=>{});};
- const timer=setInterval(()=>{if(performance.now()-last>=spec.idleMs)void stop();},Math.min(1000,spec.idleMs));process.on('SIGTERM',()=>{void stop();});process.on('SIGINT',()=>{void stop();});
+ let stopped=false;const stop=async(signal:string)=>{if(stopped)return;stopped=true;await removeRecord();server.stop(true);console.log(`review: exiting — received ${signal}.`);process.exit(0);};
+ process.on('SIGTERM',()=>{void stop('SIGTERM');});process.on('SIGINT',()=>{void stop('SIGINT');});
 }
 
 /** Read/control an already running, explicitly opted-in exact binding. Never starts a worker. */
