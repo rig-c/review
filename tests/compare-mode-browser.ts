@@ -729,6 +729,74 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       const envBaseline = await runEnvPlayback('none');
       const envGust = await runEnvPlayback('gust');
       const envJolt = await runEnvPlayback('jolt');
+
+      // #247: Enable environment in Animate, trigger Gust, return to Compare and play:
+      // neither build receives the picked environment in Compare, and returning to Animate restores the state left.
+      const seekZero = async () => {
+        scrub.value = '0';
+        scrub.dispatchEvent(new Event('input', { bubbles: true }));
+        for (let i = 0; i < 120; i++) {
+          if (!document.getElementById('add-feedback').disabled && Number(document.getElementById('scrub').value) < 0.01) break;
+          await sleep(25);
+        }
+      };
+      const playCurrentModeToEnd = async () => {
+        document.getElementById('play').click();
+        for (let i = 0; i < 200; i++) {
+          const v = document.getElementById('reference-video');
+          const t = Number(document.getElementById('scrub').value);
+          const msg = document.getElementById('message')?.textContent || '';
+          const settled = v.paused && !document.getElementById('add-feedback').disabled && t >= 0.95 && msg.includes('Playback stopped at the last supported decoded reference frame');
+          if (settled) break;
+          await sleep(25);
+        }
+        await sleep(40);
+        return {
+          mode: window.rigReviewEditor.mode(),
+          time: Number(document.getElementById('scrub').value),
+          windReadout: document.getElementById('wind-readout')?.textContent || '',
+          a: window.rigReviewEditor.bone('mesh', 'a'),
+          b: window.rigReviewEditor.bone('mesh', 'b'),
+        };
+      };
+
+      document.getElementById('physics-reset').click();
+      await sleep(60);
+      await clickMode('compare');
+      await seekZero();
+      const compareBaseline = await playCurrentModeToEnd();
+
+      await seekZero();
+      await clickMode('playback');
+      document.getElementById('wind-base').value = '0';
+      document.getElementById('wind-base').dispatchEvent(new Event('input', { bubbles: true }));
+      document.getElementById('wind-gust-peak').value = '3';
+      document.getElementById('wind-gust-peak').dispatchEvent(new Event('change', { bubbles: true }));
+      document.getElementById('wind-gust-duration').value = '1.2';
+      document.getElementById('wind-gust-duration').dispatchEvent(new Event('change', { bubbles: true }));
+      document.getElementById('wind-gust').click();
+      await sleep(40);
+
+      await clickMode('compare');
+      const compareAfterAnimateGust = await playCurrentModeToEnd();
+
+      await clickMode('playback');
+      const animateRestoredControls = {
+        applied: document.getElementById('environment-applied')?.checked ?? false,
+        gustPressed: document.getElementById('wind-gust')?.getAttribute('aria-pressed') ?? null,
+        gustPeak: document.getElementById('wind-gust-peak')?.value ?? '',
+        gustDuration: document.getElementById('wind-gust-duration')?.value ?? '',
+        windReadoutBeforePlay: document.getElementById('wind-readout')?.textContent || '',
+      };
+      await seekZero();
+      const animateRestoredPlay = await playCurrentModeToEnd();
+
+      await clickMode('compare');
+      const comparePausedAfterAnimateGust = {
+        a: window.rigReviewEditor.bone('mesh', 'a'),
+        b: window.rigReviewEditor.bone('mesh', 'b'),
+      };
+
       document.getElementById('physics-reset').click();
       await sleep(60);
 
@@ -741,6 +809,21 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         joltPickedDelta: poseDelta(envJolt.a, envBaseline.a),
         gustUnpickedDelta: poseDelta(envGust.b, envBaseline.b),
         joltUnpickedDelta: poseDelta(envJolt.b, envBaseline.b),
+        compareBaseline,
+        compareAfterAnimateGust: {
+          play: compareAfterAnimateGust,
+          deltaA: poseDelta(compareAfterAnimateGust.a, compareBaseline.a),
+          deltaB: poseDelta(compareAfterAnimateGust.b, compareBaseline.b),
+          pausedAfterSwitchDeltaA: poseDelta(comparePausedAfterAnimateGust.a, compareBaseline.a),
+          pausedAfterSwitchDeltaB: poseDelta(comparePausedAfterAnimateGust.b, compareBaseline.b),
+        },
+        animateRestored: {
+          controls: animateRestoredControls,
+          play: animateRestoredPlay,
+          deltaA: poseDelta(animateRestoredPlay.a, compareBaseline.a),
+          deltaAFromWindZeroBaseline: poseDelta(animateRestoredPlay.a, envBaseline.a),
+          deltaB: poseDelta(animateRestoredPlay.b, compareBaseline.b),
+        },
       };
 
       const [compareRes, sessionRes] = await Promise.all([
@@ -933,7 +1016,17 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       !(envPlay.gustPickedDelta > 1) ||
       !(envPlay.joltPickedDelta > 0.1) ||
       envPlay.gustUnpickedDelta !== 0 ||
-      envPlay.joltUnpickedDelta !== 0
+      envPlay.joltUnpickedDelta !== 0 ||
+      envPlay.compareAfterAnimateGust?.deltaA !== 0 ||
+      envPlay.compareAfterAnimateGust?.deltaB !== 0 ||
+      envPlay.compareAfterAnimateGust?.pausedAfterSwitchDeltaA !== 0 ||
+      envPlay.compareAfterAnimateGust?.pausedAfterSwitchDeltaB !== 0 ||
+      !envPlay.animateRestored?.controls?.applied ||
+      envPlay.animateRestored?.controls?.gustPressed !== 'true' ||
+      envPlay.animateRestored?.controls?.gustPeak !== '3' ||
+      envPlay.animateRestored?.controls?.gustDuration !== '1.2' ||
+      !(envPlay.animateRestored?.deltaA > 1) ||
+      envPlay.animateRestored?.deltaB !== 0
     ) {
       failures.push(`Environment Gust/Jolt playback mismatch: ${JSON.stringify(envPlay)}`);
     }

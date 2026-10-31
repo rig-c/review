@@ -423,10 +423,22 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function setMode(nextMode: CommentMode, options: { fromTab?: boolean } = {}): void {
+    const prevMode = workspaceMode;
     workspaceMode = nextMode;
     const currentPart = host.parts()?.value();
     if (nextMode !== 'compare' && (currentPart?.side === 'a' || currentPart?.side === 'b') && currentPart.side !== pickedSide) {
       setPickedSide(currentPart.side);
+    }
+    const modeBoundaryChanged = (prevMode === 'compare') !== (nextMode === 'compare');
+    if (modeBoundaryChanged) {
+      steppedLive = false;
+      applyEnvironment();
+      const p = currentPlayer();
+      if (p?.current && !host.playing()) {
+        p.seek(host.time());
+        p.draw();
+        host.parts()?.present(pickedSide);
+      }
     }
     if (nextMode !== 'compare') {
       host.syncFeedbackSide(pickedSide);
@@ -440,7 +452,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     }
     refreshAnimationInspection();
     inspectorBlocks?.refresh();
-    host.redrawOverlays(false);
+    host.redrawOverlays(modeBoundaryChanged);
     host.saveDraft();
   }
 
@@ -908,10 +920,11 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function applyEnvironment(): void {
+    const active = workspaceMode !== 'compare' && environmentApplied();
     for (const s of ['a', 'b'] as const) {
       const p = host.players[s];
       if (!p) continue;
-      if (s === pickedSide && environmentApplied()) {
+      if (s === pickedSide && active) {
         p.environment(environmentFor(wind.read(), gravityValue()));
       } else {
         p.environment(null);
@@ -1023,6 +1036,10 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function seekMode(target: number, continuing: boolean): 'settle' | 'seek' {
+    if (workspaceMode === 'compare') {
+      steppedLive = false;
+      return 'seek';
+    }
     const p = currentPlayer();
     if (!continuing && steppedLive && p && target >= p.time - 1e-9 && target - p.time <= 0.25) {
       steppedLive = false;
@@ -1036,7 +1053,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   function stepSide(mode: 'present' | 'settle' | 'seek', side: Side, target: number): void {
     const player = host.players[side];
     if (!player) return;
-    if (side !== pickedSide) {
+    if (workspaceMode === 'compare' || side !== pickedSide) {
       player.environment(null);
       player.seek(target);
       return;
