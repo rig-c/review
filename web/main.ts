@@ -76,7 +76,8 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
 const input = (id: string) => el<HTMLInputElement>(id);
 const select = (id: string) => el<HTMLSelectElement>(id);
 const button = (id: string) => el<HTMLButtonElement>(id);
-const text = (id: string, value: string) => { el(id).textContent = value; };
+const titledIds = new Set(['message', 'player-state', 'layout-state', 'renderer-state', 'layer-state', 'idle-state', 'control-state', 'draft-state', 'rig-label', 'reference-label', 'coordinates']);
+const text = (id: string, value: string) => { const node = el(id); node.textContent = value; if (titledIds.has(id)) node.title = value; };
 const option = (value: string, label: string) => { const item = document.createElement('option'); item.value = value; item.textContent = label; return item; };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
@@ -647,11 +648,12 @@ function tick(now: number): void {
 
 function configureTurnPad(model:unknown):void {
  const previous=turnPad?.snapshot();turnPad?.dispose();turnPad=null;turnAdjust=null;document.getElementById('turn-pad-host')?.remove();
- const dials=discoverTurnDials(model,assets?.animations);if(!dials.length){setAdjust();return;}
+ const dials=discoverTurnDials(model,assets?.animations);if(!dials.length){setAdjust();workspace?.refresh();return;}
  const host=document.createElement('div');host.id='turn-pad-host';el('stage-layout').before(host);
  turnPad=bindTurnPad({host,stages:[el('rig-viewport')],dials,blocked:()=>!!persistence?.restoring()||!!document.querySelector('dialog[open]')||!!rebuildBusy,
   draw:state=>{if(!player)return;turnAdjust=state.adjust();setAdjust();if(playing)drawRig(()=>player!.draw());},save:()=>persistence?.save(),error:value=>message(value,true)});
  if(previous&&turnPad){try{turnPad.restore(previous);}catch{message('TURN_STATE_MODEL_MISMATCH: turn values reset for this build.',true);}}
+ workspace?.refresh();
 }
 async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
   text('renderer-state',rendererStatus(null,'pending').label);

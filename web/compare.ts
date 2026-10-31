@@ -28,7 +28,8 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const node = document.getElementById(id); if (!node) throw new Error(`Missing compare UI element: ${id}`); return node as T;
 };
 const input = (id: string) => el<HTMLInputElement>(id), select = (id: string) => el<HTMLSelectElement>(id), button = (id: string) => el<HTMLButtonElement>(id);
-const text = (id: string, value: string) => { el(id).textContent = value; };
+const titledIds = new Set(['reference-time', 'a-time', 'b-time', 'a-frame', 'b-frame', 'a-renderer', 'b-renderer', 'reference-name', 'a-title', 'b-title', 'message']);
+const text = (id: string, value: string) => { const node = el(id); node.textContent = value; if (titledIds.has(id)) node.title = value; };
 const describe = (value: unknown) => value instanceof Error ? value.message : String(value);
 const video = el<HTMLVideoElement>('reference-video');
 let data: CompareResponse, session: CompareSession;
@@ -137,7 +138,7 @@ function renderPresentation(state:PresentationState):void {
  el('sync-status').classList.toggle('error',state.status==='held'||state.lastLatenessMs>0||state.status==='failed');
  if(!state.inspection){
   trace=null;updateFeedbackAvailability();
-  for(const side of ['a','b'] as const){text(`${side}-time`,last?`${last[side].toFixed(6)} s · ${state.status==='held'?'held':'drawn; feedback unavailable'}`:'unknown');const decoded=last&&referenceFrames?referenceFrameAtTime(referenceFrames,last.reference):null,frame=decoded?associations[side].get(decoded.index)??null:null;text(`${side}-frame`,last?`${state.status==='held'?'Held':'Drawn'} review F${frame??'—'}`:'Review frame unknown');}
+  for(const side of ['a','b'] as const){text(`${side}-time`,last?`${last[side].toFixed(6)} s`:'— s');const decoded=last&&referenceFrames?referenceFrameAtTime(referenceFrames,last.reference):null,frame=decoded?associations[side].get(decoded.index)??null:null;text(`${side}-frame`,last?`${state.status==='held'?'Held':'Drawn; feedback unavailable'} · review F${frame??'—'}`:'Review frame unknown');}
   text('clock-source','Feedback requires a pair submitted before the known next-reference estimate or paused inspection.');
  }
  text('sync-warning',state.deadlineKind==='unknown'?'Next-reference timing unknown: an adjacent decoded timestamp and positive playback rate are required. Playback continues; pause for exact inspection.':state.lastLatenessMs>0?'The pair finished CPU draw submission after the estimated next reference display boundary. Pause for exact inspection.':'');
@@ -409,6 +410,7 @@ function bind(): void {
 
 async function start(): Promise<void> {
   try {
+    for (const id of titledIds) { const node = document.getElementById(id); if (node && node.textContent) node.title = node.textContent; }
     let writes: { capabilityRequired: boolean; control?: boolean };
     [data, session, writes] = await Promise.all([api<CompareResponse>('/api/compare'), api<CompareSession>('/api/compare/session'), api<{ capabilityRequired: boolean; control?: boolean }>('/api/access')]);
     readOnly = readOnlyReason(access, writes.capabilityRequired); if (readOnly) message(readOnly, true); controlServed = writes.control !== false;
@@ -425,7 +427,7 @@ async function start(): Promise<void> {
     void loadFrameIndex();
     input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;
-    await seekTo(0);configureTurnPad();activeCamera='a';if(cameraSync)alignCameras();fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();setupComments();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
+    await seekTo(0);configureTurnPad();workspace?.refresh();activeCamera='a';if(cameraSync)alignCameras();fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();setupComments();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
     if(!readOnly&&controlServed)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { failPair(error); for (const side of ['a', 'b'] as const) if (!players[side]) text(`${side}-empty`, `${side.toUpperCase()} Could not open comparison rig.`); text('reference-empty', 'Check the reference video and comparison inputs.'); }
 }
