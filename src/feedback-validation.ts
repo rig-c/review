@@ -1,3 +1,4 @@
+import type {TurnDial} from './turn-pad.ts';
 import { lastFrame, timeAtFrame, type FrameClock } from './frame-clock.ts';
 
 /** Null names mean unavailable metadata; an empty list means known empty. */
@@ -5,6 +6,7 @@ export interface FeedbackCatalog {
   rig:string;bones:string[]|null;slots:string[]|null;
   animations:{name:string;duration:number}[]|null;
   clock:FrameClock|null;clockAnimation:string|null;
+  turnDials?:TurnDial[];
 }
 export type FeedbackTargetKind='bone'|'slot'|'rig';
 export interface FeedbackSelection {frameStart:number;frameEnd:number;target:{kind:FeedbackTargetKind;name:string};animation:string|null}

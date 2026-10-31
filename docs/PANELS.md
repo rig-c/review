@@ -355,3 +355,46 @@ In **Animate**, the **Retarget** block (#114) puts a pose sequence the package d
 
 To reproduce an Apply outside review, run the same producer with the record's flags in an empty directory holding the sequence as `pose.json` and the record's map as `map.json`: `rig-pose clean --pose pose.json --out pose.clean.json <op.clean…>` then `rig-pose retarget --rig <handoff rig> --map map.json --sequence pose.clean.json --out motion.json <op.args…>`. Its `motion.json` is byte-equal to the scratch build's `rig/motion.json`.
 
+
+## Turn pad
+
+A model with supported turn sliders gets a **Turn pad** above the stage, separately
+from the Rig fields producer preview. The loaded model must declare both the bone
+and exactly one local, non-looping slider: `yaw_dial`, `pitch_dial`,
+`body_yaw_dial`, or the bone a compiled `body_turn` slider names. The latter is how
+the producer carries a custom `turn.body.slider`; no producer config or character
+name is consulted. A bare bone name is insufficient. The label's tooltip names
+the actual slider, bone, channel and animation. Unsupported or ambiguous bindings
+are not offered. A model without these bindings gets no pad or turn log.
+
+Move the pointer across the rig viewport: its first/last CSS pixel spans the
+slider's actual range, with zero at the centre (each half maps to its own endpoint).
+Head yaw and body follow horizontal position; pitch increases upward. The range is
+the inverse of `time = to + (value − from) × scale` over the slider animation's
+actual duration, including negative scales; only finite ranges containing zero
+are supported. No degrees or range are inferred from the art or the bone name.
+
+**Applied** is the eased value sent through published Play's `player.adjust` /
+`BoneAdjust`, before constraints and physics; **target** is the pointer's value.
+The number field edits the target, applies that exact value immediately and turns
+**Hold** on. Hold freezes the current applied values and cancels pending travel;
+**Reset 0** applies zero and holds it. Neither operation changes inspection time.
+**Smoothing** displays the official head-turn demo's critically damped spring
+frequency, `ω₀ = 20 s⁻¹`; its number accepts 1…100, and switching it off applies
+pointer values immediately. The spring runs in normalized pointer space before
+mapping into each range. A held or restored value is not spring-interpolated.
+Camera drags, modal dialogs and rebuilds do not steer the pad.
+
+In **compare**, only axes declared on both loaded models are offered. Their ranges
+are intersected and that common range is displayed. Both panes receive the same
+numeric value, even when their own ranges or body-dial bone names differ; no
+per-pane normalization or clamp changes the requested angle. An axis absent on
+one side is omitted. If no supported common axis remains, no pad is shown.
+
+The exact applied values, Hold and smoothing setting are kept in the source-bound
+view link/local draft. Reload restores them paused and validates the current
+model's supported axes and bounds. Feedback captures those applied values in its
+separately validated `context.turn`; submitted feedback retains the immutable
+package/model/motion identity. It does not record pending pointer travel, author
+keys, write `motion.json` or change source files. The Rig fields `turn` x preview
+remains independent, temporary and unrecorded.
