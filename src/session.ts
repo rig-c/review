@@ -1,6 +1,6 @@
 import {clockForAnimation,frameAtTime} from './frame-clock.ts';
 import {parseBookmark} from '../web/inspection-persistence.ts';
-import {parseStageComment,projectMark,hasStageComment,isTimeOnlyFeedback,requireFeedbackFrames} from './stage-comment.ts';
+import {parseStageComment,projectMark,hasStageComment,isTimeOnlyFeedback,feedbackFrameInterval} from './stage-comment.ts';
 import {validateCommentCrop,saveCommentCrops,assertSubmittedComments} from './comment-crops.ts';
 import {TurnState,type TurnDial} from './turn-pad.ts';
 import { createHash } from 'node:crypto';
@@ -75,7 +75,7 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
   }
   const selected=animation??(typeof context.animation==='string'?context.animation:null);
   if(timed)validateTimedFeedbackSelection(p.feedbackCatalog,{target:feedback.target,animation:selected,time:comment!.time});
-  else validateFeedbackSelection((context.comment as any)?.frame?.basis==='reference'?{...p.feedbackCatalog,clock:null,clockAnimation:null}:p.feedbackCatalog,{...requireFeedbackFrames(feedback),target:feedback.target,animation:selected});
+  else validateFeedbackSelection((context.comment as any)?.frame?.basis==='reference'?{...p.feedbackCatalog,clock:null,clockAnimation:null}:p.feedbackCatalog,{...feedbackFrameInterval(feedback),target:feedback.target,animation:selected});
   return {...feedback,context:{...context,...(animation===undefined?{}:{animation}),interval} as Json};
 }
 export function readPackageFeedback(feedback:Feedback,p:ReviewPackage,animation?:string,turnDials?:readonly TurnDial[]):{feedback:Feedback;warning?:FeedbackWarning} {

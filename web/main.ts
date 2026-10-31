@@ -2119,6 +2119,17 @@ async function meshFolds():Promise<string[]> {
 void start();
 
 
+/** Only live, unrecorded authoring effects block capture; unsent form ops alone do not. */
+function commentCaptureRefusal():string|null {
+ if(appliedOnStage)return 'COMMENT_APPLIED_BUILD_UNSUPPORTED: return to the inspected source before commenting on this applied scratch build';
+ if(rebuildBusy)return 'COMMENT_SOURCE_BUSY: wait for the rebuild or candidate model replacement before commenting';
+ const preview=idleAdjust?'Idle tracks':dialAdjust?'Rig fields turn dial':physicsPreview.read().length?'Physics live overrides':stripPending?'Density strip candidate':
+  meshEditor?.overlay()?'Edit Mesh':bonesPanel?.overlay()?'Bones anchors':cutsPanel&&(cutsPanel.overlayRegions().length||cutsPanel.overlayMarkers().length)?'Cuts/patches/joints':
+  clothPanel?.overlayRegions().length?'Cloth links':meshPanel&&(meshPanel.overlayRegions().length||meshPanel.overlayCircles().length)?'Mesh regions':
+  chestRegions().length||chestCircles().length||chestMarkers().length?'Chest regions/landmarks':rigFieldsPanel?.handles().length?'Rig fields stage handles':
+  (()=>{const handles=document.getElementById('idle-handles');return handles&&!handles.hidden&&handles.childElementCount>0;})()?'Idle tracks stage handles':null;
+ return preview?`COMMENT_UNAPPLIED_PREVIEW: ${preview} is active; leave or disable that preview before commenting (nothing is cleared or applied automatically)`:null;
+}
 function setupComments():void {
  comments=bindStageComments({toolbar:el('stage-comment').parentElement!,viewports:{rig:el('rig-viewport'),reference:el('reference-viewport')},
   pose:view=>{
@@ -2128,6 +2139,6 @@ function setupComments():void {
   },
   pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(player?.time??time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:inspectionBookmark,restore:(b,timed)=>restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal,!!timed),feedback:()=>session.feedback,
   locked:id=>!!submittedBaseline?.updatedAt&&submittedBaseline.feedback.some(f=>f.id===id),add:f=>session.feedback.push(f),changed:()=>{markDirty();renderProposals();persistence?.save();},error:value=>message(value,true),
-  blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
+  refusal:commentCaptureRefusal,blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
  });
 }

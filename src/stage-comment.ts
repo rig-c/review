@@ -53,9 +53,15 @@ export function feedbackTimingLabel(f:{frameStart:number|null;frameEnd:number|nu
  if(f.frameStart===null||f.frameEnd===null){const c=obj(obj(f.context).comment);if(c.frame!==null||c.timeBasis?.schema!==timeOnlyBasis.schema||c.timeBasis?.reason!==timeOnlyReason||!number(c.time)||c.time<0)fail('time-only display context');return `${c.time} s (seconds basis) · ${timeOnlyReason}`;}
  return `F${f.frameStart}–${f.frameEnd}`;
 }
-export function requireFeedbackFrames(f:{frameStart:number|null;frameEnd:number|null}):{frameStart:number;frameEnd:number}{
+export function feedbackFrameInterval(f:{frameStart:number|null;frameEnd:number|null}):{frameStart:number;frameEnd:number}{
  if(f.frameStart===null||f.frameEnd===null)throw new Error(`COMMENT_CLOCK_UNAVAILABLE: ${timeOnlyReason}; a time-only comment has no frame interval for strip export`);
  return {frameStart:f.frameStart,frameEnd:f.frameEnd};
+}
+/** Strip planners address producer frames; a decoded reference index is not that clock. */
+export function requireFeedbackFrames(f:{frameStart:number|null;frameEnd:number|null;context?:unknown}):{frameStart:number;frameEnd:number}{
+ const frames=feedbackFrameInterval(f),comment=(f.context as any)?.comment;
+ if(hasStageComment(comment)&&comment.frame?.basis==='reference')throw new Error('COMMENT_REFERENCE_STRIP_UNAVAILABLE: decoded reference frames are not producer frames; reference-basis comments cannot be exported as producer-frame strips');
+ return frames;
 }
 export function region(a:MarkPoint,b:MarkPoint):MarkRegion{return {x:Math.min(a.x,b.x),y:Math.min(a.y,b.y),width:Math.abs(a.x-b.x),height:Math.abs(a.y-b.y)};}
 export function projectMark(p:MarkPoint,c:ControlNumericCamera):MarkPoint {const s=c.viewport.width/c.visible.width;return {x:(p.x-c.visible.x)*s,y:c.space==='world'?(c.visible.y+c.visible.height-p.y)*s:(p.y-c.visible.y)*s};}
