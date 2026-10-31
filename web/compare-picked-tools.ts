@@ -52,12 +52,13 @@ import {
 import { patchRoute } from '../src/retune-route.ts';
 import type { CheckSummary } from '../src/applied-context.ts';
 import { appliedBlockOps, recordBlock, staleReadouts } from '../src/applied-blocks.ts';
+import { compareSeekStep } from '../src/compare-playhead.ts';
 import { composeAdjust, PhysicsPreview } from './preview.ts';
 import {
   createWindModel, environmentFor, windReadout, RUNTIME_START_READOUT, joltPacket, dueJolts, dragMoved,
-  loadModelDocument, environmentContext, environmentJson, type JoltStep, type WindState,
+  loadModelDocument, environmentContext, environmentJson, type JoltStep, type WindSnapshot, type WindState,
 } from '../src/environment.ts';
-import { environmentCheckRows, scheduleContext, worldExport, type EnvironmentCheckView, type WorldExport } from './environment-world.ts';
+import { environmentCheckRows, restartsWindClock, scheduleContext, worldExport, type ClipMove, type EnvironmentCheckView, type WorldExport } from './environment-world.ts';
 import type { OverlayCircle, OverlayMarker, OverlayRegion, OverlaySnapshot } from './rig-overlays.ts';
 import type { PatchOp } from '../src/config-patch.ts';
 
@@ -148,6 +149,7 @@ export interface ComparePickedToolsHost {
   message: (value: string, error?: boolean) => void;
   download: (filename: string, content: string, type: string) => void;
   turnAdjustFor: (side: Side) => BoneAdjust | null;
+  syncFeedbackSide: (side: Side) => void;
 }
 
 export interface ComparePickedTools {
@@ -178,6 +180,8 @@ export interface ComparePickedTools {
   busy: () => boolean;
   appliedFor: (side: Side) => AppliedRecord | AppliedPatch | AppliedDelta | AppliedRetarget | null;
   modelHashFor: (side: Side) => string | null;
+  seekMode: (target: number, continuing: boolean) => 'settle' | 'seek';
+  stepSide: (mode: 'present' | 'settle' | 'seek', side: Side, target: number) => void;
   dispose: () => void;
 }
 
@@ -265,6 +269,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   const wind = createWindModel();
   let joltQueue: JoltStep[] = [];
   let environmentNote = '';
+  let steppedLive = false;
   const physicsPreview = new PhysicsPreview();
   let idleAdjust: BoneAdjust | null = null;
   let dialAdjust: BoneAdjust | null = null;
@@ -423,6 +428,9 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     if (nextMode !== 'compare' && (currentPart?.side === 'a' || currentPart?.side === 'b') && currentPart.side !== pickedSide) {
       setPickedSide(currentPart.side);
     }
+    if (nextMode !== 'compare') {
+      host.syncFeedbackSide(pickedSide);
+    }
     syncModeButtons();
     syncPickedBanner();
     if (!options.fromTab) {
@@ -438,6 +446,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   function setPickedSide(nextSide: Side): void {
     if (pickedSide === nextSide) {
+      if (workspaceMode !== 'compare') host.syncFeedbackSide(pickedSide);
       syncPickedBanner();
       moveStageHandlesToPickedSide();
       return;
@@ -450,7 +459,25 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     idleAdjust = null;
     dialAdjust = null;
     setAdjust(prevSide);
+    const prevPlayer = host.players[prevSide];
+    if (prevPlayer) {
+      prevPlayer.environment(null);
+      if (prevPlayer.current && !host.playing()) {
+        prevPlayer.seek(host.time());
+        prevPlayer.draw();
+        host.parts()?.present(prevSide);
+      }
+    }
     pickedSide = nextSide;
+    steppedLive = false;
+    if (workspaceMode !== 'compare') host.syncFeedbackSide(pickedSide);
+    applyEnvironment();
+    const nextPlayer = currentPlayer();
+    if (nextPlayer?.current && !host.playing()) {
+      nextPlayer.repose();
+      nextPlayer.draw();
+      host.parts()?.present(pickedSide);
+    }
     syncPickedBanner();
     moveStageHandlesToPickedSide();
     const currentPart = host.parts()?.value();
@@ -840,12 +867,20 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     }
   }
 
+  function environmentApplied(): boolean {
+    return input('environment-applied').checked;
+  }
+
+  function gravityValue(): number {
+    return Number(input('gravity').value);
+  }
+
   function stageWorld(): StageWorld {
-    return { wind: wind.state(), jolts: joltQueue.map(step => ({ ...step })), applied: input('environment-applied').checked, gravity: Number(input('gravity').value) };
+    return { wind: wind.state(), jolts: joltQueue.map(step => ({ ...step })), applied: environmentApplied(), gravity: gravityValue() };
   }
 
   function useWorld(): boolean {
-    return input('environment-use').checked && input('environment-applied').checked;
+    return input('environment-use').checked && environmentApplied();
   }
 
   function checkAnimation(side: Side = pickedSide): string {
@@ -858,7 +893,186 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function worldFor(name: string, side: Side = pickedSide): WorldExport | { error: string } {
-    return worldExport(wind.snapshot(), Number(input('gravity').value), input('environment-applied').checked, name, clipDuration(name, side));
+    return worldExport(wind.snapshot(), gravityValue(), environmentApplied(), name, clipDuration(name, side));
+  }
+
+  function stepEnvironment(dt: number): void {
+    const player = currentPlayer();
+    if (!player) return;
+    wind.advance(dt);
+    const { due, pending } = dueJolts(joltQueue, wind.read().time);
+    joltQueue = pending;
+    for (const step of due) player.moved({ x: step.x, y: step.y });
+    if (environmentApplied()) player.environment(environmentFor(wind.read(), gravityValue()));
+    renderEnvironment();
+  }
+
+  function applyEnvironment(): void {
+    for (const s of ['a', 'b'] as const) {
+      const p = host.players[s];
+      if (!p) continue;
+      if (s === pickedSide && environmentApplied()) {
+        p.environment(environmentFor(wind.read(), gravityValue()));
+      } else {
+        p.environment(null);
+      }
+    }
+    renderEnvironment();
+  }
+
+  function renderSchedule(): void {
+    const animation = host.data().animation, check = checkAnimation(pickedSide);
+    const world = worldFor(animation, pickedSide), checked = check !== animation ? worldFor(check, pickedSide) : null;
+    const shown = 'error' in world
+      ? world.error
+      : `${world.summary}${useWorld() ? ' · used for readings and Apply' : ''}${checked && !('error' in checked) && checked.sha256 !== world.sha256 ? ` · check reads ${check}'s: ${checked.summary}` : ''}`;
+    text('environment-schedule', shown);
+  }
+
+  function renderEnvironment(): void {
+    if (!currentPlayer()) return;
+    const reading = wind.read(), g = gravityValue();
+    text('wind-readout', (environmentApplied() ? windReadout(reading, g) : RUNTIME_START_READOUT) + environmentNote);
+    const gust = button('wind-gust');
+    gust.disabled = reading.gusting;
+    gust.setAttribute('aria-pressed', String(reading.gusting));
+    gust.textContent = reading.gusting ? 'Gusting…' : 'Gust';
+    text('wind-base-label', input('wind-base').value);
+    text('gravity-label', g.toFixed(2));
+    renderSchedule();
+  }
+
+  function restartWindClock(): void {
+    const now = wind.read().time;
+    wind.restore(wind.snapshot());
+    joltQueue = joltQueue.map(step => ({ ...step, at: Math.max(0, step.at - now) }));
+  }
+
+  function clipMoved(move: ClipMove): void {
+    if (currentPlayer() && restartsWindClock(move, useWorld())) {
+      restartWindClock();
+      applyEnvironment();
+    }
+  }
+
+  function syncEnvironmentInputs(): void {
+    const s = wind.snapshot();
+    input('wind-base').value = String(s.base);
+    input('wind-breeze').checked = s.breeze;
+    input('wind-repeat').checked = s.repeat;
+    input('wind-gust-peak').value = String(s.gustPeak);
+    input('wind-gust-duration').value = String(s.gustDuration);
+    renderEnvironment();
+  }
+
+  function resetPhysics(): void {
+    const p = currentPlayer();
+    if (!p) return;
+    joltQueue = [];
+    steppedLive = false;
+    wind.restore(null);
+    input('environment-applied').checked = false;
+    input('gravity').value = '1';
+    syncEnvironmentInputs();
+    try {
+      p.environment(null);
+      if (p.current) {
+        p.seek(host.time());
+        p.draw();
+        host.parts()?.present(pickedSide);
+        host.redrawOverlays(true);
+      }
+      environmentNote = ` · physics history cleared; re-posed from ${host.time().toFixed(3)} s`;
+    } catch (error) {
+      environmentNote = '';
+      host.message(`Physics reset refused: ${errorText(error)}`, true);
+    }
+    renderEnvironment();
+    host.saveDraft();
+  }
+
+  function restoreEnvironment(): void {
+    const snapshot: WindSnapshot = {
+      version: 1,
+      base: Number(input('wind-base').value),
+      breeze: input('wind-breeze').checked,
+      repeat: input('wind-repeat').checked,
+      gustPeak: Number(input('wind-gust-peak').value),
+      gustDuration: Number(input('wind-gust-duration').value),
+    };
+    try {
+      wind.restore(snapshot);
+      environmentFor(wind.read(), gravityValue());
+    } catch (error) {
+      wind.restore(null);
+      input('environment-applied').checked = false;
+      input('gravity').value = '1';
+      host.message(`Saved environment not restored: ${errorText(error)}`, true);
+    }
+    syncEnvironmentInputs();
+    applyEnvironment();
+  }
+
+  function seekEndTime(time: number): number {
+    const steps = Math.floor(time / compareSeekStep);
+    let t = 0;
+    for (let i = 0; i < steps; i++) t += compareSeekStep;
+    const rest = time - t;
+    if (rest > 0) t += rest;
+    return t;
+  }
+
+  function seekMode(target: number, continuing: boolean): 'settle' | 'seek' {
+    const p = currentPlayer();
+    if (!continuing && steppedLive && p && target >= p.time - 1e-9 && target - p.time <= 0.25) {
+      steppedLive = false;
+      return 'settle';
+    }
+    steppedLive = false;
+    clipMoved(continuing ? { kind: 'replay' } : { kind: 'seek', to: target });
+    return 'seek';
+  }
+
+  function stepSide(mode: 'present' | 'settle' | 'seek', side: Side, target: number): void {
+    const player = host.players[side];
+    if (!player) return;
+    if (side !== pickedSide) {
+      player.environment(null);
+      player.seek(target);
+      return;
+    }
+    const end = seekEndTime(target);
+    if ((mode === 'settle' || (mode === 'present' && (environmentApplied() || joltQueue.length > 0 || steppedLive))) && end >= player.time - 1e-9) {
+      if (mode === 'present') steppedLive = true;
+      player.resume();
+      try {
+        const step = compareSeekStep;
+        while (player.time + step < end) {
+          stepEnvironment(step);
+          player.advance(step);
+        }
+        while (player.time > 0 && player.time < end / 2) {
+          const d = Math.min(step, end / 2);
+          stepEnvironment(d);
+          player.advance(d);
+        }
+        const rest = end - player.time;
+        if (rest > 0) {
+          stepEnvironment(rest);
+          player.advance(rest);
+        }
+      } finally {
+        player.pause();
+      }
+      return;
+    }
+    steppedLive = false;
+    if (environmentApplied()) {
+      player.environment(environmentFor(wind.read(), gravityValue()));
+    } else {
+      player.environment(null);
+    }
+    player.seek(target);
   }
 
   function stageChanged(side: Side, change: StageChange<NonNullable<SideBuildState['stripPending']>>): void {
@@ -871,6 +1085,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   async function swapPickedSide(side: Side, modelUrl: string, prefix: string, sha256: string, clipName?: string): Promise<void> {
     await host.swapSideRig(side, modelUrl, prefix, sha256, clipName);
+    applyEnvironment();
   }
 
   async function applyRebuild(): Promise<void> {
@@ -1551,47 +1766,62 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       const node = document.getElementById(id) as HTMLInputElement | HTMLButtonElement | null;
       if (node) node.disabled = false;
     }
-    const renderEnv = () => {
-      const p = currentPlayer(); if (!p) return;
-      const reading = wind.read(), g = Number(input('gravity').value);
-      text('wind-readout', (input('environment-applied').checked ? windReadout(reading, g) : RUNTIME_START_READOUT) + environmentNote);
-      text('wind-base-label', input('wind-base').value);
-      text('gravity-label', g.toFixed(2));
-      const w = worldFor(host.data().animation, pickedSide);
-      text('environment-schedule', 'error' in w ? w.error : `${w.summary}${useWorld() ? ' · used for readings and Apply' : ''}`);
-    };
     const engage = (change: () => void) => {
       try {
         change(); input('environment-applied').checked = true; environmentNote = '';
+        applyEnvironment();
         const p = currentPlayer();
-        if (p) {
-          p.environment(environmentFor(wind.read(), Number(input('gravity').value)));
-          if (p.current && !host.playing()) { p.repose(); p.draw(); host.parts()?.present(pickedSide); host.redrawOverlays(true); }
+        if (p?.current && !host.playing()) {
+          p.repose(); p.draw(); host.parts()?.present(pickedSide); host.redrawOverlays(true);
         }
-        renderEnv(); host.saveDraft();
-      } catch (error) { host.message(`Environment unchanged: ${errorText(error)}`, true); }
+        host.saveDraft();
+      } catch (error) {
+        host.message(`Environment unchanged: ${errorText(error)}`, true);
+        syncEnvironmentInputs();
+      }
     };
     input('wind-base').oninput = () => engage(() => wind.setBase(Number(input('wind-base').value)));
     input('wind-breeze').onchange = () => engage(() => wind.setBreeze(input('wind-breeze').checked));
     input('wind-repeat').onchange = () => engage(() => wind.setRepeat(input('wind-repeat').checked));
     input('wind-gust-peak').onchange = () => engage(() => wind.setGustPeak(Number(input('wind-gust-peak').value)));
     input('wind-gust-duration').onchange = () => engage(() => wind.setGustDuration(Number(input('wind-gust-duration').value)));
-    input('gravity').oninput = () => engage(() => { environmentFor(wind.read(), Number(input('gravity').value)); });
+    input('gravity').oninput = () => engage(() => { environmentFor(wind.read(), gravityValue()); });
     button('wind-gust').onclick = () => engage(() => wind.triggerGust());
-    button('jolt').onclick = () => { if (!currentPlayer()) return; joltQueue.push(...joltPacket(wind.read().time)); };
-    button('physics-reset').onclick = () => {
-      const p = currentPlayer(); if (!p) return;
-      joltQueue = []; wind.restore(null); input('environment-applied').checked = false; input('gravity').value = '1';
-      p.environment(null); if (p.current) { p.seek(host.time()); p.draw(); host.parts()?.present(pickedSide); }
-      renderEnv(); host.saveDraft();
+    button('jolt').onclick = () => {
+      if (!currentPlayer()) return;
+      joltQueue.push(...joltPacket(wind.read().time));
+      if (!host.playing()) host.message('Jolt queued · it reaches the physics on the next steps; press Play.');
     };
+    button('physics-reset').onclick = resetPhysics;
     button('applied-undo').onclick = () => { void undoApply(); };
+    input('environment-use').onchange = () => {
+      if (!input('environment-use').checked) {
+        host.message("Use for readings is off: readings send the standing wind and gravity, Apply's check reads the default world.");
+        renderSchedule();
+        return;
+      }
+      const world = worldFor(host.data().animation, pickedSide);
+      if ('error' in world) {
+        input('environment-use').checked = false;
+        host.message(world.error, true);
+        renderSchedule();
+        return;
+      }
+      restartWindClock();
+      void host.seekTo(0);
+      applyEnvironment();
+      host.message(`Use for readings: ${world.summary} · the wind clock restarts with the clip.`);
+    };
     button('environment-export').onclick = () => {
       const w = worldFor(host.data().animation, pickedSide);
       if ('error' in w) { host.message(w.error, true); return; }
       host.download('rigc-environment.json', w.text, 'application/json');
+      host.message(`Exported ${w.summary}. The download is the bytes readings, Apply and feedback carry; the package is unchanged.`);
     };
     button('environment-check').onclick = () => { void runEnvironmentCheck(); };
+    input('drag-trail').onchange = () => {
+      for (const s of ['a', 'b'] as const) el(`${s}-viewport`).dataset.trail = String(s === pickedSide && input('drag-trail').checked);
+    };
   }
 
   function onInspectorTabChanged(): void {
@@ -2174,6 +2404,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       if (ui.workspaceMode === 'setup' || ui.workspaceMode === 'animate' || ui.workspaceMode === 'compare') {
         setMode(ui.workspaceMode);
       }
+      restoreEnvironment();
       inspectorBlocks?.restore(restoreActiveBlocksUI(ui));
     },
     commentRefusal: () => {
@@ -2197,6 +2428,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     busy: () => rebuildBusy || densityBusy,
     appliedFor: side => sides[side].appliedOnStage,
     modelHashFor: side => sides[side].stageModelHash,
+    seekMode,
+    stepSide,
     dispose: () => {
       if (handoffTimer) clearTimeout(handoffTimer);
       for (const dispose of disposers) dispose();

@@ -167,7 +167,15 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
   const send = (method: string, params: Record<string, unknown> = {}): Promise<any> => {
     const id = ++nextId;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (pending.delete(id)) {
+          reject(new Error(`CDP ${method} timed out after 60s`));
+        }
+      }, 60_000);
+      pending.set(id, {
+        resolve: val => { clearTimeout(timer); resolve(val); },
+        reject: err => { clearTimeout(timer); reject(err); },
+      });
       ws.send(JSON.stringify({ id, method, params }));
     });
   };
@@ -245,6 +253,7 @@ export async function runCompareModeBrowserVerification() {
     const fakeParts = `const fs=require('fs'),path=require('path');const a=process.argv.slice(2);const f=n=>a[a.indexOf(n)+1];
 if(a[0]==='--version'){console.log('1.42.0');process.exit(0);}
 if(a[0]==='rig'){const out=f('--out'),src=path.join(f('--parts'),'rig');fs.mkdirSync(out,{recursive:true});for(const n of fs.readdirSync(src))fs.copyFileSync(path.join(src,n),path.join(out,n));console.log('rig-parts rig: wrote '+out);process.exit(0);}
+if(a[0]==='check'){const out=f('--out'),rig=JSON.parse(fs.readFileSync(path.join(f('--rig'),'rig.json'),'utf8'));fs.mkdirSync(out,{recursive:true});const fail=!!(rig.mesh&&rig.mesh.r===9);fs.writeFileSync(path.join(out,'check.json'),JSON.stringify({PASS:!fail,TEXTURE_STRETCH:{status:fail?'FAIL':'PASS'},gate_spine_html_green:!fail}));console.log(fail?'check: FAIL (TEXTURE_STRETCH)':'check: PASS');process.exit(fail?1:0);}
 const out=f('--out');fs.mkdirSync(out,{recursive:true});const mesh=fs.readFileSync(f('--mesh'),'utf8');
 fs.writeFileSync(path.join(out,'rig.json'),JSON.stringify({mesh:JSON.parse(mesh)}));fs.writeFileSync(path.join(out,'motion.json'),'{}');
 fs.writeFileSync(path.join(out,'remesh.json'),JSON.stringify({spec:'rig-parts-remesh/1',request:{part:f('--part'),page_edges:'free',pack_shape:'polygon'},target:{before:{vertices:4,triangles:2,hull:4},after:{vertices:4,triangles:2,hull:4}}}));
@@ -258,7 +267,7 @@ const rigPath=f('--rig');const srcBuild=${JSON.stringify(srcBuildDir)};
 for(const n of ['skeleton.model.json','rigid.png','mesh.png']){if(fs.existsSync(path.join(srcBuild,n)))fs.copyFileSync(path.join(srcBuild,n),path.join(out,n));}
 const model=JSON.parse(fs.readFileSync(path.join(out,'skeleton.model.json'),'utf8'));
 const rig=JSON.parse(fs.readFileSync(rigPath,'utf8'));
-model.rebuiltRegions=rig.mesh?rig.mesh.contour.regions:null;
+model.rig={...model.rig,rebuilt:rig,rebuiltRegions:rig.mesh?rig.mesh.contour.regions:null};
 fs.writeFileSync(path.join(out,'skeleton.model.json'),JSON.stringify(model));
 console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
@@ -309,7 +318,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
           },
         },
         constraints: [
-          { type: 'physics', name: 'mesh_physics', bone: 'mesh', rotate: 1, strength, damping: 0.85, wind: 1, gravity: 2 },
+          { type: 'physics', name: 'mesh_physics', bone: 'mesh', x: 1, inertia: 1, rotate: 1, strength, damping: 0.85, wind: 1, gravity: 2 },
         ],
         motion: {
           duration: 1,
@@ -320,8 +329,10 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         },
       };
       const model = structuredClone(baseModel);
+      const meshBone = model.bones.find((b: { name?: string }) => b.name === 'mesh');
+      if (meshBone) meshBone.length = 12;
       model.constraints = [
-        { kind: 'physics', declaredIn: 'rig', name: 'mesh_physics', bone: 'mesh', rotate: 1, strength, damping: 0.85, wind: 1, gravity: 2 },
+        { kind: 'physics', declaredIn: 'rig', name: 'mesh_physics', bone: 'mesh', x: 1, inertia: 1, rotate: 1, strength, damping: 0.85, wind: 1, gravity: 2 },
       ];
 
       await writeFile(join(pkg, 'rig/config.json'), JSON.stringify(cfg, null, 2));
@@ -601,17 +612,136 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
       for (let i = 0; i < 200; i++) {
         const items = document.querySelectorAll('#applied-list li');
-        if (items.length > 0) break;
+        if (items.length > 0 && window.rigReviewEditor.stage('b').applied) break;
         await sleep(40);
       }
       await sleep(80);
       const bAppliedCount = document.querySelectorAll('#applied-list li').length;
+      const chestStatusAfterRegionsApply = document.getElementById('chest-editor-status')?.textContent || '';
 
       // Switch back to Build A and verify Build A was NOT modified
       document.querySelector('#mode-build-picker [data-build-side="a"]').click();
       await sleep(100);
       const aAppliedCount = document.querySelectorAll('#applied-list li').length;
       const aChestCxAfterBApply = document.getElementById('chest-0-cx')?.value;
+
+      // Bar 1a: After Apply on picked Build B, adding feedback for B carries B's applied record while A carries null
+      const addFormFeedback = async (sideVal, catVal, summaryText) => {
+        const sideSel = document.getElementById('side');
+        sideSel.value = sideVal;
+        sideSel.dispatchEvent(new Event('change', { bubbles: true }));
+        const startIn = document.getElementById('frame-start');
+        const endIn = document.getElementById('frame-end');
+        startIn.value = '0';
+        endIn.value = '2';
+        const kindSel = document.getElementById('target-kind');
+        kindSel.value = 'bone';
+        kindSel.dispatchEvent(new Event('change', { bubbles: true }));
+        const nameIn = document.getElementById('target-name');
+        nameIn.value = 'mesh';
+        const catSel = document.getElementById('category');
+        catSel.value = catVal;
+        const sumIn = document.getElementById('summary');
+        sumIn.value = summaryText;
+        document.getElementById('add-feedback').click();
+        await sleep(60);
+      };
+
+      await addFormFeedback('b', 'quality', 'feedback on applied B');
+      await addFormFeedback('a', 'quality', 'feedback on unapplied A');
+      document.getElementById('submit').click();
+      await sleep(200);
+
+      const sessionAfterRegionsApply = await (await fetch(new URL('api/compare/session', location.href))).json();
+      const fbAppliedB = (sessionAfterRegionsApply.feedback || []).find(f => f.summary === 'feedback on applied B');
+      const fbUnappliedA = (sessionAfterRegionsApply.feedback || []).find(f => f.summary === 'feedback on unapplied A');
+      const stageBApplied = window.rigReviewEditor.stage('b').applied;
+
+      // Bar 1b: A patch Apply whose check FAILs on Build B is refused on Submit with EDIT_SUBMIT_UNCHECKED
+      document.querySelector('#mode-build-picker [data-build-side="b"]').click();
+      await sleep(80);
+      await clickMode('rig');
+      window.rigReviewEditor.mesh.select('mesh');
+      window.rigReviewEditor.mesh.set(['r'], 9);
+      await window.rigReviewEditor.mesh.apply();
+      await sleep(80);
+      const stageBFailedPatch = window.rigReviewEditor.stage('b').applied;
+      await addFormFeedback('b', 'defect', 'feedback on failed-check B');
+      document.getElementById('submit').click();
+      await sleep(200);
+      const failedCheckMessage = document.getElementById('message')?.textContent || '';
+      const failedCheckIsError = document.getElementById('message')?.classList.contains('error') ?? false;
+
+      // Clean up the unsubmitted failed-check feedback item so the session stays valid
+      const deleteButtons = [...document.querySelectorAll('#feedback-list .feedback-item button')];
+      if (deleteButtons.length > 0) {
+        deleteButtons[deleteButtons.length - 1].click();
+        await sleep(60);
+      }
+
+      // Bar 2: With environment applied, playing after Gust and after Jolt moves the picked build's pose
+      // away from the same run without them (read as a number), while the unpicked build's pose does not change.
+      document.querySelector('#mode-build-picker [data-build-side="a"]').click();
+      await sleep(80);
+      await clickMode('playback');
+
+      const runEnvPlayback = async (trigger) => {
+        document.getElementById('physics-reset').click();
+        await sleep(60);
+        scrub.value = '0';
+        scrub.dispatchEvent(new Event('input', { bubbles: true }));
+        for (let i = 0; i < 120; i++) {
+          if (!document.getElementById('add-feedback').disabled && Number(document.getElementById('scrub').value) < 0.01) break;
+          await sleep(25);
+        }
+        const windBase = document.getElementById('wind-base');
+        windBase.value = '0';
+        windBase.dispatchEvent(new Event('input', { bubbles: true }));
+        const gustPeak = document.getElementById('wind-gust-peak');
+        gustPeak.value = '3';
+        gustPeak.dispatchEvent(new Event('change', { bubbles: true }));
+        const gustDur = document.getElementById('wind-gust-duration');
+        gustDur.value = '1.2';
+        gustDur.dispatchEvent(new Event('change', { bubbles: true }));
+        if (trigger === 'gust') {
+          document.getElementById('wind-gust').click();
+        } else if (trigger === 'jolt') {
+          document.getElementById('jolt').click();
+        }
+        document.getElementById('play').click();
+        for (let i = 0; i < 200; i++) {
+          const v = document.getElementById('reference-video');
+          const t = Number(document.getElementById('scrub').value);
+          const msg = document.getElementById('message')?.textContent || '';
+          const settled = v.paused && !document.getElementById('add-feedback').disabled && t >= 0.95 && msg.includes('Playback stopped at the last supported decoded reference frame');
+          if (settled) break;
+          await sleep(25);
+        }
+        await sleep(40);
+        return {
+          time: Number(document.getElementById('scrub').value),
+          windReadout: document.getElementById('wind-readout')?.textContent || '',
+          a: window.rigReviewEditor.bone('mesh', 'a'),
+          b: window.rigReviewEditor.bone('mesh', 'b'),
+        };
+      };
+
+      const envBaseline = await runEnvPlayback('none');
+      const envGust = await runEnvPlayback('gust');
+      const envJolt = await runEnvPlayback('jolt');
+      document.getElementById('physics-reset').click();
+      await sleep(60);
+
+      const poseDelta = (p1, p2) => Math.hypot((p1?.x ?? 0) - (p2?.x ?? 0), (p1?.y ?? 0) - (p2?.y ?? 0), (p1?.rotationX ?? 0) - (p2?.rotationX ?? 0));
+      const environmentPlayback = {
+        baseline: envBaseline,
+        gust: envGust,
+        jolt: envJolt,
+        gustPickedDelta: poseDelta(envGust.a, envBaseline.a),
+        joltPickedDelta: poseDelta(envJolt.a, envBaseline.a),
+        gustUnpickedDelta: poseDelta(envGust.b, envBaseline.b),
+        joltUnpickedDelta: poseDelta(envJolt.b, envBaseline.b),
+      };
 
       const [compareRes, sessionRes] = await Promise.all([
         fetch(new URL('api/compare', location.href)),
@@ -634,6 +764,16 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
           aAppliedCount,
           aChestCxAfterBApply,
         },
+        appliedFeedbackCheck: {
+          chestStatusAfterRegionsApply,
+          bFeedbackApplied: fbAppliedB?.context?.applied ?? null,
+          aFeedbackApplied: fbUnappliedA?.context?.applied ?? null,
+          stageBApplied,
+          stageBFailedPatchCheck: stageBFailedPatch?.check ?? null,
+          failedCheckMessage,
+          failedCheckIsError,
+        },
+        environmentPlayback,
         commentModes,
         binding: {
           sourceHash: compareData.sourceHash,
@@ -769,6 +909,34 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
     if (compareCheck.applyIsolation.bAppliedCount !== 1 || compareCheck.applyIsolation.aAppliedCount !== 0 || compareCheck.applyIsolation.aChestCxAfterBApply !== '10')
       failures.push(`Apply isolation failed: ${JSON.stringify(compareCheck.applyIsolation)}`);
+
+    const afc = compareCheck.appliedFeedbackCheck;
+    if (
+      !afc?.bFeedbackApplied ||
+      afc.bFeedbackApplied.schema !== 'rig-review-applied/1' ||
+      afc.bFeedbackApplied.buildId !== afc.stageBApplied?.buildId ||
+      afc.aFeedbackApplied !== null
+    ) {
+      failures.push(`Feedback applied record mismatch: ${JSON.stringify(afc)}`);
+    }
+    if (
+      afc?.stageBFailedPatchCheck?.pass !== false ||
+      !afc.failedCheckIsError ||
+      !afc.failedCheckMessage.includes('EDIT_SUBMIT_UNCHECKED: applied build failed check — check: FAIL (TEXTURE_STRETCH)')
+    ) {
+      failures.push(`Failed check refusal mismatch: ${JSON.stringify(afc)}`);
+    }
+
+    const envPlay = compareCheck.environmentPlayback;
+    if (
+      !envPlay ||
+      !(envPlay.gustPickedDelta > 1) ||
+      !(envPlay.joltPickedDelta > 0.1) ||
+      envPlay.gustUnpickedDelta !== 0 ||
+      envPlay.joltUnpickedDelta !== 0
+    ) {
+      failures.push(`Environment Gust/Jolt playback mismatch: ${JSON.stringify(envPlay)}`);
+    }
 
     if (!diskUnchanged.aUnchanged || !diskUnchanged.bUnchanged)
       failures.push(`Input package bytes on disk changed after Apply: ${JSON.stringify(diskUnchanged)}`);
