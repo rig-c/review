@@ -503,6 +503,14 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         await sleep(40);
         const timelineLanes = document.querySelectorAll('#animation-inspection .animation-lane').length;
         const timelineKeys = document.querySelectorAll('#animation-inspection .animation-key').length;
+        const editableLanes = document.querySelectorAll('#animation-inspection .animation-lane[data-editable="true"]').length;
+        const gateEl = document.querySelector('#animation-inspection [data-animation-gate]');
+        const gateCode = gateEl?.getAttribute('data-gate-code') || '';
+        const gateEditable = gateEl?.getAttribute('data-editable') || '';
+        const gateText = gateEl?.textContent || '';
+        const animApplyDisabled = document.querySelector('#animation-inspection [data-animation-apply]')?.disabled ?? false;
+        const dockPanelPresent = !!document.getElementById('animation-dock');
+        const animateBlocksPresent = !!document.getElementById('animate-blocks');
 
         document.querySelector('[data-animation-view="curve"]')?.click();
         await sleep(40);
@@ -540,6 +548,13 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
           animate: {
             timelineLanes,
             timelineKeys,
+            editableLanes,
+            gateCode,
+            gateEditable,
+            gateText,
+            animApplyDisabled,
+            dockPanelPresent,
+            animateBlocksPresent,
             curvePaths,
             curveReadout,
             treeBones,
@@ -975,6 +990,16 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         failures.push(`${label}: bones/rigFields/cloth/cuts panels not populated: ${JSON.stringify(b.setup)}`);
       if (b.animate.timelineLanes < 1 || b.animate.timelineKeys < 1 || b.animate.curvePaths < 1 || !b.animate.treeBones.includes('mesh'))
         failures.push(`${label}: animation timeline/curve/tree not populated: ${JSON.stringify(b.animate)}`);
+      if (
+        b.animate.gateCode !== 'ANIMATION_COMPARE_READ_ONLY' ||
+        b.animate.gateEditable !== 'false' ||
+        b.animate.editableLanes !== 0 ||
+        !b.animate.animApplyDisabled ||
+        !b.animate.dockPanelPresent ||
+        !b.animate.animateBlocksPresent
+      ) {
+        failures.push(`${label}: compare timeline read-only gate or split dock failed: ${JSON.stringify(b.animate)}`);
+      }
       if (!b.animate.physicsHasStrength || !b.animate.idleHasMesh || !b.animate.retargetSequences.includes('pose-1'))
         failures.push(`${label}: physics/idle/retarget panels not populated: ${JSON.stringify(b.animate)}`);
     }

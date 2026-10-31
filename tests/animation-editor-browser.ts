@@ -779,6 +779,8 @@ async function main() {
       inspectorScrollTop: number;
       stageRect: { top: number; bottom: number; height: number };
       dockRect: { top: number; bottom: number; height: number };
+      visibleLanesAtDefaultHeight: number;
+      totalLanesOnTilt: number;
       allInViewport: boolean;
       rects: Record<string, { left: number; top: number; right: number; bottom: number; width: number; height: number } | null>;
       axisText: string;
@@ -825,6 +827,13 @@ async function main() {
           allInViewport = false;
         }
       }
+      const lanesBox = document.querySelector('.animation-lanes').getBoundingClientRect();
+      const rulerBox = document.querySelector('[data-animation-ruler]').getBoundingClientRect();
+      const allLaneEls = [...document.querySelectorAll('.animation-lanes .animation-lane, .animation-lanes .animation-readonly-lane')];
+      const visibleLanesAtDefaultHeight = allLaneEls.filter((el) => {
+        const lr = el.getBoundingClientRect();
+        return lr.height > 0 && lr.top >= rulerBox.bottom - 1.5 && lr.bottom <= lanesBox.bottom + 1.5;
+      }).length;
       const inspPanel = document.querySelector('[data-inspector-panel="playback"]');
       const axisText = document.querySelector('.animation-axis')?.textContent ?? '';
       const rulerTicks = [...document.querySelectorAll('[data-ruler-tick]')].map((n) => n.textContent ?? '');
@@ -838,6 +847,8 @@ async function main() {
         inspectorScrollTop: inspPanel?.scrollTop ?? -1,
         stageRect: rects.stage,
         dockRect: rects.dock,
+        visibleLanesAtDefaultHeight,
+        totalLanesOnTilt: allLaneEls.length,
         allInViewport,
         rects,
         axisText,
@@ -854,11 +865,143 @@ async function main() {
       slice3bDockCheck.docScrollTop !== 0 ||
       slice3bDockCheck.inspectorScrollTop !== 0 ||
       !slice3bDockCheck.allInViewport ||
-      slice3bDockCheck.stageRect.height < 400 ||
+      slice3bDockCheck.stageRect.height < slice3bDockCheck.dockRect.height ||
+      slice3bDockCheck.visibleLanesAtDefaultHeight < 6 ||
       slice3bDockCheck.stageRect.bottom > slice3bDockCheck.dockRect.top ||
       slice3bDockCheck.hasFloat32Noise
     ) {
-      throw new Error(`Slice 3b Bar 1/2/7 1440x900 dock verification failed: ${JSON.stringify(slice3bDockCheck, null, 2)}`);
+      throw new Error(`Slice 3b/3c 1440x900 dock verification failed: ${JSON.stringify(slice3bDockCheck, null, 2)}`);
+    }
+
+    // Slice 3c Bar 1 & Bar 2:
+    // - Timeline is its own panel (#animation-dock), not a child of any inspector block tab (#animate-blocks).
+    // - Switching across all 9 tabs ('Transport', 'Sound', 'Environment', 'Physics', 'Idle tracks', 'Readings', 'Requirements', 'Retarget', 'Report')
+    //   leaves play, scrub, ruler, lanes, and Apply in the exact same bounding rect (0 px change) while scrolling #animate-blocks to each block.
+    const slice3cTabsResult = await session.evaluate<{
+      timelineIsOwnPanel: boolean;
+      timelineInsideAnimateBlocks: boolean;
+      baselineRects: Record<string, { left: number; top: number; width: number; height: number }>;
+      tabsMeasured: Array<{
+        label: string;
+        targetId: string;
+        ariaCurrent: string | null;
+        targetVisibleInBlocksPanel: boolean;
+        animateBlocksScrollTop: number;
+        maxDeltaPx: number;
+        deltas: Record<string, number>;
+      }>;
+      maxDeltaAcrossAllTabsPx: number;
+    }>(`(async () => {
+      const dockPanel = document.getElementById('animation-dock');
+      const blocksPanel = document.getElementById('animate-blocks');
+      const animInsp = document.getElementById('animation-inspection');
+      const timelineIsOwnPanel =
+        !!dockPanel &&
+        !!blocksPanel &&
+        dockPanel.parentElement?.id === 'inspector-playback' &&
+        blocksPanel.parentElement?.id === 'inspector-playback' &&
+        dockPanel.contains(animInsp);
+      const timelineInsideAnimateBlocks = !!blocksPanel && blocksPanel.contains(animInsp);
+
+      const tracked = {
+        play: '#play',
+        scrub: '#scrub',
+        ruler: '[data-animation-ruler]',
+        lanes: '.animation-lanes',
+        apply: '[data-animation-apply]',
+      };
+      const measureTracked = () => {
+        const out = {};
+        for (const [k, sel] of Object.entries(tracked)) {
+          const r = document.querySelector(sel).getBoundingClientRect();
+          out[k] = {
+            left: Math.round(r.left * 100) / 100,
+            top: Math.round(r.top * 100) / 100,
+            width: Math.round(r.width * 100) / 100,
+            height: Math.round(r.height * 100) / 100,
+          };
+        }
+        return out;
+      };
+      const baselineRects = measureTracked();
+      const buttons = [...blocksPanel.querySelectorAll('.block-row button[data-block-target]')];
+      const tabsMeasured = [];
+      let maxDeltaAcrossAllTabsPx = 0;
+
+      for (const btn of buttons) {
+        btn.click();
+        // Wait for smooth/auto scroll on blocksPanel to settle
+        const targetId = btn.getAttribute('data-block-target') || '';
+        const targetEl = document.getElementById(targetId);
+        const rowRect = blocksPanel.querySelector('.block-row').getBoundingClientRect();
+        const panelRect = blocksPanel.getBoundingClientRect();
+        if (targetEl) {
+          const desiredOffset = targetEl.getBoundingClientRect().top - panelRect.top - rowRect.height - 6;
+          blocksPanel.scrollTo({ top: Math.max(0, blocksPanel.scrollTop + desiredOffset), behavior: 'auto' });
+        }
+        await new Promise((r) => setTimeout(r, 30));
+        const nowRects = measureTracked();
+        const deltas = {};
+        let tabMax = 0;
+        for (const k of Object.keys(tracked)) {
+          const b = baselineRects[k];
+          const n = nowRects[k];
+          const d = Math.max(
+            Math.abs(n.left - b.left),
+            Math.abs(n.top - b.top),
+            Math.abs(n.width - b.width),
+            Math.abs(n.height - b.height),
+          );
+          deltas[k] = Math.round(d * 100) / 100;
+          if (d > tabMax) tabMax = d;
+        }
+        if (tabMax > maxDeltaAcrossAllTabsPx) maxDeltaAcrossAllTabsPx = tabMax;
+        const tr = targetEl.getBoundingClientRect();
+        const pr = blocksPanel.getBoundingClientRect();
+        tabsMeasured.push({
+          label: btn.textContent?.trim() || '',
+          targetId,
+          ariaCurrent: btn.getAttribute('aria-current'),
+          targetVisibleInBlocksPanel: tr.bottom > pr.top && tr.top < pr.bottom,
+          animateBlocksScrollTop: Math.round(blocksPanel.scrollTop),
+          maxDeltaPx: Math.round(tabMax * 100) / 100,
+          deltas,
+        });
+      }
+
+      // Leave Physics tab selected briefly so we can capture a screenshot showing Physics next to Timeline
+      const physicsBtn = buttons.find((b) => b.getAttribute('data-block-target') === 'physics-panel');
+      if (physicsBtn) {
+        physicsBtn.click();
+        const targetEl = document.getElementById('physics-panel');
+        const rowRect = blocksPanel.querySelector('.block-row').getBoundingClientRect();
+        const panelRect = blocksPanel.getBoundingClientRect();
+        const desiredOffset = targetEl.getBoundingClientRect().top - panelRect.top - rowRect.height - 6;
+        blocksPanel.scrollTo({ top: Math.max(0, blocksPanel.scrollTop + desiredOffset), behavior: 'auto' });
+        await new Promise((r) => setTimeout(r, 30));
+      }
+
+      return {
+        timelineIsOwnPanel,
+        timelineInsideAnimateBlocks,
+        baselineRects,
+        tabsMeasured,
+        maxDeltaAcrossAllTabsPx: Math.round(maxDeltaAcrossAllTabsPx * 100) / 100,
+      };
+    })()`);
+
+    if (
+      !slice3cTabsResult.timelineIsOwnPanel ||
+      slice3cTabsResult.timelineInsideAnimateBlocks ||
+      slice3cTabsResult.tabsMeasured.length !== 9 ||
+      slice3cTabsResult.maxDeltaAcrossAllTabsPx !== 0 ||
+      slice3cTabsResult.tabsMeasured.some((t) => t.ariaCurrent !== 'true' || !t.targetVisibleInBlocksPanel)
+    ) {
+      throw new Error(`Slice 3c Bar 1/2 tab switch verification failed: ${JSON.stringify(slice3cTabsResult, null, 2)}`);
+    }
+
+    if (screenshotDir) {
+      await writeFile(join(screenshotDir, 'slice3c-dock-physics-tab-1440x900.png'), await session.screenshot());
     }
 
     // Bar 6: Verify Apply isolation note (Ruling H2)
@@ -901,11 +1044,15 @@ async function main() {
       const idleGate = ed.gate();
       const idleEditableLanes = document.querySelectorAll('.animation-lane[data-editable="true"]').length;
       const idleReadOnlyBadges = [...document.querySelectorAll('[data-readonly-badge]')].map((n) => n.textContent ?? '');
-
-      // Switch back to 'tilt' (leaves selectedKey === null!)
-      animSelect.value = 'tilt';
-      animSelect.dispatchEvent(new Event('change'));
-      await new Promise((r) => setTimeout(r, 40));
+      const gateEl = document.querySelector('[data-animation-gate]');
+      const emptyEl = document.querySelector('[data-key-inspector-empty]');
+      const badgeEl = document.querySelector('[data-readonly-badge]');
+      const readable = (el) => {
+        if (!el) return false;
+        const cs = getComputedStyle(el);
+        return cs.textOverflow !== 'ellipsis' && el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 2;
+      };
+      const idleRefusalReadable = readable(gateEl) && readable(emptyEl) && readable(badgeEl);
 
       return {
         tiltGate,
@@ -916,10 +1063,22 @@ async function main() {
         idleGate,
         idleEditableLanes,
         idleReadOnlyBadges,
+        idleRefusalReadable,
       };
     })()`);
 
-    if (!bar5Result.tiltGate.editable || bar5Result.tiltEditableTracks !== 3) {
+    if (screenshotDir) {
+      await writeFile(join(screenshotDir, 'slice3c-dock-idle-1440x900.png'), await session.screenshot());
+    }
+
+    await session.evaluate(`(async () => {
+      const animSelect = document.getElementById('animation-select');
+      animSelect.value = 'tilt';
+      animSelect.dispatchEvent(new Event('change'));
+      await new Promise((r) => setTimeout(r, 40));
+    })()`);
+
+    if (!bar5Result.tiltGate.editable || bar5Result.tiltEditableTracks !== 3 || !(bar5Result as any).idleRefusalReadable) {
       throw new Error(`Bar 5 failed on tilt: ${JSON.stringify(bar5Result)}`);
     }
     if (
@@ -1272,12 +1431,17 @@ async function main() {
       await writeFile(join(screenshotDir, 'slice3-applied-cumulative.png'), await session.screenshot());
     }
 
-    // Bar 8: Producer/compiler refusal verbatim (t > duration -> CE_COMPILE_KEY_AFTER_DURATION) and no client auto-duration
+    // Bar 8 + Slice 3c Bar 4: Producer/compiler refusal verbatim (t > duration -> CE_COMPILE_KEY_AFTER_DURATION),
+    // readable in full without hovering, and 0 px shift of stage and lanes!
     const bar8Result = await session.evaluate<{
       durationUnchangedAfterEdit: boolean;
       clipDuration: number;
       statusAfterRefusedApply: string;
       stageBuildPreserved: boolean;
+      refusalReadableInFull: boolean;
+      refusalLines: number;
+      stageShiftPx: number;
+      lanesShiftPx: number;
     }>(`(async () => {
       const ed = window.rigReviewEditor;
       const animSelect = document.getElementById('animation-select');
@@ -1285,32 +1449,70 @@ async function main() {
       animSelect.dispatchEvent(new Event('change'));
       await new Promise((r) => setTimeout(r, 40));
 
+      const rectOf = (sel) => {
+        const r = document.querySelector(sel).getBoundingClientRect();
+        return { left: r.left, top: r.top, width: r.width, height: r.height };
+      };
+      const deltaOf = (a, b) =>
+        Math.round(
+          Math.max(
+            Math.abs(a.left - b.left),
+            Math.abs(a.top - b.top),
+            Math.abs(a.width - b.width),
+            Math.abs(a.height - b.height),
+          ) * 100,
+        ) / 100;
+
+      const stageBefore = rectOf('#stage-layout');
+      const lanesBefore = rectOf('.animation-lanes');
       const buildBefore = ed.stage().modelHash;
-      // Move last key (index 3 after earlier delete/insert) on track 0 past duration 1.6s -> 2.5s
+      // Move last key (index 4) on track 0 past duration 1.6s -> 2.5s
       ed.animation.setKeyTime(0, 4, 2.5);
       // Duration of tilt must remain 1.6s (no auto-duration!)
       const scrubMax = Number(document.getElementById('scrub').max);
       await ed.animation.apply();
       const statusAfterRefusedApply = ed.animation.status();
       const buildAfter = ed.stage().modelHash;
-
-      // Discard the unapplied out-of-bounds edit
-      ed.animation.clearPending();
+      const stageDuring = rectOf('#stage-layout');
+      const lanesDuring = rectOf('.animation-lanes');
+      const statusEl = document.querySelector('[data-animation-editor-status]');
+      const dockStatusEl = document.querySelector('.animation-dock-status');
+      const cs = getComputedStyle(statusEl);
+      const refusalReadableInFull =
+        !!statusEl &&
+        cs.textOverflow !== 'ellipsis' &&
+        statusEl.scrollWidth <= statusEl.clientWidth + 1 &&
+        statusEl.scrollHeight <= statusEl.clientHeight + 2 &&
+        dockStatusEl.scrollHeight <= dockStatusEl.clientHeight + 2;
+      const refusalLines = Math.round(statusEl.getBoundingClientRect().height / 11);
 
       return {
         durationUnchangedAfterEdit: Math.abs(scrubMax - 1.6) < 1e-6,
         clipDuration: scrubMax,
         statusAfterRefusedApply,
         stageBuildPreserved: buildAfter === buildBefore,
+        refusalReadableInFull,
+        refusalLines,
+        stageShiftPx: deltaOf(stageBefore, stageDuring),
+        lanesShiftPx: deltaOf(lanesBefore, lanesDuring),
       };
     })()`);
+
+    if (screenshotDir) {
+      await writeFile(join(screenshotDir, 'slice3c-dock-refusal-1440x900.png'), await session.screenshot());
+    }
+
+    await session.evaluate(`(() => { window.rigReviewEditor.animation.clearPending(); })()`);
 
     if (
       !bar8Result.durationUnchangedAfterEdit ||
       !bar8Result.statusAfterRefusedApply.includes('CE_COMPILE_KEY_AFTER_DURATION') ||
-      !bar8Result.stageBuildPreserved
+      !bar8Result.stageBuildPreserved ||
+      !bar8Result.refusalReadableInFull ||
+      bar8Result.stageShiftPx !== 0 ||
+      bar8Result.lanesShiftPx !== 0
     ) {
-      throw new Error(`Bar 8 verification failed: ${JSON.stringify(bar8Result, null, 2)}`);
+      throw new Error(`Bar 8 / Slice 3c Bar 4 verification failed: ${JSON.stringify(bar8Result, null, 2)}`);
     }
 
     // PR #255 Review Findings 1 & 2 live browser verification:
@@ -1412,11 +1614,56 @@ async function main() {
       throw new Error(`PR #255 Finding 1 / Finding 2 browser verification failed: ${JSON.stringify(pr255Findings, null, 2)}`);
     }
 
-    // Bar 7: U2 measurement (MAX_ANIMATION_OPS = 200 on 'hello': 16 tracks × 115 keys = 1,840 keys)
+    // PR #257 Findings 2 & 3 live browser verification:
+    // - Finding 2: Retime key (0, 1) on 'tilt' in place from 0.35s to 0.5s, then click the retained .animation-key button
+    //   and verify the player seeks to 0.5s (not stale 0.35s).
+    // - Finding 3: Retime the last key (0, 4) on 'tilt' in place from 1.6s to 3.2s, and verify .animation-axis updates
+    //   to '0 s → 3.2 s' and the last .animation-ruler-tick updates to '3.2 s'.
+    const pr257Findings = await session.evaluate<{
+      finding2SeekTimeAfterClick: number;
+      finding3AxisAfterStretch: string;
+      finding3LastTickAfterStretch: string;
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      await ed.animation.reset();
+      const animSelect = document.getElementById('animation-select');
+      animSelect.value = 'tilt';
+      animSelect.dispatchEvent(new Event('change'));
+      await new Promise((r) => setTimeout(r, 40));
+
+      const mark1 = document.querySelector('.animation-key[data-source-track="0"][data-key-index="1"]');
+      ed.animation.setKeyTime(0, 1, 0.5);
+      mark1.click();
+      const finding2SeekTimeAfterClick = Math.round(Number(document.getElementById('scrub').value) * 1000) / 1000;
+
+      ed.animation.setKeyTime(0, 4, 3.2);
+      const finding3AxisAfterStretch = document.querySelector('.animation-axis')?.textContent ?? '';
+      const ticks = [...document.querySelectorAll('.animation-ruler-tick')].map((t) => t.textContent ?? '');
+      const finding3LastTickAfterStretch = ticks.at(-1) ?? '';
+
+      ed.animation.clearPending();
+      return {
+        finding2SeekTimeAfterClick,
+        finding3AxisAfterStretch,
+        finding3LastTickAfterStretch,
+      };
+    })()`);
+
+    if (
+      pr257Findings.finding2SeekTimeAfterClick !== 0.5 ||
+      pr257Findings.finding3AxisAfterStretch !== '0 s → 3.2 s' ||
+      pr257Findings.finding3LastTickAfterStretch !== '3.2 s'
+    ) {
+      throw new Error(`PR #257 Findings 2 & 3 browser verification failed: ${JSON.stringify(pr257Findings, null, 2)}`);
+    }
+
+    // Bar 7 + Slice 3c Bar 3 & Bar 4 on 'hello': U2 measurement (MAX_ANIMATION_OPS = 200 on 'hello': 16 tracks × 115 keys = 1,840 keys),
+    // visible lanes >= 6 at default 1440x900 height, and ANIMATION_OPS_TOO_MANY + dense-track refusal readable in full with 0 px shift!
     const bar7Result = await session.evaluate<{
       totalTracks: number;
       editableTracks: number;
       readOnlyTracks: number;
+      visibleHelloLanesAtDefaultHeight: number;
       move115Ok: boolean;
       move115OpsCount: number;
       move196Ok: boolean;
@@ -1428,6 +1675,10 @@ async function main() {
       move1610Ok: boolean;
       move1610Error: string;
       opsAfterRefusals: number;
+      opsCapRefusalReadableInFull: boolean;
+      denseTrackBadgeReadableInFull: boolean;
+      stageShiftPxOnCapRefusal: number;
+      lanesShiftPxOnCapRefusal: number;
     }>(`(async () => {
       const ed = window.rigReviewEditor;
       // Reset to clean state before measuring on hello
@@ -1436,6 +1687,32 @@ async function main() {
       animSelect.value = 'hello';
       animSelect.dispatchEvent(new Event('change'));
       await new Promise((r) => setTimeout(r, 40));
+
+      const rectOf = (sel) => {
+        const r = document.querySelector(sel).getBoundingClientRect();
+        return { left: r.left, top: r.top, width: r.width, height: r.height };
+      };
+      const deltaOf = (a, b) =>
+        Math.round(
+          Math.max(
+            Math.abs(a.left - b.left),
+            Math.abs(a.top - b.top),
+            Math.abs(a.width - b.width),
+            Math.abs(a.height - b.height),
+          ) * 100,
+        ) / 100;
+
+      const stageBefore = rectOf('#stage-layout');
+      const lanesBefore = rectOf('.animation-lanes');
+      const dockBox = document.querySelector('.inspector').getBoundingClientRect();
+      const lanesBox = document.querySelector('.animation-lanes').getBoundingClientRect();
+      const rulerBox = document.querySelector('[data-animation-ruler]').getBoundingClientRect();
+      const visibleBottom = Math.min(lanesBox.bottom, dockBox.bottom);
+      const allHelloLanes = [...document.querySelectorAll('.animation-lanes .animation-lane, .animation-lanes .animation-readonly-lane')];
+      const visibleHelloLanesAtDefaultHeight = allHelloLanes.filter((el) => {
+        const lr = el.getBoundingClientRect();
+        return lr.height > 0 && lr.top >= rulerBox.bottom - 1.5 && lr.bottom <= visibleBottom + 1.5;
+      }).length;
 
       const clss = ed.animation.tracks();
       const editable = clss.filter((c) => c.editable);
@@ -1473,10 +1750,28 @@ async function main() {
       );
       const res1610 = ed.animation.moveSelection(sel1610, 0.005);
 
+      const stageDuring = rectOf('#stage-layout');
+      const lanesDuring = rectOf('.animation-lanes');
+      const statusEl = document.querySelector('[data-animation-editor-status]');
+      const dockStatusEl = document.querySelector('.animation-dock-status');
+      const badgeEl = document.querySelector('[data-readonly-badge]');
+      const opsCapRefusalReadableInFull =
+        !!statusEl &&
+        getComputedStyle(statusEl).textOverflow !== 'ellipsis' &&
+        statusEl.scrollWidth <= statusEl.clientWidth + 1 &&
+        statusEl.scrollHeight <= statusEl.clientHeight + 2 &&
+        dockStatusEl.scrollHeight <= dockStatusEl.clientHeight + 2;
+      const denseTrackBadgeReadableInFull =
+        !!badgeEl &&
+        getComputedStyle(badgeEl).textOverflow !== 'ellipsis' &&
+        badgeEl.scrollWidth <= badgeEl.clientWidth + 1 &&
+        badgeEl.scrollHeight <= badgeEl.clientHeight + 2;
+
       return {
         totalTracks: clss.length,
         editableTracks: editable.length,
         readOnlyTracks: readOnly.length,
+        visibleHelloLanesAtDefaultHeight,
         move115Ok: res115.ok,
         move115OpsCount,
         move196Ok: res196.ok,
@@ -1488,13 +1783,22 @@ async function main() {
         move1610Ok: res1610.ok,
         move1610Error: res1610.error ?? '',
         opsAfterRefusals: ed.animation.ops().length,
+        opsCapRefusalReadableInFull,
+        denseTrackBadgeReadableInFull,
+        stageShiftPxOnCapRefusal: deltaOf(stageBefore, stageDuring),
+        lanesShiftPxOnCapRefusal: deltaOf(lanesBefore, lanesDuring),
       };
     })()`);
+
+    if (screenshotDir) {
+      await writeFile(join(screenshotDir, 'slice3c-dock-hello-1440x900.png'), await session.screenshot());
+    }
 
     if (
       bar7Result.totalTracks !== 16 ||
       bar7Result.editableTracks !== 14 ||
       bar7Result.readOnlyTracks !== 2 ||
+      bar7Result.visibleHelloLanesAtDefaultHeight < 6 ||
       !bar7Result.move115Ok ||
       bar7Result.move115OpsCount !== 115 ||
       !bar7Result.move196Ok ||
@@ -1505,9 +1809,13 @@ async function main() {
       !bar7Result.move230Error.startsWith('ANIMATION_OPS_TOO_MANY:') ||
       bar7Result.move1610Ok !== false ||
       !bar7Result.move1610Error.startsWith('ANIMATION_OPS_TOO_MANY:') ||
-      bar7Result.opsAfterRefusals !== 0
+      bar7Result.opsAfterRefusals !== 0 ||
+      !bar7Result.opsCapRefusalReadableInFull ||
+      !bar7Result.denseTrackBadgeReadableInFull ||
+      bar7Result.stageShiftPxOnCapRefusal !== 0 ||
+      bar7Result.lanesShiftPxOnCapRefusal !== 0
     ) {
-      throw new Error(`Bar 7 verification failed: ${JSON.stringify(bar7Result, null, 2)}`);
+      throw new Error(`Bar 7 / Slice 3c Bar 3/4 verification failed: ${JSON.stringify(bar7Result, null, 2)}`);
     }
 
     // Slice 3b Bar 3, Bar 4, Bar 9 on 'hello' (16 lanes × 115 keys):
@@ -1623,9 +1931,13 @@ async function main() {
             allInViewport: slice3bDockCheck.allInViewport,
             stageRect: slice3bDockCheck.stageRect,
             dockRect: slice3bDockCheck.dockRect,
+            visibleLanesAtDefaultHeight: slice3bDockCheck.visibleLanesAtDefaultHeight,
+            totalLanesOnTilt: slice3bDockCheck.totalLanesOnTilt,
             axisText: slice3bDockCheck.axisText,
             hasFloat32Noise: slice3bDockCheck.hasFloat32Noise,
           },
+          slice3cTabsResult,
+          pr257Findings,
           slice3bZeroJitterAndSingleGestureDrag: {
             selectedKeyBefore: preDragSnapshot.selectedKeyBefore,
             selectedAfterDrag: bar1And2Result.selectedAfterDrag,

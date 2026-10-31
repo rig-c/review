@@ -385,7 +385,8 @@ export interface AnimationEditGate {
     | 'OK'
     | 'ANIMATION_IDLE_GOVERNED_BY_TURN_PAD'
     | 'ANIMATION_SOURCE_MISSING'
-    | 'ANIMATION_NOT_IN_SOURCE';
+    | 'ANIMATION_NOT_IN_SOURCE'
+    | 'ANIMATION_COMPARE_READ_ONLY';
   reason: string | null;
   note: string | null;
 }

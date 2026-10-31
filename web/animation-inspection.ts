@@ -66,6 +66,7 @@ export interface AnimationPanelOptions {
  apply?:(ops:readonly AnimationSourceOp[])=>Promise<unknown>;
  reset?:()=>Promise<void>;
  pause?:()=>void;
+ readOnlyReason?:string|null;
 }
 
 export interface SelectedAnimationKey {
@@ -138,7 +139,7 @@ export class AnimationInspectionPanel {
  private isBusy=false;
  private suppressNextKeyClick=false;
  private lastDockClientHeight=0;
- private lastLanesHeight=116;
+ private lastLanesHeight=186;
  private draggingKey:{
   pointerId:number;
   trackIndex:number;
@@ -239,9 +240,11 @@ export class AnimationInspectionPanel {
   this.disposers.push(()=>{stage.removeEventListener('pointerdown',down);stage.removeEventListener('pointerup',up);window.removeEventListener('keydown',key);window.removeEventListener('keyup',key);window.removeEventListener('blur',blur);});
 
   if(typeof ResizeObserver!=='undefined'&&typeof host.closest==='function'){
-   const dockPanel=host.closest<HTMLElement>('.inspector')??host.closest<HTMLElement>('[data-inspector-panel]');
+   const playbackPanel=host.closest<HTMLElement>('[data-inspector-panel]');
+   const dockPanel=host.closest<HTMLElement>('.inspector');
    const ro=new ResizeObserver(()=>{this.syncDockHeight(true);});
-   if(dockPanel)ro.observe(dockPanel);
+   if(playbackPanel)ro.observe(playbackPanel);
+   if(dockPanel&&dockPanel!==playbackPanel)ro.observe(dockPanel);
    ro.observe(host);
    this.disposers.push(()=>ro.disconnect());
   }
@@ -271,7 +274,7 @@ export class AnimationInspectionPanel {
    lanes.style.maxHeight=`${this.lastLanesHeight}px`;
    return;
   }
-  const panel=this.options.host.closest<HTMLElement>('.inspector')??this.options.host.closest<HTMLElement>('[data-inspector-panel]');
+  const panel=this.options.host.closest<HTMLElement>('[data-inspector-panel]')??this.options.host.closest<HTMLElement>('.inspector');
   if(!panel||panel.clientHeight<=0){
    lanes.style.height=`${this.lastLanesHeight}px`;
    lanes.style.maxHeight=`${this.lastLanesHeight}px`;
@@ -279,7 +282,8 @@ export class AnimationInspectionPanel {
   }
   if(fromResize||panel.clientHeight!==this.lastDockClientHeight){
    this.lastDockClientHeight=panel.clientHeight;
-   this.lastLanesHeight=Math.max(96,Math.floor(panel.clientHeight-162));
+   const overhead=panel.hasAttribute('data-inspector-panel')?125:155;
+   this.lastLanesHeight=Math.max(104,Math.floor(panel.clientHeight-overhead));
   }
   lanes.style.height=`${this.lastLanesHeight}px`;
   lanes.style.maxHeight=`${this.lastLanesHeight}px`;
@@ -309,7 +313,10 @@ export class AnimationInspectionPanel {
 
  model(doc:unknown,animation:string){
   if(this.document===doc&&this.animation===animation)return;
-  if(animation&&this.lastNonEmptyAnimation&&this.lastNonEmptyAnimation!==animation)this.selectedKey=null;
+  if(animation&&this.lastNonEmptyAnimation&&this.lastNonEmptyAnimation!==animation){
+   this.selectedKey=null;
+   this.setEditorStatus('',false);
+  }
   if(animation)this.lastNonEmptyAnimation=animation;
   this.document=doc;
   this.animation=animation;
@@ -351,6 +358,16 @@ export class AnimationInspectionPanel {
   }
   if(this.animation==='idle'){
    return checkAnimationEditGate('idle',this.source?.path??null);
+  }
+  if(this.options.readOnlyReason||!this.options.apply||!this.options.preview){
+   return {
+    editable:false,
+    code:'ANIMATION_COMPARE_READ_ONLY',
+    reason:
+     this.options.readOnlyReason??
+     'keyed animation editing is read-only in comparison sessions until per-side animation rebuild is wired.',
+    note:null,
+   };
   }
   if(!this.source||!this.source.available||!this.source.text){
    const r=this.source?.reason??this.sourceFallbackReason??'config.json does not declare an "animations_from" motion spec file.';
@@ -475,10 +492,11 @@ export class AnimationInspectionPanel {
   }else{
    this.opsSummary.textContent=`${appliedCount} op(s) applied on stage · 0 unapplied`;
   }
-  this.undoOpBtn.disabled=this.isBusy||allOps.length===0;
-  this.clearOpsBtn.disabled=this.isBusy||!hasPreview;
-  this.applyBtn.disabled=this.isBusy||!hasPreview||allOps.length===0||!this.source?.available;
-  this.resetBtn.disabled=this.isBusy||(allOps.length===0&&appliedCount===0);
+  const gate=this.gateInfo();
+  this.undoOpBtn.disabled=this.isBusy||!gate.editable||allOps.length===0;
+  this.clearOpsBtn.disabled=this.isBusy||!gate.editable||!hasPreview;
+  this.applyBtn.disabled=this.isBusy||!gate.editable||!hasPreview||allOps.length===0||!this.source?.available;
+  this.resetBtn.disabled=this.isBusy||!gate.editable||(allOps.length===0&&appliedCount===0);
  }
 
  setEditorStatus(text:string,error=false){
@@ -536,9 +554,14 @@ export class AnimationInspectionPanel {
   op:AnimationSourceOp,
   opts:{skipTimelineDomRebuild?:boolean}={},
  ):{ok:true;ops:readonly AnimationSourceOp[]}|{ok:false;error:string}{
+  const gate=this.gateInfo();
+  if(!gate.editable){
+   const err=`${gate.code}: ${gate.reason??'animation is read-only'}`;
+   this.setEditorStatus(err,true);
+   return {ok:false,error:err};
+  }
   if(!this.builder||!this.source?.available){
-   const gate=this.gateInfo();
-   const err=gate.editable?'ANIMATION_SOURCE_MISSING: animation source is not loaded':`${gate.code}: ${gate.reason}`;
+   const err='ANIMATION_SOURCE_MISSING: animation source is not loaded';
    this.setEditorStatus(err,true);
    return {ok:false,error:err};
   }
@@ -580,6 +603,12 @@ export class AnimationInspectionPanel {
  }
 
  insertKey(trackIndex:number,time:number,value?:readonly number[]){
+  const gate=this.gateInfo();
+  if(!gate.editable){
+   const err=`${gate.code}: ${gate.reason??'animation is read-only'}`;
+   this.setEditorStatus(err,true);
+   return {ok:false as const,error:err};
+  }
   const clss=this.tracksInfo();
   const cls=clss[trackIndex];
   if(!cls||!cls.editable){
@@ -644,9 +673,14 @@ export class AnimationInspectionPanel {
   selections:ReadonlyArray<{track:number;key:number}>,
   deltaTime:number,
  ):{ok:true;ops:readonly AnimationSourceOp[]}|{ok:false;error:string}{
+  const gate=this.gateInfo();
+  if(!gate.editable){
+   const err=`${gate.code}: ${gate.reason??'animation is read-only'}`;
+   this.setEditorStatus(err,true);
+   return {ok:false,error:err};
+  }
   if(!this.builder||!this.source?.available){
-   const gate=this.gateInfo();
-   const err=gate.editable?'ANIMATION_SOURCE_MISSING: animation source is not loaded':`${gate.code}: ${gate.reason}`;
+   const err='ANIMATION_SOURCE_MISSING: animation source is not loaded';
    this.setEditorStatus(err,true);
    return {ok:false,error:err};
   }
@@ -909,16 +943,20 @@ export class AnimationInspectionPanel {
   const emptyHint=box.querySelector<HTMLElement>('[data-key-inspector-empty]');
 
   if(!info){
+   const hideInputs=!gate.editable;
    if(title){
+    title.hidden=hideInputs;
     title.textContent='No key selected';
     title.title='';
    }
    if(timeInput){
     timeInput.disabled=true;
+    if(timeInput.parentElement)timeInput.parentElement.hidden=hideInputs;
     if(document.activeElement!==timeInput)timeInput.value='';
     timeInput.onchange=null;
    }
    if(channelsHost){
+    channelsHost.hidden=hideInputs;
     const existing=channelsHost.querySelectorAll<HTMLInputElement>('[data-key-channel]');
     if(existing.length!==1||!existing[0]!.disabled){
      const chWrap=document.createElement('label');
@@ -935,24 +973,27 @@ export class AnimationInspectionPanel {
     }
    }
    if(delBtn){
+    delBtn.hidden=hideInputs;
     delBtn.disabled=true;
     delBtn.onclick=null;
    }
    if(emptyHint){
-    emptyHint.hidden=false;
+    emptyHint.hidden=gate.editable;
     emptyHint.textContent=gate.editable
-     ?'Click or drag a key ◆ on an editable bone track.'
-     :`Key editing disabled (${gate.code}: ${gate.reason})`;
-    emptyHint.title=emptyHint.textContent;
+     ?''
+     :`Key editing disabled (${gate.code})`;
+    emptyHint.title=gate.editable?'':`${gate.code}: ${gate.reason}`;
    }
    return;
   }
 
   if(title){
+   title.hidden=false;
    title.textContent=`${info.bone} · ${info.property} · key #${info.keyIndex} (track #${info.trackIndex})`;
    title.title=title.textContent;
   }
   if(timeInput){
+   if(timeInput.parentElement)timeInput.parentElement.hidden=false;
    timeInput.disabled=this.isBusy;
    if(document.activeElement!==timeInput)timeInput.value=String(cleanMotionNumber(info.time));
    timeInput.onchange=()=>{
@@ -961,6 +1002,7 @@ export class AnimationInspectionPanel {
    };
   }
   if(channelsHost){
+   channelsHost.hidden=false;
    const existing=channelsHost.querySelectorAll<HTMLInputElement>('[data-key-channel]');
    const sameShape=
     existing.length===info.channels.length&&
@@ -1000,6 +1042,7 @@ export class AnimationInspectionPanel {
    }
   }
   if(delBtn){
+   delBtn.hidden=false;
    delBtn.disabled=this.isBusy;
    delBtn.onclick=()=>{
     this.deleteKey(info.trackIndex,info.keyIndex);
@@ -1011,9 +1054,37 @@ export class AnimationInspectionPanel {
   }
  }
 
+ private effectiveEnd():number{
+  return Math.max(
+   this.runtimeDuration,
+   ...(this.inspection?.tracks??[]).map(t=>t.keys.at(-1)?.time??0),
+   Number.MIN_VALUE,
+  );
+ }
+
+ private syncRulerInPlace(end:number){
+  const cleanEnd=formatSeconds(end);
+  const axis=this.options.host.querySelector<HTMLElement>('.animation-axis');
+  if(axis)axis.textContent=`0 s → ${cleanEnd} s`;
+  const rulerTrack=this.options.host.querySelector<HTMLElement>('[data-animation-ruler-track]');
+  if(!rulerTrack)return;
+  for(const oldTick of [...rulerTrack.querySelectorAll('.animation-ruler-tick')])oldTick.remove();
+  const playhead=rulerTrack.querySelector('[data-playhead]');
+  for(const tickTime of buildRulerTicks(end,this.zoom)){
+   const tick=document.createElement('span');
+   tick.className='animation-ruler-tick';
+   tick.dataset.rulerTick=formatSeconds(tickTime);
+   tick.style.left=`${Math.max(0,Math.min(100,tickTime/end*100))}%`;
+   tick.textContent=`${formatSeconds(tickTime)} s`;
+   rulerTrack.append(tick);
+  }
+  if(playhead)rulerTrack.append(playhead);
+ }
+
  private syncTimelineKeysInPlace(){
   if(!this.inspection)return;
-  const end=Math.max(this.runtimeDuration,...this.inspection.tracks.map(t=>t.keys.at(-1)?.time??0),Number.MIN_VALUE);
+  const end=this.effectiveEnd();
+  this.syncRulerInPlace(end);
   const marks=this.options.host.querySelectorAll<HTMLButtonElement>('.animation-key');
   for(const mark of marks){
    const ptr=mark.dataset.track;
@@ -1033,6 +1104,7 @@ export class AnimationInspectionPanel {
     mark.setAttribute('aria-label',mark.title);
    }
   }
+  this.placePlayheads();
  }
 
  private renderTimeline(){
@@ -1053,7 +1125,7 @@ export class AnimationInspectionPanel {
   }
 
   const tracks=filterTracks(this.inspection,this.selection.value());
-  const end=Math.max(this.runtimeDuration,...this.inspection.tracks.map(t=>t.keys.at(-1)?.time??0),Number.MIN_VALUE);
+  const end=this.effectiveEnd();
   const cleanEnd=formatSeconds(end);
   const rowWidth=this.zoom>1?`calc(190px + (100% - 190px) * ${this.zoom})`:'100%';
 
@@ -1089,7 +1161,7 @@ export class AnimationInspectionPanel {
   rulerPlayhead.className='animation-playhead';
   rulerPlayhead.dataset.playhead='';
   rulerTrack.append(rulerPlayhead);
-  this.bindRulerScrub(rulerTrack,end);
+  this.bindRulerScrub(rulerTrack);
   ruler.append(rulerCorner,rulerTrack);
   list.append(ruler);
 
@@ -1097,6 +1169,7 @@ export class AnimationInspectionPanel {
 
   for(const kind of ['bone','slot'] as const){
    for(const track of tracks.filter(t=>t.kind===kind)){
+    const trackPointer=track.pointer;
     const cls=kind==='bone'?clsByBoneProp.get(`${track.target}\0${track.name}`):clss.find(c=>c.targetKind==='slot'&&c.target===track.target&&c.property===track.name);
     if(cls)matchedSourceIndices.add(cls.trackIndex);
     const isEditable=gate.editable&&!!cls?.editable;
@@ -1111,7 +1184,7 @@ export class AnimationInspectionPanel {
     const row=document.createElement('div');
     row.className='animation-lane';
     row.style.width=rowWidth;
-    row.dataset.track=track.pointer;
+    row.dataset.track=trackPointer;
     row.dataset.editable=String(isEditable);
     if(cls!==undefined)row.dataset.sourceTrack=String(cls.trackIndex);
     if(!isEditable)row.dataset.readonlyReason=readonlyReason;
@@ -1120,7 +1193,10 @@ export class AnimationInspectionPanel {
     head.className='animation-lane-head';
     head.dataset.laneHead='';
 
-    const label=button(`${track.target} · ${track.name}`,()=>{this.track=track;this.channel=0;this.renderChannels();this.show('curve');});
+    const label=button(`${track.target} · ${track.name}`,()=>{
+     const liveTrack=this.inspection?.tracks.find(t=>t.pointer===trackPointer)??track;
+     this.track=liveTrack;this.channel=0;this.renderChannels();this.show('curve');
+    });
     label.className='animation-lane-label';
     label.title=`${track.target} · ${track.name}`;
     head.append(label);
@@ -1133,19 +1209,20 @@ export class AnimationInspectionPanel {
      addKeyBtn.dataset.addKeyTrack=String(cls.trackIndex);
      addKeyBtn.title=`Insert key on ${track.target} · ${track.name} at playhead (${formatSeconds(this.at)} s)`;
      head.append(addKeyBtn);
-    }else{
-     const badge=document.createElement('span');
-     badge.className='animation-readonly-badge';
-     badge.dataset.readonlyBadge='';
-     badge.textContent=readonlyReason;
-     badge.title=readonlyReason;
-     head.append(badge);
     }
     row.append(head);
 
     const marks=document.createElement('div');
     marks.className='animation-key-lane';
-    marks.dataset.track=track.pointer;
+    marks.dataset.track=trackPointer;
+    if(!isEditable){
+     const badge=document.createElement('span');
+     badge.className='animation-readonly-badge';
+     badge.dataset.readonlyBadge='';
+     badge.textContent=readonlyReason;
+     badge.title=readonlyReason;
+     marks.append(badge);
+    }
     row.append(marks);
 
     track.keys.forEach((key,index)=>{
@@ -1155,16 +1232,19 @@ export class AnimationInspectionPanel {
        this.suppressNextKeyClick=false;
        return;
       }
-      this.track=track;this.channel=0;this.renderChannels();
+      const liveTrack=this.inspection?.tracks.find(t=>t.pointer===trackPointer)??track;
+      const liveIdx=Number(mark.dataset.keyIndex??index);
+      const liveKey=liveTrack.keys[liveIdx]??key;
+      this.track=liveTrack;this.channel=0;this.renderChannels();
       if(isEditable&&cls){
-       this.selectedKey={animation:this.animation,trackIndex:cls.trackIndex,keyIndex:index,pointer:track.pointer};
+       this.selectedKey={animation:this.animation,trackIndex:cls.trackIndex,keyIndex:liveIdx,pointer:trackPointer};
        this.syncTimelineKeysInPlace();
        this.syncKeyInspectorInPlace();
       }else{
        this.setEditorStatus(readonlyReason,true);
       }
-      if(key.time>=0&&key.time<=this.runtimeDuration){
-       this.options.seek(key.time);
+      if(liveKey.time>=0&&liveKey.time<=this.runtimeDuration){
+       this.options.seek(liveKey.time);
       }
      });
      mark.className='animation-key';
@@ -1172,7 +1252,7 @@ export class AnimationInspectionPanel {
      if(isSelected)mark.classList.add('selected');
      mark.setAttribute('aria-pressed',String(isSelected));
      Object.assign(mark.dataset,{
-      track:track.pointer,
+      track:trackPointer,
       targetKind:kind,
       target:track.target,
       timeline:track.name,
@@ -1186,7 +1266,7 @@ export class AnimationInspectionPanel {
      mark.setAttribute('aria-label',mark.title);
 
      if(isEditable&&cls){
-      this.bindKeyDrag(mark,marks,cls.trackIndex,index,track,end);
+      this.bindKeyDrag(mark,marks,cls.trackIndex,index,trackPointer);
      }
      marks.append(mark);
     });
@@ -1256,14 +1336,18 @@ export class AnimationInspectionPanel {
   if(prevScrollLeft>0)list.scrollLeft=prevScrollLeft;
  }
 
- private bindRulerScrub(rulerTrack:HTMLElement,end:number){
+ private bindRulerScrub(rulerTrack:HTMLElement){
   let scrubbingId:number|null=null;
   const scrubAt=(clientX:number)=>{
    const rect=rulerTrack.getBoundingClientRect();
    if(rect.width<=0)return;
+   const end=this.effectiveEnd();
    const ratio=Math.max(0,Math.min(1,(clientX-rect.left)/rect.width));
+   const rawTime=cleanMotionNumber(ratio*end);
+   this.at=rawTime;
+   this.placePlayheads();
    const maxSeek=this.runtimeDuration>0?Math.min(end,this.runtimeDuration):end;
-   const target=cleanMotionNumber(Math.min(maxSeek,ratio*end));
+   const target=cleanMotionNumber(Math.min(maxSeek,rawTime));
    this.options.seek(target);
   };
   rulerTrack.addEventListener('pointerdown',e=>{
@@ -1292,8 +1376,7 @@ export class AnimationInspectionPanel {
   laneEl:HTMLElement,
   trackIndex:number,
   keyIndex:number,
-  track:InspectionTrack,
-  end:number,
+  trackPointer:string,
  ){
   mark.addEventListener('pointerdown',e=>{
    if(!e.isPrimary||e.button!==0||this.isBusy)return;
@@ -1302,25 +1385,27 @@ export class AnimationInspectionPanel {
    this.suppressNextKeyClick=true;
    // Immediately select the key in place on pointerdown without rebuilding the DOM,
    // so pressing and dragging an unselected key works in a single gesture with zero layout shift.
-   this.track=track;
+   const liveTrack=this.inspection?.tracks.find(t=>t.pointer===trackPointer)??null;
+   const liveIdx=Number(mark.dataset.keyIndex??keyIndex);
+   if(liveTrack)this.track=liveTrack;
    this.channel=0;
-   this.selectedKey={animation:this.animation,trackIndex,keyIndex,pointer:track.pointer};
+   this.selectedKey={animation:this.animation,trackIndex,keyIndex:liveIdx,pointer:trackPointer};
    this.syncTimelineKeysInPlace();
    this.syncKeyInspectorInPlace();
    this.renderChannels();
-   const k=track.keys[keyIndex];
+   const k=liveTrack?.keys[liveIdx];
    if(k&&k.time>=0&&k.time<=this.runtimeDuration){
     this.options.seek(k.time);
    }
    this.draggingKey={
     pointerId:e.pointerId,
     trackIndex,
-    keyIndex,
+    keyIndex:liveIdx,
     startX:e.clientX,
     moved:false,
     laneEl,
     markEl:mark,
-    end,
+    end:this.effectiveEnd(),
    };
    mark.setPointerCapture?.(e.pointerId);
   });
@@ -1330,13 +1415,13 @@ export class AnimationInspectionPanel {
    if(!drag||drag.pointerId!==e.pointerId)return;
    if(!drag.moved&&Math.abs(e.clientX-drag.startX)<1)return;
    drag.moved=true;
-   this.selectedKey={animation:this.animation,trackIndex,keyIndex,pointer:track.pointer};
+   this.selectedKey={animation:this.animation,trackIndex:drag.trackIndex,keyIndex:drag.keyIndex,pointer:trackPointer};
    const rect=drag.laneEl.getBoundingClientRect();
    if(rect.width<=0)return;
    const ratio=Math.max(0,(e.clientX-rect.left)/rect.width);
    const rawTime=Math.round(ratio*drag.end*10000)/10000;
    const res=this.applyOp(
-    {op:'set_key_time',animation:this.animation,track:trackIndex,key:keyIndex,time:rawTime},
+    {op:'set_key_time',animation:this.animation,track:drag.trackIndex,key:drag.keyIndex,time:rawTime},
     {skipTimelineDomRebuild:true},
    );
    if(res.ok&&rawTime>=0&&rawTime<=this.runtimeDuration){
@@ -1398,7 +1483,7 @@ export class AnimationInspectionPanel {
   if(this.cursor&&this.plot){this.cursor.setAttribute('visibility',value===null?'hidden':'visible');if(value!==null){const p=this.plot(time,value);this.cursor.setAttribute('cx',String(p.x));this.cursor.setAttribute('cy',String(p.y));}}
  }
 
- private placePlayheads(){const end=Math.max(this.runtimeDuration,...(this.inspection?.tracks??[]).map(t=>t.keys.at(-1)?.time??0),Number.MIN_VALUE);for(const n of this.options.host.querySelectorAll<HTMLElement>('[data-playhead]'))n.style.left=`${Math.max(0,Math.min(100,this.at/end*100))}%`;}
+ private placePlayheads(){const end=this.effectiveEnd();for(const n of this.options.host.querySelectorAll<HTMLElement>('[data-playhead]'))n.style.left=`${Math.max(0,Math.min(100,this.at/end*100))}%`;}
 
  capture(player:Pick<RigPlayer,'bone'>|null,frame:PosedFrame|undefined){
   this.frame=frame??null;this.bones.clear();for(const b of player&&frame?this.inspection?.bones??[]:[]){try{const p=player!.bone(b.name);if(p.active)this.bones.set(b.name,{x:p.x,y:p.y});}catch{/* unavailable bones have no stage handle */}}this.redraw();

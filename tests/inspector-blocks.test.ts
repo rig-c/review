@@ -22,15 +22,21 @@ function rowButtons(html:string,id:string){
  return [...row.matchAll(/<button type="button" data-block-target="([^"]+)"(?: data-block-includes="([^"]+)")?>([^<]+)<\/button>/g)].map(m=>({target:m[1]!,includes:(m[2]??'').split(' ').filter(Boolean),label:m[3]!}));
 }
 
-test('every block of each Inspector section has a row button, and every row button targets a block of that section',async()=>{
+test('every block of each Inspector section has a row button, and every row button targets a block of that section; in Animate the timeline is its own panel beside the scrolling blocks panel',async()=>{
  const html=await indexHtml();
- const expected={'inspector-rig':['Part','Modeling','Chest','Mesh','Weights','Bones','Fields','Cuts','Cloth'],'inspector-playback':['Transport','Sound','Environment','Physics','Idle tracks','Readings','Requirements','Retarget','Report']};
- for(const [section,labels]of Object.entries(expected)){
-  const children=directChildren(html,section),buttons=rowButtons(html,section);
-  // The row is the section's first child, so it stays above the blocks it scrolls.
+ const playbackPanels=directChildren(html,'inspector-playback');
+ expect(playbackPanels.map(p=>attr(p.attrs,'id'))).toEqual(['animation-dock','animate-blocks']);
+ const dockChildren=directChildren(html,'animation-dock');
+ expect(dockChildren.map(c=>attr(c.attrs,'id'))).toEqual(['transport','frame-controls','animation-inspection']);
+ const expected={'inspector-rig':['Part','Modeling','Chest','Mesh','Weights','Bones','Fields','Cuts','Cloth'],'animate-blocks':['Transport','Sound','Environment','Physics','Idle tracks','Readings','Requirements','Retarget','Report']};
+ for(const [container,labels]of Object.entries(expected)){
+  const children=directChildren(html,container),buttons=rowButtons(html,container);
+  // The row is the scroll container's first child, so it stays above the blocks it scrolls.
   expect(children[0]?.tag).toBe('nav');expect(attr(children[0]!.attrs,'class')).toBe('block-row');
   expect(buttons.map(b=>b.label)).toEqual(labels);
   const blocks=children.slice(1).map(child=>attr(child.attrs,'id'));expect(blocks.every(Boolean)).toBe(true);
+  // The timeline is never inside the scrolling blocks container.
+  expect(blocks).not.toContain('animation-inspection');
   const covered=new Set(buttons.flatMap(b=>[b.target,...b.includes]));
   for(const block of blocks)expect({block,covered:covered.has(block!)}).toEqual({block,covered:true});
   for(const button of buttons){expect(blocks).toContain(button.target);for(const id of button.includes)expect(blocks).toContain(id);}
@@ -38,7 +44,7 @@ test('every block of each Inspector section has a row button, and every row butt
   const order=blocks as string[];for(const [i,button]of buttons.entries()){const at=order.indexOf(button.target),next=i+1<buttons.length?order.indexOf(buttons[i+1]!.target):order.length;expect(at).toBeLessThan(next);for(const id of button.includes){const k=order.indexOf(id);expect(k>at&&k<next).toBe(true);}}
  }
  // The row ids are new; each kept block id still appears exactly once.
- for(const id of ['transport','environment','physics-panel','idle-tracks','readings','sound-panel','report-panel','selected-part','modeling-tools','chest-regions','mesh-panel','weights','bones-panel','rig-fields','cuts-panel','cloth-panel'])expect(html.split(` id="${id}"`).length).toBe(2);
+ for(const id of ['animation-dock','animate-blocks','animation-inspection','transport','environment','physics-panel','idle-tracks','readings','sound-panel','report-panel','selected-part','modeling-tools','chest-regions','mesh-panel','weights','bones-panel','rig-fields','cuts-panel','cloth-panel'])expect(html.split(` id="${id}"`).length).toBe(2);
 });
 
 /** Minimal element: layout comes from explicit `top`/`height`, relative to the section's scroll. */
