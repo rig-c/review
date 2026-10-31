@@ -55,6 +55,7 @@ http://127.0.0.1:4318/instances/<key>/?input=…&handoff=…#cap=…
 | <a id="inspect-animation-keys"></a>Inspect stored animation keys | Timeline, Curves, Bone tree | [Animation keys — PANELS](docs/PANELS.md#inspect-animation-keys) |
 | <a id="inspect-a-part"></a>Select and fit a model slot | Parts explorer | [Part inspection — PANELS](docs/PANELS.md#inspect-a-part) |
 | <a id="weights-setup-pose-watch-only"></a>Inspect setup-pose weights | Weights | [Weights — PANELS](docs/PANELS.md#weights-setup-pose-watch-only) |
+| Steer model turn dials and compare at one angle | Turn pad | [Turn inspection — PANELS](docs/PANELS.md#turn-pad) |
 | **Edit through the producer** | | |
 | <a id="chest-regions-designate-rebuild-watch"></a>Designate chest regions and rebuild | Chest regions | [Chest regions — PANELS](docs/PANELS.md#chest-regions-designate-rebuild-watch) |
 | <a id="mesh-panel-density-regions-segments--remesh"></a>Rebuild a part from mesh parameters | Mesh | [Mesh parameters — PANELS](docs/PANELS.md#mesh-panel-density-regions-segments--remesh) |

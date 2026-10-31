@@ -294,3 +294,13 @@ footer.status-bar{flex-wrap:nowrap}
 .animation-bone-pick[aria-pressed=true]{outline:3px solid var(--rv-bone-selected);outline-offset:2px}
 
 #motion-tools>.animation-inspection{flex-basis:100%;min-width:0}
+
+/* Model-bound inspection dials; stage and Inspector remain separate. */
+#turn-pad-host{flex:none;max-height:180px;overflow:auto;border-bottom:1px solid var(--border);background:var(--bg)}
+.turn-pad{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;padding:8px 12px}
+.turn-pad>span{color:var(--fg-muted);font-size:11px}
+.turn-pad label{display:flex;align-items:center;gap:5px;font-size:11px;white-space:nowrap}
+.turn-pad input[type=number]{width:78px;color:var(--fg);background:var(--rv-control);border:1px solid var(--border-strong);padding:4px}
+.turn-pad output{font-variant-numeric:tabular-nums;color:var(--fg-strong)}
+.turn-pad button[aria-pressed=true]{border-color:var(--pass);color:var(--pass)}
+#turn-pad-host>p{margin:0 12px 6px}

@@ -1,3 +1,4 @@
+import {TurnState,type TurnDial} from './turn-pad.ts';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -24,7 +25,7 @@ export function parseFeedback(item:unknown,strict=true):Feedback {
 export interface FeedbackWarning {id:string;error:string}
 
 /** Derive the annotated interval, retaining inspection context as separate data. */
-export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animation?:string):Feedback {
+export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animation?:string,turnDials:readonly TurnDial[]=p.feedbackCatalog.turnDials??[]):Feedback {
   const context=feedback.context===undefined?{}:object(feedback.context,'feedback.context');
   const interval={frameStart:feedback.frameStart,frameEnd:feedback.frameEnd,inclusive:true};
   if(context.interval!==undefined&&!isDeepStrictEqual(context.interval,interval))throw new Error('feedback.context.interval: must match chosen inclusive frameStart/frameEnd');
@@ -40,12 +41,13 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
   if(context.requirements!==undefined)parseRequirementsContext(context.requirements,text=>createHash('sha256').update(text).digest('hex'));
   // The exported environment schedule (#112): absent or null stays valid; a present record carries its bytes and their sha256, recomputed here.
   if(context.environmentSchedule!==undefined)parseScheduleContext(context.environmentSchedule,text=>createHash('sha256').update(text).digest('hex'));
+  if(context.turn!==undefined){if(!turnDials.length)throw new Error('TURN_UNAVAILABLE: this inspected model has no supported turn dials');new TurnState(turnDials).validate(context.turn);}
   const selected=animation??(typeof context.animation==='string'?context.animation:null);
   validateFeedbackSelection(p.feedbackCatalog,{frameStart:feedback.frameStart,frameEnd:feedback.frameEnd,target:feedback.target,animation:selected});
   return {...feedback,context:{...context,...(animation===undefined?{}:{animation}),interval} as Json};
 }
-export function readPackageFeedback(feedback:Feedback,p:ReviewPackage,animation?:string):{feedback:Feedback;warning?:FeedbackWarning} {
-  try{return {feedback:validatePackageFeedback(feedback,p,animation)};}catch(e){
+export function readPackageFeedback(feedback:Feedback,p:ReviewPackage,animation?:string,turnDials?:readonly TurnDial[]):{feedback:Feedback;warning?:FeedbackWarning} {
+  try{return {feedback:validatePackageFeedback(feedback,p,animation,turnDials)};}catch(e){
     // Old submitted evidence remains readable. Only add a missing derived
     // interval; contradictory supplied evidence is preserved with its warning.
     const context=feedback.context;const normalized=context===undefined?{interval:{frameStart:feedback.frameStart,frameEnd:feedback.frameEnd,inclusive:true}}:context&&typeof context==='object'&&!Array.isArray(context)&&!('interval' in context)?{...context,interval:{frameStart:feedback.frameStart,frameEnd:feedback.frameEnd,inclusive:true}}:context;

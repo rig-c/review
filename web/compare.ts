@@ -1,3 +1,5 @@
+import {sharedTurnDials,type TurnDial} from '../src/turn-pad.ts';
+import {bindTurnPad,type TurnPad} from './turn-pad.ts';
 import {PartExplorer,loadPartCatalog} from './part-selection.ts';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature,type PaneCamera} from './camera-view.ts';
 import { loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
@@ -41,7 +43,7 @@ let cameraSync=true,activeCamera:CameraTarget='a',cameraRestoring=false,cameraLa
 let idleHeld=true,loopRestarting=false,suspendedPreview=false;
 let appearance:ReturnType<typeof bindAppearance>|null=null,controlDispose:(()=>void)|null=null,workspace:WorkspaceUI|null=null;
 const viewDisposers:(()=>void)[]=[];
-let parts:PartExplorer|null=null;
+let parts:PartExplorer|null=null,turnPad:TurnPad|null=null;
 const overlays:Partial<Record<Side,RigOverlays>>={};
 function inspectionPlayer(side:Side):InspectionPlayer {const player=players[side];if(!player)throw new Error('Part player unavailable');return {get time(){return player.time;},pause:()=>player.pause(),seek:time=>player.seek(time),draw:()=>{player.draw();parts?.present(side);}};}
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
@@ -225,6 +227,14 @@ function fit(): void {
  redrawOverlays(false);referenceFit();renderCameraControls();renderNumericView();
 }
 
+function configureTurnPad():void {
+ const a=data.a.feedbackCatalog.turnDials??[],b=data.b.feedbackCatalog.turnDials??[],dials=sharedTurnDials(a,b);
+ if(!dials.length)return;
+ const host=document.createElement('div');host.id='turn-pad-host';el('stage-layout').before(host);
+ turnPad=bindTurnPad({host,stages:[el('a-viewport'),el('b-viewport')],dials,blocked:()=>seeking||video.seeking||!!persistence?.restoring()||!ready,
+  draw:state=>{if(!players.a||!players.b)return;try{for(const side of ['a','b'] as const){const source=side==='a'?a:b;players[side]!.adjust=state.adjust(source.filter(d=>dials.some(shared=>shared.axis===d.axis)));}players.a.draw();parts?.present('a');players.b.draw();parts?.present('b');redrawOverlays(true);}catch(error){failPair(error);throw error;}},save:()=>persistence?.save(),error:value=>message(value,true)});
+ const note=document.createElement('p');note.className='hint';note.textContent='Both panes share the same values over the intersection of their declared ranges. Axes absent on either side are not offered.';host.append(note);
+}
 async function loadSide(side: Side, value: CompareSide): Promise<number> {
   text(`${side}-title`, value.manifest.title);
   if (!value.manifest.model) throw new Error(`${side.toUpperCase()}: compiled model Not supplied`);
@@ -370,7 +380,7 @@ function bind(): void {
     if (!['bone', 'slot', 'rig'].includes(kind) || !['defect', 'quality'].includes(category) || !name || !summary || /[\r\n]/.test(summary) || summary.length > 1000) { message('Enter a target type, actual name, category and one-line summary of up to 1,000 characters.', true); return; }
     const target: CompareFeedback['target'] = { kind: kind as CompareFeedback['target']['kind'], name };
     try { validateFeedbackSelection(data[side].feedbackCatalog, { frameStart, frameEnd, target, animation: data.animation }); } catch (error) { message(describe(error), true); return; }
-    session.feedback.push({ id: crypto.randomUUID(), side, frameStart, frameEnd, target, category: category as CompareFeedback['category'], summary, context: { interval: { frameStart, frameEnd, inclusive: true }, animation: data.animation, mediaTime: inspected.reference, clockSource: inspected.source, frame: currentFrame(side), frames: { a: currentFrame('a'), b: currentFrame('b') }, playheads: { reference: inspected.reference, a: inspected.a, b: inspected.b },reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,part:parts?.feedback()??null,view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},decodedIndex:referenceFrames?referenceFrameAtTime(referenceFrames,inspected.reference)?.index??null:null } });
+    session.feedback.push({ id: crypto.randomUUID(), side, frameStart, frameEnd, target, category: category as CompareFeedback['category'], summary, context: { ...(turnPad?{turn:JSON.parse(JSON.stringify(turnPad.snapshot()))}:{}),interval: { frameStart, frameEnd, inclusive: true }, animation: data.animation, mediaTime: inspected.reference, clockSource: inspected.source, frame: currentFrame(side), frames: { a: currentFrame('a'), b: currentFrame('b') }, playheads: { reference: inspected.reference, a: inspected.a, b: inspected.b },reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')},requestedProducer,part:parts?.feedback()??null,view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},decodedIndex:referenceFrames?referenceFrameAtTime(referenceFrames,inspected.reference)?.index??null:null } });
     input('summary').value = ''; markDirty(); renderFeedback(); message('Added feedback bound to the target build and both reviewed sources.');
   };
   button('submit').onclick = async () => { if(readOnly){message(readOnly,true);return;}if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; } saving = true; savedState(); const payload = JSON.stringify(session); try { const saved = await api<CompareSession>('/api/compare/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload }); if (JSON.stringify(session) === payload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;await persistence?.submitted(saved); message(dirty ? 'Changes were made during submission. Submit again.' : 'Submitted the selected review status and A/B/reference-video provenance.'); } catch (error) { message(`Submission failed: ${describe(error)}`, true); } finally { saving = false; savedState(); } };
@@ -390,7 +400,7 @@ function bind(): void {
   document.addEventListener('visibilitychange',()=>{if(document.hidden){suspendedPreview=!video.paused;stop();}else if(suspendedPreview&&!idleHeld){suspendedPreview=false;void playComparison().catch(error=>message(describe(error),true));}});
   const observer = new ResizeObserver(fit); observer.observe(el('a-viewport')); observer.observe(el('b-viewport'));observer.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { persistence?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
+  window.addEventListener('pagehide', () => { persistence?.dispose();turnPad?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
 }
 
 async function start(): Promise<void> {
@@ -411,7 +421,7 @@ async function start(): Promise<void> {
     void loadFrameIndex();
     input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;
-    await seekTo(0);activeCamera='a';if(cameraSync)alignCameras();fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
+    await seekTo(0);configureTurnPad();activeCamera='a';if(cameraSync)alignCameras();fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
     if(!readOnly&&controlServed)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { failPair(error); for (const side of ['a', 'b'] as const) if (!players[side]) text(`${side}-empty`, `${side.toUpperCase()} Could not open comparison rig.`); text('reference-empty', 'Check the reference video and comparison inputs.'); }
 }
@@ -516,10 +526,11 @@ function numericView():ControlView {
 }
 function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
 function inspectionBinding():InspectionBinding{return {mode:'compare',sourceHash:data.sourceHash,rigs:[data.a.reviewedSource.rig?.sha256??null,data.b.reviewedSource.rig?.sha256??null]};}
-function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:data.animation,time:trace?.reference??presentation.snapshot().lastDrawn?.reference??null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{part:parts?.value()??null,reference:data.reference.sha256,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view'}};}
+function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:data.animation,time:trace?.reference??presentation.snapshot().lastDrawn?.reference??null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,reference:data.reference.sha256,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view'}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  await restoreTransaction(async()=>{
 
+ if(bookmark.selection.turn){if(!turnPad)throw new Error('TURN_UNAVAILABLE');turnPad.state.validate(bookmark.selection.turn);}
  parts?.validate(bookmark.selection.part);
  if(bookmark.animation!==data.animation||bookmark.selection.reference!==data.reference.sha256)throw new Error('Saved comparison animation/reference requires a different source binding');
  if(!domain)throw new Error('Comparison is not ready');if(bookmark.time!==null)requireCommonTime(bookmark.time,domain);
@@ -530,6 +541,7 @@ async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal)
 }
 async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  cameraRestoring=true;try{
+ if(turnPad){if(bookmark.selection.turn)turnPad.restore(bookmark.selection.turn);else{turnPad.state.reset();turnPad.restore(turnPad.snapshot());}}
  parts?.select(bookmark.selection.part??null);
  idleHeld=true;stop();if(bookmark.time!==null){await seekTo(bookmark.time);if(signal.aborted||!trace)throw new Error('Saved reference inspection could not settle');}
  appearance?.set(bookmark.theme);Object.assign(layers,{images:bookmark.layers.images,mesh:bookmark.layers.meshes,bones:bookmark.layers.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;

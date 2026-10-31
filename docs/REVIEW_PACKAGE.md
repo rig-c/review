@@ -106,6 +106,29 @@ Both session responses include server-derived `feedbackWarnings:[{id,error}]`. R
 The state filename is a digest of identity, revision, source hash and reviewed artifact/tool identity, so package names cannot select arbitrary filesystem paths. Writes are atomic and source files remain untouched. Review/session load and save stream-hash the declared inputs; changed bytes produce HTTP 409 and require restart. Asset reads do not rehash an entire video: single byte ranges return 206 and invalid ranges 416. Asset documents receive a sandbox CSP with no scripts or same-origin permission, so delivered authoring HTML cannot approve its own package. No network listener beyond loopback or cross-origin mutation is offered.
 
 
+### Turn inspection context
+
+`context.turn`, when present, is a closed, bounded record:
+`{schema:"rig-review-turn/1", values:{yaw?,pitch?,body?}, held:boolean, smoothing:number}`.
+Values are the applied dial values, not pending pointer targets. Smoothing is the
+normalized-pointer spring frequency (0 disables it, otherwise at most 100 s⁻¹).
+Only the model's supported actual sliders supply the permitted axes and ranges;
+all offered axes must be present, each finite and within its range. Unknown keys,
+missing axes, unsupported models and out-of-range values refuse with `TURN_*`.
+A comparison validates against both source-bound models' common axes and range
+intersection, irrespective of the feedback's selected side. Model metadata comes
+from the same bytes hashed into `reviewedSource`; there is no filesystem parameter
+or producer-config discovery in this field. Session source rehashing, identity,
+Origin and payload limits still apply. Historical records retain warnings under
+the ordinary legacy-read policy; a fresh save cannot bypass this validation.
+If a scratch rebuild changes supported axes or expands a range, submission still
+uses the original inspected catalog: newly supported values are refused by name
+(`TURN_UNAVAILABLE` or `TURN_STATE_MODEL_MISMATCH`), rather than silently certified
+as inspected inputs. Authoritative scratch-dial validation is outside this field.
+The optional inspection bookmark `selection.turn` has this same shape and is
+checked against the active pad before transactional restoration. It restores
+applied values, not the pointer's pending travel. No package or motion bytes change.
+
 ## Feedback export
 
 The frontend downloads `rig-review-feedback/1` JSON with `id`, `revision`, `sourceHash`, review status, `feedback[]`, and issue-ready `issues[]` entries containing title/body/labels. It also offers Markdown. Each issue contains the frame interval, target, category, summary and package binding. Exports stay local; no issue is posted automatically. These are review annotations, not motion or correction-key artifacts.

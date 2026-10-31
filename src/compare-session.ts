@@ -1,3 +1,4 @@
+import {sharedTurnDials} from './turn-pad.ts';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -17,7 +18,8 @@ export function parseCompareSession(input:unknown,p:ComparePackage,strict=true):
   if(value.corrections!==undefined)throw new Error('compare session.corrections: motion authoring proposals are not accepted');
   if(!Array.isArray(value.feedback)||value.feedback.length>1000)throw new Error('compare session.feedback: expected array <= 1000');
   const feedbackWarnings:FeedbackWarning[]=[];
-  const feedback:CompareFeedback[]=value.feedback.map((item:unknown)=>{const side=choice(object(item,'feedback').side,['a','b'] as const,'feedback.side'),parsed=parseFeedback(item,strict);if(strict)return {...validatePackageFeedback(parsed,p[side],p.response.animation),side};const read=readPackageFeedback(parsed,p[side],p.response.animation);if(read.warning)feedbackWarnings.push(read.warning);return {...read.feedback,side};});
+  const turnDials=sharedTurnDials(p.a.feedbackCatalog.turnDials??[],p.b.feedbackCatalog.turnDials??[]);
+  const feedback:CompareFeedback[]=value.feedback.map((item:unknown)=>{const side=choice(object(item,'feedback').side,['a','b'] as const,'feedback.side'),parsed=parseFeedback(item,strict);if(strict)return {...validatePackageFeedback(parsed,p[side],p.response.animation,turnDials),side};const read=readPackageFeedback(parsed,p[side],p.response.animation,turnDials);if(read.warning)feedbackWarnings.push(read.warning);return {...read.feedback,side};});
   if(new Set(feedback.map(f=>f.id)).size!==feedback.length)throw new Error('compare session.feedback: duplicate ids');
   return {...fresh,status:choice(value.status,['pending','approved','changes-requested'] as const,'compare session.status'),feedback,feedbackWarnings,updatedAt:new Date().toISOString()};
 }

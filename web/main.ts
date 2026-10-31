@@ -1,3 +1,5 @@
+import {discoverTurnDials,TurnState} from '../src/turn-pad.ts';
+import {bindTurnPad,type TurnPad} from './turn-pad.ts';
 import {PartExplorer,loadPartModel,partBounds} from './part-selection.ts';
 import {AnimationInspectionPanel} from './animation-inspection.ts';
 import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
@@ -155,7 +157,8 @@ let joltQueue:JoltStep[]=[],environmentNote='';
 let idlePanel:IdlePanel|null=null;
 /** Setup · Rig fields (#110): the panel; its turn dial and the idle preview share `player.adjust` (both run, idle first). */
 let rigFieldsPanel:RigFieldsPanel|null=null,idleAdjust:BoneAdjust|null=null,dialAdjust:BoneAdjust|null=null;
-function setAdjust():void {if(!player)return;player.adjust=composeAdjust(idleAdjust,dialAdjust);if(!playing)drawRig(()=>player!.draw());}
+let turnPad:TurnPad|null=null,turnAdjust:BoneAdjust|null=null;
+function setAdjust():void {if(!player)return;player.adjust=composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust);if(!playing)drawRig(()=>player!.draw());}
 /** #106: the Setup Mesh panel, and the overlay's last snapshot (bar 1 reads its per-slot triangle count). */
 let meshPanel:MeshPanel|null=null,lastOverlay:OverlaySnapshot|null=null,densityStrip:DensityStripPanel|null=null;
 const physicsPreview=new PhysicsPreview();
@@ -639,6 +642,14 @@ function tick(now: number): void {
   requestAnimationFrame(tick);
 }
 
+function configureTurnPad(model:unknown):void {
+ const previous=turnPad?.snapshot();turnPad?.dispose();turnPad=null;turnAdjust=null;document.getElementById('turn-pad-host')?.remove();
+ const dials=discoverTurnDials(model,assets?.animations);if(!dials.length){setAdjust();return;}
+ const host=document.createElement('div');host.id='turn-pad-host';el('stage-layout').before(host);
+ turnPad=bindTurnPad({host,stages:[el('rig-viewport')],dials,blocked:()=>!!persistence?.restoring()||!!document.querySelector('dialog[open]')||!!rebuildBusy,
+  draw:state=>{if(!player)return;turnAdjust=state.adjust();setAdjust();if(playing)drawRig(()=>player!.draw());},save:()=>persistence?.save(),error:value=>message(value,true)});
+ if(previous&&turnPad){try{turnPad.restore(previous);}catch{message('TURN_STATE_MODEL_MISMATCH: turn values reset for this build.',true);}}
+}
 async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
   text('renderer-state',rendererStatus(null,'pending').label);
   if (!data.manifest.model) { text('player-state', 'No rig supplied · reference review is available'); return; }
@@ -651,7 +662,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     } });
     player = new RigPlayer(el('rig-root'), assets);
     // Parts inspection is an add-on: a catalog refusal is shown in the explorer and never aborts the rig.
-    try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
+    try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
     player.on('event', event => { text('event-log', `Runtime event: ${event.name} · ${event.time.toFixed(2)} s`); });
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
@@ -668,7 +679,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     enableEnvironment(modelUrl);
     describeLayerToggles(document,el('layer-state').textContent??'');
     fitCamera();
-  } catch (error) { text('renderer-state',rendererStatus(null,'failed').label);player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${errorText(error)}`); message(errorText(error), true); }
+  } catch (error) { turnPad?.dispose();turnPad=null;document.getElementById('turn-pad-host')?.remove();text('renderer-state',rendererStatus(null,'failed').label);player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${errorText(error)}`); message(errorText(error), true); }
 }
 
 function chooseAxis(): void {
@@ -850,7 +861,7 @@ function bind(): void {
     try { validateFeedbackSelection(data.feedbackCatalog, { frameStart, frameEnd, target, animation: selectedAnimation }); } catch (error) { message(errorText(error), true); return; }
     const box = assets?.stage ?? player?.bounds();
     const center = cameraCenter ?? (box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null);
-    session.feedback.push({ id: crypto.randomUUID(), frameStart, frameEnd, target, category: select('feedback-category').value as Feedback['category'], summary, context: {part:parts?.feedback()??null,
+    session.feedback.push({ id: crypto.randomUUID(), frameStart, frameEnd, target, category: select('feedback-category').value as Feedback['category'], summary, context: {...(turnPad?{turn:JSON.parse(JSON.stringify(turnPad.snapshot())) as Json}:{}),part:parts?.feedback()??null,
       interval: { frameStart, frameEnd, inclusive: true },
       checkpoint: checkpoint?.id ?? null, animation: selectedAnimation, time, frame: frameAtTime(activeFrameClock(), time),
       reference: select('reference-select').value || null, person: selectedPerson || null,
@@ -941,7 +952,7 @@ function bind(): void {
   document.addEventListener('visibilitychange',()=>{if(document.hidden){const resume=playing;pause();suspendedPreview=resume;}else if(suspendedPreview){suspendedPreview=false;void playPreview();}});
   const resize = new ResizeObserver(fitCamera); resize.observe(el('rig-viewport')); resize.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { persistence?.dispose();workspace?.dispose();pause();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());overlays?.dispose(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
+  window.addEventListener('pagehide', () => { persistence?.dispose();turnPad?.dispose();workspace?.dispose();pause();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());overlays?.dispose(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
 }
 
 async function start(): Promise<void> {
@@ -1076,7 +1087,7 @@ function numericView():ControlView {
 }
 function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data.sourceHash,rigs:[data.reviewedSource.rig?.sha256??null]};}
-function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time:player?.time??time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:selectedInspector()??'view',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
+function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time:player?.time??time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:selectedInspector()??'view',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  await restoreTransaction(()=>prepareInspection(bookmark,signal),()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
 }
@@ -1092,6 +1103,7 @@ async function inspectionReferenceInfo(id:string|null,signal:AbortSignal):Promis
 }
 async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  const selection=bookmark.selection;
+ if(selection.turn){if(!turnPad)throw new Error('TURN_UNAVAILABLE');turnPad.state.validate(selection.turn);}
  parts?.validate(selection.part);
  if(player&&!bookmark.animation||bookmark.animation&&!assets?.animations.some(a=>a.name===bookmark.animation))throw new Error('Saved animation is absent from this rig');
  if(selection.reference&&!data.manifest.references.some(r=>r.id===selection.reference))throw new Error('Saved reference is not declared');
@@ -1114,6 +1126,7 @@ async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal)
 async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  cameraRestoring=true;try{
  const selection=bookmark.selection;
+ if(turnPad){if(selection.turn)turnPad.restore(selection.turn);else{turnPad.state.reset();turnPad.restore(turnPad.snapshot());}}
  parts?.select(selection.part??null);
  pause();
  if(selection.checkpoint!==undefined){checkpoint=data.manifest.checkpoints.find(c=>c.id===selection.checkpoint);renderCheckpoint();renderCheckpoints();}
@@ -1936,7 +1949,7 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
  {const animations=select('animation-select');animations.replaceChildren(...assets.animations.map(item=>option(item.name,data.manifest.animations.find(a=>a.id===item.name)?.label??item.name)));animations.disabled=assets.animations.length===0;}
  player.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
- try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
+ try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
  if(keepSet){try{player.setSet(keepSet);}catch{select('part-set').value='';player.setSet(null);}}
  // The same world before the first pose: a physics Apply resumes the wind (clock and pulse), the pending jolts, gravity and
  // whether the controls are engaged as they stood when Apply was pressed; then the seek re-poses under that world.

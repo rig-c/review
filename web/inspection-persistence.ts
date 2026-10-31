@@ -1,3 +1,4 @@
+import {parseTurnSnapshot,type TurnSnapshot} from '../src/turn-pad.ts';
 /** Versioned local drafts and public numeric view links. No capability or review decision is put in a URL. */
 import {parseControlPart,parseControlView,type ControlPart,type ControlView} from '../src/control.ts';
 import type {Json} from '../src/manifest.ts';
@@ -8,7 +9,7 @@ export function serializableView(view:ControlView):Record<string,Json> {
  if(view.cameraSync!==undefined)value.cameraSync=view.cameraSync;if(view.activeCamera!==undefined)value.activeCamera=view.activeCamera;return value;
 }
 export interface InspectionBinding {mode:'single'|'compare';sourceHash:string;rigs:(string|null)[]}
-export interface InspectionSelection {part?:ControlPart|null;workspace?:'modeling'|'motion';view?:'compare'|'reference'|'rig';checkpoint?:string|null;reference?:string|null;person?:string|null;inspector?:string;partSet?:string|null;axis?:{id:string;value:number}|null}
+export interface InspectionSelection {turn?:TurnSnapshot;part?:ControlPart|null;workspace?:'modeling'|'motion';view?:'compare'|'reference'|'rig';checkpoint?:string|null;reference?:string|null;person?:string|null;inspector?:string;partSet?:string|null;axis?:{id:string;value:number}|null}
 export interface InspectionBookmark {
  schema:'rig-review-inspection/1';binding:InspectionBinding;animation:string|null;time:number|null;
  theme:'system'|'dark'|'light';layers:{images:boolean;meshes:boolean;bones:boolean};view:ControlView;selection:InspectionSelection;
@@ -33,13 +34,14 @@ export function parseBookmark(value:unknown,expected?:InspectionBinding):Inspect
  if(o.time!==null&&(typeof o.time!=='number'||!Number.isFinite(o.time)||o.time<0||o.time>Number.MAX_SAFE_INTEGER))throw new Error('View time requires finite nonnegative seconds');
  if(!['system','dark','light'].includes(String(o.theme)))throw new Error('View appearance invalid');
  const layers=record(o.layers,'layers');keys(layers,['images','meshes','bones'],'layers');for(const k of ['images','meshes','bones'])if(typeof layers[k]!=='boolean')throw new Error('View layers must be boolean');
- const selection=record(o.selection,'selection');keys(selection,['workspace','view','checkpoint','reference','person','inspector','partSet','axis','part'],'selection');
+ const selection=record(o.selection,'selection');keys(selection,['workspace','view','checkpoint','reference','person','inspector','partSet','axis','part','turn'],'selection');
  if(selection.workspace!==undefined&&!['modeling','motion'].includes(String(selection.workspace)))throw new Error('View workspace invalid');
  if(selection.view!==undefined&&!['compare','reference','rig'].includes(String(selection.view)))throw new Error('View selection invalid');
  for(const k of ['checkpoint','reference','person','inspector','partSet'])if(selection[k]!==undefined&&selection[k]!==null)text(selection[k],k);
  if(selection.axis!==undefined&&selection.axis!==null){const axis=record(selection.axis,'axis');keys(axis,['id','value'],'axis');text(axis.id,'axis id');if(typeof axis.value!=='number'||!Number.isFinite(axis.value))throw new Error('View axis value invalid');}
  if(selection.inspector!==undefined&&!['view','rig','playback','feedback'].includes(String(selection.inspector)))throw new Error('Inspector selection invalid');
  if(selection.part!==undefined){const part=parseControlPart(selection.part);if(part&&(binding.mode==='single'?part.side!=='single':part.side==='single'))throw new Error('View part side unavailable in this review mode');selection.part=part;}
+ if(selection.turn!==undefined)selection.turn=parseTurnSnapshot(selection.turn);
  const view=parseControlView(o.view);
  if(view.activeCamera&&(binding.mode==='single'&&(view.activeCamera==='a'||view.activeCamera==='b')||binding.mode==='compare'&&view.activeCamera==='rig'))throw new Error('View active camera is unavailable in this review mode');
  return {schema:o.schema,binding,animation,time:o.time as number|null,theme:o.theme as InspectionBookmark['theme'],layers:{images:layers.images as boolean,meshes:layers.meshes as boolean,bones:layers.bones as boolean},view,selection:{...selection} as InspectionSelection};

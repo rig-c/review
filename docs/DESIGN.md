@@ -73,6 +73,17 @@ The single review page is one inspection workspace: a left column, the stage, th
 
 The compare page keeps its own markup and stylesheet: sources left, Parts explorer right, its four Inspector sections, its export buttons and its separator colour. It shares the workspace coordinator, so its separators are drawn at the same 4px.
 
+## Model turn inspection
+
+The Turn pad is a separate inspection surface above the stage, leaving the Rig
+fields producer preview unchanged. It reads actual model slider/bone declarations,
+uses published Play's BoneAdjust, displays applied and target values separately,
+and supports Hold, exact entry, zero reset and the head-turn demo's critically
+damped smoothing. Compare uses the common axes and intersection of both ranges,
+passing identical numeric values to both players. A separately validated feedback
+field and source-bound view state retain applied values; no keys or source motion
+are authored. See [Turn pad](PANELS.md#turn-pad).
+
 ## Stored animation inspection
 
 Animate’s read-only block under Transport reads the hash-verified compiled skeleton of the build on stage. Timeline, Curves and Bone tree share transport and page-local bone/slot selection. A bone selection highlights its directly attached Parts rows; it never picks an arbitrary child slot. Stage picking uses held drawn geometry and resolved clips. Source-bound slot identity and every existing output/patch format remain unchanged.
