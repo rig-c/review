@@ -33,6 +33,28 @@ const svg=(tag:string,attrs:Record<string,string|number>)=>{const n=document.cre
 const numeric=(value:number)=>Object.is(value,-0)?'-0':String(value);
 const button=(label:string,click:()=>void)=>{const b=document.createElement('button');b.type='button';b.textContent=label;b.onclick=click;return b;};
 
+/** Clean human-readable seconds without Float32 noise (e.g. 1.6 instead of 1.600000023841858). */
+export function formatSeconds(value:number):string {
+ if(!Number.isFinite(value))return '0';
+ const cleaned=Number(value.toFixed(4));
+ return Object.is(cleaned,-0)?'0':String(cleaned);
+}
+
+/** Clean ruler tick positions from 0 to end for the given horizontal zoom factor. */
+export function buildRulerTicks(end:number,zoom=1):number[] {
+ if(!(end>0)||!Number.isFinite(end))return [0];
+ const cleanEnd=Number(end.toFixed(4));
+ const niceSteps=[0.02,0.05,0.1,0.2,0.25,0.5,1,2,5,10];
+ const targetCount=Math.max(6,Math.min(32,Math.round(8*Math.max(1,zoom))));
+ const step=niceSteps.find(s=>cleanEnd/s<=targetCount)??niceSteps.at(-1)!;
+ const ticks:number[]=[0];
+ for(let i=1;i*step<cleanEnd-step*0.35;i++){
+  ticks.push(Number((i*step).toFixed(4)));
+ }
+ if(ticks.at(-1)!==cleanEnd)ticks.push(cleanEnd);
+ return ticks;
+}
+
 export interface AnimationPanelOptions {
  host:HTMLElement;
  stage:HTMLElement;
@@ -76,10 +98,12 @@ export class AnimationInspectionPanel {
  private track:InspectionTrack|null=null;
  private channel=0;
  private view='timeline';
+ private zoom=1;
  private unavailableChannel='';
  private selection:InspectionSelection;
  private panes=new Map<string,HTMLElement>();
  private views:HTMLButtonElement[]=[];
+ private zoomButtons:HTMLButtonElement[]=[];
  private playhead:SVGElement|null=null;
  private cursor:SVGElement|null=null;
  private plot:((t:number,v:number)=>{x:number;y:number})|null=null;
@@ -104,13 +128,17 @@ export class AnimationInspectionPanel {
  private boneButtons=new Map<string,HTMLButtonElement>();
  private bonePoints=false;
 
- // Keyed animation editing state (Slice 3)
+ // Keyed animation editing state (Slice 3 / Slice 3b)
  private source:AnimationSourceView|null=null;
  private sourceFallbackReason:string|null=null;
  private builder:AnimationOpBuilder|null=null;
  private appliedOps:AnimationSourceOp[]=[];
  private selectedKey:SelectedAnimationKey|null=null;
+ private lastNonEmptyAnimation='';
  private isBusy=false;
+ private suppressNextKeyClick=false;
+ private lastDockClientHeight=0;
+ private lastLanesHeight=116;
  private draggingKey:{
   pointerId:number;
   trackIndex:number;
@@ -125,29 +153,36 @@ export class AnimationInspectionPanel {
  constructor(private options:AnimationPanelOptions){
   const {host,stage}=options;
   host.classList.add('animation-inspection');
-  host.innerHTML=`<h3>Animation timeline &amp; inspection</h3>
-<p data-inspection-status class="hint"></p>
-<div class="animation-gate-banner hint" data-animation-gate></div>
-<div class="animation-editor-bar" data-animation-editor-bar>
- <div class="animation-editor-actions">
-  <span class="animation-preview-badge" data-animation-preview-badge hidden>preview — Apply decides</span>
-  <span class="animation-ops-summary" data-animation-ops-summary>0 pending ops</span>
-  <button type="button" data-animation-undo-op disabled>Undo op</button>
-  <button type="button" data-animation-clear-ops disabled>Discard pending</button>
-  <button type="button" data-animation-apply disabled>Apply · Rebuild</button>
-  <button type="button" data-animation-reset disabled>Reset</button>
+  host.innerHTML=`<div class="animation-dock-bar">
+ <h3 class="animation-dock-title">Animation timeline &amp; inspection</h3>
+ <div class="animation-view-buttons" aria-label="Animation inspection views"></div>
+ <div class="animation-zoom-buttons" role="group" aria-label="Timeline horizontal zoom"></div>
+ <div class="animation-editor-bar" data-animation-editor-bar>
+  <div class="animation-editor-actions">
+   <span class="animation-preview-badge" data-animation-preview-badge hidden>preview — Apply decides</span>
+   <span class="animation-ops-summary" data-animation-ops-summary>0 pending ops</span>
+   <button type="button" data-animation-undo-op disabled>Undo op</button>
+   <button type="button" data-animation-clear-ops disabled>Discard pending</button>
+   <button type="button" data-animation-apply disabled>Apply · Rebuild</button>
+   <button type="button" data-animation-reset disabled>Reset</button>
+  </div>
  </div>
- <p class="hint" data-animation-apply-note></p>
- <p class="hint" data-animation-editor-status role="status"></p>
 </div>
-<div class="animation-view-buttons" aria-label="Animation inspection views"></div>
+<div class="animation-dock-status">
+ <div class="animation-gate-banner hint" data-animation-gate></div>
+ <p class="hint" data-animation-editor-status role="status"></p>
+ <p class="hint" data-animation-apply-note></p>
+ <p data-inspection-status class="hint"></p>
+</div>
 <section data-animation-pane="timeline" aria-label="Timeline"></section>
 <section data-animation-pane="curve" aria-label="Stored curves" hidden>
- <label>Channel <select data-curve-channel aria-label="Stored animation channel"></select></label>
- <label>Time (s) <input data-curve-time type="number" min="0" step="any" aria-label="Exact inspection seconds"></label>
- <button data-curve-seek type="button">Inspect time</button>
+ <div class="animation-curve-toolbar">
+  <label>Channel <select data-curve-channel aria-label="Stored animation channel"></select></label>
+  <label>Time (s) <input data-curve-time type="number" min="0" step="any" aria-label="Exact inspection seconds"></label>
+  <button data-curve-seek type="button">Inspect time</button>
+  <output data-curve-readout aria-live="off"></output>
+ </div>
  <svg data-curve-plot role="img" aria-label="Exact stored curve and control points" viewBox="0 0 800 230"></svg>
- <output data-curve-readout aria-live="off"></output>
  <p class="hint">Stored curve and handles are exact. Runtime evaluation uses Play’s ten-piece Float32 interpolation; the cursor may sit off the cubic. Values are authored locals before constraints and previews.</p>
 </section>
 <section data-animation-pane="tree" aria-label="Bone tree" hidden></section>`;
@@ -163,6 +198,7 @@ export class AnimationInspectionPanel {
   this.applyNote=host.querySelector('[data-animation-apply-note]')!;
   this.editorStatus=host.querySelector('[data-animation-editor-status]')!;
   this.applyNote.textContent=ANIMATION_APPLY_ISOLATION_NOTE;
+  this.applyNote.title=ANIMATION_APPLY_ISOLATION_NOTE;
   this.channelSelect=host.querySelector('[data-curve-channel]')!;
   this.readout=host.querySelector('[data-curve-readout]')!;
 
@@ -172,7 +208,24 @@ export class AnimationInspectionPanel {
   this.resetBtn.onclick=()=>{this.resetEdits();if(this.options.reset)void this.options.reset();};
 
   for(const pane of host.querySelectorAll<HTMLElement>('[data-animation-pane]'))this.panes.set(pane.dataset.animationPane!,pane);
-  for(const [id,label]of [['timeline','Timeline'],['curve','Curves'],['tree','Bone tree']]){const b=button(label!,()=>this.show(id!));b.dataset.animationView=id;host.querySelector('.animation-view-buttons')!.append(b);this.views.push(b);}
+  const viewButtonsHost=host.querySelector('.animation-view-buttons')!;
+  for(const [id,label]of [['timeline','Timeline'],['curve','Curves'],['tree','Bone tree']]){
+   const b=button(label!,()=>this.show(id!));
+   b.dataset.animationView=id;
+   viewButtonsHost.append(b);
+   this.views.push(b);
+  }
+  const zoomHost=host.querySelector('.animation-zoom-buttons');
+  if(zoomHost){
+   for(const z of [1,2,4,8]){
+    const zb=button(`${z}×`,()=>this.setZoom(z));
+    zb.dataset.animationZoom=String(z);
+    zb.setAttribute('aria-pressed',String(z===this.zoom));
+    zb.title=`Timeline horizontal zoom ${z}×`;
+    zoomHost.append(zb);
+    this.zoomButtons.push(zb);
+   }
+  }
   this.selection=new InspectionSelection(value=>{options.select(value);this.renderSelection();});
   host.querySelector<HTMLButtonElement>('[data-curve-seek]')!.onclick=()=>{const value=host.querySelector<HTMLInputElement>('[data-curve-time]')!.value.trim();options.seek(value?Number(value):NaN);};
   this.channelSelect.onchange=()=>{this.unavailableChannel='';const [pointer,c]=JSON.parse(this.channelSelect.value) as [string,number];this.track=this.inspection?.tracks.find(t=>t.pointer===pointer)??null;this.channel=c;this.renderCurve();this.update(this.at,this.runtimeDuration);};
@@ -184,8 +237,52 @@ export class AnimationInspectionPanel {
   const key=(e:KeyboardEvent)=>{if(e.code==='Space')this.space=e.type==='keydown';};const blur=()=>{this.space=false;this.down=null;};
   stage.addEventListener('pointerdown',down);stage.addEventListener('pointerup',up);window.addEventListener('keydown',key);window.addEventListener('keyup',key);window.addEventListener('blur',blur);
   this.disposers.push(()=>{stage.removeEventListener('pointerdown',down);stage.removeEventListener('pointerup',up);window.removeEventListener('keydown',key);window.removeEventListener('keyup',key);window.removeEventListener('blur',blur);});
+
+  if(typeof ResizeObserver!=='undefined'&&typeof host.closest==='function'){
+   const dockPanel=host.closest<HTMLElement>('.inspector')??host.closest<HTMLElement>('[data-inspector-panel]');
+   const ro=new ResizeObserver(()=>{this.syncDockHeight(true);});
+   if(dockPanel)ro.observe(dockPanel);
+   ro.observe(host);
+   this.disposers.push(()=>ro.disconnect());
+  }
   this.show('timeline');
   this.renderEditorBar();
+ }
+
+ zoomLevel():number{
+  return this.zoom;
+ }
+
+ setZoom(nextZoom:number){
+  const clamped=[1,2,4,8].includes(nextZoom)?nextZoom:1;
+  if(this.zoom===clamped)return;
+  this.zoom=clamped;
+  for(const zb of this.zoomButtons){
+   zb.setAttribute('aria-pressed',String(Number(zb.dataset.animationZoom)===this.zoom));
+  }
+  this.renderTimeline();
+ }
+
+ private syncDockHeight(fromResize=false){
+  const lanes=this.options.host.querySelector<HTMLElement>('.animation-lanes');
+  if(!lanes)return;
+  if(typeof this.options.host.closest!=='function'){
+   lanes.style.height=`${this.lastLanesHeight}px`;
+   lanes.style.maxHeight=`${this.lastLanesHeight}px`;
+   return;
+  }
+  const panel=this.options.host.closest<HTMLElement>('.inspector')??this.options.host.closest<HTMLElement>('[data-inspector-panel]');
+  if(!panel||panel.clientHeight<=0){
+   lanes.style.height=`${this.lastLanesHeight}px`;
+   lanes.style.maxHeight=`${this.lastLanesHeight}px`;
+   return;
+  }
+  if(fromResize||panel.clientHeight!==this.lastDockClientHeight){
+   this.lastDockClientHeight=panel.clientHeight;
+   this.lastLanesHeight=Math.max(96,Math.floor(panel.clientHeight-162));
+  }
+  lanes.style.height=`${this.lastLanesHeight}px`;
+  lanes.style.maxHeight=`${this.lastLanesHeight}px`;
  }
 
  loadSource(source:AnimationSourceView|null,fallbackReason:string|null=null){
@@ -212,7 +309,8 @@ export class AnimationInspectionPanel {
 
  model(doc:unknown,animation:string){
   if(this.document===doc&&this.animation===animation)return;
-  const animChanged=this.animation!==animation;
+  if(animation&&this.lastNonEmptyAnimation&&this.lastNonEmptyAnimation!==animation)this.selectedKey=null;
+  if(animation)this.lastNonEmptyAnimation=animation;
   this.document=doc;
   this.animation=animation;
   this.baseInspection=null;
@@ -220,7 +318,6 @@ export class AnimationInspectionPanel {
   this.track=null;
   this.unavailableChannel='';
   this.frame=null;
-  if(animChanged)this.selectedKey=null;
   this.bones.clear();
   this.boneButtons.clear();
   this.picks.replaceChildren();
@@ -231,8 +328,10 @@ export class AnimationInspectionPanel {
    boneHierarchy(this.baseInspection);
    this.syncEffectiveInspection(true);
    this.status.textContent=`${animation||'Setup'} · ${this.inspection!.tracks.length} stored tracks · key times in seconds; frames require a declared clock.`;
+   this.status.title=this.status.textContent;
   }catch(e){
    this.status.textContent=e instanceof Error?e.message:String(e);
+   this.status.title=this.status.textContent;
   }
   if(this.selection.value()&&!this.has(this.selection.value()))this.selection.select(null);
   this.renderGateBanner();
@@ -302,7 +401,7 @@ export class AnimationInspectionPanel {
    return;
   }
   const hasPreview=this.hasUnappliedPreview();
-  if(hasPreview&&this.builder&&this.builder.dirty){
+  if(hasPreview&&this.builder){
    try{
     this.inspection=overlayDraftOnInspection(
      this.baseInspection,
@@ -342,6 +441,7 @@ export class AnimationInspectionPanel {
   const gate=this.gateInfo();
   if(!this.animation){
    this.gateBanner.textContent='Select an animation clip to inspect or edit keys.';
+   this.gateBanner.title=this.gateBanner.textContent;
    this.gateBanner.dataset.gateCode='NONE';
    this.gateBanner.dataset.editable='false';
    return;
@@ -356,6 +456,7 @@ export class AnimationInspectionPanel {
    const notePart=gate.note?` · Note: ${gate.note}`:'';
    this.gateBanner.textContent=`Editable clip "${this.animation}" from ${srcPath}${hashShort}${notePart}`;
   }
+  this.gateBanner.title=this.gateBanner.textContent;
  }
 
  private renderEditorBar(){
@@ -364,7 +465,8 @@ export class AnimationInspectionPanel {
   const appliedCount=this.appliedOps.length;
   this.previewBadge.hidden=!hasPreview;
   if(hasPreview){
-   this.previewBadge.textContent=`preview — Apply decides (${allOps.length} op(s) on ${[...new Set(allOps.map(o=>o.animation))].join(', ')})`;
+   const clips=[...new Set([...allOps,...this.appliedOps].map(o=>o.animation))];
+   this.previewBadge.textContent=`preview — Apply decides (${allOps.length} op(s)${clips.length?` on ${clips.join(', ')}`:''})`;
   }
   if(allOps.length===0&&appliedCount===0){
    this.opsSummary.textContent=`0 pending ops (cap ${MAX_ANIMATION_OPS})`;
@@ -381,6 +483,7 @@ export class AnimationInspectionPanel {
 
  setEditorStatus(text:string,error=false){
   this.editorStatus.textContent=text;
+  this.editorStatus.title=text;
   this.editorStatus.classList.toggle('error',error);
   this.editorStatus.setAttribute('role',error?'alert':'status');
  }
@@ -389,6 +492,7 @@ export class AnimationInspectionPanel {
   this.isBusy=isBusy;
   this.options.host.setAttribute('aria-busy',String(isBusy));
   this.renderEditorBar();
+  this.syncKeyInspectorInPlace();
  }
 
  markApplied(ops:readonly AnimationSourceOp[],statusText:string,isError=false){
@@ -398,6 +502,21 @@ export class AnimationInspectionPanel {
   this.renderTimeline();
   this.renderChannels();
   this.setEditorStatus(statusText,isError);
+ }
+
+ /**
+  * Reconcile the stage's currently active animation record without wiping pending edits in `this.builder`.
+  * When another kind of Apply (Bones, Mesh, Idle, Retarget, Chest, etc.) replaces the stage build, `applied` is `null`
+  * and `this.appliedOps` clears to `[]` while `this.builder.ops` stays intact as pending unapplied edits.
+  */
+ reconcileStageApplied(applied:AppliedAnimation|null){
+  const nextApplied=applied?applied.ops.map(o=>structuredClone(o)):[];
+  if(JSON.stringify(this.appliedOps)===JSON.stringify(nextApplied))return;
+  this.appliedOps=nextApplied;
+  this.syncEffectiveInspection(true);
+  this.renderEditorBar();
+  this.renderTimeline();
+  this.renderChannels();
  }
 
  syncApplied(applied:AppliedAnimation|null){
@@ -428,7 +547,10 @@ export class AnimationInspectionPanel {
    this.builder.apply(op);
    this.syncEffectiveInspection(true);
    this.renderEditorBar();
-   if(!opts.skipTimelineDomRebuild){
+   if(opts.skipTimelineDomRebuild){
+    this.syncTimelineKeysInPlace();
+    this.syncKeyInspectorInPlace();
+   }else{
     this.renderTimeline();
    }
    this.renderChannels();
@@ -442,7 +564,10 @@ export class AnimationInspectionPanel {
  }
 
  setKeyTime(trackIndex:number,keyIndex:number,time:number){
-  return this.applyOp({op:'set_key_time',animation:this.animation,track:trackIndex,key:keyIndex,time});
+  return this.applyOp(
+   {op:'set_key_time',animation:this.animation,track:trackIndex,key:keyIndex,time},
+   {skipTimelineDomRebuild:true},
+  );
  }
 
  setKeyValue(trackIndex:number,keyIndex:number,channel:number|undefined,value:number|readonly number[]){
@@ -450,6 +575,7 @@ export class AnimationInspectionPanel {
    channel!==undefined
     ?{op:'set_key_value',animation:this.animation,track:trackIndex,key:keyIndex,channel,value:value as number}
     :{op:'set_key_value',animation:this.animation,track:trackIndex,key:keyIndex,value:value as readonly number[]},
+   {skipTimelineDomRebuild:true},
   );
  }
 
@@ -490,7 +616,8 @@ export class AnimationInspectionPanel {
    if(insertedIdx>=0){
     const inspTrack=this.inspection?.tracks.find(t=>t.kind==='bone'&&t.target===cls.target&&t.name===cls.property);
     this.selectedKey={animation:this.animation,trackIndex,keyIndex:insertedIdx,pointer:inspTrack?.pointer??''};
-    this.renderTimeline();
+    this.syncTimelineKeysInPlace();
+    this.syncKeyInspectorInPlace();
    }
   }
   return res;
@@ -506,7 +633,8 @@ export class AnimationInspectionPanel {
     }else{
      this.selectedKey={...this.selectedKey,keyIndex:Math.min(keyIndex,rawKeys.length-1)};
     }
-    this.renderTimeline();
+    this.syncTimelineKeysInPlace();
+    this.syncKeyInspectorInPlace();
    }
   }
   return res;
@@ -527,7 +655,8 @@ export class AnimationInspectionPanel {
    this.builder.moveSelection(this.animation,selections,deltaTime);
    this.syncEffectiveInspection(true);
    this.renderEditorBar();
-   this.renderTimeline();
+   this.syncTimelineKeysInPlace();
+   this.syncKeyInspectorInPlace();
    this.renderChannels();
    this.setEditorStatus(`Moved ${selections.length} selected key(s) by ${deltaTime} s (${this.builder.ops.length} pending op(s)).`,false);
    return {ok:true,ops:this.builder.ops};
@@ -608,7 +737,8 @@ export class AnimationInspectionPanel {
   if(k.t>=0&&k.t<=this.runtimeDuration){
    this.options.seek(k.t);
   }
-  this.renderTimeline();
+  this.syncTimelineKeysInPlace();
+  this.syncKeyInspectorInPlace();
   return true;
  }
 
@@ -663,6 +793,10 @@ export class AnimationInspectionPanel {
   const note=document.createElement('p');note.className='hint';note.textContent='Enable Bone points to pick bones on stage. Overlapping points pick the last active bone in source order; use the tree for an exact target. Attached Parts rows highlight together.';pane.prepend(note);
  }
 
+ /**
+  * Fixed-height single-row Key Bar. Both the insert controls and the selected-key fields
+  * always occupy the same 26px bar so selecting or editing a key produces zero layout shift.
+  */
  private renderKeyInspector(host:HTMLElement){
   const box=document.createElement('div');
   box.className='animation-key-inspector';
@@ -671,13 +805,20 @@ export class AnimationInspectionPanel {
   const clss=this.tracksInfo();
   const editableTracks=clss.filter(c=>c.editable);
 
-  if(gate.editable&&editableTracks.length>0){
-   const addBar=document.createElement('div');
-   addBar.className='animation-insert-bar';
-   const trackLabel=document.createElement('label');
-   trackLabel.textContent='Editable track ';
-   const trackSel=document.createElement('select');
-   trackSel.dataset.insertTrack='';
+  const addBar=document.createElement('div');
+  addBar.className='animation-insert-bar';
+  const trackLabel=document.createElement('label');
+  trackLabel.className='animation-bar-field';
+  trackLabel.textContent='Track ';
+  const trackSel=document.createElement('select');
+  trackSel.dataset.insertTrack='';
+  trackSel.disabled=!gate.editable||editableTracks.length===0;
+  if(editableTracks.length===0){
+   const opt=document.createElement('option');
+   opt.value='';
+   opt.textContent='No editable tracks';
+   trackSel.append(opt);
+  }else{
    for(const c of editableTracks){
     const opt=document.createElement('option');
     opt.value=String(c.trackIndex);
@@ -685,106 +826,223 @@ export class AnimationInspectionPanel {
     if(this.selectedKey?.trackIndex===c.trackIndex)opt.selected=true;
     trackSel.append(opt);
    }
-   trackLabel.append(trackSel);
-
-   const timeLabel=document.createElement('label');
-   timeLabel.textContent='Time (s) ';
-   const timeIn=document.createElement('input');
-   timeIn.type='number';
-   timeIn.step='any';
-   timeIn.min='0';
-   timeIn.dataset.insertTime='';
-   timeIn.value=String(cleanMotionNumber(this.at));
-   timeLabel.append(timeIn);
-
-   const addBtn=button('+ Add key',()=>{
-    const tIdx=Number(trackSel.value);
-    const tVal=Number(timeIn.value);
-    this.insertKey(tIdx,tVal);
-   });
-   addBtn.dataset.insertKey='';
-   addBar.append(trackLabel,timeLabel,addBtn);
-   box.append(addBar);
   }
+  trackLabel.append(trackSel);
 
-  const info=this.selectedKeyInfo();
-  if(!info){
-   const hint=document.createElement('p');
-   hint.className='hint';
-   hint.dataset.keyInspectorEmpty='';
-   hint.textContent=gate.editable
-    ?'Click a key diamond on an editable bone track to inspect or edit its time and channel values, or drag it horizontally in time.'
-    :`Key editing disabled (${gate.code}: ${gate.reason})`;
-   box.append(hint);
-   host.append(box);
-   return;
-  }
+  const timeLabel=document.createElement('label');
+  timeLabel.className='animation-bar-field';
+  timeLabel.textContent='t ';
+  const timeIn=document.createElement('input');
+  timeIn.type='number';
+  timeIn.step='any';
+  timeIn.min='0';
+  timeIn.dataset.insertTime='';
+  timeIn.disabled=!gate.editable||editableTracks.length===0;
+  timeIn.value=String(cleanMotionNumber(this.at));
+  timeLabel.append(timeIn);
+
+  const addBtn=button('+ Add key',()=>{
+   const tIdx=Number(trackSel.value);
+   const tVal=Number(timeIn.value);
+   this.insertKey(tIdx,tVal);
+  });
+  addBtn.dataset.insertKey='';
+  addBtn.disabled=!gate.editable||editableTracks.length===0;
+  addBar.append(trackLabel,timeLabel,addBtn);
+  box.append(addBar);
 
   const detail=document.createElement('div');
   detail.className='animation-key-detail';
+  detail.dataset.keyDetail='';
   const title=document.createElement('strong');
+  title.className='animation-key-title';
   title.dataset.keyInspectorTitle='';
-  title.textContent=`${info.bone} · ${info.property} · key #${info.keyIndex} (track #${info.trackIndex})`;
   detail.append(title);
 
   const timeWrap=document.createElement('label');
-  timeWrap.textContent='Key time (s) ';
+  timeWrap.className='animation-bar-field';
+  timeWrap.textContent='Key t (s) ';
   const timeInput=document.createElement('input');
   timeInput.type='number';
   timeInput.step='any';
   timeInput.min='0';
   timeInput.dataset.keyTimeInput='';
-  timeInput.value=String(info.time);
-  timeInput.onchange=()=>{
-   const nextT=Number(timeInput.value);
-   this.setKeyTime(info.trackIndex,info.keyIndex,nextT);
-  };
   timeWrap.append(timeInput);
   detail.append(timeWrap);
 
-  for(const ch of info.channels){
-   const chWrap=document.createElement('label');
-   chWrap.textContent=`${ch.local} (${ch.field}) `;
-   const chInput=document.createElement('input');
-   chInput.type='number';
-   chInput.step='any';
-   chInput.dataset.keyChannel=String(ch.index);
-   chInput.dataset.channelLocal=ch.local;
-   chInput.dataset.channelField=ch.field;
-   chInput.value=String(ch.value);
-   chInput.onchange=()=>{
-    const nextV=Number(chInput.value);
-    this.setKeyValue(info.trackIndex,info.keyIndex,ch.index,nextV);
-   };
-   chWrap.append(chInput);
-   detail.append(chWrap);
-  }
+  const channelsHost=document.createElement('span');
+  channelsHost.className='animation-key-channels';
+  channelsHost.dataset.keyChannelsHost='';
+  detail.append(channelsHost);
 
-  const delBtn=button('Delete key',()=>{
-   this.deleteKey(info.trackIndex,info.keyIndex);
-  });
+  const delBtn=button('Delete key',()=>{});
   delBtn.dataset.deleteKey='';
   detail.append(delBtn);
 
+  const hint=document.createElement('span');
+  hint.className='hint animation-key-empty';
+  hint.dataset.keyInspectorEmpty='';
+  detail.append(hint);
+
   box.append(detail);
   host.append(box);
+  this.syncKeyInspectorInPlace();
  }
 
- private refreshInspectorInputsInPlace(){
+ private syncKeyInspectorInPlace(){
+  const box=this.options.host.querySelector<HTMLElement>('[data-key-inspector]');
+  if(!box)return;
+  const gate=this.gateInfo();
   const info=this.selectedKeyInfo();
-  if(!info)return;
-  const timeInput=this.options.host.querySelector<HTMLInputElement>('[data-key-time-input]');
-  if(timeInput&&document.activeElement!==timeInput)timeInput.value=String(info.time);
-  const title=this.options.host.querySelector<HTMLElement>('[data-key-inspector-title]');
-  if(title)title.textContent=`${info.bone} · ${info.property} · key #${info.keyIndex} (track #${info.trackIndex})`;
-  for(const ch of info.channels){
-   const chIn=this.options.host.querySelector<HTMLInputElement>(`[data-key-channel="${ch.index}"]`);
-   if(chIn&&document.activeElement!==chIn)chIn.value=String(ch.value);
+
+  const trackSel=box.querySelector<HTMLSelectElement>('[data-insert-track]');
+  if(trackSel&&info){
+   for(const opt of trackSel.options){
+    opt.selected=opt.value===String(info.trackIndex);
+   }
+  }
+
+  const title=box.querySelector<HTMLElement>('[data-key-inspector-title]');
+  const timeInput=box.querySelector<HTMLInputElement>('[data-key-time-input]');
+  const channelsHost=box.querySelector<HTMLElement>('[data-key-channels-host]');
+  const delBtn=box.querySelector<HTMLButtonElement>('[data-delete-key]');
+  const emptyHint=box.querySelector<HTMLElement>('[data-key-inspector-empty]');
+
+  if(!info){
+   if(title){
+    title.textContent='No key selected';
+    title.title='';
+   }
+   if(timeInput){
+    timeInput.disabled=true;
+    if(document.activeElement!==timeInput)timeInput.value='';
+    timeInput.onchange=null;
+   }
+   if(channelsHost){
+    const existing=channelsHost.querySelectorAll<HTMLInputElement>('[data-key-channel]');
+    if(existing.length!==1||!existing[0]!.disabled){
+     const chWrap=document.createElement('label');
+     chWrap.className='animation-bar-field';
+     chWrap.textContent='val ';
+     const chInput=document.createElement('input');
+     chInput.type='number';
+     chInput.step='any';
+     chInput.dataset.keyChannel='0';
+     chInput.disabled=true;
+     chInput.value='';
+     chWrap.append(chInput);
+     channelsHost.replaceChildren(chWrap);
+    }
+   }
+   if(delBtn){
+    delBtn.disabled=true;
+    delBtn.onclick=null;
+   }
+   if(emptyHint){
+    emptyHint.hidden=false;
+    emptyHint.textContent=gate.editable
+     ?'Click or drag a key ◆ on an editable bone track.'
+     :`Key editing disabled (${gate.code}: ${gate.reason})`;
+    emptyHint.title=emptyHint.textContent;
+   }
+   return;
+  }
+
+  if(title){
+   title.textContent=`${info.bone} · ${info.property} · key #${info.keyIndex} (track #${info.trackIndex})`;
+   title.title=title.textContent;
+  }
+  if(timeInput){
+   timeInput.disabled=this.isBusy;
+   if(document.activeElement!==timeInput)timeInput.value=String(cleanMotionNumber(info.time));
+   timeInput.onchange=()=>{
+    const nextT=Number(timeInput.value);
+    this.setKeyTime(info.trackIndex,info.keyIndex,nextT);
+   };
+  }
+  if(channelsHost){
+   const existing=channelsHost.querySelectorAll<HTMLInputElement>('[data-key-channel]');
+   const sameShape=
+    existing.length===info.channels.length&&
+    info.channels.every((ch,idx)=>existing[idx]?.dataset.channelLocal===ch.local&&existing[idx]?.dataset.channelField===ch.field);
+   if(sameShape){
+    info.channels.forEach((ch,idx)=>{
+     const chIn=existing[idx]!;
+     chIn.disabled=this.isBusy;
+     if(document.activeElement!==chIn)chIn.value=String(ch.value);
+     chIn.onchange=()=>{
+      const nextV=Number(chIn.value);
+      this.setKeyValue(info.trackIndex,info.keyIndex,ch.index,nextV);
+     };
+    });
+   }else{
+    const nodes:HTMLElement[]=[];
+    for(const ch of info.channels){
+     const chWrap=document.createElement('label');
+     chWrap.className='animation-bar-field';
+     chWrap.textContent=`${ch.local} (${ch.field}) `;
+     const chInput=document.createElement('input');
+     chInput.type='number';
+     chInput.step='any';
+     chInput.disabled=this.isBusy;
+     chInput.dataset.keyChannel=String(ch.index);
+     chInput.dataset.channelLocal=ch.local;
+     chInput.dataset.channelField=ch.field;
+     chInput.value=String(ch.value);
+     chInput.onchange=()=>{
+      const nextV=Number(chInput.value);
+      this.setKeyValue(info.trackIndex,info.keyIndex,ch.index,nextV);
+     };
+     chWrap.append(chInput);
+     nodes.push(chWrap);
+    }
+    channelsHost.replaceChildren(...nodes);
+   }
+  }
+  if(delBtn){
+   delBtn.disabled=this.isBusy;
+   delBtn.onclick=()=>{
+    this.deleteKey(info.trackIndex,info.keyIndex);
+   };
+  }
+  if(emptyHint){
+   emptyHint.hidden=true;
+   emptyHint.textContent='';
+  }
+ }
+
+ private syncTimelineKeysInPlace(){
+  if(!this.inspection)return;
+  const end=Math.max(this.runtimeDuration,...this.inspection.tracks.map(t=>t.keys.at(-1)?.time??0),Number.MIN_VALUE);
+  const marks=this.options.host.querySelectorAll<HTMLButtonElement>('.animation-key');
+  for(const mark of marks){
+   const ptr=mark.dataset.track;
+   const track=ptr?this.inspection.tracks.find(t=>t.pointer===ptr):undefined;
+   const kIdx=Number(mark.dataset.keyIndex);
+   const srcTrack=mark.dataset.sourceTrack!==undefined?Number(mark.dataset.sourceTrack):undefined;
+   const isEditable=mark.dataset.editable==='true';
+   const isSelected=isEditable&&srcTrack!==undefined&&this.selectedKey?.animation===this.animation&&this.selectedKey.trackIndex===srcTrack&&this.selectedKey.keyIndex===kIdx;
+   mark.classList.toggle('selected',isSelected);
+   mark.setAttribute('aria-pressed',String(isSelected));
+   if(track&&track.keys[kIdx]){
+    const key=track.keys[kIdx]!;
+    const cleanT=formatSeconds(key.time);
+    mark.dataset.keyTime=cleanT;
+    mark.style.left=`${Math.max(0,Math.min(100,key.time/end*100))}%`;
+    mark.title=`${track.target} · ${track.name} · key ${kIdx} · ${cleanT} s${isEditable?' (drag to retime)':' (read-only)'}`;
+    mark.setAttribute('aria-label',mark.title);
+   }
   }
  }
 
  private renderTimeline(){
-  const pane=this.panes.get('timeline')!;pane.replaceChildren();this.playhead=null;if(!this.inspection)return;
+  const pane=this.panes.get('timeline')!;
+  const prevLanes=pane.querySelector<HTMLElement>('.animation-lanes');
+  const prevScrollTop=prevLanes?.scrollTop??0;
+  const prevScrollLeft=prevLanes?.scrollLeft??0;
+  pane.replaceChildren();
+  this.playhead=null;
+  if(!this.inspection)return;
   this.renderKeyInspector(pane);
 
   const gate=this.gateInfo();
@@ -796,13 +1054,48 @@ export class AnimationInspectionPanel {
 
   const tracks=filterTracks(this.inspection,this.selection.value());
   const end=Math.max(this.runtimeDuration,...this.inspection.tracks.map(t=>t.keys.at(-1)?.time??0),Number.MIN_VALUE);
-  const list=document.createElement('div');list.className='animation-lanes';pane.append(list);
-  const axis=document.createElement('div');axis.className='animation-axis';axis.textContent=`0 s → ${end} s`;list.append(axis);
+  const cleanEnd=formatSeconds(end);
+  const rowWidth=this.zoom>1?`calc(190px + (100% - 190px) * ${this.zoom})`:'100%';
+
+  const list=document.createElement('div');
+  list.className='animation-lanes';
+  list.dataset.animationLanes='';
+  pane.append(list);
+
+  // Sticky top time ruler with ticks and scrub support
+  const ruler=document.createElement('div');
+  ruler.className='animation-ruler';
+  ruler.dataset.animationRuler='';
+  ruler.style.width=rowWidth;
+  const rulerCorner=document.createElement('div');
+  rulerCorner.className='animation-ruler-corner';
+  const axis=document.createElement('div');
+  axis.className='animation-axis';
+  axis.textContent=`0 s → ${cleanEnd} s`;
+  rulerCorner.append(axis);
+
+  const rulerTrack=document.createElement('div');
+  rulerTrack.className='animation-ruler-track';
+  rulerTrack.dataset.animationRulerTrack='';
+  for(const tickTime of buildRulerTicks(end,this.zoom)){
+   const tick=document.createElement('span');
+   tick.className='animation-ruler-tick';
+   tick.dataset.rulerTick=formatSeconds(tickTime);
+   tick.style.left=`${Math.max(0,Math.min(100,tickTime/end*100))}%`;
+   tick.textContent=`${formatSeconds(tickTime)} s`;
+   rulerTrack.append(tick);
+  }
+  const rulerPlayhead=document.createElement('span');
+  rulerPlayhead.className='animation-playhead';
+  rulerPlayhead.dataset.playhead='';
+  rulerTrack.append(rulerPlayhead);
+  this.bindRulerScrub(rulerTrack,end);
+  ruler.append(rulerCorner,rulerTrack);
+  list.append(ruler);
 
   const matchedSourceIndices=new Set<number>();
 
   for(const kind of ['bone','slot'] as const){
-   const group=document.createElement('h4');group.textContent=kind==='bone'?'Bones':'Slots';list.append(group);
    for(const track of tracks.filter(t=>t.kind===kind)){
     const cls=kind==='bone'?clsByBoneProp.get(`${track.target}\0${track.name}`):clss.find(c=>c.targetKind==='slot'&&c.target===track.target&&c.property===track.name);
     if(cls)matchedSourceIndices.add(cls.trackIndex);
@@ -817,14 +1110,20 @@ export class AnimationInspectionPanel {
 
     const row=document.createElement('div');
     row.className='animation-lane';
+    row.style.width=rowWidth;
     row.dataset.track=track.pointer;
     row.dataset.editable=String(isEditable);
     if(cls!==undefined)row.dataset.sourceTrack=String(cls.trackIndex);
     if(!isEditable)row.dataset.readonlyReason=readonlyReason;
 
+    const head=document.createElement('div');
+    head.className='animation-lane-head';
+    head.dataset.laneHead='';
+
     const label=button(`${track.target} · ${track.name}`,()=>{this.track=track;this.channel=0;this.renderChannels();this.show('curve');});
     label.className='animation-lane-label';
-    row.append(label);
+    label.title=`${track.target} · ${track.name}`;
+    head.append(label);
 
     if(isEditable&&cls){
      const addKeyBtn=button('+ Key',()=>{
@@ -832,16 +1131,17 @@ export class AnimationInspectionPanel {
      });
      addKeyBtn.className='animation-lane-add';
      addKeyBtn.dataset.addKeyTrack=String(cls.trackIndex);
-     addKeyBtn.title=`Insert key on ${track.target} · ${track.name} at playhead (${this.at} s)`;
-     row.append(addKeyBtn);
+     addKeyBtn.title=`Insert key on ${track.target} · ${track.name} at playhead (${formatSeconds(this.at)} s)`;
+     head.append(addKeyBtn);
     }else{
      const badge=document.createElement('span');
      badge.className='animation-readonly-badge';
      badge.dataset.readonlyBadge='';
      badge.textContent=readonlyReason;
      badge.title=readonlyReason;
-     row.append(badge);
+     head.append(badge);
     }
+    row.append(head);
 
     const marks=document.createElement('div');
     marks.className='animation-key-lane';
@@ -849,11 +1149,17 @@ export class AnimationInspectionPanel {
     row.append(marks);
 
     track.keys.forEach((key,index)=>{
+     const cleanT=formatSeconds(key.time);
      const mark=button('◆',()=>{
+      if(this.suppressNextKeyClick){
+       this.suppressNextKeyClick=false;
+       return;
+      }
       this.track=track;this.channel=0;this.renderChannels();
       if(isEditable&&cls){
        this.selectedKey={animation:this.animation,trackIndex:cls.trackIndex,keyIndex:index,pointer:track.pointer};
-       this.renderTimeline();
+       this.syncTimelineKeysInPlace();
+       this.syncKeyInspectorInPlace();
       }else{
        this.setEditorStatus(readonlyReason,true);
       }
@@ -866,16 +1172,17 @@ export class AnimationInspectionPanel {
      if(isSelected)mark.classList.add('selected');
      mark.setAttribute('aria-pressed',String(isSelected));
      Object.assign(mark.dataset,{
+      track:track.pointer,
       targetKind:kind,
       target:track.target,
       timeline:track.name,
       keyIndex:String(index),
-      keyTime:String(key.time),
+      keyTime:cleanT,
       editable:String(isEditable),
       ...(cls!==undefined?{sourceTrack:String(cls.trackIndex)}:{}),
      });
      mark.style.left=`${Math.max(0,Math.min(100,key.time/end*100))}%`;
-     mark.title=`${track.target} · ${track.name} · key ${index} · ${key.time} s${isEditable?' (drag to retime)':' (read-only)'}`;
+     mark.title=`${track.target} · ${track.name} · key ${index} · ${cleanT} s${isEditable?' (drag to retime)':' (read-only)'}`;
      mark.setAttribute('aria-label',mark.title);
 
      if(isEditable&&cls){
@@ -901,30 +1208,41 @@ export class AnimationInspectionPanel {
    if(selectedTarget.kind==='slot'&&c.targetKind==='slot'&&c.target===selectedTarget.name)return true;
    return false;
   });
-  if(extraReadonly.length>0){
-   const roGroup=document.createElement('h4');
-   roGroup.textContent='Read-only source tracks';
-   list.append(roGroup);
-   for(const c of extraReadonly){
-    const reason=gate.editable?`ANIMATION_TRACK_READ_ONLY: ${c.reason}`:`${gate.code}: ${gate.reason}`;
-    const row=document.createElement('div');
-    row.className='animation-readonly-lane';
-    row.dataset.sourceTrack=String(c.trackIndex);
-    row.dataset.targetKind=c.targetKind;
-    row.dataset.target=c.target;
-    row.dataset.property=c.property;
-    row.dataset.editable='false';
-    row.dataset.readonlyReason=reason;
-    const lbl=document.createElement('span');
-    lbl.className='animation-lane-label';
-    lbl.textContent=`${c.targetKind}:${c.target} · ${c.property}`;
-    const badge=document.createElement('span');
-    badge.className='animation-readonly-badge';
-    badge.dataset.readonlyBadge='';
-    badge.textContent=reason;
-    row.append(lbl,badge);
-    list.append(row);
-   }
+  for(const c of extraReadonly){
+   const reason=gate.editable?`ANIMATION_TRACK_READ_ONLY: ${c.reason}`:`${gate.code}: ${gate.reason}`;
+   const row=document.createElement('div');
+   row.className='animation-readonly-lane';
+   row.style.width=rowWidth;
+   row.dataset.sourceTrack=String(c.trackIndex);
+   row.dataset.targetKind=c.targetKind;
+   row.dataset.target=c.target;
+   row.dataset.property=c.property;
+   row.dataset.editable='false';
+   row.dataset.readonlyReason=reason;
+
+   const head=document.createElement('div');
+   head.className='animation-lane-head';
+   head.dataset.laneHead='';
+   const lbl=document.createElement('span');
+   lbl.className='animation-lane-label';
+   lbl.textContent=`${c.targetKind}:${c.target} · ${c.property}`;
+   lbl.title=lbl.textContent;
+   head.append(lbl);
+
+   const trackArea=document.createElement('div');
+   trackArea.className='animation-key-lane readonly-lane-track';
+   const badge=document.createElement('span');
+   badge.className='animation-readonly-badge';
+   badge.dataset.readonlyBadge='';
+   badge.textContent=reason;
+   badge.title=reason;
+   const line=document.createElement('span');
+   line.className='animation-playhead';
+   line.dataset.playhead='';
+   trackArea.append(badge,line);
+
+   row.append(head,trackArea);
+   list.append(row);
   }
 
   if(!tracks.length&&!extraReadonly.length){
@@ -932,7 +1250,41 @@ export class AnimationInspectionPanel {
    empty.textContent='No stored tracks for this selection.';
    list.append(empty);
   }
+  this.syncDockHeight(false);
   this.placePlayheads();
+  if(prevScrollTop>0)list.scrollTop=prevScrollTop;
+  if(prevScrollLeft>0)list.scrollLeft=prevScrollLeft;
+ }
+
+ private bindRulerScrub(rulerTrack:HTMLElement,end:number){
+  let scrubbingId:number|null=null;
+  const scrubAt=(clientX:number)=>{
+   const rect=rulerTrack.getBoundingClientRect();
+   if(rect.width<=0)return;
+   const ratio=Math.max(0,Math.min(1,(clientX-rect.left)/rect.width));
+   const maxSeek=this.runtimeDuration>0?Math.min(end,this.runtimeDuration):end;
+   const target=cleanMotionNumber(Math.min(maxSeek,ratio*end));
+   this.options.seek(target);
+  };
+  rulerTrack.addEventListener('pointerdown',e=>{
+   if(!e.isPrimary||e.button!==0)return;
+   e.preventDefault();
+   e.stopPropagation();
+   scrubbingId=e.pointerId;
+   rulerTrack.setPointerCapture?.(e.pointerId);
+   scrubAt(e.clientX);
+  });
+  rulerTrack.addEventListener('pointermove',e=>{
+   if(scrubbingId!==e.pointerId)return;
+   scrubAt(e.clientX);
+  });
+  const endScrub=(e:PointerEvent)=>{
+   if(scrubbingId!==e.pointerId)return;
+   scrubbingId=null;
+   if(rulerTrack.hasPointerCapture?.(e.pointerId))rulerTrack.releasePointerCapture(e.pointerId);
+  };
+  rulerTrack.addEventListener('pointerup',endScrub);
+  rulerTrack.addEventListener('pointercancel',endScrub);
  }
 
  private bindKeyDrag(
@@ -945,7 +1297,21 @@ export class AnimationInspectionPanel {
  ){
   mark.addEventListener('pointerdown',e=>{
    if(!e.isPrimary||e.button!==0||this.isBusy)return;
+   e.preventDefault();
    e.stopPropagation();
+   this.suppressNextKeyClick=true;
+   // Immediately select the key in place on pointerdown without rebuilding the DOM,
+   // so pressing and dragging an unselected key works in a single gesture with zero layout shift.
+   this.track=track;
+   this.channel=0;
+   this.selectedKey={animation:this.animation,trackIndex,keyIndex,pointer:track.pointer};
+   this.syncTimelineKeysInPlace();
+   this.syncKeyInspectorInPlace();
+   this.renderChannels();
+   const k=track.keys[keyIndex];
+   if(k&&k.time>=0&&k.time<=this.runtimeDuration){
+    this.options.seek(k.time);
+   }
    this.draggingKey={
     pointerId:e.pointerId,
     trackIndex,
@@ -956,13 +1322,13 @@ export class AnimationInspectionPanel {
     markEl:mark,
     end,
    };
-   mark.setPointerCapture(e.pointerId);
+   mark.setPointerCapture?.(e.pointerId);
   });
 
   mark.addEventListener('pointermove',e=>{
    const drag=this.draggingKey;
    if(!drag||drag.pointerId!==e.pointerId)return;
-   if(!drag.moved&&Math.abs(e.clientX-drag.startX)<2)return;
+   if(!drag.moved&&Math.abs(e.clientX-drag.startX)<1)return;
    drag.moved=true;
    this.selectedKey={animation:this.animation,trackIndex,keyIndex,pointer:track.pointer};
    const rect=drag.laneEl.getBoundingClientRect();
@@ -973,25 +1339,18 @@ export class AnimationInspectionPanel {
     {op:'set_key_time',animation:this.animation,track:trackIndex,key:keyIndex,time:rawTime},
     {skipTimelineDomRebuild:true},
    );
-   if(res.ok){
-    mark.style.left=`${Math.max(0,Math.min(100,rawTime/drag.end*100))}%`;
-    mark.dataset.keyTime=String(rawTime);
-    mark.title=`${track.target} · ${track.name} · key ${keyIndex} · ${rawTime} s (drag to retime)`;
-    mark.setAttribute('aria-label',mark.title);
-    this.refreshInspectorInputsInPlace();
+   if(res.ok&&rawTime>=0&&rawTime<=this.runtimeDuration){
+    this.options.seek(rawTime);
    }
   });
 
   const finishDrag=(e:PointerEvent)=>{
    const drag=this.draggingKey;
    if(!drag||drag.pointerId!==e.pointerId)return;
-   const wasMoved=drag.moved;
    this.draggingKey=null;
-   if(mark.hasPointerCapture(e.pointerId))mark.releasePointerCapture(e.pointerId);
-   if(wasMoved){
-    e.preventDefault();
-    this.renderTimeline();
-   }
+   if(mark.hasPointerCapture?.(e.pointerId))mark.releasePointerCapture(e.pointerId);
+   e.preventDefault();
+   setTimeout(()=>{this.suppressNextKeyClick=false;},0);
   };
   mark.addEventListener('pointerup',finishDrag);
   mark.addEventListener('pointercancel',finishDrag);
@@ -1015,7 +1374,7 @@ export class AnimationInspectionPanel {
   const low=Math.min(...values),high=Math.max(...values),span=high-low||1,end=Math.max(this.runtimeDuration,t.keys.at(-1)!.time,Number.MIN_VALUE);
   const plot=this.plot=(time:number,value:number)=>({x:48+time/end*728,y:195-(value-low)/span*160});
   host.append(svg('path',{d:'M48 20 V195 H776',class:'animation-axes'}));
-  for(const [time,value]of [[0,low],[end,high]]){const n=svg('text',{x:time===0?48:650,y:time===0?220:15});n.textContent=`${time} s · ${value}`;host.append(n);}
+  for(const [time,value]of [[0,low],[end,high]]){const n=svg('text',{x:time===0?48:650,y:time===0?220:15});n.textContent=`${formatSeconds(time)} s · ${formatSeconds(value)}`;host.append(n);}
   for(const [index,s]of segments.entries()){
    const a=plot(...s.from),b=plot(...s.to);let d=`M${a.x} ${a.y}`;
    if(Array.isArray(s.curve)){const c=plot(s.curve[0]!,s.curve[1]!),e=plot(s.curve[2]!,s.curve[3]!);d+=` C${c.x} ${c.y} ${e.x} ${e.y} ${b.x} ${b.y}`;
@@ -1028,18 +1387,18 @@ export class AnimationInspectionPanel {
  }
 
  update(time:number,duration:number){
-  this.at=time;this.runtimeDuration=duration;const timeInput=this.options.host.querySelector<HTMLInputElement>('[data-curve-time]')!;timeInput.max=String(duration);if(document.activeElement!==timeInput)timeInput.value=String(time);
+  this.at=time;this.runtimeDuration=duration;const timeInput=this.options.host.querySelector<HTMLInputElement>('[data-curve-time]')!;timeInput.max=String(formatSeconds(duration));if(document.activeElement!==timeInput)timeInput.value=String(formatSeconds(time));
   const insertTimeInput=this.options.host.querySelector<HTMLInputElement>('[data-insert-time]');
   if(insertTimeInput&&document.activeElement!==insertTimeInput)insertTimeInput.value=String(cleanMotionNumber(time));
   this.placePlayheads();const t=this.track,c=t&&CHANNELS[t.name]?.[this.channel];this.readout.textContent=`Runtime evaluation unavailable: ${this.unavailableChannel||'select a numeric stored channel'}.`;for(const key of ['time','channelValue','localValue','bone','property'])delete this.readout.dataset[key];
   if(!t||!c||!this.inspection)return;
   const value=evaluateStoredChannel(t,this.channel,time),local=evaluateBoneLocals(this.inspection,t.target,time)[c.local];
   Object.assign(this.readout.dataset,{time:String(time),channelValue:value===null?'setup':numeric(value),localValue:numeric(local),bone:t.target,property:c.local});
-  this.readout.textContent=`Runtime evaluation · ${time} s · ${c.local} track: ${value===null?'before first key (setup)':numeric(value)} · authored local: ${numeric(local)}`;
+  this.readout.textContent=`Runtime evaluation · ${formatSeconds(time)} s · ${c.local} track: ${value===null?'before first key (setup)':numeric(value)} · authored local: ${numeric(local)}`;
   if(this.cursor&&this.plot){this.cursor.setAttribute('visibility',value===null?'hidden':'visible');if(value!==null){const p=this.plot(time,value);this.cursor.setAttribute('cx',String(p.x));this.cursor.setAttribute('cy',String(p.y));}}
  }
 
- private placePlayheads(){const end=Math.max(this.runtimeDuration,...(this.inspection?.tracks??[]).map(t=>t.keys.at(-1)?.time??0),Number.MIN_VALUE);for(const n of this.options.host.querySelectorAll<HTMLElement>('[data-playhead]'))n.style.left=`${this.at/end*100}%`;}
+ private placePlayheads(){const end=Math.max(this.runtimeDuration,...(this.inspection?.tracks??[]).map(t=>t.keys.at(-1)?.time??0),Number.MIN_VALUE);for(const n of this.options.host.querySelectorAll<HTMLElement>('[data-playhead]'))n.style.left=`${Math.max(0,Math.min(100,this.at/end*100))}%`;}
 
  capture(player:Pick<RigPlayer,'bone'>|null,frame:PosedFrame|undefined){
   this.frame=frame??null;this.bones.clear();for(const b of player&&frame?this.inspection?.bones??[]:[]){try{const p=player!.bone(b.name);if(p.active)this.bones.set(b.name,{x:p.x,y:p.y});}catch{/* unavailable bones have no stage handle */}}this.redraw();

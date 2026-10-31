@@ -776,6 +776,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const state = currentState();
     const on = appliedBlockOps(state.appliedOnStage);
     cutsPanel?.applied(on.cuts); clothPanel?.applied(on.cloth);
+    animationPanel?.reconcileStageApplied(state.appliedOnStage?.schema === 'rig-review-applied/5' ? state.appliedOnStage : null);
     for (const block of staleReadouts(state.readoutStage, state.appliedOnStage)) {
       (block === 'cuts' ? cutsPanel : clothPanel)?.shown(null);
     }
@@ -843,6 +844,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       cutsPanel?.load(status.inputs && status.cuts ? status.cuts.config : null, status.bones ?? [], status.inputs ? null : status.reason ?? 'CUTS_UNAVAILABLE: no producer handoff', status.cuts?.build ?? null);
       meshPanel?.load(status.inputs ? status.meshes ?? {} : null, status.inputs ? null : status.reason ?? 'MESH_PANEL_UNAVAILABLE: no producer handoff');
       meshPanel?.select(currentSlot);
+      animationPanel?.loadSource(status.animations ?? null, status.reason);
     }
     if (state.requirementsCatalog) {
       requirementsPanel?.load(state.requirementsCatalog, state.requirementsCatalog.reason);
