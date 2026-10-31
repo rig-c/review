@@ -1,6 +1,7 @@
 /** Managed loopback front: one stable origin (127.0.0.1:4318 by default) routing `/instances/<key>/…` to the
  * worker named by that key's private open record. It is a router, not an authority: it never reads packages,
  * never serves or logs a capability, and forwards a mutation (rewriting Origin) only with the page capability. */
+import type {ServerWebSocket} from 'bun';
 import {randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {lstat,readFile,readdir,realpath,rename,unlink,writeFile,open as openFile} from 'node:fs/promises';
@@ -93,9 +94,15 @@ async function instanceRecord(control:string,key:string):Promise<RecordFile|null
 const upstreamFailure:Record<number,string>={400:'FRONT_UPSTREAM_REJECTED',403:'FRONT_UPSTREAM_FORBIDDEN',404:'FRONT_UPSTREAM_NOT_FOUND',405:'FRONT_UPSTREAM_METHOD',409:'FRONT_UPSTREAM_CONFLICT'};
 const responseHeaders=['content-type','content-length','content-range','accept-ranges','content-disposition','cache-control','content-security-policy','x-content-type-options','referrer-policy'];
 export const maximumUpstreamStreams=32;
+interface FrontLiveRelay {upstream:WebSocket;client:ServerWebSocket<FrontLiveRelay>|null}
 export function startFront(options:{control:string;port:number;nonce:string;fingerprint:string}){
  const origin=`http://127.0.0.1:${options.port}`;let active=0,last=performance.now();
- const server=Bun.serve({hostname:'127.0.0.1',port:options.port,async fetch(req){
+ const server=Bun.serve<FrontLiveRelay>({hostname:'127.0.0.1',port:options.port,websocket:{
+  idleTimeout:0,
+  open(ws){last=performance.now();ws.data.client=ws;if(ws.data.upstream.readyState!==WebSocket.OPEN){try{ws.close();}catch{}return;}try{ws.send('live');}catch{}},
+  message(ws,msg){last=performance.now();try{ws.data.upstream.send(msg);}catch{}},
+  close(ws){last=performance.now();try{ws.data.upstream.close();}catch{}},
+ },async fetch(req,srv){
   last=performance.now();
   try{
    const url=new URL(req.url);if(url.origin!==origin)return refuse('FRONT_LOOPBACK_REQUIRED',403);
@@ -106,6 +113,33 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
    const record=await instanceRecord(options.control,key);if(!record)return refuse('FRONT_INSTANCE_UNKNOWN: reopen with rig-review open',404);
    const route=frontRoute(record.mode,req.method,path);if(!route)return refuse('FRONT_ROUTE_REFUSED',404);
    const landing=path==='/'||path==='/index.html';if(!landing&&url.search)return refuse('FRONT_QUERY_REFUSED',400);
+   if(route.live){
+    if(sentOrigin!==origin)return refuse('FRONT_SAME_ORIGIN_REQUIRED',403);
+    if(req.headers.get('upgrade')?.toLowerCase()!=='websocket')return refuse('FRONT_UPGRADE_REQUIRED',426);
+    const upstreamWs=new WebSocket(record.origin.replace(/^http/,'ws')+path,{headers:{[openNonceHeader]:record.nonce}} as unknown as string[]);
+    const outcome=await new Promise<'ok'|'replaced'|'timeout'|'closed'>(resolve=>{
+     const timer=setTimeout(()=>resolve('timeout'),route.timeoutMs);
+     const finish=(result:'ok'|'replaced'|'timeout'|'closed')=>{clearTimeout(timer);resolve(result);};
+     req.signal.addEventListener('abort',()=>finish('closed'),{once:true});
+     upstreamWs.onmessage=ev=>{try{const msg=JSON.parse(String(ev.data)) as {type?:string;key?:string};finish(msg?.type==='live'&&msg?.key===key?'ok':'replaced');}catch{finish('replaced');}};
+     upstreamWs.onerror=()=>finish('closed');
+     upstreamWs.onclose=()=>finish('closed');
+    });
+    if(outcome!=='ok'){
+     try{upstreamWs.close();}catch{}
+     if(outcome==='timeout'&&!req.signal.aborted)return refuse('FRONT_UPSTREAM_TIMEOUT',504);
+     if(outcome==='replaced')return refuse('FRONT_INSTANCE_REPLACED: reopen with rig-review open',410);
+     const probe=await fetch(record.origin+'/api/access',{headers:{[openNonceHeader]:record.nonce},redirect:'manual',signal:AbortSignal.timeout(1500)}).catch(()=>null);
+     void probe?.body?.cancel().catch(()=>{});
+     return probe?refuse('FRONT_INSTANCE_REPLACED: reopen with rig-review open',410):refuse('FRONT_INSTANCE_EXPIRED: reopen with rig-review open',410);
+    }
+    const relay:FrontLiveRelay={upstream:upstreamWs,client:null};
+    upstreamWs.onmessage=ev=>{try{relay.client?.send(String(ev.data));}catch{}};
+    upstreamWs.onerror=()=>{try{relay.client?.close();}catch{}};
+    upstreamWs.onclose=()=>{try{relay.client?.close();}catch{}};
+    if(!srv.upgrade(req,{data:relay,headers:noStore})){try{upstreamWs.close();}catch{}return refuse('FRONT_UPGRADE_FAILED',400);}
+    return undefined as unknown as Response;
+   }
    let body:ArrayBuffer|undefined;
    if(route.mutation){
     // Never rewrite Origin without this instance's capability; the worker compares it again itself.
@@ -114,11 +148,10 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
     body=await boundedBody(req,route.limit);
     if(!await alive(record))return refuse('FRONT_INSTANCE_EXPIRED: reopen with rig-review open',410);
    }
-   if(!route.live&&active>=maximumUpstreamStreams)return refuse('FRONT_BUSY: too many concurrent upstream streams',503);
-   if(route.live)try{server.timeout(req,0);}catch{}
+   if(active>=maximumUpstreamStreams)return refuse('FRONT_BUSY: too many concurrent upstream streams',503);
    const headers=new Headers({[openNonceHeader]:record.nonce});for(const name of ['accept','range','if-range',...(route.mutation?['content-type']:[]),...(route.control?['authorization']:[])]){const value=req.headers.get(name);if(value!==null)headers.set(name,value);}
    if(route.mutation){headers.set('origin',record.origin);headers.set(capabilityHeader,record.capability);}
-   if(!route.live)active++;let released=false;const abort=new AbortController(),timer=route.live?undefined:setTimeout(()=>abort.abort(),route.timeoutMs);const release=()=>{if(released)return;released=true;if(!route.live)active--;if(timer)clearTimeout(timer);};
+   active++;let released=false;const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),route.timeoutMs);const release=()=>{if(released)return;released=true;active--;clearTimeout(timer);};
    req.signal.addEventListener('abort',()=>abort.abort(),{once:true});
    let upstream:Response;
    try{upstream=await fetch(record.origin+path+(landing?url.search:''),{method:req.method,headers,...(body?{body}:{}),redirect:'manual',signal:abort.signal});}

@@ -10,12 +10,17 @@ import { loadReview } from '../src/manifest.ts';
 import { openReview } from '../src/open.ts';
 import { rebuildDir } from '../src/rebuild.ts';
 import { startServer } from '../src/server.ts';
+import { connectLiveWindow } from '../web/live-connection.ts';
 
 const roots: string[] = [];
 const subprocs: Bun.Subprocess[] = [];
 const activeServers: { stop(close?: boolean): void }[] = [];
+const activeSockets: WebSocket[] = [];
 
 afterEach(async () => {
+  for (const ws of activeSockets.splice(0)) {
+    try { ws.close(); } catch {}
+  }
   for (const s of activeServers.splice(0)) {
     try { s.stop(true); } catch {}
   }
@@ -36,21 +41,50 @@ async function makeTempRoot(prefix = 'review-lifecycle-'): Promise<string> {
   return dir;
 }
 
-async function openLiveStream(url: string): Promise<{ abort: () => void; firstChunk: string }> {
-  const controller = new AbortController();
-  const res = await fetch(url, { signal: controller.signal });
-  expect(res.status).toBe(200);
-  expect(res.headers.get('content-type')).toContain('text/event-stream');
-  const reader = res.body!.getReader();
-  const first = await reader.read();
-  const firstChunk = new TextDecoder().decode(first.value);
+function freePort(): number {
+  const srv = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('') });
+  const port = srv.port!;
+  srv.stop(true);
+  return port;
+}
+
+async function openLiveSocket(url: string, originHeader: string | null = new URL(url).origin): Promise<{ ws: WebSocket; abort: () => void; firstMessage: string }> {
+  const wsUrl = url.replace(/^http/i, 'ws');
+  const ws = new WebSocket(wsUrl, (originHeader !== null ? { headers: { Origin: originHeader } } : undefined) as unknown as string[]);
+  activeSockets.push(ws);
+  const firstMessage = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out waiting for WebSocket message on ${wsUrl}`)), 5_000);
+    ws.onmessage = ev => {
+      clearTimeout(timer);
+      resolve(String(ev.data));
+    };
+    ws.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error(`WebSocket error on ${wsUrl}`));
+    };
+    ws.onclose = ev => {
+      clearTimeout(timer);
+      reject(new Error(`WebSocket closed before first message on ${wsUrl} (code=${ev.code})`));
+    };
+  });
   return {
-    firstChunk,
+    ws,
+    firstMessage,
     abort: () => {
-      controller.abort();
-      void reader.cancel().catch(() => {});
+      try {
+        ws.close();
+      } catch {}
     },
   };
+}
+
+async function waitForConnections(getActual: () => number, expected: number, timeoutMs = 2_000): Promise<number> {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    if (getActual() === expected) return expected;
+    await Bun.sleep(15);
+  }
+  return getActual();
 }
 
 test('defaults state the measured 3s close grace and 30m unopened timeout', () => {
@@ -59,7 +93,7 @@ test('defaults state the measured 3s close grace and 30m unopened timeout', () =
   expect(DEFAULT_UNOPENED_TIMEOUT_MS).toBe(30 * 60 * 1_000);
 });
 
-test('single and compare servers count live connections, survive reload and 2->1 tab close, and exit after last window closes', async () => {
+test('single and compare servers count live WebSocket connections, survive reload and 2->1 tab close, and exit after last window closes', async () => {
   const root = await makeTempRoot();
   const pkgA = join(root, 'a');
   const pkgB = join(root, 'b');
@@ -80,13 +114,17 @@ test('single and compare servers count live connections, survive reload and 2->1
   activeServers.push(single);
   const singleOrigin = `http://127.0.0.1:${single.port}`;
 
+  // Non-upgrade same-origin GET is refused with 426; missing/foreign Origin is refused with 403
+  expect((await fetch(singleOrigin + LIVE_PATH)).status).toBe(403);
+  expect((await fetch(singleOrigin + LIVE_PATH, { headers: { Origin: singleOrigin } })).status).toBe(426);
+
   // Tab 1 opens
-  const tab1 = await openLiveStream(singleOrigin + LIVE_PATH);
-  expect(tab1.firstChunk).toContain(': live');
+  const tab1 = await openLiveSocket(singleOrigin + LIVE_PATH);
+  expect(tab1.firstMessage).toContain('live');
   expect(single.live.connections).toBe(1);
 
   // Tab 2 opens
-  const tab2 = await openLiveStream(singleOrigin + LIVE_PATH);
+  const tab2 = await openLiveSocket(singleOrigin + LIVE_PATH);
   expect(single.live.connections).toBe(2);
 
   // Closing Tab 1 leaves Tab 2 connected; server must stay alive past graceMs
@@ -98,11 +136,11 @@ test('single and compare servers count live connections, survive reload and 2->1
 
   // Reload simulation on Tab 2: disconnect, fetch page/API inside grace window, reconnect
   tab2.abort();
-  await Bun.sleep(40);
+  await waitForConnections(() => single.live.connections, 0);
   expect(single.live.connections).toBe(0);
   expect((await fetch(singleOrigin + '/')).status).toBe(200);
   expect((await fetch(singleOrigin + '/api/review')).status).toBe(200);
-  const tab2Reloaded = await openLiveStream(singleOrigin + LIVE_PATH);
+  const tab2Reloaded = await openLiveSocket(singleOrigin + LIVE_PATH);
   expect(single.live.connections).toBe(1);
   await Bun.sleep(160);
   expect(singleLines).toEqual([]);
@@ -126,8 +164,10 @@ test('single and compare servers count live connections, survive reload and 2->1
   activeServers.push(compare);
   const compareOrigin = `http://127.0.0.1:${compare.port}`;
 
-  const cTab1 = await openLiveStream(compareOrigin + LIVE_PATH);
-  const cTab2 = await openLiveStream(compareOrigin + LIVE_PATH);
+  expect((await fetch(compareOrigin + LIVE_PATH)).status).toBe(403);
+  expect((await fetch(compareOrigin + LIVE_PATH, { headers: { Origin: compareOrigin } })).status).toBe(426);
+  const cTab1 = await openLiveSocket(compareOrigin + LIVE_PATH);
+  const cTab2 = await openLiveSocket(compareOrigin + LIVE_PATH);
   expect(compare.live.connections).toBe(2);
   cTab1.abort();
   await Bun.sleep(180);
@@ -138,6 +178,223 @@ test('single and compare servers count live connections, survive reload and 2->1
   expect(cExit?.reason).toBe('last-window-closed');
   expect(compareLines).toEqual(['review compare: exiting — last review window closed (0 live connections for 120ms).']);
 });
+
+test('foreign and missing Origin headers are refused on the managed front and on both direct servers without raising connections, while same-origin connects', async () => {
+  const root = await makeTempRoot();
+  const pkgA = join(root, 'a');
+  const pkgB = join(root, 'b');
+  const ref = join(root, 'ref.mov');
+  await cp(join(import.meta.dir, 'fixtures/strip-probe'), pkgA, { recursive: true });
+  await cp(pkgA, pkgB, { recursive: true });
+  await cp(join(pkgA, 'reference.mov'), ref);
+
+  const single = await startServer(await loadReview(pkgA), {
+    port: 0,
+    stateDir: join(root, 'state-single'),
+    graceMs: 300,
+    unopenedTimeoutMs: 5_000,
+    log: () => {},
+  });
+  activeServers.push(single);
+  const singleOrigin = `http://127.0.0.1:${single.port}`;
+
+  const compare = await startCompareServer(
+    await loadCompare({ a: pkgA, b: pkgB, reference: ref, animation: 'inspect' }),
+    {
+      port: 0,
+      stateDir: join(root, 'state-compare'),
+      graceMs: 300,
+      unopenedTimeoutMs: 5_000,
+      log: () => {},
+    },
+  );
+  activeServers.push(compare);
+  const compareOrigin = `http://127.0.0.1:${compare.port}`;
+
+  // 1. Direct single server: foreign and missing Origin refused with 403 and 0 connections
+  for (const badOrigin of ['http://evil.test', `http://localhost:${single.port}`, 'null', null]) {
+    const httpRes = await fetch(singleOrigin + LIVE_PATH, {
+      headers: badOrigin !== null ? { Origin: badOrigin } : {},
+    });
+    expect(httpRes.status).toBe(403);
+    expect(await httpRes.json()).toEqual({ error: 'Same-origin Origin required' });
+    await expect(openLiveSocket(singleOrigin + LIVE_PATH, badOrigin)).rejects.toThrow();
+    expect(single.live.connections).toBe(0);
+    expect(single.live.everConnected).toBe(false);
+  }
+  const sOk = await openLiveSocket(singleOrigin + LIVE_PATH, singleOrigin);
+  expect(single.live.connections).toBe(1);
+  sOk.abort();
+
+  // 2. Direct compare server: foreign and missing Origin refused with 403 and 0 connections
+  for (const badOrigin of ['http://evil.test', `http://localhost:${compare.port}`, 'null', null]) {
+    const httpRes = await fetch(compareOrigin + LIVE_PATH, {
+      headers: badOrigin !== null ? { Origin: badOrigin } : {},
+    });
+    expect(httpRes.status).toBe(403);
+    expect(await httpRes.json()).toEqual({ error: 'Same-origin Origin required' });
+    await expect(openLiveSocket(compareOrigin + LIVE_PATH, badOrigin)).rejects.toThrow();
+    expect(compare.live.connections).toBe(0);
+    expect(compare.live.everConnected).toBe(false);
+  }
+  const cOk = await openLiveSocket(compareOrigin + LIVE_PATH, compareOrigin);
+  expect(compare.live.connections).toBe(1);
+  cOk.abort();
+
+  // 3. Managed front: foreign and missing Origin refused with 403 FRONT_SAME_ORIGIN_REQUIRED before touching worker
+  const frontStateDir = join(root, 'state-front');
+  const frontPort = freePort();
+  const opened = await openReview(
+    { input: pkgA, animation: 'inspect' },
+    { stateDir: frontStateDir, frontPort, graceMs: 300, idleMs: 5_000 },
+  );
+  const frontOrigin = new URL(opened.url).origin;
+  const frontLiveUrl = frontOrigin + new URL(opened.url).pathname + 'api/live';
+  const workerKey = new URL(opened.url).pathname.split('/')[2]!;
+  const workerRecord = JSON.parse(await readFile(join(frontStateDir, 'open', `${workerKey}.json`), 'utf8')) as { origin: string };
+
+  for (const badOrigin of ['http://evil.test', `http://localhost:${frontPort}`, 'null', null]) {
+    const httpRes = await fetch(frontLiveUrl, {
+      headers: badOrigin !== null ? { Origin: badOrigin } : {},
+    });
+    expect(httpRes.status).toBe(403);
+    expect(await httpRes.json()).toEqual({ error: 'FRONT_SAME_ORIGIN_REQUIRED' });
+    await expect(openLiveSocket(frontLiveUrl, badOrigin)).rejects.toThrow();
+  }
+  // Also verify direct foreign-Origin attempt against the managed worker's own port is refused
+  await expect(openLiveSocket(workerRecord.origin + LIVE_PATH, 'http://evil.test')).rejects.toThrow();
+  await expect(openLiveSocket(workerRecord.origin + LIVE_PATH, null)).rejects.toThrow();
+
+  // Same-origin on the front connects cleanly (front relays to worker with nonce and no browser Origin)
+  const fOk = await openLiveSocket(frontLiveUrl, frontOrigin);
+  expect(fOk.firstMessage).toContain('live');
+  fOk.abort();
+});
+
+test('when a live WebSocket drops while the only window is still open, connectLiveWindow reconnects within graceMs and the server survives', async () => {
+  const root = await makeTempRoot();
+  const pkg = join(root, 'pkg');
+  await cp(join(import.meta.dir, 'fixtures/strip-probe'), pkg, { recursive: true });
+  const lines: string[] = [];
+  const graceMs = 600;
+  const server = await startServer(await loadReview(pkg), {
+    port: 0,
+    stateDir: join(root, 'state'),
+    graceMs,
+    unopenedTimeoutMs: 5_000,
+    log: line => lines.push(line),
+  });
+  activeServers.push(server);
+  const origin = `http://127.0.0.1:${server.port}`;
+
+  // In a browser, `new WebSocket(url)` always sends the page's Origin header automatically.
+  // In Bun's non-DOM test runner, wrap WebSocket to attach `Origin: origin` like a browser page does.
+  const NativeWebSocket = globalThis.WebSocket;
+  class BrowserLikeWebSocket extends NativeWebSocket {
+    constructor(url: string | URL, protocols?: string | string[]) {
+      super(url, (protocols ?? { headers: { Origin: origin } }) as unknown as string[]);
+    }
+  }
+  globalThis.WebSocket = BrowserLikeWebSocket;
+
+  const dispose = connectLiveWindow({
+    route: path => origin + path,
+  });
+  try {
+    expect(await waitForConnections(() => server.live.connections, 1, 2_000)).toBe(1);
+
+    // Drop the active server socket while the window remains open
+    const dropped = server.live.dropSockets();
+    expect(dropped).toBe(1);
+    expect(server.live.connections).toBe(0);
+
+    // Client must reconnect within graceMs (~200ms) and keep the server alive past graceMs
+    expect(await waitForConnections(() => server.live.connections, 1, graceMs - 50)).toBe(1);
+    await Bun.sleep(graceMs + 200);
+    expect(server.live.connections).toBe(1);
+    expect(lines).toEqual([]);
+    expect((await fetch(origin + '/api/review')).status).toBe(200);
+  } finally {
+    dispose();
+    globalThis.WebSocket = NativeWebSocket;
+  }
+
+  const exitInfo = await server.live.exited;
+  expect(exitInfo?.reason).toBe('last-window-closed');
+});
+
+test('managed front relays 8 concurrent WebSocket windows across 2 instances and completes session save on the 8th + loads a 9th page', async () => {
+  const root = await makeTempRoot();
+  const pkgA = join(root, 'pkg-a');
+  const pkgB = join(root, 'pkg-b');
+  await mkdir(pkgA, { recursive: true });
+  await mkdir(pkgB, { recursive: true });
+  await cp(join(import.meta.dir, 'fixtures/strip-probe/build'), join(pkgA, 'build'), { recursive: true });
+  await cp(join(import.meta.dir, 'fixtures/strip-probe/motion.json'), join(pkgA, 'motion.json'));
+  await cp(join(import.meta.dir, 'fixtures/strip-probe/build'), join(pkgB, 'build'), { recursive: true });
+  await cp(join(import.meta.dir, 'fixtures/strip-probe/motion.json'), join(pkgB, 'motion.json'));
+  await writeFile(join(pkgB, 'report.json'), JSON.stringify({ spec: 'rig-pose-report/1', animation: 'inspect', frameTimes: [0, 0.5, 1] }));
+
+  const stateDir = join(root, 'state');
+  const frontPort = freePort();
+  const instA = await openReview({ input: pkgA, animation: 'inspect' }, { stateDir, frontPort, graceMs: 600, idleMs: 5_000 });
+  const instB = await openReview({ input: pkgB, animation: 'inspect' }, { stateDir, frontPort, graceMs: 600, idleMs: 5_000 });
+
+  const urlA = new URL(instA.url);
+  const urlB = new URL(instB.url);
+  const frontOrigin = urlA.origin;
+  const baseA = frontOrigin + urlA.pathname;
+  const baseB = frontOrigin + urlB.pathname;
+  const capB = urlB.hash.slice(5);
+
+  // Non-upgrade same-origin GET to front /api/live is refused with 426 FRONT_UPGRADE_REQUIRED
+  const nonWs = await fetch(baseA + 'api/live', { headers: { Origin: frontOrigin } });
+  expect(nonWs.status).toBe(426);
+  expect((await nonWs.json()).error).toBe('FRONT_UPGRADE_REQUIRED');
+
+  // Open 8 windows across the 2 instances through the same front origin
+  const windows = await Promise.all(
+    Array.from({ length: 8 }, (_, idx) => openLiveSocket((idx < 4 ? baseA : baseB) + 'api/live')),
+  );
+  expect(windows).toHaveLength(8);
+
+  // On the 8th window (instance B), read and save feedback session through the front
+  const sessionB = await (await fetch(baseB + 'api/session')).json();
+  const saveRes = await fetch(baseB + 'api/session', {
+    method: 'PUT',
+    headers: {
+      Origin: frontOrigin,
+      'Content-Type': 'application/json',
+      'X-Review-Capability': capB,
+    },
+    body: JSON.stringify({
+      ...sessionB,
+      status: 'approved',
+      notes: 'Saved from window 8 while 8 live WebSockets are open',
+    }),
+  });
+  expect(saveRes.status).toBe(200);
+  expect((await saveRes.json()).status).toBe('approved');
+
+  // Open a 9th page and live socket through the front while all 8 are still connected
+  const ninthLanding = await fetch(instA.url);
+  expect(ninthLanding.status).toBe(200);
+  const ninthReview = await fetch(baseA + 'api/review');
+  expect(ninthReview.status).toBe(200);
+  const window9 = await openLiveSocket(baseA + 'api/live');
+  expect(window9.firstMessage).toContain('live');
+
+  // Close all 9 windows and wait for both workers to exit cleanly
+  window9.abort();
+  for (const w of windows) w.abort();
+
+  for (let i = 0; i < 80; i++) {
+    const openFiles = (await readdir(join(stateDir, 'open'))).filter(n => /^[a-f0-9]{64}\.json$/.test(n));
+    if (openFiles.length === 0) break;
+    await Bun.sleep(50);
+  }
+  expect((await readdir(join(stateDir, 'open'))).filter(n => /^[a-f0-9]{64}\.json$/.test(n))).toEqual([]);
+}, 30_000);
 
 test('a server that never receives any page connection exits after unopenedTimeoutMs and prints why', async () => {
   const root = await makeTempRoot();
@@ -181,12 +438,13 @@ test('a SIGKILLed client process is detected via socket teardown without pagehid
   }
   const url = new URL(/Review ready: (\S+)/.exec(stdout)![1]!);
   const origin = url.origin;
+  const wsUrl = origin.replace(/^http/i, 'ws') + LIVE_PATH;
 
-  // Spawn a separate process that holds /api/live open and never sends pagehide/sendBeacon
+  // Spawn a separate process that holds /api/live WebSocket open and never sends pagehide/sendBeacon
   const clientProc = Bun.spawn([
     process.execPath,
     '-e',
-    `const res = await fetch(${JSON.stringify(origin + LIVE_PATH)}); const r = res.body.getReader(); await r.read(); console.log('CONNECTED'); await new Promise(() => {});`,
+    `const ws = new WebSocket(${JSON.stringify(wsUrl)}, { headers: { Origin: ${JSON.stringify(origin)} } }); ws.onmessage = () => console.log('CONNECTED'); await new Promise(() => {});`,
   ], { stdout: 'pipe', stderr: 'pipe' });
   subprocs.push(clientProc);
 
@@ -271,7 +529,7 @@ fs.writeFileSync(path.join(out,'skeleton.png'),'png');console.log('rigc: wrote '
   activeServers.push(server);
   const origin = `http://127.0.0.1:${server.port}`;
 
-  const tab = await openLiveStream(origin + LIVE_PATH);
+  const tab = await openLiveSocket(origin + LIVE_PATH);
   const cfgHash = sha256(await readFile(join(pkg, 'rig/config.json')));
 
   // Start an Apply (returns 202 running while fakeParts takes 350ms)
@@ -315,7 +573,7 @@ fs.writeFileSync(path.join(out,'skeleton.png'),'png');console.log('rigc: wrote '
   });
   activeServers.push(server2);
   const origin2 = `http://127.0.0.1:${server2.port}`;
-  const tabA = await openLiveStream(origin2 + LIVE_PATH);
+  const tabA = await openLiveSocket(origin2 + LIVE_PATH);
   const startRes2 = await fetch(origin2 + '/api/rebuild', {
     method: 'POST',
     headers: { Origin: origin2, 'Content-Type': 'application/json' },
@@ -325,7 +583,7 @@ fs.writeFileSync(path.join(out,'skeleton.png'),'png');console.log('rigc: wrote '
   // Close tabA while Apply is running, wait past graceMs, then open tabB before Apply finishes
   tabA.abort();
   await Bun.sleep(120);
-  const tabB = await openLiveStream(origin2 + LIVE_PATH);
+  const tabB = await openLiveSocket(origin2 + LIVE_PATH);
   await Bun.sleep(350);
   expect(linesReconnected).toEqual([]);
   expect((await fetch(origin2 + '/api/review')).status).toBe(200);
@@ -345,7 +603,7 @@ test('saved feedback and session files survive exit byte-identically when the sa
   const firstOrigin = new URL(first.url).origin;
   const cap = new URL(first.url).hash.slice(5);
 
-  const tab = await openLiveStream(firstOrigin + LIVE_PATH);
+  const tab = await openLiveSocket(firstOrigin + LIVE_PATH);
   const session = await (await fetch(firstOrigin + '/api/session')).json();
   const updated = {
     ...session,
@@ -387,7 +645,7 @@ test('saved feedback and session files survive exit byte-identically when the sa
   const reopened = await openReview({ input: pkg, animation: 'inspect', direct: true }, { stateDir, graceMs: 100, idleMs: 5_000 });
   expect(reopened.reused).toBe(false);
   const secondOrigin = new URL(reopened.url).origin;
-  const tab2 = await openLiveStream(secondOrigin + LIVE_PATH);
+  const tab2 = await openLiveSocket(secondOrigin + LIVE_PATH);
   const restoredSession = await (await fetch(secondOrigin + '/api/session')).json();
   const bytesOnReopen = await Promise.all(sessionFiles.map(async f => ({ name: f, sha256: sha256(await readFile(join(stateDir, f))) })));
 
@@ -416,7 +674,7 @@ test('reusing a worker inside its close grace window re-arms it as an unopened s
   const origin = new URL(first.url).origin;
 
   // Connect a window and then close it so the worker enters its 250ms grace window
-  const tab1 = await openLiveStream(origin + LIVE_PATH);
+  const tab1 = await openLiveSocket(origin + LIVE_PATH);
   tab1.abort();
   await Bun.sleep(70);
 
@@ -450,11 +708,9 @@ test('wall-clock sleep jump resets pending countdown instead of exiting prematur
     log: line => lines.push(line),
   });
   try {
-    const ctrl = new AbortController();
-    const res = life.connect(new Request('http://127.0.0.1/api/live', { signal: ctrl.signal }), {});
-    expect(res.status).toBe(200);
+    const handle = life.attachSocket();
     expect(life.connections).toBe(1);
-    ctrl.abort();
+    handle.close();
     expect(life.connections).toBe(0);
 
     // Simulate a 10-second machine sleep jump on the next tick: zeroSince must reset to wake time (11_000)

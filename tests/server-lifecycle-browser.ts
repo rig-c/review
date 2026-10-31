@@ -6,12 +6,18 @@
  *   tab stops it after the grace period.
  * - Killing the browser process with SIGKILL (-9, no pagehide or sendBeacon) tears down the loopback
  *   socket so the server exits 0 within the grace period + margin and frees its port.
+ * - Opening 8 browser windows across 2 managed-front instances (sharing one front origin) does not exhaust
+ *   the browser's 6-connection HTTP/1.1 pool: all 8 windows load promptly, feedback save in the 8th window
+ *   completes, and a 9th page loads cleanly.
+ * - Dropping the live socket while the only browser window remains open reconnects within the grace period
+ *   so the server survives.
  * - Uses generated fixtures only; never conditionally enters external directories.
  */
-import { cp, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { openReview } from '../src/open.ts';
 
 export interface CloseBarResult {
   pageKind: 'single' | 'compare';
@@ -49,11 +55,38 @@ export interface KilledBrowserResult {
   passed: boolean;
 }
 
+export interface EightManagedFrontWindowsResult {
+  frontOrigin: string;
+  instancesCount: number;
+  windowsOpened: number;
+  windowLoadTimesMs: number[];
+  allEightLoadedWithin3s: boolean;
+  eighthWindowSaveStatus: number;
+  eighthWindowSavedReviewStatus: string | null;
+  ninthPageLoaded: boolean;
+  ninthPageLoadMs: number;
+  workersExitedAfterAllClosed: boolean;
+  passed: boolean;
+}
+
+export interface DroppedSocketReconnectResult {
+  graceMs: number;
+  droppedCount: number;
+  reconnectedWithinGrace: boolean;
+  reconnectElapsedMs: number;
+  aliveAfterGrace: boolean;
+  connectionsAfterGrace: number;
+  uiIntactAfterGrace: boolean;
+  passed: boolean;
+}
+
 export interface ServerLifecycleBrowserReport {
   browserBinary: string;
   closeBars: CloseBarResult[];
   reloadAndTwoTabs: ReloadAndTwoTabsResult[];
   killedBrowser: KilledBrowserResult;
+  eightManagedFrontWindows: EightManagedFrontWindowsResult;
+  droppedSocketReconnect: DroppedSocketReconnectResult;
   failures: string[];
 }
 
@@ -104,11 +137,18 @@ function findBrowserBinary(): string {
   throw new Error('No headless Chromium/Chrome/Edge binary found');
 }
 
+function freePort(): number {
+  const srv = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('') });
+  const port = srv.port!;
+  srv.stop(true);
+  return port;
+}
+
 interface CdpBrowser {
   bin: string;
   proc: Bun.Subprocess;
   send(method: string, params?: Record<string, unknown>, sessionId?: string): Promise<any>;
-  openTab(url: string, readySelector: string): Promise<{ targetId: string; sessionId: string }>;
+  openTab(url: string, readySelector: string, timeoutMs?: number): Promise<{ targetId: string; sessionId: string; elapsedMs: number }>;
   evaluate<T>(sessionId: string, expression: string): Promise<T>;
   closeTab(targetId: string): Promise<void>;
   killHard(): Promise<void>;
@@ -234,18 +274,26 @@ async function launchCdpBrowser(profileDir: string): Promise<CdpBrowser> {
     return res?.result?.value as T;
   };
 
-  const openTab = async (url: string, readySelector: string): Promise<{ targetId: string; sessionId: string }> => {
+  const openTab = async (
+    url: string,
+    readySelector: string,
+    timeoutMs = 6_000,
+  ): Promise<{ targetId: string; sessionId: string; elapsedMs: number }> => {
+    const startAt = performance.now();
     const { targetId } = await send('Target.createTarget', { url });
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
     await send('Page.enable', {}, sessionId);
     await send('Runtime.enable', {}, sessionId);
-    for (let i = 0; i < 200; i++) {
+    const deadline = startAt + timeoutMs;
+    while (performance.now() < deadline) {
       const ok = await evaluate<boolean>(
         sessionId,
         `document.readyState === 'complete' && Boolean(document.querySelector(${JSON.stringify(readySelector)}))`,
       ).catch(() => false);
-      if (ok) return { targetId, sessionId };
-      await Bun.sleep(30);
+      if (ok) {
+        return { targetId, sessionId, elapsedMs: r2(performance.now() - startAt) };
+      }
+      await Bun.sleep(25);
     }
     throw new Error(`Timed out waiting for ${readySelector} on ${url}`);
   };
@@ -294,11 +342,12 @@ async function isPortListening(port: number): Promise<boolean> {
 }
 
 interface SpawnedReviewServer {
-  proc: Bun.Subprocess;
+  proc: Bun.Subprocess<'pipe', 'pipe', 'pipe'>;
   port: number;
   url: string;
   getConnections(): Promise<number>;
   waitForConnections(expected: number, timeoutMs?: number): Promise<number>;
+  dropSockets(): Promise<number>;
   waitForExit(timeoutMs: number): Promise<{ exitCode: number | null; stdout: string; exitLine: string | null }>;
   kill(): Promise<void>;
 }
@@ -312,7 +361,7 @@ async function spawnServerProcess(options: {
   graceMs: number;
   unopenedTimeoutMs: number;
 }): Promise<SpawnedReviewServer> {
-  const script =
+  const bootstrap =
     options.mode === 'single'
       ? `
         import { loadReview } from './src/manifest.ts';
@@ -325,8 +374,6 @@ async function spawnServerProcess(options: {
           unopenedTimeoutMs: ${options.unopenedTimeoutMs},
           exitOnClose: true,
         });
-        console.log('READY port=' + s.port);
-        setInterval(() => console.log('CONN=' + s.live.connections), 30).unref();
       `
       : `
         import { loadCompare } from './src/compare.ts';
@@ -344,12 +391,24 @@ async function spawnServerProcess(options: {
           unopenedTimeoutMs: ${options.unopenedTimeoutMs},
           exitOnClose: true,
         });
-        console.log('READY port=' + s.port);
-        setInterval(() => console.log('CONN=' + s.live.connections), 30).unref();
       `;
+
+  const script = `
+    ${bootstrap}
+    console.log('READY port=' + s.port);
+    setInterval(() => console.log('CONN=' + s.live.connections), 25).unref();
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', chunk => {
+      if (String(chunk).includes('DROP')) {
+        const dropped = s.live.dropSockets();
+        console.log('DROPPED=' + dropped + ' CONN=' + s.live.connections);
+      }
+    });
+  `;
 
   const proc = Bun.spawn([process.execPath, '-e', script], {
     cwd: join(import.meta.dir, '..'),
+    stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -358,6 +417,8 @@ async function spawnServerProcess(options: {
   const decoder = new TextDecoder();
   let stdout = '';
   let lastConnections = 0;
+  let droppedRecords = 0;
+  let lastDroppedCount = 0;
   let streamDone = false;
 
   const pump = (async () => {
@@ -369,6 +430,11 @@ async function spawnServerProcess(options: {
         const matches = [...stdout.matchAll(/CONN=(\d+)/g)];
         if (matches.length > 0) {
           lastConnections = Number(matches[matches.length - 1]![1]);
+        }
+        const dropMatches = [...stdout.matchAll(/DROPPED=(\d+)/g)];
+        if (dropMatches.length > droppedRecords) {
+          droppedRecords = dropMatches.length;
+          lastDroppedCount = Number(dropMatches[dropMatches.length - 1]![1]);
         }
       }
     } catch {}
@@ -384,16 +450,27 @@ async function spawnServerProcess(options: {
         port,
         url: `http://127.0.0.1:${port}/`,
         async getConnections() {
-          await Bun.sleep(45);
+          await Bun.sleep(40);
           return lastConnections;
         },
         async waitForConnections(expected: number, timeoutMs = 5_000) {
           const deadline = performance.now() + timeoutMs;
           while (performance.now() < deadline) {
             if (lastConnections === expected) return lastConnections;
-            await Bun.sleep(25);
+            await Bun.sleep(20);
           }
           return lastConnections;
+        },
+        async dropSockets() {
+          const prev = droppedRecords;
+          proc.stdin.write('DROP\n');
+          proc.stdin.flush();
+          const deadline = performance.now() + 2_000;
+          while (performance.now() < deadline) {
+            if (droppedRecords > prev) return lastDroppedCount;
+            await Bun.sleep(15);
+          }
+          return lastDroppedCount;
         },
         async waitForExit(timeoutMs: number) {
           const code = await Promise.race([
@@ -448,11 +525,13 @@ export async function runServerLifecycleBrowserVerification(options?: {
   const failures: string[] = [];
   let browser: CdpBrowser | null = null;
   let killedBrowserResult: KilledBrowserResult | null = null;
+  let eightManagedFrontWindows: EightManagedFrontWindowsResult | null = null;
+  let droppedSocketReconnect: DroppedSocketReconnectResult | null = null;
 
   try {
     browser = await launchCdpBrowser(mainProfile);
 
-    // 1. Bar 1: Single and Compare close-only-tab exit timing, exit code 0, freed port, and reason line
+    // 1. Close-only-tab exit timing, exit code 0, freed port, and reason line (single & compare)
     for (const pageKind of ['single', 'compare'] as const) {
       const graceMs = 600;
       const marginMs = 1_000;
@@ -504,7 +583,7 @@ export async function runServerLifecycleBrowserVerification(options?: {
       }
     }
 
-    // 2. Bar 2: Reload and two-tab behavior on both single and compare pages
+    // 2. Reload and two-tab behavior on both single and compare pages
     for (const pageKind of ['single', 'compare'] as const) {
       const graceMs = 500;
       const readySelector = pageKind === 'single' ? '#rig-root canvas, #rig-root img' : '#a-root canvas, #a-root img';
@@ -587,7 +666,7 @@ export async function runServerLifecycleBrowserVerification(options?: {
       }
     }
 
-    // 3. Bar 3: Killed browser process (SIGKILL -9, no pagehide or sendBeacon)
+    // 3. Killed browser process (SIGKILL -9, no pagehide or sendBeacon)
     const killGraceMs = 500;
     const killMarginMs = 1_000;
     const killSrv = await spawnServerProcess({
@@ -641,11 +720,198 @@ export async function runServerLifecycleBrowserVerification(options?: {
       await killSrv.kill();
     }
 
+    // 4. Eight windows across 2 managed-front instances (same front origin):
+    //    feedback save in the 8th window completes and a 9th page loads
+    const frontPkg1 = join(root, 'front-pkg-1');
+    const frontPkg2 = join(root, 'front-pkg-2');
+    await mkdir(frontPkg1, { recursive: true });
+    await mkdir(frontPkg2, { recursive: true });
+    await cp(join(pkgA, 'build'), join(frontPkg1, 'build'), { recursive: true });
+    await cp(join(pkgA, 'motion.json'), join(frontPkg1, 'motion.json'));
+    await cp(join(pkgA, 'build'), join(frontPkg2, 'build'), { recursive: true });
+    await cp(join(pkgA, 'motion.json'), join(frontPkg2, 'motion.json'));
+    await writeFile(
+      join(frontPkg2, 'report.json'),
+      JSON.stringify({ spec: 'rig-pose-report/1', animation: 'inspect', frameTimes: [0, 0.5, 1] }),
+    );
+    const frontStateDir = join(root, 'state-front-8');
+    const frontPort = freePort();
+    const open1 = await openReview(
+      { input: frontPkg1, animation: 'inspect' },
+      { stateDir: frontStateDir, frontPort, graceMs: 600, idleMs: 10_000 },
+    );
+    const open2 = await openReview(
+      { input: frontPkg2, animation: 'inspect' },
+      { stateDir: frontStateDir, frontPort, graceMs: 600, idleMs: 10_000 },
+    );
+    const frontOrigin = new URL(open1.url).origin;
+    const cap2 = new URL(open2.url).hash.slice(5);
+    const base2Path = new URL(open2.url).pathname;
+
+    const openedTabs: { targetId: string; sessionId: string; elapsedMs: number }[] = [];
+    try {
+      for (let i = 0; i < 8; i++) {
+        const targetUrl = i < 4 ? open1.url : open2.url;
+        const t = await browser.openTab(targetUrl, '#rig-root canvas, #rig-root img', 5_000);
+        openedTabs.push(t);
+      }
+      const windowLoadTimesMs = openedTabs.map(t => t.elapsedMs);
+      const allEightLoadedWithin3s = windowLoadTimesMs.length === 8 && windowLoadTimesMs.every(ms => ms < 3_000);
+
+      // In the 8th window (openedTabs[7]), save feedback session through the shared front origin
+      const tab8 = openedTabs[7]!;
+      const saveResult = await browser.evaluate<{ status: number; reviewStatus: string | null }>(
+        tab8.sessionId,
+        `(async () => {
+          const curRes = await fetch(${JSON.stringify(base2Path + 'api/session')});
+          const cur = await curRes.json();
+          const putRes = await fetch(${JSON.stringify(base2Path + 'api/session')}, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Review-Capability': ${JSON.stringify(cap2)},
+            },
+            body: JSON.stringify({
+              ...cur,
+              status: 'approved',
+              notes: 'Saved in 8th managed-front browser window',
+            }),
+          });
+          const body = await putRes.json().catch(() => null);
+          return { status: putRes.status, reviewStatus: body?.status ?? null };
+        })()`,
+      );
+
+      // Open a 9th browser window while all 8 are still open
+      const tab9 = await browser.openTab(open1.url, '#rig-root canvas, #rig-root img', 5_000);
+      openedTabs.push(tab9);
+      const ninthPageLoaded = true;
+      const ninthPageLoadMs = tab9.elapsedMs;
+
+      // Close all 9 windows and verify both workers exit cleanly
+      for (const t of openedTabs.splice(0)) {
+        await browser.closeTab(t.targetId);
+      }
+      let workersExitedAfterAllClosed = false;
+      for (let i = 0; i < 80; i++) {
+        const openFiles = (await readdir(join(frontStateDir, 'open'))).filter(n => /^[a-f0-9]{64}\.json$/.test(n));
+        if (openFiles.length === 0) {
+          workersExitedAfterAllClosed = true;
+          break;
+        }
+        await Bun.sleep(50);
+      }
+
+      const passed =
+        allEightLoadedWithin3s &&
+        saveResult.status === 200 &&
+        saveResult.reviewStatus === 'approved' &&
+        ninthPageLoaded &&
+        ninthPageLoadMs < 3_000 &&
+        workersExitedAfterAllClosed;
+      if (!passed) {
+        failures.push(
+          `Eight managed-front windows bar failed: ${JSON.stringify({
+            windowLoadTimesMs,
+            allEightLoadedWithin3s,
+            saveResult,
+            ninthPageLoaded,
+            ninthPageLoadMs,
+            workersExitedAfterAllClosed,
+          })}`,
+        );
+      }
+      eightManagedFrontWindows = {
+        frontOrigin,
+        instancesCount: 2,
+        windowsOpened: 8,
+        windowLoadTimesMs,
+        allEightLoadedWithin3s,
+        eighthWindowSaveStatus: saveResult.status,
+        eighthWindowSavedReviewStatus: saveResult.reviewStatus,
+        ninthPageLoaded,
+        ninthPageLoadMs,
+        workersExitedAfterAllClosed,
+        passed,
+      };
+    } finally {
+      for (const t of openedTabs.splice(0)) {
+        await browser.closeTab(t.targetId).catch(() => {});
+      }
+    }
+
+    // 5. Dropped live socket while the only browser window is open reconnects within graceMs and server survives
+    const dropGraceMs = 700;
+    const dropSrv = await spawnServerProcess({
+      mode: 'single',
+      pkgA,
+      pkgB,
+      ref,
+      stateDir: join(root, 'state-drop'),
+      graceMs: dropGraceMs,
+      unopenedTimeoutMs: 30_000,
+    });
+    try {
+      const dropTab = await browser.openTab(dropSrv.url, '#rig-root canvas, #rig-root img');
+      await dropSrv.waitForConnections(1);
+
+      const dropAt = performance.now();
+      const droppedCount = await dropSrv.dropSockets();
+      await dropSrv.waitForConnections(0, 200);
+      const reconnectedCount = await dropSrv.waitForConnections(1, dropGraceMs - 20);
+      const reconnectElapsedMs = r2(performance.now() - dropAt);
+      const reconnectedWithinGrace = droppedCount === 1 && reconnectedCount === 1 && reconnectElapsedMs < dropGraceMs;
+
+      // Wait well past graceMs after the drop to prove the server did not exit
+      await Bun.sleep(dropGraceMs + 300);
+      const connectionsAfterGrace = await dropSrv.getConnections();
+      const aliveAfterGrace = dropSrv.proc.exitCode === null && (await isPortListening(dropSrv.port));
+      const uiIntactAfterGrace = await browser.evaluate<boolean>(
+        dropTab.sessionId,
+        `Boolean(document.querySelector('#rig-root canvas, #rig-root img')) && Boolean(document.getElementById('scrub'))`,
+      );
+
+      await browser.closeTab(dropTab.targetId);
+      await dropSrv.waitForExit(dropGraceMs + 1_000);
+
+      const passed =
+        reconnectedWithinGrace &&
+        aliveAfterGrace &&
+        connectionsAfterGrace === 1 &&
+        uiIntactAfterGrace;
+      if (!passed) {
+        failures.push(
+          `Dropped socket reconnect bar failed: ${JSON.stringify({
+            droppedCount,
+            reconnectedWithinGrace,
+            reconnectElapsedMs,
+            aliveAfterGrace,
+            connectionsAfterGrace,
+            uiIntactAfterGrace,
+          })}`,
+        );
+      }
+      droppedSocketReconnect = {
+        graceMs: dropGraceMs,
+        droppedCount,
+        reconnectedWithinGrace,
+        reconnectElapsedMs,
+        aliveAfterGrace,
+        connectionsAfterGrace,
+        uiIntactAfterGrace,
+        passed,
+      };
+    } finally {
+      await dropSrv.kill();
+    }
+
     return {
       browserBinary: browser.bin,
       closeBars,
       reloadAndTwoTabs,
       killedBrowser: killedBrowserResult!,
+      eightManagedFrontWindows: eightManagedFrontWindows!,
+      droppedSocketReconnect: droppedSocketReconnect!,
       failures,
     };
   } finally {

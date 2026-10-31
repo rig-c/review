@@ -162,7 +162,7 @@ fingerprint and a private capability handshake are reused. The URL hash is
 checked before serving the app; a stale link never selects another instance's
 package. Input hashes are freshly computed, not trusted from mtime caches. In both
 `open` and foreground `review` / `review compare`, each open window holds a live
-connection (`/api/live`); once the last window closes and stays at zero connections
+WebSocket connection (`/api/live`); once the last window closes and stays at zero connections
 for the 3-second grace period, or if no window ever connects within 30 minutes
 (reusing a windowless worker via `open` gives it a fresh 30-minute unopened window),
 the server finishes any in-flight request or Apply, flushes state, prints one line

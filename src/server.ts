@@ -4,7 +4,7 @@ import { appRoot, buildWeb } from './build.ts';
 import { packagePath, safeFile, type ReviewPackage } from './manifest.ts';
 import { exportReviewStrip, stripJson } from './strip-export.ts';
 import {assertReviewUnchanged,referenceBinding,selectedReference,safeSelectedReference,serveReference} from './reference.ts';
-import {openGate,staleOpenStatus,accessGate,openNonceGate,stampOpen,type OpenIdentity} from './open-protocol.ts';
+import {openGate,staleOpenStatus,accessGate,openNonceGate,openNonceHeader,sameSecret,stampOpen,type OpenIdentity} from './open-protocol.ts';
 import { readSession, saveSession } from './session.ts';
 import { createRebuilds, RebuildError } from './rebuild.ts';
 import { DENSITY_STRIP_LIMIT } from './density-strip.ts';
@@ -14,7 +14,7 @@ import { BONES_CHECK_LIMIT, createBonesCheck } from './bones-check.ts';
 import { createRequirementsCheck } from './requirements-run.ts';
 import { REQUIREMENTS_LIMIT, RequirementsError } from './requirements.ts';
 import { createEnvironmentCheck, ENVIRONMENT_CHECK_LIMIT, EnvironmentCheckError } from './environment-check.ts';
-import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo } from './live-lifecycle.ts';
+import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
@@ -55,11 +55,15 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
     busy:()=>Boolean(rebuilds.busy()||readings.running()||requirements.running()||environmentCheck.running()||bonesCheck.running()),
     stopServer:()=>{rawStop?.(true);},
   });
-  const handle=async(req:Request,port:number|undefined):Promise<Response>=>{try {
+  const handle=async(req:Request,port:number|undefined,srv:UpgradableServer):Promise<Response|undefined>=>{try {
       const url=new URL(req.url);const origin=`http://127.0.0.1:${port}`;
       if(url.origin!==origin)return json({error:'Loopback host required'},403);
       const refused=openNonceGate(req,options.open)??accessGate(req,options.capability,!!control);if(refused)return refused;
-      if(req.method==='GET'&&url.pathname===LIVE_PATH){options.activity?.();return live.connect(req,headers);}
+      if(req.method==='GET'&&url.pathname===LIVE_PATH){
+        const fromFront=Boolean(options.open&&sameSecret(req.headers.get(openNonceHeader),options.open.nonce)&&req.headers.get('origin')===null);
+        if(!fromFront&&req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+        options.activity?.();return live.upgrade(req,srv,headers,options.open?.key);
+      }
       live.onRequestStart(url.pathname);
       try {
       const controlled=await control?.(req,origin);if(controlled)return controlled;
@@ -165,7 +169,7 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       return json({error:'Not found'},404);
       } finally { live.onRequestEnd(url.pathname); }
     }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message.includes('inputs changed')?409:400);}};
-  const server=Bun.serve({hostname:'127.0.0.1',port:options.port??4317,async fetch(req,srv){try{if(new URL(req.url).pathname===LIVE_PATH)srv.timeout(req,0);}catch{}return stampOpen(req,await handle(req,srv.port),options.open);}});
+  const server=Bun.serve({hostname:'127.0.0.1',port:options.port??4317,websocket:live.websocket,async fetch(req,srv){const res=await handle(req,srv.port,srv);if(!res)return undefined as unknown as Response;return stampOpen(req,res,options.open);}});
   rawStop=server.stop.bind(server);
   server.stop=((closeActiveConnections?:boolean)=>{live.stop();return rawStop!(closeActiveConnections);}) as typeof server.stop;
   return Object.assign(server,{live});

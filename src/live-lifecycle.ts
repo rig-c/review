@@ -1,20 +1,26 @@
 /**
- * Live review window connection tracking and idle/close server lifecycle (#236).
+ * Live review window WebSocket connection tracking and idle/close server lifecycle (#236).
  *
- * Each open review or compare page holds one Server-Sent Events (`GET /api/live`) stream open.
+ * Each open review or compare page holds one WebSocket (`GET /api/live`) connection open.
+ * - Why WebSocket: all managed `open` instances share the front origin (`127.0.0.1:4318`). Browsers cap HTTP/1.1
+ *   connections at six per host, so holding one HTTP stream per tab starves requests at six windows. WebSockets sit
+ *   outside the six-connection HTTP/1.1 pool and notify `onclose` immediately on drop so the client can reconnect
+ *   within a couple hundred milliseconds rather than waiting on browser stream retry timers.
  * - Reload vs. close: closing a tab or killing the browser (`SIGKILL`) tears down the TCP socket immediately without
- *   needing `pagehide` or `sendBeacon`. A reload tears down the old stream and immediately issues document/API requests
- *   followed by a new `/api/live` stream well within `DEFAULT_CLOSE_GRACE_MS` (measured 40-slot + video reload p50
+ *   needing `pagehide` or `sendBeacon`. A reload tears down the old socket and immediately issues document/API requests
+ *   followed by a new `/api/live` WebSocket well within `DEFAULT_CLOSE_GRACE_MS` (measured 40-slot + video reload p50
  *   127.3ms, max 148.9ms; dual 40-slot compare p50 83.6ms, max 106.0ms -> 3,000ms grace gives >20x headroom, and
  *   incoming requests during the grace window reset the zero-connection clock).
- * - Second tab: each tab holds its own `/api/live` stream (`connections === 2`); closing one leaves `connections === 1`.
- * - Machine sleep / background tab freeze: liveness is bound to the kernel loopback TCP socket rather than client JS
- *   timer heartbeats, and wall-clock sleep jumps reset any pending countdown on wake.
+ * - Second tab: each tab holds its own `/api/live` WebSocket (`connections === 2`); closing one leaves `connections === 1`.
+ * - Quiet socket & machine sleep / background tab freeze: `idleTimeout` is disabled (`0`) and periodic server keepalive
+ *   frames keep quiet sockets open; liveness is bound to the kernel loopback TCP socket rather than client JS timer
+ *   heartbeats, and wall-clock sleep jumps reset any pending countdown on wake.
  * - Unopened server: if no page ever connects within `DEFAULT_UNOPENED_TIMEOUT_MS` (30 minutes, 1,800,000ms), or after
  *   an `open` reuse re-arms a windowless worker, the server exits 0.
  * - In-flight work: an active HTTP request or producer Apply/rebuild delays exit until it finishes, then re-checks the
  *   live connection count before flushing state, stopping the listener, printing one reason line, and exiting 0.
  */
+import type { ServerWebSocket, WebSocketHandler } from 'bun';
 
 export const LIVE_PATH = '/api/live';
 
@@ -43,6 +49,15 @@ export interface LiveExitInfo {
   line: string;
 }
 
+export interface LiveSocketData {
+  key?: string;
+  release?: () => void;
+}
+
+export interface UpgradableServer {
+  upgrade(req: Request, options: { data: LiveSocketData; headers?: HeadersInit }): boolean;
+}
+
 export interface LiveLifecycleOptions {
   label?: string;
   graceMs?: number;
@@ -57,7 +72,10 @@ export interface LiveLifecycleOptions {
 }
 
 export interface LiveLifecycle {
-  connect(req: Request, baseHeaders: Record<string, string>): Response;
+  upgrade(req: Request, srv: UpgradableServer, baseHeaders: Record<string, string>, key?: string): Response | undefined;
+  readonly websocket: WebSocketHandler<LiveSocketData>;
+  attachSocket(): { close(): void };
+  dropSockets(): number;
   onRequestStart(pathname: string): void;
   onRequestEnd(pathname: string): void;
   rearmUnopened(): boolean;
@@ -66,8 +84,6 @@ export interface LiveLifecycle {
   readonly everConnected: boolean;
   readonly exited: Promise<LiveExitInfo | null>;
 }
-
-const encoder = new TextEncoder();
 
 function isIgnoredActivityPath(pathname: string): boolean {
   return pathname === LIVE_PATH;
@@ -95,6 +111,7 @@ export function createLiveLifecycle(options: LiveLifecycleOptions = {}): LiveLif
   let stopped = false;
   let closing = false;
   let waitingForInFlight = false;
+  const activeSockets = new Set<ServerWebSocket<LiveSocketData>>();
 
   let resolveExited!: (info: LiveExitInfo | null) => void;
   const exited = new Promise<LiveExitInfo | null>(resolve => {
@@ -123,6 +140,7 @@ export function createLiveLifecycle(options: LiveLifecycleOptions = {}): LiveLif
       return;
     }
     clearInterval(timer);
+    clearInterval(keepaliveTimer);
     try {
       await options.onClose?.(info);
     } catch { /* best-effort close hook */ }
@@ -182,65 +200,90 @@ export function createLiveLifecycle(options: LiveLifecycleOptions = {}): LiveLif
   }, checkIntervalMs);
   timer.unref?.();
 
-  function connect(req: Request, baseHeaders: Record<string, string>): Response {
+  const keepaliveTimer = setInterval(() => {
+    if (stopped || closing || activeSockets.size === 0) return;
+    for (const ws of [...activeSockets]) {
+      try {
+        ws.send('keepalive');
+        ws.ping?.();
+      } catch {
+        ws.data?.release?.();
+      }
+    }
+  }, KEEPALIVE_INTERVAL_MS);
+  keepaliveTimer.unref?.();
+
+  function attachSocket(): { close(): void } {
+    connections += 1;
+    everConnected = true;
+    zeroSince = null;
+    waitingForInFlight = false;
+    let released = false;
+    return {
+      close() {
+        if (released) return;
+        released = true;
+        connections = Math.max(0, connections - 1);
+        if (connections === 0 && !stopped && !closing) {
+          zeroSince = now();
+          check();
+        }
+      },
+    };
+  }
+
+  function upgrade(req: Request, srv: UpgradableServer, baseHeaders: Record<string, string>, key?: string): Response | undefined {
     if (stopped || closing) {
       return new Response('Server is closing', { status: 503, headers: baseHeaders });
     }
-    let released = false;
-    let keepalive: ReturnType<typeof setInterval> | null = null;
-
-    const release = () => {
-      if (released) return;
-      released = true;
-      if (keepalive !== null) {
-        clearInterval(keepalive);
-        keepalive = null;
-      }
-      connections = Math.max(0, connections - 1);
-      if (connections === 0 && !stopped && !closing) {
-        zeroSince = now();
-        check();
-      }
-    };
-
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        connections += 1;
-        everConnected = true;
-        zeroSince = null;
-        waitingForInFlight = false;
-        try {
-          controller.enqueue(encoder.encode(': live\n\n'));
-        } catch {
-          release();
-          return;
-        }
-        keepalive = setInterval(() => {
-          if (released || stopped || closing) return;
-          try {
-            controller.enqueue(encoder.encode(': keepalive\n\n'));
-          } catch {
-            release();
-          }
-        }, KEEPALIVE_INTERVAL_MS);
-        keepalive.unref?.();
-        req.signal.addEventListener('abort', release, { once: true });
-        if (req.signal.aborted) release();
-      },
-      cancel() {
-        release();
-      },
+    if (req.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
+      return new Response('WebSocket upgrade required', { status: 426, headers: baseHeaders });
+    }
+    const upgraded = srv.upgrade(req, {
+      data: { key },
+      headers: baseHeaders,
     });
+    if (upgraded) return undefined;
+    return new Response('WebSocket upgrade failed', { status: 400, headers: baseHeaders });
+  }
 
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        ...baseHeaders,
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'X-Accel-Buffering': 'no',
-      },
-    });
+  const websocket: WebSocketHandler<LiveSocketData> = {
+    idleTimeout: 0,
+    open(ws) {
+      if (stopped || closing) {
+        try { ws.close(); } catch {}
+        return;
+      }
+      const handle = attachSocket();
+      activeSockets.add(ws);
+      ws.data = {
+        ...ws.data,
+        release: () => {
+          activeSockets.delete(ws);
+          handle.close();
+        },
+      };
+      try {
+        ws.send(ws.data.key ? JSON.stringify({ type: 'live', key: ws.data.key }) : 'live');
+      } catch {
+        ws.data.release?.();
+      }
+    },
+    message() {},
+    close(ws) {
+      ws.data?.release?.();
+    },
+  };
+
+  function dropSockets(): number {
+    const list = [...activeSockets];
+    for (const ws of list) {
+      try {
+        ws.close(1012, 'dropped');
+      } catch {}
+      ws.data?.release?.();
+    }
+    return list.length;
   }
 
   function onRequestStart(pathname: string): void {
@@ -280,11 +323,19 @@ export function createLiveLifecycle(options: LiveLifecycleOptions = {}): LiveLif
     stopped = true;
     closing = false;
     clearInterval(timer);
+    clearInterval(keepaliveTimer);
+    for (const ws of [...activeSockets]) {
+      try { ws.close(); } catch {}
+    }
+    activeSockets.clear();
     resolveExited(null);
   }
 
   return {
-    connect,
+    upgrade,
+    websocket,
+    attachSocket,
+    dropSockets,
     onRequestStart,
     onRequestEnd,
     rearmUnopened,
