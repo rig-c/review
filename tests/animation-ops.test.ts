@@ -906,6 +906,11 @@ class StubElement extends EventTarget {
     super();
     this.tagName = tag.toUpperCase();
   }
+  override dispatchEvent(event: Event): boolean {
+    const res = super.dispatchEvent(event);
+    if (event.type === 'click' && !event.defaultPrevented) this.onclick?.();
+    return res;
+  }
   get className() {
     return [...this.classes].join(' ');
   }
@@ -1091,6 +1096,7 @@ test('AnimationInspectionPanel: Undo op after Apply previews the undone original
         lastPreviewAdjust = adj;
         lastPreviewActive = active;
       },
+      apply: async () => {},
     });
 
     panel.loadSource({
@@ -1243,6 +1249,7 @@ test('AnimationInspectionPanel: non-animation stage replacement clears stale app
       preview: (_adj, active) => {
         lastPreviewActive = active;
       },
+      apply: async () => {},
     });
 
     panel.loadSource({
@@ -1378,6 +1385,8 @@ test('Slice 3b: formatSeconds, buildRulerTicks, horizontal zoom, unselected key 
       seek: () => {},
       project: (x, y) => ({ x, y }),
       enabled: () => true,
+      preview: () => {},
+      apply: async () => {},
     });
     panel.loadSource({
       available: true,
@@ -1445,6 +1454,8 @@ test('Slice 3b: formatSeconds, buildRulerTicks, horizontal zoom, unselected key 
       seek: () => {},
       project: (x: number, y: number) => ({ x, y }),
       enabled: () => true,
+      preview: () => {},
+      apply: async () => {},
     });
     mPanel1.loadSource({ available: true, reason: null, path: 'animations.json', sha256: demoHash, text: demoText, easings: {} });
     mPanel1.model(model, 'tilt');
@@ -1457,6 +1468,287 @@ test('Slice 3b: formatSeconds, buildRulerTicks, horizontal zoom, unselected key 
     // Mutant 1 fails to overlay baseText onto baseInspection, leaving 14.5 instead of 10!
     expect(mPanel1.overlaidInspection().tracks[0].keys[1].value).toBe(14.5);
     mPanel1.dispose();
+  } finally {
+    if (prevDoc) Object.defineProperty(globalThis, 'document', prevDoc);
+    else Reflect.deleteProperty(globalThis, 'document');
+    if (prevWin) Object.defineProperty(globalThis, 'window', prevWin);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
+
+test('PR #257 review findings 1-3 (compare read-only gate, retained key live track lookup, ruler/scrub/drag domain after end moves) and planted controls', async () => {
+  const { AnimationInspectionPanel } = await import('../web/animation-inspection.ts');
+  const prevDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const prevWin = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const winTarget = new EventTarget();
+  Object.defineProperty(globalThis, 'document', {
+    value: {
+      activeElement: null,
+      createElement: (tag: string) => new StubElement(tag),
+      createElementNS: (_ns: string, tag: string) => new StubElement(tag),
+    },
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(globalThis, 'window', {
+    value: winTarget,
+    configurable: true,
+    writable: true,
+  });
+
+  try {
+    const demoText = readFileSync(new URL('./fixtures/motion/demo.json', import.meta.url), 'utf8');
+    const demoHash = sha256(demoText);
+    const model = {
+      spec: 'rigc-compiled/3',
+      skeleton: { width: 100, height: 100 },
+      pages: [],
+      bones: [
+        { name: 'root', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'hip', parent: 'root', x: 0, y: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'chest', parent: 'hip', x: 0, y: 20, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'head', parent: 'chest', x: 0, y: 30, rotation: 0, scaleX: 1, scaleY: 1 },
+      ],
+      slots: [],
+      skins: [{ name: 'default', attachments: {} }],
+      animations: [
+        {
+          name: 'tilt',
+          duration: 1.6,
+          bones: [
+            {
+              name: 'head',
+              timelines: [
+                {
+                  name: 'rotate',
+                  keys: [
+                    { time: 0, value: 0 },
+                    { time: 0.35, value: 10 },
+                    { time: 0.95, value: 8.5 },
+                    { time: 1.3, value: -1.2 },
+                    { time: 1.6, value: 0 },
+                  ],
+                },
+              ],
+            },
+          ],
+          slots: [],
+        },
+      ],
+    };
+
+    // -------------------------------------------------------------------------
+    // Finding 1: Compare mode without preview/apply is read-only by name
+    // -------------------------------------------------------------------------
+    const compareHost = new StubElement('section');
+    const compareStage = new StubElement('div');
+    const comparePanel = new AnimationInspectionPanel({
+      host: compareHost as unknown as HTMLElement,
+      stage: compareStage as unknown as HTMLElement,
+      select: () => {},
+      seek: () => {},
+      project: (x, y) => ({ x, y }),
+      enabled: () => true,
+    });
+    comparePanel.loadSource({
+      available: true,
+      reason: null,
+      path: 'animations.json',
+      sha256: demoHash,
+      text: demoText,
+      easings: {},
+    });
+    comparePanel.model(model, 'tilt');
+    comparePanel.update(0, 1.6);
+
+    const compareGate = comparePanel.gateInfo();
+    expect(compareGate.editable).toBe(false);
+    expect(compareGate.code).toBe('ANIMATION_COMPARE_READ_ONLY');
+    expect(compareGate.reason).toContain('read-only in comparison sessions');
+    expect(compareHost.querySelector('[data-animation-gate]')?.textContent).toContain('ANIMATION_COMPARE_READ_ONLY');
+    expect(compareHost.querySelector('[data-animation-apply]')?.disabled).toBe(true);
+    expect(compareHost.querySelector('[data-insert-key]')?.disabled).toBe(true);
+    expect(compareHost.querySelectorAll('.animation-lane').every((l) => l.dataset.editable === 'false')).toBe(true);
+
+    const rTime = comparePanel.setKeyTime(0, 1, 0.5);
+    expect(rTime.ok).toBe(false);
+    if (!rTime.ok) expect(rTime.error).toContain('ANIMATION_COMPARE_READ_ONLY');
+    const rVal = comparePanel.setKeyValue(0, 1, 0, 12);
+    expect(rVal.ok).toBe(false);
+    const rIns = comparePanel.insertKey(0, 0.5);
+    expect(rIns.ok).toBe(false);
+    const rDel = comparePanel.deleteKey(0, 1);
+    expect(rDel.ok).toBe(false);
+    const rMove = comparePanel.moveSelection([{ track: 0, key: 1 }], 0.1);
+    expect(rMove.ok).toBe(false);
+    expect(comparePanel.selectKey(0, 1)).toBe(false);
+    expect(comparePanel.ops()).toHaveLength(0);
+    expect(comparePanel.hasUnappliedPreview()).toBe(false);
+    expect(compareHost.querySelector('[data-animation-editor-status]')?.textContent).toContain('ANIMATION_COMPARE_READ_ONLY');
+    comparePanel.dispose();
+
+    // -------------------------------------------------------------------------
+    // Finding 2 & Finding 3: Retained key live track lookup & dynamic end domain
+    // -------------------------------------------------------------------------
+    const editHost = new StubElement('section');
+    const editStage = new StubElement('div');
+    const seekedTimes: number[] = [];
+    const editPanel = new AnimationInspectionPanel({
+      host: editHost as unknown as HTMLElement,
+      stage: editStage as unknown as HTMLElement,
+      select: () => {},
+      seek: (t) => seekedTimes.push(t),
+      project: (x, y) => ({ x, y }),
+      enabled: () => true,
+      preview: () => {},
+      apply: async () => {},
+    });
+    editPanel.loadSource({
+      available: true,
+      reason: null,
+      path: 'animations.json',
+      sha256: demoHash,
+      text: demoText,
+      easings: {},
+    });
+    editPanel.model(model, 'tilt');
+    editPanel.update(0, 1.6);
+
+    const retainedMark = editHost.querySelectorAll('.animation-key')[1]!;
+    // Retime key (0, 1) from 0.35s to 0.5s in place (skipTimelineDomRebuild: true)
+    expect(editPanel.setKeyTime(0, 1, 0.5).ok).toBe(true);
+    expect(editHost.querySelectorAll('.animation-key')[1]).toBe(retainedMark);
+
+    // Finding 2: Clicking the retained key button must seek to 0.5s (not stale 0.35s)
+    // and assign the live overlaid track (not the initial track with 0.35s)
+    seekedTimes.length = 0;
+    retainedMark.dispatchEvent(new Event('click'));
+    expect(seekedTimes).toEqual([0.5]);
+    const internalTrack = (editPanel as unknown as { track: { keys: Array<{ time: number }> } }).track;
+    expect(internalTrack.keys[1]!.time).toBe(0.5);
+
+    // Finding 3: Stretch the 1.6s timeline to 3.2s by retiming the last key (0, 4) in place
+    expect(editPanel.setKeyTime(0, 4, 3.2).ok).toBe(true);
+    expect(editHost.querySelector('.animation-axis')?.textContent).toBe('0 s → 3.2 s');
+    const rulerTicksAfterStretch = editHost.querySelectorAll('.animation-ruler-tick');
+    expect(rulerTicksAfterStretch.at(-1)?.textContent).toBe('3.2 s');
+
+    // Scrubbing halfway across the 800px ruler (clientX = 400 => ratio = 0.5 => 0.5 * 3.2 = 1.6s, NOT 0.8s)
+    const rulerTrack = editHost.querySelector('[data-animation-ruler-track]')!;
+    seekedTimes.length = 0;
+    const scrubDown = new Event('pointerdown', { cancelable: true });
+    Object.assign(scrubDown, { isPrimary: true, button: 0, pointerId: 11, clientX: 400 });
+    rulerTrack.dispatchEvent(scrubDown);
+    const scrubUp = new Event('pointerup', { cancelable: true });
+    Object.assign(scrubUp, { isPrimary: true, button: 0, pointerId: 11, clientX: 400 });
+    rulerTrack.dispatchEvent(scrubUp);
+    expect(seekedTimes).toEqual([1.6]);
+
+    // Dragging retainedMark (key 1) to clientX = 200 on the 800px lane (ratio = 0.25 => 0.25 * 3.2 = 0.8s, NOT 0.4s)
+    const dragDown = new Event('pointerdown', { cancelable: true });
+    Object.assign(dragDown, { isPrimary: true, button: 0, pointerId: 12, clientX: 125 });
+    retainedMark.dispatchEvent(dragDown);
+    const dragMove = new Event('pointermove', { cancelable: true });
+    Object.assign(dragMove, { isPrimary: true, button: 0, pointerId: 12, clientX: 200 });
+    retainedMark.dispatchEvent(dragMove);
+    const dragUp = new Event('pointerup', { cancelable: true });
+    Object.assign(dragUp, { isPrimary: true, button: 0, pointerId: 12, clientX: 200 });
+    retainedMark.dispatchEvent(dragUp);
+    expect(editPanel.selectedKeyInfo()?.time).toBe(0.8);
+    editPanel.dispose();
+
+    // -------------------------------------------------------------------------
+    // Controls (planted mutants) for Findings 1, 2, and 3
+    // -------------------------------------------------------------------------
+    const srcText = readFileSync(new URL('../web/animation-inspection.ts', import.meta.url), 'utf8');
+    const loadMutant = async (mutatedTs: string) => {
+      const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(mutatedTs);
+      const resolved = js
+        .replaceAll('../src/', new URL('../src/', import.meta.url).href)
+        .replaceAll('./', new URL('../web/', import.meta.url).href);
+      return import('data:text/javascript;base64,' + Buffer.from(resolved).toString('base64'));
+    };
+
+    // Control 1 (Finding 1 mutant: omit !this.options.apply||!this.options.preview gate check)
+    expect(srcText).toContain('if(this.options.readOnlyReason||!this.options.apply||!this.options.preview){');
+    const modF1 = await loadMutant(
+      srcText.replace('if(this.options.readOnlyReason||!this.options.apply||!this.options.preview){', 'if(false){'),
+    );
+    const c1Host = new StubElement('section');
+    const c1Panel = new modF1.AnimationInspectionPanel({
+      host: c1Host,
+      stage: new StubElement('div'),
+      select: () => {},
+      seek: () => {},
+      project: (x: number, y: number) => ({ x, y }),
+      enabled: () => true,
+    });
+    c1Panel.loadSource({ available: true, reason: null, path: 'animations.json', sha256: demoHash, text: demoText, easings: {} });
+    c1Panel.model(model, 'tilt');
+    expect(c1Panel.gateInfo().editable).toBe(true); // Mutant wrongly opens editable in compare mode!
+    expect(c1Panel.setKeyTime(0, 1, 0.5).ok).toBe(true); // Mutant allows fake preview edits!
+    c1Panel.dispose();
+
+    // Control 2 (Finding 2 mutant: capture stale track & key in mark click handler)
+    expect(srcText).toContain('const liveTrack=this.inspection?.tracks.find(t=>t.pointer===trackPointer)??track;');
+    const modF2 = await loadMutant(
+      srcText
+        .replaceAll('const liveTrack=this.inspection?.tracks.find(t=>t.pointer===trackPointer)??track;', 'const liveTrack=track;')
+        .replaceAll('const liveKey=liveTrack.keys[liveIdx]??key;', 'const liveKey=key;'),
+    );
+    const c2Host = new StubElement('section');
+    const c2Seeked: number[] = [];
+    const c2Panel = new modF2.AnimationInspectionPanel({
+      host: c2Host,
+      stage: new StubElement('div'),
+      select: () => {},
+      seek: (t: number) => c2Seeked.push(t),
+      project: (x: number, y: number) => ({ x, y }),
+      enabled: () => true,
+      preview: () => {},
+      apply: async () => {},
+    });
+    c2Panel.loadSource({ available: true, reason: null, path: 'animations.json', sha256: demoHash, text: demoText, easings: {} });
+    c2Panel.model(model, 'tilt');
+    c2Panel.update(0, 1.6);
+    const c2Mark = c2Host.querySelectorAll('.animation-key')[1]!;
+    c2Panel.setKeyTime(0, 1, 0.5);
+    c2Mark.dispatchEvent(new Event('click'));
+    expect(c2Seeked).toEqual([0.35]); // Mutant seeks to stale 0.35s instead of retimed 0.5s!
+    expect(c2Panel.track.keys[1].time).toBe(0.35); // Mutant restores stale track!
+    c2Panel.dispose();
+
+    // Control 3 (Finding 3 mutant: skip syncRulerInPlace and freeze end at 1.6 in scrub/drag)
+    expect(srcText).toContain('this.syncRulerInPlace(end);');
+    const modF3 = await loadMutant(
+      srcText
+        .replace('this.syncRulerInPlace(end);', '')
+        .replace('const end=this.effectiveEnd();\n   const ratio=Math.max(0,Math.min(1,(clientX-rect.left)/rect.width));', 'const end=this.runtimeDuration;\n   const ratio=Math.max(0,Math.min(1,(clientX-rect.left)/rect.width));')
+        .replace('end:this.effectiveEnd(),', 'end:this.runtimeDuration,'),
+    );
+    const c3Host = new StubElement('section');
+    const c3Seeked: number[] = [];
+    const c3Panel = new modF3.AnimationInspectionPanel({
+      host: c3Host,
+      stage: new StubElement('div'),
+      select: () => {},
+      seek: (t: number) => c3Seeked.push(t),
+      project: (x: number, y: number) => ({ x, y }),
+      enabled: () => true,
+      preview: () => {},
+      apply: async () => {},
+    });
+    c3Panel.loadSource({ available: true, reason: null, path: 'animations.json', sha256: demoHash, text: demoText, easings: {} });
+    c3Panel.model(model, 'tilt');
+    c3Panel.update(0, 1.6);
+    c3Panel.setKeyTime(0, 4, 3.2);
+    expect(c3Host.querySelector('.animation-axis')?.textContent).toBe('0 s → 1.6 s'); // Mutant leaves ruler at 1.6s!
+    const c3Ruler = c3Host.querySelector('[data-animation-ruler-track]')!;
+    const c3Scrub = new Event('pointerdown', { cancelable: true });
+    Object.assign(c3Scrub, { isPrimary: true, button: 0, pointerId: 19, clientX: 400 });
+    c3Ruler.dispatchEvent(c3Scrub);
+    expect(c3Seeked).toEqual([0.8]); // Mutant seeks halfway to 0.8s instead of 1.6s!
+    c3Panel.dispose();
   } finally {
     if (prevDoc) Object.defineProperty(globalThis, 'document', prevDoc);
     else Reflect.deleteProperty(globalThis, 'document');

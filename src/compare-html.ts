@@ -71,22 +71,22 @@ const REGIONS: readonly {
     key: 'animateBlockRow',
     placeholder: '<!-- shared:animate-block-row -->',
     start: '<nav class="block-row" aria-label="Animate blocks">',
-    end: '<section id="transport"',
-    compareEnd: '<section id="transport"',
+    end: '<section id="motion-tools">',
+    compareEnd: '<div class="compare-info">',
   },
   {
     key: 'transportStrips',
     placeholder: '<!-- shared:transport-strips -->',
     start: '<div id="reading-ticks"',
     end: '</section><section id="frame-controls"',
-    compareEnd: '</section><div class="compare-info">',
+    compareEnd: '</section><section id="animation-inspection"',
   },
   {
     key: 'animatePanels',
     placeholder: '<!-- shared:animate-panels -->',
     start: '<section id="motion-tools">',
-    end: '</section></div></section></main>',
-    compareEnd: '</section><section id="inspector-feedback"',
+    end: '</div></section></div></section></main>',
+    compareEnd: '</div></section><section id="inspector-feedback"',
   },
 ];
 

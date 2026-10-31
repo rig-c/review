@@ -65,8 +65,8 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
  }
  const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=selectedInspector() as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
  let disposed=false,frame=0,applying=false,available={width:0,height:0},effective=allocateWorkspaceLayout(available,desired,columns);
- const panelFor=(tab:InspectorTab)=>require('inspector-'+tab);
- const capture=()=>{const tab=active(),panel=panelFor(tab),saved=memory.snapshot()[tab];if(!panel.hidden&&(!saved||saved.x<=Math.max(0,panel.scrollWidth-panel.clientWidth)&&saved.y<=Math.max(0,panel.scrollHeight-panel.clientHeight)))memory.capture(tab,panel);};
+ const panelFor=(tab:InspectorTab)=>{const section=require('inspector-'+tab);return (typeof section.querySelector==='function'?section.querySelector<HTMLElement>('.animate-blocks-panel'):null)??section;};
+ const capture=()=>{const tab=active(),section=require('inspector-'+tab),panel=panelFor(tab),saved=memory.snapshot()[tab];if(!section.hidden&&(!saved||saved.x<=Math.max(0,panel.scrollWidth-panel.clientWidth)&&saved.y<=Math.max(0,panel.scrollHeight-panel.clientHeight)))memory.capture(tab,panel);};
  const restore=()=>{if(!disposed)memory.restore(active(),panelFor(active()));};
  const schedule=()=>{if(!disposed&&!frame)frame=requestAnimationFrame(()=>{frame=0;apply();});};
  const dock=(panel:WorkspacePanel,drawer:boolean)=>{

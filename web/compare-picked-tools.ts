@@ -1897,6 +1897,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     stage: viewportProxy,
     project: (x, y) => rigProject()(x, y),
     enabled: () => !!currentState().partModel && currentInspector() === 'playback',
+    readOnlyReason: 'keyed animation editing is read-only in comparison sessions until per-side animation rebuild is wired.',
     seek: exact => {
       if (!Number.isFinite(exact) || exact < 0 || exact > host.duration()) {
         host.message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.', true);

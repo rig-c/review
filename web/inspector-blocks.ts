@@ -38,35 +38,41 @@ const holdMs=1200;
 export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlocks {
  const now=options.now??(()=>Date.now()),reduced=options.reducedMotion??(()=>typeof matchMedia==='function'&&matchMedia('(prefers-reduced-motion: reduce)').matches);
  const makeObserver=options.observer??((root,changed)=>typeof IntersectionObserver==='function'?new IntersectionObserver(changed,{root,threshold:[0,.25,.5,.75,1]}):null);
- let ready=false;const disposers:(()=>void)[]=[],state:ActiveBlocks={},rows=new Map<string,{section:HTMLElement;row:HTMLElement;buttons:HTMLButtonElement[];hold:number;follow:()=>void}>();
- const targetOf=(section:HTMLElement,button:HTMLButtonElement)=>{const id=button.dataset.blockTarget??'';const node=id?section.ownerDocument.getElementById(id):null;return node&&section.contains(node)?node:null;};
- const mark=(name:string,id:string)=>{const entry=rows.get(name);if(!entry||!entry.buttons.some(button=>button.dataset.blockTarget===id))return false;for(const button of entry.buttons){if(button.dataset.blockTarget===id)button.setAttribute('aria-current','true');else button.removeAttribute('aria-current');}const before=state[name];state[name]=id;if(before!==id&&ready)options.changed?.();return true;};
+ let ready=false;const disposers:(()=>void)[]=[],state:ActiveBlocks={},rows=new Map<string,{section:HTMLElement;scrollRoot:HTMLElement;row:HTMLElement;buttons:HTMLButtonElement[];hold:number;follow:()=>void}>();
+ const targetOf=(scrollRoot:HTMLElement,button:HTMLButtonElement)=>{const id=button.dataset.blockTarget??'';const node=id?scrollRoot.ownerDocument.getElementById(id):null;return node&&scrollRoot.contains(node)?node:null;};
+ const resolveId=(entry:{buttons:HTMLButtonElement[]},id:string)=>entry.buttons.some(b=>b.dataset.blockTarget===id)?id:(id==='transport'&&entry.buttons.some(b=>b.dataset.blockTarget==='motion-tools')?'motion-tools':id);
+ const mark=(name:string,rawId:string)=>{const entry=rows.get(name);if(!entry)return false;const id=resolveId(entry,rawId);if(!entry.buttons.some(button=>button.dataset.blockTarget===id))return false;for(const button of entry.buttons){if(button.dataset.blockTarget===id)button.setAttribute('aria-current','true');else button.removeAttribute('aria-current');}const before=state[name];state[name]=id;if(before!==id&&ready)options.changed?.();return true;};
  for(const section of options.sections){
-  const name=section.dataset.inspectorPanel??'',row=[...section.children].find(node=>(node as HTMLElement).classList.contains('block-row')) as HTMLElement|undefined;if(!name||!row)continue;
-  const buttons=[...row.querySelectorAll<HTMLButtonElement>('button[data-block-target]')].filter(button=>targetOf(section,button));if(!buttons.length)continue;
-  const entry={section,row,buttons,hold:0,follow:()=>{}};rows.set(name,entry);
+  const name=section.dataset.inspectorPanel??'';if(!name)continue;
+  const directRow=[...section.children].find(node=>(node as HTMLElement).classList.contains('block-row')) as HTMLElement|undefined;
+  const nestedRoot=directRow?undefined:[...section.children].find(node=>[...((node as HTMLElement).children??[])].some(c=>(c as HTMLElement).classList.contains('block-row'))) as HTMLElement|undefined;
+  const scrollRoot=nestedRoot??section;
+  const row=directRow??([...(nestedRoot?.children??[])].find(node=>(node as HTMLElement).classList.contains('block-row')) as HTMLElement|undefined);
+  if(!row)continue;
+  const buttons=[...row.querySelectorAll<HTMLButtonElement>('button[data-block-target]')].filter(button=>targetOf(scrollRoot,button));if(!buttons.length)continue;
+  const entry={section,scrollRoot,row,buttons,hold:0,follow:()=>{}};rows.set(name,entry);
   // Scroll-follow: the active block is the last one whose top has reached the row; at the end of the
   // section it is the last visible one, so a short closing block can still become active.
   entry.follow=()=>{
-   if(entry.hold>now()||section.hidden)return;const top=section.getBoundingClientRect().top+row.getBoundingClientRect().height+blockScrollGap*4;
-   const visible=buttons.map(button=>({button,node:targetOf(section,button)})).filter((item):item is {button:HTMLButtonElement;node:HTMLElement}=>!!item.node&&!item.node.hidden);if(!visible.length)return;
+   if(entry.hold>now()||section.hidden)return;const top=scrollRoot.getBoundingClientRect().top+row.getBoundingClientRect().height+blockScrollGap*4;
+   const visible=buttons.map(button=>({button,node:targetOf(scrollRoot,button)})).filter((item):item is {button:HTMLButtonElement;node:HTMLElement}=>!!item.node&&!item.node.hidden);if(!visible.length)return;
    let current=visible[0]!;for(const item of visible)if(item.node.getBoundingClientRect().top<=top)current=item;
-   if(section.scrollHeight-section.clientHeight>0&&section.scrollTop>=section.scrollHeight-section.clientHeight-2){const bottom=section.getBoundingClientRect().bottom;for(const item of visible)if(item.node.getBoundingClientRect().top<bottom)current=item;}
+   if(scrollRoot.scrollHeight-scrollRoot.clientHeight>0&&scrollRoot.scrollTop>=scrollRoot.scrollHeight-scrollRoot.clientHeight-2){const bottom=scrollRoot.getBoundingClientRect().bottom;for(const item of visible)if(item.node.getBoundingClientRect().top<bottom)current=item;}
    mark(name,current.button.dataset.blockTarget!);
   };
   const click=(event:Event)=>{const button=(event.target as Element|null)?.closest?.('button[data-block-target]') as HTMLButtonElement|null;if(!button||!buttons.includes(button))return;select(name,button.dataset.blockTarget!);};
   const release=()=>{entry.hold=0;};const intent=(event:Event)=>{if(!row.contains(event.target as Node))release();};
-  row.addEventListener('click',click);for(const type of ['wheel','touchstart','keydown','pointerdown'])section.addEventListener(type,intent,{passive:true});section.addEventListener('scrollend',release);
-  const observer=makeObserver(section,()=>entry.follow());if(observer)for(const button of buttons)observer.observe(targetOf(section,button)!);
-  disposers.push(()=>{row.removeEventListener('click',click);for(const type of ['wheel','touchstart','keydown','pointerdown'])section.removeEventListener(type,intent);section.removeEventListener('scrollend',release);observer?.disconnect();});
+  row.addEventListener('click',click);for(const type of ['wheel','touchstart','keydown','pointerdown'])scrollRoot.addEventListener(type,intent,{passive:true});scrollRoot.addEventListener('scrollend',release);
+  const observer=makeObserver(scrollRoot,()=>entry.follow());if(observer)for(const button of buttons)observer.observe(targetOf(scrollRoot,button)!);
+  disposers.push(()=>{row.removeEventListener('click',click);for(const type of ['wheel','touchstart','keydown','pointerdown'])scrollRoot.removeEventListener(type,intent);scrollRoot.removeEventListener('scrollend',release);observer?.disconnect();});
   mark(name,buttons[0]!.dataset.blockTarget!);
  }
  ready=true;
  /** Scroll the block so its top sits just under the sticky row, then mark it. */
- function select(name:string,id:string):void {
-  const entry=rows.get(name);if(!entry)return;const button=entry.buttons.find(b=>b.dataset.blockTarget===id);const node=button&&targetOf(entry.section,button);if(!node)return;
-  const {section,row}=entry,offset=node.getBoundingClientRect().top-section.getBoundingClientRect().top-row.getBoundingClientRect().height-blockScrollGap;
-  entry.hold=now()+holdMs;mark(name,id);section.scrollTo({top:Math.max(0,section.scrollTop+offset),behavior:reduced()?'auto':'smooth'});
+ function select(name:string,rawId:string):void {
+  const entry=rows.get(name);if(!entry)return;const id=resolveId(entry,rawId);const button=entry.buttons.find(b=>b.dataset.blockTarget===id);const node=button&&targetOf(entry.scrollRoot,button);if(!node)return;
+  const {scrollRoot,row}=entry,offset=node.getBoundingClientRect().top-scrollRoot.getBoundingClientRect().top-row.getBoundingClientRect().height-blockScrollGap;
+  entry.hold=now()+holdMs;mark(name,id);scrollRoot.scrollTo({top:Math.max(0,scrollRoot.scrollTop+offset),behavior:reduced()?'auto':'smooth'});
  }
  return {
   state:()=>({...state}),select,
