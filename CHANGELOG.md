@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.1](https://github.com/rig-c/review/compare/v0.18.0...v0.18.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **compare:** hold the picked environment out of Compare ([#248](https://github.com/rig-c/review/issues/248)) ([63a8fea](https://github.com/rig-c/review/commit/63a8fea484204f763b25c48e6480c57976d699e1)), closes [#247](https://github.com/rig-c/review/issues/247)
+
 ## [0.18.0](https://github.com/rig-c/review/compare/v0.17.0...v0.18.0) (2026-10-31)
 
 
