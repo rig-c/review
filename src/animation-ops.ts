@@ -899,11 +899,14 @@ function formatNumberWithRawStyle(
   rawElem: string,
   baseRawElem?: string,
 ): string {
+  // An unchanged number keeps its literal whatever its precision; only a number
+  // this edit computed is cleaned.
+  if (Number(rawElem) === nextNum) return rawElem;
   const cleaned = cleanMotionNumber(nextNum);
-  if (baseRawElem !== undefined && Number(baseRawElem) === cleaned) {
+  if (baseRawElem !== undefined && cleanMotionNumber(Number(baseRawElem)) === cleaned) {
     return baseRawElem;
   }
-  if (Number(rawElem) === cleaned) return rawElem;
+  if (cleanMotionNumber(Number(rawElem)) === cleaned) return rawElem;
   if (Number.isInteger(cleaned) && /^-?\d+\.0$/.test(rawElem)) {
     return cleaned.toFixed(1);
   }

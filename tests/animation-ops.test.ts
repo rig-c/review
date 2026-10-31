@@ -659,3 +659,32 @@ test('pending preview adapter projects draft tracks into InspectionTrack for eva
   expect(localsEnd.y).toBe(-12);
   expect(Object.keys(CHANNELS)).toHaveLength(10);
 });
+
+test('a number past twelve significant digits survives a retime that does not change it, and retiming back restores the bytes', () => {
+  const text = `{
+  "spec": "rigc-motion/1",
+  "animations": {
+    "a": {
+      "duration": 3,
+      "loop": false,
+      "tracks": [
+        {
+          "bone": "b",
+          "property": "rotate",
+          "keys": [
+            {"t": 0, "v": [0], "curve": [0.2, 0.123456789012345, 0.8, 0.987654321098765]},
+            {"t": 1, "v": [1], "curve": [1.5, 1, 2.5, 2]},
+            {"t": 3, "v": [2]}
+          ]
+        }
+      ]
+    }
+  }
+}
+`;
+  const retime = (time: number) => ({ op: 'set_key_time' as const, animation: 'a', track: 0, key: 1, time });
+  const moved = applyAnimationOps(text, [retime(2)]).text;
+  expect(moved).toContain('0.123456789012345');
+  expect(moved).toContain('0.987654321098765');
+  expect(sha256(applyAnimationOps(text, [retime(2), retime(1)]).text)).toBe(sha256(text));
+});
