@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.14.0](https://github.com/rig-c/review/compare/v0.13.1...v0.14.0) (2026-10-31)
+
+
+### Features
+
+* **review:** add a turn pad over a rig's model dials ([#230](https://github.com/rig-c/review/issues/230)) ([94b25c4](https://github.com/rig-c/review/commit/94b25c4e21e4bf13b35e8f8c38e1df1130cb9483)), closes [#229](https://github.com/rig-c/review/issues/229)
+
+
+### Bug Fixes
+
+* **docs:** replace the README's twenty "see the reference" stubs with one task table ([#228](https://github.com/rig-c/review/issues/228)) ([a725779](https://github.com/rig-c/review/commit/a725779fd0079106f867664550e842aa3b41dc50)), closes [#227](https://github.com/rig-c/review/issues/227)
+* **docs:** split the 95 KB README into orientation and shipped reference docs ([#225](https://github.com/rig-c/review/issues/225)) ([3eabbcd](https://github.com/rig-c/review/commit/3eabbcd86418b8d0f030508619a1a11e5b95639f)), closes [#224](https://github.com/rig-c/review/issues/224)
+
 ## [0.13.1](https://github.com/rig-c/review/compare/v0.13.0...v0.13.1) (2026-10-29)
 
 
