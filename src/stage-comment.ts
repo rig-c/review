@@ -26,8 +26,8 @@ export function stageCommentMode(value:unknown):CommentMode {
  const c=obj(value);
  if(!Object.hasOwn(c,'mode'))throw new Error('COMMENT_MODE_MISSING: placement mode is required');
  if(!commentModes.includes(c.mode))throw new Error('COMMENT_MODE_UNKNOWN: expected setup, animate or compare');
- const b=c.bookmark;
- if(c.mode==='compare' ? b?.binding?.mode!=='compare'||c.viewport==='rig' : b?.binding?.mode!=='single'||!['rig','reference'].includes(c.viewport)||b?.selection?.inspector!==(c.mode==='setup'?'rig':'playback'))throw new Error('COMMENT_MODE_MISMATCH: placement mode differs from page, viewport or saved inspector');
+ const b=c.bookmark,bm=b?.binding?.mode,selMode=b?.selection?.mode;
+ if(bm==='single' ? c.mode==='compare'||!['rig','reference'].includes(c.viewport)||b?.selection?.inspector!==(c.mode==='setup'?'rig':'playback') : bm!=='compare'||c.viewport==='rig'||selMode!==undefined&&selMode!==c.mode||(c.mode==='setup'&&b?.selection?.inspector!=='rig')||(c.mode==='animate'&&b?.selection?.inspector!=='playback'))throw new Error('COMMENT_MODE_MISMATCH: placement mode differs from page, viewport or saved inspector');
  return c.mode;
 }
 export function parseStageComment(value:unknown):StageComment {

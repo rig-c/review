@@ -25,6 +25,7 @@ import {parseBookmark,connectInspectionPersistence,serializableView,numericCamer
 import {RendererBadge} from './renderer-status.ts';
 import {ComparePresentation,type PresentationState} from '../src/compare-presentation.ts';
 import {nextReferenceInterval,ReferenceSelectionUnavailable,inspectionReferenceFrame,lastSupportedReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,type ReferenceFrameIndex,type VideoInfo,type VideoFrame} from '../src/reference-frames.ts';
+import {mountComparePickedTools,type ComparePickedTools} from './compare-picked-tools.ts';
 type Side = 'a' | 'b';
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const node = document.getElementById(id); if (!node) throw new Error(`Missing compare UI element: ${id}`); return node as T;
@@ -51,6 +52,8 @@ const viewDisposers:(()=>void)[]=[];
 let parts:PartExplorer|null=null,turnPad:TurnPad|null=null;
 const thumbnails:Partial<Record<Side,PartThumbnails>>={};
 let comments:ReturnType<typeof bindStageComments>|null=null;
+let pickedTools:ComparePickedTools|null=null;
+const turnAdjusts:Partial<Record<Side,import('@rig-c/play').BoneAdjust|null>>={};
 const overlays:Partial<Record<Side,RigOverlays>>={};
 function inspectionPlayer(side:Side):InspectionPlayer {const player=players[side];if(!player)throw new Error('Part player unavailable');return {get time(){return player.time;},pause:()=>player.pause(),seek:time=>player.seek(time),draw:()=>{player.draw();parts?.present(side);}};}
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
@@ -114,7 +117,7 @@ function renderTrace(value: CompareTrace): void {
   if (document.activeElement !== input('time-input')) input('time-input').value = value.reference.toFixed(6);
   text('clock-source', value.source === 'video-frame' ? 'requestVideoFrameCallback · Actual mediaTime' : 'currentTime fallback');
   text('trace', JSON.stringify({ seekStep: compareSeekStep, referenceClock: value.source, frames: { a: currentFrame('a'), b: currentFrame('b') }, reviewFrames:{a:currentReviewFrame('a'),b:currentReviewFrame('b')}, requestedProducer,endStopReason, decodedIndex:referenceFrames?referenceFrameAtTime(referenceFrames,value.reference)?.index??null:null, recent: traceRows }, null, 2));
-  updateFeedbackAvailability();frameControls();
+  updateFeedbackAvailability();frameControls();pickedTools?.onPosePresented();
 }
 
 function updateFeedbackAvailability(): void { button('add-feedback').disabled = !feedbackTrace(ready, seeking || video.seeking, trace); }
@@ -218,7 +221,7 @@ async function seekTo(target: number,producer:{side:Side;frame:number;time:numbe
     const value=inspected.inspection!;
     if (generation !== latestSeek || signal.aborted) return;
     requestedProducer=producer;endStopReason=endReason;seeking = false; lastPresented = { time: value.reference, source: value.source }; renderTrace(value);renderPresentation(inspected);
-    message(endReason??'Inspecting both rigs at the actual reference video time.');
+    message(endReason??((typeof pickedTools!=='undefined'&&pickedTools?pickedTools.defaultStatusMessage():null)??'Inspecting both rigs at the actual reference video time.'));
   } catch (error) { if (!signal.aborted && generation === latestSeek){if(error instanceof ReferenceSelectionUnavailable){stop();invalidateTrace(describe(error));message(describe(error),true);}else failPair(error);} }
   finally { if (generation === latestSeek) { seeking = false; updateFeedbackAvailability();frameControls(); } }
 }
@@ -239,7 +242,7 @@ function configureTurnPad():void {
  if(!dials.length)return;
  const host=document.createElement('div');host.id='turn-pad-host';el('stage-layout').before(host);
  turnPad=bindTurnPad({host,stages:[el('a-viewport'),el('b-viewport')],dials,blocked:()=>seeking||video.seeking||!!persistence?.restoring()||!ready,
-  draw:state=>{if(!players.a||!players.b)return;try{for(const side of ['a','b'] as const){const source=side==='a'?a:b;players[side]!.adjust=state.adjust(source.filter(d=>dials.some(shared=>shared.axis===d.axis)));}players.a.draw();parts?.present('a');players.b.draw();parts?.present('b');redrawOverlays(true);}catch(error){failPair(error);throw error;}},save:()=>persistence?.save(),error:value=>message(value,true)});
+  draw:state=>{if(!players.a||!players.b)return;try{for(const side of ['a','b'] as const){const source=side==='a'?a:b;players[side]!.adjust=state.adjust(source.filter(d=>dials.some(shared=>shared.axis===d.axis)));if(typeof turnAdjusts!=='undefined')turnAdjusts[side]=players[side]!.adjust;}players.a.draw();parts?.present('a');players.b.draw();parts?.present('b');redrawOverlays(true);}catch(error){failPair(error);throw error;}},save:()=>persistence?.save(),error:value=>message(value,true)});
  const note=document.createElement('p');note.className='hint';note.textContent='Both panes share the same values over the intersection of their declared ranges. Axes absent on either side are not offered.';host.append(note);
 }
 async function loadSide(side: Side, value: CompareSide): Promise<number> {
@@ -250,9 +253,22 @@ async function loadSide(side: Side, value: CompareSide): Promise<number> {
   assets[side] = loaded; const clip = loaded.animations.find(item => item.name === data.animation); if (!clip) throw new Error(`${side.toUpperCase()}: animation "${data.animation}" Not supplied`);
   const player = new RigPlayer(el(`${side}-root`), loaded, { seekStep: compareSeekStep });
   // A side counts as loaded only after its first successful draw; a parts catalog refusal never fails the side.
-  try { players[side] = player;try{const catalog=await loadPartModel(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]);thumbnails[side]?.dispose();thumbnails[side]=new PartThumbnails(pageRegionTable(catalog.model),loaded.pageImages);parts?.register(side,catalog.entries,player,thumbnails[side]);}catch(error){parts?.refuseCatalog(side,error);} player.environment(null); player.play(data.animation, { loop: false }); player.pause(); player.draw(); }
+  try { players[side] = player;try{const catalog=await loadPartModel(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]);thumbnails[side]?.dispose();thumbnails[side]=new PartThumbnails(pageRegionTable(catalog.model),loaded.pageImages);parts?.register(side,catalog.entries,player,thumbnails[side]);pickedTools?.registerSideModel(side,modelUrl,access.route(`/compare-assets/${side}/`),value.reviewedSource.rig!.sha256,catalog.model);}catch(error){parts?.refuseCatalog(side,error);pickedTools?.registerSideModel(side,modelUrl,access.route(`/compare-assets/${side}/`),value.reviewedSource.rig!.sha256,null);} player.environment(null); player.play(data.animation, { loop: false }); player.pause(); player.draw(); }
   catch (error) { thumbnails[side]?.dispose(); delete thumbnails[side]; delete players[side]; player.dispose(); throw error; }
   el(`${side}-empty`).hidden = true; return clip.duration;
+}
+async function swapSideRig(side:Side,modelUrl:string,prefix:string,sha256:string,clipName?:string):Promise<void> {
+ const keepTime=players[side]?.time??trace?.reference??0,wasPlaying=!video.paused;
+ stop();
+ const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`${side}: model page escapes its build`);return target.href;}});
+ const chosenClip=clipName&&next.animations.some(item=>item.name===clipName)?clipName:next.animations.some(item=>item.name===data.animation)?data.animation:next.animations[0]?.name??'';
+ players[side]?.dispose();assets[side]?.dispose();assets[side]=next;
+ const player=new RigPlayer(el(`${side}-root`),next,{seekStep:compareSeekStep});players[side]=player;
+ try{const catalog=await loadPartModel(modelUrl,sha256,data[side].feedbackCatalog.slots??[]);thumbnails[side]?.dispose();thumbnails[side]=new PartThumbnails(pageRegionTable(catalog.model),next.pageImages);parts?.register(side,catalog.entries,player,thumbnails[side]);pickedTools?.registerSideModel(side,modelUrl,prefix,sha256,catalog.model);}
+ catch(error){parts?.refuseCatalog(side,error);pickedTools?.registerSideModel(side,modelUrl,prefix,sha256,null);}
+ player.environment(null);if(chosenClip){player.play(chosenClip,{loop:false});player.pause();player.seek(Math.min(keepTime,next.animations.find(item=>item.name===chosenClip)?.duration??keepTime));}
+ player.draw();parts?.present(side);fit();redrawOverlays(true);
+ if(wasPlaying)void playComparison().catch(error=>message(describe(error),true));
 }
 
 async function loadFrameIndex():Promise<void>{
@@ -405,10 +421,11 @@ function bind(): void {
   input('idle-repeat').onchange=()=>{renderIdle();if(canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));};
   el('inspector-feedback').addEventListener('focusin',()=>{idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);});
   bindInspector();
+  pickedTools=mountComparePickedTools({data:()=>data,readOnly:()=>readOnly,players,assets,rigScales,layers,parts:()=>parts,time:()=>trace?.reference??presentation.snapshot().lastDrawn?.reference??0,duration:()=>domain?.end??0,playing:()=>!video.paused,pause:()=>{idleHeld=true;stop();},seekTo:seconds=>seekTo(seconds),api,route:access.route,swapSideRig,redrawOverlays,fit,syncLayout:()=>{renderPairLayout();const mode=pickedTools?.mode()??'compare',picked=pickedTools?.pickedSide()??'a';if(mode!=='compare'&&activeCamera!=='reference'&&activeCamera!==picked)activeCamera=picked;fit();},saveDraft:()=>{persistence?.save();},message,download,turnAdjustFor:side=>turnAdjusts[side]??null});
   document.addEventListener('visibilitychange',()=>{if(document.hidden){suspendedPreview=!video.paused;stop();}else if(suspendedPreview&&!idleHeld){suspendedPreview=false;void playComparison().catch(error=>message(describe(error),true));}});
   const observer = new ResizeObserver(fit); observer.observe(el('a-viewport')); observer.observe(el('b-viewport'));observer.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { comments?.dispose();persistence?.dispose();turnPad?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { thumbnails[side]?.dispose(); players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
+  window.addEventListener('pagehide', () => { pickedTools?.dispose();comments?.dispose();persistence?.dispose();turnPad?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { thumbnails[side]?.dispose(); players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
 }
 
 async function start(): Promise<void> {
@@ -419,7 +436,7 @@ async function start(): Promise<void> {
     readOnly = readOnlyReason(access, writes.capabilityRequired); if (readOnly) message(readOnly, true); controlServed = writes.control !== false;
     submittedBaseline=structuredClone(session);
     if (data.id !== session.id || data.sourceHash !== session.sourceHash || JSON.stringify(data.binding) !== JSON.stringify(session.binding)) throw new Error('Comparison and submission session refer to different source identities. Reopen the review.');
-    text('title', data.title); text('animation', `${data.animation} · A/B order and reference video hash are fixed`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); parts=new PartExplorer(el('parts-explorer'),el('selected-part'),previous=>{redrawOverlays(true);const part=parts?.value();if(part){activeCamera=part.side==='b'?'b':'a';workspace?.revealInspector();document.querySelector<HTMLButtonElement>('[data-inspector=rig]')?.click();renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera());persistence?.save();},part=>{select('side').value=part.side;select('target-kind').value='slot';renderFeedbackSelection();input('target-name').value=part.slot;document.querySelector<HTMLButtonElement>('[data-inspector=feedback]')?.click();}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackSelection(); renderFeedback(); savedState();
+    text('title', data.title); text('animation', `${data.animation} · A/B order and reference video hash are fixed`); document.title = data.title + ' · rig review compare'; select('status').value = session.status; provenance(); bind(); parts=new PartExplorer(el('parts-explorer'),el('selected-part'),previous=>{redrawOverlays(true);const part=parts?.value();pickedTools?.onPartSelected(part?.side==='b'?'b':part?.side==='a'?'a':null,part?.slot??null);if(part&&!pickedTools?.isSwitchingSide()){activeCamera=part.side==='b'?'b':'a';workspace?.revealInspector();if(document.querySelector<HTMLElement>('[data-inspector][aria-selected="true"]')?.dataset.inspector!=='playback')document.querySelector<HTMLButtonElement>('[data-inspector=rig]')?.click();renderCameraControls();}if(!cameraRestoring&&!pickedTools?.isSwitchingSide()&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera());persistence?.save();},part=>{select('side').value=part.side;select('target-kind').value='slot';renderFeedbackSelection();input('target-name').value=part.slot;document.querySelector<HTMLButtonElement>('[data-inspector=feedback]')?.click();}); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackSelection(); renderFeedback(); savedState();
     renderPairLayout();
     const settled = await Promise.allSettled([loadReference(), loadSide('a', data.a), loadSide('b', data.b)]);
     const outcome = (value: PromiseSettledResult<number>): InputState => value.status === 'fulfilled' ? { state: 'loaded' } : { state: 'failed', reason: describe(value.reason) };
@@ -430,14 +447,14 @@ async function start(): Promise<void> {
     void loadFrameIndex();
     input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;
-    await seekTo(0);configureTurnPad();workspace?.refresh();activeCamera='a';if(cameraSync)alignCameras();fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();setupComments();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
+    await seekTo(0);configureTurnPad();workspace?.refresh();activeCamera='a';if(cameraSync)alignCameras();fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();setupComments();await pickedTools?.loadInitialSideStatuses();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
     if(!readOnly&&controlServed)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
   } catch (error) { failPair(error); for (const side of ['a', 'b'] as const) if (!players[side]) text(`${side}-empty`, `${side.toUpperCase()} Could not open comparison rig.`); text('reference-empty', 'Check the reference video and comparison inputs.'); }
 }
 function sharedBox():PoseBounds|null {const a=assets.a?.stage??players.a?.bounds(),b=assets.b?.stage??players.b?.bounds();return a&&b?unionBounds(a,b):a??b??null;}
 /** The pair is offered only when both sides and the shared video actually loaded; a failed side leaves the survivor as a single pane, named. */
 function renderPairLayout():PairEligibilityState {
- const state=pairEligibility(pairInputs),shown={reference:state.effective==='compare'||state.effective==='reference',a:state.effective==='compare'||state.effective==='a',b:state.effective==='compare'||state.effective==='b'};
+ const tools=typeof pickedTools!=='undefined'?pickedTools:null,state=pairEligibility(pairInputs),mode=tools?.mode()??'compare',picked=tools?.pickedSide()??'a',shown={reference:state.effective==='compare'||state.effective==='reference',a:(state.effective==='compare'&&(mode==='compare'||picked==='a'))||state.effective==='a',b:(state.effective==='compare'&&(mode==='compare'||picked==='b'))||state.effective==='b'};
  for(const target of ['reference','a','b'] as const){const pane=el(target+'-viewport').closest('section');if(pane)pane.hidden=!shown[target];}
  el('stage-layout').dataset.panes=String(Object.values(shown).filter(Boolean).length);
  if(state.effective!=='compare')text('domain',state.effective===null?`No input rendered · ${state.reasons.compare??''}`:`${state.effective==='reference'?'Reference only':state.effective.toUpperCase()+' only'} · comparison unavailable: ${state.reasons.compare??''}`);
@@ -455,9 +472,10 @@ function showSurvivors():void {
  if(!readOnly&&controlServed)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
 }
 function paneFrame(target:CameraTarget,hidden=false):CameraFrame|null {
- const viewport=el(target+'-viewport');if(viewport.clientWidth<=0||viewport.clientHeight<=0)return hidden?cameraFrames[target]??null:null;
+ const viewport=el(target+'-viewport');let width=viewport.clientWidth,height=viewport.clientHeight;
+ if(width<=0||height<=0){if(!hidden)return null;if(cameraFrames[target])return cameraFrames[target]!;if(target==='a'||target==='b'){const other=el((target==='a'?'b':'a')+'-viewport');width=other.clientWidth;height=other.clientHeight;}if(width<=0||height<=0)return null;}
  const box=target==='reference'?video.videoWidth>0&&video.videoHeight>0?{x:0,y:0,width:video.videoWidth,height:video.videoHeight}:null:players[target]?sharedBox():null;
- if(!box)return null;const frame=cameraFrame(target==='reference'?'image':'world',box,viewport.clientWidth,viewport.clientHeight,target==='reference'?0:22,target==='reference'?0:38);if(frame)cameraFrames[target]=frame;return frame;
+ if(!box)return null;const frame=cameraFrame(target==='reference'?'image':'world',box,width,height,target==='reference'?0:22,target==='reference'?0:38);if(frame)cameraFrames[target]=frame;return frame;
 }
 function availableCamera():CameraTarget|null {return paneFrame(activeCamera)?activeCamera:paneFrame('a')?'a':paneFrame('b')?'b':paneFrame('reference')?'reference':null;}
 function activateCamera(target:CameraTarget):void {if(paneFrame(target)){activeCamera=target;renderCameraControls();}}
@@ -478,15 +496,15 @@ function updateCamera(target:CameraTarget,value:CameraSignature,rigGroup=false):
 }
 function zoomCamera(factor:number,target=availableCamera()):void {if(!target)return;const frame=paneFrame(target);if(frame)updateCamera(target,zoomSignature(cameraSignature(cameras[target],frame),factor));}
 function panCamera(target:CameraTarget,dx:number,dy:number):void {const frame=paneFrame(target);if(frame)updateCamera(target,dragSignature(cameraSignature(cameras[target],frame),frame,dx,dy));}
-function fitActiveCamera(target=availableCamera()):void {if(!target)return;const part=parts?.value();if(part?.side===target){const box=parts?.bounds(),frame=paneFrame(target);if(!box||!frame){message('PART_FIT_UNAVAILABLE: selected slot has no positive drawn bounds.',true);return;}updateCamera(target,boundsFitSignature(box,frame,22,38));message('Selected slot fitted.');}else{if(!paneFrame(target))return;updateCamera(target,{zoom:1,pan:{x:0,y:0}});message('View fitted.');}}
+function fitActiveCamera(target=availableCamera()):void {if(!target)return;const tools=typeof pickedTools!=='undefined'?pickedTools:null,mode=tools?.mode()??'compare',picked=tools?.pickedSide()??'a',suffix=mode==='compare'?'':` on Build ${picked.toUpperCase()} (${data[picked].manifest.title})`;const part=parts?.value();if(part?.side===target){const box=parts?.bounds(),frame=paneFrame(target);if(!box||!frame){message('PART_FIT_UNAVAILABLE: selected slot has no positive drawn bounds.',true);return;}updateCamera(target,boundsFitSignature(box,frame,22,38));message(`Selected slot fitted${suffix}.`);}else{if(!paneFrame(target))return;updateCamera(target,{zoom:1,pan:{x:0,y:0}});message(`View fitted${suffix}.`);}}
 function referenceFit():void {const frame=paneFrame('reference');if(!frame)return;const signature=cameraSignature(cameras.reference,frame);video.style.transform=`translate(${signature.pan.x*frame.width}px,${signature.pan.y*frame.height}px) scale(${signature.zoom})`;}
 function redrawOverlays(fresh:boolean):void {
  const warnings:string[]=[];let needsCapture=false;
- for(const side of ['a','b'] as const){const overlay=overlays[side],player=players[side];if(!overlay||!player)continue;const root=el(`${side}-root`),project=(x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*rigScales[side],y:parseFloat(root.style.top||'0')-y*rigScales[side]});const snapshot=fresh?overlay.refresh({player,frame:parts?.frame(side),selectedSlot:parts?.value()?.side===side?parts.value()!.slot:null,bones:(data[side].feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers}):overlay.redraw({project,settings:layers});warnings.push(...snapshot.warnings);needsCapture ||= snapshot.needsCapture;}
+ for(const side of ['a','b'] as const){const overlay=overlays[side],player=players[side];if(!overlay||!player)continue;const root=el(`${side}-root`),project=(x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*rigScales[side],y:parseFloat(root.style.top||'0')-y*rigScales[side]}),extra=pickedTools?pickedTools.overlayInputFor(side):{regions:[],circles:[],markers:[],meshEdit:null,weights:null,anchors:null};const snapshot=fresh?overlay.refresh({player,frame:parts?.frame(side),selectedSlot:parts?.value()?.side===side?parts.value()!.slot:null,bones:(data[side].feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,...extra}):overlay.redraw({project,settings:layers,...extra});pickedTools?.recordOverlaySnapshot(side,snapshot);warnings.push(...snapshot.warnings);needsCapture ||= snapshot.needsCapture;}
  text('layer-state',warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');
  if(!fresh&&needsCapture&&trace&&!seeking&&!video.seeking&&players.a&&players.b){try{drawSynchronizedPair(inspectionPlayer('a'),inspectionPlayer('b'));redrawOverlays(true);for(const side of ['a','b'] as const)text(`${side}-renderer`,rendererBadges[side].observe('drawn',players[side]!.renderer).label);}catch(error){failPair(error);}}
 }
-function bindInspector():void {bindInspectorTabs(()=>{workspace?.afterTab();if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]')){idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);}fit();},()=>workspace?.beforeTab());}
+function bindInspector():void {bindInspectorTabs(()=>{pickedTools?.onInspectorTabChanged();workspace?.afterTab();if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]')){idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);}fit();},()=>workspace?.beforeTab());}
 
 function canRepeatIdle():boolean{return data?.animation==='idle'&&idleAvailable(assets.a?.animations.map(a=>a.name)??[],data.animation)&&idleAvailable(assets.b?.animations.map(a=>a.name)??[],data.animation)&&input('idle-repeat').checked&&!!domain&&domain.end>0;}
 function renderIdle():void {text('idle-state',canRepeatIdle()?'Actual idle · repeat enabled':'Bound non-idle inspection · no automatic playback');}
@@ -535,7 +553,7 @@ function numericView():ControlView {
 }
 function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
 function inspectionBinding():InspectionBinding{return {mode:'compare',sourceHash:data.sourceHash,rigs:[data.a.reviewedSource.rig?.sha256??null,data.b.reviewedSource.rig?.sha256??null]};}
-function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:data.animation,time:trace?.reference??presentation.snapshot().lastDrawn?.reference??null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,reference:data.reference.sha256,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view'}};}
+function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:data.animation,time:trace?.reference??presentation.snapshot().lastDrawn?.reference??null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,reference:data.reference.sha256,inspector:document.querySelector<HTMLElement>('[data-inspector][aria-selected=true]')?.dataset.inspector??'view',mode:pickedTools?.mode()??'compare',side:pickedTools?.pickedSide()??'a'}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  await restoreTransaction(async()=>{
 
@@ -555,6 +573,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
  idleHeld=true;stop();if(bookmark.time!==null){await seekTo(bookmark.time);if(signal.aborted||!trace)throw new Error('Saved reference inspection could not settle');}
  appearance?.set(bookmark.theme);Object.assign(layers,{images:bookmark.layers.images,mesh:bookmark.layers.meshes,bones:bookmark.layers.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;
  if(bookmark.selection.inspector){workspace?.beforeTab();for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-inspector]')){const selected=tab.dataset.inspector===bookmark.selection.inspector;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==bookmark.selection.inspector;workspace?.afterTab();}
+ if(typeof pickedTools!=='undefined'&&pickedTools){if(bookmark.selection.side==='a'||bookmark.selection.side==='b')pickedTools.setPickedSide(bookmark.selection.side);const nextMode=bookmark.selection.mode??(bookmark.selection.inspector==='rig'?'setup':bookmark.selection.inspector==='playback'?'animate':'compare');pickedTools.setMode(nextMode,{fromTab:true});}
  syncStageLayout(el('stage-layout'));fit();
  for(const target of ['a','b','reference'] as const){const camera=bookmark.view.cameras[target],frame=paneFrame(target,true);if(camera&&frame)cameras[target]={zoom:restoredZoom(camera,frame.baseScale,frame.width,frame.height),center:{...camera.center}};}
  cameraSync=bookmark.view.cameraSync??false;activeCamera=bookmark.view.activeCamera==='b'||bookmark.view.activeCamera==='reference'?bookmark.view.activeCamera:'a';
@@ -563,7 +582,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
 }
 async function setupPersistence():Promise<boolean> {
  persistence=await connectInspectionPersistence({scope:'compare:'+data.a.manifest.id+':'+data.a.sourceHash+':'+data.b.manifest.id+':'+data.b.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('status').value=session.status;renderFeedback();savedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
- ui:()=>({inspectorScroll:workspace?.scroll()??'{}',frameBasis:select('frame-basis').value}),restoreUI:value=>{if(value.frameBasis==='a'||value.frameBasis==='b')select('frame-basis').value=value.frameBasis;frameControls();workspace?.restoreScroll(value.inspectorScroll);},afterInputs:()=>{video.muted=!input('reference-audio').checked;const name=input('target-name').value;renderFeedbackSelection();input('target-name').value=name;},onConflict:value=>{draftConflict=value;savedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
+ ui:()=>({inspectorScroll:workspace?.scroll()??'{}',frameBasis:select('frame-basis').value,...(pickedTools?pickedTools.uiState():{})}),restoreUI:value=>{if(value.frameBasis==='a'||value.frameBasis==='b')select('frame-basis').value=value.frameBasis;frameControls();pickedTools?.restoreUiState(value);workspace?.restoreScroll(value.inspectorScroll);},afterInputs:()=>{video.muted=!input('reference-audio').checked;const name=input('target-name').value;renderFeedbackSelection();input('target-name').value=name;},onConflict:value=>{draftConflict=value;savedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
  return persistence.restored;
 }
 
@@ -573,12 +592,12 @@ function setupComments():void {
    if(view==='rig'||!trace)return null;const side=view==='b'?'b':'a',camera=numericView().cameras[view];if(!camera||hostHidden(el(view+'-viewport')))return null;
    const raw=currentReviewFrame(side)??currentFrame(side),decoded=referenceFrames?referenceFrameAtTime(referenceFrames,trace.reference):null;
    const renderer=players[side]?.renderer;const index=view==='reference'?decoded?.index:raw??decoded?.index,basis=view==='reference'||raw===null?'reference':'producer';
-   return {mode:'compare',capture:{pane:el(view+'-viewport'),root:view==='reference'?undefined:el(side+'-root'),images:view==='reference'||layers.images,canvas:view!=='reference'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null||index===undefined?null:{index,basis},time:trace.reference,animation:data.animation,turn:turnPad?.snapshot()??null,sourceHash:data[side].sourceHash,modelHash:view==='reference'?null:data[side].reviewedSource.rig?.sha256??null,referenceHash:data.reference.sha256,referenceId:data.reference.sha256,rig:data[side].manifest.id,side,...(view==='reference'?{media:video}:{posed:parts?.frame(side),assets:assets[side]})} as CommentPose;
+   return {mode:pickedTools?.mode()??'compare',capture:{pane:el(view+'-viewport'),root:view==='reference'?undefined:el(side+'-root'),images:view==='reference'||layers.images,canvas:view!=='reference'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null||index===undefined?null:{index,basis},time:trace.reference,animation:data.animation,turn:turnPad?.snapshot()??null,sourceHash:data[side].sourceHash,modelHash:view==='reference'?null:pickedTools?.modelHashFor(side)??data[side].reviewedSource.rig?.sha256??null,referenceHash:data.reference.sha256,referenceId:data.reference.sha256,rig:data[side].manifest.id,side,...(view==='reference'?{media:video}:{posed:parts?.frame(side),assets:assets[side]})} as CommentPose;
   },
   pause:async()=>{idleHeld=true;const running=!video.paused,at=trace?.reference??lastPresented?.time;stop();if(running&&at!==undefined){await seekTo(at);if(!trace)throw new Error('COMMENT_INSPECTION_UNAVAILABLE');}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},
   bookmark:inspectionBookmark,restore:b=>restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal),feedback:()=>session.feedback,
   locked:id=>!!submittedBaseline?.updatedAt&&submittedBaseline.feedback.some(f=>f.id===id),
-  add:(f,side)=>session.feedback.push({...f,side:side??'a'}),changed:()=>{markDirty();renderFeedback();persistence?.save();},error:value=>message(value,true),blocked:()=>saving||seeking||video.seeking||!!persistence?.restoring()||!ready
+  add:(f,side)=>session.feedback.push({...f,side:side??'a'}),changed:()=>{markDirty();renderFeedback();persistence?.save();},error:value=>message(value,true),refusal:()=>pickedTools?.commentRefusal()??null,shortcutBlocked:()=>pickedTools?.shortcutBlocked()??false,blocked:()=>saving||seeking||video.seeking||!!persistence?.restoring()||!ready||!!pickedTools?.busy()
  });
 }
 function hostHidden(node:HTMLElement):boolean{return node.clientWidth<=0||node.clientHeight<=0;}

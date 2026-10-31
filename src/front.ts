@@ -58,27 +58,23 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  const reads=mode==='single'?['/api/review','/review-reference']:['/api/compare','/api/compare/reference-frames','/compare-reference'];
  if(reads.includes(path))return read?get:null;
  if((mode==='single'?/^\/assets\/[^/]/:/^\/compare-assets\/(a|b)\/[^/]/).test(path))return read?get:null;
- // Apply · Rebuild (single only): status, one typed request, a job's status and its served scratch build.
- if(mode==='single'&&path==='/api/rebuild')return read?get:method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
- // #166 (single only): the applied records, and undo of the last one ({from}).
- if(mode==='single'&&path==='/api/rebuild/history')return read?get:null;
- if(mode==='single'&&path==='/api/rebuild/undo')return method==='POST'?{mutation:true,limit:1024,timeoutMs:30000,control:false}:null;
- if(mode==='single'&&(/^\/api\/rebuild\/[a-f0-9]{64}$/.test(path)||/^\/rebuild\/[a-f0-9]{64}\/[^/]/.test(path)))return read?get:null;
- // #173 (single only): a density strip (2–5 patches, 320 KiB), its status, a candidate's job, its served build, and closing it.
- if(mode==='single'&&path==='/api/density-strip')return read?get:method==='POST'?{mutation:true,limit:320*1024,timeoutMs:30000,control:false}:null;
- if(mode==='single'&&path==='/api/density-strip/close')return method==='POST'?{mutation:true,limit:1024,timeoutMs:30000,control:false}:null;
- if(mode==='single'&&(/^\/api\/density-strip\/[a-f0-9]{64}(?:\/[a-f0-9]{64})?$/.test(path)||/^\/density-strip\/[a-f0-9]{64}\/[a-f0-9]{64}\/[^/]/.test(path)))return read?get:null;
- // Bones check (#109, single only): one typed request {ops, configHash}, answered in the response.
- if(mode==='single'&&path==='/api/bones-check')return method==='POST'?{mutation:true,limit:64*1024,timeoutMs:60000,control:false}:null;
- // Readings (#108, single only): one typed request, then its job's status.
- if(mode==='single'&&path==='/api/readings')return method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
- if(mode==='single'&&/^\/api\/readings\/[a-f0-9]{64}$/.test(path))return read?get:null;
- // Declared requirements (#113, single only): the stage's catalog, one typed request, then its job's status.
- if(mode==='single'&&path==='/api/requirements')return read?get:method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
- if(mode==='single'&&/^\/api\/requirements\/[a-f0-9]{64}$/.test(path))return read?get:null;
- // Check under this world (#112, single only): one typed request {build, schedule}, then its job's status.
- if(mode==='single'&&path==='/api/environment-check')return method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
- if(mode==='single'&&/^\/api\/environment-check\/[a-f0-9]{64}$/.test(path))return read?get:null;
+ // Apply · Rebuild and producer checks: un-prefixed in single mode, side-scoped (/api/compare/(a|b)/*, /compare-rebuild/(a|b)/*) in compare mode (#234).
+ const toolPath=mode==='compare'?path.replace(/^\/api\/compare\/(?:a|b)(?=\/)/,'/api').replace(/^\/compare-rebuild\/(?:a|b)\//,'/rebuild/').replace(/^\/compare-density-strip\/(?:a|b)\//,'/density-strip/'):path;
+ if(mode==='compare'&&toolPath===path)return null;
+ if(toolPath==='/api/rebuild')return read?get:method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
+ if(toolPath==='/api/rebuild/history')return read?get:null;
+ if(toolPath==='/api/rebuild/undo')return method==='POST'?{mutation:true,limit:1024,timeoutMs:30000,control:false}:null;
+ if(/^\/api\/rebuild\/[a-f0-9]{64}$/.test(toolPath)||/^\/rebuild\/[a-f0-9]{64}\/[^/]/.test(toolPath))return read?get:null;
+ if(toolPath==='/api/density-strip')return read?get:method==='POST'?{mutation:true,limit:320*1024,timeoutMs:30000,control:false}:null;
+ if(toolPath==='/api/density-strip/close')return method==='POST'?{mutation:true,limit:1024,timeoutMs:30000,control:false}:null;
+ if(/^\/api\/density-strip\/[a-f0-9]{64}(?:\/[a-f0-9]{64})?$/.test(toolPath)||/^\/density-strip\/[a-f0-9]{64}\/[a-f0-9]{64}\/[^/]/.test(toolPath))return read?get:null;
+ if(toolPath==='/api/bones-check')return method==='POST'?{mutation:true,limit:64*1024,timeoutMs:60000,control:false}:null;
+ if(toolPath==='/api/readings')return method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
+ if(/^\/api\/readings\/[a-f0-9]{64}$/.test(toolPath))return read?get:null;
+ if(toolPath==='/api/requirements')return read?get:method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
+ if(/^\/api\/requirements\/[a-f0-9]{64}$/.test(toolPath))return read?get:null;
+ if(toolPath==='/api/environment-check')return method==='POST'?{mutation:true,limit:64*1024,timeoutMs:30000,control:false}:null;
+ if(/^\/api\/environment-check\/[a-f0-9]{64}$/.test(toolPath))return read?get:null;
  return null;
 }
 async function boundedBody(req:Request,limit:number,timeoutMs=10000):Promise<ArrayBuffer>{
