@@ -51,7 +51,7 @@ http://127.0.0.1:4318/instances/<key>/?input=…&handoff=…#cap=…
 | <a id="feedback-ownership"></a>Retrieve submitted feedback | `feedback` | [Feedback ownership — WORKFLOWS](docs/WORKFLOWS.md#feedback-ownership) |
 | <a id="frame-strip-export"></a>Export feedback intervals as strips | `strip` | [Frame strip export — WORKFLOWS](docs/WORKFLOWS.md#frame-strip-export) |
 | **Inspect** | | |
-| <a id="workspace-settings-and-panels"></a>Navigate the workspace | Setup, Animate, Settings | [Workspace panels — PANELS](docs/PANELS.md#workspace-settings-and-panels) |
+| <a id="workspace-settings-and-panels"></a>Navigate the workspace | Setup, Animate, Compare, Settings | [Workspace panels — PANELS](docs/PANELS.md#workspace-settings-and-panels) |
 | <a id="inspect-animation-keys"></a>Inspect stored animation keys | Timeline, Curves, Bone tree | [Animation keys — PANELS](docs/PANELS.md#inspect-animation-keys) |
 | <a id="inspect-a-part"></a>Select and fit a model slot | Parts explorer | [Part inspection — PANELS](docs/PANELS.md#inspect-a-part) |
 | <a id="weights-setup-pose-watch-only"></a>Inspect setup-pose weights | Weights | [Weights — PANELS](docs/PANELS.md#weights-setup-pose-watch-only) |

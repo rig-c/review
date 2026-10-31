@@ -8,8 +8,14 @@ The review page has a left column (Parts explorer, with checkpoints and the
 reference select folded above it), the stage, the Inspector below it with
 **Setup** and **Animate** sections, and a status footer. The compare page
 keeps sources on the left and the Parts explorer on the right. The page
-header carries the **Setup** / **Animate** mode switch next to the package
-title; it is the only way to change the Inspector's section. Setup is the
+header carries the **Setup · Animate · Compare** mode switch next to the package
+title. In a single-build session (`rig-review open <built>`), **Compare** is
+disabled with a tooltip explaining that a second build and reference video are
+required (`--compare <built> --reference <video>`). In a comparison session, the
+page starts in **Compare** mode with Reference, Build A and Build B side by
+side, and switching to **Setup** or **Animate** keeps time, animation and
+selection while exposing the **Editing Build A / Build B** picker so the shared
+Setup and Animate panels operate on the picked build only. Setup is the
 mesh-review composition (selected part, part presets, modeling-review
 proposals) and holds nothing that seeks or plays; the angle inspection, the
 transport and frame navigation are in Animate. **Write review** at the top

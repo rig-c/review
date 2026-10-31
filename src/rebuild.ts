@@ -409,6 +409,8 @@ export interface RebuildOptions {
   stateDir: string; starts: readonly string[]; unchanged: () => Promise<void>; bones: readonly string[] | null;
   /** #179: how many strip candidates run at once, at most four including the recording candidate. */
   stripConcurrency?: number;
+  assetPrefix?: string;
+  stripPrefix?: string;
 }
 /** #173: a density strip's scratch — one folder per package, holding at most the one strip on screen. */
 export const stripRoot = (stateDir: string, sourceHash: string) => join(stateDir, 'density-strip', sourceHash);
@@ -568,16 +570,17 @@ async function assembledAfter(job: PatchJob, dir: string, inputs: ProducerInputs
 }
 
 /** Hash every page the compiled model names and the model itself; names are literal relative paths inside the build. */
-async function hashBuild(build: string, id: string): Promise<RebuildBuild> {
+async function hashBuild(build: string, id: string, assetPrefix = '/rebuild'): Promise<RebuildBuild> {
   const dir = await realpath(build), model = 'skeleton.model.json', bytes = await readFile(await safeFile(dir, model)), doc = object(JSON.parse(bytes.toString('utf8')), 'model');
   if (doc.spec !== 'rigc-compiled/3' || !Array.isArray(doc.pages)) throw new RebuildError('REBUILD_BUILD_INVALID', 'the compiled scratch model is not rigc-compiled/3 with pages');
   const files: Record<string, string> = { [model]: sha256(bytes) };
   for (const page of doc.pages) { const name = packagePath(object(page, 'model.pages[]').name, 'model.pages[].name'); files[name] = sha256(await readFile(await safeFile(dir, name))); }
-  return { model, modelUrl: `/rebuild/${id}/${model}`, modelHash: files[model]!, files };
+  return { model, modelUrl: `${assetPrefix}/${id}/${model}`, modelHash: files[model]!, files };
 }
 
 /** One rebuild at a time per review instance; finished jobs stay readable by id. */
 export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
+  const assetPrefix = options.assetPrefix ?? '/rebuild', stripPrefix = options.stripPrefix ?? '/density-strip';
   const jobs = new Map<string, RebuildJob | PatchJob | DeltaJob | RetargetJob>();
   let running: string | null = null;
   /** #173: the density strip on screen (at most one per review): its candidates run beside each other, none of them applied. */
@@ -821,9 +824,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     try {
       const stored = JSON.parse(await readFile(resultFile, 'utf8')) as J;
       if (stored.schema !== REBUILD_SCHEMA || stored.id !== id || stored.status !== 'built' || !stored.build) return null;
-      const now = await hashBuild(join(dir, 'build'), id);
+      const now = await hashBuild(join(dir, 'build'), id, assetPrefix);
       if (JSON.stringify(now.files) !== JSON.stringify(stored.build.files)) return null;
-      const job = { ...stored, reused: true };
+      const job = { ...stored, build: now, reused: true };
       // A retarget built before the job carried its report's frameTimes (#164): read them from the build's own report.
       if ('kind' in job && job.kind === 'retarget' && (job as RetargetJob).frameTimes === undefined) {
         let times: unknown = null;
@@ -888,7 +891,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       // The package and its producer inputs must still be the bytes the request was made against.
       // The handoff files are in the reviewed identity, so this also catches a config, parts or rig change.
       try { await options.unchanged(); } catch { throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild'); }
-      job.build = await hashBuild(join(dir, 'build'), job.id);
+      job.build = await hashBuild(join(dir, 'build'), job.id, assetPrefix);
       if (steps.hashed) await steps.hashed();
       // #166: an undo's re-run must reproduce the build its record names, file for file; otherwise it is refused, not guessed.
       const changed = steps.candidate ? null : restoredDifference(job.id, job.build.files);
@@ -1244,7 +1247,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   function stripView(): DensityStripView | null {
     if (!strip) return null;
     const s = strip;
-    const rows = s.candidates.map(c => candidateRow({ value: c.value, id: c.id, entry: c.entry, job: c.job, part: s.part, modelUrl: c.job.build ? `/density-strip/${s.id}/${c.id}/${c.job.build.model}` : null, applied: c.applied }));
+    const rows = s.candidates.map(c => candidateRow({ value: c.value, id: c.id, entry: c.entry, job: c.job, part: s.part, modelUrl: c.job.build ? `${stripPrefix}/${s.id}/${c.id}/${c.job.build.model}` : null, applied: c.applied }));
     return { schema: DENSITY_STRIP_SCHEMA, id: s.id, status: s.status, part: s.part, field: s.field, concurrency: s.concurrency, configHash: s.configHash, producer: s.producer, compiler: s.compiler, wallMs: s.wallMs, rows, labels: s.status === 'done' ? stripLabels(rows) : { fewest: null, widest: null } };
   }
   /** `GET /api/density-strip/<id>` (and `GET /api/density-strip`: the strip on screen, or null). */

@@ -10,7 +10,7 @@ export function serializableView(view:ControlView):Record<string,Json> {
  if(view.cameraSync!==undefined)value.cameraSync=view.cameraSync;if(view.activeCamera!==undefined)value.activeCamera=view.activeCamera;return value;
 }
 export interface InspectionBinding {mode:'single'|'compare';sourceHash:string;rigs:(string|null)[]}
-export interface InspectionSelection {turn?:TurnSnapshot;part?:ControlPart|null;workspace?:'modeling'|'motion';view?:'compare'|'reference'|'rig';checkpoint?:string|null;reference?:string|null;person?:string|null;inspector?:string;partSet?:string|null;axis?:{id:string;value:number}|null}
+export interface InspectionSelection {turn?:TurnSnapshot;part?:ControlPart|null;workspace?:'modeling'|'motion';view?:'compare'|'reference'|'rig';checkpoint?:string|null;reference?:string|null;person?:string|null;inspector?:string;partSet?:string|null;axis?:{id:string;value:number}|null;mode?:'setup'|'animate'|'compare';side?:'a'|'b'}
 export interface InspectionBookmark {
  schema:'rig-review-inspection/1';binding:InspectionBinding;animation:string|null;time:number|null;
  theme:'system'|'dark'|'light';layers:{images:boolean;meshes:boolean;bones:boolean};view:ControlView;selection:InspectionSelection;
@@ -35,9 +35,13 @@ export function parseBookmark(value:unknown,expected?:InspectionBinding):Inspect
  if(o.time!==null&&(typeof o.time!=='number'||!Number.isFinite(o.time)||o.time<0||o.time>Number.MAX_SAFE_INTEGER))throw new Error('View time requires finite nonnegative seconds');
  if(!['system','dark','light'].includes(String(o.theme)))throw new Error('View appearance invalid');
  const layers=record(o.layers,'layers');keys(layers,['images','meshes','bones'],'layers');for(const k of ['images','meshes','bones'])if(typeof layers[k]!=='boolean')throw new Error('View layers must be boolean');
- const selection=record(o.selection,'selection');keys(selection,['workspace','view','checkpoint','reference','person','inspector','partSet','axis','part','turn'],'selection');
+ const selection=record(o.selection,'selection');keys(selection,['workspace','view','checkpoint','reference','person','inspector','partSet','axis','part','turn','mode','side'],'selection');
  if(selection.workspace!==undefined&&!['modeling','motion'].includes(String(selection.workspace)))throw new Error('View workspace invalid');
  if(selection.view!==undefined&&!['compare','reference','rig'].includes(String(selection.view)))throw new Error('View selection invalid');
+ if(selection.mode!==undefined&&!['setup','animate','compare'].includes(String(selection.mode)))throw new Error('View workspace mode invalid');
+ if(selection.mode==='compare'&&binding.mode==='single')throw new Error('Compare mode is unavailable without a second build');
+ if(selection.side!==undefined&&!['a','b'].includes(String(selection.side)))throw new Error('View build side invalid');
+ if(selection.side!==undefined&&binding.mode==='single')throw new Error('Build side is unavailable in single review mode');
  for(const k of ['checkpoint','reference','person','inspector','partSet'])if(selection[k]!==undefined&&selection[k]!==null)text(selection[k],k);
  if(selection.axis!==undefined&&selection.axis!==null){const axis=record(selection.axis,'axis');keys(axis,['id','value'],'axis');text(axis.id,'axis id');if(typeof axis.value!=='number'||!Number.isFinite(axis.value))throw new Error('View axis value invalid');}
  if(selection.inspector!==undefined&&!['view','rig','playback','feedback'].includes(String(selection.inspector)))throw new Error('Inspector selection invalid');
