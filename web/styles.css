@@ -264,16 +264,35 @@ footer.status-bar{flex-wrap:nowrap}
 .cloth-fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 10px;margin:0 0 10px;padding:9px 10px;border:1px solid var(--border);border-radius:6px}.cloth-field{display:flex;flex-direction:column;gap:2px;min-width:0;color:var(--fg-muted);font-size:11px}.cloth-field input,.cloth-field select{width:100%;min-width:0;padding:4px 6px;font:11px var(--font-mono)}.cloth-field code{font:10px var(--font-mono);color:var(--fg-soft);overflow-wrap:anywhere}.cloth-field.pending span{color:var(--warn)}.cloth-declared{display:inline-flex;align-items:center;gap:4px}#cloth-panel-state.error,#cloth-status.error{color:var(--fail)!important}#cloth-pending-list .error{color:var(--fail)}
 .applied-records{padding:12px 15px;border-bottom:1px solid var(--border);background:var(--rv-panel);font-size:11px}.applied-records .row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}.applied-records .eyebrow{margin:0}.applied-records button{padding:4px 9px;font-size:11px}.applied-list{margin:0 0 6px;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:3px}.applied-list li{font:11px var(--font-mono);color:var(--fg-muted);overflow-wrap:anywhere}.applied-list li.on-stage{color:var(--fg-strong)}#applied-status{margin:0}#applied-status.error{color:var(--fail)}
 .density-strip{margin-top:12px;padding-top:10px;border-top:1px solid var(--border)}.density-strip-form label{display:inline-flex;align-items:center;gap:4px}.density-strip-form input[type=number]{width:64px}.density-strip-table{overflow-x:auto;max-width:100%}.density-strip-rows{width:100%;border-collapse:collapse;font:11px var(--font-mono);font-variant-numeric:tabular-nums}.density-strip-rows th,.density-strip-rows td{padding:4px 6px;border-top:1px solid var(--border);text-align:left;vertical-align:top}.density-strip-rows th{color:var(--fg-muted);font-weight:500;white-space:nowrap}.density-strip-rows tr.pending td{background:var(--rv-pressed-bg)}.density-strip-rows tr.refused td{color:var(--fg-muted)}.density-strip-value strong{display:block;color:var(--fg-strong)}.density-strip-label{display:block;margin-top:3px;padding:1px 5px;border:1px solid var(--rv-pressed-border);border-radius:4px;color:var(--fg-strong);white-space:nowrap;font-family:var(--font-sans)}.density-strip-bars div{white-space:nowrap}.density-strip-verdict{min-width:140px;max-width:340px;overflow-wrap:anywhere}.density-strip-verdict.pass{color:var(--pass)}.density-strip-actions{white-space:nowrap}.density-strip-actions button{margin:0 4px 4px 0}
-/* Key inspection reads the current compiled skeleton; it has no authoring controls. */
+/* Key inspection and dopesheet editing (#235): tokens only. */
+.animation-gate-banner{margin:4px 0 8px;padding:6px 9px;border:1px solid var(--border-strong);border-radius:6px;background:var(--rv-raised);color:var(--fg-soft);font-size:11px;overflow-wrap:anywhere}
+.animation-gate-banner[data-editable=true]{border-color:var(--pass);color:var(--fg-strong)}
+.animation-gate-banner[data-editable=false]{border-color:var(--warn);color:var(--warn)}
+.animation-editor-bar{margin:6px 0 10px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--rv-raised);font-size:11px}
+.animation-editor-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;margin-bottom:6px}
+.animation-editor-actions button{padding:4px 8px;font-size:11px}
+.animation-preview-badge{padding:2px 7px;border:1px solid var(--warn);border-radius:4px;color:var(--warn);font:11px var(--font-mono)}
+.animation-ops-summary{font:11px var(--font-mono);color:var(--fg-muted);margin-right:auto}
+.animation-key-inspector{margin:6px 0 10px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--rv-raised);font-size:11px;display:flex;flex-direction:column;gap:8px}
+.animation-insert-bar,.animation-key-detail{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px}
+.animation-insert-bar label,.animation-key-detail label{display:inline-flex;align-items:center;gap:4px;color:var(--fg-muted)}
+.animation-insert-bar select{width:auto;max-width:220px;padding:3px 6px;font-size:11px}
+.animation-insert-bar input[type=number],.animation-key-detail input[type=number]{width:78px;padding:3px 6px;font:11px var(--font-mono)}
+.animation-insert-bar button,.animation-key-detail button{padding:3px 8px;font-size:11px}
 .animation-view-buttons{display:flex;gap:6px;margin:8px 0}
 .animation-view-buttons button[aria-pressed=true],.animation-tree button[aria-pressed=true]{color:var(--pass);border-color:var(--pass)}
 .animation-lanes{overflow:auto;max-height:280px;padding:4px 12px 8px 0}
 .animation-lanes h4{position:sticky;left:0;margin:6px 0;color:var(--fg-soft)}
-.animation-axis{padding-left:190px;color:var(--fg-muted);font-size:11px}
-.animation-lane{display:grid;grid-template-columns:180px minmax(360px,1fr);gap:10px;min-height:28px;align-items:center;border-bottom:1px solid var(--border)}
+.animation-axis{padding-left:235px;color:var(--fg-muted);font-size:11px}
+.animation-lane{display:grid;grid-template-columns:150px 75px minmax(340px,1fr);gap:8px;min-height:28px;align-items:center;border-bottom:1px solid var(--border)}
+.animation-readonly-lane{display:grid;grid-template-columns:180px minmax(260px,1fr);gap:8px;min-height:26px;align-items:center;border-bottom:1px solid var(--border);opacity:.8}
 .animation-lane-label{text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+.animation-lane-add{padding:2px 6px;font-size:10px;white-space:nowrap}
+.animation-readonly-badge{font:10px var(--font-mono);color:var(--fg-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .animation-key-lane{position:relative;height:26px;margin:0 6px}
-.animation-key{position:absolute;transform:translateX(-50%);padding:0;border:0;background:transparent;color:var(--link);font-size:12px;height:26px;min-width:6px}
+.animation-key{position:absolute;transform:translateX(-50%);padding:0;border:0;background:transparent;color:var(--link);font-size:12px;height:26px;min-width:6px;touch-action:none}
+.animation-key[data-editable=true]{cursor:ew-resize}
+.animation-key.selected{color:var(--warn);font-weight:700;z-index:3}
 .animation-key:hover,.animation-key:focus-visible{color:var(--pass);z-index:2}
 .animation-playhead{position:absolute;top:0;bottom:0;width:1px;background:var(--warn);pointer-events:none}
 [data-curve-plot]{display:block;width:100%;min-width:420px;max-height:260px;overflow:visible}

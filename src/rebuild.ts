@@ -401,7 +401,7 @@ export function parseAnimationRequest(input: unknown): AnimationRequest {
   if (typeof v.animationsFromHash !== 'string' || !/^[a-f0-9]{64}$/.test(v.animationsFromHash)) bad('animationsFromHash');
   const args = parseAnimationArgs(v.args);
   if (!Array.isArray(v.ops)) return bad('ops must be an array');
-  if (v.ops.length > MAX_ANIMATION_OPS) return bad(`ops must hold at most ${MAX_ANIMATION_OPS} entries`);
+  if (v.ops.length > MAX_ANIMATION_OPS) throw new RebuildError('ANIMATION_OPS_TOO_MANY', `ops must hold at most ${MAX_ANIMATION_OPS} entries (got ${v.ops.length})`);
   if (v.ops.length === 0) throw new RebuildError('ANIMATION_OPS_EMPTY', 'ops must hold at least 1 operation; nothing to apply');
   const ops = v.ops.map((op, i) => {
     try { return parseAnimationSourceOp(op, `ops[${i}]`); }
@@ -422,6 +422,14 @@ export interface AnimationJob {
   check: CheckSummary | null;
   files: FilesDiff | null;
   build: RebuildBuild | null;
+}
+export interface AnimationSourceStatus {
+  available: boolean;
+  reason: string | null;
+  path: string | null;
+  sha256: string | null;
+  text: string | null;
+  easings: Record<string, [number, number, number, number]> | null;
 }
 /**
  * Deterministic: the package, the config bytes, the patch's own bytes and both tool versions. No clock. A retune-routed
@@ -721,9 +729,80 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       producer: resolved.ok ? tool(resolved.producer) : null, compiler: resolved.ok ? tool(resolved.compiler) : null,
       // #114: what the retarget editor offers — the pose producer, the declared sequences, the rig's bones and animations.
       retarget: await retargetStatus(inputs),
+      // #235: the handoff's motion.animations_from file (path, sha256, text) and the rig's easings table for the timeline editor.
+      animations: await animationsStatus(inputs),
       reason,
       running,
     };
+  }
+  /** #235: what the keyed animation editor starts from. */
+  async function animationsStatus(inputs: ProducerInputs | null): Promise<AnimationSourceStatus> {
+    if (!inputs) {
+      return {
+        available: false,
+        reason: p.handoff ? handoffGap(p.handoff) : (p.handoffReason ?? modelingHandoffMissing(null)),
+        path: null,
+        sha256: null,
+        text: null,
+        easings: null,
+      };
+    }
+    let easings: Record<string, [number, number, number, number]> | null = null;
+    try {
+      const rigMotion = JSON.parse(await readFile(join(inputs.rig, 'motion.json'), 'utf8')) as { easings?: unknown };
+      if (rigMotion.easings && typeof rigMotion.easings === 'object' && !Array.isArray(rigMotion.easings)) {
+        easings = rigMotion.easings as Record<string, [number, number, number, number]>;
+      }
+    } catch { /* optional */ }
+    const configDoc = object(JSON.parse(inputs.configText), 'config');
+    const motion = configDoc.motion && typeof configDoc.motion === 'object' && !Array.isArray(configDoc.motion) ? configDoc.motion as Record<string, unknown> : null;
+    const relFrom = typeof motion?.animations_from === 'string' && motion.animations_from.trim() ? motion.animations_from : null;
+    if (!relFrom) {
+      return {
+        available: false,
+        reason: 'ANIMATION_SOURCE_MISSING: config.json does not declare an "animations_from" motion spec file.',
+        path: null,
+        sha256: null,
+        text: null,
+        easings,
+      };
+    }
+    let absFrom: string;
+    try { absFrom = await realpath(resolve(dirname(inputs.config), relFrom)); }
+    catch {
+      return {
+        available: false,
+        reason: `ANIMATION_SOURCE_MISSING: config motion.animations_from (${relFrom}) does not exist`,
+        path: relFrom,
+        sha256: null,
+        text: null,
+        easings,
+      };
+    }
+    const showFrom = relative(await realpath(p.root), absFrom).split(sep).join('/') || '.';
+    const handoffFile = inputs.handoff.files.find(f => f.path === showFrom);
+    if (!handoffFile) {
+      return {
+        available: false,
+        reason: `ANIMATION_SOURCE_MISSING: config motion.animations_from (${showFrom}) is missing from the handoff`,
+        path: showFrom,
+        sha256: null,
+        text: null,
+        easings,
+      };
+    }
+    const text = await readFile(absFrom, 'utf8'), hash = sha256(text);
+    if (hash !== handoffFile.sha256) {
+      return {
+        available: false,
+        reason: `REBUILD_INPUTS_CHANGED: ${showFrom} changed since the review was opened; restart review`,
+        path: showFrom,
+        sha256: hash,
+        text: null,
+        easings,
+      };
+    }
+    return { available: true, reason: null, path: showFrom, sha256: hash, text, easings };
   }
   /** #111: what the cloth recipe form starts from. */
   async function clothStatus(handoff: Handoff, inputs: ProducerInputs, resolved: ReturnType<typeof resolveProducer>) {
@@ -1574,7 +1653,15 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       throw new RebuildError('REBUILD_ANIMATIONS_STALE', 'the animations_from file changed since the editor read it; reload');
     }
 
-    const builder = new AnimationOpBuilder(baseAnimText);
+    let fallbackEasings: Record<string, [number, number, number, number]> | undefined;
+    try {
+      const rigMotion = JSON.parse(await readFile(join(inputs.rig, 'motion.json'), 'utf8')) as { easings?: unknown };
+      if (rigMotion.easings && typeof rigMotion.easings === 'object' && !Array.isArray(rigMotion.easings)) {
+        fallbackEasings = rigMotion.easings as Record<string, [number, number, number, number]>;
+      }
+    } catch { /* optional */ }
+
+    const builder = new AnimationOpBuilder(baseAnimText, fallbackEasings);
     try {
       for (const op of request.ops) builder.apply(op);
     } catch (e) {
