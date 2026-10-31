@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/rig-c/review/compare/v0.16.0...v0.17.0) (2026-10-31)
+
+
+### Features
+
+* **server:** exit when the last review window closes ([#243](https://github.com/rig-c/review/issues/243)) ([b94ba18](https://github.com/rig-c/review/commit/b94ba18275113bf7e2cf855e2f91b53a76d16ce1))
+
 ## [0.16.0](https://github.com/rig-c/review/compare/v0.15.1...v0.16.0) (2026-10-31)
 
 
