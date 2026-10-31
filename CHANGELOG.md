@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/rig-c/review/compare/v0.17.0...v0.18.0) (2026-10-31)
+
+
+### Features
+
+* **compare:** make Compare a mode in the top switch ([#245](https://github.com/rig-c/review/issues/245)) ([747dcae](https://github.com/rig-c/review/commit/747dcae57ee277d6f31e8f71ab5ad57f5b1d7730))
+
 ## [0.17.0](https://github.com/rig-c/review/compare/v0.16.0...v0.17.0) (2026-10-31)
 
 
