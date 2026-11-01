@@ -409,9 +409,9 @@ export function parseAnimationRequest(input: unknown): AnimationRequest {
   });
   return { configHash: v.configHash as string, animationsFromHash: v.animationsFromHash as string, ops, args };
 }
-/** Deterministic: the package, the config bytes, the handoff animations_from bytes, the canonical ops bytes, both tool versions and any non-default rig flags. No clock. */
-export function animationId(input: { sourceHash: string; configHash: string; animationsFromHash: string; opsText: string; producer: string; compiler: string; args?: readonly string[] }): string {
-  return sha256(JSON.stringify([REBUILD_SCHEMA, 'animation', input.sourceHash, input.configHash, input.animationsFromHash, input.opsText, input.producer, input.compiler, ...(input.args?.length ? [input.args] : [])]));
+/** Deterministic: the package, the config bytes, the handoff animations_from bytes, the canonical ops bytes, both tool versions, any non-default rig flags, and any exported environment schedule. No clock. */
+export function animationId(input: { sourceHash: string; configHash: string; animationsFromHash: string; opsText: string; producer: string; compiler: string; args?: readonly string[]; environment?: string }): string {
+  return sha256(JSON.stringify([REBUILD_SCHEMA, 'animation', input.sourceHash, input.configHash, input.animationsFromHash, input.opsText, input.producer, input.compiler, ...(input.args?.length ? [input.args] : []), ...(input.environment ? ['environment', input.environment] : [])]));
 }
 export interface AnimationJob {
   schema: typeof REBUILD_SCHEMA; kind: 'animation'; id: string; status: RebuildStatus; reused: boolean; op: 'rig';
@@ -422,6 +422,7 @@ export interface AnimationJob {
   check: CheckSummary | null;
   files: FilesDiff | null;
   build: RebuildBuild | null;
+  environment?: ApplyWorld['record'];
 }
 export interface AnimationSourceStatus {
   available: boolean;
@@ -1602,7 +1603,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   }
 
   /** #235: spliced `animations_from` → `<dir>/animations.json`, `<dir>/config.json` pointing at it → `rig-parts rig` → compile → `rig-parts check`. */
-  function executeAnimation(job: AnimationJob, dir: string, inputs: ProducerInputs, resolved: Resolved, scratchConfig: string, splicedAnimations: string): Promise<void> {
+  function executeAnimation(job: AnimationJob, dir: string, inputs: ProducerInputs, resolved: Resolved, scratchConfig: string, splicedAnimations: string, world: ApplyWorld | null = null): Promise<void> {
     const args = job.request.args ?? [], producer = resolved.producer;
     return apply(job, dir, inputs, resolved, {
       cmd: 'rig', spec: 'rig',
@@ -1620,17 +1621,18 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     }, {
       diff: files => { job.files = files; },
       check: (summary: CheckSummary, wallMs: number | null) => { job.wallMs.check = wallMs; job.check = summary; },
+      world,
     });
   }
 
   /**
-   * `POST /api/rebuild` with `{animation: {configHash, animationsFromHash, ops, args?}}` (#235): applies the cumulative
+   * `POST /api/rebuild` with `{animation: {configHash, animationsFromHash, ops, args?}, environment?}` (#235): applies the cumulative
    * span-preserving ops directly to the handoff's `motion.animations_from` text (`REBUILD_ANIMATIONS_STALE` when
    * `animationsFromHash` does not match the handoff file), writes `<dir>/animations.json` and `<dir>/config.json` in
    * scratch, and runs `rig-parts rig` + `rigc build` + `check`. Empty or no-op ops (leaving `animations_from` equal to
    * the handoff text) are refused before anything is written or run; producer refusals return by name with nothing landed.
    */
-  async function startAnimation(input: unknown): Promise<{ status: number; body: unknown }> {
+  async function startAnimation(input: unknown, world: ApplyWorld | null = null, rawEnvironment?: unknown): Promise<{ status: number; body: unknown }> {
     const request = parseAnimationRequest(input);
     assertStateOutside();
     await options.unchanged();
@@ -1681,6 +1683,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
 
     const resolved = resolveProducer(options.starts);
     if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
+    if (world && !versionAtLeast(resolved.producer.version, CHECK_ENVIRONMENT_SINCE)) {
+      const error = modelingProducerTooOld(resolved.producer.version || 'unknown', CHECK_ENVIRONMENT_SINCE, 'rig-parts check --environment');
+      return { status: 200, body: { status: 'refused', error, producerLine: error } };
+    }
     try { assertWholeRigBaseline(await settledBaseline()); } catch (e) { if (e instanceof BaselineError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
 
     const opsText = animationOpsText(effectiveOps), opsSha256 = sha256(opsText), afterSha256 = sha256(splicedAnimText);
@@ -1692,6 +1698,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       producer: `${resolved.producer.package}@${resolved.producer.version}`,
       compiler: `${resolved.compiler.package}@${resolved.compiler.version}`,
       args: request.args,
+      ...(world ? { environment: world.record.sha256 } : {}),
     });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
@@ -1707,6 +1714,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         ops: effectiveOps,
         ...(request.args.length ? { args: request.args } : {}),
       },
+      ...(world && rawEnvironment !== undefined ? { environment: rawEnvironment } : {}),
     };
 
     return reserve(`REBUILD_BUSY: rebuild ${id} is still running`, async () => {
@@ -1739,9 +1747,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         check: null,
         files: null,
         build: null,
+        ...(world ? { environment: world.record } : {}),
       };
       jobs.set(id, job); running = id; bodies.set(id, recordedBody);
-      void executeAnimation(job, dir, inputs, resolved, scratchCfgText, splicedAnimText).finally(() => { if (running === id) running = null; });
+      void executeAnimation(job, dir, inputs, resolved, scratchCfgText, splicedAnimText, world).finally(() => { if (running === id) running = null; });
       return { status: 202, body: snapshot(job) };
     });
   }
@@ -1749,8 +1758,11 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   /** `POST /api/rebuild`: refusals are returned before anything is written or run. */
   async function start(input: unknown): Promise<{ status: number; body: unknown }> {
     if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'animation')) {
-      if (Object.keys(input).length !== 1) bad('expected exactly {animation}');
-      return startAnimation((input as { animation: unknown }).animation);
+      const keys = Object.keys(input).sort().join(',');
+      if (keys !== 'animation' && keys !== 'animation,environment') bad('expected exactly {animation} or {animation, environment}');
+      const rawEnv = Object.hasOwn(input, 'environment') ? (input as { environment: unknown }).environment : undefined;
+      const world = rawEnv !== undefined ? parseApplyWorld(rawEnv) : null;
+      return startAnimation((input as { animation: unknown }).animation, world, rawEnv);
     }
     if (input && typeof input === 'object' && !Array.isArray(input) && Object.hasOwn(input, 'retarget')) {
       if (Object.keys(input).length !== 1) bad('expected exactly {retarget}');

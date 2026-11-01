@@ -1366,7 +1366,7 @@ function restoreEnvironment():void {
 function feedbackEnvironment(){return player?environmentJson(environmentContext(wind.read(),gravityValue(),environmentApplied(),player.environment())):null;}
 function enableEnvironment(modelUrl:string):void {
  for(const id of environmentInputs)el<HTMLInputElement|HTMLButtonElement>(id).disabled=false;
- syncEnvironmentInputs();text('physics-panel-state','Reading the compiled model…');
+ syncEnvironmentInputs();text('physics-panel-state','Reading the compiled model…');text('idle-tracks-state','Reading the compiled model…');
  readingsPanel?.catalog(data.feedbackCatalog.slots??[],data.feedbackCatalog.bones??[]);readingsPanel?.status('Pick readings, then Run: each runs on the inspected build and on the latest scratch build.',false);
  const rig=data.reviewedSource.rig;
  if(!rig){inspectedDocumentReason='PHYSICS_TUNING_UNAVAILABLE: no reviewed rig identity';refreshPhysics();return;}
@@ -1377,7 +1377,7 @@ function refreshPhysics():void {
  if(!physicsPanel)return;
  if(inspectedDocumentReason){physicsPanel.load({available:false,reason:inspectedDocumentReason},[]);return;}
  if(!inspectedDocument)return;
- if(!rebuildStatus){text('physics-panel-state','Reading the producer handoff…');return;}
+ if(!rebuildStatus){text('physics-panel-state','Reading the producer handoff…');text('idle-tracks-state','Reading the producer handoff…');return;}
  if(!rebuildStatus.inputs||!rebuildStatus.producer){physicsPanel.load({available:false,reason:rebuildStatus.reason??'PHYSICS_TUNING_UNAVAILABLE: no producer handoff'},[]);return;}
  const bones=(inspectedDocument as {bones?:unknown}).bones,list=Array.isArray(bones)?bones.filter((b):b is {name:string;parent?:string}=>!!b&&typeof (b as {name?:unknown}).name==='string'):[];
  physicsPanel.load(tuningRows(rebuildStatus.constraints??null,inspectedDocument),list);
@@ -1468,7 +1468,7 @@ async function applyMeshDelta(doc:MeshEditDocument,line:(text:string)=>void):Pro
 }
 /** `GET /api/rebuild`: whether Apply can run, and the producer config's regions to start an untouched editor from. */
 async function loadRebuildStatus():Promise<RebuildStatusView|null> {
- try{rebuildStatus=await api<RebuildStatusView>('/api/rebuild');}catch(error){rebuildStatus=null;chestEditor?.notify(`REBUILD_STATUS_UNAVAILABLE: ${errorText(error)}`,true);return null;}
+ try{rebuildStatus=await api<RebuildStatusView>('/api/rebuild');}catch(error){rebuildStatus=null;const reason=`REBUILD_STATUS_UNAVAILABLE: ${errorText(error)}`;chestEditor?.notify(reason,true);animationPanel?.loadSource(null,reason);return null;}
  const seed={...(seedFields(rebuildStatus,chestField)??{}),...(seedLandmarks(rebuildStatus,chestField)??{})};
  if(Object.keys(seed).length){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
  if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,true);
@@ -1697,12 +1697,16 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   unappliedOps:()=>animationPanel?.unappliedOps()??[],
   hasPreview:()=>animationPanel?.hasUnappliedPreview()??false,
   source:()=>animationPanel?.sourceInfo()??null,
+  setSourceLoading:()=>animationPanel?.setSourceLoading(),
+  setSource:(source:Parameters<AnimationInspectionPanel['loadSource']>[0],fallbackReason?:string|null)=>animationPanel?.loadSource(source,fallbackReason),
   gate:()=>animationPanel?.gateInfo()??null,
   tracks:()=>animationPanel?.tracksInfo()??[],
   selectedKey:()=>animationPanel?.selectedKeyInfo()??null,
   selectKey:(track:number,key:number)=>animationPanel?.selectKey(track,key)??false,
   setKeyTime:(track:number,key:number,t:number)=>animationPanel?.setKeyTime(track,key,t)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},
   setKeyValue:(track:number,key:number,channel:number|undefined,value:number|readonly number[])=>animationPanel?.setKeyValue(track,key,channel,value)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},
+  setKeyCurve:(track:number,key:number,curve:readonly number[]|'stepped'|null)=>animationPanel?.setKeyCurve(track,key,curve)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},
+  setKeyEase:(track:number,key:number,ease:string|null)=>animationPanel?.setKeyEase(track,key,ease)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},
   insertKey:(track:number,t:number,value?:readonly number[])=>animationPanel?.insertKey(track,t,value)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},
   deleteKey:(track:number,key:number)=>animationPanel?.deleteKey(track,key)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},
   moveSelection:(selections:ReadonlyArray<{track:number;key:number}>,deltaTime:number)=>animationPanel?.moveSelection(selections,deltaTime)??{ok:false,error:'ANIMATION_PANEL_UNAVAILABLE'},

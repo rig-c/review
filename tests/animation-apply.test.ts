@@ -59,13 +59,14 @@ const f = n => { const i = a.indexOf(n); return i >= 0 ? a[i + 1] : null; };
 if (a[0] === '--version') { console.log('2.0.0'); process.exit(0); }
 if (a[0] === 'check') {
   const out = f('--out');
+  const envPath = f('--environment');
   fs.mkdirSync(out, { recursive: true });
   fs.writeFileSync(path.join(out, 'check.json'), JSON.stringify({
     PASS: true,
     gate_spine_html_green: true,
     MESH_CLEAN: { status: 'PASS' }
   }));
-  console.log('check: PASS (1 of 1 bar(s) met)');
+  console.log('check: PASS (1 of 1 bar(s) met)' + (envPath ? ' [env=' + path.basename(envPath) + ']' : ''));
   process.exit(0);
 }
 if (a[0] === 'rig') {
@@ -777,6 +778,52 @@ test('Slice 2 Apply: retime, delete, insert, value, curve match H5; cumulative s
       expect(customRecord.args).toEqual(['--page-edges', 'pot', '--pack-shape', 'rect']);
       expect(parseApplied(JSON.stringify(customRecord))).toEqual(customRecord);
       await api('/api/rebuild/undo', { from: customFlagsJob.id });
+
+      // 5b. Defect 1: Animation Apply with an active environment schedule ({animation, environment})
+      const envSchedule = {
+        spec: 'rigc-environment/1' as const,
+        steps: [
+          { t: 0, wind: [25, 0] as [number, number], gravity: [0, 1] as [number, number] },
+          { t: 0.5, wind: [40, 0] as [number, number], gravity: [0, 1.2] as [number, number] },
+        ],
+      };
+      const envJob = await settle(
+        await api<AnimationJobView>('/api/rebuild', {
+          animation: {
+            configHash,
+            animationsFromHash,
+            ops: [op1],
+          },
+          environment: envSchedule,
+        }),
+      );
+      expect((envJob as unknown as { error?: string }).error).toBeUndefined();
+      expect(envJob.status).toBe('built');
+      expect(envJob.environment).toBeDefined();
+      expect(envJob.environment!.steps).toBe(2);
+      expect(envJob.environment!.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(envJob.lines.some((l) => l.includes('[env=environment.json]'))).toBe(true);
+      const envRecord = animationAppliedRecord(envJob);
+      expect(envRecord.environment).toEqual(envJob.environment);
+      expect(parseApplied(JSON.stringify(envRecord))).toEqual(envRecord);
+      expect(() => parseAppliedContext(envRecord)).not.toThrow();
+      expect(appliedSummary(envRecord)).toContain(
+        `under the exported world (2 step(s), sha256 ${envJob.environment!.sha256.slice(0, 16)})`,
+      );
+      expect(animationOutcomeLine(envJob).text).toContain(
+        `under the exported world (2 step(s), sha256 ${envJob.environment!.sha256.slice(0, 16)})`,
+      );
+      // Planted mutant control: extra unknown top-level field alongside {animation, environment} is refused
+      const badEnvKeysReply = await api<{ status: string; error: string }>('/api/rebuild', {
+        animation: { configHash, animationsFromHash, ops: [op1] },
+        environment: envSchedule,
+        extraField: 1,
+      });
+      expect(badEnvKeysReply.status).toBe('refused');
+      expect(badEnvKeysReply.error).toBe(
+        'REBUILD_REQUEST_INVALID: expected exactly {animation} or {animation, environment}',
+      );
+      await api('/api/rebuild/undo', { from: envJob.id });
     } finally {
       server.stop();
     }

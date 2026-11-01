@@ -66,8 +66,9 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
  const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=selectedInspector() as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
  let disposed=false,frame=0,applying=false,available={width:0,height:0},effective=allocateWorkspaceLayout(available,desired,columns);
  const panelFor=(tab:InspectorTab)=>{const section=require('inspector-'+tab);return (typeof section.querySelector==='function'?section.querySelector<HTMLElement>('.animate-blocks-panel'):null)??section;};
- const capture=()=>{const tab=active(),section=require('inspector-'+tab),panel=panelFor(tab),saved=memory.snapshot()[tab];if(!section.hidden&&(!saved||saved.x<=Math.max(0,panel.scrollWidth-panel.clientWidth)&&saved.y<=Math.max(0,panel.scrollHeight-panel.clientHeight)))memory.capture(tab,panel);};
- const restore=()=>{if(!disposed)memory.restore(active(),panelFor(active()));};
+ const userByTab=new Map<InspectorTab,boolean>(),extentByTab=new Map<InspectorTab,string>(),extentOf=(panel:HTMLElement)=>`${panel.scrollWidth}:${panel.scrollHeight}:${panel.clientWidth}:${panel.clientHeight}`;
+ const capture=()=>{const tab=active(),section=require('inspector-'+tab),panel=panelFor(tab),saved=memory.snapshot()[tab];if(!section.hidden&&(!saved||saved.x<=Math.max(0,panel.scrollWidth-panel.clientWidth)&&saved.y<=Math.max(0,panel.scrollHeight-panel.clientHeight)))memory.capture(tab,panel,false);};
+ const restore=()=>{if(disposed)return;const tab=active(),panel=panelFor(tab);if(panel.clientWidth>0||panel.clientHeight>0)extentByTab.set(tab,extentOf(panel));memory.restore(tab,panel);};
  const schedule=()=>{if(!disposed&&!frame)frame=requestAnimationFrame(()=>{frame=0;apply();});};
  const dock=(panel:WorkspacePanel,drawer:boolean)=>{
   const element=node(panel),dialog=dialogs[panel],trigger=buttons[panel];trigger.hidden=!drawer;handles[panel].hidden=drawer;
@@ -93,17 +94,17 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
  theme.onchange=()=>{store.update({theme:theme.value as WorkspaceTheme});options.defaultTheme(store.get().theme);};sync.onchange=()=>{store.update({defaultCameraSync:sync.checked});};idle.onchange=()=>{store.update({defaultIdleRepeat:idle.checked});};require<HTMLButtonElement>('settings-reset').onclick=()=>store.resetLayout();settingsToggle.onclick=()=>{store.update({settingsCollapsed:!store.get().settingsCollapsed});};
  const unsubscribe=store.subscribe(value=>{desired={...value.panels};renderSettings();schedule();});renderSettings();
  for(const tab of tabs){
-  const panel=panelFor(tab);let user=false,timer:ReturnType<typeof setTimeout>|undefined;
-  const intent=()=>{user=true;if(timer)clearTimeout(timer);timer=setTimeout(()=>{user=false;},600);};const scrolled=()=>{
-   if(!user)return;const saved=memory.snapshot()[tab]??{x:0,y:0};
+  const panel=panelFor(tab);let timer:ReturnType<typeof setTimeout>|undefined;
+  const intent=()=>{userByTab.set(tab,true);if(timer)clearTimeout(timer);timer=setTimeout(()=>{userByTab.set(tab,false);},600);};const scrolled=()=>{
+   if(!userByTab.get(tab))return;const saved=memory.snapshot()[tab]??{x:0,y:0};
    const expected={x:Math.min(saved.x,Math.max(0,panel.scrollWidth-panel.clientWidth)),y:Math.min(saved.y,Math.max(0,panel.scrollHeight-panel.clientHeight))};
    // Scroll steps precede animation frames. An actual new user offset may cancel
    // a queued restore; the restore's own expected clamp must retain its desire.
    if(panel.scrollLeft!==expected.x||panel.scrollTop!==expected.y)memory.capture(tab,panel,true);
   };
-  for(const type of ['wheel','pointerdown','touchstart','keydown'])panel.addEventListener(type,intent,{passive:true});panel.addEventListener('scroll',scrolled,{passive:true});
-  let extent='';const content=new MutationObserver(()=>{const next=`${panel.scrollWidth}:${panel.scrollHeight}:${panel.clientWidth}:${panel.clientHeight}`;if(next!==extent){extent=next;if(tab===active())restore();}});content.observe(panel,{childList:true,subtree:true});
-  disposers.push(()=>{if(timer)clearTimeout(timer);for(const type of ['wheel','pointerdown','touchstart','keydown'])panel.removeEventListener(type,intent);panel.removeEventListener('scroll',scrolled);content.disconnect();});
+  for(const type of ['wheel','pointerdown','touchstart','keydown','click'])panel.addEventListener(type,intent,{passive:true,capture:true});panel.addEventListener('scroll',scrolled,{passive:true});
+  const content=new MutationObserver(()=>{if(panel.clientWidth<=0&&panel.clientHeight<=0)return;const next=extentOf(panel);if(next!==extentByTab.get(tab)){extentByTab.set(tab,next);if(tab===active())restore();}});content.observe(panel,{childList:true,subtree:true});
+  disposers.push(()=>{if(timer)clearTimeout(timer);for(const type of ['wheel','pointerdown','touchstart','keydown','click'])panel.removeEventListener(type,intent,{capture:true});panel.removeEventListener('scroll',scrolled);content.disconnect();});
  }
  const observer=new ResizeObserver(schedule);observer.observe(layout);for(const node of [...stack.children])if(node!==stage)observer.observe(node);for(const tab of tabs)observer.observe(panelFor(tab));
  const resumed=()=>{if(!document.hidden)store.refresh();};document.addEventListener('visibilitychange',resumed);schedule();

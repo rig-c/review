@@ -383,6 +383,7 @@ export interface AnimationEditGate {
   editable: boolean;
   code:
     | 'OK'
+    | 'ANIMATION_SOURCE_LOADING'
     | 'ANIMATION_IDLE_GOVERNED_BY_TURN_PAD'
     | 'ANIMATION_SOURCE_MISSING'
     | 'ANIMATION_NOT_IN_SOURCE'
@@ -1695,7 +1696,9 @@ export class AnimationOpBuilder {
     if (
       sameKeyTarget &&
       ((op.op === 'set_key_time' && last.op.op === 'set_key_time') ||
-        (op.op === 'set_key_value' && last.op.op === 'set_key_value'))
+        (op.op === 'set_key_value' && last.op.op === 'set_key_value') ||
+        ((op.op === 'set_key_curve' || op.op === 'set_key_ease') &&
+          (last.op.op === 'set_key_curve' || last.op.op === 'set_key_ease')))
     ) {
       const replayFrom = last.textBefore;
       const coalescedOp =

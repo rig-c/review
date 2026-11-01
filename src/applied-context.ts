@@ -149,6 +149,8 @@ export interface AppliedAnimation {
   check: CheckSummary | null;
   files: FilesDiff | null;
   modelHash: string;
+  /** #112: the exported `rigc-environment/1` schedule Apply's check read, when "Use for readings" was on. */
+  environment?: { sha256: string; steps: number };
 }
 /** One producer document against the inspected one: `count` differing JSON Pointers, the first `MAX_DIFF_PATHS` listed. */
 export interface DocumentDiff { file: ProducerDocument; count: number; paths: string[] }
@@ -293,7 +295,7 @@ export function parseAppliedContext(value: unknown): void {
     return;
   }
   if (value.schema === APPLIED_ANIMATION_SCHEMA) {
-    const v = exact(value, 'animationsFrom,args,buildId,check,compiler,configHash,files,line,modelHash,ops,opsSha256,producer,schema', field);
+    const v = exact(value, `animationsFrom,args,buildId,check,compiler,configHash,${Object.hasOwn(value, 'environment') ? 'environment,' : ''}files,line,modelHash,ops,opsSha256,producer,schema`, field);
     if (![v.buildId, v.configHash, v.opsSha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, opsSha256 and modelHash are SHA-256 hex`);
     const af = exact(v.animationsFrom, 'afterSha256,beforeSha256,path', `${field}.animationsFrom`);
     if (typeof af.path !== 'string' || !af.path || !hex(af.beforeSha256) || !hex(af.afterSha256)) throw new Error(`${field}.animationsFrom: {path, beforeSha256, afterSha256 (SHA-256 hex)}`);
@@ -303,6 +305,7 @@ export function parseAppliedContext(value: unknown): void {
     tool(v.producer, `${field}.producer`); tool(v.compiler, `${field}.compiler`); lineOrNull(v.line, `${field}.line`);
     parseCheck(v.check, `${field}.check`);
     parseFilesDiff(v.files, `${field}.files`);
+    if (Object.hasOwn(v, 'environment')) { const e = exact(v.environment, 'sha256,steps', `${field}.environment`); if (!hex(e.sha256) || !Number.isSafeInteger(e.steps) || (e.steps as number) < 1) throw new Error(`${field}.environment: {sha256 (SHA-256 hex), steps ≥ 1}`); }
     return;
   }
   throw new Error(`${field}.schema: expected ${APPLIED_REGIONS_SCHEMA}, ${APPLIED_PATCH_SCHEMA} (patch ${CONFIG_PATCH_SCHEMA}), ${APPLIED_DELTA_SCHEMA} (mesh-edit delta), ${APPLIED_RETARGET_SCHEMA} (retarget) or ${APPLIED_ANIMATION_SCHEMA} (animation)`);
@@ -328,8 +331,9 @@ export function appliedSummary(value: unknown): string | null {
     const a = value as AppliedAnimation;
     const anims = [...new Set(a.ops.map(o => o.animation))];
     const check = a.check ? `check ${a.check.pass === null ? 'not read' : a.check.pass ? 'PASS' : 'FAIL'}` : 'check not run';
+    const env = a.environment ? ` under the exported world (${a.environment.steps} step(s), sha256 ${a.environment.sha256.slice(0, 16)})` : '';
     const diff = a.files ? ` · ${filesDiffText(a.files)}` : '';
-    return `animation ${a.opsSha256.slice(0, 12)}… (${a.ops.length} op(s) on ${anims.join(', ')}; ${a.animationsFrom.path} ${a.animationsFrom.beforeSha256.slice(0, 12)}… → ${a.animationsFrom.afterSha256.slice(0, 12)}…) with ${producer.package} ${producer.version} · ${check}${diff} · model ${model}…`;
+    return `animation ${a.opsSha256.slice(0, 12)}… (${a.ops.length} op(s) on ${anims.join(', ')}; ${a.animationsFrom.path} ${a.animationsFrom.beforeSha256.slice(0, 12)}… → ${a.animationsFrom.afterSha256.slice(0, 12)}…) with ${producer.package} ${producer.version} · ${check}${env}${diff} · model ${model}…`;
   }
   const a = value as AppliedPatch, paths = a.patch.ops.map(o => `${o.op} ${o.path}`);
   const check = a.check ? `check ${a.check.pass === null ? 'not read' : a.check.pass ? 'PASS' : 'FAIL'}` : 'check not run';

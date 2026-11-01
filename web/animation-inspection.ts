@@ -18,6 +18,7 @@ import {
  cleanMotionNumber,
  MAX_ANIMATION_OPS,
  overlayDraftOnInspection,
+ seedCubicCurve,
  type AnimationEditGate,
  type AnimationSourceOp,
  type EasingTuple,
@@ -109,6 +110,11 @@ export class AnimationInspectionPanel {
  private cursor:SVGElement|null=null;
  private plot:((t:number,v:number)=>{x:number;y:number})|null=null;
  private channelSelect:HTMLSelectElement;
+ private segmentSelect:HTMLSelectElement;
+ private easeSelect:HTMLSelectElement;
+ private curveReadonly:HTMLElement;
+ private curvePlot:SVGSVGElement;
+ private curveSegment=0;
  private readout:HTMLOutputElement;
  private status:HTMLElement;
  private gateBanner:HTMLElement;
@@ -129,8 +135,9 @@ export class AnimationInspectionPanel {
  private boneButtons=new Map<string,HTMLButtonElement>();
  private bonePoints=false;
 
- // Keyed animation editing state (Slice 3 / Slice 3b)
+ // Keyed animation editing state (Slice 3 / Slice 3b / Slice 4a)
  private source:AnimationSourceView|null=null;
+ private sourceLoaded=false;
  private sourceFallbackReason:string|null=null;
  private builder:AnimationOpBuilder|null=null;
  private appliedOps:AnimationSourceOp[]=[];
@@ -148,6 +155,17 @@ export class AnimationInspectionPanel {
   moved:boolean;
   laneEl:HTMLElement;
   markEl:HTMLButtonElement;
+  end:number;
+ }|null=null;
+ private draggingCurveHandle:{
+  pointerId:number;
+  trackIndex:number;
+  segmentIndex:number;
+  handleIndex:1|2;
+  channel:number;
+  low:number;
+  high:number;
+  span:number;
   end:number;
  }|null=null;
 
@@ -179,8 +197,11 @@ export class AnimationInspectionPanel {
 <section data-animation-pane="curve" aria-label="Stored curves" hidden>
  <div class="animation-curve-toolbar">
   <label>Channel <select data-curve-channel aria-label="Stored animation channel"></select></label>
+  <label>Segment <select data-curve-segment aria-label="Curve segment"></select></label>
+  <label>Curve <select data-curve-ease aria-label="Segment curve or easing"></select></label>
   <label>Time (s) <input data-curve-time type="number" min="0" step="any" aria-label="Exact inspection seconds"></label>
   <button data-curve-seek type="button">Inspect time</button>
+  <span class="animation-curve-readonly hint" data-curve-readonly hidden></span>
   <output data-curve-readout aria-live="off"></output>
  </div>
  <svg data-curve-plot role="img" aria-label="Exact stored curve and control points" viewBox="0 0 800 230"></svg>
@@ -201,6 +222,10 @@ export class AnimationInspectionPanel {
   this.applyNote.textContent=ANIMATION_APPLY_ISOLATION_NOTE;
   this.applyNote.title=ANIMATION_APPLY_ISOLATION_NOTE;
   this.channelSelect=host.querySelector('[data-curve-channel]')!;
+  this.segmentSelect=host.querySelector('[data-curve-segment]')!;
+  this.easeSelect=host.querySelector('[data-curve-ease]')!;
+  this.curveReadonly=host.querySelector('[data-curve-readonly]')!;
+  this.curvePlot=host.querySelector('[data-curve-plot]')!;
   this.readout=host.querySelector('[data-curve-readout]')!;
 
   this.undoOpBtn.onclick=()=>{this.undoOp();};
@@ -230,6 +255,18 @@ export class AnimationInspectionPanel {
   this.selection=new InspectionSelection(value=>{options.select(value);this.renderSelection();});
   host.querySelector<HTMLButtonElement>('[data-curve-seek]')!.onclick=()=>{const value=host.querySelector<HTMLInputElement>('[data-curve-time]')!.value.trim();options.seek(value?Number(value):NaN);};
   this.channelSelect.onchange=()=>{this.unavailableChannel='';const [pointer,c]=JSON.parse(this.channelSelect.value) as [string,number];this.track=this.inspection?.tracks.find(t=>t.pointer===pointer)??null;this.channel=c;this.renderCurve();this.update(this.at,this.runtimeDuration);};
+  this.segmentSelect.onchange=()=>{
+   this.curveSegment=Math.max(0,Number(this.segmentSelect.value)||0);
+   const cls=this.resolveTrackClassification(this.track);
+   if(this.gateInfo().editable&&cls?.editable&&this.track){
+    this.selectedKey={animation:this.animation,trackIndex:cls.trackIndex,keyIndex:this.curveSegment,pointer:this.track.pointer};
+    this.syncTimelineKeysInPlace();
+    this.syncKeyInspectorInPlace();
+   }
+   this.renderCurve();
+  };
+  this.easeSelect.onchange=()=>{this.applyCurveModeChange(this.easeSelect.value);};
+  this.bindCurveHandleDrag();
   this.picks=document.createElement('div');this.picks.className='animation-stage-picks';stage.append(this.picks);
   const down=(e:PointerEvent)=>{this.down=e.isPrimary&&e.button===0?{x:e.clientX,y:e.clientY}:null;};
   const up=(e:PointerEvent)=>{const start=this.down;this.down=null;if(!start||Math.hypot(e.clientX-start.x,e.clientY-start.y)>3||this.space||!options.enabled()||e.target instanceof Element&&e.target.closest('button,input,select,textarea')||!this.frame)return;
@@ -282,14 +319,28 @@ export class AnimationInspectionPanel {
   }
   if(fromResize||panel.clientHeight!==this.lastDockClientHeight){
    this.lastDockClientHeight=panel.clientHeight;
-   const overhead=panel.hasAttribute('data-inspector-panel')?125:155;
+   const overhead=panel.hasAttribute('data-inspector-panel')?129:159;
    this.lastLanesHeight=Math.max(104,Math.floor(panel.clientHeight-overhead));
   }
   lanes.style.height=`${this.lastLanesHeight}px`;
   lanes.style.maxHeight=`${this.lastLanesHeight}px`;
  }
 
+ setSourceLoading(){
+  this.sourceLoaded=false;
+  this.source=null;
+  this.sourceFallbackReason=null;
+  this.builder=null;
+  this.appliedOps=[];
+  this.selectedKey=null;
+  this.syncEffectiveInspection(false);
+  this.renderGateBanner();
+  this.renderEditorBar();
+  this.renderSelection();
+ }
+
  loadSource(source:AnimationSourceView|null,fallbackReason:string|null=null){
+  this.sourceLoaded=true;
   this.source=source;
   this.sourceFallbackReason=fallbackReason;
   if(source?.available&&source.text){
@@ -366,6 +417,14 @@ export class AnimationInspectionPanel {
     reason:
      this.options.readOnlyReason??
      'keyed animation editing is read-only in comparison sessions until per-side animation rebuild is wired.',
+    note:null,
+   };
+  }
+  if(!this.sourceLoaded){
+   return {
+    editable:false,
+    code:'ANIMATION_SOURCE_LOADING',
+    reason:'Reading the producer handoff…',
     note:null,
    };
   }
@@ -461,8 +520,18 @@ export class AnimationInspectionPanel {
    this.gateBanner.title=this.gateBanner.textContent;
    this.gateBanner.dataset.gateCode='NONE';
    this.gateBanner.dataset.editable='false';
+   delete this.gateBanner.dataset.loading;
    return;
   }
+  if(gate.code==='ANIMATION_SOURCE_LOADING'){
+   this.gateBanner.textContent=gate.reason??'Reading the producer handoff…';
+   this.gateBanner.title=this.gateBanner.textContent;
+   this.gateBanner.dataset.gateCode='LOADING';
+   this.gateBanner.dataset.editable='false';
+   this.gateBanner.dataset.loading='true';
+   return;
+  }
+  delete this.gateBanner.dataset.loading;
   this.gateBanner.dataset.gateCode=gate.code;
   this.gateBanner.dataset.editable=String(gate.editable);
   if(!gate.editable){
@@ -511,6 +580,7 @@ export class AnimationInspectionPanel {
   this.options.host.setAttribute('aria-busy',String(isBusy));
   this.renderEditorBar();
   this.syncKeyInspectorInPlace();
+  this.renderCurve();
  }
 
  markApplied(ops:readonly AnimationSourceOp[],statusText:string,isError=false){
@@ -598,6 +668,20 @@ export class AnimationInspectionPanel {
    channel!==undefined
     ?{op:'set_key_value',animation:this.animation,track:trackIndex,key:keyIndex,channel,value:value as number}
     :{op:'set_key_value',animation:this.animation,track:trackIndex,key:keyIndex,value:value as readonly number[]},
+   {skipTimelineDomRebuild:true},
+  );
+ }
+
+ setKeyCurve(trackIndex:number,keyIndex:number,curve:readonly number[]|'stepped'|null){
+  return this.applyOp(
+   {op:'set_key_curve',animation:this.animation,track:trackIndex,key:keyIndex,curve},
+   {skipTimelineDomRebuild:true},
+  );
+ }
+
+ setKeyEase(trackIndex:number,keyIndex:number,ease:string|null){
+  return this.applyOp(
+   {op:'set_key_ease',animation:this.animation,track:trackIndex,key:keyIndex,ease},
    {skipTimelineDomRebuild:true},
   );
  }
@@ -1216,6 +1300,9 @@ export class AnimationInspectionPanel {
     marks.className='animation-key-lane';
     marks.dataset.track=trackPointer;
     if(!isEditable){
+     marks.onclick=e=>{if(e.target===marks)this.setEditorStatus(readonlyReason,true);};
+    }
+    if(!isEditable&&track.keys.length===0){
      const badge=document.createElement('span');
      badge.className='animation-readonly-badge';
      badge.dataset.readonlyBadge='';
@@ -1275,6 +1362,15 @@ export class AnimationInspectionPanel {
     line.className='animation-playhead';
     line.dataset.playhead='';
     marks.append(line);
+    if(gate.editable&&!isEditable&&track.keys.length>0){
+     row.classList.add('has-readonly-note');
+     const badge=document.createElement('div');
+     badge.className='animation-readonly-badge animation-readonly-subrow';
+     badge.dataset.readonlyBadge='';
+     badge.textContent=readonlyReason;
+     badge.title=readonlyReason;
+     row.append(badge);
+    }
     list.append(row);
    }
   }
@@ -1452,18 +1548,303 @@ export class AnimationInspectionPanel {
   this.channelSelect.disabled=this.channelSelect.options.length===0;this.renderCurve();this.update(this.at,this.runtimeDuration);
  }
 
+ private resolveTrackClassification(track:InspectionTrack|null):TrackClassification|undefined{
+  if(!track||track.kind!=='bone')return undefined;
+  return this.tracksInfo().find(c=>c.targetKind==='bone'&&c.target===track.target&&c.property===track.name);
+ }
+
+ private availableEasings():Record<string,EasingTuple>{
+  const out:Record<string,EasingTuple>={...(this.source?.easings??{})};
+  const doc=this.draftDocument() as {easings?:Record<string,unknown>}|undefined;
+  if(doc?.easings&&typeof doc.easings==='object'&&!Array.isArray(doc.easings)){
+   for(const [k,v] of Object.entries(doc.easings)){
+    if(Array.isArray(v)&&v.length===4&&v.every(n=>typeof n==='number'&&Number.isFinite(n))){
+     out[k]=[v[0] as number,v[1] as number,v[2] as number,v[3] as number];
+    }
+   }
+  }
+  return out;
+ }
+
+ private fullSegmentCubic(trackIndex:number,segmentIndex:number):number[]|null{
+  const rawKeys=this.readDraftTrackKeys(trackIndex);
+  const k0=rawKeys[segmentIndex],k1=rawKeys[segmentIndex+1];
+  if(!k0||!k1)return null;
+  const numChannels=k0.v.length;
+  if(Array.isArray(k0.curve)&&k0.curve.length===numChannels*4){
+   return k0.curve.map(n=>cleanMotionNumber(n));
+  }
+  if(typeof k0.ease==='string'&&k0.ease!=='stepped'){
+   const handles=this.availableEasings()[k0.ease];
+   if(handles&&handles.length===4){
+    const [hx1,hy1,hx2,hy2]=handles;
+    const dt=k1.t-k0.t;
+    const out:number[]=[];
+    for(let c=0;c<numChannels;c++){
+     const v1=k0.v[c]!,dv=k1.v[c]!-v1;
+     out.push(
+      cleanMotionNumber(k0.t+dt*hx1),
+      cleanMotionNumber(v1+dv*hy1),
+      cleanMotionNumber(k0.t+dt*hx2),
+      cleanMotionNumber(v1+dv*hy2),
+     );
+    }
+    return out;
+   }
+  }
+  return seedCubicCurve(k0.t,k0.v,k1.t,k1.v);
+ }
+
+ private applyCurveModeChange(mode:string){
+  const gate=this.gateInfo();
+  const cls=this.resolveTrackClassification(this.track);
+  if(!gate.editable||!cls?.editable){
+   const reason=!gate.editable?`${gate.code}: ${gate.reason}`:cls?`ANIMATION_TRACK_READ_ONLY: ${cls.reason}`:'ANIMATION_TRACK_READ_ONLY: track is read-only';
+   this.setEditorStatus(reason,true);
+   return;
+  }
+  const segIdx=this.curveSegment;
+  if(mode==='linear'){
+   this.setKeyCurve(cls.trackIndex,segIdx,null);
+  }else if(mode==='stepped'){
+   this.setKeyCurve(cls.trackIndex,segIdx,'stepped');
+  }else if(mode==='cubic'){
+   const seeded=this.fullSegmentCubic(cls.trackIndex,segIdx);
+   if(seeded)this.setKeyCurve(cls.trackIndex,segIdx,seeded);
+  }else if(mode.startsWith('ease:')){
+   this.setKeyEase(cls.trackIndex,segIdx,mode.slice(5));
+  }
+ }
+
+ private renderCurveControls(
+  t:InspectionTrack|null,
+  segments:ReturnType<typeof channelSegments>,
+  cls:TrackClassification|undefined,
+  trackEditable:boolean,
+ ){
+  const gate=this.gateInfo();
+  this.segmentSelect.replaceChildren();
+  this.easeSelect.replaceChildren();
+  if(!t||segments.length===0){
+   const opt=document.createElement('option');
+   opt.value='0';
+   opt.textContent='No segments';
+   this.segmentSelect.append(opt);
+   this.segmentSelect.disabled=true;
+   const eOpt=document.createElement('option');
+   eOpt.value='linear';
+   eOpt.textContent='Linear';
+   this.easeSelect.append(eOpt);
+   this.easeSelect.disabled=true;
+   const reason=!gate.editable
+    ?`${gate.code}: ${gate.reason}`
+    :cls&&!cls.editable
+    ?`ANIMATION_TRACK_READ_ONLY: ${cls.reason}`
+    :t
+    ?'Track has fewer than 2 keys (no curve segments).'
+    :'Select a bone channel.';
+   this.curveReadonly.hidden=false;
+   this.curveReadonly.textContent=reason;
+   this.curveReadonly.title=reason;
+   return;
+  }
+
+  if(
+   cls&&
+   this.selectedKey?.animation===this.animation&&
+   this.selectedKey.trackIndex===cls.trackIndex&&
+   this.selectedKey.keyIndex>=0&&
+   this.selectedKey.keyIndex<segments.length
+  ){
+   this.curveSegment=this.selectedKey.keyIndex;
+  }
+  this.curveSegment=Math.max(0,Math.min(this.curveSegment,segments.length-1));
+
+  segments.forEach((s,idx)=>{
+   const opt=document.createElement('option');
+   opt.value=String(idx);
+   opt.textContent=`#${idx} · ${formatSeconds(s.from[0])}s → ${formatSeconds(s.to[0])}s`;
+   if(idx===this.curveSegment)opt.selected=true;
+   this.segmentSelect.append(opt);
+  });
+  this.segmentSelect.disabled=segments.length<=1;
+
+  const easings=this.availableEasings();
+  const modeOptions:Array<[string,string]>=[
+   ['linear','Linear'],
+   ['cubic','Cubic Bézier (handles)'],
+   ['stepped','Stepped (hold)'],
+   ...Object.keys(easings).map((name):[string,string]=>[`ease:${name}`,`Ease: ${name}`]),
+  ];
+  for(const [val,label] of modeOptions){
+   const opt=document.createElement('option');
+   opt.value=val;
+   opt.textContent=label;
+   this.easeSelect.append(opt);
+  }
+
+  let currentMode='linear';
+  if(cls){
+   const rawKey=this.readDraftTrackKeys(cls.trackIndex)[this.curveSegment];
+   if(rawKey){
+    if(rawKey.curve==='stepped'||rawKey.ease==='stepped')currentMode='stepped';
+    else if(Array.isArray(rawKey.curve))currentMode='cubic';
+    else if(typeof rawKey.ease==='string'&&rawKey.ease){
+     const eVal=`ease:${rawKey.ease}`;
+     if(![...this.easeSelect.options].some(o=>o.value===eVal)){
+      const extra=document.createElement('option');
+      extra.value=eVal;
+      extra.textContent=`Ease: ${rawKey.ease}`;
+      this.easeSelect.append(extra);
+     }
+     currentMode=eVal;
+    }
+   }
+  }else{
+   const seg=segments[this.curveSegment];
+   if(seg?.curve==='stepped')currentMode='stepped';
+   else if(Array.isArray(seg?.curve))currentMode='cubic';
+  }
+  this.easeSelect.value=currentMode;
+  this.easeSelect.disabled=this.isBusy||!trackEditable;
+
+  if(!trackEditable){
+   const readonlyReason=!gate.editable
+    ?`${gate.code}: ${gate.reason}`
+    :cls&&!cls.editable
+    ?`ANIMATION_TRACK_READ_ONLY: ${cls.reason}`
+    :`ANIMATION_TRACK_READ_ONLY: bone track "${t.target}.${t.name}" is not an editable source track in ${this.source?.path??'animations_from'}`;
+   this.curveReadonly.hidden=false;
+   this.curveReadonly.textContent=readonlyReason;
+   this.curveReadonly.title=readonlyReason;
+  }else{
+   this.curveReadonly.hidden=true;
+   this.curveReadonly.textContent='';
+   this.curveReadonly.title='';
+  }
+ }
+
+ private onCurveHandlePointerDown(e:PointerEvent,target:SVGElement){
+  if(!e.isPrimary||e.button!==0||this.isBusy||this.draggingCurveHandle)return;
+  e.preventDefault();
+  e.stopPropagation();
+  const gate=this.gateInfo();
+  const cls=this.resolveTrackClassification(this.track);
+  const trackEditable=gate.editable&&!!cls?.editable;
+  if(!trackEditable||!cls||!this.track){
+   const reason=!gate.editable
+    ?`${gate.code}: ${gate.reason}`
+    :cls&&!cls.editable
+    ?`ANIMATION_TRACK_READ_ONLY: ${cls.reason}`
+    :'ANIMATION_TRACK_READ_ONLY: curve handles are read-only on this track';
+   this.setEditorStatus(reason,true);
+   return;
+  }
+  const segIdx=Number(target.dataset.segment??0);
+  const handleIdx=Number(target.dataset.curveHandle)===2?2:1;
+  this.curveSegment=segIdx;
+  this.selectedKey={animation:this.animation,trackIndex:cls.trackIndex,keyIndex:segIdx,pointer:this.track.pointer};
+  this.syncTimelineKeysInPlace();
+  this.syncKeyInspectorInPlace();
+  const field=CHANNELS[this.track.name]?.[this.channel]?.field;
+  if(!field||!this.track.keys.length)return;
+  const segments=channelSegments(this.track,this.channel);
+  const values=this.track.keys.map(k=>k[field] as number);
+  for(const s of segments)if(Array.isArray(s.curve))values.push(s.curve[1]!,s.curve[3]!);
+  const low=Math.min(...values),high=Math.max(...values),span=high-low||1;
+  const end=Math.max(this.runtimeDuration,this.track.keys.at(-1)!.time,Number.MIN_VALUE);
+  this.draggingCurveHandle={
+   pointerId:e.pointerId,
+   trackIndex:cls.trackIndex,
+   segmentIndex:segIdx,
+   handleIndex:handleIdx,
+   channel:this.channel,
+   low,
+   high,
+   span,
+   end,
+  };
+  this.curvePlot.setPointerCapture?.(e.pointerId);
+ }
+
+ private bindCurveHandleDrag(){
+  const svgHost=this.curvePlot;
+  svgHost.addEventListener('pointerdown',e=>{
+   const rawTarget=e.target as (Element&{dataset?:DOMStringMap})|null;
+   const target=rawTarget?.closest?.<SVGElement>('[data-curve-handle]')??(rawTarget?.dataset?.curveHandle?rawTarget as unknown as SVGElement:null);
+   if(target)this.onCurveHandlePointerDown(e,target);
+  });
+
+  svgHost.addEventListener('pointermove',e=>{
+   const drag=this.draggingCurveHandle;
+   if(!drag||drag.pointerId!==e.pointerId)return;
+   const rect=svgHost.getBoundingClientRect();
+   if(rect.width<=0||rect.height<=0)return;
+   const toPlot=svgHost.getScreenCTM()?.inverse();
+   if(!toPlot)return;
+   const svgX=toPlot.a*e.clientX+toPlot.c*e.clientY+toPlot.e;
+   const svgY=toPlot.b*e.clientX+toPlot.d*e.clientY+toPlot.f;
+   const rawT=((svgX-48)/728)*drag.end;
+   const rawV=drag.low+((195-svgY)/160)*drag.span;
+   const rawKeys=this.readDraftTrackKeys(drag.trackIndex);
+   const k0=rawKeys[drag.segmentIndex],k1=rawKeys[drag.segmentIndex+1];
+   if(!k0||!k1)return;
+   const cx=cleanMotionNumber(Math.max(k0.t,Math.min(k1.t,rawT)));
+   const cy=cleanMotionNumber(rawV);
+   const baseCurve=this.fullSegmentCubic(drag.trackIndex,drag.segmentIndex);
+   if(!baseCurve)return;
+   const nextCurve=[...baseCurve];
+   const offset=drag.channel*4+(drag.handleIndex===2?2:0);
+   nextCurve[offset]=cx;
+   nextCurve[offset+1]=cy;
+   this.setKeyCurve(drag.trackIndex,drag.segmentIndex,nextCurve);
+  });
+
+  const endDrag=(e:PointerEvent)=>{
+   const drag=this.draggingCurveHandle;
+   if(!drag||drag.pointerId!==e.pointerId)return;
+   this.draggingCurveHandle=null;
+   if(svgHost.hasPointerCapture?.(e.pointerId))svgHost.releasePointerCapture(e.pointerId);
+   this.renderCurve();
+  };
+  svgHost.addEventListener('pointerup',endDrag);
+  svgHost.addEventListener('pointercancel',endDrag);
+ }
+
  private renderCurve(){
-  const host=this.options.host.querySelector('[data-curve-plot]')!;host.replaceChildren();this.cursor=null;this.plot=null;
-  const t=this.track,field=t&&CHANNELS[t.name]?.[this.channel]?.field;if(!t||!field||!t.keys.length)return;
-  const segments=channelSegments(t,this.channel),values=t.keys.map(k=>k[field] as number);for(const s of segments)if(Array.isArray(s.curve))values.push(s.curve[1]!,s.curve[3]!);
-  const low=Math.min(...values),high=Math.max(...values),span=high-low||1,end=Math.max(this.runtimeDuration,t.keys.at(-1)!.time,Number.MIN_VALUE);
+  const host=this.curvePlot;host.replaceChildren();this.cursor=null;this.plot=null;
+  const t=this.track,field=t&&CHANNELS[t.name]?.[this.channel]?.field;
+  const cls=this.resolveTrackClassification(t);
+  const trackEditable=this.gateInfo().editable&&!!cls?.editable;
+  if(!t||!field||!t.keys.length){
+   this.renderCurveControls(null,[],cls,false);
+   return;
+  }
+  const segments=channelSegments(t,this.channel);
+  this.renderCurveControls(t,segments,cls,trackEditable);
+  const values=t.keys.map(k=>k[field] as number);for(const s of segments)if(Array.isArray(s.curve))values.push(s.curve[1]!,s.curve[3]!);
+  const activeDrag=this.draggingCurveHandle&&cls&&this.draggingCurveHandle.trackIndex===cls.trackIndex&&this.draggingCurveHandle.channel===this.channel?this.draggingCurveHandle:null;
+  const low=activeDrag?activeDrag.low:Math.min(...values);
+  const high=activeDrag?activeDrag.high:Math.max(...values);
+  const span=activeDrag?activeDrag.span:(high-low||1);
+  const end=activeDrag?activeDrag.end:Math.max(this.runtimeDuration,t.keys.at(-1)!.time,Number.MIN_VALUE);
   const plot=this.plot=(time:number,value:number)=>({x:48+time/end*728,y:195-(value-low)/span*160});
   host.append(svg('path',{d:'M48 20 V195 H776',class:'animation-axes'}));
   for(const [time,value]of [[0,low],[end,high]]){const n=svg('text',{x:time===0?48:650,y:time===0?220:15});n.textContent=`${formatSeconds(time)} s · ${formatSeconds(value)}`;host.append(n);}
   for(const [index,s]of segments.entries()){
    const a=plot(...s.from),b=plot(...s.to);let d=`M${a.x} ${a.y}`;
    if(Array.isArray(s.curve)){const c=plot(s.curve[0]!,s.curve[1]!),e=plot(s.curve[2]!,s.curve[3]!);d+=` C${c.x} ${c.y} ${e.x} ${e.y} ${b.x} ${b.y}`;
-    host.append(svg('path',{d:`M${a.x} ${a.y} L${c.x} ${c.y} M${b.x} ${b.y} L${e.x} ${e.y}`,class:'animation-handles'}));for(const p of [c,e])host.append(svg('circle',{cx:p.x,cy:p.y,r:3,class:'animation-handle'}));
+    const hLine=svg('path',{d:`M${a.x} ${a.y} L${c.x} ${c.y} M${b.x} ${b.y} L${e.x} ${e.y}`,class:'animation-handles'});
+    hLine.dataset.handleLines=String(index);
+    host.append(hLine);
+    for(const [hIdx,p] of [[1,c],[2,e]] as const){
+     const hCircle=svg('circle',{cx:p.x,cy:p.y,r:trackEditable?5:3,class:`animation-handle${index===this.curveSegment?' active':''}`});
+     hCircle.dataset.curveHandle=String(hIdx);
+     hCircle.dataset.segment=String(index);
+     hCircle.dataset.editable=String(trackEditable);
+     hCircle.addEventListener('pointerdown',e=>this.onCurveHandlePointerDown(e as PointerEvent,hCircle));
+     host.append(hCircle);
+    }
    }else d+=s.curve==='stepped'?` H${b.x} V${b.y}`:` L${b.x} ${b.y}`;
    const path=svg('path',{d,class:'animation-curve'});path.dataset.segment=String(index);path.dataset.stored=JSON.stringify(s);host.append(path);
   }
