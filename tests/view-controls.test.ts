@@ -281,3 +281,22 @@ test('the review page view bar holds the three layer toggles with matching short
  for(const item of layerShortcuts){const match=bar.match(new RegExp(`<label class="layer-toggle"[^>]*><input aria-keyshortcuts="([A-Z])" id="${item.id}"[^>]*><span>${item.label}</span>`));expect(match?.[1]).toBe(item.key.toUpperCase());}
  expect(html.match(/id="layer-(images|mesh|bones)"/g)?.length).toBe(3);
 });
+
+test('#279: view bar wraps without shrinking or clipping layer toggles and keeps refusal status out of flow',async()=>{
+ const css=await readFile(new URL('../web/styles.css',import.meta.url),'utf8');
+ const checkViewbarCss=(sheet:string)=>{
+  const stripped=sheet.replace(/\/\*[\s\S]*?\*\//g,'');
+  const rules=(sel:string)=>[...stripped.matchAll(/([^{}@]+)\{([^{}]*)\}/g)].filter(m=>m[1]!.split(',').map(s=>s.trim()).includes(sel)).map(m=>m[2]!);
+  const viewbar=rules('.viewbar'),layerToggles=rules('.viewbar>.layer-toggles'),refusal=rules('#stage-comment-refusal');
+  const lastViewbar=viewbar.at(-1)??'',lastLayers=layerToggles.at(-1)??'',lastRefusal=refusal.at(-1)??'';
+  const wraps=lastViewbar.includes('flex-wrap:wrap')&&!viewbar.some(r=>r.includes('flex-wrap:nowrap'));
+  const layersUnclipped=lastLayers.includes('flex:none')&&!layerToggles.some(r=>r.includes('overflow:hidden')||/flex:\s*0\s+1/.test(r));
+  const refusalOutOfFlow=lastRefusal.includes('position:absolute')&&lastRefusal.includes('clip-path:inset(50%)');
+  return wraps&&layersUnclipped&&refusalOutOfFlow;
+ };
+ expect(checkViewbarCss(css)).toBe(true);
+ // Planted pre-#279 rules must fail the gate.
+ expect(checkViewbarCss(css.replace('.viewbar{flex-wrap:wrap;','.viewbar{flex-wrap:nowrap;'))).toBe(false);
+ expect(checkViewbarCss(css.replace('.viewbar>.layer-toggles{flex:none}','.viewbar>.layer-toggles{flex:0 1 auto;overflow:hidden}'))).toBe(false);
+ expect(checkViewbarCss(css.replaceAll('#stage-comment-refusal{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}','#stage-comment-refusal{flex:0 1 180px}'))).toBe(false);
+});
