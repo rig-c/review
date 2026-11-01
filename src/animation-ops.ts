@@ -430,9 +430,13 @@ export function findBoneConstraint(
     const kind = (
       typeof raw.kind === 'string'
         ? raw.kind
-        : typeof rec.kind === 'string'
-          ? rec.kind
-          : fallbackKind
+        : typeof raw.type === 'string'
+          ? raw.type
+          : typeof rec.kind === 'string'
+            ? rec.kind
+            : typeof rec.type === 'string'
+              ? rec.type
+              : fallbackKind
     ) as BoneConstraintInfo['kind'] | undefined;
     if (!kind) return null;
     const boneField =
@@ -1778,9 +1782,11 @@ export class AnimationOpBuilder {
     op: AnimationSourceOp;
     textBefore: string;
     undoGroupId?: number;
+    explicitGroup?: boolean;
   }> = [];
   private nextUndoGroupId = 1;
   private activeUndoGroupId: number | undefined = undefined;
+  private explicitGroupDepth = 0;
 
   constructor(baseText: string, fallbackEasings?: Readonly<Record<string, EasingTuple>>) {
     this.baseText = baseText;
@@ -1807,6 +1813,18 @@ export class AnimationOpBuilder {
   withUndoGroup<T>(groupId: number, fn: () => T): T {
     const prev = this.activeUndoGroupId;
     this.activeUndoGroupId = groupId;
+    this.explicitGroupDepth++;
+    try {
+      return fn();
+    } finally {
+      this.explicitGroupDepth--;
+      this.activeUndoGroupId = prev;
+    }
+  }
+
+  private withInternalUndoGroup<T>(groupId: number, fn: () => T): T {
+    const prev = this.activeUndoGroupId;
+    this.activeUndoGroupId = groupId;
     try {
       return fn();
     } finally {
@@ -1831,9 +1849,11 @@ export class AnimationOpBuilder {
     const last = this.history.at(-1);
 
     // Coalesce a set_key_value into a trailing insert_key on the same (animation, track)
-    // when the set_key_value targets the newly inserted key (e.g. stage bone drag on an unkeyed frame).
+    // only within the same explicit undo group (e.g. stage bone drag on an unkeyed frame).
     if (
       last !== undefined &&
+      this.activeUndoGroupId !== undefined &&
+      last.undoGroupId === this.activeUndoGroupId &&
       last.op.op === 'insert_key' &&
       op.op === 'set_key_value' &&
       last.op.animation === op.animation &&
@@ -1885,9 +1905,13 @@ export class AnimationOpBuilder {
           this.baseText,
           this.fallbackEasings,
         );
-        const groupId = this.activeUndoGroupId ?? last.undoGroupId;
         this.history.pop();
-        this.history.push({ op: coalescedInsert, textBefore: replayFrom, undoGroupId: groupId });
+        this.history.push({
+          op: coalescedInsert,
+          textBefore: replayFrom,
+          undoGroupId: this.activeUndoGroupId,
+          explicitGroup: this.explicitGroupDepth > 0,
+        });
         this.currentText = res.text;
         return res;
       }
@@ -1895,6 +1919,7 @@ export class AnimationOpBuilder {
 
     const sameKeyTarget =
       last !== undefined &&
+      last.undoGroupId === this.activeUndoGroupId &&
       last.op.animation === op.animation &&
       last.op.track === op.track &&
       'key' in last.op &&
@@ -1914,28 +1939,22 @@ export class AnimationOpBuilder {
           ? coalesceSetKeyValueOp(replayFrom, last.op, op)
           : op;
       const res = applyAnimationOp(replayFrom, coalescedOp, this.baseText, this.fallbackEasings);
-      const groupId = this.activeUndoGroupId ?? last.undoGroupId;
       this.history.pop();
-      if (res.text === this.baseText) {
-        this.history.length = 0;
-        this.currentText = this.baseText;
-        return { text: this.baseText, changedSpans: [] };
-      }
       if (res.text === replayFrom) {
         this.currentText = replayFrom;
         return { text: replayFrom, changedSpans: [] };
       }
-      this.history.push({ op: coalescedOp, textBefore: replayFrom, undoGroupId: groupId });
+      this.history.push({
+        op: coalescedOp,
+        textBefore: replayFrom,
+        undoGroupId: this.activeUndoGroupId,
+        explicitGroup: this.explicitGroupDepth > 0,
+      });
       this.currentText = res.text;
       return res;
     }
 
     const res = applyAnimationOp(this.currentText, op, this.baseText, this.fallbackEasings);
-    if (res.text === this.baseText) {
-      this.history.length = 0;
-      this.currentText = this.baseText;
-      return { text: this.baseText, changedSpans: [] };
-    }
     if (res.text === this.currentText) {
       return { text: this.currentText, changedSpans: [] };
     }
@@ -1948,6 +1967,7 @@ export class AnimationOpBuilder {
       op,
       textBefore: this.currentText,
       undoGroupId: this.activeUndoGroupId,
+      explicitGroup: this.explicitGroupDepth > 0,
     });
     this.currentText = res.text;
     return res;
@@ -2005,21 +2025,43 @@ export class AnimationOpBuilder {
         }
       }
 
-      // Coalesce with a trailing batch of set_key_time ops on the same selection
+      // Coalesce with a trailing batch of set_key_time ops on the exact same selection and undo context
+      const last = this.history.at(-1);
       let suffixStart = this.history.length;
       let existingGroupId: number | undefined;
-      while (suffixStart > 0) {
-        const prevEntry = this.history[suffixStart - 1]!;
-        const prev = prevEntry.op;
-        if (
-          prev.op === 'set_key_time' &&
-          prev.animation === animation &&
-          targetTimes.has(`${prev.track}:${prev.key}`)
+      const canTryCoalesce =
+        last !== undefined &&
+        last.undoGroupId !== undefined &&
+        (this.activeUndoGroupId !== undefined
+          ? last.undoGroupId === this.activeUndoGroupId
+          : !last.explicitGroup);
+      if (canTryCoalesce) {
+        const candidateGroupId = last.undoGroupId!;
+        const matchedTargets = new Set<string>();
+        let candidateStart = this.history.length;
+        let validBatch = true;
+        while (
+          candidateStart > 0 &&
+          this.history[candidateStart - 1]!.undoGroupId === candidateGroupId
         ) {
-          existingGroupId ??= prevEntry.undoGroupId;
-          suffixStart--;
-        } else {
-          break;
+          const prev = this.history[candidateStart - 1]!.op;
+          const targetKey = `${prev.track}:${'key' in prev ? prev.key : -1}`;
+          if (
+            prev.op === 'set_key_time' &&
+            prev.animation === animation &&
+            targetTimes.has(targetKey) &&
+            !matchedTargets.has(targetKey)
+          ) {
+            matchedTargets.add(targetKey);
+            candidateStart--;
+          } else {
+            validBatch = false;
+            break;
+          }
+        }
+        if (validBatch && matchedTargets.size === targetTimes.size) {
+          suffixStart = candidateStart;
+          existingGroupId = candidateGroupId;
         }
       }
       if (suffixStart < this.history.length) {
@@ -2033,7 +2075,7 @@ export class AnimationOpBuilder {
       }
 
       const groupId = this.activeUndoGroupId ?? existingGroupId ?? this.beginUndoGroup();
-      this.withUndoGroup(groupId, () => {
+      this.withInternalUndoGroup(groupId, () => {
         for (const track of sortedTracks) {
           const { keys } = resolveEditableTrack(this.currentText, animation, track);
           const keyIndices = [...byTrack.get(track)!].sort((a, b) => {
@@ -2115,7 +2157,7 @@ export class AnimationOpBuilder {
     const changedSpans: { start: number; end: number }[] = [];
     try {
       const groupId = this.activeUndoGroupId ?? this.beginUndoGroup();
-      this.withUndoGroup(groupId, () => {
+      this.withInternalUndoGroup(groupId, () => {
         for (const track of sortedTracks) {
           const keyIndices = byTrack.get(track)!;
           for (const key of keyIndices) {

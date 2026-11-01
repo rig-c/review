@@ -877,6 +877,28 @@ test('Slice 2 Apply: retime, delete, insert, value, curve match H5; cumulative s
 
       const undoA = await cmpApi<{ status: string }>('/api/compare/a/rebuild/undo', { from: jobA.id });
       expect(undoA.status).toBe('inspected');
+
+      // Side B (/api/compare/b/rebuild) also runs independently and leaves Side A's history and files untouched
+      const opB: AnimationSourceOp = { op: 'set_key_value', animation: 'tilt', track: 0, key: 1, value: [24] };
+      let jobB = await cmpApi<AnimationJobView>('/api/compare/b/rebuild', {
+        animation: {
+          configHash: sideB.configHash,
+          animationsFromHash: sideB.animationsFromHash,
+          ops: [opB],
+        },
+      });
+      for (let i = 0; jobB.status === 'running' && i < 200; i++) {
+        await Bun.sleep(20);
+        jobB = await cmpApi<AnimationJobView>(`/api/compare/b/rebuild/${jobB.id}`);
+      }
+      expect(jobB.status).toBe('built');
+      expect(jobB.build!.modelUrl).toStartWith(`/compare-rebuild/b/${jobB.id}/`);
+      const histAAfterB = await cmpApi<{ depth: number }>('/api/compare/a/rebuild/history');
+      const histBAfterB = await cmpApi<{ depth: number }>('/api/compare/b/rebuild/history');
+      expect(histAAfterB.depth).toBe(0);
+      expect(histBAfterB.depth).toBe(1);
+      const undoB = await cmpApi<{ status: string }>('/api/compare/b/rebuild/undo', { from: jobB.id });
+      expect(undoB.status).toBe('inspected');
       expect(treeSha256(sideA.pkgDir)).toBe(beforeATree);
       expect(treeSha256(sideB.pkgDir)).toBe(beforeBTree);
     } finally {

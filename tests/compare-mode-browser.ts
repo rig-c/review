@@ -27,6 +27,16 @@ interface CdpSession {
   setViewport(width: number, height: number): Promise<void>;
   goto(url: string): Promise<void>;
   evaluate<T>(expression: string): Promise<T>;
+  dispatchMouseEvent(params: {
+    type: 'mousePressed' | 'mouseMoved' | 'mouseReleased';
+    x: number;
+    y: number;
+    button?: 'left' | 'none';
+    buttons?: number;
+    clickCount?: number;
+    modifiers?: number;
+  }): Promise<void>;
+  screenshot(): Promise<Buffer>;
   close(): Promise<void>;
 }
 
@@ -216,6 +226,21 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
       }
       return res?.result?.value as T;
     },
+    async dispatchMouseEvent(params) {
+      await send('Input.dispatchMouseEvent', {
+        type: params.type,
+        x: params.x,
+        y: params.y,
+        button: params.button ?? 'left',
+        buttons: params.buttons ?? (params.type === 'mouseReleased' ? 0 : 1),
+        clickCount: params.clickCount ?? 1,
+        modifiers: params.modifiers ?? 0,
+      });
+    },
+    async screenshot(): Promise<Buffer> {
+      const res = await send('Page.captureScreenshot', { format: 'png' });
+      return Buffer.from(res.data, 'base64');
+    },
     async close() {
       try { ws.close(); } catch {}
       try { proc.kill(); } catch {}
@@ -252,7 +277,7 @@ export async function runCompareModeBrowserVerification() {
     // Stand-in producers in root/node_modules for Apply · Rebuild
     const fakeParts = `const fs=require('fs'),path=require('path');const a=process.argv.slice(2);const f=n=>a[a.indexOf(n)+1];
 if(a[0]==='--version'){console.log('1.42.0');process.exit(0);}
-if(a[0]==='rig'){const out=f('--out'),src=path.join(f('--parts'),'rig');fs.mkdirSync(out,{recursive:true});for(const n of fs.readdirSync(src))fs.copyFileSync(path.join(src,n),path.join(out,n));console.log('rig-parts rig: wrote '+out);process.exit(0);}
+if(a[0]==='rig'){const out=f('--out'),src=path.join(f('--parts'),'rig'),cfgPath=f('--config');fs.mkdirSync(out,{recursive:true});for(const n of fs.readdirSync(src))fs.copyFileSync(path.join(src,n),path.join(out,n));if(cfgPath){const cfg=JSON.parse(fs.readFileSync(cfgPath,'utf8'));if(cfg.motion&&cfg.motion.animations_from){const animPath=path.resolve(path.dirname(path.resolve(cfgPath)),cfg.motion.animations_from);if(fs.existsSync(animPath))fs.copyFileSync(animPath,path.join(out,'motion.json'));}}console.log('rig-parts rig: wrote '+out);process.exit(0);}
 if(a[0]==='check'){const out=f('--out'),rig=JSON.parse(fs.readFileSync(path.join(f('--rig'),'rig.json'),'utf8'));fs.mkdirSync(out,{recursive:true});const fail=!!(rig.mesh&&rig.mesh.r===9);fs.writeFileSync(path.join(out,'check.json'),JSON.stringify({PASS:!fail,TEXTURE_STRETCH:{status:fail?'FAIL':'PASS'},gate_spine_html_green:!fail}));console.log(fail?'check: FAIL (TEXTURE_STRETCH)':'check: PASS');process.exit(fail?1:0);}
 const out=f('--out');fs.mkdirSync(out,{recursive:true});const mesh=fs.readFileSync(f('--mesh'),'utf8');
 fs.writeFileSync(path.join(out,'rig.json'),JSON.stringify({mesh:JSON.parse(mesh)}));fs.writeFileSync(path.join(out,'motion.json'),'{}');
@@ -261,13 +286,47 @@ console.log('rig-parts remesh: wrote 3 file(s) under '+out);`;
 
     const srcBuildDir = join(root, 'a/build');
     const fakeRigc = `const fs=require('fs'),path=require('path');const a=process.argv.slice(2);const f=n=>a[a.indexOf(n)+1];
+const f32=n=>Math.fround(Number(n));const keyTime=n=>f32(Math.round(Number(n)*360000)/360000);
 if(a[0]==='--version'){console.log('2.64.1');process.exit(0);}
 const out=f('--out');fs.mkdirSync(out,{recursive:true});
-const rigPath=f('--rig');const srcBuild=${JSON.stringify(srcBuildDir)};
+const rigPath=f('--rig'),motionPath=f('--motion');const srcBuild=${JSON.stringify(srcBuildDir)};
 for(const n of ['skeleton.model.json','rigid.png','mesh.png']){if(fs.existsSync(path.join(srcBuild,n)))fs.copyFileSync(path.join(srcBuild,n),path.join(out,n));}
 const model=JSON.parse(fs.readFileSync(path.join(out,'skeleton.model.json'),'utf8'));
 const rig=JSON.parse(fs.readFileSync(rigPath,'utf8'));
 model.rig={...model.rig,rebuilt:rig,rebuiltRegions:rig.mesh?rig.mesh.contour.regions:null};
+if(motionPath&&fs.existsSync(motionPath)){
+  const motion=JSON.parse(fs.readFileSync(motionPath,'utf8'));
+  if(motion&&motion.spec==='rigc-motion/1'&&motion.animations){
+    const easings=motion.easings||{};const anims=[];
+    for(const [name,anim] of Object.entries(motion.animations)){
+      const dur=Number(anim.duration||0);const bonesMap={};
+      for(const track of (anim.tracks||[])){
+        if(!track.bone||track.property==='inherit')continue;
+        if((track.keys||[]).some(k=>k&&typeof k==='object'&&'derive' in k))continue;
+        const keys=track.keys.map((k,idx)=>{
+          const entry={time:keyTime(k.t)};
+          if(track.property==='translate'||track.property==='scale'||track.property==='shear'){entry.x=f32(k.v[0]);entry.y=f32(k.v[1]);}
+          else{entry.value=f32(k.v[0]);}
+          const next=track.keys[idx+1];
+          if(next&&Array.isArray(next.v)){
+            if(k.curve==='stepped')entry.curve='stepped';
+            else if(Array.isArray(k.curve))entry.curve=k.curve.map(f32);
+            else if(typeof k.ease==='string'&&Array.isArray(easings[k.ease])){
+              const [hx1,hy1,hx2,hy2]=easings[k.ease];const dt=next.t-k.t;const cArr=[];
+              for(let c=0;c<k.v.length;c++){const v1=k.v[c],dv=next.v[c]-v1;cArr.push(f32(k.t+dt*hx1),f32(v1+dv*hy1),f32(k.t+dt*hx2),f32(v1+dv*hy2));}
+              entry.curve=cArr;
+            }
+          }
+          return entry;
+        });
+        (bonesMap[track.bone]??=[]).push({name:track.property,keys});
+      }
+      anims.push({name,duration:f32(dur),bones:Object.entries(bonesMap).map(([bName,timelines])=>({name:bName,timelines})),slots:[],constraints:{ik:[],transform:[],path:[],physics:[],slider:[]},attachments:[],drawOrder:[],events:[]});
+    }
+    model.animations=anims;
+    model.editorOrder={...model.editorOrder,animations:anims.map(x=>x.name)};
+  }
+}
 fs.writeFileSync(path.join(out,'skeleton.model.json'),JSON.stringify(model));
 console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
@@ -295,6 +354,74 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       })),
     };
 
+    const compareAnimationsDoc = {
+      spec: 'rigc-motion/1',
+      easings: {
+        easeOutQuad: [0.25, 0.46, 0.45, 0.94],
+      },
+      animations: {
+        inspect: {
+          duration: 1,
+          tracks: [
+            {
+              bone: 'rigid',
+              property: 'translatex',
+              keys: [
+                { t: 0, v: [0], curve: [0.1, 0, 0.4, 12] },
+                { t: 0.5, v: [12], curve: [0.6, 12, 0.9, 0] },
+                { t: 1, v: [0] },
+              ],
+            },
+            {
+              bone: 'rigid',
+              property: 'rotate',
+              keys: [
+                { t: 0, v: [0], curve: [0.1, 0, 0.4, 10] },
+                { t: 0.5, v: [10], curve: [0.6, 10, 0.9, 0] },
+                { t: 1, v: [0] },
+              ],
+            },
+            {
+              bone: 'mesh',
+              property: 'rotate',
+              keys: [
+                { t: 0, v: [0] },
+                { t: 0.5, v: [35] },
+                { t: 1, v: [-20] },
+              ],
+            },
+          ],
+        },
+        still: {
+          duration: 1,
+          tracks: [
+            {
+              bone: 'root',
+              property: 'translatex',
+              keys: [
+                { t: 0, v: [0] },
+                { t: 1, v: [0] },
+              ],
+            },
+          ],
+        },
+        short: {
+          duration: 0.8,
+          tracks: [
+            {
+              bone: 'root',
+              property: 'translatex',
+              keys: [
+                { t: 0, v: [0] },
+                { t: 0.8, v: [0] },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    const compareAnimationsText = JSON.stringify(compareAnimationsDoc, null, 2) + '\n';
+
     for (const [side, cx, strength] of [['a', 10, 100], ['b', 14, 140]] as const) {
       const pkg = join(root, side);
       await mkdir(join(pkg, 'build'), { recursive: true });
@@ -321,6 +448,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
           { type: 'physics', name: 'mesh_physics', bone: 'mesh', x: 1, inertia: 1, rotate: 1, strength, damping: 0.85, wind: 1, gravity: 2 },
         ],
         motion: {
+          animations_from: 'animations.json',
           duration: 1,
           tracks: [{ bone: 'mesh', prop: 'rotate', amp: 5, period: 1, phase: 0 }],
         },
@@ -331,14 +459,37 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       const model = structuredClone(baseModel);
       const meshBone = model.bones.find((b: { name?: string }) => b.name === 'mesh');
       if (meshBone) meshBone.length = 12;
+      const inspectAnim = model.animations.find((a: { name?: string }) => a.name === 'inspect');
+      const rigidAnimBone = inspectAnim?.bones?.find((b: { name?: string }) => b.name === 'rigid');
+      if (rigidAnimBone) {
+        rigidAnimBone.timelines = [
+          {
+            name: 'translatex',
+            keys: [
+              { time: 0, value: 0, curve: [Math.fround(0.1), 0, Math.fround(0.4), 12] },
+              { time: 0.5, value: 12, curve: [Math.fround(0.6), 12, Math.fround(0.9), 0] },
+              { time: 1, value: 0 },
+            ],
+          },
+          {
+            name: 'rotate',
+            keys: [
+              { time: 0, value: 0, curve: [Math.fround(0.1), 0, Math.fround(0.4), 10] },
+              { time: 0.5, value: 10, curve: [Math.fround(0.6), 10, Math.fround(0.9), 0] },
+              { time: 1, value: 0 },
+            ],
+          },
+        ];
+      }
       model.constraints = [
         { kind: 'physics', declaredIn: 'rig', name: 'mesh_physics', bone: 'mesh', x: 1, inertia: 1, rotate: 1, strength, damping: 0.85, wind: 1, gravity: 2 },
       ];
 
       await writeFile(join(pkg, 'rig/config.json'), JSON.stringify(cfg, null, 2));
+      await writeFile(join(pkg, 'rig/animations.json'), compareAnimationsText);
       await writeFile(join(pkg, 'rig/out/parts.json'), JSON.stringify({ parts: [{ name: 'mesh', box: [0, 0, 20, 20] }, { name: 'rigid', box: [0, 0, 20, 20] }] }));
       await writeFile(join(pkg, 'rig/out/rig/rig.json'), JSON.stringify({ bones: [{ name: 'root' }, { name: 'rigid' }, { name: 'mesh' }] }));
-      await writeFile(join(pkg, 'rig/out/rig/motion.json'), JSON.stringify({ animations: { inspect: { duration: 1, bones: {} } } }));
+      await writeFile(join(pkg, 'rig/out/rig/motion.json'), compareAnimationsText);
       await writeFile(join(pkg, 'rig/out/rig/mesh_report.json'), '{}');
       await writeFile(join(pkg, 'build/skeleton.model.json'), JSON.stringify(model, null, 2));
       await writeFile(join(pkg, 'build/rigid.png'), rigidPng);
@@ -951,6 +1102,280 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       };
     })()`);
 
+    // Slice 4c (#235): Per-side keyed animation editing in Compare mode on Side B while Side A stays untouched:
+    // - Pick Build B in Animate mode, reset Build B to clean baseline, seek to t = 0.5s.
+    // - Edit key time & value on track 0 (rigid.translatex), drag curve handle in Curves view on track 1 (rigid.rotate),
+    //   and drag bone 'rigid' on #b-viewport stage in Pose: Rotate mode.
+    // - Verify Side A's stage pose, pending ops, and applied record stay untouched across side switches.
+    // - Run Apply · Rebuild on Side B (/api/compare/b/rebuild), verify Math.fround parity (maxFroundDiff === 0) and Side A untouched.
+    // - Run Undo op on Side B to return to baseline.
+    const compareAnimPreDrag = await session.evaluate<{
+      aPoseBaseline: any;
+      bPoseBaseline: any;
+      aModelHashBaseline: string;
+      curveHandle1Center: { x: number; y: number };
+    }>(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const ed = window.rigReviewEditor;
+      document.querySelector('.mode-switch [data-mode="playback"]').click();
+      await sleep(60);
+      document.querySelector('#mode-build-picker [data-build-side="b"]').click();
+      await sleep(80);
+      const wholeBtn = document.querySelector('[data-part-whole]');
+      if (wholeBtn && wholeBtn.getAttribute('aria-pressed') !== 'true') {
+        wholeBtn.click();
+        await sleep(60);
+      }
+      await ed.reset('b');
+      await ed.animation.reset();
+      await sleep(60);
+
+      const scrub = document.getElementById('scrub');
+      scrub.value = '0.5';
+      scrub.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(60);
+
+      const aPoseBaseline = ed.bone('rigid', 'a');
+      const bPoseBaseline = ed.bone('rigid', 'b');
+      const aModelHashBaseline = ed.stage('a').modelHash;
+
+      // 1. Edit key time & value on track 0 (rigid.translatex key 1: 0.5s -> 0.55s, value 12 -> 24)
+      ed.animation.selectKey(0, 1);
+      ed.animation.setKeyTime(0, 1, 0.55);
+      ed.animation.setKeyValue(0, 1, 0, 24);
+
+      // 2. Switch to Curves view, select track 1 key 0 (rigid.rotate segment 0..0.5s), set cubic mode, and get handle 1 center
+      document.querySelector('#animation-inspection [data-animation-view="curve"]').click();
+      await sleep(40);
+      ed.animation.selectKey(1, 0);
+      const easeSel = document.querySelector('#animation-inspection [data-curve-ease]');
+      easeSel.value = 'cubic';
+      easeSel.dispatchEvent(new Event('change'));
+      await sleep(30);
+      const h1 = document.querySelector('#animation-inspection [data-curve-handle="1"]').getBoundingClientRect();
+      return {
+        aPoseBaseline,
+        bPoseBaseline,
+        aModelHashBaseline,
+        curveHandle1Center: { x: h1.left + h1.width / 2, y: h1.top + h1.height / 2 },
+      };
+    })()`);
+
+    // Drag curve handle 1 on Build B
+    const chx = compareAnimPreDrag.curveHandle1Center.x;
+    const chy = compareAnimPreDrag.curveHandle1Center.y;
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: chx, y: chy, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: chx + 18, y: chy - 16, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: chx + 18, y: chy - 16, button: 'left', buttons: 0 });
+
+    const compareAnimStagePre = await session.evaluate<{
+      rigidPickCenterB: { x: number; y: number };
+    }>(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      document.querySelector('#animation-inspection [data-animation-view="timeline"]').click();
+      const layerBones = document.getElementById('layer-bones');
+      if (layerBones && !layerBones.checked) layerBones.click();
+      document.querySelector('#animation-inspection [data-stage-pose-mode="rotate"]').click();
+      const scrub = document.getElementById('scrub');
+      scrub.value = '0.5';
+      scrub.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(40);
+      const pick = document.querySelector('#b-viewport .animation-bone-pick[data-bone="rigid"]').getBoundingClientRect();
+      return {
+        rigidPickCenterB: { x: pick.left + pick.width / 2, y: pick.top + pick.height / 2 },
+      };
+    })()`);
+
+    // 3. Drag bone 'rigid' on #b-viewport stage in Pose: Rotate mode
+    const bpx = compareAnimStagePre.rigidPickCenterB.x;
+    const bpy = compareAnimStagePre.rigidPickCenterB.y;
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: bpx, y: bpy, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: bpx + 24, y: bpy - 18, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: bpx + 24, y: bpy - 18, button: 'left', buttons: 0 });
+
+    const compareAnimationEditCheck = await session.evaluate<{
+      bOpsBeforeSwitch: any[];
+      bPosePreviewAt05: any;
+      aPoseDuringBPreviewAt05: any;
+      aOpsWhenSwitchedToA: number;
+      aHasPreviewWhenSwitchedToA: boolean;
+      bOpsWhenSwitchedBackToB: number;
+      bHasPreviewWhenSwitchedBackToB: boolean;
+      windowScrollY: number;
+      inspectorScrollTop: number;
+      toolbarGapPx: number;
+      deleteKeyRightClipPx: number;
+    }>(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const ed = window.rigReviewEditor;
+      const scrub = document.getElementById('scrub');
+      scrub.value = '0.5';
+      scrub.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(30);
+
+      const bOpsBeforeSwitch = ed.animation.ops();
+      const bPosePreviewAt05 = ed.bone('rigid', 'b');
+      const aPoseDuringBPreviewAt05 = ed.bone('rigid', 'a');
+
+      // Switch picker to Build A -> verify Build A has 0 pending ops and no preview
+      document.querySelector('#mode-build-picker [data-build-side="a"]').click();
+      await sleep(60);
+      const aOpsWhenSwitchedToA = ed.animation.ops().length;
+      const aHasPreviewWhenSwitchedToA = ed.animation.hasPreview();
+
+      // Switch picker back to Build B -> verify Build B retains its pending ops and preview
+      document.querySelector('#mode-build-picker [data-build-side="b"]').click();
+      await sleep(60);
+      const bOpsWhenSwitchedBackToB = ed.animation.ops().length;
+      const bHasPreviewWhenSwitchedBackToB = ed.animation.hasPreview();
+      ed.animation.selectKey(1, 1);
+
+      const insp = document.getElementById('inspector-playback');
+      if (insp) insp.scrollTop = 0;
+      const lanes = document.querySelector('#animation-inspection .animation-lanes');
+      if (lanes) lanes.scrollTop = 0;
+      await sleep(30);
+
+      const moveBtn = document.querySelector('#animation-inspection [data-stage-pose-mode="translate"]').getBoundingClientRect();
+      const undoBtn = document.querySelector('#animation-inspection [data-animation-undo-op]').getBoundingClientRect();
+      const delKeyBtn = document.querySelector('#animation-inspection [data-delete-key]').getBoundingClientRect();
+      const keyInsp = document.querySelector('#animation-inspection [data-key-inspector]').getBoundingClientRect();
+      const toolbarGapPx = Math.round((undoBtn.left - moveBtn.right) * 100) / 100;
+      const deleteKeyRightClipPx = Math.max(0, Math.round((delKeyBtn.right - keyInsp.right) * 100) / 100);
+
+      return {
+        bOpsBeforeSwitch,
+        bPosePreviewAt05,
+        aPoseDuringBPreviewAt05,
+        aOpsWhenSwitchedToA,
+        aHasPreviewWhenSwitchedToA,
+        bOpsWhenSwitchedBackToB,
+        bHasPreviewWhenSwitchedBackToB,
+        windowScrollY: window.scrollY,
+        inspectorScrollTop: insp ? insp.scrollTop : -1,
+        toolbarGapPx,
+        deleteKeyRightClipPx,
+      };
+    })()`);
+
+    const screenshotDir = process.env.SCREENSHOT_DIR || null;
+    if (screenshotDir) {
+      await mkdir(screenshotDir, { recursive: true });
+      await writeFile(join(screenshotDir, 'slice4c-compare-side-b-1440x900.png'), await session.screenshot());
+    }
+
+    const compareAnimationApplyAndUndoCheck = await session.evaluate<{
+      bAppliedSchema: string;
+      bAppliedOpsCount: number;
+      aAppliedAfterBApply: any;
+      maxFroundDiffOnB: number;
+      aPoseDeltaAfterBApply: number;
+      bOpsAfterUndoAll: number;
+      bHasPreviewAfterUndoAll: boolean;
+      bPoseDeltaAfterUndoAllVsBaseline: number;
+      aModelHashAfterAll: string;
+      bOpsAfterConcurrentAReset: number;
+      bHasPreviewAfterConcurrentAReset: boolean;
+      aAppliedAfterConcurrentReset: any;
+      aOpsAfterConcurrentReset: number;
+    }>(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const ed = window.rigReviewEditor;
+      const scrub = document.getElementById('scrub');
+      const seekTo = async (t) => {
+        scrub.value = String(t);
+        scrub.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(25);
+      };
+
+      const sampleTimes = [0, 0.25, 0.5, 0.55, 0.8];
+      const bPreviewPoses = [];
+      for (const t of sampleTimes) {
+        await seekTo(t);
+        const b = ed.bone('rigid', 'b');
+        bPreviewPoses.push([Math.fround(b.x), Math.fround(b.y), Math.fround(b.rotationX)]);
+      }
+
+      // Click Apply · Rebuild on Build B
+      await ed.animation.apply();
+      const bStage = ed.stage('b');
+      const aStage = ed.stage('a');
+
+      let maxFroundDiffOnB = 0;
+      for (let i = 0; i < sampleTimes.length; i++) {
+        await seekTo(sampleTimes[i]);
+        const b = ed.bone('rigid', 'b');
+        const cur = [Math.fround(b.x), Math.fround(b.y), Math.fround(b.rotationX)];
+        for (let k = 0; k < cur.length; k++) {
+          const diff = Math.abs(bPreviewPoses[i][k] - cur[k]);
+          if (diff > maxFroundDiffOnB) maxFroundDiffOnB = diff;
+        }
+      }
+
+      await seekTo(0.5);
+      const aAfterApply = ed.bone('rigid', 'a');
+      const aBase = ${JSON.stringify(compareAnimPreDrag.aPoseBaseline)};
+      const bBase = ${JSON.stringify(compareAnimPreDrag.bPoseBaseline)};
+      const aPoseDeltaAfterBApply = Math.hypot(
+        aAfterApply.x - aBase.x,
+        aAfterApply.y - aBase.y,
+        aAfterApply.rotationX - aBase.rotationX,
+      );
+
+      // Click [data-animation-undo-op] until ops().length === 0
+      const undoBtn = document.querySelector('#animation-inspection [data-animation-undo-op]');
+      while (ed.animation.ops().length > 0 && undoBtn && !undoBtn.disabled) {
+        undoBtn.click();
+      }
+      await seekTo(0.5);
+      const bOpsAfterUndoAll = ed.animation.ops().length;
+      const bHasPreviewAfterUndoAll = ed.animation.hasPreview();
+      const bAfterUndoAll = ed.bone('rigid', 'b');
+      const bPoseDeltaAfterUndoAllVsBaseline = Math.hypot(
+        Math.fround(bAfterUndoAll.x) - Math.fround(bBase.x),
+        Math.fround(bAfterUndoAll.y) - Math.fround(bBase.y),
+        Math.fround(bAfterUndoAll.rotationX) - Math.fround(bBase.rotationX),
+      );
+
+      // Reset Build B back to inspected build before testing PR #262 Finding 2 concurrent reset
+      await ed.animation.reset();
+
+      // PR #262 Finding 2: Apply on Build A, start reset() on Build A, switch to Build B during the reset await
+      // and make a pending edit on Build B -> Build B's pending edit must survive and Build A must end with 0 ops.
+      ed.pickSide('a');
+      await sleep(30);
+      ed.animation.setKeyValue(1, 1, 0, 19);
+      await ed.animation.apply();
+      const resetAPromise = ed.animation.reset();
+      ed.pickSide('b');
+      ed.animation.setKeyValue(1, 1, 0, 27);
+      await resetAPromise;
+      const bOpsAfterConcurrentAReset = ed.animation.ops().length;
+      const bHasPreviewAfterConcurrentAReset = ed.animation.hasPreview();
+      const aAppliedAfterConcurrentReset = ed.stage('a').applied;
+      ed.pickSide('a');
+      await sleep(20);
+      const aOpsAfterConcurrentReset = ed.animation.ops().length;
+      ed.pickSide('b');
+      await ed.animation.reset();
+
+      return {
+        bAppliedSchema: bStage.applied?.schema ?? '',
+        bAppliedOpsCount: bStage.applied?.ops?.length ?? 0,
+        aAppliedAfterBApply: aStage.applied,
+        maxFroundDiffOnB,
+        aPoseDeltaAfterBApply: Math.round(aPoseDeltaAfterBApply * 1000) / 1000,
+        bOpsAfterUndoAll,
+        bHasPreviewAfterUndoAll,
+        bPoseDeltaAfterUndoAllVsBaseline: Math.round(bPoseDeltaAfterUndoAllVsBaseline * 1000) / 1000,
+        aModelHashAfterAll: ed.stage('a').modelHash,
+        bOpsAfterConcurrentAReset,
+        bHasPreviewAfterConcurrentAReset,
+        aAppliedAfterConcurrentReset,
+        aOpsAfterConcurrentReset,
+      };
+    })()`);
+
     // Also verify an old compare deep link (without selection.mode) opens in Compare mode
     const legacyBookmark: InspectionBookmark = {
       schema: 'rig-review-inspection/1',
@@ -1060,14 +1485,14 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       if (b.animate.timelineLanes < 1 || b.animate.timelineKeys < 1 || b.animate.curvePaths < 1 || !b.animate.treeBones.includes('mesh'))
         failures.push(`${label}: animation timeline/curve/tree not populated: ${JSON.stringify(b.animate)}`);
       if (
-        b.animate.gateCode !== 'ANIMATION_COMPARE_READ_ONLY' ||
-        b.animate.gateEditable !== 'false' ||
-        b.animate.editableLanes !== 0 ||
+        b.animate.gateCode !== 'OK' ||
+        b.animate.gateEditable !== 'true' ||
+        b.animate.editableLanes < 2 ||
         !b.animate.animApplyDisabled ||
         !b.animate.dockPanelPresent ||
         !b.animate.animateBlocksPresent
       ) {
-        failures.push(`${label}: compare timeline read-only gate or split dock failed: ${JSON.stringify(b.animate)}`);
+        failures.push(`${label}: compare timeline editable gate or split dock failed: ${JSON.stringify(b.animate)}`);
       }
       if (!b.animate.physicsHasStrength || !b.animate.idleHasMesh || !b.animate.retargetSequences.includes('pose-1'))
         failures.push(`${label}: physics/idle/retarget panels not populated: ${JSON.stringify(b.animate)}`);
@@ -1136,6 +1561,49 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       failures.push(`Environment Gust/Jolt playback mismatch: ${JSON.stringify(envPlay)}`);
     }
 
+    if (
+      compareAnimationEditCheck.bOpsBeforeSwitch.length < 3 ||
+      compareAnimationEditCheck.aOpsWhenSwitchedToA !== 0 ||
+      compareAnimationEditCheck.aHasPreviewWhenSwitchedToA !== false ||
+      compareAnimationEditCheck.bOpsWhenSwitchedBackToB !== compareAnimationEditCheck.bOpsBeforeSwitch.length ||
+      compareAnimationEditCheck.bHasPreviewWhenSwitchedBackToB !== true ||
+      compareAnimationEditCheck.windowScrollY !== 0 ||
+      compareAnimationEditCheck.inspectorScrollTop !== 0 ||
+      compareAnimationEditCheck.toolbarGapPx < 2 ||
+      compareAnimationEditCheck.deleteKeyRightClipPx > 0.5 ||
+      Math.hypot(
+        compareAnimationEditCheck.aPoseDuringBPreviewAt05.x - compareAnimPreDrag.aPoseBaseline.x,
+        compareAnimationEditCheck.aPoseDuringBPreviewAt05.y - compareAnimPreDrag.aPoseBaseline.y,
+        compareAnimationEditCheck.aPoseDuringBPreviewAt05.rotationX - compareAnimPreDrag.aPoseBaseline.rotationX,
+      ) > 1e-6 ||
+      Math.hypot(
+        compareAnimationEditCheck.bPosePreviewAt05.x - compareAnimPreDrag.bPoseBaseline.x,
+        compareAnimationEditCheck.bPosePreviewAt05.y - compareAnimPreDrag.bPoseBaseline.y,
+        compareAnimationEditCheck.bPosePreviewAt05.rotationX - compareAnimPreDrag.bPoseBaseline.rotationX,
+      ) < 1 ||
+      compareAnimationApplyAndUndoCheck.bAppliedSchema !== 'rig-review-applied/5' ||
+      compareAnimationApplyAndUndoCheck.bAppliedOpsCount !== compareAnimationEditCheck.bOpsBeforeSwitch.length ||
+      compareAnimationApplyAndUndoCheck.aAppliedAfterBApply !== null ||
+      compareAnimationApplyAndUndoCheck.maxFroundDiffOnB !== 0 ||
+      compareAnimationApplyAndUndoCheck.aPoseDeltaAfterBApply !== 0 ||
+      compareAnimationApplyAndUndoCheck.bOpsAfterUndoAll !== 0 ||
+      compareAnimationApplyAndUndoCheck.bHasPreviewAfterUndoAll !== true ||
+      compareAnimationApplyAndUndoCheck.bPoseDeltaAfterUndoAllVsBaseline !== 0 ||
+      compareAnimationApplyAndUndoCheck.aModelHashAfterAll !== compareAnimPreDrag.aModelHashBaseline ||
+      compareAnimationApplyAndUndoCheck.bOpsAfterConcurrentAReset !== 1 ||
+      compareAnimationApplyAndUndoCheck.bHasPreviewAfterConcurrentAReset !== true ||
+      compareAnimationApplyAndUndoCheck.aAppliedAfterConcurrentReset !== null ||
+      compareAnimationApplyAndUndoCheck.aOpsAfterConcurrentReset !== 0
+    ) {
+      failures.push(
+        `Compare per-side animation editing check failed: ${JSON.stringify({
+          compareAnimPreDrag,
+          compareAnimationEditCheck,
+          compareAnimationApplyAndUndoCheck,
+        })}`,
+      );
+    }
+
     if (!diskUnchanged.aUnchanged || !diskUnchanged.bUnchanged)
       failures.push(`Input package bytes on disk changed after Apply: ${JSON.stringify(diskUnchanged)}`);
 
@@ -1148,6 +1616,8 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
     return {
       singleCheck,
       compareCheck,
+      compareAnimationEditCheck,
+      compareAnimationApplyAndUndoCheck,
       legacyDeepLinkCheck,
       diskUnchanged,
       failures,

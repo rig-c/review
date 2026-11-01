@@ -496,6 +496,15 @@ export async function setupBrowserFixture(root: string) {
     ],
   };
 
+  demoAnimObj.animations.smile.tracks.push({
+    bone: 'head_ctl',
+    property: 'rotate',
+    keys: [
+      { t: 0, v: [0] },
+      { t: 1.4, v: [0] },
+    ],
+  });
+
   const demoAnimText = JSON.stringify(demoAnimObj, null, 2) + '\n';
   writeFileSync(join(pkgDir, 'animations.json'), demoAnimText);
 
@@ -513,6 +522,8 @@ export async function setupBrowserFixture(root: string) {
     { name: 'hip', parent: 'root', x: 0, y: 5, rotation: 0, scaleX: 1, scaleY: 1 },
     { name: 'chest', parent: 'hip', x: 0, y: 10, rotation: 0, scaleX: 1, scaleY: 1 },
     { name: 'head', parent: 'chest', x: 0, y: 15, rotation: 0, scaleX: 1, scaleY: 1 },
+    { name: 'head_ctl', parent: 'chest', x: 0, y: 15, rotation: 0, scaleX: 1, scaleY: 1 },
+    { name: 'head_up', parent: 'head', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
     { name: 'rigid', parent: 'head', x: -18, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
     { name: 'mesh', parent: 'chest', x: 18, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
     { name: 'brow_r', parent: 'head', x: -5, y: 5, rotation: 0, scaleX: 1, scaleY: 1 },
@@ -2323,15 +2334,40 @@ async function main() {
     await session.dispatchMouseEvent({ type: 'mouseMoved', x: Math.round((boxX0 + boxX1) / 2), y: Math.round((boxY0 + boxY1) / 2), button: 'left', buttons: 1 });
     await session.dispatchMouseEvent({ type: 'mouseMoved', x: boxX1, y: boxY1, button: 'left', buttons: 1 });
 
-    const activeBoxRect = await session.evaluate<{ present: boolean; width: number; height: number }>(`(() => {
+    const activeBoxRect = await session.evaluate<{
+      present: boolean;
+      width: number;
+      height: number;
+      browserSelectionText: string;
+      boxBgColor: string;
+      boxZIndex: number;
+      keyZIndex: number;
+      lanesUserSelect: string;
+    }>(`(() => {
       const el = document.querySelector('[data-selection-box]');
-      if (!el) return { present: false, width: 0, height: 0 };
+      if (!el) return { present: false, width: 0, height: 0, browserSelectionText: '', boxBgColor: '', boxZIndex: 0, keyZIndex: 0, lanesUserSelect: '' };
       const r = el.getBoundingClientRect();
-      return { present: true, width: Math.round(r.width), height: Math.round(r.height) };
+      const boxCs = getComputedStyle(el);
+      const keyEl = document.querySelector('.animation-key[data-source-track="0"][data-key-index="1"]');
+      const keyCs = keyEl ? getComputedStyle(keyEl) : null;
+      const lanesEl = document.querySelector('.animation-lanes');
+      const lanesCs = lanesEl ? getComputedStyle(lanesEl) : null;
+      return {
+        present: true,
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+        browserSelectionText: window.getSelection()?.toString() ?? '',
+        boxBgColor: boxCs.backgroundColor,
+        boxZIndex: Number(boxCs.zIndex) || 0,
+        keyZIndex: keyCs ? Number(keyCs.zIndex) || 0 : 0,
+        lanesUserSelect: lanesCs ? (lanesCs.userSelect || lanesCs.webkitUserSelect || '') : '',
+      };
     })()`);
 
     if (screenshotDir) {
-      await writeFile(join(screenshotDir, 'slice4b-box-select-1440x900.png'), await session.screenshot());
+      const boxPng = await session.screenshot();
+      await writeFile(join(screenshotDir, 'slice4b-box-select-1440x900.png'), boxPng);
+      await writeFile(join(screenshotDir, 'slice4c-box-select-1440x900.png'), boxPng);
     }
 
     await session.dispatchMouseEvent({ type: 'mouseReleased', x: boxX1, y: boxY1, button: 'left', buttons: 0 });
@@ -2648,6 +2684,10 @@ async function main() {
       !activeBoxRect.present ||
       activeBoxRect.width < 3 ||
       activeBoxRect.height < 3 ||
+      activeBoxRect.browserSelectionText !== '' ||
+      activeBoxRect.boxBgColor !== 'rgba(0, 0, 0, 0)' ||
+      activeBoxRect.keyZIndex <= activeBoxRect.boxZIndex ||
+      activeBoxRect.lanesUserSelect !== 'none' ||
       afterBoxSelect.selectedKeys.length < 4 ||
       afterBoxSelect.hasReadOnlyInSelection ||
       !afterBoxSelect.statusAfterBoxWithReadOnly.includes('ANIMATION_TRACK_READ_ONLY') ||
@@ -2696,10 +2736,521 @@ async function main() {
       );
     }
 
+    // -------------------------------------------------------------------------
+    // Slice 4c Browser Verification:
+    // 1. PR #260 Finding 1: Real Shift-click with a 150 ms press-release hold does not undo itself on click.
+    // 2. PR #260 Finding 2: Two separate group moves and two separate stage bone drags undo one gesture at a time.
+    // 3. Eye Defect 1: Overlapping bone points on stage prioritize editable bones (head over head_up on tilt)
+    //    and click-to-cycle reaches the next overlapping editable bone (head -> head_ctl on smile).
+    // 4. Eye Defect 2: Box-drag selection has zero browser text selection, transparent fill, and z-index below keys.
+    // -------------------------------------------------------------------------
+    const slice4cSetup = await session.evaluate<{
+      k01: { x: number; y: number };
+      k11: { x: number; y: number };
+      k21: { x: number; y: number };
+      lane0Left: number;
+      lane0Width: number;
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      await ed.animation.reset();
+      const animSelect = document.getElementById('animation-select');
+      animSelect.value = 'tilt';
+      animSelect.dispatchEvent(new Event('change'));
+      document.querySelector('[data-animation-view="timeline"]').click();
+      document.querySelector('[data-animation-zoom="1"]').click();
+      const lanes = document.querySelector('.animation-lanes');
+      lanes.scrollTop = 0;
+      lanes.scrollLeft = 0;
+      await new Promise((r) => setTimeout(r, 35));
+      const centerOf = (sel) => {
+        const r = document.querySelector(sel).getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      };
+      const lane0 = document.querySelector('.animation-lane[data-source-track="0"] .animation-key-lane').getBoundingClientRect();
+      return {
+        k01: centerOf('.animation-key[data-source-track="0"][data-key-index="1"]'),
+        k11: centerOf('.animation-key[data-source-track="1"][data-key-index="1"]'),
+        k21: centerOf('.animation-key[data-source-track="2"][data-key-index="1"]'),
+        lane0Left: lane0.left,
+        lane0Width: lane0.width,
+      };
+    })()`);
+
+    // 1. PR #260 Finding 1: Real Shift-click with 150 ms hold between mousePressed and mouseReleased
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: slice4cSetup.k01.x, y: slice4cSetup.k01.y, button: 'left', buttons: 1 });
+    await Bun.sleep(150);
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: slice4cSetup.k01.x, y: slice4cSetup.k01.y, button: 'left', buttons: 0 });
+
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: slice4cSetup.k11.x, y: slice4cSetup.k11.y, button: 'left', buttons: 1, modifiers: 8 });
+    await Bun.sleep(150);
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: slice4cSetup.k11.x, y: slice4cSetup.k11.y, button: 'left', buttons: 0, modifiers: 8 });
+    const shiftHoldCountAfterAdd = await session.evaluate<number>('window.rigReviewEditor.animation.selectedKeys().length');
+
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: slice4cSetup.k21.x, y: slice4cSetup.k21.y, button: 'left', buttons: 1, modifiers: 8 });
+    await Bun.sleep(150);
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: slice4cSetup.k21.x, y: slice4cSetup.k21.y, button: 'left', buttons: 0, modifiers: 8 });
+    const shiftHoldCountAfterThird = await session.evaluate<number>('window.rigReviewEditor.animation.selectedKeys().length');
+
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: slice4cSetup.k11.x, y: slice4cSetup.k11.y, button: 'left', buttons: 1, modifiers: 8 });
+    await Bun.sleep(150);
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: slice4cSetup.k11.x, y: slice4cSetup.k11.y, button: 'left', buttons: 0, modifiers: 8 });
+    const shiftHoldCountAfterToggleOff = await session.evaluate<number>('window.rigReviewEditor.animation.selectedKeys().length');
+
+    // 2a. PR #260 Finding 2 (group moves): Two separate group drags on [(0,1), (2,1)], then Undo op twice
+    // Drag 1: move key (0,1) from 0.35s to 0.39s (+0.04s)
+    const drag1X = slice4cSetup.lane0Left + (0.39 / 1.6) * slice4cSetup.lane0Width;
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: slice4cSetup.k01.x, y: slice4cSetup.k01.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: drag1X, y: slice4cSetup.k01.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: drag1X, y: slice4cSetup.k01.y, button: 'left', buttons: 0 });
+
+    // Drag 2: move key (0,1) from 0.39s to 0.43s (+0.04s)
+    const drag2X = slice4cSetup.lane0Left + (0.43 / 1.6) * slice4cSetup.lane0Width;
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: drag1X, y: slice4cSetup.k01.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: drag2X, y: slice4cSetup.k01.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: drag2X, y: slice4cSetup.k01.y, button: 'left', buttons: 0 });
+
+    const twoGroupDragsUndo = await session.evaluate<{
+      timesAfterDrag2: number[];
+      timesAfterUndo1: number[];
+      opsAfterUndo1: number;
+      timesAfterUndo2: number[];
+      opsAfterUndo2: number;
+      rotBeforeStageDrag1: number;
+      headPickAt035: { x: number; y: number };
+      headUpPickAt035: { x: number; y: number };
+      topHitBoneOnTilt: string;
+      headZIndexOnTilt: number;
+      headUpZIndexOnTilt: number;
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      const readTimes = () => {
+        const trs = ed.animation.overlaid().tracks;
+        const t0 = Math.round(trs.find((t) => t.target === 'head' && t.name === 'rotate').keys[1].time * 1000) / 1000;
+        const t2 = Math.round(trs.find((t) => t.target === 'chest' && t.name === 'rotate').keys[1].time * 1000) / 1000;
+        return [t0, t2];
+      };
+      const timesAfterDrag2 = readTimes();
+      document.querySelector('[data-animation-undo-op]').click();
+      const timesAfterUndo1 = readTimes();
+      const opsAfterUndo1 = ed.animation.ops().length;
+      document.querySelector('[data-animation-undo-op]').click();
+      const timesAfterUndo2 = readTimes();
+      const opsAfterUndo2 = ed.animation.ops().length;
+
+      // Seek to t=0.35s on tilt and inspect overlapping head / head_up bone points
+      document.querySelector('[data-stage-pose-mode="rotate"]').click();
+      const scrub = document.getElementById('scrub');
+      scrub.value = '0.35';
+      scrub.dispatchEvent(new Event('input'));
+      await new Promise((r) => setTimeout(r, 25));
+      const rotBeforeStageDrag1 = Math.round(ed.bone('head').rotationX * 100) / 100;
+      const headEl = document.querySelector('.animation-bone-pick[data-bone="head"]');
+      const headUpEl = document.querySelector('.animation-bone-pick[data-bone="head_up"]');
+      const hr = headEl.getBoundingClientRect();
+      const hur = headUpEl.getBoundingClientRect();
+      const cx = hr.left + hr.width / 2;
+      const cy = hr.top + hr.height / 2;
+      const topHit = document.elementFromPoint(cx, cy);
+      return {
+        timesAfterDrag2,
+        timesAfterUndo1,
+        opsAfterUndo1,
+        timesAfterUndo2,
+        opsAfterUndo2,
+        rotBeforeStageDrag1,
+        headPickAt035: { x: cx, y: cy },
+        headUpPickAt035: { x: hur.left + hur.width / 2, y: hur.top + hur.height / 2 },
+        topHitBoneOnTilt: topHit?.getAttribute('data-bone') ?? '',
+        headZIndexOnTilt: Number(getComputedStyle(headEl).zIndex) || 0,
+        headUpZIndexOnTilt: Number(getComputedStyle(headUpEl).zIndex) || 0,
+      };
+    })()`);
+
+    // 2b & 3a. PR #260 Finding 2 (stage drags) + Eye Defect 1 (overlapping head_up vs head on tilt):
+    // Drag twice at head_up's exact center on tilt at t=0.35s -> reaches head (not head_up!), and Undo op steps back 1 drag at a time!
+    const hp = twoGroupDragsUndo.headUpPickAt035;
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: hp.x, y: hp.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: hp.x + 20, y: hp.y - 12, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: hp.x + 20, y: hp.y - 12, button: 'left', buttons: 0 });
+    const rotAfterStageDrag1 = await session.evaluate<number>('Math.round(window.rigReviewEditor.bone("head").rotationX * 100) / 100');
+
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: hp.x, y: hp.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: hp.x + 45, y: hp.y - 30, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: hp.x + 45, y: hp.y - 30, button: 'left', buttons: 0 });
+
+    const stageOverlapAndTwoDrags = await session.evaluate<{
+      rotAfterStageDrag2: number;
+      rotAfterStageUndo1: number;
+      opsAfterStageUndo1: number;
+      rotAfterStageUndo2: number;
+      opsAfterStageUndo2: number;
+      smileHeadCenter: { x: number; y: number };
+      smileInitialTopBone: string;
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      const rotAfterStageDrag2 = Math.round(ed.bone('head').rotationX * 100) / 100;
+      document.querySelector('[data-animation-undo-op]').click();
+      const rotAfterStageUndo1 = Math.round(ed.bone('head').rotationX * 100) / 100;
+      const opsAfterStageUndo1 = ed.animation.ops().length;
+      document.querySelector('[data-animation-undo-op]').click();
+      const rotAfterStageUndo2 = Math.round(ed.bone('head').rotationX * 100) / 100;
+      const opsAfterStageUndo2 = ed.animation.ops().length;
+
+      // Clear bone selection back to Whole rig before switching to 'smile' clip at t=0s where head (track 6), head_ctl (track 7), and head_up (no track) overlap at the exact same point
+      document.querySelector('[data-animation-pane="tree"] button')?.click();
+      const animSelect = document.getElementById('animation-select');
+      animSelect.value = 'smile';
+      animSelect.dispatchEvent(new Event('change'));
+      const scrub = document.getElementById('scrub');
+      scrub.value = '0';
+      scrub.dispatchEvent(new Event('input'));
+      await new Promise((r) => setTimeout(r, 30));
+      const headEl = document.querySelector('.animation-bone-pick[data-bone="head"]');
+      const hr = headEl.getBoundingClientRect();
+      const cx = hr.left + hr.width / 2;
+      const cy = hr.top + hr.height / 2;
+      const topEl = document.elementFromPoint(cx, cy);
+      return {
+        rotAfterStageDrag2,
+        rotAfterStageUndo1,
+        opsAfterStageUndo1,
+        rotAfterStageUndo2,
+        opsAfterStageUndo2,
+        smileHeadCenter: { x: cx, y: cy },
+        smileInitialTopBone: topEl?.getAttribute('data-bone') ?? '',
+      };
+    })()`);
+
+    // 3b. Eye Defect 1 (click-to-cycle overlapping editable bones on smile):
+    // First click at smileHeadCenter selects 'head'; second click at the same point cycles to 'head_ctl' and promotes it to z-index 500;
+    // then dragging at smileHeadCenter poses 'head_ctl.rotate' (track 7)!
+    const sc = stageOverlapAndTwoDrags.smileHeadCenter;
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: sc.x, y: sc.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: sc.x, y: sc.y, button: 'left', buttons: 0 });
+    const afterFirstOverlapClick = await session.evaluate<{ selectedBone: string; topBone: string }>(`(() => {
+      const selectedBone = document.getElementById('animation-inspection')?.dataset.selectedName ?? '';
+      const topEl = document.elementFromPoint(${sc.x}, ${sc.y});
+      return { selectedBone, topBone: topEl?.getAttribute('data-bone') ?? '' };
+    })()`);
+
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: sc.x, y: sc.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: sc.x, y: sc.y, button: 'left', buttons: 0 });
+    const afterSecondOverlapClick = await session.evaluate<{ selectedBone: string; topBone: string; headCtlZIndex: number }>(`(() => {
+      const selectedBone = document.getElementById('animation-inspection')?.dataset.selectedName ?? '';
+      const topEl = document.elementFromPoint(${sc.x}, ${sc.y});
+      const ctlEl = document.querySelector('.animation-bone-pick[data-bone="head_ctl"]');
+      return {
+        selectedBone,
+        topBone: topEl?.getAttribute('data-bone') ?? '',
+        headCtlZIndex: ctlEl ? Number(getComputedStyle(ctlEl).zIndex) || 0 : 0,
+      };
+    })()`);
+
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: sc.x, y: sc.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: sc.x + 25, y: sc.y - 15, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: sc.x + 25, y: sc.y - 15, button: 'left', buttons: 0 });
+    const afterCycledOverlapDrag = await session.evaluate<{ ops: any[] }>(`(() => {
+      const ed = window.rigReviewEditor.animation;
+      const ops = ed.ops();
+      ed.clearPending();
+      return { ops };
+    })()`);
+
+    if (
+      shiftHoldCountAfterAdd !== 2 ||
+      shiftHoldCountAfterThird !== 3 ||
+      shiftHoldCountAfterToggleOff !== 2 ||
+      twoGroupDragsUndo.timesAfterDrag2[0] !== 0.43 ||
+      twoGroupDragsUndo.timesAfterDrag2[1] !== 0.58 ||
+      twoGroupDragsUndo.timesAfterUndo1[0] !== 0.39 ||
+      twoGroupDragsUndo.timesAfterUndo1[1] !== 0.54 ||
+      twoGroupDragsUndo.opsAfterUndo1 !== 2 ||
+      twoGroupDragsUndo.timesAfterUndo2[0] !== 0.35 ||
+      twoGroupDragsUndo.timesAfterUndo2[1] !== 0.5 ||
+      twoGroupDragsUndo.opsAfterUndo2 !== 0 ||
+      Math.hypot(
+        twoGroupDragsUndo.headPickAt035.x - twoGroupDragsUndo.headUpPickAt035.x,
+        twoGroupDragsUndo.headPickAt035.y - twoGroupDragsUndo.headUpPickAt035.y,
+      ) > 0.01 ||
+      twoGroupDragsUndo.topHitBoneOnTilt !== 'head' ||
+      twoGroupDragsUndo.headZIndexOnTilt <= twoGroupDragsUndo.headUpZIndexOnTilt ||
+      rotAfterStageDrag1 === twoGroupDragsUndo.rotBeforeStageDrag1 ||
+      stageOverlapAndTwoDrags.rotAfterStageDrag2 === rotAfterStageDrag1 ||
+      stageOverlapAndTwoDrags.rotAfterStageUndo1 !== rotAfterStageDrag1 ||
+      stageOverlapAndTwoDrags.opsAfterStageUndo1 !== 1 ||
+      stageOverlapAndTwoDrags.rotAfterStageUndo2 !== twoGroupDragsUndo.rotBeforeStageDrag1 ||
+      stageOverlapAndTwoDrags.opsAfterStageUndo2 !== 0 ||
+      stageOverlapAndTwoDrags.smileInitialTopBone !== 'head' ||
+      afterFirstOverlapClick.selectedBone !== 'head' ||
+      afterFirstOverlapClick.topBone !== 'head' ||
+      afterSecondOverlapClick.selectedBone !== 'head_ctl' ||
+      afterSecondOverlapClick.topBone !== 'head_ctl' ||
+      afterSecondOverlapClick.headCtlZIndex !== 500 ||
+      afterCycledOverlapDrag.ops.length !== 1 ||
+      afterCycledOverlapDrag.ops[0].track !== 7
+    ) {
+      throw new Error(
+        `Slice 4c browser verification failed: ${JSON.stringify(
+          {
+            shiftHoldCountAfterAdd,
+            shiftHoldCountAfterThird,
+            shiftHoldCountAfterToggleOff,
+            twoGroupDragsUndo,
+            rotAfterStageDrag1,
+            stageOverlapAndTwoDrags,
+            afterFirstOverlapClick,
+            afterSecondOverlapClick,
+            afterCycledOverlapDrag,
+          },
+          null,
+          2,
+        )}`,
+      );
+    }
+
+    if (process.env.RECORD_MP4) {
+      const mp4Out = process.env.RECORD_MP4;
+      const framesDir = join(root, 'rec-frames');
+      await mkdir(framesDir, { recursive: true });
+      let frameIdx = 0;
+      const snap = async (repeat = 1) => {
+        const png = await session.screenshot();
+        for (let r = 0; r < repeat; r++) {
+          frameIdx++;
+          await writeFile(join(framesDir, `frame-${String(frameIdx).padStart(4, '0')}.png`), png);
+        }
+      };
+
+      const setCursor = async (x: number, y: number, down: boolean, label: string) => {
+        await session.evaluate(`(() => {
+          let el = document.getElementById('rec-cursor-overlay');
+          if (!el) {
+            el = document.createElement('div');
+            el.id = 'rec-cursor-overlay';
+            el.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;pointer-events:none;z-index:999999;';
+            el.innerHTML = \`
+              <div id="rec-cursor-ring" style="position:absolute;left:-14px;top:-14px;width:28px;height:28px;border-radius:50%;border:2.5px solid #ff5c8a;background:rgba(255,92,138,0.18);transition:transform 0.05s;"></div>
+              <svg width="24" height="24" viewBox="0 0 24 24" style="position:absolute;left:-2px;top:-2px;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.65));">
+                <path d="M3 2 L3 19 L7.5 14.8 L11 21 L13.8 19.6 L10.3 13.5 L16.5 13.5 Z" fill="#ffffff" stroke="#11151c" stroke-width="1.6"/>
+              </svg>
+              <div id="rec-cursor-label" style="position:absolute;left:20px;top:16px;padding:3px 8px;border-radius:5px;background:rgba(17,21,28,0.92);border:1px solid #ff5c8a;color:#fff;font:600 12px/1.3 system-ui,sans-serif;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.45);"></div>
+            \`;
+            document.body.appendChild(el);
+          }
+          el.style.transform = 'translate(' + Math.round(${x}) + 'px,' + Math.round(${y}) + 'px)';
+          const ring = document.getElementById('rec-cursor-ring');
+          if (ring) {
+            ring.style.transform = ${down} ? 'scale(0.78)' : 'scale(1)';
+            ring.style.background = ${down} ? 'rgba(255,92,138,0.48)' : 'rgba(255,92,138,0.16)';
+          }
+          const lbl = document.getElementById('rec-cursor-label');
+          if (lbl) lbl.textContent = ${JSON.stringify(label)};
+        })()`);
+      };
+
+      const recSetup = await session.evaluate<{
+        headPick: { x: number; y: number; width: number; height: number };
+        chestPick: { x: number; y: number; width: number; height: number };
+        layerBonesChecked: boolean;
+      }>(`(async () => {
+        const ed = window.rigReviewEditor;
+        document.querySelector('[data-animation-pane="tree"] button')?.click();
+        await ed.animation.reset();
+        const animSelect = document.getElementById('animation-select');
+        animSelect.value = 'tilt';
+        animSelect.dispatchEvent(new Event('change'));
+        document.querySelector('[data-animation-view="timeline"]').click();
+        document.querySelector('[data-animation-zoom="1"]').click();
+        const layerBones = document.getElementById('layer-bones');
+        if (layerBones && !layerBones.checked) layerBones.click();
+        document.querySelector('[data-stage-pose-mode="rotate"]').click();
+        const scrub = document.getElementById('scrub');
+        scrub.value = '0.35';
+        scrub.dispatchEvent(new Event('input'));
+        await new Promise((r) => setTimeout(r, 50));
+        ed.animation.selectKey(0, 1);
+        await new Promise((r) => setTimeout(r, 30));
+        const hp = document.querySelector('.animation-bone-pick[data-bone="head"]').getBoundingClientRect();
+        const cp = document.querySelector('.animation-bone-pick[data-bone="chest"]').getBoundingClientRect();
+        return {
+          headPick: { x: hp.left + hp.width / 2, y: hp.top + hp.height / 2, width: hp.width, height: hp.height },
+          chestPick: { x: cp.left + cp.width / 2, y: cp.top + cp.height / 2, width: cp.width, height: cp.height },
+          layerBonesChecked: Boolean(layerBones && layerBones.checked),
+        };
+      })()`);
+
+      if (!recSetup.layerBonesChecked || recSetup.headPick.width <= 0 || recSetup.chestPick.width <= 0) {
+        throw new Error(`RECORD_MP4 bone points not visible: ${JSON.stringify(recSetup)}`);
+      }
+
+      // 1. Move cursor to stage bone 'chest' & 'head' with Bone Points ON, and drag 'head' in Pose: Rotate mode
+      const bx0 = recSetup.headPick.x;
+      const by0 = recSetup.headPick.y;
+      await setCursor(bx0 - 60, by0 + 40, false, '1. Stage Bone Drag (head · rotate)');
+      await snap(4);
+      for (let s = 1; s <= 6; s++) {
+        const u = s / 6;
+        await setCursor(bx0 - 60 * (1 - u), by0 + 40 * (1 - u), false, '1. Stage Bone Drag (head · rotate)');
+        await snap(1);
+      }
+      await setCursor(bx0, by0, true, '1. Dragging head bone on stage (Rotate)');
+      await snap(3);
+      await session.dispatchMouseEvent({ type: 'mousePressed', x: bx0, y: by0, button: 'left', buttons: 1 });
+      for (let s = 1; s <= 18; s++) {
+        const nx = Math.round(bx0 + s * 3.5);
+        const ny = Math.round(by0 + s * 2.2);
+        await session.dispatchMouseEvent({
+          type: 'mouseMoved',
+          x: nx,
+          y: ny,
+          button: 'left',
+          buttons: 1,
+        });
+        await setCursor(nx, ny, true, `1. Dragging head bone on stage (${s}/18)`);
+        await snap(1);
+      }
+      await session.dispatchMouseEvent({
+        type: 'mouseReleased',
+        x: Math.round(bx0 + 63),
+        y: Math.round(by0 + 40),
+        button: 'left',
+        buttons: 0,
+      });
+      await setCursor(Math.round(bx0 + 63), Math.round(by0 + 40), false, '1. Stage Bone Drag complete');
+      await snap(8);
+
+      // 2. Switch to Curves view and drag cubic handle 1 across 18 smooth steps
+      const recCurve = await session.evaluate<{
+        curveBtn: { x: number; y: number };
+        h1: { x: number; y: number };
+      }>(`(async () => {
+        const cb = document.querySelector('[data-animation-view="curve"]').getBoundingClientRect();
+        document.querySelector('[data-animation-view="curve"]').click();
+        window.rigReviewEditor.animation.selectKey(0, 0);
+        const easeSel = document.querySelector('[data-curve-ease]');
+        easeSel.value = 'cubic';
+        easeSel.dispatchEvent(new Event('change'));
+        await new Promise((r) => setTimeout(r, 40));
+        const r = document.querySelector('[data-curve-handle="1"]').getBoundingClientRect();
+        return {
+          curveBtn: { x: cb.left + cb.width / 2, y: cb.top + cb.height / 2 },
+          h1: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
+        };
+      })()`);
+      const cx0 = recCurve.h1.x;
+      const cy0 = recCurve.h1.y;
+      await setCursor(cx0, cy0, false, '2. Curves View: Cubic Handle h1');
+      await snap(6);
+      await setCursor(cx0, cy0, true, '2. Dragging Cubic Handle h1');
+      await snap(2);
+      await session.dispatchMouseEvent({ type: 'mousePressed', x: cx0, y: cy0, button: 'left', buttons: 1 });
+      for (let s = 1; s <= 18; s++) {
+        const nx = Math.round(cx0 + s * 2.5);
+        const ny = Math.round(cy0 - s * 2.2);
+        await session.dispatchMouseEvent({
+          type: 'mouseMoved',
+          x: nx,
+          y: ny,
+          button: 'left',
+          buttons: 1,
+        });
+        await setCursor(nx, ny, true, `2. Dragging Cubic Handle h1 (${s}/18)`);
+        await snap(1);
+      }
+      await session.dispatchMouseEvent({
+        type: 'mouseReleased',
+        x: Math.round(cx0 + 45),
+        y: Math.round(cy0 - 40),
+        button: 'left',
+        buttons: 0,
+      });
+      await setCursor(Math.round(cx0 + 45), Math.round(cy0 - 40), false, '2. Curve Handle Drag complete');
+      await snap(8);
+
+      // 3. Move cursor to Apply · Rebuild, click it, and scrub across the rebuilt timeline
+      const applyRect = await session.evaluate<{ x: number; y: number }>(`(() => {
+        const b = document.querySelector('[data-animation-apply]').getBoundingClientRect();
+        return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+      })()`);
+      for (let s = 1; s <= 6; s++) {
+        const u = s / 6;
+        const ix = Math.round((cx0 + 45) * (1 - u) + applyRect.x * u);
+        const iy = Math.round((cy0 - 40) * (1 - u) + applyRect.y * u);
+        await setCursor(ix, iy, false, '3. Click Apply · Rebuild');
+        await snap(1);
+      }
+      await setCursor(applyRect.x, applyRect.y, true, '3. Applying & Rebuilding scratch build...');
+      await snap(4);
+      await session.evaluate(`(async () => {
+        await window.rigReviewEditor.animation.apply();
+        document.querySelector('[data-animation-view="timeline"]').click();
+        await new Promise((r) => setTimeout(r, 40));
+      })()`);
+      await setCursor(applyRect.x, applyRect.y, false, '3. Applied · Rebuilt scratch build');
+      await snap(8);
+      for (let s = 0; s <= 16; s++) {
+        const t = ((s / 16) * 1.6).toFixed(2);
+        const scrubPos = await session.evaluate<{ x: number; y: number }>(`(() => {
+          const scrub = document.getElementById('scrub');
+          scrub.value = '${t}';
+          scrub.dispatchEvent(new Event('input'));
+          const r = scrub.getBoundingClientRect();
+          const frac = ${s / 16};
+          return { x: r.left + 8 + (r.width - 16) * frac, y: r.top + r.height / 2 };
+        })()`);
+        await setCursor(scrubPos.x, scrubPos.y, true, `4. Playback Scrub (${t} s)`);
+        await snap(1);
+      }
+      await snap(8);
+      await session.evaluate(`(() => {
+        document.getElementById('rec-cursor-overlay')?.remove();
+      })()`);
+
+      const ff = Bun.spawnSync(
+        [
+          'ffmpeg',
+          '-y',
+          '-framerate',
+          '12',
+          '-i',
+          join(framesDir, 'frame-%04d.png'),
+          '-c:v',
+          'libx264',
+          '-pix_fmt',
+          'yuv420p',
+          '-movflags',
+          '+faststart',
+          mp4Out,
+        ],
+        { stdout: 'pipe', stderr: 'pipe' },
+      );
+      if (ff.exitCode !== 0) {
+        throw new Error(`ffmpeg failed (${ff.exitCode}): ${new TextDecoder().decode(ff.stderr)}`);
+      }
+    }
+
     console.log(
       JSON.stringify(
         {
           ok: true,
+          slice4c: {
+            shiftHoldCountAfterAdd,
+            shiftHoldCountAfterThird,
+            shiftHoldCountAfterToggleOff,
+            twoGroupDragsUndo,
+            rotAfterStageDrag1,
+            stageOverlapAndTwoDrags,
+            afterFirstOverlapClick,
+            afterSecondOverlapClick,
+            afterCycledOverlapDrag,
+            boxSelectClean: {
+              browserSelectionText: activeBoxRect.browserSelectionText,
+              boxBgColor: activeBoxRect.boxBgColor,
+              boxZIndex: activeBoxRect.boxZIndex,
+              keyZIndex: activeBoxRect.keyZIndex,
+              lanesUserSelect: activeBoxRect.lanesUserSelect,
+            },
+          },
           slice4a: {
             defect1And4: slice4aPreDrag.defect1And4,
             defect2: {

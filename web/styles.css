@@ -276,6 +276,7 @@ footer.status-bar{flex-wrap:nowrap}
 #applied-status{margin:0;flex:0 1 auto;min-width:0;font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .inspector #inspector-playback{padding:3px 10px;box-sizing:border-box}
 .inspector #inspector-playback:not([hidden]){display:grid;grid-template-columns:minmax(0,1.55fr) minmax(320px,1fr);gap:10px;flex:1 1 0;min-height:0;overflow:hidden}
+.workspace-layout:has(>.parts-explorer) .inspector #inspector-playback:not([hidden]){grid-template-columns:minmax(0,2.2fr) minmax(220px,.85fr);gap:8px}
 .animation-dock-panel{display:flex;flex-direction:column;gap:2px;min-width:0;min-height:0;height:100%;overflow:hidden}
 .animate-blocks-panel{min-width:0;min-height:0;height:100%;overflow-y:auto;overflow-x:hidden;padding:12px 15px;box-sizing:border-box;border-left:1px solid var(--border);overscroll-behavior:contain}
 .inspector #inspector-playback .animate-blocks-panel>.block-row{top:-12px;margin:-12px -15px 8px;padding:4px 15px}
@@ -292,6 +293,7 @@ footer.status-bar{flex-wrap:nowrap}
 .animation-editor-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:nowrap;gap:3px;margin:0;min-width:0;flex:1 1 auto;overflow:hidden}
 .animation-preview-badge{padding:1px 4px;border:1px solid var(--warn);border-radius:4px;color:var(--warn);font:9px var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:36px;max-width:95px;flex:0 1 auto}
 .animation-ops-summary{font:9.5px var(--font-mono);color:var(--fg-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:44px;max-width:95px;flex:0 1 auto}
+.workspace-layout:has(>.parts-explorer) .animation-preview-badge,.workspace-layout:has(>.parts-explorer) .animation-ops-summary{display:none}
 .animation-dock-status{display:flex;flex-direction:column;justify-content:flex-start;gap:2px;height:44px;min-height:44px;max-height:44px;padding:1px 6px;box-sizing:border-box;font-size:9.5px;line-height:11px;overflow:hidden}
 .animation-gate-banner{margin:0;padding:1px 6px;border:1px solid var(--border-strong);border-radius:4px;background:var(--rv-raised);color:var(--fg-soft);font-size:9.5px;line-height:11px;white-space:normal;overflow-wrap:anywhere;text-overflow:clip;max-width:100%;width:100%;box-sizing:border-box;flex:none}
 .animation-gate-banner[data-editable=true]{border-color:var(--pass);color:var(--fg-strong)}
@@ -312,9 +314,16 @@ footer.status-bar{flex-wrap:nowrap}
 .animation-insert-bar button,.animation-key-detail button{padding:1px 6px;height:18px;font-size:10px;line-height:1;white-space:nowrap;flex:none}
 .animation-key-title{font:600 10px var(--font-mono);color:var(--fg-strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:110px;max-width:190px;flex:0 1 auto}
 .animation-key-channels{display:inline-flex;align-items:center;gap:6px;flex:none}
+.workspace-layout:has(>.parts-explorer) .animation-key-inspector{gap:5px;padding:0 4px}
+.workspace-layout:has(>.parts-explorer) .animation-insert-bar,.workspace-layout:has(>.parts-explorer) .animation-key-detail{gap:4px}
+.workspace-layout:has(>.parts-explorer) .animation-insert-bar{padding-right:5px}
+.workspace-layout:has(>.parts-explorer) .animation-insert-bar select{max-width:98px}
+.workspace-layout:has(>.parts-explorer) .animation-insert-bar input[type=number],.workspace-layout:has(>.parts-explorer) .animation-key-detail input[type=number]{width:42px}
+.workspace-layout:has(>.parts-explorer) .animation-key-title{min-width:0;max-width:84px}
+.workspace-layout:has(>.parts-explorer) .animation-key-channels{gap:4px}
 .animation-key-empty{margin:0;white-space:normal;overflow-wrap:anywhere;text-overflow:clip;font-size:9px;line-height:10.5px;min-width:0;flex:1 1 auto}
-.animation-lanes{position:relative;overflow:auto;height:186px;min-height:88px;max-height:560px;border:1px solid var(--border);border-radius:5px;background:var(--code-bg);overscroll-behavior:contain}
-.animation-ruler{position:sticky;top:0;z-index:6;display:grid;grid-template-columns:190px minmax(340px,1fr);height:20px;min-height:20px;align-items:center;background:var(--rv-bar);border-bottom:1px solid var(--border-strong);user-select:none}
+.animation-lanes{position:relative;overflow:auto;height:186px;min-height:88px;max-height:560px;border:1px solid var(--border);border-radius:5px;background:var(--code-bg);overscroll-behavior:contain;user-select:none;-webkit-user-select:none}
+.animation-ruler{position:sticky;top:0;z-index:6;display:grid;grid-template-columns:190px minmax(340px,1fr);height:20px;min-height:20px;align-items:center;background:var(--rv-bar);border-bottom:1px solid var(--border-strong);user-select:none;-webkit-user-select:none}
 .animation-ruler-corner{position:sticky;left:0;z-index:7;display:flex;align-items:center;height:100%;padding:0 6px;background:var(--rv-bar);border-right:1px solid var(--border)}
 .animation-axis{color:var(--fg-muted);font:10px var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .animation-ruler-track{position:relative;height:100%;margin:0 8px;cursor:ew-resize;touch-action:none}
@@ -325,20 +334,20 @@ footer.status-bar{flex-wrap:nowrap}
 .animation-lane.has-readonly-note{height:auto;min-height:33px;padding-bottom:1px}
 .animation-lane.has-readonly-note .animation-lane-head{grid-row:1 / span 2}
 .animation-readonly-lane{opacity:.82}
-.animation-lane-head{position:sticky;left:0;z-index:4;display:flex;align-items:center;justify-content:space-between;gap:4px;height:100%;padding:0 6px;background:var(--rv-panel);border-right:1px solid var(--border);min-width:0;overflow:hidden}
-.animation-lane-label{border:0;background:transparent;padding:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:10px var(--font-mono);color:var(--fg);min-width:0;flex:1 1 auto}
+.animation-lane-head{position:sticky;left:0;z-index:6;display:flex;align-items:center;justify-content:space-between;gap:4px;height:100%;padding:0 6px;background:var(--rv-panel);border-right:1px solid var(--border);min-width:0;overflow:hidden;user-select:none;-webkit-user-select:none}
+.animation-lane-label{border:0;background:transparent;padding:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:10px var(--font-mono);color:var(--fg);min-width:0;flex:1 1 auto;user-select:none;-webkit-user-select:none}
 .animation-lane-label:hover{background:transparent;color:var(--link-hover)}
 .animation-lane-add{padding:1px 5px;height:16px;font-size:9px;line-height:1;white-space:nowrap;flex:none}
 .animation-readonly-badge{display:block;font:8.5px/10px var(--font-mono);color:var(--fg-muted);white-space:normal;overflow-wrap:anywhere;text-overflow:clip;max-width:100%;padding:1px 4px;pointer-events:none}
 .animation-readonly-subrow{grid-column:2;margin:0 8px;padding:0 4px;font:8.5px/10px var(--font-mono)}
 .readonly-lane-track .animation-readonly-badge{max-width:100%;padding:1px 4px}
 .animation-key-lane{position:relative;height:22px;margin:0 8px}
-.animation-key{position:absolute;top:0;transform:translateX(-50%);padding:0 2px;border:0;background:transparent;color:var(--link);font-size:11px;line-height:22px;height:22px;min-width:10px;touch-action:none;user-select:none}
+.animation-key{position:absolute;top:0;transform:translateX(-50%);padding:0 2px;border:0;background:transparent;color:var(--link);font-size:11px;line-height:22px;height:22px;min-width:10px;touch-action:none;user-select:none;-webkit-user-select:none;z-index:2}
 .animation-key[data-editable=true]{cursor:ew-resize}
-.animation-key.selected{color:var(--warn);font-weight:700;z-index:3}
-.animation-key:hover,.animation-key:focus-visible{color:var(--pass);z-index:2}
+.animation-key.selected{color:var(--warn);font-weight:700;z-index:4;text-shadow:0 0 4px var(--code-bg)}
+.animation-key:hover,.animation-key:focus-visible{color:var(--pass);z-index:3}
 .animation-playhead{position:absolute;top:0;bottom:0;width:1px;background:var(--warn);pointer-events:none;z-index:5}
-.animation-selection-box{position:absolute;border:1px dashed var(--link);background:var(--rv-pressed-bg);pointer-events:none;z-index:8;box-sizing:border-box}
+.animation-selection-box{position:absolute;border:1.5px dashed var(--link);background:transparent;pointer-events:none;z-index:1;box-sizing:border-box}
 .animation-curve-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;font-size:11px;margin-bottom:4px}
 .animation-curve-toolbar select,.animation-curve-toolbar input{width:auto;padding:2px 6px;font-size:11px}
 .animation-curve-toolbar button{padding:2px 8px;font-size:11px}
@@ -360,6 +369,7 @@ footer.status-bar{flex-wrap:nowrap}
 [data-part-list] button[data-bone-selected=true]{outline:1px solid var(--pass);outline-offset:-2px}
 .animation-stage-picks{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:3}
 .animation-bone-pick{position:absolute;width:10px;height:10px;min-width:0;padding:0;transform:translate(-50%,-50%);border-radius:50%;border:1px solid var(--rv-bone-line);background:var(--rv-bone-point);pointer-events:auto;cursor:grab;touch-action:none}
+.animation-bone-pick[data-pose-editable=true]{border-color:var(--pass);background:var(--pass)}
 .animation-bone-pick[aria-pressed=true]{outline:3px solid var(--rv-bone-selected);outline-offset:2px}
 
 #motion-tools>.animation-inspection{flex-basis:100%;min-width:0}

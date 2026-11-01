@@ -68,7 +68,7 @@ export interface AnimationPanelOptions {
  apply?:(ops:readonly AnimationSourceOp[])=>Promise<unknown>;
  reset?:()=>Promise<void>;
  pause?:()=>void;
- readOnlyReason?:string|null;
+ readOnlyReason?:string|null|(()=>string|null);
 }
 
 export interface SelectedAnimationKey {
@@ -76,6 +76,23 @@ export interface SelectedAnimationKey {
  trackIndex:number;
  keyIndex:number;
  pointer:string;
+}
+
+export interface AnimationSideState {
+ document?:unknown;
+ animation?:string;
+ baseInspection?:AnimationInspection|null;
+ source:AnimationSourceView|null;
+ sourceLoaded:boolean;
+ sourceFallbackReason:string|null;
+ builder:AnimationOpBuilder|null;
+ appliedOps:AnimationSourceOp[];
+ selectedKey:SelectedAnimationKey|null;
+ selectedKeys:SelectedAnimationKey[];
+ editorStatus:{text:string;error:boolean};
+ poseMode:'rotate'|'translate';
+ poseModeLockedByUser:boolean;
+ zoom:number;
 }
 
 /** All picking reads the last drawn primitives, including their resolved clip; never a setup bounding box. */
@@ -139,15 +156,22 @@ export class AnimationInspectionPanel {
  private boneButtons=new Map<string,HTMLButtonElement>();
  private bonePoints=false;
 
- // Keyed animation editing state (Slice 3 / Slice 3b / Slice 4a / Slice 4b)
+ // Keyed animation editing state (Slice 3 / Slice 3b / Slice 4a / Slice 4b / Slice 4c)
  private source:AnimationSourceView|null=null;
  private sourceLoaded=false;
  private sourceFallbackReason:string|null=null;
  private builder:AnimationOpBuilder|null=null;
  private appliedOps:AnimationSourceOp[]=[];
+ private cachedDraftText:string|null=null;
+ private cachedDraftDoc:unknown=undefined;
+ private cachedTracksKey='';
+ private cachedTracks:TrackClassification[]=[];
+ private cachedGateKey='';
+ private cachedGate:AnimationEditGate|null=null;
  private selectedKey:SelectedAnimationKey|null=null;
  private selectedKeys:SelectedAnimationKey[]=[];
  private lastNonEmptyAnimation='';
+ private forceNextModelReload=false;
  private isBusy=false;
  private suppressNextKeyClick=false;
  private suppressNextBoneClick=false;
@@ -160,6 +184,7 @@ export class AnimationInspectionPanel {
   startX:number;
   moved:boolean;
   wasAlreadyInMulti:boolean;
+  undoGroupId:number;
   laneEl:HTMLElement;
   markEl:HTMLButtonElement;
   end:number;
@@ -170,6 +195,7 @@ export class AnimationInspectionPanel {
   segmentIndex:number;
   handleIndex:1|2;
   channel:number;
+  undoGroupId:number;
   low:number;
   high:number;
   span:number;
@@ -352,6 +378,103 @@ export class AnimationInspectionPanel {
   for(const pb of this.poseModeButtons){
    pb.setAttribute('aria-pressed',String(pb.dataset.stagePoseMode===this.poseMode));
   }
+  this.redraw();
+ }
+
+ private isBoneEditableInMode(boneName:string,mode:'rotate'|'translate'=this.poseMode):boolean{
+  if(!this.gateInfo().editable)return false;
+  const props=mode==='rotate'?['rotate']:['translate','translatex','translatey'];
+  return this.tracksInfo().some(
+   c=>c.targetKind==='bone'&&c.target===boneName&&c.editable&&props.includes(c.property),
+  );
+ }
+
+ private firstEditableTrackIndexForBone(boneName:string,mode:'rotate'|'translate'=this.poseMode):number{
+  const props=mode==='rotate'?['rotate']:['translate','translatex','translatey'];
+  const hit=this.tracksInfo().find(
+   c=>c.targetKind==='bone'&&c.target===boneName&&c.editable&&props.includes(c.property),
+  );
+  return hit?hit.trackIndex:Number.MAX_SAFE_INTEGER;
+ }
+
+ private overlappingBonesFor(boneName:string,maxScreenDistPx:number):string[]{
+  const origin=this.bones.get(boneName);
+  if(!origin)return [boneName];
+  const originScreen=this.options.project(origin.x,origin.y);
+  const btn=this.boneButtons.get(boneName);
+  const hasRealDomLayout=(btn?.getBoundingClientRect?.().width??0)>0;
+  const out:string[]=[];
+  for(const [name,p] of this.bones){
+   const worldDist=Math.hypot(p.x-origin.x,p.y-origin.y);
+   if(worldDist<=1e-3){
+    out.push(name);
+    continue;
+   }
+   if(hasRealDomLayout&&maxScreenDistPx>0){
+    const sc=this.options.project(p.x,p.y);
+    if(Math.hypot(sc.x-originScreen.x,sc.y-originScreen.y)<=maxScreenDistPx){
+     out.push(name);
+    }
+   }
+  }
+  return out.length>0?out:[boneName];
+ }
+
+ private sortOverlappingBones(candidates:readonly string[],mode:'rotate'|'translate'=this.poseMode):string[]{
+  const otherMode:'rotate'|'translate'=mode==='rotate'?'translate':'rotate';
+  const boneOrder=new Map((this.inspection?.bones??[]).map((b,i)=>[b.name,i]));
+  return [...candidates].sort((a,b)=>{
+   const aEdit=this.isBoneEditableInMode(a,mode);
+   const bEdit=this.isBoneEditableInMode(b,mode);
+   if(aEdit!==bEdit)return aEdit?-1:1;
+   if(aEdit&&bEdit){
+    const ta=this.firstEditableTrackIndexForBone(a,mode);
+    const tb=this.firstEditableTrackIndexForBone(b,mode);
+    if(ta!==tb)return ta-tb;
+   }
+   const aOther=this.isBoneEditableInMode(a,otherMode);
+   const bOther=this.isBoneEditableInMode(b,otherMode);
+   if(aOther!==bOther)return aOther?-1:1;
+   return (boneOrder.get(a)??0)-(boneOrder.get(b)??0);
+  });
+ }
+
+ private resolveBoneForStageDrag(boneName:string,mode:'rotate'|'translate'=this.poseMode):string{
+  const selected=this.selection.value();
+  const exactGroup=this.overlappingBonesFor(boneName,2);
+  const editableExact=this.sortOverlappingBones(
+   exactGroup.filter(n=>this.isBoneEditableInMode(n,mode)),
+   mode,
+  );
+  if(editableExact.length>0){
+   if(selected?.kind==='bone'&&editableExact.includes(selected.name)){
+    return selected.name;
+   }
+   return editableExact[0]!;
+  }
+  const hitboxGroup=this.overlappingBonesFor(boneName,12);
+  const editableNearby=this.sortOverlappingBones(
+   hitboxGroup.filter(n=>this.isBoneEditableInMode(n,mode)),
+   mode,
+  );
+  if(editableNearby.length>0){
+   if(selected?.kind==='bone'&&editableNearby.includes(selected.name)){
+    return selected.name;
+   }
+   return editableNearby[0]!;
+  }
+  return boneName;
+ }
+
+ private resolveBoneForStageClick(boneName:string):string{
+  const group=this.overlappingBonesFor(boneName,2);
+  const candidates=group.length>1?group:this.overlappingBonesFor(boneName,10);
+  if(candidates.length<=1)return boneName;
+  const ordered=this.sortOverlappingBones(candidates,this.poseMode);
+  const selected=this.selection.value();
+  const curIdx=selected?.kind==='bone'?ordered.indexOf(selected.name):-1;
+  if(curIdx<0)return ordered[0]!;
+  return ordered[(curIdx+1)%ordered.length]!;
  }
 
  private autoSyncPoseModeFromProperty(property:string|undefined){
@@ -411,6 +534,67 @@ export class AnimationInspectionPanel {
   this.renderSelection();
  }
 
+ exportSideState():AnimationSideState{
+  return {
+   document:this.document,
+   animation:this.animation,
+   baseInspection:this.baseInspection,
+   source:this.source,
+   sourceLoaded:this.sourceLoaded,
+   sourceFallbackReason:this.sourceFallbackReason,
+   builder:this.builder,
+   appliedOps:this.appliedOps.map(o=>structuredClone(o)),
+   selectedKey:this.selectedKey?{...this.selectedKey}:null,
+   selectedKeys:this.selectedKeys.map(k=>({...k})),
+   editorStatus:{
+    text:this.editorStatus.textContent??'',
+    error:this.editorStatus.classList.contains('error'),
+   },
+   poseMode:this.poseMode,
+   poseModeLockedByUser:this.poseModeLockedByUser,
+   zoom:this.zoom,
+  };
+ }
+
+ importSideState(state:AnimationSideState|null){
+  this.draggingKey=null;
+  this.draggingCurveHandle=null;
+  this.draggingStageBone=null;
+  this.forceNextModelReload=true;
+  if(!state){
+   this.document=null;
+   this.baseInspection=null;
+   this.inspection=null;
+   this.source=null;
+   this.sourceLoaded=false;
+   this.sourceFallbackReason=null;
+   this.builder=null;
+   this.appliedOps=[];
+   this.selectedKey=null;
+   this.selectedKeys=[];
+   this.setEditorStatus('',false);
+  }else{
+   this.document=state.document??null;
+   if(state.animation!==undefined)this.animation=state.animation;
+   this.baseInspection=state.baseInspection??null;
+   this.inspection=this.baseInspection;
+   this.source=state.source;
+   this.sourceLoaded=state.sourceLoaded;
+   this.sourceFallbackReason=state.sourceFallbackReason;
+   this.builder=state.builder;
+   this.appliedOps=state.appliedOps.map(o=>structuredClone(o));
+   this.selectedKey=state.selectedKey?{...state.selectedKey}:null;
+   this.selectedKeys=state.selectedKeys.map(k=>({...k}));
+   this.setEditorStatus(state.editorStatus.text,state.editorStatus.error);
+   this.setStagePoseMode(state.poseMode,state.poseModeLockedByUser);
+   this.setZoom(state.zoom);
+  }
+  this.syncEffectiveInspection(true);
+  this.renderGateBanner();
+  this.renderEditorBar();
+  this.renderSelection();
+ }
+
  loadSource(source:AnimationSourceView|null,fallbackReason:string|null=null){
   this.sourceLoaded=true;
   this.source=source;
@@ -436,7 +620,8 @@ export class AnimationInspectionPanel {
  }
 
  model(doc:unknown,animation:string){
-  if(this.document===doc&&this.animation===animation)return;
+  if(!this.forceNextModelReload&&this.document===doc&&this.animation===animation)return;
+  this.forceNextModelReload=false;
   if(animation&&this.lastNonEmptyAnimation&&this.lastNonEmptyAnimation!==animation){
    this.selectedKey=null;
    this.selectedKeys=[];
@@ -474,7 +659,11 @@ export class AnimationInspectionPanel {
 
  private draftDocument():unknown{
   if(!this.builder)return undefined;
-  try{return JSON.parse(this.builder.text);}catch{return undefined;}
+  const text=this.builder.text;
+  if(text===this.cachedDraftText)return this.cachedDraftDoc;
+  this.cachedDraftText=text;
+  try{this.cachedDraftDoc=JSON.parse(text);}catch{this.cachedDraftDoc=undefined;}
+  return this.cachedDraftDoc;
  }
 
  gateInfo():AnimationEditGate{
@@ -484,12 +673,13 @@ export class AnimationInspectionPanel {
   if(this.animation==='idle'){
    return checkAnimationEditGate('idle',this.source?.path??null);
   }
-  if(this.options.readOnlyReason||!this.options.apply||!this.options.preview){
+  const ro=typeof this.options.readOnlyReason==='function'?this.options.readOnlyReason():this.options.readOnlyReason;
+  if(ro||!this.options.apply||!this.options.preview){
    return {
     editable:false,
     code:'ANIMATION_COMPARE_READ_ONLY',
     reason:
-     this.options.readOnlyReason??
+     ro??
      'keyed animation editing is read-only in comparison sessions until per-side animation rebuild is wired.',
     note:null,
    };
@@ -507,13 +697,22 @@ export class AnimationInspectionPanel {
    const clean=r.replace(/^ANIMATION_SOURCE_MISSING:\s*/,'');
    return {editable:false,code:'ANIMATION_SOURCE_MISSING',reason:clean,note:null};
   }
-  return checkAnimationEditGate(this.animation,this.source.path,this.draftDocument());
+  const gateKey=`${this.animation}\0${this.source.path??''}\0${this.builder?.text??''}`;
+  if(gateKey===this.cachedGateKey&&this.cachedGate)return this.cachedGate;
+  const gate=checkAnimationEditGate(this.animation,this.source.path,this.draftDocument());
+  this.cachedGateKey=gateKey;
+  this.cachedGate=gate;
+  return gate;
  }
 
  tracksInfo():TrackClassification[]{
   const doc=this.draftDocument();
   if(!doc||!this.animation)return [];
-  return classifyAnimationTracks(doc,this.animation);
+  const key=`${this.animation}\0${this.builder?.text??''}`;
+  if(key===this.cachedTracksKey)return this.cachedTracks;
+  this.cachedTracksKey=key;
+  this.cachedTracks=classifyAnimationTracks(doc,this.animation);
+  return this.cachedTracks;
  }
 
  hasUnappliedPreview():boolean{
@@ -1073,6 +1272,10 @@ export class AnimationInspectionPanel {
    this.setEditorStatus(`ANIMATION_KEY_OUT_OF_RANGE: key ${keyIndex} on track ${trackIndex}`,true);
    return false;
   }
+  const curTarget=this.selection.value();
+  if(curTarget&&(curTarget.kind!==cls.targetKind||curTarget.name!==cls.target)){
+   this.selection.select(null);
+  }
   const inspTrack=this.inspection?.tracks.find(t=>t.kind==='bone'&&t.target===cls.target&&t.name===cls.property)??null;
   const sel={animation:this.animation,trackIndex,keyIndex,pointer:inspTrack?.pointer??''};
   this.selectedKey=sel;
@@ -1565,7 +1768,7 @@ export class AnimationInspectionPanel {
     track.keys.forEach((key,index)=>{
      const cleanT=formatSeconds(key.time);
      const mark=button('◆',e=>{
-      if(this.suppressNextKeyClick){
+      if(this.suppressNextKeyClick||(isEditable&&cls&&(e?.detail??0)>0)){
        this.suppressNextKeyClick=false;
        return;
       }
@@ -1714,6 +1917,10 @@ export class AnimationInspectionPanel {
    if(hitInteractive)return;
    const clickedLane=rawTarget?.closest?.<HTMLElement>('.animation-key-lane')??(rawTarget?.className?.includes('animation-key-lane')?rawTarget as unknown as HTMLElement:null);
    const clickedRow=rawTarget?.closest?.<HTMLElement>('.animation-lane,.animation-readonly-lane')??(clickedLane?.parentElement as HTMLElement|null)??null;
+   e.preventDefault();
+   if(typeof window!=='undefined'&&typeof window.getSelection==='function'){
+    window.getSelection()?.removeAllRanges?.();
+   }
    activeBox={
     pointerId:e.pointerId,
     startX:e.clientX,
@@ -1733,6 +1940,10 @@ export class AnimationInspectionPanel {
    const dist=Math.hypot(e.clientX-activeBox.startX,e.clientY-activeBox.startY);
    if(!activeBox.moved&&dist<3)return;
    activeBox.moved=true;
+   e.preventDefault();
+   if(typeof window!=='undefined'&&typeof window.getSelection==='function'){
+    window.getSelection()?.removeAllRanges?.();
+   }
    const listRect=list.getBoundingClientRect();
    const minX=Math.min(activeBox.startX,e.clientX);
    const maxX=Math.max(activeBox.startX,e.clientX);
@@ -1886,7 +2097,6 @@ export class AnimationInspectionPanel {
    if(e.shiftKey){
     this.toggleKeySelection(trackIndex,liveIdx,trackPointer);
     this.renderChannels();
-    setTimeout(()=>{this.suppressNextKeyClick=false;},0);
     return;
    }
    const alreadyInMulti=this.selectedKeys.length>1&&this.isKeySelected(trackIndex,liveIdx);
@@ -1910,6 +2120,7 @@ export class AnimationInspectionPanel {
     startX:e.clientX,
     moved:false,
     wasAlreadyInMulti:alreadyInMulti,
+    undoGroupId:this.builder?this.builder.beginUndoGroup():1,
     laneEl,
     markEl:mark,
     end:this.effectiveEnd(),
@@ -1932,10 +2143,12 @@ export class AnimationInspectionPanel {
     if(!anchorKey)return;
     const delta=cleanMotionNumber(rawTime-anchorKey.t);
     if(Math.abs(delta)<1e-6)return;
-    const res=this.moveSelection(
-     this.selectedKeys.map(s=>({track:s.trackIndex,key:s.keyIndex})),
-     delta,
-    );
+    const runMove=()=>
+     this.moveSelection(
+      this.selectedKeys.map(s=>({track:s.trackIndex,key:s.keyIndex})),
+      delta,
+     );
+    const res=this.builder?this.builder.withUndoGroup(drag.undoGroupId,runMove):runMove();
     if(res.ok&&rawTime>=0&&rawTime<=this.runtimeDuration){
      this.options.seek(rawTime);
     }
@@ -1952,7 +2165,11 @@ export class AnimationInspectionPanel {
 
   const finishDrag=(e:PointerEvent)=>{
    const drag=this.draggingKey;
-   if(!drag||drag.pointerId!==e.pointerId)return;
+   if(!drag||drag.pointerId!==e.pointerId){
+    if(mark.hasPointerCapture?.(e.pointerId))mark.releasePointerCapture(e.pointerId);
+    if(e.type==="pointercancel")this.suppressNextKeyClick=false;
+    return;
+   }
    this.draggingKey=null;
    if(mark.hasPointerCapture?.(e.pointerId))mark.releasePointerCapture(e.pointerId);
    if(!drag.moved&&drag.wasAlreadyInMulti&&this.selectedKey){
@@ -1961,7 +2178,7 @@ export class AnimationInspectionPanel {
     this.syncKeyInspectorInPlace();
    }
    e.preventDefault();
-   setTimeout(()=>{this.suppressNextKeyClick=false;},0);
+   if(e.type==="pointercancel")this.suppressNextKeyClick=false;
   };
   mark.addEventListener('pointerup',finishDrag);
   mark.addEventListener('pointercancel',finishDrag);
@@ -2191,6 +2408,7 @@ export class AnimationInspectionPanel {
    segmentIndex:segIdx,
    handleIndex:handleIdx,
    channel:this.channel,
+   undoGroupId:this.builder?this.builder.beginUndoGroup():1,
    low,
    high,
    span,
@@ -2380,13 +2598,6 @@ export class AnimationInspectionPanel {
    this.setEditorStatus(err,true);
    return {ok:false,error:err};
   }
-  const constraint=findBoneConstraint(this.document,boneName);
-  if(constraint){
-   const err=`ANIMATION_BONE_CONSTRAINED: bone "${boneName}" is driven by ${constraint.kind} constraint "${constraint.name}" and cannot be posed directly on stage`;
-   this.setEditorStatus(err,true);
-   return {ok:false,error:err};
-  }
-
   const clss=this.tracksInfo();
   const boneTracks=clss.filter(c=>c.targetKind==='bone'&&c.target===boneName);
   const matchingProps=mode==='rotate'?['rotate']:['translate','translatex','translatey'];
@@ -2400,6 +2611,12 @@ export class AnimationInspectionPanel {
   // Also check if compiled inspection has a bone track for this property that is missing from source
   const editableMatches=matchingTracks.filter(c=>c.editable);
   if(editableMatches.length===0){
+   const constraint=findBoneConstraint(this.document,boneName);
+   if(constraint){
+    const err=`ANIMATION_BONE_CONSTRAINED: bone "${boneName}" is driven by ${constraint.kind} constraint "${constraint.name}" and cannot be posed directly on stage`;
+    this.setEditorStatus(err,true);
+    return {ok:false,error:err};
+   }
    const compiledOnly=this.inspection.tracks.find(
     t=>t.kind==='bone'&&t.target===boneName&&matchingProps.includes(t.name),
    );
@@ -2530,13 +2747,14 @@ export class AnimationInspectionPanel {
    if(!e.isPrimary||e.button!==0||this.isBusy||this.space)return;
    e.stopPropagation();
    const mode:'rotate'|'translate'=e.altKey?(this.poseMode==='rotate'?'translate':'rotate'):this.poseMode;
-   const setup=this.inspection?.bones.find(b=>b.name===boneName);
-   const originWorld=this.boneWorldMatrix(boneName);
+   const targetBone=this.resolveBoneForStageDrag(boneName,mode);
+   const setup=this.inspection?.bones.find(b=>b.name===targetBone);
+   const originWorld=this.boneWorldMatrix(targetBone);
    const parentWorld=setup?.parent?this.boneWorldMatrix(setup.parent):{x:0,y:0,a:1,b:0,c:0,d:1};
    const undoGroupId=this.builder?this.builder.beginUndoGroup():1;
    this.draggingStageBone={
     pointerId:e.pointerId,
-    boneName,
+    boneName:targetBone,
     mode,
     startX:e.clientX,
     startY:e.clientY,
@@ -2604,7 +2822,13 @@ export class AnimationInspectionPanel {
  redraw(bonePoints=this.bonePoints){
   this.bonePoints=bonePoints;
   for(const [name,node]of this.boneButtons)if(!this.bones.has(name)){node.remove();this.boneButtons.delete(name);}
-  const {stage}=this.options,selected=this.selection.value();stage.dataset.heldFrame=this.frame?'available':'unavailable';stage.dataset.selectedKind=selected?.kind??'';stage.dataset.selectedName=selected?.name??'';this.picks.hidden=!this.options.enabled();
+  const {stage}=this.options,selected=this.selection.value();
+  stage.dataset.heldFrame=this.frame?'available':'unavailable';
+  stage.dataset.selectedKind=selected?.kind??'';
+  stage.dataset.selectedName=selected?.name??'';
+  const enabled=this.options.enabled();
+  this.picks.hidden=!enabled;
+  const otherMode:'rotate'|'translate'=this.poseMode==='rotate'?'translate':'rotate';
   let order=0;
   for(const [name,p]of this.bones){
    let b=this.boneButtons.get(name);
@@ -2614,7 +2838,8 @@ export class AnimationInspectionPanel {
       this.suppressNextBoneClick=false;
       return;
      }
-     this.select({kind:'bone',name});
+     const targetName=this.resolveBoneForStageClick(name);
+     this.select({kind:'bone',name:targetName});
     });
     b.className='animation-bone-pick';
     b.title=`Select or drag bone ${name}`;
@@ -2624,12 +2849,29 @@ export class AnimationInspectionPanel {
     this.boneButtons.set(name,b);
     this.picks.append(b);
    }
-   b.style.zIndex=String(order++);
+   const isSelected=selected?.kind==='bone'&&selected.name===name;
+   const visible=enabled&&(bonePoints||isSelected);
+   b.hidden=!bonePoints&&!isSelected;
+   b.setAttribute('aria-pressed',String(isSelected));
+   if(!visible){
+    order++;
+    continue;
+   }
+   const editableNow=this.isBoneEditableInMode(name,this.poseMode);
+   const editableOther=this.isBoneEditableInMode(name,otherMode);
+   b.dataset.poseEditable=editableNow?'true':editableOther?'other':'false';
+   const zRank=isSelected&&editableNow
+    ?500
+    :editableNow
+    ?400-Math.min(90,this.firstEditableTrackIndexForBone(name,this.poseMode))
+    :isSelected||editableOther
+    ?200+order
+    :100+order;
+   order++;
+   b.style.zIndex=String(zRank);
    const at=this.options.project(p.x,p.y);
    b.style.left=`${at.x}px`;
    b.style.top=`${at.y}px`;
-   b.hidden=!bonePoints&&!(selected?.kind==='bone'&&selected.name===name);
-   b.setAttribute('aria-pressed',String(selected?.kind==='bone'&&selected.name===name));
   }
  }
 
