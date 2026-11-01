@@ -197,7 +197,7 @@ verbatim. A kind the rig spec cannot offer (no mesh slot, no ik or transform
 constraint, fewer than two slots) is disabled with the reason. The file rides
 submitted feedback by hash and content as `context.requirements`.
 
-The view bar is one row and keeps the layer toggles in reach in every section: **Images**
+The view bar wraps when the stage is narrow and keeps every control and the layer toggles in reach in every section: **Images**
 (`I`), **Mesh edges** (`M`) and **Bone points** (`B`). The keys do nothing while
 a text field, textarea, select or editable text has focus, with Ctrl/Alt/Cmd
 held, or on key repeat; Space stays pan and Enter stays frame entry. A disabled
