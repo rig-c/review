@@ -1,10 +1,10 @@
 import {afterEach,expect,test} from 'bun:test';
 import {mkdtemp,mkdir,cp,readFile,writeFile,rm,realpath,readdir} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {connect} from 'node:net';
-import {openReview} from '../src/open.ts';
+import {openFingerprint,openReview,running} from '../src/open.ts';
 import {instanceAccess,readOnlyReason} from '../web/instance-access.ts';
 const roots:string[]=[],owned:{pid:number;origin:string;nonce:string;status:string}[]=[];
 // Stop only processes whose private nonce still answers, then prove they are gone.
-afterEach(async()=>{for(const row of owned.splice(0)){try{const r=await fetch(row.origin+row.status,{headers:{authorization:`Bearer ${row.nonce}`},signal:AbortSignal.timeout(500)});if((await r.json()).nonce===row.nonce)process.kill(row.pid,'SIGTERM');}catch{}let stopped=false;for(let n=0;n<80;n++){try{const r=await fetch(row.origin+row.status,{headers:{authorization:`Bearer ${row.nonce}`},signal:AbortSignal.timeout(100)});if((await r.json()).nonce!==row.nonce){stopped=true;break;}}catch{stopped=true;break;}await new Promise(resolve=>setTimeout(resolve,25));}expect(stopped).toBe(true);}for(const root of roots.splice(0))await rm(root,{recursive:true,force:true});});
+afterEach(async()=>{for(const row of owned.splice(0)){try{const r=await fetch(row.origin+row.status,{headers:{authorization:`Bearer ${row.nonce}`},signal:AbortSignal.timeout(500)});if((await r.json()).nonce===row.nonce)process.kill(row.pid,'SIGTERM');}catch{}let stopped=false;for(let n=0;n<80;n++){try{const r=await fetch(row.origin+row.status,{headers:{authorization:`Bearer ${row.nonce}`},signal:AbortSignal.timeout(100)});if((await r.json()).nonce!==row.nonce){stopped=true;break;}}catch{stopped=true;break;}await new Promise(resolve=>setTimeout(resolve,25));}for(let n=0;n<80&&running(row.pid);n++)await new Promise(resolve=>setTimeout(resolve,25));expect(stopped).toBe(true);}for(const root of roots.splice(0))await rm(root,{recursive:true,force:true});});
 async function fixture(){const root=await realpath(await mkdtemp(join(tmpdir(),'review-front-')));roots.push(root);const producer=join(root,'producer');await mkdir(producer);await cp(join(import.meta.dir,'fixtures/strip-probe/build'),join(producer,'build'),{recursive:true});await cp(join(import.meta.dir,'fixtures/strip-probe/motion.json'),join(producer,'motion.json'));await writeFile(join(producer,'report.json'),JSON.stringify({spec:'rig-pose-report/1',animation:'inspect',frameTimes:[0,.500003,.999997]}));const reference=join(root,'original.mov');await cp(join(import.meta.dir,'fixtures/strip-probe/reference.mov'),reference);return {root,producer,reference,state:join(root,'state')};}
 async function track(state:string){for(const name of await readdir(join(state,'open'))){const front=/^front-\d+\.json$/.test(name);if(!front&&!/^[a-f0-9]{64}\.json$/.test(name))continue;const data=JSON.parse(await readFile(join(state,'open',name),'utf8'));if(!owned.some(row=>row.nonce===data.nonce))owned.push({pid:data.pid,origin:data.origin,nonce:data.nonce,status:front?'/api/front-status':'/api/open-status'});}}
 async function record(state:string,url:string){const key=new URL(url).pathname.split('/')[2]||new URL(url).searchParams.get('handoff');return JSON.parse(await readFile(join(state,'open',key+'.json'),'utf8'));}
@@ -94,3 +94,46 @@ test('compare instances route through the front with their own assets, reference
  expect((await fetch(base+'api/compare/session',{method:'PUT',headers,body:JSON.stringify({...session,status:'approved'})})).status).toBe(403);
  expect((await fetch(base+'api/compare/session',{method:'PUT',headers:{...headers,'X-Review-Capability':cap(opened.url)},body:JSON.stringify({...session,status:'approved'})})).status).toBe(200);
 },60000);
+
+test('front stays up while control directory has a live record and exits within bound when control directory is deleted, while planted .catch(()=>{}) form fails',async()=>{
+ const f=await fixture(),port=freePort(),idleMs=120;
+ await openReview({input:f.producer},{stateDir:f.state,frontPort:port,frontIdleMs:idleMs,idleMs:5000});await track(f.state);
+ const control=join(f.state,'open'),frontRec=JSON.parse(await readFile(join(control,`front-${port}.json`),'utf8')) as {pid:number;origin:string;nonce:string;fingerprint:string};
+ // Bar 3: while control directory exists with a live instance record, front stays up past idleMs.
+ await Bun.sleep(idleMs*3);
+ expect(running(frontRec.pid)).toBe(true);
+ const aliveRes=await fetch(frontRec.origin+'/api/front-status',{headers:{authorization:`Bearer ${frontRec.nonce}`}});
+ expect(aliveRes.status).toBe(200);
+ // Any other read error (e.g. ENOTDIR when control path is a regular file) stays as it is and does not exit the front.
+ await rm(control,{recursive:true,force:true});
+ await writeFile(control,'not-a-directory');
+ await Bun.sleep(idleMs*3);
+ expect(running(frontRec.pid)).toBe(true);
+ // Bar 1: deleting the control directory (ENOENT) makes the front exit within bound.
+ await rm(control,{force:true});
+ const deadline=performance.now()+1500;
+ while(performance.now()<deadline&&running(frontRec.pid))await Bun.sleep(25);
+ expect(running(frontRec.pid)).toBe(false);
+ // Planted pre-#287 control: unguarded readdir(control) swallowed by .catch(()=>{}) stays alive past the bound when control is deleted.
+ const plantedControl=join(f.root,'planted-open');await mkdir(plantedControl,{recursive:true,mode:0o700});
+ const plantedPort=freePort(),plantedNonce=crypto.randomUUID(),plantedReq=join(plantedControl,`front-${plantedPort}.${plantedNonce}.request.json`),plantedRecPath=join(plantedControl,`front-${plantedPort}.json`);
+ const frontSrc=await readFile(new URL('../src/front.ts',import.meta.url),'utf8');
+ const plantedFrontSrc=frontSrc.replace(/async function liveInstances\(control:string\):Promise<boolean>\{[^\n]*\}/,'async function liveInstances(control:string):Promise<boolean>{for(const name of await readdir(control)){if(/^[a-f0-9]{64}\\.claim$/.test(name))return true;}return false;}');
+ const plantedDir=join(f.root,'planted-src');await mkdir(plantedDir,{recursive:true});
+ for(const name of ['open.ts','open-protocol.ts','live-lifecycle.ts','control.ts','reference.ts','manifest.ts','compare.ts','server.ts','compare-server.ts','animation-selection.ts','versions.ts','handoff.ts','state-dir.ts']){
+  await writeFile(join(plantedDir,name),`export * from ${JSON.stringify(join(import.meta.dir,'../src',name))};\n`);
+ }
+ await writeFile(join(plantedDir,'front.ts'),plantedFrontSrc);
+ await writeFile(plantedReq,JSON.stringify({schema:'rig-review-front-request/1',control:plantedControl,request:plantedReq,record:plantedRecPath,port:plantedPort,nonce:plantedNonce,fingerprint:await openFingerprint(),idleMs}),{mode:0o600});
+ const plantedProc=Bun.spawn([process.execPath,'-e',`import {runFront} from ${JSON.stringify(join(plantedDir,'front.ts'))}; await runFront(process.argv[1]);`,plantedReq],{cwd:plantedControl,stdout:'ignore',stderr:'ignore'});
+ try{
+  for(let n=0;n<80;n++){try{const r=await fetch(`http://127.0.0.1:${plantedPort}/api/front-status`,{headers:{authorization:`Bearer ${plantedNonce}`}});if(r.ok)break;}catch{}await Bun.sleep(25);}
+  await rm(plantedControl,{recursive:true,force:true});
+  await Bun.sleep(idleMs*4);
+  // The planted form fails the exit gate: the process is still running after 4x idleMs.
+  expect(running(plantedProc.pid)).toBe(true);
+ }finally{
+  try{process.kill(plantedProc.pid,'SIGTERM');}catch{}
+  await plantedProc.exited.catch(()=>{});
+ }
+},30000);
