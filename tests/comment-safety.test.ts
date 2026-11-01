@@ -40,26 +40,28 @@ import {parseStageComment,projectMark,unprojectMark,region,feedbackTimingLabel} 
 import {textEntryFocused} from '../web/view-controls.ts';
 const binderSource=await readFile(new URL('../web/stage-comments.ts',import.meta.url),'utf8');
 /** Actual event controller with a controlled capture promise, no browser/pixel claim. */
-function commentController(){
+function commentController(initialRows:any[]=[],sourceOverride=binderSource){
  class Node {
-  children:any[]=[];parent:any=null;style:any={};attributes=new Map();listeners=new Map<string,Function[]>();className='';id='';textContent='';title='Comment C';hidden=false;disabled=false;value='';clientWidth=200;clientHeight=200;clientLeft=0;clientTop=0;captured=new Set();classList={toggle(){}};onclick:any=null;onsubmit:any=null;
-  append(...ns:any[]){for(const n of ns){n.parent=this;this.children.push(n);}}after(...ns:any[]){this.append(...ns);}replaceChildren(...ns:any[]){this.children=[];this.append(...ns);}remove(){if(this.parent)this.parent.children=this.parent.children.filter((n:any)=>n!==this);}setAttribute(k:string,v:string){this.attributes.set(k,v);}closest(){return null;}focus(){}getBoundingClientRect(){return{left:0,top:0};}addEventListener(k:string,f:Function){this.listeners.set(k,[...(this.listeners.get(k)??[]),f]);}removeEventListener(){}async emit(k:string,e:any){await Promise.all((this.listeners.get(k)??[]).map(f=>f(e)));}setPointerCapture(i:number){this.captured.add(i);}hasPointerCapture(i:number){return this.captured.has(i);}releasePointerCapture(i:number){this.captured.delete(i);}
+  children:any[]=[];parent:any=null;style:any={};dataset:Record<string,string>={};attributes=new Map();listeners=new Map<string,Function[]>();className='';id='';textContent='';title='Comment C';hidden=false;disabled=false;readOnly=false;value='';clientWidth=200;clientHeight=200;clientLeft=0;clientTop=0;captured=new Set();classList={toggle(){}};onclick:any=null;onsubmit:any=null;onkeydown:any=null;
+  get offsetWidth(){return 286;}get offsetHeight(){return this.children.some((c:any)=>c.getAttribute?.('role')==='alert'&&c.textContent)?176:108;}
+  append(...ns:any[]){for(const n of ns){n.parent=this;this.children.push(n);}}after(...ns:any[]){this.append(...ns);}replaceChildren(...ns:any[]){this.children=[];this.append(...ns);}remove(){if(this.parent)this.parent.children=this.parent.children.filter((n:any)=>n!==this);}setAttribute(k:string,v:string){this.attributes.set(k,v);}getAttribute(k:string){return this.attributes.get(k)??null;}closest(){return null;}focus(){}getBoundingClientRect(){return{left:0,top:0};}addEventListener(k:string,f:Function){this.listeners.set(k,[...(this.listeners.get(k)??[]),f]);}removeEventListener(){}async emit(k:string,e:any){await Promise.all((this.listeners.get(k)??[]).map(f=>f(e)));}setPointerCapture(i:number){this.captured.add(i);}hasPointerCapture(i:number){return this.captured.has(i);}releasePointerCapture(i:number){this.captured.delete(i);}
  }
- const toggle=new Node(),listToggle=new Node(),toolbar=new Node(),pane=new Node(),win=new Node(),doc:any=new Node();let tick=()=>{},reason:string|null=null,crops=0,additions:any[]=[],pause:Promise<void>=Promise.resolve(),resolveCrop:(v:any)=>void=()=>{};const messages:string[]=[];
- doc.createElement=()=>new Node();doc.getElementById=(id:string)=>id==='stage-comment'?toggle:listToggle;
- const crop=()=>{crops++;return new Promise(resolve=>{resolveCrop=resolve;});},host={toolbar,viewports:{rig:pane},pose:()=>({mode:'animate',camera:{space:'world',center:{x:0,y:0},zoom:1,viewport:{width:200,height:200},visible:{x:-100,y:-100,width:200,height:200}},frame:{index:0,basis:'producer'},time:0,animation:null,turn:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,rig:'control'}),pause:()=>pause,bookmark:()=>({}),restore:async()=>{},feedback:()=>additions,locked:()=>false,add:(f:any)=>additions.push(f),changed(){},error:(v:string)=>messages.push(v),blocked:()=>false,refusal:()=>reason};
- const helpers=binderSource.slice(binderSource.indexOf('const markOf='),binderSource.indexOf('async function crop(')),body=binderSource.slice(binderSource.indexOf('export function bindStageComments')).replace('export function','function');const scope={host,crop,document:doc,window:win,requestAnimationFrame:(f:any)=>{tick=f;return 1;},cancelAnimationFrame(){},parseStageComment,projectMark,unprojectMark,region,feedbackTimingLabel,textEntryFocused};const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(helpers+body);const tool=new Function('scope',`with(scope){${code};return bindStageComments(host);}`)(scope);
+ const toggle=new Node(),toolbar=new Node(),pane=new Node(),win=new Node(),doc:any=new Node();let tick=()=>{},reason:string|null=null,crops=0,restores=0,additions:any[]=[...initialRows],pause:Promise<void>=Promise.resolve(),resolveCrop:(v:any)=>void=()=>{};const messages:string[]=[];
+ doc.createElement=()=>new Node();doc.getElementById=(id:string)=>id==='stage-comment'?toggle:null;
+ const crop=()=>{crops++;return new Promise(resolve=>{resolveCrop=resolve;});},host={toolbar,viewports:{rig:pane},pose:()=>({mode:'animate',camera:{space:'world',center:{x:0,y:0},zoom:1,viewport:{width:200,height:200},visible:{x:-100,y:-100,width:200,height:200}},frame:{index:0,basis:'producer'},time:0,animation:null,turn:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,rig:'control'}),pause:()=>pause,bookmark:()=>({}),restore:async()=>{restores++;},feedback:()=>additions,locked:()=>false,add:(f:any)=>additions.push(f),changed(){},error:(v:string)=>messages.push(v),blocked:()=>false,refusal:()=>reason};
+ const helpers=sourceOverride.slice(sourceOverride.indexOf('const markOf='),sourceOverride.indexOf('async function crop(')),body=sourceOverride.slice(sourceOverride.indexOf('export function bindStageComments')).replace('export function','function');const scope={host,crop,document:doc,window:win,requestAnimationFrame:(f:any)=>{tick=f;return 1;},cancelAnimationFrame(){},parseStageComment,projectMark,unprojectMark,region,feedbackTimingLabel,textEntryFocused};const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(helpers+body);const tool=new Function('scope',`with(scope){${code};return bindStageComments(host);}`)(scope);
  const event=()=>({button:0,isPrimary:true,pointerId:7,clientX:50,clientY:50,target:new Node(),preventDefault(){},stopImmediatePropagation(){}}),down=()=>pane.emit('pointerdown',event()),up=()=>pane.emit('pointerup',event()),submit=()=>{const form=pane.children.find((n:any)=>n.className.includes('stage-comment-composer'));form.children[0].value='safe note';return form.onsubmit({preventDefault(){}});};
- return {toggle,pane,messages,tool,enable:()=>toggle.onclick(),down,up,submit,tick:()=>tick(),setReason:(r:string|null)=>{reason=r;},holdPause:(p:Promise<void>)=>{pause=p;},resolveCrop:()=>resolveCrop({path:'unused',sha256:'a'.repeat(64),png:'private',width:1,height:1}),crops:()=>crops,rows:()=>additions,reasonNote:()=>toggle.children.find((n:any)=>n.id==='stage-comment-refusal')};
+ const list=()=>toolbar.children.find((n:any)=>n.id==='stage-comment-list');
+ return {toggle,toolbar,pane,list,messages,tool,enable:()=>{if(!toggle.disabled)toggle.onclick();},down,up,submit,tick:()=>tick(),setReason:(r:string|null)=>{reason=r;},holdPause:(p:Promise<void>)=>{pause=p;},resolveCrop:()=>resolveCrop({path:'unused',sha256:'a'.repeat(64),png:'private',width:1,height:1}),crops:()=>crops,restores:()=>restores,rows:()=>additions,reasonNote:()=>toggle.children.find((n:any)=>n.id==='stage-comment-refusal')};
 }
-test('P1 control displays named refusal, cancels enabled capture and never starts a preview crop',async()=>{
- const ui=commentController();try{ui.enable();ui.setReason('COMMENT_UNAPPLIED_PREVIEW: Idle tracks');ui.tick();expect(ui.toggle.disabled).toBe(true);expect(ui.toggle.title).toContain('Idle tracks');expect(ui.reasonNote().hidden).toBe(false);expect(ui.reasonNote().textContent).toContain('COMMENT_UNAPPLIED_PREVIEW');await ui.down();await ui.up();expect(ui.crops()).toBe(0);expect(ui.rows()).toHaveLength(0);expect(ui.tool.active()).toBe(false);ui.setReason(null);ui.tick();expect(ui.toggle.disabled).toBe(false);}finally{ui.tool.dispose();}
+test('P1 control displays named refusal without disabling the button, cancels enabled capture and never starts a preview crop',async()=>{
+ const ui=commentController();try{ui.enable();ui.setReason('COMMENT_UNAPPLIED_PREVIEW: Idle tracks');ui.tick();expect(ui.toggle.disabled).toBe(false);expect(ui.list().hidden).toBe(false);expect(ui.toggle.title).toContain('Idle tracks');expect(ui.reasonNote().hidden).toBe(false);expect(ui.reasonNote().textContent).toContain('COMMENT_UNAPPLIED_PREVIEW');await ui.down();await ui.up();expect(ui.crops()).toBe(0);expect(ui.rows()).toHaveLength(0);expect(ui.tool.active()).toBe(false);ui.setReason(null);ui.tick();expect(ui.toggle.disabled).toBe(false);}finally{ui.tool.dispose();}
 });
 test('P1 preview arriving during pause refuses before crop and releases only own pointer',async()=>{
  const ui=commentController();try{let release=()=>{};ui.holdPause(new Promise<void>(r=>{release=r;}));ui.enable();ui.pane.setPointerCapture(99);await ui.down();ui.setReason('COMMENT_UNAPPLIED_PREVIEW: Physics live overrides');release();await ui.up();expect(ui.crops()).toBe(0);expect(ui.rows()).toHaveLength(0);expect(ui.pane.hasPointerCapture(7)).toBe(false);expect(ui.pane.hasPointerCapture(99)).toBe(true);expect(ui.messages.join()).toContain('COMMENT_UNAPPLIED_PREVIEW');}finally{ui.tool.dispose();}
 });
 test('P1 preview arriving during async crop cannot save; normal capture still adds its record',async()=>{
- for(const preview of [false,true]){const ui=commentController();try{ui.enable();await ui.down();await ui.up();expect(ui.crops()).toBe(1);const save=ui.submit();if(preview)ui.setReason('COMMENT_UNAPPLIED_PREVIEW: Density strip candidate');ui.resolveCrop();await save;expect(ui.rows()).toHaveLength(preview?0:1);if(preview){expect(ui.toggle.disabled).toBe(true);expect(ui.reasonNote().textContent).toContain('Density strip');}}finally{ui.tool.dispose();}}
+ for(const preview of [false,true]){const ui=commentController();try{ui.enable();await ui.down();await ui.up();expect(ui.crops()).toBe(1);const save=ui.submit();if(preview)ui.setReason('COMMENT_UNAPPLIED_PREVIEW: Density strip candidate');ui.resolveCrop();await save;expect(ui.rows()).toHaveLength(preview?0:1);if(preview){expect(ui.toggle.disabled).toBe(false);expect(ui.reasonNote().textContent).toContain('Density strip');}}finally{ui.tool.dispose();}}
 });
 test('P2 helper refuses reference-basis on A, B or reference while preserving numeric producer/manual and null-time refusal',()=>{
  for(const viewport of ['a','b','reference'])expect(()=>requireFeedbackFrames({frameStart:30,frameEnd:30,context:{comment:{schema:'rig-review-comment/1',viewport,frame:{index:30,basis:'reference'}}}})).toThrow('COMMENT_REFERENCE_STRIP_UNAVAILABLE');
@@ -81,6 +83,101 @@ test('P2 actual CLI PNG request refuses the reference basis before native planni
 }));
 
 test('P1 refuses enable when already previewing and invalidates a crop even if preview clears before completion',async()=>{
- const first=commentController();try{first.setReason('COMMENT_UNAPPLIED_PREVIEW: Rig fields turn dial');first.enable();expect(first.tool.active()).toBe(false);expect(first.toggle.disabled).toBe(true);expect(first.crops()).toBe(0);}finally{first.tool.dispose();}
+ const first=commentController();try{first.setReason('COMMENT_UNAPPLIED_PREVIEW: Rig fields turn dial');first.enable();expect(first.tool.active()).toBe(false);expect(first.toggle.disabled).toBe(false);expect(first.list().hidden).toBe(false);expect(first.crops()).toBe(0);}finally{first.tool.dispose();}
  const ui=commentController();try{ui.enable();await ui.down();await ui.up();const save=ui.submit();ui.setReason('COMMENT_UNAPPLIED_PREVIEW: Idle tracks');ui.tick();ui.setReason(null);ui.tick();ui.resolveCrop();await save;expect(ui.rows()).toHaveLength(0);expect(ui.tool.draft()).toBe(false);}finally{ui.tool.dispose();}
+});
+
+test('#276 Bar 3: under COMMENT_UNAPPLIED_PREVIEW the list opens, rows restore, placing and editing are refused by name, and a planted button-disabling mutant fails',async()=>{
+ const sha=createHash('sha256').update(Buffer.from(png,'base64')).digest('hex'),camera={space:'world',center:{x:0,y:0},zoom:1,viewport:{width:200,height:200},visible:{x:-100,y:-100,width:200,height:200}},comment={schema:'rig-review-comment/1',mode:'animate',viewport:'rig',frame:{index:0,basis:'producer'},time:0,animation:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,camera,screen:{x:40,y:40,width:0,height:0},world:{x:0,y:0,width:0,height:0},slots:[],crop:{path:`comment-crops/${sha}.png`,sha256:sha,png:'data:image/png;base64,'+png,width:1,height:1},bookmark:{schema:'rig-review-inspection/1',binding:{mode:'single',sourceHash:'a'.repeat(64),rigs:[null]},time:0,animation:null,theme:'dark',layers:{images:true,meshes:false,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:camera,a:null,b:null,reference:null}},selection:{inspector:'playback'}}};
+ const existing={id:'c-1',frameStart:0,frameEnd:0,target:{kind:'rig',name:'control'},category:'defect',summary:'Original wrist note',context:{time:0,frame:0,animation:null,comment}};
+ const runUnderPreview=async(sourceText:string)=>{
+  const ui=commentController([structuredClone(existing)],sourceText);
+  try{
+   ui.setReason('COMMENT_UNAPPLIED_PREVIEW: Idle tracks');
+   ui.tick();
+   ui.enable();
+   const listOpened=!ui.list().hidden&&!ui.toggle.disabled;
+   let restored=0,editRefused=false,placeRefused=false;
+   if(listOpened){
+    const item=ui.list().children.find((n:any)=>n.className==='stage-comment-item');
+    const rowBtn=item?.children[0];
+    await rowBtn?.onclick?.();
+    restored=ui.restores();
+    const form=ui.pane.children.find((n:any)=>n.className.includes('stage-comment-composer'));
+    if(form){
+     form.children[0].value='Mutated under preview';
+     await form.onsubmit({preventDefault(){}});
+     const delBtn=form.children.find((n:any)=>n.className==='stage-comment-delete');
+     delBtn?.onclick?.();
+     editRefused=ui.rows()[0]?.summary==='Original wrist note'&&ui.rows().length===1&&(form.children[2]?.textContent??'').includes('COMMENT_UNAPPLIED_PREVIEW');
+    }
+    ui.messages.length=0;
+    await ui.down();await ui.up();
+    placeRefused=ui.crops()===0&&ui.rows().length===1&&ui.messages.some(m=>m.includes('COMMENT_UNAPPLIED_PREVIEW'));
+   }
+   return {listOpened,disabled:ui.toggle.disabled,restored,editRefused,placeRefused};
+  }finally{ui.tool.dispose();}
+ };
+ const actual=await runUnderPreview(binderSource);
+ expect(actual).toEqual({listOpened:true,disabled:false,restored:1,editRefused:true,placeRefused:true});
+ const planted=binderSource.replace('toggle.disabled=false;','toggle.disabled=!!reason;');
+ expect(planted).not.toBe(binderSource);
+ const mutant=await runUnderPreview(planted);
+ expect(mutant.disabled).toBe(true);
+ expect(mutant.listOpened).toBe(false);
+});
+
+test('#276 refusal layout & read-only controls: one-line button without bar shift, post-text measured composer clamping near bottom edge, and Read only · Escape closes hint',async()=>{
+ const css=await readFile(new URL('../web/styles.css',import.meta.url),'utf8');
+ expect(css).toContain('#stage-comment{white-space:nowrap;flex:none}');
+ expect(css).toContain('#stage-comment-refusal{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}');
+ expect(css).toContain('.stage-comment-refusal-note{display:block;margin-top:4px;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:var(--fg-muted)}');
+
+ const sha=createHash('sha256').update(Buffer.from(png,'base64')).digest('hex'),camera={space:'world',center:{x:0,y:0},zoom:1,viewport:{width:200,height:200},visible:{x:-100,y:-100,width:200,height:200}};
+ const bottomComment={schema:'rig-review-comment/1',mode:'animate',viewport:'rig',frame:{index:0,basis:'producer'},time:0,animation:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,camera,screen:{x:40,y:190,width:10,height:6},world:{x:0,y:-90,width:10,height:6},slots:[],crop:{path:`comment-crops/${sha}.png`,sha256:sha,png:'data:image/png;base64,'+png,width:1,height:1},bookmark:{schema:'rig-review-inspection/1',binding:{mode:'single',sourceHash:'a'.repeat(64),rigs:[null]},time:0,animation:null,theme:'dark',layers:{images:true,meshes:false,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:camera,a:null,b:null,reference:null}},selection:{inspector:'playback'}}};
+ const existing={id:'bottom-1',frameStart:0,frameEnd:0,target:{kind:'rig',name:'control'},category:'defect',summary:'Bottom hem seam note',context:{time:0,frame:0,animation:null,comment:bottomComment}};
+ const refusalReason='COMMENT_UNAPPLIED_PREVIEW: Idle tracks stage handles is active; leave or disable that preview before commenting (nothing is cleared or applied automatically)';
+
+ const evaluateRefusalState=async(sourceText:string)=>{
+  const ui=commentController([structuredClone(existing)],sourceText);
+  try{
+   ui.setReason(refusalReason);
+   ui.tick();
+   ui.enable();
+   const listNote=ui.list().children.find((n:any)=>n.className==='stage-comment-refusal-note');
+   const item=ui.list().children.find((n:any)=>n.className==='stage-comment-item');
+   await item?.children[0]?.onclick?.();
+   const form=ui.pane.children.find((n:any)=>n.className.includes('stage-comment-composer'));
+   const topPx=Number.parseFloat(form?.style?.top??'NaN');
+   const bottomPx=topPx+(form?.offsetHeight??0);
+   const hintText=form?.children[1]?.textContent??'';
+   return {
+    buttonNowrap:ui.toggle.style.whiteSpace==='nowrap'&&ui.toggle.style.flex==='none',
+    barRefusalOutOfFlow:ui.reasonNote()?.style?.position==='absolute'&&ui.reasonNote()?.title===refusalReason,
+    listNoteTruncatedWithTitle:listNote?.title===refusalReason&&listNote?.textContent===refusalReason&&listNote?.style?.textOverflow==='ellipsis'&&listNote?.style?.whiteSpace==='nowrap',
+    topPx,
+    bottomPx,
+    fitsInsideStage:topPx>=4&&bottomPx<=ui.pane.clientHeight-4,
+    hintText,
+   };
+  }finally{ui.tool.dispose();}
+ };
+
+ const actual=await evaluateRefusalState(binderSource);
+ expect(actual.buttonNowrap).toBe(true);
+ expect(actual.barRefusalOutOfFlow).toBe(true);
+ expect(actual.listNoteTruncatedWithTitle).toBe(true);
+ expect(actual.fitsInsideStage).toBe(true);
+ expect(actual.bottomPx).toBeLessThanOrEqual(196);
+ expect(actual.hintText).toBe('Read only · Escape closes');
+
+ // Planted old control 1 & 2 & 3: fixed 132px height positioned before error.textContent is set, and old hint text.
+ const plantedPreTextAndOldHint=binderSource
+  .replace("hint.textContent=composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels'","hint.textContent=locked?'Submitted · read-only · Escape cancels':'Enter saves · Escape cancels'")
+  .replace("const w=form.offsetWidth||294,h=form.offsetHeight||132;Object.assign(form.style,{left:Math.max(4,Math.min(screen.x+screen.width+8,pane.clientWidth-w-4))+'px',top:Math.max(4,Math.min(screen.y+screen.height+8,pane.clientHeight-h-4))+'px'});","Object.assign(form.style,{left:Math.max(4,Math.min(screen.x+screen.width+8,pane.clientWidth-294))+'px',top:Math.max(4,Math.min(screen.y+screen.height+8,pane.clientHeight-132))+'px'});");
+ expect(plantedPreTextAndOldHint).not.toBe(binderSource);
+ const oldBehaviour=await evaluateRefusalState(plantedPreTextAndOldHint);
+ expect(oldBehaviour.fitsInsideStage).toBe(false);
+ expect(oldBehaviour.bottomPx).toBeGreaterThan(200);
+ expect(oldBehaviour.hintText).toBe('Enter saves · Escape cancels');
 });

@@ -76,7 +76,7 @@ http://127.0.0.1:4318/instances/<key>/?input=…&handoff=…#cap=…
 | <a id="cuts-cut-polygons-patch-boxes-limb-joints--rig-parts-build"></a>Designate cuts, patches and limb joints | Cuts | [Cuts — PANELS](docs/PANELS.md#cuts-cut-polygons-patch-boxes-limb-joints--rig-parts-build) |
 | <a id="mesh-edit-typed-delta-preview-only"></a>Preview a setup-space delta and rebuild | Edit Mesh | [Mesh edit — PANELS](docs/PANELS.md#mesh-edit-typed-delta-preview-only) |
 | <a id="retarget-map-flags--rig-pose-watch"></a>Retarget a declared pose sequence | Retarget | [Retarget — PANELS](docs/PANELS.md#retarget-map-flags--rig-pose-watch) |
-| Mark a point or region on the current view | Comment · C | [Stage comments — PANELS](docs/PANELS.md#stage-comments) |
+| Mark, read and edit stage comments | Comment · C (n) | [Stage comments — PANELS](docs/PANELS.md#stage-comments) |
 | **Control and share** | | |
 | <a id="control-the-current-inspection-page"></a>Control an opted-in inspection | `control` | [Inspection control — WORKFLOWS](docs/WORKFLOWS.md#control-the-current-inspection-page) |
 | <a id="keep-and-share-an-inspection"></a>Restore a view link or local draft | View link, draft | [Keep and share — WORKFLOWS](docs/WORKFLOWS.md#keep-and-share-an-inspection) |
