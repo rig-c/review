@@ -1780,9 +1780,10 @@ export class AnimationInspectionPanel {
    if(!drag||drag.pointerId!==e.pointerId)return;
    const rect=svgHost.getBoundingClientRect();
    if(rect.width<=0||rect.height<=0)return;
-   const screen=svgHost.getScreenCTM();
-   if(!screen)return;
-   const {x:svgX,y:svgY}=new DOMPoint(e.clientX,e.clientY).matrixTransform(screen.inverse());
+   const toPlot=svgHost.getScreenCTM()?.inverse();
+   if(!toPlot)return;
+   const svgX=toPlot.a*e.clientX+toPlot.c*e.clientY+toPlot.e;
+   const svgY=toPlot.b*e.clientX+toPlot.d*e.clientY+toPlot.f;
    const rawT=((svgX-48)/728)*drag.end;
    const rawV=drag.low+((195-svgY)/160)*drag.span;
    const rawKeys=this.readDraftTrackKeys(drag.trackIndex);

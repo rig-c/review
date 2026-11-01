@@ -1958,6 +1958,10 @@ test('Slice 4a: loading gate before /api/rebuild resolves, read-only badge subro
 
     // Dragging [data-curve-handle="1"] on [data-curve-plot] updates the cubic curve in place
     const plotEl = host.querySelector('[data-curve-plot]')!;
+    const setScreenMatrix = (scale: number, x: number, y: number) => {
+      Object.assign(plotEl, { getScreenCTM: () => ({ inverse: () => ({ a: 1 / scale, b: 0, c: 0, d: 1 / scale, e: -x / scale, f: -y / scale }) }) });
+    };
+    setScreenMatrix(1, 0, 0);
     const h1 = host.querySelector('[data-curve-handle="1"]')!;
     expect(h1).toBeTruthy();
     expect(h1.dataset.editable).toBe('true');
@@ -1975,6 +1979,33 @@ test('Slice 4a: loading gate before /api/rebuild resolves, read-only badge subro
     plotEl.dispatchEvent(pUp);
     expect(panel.ops()).toHaveLength(1);
     expect(panel.ops()[0]!.op).toBe('set_key_curve');
+
+    // A letterboxed plot: the same viewBox point under another screen matrix writes the same curve.
+    const firstCurve = () => {
+      const op = panel.ops()[0];
+      if (op?.op !== 'set_key_curve') throw new Error('expected a set_key_curve op');
+      return op.curve;
+    };
+    const curveAtIdentity = firstCurve();
+    setScreenMatrix(0.5, 100, 20);
+    const again = host.querySelector('[data-curve-handle="1"]')!;
+    const pDown2 = new Event('pointerdown', { cancelable: true });
+    Object.assign(pDown2, { isPrimary: true, button: 0, pointerId: 22, clientX: 160, clientY: 60 });
+    again.dispatchEvent(pDown2);
+    const pMove3 = new Event('pointermove', { cancelable: true });
+    Object.assign(pMove3, { isPrimary: true, button: 0, pointerId: 22, clientX: 210 * 0.5 + 100, clientY: 50 * 0.5 + 20 });
+    plotEl.dispatchEvent(pMove3);
+    const pUp2 = new Event('pointerup', { cancelable: true });
+    Object.assign(pUp2, { isPrimary: true, button: 0, pointerId: 22, clientX: 205, clientY: 45 });
+    plotEl.dispatchEvent(pUp2);
+    expect(firstCurve()).toEqual(curveAtIdentity);
+
+    // The curve selector follows both busy transitions rather than the render an Apply left behind.
+    const curveSelect = host.querySelector('[data-curve-ease]') as unknown as { disabled: boolean };
+    panel.busy(true);
+    expect(curveSelect.disabled).toBe(true);
+    panel.busy(false);
+    expect(curveSelect.disabled).toBe(false);
 
     panel.dispose();
   } finally {
