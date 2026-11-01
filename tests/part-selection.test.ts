@@ -12,7 +12,7 @@ const model={slots:[{name:'s',bone:'root',setup:'first'},{name:'other',bone:'roo
 const entries=partCatalog(model,['s','other','clip']);
 function fake(){
  const rendered:PosedFrame[]=[];let sampled:unknown='unset',source=copyPartFrame(frame),override:SlotIdentitySnapshot|null=null;
- const snapshot=():SlotIdentitySnapshot=>override??{generation:source.generation!,set:null,skin:null,slots:entries.map((entry,z)=>{const drawn=source.order.find(row=>row.slot===entry.slot),attachment=entry.slot==='s'?'first':'sprite';return {slot:entry.slot,z,attachment:drawn?attachment:null,skin:drawn?'default':null,reason:drawn?null:entry.slot==='clip'?'no-attachment':'timeline-null'};})};
+ const snapshot=():SlotIdentitySnapshot=>override??{generation:source.generation!,set:null,sets:[],skin:null,slots:entries.map((entry,z)=>{const drawn=source.order.find(row=>row.slot===entry.slot),attachment=entry.slot==='s'?'first':'sprite';return {slot:entry.slot,z,attachment:drawn?attachment:null,skin:drawn?'default':null,reason:drawn?null:entry.slot==='clip'?'no-attachment':'timeline-null'};})};
  const player:PartPlayer={get generation(){return source.generation!;},get skin(){return snapshot().skin??undefined;},get set(){return snapshot().set;},slotIdentity:snapshot,posedFrame:filter=>{sampled=filter;return source;},renderer:{render(value:PosedFrame){rendered.push(value);}}};
  return {player,rendered,sampled:()=>sampled,source:(value:PosedFrame)=>{source={...value,generation:source.generation!+1};},identity:(value:SlotIdentitySnapshot|null)=>{override=value;}};
 }
@@ -73,7 +73,7 @@ test('selected bounds use held world geometry and normal clip intersection witho
 test('identity is authoritative for ambiguous declarations, active sets and non-drawn reasons without guessing',()=>{
  const a=fake(),inspection=new PartInspection();inspection.register('single',entries,a.player);inspection.present('single');inspection.select({side:'single',slot:'s',mode:'context'});
  expect(inspection.observation()).toMatchObject({activeAttachment:{skin:'default',attachment:'first'},identityUnavailable:null,generation:1});
- const snap:SlotIdentitySnapshot={generation:1,set:'linked-set',skin:'active-skin',slots:[{slot:'clip',z:0,attachment:null,skin:null,reason:'no-attachment'},{slot:'other',z:1,attachment:null,skin:null,reason:'set-hide'},{slot:'s',z:2,attachment:'linked-alias',skin:'owning-skin',reason:null}]};
+ const snap:SlotIdentitySnapshot={generation:1,set:'linked-set',sets:['linked-set'],skin:'active-skin',slots:[{slot:'clip',z:0,attachment:null,skin:null,reason:'no-attachment'},{slot:'other',z:1,attachment:null,skin:null,reason:'set-hide'},{slot:'s',z:2,attachment:'linked-alias',skin:'owning-skin',reason:null}]};
  const changed=copyPartFrame(frame);changed.order=changed.order.filter(row=>row.slot==='s');changed.order[0]!.z=2;a.source(changed);a.identity({...snap,generation:2});inspection.present('single');expect(inspection.observation()).toMatchObject({set:'linked-set',skin:'active-skin',activeAttachment:{skin:'owning-skin',attachment:'linked-alias'},z:2});
  inspection.select({side:'single',slot:'other',mode:'context'});expect(inspection.observation()).toMatchObject({drawn:false,activeAttachment:null,reason:'set-hide',identityUnavailable:null,z:1});
  expect(orderedParts(entries,changed,{...snap,generation:2}).map(entry=>entry.slot)).toEqual(['clip','other','s']);
@@ -147,7 +147,7 @@ test('identity capture rejects stale or forged generation/order atomically and r
 
 test('hidden, timeline-null, no-attachment and set-hide retain exact public null reasons and full z',()=>{
  for(const reason of ['hidden','timeline-null','no-attachment','set-hide'] as const){
-  const a=fake(),inspection=new PartInspection();inspection.register('single',entries,a.player);const empty:PosedFrame={order:[]};a.source(empty);a.identity({generation:2,set:reason==='set-hide'?'wink':null,skin:'active',slots:entries.map((entry,z)=>({slot:entry.slot,z,attachment:null,skin:null,reason}))});inspection.present('single');inspection.select({side:'single',slot:'s',mode:'context'});
+  const a=fake(),inspection=new PartInspection();inspection.register('single',entries,a.player);const empty:PosedFrame={order:[]};a.source(empty);a.identity({generation:2,set:reason==='set-hide'?'wink':null,sets:reason==='set-hide'?['wink']:[],skin:'active',slots:entries.map((entry,z)=>({slot:entry.slot,z,attachment:null,skin:null,reason}))});inspection.present('single');inspection.select({side:'single',slot:'s',mode:'context'});
   expect(inspection.observation()).toMatchObject({drawn:false,z:0,reason,activeAttachment:null,identityUnavailable:null,generation:2,identity:{attachment:null,skin:null,reason,activeSkin:'active'}});expect(inspection.bounds()).toBeNull();expect(inspection.value()!.identity?.reason).toBe(reason);inspection.assertIdentity(inspection.value());
  }
 });

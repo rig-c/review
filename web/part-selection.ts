@@ -58,7 +58,7 @@ export function copyPartIdentity(snapshot:SlotIdentitySnapshot,frame:PosedFrame,
  for(const row of frame.order){const identity=bySlot.get(row.slot);if(!identity||identity.reason!==null||identity.z!==row.z||row.z<=lastZ)throw new Error(`PART_IDENTITY_FRAME_MISMATCH: slot "${row.slot}" does not match held frame order`);lastZ=row.z;}
  // Identity-known slots need not have a visible primitive (zero alpha/empty
  // geometry/nonvisual setup). A known key is not a pixel or fit guarantee.
- return {generation:snapshot.generation,set:snapshot.set,skin:snapshot.skin,slots};
+ return {generation:snapshot.generation,set:snapshot.set,sets:[...snapshot.sets],skin:snapshot.skin,slots};
 }
 export function orderedParts(entries:readonly PartEntry[],frame:PosedFrame|null,identity:SlotIdentitySnapshot|null=null):PartEntry[]{
  const z=new Map(identity?.slots.map(row=>[row.slot,row.z])??frame?.order.map(row=>[row.slot,row.z])??[]),setup=new Map(entries.map((entry,i)=>[entry.slot,i]));
