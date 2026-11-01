@@ -274,8 +274,10 @@ function buildPatterns(fromCatalog: Readonly<Record<string, string>>, toCatalog:
       const isOptionalSuffix =
         prevIsNonPrefixToken ||
         (isAttachedAfterWord && (isAttachedBeforePunct || nextIsToken || isAtEnd));
-      const optDelim = '(?:|(?: · | — | \\(|, |; |\\[| —)' + charUnit + '*?)';
-      const optDelimEnd = '(?:|(?: · | — | \\(|, |; |\\[| —)' + charUnit + '*)';
+      // A bare space opens a suffix only after a literal: beside another placeholder it would split that placeholder's value.
+      const spaceDelim = beforeToken.endsWith('}') ? '' : '| ';
+      const optDelim = '(?:|(?: · | — | \\(|, |; |\\[| —' + spaceDelim + ')' + charUnit + '*?)';
+      const optDelimEnd = '(?:|(?: · | — | \\(|, |; |\\[| —' + spaceDelim + ')' + charUnit + '*)';
       regexBody += isShortOpenEnded
         ? '([^\\s]+)'
         : isOptionalPrefix

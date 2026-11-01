@@ -1018,3 +1018,15 @@ test('#294: dynamic compound strings, optional-suffix templates, and cloth/eye-r
   setLanguagePreference('system');
  }
 });
+
+test('#294: an attached optional suffix keeps a value that opens with a bare space', ()=>{
+ const roundTrips:[string,string][]=[
+  ['preview — Apply decides (2 op(s) on idle)','미리보기 — 적용 시 확정됨 (작업 2개 · idle 대상)'],
+  ['preview — Apply decides (2 op(s) on idle, tilt)','미리보기 — 적용 시 확정됨 (작업 2개 · idle, tilt 대상)'],
+  ['Applying 3 op(s) with @rig-c/parts 2.0.5: rig --config --idle-keys ctl, compile, check…','@rig-c/parts 2.0.5로 작업 3개 적용 중: rig --config --idle-keys ctl, 컴파일, 검사…']
+ ];
+ for(const [en,ko] of roundTrips){
+  expect(tr(en,'ko')).toBe(ko);
+  expect(tr(ko,'en')).toBe(en);
+ }
+});
