@@ -1174,7 +1174,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       document.querySelector('#animation-inspection [data-animation-view="timeline"]').click();
       const layerBones = document.getElementById('layer-bones');
-      if (layerBones && layerBones.getAttribute('aria-pressed') !== 'true') layerBones.click();
+      if (layerBones && !layerBones.checked) layerBones.click();
       document.querySelector('#animation-inspection [data-stage-pose-mode="rotate"]').click();
       const scrub = document.getElementById('scrub');
       scrub.value = '0.5';
@@ -1274,6 +1274,10 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       bHasPreviewAfterUndoAll: boolean;
       bPoseDeltaAfterUndoAllVsBaseline: number;
       aModelHashAfterAll: string;
+      bOpsAfterConcurrentAReset: number;
+      bHasPreviewAfterConcurrentAReset: boolean;
+      aAppliedAfterConcurrentReset: any;
+      aOpsAfterConcurrentReset: number;
     }>(`(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const ed = window.rigReviewEditor;
@@ -1324,6 +1328,8 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         undoBtn.click();
       }
       await seekTo(0.5);
+      const bOpsAfterUndoAll = ed.animation.ops().length;
+      const bHasPreviewAfterUndoAll = ed.animation.hasPreview();
       const bAfterUndoAll = ed.bone('rigid', 'b');
       const bPoseDeltaAfterUndoAllVsBaseline = Math.hypot(
         Math.fround(bAfterUndoAll.x) - Math.fround(bBase.x),
@@ -1331,16 +1337,42 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         Math.fround(bAfterUndoAll.rotationX) - Math.fround(bBase.rotationX),
       );
 
+      // Reset Build B back to inspected build before testing PR #262 Finding 2 concurrent reset
+      await ed.animation.reset();
+
+      // PR #262 Finding 2: Apply on Build A, start reset() on Build A, switch to Build B during the reset await
+      // and make a pending edit on Build B -> Build B's pending edit must survive and Build A must end with 0 ops.
+      ed.pickSide('a');
+      await sleep(30);
+      ed.animation.setKeyValue(1, 1, 0, 19);
+      await ed.animation.apply();
+      const resetAPromise = ed.animation.reset();
+      ed.pickSide('b');
+      ed.animation.setKeyValue(1, 1, 0, 27);
+      await resetAPromise;
+      const bOpsAfterConcurrentAReset = ed.animation.ops().length;
+      const bHasPreviewAfterConcurrentAReset = ed.animation.hasPreview();
+      const aAppliedAfterConcurrentReset = ed.stage('a').applied;
+      ed.pickSide('a');
+      await sleep(20);
+      const aOpsAfterConcurrentReset = ed.animation.ops().length;
+      ed.pickSide('b');
+      await ed.animation.reset();
+
       return {
         bAppliedSchema: bStage.applied?.schema ?? '',
         bAppliedOpsCount: bStage.applied?.ops?.length ?? 0,
         aAppliedAfterBApply: aStage.applied,
         maxFroundDiffOnB,
         aPoseDeltaAfterBApply: Math.round(aPoseDeltaAfterBApply * 1000) / 1000,
-        bOpsAfterUndoAll: ed.animation.ops().length,
-        bHasPreviewAfterUndoAll: ed.animation.hasPreview(),
+        bOpsAfterUndoAll,
+        bHasPreviewAfterUndoAll,
         bPoseDeltaAfterUndoAllVsBaseline: Math.round(bPoseDeltaAfterUndoAllVsBaseline * 1000) / 1000,
         aModelHashAfterAll: ed.stage('a').modelHash,
+        bOpsAfterConcurrentAReset,
+        bHasPreviewAfterConcurrentAReset,
+        aAppliedAfterConcurrentReset,
+        aOpsAfterConcurrentReset,
       };
     })()`);
 
@@ -1557,7 +1589,11 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       compareAnimationApplyAndUndoCheck.bOpsAfterUndoAll !== 0 ||
       compareAnimationApplyAndUndoCheck.bHasPreviewAfterUndoAll !== true ||
       compareAnimationApplyAndUndoCheck.bPoseDeltaAfterUndoAllVsBaseline !== 0 ||
-      compareAnimationApplyAndUndoCheck.aModelHashAfterAll !== compareAnimPreDrag.aModelHashBaseline
+      compareAnimationApplyAndUndoCheck.aModelHashAfterAll !== compareAnimPreDrag.aModelHashBaseline ||
+      compareAnimationApplyAndUndoCheck.bOpsAfterConcurrentAReset !== 1 ||
+      compareAnimationApplyAndUndoCheck.bHasPreviewAfterConcurrentAReset !== true ||
+      compareAnimationApplyAndUndoCheck.aAppliedAfterConcurrentReset !== null ||
+      compareAnimationApplyAndUndoCheck.aOpsAfterConcurrentReset !== 0
     ) {
       failures.push(
         `Compare per-side animation editing check failed: ${JSON.stringify({

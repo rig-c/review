@@ -3021,7 +3021,38 @@ async function main() {
         }
       };
 
-      const recSetup = await session.evaluate<{ headPick: { x: number; y: number } }>(`(async () => {
+      const setCursor = async (x: number, y: number, down: boolean, label: string) => {
+        await session.evaluate(`(() => {
+          let el = document.getElementById('rec-cursor-overlay');
+          if (!el) {
+            el = document.createElement('div');
+            el.id = 'rec-cursor-overlay';
+            el.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;pointer-events:none;z-index:999999;';
+            el.innerHTML = \`
+              <div id="rec-cursor-ring" style="position:absolute;left:-14px;top:-14px;width:28px;height:28px;border-radius:50%;border:2.5px solid #ff5c8a;background:rgba(255,92,138,0.18);transition:transform 0.05s;"></div>
+              <svg width="24" height="24" viewBox="0 0 24 24" style="position:absolute;left:-2px;top:-2px;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.65));">
+                <path d="M3 2 L3 19 L7.5 14.8 L11 21 L13.8 19.6 L10.3 13.5 L16.5 13.5 Z" fill="#ffffff" stroke="#11151c" stroke-width="1.6"/>
+              </svg>
+              <div id="rec-cursor-label" style="position:absolute;left:20px;top:16px;padding:3px 8px;border-radius:5px;background:rgba(17,21,28,0.92);border:1px solid #ff5c8a;color:#fff;font:600 12px/1.3 system-ui,sans-serif;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.45);"></div>
+            \`;
+            document.body.appendChild(el);
+          }
+          el.style.transform = 'translate(' + Math.round(${x}) + 'px,' + Math.round(${y}) + 'px)';
+          const ring = document.getElementById('rec-cursor-ring');
+          if (ring) {
+            ring.style.transform = ${down} ? 'scale(0.78)' : 'scale(1)';
+            ring.style.background = ${down} ? 'rgba(255,92,138,0.48)' : 'rgba(255,92,138,0.16)';
+          }
+          const lbl = document.getElementById('rec-cursor-label');
+          if (lbl) lbl.textContent = ${JSON.stringify(label)};
+        })()`);
+      };
+
+      const recSetup = await session.evaluate<{
+        headPick: { x: number; y: number; width: number; height: number };
+        chestPick: { x: number; y: number; width: number; height: number };
+        layerBonesChecked: boolean;
+      }>(`(async () => {
         const ed = window.rigReviewEditor;
         document.querySelector('[data-animation-pane="tree"] button')?.click();
         await ed.animation.reset();
@@ -3031,91 +3062,149 @@ async function main() {
         document.querySelector('[data-animation-view="timeline"]').click();
         document.querySelector('[data-animation-zoom="1"]').click();
         const layerBones = document.getElementById('layer-bones');
-        if (layerBones && layerBones.getAttribute('aria-pressed') !== 'true') layerBones.click();
+        if (layerBones && !layerBones.checked) layerBones.click();
         document.querySelector('[data-stage-pose-mode="rotate"]').click();
         const scrub = document.getElementById('scrub');
         scrub.value = '0.35';
         scrub.dispatchEvent(new Event('input'));
-        await new Promise((r) => setTimeout(r, 40));
-        const pick = document.querySelector('.animation-bone-pick[data-bone="head"]').getBoundingClientRect();
-        return { headPick: { x: pick.left + pick.width / 2, y: pick.top + pick.height / 2 } };
+        await new Promise((r) => setTimeout(r, 50));
+        ed.animation.selectKey(0, 1);
+        await new Promise((r) => setTimeout(r, 30));
+        const hp = document.querySelector('.animation-bone-pick[data-bone="head"]').getBoundingClientRect();
+        const cp = document.querySelector('.animation-bone-pick[data-bone="chest"]').getBoundingClientRect();
+        return {
+          headPick: { x: hp.left + hp.width / 2, y: hp.top + hp.height / 2, width: hp.width, height: hp.height },
+          chestPick: { x: cp.left + cp.width / 2, y: cp.top + cp.height / 2, width: cp.width, height: cp.height },
+          layerBonesChecked: Boolean(layerBones && layerBones.checked),
+        };
       })()`);
 
-      await snap(4);
-      // 1. Drag bone on stage across 10 smooth steps
+      if (!recSetup.layerBonesChecked || recSetup.headPick.width <= 0 || recSetup.chestPick.width <= 0) {
+        throw new Error(`RECORD_MP4 bone points not visible: ${JSON.stringify(recSetup)}`);
+      }
+
+      // 1. Move cursor to stage bone 'chest' & 'head' with Bone Points ON, and drag 'head' in Pose: Rotate mode
       const bx0 = recSetup.headPick.x;
       const by0 = recSetup.headPick.y;
+      await setCursor(bx0 - 60, by0 + 40, false, '1. Stage Bone Drag (head · rotate)');
+      await snap(4);
+      for (let s = 1; s <= 6; s++) {
+        const u = s / 6;
+        await setCursor(bx0 - 60 * (1 - u), by0 + 40 * (1 - u), false, '1. Stage Bone Drag (head · rotate)');
+        await snap(1);
+      }
+      await setCursor(bx0, by0, true, '1. Dragging head bone on stage (Rotate)');
+      await snap(3);
       await session.dispatchMouseEvent({ type: 'mousePressed', x: bx0, y: by0, button: 'left', buttons: 1 });
-      for (let s = 1; s <= 10; s++) {
+      for (let s = 1; s <= 18; s++) {
+        const nx = Math.round(bx0 + s * 3.5);
+        const ny = Math.round(by0 + s * 2.2);
         await session.dispatchMouseEvent({
           type: 'mouseMoved',
-          x: Math.round(bx0 + s * 4.5),
-          y: Math.round(by0 - s * 3.0),
+          x: nx,
+          y: ny,
           button: 'left',
           buttons: 1,
         });
+        await setCursor(nx, ny, true, `1. Dragging head bone on stage (${s}/18)`);
         await snap(1);
       }
       await session.dispatchMouseEvent({
         type: 'mouseReleased',
-        x: Math.round(bx0 + 45),
-        y: Math.round(by0 - 30),
+        x: Math.round(bx0 + 63),
+        y: Math.round(by0 + 40),
         button: 'left',
         buttons: 0,
       });
-      await snap(4);
+      await setCursor(Math.round(bx0 + 63), Math.round(by0 + 40), false, '1. Stage Bone Drag complete');
+      await snap(8);
 
-      // 2. Switch to Curves view and drag cubic handle 1 across 10 smooth steps
-      const recCurve = await session.evaluate<{ h1: { x: number; y: number } }>(`(async () => {
+      // 2. Switch to Curves view and drag cubic handle 1 across 18 smooth steps
+      const recCurve = await session.evaluate<{
+        curveBtn: { x: number; y: number };
+        h1: { x: number; y: number };
+      }>(`(async () => {
+        const cb = document.querySelector('[data-animation-view="curve"]').getBoundingClientRect();
         document.querySelector('[data-animation-view="curve"]').click();
         window.rigReviewEditor.animation.selectKey(0, 0);
         const easeSel = document.querySelector('[data-curve-ease]');
         easeSel.value = 'cubic';
         easeSel.dispatchEvent(new Event('change'));
-        await new Promise((r) => setTimeout(r, 35));
+        await new Promise((r) => setTimeout(r, 40));
         const r = document.querySelector('[data-curve-handle="1"]').getBoundingClientRect();
-        return { h1: { x: r.left + r.width / 2, y: r.top + r.height / 2 } };
+        return {
+          curveBtn: { x: cb.left + cb.width / 2, y: cb.top + cb.height / 2 },
+          h1: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
+        };
       })()`);
-      await snap(4);
       const cx0 = recCurve.h1.x;
       const cy0 = recCurve.h1.y;
+      await setCursor(cx0, cy0, false, '2. Curves View: Cubic Handle h1');
+      await snap(6);
+      await setCursor(cx0, cy0, true, '2. Dragging Cubic Handle h1');
+      await snap(2);
       await session.dispatchMouseEvent({ type: 'mousePressed', x: cx0, y: cy0, button: 'left', buttons: 1 });
-      for (let s = 1; s <= 10; s++) {
+      for (let s = 1; s <= 18; s++) {
+        const nx = Math.round(cx0 + s * 2.5);
+        const ny = Math.round(cy0 - s * 2.2);
         await session.dispatchMouseEvent({
           type: 'mouseMoved',
-          x: Math.round(cx0 + s * 2.8),
-          y: Math.round(cy0 - s * 2.4),
+          x: nx,
+          y: ny,
           button: 'left',
           buttons: 1,
         });
+        await setCursor(nx, ny, true, `2. Dragging Cubic Handle h1 (${s}/18)`);
         await snap(1);
       }
       await session.dispatchMouseEvent({
         type: 'mouseReleased',
-        x: Math.round(cx0 + 28),
-        y: Math.round(cy0 - 24),
+        x: Math.round(cx0 + 45),
+        y: Math.round(cy0 - 40),
         button: 'left',
         buttons: 0,
       });
-      await snap(4);
+      await setCursor(Math.round(cx0 + 45), Math.round(cy0 - 40), false, '2. Curve Handle Drag complete');
+      await snap(8);
 
-      // 3. Click Apply · Rebuild and show rebuilt result across the timeline
+      // 3. Move cursor to Apply · Rebuild, click it, and scrub across the rebuilt timeline
+      const applyRect = await session.evaluate<{ x: number; y: number }>(`(() => {
+        const b = document.querySelector('[data-animation-apply]').getBoundingClientRect();
+        return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+      })()`);
+      for (let s = 1; s <= 6; s++) {
+        const u = s / 6;
+        const ix = Math.round((cx0 + 45) * (1 - u) + applyRect.x * u);
+        const iy = Math.round((cy0 - 40) * (1 - u) + applyRect.y * u);
+        await setCursor(ix, iy, false, '3. Click Apply · Rebuild');
+        await snap(1);
+      }
+      await setCursor(applyRect.x, applyRect.y, true, '3. Applying & Rebuilding scratch build...');
+      await snap(4);
       await session.evaluate(`(async () => {
         await window.rigReviewEditor.animation.apply();
         document.querySelector('[data-animation-view="timeline"]').click();
-        await new Promise((r) => setTimeout(r, 35));
+        await new Promise((r) => setTimeout(r, 40));
       })()`);
-      await snap(6);
-      for (let s = 0; s <= 12; s++) {
-        const t = ((s / 12) * 1.6).toFixed(2);
-        await session.evaluate(`(() => {
+      await setCursor(applyRect.x, applyRect.y, false, '3. Applied · Rebuilt scratch build');
+      await snap(8);
+      for (let s = 0; s <= 16; s++) {
+        const t = ((s / 16) * 1.6).toFixed(2);
+        const scrubPos = await session.evaluate<{ x: number; y: number }>(`(() => {
           const scrub = document.getElementById('scrub');
           scrub.value = '${t}';
           scrub.dispatchEvent(new Event('input'));
+          const r = scrub.getBoundingClientRect();
+          const frac = ${s / 16};
+          return { x: r.left + 8 + (r.width - 16) * frac, y: r.top + r.height / 2 };
         })()`);
+        await setCursor(scrubPos.x, scrubPos.y, true, `4. Playback Scrub (${t} s)`);
         await snap(1);
       }
-      await snap(6);
+      await snap(8);
+      await session.evaluate(`(() => {
+        document.getElementById('rec-cursor-overlay')?.remove();
+      })()`);
 
       const ff = Bun.spawnSync(
         [

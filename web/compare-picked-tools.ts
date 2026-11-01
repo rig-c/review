@@ -514,7 +514,12 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     }
     switchingSide = true;
     try {
-      animationPanel?.importSideState(sides[nextSide].animationState);
+      const nextAnimState = sides[nextSide].animationState;
+      if (nextAnimState && sides[nextSide].partModel && nextAnimState.document !== sides[nextSide].partModel) {
+        nextAnimState.document = null;
+        nextAnimState.baseInspection = null;
+      }
+      animationPanel?.importSideState(nextAnimState);
       clearChestInputs();
       populateChestBones();
       applySideStateToPanels();
@@ -1136,60 +1141,72 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const status = state.rebuildStatus ?? await loadRebuildStatus(side);
     if (!status || !status.available || !status.inputs) {
       const reason = status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE';
-      chestEditor?.notify(reason, true, [reason]); host.message(reason, true); return;
+      if (pickedSide === side) chestEditor?.notify(reason, true, [reason]);
+      host.message(reason, true);
+      return;
     }
     let part: string, body: RebuildRequestBody;
     const lines: string[] = [];
     if (chestEditor?.mode() === 'landmarks') {
       const request = landmarksRequest(status, chestEditor.landmarks());
-      if ('error' in request) { chestEditor.notify(request.error, true, [request.error]); host.message(request.error, true); return; }
+      if ('error' in request) {
+        if (pickedSide === side) chestEditor.notify(request.error, true, [request.error]);
+        host.message(request.error, true);
+        return;
+      }
       ({ part, body } = request);
     } else {
       const designated = designatedRegions(chestField);
-      if ('error' in designated) { chestEditor?.notify(designated.error, true); return; }
+      if ('error' in designated) { if (pickedSide === side) chestEditor?.notify(designated.error, true); return; }
       const picked = pickPart(status, designated.regions);
-      if (!picked) { chestEditor?.notify(`REBUILD_PART_AMBIGUOUS: the config states ${status.parts.length} contour meshes and the designated bones name none of them alone`, true); return; }
+      if (!picked) { if (pickedSide === side) chestEditor?.notify(`REBUILD_PART_AMBIGUOUS: the config states ${status.parts.length} contour meshes and the designated bones name none of them alone`, true); return; }
       part = picked; body = { part, regions: designated.regions, configHash: status.inputs.configHash };
     }
     rebuildBusy = true; rebuildState();
-    chestEditor?.notify(`Rebuilding ${part} on Build ${side.toUpperCase()} with ${status.producer?.package} ${status.producer?.version}…`, false, []);
+    if (pickedSide === side) chestEditor?.notify(`Rebuilding ${part} on Build ${side.toUpperCase()} with ${status.producer?.package} ${status.producer?.version}…`, false, []);
     try {
       const result = await runRebuild(body, {
         post: value => host.api<RebuildJobView | RebuildRefusal>(`${sideApiPrefix(side)}/rebuild`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }),
         get: id => host.api<RebuildJobView>(`${sideApiPrefix(side)}/rebuild/${id}`),
         sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
-        onLine: line => { lines.push(line); chestEditor?.notify(line.trim() || '…', false, lines.slice(-6)); },
+        onLine: line => { lines.push(line); if (pickedSide === side) chestEditor?.notify(line.trim() || '…', false, lines.slice(-6)); },
       });
       const outcome = outcomeLine(result);
       if (!('id' in result) || result.status !== 'built' || !result.build) {
-        chestEditor?.notify(outcome.text, true, [...lines.slice(-5), outcome.text]);
+        if (pickedSide === side) chestEditor?.notify(outcome.text, true, [...lines.slice(-5), outcome.text]);
         host.message(outcome.text, true);
         return;
       }
       await swapPickedSide(side, new URL(host.route(result.build.modelUrl), location.href).href, host.route(`/compare-rebuild/${side}/${result.id}/`), result.build.modelHash);
       state.appliedOnStage = appliedRecord(result); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'regions' });
-      const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
-      chestEditor?.notify(outcome.text, false, []); host.message(outcome.text);
+      if (pickedSide === side) {
+        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
+        chestEditor?.notify(outcome.text, false, []);
+      } else if (state.animationState) {
+        state.animationState.appliedOps = [];
+      }
+      host.message(outcome.text);
     } catch (error) {
-      chestEditor?.notify(`REBUILD_FAILED: ${errorText(error)}`, true);
+      if (pickedSide === side) chestEditor?.notify(`REBUILD_FAILED: ${errorText(error)}`, true);
       host.message(`REBUILD_FAILED: ${errorText(error)}`, true);
     } finally {
       rebuildBusy = false; rebuildState();
     }
   }
 
-  async function applyPatch(patch: ConfigPatch, _world: StageWorld | null = null): Promise<PatchJobView | RebuildRefusal> {
+  async function applyPatch(patch: ConfigPatch, _world: StageWorld | null = null, side: Side = pickedSide): Promise<PatchJobView | RebuildRefusal> {
     if (rebuildBusy) return { status: 'refused', error: 'REBUILD_BUSY: an Apply is still running', producerLine: null };
     const ro = host.readOnly();
-    if (ro) { chestEditor?.notify(ro, true); return { status: 'refused', error: ro, producerLine: null }; }
-    const side = pickedSide, state = sides[side];
+    if (ro) { if (pickedSide === side) chestEditor?.notify(ro, true); return { status: 'refused', error: ro, producerLine: null }; }
+    const state = sides[side];
     const lines: string[] = [];
     rebuildBusy = true; rebuildState();
-    chestEditor?.notify(`Applying patch on Build ${side.toUpperCase()} (${patch.op.cmd}, ${patch.ops.length} op(s))…`, false, []);
+    if (pickedSide === side) chestEditor?.notify(`Applying patch on Build ${side.toUpperCase()} (${patch.op.cmd}, ${patch.ops.length} op(s))…`, false, []);
     try {
       const scheduled = useWorld() ? worldFor(checkAnimation(side), side) : null;
       if (scheduled && 'error' in scheduled) {
-        chestEditor?.notify(scheduled.error, true); host.message(scheduled.error, true);
+        if (pickedSide === side) chestEditor?.notify(scheduled.error, true);
+        host.message(scheduled.error, true);
         return { status: 'refused', error: scheduled.error, producerLine: scheduled.error };
       }
       const result = await runRebuild<{ patch: ConfigPatch; environment?: WorldExport['schedule'] }, PatchJobView>(
@@ -1198,12 +1215,12 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
           post: value => host.api<PatchJobView | RebuildRefusal>(`${sideApiPrefix(side)}/rebuild`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }),
           get: id => host.api<PatchJobView>(`${sideApiPrefix(side)}/rebuild/${id}`),
           sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
-          onLine: line => { lines.push(line); chestEditor?.notify(line.trim() || '…', false, lines.slice(-6)); },
+          onLine: line => { lines.push(line); if (pickedSide === side) chestEditor?.notify(line.trim() || '…', false, lines.slice(-6)); },
         },
       );
       const outcome = patchOutcomeLine(result), next = stageModel(result, { url: '', hash: state.stageModelHash ?? '' });
       if (next.id === null || !('id' in result)) {
-        chestEditor?.notify(outcome.text, true, [...lines.slice(-5), outcome.text]);
+        if (pickedSide === side) chestEditor?.notify(outcome.text, true, [...lines.slice(-5), outcome.text]);
         host.message(outcome.text, true);
         return result;
       }
@@ -1211,12 +1228,18 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       state.appliedOnStage = patchAppliedRecord(result);
       state.stageCheck = { lines: [...result.lines], check: result.check };
       stageChanged(side, { kind: 'apply', via: 'patch' });
-      const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
-      chestEditor?.notify(outcome.text, outcome.error, []); host.message(outcome.text, outcome.error);
+      if (pickedSide === side) {
+        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
+        chestEditor?.notify(outcome.text, outcome.error, []);
+      } else if (state.animationState) {
+        state.animationState.appliedOps = [];
+      }
+      host.message(outcome.text, outcome.error);
       return result;
     } catch (error) {
       const textMsg = `REBUILD_FAILED: ${errorText(error)}`;
-      chestEditor?.notify(textMsg, true); host.message(textMsg, true);
+      if (pickedSide === side) chestEditor?.notify(textMsg, true);
+      host.message(textMsg, true);
       return { status: 'refused', error: textMsg, producerLine: null };
     } finally {
       rebuildBusy = false; rebuildState();
@@ -1237,13 +1260,17 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         post: value => host.api<DeltaJobView | RebuildRefusal>(`${sideApiPrefix(side)}/rebuild`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }),
         get: id => host.api<DeltaJobView>(`${sideApiPrefix(side)}/rebuild/${id}`),
         sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
-        onLine: textLine => line(textLine),
+        onLine: textLine => { if (pickedSide === side) line(textLine); },
       });
       const outcome = deltaOutcomeLine(result), next = stageModel(result, { url: '', hash: state.stageModelHash ?? '' });
       if (next.id === null || !('id' in result)) { host.message(outcome.text, true); return { built: false, text: outcome.text, error: true }; }
       await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash);
       state.appliedOnStage = deltaAppliedRecord(result); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'delta' });
-      const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
+      if (pickedSide === side) {
+        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
+      } else if (state.animationState) {
+        state.animationState.appliedOps = [];
+      }
       host.message(outcome.text);
       return { built: true, text: outcome.text, error: false };
     } catch (error) {
@@ -1260,46 +1287,62 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     if (ro) { retargetPanel?.status(ro, true); return null; }
     const side = pickedSide, state = sides[side];
     const status = state.rebuildStatus ?? await loadRebuildStatus(side);
-    if (!status?.inputs) { retargetPanel?.status(status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE', true); return null; }
+    if (!status?.inputs) { if (pickedSide === side) retargetPanel?.status(status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE', true); return null; }
     const request: RetargetRequestBody = { retarget: { ...body, configHash: status.inputs.configHash } };
-    rebuildBusy = true; rebuildState(); retargetPanel?.busy(true); retargetPanel?.result(null);
-    retargetPanel?.status(`Retargeting ${body.sequence} as "${body.flags.animation}" on Build ${side.toUpperCase()}…`, false);
+    rebuildBusy = true; rebuildState();
+    if (pickedSide === side) {
+      retargetPanel?.busy(true); retargetPanel?.result(null);
+      retargetPanel?.status(`Retargeting ${body.sequence} as "${body.flags.animation}" on Build ${side.toUpperCase()}…`, false);
+    }
     try {
       const result = await runRebuild<RetargetRequestBody, RetargetJobView>(request, {
         post: value => host.api<RetargetJobView | RebuildRefusal>(`${sideApiPrefix(side)}/rebuild`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }),
         get: id => host.api<RetargetJobView>(`${sideApiPrefix(side)}/rebuild/${id}`),
         sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
-        onLine: textLine => retargetPanel?.line(textLine),
+        onLine: textLine => { if (pickedSide === side) retargetPanel?.line(textLine); },
       });
       const outcome = retargetOutcomeLine(result), next = stageModel(result, { url: '', hash: state.stageModelHash ?? '' });
-      retargetPanel?.result(result); retargetPanel?.status(outcome.text, outcome.error);
+      if (pickedSide === side) {
+        retargetPanel?.result(result); retargetPanel?.status(outcome.text, outcome.error);
+      }
       if (next.id === null || !('id' in result)) { host.message(outcome.text, true); return result; }
       await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash, result.request.record.flags.animation);
       state.appliedOnStage = retargetAppliedRecord(result); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'retarget' });
-      const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
+      if (pickedSide === side) {
+        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
+      } else if (state.animationState) {
+        state.animationState.appliedOps = [];
+      }
       host.message(outcome.text, outcome.error);
       return result;
     } catch (error) {
-      const textMsg = `REBUILD_FAILED: ${errorText(error)}`; retargetPanel?.status(textMsg, true); host.message(textMsg, true);
+      const textMsg = `REBUILD_FAILED: ${errorText(error)}`;
+      if (pickedSide === side) retargetPanel?.status(textMsg, true);
+      host.message(textMsg, true);
       return { status: 'refused', error: textMsg, producerLine: null };
     } finally {
       rebuildBusy = false; rebuildState(); retargetPanel?.busy(false);
     }
   }
 
-  async function resetRebuild(_world: StageWorld | null = null): Promise<void> {
-    const side = pickedSide, state = sides[side];
+  async function resetRebuild(_world: StageWorld | null = null, side: Side = pickedSide): Promise<void> {
+    const state = sides[side];
     if (rebuildBusy || (!state.appliedOnStage && !state.stripPending) || !state.inspectedModel) return;
     rebuildBusy = true; rebuildState();
     try {
       await swapPickedSide(side, state.inspectedModel.url, state.inspectedModel.prefix, state.inspectedModel.sha256);
       state.appliedOnStage = null; state.stageCheck = null; stageChanged(side, { kind: 'reset' });
-      animationPanel?.reconcileStageApplied(null);
-      if (animationPanel) state.animationState = animationPanel.exportSideState();
-      chestEditor?.notify(`Reset: Build ${side.toUpperCase()} is back on its inspected build.`, false);
+      if (pickedSide === side) {
+        animationPanel?.reconcileStageApplied(null);
+        if (animationPanel) state.animationState = animationPanel.exportSideState();
+        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
+        chestEditor?.notify(`Reset: Build ${side.toUpperCase()} is back on its inspected build.`, false);
+      } else if (state.animationState) {
+        state.animationState.appliedOps = [];
+      }
       host.message(`Reset Build ${side.toUpperCase()} to its inspected build.`);
     } catch (error) {
-      chestEditor?.notify(`REBUILD_RESET_FAILED: ${errorText(error)}`, true);
+      if (pickedSide === side) chestEditor?.notify(`REBUILD_RESET_FAILED: ${errorText(error)}`, true);
     } finally {
       rebuildBusy = false; rebuildState();
     }
@@ -1321,15 +1364,23 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         while (job.status === 'running') {
           await new Promise(resolve => setTimeout(resolve, 700));
           job = await host.api<AnyJobView>(`${sideApiPrefix(side)}/rebuild/${job.id}`);
-          for (; seen < job.lines.length; seen++) appliedStatus(job.lines[seen]!.trim() || '…');
+          if (pickedSide === side) {
+            for (; seen < job.lines.length; seen++) appliedStatus(job.lines[seen]!.trim() || '…');
+          }
         }
         if (job.status !== 'built') {
-          const textMsg = refusedText(job); appliedStatus(textMsg, true); host.message(textMsg, true);
+          const textMsg = refusedText(job);
+          if (pickedSide === side) appliedStatus(textMsg, true);
+          host.message(textMsg, true);
           return { status: 'refused', error: textMsg, producerLine: job.producerLine };
         }
         result = { status: 'built', undone, job, history: await host.api<AppliedHistoryView>(`${sideApiPrefix(side)}/rebuild/history`) };
       }
-      if (result.status === 'refused') { appliedStatus(result.error, true); host.message(result.error, true); return result; }
+      if (result.status === 'refused') {
+        if (pickedSide === side) appliedStatus(result.error, true);
+        host.message(result.error, true);
+        return result;
+      }
       let ops: PatchOp[] | null = null;
       if (result.status === 'inspected') {
         await swapPickedSide(side, state.inspectedModel.url, state.inspectedModel.prefix, state.inspectedModel.sha256);
@@ -1342,18 +1393,27 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         if ((job as PatchJobView).kind === 'patch') ops = (job as PatchJobView).request.patch.ops;
       }
       stageChanged(side, { kind: 'undo' });
-      physicsPanel?.applied(ops); idlePanel?.applied(ops); rigFieldsPanel?.applied(ops); bonesPanel?.applied(ops);
-      animationPanel?.reconcileStageApplied(state.appliedOnStage?.schema === 'rig-review-applied/5' ? state.appliedOnStage : null);
-      if (animationPanel) state.animationState = animationPanel.exportSideState();
-      const restored = result.status === 'built' && isPatchJob(result.job) ? result.job : null, block = recordBlock(state.appliedOnStage);
-      cutsPanel?.shown(block === 'cuts' ? restored : null); clothPanel?.shown(block === 'cloth' ? restored : null);
-      const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = state.appliedOnStage ? JSON.stringify(state.appliedOnStage) : ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
       state.appliedHistory = result.history;
       const textMsg = `Undid ${result.undone.slice(0, 12)}… on Build ${side.toUpperCase()} · ${result.history.depth} applied record(s) left`;
-      appliedStatus(textMsg); host.message(textMsg); host.redrawOverlays(true);
+      if (pickedSide === side) {
+        physicsPanel?.applied(ops); idlePanel?.applied(ops); rigFieldsPanel?.applied(ops); bonesPanel?.applied(ops);
+        animationPanel?.reconcileStageApplied(state.appliedOnStage?.schema === 'rig-review-applied/5' ? state.appliedOnStage : null);
+        if (animationPanel) state.animationState = animationPanel.exportSideState();
+        const restored = result.status === 'built' && isPatchJob(result.job) ? result.job : null, block = recordBlock(state.appliedOnStage);
+        cutsPanel?.shown(block === 'cuts' ? restored : null); clothPanel?.shown(block === 'cloth' ? restored : null);
+        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = state.appliedOnStage ? JSON.stringify(state.appliedOnStage) : ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
+        appliedStatus(textMsg);
+      } else if (state.animationState) {
+        state.animationState.appliedOps = state.appliedOnStage?.schema === 'rig-review-applied/5'
+          ? state.appliedOnStage.ops.map(o => structuredClone(o))
+          : [];
+      }
+      host.message(textMsg); host.redrawOverlays(true);
       return result;
     } catch (error) {
-      const textMsg = `UNDO_FAILED: ${errorText(error)}`; appliedStatus(textMsg, true); host.message(textMsg, true);
+      const textMsg = `UNDO_FAILED: ${errorText(error)}`;
+      if (pickedSide === side) appliedStatus(textMsg, true);
+      host.message(textMsg, true);
       return { status: 'refused', error: textMsg, producerLine: null };
     } finally {
       rebuildBusy = false; rebuildState();
@@ -1378,17 +1438,18 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const side = pickedSide, state = sides[side];
     const status = state.rebuildStatus ?? await loadRebuildStatus(side);
     const patch = status && ops.length ? makePatch(status, ops, { cmd: 'rig' }) : null;
-    if (!patch) { const reason = !ops.length ? 'PHYSICS_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; physicsPanel?.status(reason, true); return null; }
-    physicsPanel?.clearPreview();
+    if (!patch) { const reason = !ops.length ? 'PHYSICS_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; if (pickedSide === side) physicsPanel?.status(reason, true); return null; }
+    if (pickedSide === side) physicsPanel?.clearPreview();
     const world = stageWorld(), before = state.stageCheck;
-    physicsPanel?.busy(true); physicsPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false);
+    if (pickedSide === side) { physicsPanel?.busy(true); physicsPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false); }
     try {
-      const result = await applyPatch(patch, world);
-      const outcome = patchOutcomeLine(result); physicsPanel?.status(outcome.text, outcome.error);
+      const result = await applyPatch(patch, world, side);
+      const outcome = patchOutcomeLine(result);
+      if (pickedSide === side) physicsPanel?.status(outcome.text, outcome.error);
       if ('id' in result && result.status === 'built') {
-        physicsPanel?.applied(result.request.patch.ops);
+        if (pickedSide === side) physicsPanel?.applied(result.request.patch.ops);
         const after = { lines: [...result.lines], check: result.check };
-        const show = () => physicsPanel?.readout(readoutRows(before, before ? null : inspectedCheckView(side), after));
+        const show = () => { if (pickedSide === side) physicsPanel?.readout(readoutRows(before, before ? null : inspectedCheckView(side), after)); };
         show(); if (!before) void followInspectedCheck(show, side);
       }
       return result;
@@ -1396,25 +1457,27 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   async function resetPhysicsBuild(): Promise<void> {
+    const side = pickedSide, state = sides[side];
     physicsPanel?.clear(); physicsPanel?.applied(null); physicsPanel?.readout([]);
-    if (currentState().appliedOnStage) { physicsPanel?.busy(true); try { await resetRebuild(stageWorld()); } finally { physicsPanel?.busy(false); } }
-    physicsPanel?.status('Reset: the inspected build is on the stage; no pending ops.', false);
+    if (state.appliedOnStage) { physicsPanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { physicsPanel?.busy(false); } }
+    if (pickedSide === side) physicsPanel?.status('Reset: the inspected build is on the stage; no pending ops.', false);
   }
 
   async function applyIdle(ops: PatchOp[], keys: 'ctl' | 'direct' | null): Promise<PatchJobView | RebuildRefusal | null> {
     const side = pickedSide, state = sides[side];
     const status = state.rebuildStatus ?? await loadRebuildStatus(side);
     const patch = status && ops.length ? makePatch(status, ops, { cmd: 'rig', args: keys ? ['--idle-keys', keys] : [] }) : null;
-    if (!patch) { const reason = !ops.length ? 'IDLE_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; idlePanel?.status(reason, true); return null; }
+    if (!patch) { const reason = !ops.length ? 'IDLE_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; if (pickedSide === side) idlePanel?.status(reason, true); return null; }
     const world = stageWorld(), before = state.stageCheck;
-    idlePanel?.busy(true); idlePanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false);
+    if (pickedSide === side) { idlePanel?.busy(true); idlePanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false); }
     try {
-      const result = await applyPatch(patch, world);
-      const outcome = patchOutcomeLine(result); idlePanel?.status(outcome.text, outcome.error);
+      const result = await applyPatch(patch, world, side);
+      const outcome = patchOutcomeLine(result);
+      if (pickedSide === side) idlePanel?.status(outcome.text, outcome.error);
       if ('id' in result && result.status === 'built') {
-        idlePanel?.applied(result.request.patch.ops);
+        if (pickedSide === side) idlePanel?.applied(result.request.patch.ops);
         const after = { lines: [...result.lines], check: result.check };
-        const show = () => idlePanel?.readout(readoutRows(before, before ? null : inspectedCheckView(side), after, IDLE_READOUT_BARS));
+        const show = () => { if (pickedSide === side) idlePanel?.readout(readoutRows(before, before ? null : inspectedCheckView(side), after, IDLE_READOUT_BARS)); };
         show(); if (!before) void followInspectedCheck(show, side);
       }
       return result;
@@ -1422,9 +1485,10 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   async function resetIdleBuild(): Promise<void> {
+    const side = pickedSide, state = sides[side];
     idlePanel?.clear(); idlePanel?.applied(null); idlePanel?.readout([]);
-    if (currentState().appliedOnStage) { idlePanel?.busy(true); try { await resetRebuild(stageWorld()); } finally { idlePanel?.busy(false); } }
-    idlePanel?.status('Reset: the inspected build is on the stage; no pending ops; the preview is cleared.', false);
+    if (state.appliedOnStage) { idlePanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { idlePanel?.busy(false); } }
+    if (pickedSide === side) idlePanel?.status('Reset: the inspected build is on the stage; no pending ops; the preview is cleared.', false);
   }
 
   async function applyAnimation(ops: readonly AnimationSourceOp[]): Promise<AnimationJobView | RebuildRefusal | null> {
@@ -1436,18 +1500,18 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const status = state.rebuildStatus ?? await loadRebuildStatus(side);
     if (!status?.inputs) {
       const r = status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE';
-      animationPanel?.setEditorStatus(r, true);
+      if (pickedSide === side) animationPanel?.setEditorStatus(r, true);
       return null;
     }
     const animSource = status.animations;
     if (!animSource?.available || !animSource.sha256) {
       const r = animSource?.reason ?? 'ANIMATION_SOURCE_MISSING: config.json does not declare an "animations_from" motion spec file.';
-      animationPanel?.setEditorStatus(r, true);
+      if (pickedSide === side) animationPanel?.setEditorStatus(r, true);
       return null;
     }
     const scheduled = useWorld() ? worldFor(checkAnimation(side), side) : null;
     if (scheduled && 'error' in scheduled) {
-      animationPanel?.setEditorStatus(scheduled.error, true);
+      if (pickedSide === side) animationPanel?.setEditorStatus(scheduled.error, true);
       host.message(scheduled.error, true);
       return { status: 'refused', error: scheduled.error, producerLine: scheduled.error };
     }
@@ -1461,8 +1525,11 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       },
       ...(scheduled ? { environment: scheduled.schedule } : {}),
     };
-    rebuildBusy = true; rebuildState(); animationPanel?.busy(true);
-    animationPanel?.setEditorStatus(`Applying ${ops.length} animation op(s) on Build ${side.toUpperCase()} (${animSource.path ?? 'animations_from'}: rig-parts rig → rigc build → rig-parts check)…`, false);
+    rebuildBusy = true; rebuildState();
+    if (pickedSide === side) {
+      animationPanel?.busy(true);
+      animationPanel?.setEditorStatus(`Applying ${ops.length} animation op(s) on Build ${side.toUpperCase()} (${animSource.path ?? 'animations_from'}: rig-parts rig → rigc build → rig-parts check)…`, false);
+    }
     try {
       const result = await runRebuild<AnimationRequestBody, AnimationJobView>(request, {
         post: value => host.api<AnimationJobView | RebuildRefusal>(`${sideApiPrefix(side)}/rebuild`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }),
@@ -1489,6 +1556,9 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         draft.dispatchEvent(new Event('input', { bubbles: true }));
         animationPanel?.setEditorStatus(outcome.text, outcome.error);
         state.animationState = animationPanel?.exportSideState() ?? state.animationState;
+      } else if (state.animationState) {
+        state.animationState.appliedOps = ops.map(o => structuredClone(o));
+        state.animationState.editorStatus = { text: outcome.text, error: outcome.error };
       }
       host.message(outcome.text, outcome.error);
       return result;
@@ -1504,20 +1574,33 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   async function resetAnimationBuild(): Promise<void> {
     const side = pickedSide, state = sides[side];
+    const resetMsg = `Reset: Build ${side.toUpperCase()} is back on its inspected build; no pending animation ops.`;
     animationPanel?.resetEdits();
+    animationPanel?.setEditorStatus(resetMsg, false);
+    if (animationPanel) state.animationState = animationPanel.exportSideState();
     state.animAdjust = null;
     setAdjust(side);
     if (state.appliedOnStage) {
       animationPanel?.busy(true);
       try {
-        await resetRebuild(stageWorld());
+        await resetRebuild(stageWorld(), side);
       } finally {
         animationPanel?.busy(false);
-        animationPanel?.resetEdits();
+        if (pickedSide === side) {
+          animationPanel?.resetEdits();
+        } else if (state.animationState) {
+          state.animationState.appliedOps = [];
+          state.animationState.selectedKey = null;
+          state.animationState.selectedKeys = [];
+        }
       }
     }
-    if (animationPanel) state.animationState = animationPanel.exportSideState();
-    animationPanel?.setEditorStatus(`Reset: Build ${side.toUpperCase()} is back on its inspected build; no pending animation ops.`, false);
+    if (pickedSide === side) {
+      animationPanel?.setEditorStatus(resetMsg, false);
+      if (animationPanel) state.animationState = animationPanel.exportSideState();
+    } else if (state.animationState) {
+      state.animationState.editorStatus = { text: resetMsg, error: false };
+    }
   }
 
   async function checkBones(ops: PatchOp[]): Promise<BonesCheckView> {
@@ -1530,74 +1613,84 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   async function applyBones(ops: PatchOp[]): Promise<PatchJobView | RebuildRefusal | null> {
     const side = pickedSide, status = sides[side].rebuildStatus ?? await loadRebuildStatus(side);
     const patch = status && ops.length ? makePatch(status, ops, { cmd: 'rig' }) : null;
-    if (!patch) { const reason = !ops.length ? 'BONES_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; bonesPanel?.status(reason, true); return null; }
-    bonesPanel?.busy(true); bonesPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false);
+    if (!patch) { const reason = !ops.length ? 'BONES_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; if (pickedSide === side) bonesPanel?.status(reason, true); return null; }
+    if (pickedSide === side) { bonesPanel?.busy(true); bonesPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false); }
     try {
-      const result = await applyPatch(patch, stageWorld());
-      const outcome = patchOutcomeLine(result); bonesPanel?.status(outcome.text, outcome.error);
-      if ('id' in result && result.status === 'built') { bonesPanel?.applied(result.request.patch.ops); host.redrawOverlays(true); }
+      const result = await applyPatch(patch, stageWorld(), side);
+      const outcome = patchOutcomeLine(result);
+      if (pickedSide === side) bonesPanel?.status(outcome.text, outcome.error);
+      if ('id' in result && result.status === 'built') {
+        if (pickedSide === side) bonesPanel?.applied(result.request.patch.ops);
+        host.redrawOverlays(true);
+      }
       return result;
     } finally { bonesPanel?.busy(false); }
   }
 
   async function resetBonesBuild(): Promise<void> {
+    const side = pickedSide, state = sides[side];
     bonesPanel?.clear(); bonesPanel?.applied(null);
-    if (currentState().appliedOnStage) { bonesPanel?.busy(true); try { await resetRebuild(stageWorld()); } finally { bonesPanel?.busy(false); } }
-    bonesPanel?.status('Reset: the inspected build is on the stage; no pending ops.', false);
+    if (state.appliedOnStage) { bonesPanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { bonesPanel?.busy(false); } }
+    if (pickedSide === side) bonesPanel?.status('Reset: the inspected build is on the stage; no pending ops.', false);
   }
 
   async function applyCuts(ops: PatchOp[]): Promise<PatchJobView | RebuildRefusal | null> {
     const side = pickedSide, status = sides[side].rebuildStatus ?? await loadRebuildStatus(side);
     const patch = status && ops.length ? makePatch(status, ops, { cmd: 'rig' }) : null;
-    if (!patch) { const reason = !ops.length ? 'CUTS_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; cutsPanel?.status(reason, true); return null; }
-    cutsPanel?.busy(true); cutsPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false);
+    if (!patch) { const reason = !ops.length ? 'CUTS_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; if (pickedSide === side) cutsPanel?.status(reason, true); return null; }
+    if (pickedSide === side) { cutsPanel?.busy(true); cutsPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false); }
     try {
-      const result = await applyPatch(patch, stageWorld());
-      const outcome = patchOutcomeLine(result); cutsPanel?.status(outcome.text, outcome.error);
+      const result = await applyPatch(patch, stageWorld(), side);
+      const outcome = patchOutcomeLine(result);
+      if (pickedSide === side) cutsPanel?.status(outcome.text, outcome.error);
       if ('id' in result && result.status === 'built') host.redrawOverlays(true);
       return result;
     } finally { cutsPanel?.busy(false); }
   }
 
   async function resetCutsBuild(): Promise<void> {
+    const side = pickedSide, state = sides[side];
     cutsPanel?.clear(); cutsPanel?.shown(null);
-    if (currentState().appliedOnStage) { cutsPanel?.busy(true); try { await resetRebuild(stageWorld()); } finally { cutsPanel?.busy(false); } }
-    cutsPanel?.status('Reset: the inspected build is on the stage; no pending ops.', false);
+    if (state.appliedOnStage) { cutsPanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { cutsPanel?.busy(false); } }
+    if (pickedSide === side) cutsPanel?.status('Reset: the inspected build is on the stage; no pending ops.', false);
   }
 
   async function applyCloth(ops: PatchOp[]): Promise<PatchJobView | RebuildRefusal | null> {
     const side = pickedSide, status = sides[side].rebuildStatus ?? await loadRebuildStatus(side);
     const patch = status && ops.length ? makePatch(status, ops, { cmd: 'rig' }) : null;
-    if (!patch) { const reason = !ops.length ? 'CLOTH_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; clothPanel?.status(reason, true); return null; }
-    clothPanel?.busy(true); clothPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false);
+    if (!patch) { const reason = !ops.length ? 'CLOTH_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; if (pickedSide === side) clothPanel?.status(reason, true); return null; }
+    if (pickedSide === side) { clothPanel?.busy(true); clothPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false); }
     try {
-      const result = await applyPatch(patch, stageWorld());
-      const outcome = patchOutcomeLine(result); clothPanel?.status(outcome.text, outcome.error);
+      const result = await applyPatch(patch, stageWorld(), side);
+      const outcome = patchOutcomeLine(result);
+      if (pickedSide === side) clothPanel?.status(outcome.text, outcome.error);
       if ('id' in result && result.status === 'built') host.redrawOverlays(true);
       return result;
     } finally { clothPanel?.busy(false); }
   }
 
   async function resetClothBuild(): Promise<void> {
+    const side = pickedSide, state = sides[side];
     clothPanel?.clear(); clothPanel?.shown(null);
-    if (currentState().appliedOnStage) { clothPanel?.busy(true); try { await resetRebuild(stageWorld()); } finally { clothPanel?.busy(false); } }
-    clothPanel?.status('Reset: the inspected build is on the stage; no pending ops.', false);
+    if (state.appliedOnStage) { clothPanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { clothPanel?.busy(false); } }
+    if (pickedSide === side) clothPanel?.status('Reset: the inspected build is on the stage; no pending ops.', false);
   }
 
   async function applyRigFields(ops: PatchOp[]): Promise<PatchJobView | RebuildRefusal | null> {
     const side = pickedSide, state = sides[side], status = state.rebuildStatus ?? await loadRebuildStatus(side);
-    try { assertRigFieldOps(ops); } catch (error) { rigFieldsPanel?.status(errorText(error), true); return null; }
+    try { assertRigFieldOps(ops); } catch (error) { if (pickedSide === side) rigFieldsPanel?.status(errorText(error), true); return null; }
     const patch = status && ops.length ? makePatch(status, ops, { cmd: 'rig' }) : null;
-    if (!patch) { const reason = !ops.length ? 'RIG_FIELDS_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; rigFieldsPanel?.status(reason, true); return null; }
+    if (!patch) { const reason = !ops.length ? 'RIG_FIELDS_NOTHING_PENDING: no pending ops' : status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE'; if (pickedSide === side) rigFieldsPanel?.status(reason, true); return null; }
     const world = stageWorld(), before = state.stageCheck;
-    rigFieldsPanel?.busy(true); rigFieldsPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false);
+    if (pickedSide === side) { rigFieldsPanel?.busy(true); rigFieldsPanel?.status(`Applying ${ops.length} op(s) on Build ${side.toUpperCase()}…`, false); }
     try {
-      const result = await applyPatch(patch, world);
-      const outcome = patchOutcomeLine(result); rigFieldsPanel?.status(outcome.text, outcome.error);
+      const result = await applyPatch(patch, world, side);
+      const outcome = patchOutcomeLine(result);
+      if (pickedSide === side) rigFieldsPanel?.status(outcome.text, outcome.error);
       if ('id' in result && result.status === 'built') {
-        rigFieldsPanel?.applied(result.request.patch.ops);
+        if (pickedSide === side) rigFieldsPanel?.applied(result.request.patch.ops);
         const after = { lines: [...result.lines], check: result.check };
-        const show = () => rigFieldsPanel?.readout(readoutRows(before, before ? null : inspectedCheckView(side), after, RIG_FIELDS_READOUT_BARS));
+        const show = () => { if (pickedSide === side) rigFieldsPanel?.readout(readoutRows(before, before ? null : inspectedCheckView(side), after, RIG_FIELDS_READOUT_BARS)); };
         show(); if (!before) void followInspectedCheck(show, side);
       }
       return result;
@@ -1605,25 +1698,26 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   async function resetRigFieldsBuild(): Promise<void> {
+    const side = pickedSide, state = sides[side];
     rigFieldsPanel?.setDial(0); rigFieldsPanel?.clear(); rigFieldsPanel?.applied(null); rigFieldsPanel?.readout([]);
-    if (currentState().appliedOnStage) { rigFieldsPanel?.busy(true); try { await resetRebuild(stageWorld()); } finally { rigFieldsPanel?.busy(false); } }
-    rigFieldsPanel?.status('Reset: the inspected build is on the stage; no pending ops; the dial is at 0.', false);
+    if (state.appliedOnStage) { rigFieldsPanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { rigFieldsPanel?.busy(false); } }
+    if (pickedSide === side) rigFieldsPanel?.status('Reset: the inspected build is on the stage; no pending ops; the dial is at 0.', false);
   }
 
   async function applyMesh(part: string, entry: MeshEntry): Promise<PatchJobView | RebuildRefusal | null> {
     const side = pickedSide, state = sides[side], status = state.rebuildStatus ?? await loadRebuildStatus(side);
     const problems = meshPanel?.precheck() ?? [];
-    if (problems.length) { meshPanel?.status(`${problems[0]} (review pre-check; nothing sent)`, true); return null; }
+    if (problems.length) { if (pickedSide === side) meshPanel?.status(`${problems[0]} (review pre-check; nothing sent)`, true); return null; }
     const patch = status ? makePatch(status, meshPatchOps(part, entry), { cmd: 'remesh', args: ['--part', part] }) : null;
-    if (!patch) { meshPanel?.status(status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE', true); return null; }
-    try { assertMeshPatch(patch, part); } catch (error) { meshPanel?.status(errorText(error), true); return null; }
+    if (!patch) { if (pickedSide === side) meshPanel?.status(status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE', true); return null; }
+    try { assertMeshPatch(patch, part); } catch (error) { if (pickedSide === side) meshPanel?.status(errorText(error), true); return null; }
     lastMeshPatch = patch;
     const world = stageWorld(), before = state.stageCheck;
-    meshPanel?.busy(true); meshPanel?.status(`Applying meshes.${part} on Build ${side.toUpperCase()} with ${patch.producer.name} ${patch.producer.version}: remesh --mesh, compile, check…`, false);
+    if (pickedSide === side) { meshPanel?.busy(true); meshPanel?.status(`Applying meshes.${part} on Build ${side.toUpperCase()} with ${patch.producer.name} ${patch.producer.version}: remesh --mesh, compile, check…`, false); }
     try {
-      const result = await applyPatch(patch, world);
+      const result = await applyPatch(patch, world, side);
       const outcome = meshApplyOutcome(result as Parameters<typeof meshApplyOutcome>[0]);
-      meshPanel?.status(outcome.text, outcome.error);
+      if (pickedSide === side) meshPanel?.status(outcome.text, outcome.error);
       if ('id' in result && result.status === 'built') {
         if (!host.layers.mesh) { host.layers.mesh = true; input('layer-mesh').checked = true; }
         const player = host.players[side];
@@ -1631,12 +1725,14 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         host.redrawOverlays(true);
         const counts = result.remesh ?? null, overlay = state.lastOverlay?.meshTriangles[part] ?? null;
         const agree = triangleAgreement(counts, counts?.modelTriangles ?? null, overlay);
-        meshPanel?.counts([
-          ...(counts ? [{ label: 'BEFORE', text: `${counts.part} ${countsText(counts.before)} (remesh.json)` }, { label: 'AFTER', text: `${counts.part} ${countsText(counts.after)} (remesh.json)` }] : []),
-          { label: agree.ok ? 'AGREE' : 'DIFFER', text: agree.line, error: !agree.ok },
-        ]);
+        if (pickedSide === side) {
+          meshPanel?.counts([
+            ...(counts ? [{ label: 'BEFORE', text: `${counts.part} ${countsText(counts.before)} (remesh.json)` }, { label: 'AFTER', text: `${counts.part} ${countsText(counts.after)} (remesh.json)` }] : []),
+            { label: agree.ok ? 'AGREE' : 'DIFFER', text: agree.line, error: !agree.ok },
+          ]);
+        }
         const after = { lines: [...result.lines], check: result.check };
-        const show = () => meshPanel?.readout(readoutRows(before, before ? null : inspectedCheckView(side), after, ['TEXTURE_STRETCH']));
+        const show = () => { if (pickedSide === side) meshPanel?.readout(readoutRows(before, before ? null : inspectedCheckView(side), after, ['TEXTURE_STRETCH'])); };
         show(); if (!before) void followInspectedCheck(show, side);
       }
       return result;
@@ -1644,14 +1740,18 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   async function resetMeshBuild(): Promise<void> {
+    const side = pickedSide, state = sides[side];
     meshPanel?.counts([]); meshPanel?.readout([]);
-    if (currentState().appliedOnStage || currentState().stripPending) {
-      meshPanel?.busy(true); try { await resetRebuild(stageWorld()); } finally { meshPanel?.busy(false); }
+    if (state.appliedOnStage || state.stripPending) {
+      meshPanel?.busy(true); try { await resetRebuild(stageWorld(), side); } finally { meshPanel?.busy(false); }
     }
-    meshPanel?.status('Reset: the inspected build is on the stage; the pending entry is the config\'s.', false);
+    if (pickedSide === side) meshPanel?.status('Reset: the inspected build is on the stage; the pending entry is the config\'s.', false);
   }
 
-  const densityLine = (msg: string, error = false) => { densityStrip?.status(msg, error); if (error) host.message(msg, true); };
+  const densityLine = (msg: string, error = false, side: Side = pickedSide) => {
+    if (pickedSide === side) densityStrip?.status(msg, error);
+    if (error) host.message(msg, true);
+  };
   const renderStrip = () => {
     const state = currentState();
     densityStrip?.show(state.stripView, state.stripPending && state.stripView?.id === state.stripPending.id ? state.stripPending.index : null, densityBusy || rebuildBusy || !!host.readOnly());
@@ -1668,9 +1768,9 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     if (ro) { densityLine(ro, true); return { error: ro }; }
     const side = pickedSide, state = sides[side];
     const status = state.rebuildStatus ?? await loadRebuildStatus(side), part = meshPanel?.part() ?? null, entry = meshPanel?.entry() ?? null;
-    if (!status || !part || !entry) { const t = status?.reason ?? 'MESH_PANEL_NO_PART: select a mesh part'; densityLine(t, true); return { error: t }; }
+    if (!status || !part || !entry) { const t = status?.reason ?? 'MESH_PANEL_NO_PART: select a mesh part'; densityLine(t, true, side); return { error: t }; }
     const problems = meshPanel?.precheck() ?? [];
-    if (problems.length) { const t = `${problems[0]} (review pre-check; nothing sent)`; densityLine(t, true); return { error: t }; }
+    if (problems.length) { const t = `${problems[0]} (review pre-check; nothing sent)`; densityLine(t, true, side); return { error: t }; }
     let patches: ConfigPatch[];
     try {
       const field = densityField(entry, part);
@@ -1680,26 +1780,26 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         assertMeshPatch(patch, part);
         return patch;
       });
-    } catch (error) { const t = errorText(error); densityLine(t, true); return { error: t }; }
-    if (state.stripPending) await stripBack();
-    densityBusy = true; renderStrip();
-    densityLine(`Building a strip of ${values.length} on ${part} (Build ${side.toUpperCase()}): ${values.join(', ')}…`);
+    } catch (error) { const t = errorText(error); densityLine(t, true, side); return { error: t }; }
+    if (state.stripPending) await stripBack(side);
+    densityBusy = true; if (pickedSide === side) renderStrip();
+    densityLine(`Building a strip of ${values.length} on ${part} (Build ${side.toUpperCase()}): ${values.join(', ')}…`, false, side);
     const t0 = performance.now();
     try {
       let view: DensityStripViewLike | { status: string; error: string };
       try { view = await host.api<DensityStripViewLike | { status: string; error: string }>(`${sideApiPrefix(side)}/density-strip`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patches }) }); }
-      catch (error) { const t = errorText(error); densityLine(t, true); return { error: t }; }
-      if ('error' in view) { densityLine(view.error, true); return { error: view.error }; }
-      state.stripView = view; renderStrip();
+      catch (error) { const t = errorText(error); densityLine(t, true, side); return { error: t }; }
+      if ('error' in view) { densityLine(view.error, true, side); return { error: view.error }; }
+      state.stripView = view; if (pickedSide === side) renderStrip();
       while (state.stripView.status === 'running') {
         await new Promise(resolve => setTimeout(resolve, 1500));
         state.stripView = await host.api<DensityStripViewLike>(`${sideApiPrefix(side)}/density-strip/${state.stripView.id}`);
-        renderStrip();
+        if (pickedSide === side) renderStrip();
         const settled = state.stripView.rows.filter(r => r.status !== 'running').length;
-        densityLine(`Strip ${state.stripView.id.slice(0, 12)}…: ${settled} of ${state.stripView.rows.length} settled · ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+        densityLine(`Strip ${state.stripView.id.slice(0, 12)}…: ${settled} of ${state.stripView.rows.length} settled · ${((performance.now() - t0) / 1000).toFixed(0)} s`, false, side);
       }
       const passing = state.stripView.rows.filter(r => r.verdict === 'PASS').length;
-      densityLine(`Strip of ${state.stripView.rows.length} on ${state.stripView.part} settled: ${passing} passing.`);
+      densityLine(`Strip of ${state.stripView.rows.length} on ${state.stripView.part} settled: ${passing} passing.`, false, side);
       return state.stripView;
     } finally { densityBusy = false; renderStrip(); }
   }
@@ -1708,7 +1808,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const side = pickedSide, state = sides[side];
     const view = state.stripView, row = view?.rows[index];
     if (!view || !row) return { error: 'DENSITY_STRIP_NOT_FOUND' };
-    if (!row.modelUrl || !row.modelHash) { const t = `DENSITY_STRIP_ROW_NOT_LOADABLE: ${row.value} — ${row.applied ? 'applied already' : row.verdict}`; densityLine(t, true); return { error: t }; }
+    if (!row.modelUrl || !row.modelHash) { const t = `DENSITY_STRIP_ROW_NOT_LOADABLE: ${row.value} — ${row.applied ? 'applied already' : row.verdict}`; densityLine(t, true, side); return { error: t }; }
     if (rebuildBusy || densityBusy) return { error: 'REBUILD_BUSY' };
     const back = state.stripPending?.back ?? {
       url: state.stageSource?.url ?? state.inspectedModel!.url,
@@ -1722,42 +1822,51 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       await swapPickedSide(side, new URL(host.route(row.modelUrl), location.href).href, host.route(`/compare-density-strip/${side}/${view.id}/${row.id}/`), row.modelHash);
       state.stripPending = { index, id: view.id, candidate: row.id, back };
       state.appliedOnStage = null; state.stageCheck = null;
-      const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
-      meshPanel?.setEntry(row.entry as MeshEntry);
+      if (pickedSide === side) {
+        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
+        meshPanel?.setEntry(row.entry as MeshEntry);
+      } else if (state.animationState) {
+        state.animationState.appliedOps = [];
+      }
       if (!host.layers.mesh) { host.layers.mesh = true; input('layer-mesh').checked = true; }
       host.redrawOverlays(true);
       const c = row.counts ? { vertices: row.counts.vertices, triangles: row.counts.triangles, hull: 0 } : null;
       const agree = triangleAgreement(c ? { part: view.part, before: c, after: c } : null, row.modelTriangles, state.lastOverlay?.meshTriangles[view.part] ?? null);
-      meshPanel?.counts([{ label: 'PENDING', text: `${view.field} ${row.value} — not applied` }, { label: agree.ok ? 'AGREE' : 'DIFFER', text: agree.line, error: !agree.ok }]);
-      densityLine(`Pending on Build ${side.toUpperCase()}: ${view.part} ${view.field} ${row.value} (strip row ${index + 1}) — not applied.`, !agree.ok);
+      if (pickedSide === side) {
+        meshPanel?.counts([{ label: 'PENDING', text: `${view.field} ${row.value} — not applied` }, { label: agree.ok ? 'AGREE' : 'DIFFER', text: agree.line, error: !agree.ok }]);
+      }
+      densityLine(`Pending on Build ${side.toUpperCase()}: ${view.part} ${view.field} ${row.value} (strip row ${index + 1}) — not applied.`, !agree.ok, side);
       return { line: agree.line, ok: agree.ok };
-    } catch (error) { const t = `DENSITY_STRIP_LOAD_FAILED: ${errorText(error)}`; densityLine(t, true); return { error: t }; }
+    } catch (error) { const t = `DENSITY_STRIP_LOAD_FAILED: ${errorText(error)}`; densityLine(t, true, side); return { error: t }; }
     finally { rebuildBusy = false; rebuildState(); renderStrip(); }
   }
 
-  async function stripBack(): Promise<void> {
-    const side = pickedSide, state = sides[side], pending = state.stripPending;
+  async function stripBack(side: Side = pickedSide): Promise<void> {
+    const state = sides[side], pending = state.stripPending;
     if (!pending || rebuildBusy) return;
     rebuildBusy = true; rebuildState();
     try {
       await swapPickedSide(side, pending.back.url, pending.back.prefix, pending.back.hash);
       state.appliedOnStage = pending.back.applied; state.stageCheck = pending.back.check; state.stripPending = null;
-      const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = state.appliedOnStage ? JSON.stringify(state.appliedOnStage) : ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
-      meshPanel?.counts([]); host.redrawOverlays(true);
-      densityLine(`Back: Build ${side.toUpperCase()} shows ${state.appliedOnStage ? 'the last applied record' : 'the inspected build'}.`);
-    } catch (error) { densityLine(`DENSITY_STRIP_BACK_FAILED: ${errorText(error)}`, true); }
+      if (pickedSide === side) {
+        const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = state.appliedOnStage ? JSON.stringify(state.appliedOnStage) : ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
+        meshPanel?.counts([]);
+      }
+      host.redrawOverlays(true);
+      densityLine(`Back: Build ${side.toUpperCase()} shows ${state.appliedOnStage ? 'the last applied record' : 'the inspected build'}.`, false, side);
+    } catch (error) { densityLine(`DENSITY_STRIP_BACK_FAILED: ${errorText(error)}`, true, side); }
     finally { rebuildBusy = false; rebuildState(); renderStrip(); }
   }
 
   async function closeDensityStrip(): Promise<{ status: string; error?: string }> {
     const side = pickedSide, state = sides[side], view = state.stripView;
     if (!view) return { status: 'closed' };
-    if (state.stripPending && state.stripPending.id === view.id) await stripBack();
+    if (state.stripPending && state.stripPending.id === view.id) await stripBack(side);
     try {
       const r = await host.api<{ status: string; error?: string }>(`${sideApiPrefix(side)}/density-strip/close`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: view.id }) });
-      if (r.status !== 'closed') { densityLine(r.error ?? 'DENSITY_STRIP_CLOSE_REFUSED', true); return r; }
-      state.stripView = null; renderStrip(); densityLine('Strip closed; its scratch is removed.'); return r;
-    } catch (error) { const t = errorText(error); densityLine(t, true); return { status: 'refused', error: t }; }
+      if (r.status !== 'closed') { densityLine(r.error ?? 'DENSITY_STRIP_CLOSE_REFUSED', true, side); return r; }
+      state.stripView = null; if (pickedSide === side) renderStrip(); densityLine('Strip closed; its scratch is removed.', false, side); return r;
+    } catch (error) { const t = errorText(error); densityLine(t, true, side); return { status: 'refused', error: t }; }
   }
 
   async function runReadings(override?: { readings: import('../src/readings.ts').ReadingRequest[] }): Promise<ReadingsJobView | ReadingsRefusal | null> {
@@ -1778,19 +1887,26 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       let job = await host.api<ReadingsJobView | ReadingsRefusal>(`${sideApiPrefix(side)}/readings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(error => ({ status: 'refused' as const, error: errorText(error).replace(/^\d+: /, '') }));
       if (!('id' in job)) {
         const textMsg = (() => { try { return (JSON.parse(job.error) as { error?: string }).error ?? job.error; } catch { return job.error; } })();
-        readingsPanel.status(textMsg, true); return { status: 'refused', error: textMsg };
+        if (pickedSide === side) readingsPanel.status(textMsg, true);
+        return { status: 'refused', error: textMsg };
       }
       while (job.status === 'running') {
         await new Promise(resolve => setTimeout(resolve, 800));
         job = await host.api<ReadingsJobView>(`${sideApiPrefix(side)}/readings/${job.id}`);
       }
-      if (job.status === 'failed') { readingsPanel.status(job.error ?? 'READINGS_FAILED', true); return job; }
-      sides[side].readingsJob = job; readingsPanel.lines(job);
-      const ticks = job.runs.map(r => `${r.build} ${r.results.reduce((n, x) => n + x.frames.length, 0)} tick(s)`).join(' · ');
-      const refused = job.runs.flatMap(r => r.results).find(r => r.status !== 'read');
-      readingsPanel.status(`${refused ? `${refused.refusal} · ` : ''}Readings of ${job.request.animation}: ${ticks} · ${((performance.now() - started) / 1000).toFixed(1)} s`, !!refused);
+      if (job.status === 'failed') {
+        if (pickedSide === side) readingsPanel.status(job.error ?? 'READINGS_FAILED', true);
+        return job;
+      }
+      sides[side].readingsJob = job;
+      if (pickedSide === side) {
+        readingsPanel.lines(job);
+        const ticks = job.runs.map(r => `${r.build} ${r.results.reduce((n, x) => n + x.frames.length, 0)} tick(s)`).join(' · ');
+        const refused = job.runs.flatMap(r => r.results).find(r => r.status !== 'read');
+        readingsPanel.status(`${refused ? `${refused.refusal} · ` : ''}Readings of ${job.request.animation}: ${ticks} · ${((performance.now() - started) / 1000).toFixed(1)} s`, !!refused);
+      }
       return job;
-    } catch (error) { readingsPanel.status(`READINGS_FAILED: ${errorText(error)}`, true); return null; }
+    } catch (error) { if (pickedSide === side) readingsPanel.status(`READINGS_FAILED: ${errorText(error)}`, true); return null; }
     finally { readingsBusy = false; readingsPanel.busy(false); }
   }
 
@@ -1814,16 +1930,17 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   async function meshFolds(): Promise<string[]> {
-    const animation = host.data().animation;
+    const side = pickedSide, animation = host.data().animation;
     meshPanel?.status(`Running the folds reading of ${animation}…`, false);
     const job = await runReadings({ readings: [{ kind: 'folds' }] });
     if (!job || !('runs' in job)) {
       const textMsg = job && 'error' in job && job.error ? job.error : 'READINGS_UNAVAILABLE: no reading ran';
-      meshPanel?.status(textMsg, true); return [textMsg];
+      if (pickedSide === side) meshPanel?.status(textMsg, true);
+      return [textMsg];
     }
     const lines = job.runs.map(run => { const r = run.results[0]; return r ? worstLine(run.build, r) : `${run.build} · folds: not run`; });
     if (job.runs.length < 2) lines.push('scratch · folds: no scratch build yet (Apply builds one)');
-    meshPanel?.status(lines.join(' | '), job.runs.some(run => run.results.some(r => r.status !== 'read')));
+    if (pickedSide === side) meshPanel?.status(lines.join(' | '), job.runs.some(run => run.results.some(r => r.status !== 'read')));
     return lines;
   }
 
@@ -1846,6 +1963,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const side = pickedSide, state = sides[side];
     const out = el('environment-check-lines');
     const show = (rows: { kind: string; text: string }[]) => {
+      if (pickedSide !== side) return;
       out.replaceChildren(...rows.map(row => { const line = document.createElement('div'); line.className = `env-${row.kind}`; line.textContent = row.text; return line; }));
     };
     const name = checkAnimation(side), world = worldFor(name, side);
@@ -2483,6 +2601,10 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       st.stageSource = { url: modelUrl, prefix, hash: sha256 };
       st.stageModelHash = sha256;
       st.partModel = partModel;
+      if (side !== pickedSide && st.animationState) {
+        st.animationState.document = null;
+        st.animationState.baseInspection = null;
+      }
       void loadModelDocument(modelUrl, sha256).then(loaded => {
         if (loaded.ok) {
           st.inspectedDocument = loaded.document;
@@ -2550,10 +2672,10 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       requirementsPanel?.selectionChanged();
     },
     overlayInputFor: side => {
-      animationPanel?.redraw(host.layers.bones);
       if (side !== pickedSide) {
         return { regions: [], circles: [], markers: [], meshEdit: null, weights: null, anchors: null };
       }
+      animationPanel?.redraw(host.layers.bones);
       idlePanel?.place(host.duration());
       rigFieldsPanel?.place();
       return {

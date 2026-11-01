@@ -79,6 +79,9 @@ export interface SelectedAnimationKey {
 }
 
 export interface AnimationSideState {
+ document?:unknown;
+ animation?:string;
+ baseInspection?:AnimationInspection|null;
  source:AnimationSourceView|null;
  sourceLoaded:boolean;
  sourceFallbackReason:string|null;
@@ -159,6 +162,12 @@ export class AnimationInspectionPanel {
  private sourceFallbackReason:string|null=null;
  private builder:AnimationOpBuilder|null=null;
  private appliedOps:AnimationSourceOp[]=[];
+ private cachedDraftText:string|null=null;
+ private cachedDraftDoc:unknown=undefined;
+ private cachedTracksKey='';
+ private cachedTracks:TrackClassification[]=[];
+ private cachedGateKey='';
+ private cachedGate:AnimationEditGate|null=null;
  private selectedKey:SelectedAnimationKey|null=null;
  private selectedKeys:SelectedAnimationKey[]=[];
  private lastNonEmptyAnimation='';
@@ -527,6 +536,9 @@ export class AnimationInspectionPanel {
 
  exportSideState():AnimationSideState{
   return {
+   document:this.document,
+   animation:this.animation,
+   baseInspection:this.baseInspection,
    source:this.source,
    sourceLoaded:this.sourceLoaded,
    sourceFallbackReason:this.sourceFallbackReason,
@@ -550,6 +562,9 @@ export class AnimationInspectionPanel {
   this.draggingStageBone=null;
   this.forceNextModelReload=true;
   if(!state){
+   this.document=null;
+   this.baseInspection=null;
+   this.inspection=null;
    this.source=null;
    this.sourceLoaded=false;
    this.sourceFallbackReason=null;
@@ -559,6 +574,10 @@ export class AnimationInspectionPanel {
    this.selectedKeys=[];
    this.setEditorStatus('',false);
   }else{
+   this.document=state.document??null;
+   if(state.animation!==undefined)this.animation=state.animation;
+   this.baseInspection=state.baseInspection??null;
+   this.inspection=this.baseInspection;
    this.source=state.source;
    this.sourceLoaded=state.sourceLoaded;
    this.sourceFallbackReason=state.sourceFallbackReason;
@@ -640,7 +659,11 @@ export class AnimationInspectionPanel {
 
  private draftDocument():unknown{
   if(!this.builder)return undefined;
-  try{return JSON.parse(this.builder.text);}catch{return undefined;}
+  const text=this.builder.text;
+  if(text===this.cachedDraftText)return this.cachedDraftDoc;
+  this.cachedDraftText=text;
+  try{this.cachedDraftDoc=JSON.parse(text);}catch{this.cachedDraftDoc=undefined;}
+  return this.cachedDraftDoc;
  }
 
  gateInfo():AnimationEditGate{
@@ -674,13 +697,22 @@ export class AnimationInspectionPanel {
    const clean=r.replace(/^ANIMATION_SOURCE_MISSING:\s*/,'');
    return {editable:false,code:'ANIMATION_SOURCE_MISSING',reason:clean,note:null};
   }
-  return checkAnimationEditGate(this.animation,this.source.path,this.draftDocument());
+  const gateKey=`${this.animation}\0${this.source.path??''}\0${this.builder?.text??''}`;
+  if(gateKey===this.cachedGateKey&&this.cachedGate)return this.cachedGate;
+  const gate=checkAnimationEditGate(this.animation,this.source.path,this.draftDocument());
+  this.cachedGateKey=gateKey;
+  this.cachedGate=gate;
+  return gate;
  }
 
  tracksInfo():TrackClassification[]{
   const doc=this.draftDocument();
   if(!doc||!this.animation)return [];
-  return classifyAnimationTracks(doc,this.animation);
+  const key=`${this.animation}\0${this.builder?.text??''}`;
+  if(key===this.cachedTracksKey)return this.cachedTracks;
+  this.cachedTracksKey=key;
+  this.cachedTracks=classifyAnimationTracks(doc,this.animation);
+  return this.cachedTracks;
  }
 
  hasUnappliedPreview():boolean{
@@ -2790,7 +2822,12 @@ export class AnimationInspectionPanel {
  redraw(bonePoints=this.bonePoints){
   this.bonePoints=bonePoints;
   for(const [name,node]of this.boneButtons)if(!this.bones.has(name)){node.remove();this.boneButtons.delete(name);}
-  const {stage}=this.options,selected=this.selection.value();stage.dataset.heldFrame=this.frame?'available':'unavailable';stage.dataset.selectedKind=selected?.kind??'';stage.dataset.selectedName=selected?.name??'';this.picks.hidden=!this.options.enabled();
+  const {stage}=this.options,selected=this.selection.value();
+  stage.dataset.heldFrame=this.frame?'available':'unavailable';
+  stage.dataset.selectedKind=selected?.kind??'';
+  stage.dataset.selectedName=selected?.name??'';
+  const enabled=this.options.enabled();
+  this.picks.hidden=!enabled;
   const otherMode:'rotate'|'translate'=this.poseMode==='rotate'?'translate':'rotate';
   let order=0;
   for(const [name,p]of this.bones){
@@ -2813,6 +2850,13 @@ export class AnimationInspectionPanel {
     this.picks.append(b);
    }
    const isSelected=selected?.kind==='bone'&&selected.name===name;
+   const visible=enabled&&(bonePoints||isSelected);
+   b.hidden=!bonePoints&&!isSelected;
+   b.setAttribute('aria-pressed',String(isSelected));
+   if(!visible){
+    order++;
+    continue;
+   }
    const editableNow=this.isBoneEditableInMode(name,this.poseMode);
    const editableOther=this.isBoneEditableInMode(name,otherMode);
    b.dataset.poseEditable=editableNow?'true':editableOther?'other':'false';
@@ -2828,8 +2872,6 @@ export class AnimationInspectionPanel {
    const at=this.options.project(p.x,p.y);
    b.style.left=`${at.x}px`;
    b.style.top=`${at.y}px`;
-   b.hidden=!bonePoints&&!isSelected;
-   b.setAttribute('aria-pressed',String(isSelected));
   }
  }
 

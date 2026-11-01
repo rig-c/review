@@ -2950,6 +2950,529 @@ test('PR #260 findings: Shift-click 150ms hold does not undo selection, and dist
       expect(panel.ops()).toHaveLength(1); // Mutant leaks Side B's op onto Side A!
       panel.dispose();
     }
+
+    // 9. PR #262 Finding 1 (P1): importSideState with different bones across builds (b_only_bone on Build B)
+    //    must not evaluate Build B's preview against Build A's baseInspection, nor fail with
+    //    ANIMATION_INSPECTION_UNAVAILABLE: unknown bone when Build B's model is loaded on switch.
+    {
+      const { AnimationInspectionPanel } = await import('../web/animation-inspection.ts');
+      const docA = {
+        spec: 'rigc-motion/1',
+        animations: {
+          tilt: {
+            duration: 1,
+            tracks: [
+              {
+                bone: 'head',
+                property: 'rotate',
+                keys: [
+                  { t: 0, v: [0] },
+                  { t: 0.5, v: [10] },
+                  { t: 1, v: [0] },
+                ],
+              },
+            ],
+          },
+        },
+      };
+      const docB = {
+        spec: 'rigc-motion/1',
+        animations: {
+          tilt: {
+            duration: 1,
+            tracks: [
+              {
+                bone: 'head',
+                property: 'rotate',
+                keys: [
+                  { t: 0, v: [0] },
+                  { t: 0.5, v: [10] },
+                  { t: 1, v: [0] },
+                ],
+              },
+              {
+                bone: 'b_only_bone',
+                property: 'rotate',
+                keys: [
+                  { t: 0, v: [0] },
+                  { t: 0.5, v: [15] },
+                  { t: 1, v: [0] },
+                ],
+              },
+            ],
+          },
+        },
+      };
+      const textA = JSON.stringify(docA, null, 2) + '\n';
+      const textB = JSON.stringify(docB, null, 2) + '\n';
+      const sourceA = { available: true, reason: null, path: 'animations.json', sha256: sha256(textA), text: textA, easings: {} };
+      const sourceB = { available: true, reason: null, path: 'animations.json', sha256: sha256(textB), text: textB, easings: {} };
+      const modelA = {
+        spec: 'rigc-compiled/3',
+        skeleton: { width: 100, height: 100 },
+        pages: [],
+        bones: [
+          { name: 'root', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+          { name: 'head', parent: 'root', x: 0, y: 60, rotation: 0, scaleX: 1, scaleY: 1 },
+        ],
+        slots: [],
+        skins: [{ name: 'default', attachments: {} }],
+        animations: [
+          {
+            name: 'tilt',
+            duration: 1,
+            bones: [
+              {
+                name: 'head',
+                timelines: [
+                  {
+                    name: 'rotate',
+                    keys: [
+                      { time: 0, value: 0 },
+                      { time: 0.5, value: 10 },
+                      { time: 1, value: 0 },
+                    ],
+                  },
+                ],
+              },
+            ],
+            slots: [],
+          },
+        ],
+      };
+      const modelB = {
+        spec: 'rigc-compiled/3',
+        skeleton: { width: 100, height: 100 },
+        pages: [],
+        bones: [
+          { name: 'root', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+          { name: 'head', parent: 'root', x: 0, y: 60, rotation: 0, scaleX: 1, scaleY: 1 },
+          { name: 'b_only_bone', parent: 'head', x: 10, y: 20, rotation: 0, scaleX: 1, scaleY: 1 },
+        ],
+        slots: [],
+        skins: [{ name: 'default', attachments: {} }],
+        animations: [
+          {
+            name: 'tilt',
+            duration: 1,
+            bones: [
+              {
+                name: 'head',
+                timelines: [
+                  {
+                    name: 'rotate',
+                    keys: [
+                      { time: 0, value: 0 },
+                      { time: 0.5, value: 10 },
+                      { time: 1, value: 0 },
+                    ],
+                  },
+                ],
+              },
+              {
+                name: 'b_only_bone',
+                timelines: [
+                  {
+                    name: 'rotate',
+                    keys: [
+                      { time: 0, value: 0 },
+                      { time: 0.5, value: 15 },
+                      { time: 1, value: 0 },
+                    ],
+                  },
+                ],
+              },
+            ],
+            slots: [],
+          },
+        ],
+      };
+
+      const host = new StubElement('section');
+      const stage = new StubElement('div');
+      let picked: 'a' | 'b' = 'b';
+      const activeBones: Record<'a' | 'b', Record<string, { x: number; y: number; rotation: number; scaleX: number; scaleY: number; shearX: number; shearY: number }>> = {
+        a: {
+          root: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 },
+          head: { x: 0, y: 60, rotation: 10, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 },
+        },
+        b: {
+          root: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 },
+          head: { x: 0, y: 60, rotation: 10, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 },
+          b_only_bone: { x: 10, y: 20, rotation: 15, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 },
+        },
+      };
+      const sideStates: Record<'a' | 'b', import('../web/animation-inspection.ts').AnimationSideState | null> = { a: null, b: null };
+      const panel = new AnimationInspectionPanel({
+        host: host as unknown as HTMLElement,
+        stage: stage as unknown as HTMLElement,
+        select: () => {},
+        seek: () => {},
+        project: (x, y) => ({ x, y }),
+        enabled: () => true,
+        preview: (fn) => {
+          if (!fn) return;
+          fn(
+            {
+              bone: (name: string) => {
+                const b = activeBones[picked][name];
+                if (!b) throw new Error(`ANIMATION_INSPECTION_UNAVAILABLE: unknown bone "${name}"`);
+                return b;
+              },
+            } as unknown as Parameters<import('@rig-c/play').BoneAdjust>[0],
+            { trackTime: 0.5, animation: 'tilt' } as unknown as Parameters<import('@rig-c/play').BoneAdjust>[1],
+          );
+        },
+        apply: async () => {},
+      });
+
+      // Edit b_only_bone (track 1, key 1 -> 42 deg) on Build B at t = 0.5
+      panel.loadSource(sourceB);
+      panel.model(modelB, 'tilt');
+      panel.update(0.5, 1);
+      const editBOnly = panel.setKeyValue(1, 1, 0, 42);
+      expect(editBOnly.ok).toBe(true);
+      expect(activeBones.b.b_only_bone.rotation).toBe(42);
+      sideStates.b = panel.exportSideState();
+
+      // Switch to Build A (which has no b_only_bone)
+      picked = 'a';
+      panel.importSideState(sideStates.a);
+      panel.loadSource(sourceA);
+      panel.model(modelA, 'tilt');
+      sideStates.a = panel.exportSideState();
+      expect(panel.ops()).toHaveLength(0);
+
+      // Planted mutant control first: if importSideState leaves baseInspection pointing at Build A's skeleton
+      // (which lacks b_only_bone) and immediately runs syncEffectiveInspection(true), it throws
+      // ANIMATION_INSPECTION_UNAVAILABLE: unknown bone "b_only_bone".
+      expect(() =>
+        panel.importSideState({
+          ...sideStates.b!,
+          baseInspection: sideStates.a!.baseInspection,
+        }),
+      ).toThrow(/ANIMATION_INSPECTION_UNAVAILABLE: unknown bone b_only_bone/);
+      // Restore clean Side A state after mutant control
+      panel.importSideState(sideStates.a);
+
+      // Reset b_only_bone pose to 15 before switching back to Build B
+      activeBones.b.b_only_bone.rotation = 15;
+      picked = 'b';
+      // Case 1: Destination baseInspection restored by importSideState before model() runs
+      expect(() => panel.importSideState(sideStates.b)).not.toThrow();
+      panel.loadSource(sourceB);
+      panel.model(modelB, 'tilt');
+      expect(panel.ops()).toHaveLength(1);
+      expect(activeBones.b.b_only_bone.rotation).toBe(42);
+
+      // Case 2: Destination model changed while B was unpicked (baseInspection cleared to null before importSideState)
+      picked = 'a';
+      panel.importSideState(sideStates.a);
+      panel.loadSource(sourceA);
+      panel.model(modelA, 'tilt');
+      activeBones.b.b_only_bone.rotation = 15;
+      picked = 'b';
+      const invalidatedStateB: import('../web/animation-inspection.ts').AnimationSideState = {
+        ...sideStates.b!,
+        document: null,
+        baseInspection: null,
+      };
+      expect(() => panel.importSideState(invalidatedStateB)).not.toThrow();
+      panel.loadSource(sourceB);
+      panel.model(modelB, 'tilt');
+      expect(panel.ops()).toHaveLength(1);
+      expect(activeBones.b.b_only_bone.rotation).toBe(42);
+      panel.dispose();
+    }
+
+    // 10. PR #262 Finding 2 (P2): Resetting an applied Build A and picking Build B during the async
+    //     resetRebuild() await must not wipe Build B's pending edits or copy Build B's builder into Build A.
+    const compiledTilt6Bones = {
+      spec: 'rigc-compiled/3',
+      skeleton: { width: 100, height: 100 },
+      pages: [],
+      bones: [
+        { name: 'root', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'hip', parent: 'root', x: 0, y: 20, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'chest', parent: 'hip', x: 0, y: 20, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'head', parent: 'chest', x: 0, y: 20, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'brow_r', parent: 'head', x: 6, y: 6, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'brow_l', parent: 'head', x: -6, y: 6, rotation: 0, scaleX: 1, scaleY: 1 },
+      ],
+      slots: [],
+      skins: [{ name: 'default', attachments: {} }],
+      animations: [
+        {
+          name: 'tilt',
+          duration: 1.6,
+          bones: [
+            {
+              name: 'head',
+              timelines: [
+                {
+                  name: 'rotate',
+                  keys: [
+                    { time: 0, value: 0, curve: [0.1, 0, 0.25, 10] },
+                    { time: 0.35, value: 10, curve: [0.55, 10, 0.75, 8.5] },
+                    { time: 0.95, value: 8.5 },
+                    { time: 1.3, value: -1.2 },
+                    { time: 1.6, value: 0 },
+                  ],
+                },
+              ],
+            },
+            {
+              name: 'chest',
+              timelines: [
+                {
+                  name: 'rotate',
+                  keys: [
+                    { time: 0, value: 0 },
+                    { time: 0.45, value: 3.5 },
+                    { time: 1.6, value: 0 },
+                  ],
+                },
+              ],
+            },
+          ],
+          slots: [],
+        },
+      ],
+    };
+    {
+      const { AnimationInspectionPanel } = await import('../web/animation-inspection.ts');
+      const demoText = readFileSync(new URL('./fixtures/motion/demo.json', import.meta.url), 'utf8');
+      const demoHash = sha256(demoText);
+      const source = { available: true, reason: null, path: 'animations.json', sha256: demoHash, text: demoText, easings: {} };
+      const compiled = compiledTilt6Bones;
+
+      // Planted mutant control first: unconditional resetEdits() + exportSideState() after await wipes B and corrupts A
+      {
+        const hostM = new StubElement('section');
+        const stageM = new StubElement('div');
+        let pickedM: 'a' | 'b' = 'a';
+        const sideStatesM: Record<'a' | 'b', import('../web/animation-inspection.ts').AnimationSideState | null> = { a: null, b: null };
+        const panelM = new AnimationInspectionPanel({
+          host: hostM as unknown as HTMLElement,
+          stage: stageM as unknown as HTMLElement,
+          select: () => {},
+          seek: () => {},
+          project: (x, y) => ({ x, y }),
+          enabled: () => true,
+          preview: () => {},
+          apply: async () => {},
+        });
+        panelM.loadSource(source);
+        panelM.model(compiled, 'tilt');
+        panelM.setKeyValue(0, 1, 0, 18);
+        panelM.reconcileStageApplied({ ops: [...panelM.ops()] } as unknown as Parameters<typeof panelM.reconcileStageApplied>[0]);
+        sideStatesM.a = panelM.exportSideState();
+
+        // Simulate user starting reset on A, then switching to B and editing B during await
+        pickedM = 'b';
+        panelM.importSideState(sideStatesM.b);
+        panelM.loadSource(source);
+        panelM.model(compiled, 'tilt');
+        panelM.setKeyValue(0, 1, 0, 33);
+        sideStatesM.b = panelM.exportSideState();
+        expect(panelM.ops()).toHaveLength(1);
+
+        // Mutant completion of A's reset touches shared panelM unconditionally and exports into A:
+        panelM.resetEdits();
+        sideStatesM.a = panelM.exportSideState();
+        expect(panelM.ops()).toHaveLength(0); // Mutant wiped B's pending edit!
+        panelM.dispose();
+      }
+
+      // Fixed side-bound completion: reset on A updates A's sideState and only touches the shared panel if pickedSide === 'a'
+      {
+        const host = new StubElement('section');
+        const stage = new StubElement('div');
+        let picked: 'a' | 'b' = 'a';
+        const sideStates: Record<'a' | 'b', import('../web/animation-inspection.ts').AnimationSideState | null> = { a: null, b: null };
+        const panel = new AnimationInspectionPanel({
+          host: host as unknown as HTMLElement,
+          stage: stage as unknown as HTMLElement,
+          select: () => {},
+          seek: () => {},
+          project: (x, y) => ({ x, y }),
+          enabled: () => true,
+          preview: () => {},
+          apply: async () => {},
+        });
+        panel.loadSource(source);
+        panel.model(compiled, 'tilt');
+        panel.setKeyValue(0, 1, 0, 18);
+        panel.reconcileStageApplied({ ops: [...panel.ops()] } as unknown as Parameters<typeof panel.reconcileStageApplied>[0]);
+        sideStates.a = panel.exportSideState();
+
+        let resolveReset!: () => void;
+        const resetPromise = new Promise<void>((r) => {
+          resolveReset = r;
+        });
+
+        const resetAnimationBuildForSide = async () => {
+          const side = picked;
+          panel.resetEdits();
+          sideStates[side] = panel.exportSideState();
+          await resetPromise;
+          if (sideStates[side]) {
+            sideStates[side] = {
+              ...sideStates[side]!,
+              appliedOps: [],
+              editorStatus: { text: 'Showing inspected build.', error: false },
+            };
+          }
+          if (picked === side) {
+            panel.resetEdits();
+            panel.setEditorStatus('Showing inspected build.', false);
+            sideStates[side] = panel.exportSideState();
+          }
+        };
+
+        const inflight = resetAnimationBuildForSide();
+
+        // While A's resetRebuild is awaiting, switch to B and make a pending edit (33 deg)
+        picked = 'b';
+        panel.importSideState(sideStates.b);
+        panel.loadSource(source);
+        panel.model(compiled, 'tilt');
+        const editB = panel.setKeyValue(0, 1, 0, 33);
+        expect(editB.ok).toBe(true);
+        sideStates.b = panel.exportSideState();
+
+        // Complete A's resetRebuild while B is still picked
+        resolveReset();
+        await inflight;
+
+        // B's pending edit on the visible panel is untouched, and A's sideState has 0 ops!
+        expect(panel.ops()).toHaveLength(1);
+        expect((panel.ops()[0] as { value?: number }).value).toBe(33);
+        expect(sideStates.a?.appliedOps).toEqual([]);
+        expect(sideStates.a?.builder?.ops).toEqual([]);
+
+        // Switching back to A shows 0 ops on A
+        sideStates.b = panel.exportSideState();
+        picked = 'a';
+        panel.importSideState(sideStates.a);
+        panel.loadSource(source);
+        panel.model(compiled, 'tilt');
+        expect(panel.ops()).toHaveLength(0);
+        panel.dispose();
+      }
+    }
+
+    // 11. PR #262 Finding 3 (P2): redraw() during playback must not re-parse the motion document
+    //     on every frame per bone (0 JSON.parse calls per presented playback frame, whether bonePoints
+    //     are hidden or shown).
+    {
+      const { AnimationInspectionPanel } = await import('../web/animation-inspection.ts');
+      const demoText = readFileSync(new URL('./fixtures/motion/demo.json', import.meta.url), 'utf8');
+      const demoHash = sha256(demoText);
+      const source = { available: true, reason: null, path: 'animations.json', sha256: demoHash, text: demoText, easings: {} };
+      const compiled = compiledTilt6Bones;
+      const boneNames = ['root', 'hip', 'chest', 'head', 'brow_r', 'brow_l'];
+
+      const host = new StubElement('section');
+      const stage = new StubElement('div');
+      const panel = new AnimationInspectionPanel({
+        host: host as unknown as HTMLElement,
+        stage: stage as unknown as HTMLElement,
+        select: () => {},
+        seek: () => {},
+        project: (x, y) => ({ x, y }),
+        enabled: () => true,
+        preview: () => {},
+        apply: async () => {},
+      });
+
+      panel.loadSource(source);
+      panel.model(compiled, 'tilt');
+
+      const stubPlayer = {
+        bone: (_name: string) => ({ x: 0, y: 10, active: true, a: 1, b: 0, c: 0, d: 1 }),
+      } as unknown as Pick<import('@rig-c/play').RigPlayer, 'bone'>;
+      const stubFrame = {} as unknown as import('@rig-c/play').PosedFrame;
+
+      // Warm initial render / classification cache once outside the frame loop
+      panel.capture(stubPlayer, stubFrame);
+      panel.redraw(true);
+
+      const origParse = JSON.parse;
+      let parseCountHidden = 0;
+      let parseCountVisible = 0;
+
+      // Planted mutant control: uncached per-bone classification in redraw() parses (4*B + E) = 26 times per redraw
+      // (52 times per 2-redraw presented playback frame on the 6-bone tilt rig where B=6, E=2).
+      const runUncachedMutantRedraw = () => {
+        let mutantParses = 0;
+        for (const bName of boneNames) {
+          // isBoneEditableInMode(bName, 'rotate'): gateInfo (1 parse) + tracksInfo (1 parse) = 2 parses
+          origParse(demoText);
+          origParse(demoText);
+          // isBoneEditableInMode(bName, 'translate'): gateInfo (1 parse) + tracksInfo (1 parse) = 2 parses
+          origParse(demoText);
+          origParse(demoText);
+          mutantParses += 4;
+          if (bName === 'head' || bName === 'chest') {
+            // firstEditableTrackIndexForBone(bName, 'rotate'): tracksInfo (1 parse)
+            origParse(demoText);
+            mutantParses += 1;
+          }
+        }
+        return mutantParses;
+      };
+      expect(runUncachedMutantRedraw() * 2).toBe(52);
+
+      JSON.parse = ((...args: Parameters<typeof JSON.parse>) => {
+        parseCountHidden++;
+        return origParse(...args);
+      }) as typeof JSON.parse;
+      try {
+        for (let frame = 0; frame < 10; frame++) {
+          const t = (frame * 0.1) % 1.6;
+          panel.update(t, 1.6);
+          panel.capture(stubPlayer, stubFrame);
+          panel.redraw(false);
+        }
+      } finally {
+        JSON.parse = origParse;
+      }
+      expect(parseCountHidden).toBe(0);
+
+      JSON.parse = ((...args: Parameters<typeof JSON.parse>) => {
+        parseCountVisible++;
+        return origParse(...args);
+      }) as typeof JSON.parse;
+      try {
+        for (let frame = 0; frame < 10; frame++) {
+          const t = (frame * 0.1) % 1.6;
+          panel.update(t, 1.6);
+          panel.capture(stubPlayer, stubFrame);
+          panel.redraw(true);
+        }
+      } finally {
+        JSON.parse = origParse;
+      }
+      expect(parseCountVisible).toBe(0);
+
+      // When an edit mutates builder.text, subsequent redraw(true) calls reuse the cached draftDocument/gate/tracks (0 parses)
+      const res = panel.setKeyValue(0, 1, 0, 22);
+      expect(res.ok).toBe(true);
+      let parseCountAfterEditRedraw = 0;
+      JSON.parse = ((...args: Parameters<typeof JSON.parse>) => {
+        parseCountAfterEditRedraw++;
+        return origParse(...args);
+      }) as typeof JSON.parse;
+      try {
+        panel.redraw(true);
+        panel.redraw(true);
+      } finally {
+        JSON.parse = origParse;
+      }
+      expect(parseCountAfterEditRedraw).toBe(0);
+      panel.dispose();
+    }
   } finally {
     if (prevDoc) Object.defineProperty(globalThis, 'document', prevDoc);
     else Reflect.deleteProperty(globalThis, 'document');
