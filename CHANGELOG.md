@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.1](https://github.com/rig-c/review/compare/v0.24.0...v0.24.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **readme:** title the README @rig-c/review ([#273](https://github.com/rig-c/review/issues/273)) ([d962804](https://github.com/rig-c/review/commit/d962804bf164a67fbd78952d7e96196076664429))
+
 ## [0.24.0](https://github.com/rig-c/review/compare/v0.23.0...v0.24.0) (2026-11-01)
 
 
