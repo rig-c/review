@@ -7,7 +7,7 @@ import { loadCompare } from '../src/compare.ts';
 import { startCompareServer } from '../src/compare-server.ts';
 import { createLiveLifecycle, DEFAULT_CLOSE_GRACE_MS, DEFAULT_UNOPENED_TIMEOUT_MS, LIVE_PATH } from '../src/live-lifecycle.ts';
 import { loadReview } from '../src/manifest.ts';
-import { openReview } from '../src/open.ts';
+import { openFingerprint, openReview, running } from '../src/open.ts';
 import { rebuildDir } from '../src/rebuild.ts';
 import { startServer } from '../src/server.ts';
 import { connectLiveWindow } from '../web/live-connection.ts';
@@ -16,6 +16,31 @@ const roots: string[] = [];
 const subprocs: Bun.Subprocess[] = [];
 const activeServers: { stop(close?: boolean): void }[] = [];
 const activeSockets: WebSocket[] = [];
+const ownedDaemons: { pid: number; origin: string; nonce: string; status: string }[] = [];
+
+async function collectOpenDaemons(root: string): Promise<void> {
+  const entries = await readdir(root, { recursive: true }).catch(() => [] as string[]);
+  for (const rel of entries) {
+    const normalized = rel.replaceAll('\\', '/');
+    const base = normalized.split('/').pop() ?? '';
+    const isFront = /^front-\d+\.json$/.test(base);
+    const isWorker = /^[a-f0-9]{64}\.json$/.test(base);
+    if ((!isFront && !isWorker) || !normalized.endsWith(`open/${base}`)) continue;
+    try {
+      const data = JSON.parse(await readFile(join(root, rel), 'utf8')) as { pid?: number; origin?: string; nonce?: string };
+      if (typeof data.pid === 'number' && typeof data.origin === 'string' && typeof data.nonce === 'string') {
+        if (!ownedDaemons.some(row => row.nonce === data.nonce)) {
+          ownedDaemons.push({
+            pid: data.pid,
+            origin: data.origin,
+            nonce: data.nonce,
+            status: isFront ? '/api/front-status' : '/api/open-status',
+          });
+        }
+      }
+    } catch {}
+  }
+}
 
 afterEach(async () => {
   for (const ws of activeSockets.splice(0)) {
@@ -27,6 +52,23 @@ afterEach(async () => {
   for (const p of subprocs.splice(0)) {
     try { p.kill('SIGTERM'); } catch {}
     await p.exited.catch(() => {});
+  }
+  for (const r of roots) {
+    await collectOpenDaemons(r);
+  }
+  for (const row of ownedDaemons.splice(0)) {
+    try {
+      const res = await fetch(row.origin + row.status, {
+        headers: { authorization: `Bearer ${row.nonce}` },
+        signal: AbortSignal.timeout(500),
+      });
+      if (((await res.json()) as { nonce?: string }).nonce === row.nonce) {
+        process.kill(row.pid, 'SIGTERM');
+      }
+    } catch {}
+    for (let i = 0; i < 80 && running(row.pid); i++) {
+      await Bun.sleep(25);
+    }
   }
   for (const r of roots.splice(0)) {
     await rm(r, { recursive: true, force: true }).catch(() => {});
@@ -731,4 +773,117 @@ test('wall-clock sleep jump resets pending countdown instead of exiting prematur
   } finally {
     life.stop();
   }
+});
+
+test('a front stays up while its control directory has a live record and exits within a bound when the control directory is deleted, while the planted .catch(()=>{}) form fails', async () => {
+  const root = await makeTempRoot();
+  const pkg = join(root, 'pkg');
+  await cp(join(import.meta.dir, 'fixtures/strip-probe'), pkg, { recursive: true });
+  const stateDir = join(root, 'state');
+  const frontPort = freePort();
+  const idleMs = 120;
+
+  await openReview(
+    { input: pkg, animation: 'inspect' },
+    { stateDir, frontPort, frontIdleMs: idleMs, graceMs: 300, idleMs: 5_000 },
+  );
+  await collectOpenDaemons(root);
+
+  const control = join(stateDir, 'open');
+  const frontRec = JSON.parse(await readFile(join(control, `front-${frontPort}.json`), 'utf8')) as {
+    pid: number;
+    origin: string;
+    nonce: string;
+  };
+
+  // Bar 3: while the control directory exists with a live instance record, the front stays up past idleMs.
+  await Bun.sleep(idleMs * 3);
+  expect(running(frontRec.pid)).toBe(true);
+  const statusRes = await fetch(frontRec.origin + '/api/front-status', {
+    headers: { authorization: `Bearer ${frontRec.nonce}` },
+  });
+  expect(statusRes.status).toBe(200);
+
+  // Any other read error (such as ENOTDIR) stays as it is and does not stop the front.
+  await rm(control, { recursive: true, force: true });
+  await writeFile(control, 'not-a-directory');
+  await Bun.sleep(idleMs * 3);
+  expect(running(frontRec.pid)).toBe(true);
+
+  // Bar 1: deleting the control directory causes the front to exit within the bound.
+  await rm(control, { force: true });
+  const deadline = performance.now() + 1_500;
+  while (performance.now() < deadline && running(frontRec.pid)) {
+    await Bun.sleep(25);
+  }
+  expect(running(frontRec.pid)).toBe(false);
+
+  // Planted pre-#287 control: unguarded readdir(control) swallowed by .catch(()=>{}) fails the exit bound.
+  const plantedControl = join(root, 'planted-open');
+  await mkdir(plantedControl, { recursive: true, mode: 0o700 });
+  const plantedPort = freePort();
+  const plantedNonce = crypto.randomUUID();
+  const plantedReq = join(plantedControl, `front-${plantedPort}.${plantedNonce}.request.json`);
+  const plantedRecPath = join(plantedControl, `front-${plantedPort}.json`);
+  const frontSrc = await readFile(new URL('../src/front.ts', import.meta.url), 'utf8');
+  const plantedFrontSrc = frontSrc.replace(
+    /async function liveInstances\(control:string\):Promise<boolean>\{[^\n]*\}/,
+    'async function liveInstances(control:string):Promise<boolean>{for(const name of await readdir(control)){if(/^[a-f0-9]{64}\\.claim$/.test(name))return true;}return false;}',
+  );
+  const plantedDir = join(root, 'planted-src');
+  await mkdir(plantedDir, { recursive: true });
+  for (const name of [
+    'open.ts',
+    'open-protocol.ts',
+    'live-lifecycle.ts',
+    'control.ts',
+    'reference.ts',
+    'manifest.ts',
+    'compare.ts',
+    'server.ts',
+    'compare-server.ts',
+    'animation-selection.ts',
+    'versions.ts',
+    'handoff.ts',
+    'state-dir.ts',
+  ]) {
+    await writeFile(join(plantedDir, name), `export * from ${JSON.stringify(join(import.meta.dir, '../src', name))};\n`);
+  }
+  await writeFile(join(plantedDir, 'front.ts'), plantedFrontSrc);
+  await writeFile(
+    plantedReq,
+    JSON.stringify({
+      schema: 'rig-review-front-request/1',
+      control: plantedControl,
+      request: plantedReq,
+      record: plantedRecPath,
+      port: plantedPort,
+      nonce: plantedNonce,
+      fingerprint: await openFingerprint(),
+      idleMs,
+    }),
+    { mode: 0o600 },
+  );
+  const plantedProc = Bun.spawn(
+    [
+      process.execPath,
+      '-e',
+      `import {runFront} from ${JSON.stringify(join(plantedDir, 'front.ts'))}; await runFront(process.argv[1]);`,
+      plantedReq,
+    ],
+    { cwd: plantedControl, stdout: 'ignore', stderr: 'ignore' },
+  );
+  subprocs.push(plantedProc);
+  for (let i = 0; i < 80; i++) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${plantedPort}/api/front-status`, {
+        headers: { authorization: `Bearer ${plantedNonce}` },
+      });
+      if (r.ok) break;
+    } catch {}
+    await Bun.sleep(25);
+  }
+  await rm(plantedControl, { recursive: true, force: true });
+  await Bun.sleep(idleMs * 4);
+  expect(running(plantedProc.pid)).toBe(true);
 });

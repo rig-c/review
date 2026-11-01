@@ -164,7 +164,7 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
  }});
  return {origin,stop:()=>server.stop(true),idleMs:()=>performance.now()-last,active:()=>active};
 }
-async function liveInstances(control:string):Promise<boolean>{for(const name of await readdir(control)){if(/^[a-f0-9]{64}\.claim$/.test(name))return true;if(/^[a-f0-9]{64}\.json$/.test(name)){const row=await readRecord(join(control,name),name.slice(0,64)).catch(()=>null);if(row&&running(row.pid))return true;}}return false;}
+async function liveInstances(control:string):Promise<boolean>{let names:string[];try{names=await readdir(control);}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return false;throw e;}for(const name of names){if(/^[a-f0-9]{64}\.claim$/.test(name))return true;if(/^[a-f0-9]{64}\.json$/.test(name)){const row=await readRecord(join(control,name),name.slice(0,64)).catch(()=>null);if(row&&running(row.pid))return true;}}return false;}
 export async function runFront(requestPath:string):Promise<void>{
  const spec=await smallJson(requestPath) as FrontRequest;if(spec?.schema!=='rig-review-front-request/1'||!uuid.test(spec.nonce??'')||!hex64.test(spec.fingerprint??'')||!Number.isSafeInteger(spec.port)||spec.port<1||spec.port>65535||!Number.isSafeInteger(spec.idleMs)||spec.idleMs<100)throw new Error('front: invalid request');
  const control=await realpath(spec.control);if(dirname(await realpath(requestPath))!==control||spec.request!==requestPath||spec.record!==join(control,frontName(spec.port)+'.json'))throw new Error('front: invalid state locations');
