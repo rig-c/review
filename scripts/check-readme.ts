@@ -35,7 +35,7 @@ export function checkReadme(text: string): string[] {
   const entities: Record<string, string> = {amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' '};
   const labels = new Set<string>();
   for (const match of Bun.markdown.html(text).matchAll(/<a\b[^>]*\bhref\s*=[^>]*>([\s\S]*?)<\/a>/giu)) {
-    const label = match[1]!.replace(/<[^>]*>/gu, '').replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/giu, (_, entity: string) => {
+    const label = match[1]!.replace(/<img\b[^>]*\balt="([^"]*)"[^>]*>/giu, '$1').replace(/<[^>]*>/gu, '').replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/giu, (_, entity: string) => {
       if (!entity.startsWith('#')) return entities[entity.toLowerCase()]!;
       const value = entity[1]?.toLowerCase() === 'x' ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
       return value > 0 && value <= 0x10ffff ? String.fromCodePoint(value) : '\uFFFD';
