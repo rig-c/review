@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.25.0](https://github.com/rig-c/review/compare/v0.24.1...v0.25.0) (2026-11-01)
+
+
+### Features
+
+* **comments:** one comment control for writing, listing and editing ([#277](https://github.com/rig-c/review/issues/277)) ([598d37d](https://github.com/rig-c/review/commit/598d37d651848ad328858280d09f03e516096333)), closes [#276](https://github.com/rig-c/review/issues/276)
+* **i18n:** the review app in English and Korean ([#280](https://github.com/rig-c/review/issues/280)) ([de09469](https://github.com/rig-c/review/commit/de09469c2e24ec02794794180d5e200d5d5e4952))
+
 ## [0.24.1](https://github.com/rig-c/review/compare/v0.24.0...v0.24.1) (2026-11-01)
 
 
