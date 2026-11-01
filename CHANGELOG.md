@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.22.0](https://github.com/rig-c/review/compare/v0.21.0...v0.22.0) (2026-11-01)
+
+
+### Features
+
+* **animate:** edit each build separately in Compare ([#262](https://github.com/rig-c/review/issues/262)) ([05cba0c](https://github.com/rig-c/review/commit/05cba0ceab9cbf4daedd42e6c42697ed8e50186b))
+* **animate:** select keys in groups and pose bones on the stage ([#260](https://github.com/rig-c/review/issues/260)) ([b13f0c0](https://github.com/rig-c/review/commit/b13f0c0ab342164d497f924ac4282b0f7016f116))
+
+
+### Bug Fixes
+
+* show the shared banner ([#264](https://github.com/rig-c/review/issues/264)) ([6bd7acd](https://github.com/rig-c/review/commit/6bd7acd7eced71d6a409a4429891d28a14462e3a)), closes [#263](https://github.com/rig-c/review/issues/263)
+
 ## [0.21.0](https://github.com/rig-c/review/compare/v0.20.0...v0.21.0) (2026-11-01)
 
 
