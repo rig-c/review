@@ -110,3 +110,60 @@ test('saved preferences from earlier versions with 280px inspectorHeight still l
  tampered.panels.inspectorHeight=250;
  expect(()=>parseWorkspacePreferences(tampered)).toThrow('PREFERENCES_STAMP: unstamped inspectorHeight differs from defaults');
 });
+
+test('stored preferences from 0.24.1 without language load unchanged and language round-trips with planted controls refused',()=>{
+ // Exact 0.24.1 record shape: no language field and no stamps.language entry.
+ const v0241Record={
+  schema:workspacePreferenceKey,
+  revision:3,
+  theme:'dark',
+  defaultCameraSync:false,
+  defaultIdleRepeat:true,
+  settingsCollapsed:false,
+  panels:{leftWidth:210,rightWidth:310,inspectorHeight:360},
+  stamps:{
+   theme:{revision:1,writer:'tab-0241'},
+   defaultCameraSync:{revision:2,writer:'tab-0241'},
+   defaultIdleRepeat:{revision:0,writer:''},
+   settingsCollapsed:{revision:3,writer:'tab-0241'},
+   leftWidth:{revision:2,writer:'tab-0241'},
+   rightWidth:{revision:2,writer:'tab-0241'},
+   inspectorHeight:{revision:3,writer:'tab-0241'},
+  },
+ };
+ const parsed=parseWorkspacePreferences(v0241Record);
+ expect(parsed).toMatchObject({
+  theme:'dark',
+  language:'system',
+  defaultCameraSync:false,
+  defaultIdleRepeat:true,
+  settingsCollapsed:false,
+  panels:{leftWidth:210,rightWidth:310,inspectorHeight:360},
+  revision:3,
+  stamps:{language:{revision:0,writer:''}},
+ });
+ const hub=new PreferenceHub();
+ hub.values.set(workspacePreferenceKey,JSON.stringify(v0241Record));
+ const store=new WorkspacePreferenceStore({...hub.endpoint(),writer:'tab-new'});
+ expect(store.status().state).toBe('available');
+ expect(store.get()).toEqual(parsed);
+ expect(hub.writes).toBe(0);
+ store.update({language:'ko'});
+ expect(store.get().language).toBe('ko');
+ const afterKo=parseWorkspacePreferences(JSON.parse(hub.values.get(workspacePreferenceKey)!));
+ expect(afterKo).toMatchObject({
+  theme:'dark',
+  language:'ko',
+  defaultCameraSync:false,
+  settingsCollapsed:false,
+  panels:{leftWidth:210,rightWidth:310,inspectorHeight:360},
+  revision:4,
+  stamps:{language:{revision:4,writer:'tab-new'}},
+ });
+ store.resetLayout();
+ expect(store.get().language).toBe('ko');
+ store.dispose();
+ // Planted controls: unstamped non-default language or unsupported language code must fail.
+ expect(()=>parseWorkspacePreferences({...v0241Record,language:'ko'})).toThrow('PREFERENCES_STAMP: unstamped language differs from defaults');
+ expect(()=>parseWorkspacePreferences({...defaultWorkspacePreferences(),language:'ja'})).toThrow('PREFERENCES_LANGUAGE: expected system, en or ko');
+});

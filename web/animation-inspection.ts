@@ -26,6 +26,7 @@ import {
  type TrackClassification,
 } from '../src/animation-ops.ts';
 import type {AppliedAnimation} from '../src/applied-context.ts';
+import {sourceTextContent} from './i18n.ts';
 import type {AnimationSourceView} from './rebuild-client.ts';
 import {InspectionSelection} from './inspection-selection.ts';
 import {animationPreviewAdjust} from './preview.ts';
@@ -880,7 +881,7 @@ export class AnimationInspectionPanel {
    this.renderTimeline();
    this.renderChannels();
   }
-  const curStatus=(this.editorStatus.textContent??'').trim();
+  const curStatus=sourceTextContent(this.editorStatus).trim();
   if(applied){
    if(restoredOutcome){
     this.setEditorStatus(restoredOutcome.text,restoredOutcome.error);

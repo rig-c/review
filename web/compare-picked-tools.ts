@@ -15,6 +15,7 @@ import { AnimationInspectionPanel, type AnimationSideState } from './animation-i
 import type { AnimationSourceOp } from '../src/animation-ops.ts';
 import { partBounds, type PartExplorer } from './part-selection.ts';
 import { bindInspectorBlocks, activeBlocksUI, restoreActiveBlocksUI, type InspectorBlocks } from './inspector-blocks.ts';
+import { sourceTextContent, tr } from './i18n.ts';
 import { bindChestEditor, canvasToCrop, bustLabel, bustSides, LANDMARKS, landmarkInputId, rowCircle, type ChestEditor, type LandmarkKey } from './chest-editor.ts';
 import { chestOverlayCircles, chestOverlayPolygons, chestRegionRows, chestRowId, evaluateChestForm } from './chest-regions-tool.ts';
 import { chestRegionsBinding, cropWorldMapping, type CropWorldMapping } from '../src/chest-regions.ts';
@@ -834,7 +835,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       state.appliedOnStage?.schema === 'rig-review-applied/5' ? state.appliedOnStage : null,
       restored?.panel === 'animation' ? { text: restored.text, error: restored.error } : null,
     );
-    const statusText = (id: string) => document.getElementById(id)?.textContent ?? '';
+    const statusText = (id: string) => sourceTextContent(document.getElementById(id));
     const reconciled = reconcilePanelStatuses(
       {
         chest: chestEditor?.noticeText() ?? '',
@@ -847,7 +848,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         physics: statusText('physics-apply-status'),
         idle: statusText('idle-apply-status'),
         retarget: statusText('retarget-status'),
-        animation: document.querySelector('[data-animation-editor-status]')?.textContent ?? '',
+        animation: sourceTextContent(document.querySelector('[data-animation-editor-status]')),
       },
       state.appliedOnStage,
       restored,
@@ -2278,7 +2279,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     applied: () => currentState().appliedOnStage?.schema === 'rig-review-applied/3',
     resetBuild: () => resetRebuild(stageWorld()),
     message: host.message,
-    confirm: msg => window.confirm(msg),
+    confirm: msg => window.confirm(tr(msg)),
     token,
   });
   disposers.push(() => meshEditor?.dispose());

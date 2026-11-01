@@ -30,6 +30,21 @@ body. A drawer keeps its title and close button in place while its body
 scrolls. The per-inspection **Repeat idle** toggle sits in the Animate
 transport row.
 
+**Settings** (`#workspace-settings`) stores workspace-level preferences across
+tabs under `rig-review.workspace.v1` (`web/workspace-preferences.ts`):
+**Appearance** (`system`, `dark`, `light`), **Language** (`system`, `en`, `ko`),
+default **Sync cameras**, default **Repeat idle**, collapsed state and panel
+geometry (**Reset layout** resets geometry only). Stored records from `0.24.1`
+without `language` load unchanged with `language: "system"`. Under `system`, a
+first visit whose browser language starts with `ko` resolves to Korean (`ko`),
+and any other browser language resolves to English (`en`); `<html lang>` tracks
+the resolved language (`en` or `ko`). Visible UI strings on the review and
+compare pages come from the zero-dependency catalogue layer (`web/catalog-en.ts`,
+`web/catalog-ko.ts`, `web/i18n.ts`), switching live without reload and without
+losing pending edits, selection or the playhead. CLI/`check`/`feedback` output,
+schema field names, error codes (`CODE_NAME: <translated detail>`), rig bone,
+slot and animation names, and a reviewer's own comments stay untouched.
+
 Animate's **Environment** block drives the player's physics while you
 inspect: a **Wind** base (−100…100), **Breeze**, a **Gust** pulse
 (peak 0…200, duration 0.1…20 s, **Repeat** every max(6, duration + 0.6) s)
