@@ -14,6 +14,7 @@ import {
   classifyAnimationTracks,
   cleanMotionNumber,
   draftTrackToInspectionTrack,
+  findBoneConstraint,
   jsonValueSpan,
   MAX_ANIMATION_OPS,
   overlayDraftOnInspection,
@@ -899,16 +900,16 @@ class StubElement extends EventTarget {
   classes = new Set<string>();
   children: StubElement[] = [];
   parentElement: StubElement | null = null;
-  onclick: (() => void) | null = null;
+  onclick: ((e?: Event) => void) | null = null;
   onchange: (() => void) | null = null;
-  style: Record<string, string> = { left: '', top: '', width: '', zIndex: '' };
+  style: Record<string, string> = { left: '', top: '', width: '', height: '', zIndex: '' };
   constructor(tag = 'div') {
     super();
     this.tagName = tag.toUpperCase();
   }
   override dispatchEvent(event: Event): boolean {
     const res = super.dispatchEvent(event);
-    if (event.type === 'click' && !event.defaultPrevented) this.onclick?.();
+    if (event.type === 'click' && !event.defaultPrevented) this.onclick?.(event);
     return res;
   }
   get className() {
@@ -1003,6 +1004,7 @@ class StubElement extends EventTarget {
     return this.children.flatMap((c) => [c, ...c.all()]);
   }
   matches(sel: string): boolean {
+    if (sel.includes(',')) return sel.split(',').some((s) => this.matches(s.trim()));
     if (sel.startsWith('.')) return this.classes.has(sel.slice(1));
     const attrM = /^\[([a-zA-Z0-9_-]+)(?:="([^"]*)")?\]$/.exec(sel);
     if (attrM) {
@@ -1016,6 +1018,14 @@ class StubElement extends EventTarget {
       return v === undefined ? this.attrs.has(k) : this.attrs.get(k) === v;
     }
     return this.tagName === sel.toUpperCase();
+  }
+  closest<T = StubElement>(sel: string): T | null {
+    let cur: StubElement | null = this;
+    while (cur) {
+      if (cur.matches(sel)) return cur as unknown as T;
+      cur = cur.parentElement;
+    }
+    return null;
   }
   querySelector<T = StubElement>(sel: string): T | null {
     return (this.all().find((el) => el.matches(sel)) as unknown as T) ?? null;
@@ -2015,5 +2025,409 @@ test('Slice 4a: loading gate before /api/rebuild resolves, read-only badge subro
     else Reflect.deleteProperty(globalThis, 'window');
   }
 });
+
+test('Slice 4b: multi-key selection (Shift-click, box drag, group move + 1-step undo, group delete + ANIMATION_TRACK_MIN_KEYS), stage bone drag (rotate/translate on rotated & unrotated parent, unkeyed insert+set 1-step undo, named refusals), and planted mutants', async () => {
+  const { AnimationInspectionPanel } = await import('../web/animation-inspection.ts');
+  const prevDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const prevWin = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const winTarget = new EventTarget();
+  Object.defineProperty(globalThis, 'document', {
+    value: {
+      activeElement: null,
+      createElement: (tag: string) => new StubElement(tag),
+      createElementNS: (_ns: string, tag: string) => new StubElement(tag),
+    },
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(globalThis, 'window', {
+    value: winTarget,
+    configurable: true,
+    writable: true,
+  });
+
+  try {
+    const demoText = readFileSync(new URL('./fixtures/motion/demo.json', import.meta.url), 'utf8');
+    const demoHash = sha256(demoText);
+
+    // 1. AnimationOpBuilder: moveSelection 1-step undo + coalescing + named refusals
+    const builder = new AnimationOpBuilder(demoText);
+    builder.moveSelection('smile', [{ track: 0, key: 1 }, { track: 1, key: 1 }], 0.05);
+    builder.moveSelection('smile', [{ track: 0, key: 1 }, { track: 1, key: 1 }], 0.05);
+    // Coalesced across consecutive moves of the same selection into 2 ops (1 per key)
+    expect(builder.ops).toHaveLength(2);
+    expect(builder.ops[0]).toEqual({ op: 'set_key_time', animation: 'smile', track: 0, key: 1, time: 0.35 });
+    expect(builder.ops[1]).toEqual({ op: 'set_key_time', animation: 'smile', track: 1, key: 1, time: 0.35 });
+    // Single undo() unwinds the entire group move back to exact baseText
+    expect(builder.undo()).toBe(true);
+    expect(builder.ops).toHaveLength(0);
+    expect(builder.text).toBe(demoText);
+
+    // Refusals name the target object and offending value while restoring prior state
+    builder.moveSelection('smile', [{ track: 0, key: 1 }, { track: 1, key: 1 }], 0.1);
+    expect(() => builder.moveSelection('smile', [{ track: 0, key: 1 }, { track: 1, key: 1 }], 2.0)).toThrow(
+      /ANIMATION_KEY_ORDER: animation "smile" track 0 \("mouth\.scale"\) key 1 time 2\.35/,
+    );
+    expect(() => builder.moveSelection('smile', [{ track: 0, key: 1 }, { track: 1, key: 1 }], -5.0)).toThrow(
+      /ANIMATION_KEY_TIME_INVALID: animation "smile" track 0 \("mouth\.scale"\) key 1 time must be a finite number >= 0, got -4\.65/,
+    );
+    expect(builder.ops).toHaveLength(2);
+    builder.revert();
+
+    // 2. AnimationOpBuilder: deleteSelection 1-step undo + descending index order + ANIMATION_TRACK_MIN_KEYS refusal
+    builder.deleteSelection('smile', [{ track: 0, key: 1 }, { track: 0, key: 2 }, { track: 1, key: 1 }]);
+    expect(builder.ops).toHaveLength(3);
+    // Track 0 deleted key 2 before key 1 so indices stayed valid
+    expect(builder.ops[0]).toEqual({ op: 'delete_key', animation: 'smile', track: 0, key: 2 });
+    expect(builder.ops[1]).toEqual({ op: 'delete_key', animation: 'smile', track: 0, key: 1 });
+    expect(builder.ops[2]).toEqual({ op: 'delete_key', animation: 'smile', track: 1, key: 1 });
+    // Single undo() restores all 3 deleted keys and exact baseText
+    expect(builder.undo()).toBe(true);
+    expect(builder.ops).toHaveLength(0);
+    expect(builder.text).toBe(demoText);
+
+    // Deleting too many keys on a track refuses with ANIMATION_TRACK_MIN_KEYS naming track and remaining count
+    expect(() =>
+      builder.deleteSelection('smile', [
+        { track: 1, key: 0 },
+        { track: 1, key: 1 },
+        { track: 1, key: 2 },
+        { track: 1, key: 3 },
+      ]),
+    ).toThrow(/ANIMATION_TRACK_MIN_KEYS: animation "smile" track 1 \("mouth\.translatey"\) cannot delete 4 of 4 key\(s\)/);
+    expect(builder.ops).toHaveLength(0);
+    expect(builder.text).toBe(demoText);
+
+    // 3. AnimationOpBuilder: insert_key + set_key_value coalescing as 1 op and 1 undo step
+    const groupId = builder.beginUndoGroup();
+    builder.withUndoGroup(groupId, () => {
+      builder.apply({ op: 'insert_key', animation: 'tilt', track: 0, time: 0.6, value: [2.0] });
+      builder.apply({ op: 'set_key_value', animation: 'tilt', track: 0, key: 2, channel: 0, value: 7.25 });
+      builder.apply({ op: 'set_key_value', animation: 'tilt', track: 0, key: 2, channel: 0, value: 9.5 });
+    });
+    expect(builder.ops).toEqual([
+      { op: 'insert_key', animation: 'tilt', track: 0, time: 0.6, value: [9.5] },
+    ]);
+    expect(builder.undo()).toBe(true);
+    expect(builder.ops).toHaveLength(0);
+    expect(builder.text).toBe(demoText);
+
+    // 4. findBoneConstraint: identifies physics, ik, and transform constraints on bones
+    const constrainedModel = {
+      physics: [{ name: 'scarf_phys', bone: 'scarf2' }],
+      ik: [{ name: 'leg_ik', bones: ['thigh_l', 'shin_l'], target: 'foot_goal' }],
+      transform: [{ name: 'eye_aim', bones: ['pupil_l'], target: 'eye_ctrl' }],
+    };
+    expect(findBoneConstraint(constrainedModel, 'scarf2')).toEqual({ kind: 'physics', name: 'scarf_phys' });
+    expect(findBoneConstraint(constrainedModel, 'shin_l')).toEqual({ kind: 'ik', name: 'leg_ik' });
+    expect(findBoneConstraint(constrainedModel, 'pupil_l')).toEqual({ kind: 'transform', name: 'eye_aim' });
+    expect(findBoneConstraint(constrainedModel, 'head')).toBeNull();
+    // Verify findBoneConstraint also handles @rig-c/play's parsed constraints[].record shape
+    const playParsedDoc = {
+      constraints: [
+        { name: 'scarf_phys', kind: 'physics', record: { name: 'scarf_phys', bone: 'scarf2' } },
+        { name: 'leg_ik', kind: 'ik', record: { name: 'leg_ik', bones: ['thigh_l', 'shin_l'] } },
+      ],
+    };
+    expect(findBoneConstraint(playParsedDoc, 'scarf2')).toEqual({ kind: 'physics', name: 'scarf_phys' });
+    expect(findBoneConstraint(playParsedDoc, 'shin_l')).toEqual({ kind: 'ik', name: 'leg_ik' });
+
+    // 5. AnimationInspectionPanel: multi-key selection, box drag, group move, group delete, and stage bone drag
+    const model = {
+      spec: 'rigc-compiled/3',
+      skeleton: { width: 100, height: 100 },
+      pages: [],
+      bones: [
+        { name: 'root', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'hip', parent: 'root', x: 0, y: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'chest', parent: 'hip', x: 0, y: 20, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'head', parent: 'chest', x: 0, y: 30, rotation: 90, scaleX: 1, scaleY: 1 },
+        { name: 'brow_r', parent: 'head', x: 10, y: 5, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'brow_l', parent: 'head', x: 10, y: -5, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'scarf2', parent: 'chest', x: 0, y: -10, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'jaw', parent: 'head', x: -5, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+      ],
+      physics: [{ name: 'scarf_phys', bone: 'scarf2' }],
+      slots: [],
+      skins: [{ name: 'default', attachments: {} }],
+      animations: [
+        {
+          name: 'smile',
+          duration: 1.6,
+          bones: [
+            {
+              name: 'head',
+              timelines: [
+                {
+                  name: 'rotate',
+                  keys: [
+                    { time: 0, value: 0 },
+                    { time: 0.3, value: 3 },
+                    { time: 0.9, value: 2.5 },
+                    { time: 1.3, value: -0.4 },
+                    { time: 1.6, value: 0 },
+                  ],
+                },
+              ],
+            },
+            {
+              name: 'brow_r',
+              timelines: [
+                {
+                  name: 'translate',
+                  keys: [
+                    { time: 0, x: 0, y: 0 },
+                    { time: 0.3, x: 0, y: 2.2 },
+                    { time: 0.9, x: 0, y: 1.8 },
+                    { time: 1.3, x: 0, y: -0.3 },
+                    { time: 1.6, x: 0, y: 0 },
+                  ],
+                },
+              ],
+            },
+            {
+              name: 'brow_l',
+              timelines: [
+                {
+                  name: 'translate',
+                  keys: [
+                    { time: 0, x: 0, y: 0 },
+                    { time: 0.3, x: 0, y: 2.2 },
+                    { time: 0.9, x: 0, y: 1.8 },
+                    { time: 1.3, x: 0, y: -0.3 },
+                    { time: 1.6, x: 0, y: 0 },
+                  ],
+                },
+              ],
+            },
+          ],
+          slots: [],
+        },
+      ],
+    };
+
+    const smileSourceText = JSON.stringify(
+      {
+        spec: 'rigc-motion/1',
+        animations: {
+          smile: {
+            duration: 1.6,
+            loop: false,
+            tracks: [
+              {
+                bone: 'head',
+                property: 'rotate',
+                keys: [
+                  { t: 0, v: [0] },
+                  { t: 0.3, v: [3] },
+                  { t: 0.9, v: [2.5] },
+                  { t: 1.3, v: [-0.4] },
+                  { t: 1.6, v: [0] },
+                ],
+              },
+              {
+                bone: 'brow_r',
+                property: 'translate',
+                keys: [
+                  { t: 0, v: [0, 0] },
+                  { t: 0.3, v: [0, 2.2] },
+                  { t: 0.9, v: [0, 1.8] },
+                  { t: 1.3, v: [0, -0.3] },
+                  { t: 1.6, v: [0, 0] },
+                ],
+              },
+              {
+                bone: 'brow_l',
+                property: 'translate',
+                keys: [
+                  { t: 0, v: [0, 0] },
+                  { t: 0.3, v: [0, 2.2] },
+                  { t: 0.9, v: [0, 1.8] },
+                  { t: 1.3, v: [0, -0.3] },
+                  { t: 1.6, v: [0, 0] },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      null,
+      2,
+    );
+    const smileSourceHash = sha256(smileSourceText);
+
+    const host = new StubElement('section');
+    const stage = new StubElement('div');
+    const seeked: number[] = [];
+    const panel = new AnimationInspectionPanel({
+      host: host as unknown as HTMLElement,
+      stage: stage as unknown as HTMLElement,
+      select: () => {},
+      seek: (t) => seeked.push(t),
+      project: (x, y) => ({ x, y }),
+      enabled: () => true,
+      preview: () => {},
+      apply: async () => {},
+    });
+    panel.loadSource({
+      available: true,
+      reason: null,
+      path: 'animations.json',
+      sha256: smileSourceHash,
+      text: smileSourceText,
+      easings: {},
+    });
+    panel.model(model, 'smile');
+    panel.update(0.3, 1.6);
+
+    // Shift-click multi-key selection
+    expect(panel.selectKey(0, 1)).toBe(true);
+    expect(panel.selectedKeysInfo()).toHaveLength(1);
+    const track1Marks = host.querySelectorAll('.animation-key').filter((m) => m.dataset.sourceTrack === '1');
+    const shiftClickEv = new Event('click', { cancelable: true });
+    Object.assign(shiftClickEv, { shiftKey: true });
+    track1Marks[1]!.dispatchEvent(shiftClickEv);
+    expect(panel.selectedKeysInfo()).toHaveLength(2);
+    expect(host.querySelector('[data-key-inspector-title]')?.textContent).toContain('2 keys selected');
+
+    // Shift-clicking again toggles the key off
+    track1Marks[1]!.dispatchEvent(shiftClickEv);
+    expect(panel.selectedKeysInfo()).toHaveLength(1);
+
+    // selectKeys across tracks + multi-key delete as 1 undo step
+    expect(panel.selectKeys([{ track: 0, key: 1 }, { track: 1, key: 1 }])).toBe(true);
+    expect(panel.selectedKeysInfo()).toHaveLength(2);
+    expect(panel.deleteSelection().ok).toBe(true);
+    expect(panel.ops()).toHaveLength(2);
+    expect(panel.undoOp()).toBe(true);
+    expect(panel.ops()).toHaveLength(0);
+
+    // Stage bone pose: supply a live player pose snapshot where `head` is rotated +90 deg at (0, 60)
+    // and `brow_r` has setup (x=10, y=5) under `head` (so world is (-5, 70)).
+    const rad90 = Math.PI / 2;
+    const cos90 = Math.cos(rad90); // ~0
+    const sin90 = Math.sin(rad90); // 1
+    const boneMap: Record<string, { x: number; y: number; active: boolean; a: number; b: number; c: number; d: number }> = {
+      root: { x: 0, y: 0, active: true, a: 1, b: 0, c: 0, d: 1 },
+      hip: { x: 0, y: 10, active: true, a: 1, b: 0, c: 0, d: 1 },
+      chest: { x: 0, y: 30, active: true, a: 1, b: 0, c: 0, d: 1 },
+      head: { x: 0, y: 60, active: true, a: cos90, b: -sin90, c: sin90, d: cos90 },
+      brow_r: { x: -5, y: 70, active: true, a: cos90, b: -sin90, c: sin90, d: cos90 },
+      brow_l: { x: 5, y: 70, active: true, a: cos90, b: -sin90, c: sin90, d: cos90 },
+      scarf2: { x: 0, y: 20, active: true, a: 1, b: 0, c: 0, d: 1 },
+      jaw: { x: 0, y: 55, active: true, a: cos90, b: -sin90, c: sin90, d: cos90 },
+    };
+    const mockPlayer = {
+      bone: (name: string) => boneMap[name] ?? { x: 0, y: 0, active: false, a: 1, b: 0, c: 0, d: 1 },
+    } as unknown as import('@rig-c/play').RigPlayer;
+    const mockFrame = {} as unknown as import('@rig-c/play').PosedFrame;
+    panel.capture(mockPlayer, mockFrame);
+
+    // Stage translate on ROTATED parent (`head` at 90 deg) at existing key t=0.3s:
+    // Move `brow_r` to world (2, 85).
+    // Parent `head` is at (0, 60) with 90 deg rotation (a=0, b=-1, c=1, d=0).
+    // World offset from `head`: wx = 2 - 0 = 2, wy = 85 - 60 = 25.
+    // Inverse parent matrix gives local (lx, ly) = (25, -2).
+    // Subtracting brow_r setup (x=10, y=5) gives key (dx, dy) = (15, -7).
+    const rotParentRes = panel.poseBoneOnStage('brow_r', 'translate', 2, 85);
+    expect(rotParentRes.ok).toBe(true);
+    const browKeyAfter = panel.overlaidInspection()!.tracks.find((t) => t.target === 'brow_r')!.keys[1]!;
+    expect(browKeyAfter.x).toBeCloseTo(15, 4);
+    expect(browKeyAfter.y).toBeCloseTo(-7, 4);
+    // Forward world position from head's matrix + (setup + key) must land within 1e-4 of (2, 85)!
+    const lx = 10 + Number(browKeyAfter.x ?? 0);
+    const ly = 5 + Number(browKeyAfter.y ?? 0);
+    const worldX = cos90 * lx - sin90 * ly + 0;
+    const worldY = sin90 * lx + cos90 * ly + 60;
+    expect(Math.hypot(worldX - 2, worldY - 85)).toBeLessThan(1e-3);
+    expect(panel.undoOp()).toBe(true);
+
+    // Stage rotate at UNKEYED playhead t=0.6s inserts a key and sets its value in 1 op / 1 undo step
+    panel.update(0.6, 1.6);
+    const unkeyedRes = panel.poseBoneOnStage('head', 'rotate', -20, 80);
+    expect(unkeyedRes.ok).toBe(true);
+    expect(panel.ops()).toHaveLength(1);
+    expect(panel.ops()[0]!.op).toBe('insert_key');
+    expect(panel.undoOp()).toBe(true);
+    expect(panel.ops()).toHaveLength(0);
+
+    // Stage refusals:
+    // - Constrained bone (`scarf2` has physics constraint `scarf_phys`) -> ANIMATION_BONE_CONSTRAINED
+    const rConst = panel.poseBoneOnStage('scarf2', 'rotate', 10, 20);
+    expect(rConst.ok).toBe(false);
+    if (!rConst.ok) expect(rConst.error).toContain('ANIMATION_BONE_CONSTRAINED');
+    // - Unkeyed bone (`jaw` has no rotate or translate track in `smile`) -> ANIMATION_BONE_NO_TRACK
+    const rNoTrack = panel.poseBoneOnStage('jaw', 'rotate', 10, 55);
+    expect(rNoTrack.ok).toBe(false);
+    if (!rNoTrack.ok) expect(rNoTrack.error).toContain('ANIMATION_BONE_NO_TRACK');
+
+    panel.dispose();
+
+    // 6. Planted mutants for Slice 4b
+    const opsSrc = readFileSync(new URL('../src/animation-ops.ts', import.meta.url), 'utf8');
+    expect(opsSrc).toContain('this.history.at(-1)!.undoGroupId === last.undoGroupId');
+    // Mutant A: disable undoGroupId loop in AnimationOpBuilder.undo() -> multi-key move/delete fails 1-step undo!
+    const mutantOpsTs = opsSrc.replace(
+      'this.history.at(-1)!.undoGroupId === last.undoGroupId',
+      'false',
+    );
+    const mutantOpsJs = new Bun.Transpiler({ loader: 'ts' })
+      .transformSync(mutantOpsTs)
+      .replaceAll('./', new URL('../src/', import.meta.url).href);
+    const modOpsMutant = await import(
+      'data:text/javascript;base64,' + Buffer.from(mutantOpsJs).toString('base64')
+    );
+    const mBuilder = new modOpsMutant.AnimationOpBuilder(demoText);
+    mBuilder.moveSelection('smile', [{ track: 0, key: 1 }, { track: 1, key: 1 }], 0.05);
+    mBuilder.undo();
+    // Mutant leaves 1 op still pending after 1 undo() instead of unwinding the whole group!
+    expect(mBuilder.ops.length).toBe(1);
+
+    // Mutant B: ignore parent rotation in poseBoneOnStage -> rotated parent translate lands far from cursor!
+    const webSrc = readFileSync(new URL('../web/animation-inspection.ts', import.meta.url), 'utf8');
+    expect(webSrc).toContain('const localX=Math.abs(det)>1e-8?(parentWorld.d*dx-parentWorld.b*dy)/det:dx;');
+    const mutantWebTs = webSrc
+      .replace('const localX=Math.abs(det)>1e-8?(parentWorld.d*dx-parentWorld.b*dy)/det:dx;', 'const localX=dx;')
+      .replace('const localY=Math.abs(det)>1e-8?(-parentWorld.c*dx+parentWorld.a*dy)/det:dy;', 'const localY=dy;');
+    const mutantWebJs = new Bun.Transpiler({ loader: 'ts' })
+      .transformSync(mutantWebTs)
+      .replaceAll('../src/', new URL('../src/', import.meta.url).href)
+      .replaceAll('./', new URL('../web/', import.meta.url).href);
+    const modWebMutant = await import(
+      'data:text/javascript;base64,' + Buffer.from(mutantWebJs).toString('base64')
+    );
+    const mHost = new StubElement('section');
+    const mStage = new StubElement('div');
+    const mPanel = new modWebMutant.AnimationInspectionPanel({
+      host: mHost,
+      stage: mStage,
+      select: () => {},
+      seek: () => {},
+      project: (x: number, y: number) => ({ x, y }),
+      enabled: () => true,
+      preview: () => {},
+      apply: async () => {},
+    });
+    mPanel.loadSource({ available: true, reason: null, path: 'animations.json', sha256: smileSourceHash, text: smileSourceText, easings: {} });
+    mPanel.model(model, 'smile');
+    mPanel.update(0.3, 1.6);
+    mPanel.capture(mockPlayer, mockFrame);
+    mPanel.poseBoneOnStage('brow_r', 'translate', 2, 85);
+    const mKey = mPanel.overlaidInspection().tracks.find((t: { target: string }) => t.target === 'brow_r').keys[1];
+    const mLx = 10 + Number(mKey.x ?? 0);
+    const mLy = 5 + Number(mKey.y ?? 0);
+    const mWorldX = cos90 * mLx - sin90 * mLy + 0;
+    const mWorldY = sin90 * mLx + cos90 * mLy + 60;
+    // Mutant misses target (2, 85) by > 20 world units on a 90-degree rotated parent!
+    expect(Math.hypot(mWorldX - 2, mWorldY - 85)).toBeGreaterThan(20);
+    mPanel.dispose();
+  } finally {
+    if (prevDoc) Object.defineProperty(globalThis, 'document', prevDoc);
+    else Reflect.deleteProperty(globalThis, 'document');
+    if (prevWin) Object.defineProperty(globalThis, 'window', prevWin);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
+
 
 

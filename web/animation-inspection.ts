@@ -16,6 +16,7 @@ import {
  checkAnimationEditGate,
  classifyAnimationTracks,
  cleanMotionNumber,
+ findBoneConstraint,
  MAX_ANIMATION_OPS,
  overlayDraftOnInspection,
  seedCubicCurve,
@@ -32,7 +33,7 @@ import {animationPreviewAdjust} from './preview.ts';
 const NS='http://www.w3.org/2000/svg';
 const svg=(tag:string,attrs:Record<string,string|number>)=>{const n=document.createElementNS(NS,tag);for(const [k,v]of Object.entries(attrs))n.setAttribute(k,String(v));return n;};
 const numeric=(value:number)=>Object.is(value,-0)?'-0':String(value);
-const button=(label:string,click:()=>void)=>{const b=document.createElement('button');b.type='button';b.textContent=label;b.onclick=click;return b;};
+const button=(label:string,click:(e?:MouseEvent)=>void)=>{const b=document.createElement('button');b.type='button';b.textContent=label;b.onclick=click;return b;};
 
 /** Clean human-readable seconds without Float32 noise (e.g. 1.6 instead of 1.600000023841858). */
 export function formatSeconds(value:number):string {
@@ -101,11 +102,14 @@ export class AnimationInspectionPanel {
  private channel=0;
  private view='timeline';
  private zoom=1;
+ private poseMode:'rotate'|'translate'='rotate';
+ private poseModeLockedByUser=false;
  private unavailableChannel='';
  private selection:InspectionSelection;
  private panes=new Map<string,HTMLElement>();
  private views:HTMLButtonElement[]=[];
  private zoomButtons:HTMLButtonElement[]=[];
+ private poseModeButtons:HTMLButtonElement[]=[];
  private playhead:SVGElement|null=null;
  private cursor:SVGElement|null=null;
  private plot:((t:number,v:number)=>{x:number;y:number})|null=null;
@@ -127,7 +131,7 @@ export class AnimationInspectionPanel {
  private applyNote:HTMLElement;
  private editorStatus:HTMLElement;
  private picks:HTMLElement;
- private bones=new Map<string,{x:number;y:number}>();
+ private bones=new Map<string,{x:number;y:number;a:number;b:number;c:number;d:number;hasMatrix:boolean}>();
  private frame:PosedFrame|null=null;
  private down:{x:number;y:number}|null=null;
  private space=false;
@@ -135,16 +139,18 @@ export class AnimationInspectionPanel {
  private boneButtons=new Map<string,HTMLButtonElement>();
  private bonePoints=false;
 
- // Keyed animation editing state (Slice 3 / Slice 3b / Slice 4a)
+ // Keyed animation editing state (Slice 3 / Slice 3b / Slice 4a / Slice 4b)
  private source:AnimationSourceView|null=null;
  private sourceLoaded=false;
  private sourceFallbackReason:string|null=null;
  private builder:AnimationOpBuilder|null=null;
  private appliedOps:AnimationSourceOp[]=[];
  private selectedKey:SelectedAnimationKey|null=null;
+ private selectedKeys:SelectedAnimationKey[]=[];
  private lastNonEmptyAnimation='';
  private isBusy=false;
  private suppressNextKeyClick=false;
+ private suppressNextBoneClick=false;
  private lastDockClientHeight=0;
  private lastLanesHeight=186;
  private draggingKey:{
@@ -153,6 +159,7 @@ export class AnimationInspectionPanel {
   keyIndex:number;
   startX:number;
   moved:boolean;
+  wasAlreadyInMulti:boolean;
   laneEl:HTMLElement;
   markEl:HTMLButtonElement;
   end:number;
@@ -168,6 +175,17 @@ export class AnimationInspectionPanel {
   span:number;
   end:number;
  }|null=null;
+ private draggingStageBone:{
+  pointerId:number;
+  boneName:string;
+  mode:'rotate'|'translate';
+  startX:number;
+  startY:number;
+  moved:boolean;
+  undoGroupId:number;
+  originWorld:{x:number;y:number};
+  parentWorld:{x:number;y:number;a:number;b:number;c:number;d:number};
+ }|null=null;
 
  constructor(private options:AnimationPanelOptions){
   const {host,stage}=options;
@@ -176,6 +194,7 @@ export class AnimationInspectionPanel {
  <h3 class="animation-dock-title">Animation timeline &amp; inspection</h3>
  <div class="animation-view-buttons" aria-label="Animation inspection views"></div>
  <div class="animation-zoom-buttons" role="group" aria-label="Timeline horizontal zoom"></div>
+ <div class="animation-pose-buttons" role="group" aria-label="Stage bone pose mode"></div>
  <div class="animation-editor-bar" data-animation-editor-bar>
   <div class="animation-editor-actions">
    <span class="animation-preview-badge" data-animation-preview-badge hidden>preview — Apply decides</span>
@@ -252,6 +271,20 @@ export class AnimationInspectionPanel {
     this.zoomButtons.push(zb);
    }
   }
+  const poseHost=host.querySelector('.animation-pose-buttons');
+  if(poseHost){
+   for(const [mode,label,tip] of [
+    ['rotate','Rotate','Drag bone handles on stage to rotate (hold Alt during drag to translate)'],
+    ['translate','Move','Drag bone handles on stage to translate (hold Alt during drag to rotate)'],
+   ] as const){
+    const pb=button(label,()=>this.setStagePoseMode(mode,true));
+    pb.dataset.stagePoseMode=mode;
+    pb.setAttribute('aria-pressed',String(mode===this.poseMode));
+    pb.title=tip;
+    poseHost.append(pb);
+    this.poseModeButtons.push(pb);
+   }
+  }
   this.selection=new InspectionSelection(value=>{options.select(value);this.renderSelection();});
   host.querySelector<HTMLButtonElement>('[data-curve-seek]')!.onclick=()=>{const value=host.querySelector<HTMLInputElement>('[data-curve-time]')!.value.trim();options.seek(value?Number(value):NaN);};
   this.channelSelect.onchange=()=>{this.unavailableChannel='';const [pointer,c]=JSON.parse(this.channelSelect.value) as [string,number];this.track=this.inspection?.tracks.find(t=>t.pointer===pointer)??null;this.channel=c;this.renderCurve();this.update(this.at,this.runtimeDuration);};
@@ -259,7 +292,9 @@ export class AnimationInspectionPanel {
    this.curveSegment=Math.max(0,Number(this.segmentSelect.value)||0);
    const cls=this.resolveTrackClassification(this.track);
    if(this.gateInfo().editable&&cls?.editable&&this.track){
-    this.selectedKey={animation:this.animation,trackIndex:cls.trackIndex,keyIndex:this.curveSegment,pointer:this.track.pointer};
+    const sel={animation:this.animation,trackIndex:cls.trackIndex,keyIndex:this.curveSegment,pointer:this.track.pointer};
+    this.selectedKey=sel;
+    this.selectedKeys=[sel];
     this.syncTimelineKeysInPlace();
     this.syncKeyInspectorInPlace();
    }
@@ -272,7 +307,24 @@ export class AnimationInspectionPanel {
   const up=(e:PointerEvent)=>{const start=this.down;this.down=null;if(!start||Math.hypot(e.clientX-start.x,e.clientY-start.y)>3||this.space||!options.enabled()||e.target instanceof Element&&e.target.closest('button,input,select,textarea')||!this.frame)return;
    const rect=stage.getBoundingClientRect(),p0=options.project(0,0),px=options.project(1,0),py=options.project(0,1),x=(e.clientX-rect.left-p0.x)/(px.x-p0.x),y=(e.clientY-rect.top-p0.y)/(py.y-p0.y),slot=pickedSlot(this.frame,x,y);if(slot)this.select({kind:'slot',name:slot});
   };
-  const key=(e:KeyboardEvent)=>{if(e.code==='Space')this.space=e.type==='keydown';};const blur=()=>{this.space=false;this.down=null;};
+  const key=(e:KeyboardEvent)=>{
+   if(e.code==='Space')this.space=e.type==='keydown';
+   if(e.type==='keydown'&&(e.key==='Delete'||e.key==='Backspace')&&!this.isBusy){
+    const active=document.activeElement as Element|null;
+    const inField=active&&typeof active.closest==='function'&&active.closest('input,textarea,select');
+    const inHost=active&&typeof this.options.host.contains==='function'&&this.options.host.contains(active);
+    if(!inField&&inHost){
+     if(this.selectedKeys.length>1){
+      e.preventDefault();
+      this.deleteSelection();
+     }else if(this.selectedKey&&this.selectedKey.animation===this.animation){
+      e.preventDefault();
+      this.deleteKey(this.selectedKey.trackIndex,this.selectedKey.keyIndex);
+     }
+    }
+   }
+  };
+  const blur=()=>{this.space=false;this.down=null;};
   stage.addEventListener('pointerdown',down);stage.addEventListener('pointerup',up);window.addEventListener('keydown',key);window.addEventListener('keyup',key);window.addEventListener('blur',blur);
   this.disposers.push(()=>{stage.removeEventListener('pointerdown',down);stage.removeEventListener('pointerup',up);window.removeEventListener('keydown',key);window.removeEventListener('keyup',key);window.removeEventListener('blur',blur);});
 
@@ -287,6 +339,25 @@ export class AnimationInspectionPanel {
   }
   this.show('timeline');
   this.renderEditorBar();
+ }
+
+ stagePoseMode():'rotate'|'translate'{
+  return this.poseMode;
+ }
+
+ setStagePoseMode(mode:'rotate'|'translate',lockedByUser=true){
+  if(mode!=='rotate'&&mode!=='translate')return;
+  this.poseMode=mode;
+  if(lockedByUser)this.poseModeLockedByUser=true;
+  for(const pb of this.poseModeButtons){
+   pb.setAttribute('aria-pressed',String(pb.dataset.stagePoseMode===this.poseMode));
+  }
+ }
+
+ private autoSyncPoseModeFromProperty(property:string|undefined){
+  if(this.poseModeLockedByUser||!property)return;
+  if(property==='rotate')this.setStagePoseMode('rotate',false);
+  else if(property==='translate'||property==='translatex'||property==='translatey')this.setStagePoseMode('translate',false);
  }
 
  zoomLevel():number{
@@ -333,6 +404,7 @@ export class AnimationInspectionPanel {
   this.builder=null;
   this.appliedOps=[];
   this.selectedKey=null;
+  this.selectedKeys=[];
   this.syncEffectiveInspection(false);
   this.renderGateBanner();
   this.renderEditorBar();
@@ -355,6 +427,7 @@ export class AnimationInspectionPanel {
    this.builder=null;
    this.appliedOps=[];
    this.selectedKey=null;
+   this.selectedKeys=[];
   }
   this.syncEffectiveInspection(false);
   this.renderGateBanner();
@@ -366,6 +439,7 @@ export class AnimationInspectionPanel {
   if(this.document===doc&&this.animation===animation)return;
   if(animation&&this.lastNonEmptyAnimation&&this.lastNonEmptyAnimation!==animation){
    this.selectedKey=null;
+   this.selectedKeys=[];
    this.setEditorStatus('',false);
   }
   if(animation)this.lastNonEmptyAnimation=animation;
@@ -728,7 +802,10 @@ export class AnimationInspectionPanel {
    const insertedIdx=rawKeys.findIndex(k=>k.t===cleanMotionNumber(time));
    if(insertedIdx>=0){
     const inspTrack=this.inspection?.tracks.find(t=>t.kind==='bone'&&t.target===cls.target&&t.name===cls.property);
-    this.selectedKey={animation:this.animation,trackIndex,keyIndex:insertedIdx,pointer:inspTrack?.pointer??''};
+    const sel={animation:this.animation,trackIndex,keyIndex:insertedIdx,pointer:inspTrack?.pointer??''};
+    this.selectedKey=sel;
+    this.selectedKeys=[sel];
+    this.autoSyncPoseModeFromProperty(cls.property);
     this.syncTimelineKeysInPlace();
     this.syncKeyInspectorInPlace();
    }
@@ -743,14 +820,58 @@ export class AnimationInspectionPanel {
    if(this.selectedKey&&this.selectedKey.trackIndex===trackIndex){
     if(rawKeys.length===0){
      this.selectedKey=null;
+     this.selectedKeys=[];
     }else{
      this.selectedKey={...this.selectedKey,keyIndex:Math.min(keyIndex,rawKeys.length-1)};
+     this.selectedKeys=[this.selectedKey];
     }
     this.syncTimelineKeysInPlace();
     this.syncKeyInspectorInPlace();
    }
   }
   return res;
+ }
+
+ deleteSelection(
+  selections?:ReadonlyArray<{track:number;key:number}>,
+ ):{ok:true;ops:readonly AnimationSourceOp[]}|{ok:false;error:string}{
+  const gate=this.gateInfo();
+  if(!gate.editable){
+   const err=`${gate.code}: ${gate.reason??'animation is read-only'}`;
+   this.setEditorStatus(err,true);
+   return {ok:false,error:err};
+  }
+  if(!this.builder||!this.source?.available){
+   const err='ANIMATION_SOURCE_MISSING: animation source is not loaded';
+   this.setEditorStatus(err,true);
+   return {ok:false,error:err};
+  }
+  const targets=
+   selections??
+   this.selectedKeys
+    .filter(s=>s.animation===this.animation)
+    .map(s=>({track:s.trackIndex,key:s.keyIndex}));
+  if(targets.length===0){
+   const err='ANIMATION_KEY_OUT_OF_RANGE: no keys selected to delete';
+   this.setEditorStatus(err,true);
+   return {ok:false,error:err};
+  }
+  try{
+   this.options.pause?.();
+   this.builder.deleteSelection(this.animation,targets);
+   this.selectedKey=null;
+   this.selectedKeys=[];
+   this.syncEffectiveInspection(true);
+   this.renderEditorBar();
+   this.renderTimeline();
+   this.renderChannels();
+   this.setEditorStatus(`Deleted ${targets.length} selected key(s) (${this.builder.ops.length} pending op(s)).`,false);
+   return {ok:true,ops:this.builder.ops};
+  }catch(e){
+   const msg=e instanceof Error?e.message:String(e);
+   this.setEditorStatus(msg,true);
+   return {ok:false,error:msg};
+  }
  }
 
  moveSelection(
@@ -816,11 +937,118 @@ export class AnimationInspectionPanel {
    this.builder=new AnimationOpBuilder(this.source.text,(this.source.easings??undefined) as Readonly<Record<string,EasingTuple>>|undefined);
   }
   this.selectedKey=null;
+  this.selectedKeys=[];
   this.syncEffectiveInspection(true);
   this.renderEditorBar();
   this.renderTimeline();
   this.renderChannels();
   this.setEditorStatus('Reset: no pending animation ops.',false);
+ }
+
+ isKeySelected(trackIndex:number,keyIndex:number):boolean{
+  if(this.selectedKeys.some(s=>s.animation===this.animation&&s.trackIndex===trackIndex&&s.keyIndex===keyIndex)){
+   return true;
+  }
+  return (
+   this.selectedKey!==null&&
+   this.selectedKey.animation===this.animation&&
+   this.selectedKey.trackIndex===trackIndex&&
+   this.selectedKey.keyIndex===keyIndex
+  );
+ }
+
+ selectedKeysInfo():SelectedAnimationKey[]{
+  const list=this.selectedKeys.filter(s=>s.animation===this.animation);
+  if(list.length>0)return [...list];
+  if(this.selectedKey&&this.selectedKey.animation===this.animation)return [this.selectedKey];
+  return [];
+ }
+
+ toggleKeySelection(trackIndex:number,keyIndex:number,pointerHint?:string):boolean{
+  const gate=this.gateInfo();
+  if(!gate.editable){
+   this.setEditorStatus(`${gate.code}: ${gate.reason}`,true);
+   return false;
+  }
+  const clss=this.tracksInfo();
+  const cls=clss[trackIndex];
+  if(!cls){
+   this.setEditorStatus(`ANIMATION_TRACK_OUT_OF_RANGE: track ${trackIndex}`,true);
+   return false;
+  }
+  if(!cls.editable){
+   this.setEditorStatus(`ANIMATION_TRACK_READ_ONLY: ${cls.reason}`,true);
+   return false;
+  }
+  const rawKeys=this.readDraftTrackKeys(trackIndex);
+  const k=rawKeys[keyIndex];
+  if(!k){
+   this.setEditorStatus(`ANIMATION_KEY_OUT_OF_RANGE: key ${keyIndex} on track ${trackIndex}`,true);
+   return false;
+  }
+  const inspTrack=this.inspection?.tracks.find(t=>t.kind==='bone'&&t.target===cls.target&&t.name===cls.property)??null;
+  const pointer=pointerHint??inspTrack?.pointer??'';
+  const current=this.selectedKeysInfo();
+  const existingIdx=current.findIndex(s=>s.trackIndex===trackIndex&&s.keyIndex===keyIndex);
+  if(existingIdx>=0){
+   current.splice(existingIdx,1);
+   this.selectedKeys=current;
+   this.selectedKey=current.at(-1)??null;
+  }else{
+   const entry:SelectedAnimationKey={animation:this.animation,trackIndex,keyIndex,pointer};
+   current.push(entry);
+   this.selectedKeys=current;
+   this.selectedKey=entry;
+   this.autoSyncPoseModeFromProperty(cls.property);
+  }
+  this.syncTimelineKeysInPlace();
+  this.syncKeyInspectorInPlace();
+  this.setEditorStatus(`Selected ${this.selectedKeys.length} key(s) across ${new Set(this.selectedKeys.map(s=>s.trackIndex)).size} track(s).`,false);
+  return true;
+ }
+
+ selectKeys(selections:ReadonlyArray<{track:number;key:number}>):boolean{
+  const gate=this.gateInfo();
+  if(!gate.editable){
+   this.setEditorStatus(`${gate.code}: ${gate.reason}`,true);
+   return false;
+  }
+  const clss=this.tracksInfo();
+  const next:SelectedAnimationKey[]=[];
+  const seen=new Set<string>();
+  const skippedReadonly=new Set<string>();
+  for(const sel of selections){
+   const cls=clss[sel.track];
+   if(!cls)continue;
+   if(!cls.editable){
+    skippedReadonly.add(`${cls.target}.${cls.property}`);
+    continue;
+   }
+   const rawKeys=this.readDraftTrackKeys(sel.track);
+   if(!rawKeys[sel.key])continue;
+   const id=`${sel.track}:${sel.key}`;
+   if(seen.has(id))continue;
+   seen.add(id);
+   const inspTrack=this.inspection?.tracks.find(t=>t.kind==='bone'&&t.target===cls.target&&t.name===cls.property)??null;
+   next.push({animation:this.animation,trackIndex:sel.track,keyIndex:sel.key,pointer:inspTrack?.pointer??''});
+  }
+  this.selectedKeys=next;
+  this.selectedKey=next.at(-1)??null;
+  if(this.selectedKey){
+   const lastCls=clss[this.selectedKey.trackIndex];
+   this.autoSyncPoseModeFromProperty(lastCls?.property);
+  }
+  this.syncTimelineKeysInPlace();
+  this.syncKeyInspectorInPlace();
+  if(skippedReadonly.size>0){
+   this.setEditorStatus(
+    `Selected ${next.length} editable key(s); skipped read-only track(s): ${[...skippedReadonly].join(', ')} (ANIMATION_TRACK_READ_ONLY).`,
+    false,
+   );
+  }else{
+   this.setEditorStatus(`Selected ${next.length} key(s) across ${new Set(next.map(s=>s.trackIndex)).size} track(s).`,false);
+  }
+  return next.length>0;
  }
 
  selectKey(trackIndex:number,keyIndex:number):boolean{
@@ -846,7 +1074,10 @@ export class AnimationInspectionPanel {
    return false;
   }
   const inspTrack=this.inspection?.tracks.find(t=>t.kind==='bone'&&t.target===cls.target&&t.name===cls.property)??null;
-  this.selectedKey={animation:this.animation,trackIndex,keyIndex,pointer:inspTrack?.pointer??''};
+  const sel={animation:this.animation,trackIndex,keyIndex,pointer:inspTrack?.pointer??''};
+  this.selectedKey=sel;
+  this.selectedKeys=[sel];
+  this.autoSyncPoseModeFromProperty(cls.property);
   if(inspTrack){
    this.track=inspTrack;
    this.channel=0;
@@ -1012,6 +1243,7 @@ export class AnimationInspectionPanel {
   if(!box)return;
   const gate=this.gateInfo();
   const info=this.selectedKeyInfo();
+  const multi=this.selectedKeysInfo();
 
   const trackSel=box.querySelector<HTMLSelectElement>('[data-insert-track]');
   if(trackSel&&info){
@@ -1059,6 +1291,7 @@ export class AnimationInspectionPanel {
    if(delBtn){
     delBtn.hidden=hideInputs;
     delBtn.disabled=true;
+    delBtn.textContent='Delete key';
     delBtn.onclick=null;
    }
    if(emptyHint){
@@ -1073,8 +1306,14 @@ export class AnimationInspectionPanel {
 
   if(title){
    title.hidden=false;
-   title.textContent=`${info.bone} · ${info.property} · key #${info.keyIndex} (track #${info.trackIndex})`;
-   title.title=title.textContent;
+   if(multi.length>1){
+    const trackCount=new Set(multi.map(s=>s.trackIndex)).size;
+    title.textContent=`${multi.length} keys selected (${trackCount} track${trackCount===1?'':'s'})`;
+    title.title=`${multi.length} keys selected (${trackCount} track(s)) · anchor ${info.bone} · ${info.property} #${info.keyIndex}`;
+   }else{
+    title.textContent=`${info.bone} · ${info.property} · key #${info.keyIndex} (track #${info.trackIndex})`;
+    title.title=title.textContent;
+   }
   }
   if(timeInput){
    if(timeInput.parentElement)timeInput.parentElement.hidden=false;
@@ -1082,11 +1321,16 @@ export class AnimationInspectionPanel {
    if(document.activeElement!==timeInput)timeInput.value=String(cleanMotionNumber(info.time));
    timeInput.onchange=()=>{
     const nextT=Number(timeInput.value);
-    this.setKeyTime(info.trackIndex,info.keyIndex,nextT);
+    if(multi.length>1){
+     const delta=cleanMotionNumber(nextT-info.time);
+     this.moveSelection(multi.map(s=>({track:s.trackIndex,key:s.keyIndex})),delta);
+    }else{
+     this.setKeyTime(info.trackIndex,info.keyIndex,nextT);
+    }
    };
   }
   if(channelsHost){
-   channelsHost.hidden=false;
+   channelsHost.hidden=multi.length>1;
    const existing=channelsHost.querySelectorAll<HTMLInputElement>('[data-key-channel]');
    const sameShape=
     existing.length===info.channels.length&&
@@ -1128,8 +1372,13 @@ export class AnimationInspectionPanel {
   if(delBtn){
    delBtn.hidden=false;
    delBtn.disabled=this.isBusy;
+   delBtn.textContent=multi.length>1?`Delete ${multi.length} keys`:'Delete key';
    delBtn.onclick=()=>{
-    this.deleteKey(info.trackIndex,info.keyIndex);
+    if(multi.length>1){
+     this.deleteSelection();
+    }else{
+     this.deleteKey(info.trackIndex,info.keyIndex);
+    }
    };
   }
   if(emptyHint){
@@ -1176,7 +1425,7 @@ export class AnimationInspectionPanel {
    const kIdx=Number(mark.dataset.keyIndex);
    const srcTrack=mark.dataset.sourceTrack!==undefined?Number(mark.dataset.sourceTrack):undefined;
    const isEditable=mark.dataset.editable==='true';
-   const isSelected=isEditable&&srcTrack!==undefined&&this.selectedKey?.animation===this.animation&&this.selectedKey.trackIndex===srcTrack&&this.selectedKey.keyIndex===kIdx;
+   const isSelected=isEditable&&srcTrack!==undefined&&this.isKeySelected(srcTrack,kIdx);
    mark.classList.toggle('selected',isSelected);
    mark.setAttribute('aria-pressed',String(isSelected));
    if(track&&track.keys[kIdx]){
@@ -1217,6 +1466,7 @@ export class AnimationInspectionPanel {
   list.className='animation-lanes';
   list.dataset.animationLanes='';
   pane.append(list);
+  this.bindLaneBoxSelection(list);
 
   // Sticky top time ruler with ticks and scrub support
   const ruler=document.createElement('div');
@@ -1279,7 +1529,7 @@ export class AnimationInspectionPanel {
 
     const label=button(`${track.target} · ${track.name}`,()=>{
      const liveTrack=this.inspection?.tracks.find(t=>t.pointer===trackPointer)??track;
-     this.track=liveTrack;this.channel=0;this.renderChannels();this.show('curve');
+     this.track=liveTrack;this.channel=0;this.autoSyncPoseModeFromProperty(track.name);this.renderChannels();this.show('curve');
     });
     label.className='animation-lane-label';
     label.title=`${track.target} · ${track.name}`;
@@ -1314,7 +1564,7 @@ export class AnimationInspectionPanel {
 
     track.keys.forEach((key,index)=>{
      const cleanT=formatSeconds(key.time);
-     const mark=button('◆',()=>{
+     const mark=button('◆',e=>{
       if(this.suppressNextKeyClick){
        this.suppressNextKeyClick=false;
        return;
@@ -1324,9 +1574,16 @@ export class AnimationInspectionPanel {
       const liveKey=liveTrack.keys[liveIdx]??key;
       this.track=liveTrack;this.channel=0;this.renderChannels();
       if(isEditable&&cls){
-       this.selectedKey={animation:this.animation,trackIndex:cls.trackIndex,keyIndex:liveIdx,pointer:trackPointer};
-       this.syncTimelineKeysInPlace();
-       this.syncKeyInspectorInPlace();
+       if(e?.shiftKey){
+        this.toggleKeySelection(cls.trackIndex,liveIdx,trackPointer);
+       }else{
+        const sel={animation:this.animation,trackIndex:cls.trackIndex,keyIndex:liveIdx,pointer:trackPointer};
+        this.selectedKey=sel;
+        this.selectedKeys=[sel];
+        this.autoSyncPoseModeFromProperty(cls.property);
+        this.syncTimelineKeysInPlace();
+        this.syncKeyInspectorInPlace();
+       }
       }else{
        this.setEditorStatus(readonlyReason,true);
       }
@@ -1335,7 +1592,7 @@ export class AnimationInspectionPanel {
       }
      });
      mark.className='animation-key';
-     const isSelected=isEditable&&cls!==undefined&&this.selectedKey?.animation===this.animation&&this.selectedKey.trackIndex===cls.trackIndex&&this.selectedKey.keyIndex===index;
+     const isSelected=isEditable&&cls!==undefined&&this.isKeySelected(cls.trackIndex,index);
      if(isSelected)mark.classList.add('selected');
      mark.setAttribute('aria-pressed',String(isSelected));
      Object.assign(mark.dataset,{
@@ -1432,6 +1689,147 @@ export class AnimationInspectionPanel {
   if(prevScrollLeft>0)list.scrollLeft=prevScrollLeft;
  }
 
+ /**
+  * Box-drag selection (>= 3 px) across `.animation-lanes` / `.animation-key-lane`,
+  * while a plain click (< 3 px) on an empty editable `.animation-key-lane` seeks the playhead.
+  * Playhead scrub remains on `.animation-ruler-track`.
+  */
+ private bindLaneBoxSelection(list:HTMLElement){
+  let activeBox:{
+   pointerId:number;
+   startX:number;
+   startY:number;
+   shiftKey:boolean;
+   baseSelection:SelectedAnimationKey[];
+   clickedLane:HTMLElement|null;
+   clickedRow:HTMLElement|null;
+   moved:boolean;
+   boxEl:HTMLElement|null;
+  }|null=null;
+
+  list.addEventListener('pointerdown',e=>{
+   if(!e.isPrimary||e.button!==0||this.isBusy)return;
+   const rawTarget=e.target as (Element&{dataset?:DOMStringMap;className?:string})|null;
+   const hitInteractive=rawTarget?.closest?.('button,input,select,textarea,[data-animation-ruler],[data-lane-head]');
+   if(hitInteractive)return;
+   const clickedLane=rawTarget?.closest?.<HTMLElement>('.animation-key-lane')??(rawTarget?.className?.includes('animation-key-lane')?rawTarget as unknown as HTMLElement:null);
+   const clickedRow=rawTarget?.closest?.<HTMLElement>('.animation-lane,.animation-readonly-lane')??(clickedLane?.parentElement as HTMLElement|null)??null;
+   activeBox={
+    pointerId:e.pointerId,
+    startX:e.clientX,
+    startY:e.clientY,
+    shiftKey:e.shiftKey,
+    baseSelection:e.shiftKey?this.selectedKeysInfo():[],
+    clickedLane,
+    clickedRow,
+    moved:false,
+    boxEl:null,
+   };
+   list.setPointerCapture?.(e.pointerId);
+  });
+
+  list.addEventListener('pointermove',e=>{
+   if(!activeBox||activeBox.pointerId!==e.pointerId)return;
+   const dist=Math.hypot(e.clientX-activeBox.startX,e.clientY-activeBox.startY);
+   if(!activeBox.moved&&dist<3)return;
+   activeBox.moved=true;
+   const listRect=list.getBoundingClientRect();
+   const minX=Math.min(activeBox.startX,e.clientX);
+   const maxX=Math.max(activeBox.startX,e.clientX);
+   const minY=Math.min(activeBox.startY,e.clientY);
+   const maxY=Math.max(activeBox.startY,e.clientY);
+
+   if(!activeBox.boxEl){
+    const boxEl=document.createElement('div');
+    boxEl.className='animation-selection-box';
+    boxEl.dataset.selectionBox='';
+    list.append(boxEl);
+    activeBox.boxEl=boxEl;
+   }
+   activeBox.boxEl.style.left=`${minX-listRect.left+(list.scrollLeft||0)}px`;
+   activeBox.boxEl.style.top=`${minY-listRect.top+(list.scrollTop||0)}px`;
+   activeBox.boxEl.style.width=`${maxX-minX}px`;
+   activeBox.boxEl.style.height=`${maxY-minY}px`;
+
+   const merged=new Map<string,SelectedAnimationKey>();
+   for(const s of activeBox.baseSelection){
+    merged.set(`${s.trackIndex}:${s.keyIndex}`,s);
+   }
+   const skippedReadonly=new Set<string>();
+   const allMarks=list.querySelectorAll<HTMLButtonElement>('.animation-key');
+   for(const mark of allMarks){
+    const r=mark.getBoundingClientRect();
+    const cx=(r.left+r.right)/2;
+    const cy=(r.top+r.bottom)/2;
+    const intersects=r.right>=minX&&r.left<=maxX&&r.bottom>=minY&&r.top<=maxY&&(cx>=minX-4&&cx<=maxX+4&&cy>=minY-4&&cy<=maxY+4);
+    if(!intersects)continue;
+    if(mark.dataset.editable==='true'&&mark.dataset.sourceTrack!==undefined){
+     const tr=Number(mark.dataset.sourceTrack);
+     const kIdx=Number(mark.dataset.keyIndex);
+     merged.set(`${tr}:${kIdx}`,{
+      animation:this.animation,
+      trackIndex:tr,
+      keyIndex:kIdx,
+      pointer:mark.dataset.track??'',
+     });
+    }else{
+     skippedReadonly.add(`${mark.dataset.target??''}.${mark.dataset.timeline??''}`);
+    }
+   }
+   this.selectedKeys=[...merged.values()];
+   this.selectedKey=this.selectedKeys.at(-1)??null;
+   this.syncTimelineKeysInPlace();
+   this.syncKeyInspectorInPlace();
+   if(skippedReadonly.size>0){
+    this.setEditorStatus(
+     `Selected ${this.selectedKeys.length} editable key(s); skipped read-only track(s): ${[...skippedReadonly].join(', ')} (ANIMATION_TRACK_READ_ONLY).`,
+     false,
+    );
+   }else{
+    this.setEditorStatus(
+     `Selected ${this.selectedKeys.length} key(s) across ${new Set(this.selectedKeys.map(s=>s.trackIndex)).size} track(s).`,
+     false,
+    );
+   }
+  });
+
+  const endBox=(e:PointerEvent)=>{
+   if(!activeBox||activeBox.pointerId!==e.pointerId)return;
+   const box=activeBox;
+   activeBox=null;
+   if(list.hasPointerCapture?.(e.pointerId))list.releasePointerCapture(e.pointerId);
+   if(box.boxEl)box.boxEl.remove();
+   if(!box.moved&&box.clickedLane){
+    const rowEditable=box.clickedRow?.dataset.editable==='true';
+    const roReason=box.clickedRow?.dataset.readonlyReason;
+    if(!rowEditable&&roReason){
+     this.setEditorStatus(roReason,true);
+     return;
+    }
+    if(rowEditable){
+     if(!box.shiftKey){
+      this.selectedKey=null;
+      this.selectedKeys=[];
+      this.syncTimelineKeysInPlace();
+      this.syncKeyInspectorInPlace();
+     }
+     const rect=box.clickedLane.getBoundingClientRect();
+     if(rect.width>0){
+      const end=this.effectiveEnd();
+      const ratio=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width));
+      const rawTime=cleanMotionNumber(ratio*end);
+      this.at=rawTime;
+      this.placePlayheads();
+      const maxSeek=this.runtimeDuration>0?Math.min(end,this.runtimeDuration):end;
+      this.options.seek(cleanMotionNumber(Math.min(maxSeek,rawTime)));
+     }
+    }
+   }
+  };
+  list.addEventListener('pointerup',endBox);
+  list.addEventListener('pointercancel',endBox);
+ }
+
  private bindRulerScrub(rulerTrack:HTMLElement){
   let scrubbingId:number|null=null;
   const scrubAt=(clientX:number)=>{
@@ -1485,7 +1883,19 @@ export class AnimationInspectionPanel {
    const liveIdx=Number(mark.dataset.keyIndex??keyIndex);
    if(liveTrack)this.track=liveTrack;
    this.channel=0;
-   this.selectedKey={animation:this.animation,trackIndex,keyIndex:liveIdx,pointer:trackPointer};
+   if(e.shiftKey){
+    this.toggleKeySelection(trackIndex,liveIdx,trackPointer);
+    this.renderChannels();
+    setTimeout(()=>{this.suppressNextKeyClick=false;},0);
+    return;
+   }
+   const alreadyInMulti=this.selectedKeys.length>1&&this.isKeySelected(trackIndex,liveIdx);
+   const sel={animation:this.animation,trackIndex,keyIndex:liveIdx,pointer:trackPointer};
+   this.selectedKey=sel;
+   if(!alreadyInMulti){
+    this.selectedKeys=[sel];
+   }
+   this.autoSyncPoseModeFromProperty(liveTrack?.name);
    this.syncTimelineKeysInPlace();
    this.syncKeyInspectorInPlace();
    this.renderChannels();
@@ -1499,6 +1909,7 @@ export class AnimationInspectionPanel {
     keyIndex:liveIdx,
     startX:e.clientX,
     moved:false,
+    wasAlreadyInMulti:alreadyInMulti,
     laneEl,
     markEl:mark,
     end:this.effectiveEnd(),
@@ -1516,6 +1927,20 @@ export class AnimationInspectionPanel {
    if(rect.width<=0)return;
    const ratio=Math.max(0,(e.clientX-rect.left)/rect.width);
    const rawTime=Math.round(ratio*drag.end*10000)/10000;
+   if(this.selectedKeys.length>1&&this.isKeySelected(drag.trackIndex,drag.keyIndex)){
+    const anchorKey=this.readDraftTrackKeys(drag.trackIndex)[drag.keyIndex];
+    if(!anchorKey)return;
+    const delta=cleanMotionNumber(rawTime-anchorKey.t);
+    if(Math.abs(delta)<1e-6)return;
+    const res=this.moveSelection(
+     this.selectedKeys.map(s=>({track:s.trackIndex,key:s.keyIndex})),
+     delta,
+    );
+    if(res.ok&&rawTime>=0&&rawTime<=this.runtimeDuration){
+     this.options.seek(rawTime);
+    }
+    return;
+   }
    const res=this.applyOp(
     {op:'set_key_time',animation:this.animation,track:drag.trackIndex,key:drag.keyIndex,time:rawTime},
     {skipTimelineDomRebuild:true},
@@ -1530,6 +1955,11 @@ export class AnimationInspectionPanel {
    if(!drag||drag.pointerId!==e.pointerId)return;
    this.draggingKey=null;
    if(mark.hasPointerCapture?.(e.pointerId))mark.releasePointerCapture(e.pointerId);
+   if(!drag.moved&&drag.wasAlreadyInMulti&&this.selectedKey){
+    this.selectedKeys=[this.selectedKey];
+    this.syncTimelineKeysInPlace();
+    this.syncKeyInspectorInPlace();
+   }
    e.preventDefault();
    setTimeout(()=>{this.suppressNextKeyClick=false;},0);
   };
@@ -1743,7 +2173,9 @@ export class AnimationInspectionPanel {
   const segIdx=Number(target.dataset.segment??0);
   const handleIdx=Number(target.dataset.curveHandle)===2?2:1;
   this.curveSegment=segIdx;
-  this.selectedKey={animation:this.animation,trackIndex:cls.trackIndex,keyIndex:segIdx,pointer:this.track.pointer};
+  const sel={animation:this.animation,trackIndex:cls.trackIndex,keyIndex:segIdx,pointer:this.track.pointer};
+  this.selectedKey=sel;
+  this.selectedKeys=[sel];
   this.syncTimelineKeysInPlace();
   this.syncKeyInspectorInPlace();
   const field=CHANNELS[this.track.name]?.[this.channel]?.field;
@@ -1866,16 +2298,338 @@ export class AnimationInspectionPanel {
 
  private placePlayheads(){const end=this.effectiveEnd();for(const n of this.options.host.querySelectorAll<HTMLElement>('[data-playhead]'))n.style.left=`${Math.max(0,Math.min(100,this.at/end*100))}%`;}
 
+ boneWorldMatrix(boneName:string):{x:number;y:number;a:number;b:number;c:number;d:number}{
+  const captured=this.bones.get(boneName);
+  if(captured&&captured.hasMatrix){
+   return {x:captured.x,y:captured.y,a:captured.a,b:captured.b,c:captured.c,d:captured.d};
+  }
+  if(!this.inspection)return {x:captured?.x??0,y:captured?.y??0,a:1,b:0,c:0,d:1};
+  const chain:string[]=[];
+  let curr:string|undefined=boneName;
+  const visited=new Set<string>();
+  while(curr&&!visited.has(curr)){
+   visited.add(curr);
+   chain.unshift(curr);
+   const b=this.inspection.bones.find(x=>x.name===curr);
+   curr=b?.parent;
+  }
+  let wa=1,wb=0,wc=0,wd=1,wx=0,wy=0;
+  for(const name of chain){
+   const locals=evaluateBoneLocals(this.inspection,name,this.at);
+   const rx=(locals.rotation+locals.shearX)*(Math.PI/180);
+   const ry=(locals.rotation+90+locals.shearY)*(Math.PI/180);
+   const la=Math.cos(rx)*locals.scaleX;
+   const lb=Math.cos(ry)*locals.scaleY;
+   const lc=Math.sin(rx)*locals.scaleX;
+   const ld=Math.sin(ry)*locals.scaleY;
+   const nx=wa*locals.x+wb*locals.y+wx;
+   const ny=wc*locals.x+wd*locals.y+wy;
+   const na=wa*la+wb*lc;
+   const nb=wa*lb+wb*ld;
+   const nc=wc*la+wd*lc;
+   const nd=wc*lb+wd*ld;
+   wx=nx;wy=ny;wa=na;wb=nb;wc=nc;wd=nd;
+  }
+  return {x:wx,y:wy,a:wa,b:wb,c:wc,d:wd};
+ }
+
+ private clientToWorld(clientX:number,clientY:number):{x:number;y:number}{
+  const pickRect=this.picks.getBoundingClientRect();
+  const rect=pickRect.width>0?pickRect:this.options.stage.getBoundingClientRect();
+  const p0=this.options.project(0,0);
+  const px=this.options.project(1,0);
+  const py=this.options.project(0,1);
+  const sx=px.x-p0.x||1;
+  const sy=py.y-p0.y||1;
+  return {
+   x:(clientX-rect.left-p0.x)/sx,
+   y:(clientY-rect.top-p0.y)/sy,
+  };
+ }
+
+ /**
+  * Pose `boneName` on stage in `mode` ('rotate' or 'translate') at viewport client coordinates
+  * `(clientX, clientY)`. When the playhead sits on an existing key (within 5e-4 s), sets that key's
+  * value; otherwise inserts a key at the playhead (`this.at`) and sets it as one undo group.
+  */
+ poseBoneOnStage(
+  boneName:string,
+  mode:'rotate'|'translate',
+  clientX:number,
+  clientY:number,
+  gesture?:{
+   undoGroupId:number;
+   originWorld:{x:number;y:number};
+   parentWorld:{x:number;y:number;a:number;b:number;c:number;d:number};
+  },
+ ):{ok:true;ops:readonly AnimationSourceOp[]}|{ok:false;error:string}{
+  const gate=this.gateInfo();
+  if(!gate.editable){
+   const err=`${gate.code}: ${gate.reason??'animation is read-only'}`;
+   this.setEditorStatus(err,true);
+   return {ok:false,error:err};
+  }
+  if(!this.builder||!this.source?.available||!this.inspection){
+   const err='ANIMATION_SOURCE_MISSING: animation source is not loaded';
+   this.setEditorStatus(err,true);
+   return {ok:false,error:err};
+  }
+  const setup=this.inspection.bones.find(b=>b.name===boneName);
+  if(!setup){
+   const err=`ANIMATION_BONE_NO_TRACK: unknown bone "${boneName}"`;
+   this.setEditorStatus(err,true);
+   return {ok:false,error:err};
+  }
+  const constraint=findBoneConstraint(this.document,boneName);
+  if(constraint){
+   const err=`ANIMATION_BONE_CONSTRAINED: bone "${boneName}" is driven by ${constraint.kind} constraint "${constraint.name}" and cannot be posed directly on stage`;
+   this.setEditorStatus(err,true);
+   return {ok:false,error:err};
+  }
+
+  const clss=this.tracksInfo();
+  const boneTracks=clss.filter(c=>c.targetKind==='bone'&&c.target===boneName);
+  const matchingProps=mode==='rotate'?['rotate']:['translate','translatex','translatey'];
+  const matchingTracks=boneTracks.filter(c=>matchingProps.includes(c.property));
+  const readonlyMatch=matchingTracks.find(c=>!c.editable);
+  if(readonlyMatch){
+   const err=`ANIMATION_TRACK_READ_ONLY: ${readonlyMatch.reason}`;
+   this.setEditorStatus(err,true);
+   return {ok:false,error:err};
+  }
+  // Also check if compiled inspection has a bone track for this property that is missing from source
+  const editableMatches=matchingTracks.filter(c=>c.editable);
+  if(editableMatches.length===0){
+   const compiledOnly=this.inspection.tracks.find(
+    t=>t.kind==='bone'&&t.target===boneName&&matchingProps.includes(t.name),
+   );
+   if(compiledOnly){
+    const err=`ANIMATION_TRACK_READ_ONLY: bone track "${boneName}.${compiledOnly.name}" is not an editable source track in ${this.source.path??'animations_from'}`;
+    this.setEditorStatus(err,true);
+    return {ok:false,error:err};
+   }
+   const err=`ANIMATION_BONE_NO_TRACK: bone "${boneName}" has no editable "${mode}" track in animation "${this.animation}" (${this.source.path??'animations_from'})`;
+   this.setEditorStatus(err,true);
+   return {ok:false,error:err};
+  }
+
+  const worldPt=this.clientToWorld(clientX,clientY);
+  const parentWorld=
+   gesture?.parentWorld??
+   (setup.parent?this.boneWorldMatrix(setup.parent):{x:0,y:0,a:1,b:0,c:0,d:1});
+  const originWorld=gesture?.originWorld??this.boneWorldMatrix(boneName);
+  const det=parentWorld.a*parentWorld.d-parentWorld.b*parentWorld.c;
+
+  let targetOps:Array<{trackIndex:number;property:string;channel?:number;value:number|readonly number[]}>=[];
+
+  if(mode==='rotate'){
+   const rotTrack=editableMatches.find(c=>c.property==='rotate')!;
+   const vx=worldPt.x-originWorld.x;
+   const vy=worldPt.y-originWorld.y;
+   if(Math.hypot(vx,vy)<1e-6){
+    return {ok:true,ops:this.builder.ops};
+   }
+   const lvx=Math.abs(det)>1e-8?(parentWorld.d*vx-parentWorld.b*vy)/det:vx;
+   const lvy=Math.abs(det)>1e-8?(-parentWorld.c*vx+parentWorld.a*vy)/det:vy;
+   const angleDeg=Math.atan2(lvy,lvx)*(180/Math.PI);
+   const rawDelta=angleDeg-(setup.rotation??0);
+   const wrapped=((((rawDelta+180)%360)+360)%360)-180;
+   const rotVal=cleanMotionNumber(wrapped);
+   targetOps=[{trackIndex:rotTrack.trackIndex,property:'rotate',value:[rotVal]}];
+  }else{
+   const dx=worldPt.x-parentWorld.x;
+   const dy=worldPt.y-parentWorld.y;
+   const localX=Math.abs(det)>1e-8?(parentWorld.d*dx-parentWorld.b*dy)/det:dx;
+   const localY=Math.abs(det)>1e-8?(-parentWorld.c*dx+parentWorld.a*dy)/det:dy;
+   const trackValX=cleanMotionNumber(localX-(setup.x??0));
+   const trackValY=cleanMotionNumber(localY-(setup.y??0));
+   const tr2d=editableMatches.find(c=>c.property==='translate');
+   if(tr2d){
+    targetOps=[{trackIndex:tr2d.trackIndex,property:'translate',value:[trackValX,trackValY]}];
+   }else{
+    const trx=editableMatches.find(c=>c.property==='translatex');
+    const tryTrack=editableMatches.find(c=>c.property==='translatey');
+    if(trx)targetOps.push({trackIndex:trx.trackIndex,property:'translatex',value:[trackValX]});
+    if(tryTrack)targetOps.push({trackIndex:tryTrack.trackIndex,property:'translatey',value:[trackValY]});
+   }
+  }
+
+  const groupId=gesture?.undoGroupId??this.builder.beginUndoGroup();
+  const savedText=this.builder.text;
+  try{
+   this.options.pause?.();
+   if(gesture){
+    this.builder.unwindUndoGroup(groupId);
+   }
+   let keyCountChanged=false;
+   const playheadTime=cleanMotionNumber(this.at);
+   this.builder.withUndoGroup(groupId,()=>{
+    for(const item of targetOps){
+     const beforeKeys=this.readDraftTrackKeys(item.trackIndex);
+     const existingIdx=beforeKeys.findIndex(k=>Math.abs(k.t-playheadTime)<=5e-4);
+     const arrVal=Array.isArray(item.value)?item.value:[item.value as number];
+     if(existingIdx>=0){
+      this.builder!.apply({
+       op:'set_key_value',
+       animation:this.animation,
+       track:item.trackIndex,
+       key:existingIdx,
+       value:arrVal,
+      });
+      const inspTrack=this.inspection?.tracks.find(t=>t.kind==='bone'&&t.target===boneName&&t.name===item.property);
+      const sel={animation:this.animation,trackIndex:item.trackIndex,keyIndex:existingIdx,pointer:inspTrack?.pointer??''};
+      this.selectedKey=sel;
+      this.selectedKeys=[sel];
+     }else{
+      this.builder!.apply({
+       op:'insert_key',
+       animation:this.animation,
+       track:item.trackIndex,
+       time:playheadTime,
+       value:arrVal,
+      });
+      const afterKeys=this.readDraftTrackKeys(item.trackIndex);
+      const newIdx=afterKeys.findIndex(k=>Math.abs(k.t-playheadTime)<=5e-4);
+      const inspTrack=this.inspection?.tracks.find(t=>t.kind==='bone'&&t.target===boneName&&t.name===item.property);
+      if(newIdx>=0){
+       const sel={animation:this.animation,trackIndex:item.trackIndex,keyIndex:newIdx,pointer:inspTrack?.pointer??''};
+       this.selectedKey=sel;
+       this.selectedKeys=[sel];
+      }
+      const domLaneKeys=this.options.host.querySelectorAll(`.animation-key[data-source-track="${item.trackIndex}"]`).length;
+      if(domLaneKeys!==afterKeys.length)keyCountChanged=true;
+     }
+    }
+   });
+   this.syncEffectiveInspection(true);
+   this.renderEditorBar();
+   if(keyCountChanged){
+    this.renderTimeline();
+   }else{
+    this.syncTimelineKeysInPlace();
+    this.syncKeyInspectorInPlace();
+   }
+   this.renderChannels();
+   this.setEditorStatus(
+    `Posed bone "${boneName}" (${mode}) at ${formatSeconds(playheadTime)} s (${this.builder.ops.length} pending op(s), preview active).`,
+    false,
+   );
+   return {ok:true,ops:this.builder.ops};
+  }catch(e){
+   if(this.builder.text!==savedText&&gesture){
+    this.builder.unwindUndoGroup(groupId);
+   }
+   const msg=e instanceof Error?e.message:String(e);
+   this.setEditorStatus(msg,true);
+   return {ok:false,error:msg};
+  }
+ }
+
+ private bindStageBoneDrag(btn:HTMLButtonElement,boneName:string){
+  btn.addEventListener('pointerdown',e=>{
+   if(!e.isPrimary||e.button!==0||this.isBusy||this.space)return;
+   e.stopPropagation();
+   const mode:'rotate'|'translate'=e.altKey?(this.poseMode==='rotate'?'translate':'rotate'):this.poseMode;
+   const setup=this.inspection?.bones.find(b=>b.name===boneName);
+   const originWorld=this.boneWorldMatrix(boneName);
+   const parentWorld=setup?.parent?this.boneWorldMatrix(setup.parent):{x:0,y:0,a:1,b:0,c:0,d:1};
+   const undoGroupId=this.builder?this.builder.beginUndoGroup():1;
+   this.draggingStageBone={
+    pointerId:e.pointerId,
+    boneName,
+    mode,
+    startX:e.clientX,
+    startY:e.clientY,
+    moved:false,
+    undoGroupId,
+    originWorld:{x:originWorld.x,y:originWorld.y},
+    parentWorld,
+   };
+   btn.setPointerCapture?.(e.pointerId);
+  });
+
+  btn.addEventListener('pointermove',e=>{
+   const drag=this.draggingStageBone;
+   if(!drag||drag.pointerId!==e.pointerId)return;
+   if(!drag.moved&&Math.hypot(e.clientX-drag.startX,e.clientY-drag.startY)<2)return;
+   if(!drag.moved){
+    drag.moved=true;
+    this.suppressNextBoneClick=true;
+    this.select({kind:'bone',name:drag.boneName});
+   }
+   const activeMode:'rotate'|'translate'=e.altKey?(this.poseMode==='rotate'?'translate':'rotate'):drag.mode;
+   this.poseBoneOnStage(drag.boneName,activeMode,e.clientX,e.clientY,{
+    undoGroupId:drag.undoGroupId,
+    originWorld:drag.originWorld,
+    parentWorld:drag.parentWorld,
+   });
+  });
+
+  const endBoneDrag=(e:PointerEvent)=>{
+   const drag=this.draggingStageBone;
+   if(!drag||drag.pointerId!==e.pointerId)return;
+   this.draggingStageBone=null;
+   if(btn.hasPointerCapture?.(e.pointerId))btn.releasePointerCapture(e.pointerId);
+   if(drag.moved){
+    e.preventDefault();
+    setTimeout(()=>{this.suppressNextBoneClick=false;},0);
+   }
+  };
+  btn.addEventListener('pointerup',endBoneDrag);
+  btn.addEventListener('pointercancel',endBoneDrag);
+ }
+
  capture(player:Pick<RigPlayer,'bone'>|null,frame:PosedFrame|undefined){
-  this.frame=frame??null;this.bones.clear();for(const b of player&&frame?this.inspection?.bones??[]:[]){try{const p=player!.bone(b.name);if(p.active)this.bones.set(b.name,{x:p.x,y:p.y});}catch{/* unavailable bones have no stage handle */}}this.redraw();
+  this.frame=frame??null;this.bones.clear();
+  for(const b of player&&frame?this.inspection?.bones??[]:[]){
+   try{
+    const p=player!.bone(b.name) as {x:number;y:number;active:boolean;a?:number;b?:number;c?:number;d?:number};
+    if(p.active){
+     const hasMatrix=typeof p.a==='number'&&typeof p.b==='number'&&typeof p.c==='number'&&typeof p.d==='number';
+     this.bones.set(b.name,{
+      x:p.x,
+      y:p.y,
+      a:hasMatrix?p.a!:1,
+      b:hasMatrix?p.b!:0,
+      c:hasMatrix?p.c!:0,
+      d:hasMatrix?p.d!:1,
+      hasMatrix,
+     });
+    }
+   }catch{/* unavailable bones have no stage handle */}
+  }
+  this.redraw();
  }
 
  redraw(bonePoints=this.bonePoints){
   this.bonePoints=bonePoints;
   for(const [name,node]of this.boneButtons)if(!this.bones.has(name)){node.remove();this.boneButtons.delete(name);}
   const {stage}=this.options,selected=this.selection.value();stage.dataset.heldFrame=this.frame?'available':'unavailable';stage.dataset.selectedKind=selected?.kind??'';stage.dataset.selectedName=selected?.name??'';this.picks.hidden=!this.options.enabled();
-  let order=0;for(const [name,p]of this.bones){let b=this.boneButtons.get(name);if(!b){b=button('',()=>this.select({kind:'bone',name}));b.className='animation-bone-pick';b.title=`Select bone ${name}`;b.setAttribute('aria-label',b.title);b.dataset.bone=name;this.boneButtons.set(name,b);this.picks.append(b);}
-   b.style.zIndex=String(order++);const at=this.options.project(p.x,p.y);b.style.left=`${at.x}px`;b.style.top=`${at.y}px`;b.hidden=!bonePoints&&!(selected?.kind==='bone'&&selected.name===name);b.setAttribute('aria-pressed',String(selected?.kind==='bone'&&selected.name===name));
+  let order=0;
+  for(const [name,p]of this.bones){
+   let b=this.boneButtons.get(name);
+   if(!b){
+    b=button('',()=>{
+     if(this.suppressNextBoneClick){
+      this.suppressNextBoneClick=false;
+      return;
+     }
+     this.select({kind:'bone',name});
+    });
+    b.className='animation-bone-pick';
+    b.title=`Select or drag bone ${name}`;
+    b.setAttribute('aria-label',`Select bone ${name}`);
+    b.dataset.bone=name;
+    this.bindStageBoneDrag(b,name);
+    this.boneButtons.set(name,b);
+    this.picks.append(b);
+   }
+   b.style.zIndex=String(order++);
+   const at=this.options.project(p.x,p.y);
+   b.style.left=`${at.x}px`;
+   b.style.top=`${at.y}px`;
+   b.hidden=!bonePoints&&!(selected?.kind==='bone'&&selected.name===name);
+   b.setAttribute('aria-pressed',String(selected?.kind==='bone'&&selected.name===name));
   }
  }
 
