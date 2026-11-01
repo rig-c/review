@@ -300,3 +300,20 @@ test('#279: view bar wraps without shrinking or clipping layer toggles and keeps
  expect(checkViewbarCss(css.replace('.viewbar>.layer-toggles{flex:none}','.viewbar>.layer-toggles{flex:0 1 auto;overflow:hidden}'))).toBe(false);
  expect(checkViewbarCss(css.replaceAll('#stage-comment-refusal{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}','#stage-comment-refusal{flex:0 1 180px}'))).toBe(false);
 });
+
+test('#284: comment list CSS anchors below the view bar on both review and compare stylesheets; planted top:55px fails',async()=>{
+ const styles=await readFile(new URL('../web/styles.css',import.meta.url),'utf8');
+ const compare=await readFile(new URL('../web/compare.css',import.meta.url),'utf8');
+ const checkListAnchorCss=(sheet:string)=>{
+  const stripped=sheet.replace(/\/\*[\s\S]*?\*\//g,'');
+  const rules=(sel:string)=>[...stripped.matchAll(/([^{}@]+)\{([^{}]*)\}/g)].filter(m=>m[1]!.split(',').map(s=>s.trim()).includes(sel)).map(m=>m[2]!);
+  const viewbarAnchored=rules('.viewbar').some(r=>r.includes('anchor-name:--stage-comment-bar'))&&rules('.toolbar').some(r=>r.includes('anchor-name:--stage-comment-bar'));
+  const listRules=rules('.stage-comment-list'),lastList=listRules.at(-1)??'';
+  const listAnchored=lastList.includes('position-anchor:--stage-comment-bar')&&lastList.includes('top:calc(anchor(bottom,50px) + 5px)')&&!listRules.some(r=>/(?:^|;)top:\s*55px(?:;|$)/.test(r));
+  return viewbarAnchored&&listAnchored;
+ };
+ expect(checkListAnchorCss(styles)).toBe(true);
+ expect(checkListAnchorCss(compare)).toBe(true);
+ expect(checkListAnchorCss(styles.replace('top:calc(anchor(bottom,50px) + 5px)','top:55px'))).toBe(false);
+ expect(checkListAnchorCss(compare.replace('top:calc(anchor(bottom,50px) + 5px)','top:55px'))).toBe(false);
+});

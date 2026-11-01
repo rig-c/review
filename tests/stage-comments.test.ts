@@ -136,6 +136,42 @@ function commentUI(feedback:any[]=[],options:{locked?:(id:string)=>boolean;cropI
  return {toggle,pane,workspace,list,tool,pose,errors,restores:()=>restores,changes:()=>changes,tick:()=>next(),down:()=>{if(!tool.active())toggle.onclick?.();pane.dispatch('pointerdown',event());},up:()=>pane.emit('pointerup',event()),key:(k:string)=>doc.dispatch('keydown',event({key:k})),escape:()=>doc.dispatch('keydown',event({key:'Escape'})),blur:()=>win.dispatch('blur'),cleanup:()=>{tool.dispose();for(const [k,v]of saved)(globalThis as any)[k]=v;if(prevGetComputedStyle===undefined)delete (globalThis as any).getComputedStyle;}};
 }
 test('comment list overlay lives outside the measured workspace stage chrome',()=>{const ui=commentUI();try{expect(ui.workspace.children).toHaveLength(1);expect(ui.workspace.children[0]!.className).toContain('stage-comment-list');}finally{ui.cleanup();}});
+test('#284: open comment list tracks wrapped view bar bottom across widths and languages; planted fixed top:55px covers wrapped rows',()=>{
+ const ui=commentUI();
+ try{
+  let barBottom=122;
+  (ui.workspace as any).getBoundingClientRect=()=>({left:264,top:72,right:900,bottom:900,width:636,height:828});
+  (ui.toggle as any).closest=()=>null;
+  // Rebind toolbar rect through workspace's first-pass toolbar reference in commentUI:
+  const toolbarRect=()=>({left:264,top:72,right:900,bottom:barBottom,width:636,height:barBottom-72});
+  // commentUI's toolbar is the node whose closest('main') is ui.workspace; patch Node.prototype.getBoundingClientRect for that toolbar via ui.list()'s sibling/owner check:
+  const origRect=Object.getPrototypeOf(ui.workspace).getBoundingClientRect;
+  Object.getPrototypeOf(ui.workspace).getBoundingClientRect=function(){return this===ui.workspace?{left:264,top:72,right:900,bottom:900,width:636,height:828}:toolbarRect();};
+  try{
+   ui.toggle.onclick?.();
+   expect(ui.list().hidden).toBe(false);
+   expect(ui.list().style.top).toBe('55px');
+   // 900x900 English wraps to 3 rows (bottom: 184, height: 112) -> list top becomes 117px (screen y=189 > 184).
+   barBottom=184;
+   ui.tick();
+   expect(ui.list().style.top).toBe('117px');
+   expect(72+parseFloat(ui.list().style.top)).toBeGreaterThan(barBottom);
+   // 900x900 Korean wraps to 2 rows (bottom: 149, height: 77) -> list top becomes 82px (screen y=154 > 149).
+   barBottom=149;
+   ui.tick();
+   expect(ui.list().style.top).toBe('82px');
+   expect(72+parseFloat(ui.list().style.top)).toBeGreaterThan(barBottom);
+   // Planted pre-#284 fixed top:55px (screen y=127) fails the non-overlap gate on both 3-row en and 2-row ko wrapped bars.
+   const clearsBar=(listTopPx:number,viewbarTop:number,viewbarBottom:number)=>viewbarTop+listTopPx>=viewbarBottom;
+   expect(clearsBar(parseFloat('117px'),72,184)).toBe(true);
+   expect(clearsBar(parseFloat('82px'),72,149)).toBe(true);
+   expect(clearsBar(55,72,184)).toBe(false);
+   expect(clearsBar(55,72,149)).toBe(false);
+  }finally{
+   Object.getPrototypeOf(ui.workspace).getBoundingClientRect=origRect;
+  }
+ }finally{ui.cleanup();}
+});
 test('actual stage comment painter hides a mark on a different animation at the same frame/time/turn',()=>{
  const c=mark({sourceHash:'a'.repeat(64)});c.animation='idle';const ui=commentUI([{id:'one',summary:'spot',context:{comment:c}}]);try{const layer=ui.pane.children[0]!;expect(layer.children).toHaveLength(2);ui.pose.animation='other';ui.tick();expect(layer.children).toHaveLength(0);ui.pose.animation='idle';ui.tick();expect(layer.children).toHaveLength(2);}finally{ui.cleanup();}
 });
