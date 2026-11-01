@@ -170,6 +170,12 @@ function ensureMaps(): { enToKo: Map<string, string>; koToEn: Map<string, string
       if (!enToKoMap.has(enSub)) enToKoMap.set(enSub, koSub);
       if (!koToEnMap.has(koSub)) koToEnMap.set(koSub, enSub);
     }
+    if (/^ \([^(){}]+\)$/.test(en) && /^ \([^(){}]+\)$/.test(ko)) {
+      const enPre = `{0}${en}`;
+      const koPre = `{0}${ko}`;
+      if (!enToKoMap.has(enPre)) enToKoMap.set(enPre, koPre);
+      if (!koToEnMap.has(koPre)) koToEnMap.set(koPre, enPre);
+    }
     const enCode = /^([A-Z][A-Z0-9_]{2,}):\s+([\s\S]+)$/.exec(en);
     const koCode = /^([A-Z][A-Z0-9_]{2,}):\s+([\s\S]+)$/.exec(ko);
     if (enCode && koCode && enCode[1] === koCode[1]) {
@@ -183,6 +189,14 @@ function ensureMaps(): { enToKo: Map<string, string>; koToEn: Map<string, string
     if (enTrim && koTrim && (enTrim !== en || koTrim !== ko) && !/^[a-z0-9_.-]+$/.test(enTrim)) {
       if (!enToKoMap.has(enTrim)) enToKoMap.set(enTrim, koTrim);
       if (!koToEnMap.has(koTrim)) koToEnMap.set(koTrim, enTrim);
+    }
+    if (en.endsWith('.') && !en.endsWith('..') && ko.endsWith('.') && !ko.endsWith('..')) {
+      const enNoDot = en.slice(0, -1);
+      const koNoDot = ko.slice(0, -1);
+      if (enNoDot && koNoDot) {
+        if (!enToKoMap.has(enNoDot)) enToKoMap.set(enNoDot, koNoDot);
+        if (!koToEnMap.has(koNoDot)) koToEnMap.set(koNoDot, enNoDot);
+      }
     }
   }
   return { enToKo: enToKoMap, koToEn: koToEnMap };
@@ -215,33 +229,67 @@ function buildPatterns(fromCatalog: Readonly<Record<string, string>>, toCatalog:
     if (!srcPattern || !dstPattern || srcPattern === dstPattern) continue;
     if (!srcPattern.includes('{0}')) continue;
     const literalOnly = srcPattern.replace(tokenRe, '').trim();
+    const alphaKoOnly = literalOnly.replace(/[^A-Za-z가-힣]+/g, '');
     // Skip bare structural patterns that have no alphabetic or Korean words of their own
-    if (!/[A-Za-z가-힣]{2,}/.test(literalOnly)) continue;
+    if (alphaKoOnly.length === 0 || alphaKoOnly === '의') {
+      continue;
+    }
     const paramOrder: number[] = [];
+    const hasDotSep = srcPattern.includes(' · ') && literalOnly.length > 8;
+    const charUnit = hasDotSep
+      ? '[\\s\\S]'
+      : alphaKoOnly.length < 2
+        ? '(?:(?!\\. |\\n| · )[\\s\\S])'
+        : '(?:(?! · )[\\s\\S])';
     const isShortOpenEnded =
-      /^\{\d+\}/.test(srcPattern) &&
-      /\{\d+\}$/.test(srcPattern) &&
+      /^\{\d+\} [A-Za-z가-힣()/+-]+ \{\d+\}$/.test(srcPattern) &&
       literalOnly.length < 10 &&
       !literalOnly.includes('·') &&
       !literalOnly.includes(':');
     let regexBody = '^';
     let lastIndex = 0;
     let match: RegExpExecArray | null;
+    let prevWasOptionalPrefix = false;
     tokenRe.lastIndex = 0;
     while ((match = tokenRe.exec(srcPattern)) !== null) {
       const literalChunk = srcPattern.slice(lastIndex, match.index);
       regexBody += literalChunk.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       paramOrder.push(Number(match[1]));
+      const tokenStart = match.index;
       lastIndex = match.index + match[0].length;
       const isAtEnd = lastIndex === srcPattern.length;
-      const nextIsToken = srcPattern.slice(lastIndex).startsWith('{');
+      const afterToken = srcPattern.slice(lastIndex);
+      const beforeToken = srcPattern.slice(0, tokenStart);
+      const nextIsToken = afterToken.startsWith('{');
+      const isOptionalPrefix: boolean =
+        (tokenStart === 0 || (beforeToken.endsWith('}') && prevWasOptionalPrefix)) &&
+        (afterToken.startsWith('Readings of ') ||
+          afterToken.startsWith('retarget ') ||
+          afterToken.startsWith('build ') ||
+          afterToken.startsWith('빌드 ') ||
+          /^\{\d+\}(?: op\b| ops\b| 작업\b|build |빌드 | \{\d+\} \+ (?:compile|컴파일) | 측정: )/.test(afterToken));
+      const prevIsNonPrefixToken = beforeToken.endsWith('}') && !prevWasOptionalPrefix;
+      const isAttachedAfterWord = /(?:[a-z가-힣]|[A-Z]{2}|[)\]]|\}\u2026)$/.test(beforeToken);
+      const isAttachedBeforePunct = /^(?:[.,):;]| · | — )/.test(afterToken);
+      const isOptionalSuffix =
+        prevIsNonPrefixToken ||
+        (isAttachedAfterWord && (isAttachedBeforePunct || nextIsToken || isAtEnd));
+      // A bare space opens a suffix only after a literal: beside another placeholder it would split that placeholder's value.
+      const spaceDelim = beforeToken.endsWith('}') ? '' : '| ';
+      const optDelim = '(?:|(?: · | — | \\(|, |; |\\[| —' + spaceDelim + ')' + charUnit + '*?)';
+      const optDelimEnd = '(?:|(?: · | — | \\(|, |; |\\[| —' + spaceDelim + ')' + charUnit + '*)';
       regexBody += isShortOpenEnded
         ? '([^\\s]+)'
-        : isAtEnd
-          ? '([\\s\\S]*)'
-          : nextIsToken
-            ? '([\\s\\S]*?)'
-            : '([\\s\\S]+?)';
+        : isOptionalPrefix
+          ? `(${charUnit}*?)`
+          : isOptionalSuffix
+            ? isAtEnd
+              ? `(${optDelimEnd})`
+              : `(${optDelim})`
+            : isAtEnd
+              ? `(${charUnit}*)`
+              : `(${charUnit}+?)`;
+      prevWasOptionalPrefix = isOptionalPrefix;
     }
     regexBody += srcPattern.slice(lastIndex).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$';
     try {
@@ -307,6 +355,7 @@ const KNOWN_SHORT_PROSE = new Set([
   'pass',
   'error',
   'none',
+  'blink',
   'not read',
   'not drawn',
   'not loaded',
@@ -363,6 +412,26 @@ function translateCore(text: string, lang: ResolvedLanguage, depth: number): str
     }
   }
 
+  // Preserve required-field ' *' suffix across translation
+  if (text.endsWith(' *')) {
+    const stem = text.slice(0, -2);
+    if (stem) {
+      const translatedStem = translateCore(stem, lang, depth + 1);
+      if (translatedStem !== stem) {
+        return `${translatedStem} *`;
+      }
+    }
+  }
+
+  // Bare seconds readout '<number> s' <-> '<number>초'
+  if (lang === 'ko') {
+    const secMatch = /^(-?\d+(?:\.\d+)?) s$/.exec(text);
+    if (secMatch) return `${secMatch[1]}초`;
+  } else {
+    const secMatch = /^(-?\d+(?:\.\d+)?)초$/.exec(text);
+    if (secMatch) return `${secMatch[1]} s`;
+  }
+
   // Preserve ERROR_CODE: <detail> prefix before wildcard pattern matching
   const codeMatch = /^([A-Z][A-Z0-9_]{2,}):\s+([\s\S]+)$/.exec(text);
   if (codeMatch) {
@@ -403,7 +472,10 @@ function translateCore(text: string, lang: ResolvedLanguage, depth: number): str
         sep === ' · ' && /^(?:[◈◇]\s+)?[AB]$/.test(parts[0]?.trim() ?? '');
       const slotIdx = sep === ' · ' ? (sidePrefix ? 1 : 0) : -1;
       const mapped = parts.map((part, idx) => {
-        if (idx === slotIdx && /^[a-z0-9_.-]+$/.test(part.trim()) && !KNOWN_SHORT_PROSE.has(part.trim())) {
+        if (
+          (idx === slotIdx && /^[a-z0-9_.-]+$/.test(part.trim()) && !KNOWN_SHORT_PROSE.has(part.trim())) ||
+          (sep === ' · ' && CONTEXT_LOWER_KEYS.has(part.trim()))
+        ) {
           return part;
         }
         if (sep === ' · ' && idx > slotIdx) {
@@ -447,7 +519,20 @@ function normalizeHtmlKey(html: string): string {
   return html.replace(/\s+/g, ' ').trim();
 }
 
-const CONTEXT_LOWER_KEYS = new Set(['bone', 'box', 'from', 'root', 'silhouette', 'slot', 'tip', 'to', 'vs']);
+const CONTEXT_LOWER_KEYS = new Set([
+  'back',
+  'bone',
+  'box',
+  'from',
+  'front',
+  'root',
+  'silhouette',
+  'slot',
+  'tip',
+  'to',
+  'turbulence',
+  'vs'
+]);
 
 function isExemptElement(el: Element | null): boolean {
   let cur: Element | null = el;
@@ -498,7 +583,9 @@ function isExemptElement(el: Element | null): boolean {
           selectId === 'mesh-segment-bone' ||
           selectId === 'chest-0-bone' ||
           selectId === 'chest-1-bone' ||
-          selectId === 'person-select') &&
+          selectId === 'person-select' ||
+          parentSelect?.getAttribute?.('data-cuts-add') === 'from' ||
+          Boolean(parentSelect?.closest?.('#rig-fields-region'))) &&
         (cur as HTMLOptionElement).value !== ''
       ) {
         return true;
@@ -588,13 +675,19 @@ function applyTextNodeI18n(node: Node, lang: ResolvedLanguage): void {
     enText = existing.en;
   }
 
-  const enTrimmed = enText.trim();
+  const enTrimmed = enText.trim().replace(/ \*$/, '');
   if (CONTEXT_LOWER_KEYS.has(enTrimmed) || (/^[a-z0-9_.-]+$/.test(enTrimmed) && enTrimmed !== 'none')) {
     const parentTag = parent.tagName?.toUpperCase();
     const allow =
       parentTag === 'LABEL' ||
-      (parentTag === 'SPAN' && enTrimmed === 'vs') ||
-      (parentTag === 'OPTION' && (enTrimmed === 'silhouette' || enTrimmed === 'box'));
+      (parentTag === 'SPAN' && (enTrimmed === 'vs' || Boolean(parent.parentElement?.classList?.contains('cloth-field')))) ||
+      (parentTag === 'OPTION' &&
+        (enTrimmed === 'silhouette' ||
+          enTrimmed === 'box' ||
+          enTrimmed === 'front' ||
+          enTrimmed === 'back' ||
+          parent.parentElement?.id === 'cuts-add' ||
+          parent.parentElement?.getAttribute?.('data-cuts-add') === 'draw'));
     if (!allow) return;
   }
 
@@ -1150,5 +1243,308 @@ export function checkWebHardcodedStrings(
     ok: violations.length === 0,
     violations,
     exemptions
+  };
+}
+
+export interface KoreanDomViolation {
+  readonly kind: 'text' | 'title' | 'aria-label' | 'placeholder';
+  readonly reason: 'half-translated' | 'untranslated-english';
+  readonly tag: string;
+  readonly id: string;
+  readonly text: string;
+}
+
+export interface KoreanDomContext {
+  readonly kind?: 'text' | 'title' | 'aria-label' | 'placeholder';
+  readonly tag?: string;
+  readonly id?: string;
+  readonly cls?: string;
+}
+
+const SINGLE_WORD_FIELD_IDS = new Set([
+  'strength',
+  'damping',
+  'inertia',
+  'mass',
+  'wind',
+  'gravity',
+  'mix',
+  'limit',
+  'chains',
+  'links',
+  'translate',
+  'part',
+  'parts',
+  'grid',
+  'stray',
+  'exponent',
+  'rule',
+  'floor',
+  'amp',
+  'period',
+  'phase',
+  'base',
+  'lag',
+  'squash',
+  'brow_drop',
+  'loop',
+  'legs',
+  'rest',
+  'as',
+  'short',
+  'bends',
+  'stance',
+  'x',
+  'y',
+  'rotate',
+  'rx',
+  'ry',
+  'rz',
+  'tx',
+  'ty',
+  'sx',
+  'sy',
+  'dx',
+  'dy'
+]);
+
+const ENGLISH_PROSE_WORDS = new Set([
+  'no',
+  'not',
+  'the',
+  'by',
+  'of',
+  'in',
+  'to',
+  'for',
+  'with',
+  'from',
+  'at',
+  'on',
+  'is',
+  'are',
+  'was',
+  'were',
+  'be',
+  'or',
+  'and',
+  'then',
+  'into',
+  'across',
+  'built',
+  'accepts',
+  'installed',
+  'reader',
+  'compiled',
+  'binding',
+  'regions',
+  'stops',
+  'sequence',
+  'absent',
+  'blink',
+  'image',
+  'video',
+  'pose',
+  'inspect',
+  'planted',
+  'untranslated'
+]);
+
+let koCatalogValueSet: Set<string> | null = null;
+function getKoCatalogValueSet(): Set<string> {
+  if (!koCatalogValueSet) {
+    const vals: string[] = [];
+    for (const v of Object.values(koCatalog)) {
+      vals.push(v.replace(/\s+/g, ' ').trim());
+      if (v.includes('<') || v.includes('&')) {
+        vals.push(
+          decodeHtmlEntities(v.replace(/<[^>]+>/g, ''))
+            .replace(/\s+/g, ' ')
+            .trim()
+        );
+      }
+    }
+    koCatalogValueSet = new Set(vals);
+  }
+  return koCatalogValueSet;
+}
+
+function isAllowedPureEnglishSegment(s: string, ctx?: KoreanDomContext): boolean {
+  const t = s.trim().replace(/^[◈◇●·]\s*/, '').replace(/\s*\*$/, '');
+  if (!t || !/[A-Za-z]/.test(t)) return true;
+  const tagUpper = ctx?.tag?.toUpperCase();
+  if (tagUpper === 'CODE' || tagUpper === 'KBD') return true;
+  if (tr(t, 'ko') !== t) {
+    if (ctx?.kind === 'text' && (CONTEXT_LOWER_KEYS.has(t) || (/^[a-z0-9_.-]+$/.test(t) && t !== 'none'))) {
+      const allow =
+        tagUpper === 'LABEL' ||
+        (tagUpper === 'SPAN' && t === 'vs') ||
+        (tagUpper === 'OPTION' &&
+          (t === 'silhouette' || t === 'box' || t === 'front' || t === 'back' || ctx.id === 'cuts-add'));
+      if (!allow) return true;
+    }
+    return false;
+  }
+  if (/^[A-Z][A-Z0-9_]{2,}(?::\s*[\s\S]*|\*?)$/.test(t)) return true;
+  if (
+    t === 'a, b, …' ||
+    /^(?:Space|Shift|Alt|Ctrl|Cmd|Meta|Tab|Enter|Esc|Escape|Backspace|Delete|Home|End|English|WebGL|Canvas2D|CLEAN|RETARGET|FPS|JSON|PNG|SVG)$/.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  if (/^-?\d+(?:\.\d+)?\s*(?:px|ms|fps|Hz|s⁻¹|%|°|×)$/.test(t)) return true;
+  if (/^(?:yaw|pitch|body) · [a-z0-9_]+ \[-?\d+, -?\d+\] °$/.test(t)) return true;
+  if (/^[a-z0-9_]+ -?\d+(?:\.\d+)?°$/.test(t)) return true;
+  if (/^[a-z0-9_.-]+ → [a-z0-9_.-]+$/.test(t)) return true;
+  if (/^(?:rotate|x|y) \(-?\d+(?:\.\d+)?\)$/.test(t)) return true;
+  if (
+    /^(?:back hair|front hair|rig --config|rig-parts build|rig-parts rig|default \/ [a-z0-9_.-]+|[a-z0-9_.-]+ \/ default \/ [a-z0-9_.-]+)$/.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  const fieldMatch = /^(?:[a-z0-9_.-]+|back hair|front hair) ([a-z0-9_.-]+)$/i.exec(t);
+  if (fieldMatch && SINGLE_WORD_FIELD_IDS.has(fieldMatch[1]!)) return true;
+  if (/^(?:#\d+ )?[a-z0-9_.-]+(?: · [a-zA-Z0-9_.-]+)+$/.test(t)) {
+    const parts = t.replace(/^#\d+ /, '').split(' · ');
+    if (parts.every((p) => /^[a-zA-Z0-9_.-]+$/.test(p) && !ENGLISH_PROSE_WORDS.has(p.toLowerCase()))) {
+      return true;
+    }
+  }
+  if (!t.includes(' ')) {
+    if (ENGLISH_PROSE_WORDS.has(t.toLowerCase())) return false;
+    if (/^[A-Z][a-z]{2,}$/.test(t)) return false;
+    return true;
+  }
+  return false;
+}
+
+export function classifyKoreanDomString(
+  rawText: string,
+  ctx?: KoreanDomContext
+): 'ok' | 'half-translated' | 'untranslated-english' {
+  const t = rawText.replace(/\s+/g, ' ').trim();
+  if (!t || !/[A-Za-z]/.test(t)) return 'ok';
+  if (!/[가-힣]/.test(t)) {
+    return isAllowedPureEnglishSegment(t, ctx) ? 'ok' : 'untranslated-english';
+  }
+  if (getKoCatalogValueSet().has(t)) return 'ok';
+  const enRound = tr(t, 'en');
+  if (enRound === t || tr(enRound, 'ko') !== t) return 'half-translated';
+  const segments = t.split(' · ');
+  for (let i = 0; i < segments.length; i++) {
+    const cleanSeg = segments[i]!.trim().replace(/^[◈◇●]\s*/, '');
+    if (!cleanSeg || !/[A-Za-z]/.test(cleanSeg)) continue;
+    if (!/[가-힣]/.test(cleanSeg)) {
+      if (i === 0 && /^[a-z0-9_.-]+$/.test(cleanSeg) && !ENGLISH_PROSE_WORDS.has(cleanSeg)) continue;
+      if (!isAllowedPureEnglishSegment(cleanSeg, ctx)) return 'half-translated';
+      continue;
+    }
+    const stripped = cleanSeg
+      .replace(/\([^()]*\)/g, ' ')
+      .replace(/@[a-z0-9_-]+\/[a-z0-9_-]+/gi, ' ')
+      .replace(/[a-z0-9_]+(?:[/.][a-z0-9_]+)+/gi, ' ')
+      .replace(/--[a-z0-9-]+/g, ' ')
+      .replace(/<[a-z0-9_-]+>/g, ' ');
+    const words = stripped.match(/\b[A-Za-z]{2,}\b/g) ?? [];
+    for (const w of words) {
+      if (ENGLISH_PROSE_WORDS.has(w.toLowerCase()) || w === 'hold') return 'half-translated';
+    }
+  }
+  return 'ok';
+}
+
+export function checkKoreanDomI18n(root: Document | Element): {
+  readonly ok: boolean;
+  readonly violations: readonly KoreanDomViolation[];
+} {
+  const violations: KoreanDomViolation[] = [];
+  const rootEl: Element | null =
+    'documentElement' in root && root.documentElement
+      ? root.documentElement
+      : 'body' in root && (root as Document).body
+        ? (root as Document).body
+        : 'getAttribute' in root
+          ? (root as Element)
+          : null;
+  if (!rootEl) return { ok: true, violations };
+
+  function nearestId(el: Element | null): string {
+    let cur = el;
+    while (cur) {
+      if (cur.id) return cur.id;
+      cur = cur.parentElement;
+    }
+    return '';
+  }
+
+  const allElements: Element[] = [rootEl];
+  if (typeof rootEl.querySelectorAll === 'function') {
+    allElements.push(...Array.from(rootEl.querySelectorAll('*')));
+  } else if ('children' in rootEl) {
+    const stack: Element[] = [...Array.from(rootEl.children)];
+    while (stack.length > 0) {
+      const cur = stack.shift()!;
+      allElements.push(cur);
+      if (cur.children) stack.push(...Array.from(cur.children));
+    }
+  }
+
+  for (const el of allElements) {
+    if (isExemptElement(el)) continue;
+    const tag = el.tagName?.toUpperCase() ?? '';
+    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'PRE' || tag === 'TEXTAREA') continue;
+    const id = nearestId(el);
+    const cls = typeof el.className === 'string' ? el.className : '';
+    for (const attr of ['title', 'aria-label', 'placeholder'] as const) {
+      const val = el.getAttribute(attr);
+      if (!val || !val.trim()) continue;
+      const verdict = classifyKoreanDomString(val, { kind: attr, tag, id, cls });
+      if (verdict !== 'ok') {
+        violations.push({ kind: attr, reason: verdict, tag, id, text: val.replace(/\s+/g, ' ').trim() });
+      }
+    }
+  }
+
+  function walkTextNodes(el: Element): void {
+    if (isExemptElement(el)) return;
+    const tag = el.tagName?.toUpperCase() ?? '';
+    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'PRE' || tag === 'TEXTAREA') return;
+    if (tag === 'P' && el.classList?.contains('hint') && el.children.length > 0) {
+      const txt = el.textContent ?? '';
+      if (txt.trim()) {
+        const id = nearestId(el);
+        const cls = typeof el.className === 'string' ? el.className : '';
+        const verdict = classifyKoreanDomString(txt, { kind: 'text', tag, id, cls });
+        if (verdict !== 'ok') {
+          violations.push({ kind: 'text', reason: verdict, tag, id, text: txt.replace(/\s+/g, ' ').trim() });
+        }
+      }
+      return;
+    }
+    const id = nearestId(el);
+    const cls = typeof el.className === 'string' ? el.className : '';
+    for (const child of Array.from(el.childNodes ?? [])) {
+      if (child.nodeType === 3) {
+        const raw = child.nodeValue ?? '';
+        if (!raw.trim()) continue;
+        const verdict = classifyKoreanDomString(raw, { kind: 'text', tag, id, cls });
+        if (verdict !== 'ok') {
+          violations.push({ kind: 'text', reason: verdict, tag, id, text: raw.replace(/\s+/g, ' ').trim() });
+        }
+      } else if (child.nodeType === 1) {
+        walkTextNodes(child as Element);
+      }
+    }
+  }
+
+  walkTextNodes(rootEl);
+
+  return {
+    ok: violations.length === 0,
+    violations
   };
 }

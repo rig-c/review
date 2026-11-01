@@ -8,7 +8,9 @@ import {
  WEB_STRING_EXEMPTIONS,
  applyDomI18n,
  assertCatalogParity,
+ checkKoreanDomI18n,
  checkWebHardcodedStrings,
+ classifyKoreanDomString,
  getLanguage,
  resolveLanguage,
  setLanguagePreference,
@@ -374,6 +376,140 @@ test('stage comments (#276) switch live between en and ko including hints, refus
  }
 });
 
+// Minimal DOM tree supporting applyDomI18n (querySelectorAll('*') + createTreeWalker(root, 4)).
+class TestTextNode {
+ nodeType=3;
+ nodeValue:string;
+ parentElement:TestElement|null=null;
+ constructor(val:string){this.nodeValue=val;}
+}
+class TestElement {
+ nodeType=1;
+ tagName:string;
+ id='';
+ className='';
+ hidden=false;
+ disabled=false;
+ readOnly=false;
+ type='';
+ value='';
+ maxLength=0;
+ clientWidth=100;
+ clientHeight=100;
+ clientLeft=0;
+ clientTop=0;
+ parentElement:TestElement|null=null;
+ ownerDocument:any=null;
+ children:TestElement[]=[];
+ childNodes:(TestElement|TestTextNode)[]=[];
+ attrs=new Map<string,string>();
+ style:Record<string,string>={};
+ dataset:Record<string,string>={};
+ onclick:Function|null=null;
+ onsubmit:Function|null=null;
+ onkeydown:Function|null=null;
+ classList={
+  contains:(c:string)=>this.className.split(/\s+/).includes(c),
+  toggle:()=>{},
+ };
+ constructor(tag:string,ownerDoc?:any){
+  this.tagName=tag.toUpperCase();
+  this.ownerDocument=ownerDoc??null;
+ }
+ get title():string{return this.attrs.get('title')??'';}
+ set title(v:string){if(v)this.attrs.set('title',v);else this.attrs.delete('title');}
+ get placeholder():string{return this.attrs.get('placeholder')??'';}
+ set placeholder(v:string){if(v)this.attrs.set('placeholder',v);else this.attrs.delete('placeholder');}
+ get textContent():string{
+  return this.childNodes.map(n=>n.nodeType===3?(n as TestTextNode).nodeValue:(n as TestElement).textContent).join('');
+ }
+ set textContent(v:string){
+  this.children=[];
+  this.childNodes=[];
+  if(v!==''){
+   const tn=new TestTextNode(v);
+   tn.parentElement=this;
+   this.childNodes.push(tn);
+  }
+ }
+ getAttribute(k:string):string|null{return this.attrs.get(k)??null;}
+ setAttribute(k:string,v:string):void{this.attrs.set(k,v);}
+ removeAttribute(k:string):void{this.attrs.delete(k);}
+ append(...nodes:(TestElement|TestTextNode|string)[]):void{
+  for(const raw of nodes){
+   const n=typeof raw==='string'?new TestTextNode(raw):raw;
+   n.parentElement=this;
+   this.childNodes.push(n);
+   if(n.nodeType===1)this.children.push(n as TestElement);
+  }
+ }
+ after(...nodes:TestElement[]):void{
+  if(!this.parentElement)return;
+  this.parentElement.append(...nodes);
+ }
+ replaceChildren(...nodes:(TestElement|TestTextNode|string)[]):void{
+  this.children=[];
+  this.childNodes=[];
+  this.append(...nodes);
+ }
+ remove():void{
+  if(!this.parentElement)return;
+  this.parentElement.children=this.parentElement.children.filter(c=>c!==this);
+  this.parentElement.childNodes=this.parentElement.childNodes.filter(c=>c!==this);
+ }
+ closest(selector:string):TestElement|null{
+  const tags=selector.split(',').map(s=>s.trim().toUpperCase());
+  let cur:TestElement|null=this;
+  while(cur){
+   if(tags.includes(cur.tagName))return cur;
+   if(selector==='p.hint'&&cur.tagName==='P'&&cur.classList.contains('hint'))return cur;
+   if(selector==='main'&&cur.tagName==='MAIN')return cur;
+   cur=cur.parentElement;
+  }
+  return null;
+ }
+ querySelectorAll(sel:string):TestElement[]{
+  const out:TestElement[]=[];
+  const walk=(el:TestElement)=>{
+   for(const c of el.children){
+    if(sel==='*'||c.classList.contains(sel.replace(/^\./,''))||c.tagName===sel.toUpperCase())out.push(c);
+    walk(c);
+   }
+  };
+  walk(this);
+  return out;
+ }
+ focus():void{}
+ getBoundingClientRect(){return {left:0,top:0};}
+ addEventListener():void{}
+ removeEventListener():void{}
+}
+function makeTestDoc(){
+ const doc:any={};
+ const root=new TestElement('HTML',doc);
+ doc.documentElement=root;
+ doc.createElement=(tag:string)=>new TestElement(tag,doc);
+ doc.addEventListener=()=>{};
+ doc.removeEventListener=()=>{};
+ doc.getElementById=(id:string)=>{
+  if(root.id===id)return root;
+  return root.querySelectorAll('*').find((e:TestElement)=>e.id===id)??null;
+ };
+ doc.createTreeWalker=(start:TestElement)=>{
+  const textNodes:TestTextNode[]=[];
+  const collect=(el:TestElement)=>{
+   for(const n of el.childNodes){
+    if(n.nodeType===3)textNodes.push(n as TestTextNode);
+    else collect(n as TestElement);
+   }
+  };
+  collect(start);
+  let idx=-1;
+  return {nextNode:()=>idx+1<textNodes.length?textNodes[++idx]!:null};
+ };
+ return {doc,root};
+}
+
 test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comments, checkpoint notes, and finding inputs keep catalogue-matching reviewer text byte-identical in ko while old-code controls fail',async()=>{
  const mainSource=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
  const compareSource=await readFile(new URL('../web/compare.ts',import.meta.url),'utf8');
@@ -390,139 +526,6 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
  expect(rfStart).toBeGreaterThan(0);
  expect(rfEnd).toBeGreaterThan(rfStart);
  const rfSource=compareSource.slice(rfStart,rfEnd).replace('function renderFeedback(): void {','function renderFeedback() {');
-
- // Minimal DOM tree supporting applyDomI18n (querySelectorAll('*') + createTreeWalker(root, 4)).
- class TestTextNode {
-  nodeType=3;
-  nodeValue:string;
-  parentElement:TestElement|null=null;
-  constructor(val:string){this.nodeValue=val;}
- }
- class TestElement {
-  nodeType=1;
-  tagName:string;
-  id='';
-  className='';
-  hidden=false;
-  disabled=false;
-  readOnly=false;
-  type='';
-  value='';
-  maxLength=0;
-  clientWidth=100;
-  clientHeight=100;
-  clientLeft=0;
-  clientTop=0;
-  parentElement:TestElement|null=null;
-  ownerDocument:any=null;
-  children:TestElement[]=[];
-  childNodes:(TestElement|TestTextNode)[]=[];
-  attrs=new Map<string,string>();
-  style:Record<string,string>={};
-  dataset:Record<string,string>={};
-  onclick:Function|null=null;
-  onsubmit:Function|null=null;
-  onkeydown:Function|null=null;
-  classList={
-   contains:(c:string)=>this.className.split(/\s+/).includes(c),
-   toggle:()=>{},
-  };
-  constructor(tag:string,ownerDoc?:any){
-   this.tagName=tag.toUpperCase();
-   this.ownerDocument=ownerDoc??null;
-  }
-  get title():string{return this.attrs.get('title')??'';}
-  set title(v:string){if(v)this.attrs.set('title',v);else this.attrs.delete('title');}
-  get placeholder():string{return this.attrs.get('placeholder')??'';}
-  set placeholder(v:string){if(v)this.attrs.set('placeholder',v);else this.attrs.delete('placeholder');}
-  get textContent():string{
-   return this.childNodes.map(n=>n.nodeType===3?(n as TestTextNode).nodeValue:(n as TestElement).textContent).join('');
-  }
-  set textContent(v:string){
-   this.children=[];
-   this.childNodes=[];
-   if(v!==''){
-    const tn=new TestTextNode(v);
-    tn.parentElement=this;
-    this.childNodes.push(tn);
-   }
-  }
-  getAttribute(k:string):string|null{return this.attrs.get(k)??null;}
-  setAttribute(k:string,v:string):void{this.attrs.set(k,v);}
-  removeAttribute(k:string):void{this.attrs.delete(k);}
-  append(...nodes:(TestElement|TestTextNode)[]):void{
-   for(const n of nodes){
-    n.parentElement=this;
-    this.childNodes.push(n);
-    if(n.nodeType===1)this.children.push(n as TestElement);
-   }
-  }
-  after(...nodes:TestElement[]):void{
-   if(!this.parentElement)return;
-   this.parentElement.append(...nodes);
-  }
-  replaceChildren(...nodes:(TestElement|TestTextNode)[]):void{
-   this.children=[];
-   this.childNodes=[];
-   this.append(...nodes);
-  }
-  remove():void{
-   if(!this.parentElement)return;
-   this.parentElement.children=this.parentElement.children.filter(c=>c!==this);
-   this.parentElement.childNodes=this.parentElement.childNodes.filter(c=>c!==this);
-  }
-  closest(selector:string):TestElement|null{
-   const tags=selector.split(',').map(s=>s.trim().toUpperCase());
-   let cur:TestElement|null=this;
-   while(cur){
-    if(tags.includes(cur.tagName))return cur;
-    if(selector==='p.hint'&&cur.tagName==='P'&&cur.classList.contains('hint'))return cur;
-    if(selector==='main'&&cur.tagName==='MAIN')return cur;
-    cur=cur.parentElement;
-   }
-   return null;
-  }
-  querySelectorAll(sel:string):TestElement[]{
-   const out:TestElement[]=[];
-   const walk=(el:TestElement)=>{
-    for(const c of el.children){
-     if(sel==='*'||c.classList.contains(sel.replace(/^\./,''))||c.tagName===sel.toUpperCase())out.push(c);
-     walk(c);
-    }
-   };
-   walk(this);
-   return out;
-  }
-  focus():void{}
-  getBoundingClientRect(){return {left:0,top:0};}
-  addEventListener():void{}
-  removeEventListener():void{}
- }
- function makeTestDoc(){
-  const doc:any={};
-  const root=new TestElement('HTML',doc);
-  doc.documentElement=root;
-  doc.createElement=(tag:string)=>new TestElement(tag,doc);
-  doc.addEventListener=()=>{};
-  doc.removeEventListener=()=>{};
-  doc.getElementById=(id:string)=>{
-   if(root.id===id)return root;
-   return root.querySelectorAll('*').find((e:TestElement)=>e.id===id)??null;
-  };
-  doc.createTreeWalker=(start:TestElement)=>{
-   const textNodes:TestTextNode[]=[];
-   const collect=(el:TestElement)=>{
-    for(const n of el.childNodes){
-     if(n.nodeType===3)textNodes.push(n as TestTextNode);
-     else collect(n as TestElement);
-    }
-   };
-   collect(start);
-   let idx=-1;
-   return {nextNode:()=>idx+1<textNodes.length?textNodes[++idx]!:null};
-  };
-  return {doc,root};
- }
 
  // Catalogue string that translates to '현재 포즈에서 그려지지 않음' in ko when unexempted.
  const catalogSummary='Not drawn at current pose';
@@ -795,5 +798,235 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
   }
  }finally{
   setLanguagePreference('system');
+ }
+});
+
+test('#294: dynamic compound strings, optional-suffix templates, and cloth/eye-row/idle/rig controls translate cleanly in ko, round-trip to en, and checkKoreanDomI18n catches planted half-translated and untranslated controls',()=>{
+ const {doc,root}=makeTestDoc();
+
+ // 1. Eye-row still handle & rig-fields panel
+ const rigFields=doc.createElement('section');rigFields.id='rig-fields';
+ const rigFieldsState=doc.createElement('p');rigFieldsState.id='rig-fields-state';
+ rigFieldsState.textContent='15 regions · blink (0 still rows) · 0 stops · 0 of 23 bones state inherit · turn (0 depths)';
+ const regionSelect=doc.createElement('select');regionSelect.id='rig-fields-region';regionSelect.setAttribute('aria-label','regions.brow_l bone');
+ const regionOptAll=doc.createElement('option');regionOptAll.value='';regionOptAll.textContent='Pick a rigid part (or select it on the stage)';
+ const regionOptShoes=doc.createElement('option');regionOptShoes.value='shoes';regionOptShoes.textContent='shoes · root';
+ regionSelect.append(regionOptAll,regionOptShoes);
+ const stillSelect=doc.createElement('select');stillSelect.id='rig-fields-still';
+ const stillOptEye=doc.createElement('option');stillOptEye.value='eyewhite_l';stillOptEye.textContent='eyewhite_l · no still row';
+ stillSelect.append(stillOptEye);
+ const inheritSelect=doc.createElement('select');inheritSelect.id='rig-fields-inherit';
+ const inheritOptChain=doc.createElement('option');inheritOptChain.value='hairback_r0_';inheritOptChain.textContent='hairback_r0_ (chain) · normal';
+ inheritSelect.append(inheritOptChain);
+ const eyeHandle=doc.createElement('div');eyeHandle.className='rig-fields-handle';
+ eyeHandle.title='eyewhite_l · no still row';
+ const eyeLabel=doc.createElement('span');eyeLabel.textContent='eyewhite_l · no still row';
+ eyeHandle.append(eyeLabel);
+ rigFields.append(rigFieldsState,regionSelect,stillSelect,inheritSelect,eyeHandle);
+
+ // 2. Cloth panel state, tag picker, and all 15 multi-word recipe field labels + 6 single-word field identifiers
+ const clothPanel=doc.createElement('section');clothPanel.id='cloth-panel';
+ const clothState=doc.createElement('p');clothState.id='cloth-panel-state';
+ clothState.textContent='3 tag(s) the installed reader accepts · bottomwear: 0 part(s) (none), 0 chain(s) in the config · built by rig --config · Apply: CLOTH_KEYPOINTS_UNDECLARED: a cloth recipe Apply runs rig-parts propose, which places the body bones from the figure\'s keypoints; without them the draft moves the body bones the config states — declare the keypoint file with rig-review open <dir> --config <path> --keypoints <file> or the review.json "producer" block\'s "keypoints"';
+ const clothStateDecl=doc.createElement('p');clothStateDecl.id='cloth-panel-state-declared';
+ clothStateDecl.textContent='3 tag(s) the installed reader accepts · back hair: 1 part(s) (hair_back), 2 chain(s) in the config · built by rig --config';
+ const clothTag=doc.createElement('select');clothTag.id='cloth-tag';
+ const clothTagOpt=doc.createElement('option');clothTagOpt.value='bottomwear';clothTagOpt.textContent='bottomwear (no recipe)';
+ clothTag.append(clothTagOpt);
+ const clothFields=doc.createElement('div');clothFields.id='cloth-fields';
+ const multiWordClothLabels=[
+  ['split at','bottomwear 분할 지점(split at)','분할 지점(split at)'],
+  ['split into','bottomwear 분할 개수(split into)','분할 개수(split into)'],
+  ['hold tip','bottomwear 팁 고정(hold tip)','팁 고정(hold tip)'],
+  ['length ratio','bottomwear 길이 비율','길이 비율'],
+  ['strength trunk','bottomwear 줄기 강도(strength trunk)','줄기 강도(strength trunk)'],
+  ['strength branch','bottomwear 가지 강도(strength branch)','가지 강도(strength branch)'],
+  ['strength edge','bottomwear 가장자리 강도(strength edge)','가장자리 강도(strength edge)'],
+  ['alternate damping','bottomwear 교차 감쇠(alternate damping)','교차 감쇠(alternate damping)'],
+  ['wind [root, tip]','bottomwear 바람 [루트, 팁]','바람 [루트, 팁] *'],
+  ['gravity [root, tip]','bottomwear 중력 [루트, 팁]','중력 [루트, 팁] *'],
+  ['swing scales','bottomwear 스윙 배율(swing scales)','스윙 배율(swing scales)'],
+  ['influence across','bottomwear 가로 영향력(influence across)','가로 영향력(influence across)'],
+  ['influence max','bottomwear 최대 영향력(influence max)','최대 영향력(influence max)'],
+  ['influence shape','bottomwear 영향 형태(influence shape)','영향 형태(influence shape)'],
+  ['influence radius','bottomwear 영향 반경(influence radius)','영향 반경(influence radius)'],
+ ] as const;
+ const clothFieldNodes:Array<{span:TestElement;ctrl:TestElement;enLabel:string;enSpan:string;koAria:string;koSpan:string}>=[];
+ for(const [enLabel,koAria,koSpan]of multiWordClothLabels){
+  const lbl=doc.createElement('label');lbl.className='cloth-field';
+  const sp=doc.createElement('span');
+  const enSpan=enLabel==='wind [root, tip]'||enLabel==='gravity [root, tip]'?`${enLabel} *`:enLabel;
+  sp.textContent=enSpan;
+  const isSelect=enLabel==='hold tip'||enLabel==='influence across'||enLabel==='influence shape';
+  const ctrl=doc.createElement(isSelect?'select':'input');
+  ctrl.setAttribute('aria-label',`bottomwear ${enLabel}`);
+  lbl.append(sp,ctrl);
+  clothFields.append(lbl);
+  clothFieldNodes.push({span:sp,ctrl,enLabel,enSpan,koAria,koSpan});
+ }
+ for(const singleField of ['chains','links','damping','translate','part','parts']){
+  const lbl=doc.createElement('label');lbl.className='cloth-field';
+  const sp=doc.createElement('span');sp.textContent=singleField==='links'?'links *':singleField;
+  const ctrl=doc.createElement('input');ctrl.setAttribute('aria-label',`bottomwear ${singleField}`);
+  lbl.append(sp,ctrl);
+  clothFields.append(lbl);
+ }
+ clothPanel.append(clothState,clothStateDecl,clothTag,clothFields);
+
+ // 3. Idle panel blink marker, chain links, and state
+ const idlePanel=doc.createElement('section');idlePanel.id='idle-tracks';
+ const blinkMarker=doc.createElement('button');blinkMarker.id='idle-blink-marker';
+ blinkMarker.title='blink t 2.3 s · drag to move';
+ blinkMarker.setAttribute('aria-label','blink t 2.3 s · drag to move');
+ const idleState=doc.createElement('p');idleState.id='idle-tracks-state';
+ idleState.textContent='4 idle tracks from the handoff config (4 single, 0 chain) · duration 3.33333 s · blink · periods offered: duration / 1…12';
+ const idleChainOpt=doc.createElement('option');idleChainOpt.textContent='hairback_r0_ (3 links)';
+ const idleChainKeyedOpt=doc.createElement('option');idleChainKeyedOpt.textContent='hairback_r (3 links) · keyed';
+ idlePanel.append(blinkMarker,idleState,idleChainOpt,idleChainKeyedOpt);
+
+ // 4. Additional dynamic surfaces across the workspace
+ const misc=doc.createElement('section');misc.id='misc-surfaces';
+ const reqState=doc.createElement('p');reqState.id='requirements-state';
+ reqState.textContent='Rig spec: 42 bones, 19 slots, 6 mesh slot(s), 0 ik/transform constraint(s), 7 animation(s).';
+ const handoffLine=doc.createElement('p');handoffLine.id='handoff-line';
+ handoffLine.textContent='Handoff declared (open --config): ../../config.json sha256 afa4e7b240c6… · parts .. · baseline: not run — rig-parts rig exited 1 without a named refusal (0.1 s)';
+ const lmPrompt=doc.createElement('span');lmPrompt.id='reference-label';
+ lmPrompt.textContent='Click the part to place Apex R (then Apex L, Cleavage) · drag a marker to move it';
+ const turnPadBtn=doc.createElement('button');turnPadBtn.id='turn-pad-body';
+ turnPadBtn.title='model slider body_dial → bone body_dial, rotate, animation body_turn (compiled body_turn binding)';
+ const selectedPartMeta=doc.createElement('p');selectedPartMeta.id='selected-part';
+ selectedPartMeta.textContent='Resolved public attachment: default / hair_back. Declared: default / hair_back (mesh). Drawn page: skeleton.png · sequence 0';
+ const boneEditorTitle=doc.createElement('p');boneEditorTitle.id='bones-anchor-editor';
+ const boneStrong=doc.createElement('strong');boneStrong.textContent='hip';
+ boneEditorTitle.append(boneStrong,' · bone · parent root · bones[0]');
+ const physEditorTitle=doc.createElement('p');physEditorTitle.id='physics-row-editor';
+ const physStrong=doc.createElement('strong');physStrong.textContent='hairback_r0_phys';
+ physEditorTitle.append(physStrong,' · physics · bone hairback_r0 · /constraints/0');
+ const cpSpan=doc.createElement('span');cpSpan.id='checkpoints';cpSpan.textContent='Inspect contact.png';
+ const refOpt=doc.createElement('option');refOpt.id='reference-select';refOpt.textContent='contact.png · image';
+ const refInfo=doc.createElement('div');refInfo.id='reference-info';refInfo.textContent='image · contact.png';
+ const rigTimeLabel=doc.createElement('span');rigTimeLabel.id='rig-label';rigTimeLabel.textContent='Generated rig · idle · 0.600 s';
+ const timeLabel=doc.createElement('output');timeLabel.id='time-label';timeLabel.textContent='0.0000 / 2.2100 s';
+ const meshMaxInf=doc.createElement('input');meshMaxInf.id='mesh-params';meshMaxInf.setAttribute('aria-label','maxInfluences (influences) value');meshMaxInf.placeholder='absent';
+ const cutsAdd=doc.createElement('select');cutsAdd.id='cuts-add';
+ const cutsFront=doc.createElement('option');cutsFront.value='front';cutsFront.textContent='front';
+ const cutsBack=doc.createElement('option');cutsBack.value='back';cutsBack.textContent='back';
+ cutsAdd.append(cutsFront,cutsBack);
+ const retargetErr=doc.createElement('p');retargetErr.id='retarget-status';
+ retargetErr.textContent='RETARGET_PRODUCER_NOT_INSTALLED: @rig-c/pose is not installed beside the package or beside review, and review does not install it — bun add -d @rig-c/pose';
+ const chestErr=doc.createElement('p');chestErr.id='chest-status';
+ chestErr.textContent='CHEST_REGION_VALUE_INVALID contour tolerance';
+ misc.append(reqState,handoffLine,lmPrompt,turnPadBtn,selectedPartMeta,boneEditorTitle,physEditorTitle,cpSpan,refOpt,refInfo,rigTimeLabel,timeLabel,meshMaxInf,cutsAdd,retargetErr,chestErr);
+
+ root.append(rigFields,clothPanel,idlePanel,misc);
+
+ try{
+  setLanguagePreference('ko');
+  applyDomI18n(doc as unknown as Document);
+
+  // Verify #294 Row 1: eye-row still option & handle
+  expect(stillOptEye.textContent).toBe('eyewhite_l · 고정 행 없음');
+  expect(eyeHandle.title).toBe('eyewhite_l · 고정 행 없음');
+  expect(eyeLabel.textContent).toBe('eyewhite_l · 고정 행 없음');
+  expect(rigFieldsState.textContent).toBe('영역 15개 · 눈 깜빡임 (고정 행 0개) · 스톱 0개 · 본 23개 중 0개에 상속 선언됨 · 회전 (깊이 0개)');
+  expect(regionOptAll.textContent).toBe('강체 파츠 선택 (또는 스테이지에서 선택)');
+  expect(regionOptShoes.textContent).toBe('shoes · root');
+  expect(inheritOptChain.textContent).toBe('hairback_r0_ (체인) · normal');
+
+  // Verify #294 Row 2: cloth panel state line
+  expect(clothState.textContent).toBe('설치된 리더가 허용하는 태그 3개 · bottomwear: 설정에 파츠 0개 (없음), 체인 0개 · 빌드 방식: rig --config · 적용: CLOTH_KEYPOINTS_UNDECLARED: 천(Cloth) 레시피 적용은 인물의 키포인트로부터 신체 본을 배치하는 rig-parts propose를 실행합니다. 키포인트가 없으면 초안이 설정의 신체 본을 이동시키므로 rig-review open <dir> --config <path> --keypoints <file> 또는 review.json "producer" 블록의 "keypoints"로 키포인트 파일을 선언하세요');
+  expect(clothStateDecl.textContent).toBe('설치된 리더가 허용하는 태그 3개 · back hair: 설정에 파츠 1개 (hair_back), 체인 2개 · 빌드 방식: rig --config');
+  expect(clothTagOpt.textContent).toBe('bottomwear (레시피 없음)');
+
+  // Verify #294 Row 3: all 15 multi-word cloth labels match between visible <span> and control aria-label
+  for(const node of clothFieldNodes){
+   expect(node.ctrl.getAttribute('aria-label')).toBe(node.koAria);
+   expect(node.span.textContent).toBe(node.koSpan);
+  }
+
+  // Verify #294 Row 4: idle blink marker and idle tracks state/options
+  expect(blinkMarker.title).toBe('눈 깜빡임 t 2.3초 · 드래그하여 이동');
+  expect(blinkMarker.getAttribute('aria-label')).toBe('눈 깜빡임 t 2.3초 · 드래그하여 이동');
+  expect(idleState.textContent).toBe('핸드오프 설정의 아이들 트랙 4개 (단일 4개, 체인 0개) · 길이 3.33333초 · 눈 깜빡임 · 제공 주기: 길이 / 1…12');
+  expect(idleChainOpt.textContent).toBe('hairback_r0_ (링크 3개)');
+  expect(idleChainKeyedOpt.textContent).toBe('hairback_r (링크 3개) · 키 설정됨');
+
+  // Verify additional dynamic surfaces
+  expect(reqState.textContent).toBe('리그 사양: 본 42개, 슬롯 19개, 메시 슬롯 6개, IK/트랜스폼 제약 조건 0개, 애니메이션 7개.');
+  expect(handoffLine.textContent).toBe('핸드오프 선언됨 (open --config): ../../config.json sha256 afa4e7b240c6… · 파츠 .. · 베이스라인: 실행 안 됨 — rig-parts rig이(가) 지정된 거부 사유 없이 종료 코드 1(으)로 종료됨 (0.1초)');
+  expect(lmPrompt.textContent).toBe('파츠를 클릭하여 우측 정점(Apex R) (다음 왼쪽 정점(Apex L), 골(Cleavage)) 배치 · 마커를 드래그하여 이동');
+  expect(turnPadBtn.title).toBe('모델 슬라이더 body_dial → 본 body_dial, rotate, 애니메이션 body_turn (컴파일된 body_turn 바인딩)');
+  expect(selectedPartMeta.textContent).toBe('확인된 공개 어태치먼트: default / hair_back. 선언됨: default / hair_back (mesh). 그려진 페이지: skeleton.png · 시퀀스 0');
+  expect(boneEditorTitle.textContent).toBe('hip · 본 · 부모 root · bones[0]');
+  expect(physEditorTitle.textContent).toBe('hairback_r0_phys · 물리 · 본 hairback_r0 · /constraints/0');
+  expect(cpSpan.textContent).toBe('contact.png 점검');
+  expect(refOpt.textContent).toBe('contact.png · 이미지');
+  expect(refInfo.textContent).toBe('이미지 · contact.png');
+  expect(rigTimeLabel.textContent).toBe('생성된 리그 · idle · 0.600초');
+  expect(timeLabel.textContent).toBe('0.0000 / 2.2100초');
+  expect(meshMaxInf.getAttribute('aria-label')).toBe('최대 영향 수(maxInfluences) 값');
+  expect(meshMaxInf.placeholder).toBe('없음');
+  expect(cutsFront.textContent).toBe('앞');
+  expect(cutsBack.textContent).toBe('뒤');
+  expect(retargetErr.textContent).toBe('RETARGET_PRODUCER_NOT_INSTALLED: 패키지 또는 리뷰 옆에 @rig-c/pose가 설치되어 있지 않으며 리뷰가 직접 설치하지 않습니다 — bun add -d @rig-c/pose');
+  expect(chestErr.textContent).toBe('CHEST_REGION_VALUE_INVALID: 윤곽 허용 오차(contour tolerance)');
+
+  // Full Korean DOM scan must pass with zero violations
+  const scanRes=checkKoreanDomI18n(doc as unknown as Document);
+  expect(scanRes.violations).toEqual([]);
+  expect(scanRes.ok).toBe(true);
+
+  // Planted half-translated and untranslated controls must fail checkKoreanDomI18n
+  const plantedWrap=doc.createElement('div');plantedWrap.id='planted-controls';
+  const plantedEye=doc.createElement('span');plantedEye.textContent='eyewhite_l · no 고정 행';
+  const plantedClothState=doc.createElement('p');plantedClothState.textContent='3 tag(s) the installed reader accepts · 설정에 파츠 bottomwear: 0개';
+  const plantedClothInput=doc.createElement('input');plantedClothInput.setAttribute('aria-label','bottomwear split at');
+  const plantedClothSelect=doc.createElement('select');plantedClothSelect.setAttribute('aria-label','bottomwear hold 팁');
+  const plantedBlink=doc.createElement('button');plantedBlink.title='blink t 2.3 s · drag to move';
+  const plantedLabel=doc.createElement('label');plantedLabel.textContent='Planted untranslated control label';
+  plantedWrap.append(plantedEye,plantedClothState,plantedClothInput,plantedClothSelect,plantedBlink,plantedLabel);
+  root.append(plantedWrap);
+
+  const plantedScan=checkKoreanDomI18n(doc as unknown as Document);
+  expect(plantedScan.ok).toBe(false);
+  expect(plantedScan.violations.map(v=>`${v.kind}:${v.reason}:${v.text}`)).toEqual([
+   'aria-label:untranslated-english:bottomwear split at',
+   'aria-label:half-translated:bottomwear hold 팁',
+   'title:untranslated-english:blink t 2.3 s · drag to move',
+   'text:half-translated:eyewhite_l · no 고정 행',
+   'text:half-translated:3 tag(s) the installed reader accepts · 설정에 파츠 bottomwear: 0개',
+   'text:untranslated-english:Planted untranslated control label',
+  ]);
+  expect(classifyKoreanDomString('머리 기준 들어올림(raised by head)')).toBe('ok');
+
+  // Remove planted controls and verify round-trip back to English
+  root.children.splice(root.children.indexOf(plantedWrap),1);
+  setLanguagePreference('en');
+  applyDomI18n(doc as unknown as Document);
+
+  expect(eyeHandle.title).toBe('eyewhite_l · no still row');
+  expect(eyeLabel.textContent).toBe('eyewhite_l · no still row');
+  expect(clothStateDecl.textContent).toBe('3 tag(s) the installed reader accepts · back hair: 1 part(s) (hair_back), 2 chain(s) in the config · built by rig --config');
+  for(const node of clothFieldNodes){
+   expect(node.ctrl.getAttribute('aria-label')).toBe(`bottomwear ${node.enLabel}`);
+   expect(node.span.textContent).toBe(node.enSpan);
+  }
+  expect(blinkMarker.title).toBe('blink t 2.3 s · drag to move');
+  expect(timeLabel.textContent).toBe('0.0000 / 2.2100 s');
+  expect(idleState.textContent).toBe('4 idle tracks from the handoff config (4 single, 0 chain) · duration 3.33333 s · blink · periods offered: duration / 1…12');
+ }finally{
+  setLanguagePreference('system');
+ }
+});
+
+test('#294: an attached optional suffix keeps a value that opens with a bare space', ()=>{
+ const roundTrips:[string,string][]=[
+  ['preview — Apply decides (2 op(s) on idle)','미리보기 — 적용 시 확정됨 (작업 2개 · idle 대상)'],
+  ['preview — Apply decides (2 op(s) on idle, tilt)','미리보기 — 적용 시 확정됨 (작업 2개 · idle, tilt 대상)'],
+  ['Applying 3 op(s) with @rig-c/parts 2.0.5: rig --config --idle-keys ctl, compile, check…','@rig-c/parts 2.0.5로 작업 3개 적용 중: rig --config --idle-keys ctl, 컴파일, 검사…']
+ ];
+ for(const [en,ko] of roundTrips){
+  expect(tr(en,'ko')).toBe(ko);
+  expect(tr(ko,'en')).toBe(en);
  }
 });
