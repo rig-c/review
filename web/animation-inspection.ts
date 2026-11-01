@@ -113,7 +113,7 @@ export class AnimationInspectionPanel {
  private segmentSelect:HTMLSelectElement;
  private easeSelect:HTMLSelectElement;
  private curveReadonly:HTMLElement;
- private curvePlot:SVGElement;
+ private curvePlot:SVGSVGElement;
  private curveSegment=0;
  private readout:HTMLOutputElement;
  private status:HTMLElement;
@@ -580,6 +580,7 @@ export class AnimationInspectionPanel {
   this.options.host.setAttribute('aria-busy',String(isBusy));
   this.renderEditorBar();
   this.syncKeyInspectorInPlace();
+  this.renderCurve();
  }
 
  markApplied(ops:readonly AnimationSourceOp[],statusText:string,isError=false){
@@ -1779,8 +1780,9 @@ export class AnimationInspectionPanel {
    if(!drag||drag.pointerId!==e.pointerId)return;
    const rect=svgHost.getBoundingClientRect();
    if(rect.width<=0||rect.height<=0)return;
-   const svgX=((e.clientX-rect.left)/rect.width)*800;
-   const svgY=((e.clientY-rect.top)/rect.height)*230;
+   const screen=svgHost.getScreenCTM();
+   if(!screen)return;
+   const {x:svgX,y:svgY}=new DOMPoint(e.clientX,e.clientY).matrixTransform(screen.inverse());
    const rawT=((svgX-48)/728)*drag.end;
    const rawV=drag.low+((195-svgY)/160)*drag.span;
    const rawKeys=this.readDraftTrackKeys(drag.trackIndex);
