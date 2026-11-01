@@ -33,6 +33,23 @@ export function pointerPosition(x:number,y:number,rect:{left:number;top:number;w
  return rect.width>0&&rect.height>0?[clamp((x-rect.left)/rect.width*2-1,-1,1),clamp(1-(y-rect.top)/rect.height*2,-1,1)]:[0,0];
 }
 export function normalizedDial(n:number,range:{min:number;max:number}):number {const v=clamp(n,-1,1),zero=clamp(0,range.min,range.max);return clamp(zero+Math.abs(v)*((v<0?range.min:range.max)-zero),range.min,range.max);}
+/** Display precision for `<output>` readouts: 2 decimals for spans >= 1, scaled up (at most 6) for sub-unit ranges. */
+export function turnDialPrecision(range:{min:number;max:number},precision?:number):number {
+ if(precision!==undefined){if(!Number.isInteger(precision)||precision<0||precision>6)throw new Error('TURN_PRECISION_INVALID');return precision;}
+ const span=Math.abs(range.max-range.min);
+ return span>0&&span<1?Math.min(6,Math.max(2,Math.ceil(-Math.log10(span))+2)):2;
+}
+/** Rounded display text for `<output>`; the number input and `dataset.value` keep the exact value. */
+export function formatTurnValue(value:number,range:{min:number;max:number},precision=turnDialPrecision(range)):string {
+ const p=turnDialPrecision(range,precision);
+ return String(Number(value.toFixed(p))||0);
+}
+/** Widest character count (`ch`) reachable in `[range.min, range.max]` at `precision`, including minus sign and decimal point. */
+export function turnDialWidthCh(range:{min:number;max:number},precision=turnDialPrecision(range)):number {
+ if(!finite(range.min)||!finite(range.max)||range.min>=range.max)throw new Error('TURN_RANGE_INVALID');
+ const p=turnDialPrecision(range,precision);
+ return Math.max(range.min.toFixed(p).length,range.max.toFixed(p).length);
+}
 /** Exact critically damped solution from https://rig-c.org/demos/head-turn/bundle/app.js (HEAD_SPRING_OMEGA0=20). */
 export function springStep(s:{x:number;v:number},target:number,dt:number,omega=20):void {
  if(!(dt>0)||!finite(dt))return;const e=s.x-target,tau=omega*dt,exp=Math.exp(-tau),x=target+(e*(1+tau)+s.v*dt)*exp,v=(s.v*(1-tau)-omega*omega*dt*e)*exp;
