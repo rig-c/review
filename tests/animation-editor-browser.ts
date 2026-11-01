@@ -31,6 +31,7 @@ interface CdpSession {
     button?: 'left' | 'none';
     buttons?: number;
     clickCount?: number;
+    modifiers?: number;
   }): Promise<void>;
   screenshot(clip?: { x: number; y: number; width: number; height: number }): Promise<Buffer>;
   close(): Promise<void>;
@@ -271,6 +272,7 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
           button: params.button ?? 'left',
           buttons: params.buttons ?? (params.type === 'mouseReleased' ? 0 : 1),
           clickCount: params.clickCount ?? 1,
+          modifiers: params.modifiers ?? 0,
         },
         sessionId,
       );
@@ -535,6 +537,22 @@ export async function setupBrowserFixture(root: string) {
   const baseModelTemplate = {
     ...baseProbeModel,
     bones,
+    constraints: [
+      {
+        kind: 'physics',
+        name: 'skirt_phys',
+        declaredIn: 'rig',
+        bone: 'skirt_c0',
+        rotate: 1,
+        strength: 100,
+        damping: 0.85,
+        inertia: 0.5,
+        mass: 1,
+        wind: 0,
+        gravity: 0,
+        mix: 1,
+      },
+    ],
     animations: buildMotionAnimations(demoAnimObj),
     editorOrder: {
       ...baseProbeModel.editorOrder,
@@ -2090,20 +2108,24 @@ async function main() {
       };
     })()`);
 
-    // Drag [data-curve-handle="1"] across 3 mouseMoved steps on the curve SVG plot
+    // Drag [data-curve-handle="1"] across 3 mouseMoved steps on the curve SVG plot to a measured target point
     const hx0 = slice4aPreDrag.curveHandle1Start.x;
     const hy0 = slice4aPreDrag.curveHandle1Start.y;
+    const targetCurveHx = Math.round(hx0 + 28);
+    const targetCurveHy = Math.round(hy0 - 24);
     await session.dispatchMouseEvent({ type: 'mousePressed', x: hx0, y: hy0, button: 'left', buttons: 1 });
-    await session.dispatchMouseEvent({ type: 'mouseMoved', x: hx0 + 18, y: hy0 - 15, button: 'left', buttons: 1 });
-    await session.dispatchMouseEvent({ type: 'mouseMoved', x: hx0 + 32, y: hy0 - 28, button: 'left', buttons: 1 });
-    await session.dispatchMouseEvent({ type: 'mouseMoved', x: hx0 + 45, y: hy0 - 38, button: 'left', buttons: 1 });
-    await session.dispatchMouseEvent({ type: 'mouseReleased', x: hx0 + 45, y: hy0 - 38, button: 'left', buttons: 0 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: hx0 + 10, y: hy0 - 9, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: hx0 + 20, y: hy0 - 17, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: targetCurveHx, y: targetCurveHy, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: targetCurveHx, y: targetCurveHy, button: 'left', buttons: 0 });
 
     if (screenshotDir) {
       await writeFile(join(screenshotDir, 'slice4a-curves-drag-1440x900.png'), await session.screenshot());
     }
 
     const slice4aPostDrag = await session.evaluate<{
+      curveHandleLandingErrorPx: number;
+      curveHandleLandedCenter: { x: number; y: number };
       opsAfterHandleDrag: any[];
       rotAfterHandleDrag: number;
       curveApplyMaxFroundDiff: number;
@@ -2111,6 +2133,11 @@ async function main() {
       curveReadOnlyText: string;
     }>(`(async () => {
       const ed = window.rigReviewEditor;
+      const h1After = document.querySelector('[data-curve-handle="1"]').getBoundingClientRect();
+      const landedX = h1After.left + h1After.width / 2;
+      const landedY = h1After.top + h1After.height / 2;
+      const curveHandleLandingErrorPx =
+        Math.round(Math.hypot(landedX - ${targetCurveHx}, landedY - ${targetCurveHy}) * 1000) / 1000;
       const opsAfterHandleDrag = ed.animation.ops();
       const scrub = document.getElementById('scrub');
       const seekTo = (t) => {
@@ -2153,6 +2180,8 @@ async function main() {
       await new Promise((r) => setTimeout(r, 25));
 
       return {
+        curveHandleLandingErrorPx,
+        curveHandleLandedCenter: { x: Math.round(landedX * 100) / 100, y: Math.round(landedY * 100) / 100 },
         opsAfterHandleDrag,
         rotAfterHandleDrag,
         curveApplyMaxFroundDiff,
@@ -2166,6 +2195,7 @@ async function main() {
     }
 
     if (
+      slice4aPostDrag.curveHandleLandingErrorPx >= 1 ||
       slice4aPreDrag.defect2LoadingGateCode !== 'ANIMATION_SOURCE_LOADING' ||
       slice4aPreDrag.defect2LoadingAttr !== 'true' ||
       !slice4aPreDrag.defect2LoadingText.includes('Reading the producer handoff') ||
@@ -2199,6 +2229,473 @@ async function main() {
       );
     }
 
+    // -------------------------------------------------------------------------
+    // Slice 4b Browser Verification:
+    // Part 1: Multi-key selection in the dopesheet (Shift-click, box drag >= 3 px,
+    //         group drag retime + 1-step undo + Apply readback, group delete + 1-step undo
+    //         + ANIMATION_TRACK_MIN_KEYS refusal, read-only tracks skipped & named in status,
+    //         empty lane click < 3 px seeks playhead).
+    // Part 2: Bone drag on stage (Pose: Rotate & Pose: Move, existing key vs unkeyed playhead
+    //         insert+set as 1 undo step, parent bone world-matrix inversion on unrotated and
+    //         rotated parents landing within < 1 px of cursor, Apply parity maxFroundDiff === 0,
+    //         ANIMATION_BONE_CONSTRAINED / ANIMATION_BONE_NO_TRACK / ANIMATION_TRACK_READ_ONLY refusals).
+    // -------------------------------------------------------------------------
+    const slice4bBoxCoords = await session.evaluate<{
+      k01: { x: number; y: number };
+      k11: { x: number; y: number };
+      k21: { x: number; y: number };
+      boxStart: { x: number; y: number };
+      boxEnd: { x: number; y: number };
+      lane0Left: number;
+      lane0Width: number;
+      emptyLaneClick: { x: number; y: number };
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      await ed.animation.reset();
+      const animSelect = document.getElementById('animation-select');
+      animSelect.value = 'tilt';
+      animSelect.dispatchEvent(new Event('change'));
+      const timelineBtn = document.querySelector('[data-animation-view="timeline"]');
+      timelineBtn.click();
+      const zoom1Btn = document.querySelector('[data-animation-zoom="1"]');
+      zoom1Btn.click();
+      const lanes = document.querySelector('.animation-lanes');
+      lanes.scrollTop = 0;
+      lanes.scrollLeft = 0;
+      await new Promise((r) => setTimeout(r, 40));
+
+      const centerOf = (sel) => {
+        const el = document.querySelector(sel);
+        const r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      };
+      const k01 = centerOf('.animation-key[data-source-track="0"][data-key-index="1"]');
+      const k11 = centerOf('.animation-key[data-source-track="1"][data-key-index="1"]');
+      const k21 = centerOf('.animation-key[data-source-track="2"][data-key-index="1"]');
+      const lane0 = document.querySelector('.animation-lane[data-source-track="0"] .animation-key-lane').getBoundingClientRect();
+      const lane5 = document.querySelector('.animation-lane[data-source-track="5"] .animation-key-lane').getBoundingClientRect();
+
+      // Box drag from t=0.2s above track 0 down to t=1.05s across track 5 (includes editable tracks 0,1,2 and read-only lag track 5)
+      const boxStart = {
+        x: Math.round(lane0.left + (0.2 / 1.6) * lane0.width),
+        y: Math.round(lane0.top + 3),
+      };
+      const boxEnd = {
+        x: Math.round(lane0.left + (1.05 / 1.6) * lane0.width),
+        y: Math.round(lane5.bottom - 2),
+      };
+      const emptyLaneClick = {
+        x: Math.round(lane0.left + (0.65 / 1.6) * lane0.width),
+        y: Math.round(lane0.top + lane0.height / 2),
+      };
+      return {
+        k01,
+        k11,
+        k21,
+        boxStart,
+        boxEnd,
+        lane0Left: lane0.left,
+        lane0Width: lane0.width,
+        emptyLaneClick,
+      };
+    })()`);
+
+    // 1. Click key (0,1), then Shift-click (1,1) and (2,1) -> 3 keys selected; Shift-click (2,1) again -> 2 keys selected
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: slice4bBoxCoords.k01.x, y: slice4bBoxCoords.k01.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: slice4bBoxCoords.k01.x, y: slice4bBoxCoords.k01.y, button: 'left', buttons: 0 });
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: slice4bBoxCoords.k11.x, y: slice4bBoxCoords.k11.y, button: 'left', buttons: 1, modifiers: 8 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: slice4bBoxCoords.k11.x, y: slice4bBoxCoords.k11.y, button: 'left', buttons: 0, modifiers: 8 });
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: slice4bBoxCoords.k21.x, y: slice4bBoxCoords.k21.y, button: 'left', buttons: 1, modifiers: 8 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: slice4bBoxCoords.k21.x, y: slice4bBoxCoords.k21.y, button: 'left', buttons: 0, modifiers: 8 });
+
+    const shiftClickCount3 = await session.evaluate<number>('window.rigReviewEditor.animation.selectedKeys().length');
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: slice4bBoxCoords.k21.x, y: slice4bBoxCoords.k21.y, button: 'left', buttons: 1, modifiers: 8 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: slice4bBoxCoords.k21.x, y: slice4bBoxCoords.k21.y, button: 'left', buttons: 0, modifiers: 8 });
+    const shiftClickCount2 = await session.evaluate<number>('window.rigReviewEditor.animation.selectedKeys().length');
+
+    // 2. Box-drag selection (>= 3 px) starting on empty lane space at t=0.2s on track 0 down to t=1.6s on track 5
+    //    (encloses editable keys on tracks 0..2 AND read-only lag track 5 key at t=1.6s!)
+    const boxX0 = slice4bBoxCoords.boxStart.x;
+    const boxY0 = slice4bBoxCoords.boxStart.y;
+    const boxX1 = Math.round(slice4bBoxCoords.lane0Left + slice4bBoxCoords.lane0Width + 4);
+    const boxY1 = slice4bBoxCoords.boxEnd.y;
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: boxX0, y: boxY0, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: Math.round((boxX0 + boxX1) / 2), y: Math.round((boxY0 + boxY1) / 2), button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: boxX1, y: boxY1, button: 'left', buttons: 1 });
+
+    const activeBoxRect = await session.evaluate<{ present: boolean; width: number; height: number }>(`(() => {
+      const el = document.querySelector('[data-selection-box]');
+      if (!el) return { present: false, width: 0, height: 0 };
+      const r = el.getBoundingClientRect();
+      return { present: true, width: Math.round(r.width), height: Math.round(r.height) };
+    })()`);
+
+    if (screenshotDir) {
+      await writeFile(join(screenshotDir, 'slice4b-box-select-1440x900.png'), await session.screenshot());
+    }
+
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: boxX1, y: boxY1, button: 'left', buttons: 0 });
+
+    const afterBoxSelect = await session.evaluate<{
+      selectedKeys: Array<{ trackIndex: number; keyIndex: number }>;
+      hasReadOnlyInSelection: boolean;
+      statusAfterBoxWithReadOnly: string;
+      inspectorTitle: string;
+    }>(`(() => {
+      const ed = window.rigReviewEditor.animation;
+      const sel = ed.selectedKeys();
+      const tracks = ed.tracks();
+      const hasReadOnlyInSelection = sel.some((s) => !tracks[s.trackIndex]?.editable);
+      return {
+        selectedKeys: sel.map((s) => ({ trackIndex: s.trackIndex, keyIndex: s.keyIndex })),
+        hasReadOnlyInSelection,
+        statusAfterBoxWithReadOnly: ed.status(),
+        inspectorTitle: document.querySelector('[data-key-inspector-title]')?.textContent ?? '',
+      };
+    })()`);
+
+    // 3. Plain click (< 3 px) on empty editable lane seeks playhead and clears multi-selection,
+    //    then select middle keys (0,1), (1,1), (2,1) via box drag [0.25s..0.9s] and drag key (0,1) right by +0.05s!
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: slice4bBoxCoords.emptyLaneClick.x, y: slice4bBoxCoords.emptyLaneClick.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: slice4bBoxCoords.emptyLaneClick.x, y: slice4bBoxCoords.emptyLaneClick.y, button: 'left', buttons: 0 });
+    const afterEmptyLaneClick = await session.evaluate<{ selectedCount: number; scrubValue: number }>(`(() => ({
+      selectedCount: window.rigReviewEditor.animation.selectedKeys().length,
+      scrubValue: Number(document.getElementById('scrub').value),
+    }))()`);
+
+    // Box-select the middle keys in [0.25s..0.85s] across tracks 0, 1, 2:
+    // Track 0 key 1 (0.35s), Track 1 key 1 (0.8s), Track 2 key 1 (0.5s) -> 3 keys across 3 tracks!
+    const midBoxX0 = Math.round(slice4bBoxCoords.lane0Left + (0.25 / 1.6) * slice4bBoxCoords.lane0Width);
+    const midBoxX1 = Math.round(slice4bBoxCoords.lane0Left + (0.85 / 1.6) * slice4bBoxCoords.lane0Width);
+    const midBoxY0 = slice4bBoxCoords.boxStart.y;
+    const midBoxY1 = Math.round(slice4bBoxCoords.k21.y + 6);
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: midBoxX0, y: midBoxY0, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: midBoxX1, y: midBoxY1, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: midBoxX1, y: midBoxY1, button: 'left', buttons: 0 });
+
+    // Drag selected key (0,1) from t=0.35s to t=0.40s (+0.05s) across 2 mouseMoved steps
+    const dragK01Target1 = slice4bBoxCoords.lane0Left + (0.38 / 1.6) * slice4bBoxCoords.lane0Width;
+    const dragK01Target2 = slice4bBoxCoords.lane0Left + (0.40 / 1.6) * slice4bBoxCoords.lane0Width;
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: slice4bBoxCoords.k01.x, y: slice4bBoxCoords.k01.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: dragK01Target1, y: slice4bBoxCoords.k01.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: dragK01Target2, y: slice4bBoxCoords.k01.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: dragK01Target2, y: slice4bBoxCoords.k01.y, button: 'left', buttons: 0 });
+
+    const slice4bDopesheetResult = await session.evaluate<{
+      groupDragOps: any[];
+      opsCountAfterSingleUndo: number;
+      deleteGroupOpsCount: number;
+      opsCountAfterDeleteUndo: number;
+      minKeysRefusalError: string;
+      groupApplyRebuiltTimes: number[];
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      const groupDragOps = ed.animation.ops();
+      // 1-step Undo op unwinds all 3 retimed keys at once!
+      document.querySelector('[data-animation-undo-op]').click();
+      const opsCountAfterSingleUndo = ed.animation.ops().length;
+
+      // Group delete of the 3 selected middle keys via [data-delete-key] + 1-step Undo op
+      document.querySelector('[data-delete-key]').click();
+      const deleteGroupOpsCount = ed.animation.ops().length;
+      document.querySelector('[data-animation-undo-op]').click();
+      const opsCountAfterDeleteUndo = ed.animation.ops().length;
+
+      // Refusal when deleting all 3 keys of track 1 (head.translate) -> ANIMATION_TRACK_MIN_KEYS
+      ed.animation.selectKeys([{ track: 1, key: 0 }, { track: 1, key: 1 }, { track: 1, key: 2 }]);
+      const minKeysRes = ed.animation.deleteSelection();
+      const minKeysRefusalError = minKeysRes.ok ? '' : minKeysRes.error;
+
+      // Group move + Apply · Rebuild readback
+      ed.animation.selectKeys([{ track: 0, key: 1 }, { track: 2, key: 1 }]);
+      ed.animation.moveSelection([{ track: 0, key: 1 }, { track: 2, key: 1 }], 0.05);
+      await ed.animation.apply();
+      const insp = ed.animation.overlaid();
+      const t0k1 = Math.round(insp.tracks.find((t) => t.target === 'head' && t.name === 'rotate').keys[1].time * 1000) / 1000;
+      const t2k1 = Math.round(insp.tracks.find((t) => t.target === 'chest' && t.name === 'rotate').keys[1].time * 1000) / 1000;
+      await ed.animation.reset();
+
+      return {
+        groupDragOps,
+        opsCountAfterSingleUndo,
+        deleteGroupOpsCount,
+        opsCountAfterDeleteUndo,
+        minKeysRefusalError,
+        groupApplyRebuiltTimes: [t0k1, t2k1],
+      };
+    })()`);
+
+    // Part 2: Stage bone drag (rotate & translate on unrotated and rotated parents, unkeyed insert+set 1-step undo, refusals)
+    const stageSetup = await session.evaluate<{
+      headPickAt035: { x: number; y: number };
+      rotBeforeExistingDrag: number;
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      const animSelect = document.getElementById('animation-select');
+      animSelect.value = 'tilt';
+      animSelect.dispatchEvent(new Event('change'));
+      // Ensure Bone points (#layer-bones) is active on the stage
+      const layerBones = document.getElementById('layer-bones');
+      if (layerBones && layerBones.getAttribute('aria-pressed') !== 'true') layerBones.click();
+      // Select Pose: Rotate mode
+      document.querySelector('[data-stage-pose-mode="rotate"]').click();
+      const scrub = document.getElementById('scrub');
+      scrub.value = '0.35';
+      scrub.dispatchEvent(new Event('input'));
+      await new Promise((r) => setTimeout(r, 30));
+      const pick = document.querySelector('.animation-bone-pick[data-bone="head"]').getBoundingClientRect();
+      return {
+        headPickAt035: { x: pick.left + pick.width / 2, y: pick.top + pick.height / 2 },
+        rotBeforeExistingDrag: ed.bone('head').rotationX,
+      };
+    })()`);
+
+    // 2a. Stage rotate drag on `head` at existing key t=0.35s across 2 mouseMoved steps + 1-step undo
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: stageSetup.headPickAt035.x, y: stageSetup.headPickAt035.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: stageSetup.headPickAt035.x + 25, y: stageSetup.headPickAt035.y - 15, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: stageSetup.headPickAt035.x + 45, y: stageSetup.headPickAt035.y - 25, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: stageSetup.headPickAt035.x + 45, y: stageSetup.headPickAt035.y - 25, button: 'left', buttons: 0 });
+
+    const afterExistingRotDrag = await session.evaluate<{
+      ops: any[];
+      rotAfter: number;
+      opsAfterUndo: number;
+      headPickAt060: { x: number; y: number };
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      const ops = ed.animation.ops();
+      const rotAfter = ed.bone('head').rotationX;
+      document.querySelector('[data-animation-undo-op]').click();
+      const opsAfterUndo = ed.animation.ops().length;
+
+      // Seek to unkeyed time t=0.60s on tilt
+      const scrub = document.getElementById('scrub');
+      scrub.value = '0.6';
+      scrub.dispatchEvent(new Event('input'));
+      await new Promise((r) => setTimeout(r, 25));
+      const pick = document.querySelector('.animation-bone-pick[data-bone="head"]').getBoundingClientRect();
+      return {
+        ops,
+        rotAfter,
+        opsAfterUndo,
+        headPickAt060: { x: pick.left + pick.width / 2, y: pick.top + pick.height / 2 },
+      };
+    })()`);
+
+    // 2b. Stage rotate drag on `head` at UNKEYED playhead t=0.60s -> inserts + sets key in 1 gesture, 1 undo step
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: afterExistingRotDrag.headPickAt060.x, y: afterExistingRotDrag.headPickAt060.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: afterExistingRotDrag.headPickAt060.x + 30, y: afterExistingRotDrag.headPickAt060.y - 20, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: afterExistingRotDrag.headPickAt060.x + 50, y: afterExistingRotDrag.headPickAt060.y - 30, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: afterExistingRotDrag.headPickAt060.x + 50, y: afterExistingRotDrag.headPickAt060.y - 30, button: 'left', buttons: 0 });
+
+    const afterUnkeyedRotDrag = await session.evaluate<{
+      ops: any[];
+      opsAfterSingleUndo: number;
+      headPickAt0: { x: number; y: number };
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      const ops = ed.animation.ops();
+      document.querySelector('[data-animation-undo-op]').click();
+      const opsAfterSingleUndo = ed.animation.ops().length;
+
+      // Seek to t=0s on tilt (chest.rotate = 0, unrotated parent) and switch to Pose: Move (translate)
+      const scrub = document.getElementById('scrub');
+      scrub.value = '0';
+      scrub.dispatchEvent(new Event('input'));
+      document.querySelector('[data-stage-pose-mode="translate"]').click();
+      await new Promise((r) => setTimeout(r, 25));
+      const pick = document.querySelector('.animation-bone-pick[data-bone="head"]').getBoundingClientRect();
+      return {
+        ops,
+        opsAfterSingleUndo,
+        headPickAt0: { x: pick.left + pick.width / 2, y: pick.top + pick.height / 2 },
+      };
+    })()`);
+
+    // 2c. Stage translate drag on UNROTATED parent (`head` under `chest` at t=0s on `tilt`) -> lands within < 1 px of cursor
+    const unrotTargetX = Math.round(afterUnkeyedRotDrag.headPickAt0.x + 24);
+    const unrotTargetY = Math.round(afterUnkeyedRotDrag.headPickAt0.y - 18);
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: afterUnkeyedRotDrag.headPickAt0.x, y: afterUnkeyedRotDrag.headPickAt0.y, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: Math.round(afterUnkeyedRotDrag.headPickAt0.x + 12), y: Math.round(afterUnkeyedRotDrag.headPickAt0.y - 9), button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: unrotTargetX, y: unrotTargetY, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: unrotTargetX, y: unrotTargetY, button: 'left', buttons: 0 });
+
+    const afterUnrotTranslate = await session.evaluate<{
+      unrotatedParentCursorErrorPx: number;
+      opsAfterUndo: number;
+      browPickOnRotatedHead: { x: number; y: number };
+      headRotDeg: number;
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      const pickAfter = document.querySelector('.animation-bone-pick[data-bone="head"]').getBoundingClientRect();
+      const landedX = pickAfter.left + pickAfter.width / 2;
+      const landedY = pickAfter.top + pickAfter.height / 2;
+      const unrotatedParentCursorErrorPx =
+        Math.round(Math.hypot(landedX - ${unrotTargetX}, landedY - ${unrotTargetY}) * 1000) / 1000;
+      document.querySelector('[data-animation-undo-op]').click();
+      const opsAfterUndo = ed.animation.ops().length;
+
+      // Stay on 'tilt' clip, seek to t=0.8s (where 'head.translate' has key 1), and rotate parent 'chest' (track 2, keys 1 & 2) to 35 deg!
+      const scrub = document.getElementById('scrub');
+      scrub.value = '0.8';
+      scrub.dispatchEvent(new Event('input'));
+      ed.animation.setKeyValue(2, 1, 0, 35);
+      ed.animation.setKeyValue(2, 2, 0, 35);
+      document.querySelector('[data-stage-pose-mode="translate"]').click();
+      await new Promise((r) => setTimeout(r, 25));
+
+      const headPick = document.querySelector('.animation-bone-pick[data-bone="head"]').getBoundingClientRect();
+      return {
+        unrotatedParentCursorErrorPx,
+        opsAfterUndo,
+        browPickOnRotatedHead: { x: headPick.left + headPick.width / 2, y: headPick.top + headPick.height / 2 },
+        headRotDeg: Math.round(ed.bone('chest').rotationX * 100) / 100,
+      };
+    })()`);
+
+    // 2d. Stage translate drag on ROTATED parent (`head` under `chest` rotated 35 deg on `tilt`) -> lands within < 1 px of cursor!
+    const rotTargetX = Math.round(afterUnrotTranslate.browPickOnRotatedHead.x + 22);
+    const rotTargetY = Math.round(afterUnrotTranslate.browPickOnRotatedHead.y - 16);
+    await session.dispatchMouseEvent({
+      type: 'mousePressed',
+      x: afterUnrotTranslate.browPickOnRotatedHead.x,
+      y: afterUnrotTranslate.browPickOnRotatedHead.y,
+      button: 'left',
+      buttons: 1,
+    });
+    await session.dispatchMouseEvent({
+      type: 'mouseMoved',
+      x: Math.round(afterUnrotTranslate.browPickOnRotatedHead.x + 11),
+      y: Math.round(afterUnrotTranslate.browPickOnRotatedHead.y - 8),
+      button: 'left',
+      buttons: 1,
+    });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: rotTargetX, y: rotTargetY, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: rotTargetX, y: rotTargetY, button: 'left', buttons: 0 });
+
+    if (screenshotDir) {
+      await writeFile(join(screenshotDir, 'slice4b-bone-drag-1440x900.png'), await session.screenshot());
+    }
+
+    const slice4bStageResult = await session.evaluate<{
+      rotatedParentCursorErrorPx: number;
+      stageApplyMaxFroundDiff: number;
+      constrainedRefusal: string;
+      noTrackRefusal: string;
+      readOnlyTrackRefusal: string;
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      const headAfter = document.querySelector('.animation-bone-pick[data-bone="head"]').getBoundingClientRect();
+      const landedX = headAfter.left + headAfter.width / 2;
+      const landedY = headAfter.top + headAfter.height / 2;
+      const rotatedParentCursorErrorPx =
+        Math.round(Math.hypot(landedX - ${rotTargetX}, landedY - ${rotTargetY}) * 1000) / 1000;
+
+      // Verify Apply · Rebuild parity (maxFroundDiff === 0) for the stage-dragged pose
+      const scrub = document.getElementById('scrub');
+      const seekTo = (t) => {
+        scrub.value = String(t);
+        scrub.dispatchEvent(new Event('input'));
+      };
+      const sampleTimes = [0, 0.35, 0.5, 0.8, 1.1];
+      const previewSnap = sampleTimes.map((t) => {
+        seekTo(t);
+        const c = ed.bone('chest');
+        const h = ed.bone('head');
+        return [Math.fround(h.x), Math.fround(h.y), Math.fround(c.rotationX)];
+      });
+      await ed.animation.apply();
+      let stageApplyMaxFroundDiff = 0;
+      for (let i = 0; i < sampleTimes.length; i++) {
+        seekTo(sampleTimes[i]);
+        const c = ed.bone('chest');
+        const h = ed.bone('head');
+        const cur = [Math.fround(h.x), Math.fround(h.y), Math.fround(c.rotationX)];
+        for (let k = 0; k < cur.length; k++) {
+          const diff = Math.abs(previewSnap[i][k] - cur[k]);
+          if (diff > stageApplyMaxFroundDiff) stageApplyMaxFroundDiff = diff;
+        }
+      }
+      await ed.animation.reset();
+
+      // Stage bone drag named refusals:
+      // 1. Constrained bone ('skirt_c0' driven by 'skirt_phys') -> ANIMATION_BONE_CONSTRAINED
+      const rConst = ed.animation.poseBone('skirt_c0', 10, 10, 'rotate');
+      const constrainedRefusal = rConst.ok ? '' : rConst.error;
+      // 2. Unkeyed bone ('leg_r0' has no track in 'smile') -> ANIMATION_BONE_NO_TRACK
+      const rNoTrack = ed.animation.poseBone('leg_r0', 10, 10, 'rotate');
+      const noTrackRefusal = rNoTrack.ok ? '' : rNoTrack.error;
+      // 3. Read-only track ('sleeve_l0.rotate' has lag on 'tilt') -> ANIMATION_TRACK_READ_ONLY
+      const animSelect = document.getElementById('animation-select');
+      animSelect.value = 'tilt';
+      animSelect.dispatchEvent(new Event('change'));
+      await new Promise((r) => setTimeout(r, 30));
+      const rReadOnly = ed.animation.poseBone('sleeve_l0', 10, 10, 'rotate');
+      const readOnlyTrackRefusal = rReadOnly.ok ? '' : rReadOnly.error;
+
+      return {
+        rotatedParentCursorErrorPx,
+        stageApplyMaxFroundDiff,
+        constrainedRefusal,
+        noTrackRefusal,
+        readOnlyTrackRefusal,
+      };
+    })()`);
+
+    if (
+      shiftClickCount3 !== 3 ||
+      shiftClickCount2 !== 2 ||
+      !activeBoxRect.present ||
+      activeBoxRect.width < 3 ||
+      activeBoxRect.height < 3 ||
+      afterBoxSelect.selectedKeys.length < 4 ||
+      afterBoxSelect.hasReadOnlyInSelection ||
+      !afterBoxSelect.statusAfterBoxWithReadOnly.includes('ANIMATION_TRACK_READ_ONLY') ||
+      !afterBoxSelect.inspectorTitle.includes('keys selected') ||
+      afterEmptyLaneClick.selectedCount !== 0 ||
+      Math.abs(afterEmptyLaneClick.scrubValue - 0.65) > 0.05 ||
+      slice4bDopesheetResult.groupDragOps.length !== 3 ||
+      slice4bDopesheetResult.opsCountAfterSingleUndo !== 0 ||
+      slice4bDopesheetResult.deleteGroupOpsCount !== 3 ||
+      slice4bDopesheetResult.opsCountAfterDeleteUndo !== 0 ||
+      !slice4bDopesheetResult.minKeysRefusalError.startsWith('ANIMATION_TRACK_MIN_KEYS:') ||
+      slice4bDopesheetResult.groupApplyRebuiltTimes[0] !== 0.4 ||
+      slice4bDopesheetResult.groupApplyRebuiltTimes[1] !== 0.55 ||
+      afterExistingRotDrag.ops.length !== 1 ||
+      afterExistingRotDrag.ops[0].op !== 'set_key_value' ||
+      afterExistingRotDrag.rotAfter === stageSetup.rotBeforeExistingDrag ||
+      afterExistingRotDrag.opsAfterUndo !== 0 ||
+      afterUnkeyedRotDrag.ops.length !== 1 ||
+      afterUnkeyedRotDrag.ops[0].op !== 'insert_key' ||
+      afterUnkeyedRotDrag.opsAfterSingleUndo !== 0 ||
+      afterUnrotTranslate.unrotatedParentCursorErrorPx >= 1 ||
+      afterUnrotTranslate.opsAfterUndo !== 0 ||
+      slice4bStageResult.rotatedParentCursorErrorPx >= 1 ||
+      slice4bStageResult.stageApplyMaxFroundDiff !== 0 ||
+      !slice4bStageResult.constrainedRefusal.startsWith('ANIMATION_BONE_CONSTRAINED:') ||
+      !slice4bStageResult.noTrackRefusal.startsWith('ANIMATION_BONE_NO_TRACK:') ||
+      !slice4bStageResult.readOnlyTrackRefusal.startsWith('ANIMATION_TRACK_READ_ONLY:')
+    ) {
+      throw new Error(
+        `Slice 4b browser verification failed: ${JSON.stringify(
+          {
+            shiftClickCount3,
+            shiftClickCount2,
+            activeBoxRect,
+            afterBoxSelect,
+            afterEmptyLaneClick,
+            slice4bDopesheetResult,
+            afterExistingRotDrag,
+            afterUnkeyedRotDrag,
+            afterUnrotTranslate,
+            slice4bStageResult,
+          },
+          null,
+          2,
+        )}`,
+      );
+    }
+
     console.log(
       JSON.stringify(
         {
@@ -2213,11 +2710,32 @@ async function main() {
             defect3: slice4aPreDrag.defect3,
             curves: {
               easeOp: slice4aPreDrag.curveEaseOp,
+              curveHandleLandingErrorPx: slice4aPostDrag.curveHandleLandingErrorPx,
+              curveHandleLandedCenter: slice4aPostDrag.curveHandleLandedCenter,
               opsAfterHandleDrag: slice4aPostDrag.opsAfterHandleDrag,
               rotBeforeHandleDrag: slice4aPreDrag.rotBeforeHandleDrag,
               rotAfterHandleDrag: slice4aPostDrag.rotAfterHandleDrag,
               curveApplyMaxFroundDiff: slice4aPostDrag.curveApplyMaxFroundDiff,
               curveReadOnlyBannerVisible: slice4aPostDrag.curveReadOnlyBannerVisible,
+            },
+          },
+          slice4b: {
+            shiftClickCount3,
+            shiftClickCount2,
+            activeBoxRect,
+            afterBoxSelect,
+            afterEmptyLaneClick,
+            dopesheet: slice4bDopesheetResult,
+            stageExistingRotateOp: afterExistingRotDrag.ops[0],
+            stageUnkeyedRotateOp: afterUnkeyedRotDrag.ops[0],
+            unrotatedParentCursorErrorPx: afterUnrotTranslate.unrotatedParentCursorErrorPx,
+            rotatedParentHeadDeg: afterUnrotTranslate.headRotDeg,
+            rotatedParentCursorErrorPx: slice4bStageResult.rotatedParentCursorErrorPx,
+            stageApplyMaxFroundDiff: slice4bStageResult.stageApplyMaxFroundDiff,
+            refusals: {
+              constrained: slice4bStageResult.constrainedRefusal,
+              noTrack: slice4bStageResult.noTrackRefusal,
+              readOnlyTrack: slice4bStageResult.readOnlyTrackRefusal,
             },
           },
           slice3bDock1440x900: {

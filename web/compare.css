@@ -189,15 +189,15 @@ main{position:relative}.stage-comment-mode{cursor:crosshair}.stage-comment-mode 
 .inspector #inspector-playback .transport select{padding:1px 5px;height:20px}
 .inspector #inspector-playback .transport button{padding:1px 7px;height:20px;font-size:11px}
 .animation-inspection{display:flex;flex-direction:column;gap:2px;min-width:0;min-height:0}
-.animation-dock-bar{display:flex;align-items:center;flex-wrap:nowrap;gap:4px;height:24px;min-height:24px;max-height:24px;padding:0 5px;border:1px solid var(--border);border-radius:5px;background:var(--rv-raised);font-size:11px;overflow:hidden}
+.animation-dock-bar{display:flex;align-items:center;flex-wrap:nowrap;gap:3px;height:24px;min-height:24px;max-height:24px;padding:0 4px;border:1px solid var(--border);border-radius:5px;background:var(--rv-raised);font-size:11px;overflow:hidden}
 .animation-dock-title{display:none}
-.animation-view-buttons,.animation-zoom-buttons{display:inline-flex;align-items:center;gap:2px;margin:0;flex:none}
-.animation-view-buttons button,.animation-zoom-buttons button,.animation-editor-actions button{padding:1px 4px;height:18px;font-size:9.5px;line-height:1;white-space:nowrap;flex:none}
-.animation-view-buttons button[aria-pressed=true],.animation-zoom-buttons button[aria-pressed=true],.animation-tree button[aria-pressed=true]{color:var(--pass);border-color:var(--pass)}
-.animation-editor-bar{display:flex;align-items:center;gap:4px;margin:0 0 0 auto;padding:0;border:0;background:transparent;font-size:11px;min-width:0;flex:1 1 auto;justify-content:flex-end;overflow:hidden}
-.animation-editor-actions{display:flex;align-items:center;flex-wrap:nowrap;gap:4px;margin:0;min-width:0;overflow:hidden}
-.animation-preview-badge{padding:1px 4px;border:1px solid var(--warn);border-radius:4px;color:var(--warn);font:9px var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;flex:0 1 auto}
-.animation-ops-summary{font:9.5px var(--font-mono);color:var(--fg-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:65px;max-width:135px;flex:0 1 auto}
+.animation-view-buttons,.animation-zoom-buttons,.animation-pose-buttons{display:inline-flex;align-items:center;gap:2px;margin:0;flex:none}
+.animation-view-buttons button,.animation-zoom-buttons button,.animation-pose-buttons button,.animation-editor-actions button{padding:1px 4px;height:18px;font-size:9.5px;line-height:1;white-space:nowrap;flex:none}
+.animation-view-buttons button[aria-pressed=true],.animation-zoom-buttons button[aria-pressed=true],.animation-pose-buttons button[aria-pressed=true],.animation-tree button[aria-pressed=true]{color:var(--pass);border-color:var(--pass)}
+.animation-editor-bar{display:flex;align-items:center;gap:3px;margin:0 0 0 auto;padding:0;border:0;background:transparent;font-size:11px;min-width:0;flex:1 1 auto;justify-content:flex-end;overflow:hidden}
+.animation-editor-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:nowrap;gap:3px;margin:0;min-width:0;flex:1 1 auto;overflow:hidden}
+.animation-preview-badge{padding:1px 4px;border:1px solid var(--warn);border-radius:4px;color:var(--warn);font:9px var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:36px;max-width:95px;flex:0 1 auto}
+.animation-ops-summary{font:9.5px var(--font-mono);color:var(--fg-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:44px;max-width:95px;flex:0 1 auto}
 .animation-dock-status{display:flex;flex-direction:column;justify-content:flex-start;gap:2px;height:44px;min-height:44px;max-height:44px;padding:1px 6px;box-sizing:border-box;font-size:9.5px;line-height:11px;overflow:hidden}
 .animation-gate-banner{margin:0;padding:1px 6px;border:1px solid var(--border-strong);border-radius:4px;background:var(--rv-raised);color:var(--fg-soft);font-size:9.5px;line-height:11px;white-space:normal;overflow-wrap:anywhere;text-overflow:clip;max-width:100%;width:100%;box-sizing:border-box;flex:none}
 .animation-gate-banner[data-editable=true]{border-color:var(--pass);color:var(--fg-strong)}
@@ -216,7 +216,7 @@ main{position:relative}.stage-comment-mode{cursor:crosshair}.stage-comment-mode 
 .animation-insert-bar select{width:auto;max-width:145px;height:18px;padding:1px 4px;font-size:10px}
 .animation-insert-bar input[type=number],.animation-key-detail input[type=number]{width:62px;height:18px;padding:1px 4px;font:10px var(--font-mono)}
 .animation-insert-bar button,.animation-key-detail button{padding:1px 6px;height:18px;font-size:10px;line-height:1;white-space:nowrap;flex:none}
-.animation-key-title{font:600 10px var(--font-mono);color:var(--fg-strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:210px;flex:0 1 auto}
+.animation-key-title{font:600 10px var(--font-mono);color:var(--fg-strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:110px;max-width:190px;flex:0 1 auto}
 .animation-key-channels{display:inline-flex;align-items:center;gap:6px;flex:none}
 .animation-key-empty{margin:0;white-space:normal;overflow-wrap:anywhere;text-overflow:clip;font-size:9px;line-height:10.5px;min-width:0;flex:1 1 auto}
 .animation-lanes{position:relative;overflow:auto;height:186px;min-height:88px;max-height:560px;border:1px solid var(--border);border-radius:5px;background:var(--code-bg);overscroll-behavior:contain}
@@ -244,6 +244,7 @@ main{position:relative}.stage-comment-mode{cursor:crosshair}.stage-comment-mode 
 .animation-key.selected{color:var(--warn);font-weight:700;z-index:3}
 .animation-key:hover,.animation-key:focus-visible{color:var(--pass);z-index:2}
 .animation-playhead{position:absolute;top:0;bottom:0;width:1px;background:var(--warn);pointer-events:none;z-index:5}
+.animation-selection-box{position:absolute;border:1px dashed var(--link);background:var(--rv-pressed-bg);pointer-events:none;z-index:8;box-sizing:border-box}
 .animation-curve-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;font-size:11px;margin-bottom:4px}
 .animation-curve-toolbar select,.animation-curve-toolbar input{width:auto;padding:2px 6px;font-size:11px}
 .animation-curve-toolbar button{padding:2px 8px;font-size:11px}
@@ -264,6 +265,6 @@ main{position:relative}.stage-comment-mode{cursor:crosshair}.stage-comment-mode 
 .animation-tree button{margin:2px;padding:3px 7px;font-size:12px}
 [data-part-list] button[data-bone-selected=true]{outline:1px solid var(--pass);outline-offset:-2px}
 .animation-stage-picks{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:3}
-.animation-bone-pick{position:absolute;width:10px;height:10px;min-width:0;padding:0;transform:translate(-50%,-50%);border-radius:50%;border:1px solid var(--rv-bone-line);background:var(--rv-bone-point);pointer-events:auto}
+.animation-bone-pick{position:absolute;width:10px;height:10px;min-width:0;padding:0;transform:translate(-50%,-50%);border-radius:50%;border:1px solid var(--rv-bone-line);background:var(--rv-bone-point);pointer-events:auto;cursor:grab;touch-action:none}
 .animation-bone-pick[aria-pressed=true]{outline:3px solid var(--rv-bone-selected);outline-offset:2px}
 #motion-tools>.animation-inspection{flex-basis:100%;min-width:0}

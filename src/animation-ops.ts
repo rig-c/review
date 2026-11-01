@@ -402,8 +402,109 @@ export interface TrackClassification {
   reason: string | null;
 }
 
+export interface BoneConstraintInfo {
+  name: string;
+  kind: 'physics' | 'ik' | 'transform' | 'path' | 'slider';
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Inspect a compiled `rigc-compiled/3` model document to determine whether `boneName`
+ * is driven by a constraint (`physics`, `ik`, `transform`, `path`, or `slider`).
+ */
+export function findBoneConstraint(
+  modelDocument: unknown,
+  boneName: string,
+): BoneConstraintInfo | null {
+  if (!isRecord(modelDocument) || !boneName) return null;
+  const animations = Array.isArray(modelDocument.animations) ? modelDocument.animations : [];
+  const checkConstraint = (
+    raw: unknown,
+    fallbackKind?: BoneConstraintInfo['kind'],
+  ): BoneConstraintInfo | null => {
+    if (!isRecord(raw) || typeof raw.name !== 'string') return null;
+    const rec = isRecord(raw.record) ? raw.record : raw;
+    const kind = (
+      typeof raw.kind === 'string'
+        ? raw.kind
+        : typeof rec.kind === 'string'
+          ? rec.kind
+          : fallbackKind
+    ) as BoneConstraintInfo['kind'] | undefined;
+    if (!kind) return null;
+    const boneField =
+      typeof rec.bone === 'string'
+        ? rec.bone
+        : typeof raw.bone === 'string'
+          ? raw.bone
+          : undefined;
+    const bonesField = Array.isArray(rec.bones)
+      ? rec.bones
+      : Array.isArray(raw.bones)
+        ? raw.bones
+        : undefined;
+    if (kind === 'physics' && boneField === boneName) {
+      return { name: raw.name, kind: 'physics' };
+    }
+    if (
+      (kind === 'ik' || kind === 'transform' || kind === 'path') &&
+      (boneField === boneName || (bonesField !== undefined && bonesField.includes(boneName)))
+    ) {
+      return { name: raw.name, kind };
+    }
+    if (kind === 'slider') {
+      if (boneField === boneName || (bonesField !== undefined && bonesField.includes(boneName))) {
+        return { name: raw.name, kind: 'slider' };
+      }
+      if (
+        isRecord(rec.timelines) &&
+        Array.isArray(rec.timelines.bones) &&
+        rec.timelines.bones.some((b) => isRecord(b) && b.name === boneName)
+      ) {
+        return { name: raw.name, kind: 'slider' };
+      }
+      const animName =
+        typeof rec.animation === 'string'
+          ? rec.animation
+          : typeof raw.animation === 'string'
+            ? raw.animation
+            : undefined;
+      if (animName) {
+        const sliderAnim = animations.find(
+          (a) => isRecord(a) && a.name === animName && Array.isArray(a.bones),
+        ) as { bones?: unknown[] } | undefined;
+        if (sliderAnim?.bones?.some((b) => isRecord(b) && b.name === boneName)) {
+          return { name: raw.name, kind: 'slider' };
+        }
+      }
+    }
+    return null;
+  };
+  if (Array.isArray(modelDocument.constraints)) {
+    for (const raw of modelDocument.constraints) {
+      const hit = checkConstraint(raw);
+      if (hit) return hit;
+    }
+  }
+  for (const [field, kind] of [
+    ['physics', 'physics'],
+    ['ik', 'ik'],
+    ['transform', 'transform'],
+    ['path', 'path'],
+    ['sliders', 'slider'],
+  ] as const) {
+    const list = modelDocument[field];
+    if (Array.isArray(list)) {
+      for (const raw of list) {
+        const hit = checkConstraint(raw, kind);
+        if (hit) return hit;
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -1048,24 +1149,30 @@ export function applyAnimationOp(
   const channels = classification.channels;
   const keysPath = ['animations', op.animation, 'tracks', op.track, 'keys'] as const;
 
+  const trackLabel = `animation "${op.animation}" track ${op.track} ("${classification.target}.${classification.property}")`;
+
   if (op.op === 'set_key_time') {
     if (!Number.isInteger(op.key) || op.key < 0 || op.key >= keys.length) {
-      throw new Error(`ANIMATION_KEY_OUT_OF_RANGE: key index ${op.key} out of [0, ${keys.length - 1}]`);
+      throw new Error(
+        `ANIMATION_KEY_OUT_OF_RANGE: ${trackLabel} key index ${op.key} out of [0, ${keys.length - 1}]`,
+      );
     }
     if (typeof op.time !== 'number' || !Number.isFinite(op.time) || op.time < 0) {
-      throw new Error(`ANIMATION_KEY_TIME_INVALID: key time must be a finite number >= 0, got ${String(op.time)}`);
+      throw new Error(
+        `ANIMATION_KEY_TIME_INVALID: ${trackLabel} key ${op.key} time must be a finite number >= 0, got ${String(op.time)}`,
+      );
     }
     const nextTime = cleanMotionNumber(op.time);
     const prevKey = op.key > 0 ? keys[op.key - 1] : undefined;
     const nextKey = op.key + 1 < keys.length ? keys[op.key + 1] : undefined;
     if (prevKey && nextTime <= prevKey.t) {
       throw new Error(
-        `ANIMATION_KEY_ORDER: key ${op.key} time ${nextTime} must be > previous key ${op.key - 1} time ${prevKey.t}`,
+        `ANIMATION_KEY_ORDER: ${trackLabel} key ${op.key} time ${nextTime} must be > previous key ${op.key - 1} time ${prevKey.t}`,
       );
     }
     if (nextKey && nextTime >= nextKey.t) {
       throw new Error(
-        `ANIMATION_KEY_ORDER: key ${op.key} time ${nextTime} must be < next key ${op.key + 1} time ${nextKey.t}`,
+        `ANIMATION_KEY_ORDER: ${trackLabel} key ${op.key} time ${nextTime} must be < next key ${op.key + 1} time ${nextKey.t}`,
       );
     }
 
@@ -1347,10 +1454,14 @@ export function applyAnimationOp(
 
   if (op.op === 'delete_key') {
     if (!Number.isInteger(op.key) || op.key < 0 || op.key >= keys.length) {
-      throw new Error(`ANIMATION_KEY_OUT_OF_RANGE: key index ${op.key} out of [0, ${keys.length - 1}]`);
+      throw new Error(
+        `ANIMATION_KEY_OUT_OF_RANGE: ${trackLabel} key index ${op.key} out of [0, ${keys.length - 1}]`,
+      );
     }
     if (keys.length <= 1) {
-      throw new Error('ANIMATION_TRACK_MIN_KEYS: cannot delete the only key on a track');
+      throw new Error(
+        `ANIMATION_TRACK_MIN_KEYS: ${trackLabel} cannot delete key ${op.key}; cannot delete the only key on a track (has ${keys.length})`,
+      );
     }
 
     const keysArray = resolveArrayNode(text, keysPath);
@@ -1663,7 +1774,13 @@ export class AnimationOpBuilder {
   readonly baseText: string;
   readonly fallbackEasings?: Readonly<Record<string, EasingTuple>>;
   private currentText: string;
-  private readonly history: Array<{ op: AnimationSourceOp; textBefore: string }> = [];
+  private readonly history: Array<{
+    op: AnimationSourceOp;
+    textBefore: string;
+    undoGroupId?: number;
+  }> = [];
+  private nextUndoGroupId = 1;
+  private activeUndoGroupId: number | undefined = undefined;
 
   constructor(baseText: string, fallbackEasings?: Readonly<Record<string, EasingTuple>>) {
     this.baseText = baseText;
@@ -1683,8 +1800,99 @@ export class AnimationOpBuilder {
     return this.currentText !== this.baseText;
   }
 
+  beginUndoGroup(): number {
+    return this.nextUndoGroupId++;
+  }
+
+  withUndoGroup<T>(groupId: number, fn: () => T): T {
+    const prev = this.activeUndoGroupId;
+    this.activeUndoGroupId = groupId;
+    try {
+      return fn();
+    } finally {
+      this.activeUndoGroupId = prev;
+    }
+  }
+
+  unwindUndoGroup(groupId: number): void {
+    let earliestTextBefore: string | undefined;
+    while (
+      this.history.length > 0 &&
+      this.history.at(-1)!.undoGroupId === groupId
+    ) {
+      earliestTextBefore = this.history.pop()!.textBefore;
+    }
+    if (earliestTextBefore !== undefined) {
+      this.currentText = earliestTextBefore;
+    }
+  }
+
   apply(op: AnimationSourceOp): AppliedAnimationOpsResult {
     const last = this.history.at(-1);
+
+    // Coalesce a set_key_value into a trailing insert_key on the same (animation, track)
+    // when the set_key_value targets the newly inserted key (e.g. stage bone drag on an unkeyed frame).
+    if (
+      last !== undefined &&
+      last.op.op === 'insert_key' &&
+      op.op === 'set_key_value' &&
+      last.op.animation === op.animation &&
+      last.op.track === op.track
+    ) {
+      const { classification, keys } = resolveEditableTrack(
+        this.currentText,
+        op.animation,
+        op.track,
+      );
+      const targetKey = keys[op.key];
+      if (targetKey && targetKey.t === cleanMotionNumber(last.op.time)) {
+        const channels = classification.channels;
+        const nextValues = [...last.op.value];
+        if (op.channel !== undefined) {
+          if (
+            !Number.isInteger(op.channel) ||
+            op.channel < 0 ||
+            op.channel >= channels ||
+            typeof op.value !== 'number' ||
+            !Number.isFinite(op.value)
+          ) {
+            throw new Error(
+              `ANIMATION_VALUE_INVALID: expected finite number for channel ${String(op.channel)}`,
+            );
+          }
+          nextValues[op.channel] = cleanMotionNumber(op.value);
+        } else if (
+          Array.isArray(op.value) &&
+          op.value.length === channels &&
+          op.value.every((n) => typeof n === 'number' && Number.isFinite(n))
+        ) {
+          for (let c = 0; c < channels; c++) {
+            nextValues[c] = cleanMotionNumber(op.value[c]!);
+          }
+        } else {
+          throw new Error(
+            `ANIMATION_VALUE_INVALID: expected array of ${channels} finite number(s)`,
+          );
+        }
+        const replayFrom = last.textBefore;
+        const coalescedInsert: AnimationSourceOp = {
+          ...last.op,
+          value: nextValues,
+        };
+        const res = applyAnimationOp(
+          replayFrom,
+          coalescedInsert,
+          this.baseText,
+          this.fallbackEasings,
+        );
+        const groupId = this.activeUndoGroupId ?? last.undoGroupId;
+        this.history.pop();
+        this.history.push({ op: coalescedInsert, textBefore: replayFrom, undoGroupId: groupId });
+        this.currentText = res.text;
+        return res;
+      }
+    }
+
     const sameKeyTarget =
       last !== undefined &&
       last.op.animation === op.animation &&
@@ -1706,6 +1914,7 @@ export class AnimationOpBuilder {
           ? coalesceSetKeyValueOp(replayFrom, last.op, op)
           : op;
       const res = applyAnimationOp(replayFrom, coalescedOp, this.baseText, this.fallbackEasings);
+      const groupId = this.activeUndoGroupId ?? last.undoGroupId;
       this.history.pop();
       if (res.text === this.baseText) {
         this.history.length = 0;
@@ -1716,7 +1925,7 @@ export class AnimationOpBuilder {
         this.currentText = replayFrom;
         return { text: replayFrom, changedSpans: [] };
       }
-      this.history.push({ op: coalescedOp, textBefore: replayFrom });
+      this.history.push({ op: coalescedOp, textBefore: replayFrom, undoGroupId: groupId });
       this.currentText = res.text;
       return res;
     }
@@ -1732,19 +1941,23 @@ export class AnimationOpBuilder {
     }
     if (this.history.length >= MAX_ANIMATION_OPS) {
       throw new Error(
-        `ANIMATION_OPS_TOO_MANY: pending operations cannot exceed MAX_ANIMATION_OPS (${MAX_ANIMATION_OPS})`,
+        `ANIMATION_OPS_TOO_MANY: animation "${op.animation}" track ${op.track} operation "${op.op}" exceeds MAX_ANIMATION_OPS (${MAX_ANIMATION_OPS})`,
       );
     }
-    this.history.push({ op, textBefore: this.currentText });
+    this.history.push({
+      op,
+      textBefore: this.currentText,
+      undoGroupId: this.activeUndoGroupId,
+    });
     this.currentText = res.text;
     return res;
   }
 
   /**
    * Move a selection of `(track, key)` pairs in `animation` by `deltaTime` seconds
-   * atomically. When `deltaTime > 0`, keys on the same track are moved from right to left
-   * so an earlier key does not collide with its not-yet-moved right neighbor; when
-   * `deltaTime < 0`, from left to right. Refuses with `ANIMATION_OPS_TOO_MANY` (restoring
+   * atomically as a single undo group. When `deltaTime > 0`, keys on the same track are moved
+   * from right to left so an earlier key does not collide with its not-yet-moved right neighbor;
+   * when `deltaTime < 0`, from left to right. Refuses with `ANIMATION_OPS_TOO_MANY` (restoring
    * the builder's prior state) if the move would exceed `MAX_ANIMATION_OPS`.
    */
   moveSelection(
@@ -1753,7 +1966,7 @@ export class AnimationOpBuilder {
     deltaTime: number,
   ): AppliedAnimationOpsResult {
     if (!Number.isFinite(deltaTime)) {
-      throw new Error(`ANIMATION_KEY_TIME_INVALID: deltaTime must be finite, got ${String(deltaTime)}`);
+      throw new Error(`ANIMATION_KEY_TIME_INVALID: animation "${animation}" deltaTime must be finite, got ${String(deltaTime)}`);
     }
     if (selections.length === 0 || deltaTime === 0) {
       return { text: this.currentText, changedSpans: [] };
@@ -1770,7 +1983,7 @@ export class AnimationOpBuilder {
     const totalSelected = [...byTrack.values()].reduce((acc, a) => acc + a.length, 0);
     if (totalSelected > MAX_ANIMATION_OPS) {
       throw new Error(
-        `ANIMATION_OPS_TOO_MANY: selection move of ${totalSelected} keys exceeds MAX_ANIMATION_OPS (${MAX_ANIMATION_OPS})`,
+        `ANIMATION_OPS_TOO_MANY: animation "${animation}" selection move of ${totalSelected} keys exceeds MAX_ANIMATION_OPS (${MAX_ANIMATION_OPS})`,
       );
     }
     const savedText = this.currentText;
@@ -1780,11 +1993,13 @@ export class AnimationOpBuilder {
       const sortedTracks = [...byTrack.keys()].sort((a, b) => a - b);
       const targetTimes = new Map<string, number>();
       for (const track of sortedTracks) {
-        const { keys } = resolveEditableTrack(this.currentText, animation, track);
+        const { classification, keys } = resolveEditableTrack(this.currentText, animation, track);
         for (const key of byTrack.get(track)!) {
           const k = keys[key];
           if (!k) {
-            throw new Error(`ANIMATION_KEY_OUT_OF_RANGE: key index ${key} out of [0, ${keys.length - 1}]`);
+            throw new Error(
+              `ANIMATION_KEY_OUT_OF_RANGE: animation "${animation}" track ${track} ("${classification.target}.${classification.property}") key index ${key} out of [0, ${keys.length - 1}]`,
+            );
           }
           targetTimes.set(`${track}:${key}`, cleanMotionNumber(k.t + deltaTime));
         }
@@ -1792,13 +2007,16 @@ export class AnimationOpBuilder {
 
       // Coalesce with a trailing batch of set_key_time ops on the same selection
       let suffixStart = this.history.length;
+      let existingGroupId: number | undefined;
       while (suffixStart > 0) {
-        const prev = this.history[suffixStart - 1]!.op;
+        const prevEntry = this.history[suffixStart - 1]!;
+        const prev = prevEntry.op;
         if (
           prev.op === 'set_key_time' &&
           prev.animation === animation &&
           targetTimes.has(`${prev.track}:${prev.key}`)
         ) {
+          existingGroupId ??= prevEntry.undoGroupId;
           suffixStart--;
         } else {
           break;
@@ -1808,24 +2026,109 @@ export class AnimationOpBuilder {
         this.currentText = this.history[suffixStart]!.textBefore;
         this.history.length = suffixStart;
       }
+      if (this.history.length + totalSelected > MAX_ANIMATION_OPS) {
+        throw new Error(
+          `ANIMATION_OPS_TOO_MANY: animation "${animation}" selection move of ${totalSelected} keys with ${this.history.length} pending op(s) exceeds MAX_ANIMATION_OPS (${MAX_ANIMATION_OPS})`,
+        );
+      }
 
-      for (const track of sortedTracks) {
-        const { keys } = resolveEditableTrack(this.currentText, animation, track);
-        const keyIndices = [...byTrack.get(track)!].sort((a, b) => {
-          const shiftA = targetTimes.get(`${track}:${a}`)! - keys[a]!.t;
-          return shiftA >= 0 ? b - a : a - b;
-        });
-        for (const key of keyIndices) {
-          const res = this.apply({
-            op: 'set_key_time',
-            animation,
-            track,
-            key,
-            time: targetTimes.get(`${track}:${key}`)!,
+      const groupId = this.activeUndoGroupId ?? existingGroupId ?? this.beginUndoGroup();
+      this.withUndoGroup(groupId, () => {
+        for (const track of sortedTracks) {
+          const { keys } = resolveEditableTrack(this.currentText, animation, track);
+          const keyIndices = [...byTrack.get(track)!].sort((a, b) => {
+            const shiftA = targetTimes.get(`${track}:${a}`)! - keys[a]!.t;
+            return shiftA >= 0 ? b - a : a - b;
           });
-          changedSpans.push(...res.changedSpans);
+          for (const key of keyIndices) {
+            const res = this.apply({
+              op: 'set_key_time',
+              animation,
+              track,
+              key,
+              time: targetTimes.get(`${track}:${key}`)!,
+            });
+            changedSpans.push(...res.changedSpans);
+          }
+        }
+      });
+      return { text: this.currentText, changedSpans };
+    } catch (err) {
+      this.currentText = savedText;
+      this.history.length = 0;
+      this.history.push(...savedHistory);
+      throw err;
+    }
+  }
+
+  /**
+   * Delete a selection of `(track, key)` pairs in `animation` atomically as a single undo group.
+   * Keys on the same track are deleted in descending index order so earlier indices remain stable.
+   * Refuses with `ANIMATION_TRACK_MIN_KEYS` if any track would be left with `< 1` key, and
+   * `ANIMATION_OPS_TOO_MANY` if the total pending ops would exceed `MAX_ANIMATION_OPS`.
+   */
+  deleteSelection(
+    animation: string,
+    selections: ReadonlyArray<{ track: number; key: number }>,
+  ): AppliedAnimationOpsResult {
+    if (selections.length === 0) {
+      return { text: this.currentText, changedSpans: [] };
+    }
+    const byTrack = new Map<number, number[]>();
+    for (const sel of selections) {
+      let arr = byTrack.get(sel.track);
+      if (!arr) {
+        arr = [];
+        byTrack.set(sel.track, arr);
+      }
+      if (!arr.includes(sel.key)) arr.push(sel.key);
+    }
+    const sortedTracks = [...byTrack.keys()].sort((a, b) => a - b);
+    let totalSelected = 0;
+    for (const track of sortedTracks) {
+      const { classification, keys } = resolveEditableTrack(this.currentText, animation, track);
+      const trackLabel = `animation "${animation}" track ${track} ("${classification.target}.${classification.property}")`;
+      const keyIndices = [...byTrack.get(track)!].sort((a, b) => b - a);
+      for (const k of keyIndices) {
+        if (!Number.isInteger(k) || k < 0 || k >= keys.length) {
+          throw new Error(
+            `ANIMATION_KEY_OUT_OF_RANGE: ${trackLabel} key index ${k} out of [0, ${keys.length - 1}]`,
+          );
         }
       }
+      if (keys.length - keyIndices.length < 1) {
+        throw new Error(
+          `ANIMATION_TRACK_MIN_KEYS: ${trackLabel} cannot delete ${keyIndices.length} of ${keys.length} key(s); cannot delete the only key on a track`,
+        );
+      }
+      byTrack.set(track, keyIndices);
+      totalSelected += keyIndices.length;
+    }
+    if (this.history.length + totalSelected > MAX_ANIMATION_OPS) {
+      throw new Error(
+        `ANIMATION_OPS_TOO_MANY: animation "${animation}" selection delete of ${totalSelected} keys with ${this.history.length} pending op(s) exceeds MAX_ANIMATION_OPS (${MAX_ANIMATION_OPS})`,
+      );
+    }
+
+    const savedText = this.currentText;
+    const savedHistory = this.history.map((h) => ({ ...h }));
+    const changedSpans: { start: number; end: number }[] = [];
+    try {
+      const groupId = this.activeUndoGroupId ?? this.beginUndoGroup();
+      this.withUndoGroup(groupId, () => {
+        for (const track of sortedTracks) {
+          const keyIndices = byTrack.get(track)!;
+          for (const key of keyIndices) {
+            const res = this.apply({
+              op: 'delete_key',
+              animation,
+              track,
+              key,
+            });
+            changedSpans.push(...res.changedSpans);
+          }
+        }
+      });
       return { text: this.currentText, changedSpans };
     } catch (err) {
       this.currentText = savedText;
@@ -1838,7 +2141,16 @@ export class AnimationOpBuilder {
   undo(): boolean {
     const last = this.history.pop();
     if (!last) return false;
-    this.currentText = last.textBefore;
+    let earliestTextBefore = last.textBefore;
+    if (last.undoGroupId !== undefined) {
+      while (
+        this.history.length > 0 &&
+        this.history.at(-1)!.undoGroupId === last.undoGroupId
+      ) {
+        earliestTextBefore = this.history.pop()!.textBefore;
+      }
+    }
+    this.currentText = earliestTextBefore;
     return true;
   }
 
