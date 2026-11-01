@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.2](https://github.com/rig-c/review/compare/v0.25.1...v0.25.2) (2026-11-01)
+
+
+### Bug Fixes
+
+* **comments:** place the open list below a wrapped view bar ([#285](https://github.com/rig-c/review/issues/285)) ([062d7f9](https://github.com/rig-c/review/commit/062d7f9172ca1a87d0822c62618285a73ee4cbb2)), closes [#284](https://github.com/rig-c/review/issues/284)
+
 ## [0.25.1](https://github.com/rig-c/review/compare/v0.25.0...v0.25.1) (2026-11-01)
 
 
