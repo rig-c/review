@@ -1,5 +1,11 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rig-c/review/main/assets/banner.svg" alt="@rig-c/review — Local human rig inspection, reference comparison and feedback export" width="100%" />
+  <img src="https://raw.githubusercontent.com/rig-c/review/main/assets/banner.svg" alt="@rig-c/review" width="100%" />
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@rig-c/review"><img src="https://img.shields.io/npm/v/@rig-c/review.svg?style=flat-square&color=FF6B4A" alt="version"/></a>
+  <a href="https://www.npmjs.com/package/@rig-c/review"><img src="https://img.shields.io/npm/dm/@rig-c/review.svg?style=flat-square&color=EC4899" alt="downloads"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38BDF8.svg?style=flat-square" alt="MIT"/></a>
 </p>
 
 # review

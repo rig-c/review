@@ -25,6 +25,7 @@ const mutants = [
   {name: 'table-date-no-edge-pipes', code: 'README_TABLE_DATE', text: 'Date | Value\n--- | ---\n2026-10-30 | 7'},
   {name: 'table-header-date', code: 'README_TABLE_DATE', text: '| 2026-10-30 | Value |\n| --- | --- |\n| sample | 7 |'},
   {name: 'duplicate-link-text', code: 'README_DUPLICATE_LINK_TEXT', text: '[Compare outputs](a.md) and [Compare outputs](b.md)'},
+  {name: 'duplicate-image-link-text', code: 'README_DUPLICATE_LINK_TEXT', text: '<a href="a.md"><img src="a.svg" alt="version"/></a> <a href="b.md"><img src="b.svg" alt="version"/></a>'},
   {name: 'duplicate-visible-link-text', code: 'README_DUPLICATE_LINK_TEXT', text: '[**Compare** outputs](a.md) and [compare outputs][compare]\n\n[compare]: b.md'},
   {name: 'generic-reference', code: 'README_GENERIC_LINK_TEXT', text: '[reference](a.md)'},
   {name: 'generic-here', code: 'README_GENERIC_LINK_TEXT', text: '[*Here*](a.md)'},
