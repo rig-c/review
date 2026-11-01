@@ -1687,9 +1687,9 @@ test('PR #257 review findings 1-3 (compare read-only gate, retained key live tra
     };
 
     // Control 1 (Finding 1 mutant: omit !this.options.apply||!this.options.preview gate check)
-    expect(srcText).toContain('if(this.options.readOnlyReason||!this.options.apply||!this.options.preview){');
+    expect(srcText).toContain('if(ro||!this.options.apply||!this.options.preview){');
     const modF1 = await loadMutant(
-      srcText.replace('if(this.options.readOnlyReason||!this.options.apply||!this.options.preview){', 'if(false){'),
+      srcText.replace('if(ro||!this.options.apply||!this.options.preview){', 'if(false){'),
     );
     const c1Host = new StubElement('section');
     const c1Panel = new modF1.AnimationInspectionPanel({
@@ -2428,6 +2428,536 @@ test('Slice 4b: multi-key selection (Shift-click, box drag, group move + 1-step 
     else Reflect.deleteProperty(globalThis, 'window');
   }
 });
+
+test('PR #260 findings: Shift-click 150ms hold does not undo selection, and distinct undo gestures never merge across apply, moveSelection, or deleteSelection', async () => {
+  const prevDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const prevWin = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const winTarget = new EventTarget();
+  const docTarget = new EventTarget();
+  Object.assign(docTarget, {
+    createElement: (tag: string) => new StubElement(tag),
+    createElementNS: (_ns: string, tag: string) => new StubElement(tag),
+  });
+  Object.defineProperty(globalThis, 'document', {
+    value: docTarget,
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(globalThis, 'window', {
+    value: winTarget,
+    configurable: true,
+    writable: true,
+  });
+
+  try {
+    const demoText = readFileSync(new URL('./fixtures/motion/demo.json', import.meta.url), 'utf8');
+
+    // Finding 2a: Two withUndoGroup() calls with values 10 and 20 must undo to 10, not to the base value (0)
+    {
+      const builder = new AnimationOpBuilder(demoText);
+      const g1 = builder.beginUndoGroup();
+      builder.withUndoGroup(g1, () => {
+        builder.apply({ op: 'set_key_value', animation: 'tilt', track: 0, key: 0, value: [10] });
+      });
+      const g2 = builder.beginUndoGroup();
+      builder.withUndoGroup(g2, () => {
+        builder.apply({ op: 'set_key_value', animation: 'tilt', track: 0, key: 0, value: [20] });
+      });
+      expect(builder.undo()).toBe(true);
+      const afterFirstUndo = JSON.parse(builder.text).animations.tilt.tracks[0].keys[0].v;
+      expect(afterFirstUndo).toEqual([10]);
+      expect(builder.undo()).toBe(true);
+      expect(builder.text).toBe(demoText);
+    }
+
+    // Finding 2b: Stage drag (withUndoGroup) after a numeric edit (ungrouped) on the same key must undo only the stage drag
+    {
+      const builder = new AnimationOpBuilder(demoText);
+      builder.apply({ op: 'set_key_value', animation: 'tilt', track: 0, key: 0, value: [10] });
+      const g1 = builder.beginUndoGroup();
+      builder.withUndoGroup(g1, () => {
+        builder.apply({ op: 'set_key_value', animation: 'tilt', track: 0, key: 0, value: [20] });
+      });
+      expect(builder.undo()).toBe(true);
+      const afterFirstUndo = JSON.parse(builder.text).animations.tilt.tracks[0].keys[0].v;
+      expect(afterFirstUndo).toEqual([10]);
+      expect(builder.undo()).toBe(true);
+      expect(builder.text).toBe(demoText);
+    }
+
+    // Finding 2c: moveSelection across two distinct explicit undo groups (or after a single-key move) must not merge
+    {
+      const builder = new AnimationOpBuilder(demoText);
+      const sel = [
+        { track: 0, key: 1 },
+        { track: 1, key: 1 },
+      ];
+      const g1 = builder.beginUndoGroup();
+      builder.withUndoGroup(g1, () => {
+        builder.moveSelection('smile', sel, 0.05); // 0.25 -> 0.30
+      });
+      const g2 = builder.beginUndoGroup();
+      builder.withUndoGroup(g2, () => {
+        builder.moveSelection('smile', sel, 0.05); // 0.30 -> 0.35
+      });
+      expect(builder.undo()).toBe(true);
+      const parsedAfterUndo1 = JSON.parse(builder.text).animations.smile.tracks;
+      expect(parsedAfterUndo1[0].keys[1].t).toBe(0.3);
+      expect(parsedAfterUndo1[1].keys[1].t).toBe(0.3);
+      expect(builder.undo()).toBe(true);
+      expect(builder.text).toBe(demoText);
+
+      // Single-key move on (0, 1) followed by group move on [(0, 1), (1, 1)] must not coalesce the single-key move into the group move
+      builder.apply({ op: 'set_key_time', animation: 'smile', track: 0, key: 1, time: 0.3 });
+      builder.moveSelection('smile', sel, 0.05);
+      expect(builder.undo()).toBe(true);
+      const parsedAfterGroupUndo = JSON.parse(builder.text).animations.smile.tracks;
+      expect(parsedAfterGroupUndo[0].keys[1].t).toBe(0.3);
+      expect(parsedAfterGroupUndo[1].keys[1].t).toBe(0.25);
+      expect(builder.undo()).toBe(true);
+      expect(builder.text).toBe(demoText);
+    }
+
+    // Finding 2d: deleteSelection (and apply) returning text to baseText after an earlier gesture must not wipe earlier history
+    {
+      const builder = new AnimationOpBuilder(demoText);
+      const g1 = builder.beginUndoGroup();
+      builder.withUndoGroup(g1, () => {
+        builder.apply({ op: 'insert_key', animation: 'smile', track: 0, time: 0.6, value: [1, 1] });
+        builder.apply({ op: 'insert_key', animation: 'smile', track: 1, time: 0.6, value: [0] });
+      });
+      const textAfterInsert = builder.text;
+      // Now deleteSelection removes the two newly inserted keys at index 2, returning text to demoText
+      builder.deleteSelection('smile', [
+        { track: 0, key: 2 },
+        { track: 1, key: 2 },
+      ]);
+      expect(builder.text).toBe(demoText);
+      // Undo must undo the deleteSelection and restore the two inserted keys!
+      expect(builder.undo()).toBe(true);
+      expect(builder.text).toBe(textAfterInsert);
+      expect(builder.undo()).toBe(true);
+      expect(builder.text).toBe(demoText);
+    }
+
+    // Finding 1: Holding Shift+pointerdown for 150ms before pointerup+click must NOT double-toggle and undo selection
+    {
+      const { AnimationInspectionPanel } = await import('../web/animation-inspection.ts');
+      const model = {
+        spec: 'rigc-compiled/3',
+        skeleton: { width: 100, height: 100 },
+        pages: [],
+        bones: [
+          { name: 'head', x: 0, y: 30, rotation: 0, scaleX: 1, scaleY: 1 },
+          { name: 'brow_r', parent: 'head', x: 10, y: 5, rotation: 0, scaleX: 1, scaleY: 1 },
+        ],
+        slots: [],
+        skins: [{ name: 'default', attachments: {} }],
+        animations: [
+          {
+            name: 'smile',
+            duration: 1.6,
+            bones: [
+              {
+                name: 'head',
+                timelines: [{ name: 'rotate', keys: [{ time: 0, value: 0 }, { time: 0.3, value: 3 }, { time: 1.6, value: 0 }] }],
+              },
+              {
+                name: 'brow_r',
+                timelines: [{ name: 'translate', keys: [{ time: 0, x: 0, y: 0 }, { time: 0.3, x: 0, y: 2.2 }, { time: 1.6, x: 0, y: 0 }] }],
+              },
+            ],
+            slots: [],
+          },
+        ],
+      };
+      const smileSourceText = JSON.stringify(
+        {
+          spec: 'rigc-motion/1',
+          animations: {
+            smile: {
+              duration: 1.6,
+              loop: false,
+              tracks: [
+                { bone: 'head', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 0.3, v: [3] }, { t: 1.6, v: [0] }] },
+                { bone: 'brow_r', property: 'translate', keys: [{ t: 0, v: [0, 0] }, { t: 0.3, v: [0, 2.2] }, { t: 1.6, v: [0, 0] }] },
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      );
+      const host = new StubElement('section');
+      const stage = new StubElement('div');
+      const panel = new AnimationInspectionPanel({
+        host: host as unknown as HTMLElement,
+        stage: stage as unknown as HTMLElement,
+        select: () => {},
+        seek: () => {},
+        project: (x, y) => ({ x, y }),
+        enabled: () => true,
+        preview: () => {},
+        apply: async () => {},
+      });
+      panel.loadSource({
+        available: true,
+        reason: null,
+        path: 'animations.json',
+        sha256: sha256(smileSourceText),
+        text: smileSourceText,
+        easings: {},
+      });
+      panel.model(model, 'smile');
+      panel.update(0.3, 1.6);
+
+      expect(panel.selectKey(0, 1)).toBe(true);
+      expect(panel.selectedKeysInfo()).toHaveLength(1);
+
+      const track1Marks = host.querySelectorAll('.animation-key').filter((m) => m.dataset.sourceTrack === '1');
+      const mark = track1Marks[1]!;
+
+      const downEv = Object.assign(new Event('pointerdown', { cancelable: true }), {
+        isPrimary: true,
+        button: 0,
+        pointerId: 11,
+        shiftKey: true,
+        clientX: 50,
+      });
+      mark.dispatchEvent(downEv);
+      expect(panel.selectedKeysInfo()).toHaveLength(2);
+
+      // Hold the mouse button for 150ms (realistic human press duration)
+      await new Promise((r) => setTimeout(r, 150));
+
+      const upEv = Object.assign(new Event('pointerup', { cancelable: true }), {
+        isPrimary: true,
+        button: 0,
+        pointerId: 11,
+        shiftKey: true,
+        clientX: 50,
+      });
+      mark.dispatchEvent(upEv);
+      const clickEv = Object.assign(new Event('click', { cancelable: true }), {
+        shiftKey: true,
+      });
+      mark.dispatchEvent(clickEv);
+
+      // Selection must still have 2 keys (not undone by the click on release)!
+      expect(panel.selectedKeysInfo()).toHaveLength(2);
+      panel.dispose();
+
+      // Planted mutant for Finding 1: re-introduce setTimeout(..., 0) in if(e.shiftKey) -> 150ms hold undoes selection!
+      const webSrc = readFileSync(new URL('../web/animation-inspection.ts', import.meta.url), 'utf8');
+      expect(webSrc).toContain('if(e.shiftKey){\n    this.toggleKeySelection(trackIndex,liveIdx,trackPointer);\n    this.renderChannels();\n    return;\n   }');
+      const mutantWebTs = webSrc
+        .replace(
+          'if(this.suppressNextKeyClick||(isEditable&&cls&&(e?.detail??0)>0)){',
+          'if(this.suppressNextKeyClick){',
+        )
+        .replace(
+          'if(e.shiftKey){\n    this.toggleKeySelection(trackIndex,liveIdx,trackPointer);\n    this.renderChannels();\n    return;\n   }',
+          'if(e.shiftKey){\n    this.toggleKeySelection(trackIndex,liveIdx,trackPointer);\n    this.renderChannels();\n    setTimeout(()=>{this.suppressNextKeyClick=false;},0);\n    return;\n   }',
+        );
+      const mutantWebJs = new Bun.Transpiler({ loader: 'ts' })
+        .transformSync(mutantWebTs)
+        .replaceAll('../src/', new URL('../src/', import.meta.url).href)
+        .replaceAll('./', new URL('../web/', import.meta.url).href);
+      const modWebMutant = await import(
+        'data:text/javascript;base64,' + Buffer.from(mutantWebJs).toString('base64')
+      );
+      const mHost = new StubElement('section');
+      const mStage = new StubElement('div');
+      const mPanel = new modWebMutant.AnimationInspectionPanel({
+        host: mHost,
+        stage: mStage,
+        select: () => {},
+        seek: () => {},
+        project: (x: number, y: number) => ({ x, y }),
+        enabled: () => true,
+        preview: () => {},
+        apply: async () => {},
+      });
+      mPanel.loadSource({
+        available: true,
+        reason: null,
+        path: 'animations.json',
+        sha256: sha256(smileSourceText),
+        text: smileSourceText,
+        easings: {},
+      });
+      mPanel.model(model, 'smile');
+      mPanel.update(0.3, 1.6);
+      mPanel.selectKey(0, 1);
+      const mMark = mHost.querySelectorAll('.animation-key').filter((m) => m.dataset.sourceTrack === '1')[1]!;
+      mMark.dispatchEvent(Object.assign(new Event('pointerdown', { cancelable: true }), { isPrimary: true, button: 0, pointerId: 12, shiftKey: true, clientX: 50 }));
+      await new Promise((r) => setTimeout(r, 150));
+      mMark.dispatchEvent(Object.assign(new Event('pointerup', { cancelable: true }), { isPrimary: true, button: 0, pointerId: 12, shiftKey: true, clientX: 50 }));
+      mMark.dispatchEvent(Object.assign(new Event('click', { cancelable: true }), { shiftKey: true }));
+      expect(mPanel.selectedKeysInfo()).toHaveLength(1);
+      mPanel.dispose();
+
+      // Planted mutant for Finding 2: remove last.undoGroupId === this.activeUndoGroupId check -> undo merges 10 and 20 to 0!
+      const opsSrc = readFileSync(new URL('../src/animation-ops.ts', import.meta.url), 'utf8');
+      expect(opsSrc).toContain('last.undoGroupId === this.activeUndoGroupId &&');
+      const mutantOpsTs = opsSrc.replaceAll('last.undoGroupId === this.activeUndoGroupId &&', '');
+      const mutantOpsJs = new Bun.Transpiler({ loader: 'ts' })
+        .transformSync(mutantOpsTs)
+        .replaceAll('./', new URL('../src/', import.meta.url).href);
+      const modOpsMutant = await import(
+        'data:text/javascript;base64,' + Buffer.from(mutantOpsJs).toString('base64')
+      );
+      const mBuilder = new modOpsMutant.AnimationOpBuilder(demoText);
+      const mg1 = mBuilder.beginUndoGroup();
+      mBuilder.withUndoGroup(mg1, () => {
+        mBuilder.apply({ op: 'set_key_value', animation: 'tilt', track: 0, key: 0, value: [10] });
+      });
+      const mg2 = mBuilder.beginUndoGroup();
+      mBuilder.withUndoGroup(mg2, () => {
+        mBuilder.apply({ op: 'set_key_value', animation: 'tilt', track: 0, key: 0, value: [20] });
+      });
+      mBuilder.undo();
+      expect(JSON.parse(mBuilder.text).animations.tilt.tracks[0].keys[0].v).toEqual([0]);
+    }
+
+    // Slice 4c Eye Defect 1 control: overlapping bone points on stage reach an editable bone in current mode,
+    // and when two editable bones share a point, clicking cycles to the second editable bone so dragging edits it
+    {
+      const { AnimationInspectionPanel } = await import('../web/animation-inspection.ts');
+      const overlapModel = {
+        spec: 'rigc-compiled/3',
+        skeleton: { width: 100, height: 100 },
+        pages: [],
+        bones: [
+          { name: 'root', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+          { name: 'neck', parent: 'root', x: -1, y: 988, rotation: 0, scaleX: 1, scaleY: 1 },
+          { name: 'head_ctl', parent: 'neck', x: 0, y: 31, rotation: 0, scaleX: 1, scaleY: 1 },
+          { name: 'head', parent: 'head_ctl', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+          { name: 'head_alt', parent: 'head_ctl', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+          { name: 'head_up', parent: 'head_ctl', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+        ],
+        slots: [],
+        skins: [{ name: 'default', attachments: {} }],
+        animations: [
+          {
+            name: 'tilt',
+            duration: 1.6,
+            bones: [
+              {
+                name: 'head',
+                timelines: [{ name: 'rotate', keys: [{ time: 0, value: 0 }, { time: 0.35, value: 10 }, { time: 1.6, value: 0 }] }],
+              },
+              {
+                name: 'head_alt',
+                timelines: [{ name: 'rotate', keys: [{ time: 0, value: 0 }, { time: 0.35, value: -5 }, { time: 1.6, value: 0 }] }],
+              },
+            ],
+            slots: [],
+          },
+        ],
+      };
+      const overlapSourceText = JSON.stringify(
+        {
+          spec: 'rigc-motion/1',
+          animations: {
+            tilt: {
+              duration: 1.6,
+              loop: false,
+              tracks: [
+                { bone: 'head', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 0.35, v: [10] }, { t: 1.6, v: [0] }] },
+                { bone: 'head_alt', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 0.35, v: [-5] }, { t: 1.6, v: [0] }] },
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      );
+      const host = new StubElement('section');
+      const stage = new StubElement('div');
+      let selectedBoneName = '';
+      const panel = new AnimationInspectionPanel({
+        host: host as unknown as HTMLElement,
+        stage: stage as unknown as HTMLElement,
+        select: (s) => {
+          selectedBoneName = s?.kind === 'bone' ? s.name : '';
+        },
+        seek: () => {},
+        project: (x, y) => ({ x, y }),
+        enabled: () => true,
+        preview: () => {},
+        apply: async () => {},
+      });
+      panel.loadSource({
+        available: true,
+        reason: null,
+        path: 'animations.json',
+        sha256: sha256(overlapSourceText),
+        text: overlapSourceText,
+        easings: {},
+      });
+      panel.model(overlapModel, 'tilt');
+      panel.update(0.35, 1.6);
+
+      const boneMap: Record<string, { x: number; y: number; active: boolean; a: number; b: number; c: number; d: number }> = {
+        root: { x: 0, y: 0, active: true, a: 1, b: 0, c: 0, d: 1 },
+        neck: { x: -1, y: 988, active: true, a: 1, b: 0, c: 0, d: 1 },
+        head_ctl: { x: -1, y: 1019, active: true, a: 1, b: 0, c: 0, d: 1 },
+        head: { x: -1, y: 1019, active: true, a: 1, b: 0, c: 0, d: 1 },
+        head_alt: { x: -1, y: 1019, active: true, a: 1, b: 0, c: 0, d: 1 },
+        head_up: { x: -1, y: 1019, active: true, a: 1, b: 0, c: 0, d: 1 },
+      };
+      const mockPlayer = {
+        bone: (name: string) => boneMap[name] ?? { x: 0, y: 0, active: false, a: 1, b: 0, c: 0, d: 1 },
+      } as unknown as import('@rig-c/play').RigPlayer;
+      panel.capture(mockPlayer, {} as unknown as import('@rig-c/play').PosedFrame);
+
+      // 1. Even if pointerdown lands on `head_up` (top in source order, no track), dragging poses the first editable bone `head` (track 0) instead of refusing with ANIMATION_BONE_NO_TRACK!
+      const headUpBtn = stage.querySelectorAll('.animation-bone-pick').find((b) => b.dataset.bone === 'head_up')!;
+      expect(headUpBtn).toBeTruthy();
+      headUpBtn.dispatchEvent(Object.assign(new Event('pointerdown', { cancelable: true }), { isPrimary: true, button: 0, pointerId: 31, clientX: -1, clientY: 1019 }));
+      headUpBtn.dispatchEvent(Object.assign(new Event('pointermove', { cancelable: true }), { isPrimary: true, button: 0, pointerId: 31, clientX: 25, clientY: 1040 }));
+      headUpBtn.dispatchEvent(Object.assign(new Event('pointerup', { cancelable: true }), { isPrimary: true, button: 0, pointerId: 31, clientX: 25, clientY: 1040 }));
+      expect(panel.ops()).toHaveLength(1);
+      expect(panel.ops()[0]!.track).toBe(0); // `head.rotate`
+      expect(selectedBoneName).toBe('head');
+      expect(panel.undoOp()).toBe(true);
+
+      // 2. When two editable bones (`head` and `head_alt`) share (-1, 1019), clicking the overlapping point cycles selection from `head` to `head_alt`, and the next drag edits `head_alt` (track 1)!
+      await new Promise((r) => setTimeout(r, 10));
+      headUpBtn.dispatchEvent(new Event('click', { cancelable: true }));
+      expect(selectedBoneName).toBe('head_alt');
+      headUpBtn.dispatchEvent(Object.assign(new Event('pointerdown', { cancelable: true }), { isPrimary: true, button: 0, pointerId: 32, clientX: -1, clientY: 1019 }));
+      headUpBtn.dispatchEvent(Object.assign(new Event('pointermove', { cancelable: true }), { isPrimary: true, button: 0, pointerId: 32, clientX: -25, clientY: 1040 }));
+      headUpBtn.dispatchEvent(Object.assign(new Event('pointerup', { cancelable: true }), { isPrimary: true, button: 0, pointerId: 32, clientX: -25, clientY: 1040 }));
+      expect(panel.ops()).toHaveLength(1);
+      expect(panel.ops()[0]!.track).toBe(1); // `head_alt.rotate`
+      panel.dispose();
+    }
+
+    // 4. Compare per-side editing isolation (failing control first: switching sides without per-side state leaks Side B's pending ops, preview, and undo onto Side A)
+    {
+      const { AnimationInspectionPanel } = await import('../web/animation-inspection.ts');
+      const demoText = readFileSync(new URL('./fixtures/motion/demo.json', import.meta.url), 'utf8');
+      const demoHash = sha256(demoText);
+      const makeCompiled = (tag: string) => ({
+        spec: 'rigc-compiled/3',
+        skeleton: { width: 100, height: 100, tag },
+        pages: [],
+        bones: [
+          { name: 'root', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+          { name: 'head', parent: 'root', x: 0, y: 60, rotation: 0, scaleX: 1, scaleY: 1 },
+        ],
+        slots: [],
+        skins: [{ name: 'default', attachments: {} }],
+        animations: [
+          {
+            name: 'tilt',
+            duration: 1.6,
+            bones: [
+              {
+                name: 'head',
+                timelines: [
+                  {
+                    name: 'rotate',
+                    keys: [
+                      { time: 0, value: 0, curve: [0.1, 0, 0.25, 10] },
+                      { time: 0.35, value: 10, curve: [0.55, 10, 0.75, 8.5] },
+                      { time: 0.95, value: 8.5 },
+                      { time: 1.3, value: -1.2 },
+                      { time: 1.6, value: 0 },
+                    ],
+                  },
+                ],
+              },
+            ],
+            slots: [],
+          },
+        ],
+      });
+      const modelA = makeCompiled('A');
+      const modelB = makeCompiled('B');
+      const sourceA = { available: true, reason: null, path: 'animations.json', sha256: demoHash, text: demoText, easings: {} };
+      const sourceB = { available: true, reason: null, path: 'animations.json', sha256: demoHash, text: demoText, easings: {} };
+
+      const host = new StubElement('section');
+      const stage = new StubElement('div');
+      let picked: 'a' | 'b' = 'b';
+      let readOnlyDynamic: string | null = null;
+      const previews: Record<'a' | 'b', unknown> = { a: null, b: null };
+      const sideStates: Record<'a' | 'b', import('../web/animation-inspection.ts').AnimationSideState | null> = { a: null, b: null };
+      const panel = new AnimationInspectionPanel({
+        host: host as unknown as HTMLElement,
+        stage: stage as unknown as HTMLElement,
+        select: () => {},
+        seek: () => {},
+        project: (x, y) => ({ x, y }),
+        enabled: () => true,
+        readOnlyReason: () => readOnlyDynamic,
+        preview: (fn) => {
+          previews[picked] = fn;
+        },
+        apply: async () => {},
+      });
+
+      // Start on Side B and perform two distinct edits on key 1 (20 deg, then 25 deg via stage pose)
+      panel.loadSource(sourceB);
+      panel.model(modelB, 'tilt');
+      panel.update(0.35, 1.6);
+      expect(panel.gateInfo().editable).toBe(true);
+      const editB1 = panel.setKeyValue(0, 1, 0, 20);
+      expect(editB1.ok).toBe(true);
+      const editB2 = panel.poseBoneOnStage('head', 'rotate', 25, 85);
+      expect(editB2.ok).toBe(true);
+      expect(panel.ops()).toHaveLength(2);
+      expect(previews.b).toBeTruthy();
+      expect(previews.a).toBeNull();
+
+      // Switch to Side A with per-side state export/import: Side A has 0 pending ops, base key 1 = 10 deg, and undoOp() returns false without touching Side B
+      sideStates.b = panel.exportSideState();
+      picked = 'a';
+      panel.importSideState(sideStates.a);
+      panel.loadSource(sourceA);
+      panel.model(modelA, 'tilt');
+      sideStates.a = panel.exportSideState();
+      expect(panel.ops()).toHaveLength(0);
+      expect(previews.a).toBeNull();
+      expect(previews.b).toBeTruthy(); // Side B's preview stays intact on Side B
+      expect((panel.overlaidInspection()?.tracks[0]?.keys[1] as { value?: number } | undefined)?.value).toBe(10);
+      expect(panel.undoOp()).toBe(false);
+
+      // Switch back to Side B: Side B's 2 ops and undo history are restored intact; one undoOp() steps back to 20 deg!
+      sideStates.a = panel.exportSideState();
+      picked = 'b';
+      panel.importSideState(sideStates.b);
+      panel.loadSource(sourceB);
+      panel.model(modelB, 'tilt');
+      expect(panel.ops()).toHaveLength(2);
+      expect(panel.undoOp()).toBe(true);
+      expect(panel.ops()).toHaveLength(1);
+      expect((panel.overlaidInspection()?.tracks[0]?.keys[1] as { value?: number } | undefined)?.value).toBe(20);
+
+      // Dynamic readOnlyReason function also gates editing when set
+      readOnlyDynamic = 'READ_ONLY_SESSION: comparison is locked';
+      expect(panel.gateInfo().editable).toBe(false);
+      expect(panel.gateInfo().code).toBe('ANIMATION_COMPARE_READ_ONLY');
+
+      // Planted mutant control: omitting importSideState leaks Side B's pending ops onto Side A
+      readOnlyDynamic = null;
+      picked = 'a';
+      panel.loadSource(sourceA);
+      panel.model(modelA, 'tilt');
+      expect(panel.ops()).toHaveLength(1); // Mutant leaks Side B's op onto Side A!
+      panel.dispose();
+    }
+  } finally {
+    if (prevDoc) Object.defineProperty(globalThis, 'document', prevDoc);
+    else Reflect.deleteProperty(globalThis, 'document');
+    if (prevWin) Object.defineProperty(globalThis, 'window', prevWin);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
+
 
 
 

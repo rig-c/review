@@ -11,7 +11,8 @@
 import type { BoneAdjust, ModelAssets, RigPlayer } from '@rig-c/play';
 import type { CompareResponse } from '../src/compare.ts';
 import type { CommentMode } from '../src/stage-comment.ts';
-import { AnimationInspectionPanel } from './animation-inspection.ts';
+import { AnimationInspectionPanel, type AnimationSideState } from './animation-inspection.ts';
+import type { AnimationSourceOp } from '../src/animation-ops.ts';
 import { partBounds, type PartExplorer } from './part-selection.ts';
 import { bindInspectorBlocks, activeBlocksUI, restoreActiveBlocksUI, type InspectorBlocks } from './inspector-blocks.ts';
 import { bindChestEditor, canvasToCrop, bustLabel, bustSides, LANDMARKS, landmarkInputId, rowCircle, type ChestEditor, type LandmarkKey } from './chest-editor.ts';
@@ -41,10 +42,10 @@ import { bindRetargetPanel, type PoseMap, type RetargetPanel } from './retarget-
 import type { RetargetFlags } from '../src/retarget.ts';
 import {
   historyRow, isPatchJob, recordFor, refusedText, retargetStage, undoControl,
-  appliedRecord, deltaAppliedRecord, deltaOutcomeLine, designatedRegions, handoffText,
+  animationAppliedRecord, animationOutcomeLine, appliedRecord, deltaAppliedRecord, deltaOutcomeLine, designatedRegions, handoffText,
   landmarksRequest, seedLandmarks, makePatch, outcomeLine, patchAppliedRecord, patchOutcomeLine,
   pickPart, runRebuild, seedFields, stageModel, retargetAppliedRecord, retargetOutcomeLine, stripPendingAfter,
-  type AppliedHistoryView, type UndoView, type AnyJobView, type AppliedAnimation, type AppliedDelta, type AppliedPatch,
+  type AnimationJobView, type AnimationRequestBody, type AppliedHistoryView, type UndoView, type AnyJobView, type AppliedAnimation, type AppliedDelta, type AppliedPatch,
   type AppliedRecord, type AppliedRetarget, type DeltaJobView, type DeltaRequestBody, type ConfigPatch,
   type PatchJobView, type RebuildJobView, type RebuildRefusal, type RebuildRequestBody, type RebuildStatusView,
   type RetargetJobView, type RetargetRequestBody, type StageChange,
@@ -101,6 +102,8 @@ interface SideBuildState {
   readingsJob: ReadingsJobView | null;
   requirementsCatalog: RequirementsCatalogView | null;
   lastOverlay: OverlaySnapshot | null;
+  animationState: AnimationSideState | null;
+  animAdjust: BoneAdjust | null;
 }
 
 function emptySideState(): SideBuildState {
@@ -123,6 +126,8 @@ function emptySideState(): SideBuildState {
     readingsJob: null,
     requirementsCatalog: null,
     lastOverlay: null,
+    animationState: null,
+    animAdjust: null,
   };
 }
 
@@ -406,11 +411,15 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const player = host.players[side];
     if (!player) return;
     const baseTurn = host.turnAdjustFor(side);
-    player.adjust = side === pickedSide ? composeAdjust(baseTurn, composeAdjust(idleAdjust, dialAdjust)) : baseTurn;
+    const activeTools = side === pickedSide ? composeAdjust(idleAdjust, dialAdjust) : null;
+    player.adjust = composeAdjust(composeAdjust(baseTurn, activeTools), sides[side].animAdjust);
     if (player.current && !host.playing()) {
-      player.repose();
+      player.seek(host.time());
       player.draw();
       host.parts()?.present(side);
+      if (side === pickedSide && sides[side].partModel) {
+        animationPanel?.capture(player, host.parts()?.frame(side));
+      }
       host.redrawOverlays(true);
     }
   }
@@ -467,6 +476,9 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     if (sides[prevSide].chestInputs !== null) {
       sides[prevSide].chestInputs = snapshotChestInputs();
     }
+    if (animationPanel) {
+      sides[prevSide].animationState = animationPanel.exportSideState();
+    }
     physicsPanel?.clearPreview();
     idleAdjust = null;
     dialAdjust = null;
@@ -484,12 +496,6 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     steppedLive = false;
     if (workspaceMode !== 'compare') host.syncFeedbackSide(pickedSide);
     applyEnvironment();
-    const nextPlayer = currentPlayer();
-    if (nextPlayer?.current && !host.playing()) {
-      nextPlayer.repose();
-      nextPlayer.draw();
-      host.parts()?.present(pickedSide);
-    }
     syncPickedBanner();
     moveStageHandlesToPickedSide();
     const currentPart = host.parts()?.value();
@@ -508,13 +514,18 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     }
     switchingSide = true;
     try {
+      animationPanel?.importSideState(sides[nextSide].animationState);
       clearChestInputs();
       populateChestBones();
       applySideStateToPanels();
       updateChestMapping();
+      if (animationPanel) {
+        sides[nextSide].animationState = animationPanel.exportSideState();
+      }
     } finally {
       switchingSide = false;
     }
+    setAdjust(nextSide);
     host.redrawOverlays(true);
     host.saveDraft();
   }
@@ -1110,7 +1121,11 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   async function swapPickedSide(side: Side, modelUrl: string, prefix: string, sha256: string, clipName?: string): Promise<void> {
     await host.swapSideRig(side, modelUrl, prefix, sha256, clipName);
+    setAdjust(side);
     applyEnvironment();
+    if (side === pickedSide) {
+      refreshAnimationInspection();
+    }
   }
 
   async function applyRebuild(): Promise<void> {
@@ -1279,6 +1294,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     try {
       await swapPickedSide(side, state.inspectedModel.url, state.inspectedModel.prefix, state.inspectedModel.sha256);
       state.appliedOnStage = null; state.stageCheck = null; stageChanged(side, { kind: 'reset' });
+      animationPanel?.reconcileStageApplied(null);
+      if (animationPanel) state.animationState = animationPanel.exportSideState();
       chestEditor?.notify(`Reset: Build ${side.toUpperCase()} is back on its inspected build.`, false);
       host.message(`Reset Build ${side.toUpperCase()} to its inspected build.`);
     } catch (error) {
@@ -1326,6 +1343,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       }
       stageChanged(side, { kind: 'undo' });
       physicsPanel?.applied(ops); idlePanel?.applied(ops); rigFieldsPanel?.applied(ops); bonesPanel?.applied(ops);
+      animationPanel?.reconcileStageApplied(state.appliedOnStage?.schema === 'rig-review-applied/5' ? state.appliedOnStage : null);
+      if (animationPanel) state.animationState = animationPanel.exportSideState();
       const restored = result.status === 'built' && isPatchJob(result.job) ? result.job : null, block = recordBlock(state.appliedOnStage);
       cutsPanel?.shown(block === 'cuts' ? restored : null); clothPanel?.shown(block === 'cloth' ? restored : null);
       const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = state.appliedOnStage ? JSON.stringify(state.appliedOnStage) : ''; draft.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1406,6 +1425,99 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     idlePanel?.clear(); idlePanel?.applied(null); idlePanel?.readout([]);
     if (currentState().appliedOnStage) { idlePanel?.busy(true); try { await resetRebuild(stageWorld()); } finally { idlePanel?.busy(false); } }
     idlePanel?.status('Reset: the inspected build is on the stage; no pending ops; the preview is cleared.', false);
+  }
+
+  async function applyAnimation(ops: readonly AnimationSourceOp[]): Promise<AnimationJobView | RebuildRefusal | null> {
+    if (rebuildBusy) { animationPanel?.setEditorStatus('REBUILD_BUSY: an Apply is still running', true); return null; }
+    const ro = host.readOnly();
+    if (ro) { animationPanel?.setEditorStatus(ro, true); return null; }
+    if (!ops.length) { animationPanel?.setEditorStatus('ANIMATION_OPS_EMPTY: no pending animation ops to apply', true); return null; }
+    const side = pickedSide, state = sides[side];
+    const status = state.rebuildStatus ?? await loadRebuildStatus(side);
+    if (!status?.inputs) {
+      const r = status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE';
+      animationPanel?.setEditorStatus(r, true);
+      return null;
+    }
+    const animSource = status.animations;
+    if (!animSource?.available || !animSource.sha256) {
+      const r = animSource?.reason ?? 'ANIMATION_SOURCE_MISSING: config.json does not declare an "animations_from" motion spec file.';
+      animationPanel?.setEditorStatus(r, true);
+      return null;
+    }
+    const scheduled = useWorld() ? worldFor(checkAnimation(side), side) : null;
+    if (scheduled && 'error' in scheduled) {
+      animationPanel?.setEditorStatus(scheduled.error, true);
+      host.message(scheduled.error, true);
+      return { status: 'refused', error: scheduled.error, producerLine: scheduled.error };
+    }
+    const keying = status.idle?.keying, keys = keying && 'keys' in keying ? keying.keys : null;
+    const request: AnimationRequestBody = {
+      animation: {
+        configHash: status.inputs.configHash,
+        animationsFromHash: animSource.sha256,
+        ops: [...ops],
+        ...(keys ? { args: ['--idle-keys', keys] } : {}),
+      },
+      ...(scheduled ? { environment: scheduled.schedule } : {}),
+    };
+    rebuildBusy = true; rebuildState(); animationPanel?.busy(true);
+    animationPanel?.setEditorStatus(`Applying ${ops.length} animation op(s) on Build ${side.toUpperCase()} (${animSource.path ?? 'animations_from'}: rig-parts rig → rigc build → rig-parts check)…`, false);
+    try {
+      const result = await runRebuild<AnimationRequestBody, AnimationJobView>(request, {
+        post: value => host.api<AnimationJobView | RebuildRefusal>(`${sideApiPrefix(side)}/rebuild`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }),
+        get: id => host.api<AnimationJobView>(`${sideApiPrefix(side)}/rebuild/${id}`),
+        sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+        onLine: line => { if (pickedSide === side) animationPanel?.setEditorStatus(line.trim() || '…', false); },
+      });
+      const outcome = animationOutcomeLine(result), next = stageModel(result, { url: '', hash: state.stageModelHash ?? '' });
+      if (next.id === null || !('id' in result)) {
+        if (pickedSide === side) animationPanel?.setEditorStatus(outcome.text, true);
+        host.message(outcome.text, true);
+        return result;
+      }
+      if (pickedSide === side) {
+        animationPanel?.markApplied(ops, outcome.text, outcome.error);
+      }
+      await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash);
+      state.appliedOnStage = animationAppliedRecord(result);
+      state.stageCheck = { lines: [...result.lines], check: result.check };
+      stageChanged(side, { kind: 'apply', via: 'animation' });
+      if (pickedSide === side) {
+        const draft = el<HTMLTextAreaElement>('rebuild-applied');
+        draft.value = JSON.stringify(state.appliedOnStage);
+        draft.dispatchEvent(new Event('input', { bubbles: true }));
+        animationPanel?.setEditorStatus(outcome.text, outcome.error);
+        state.animationState = animationPanel?.exportSideState() ?? state.animationState;
+      }
+      host.message(outcome.text, outcome.error);
+      return result;
+    } catch (error) {
+      const textMsg = `REBUILD_FAILED: ${errorText(error)}`;
+      if (pickedSide === side) animationPanel?.setEditorStatus(textMsg, true);
+      host.message(textMsg, true);
+      return { status: 'refused', error: textMsg, producerLine: null };
+    } finally {
+      rebuildBusy = false; rebuildState(); animationPanel?.busy(false);
+    }
+  }
+
+  async function resetAnimationBuild(): Promise<void> {
+    const side = pickedSide, state = sides[side];
+    animationPanel?.resetEdits();
+    state.animAdjust = null;
+    setAdjust(side);
+    if (state.appliedOnStage) {
+      animationPanel?.busy(true);
+      try {
+        await resetRebuild(stageWorld());
+      } finally {
+        animationPanel?.busy(false);
+        animationPanel?.resetEdits();
+      }
+    }
+    if (animationPanel) state.animationState = animationPanel.exportSideState();
+    animationPanel?.setEditorStatus(`Reset: Build ${side.toUpperCase()} is back on its inspected build; no pending animation ops.`, false);
   }
 
   async function checkBones(ops: PatchOp[]): Promise<BonesCheckView> {
@@ -1903,7 +2015,14 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     stage: viewportProxy,
     project: (x, y) => rigProject()(x, y),
     enabled: () => !!currentState().partModel && currentInspector() === 'playback',
-    readOnlyReason: 'keyed animation editing is read-only in comparison sessions until per-side animation rebuild is wired.',
+    readOnlyReason: () => host.readOnly(),
+    pause: () => host.pause(),
+    preview: fn => {
+      sides[pickedSide].animAdjust = fn;
+      setAdjust(pickedSide);
+    },
+    apply: ops => applyAnimation(ops),
+    reset: () => resetAnimationBuild(),
     seek: exact => {
       if (!Number.isFinite(exact) || exact < 0 || exact > host.duration()) {
         host.message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.', true);
@@ -2298,6 +2417,46 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       lines: () => retargetPanel?.shownLines() ?? [],
       refusals: () => [...document.querySelectorAll('#retarget-refusals code')].map(c => c.textContent),
     },
+    animation: {
+      ops: () => animationPanel?.ops() ?? [],
+      unappliedOps: () => animationPanel?.unappliedOps() ?? [],
+      hasPreview: () => animationPanel?.hasUnappliedPreview() ?? false,
+      source: () => animationPanel?.sourceInfo() ?? null,
+      setSourceLoading: () => animationPanel?.setSourceLoading(),
+      setSource: (source: Parameters<AnimationInspectionPanel['loadSource']>[0], fallbackReason?: string | null) => animationPanel?.loadSource(source, fallbackReason),
+      gate: () => animationPanel?.gateInfo() ?? null,
+      tracks: () => animationPanel?.tracksInfo() ?? [],
+      selectedKey: () => animationPanel?.selectedKeyInfo() ?? null,
+      selectedKeys: () => animationPanel?.selectedKeysInfo() ?? [],
+      selectKey: (track: number, key: number) => animationPanel?.selectKey(track, key) ?? false,
+      selectKeys: (selections: ReadonlyArray<{ track: number; key: number }>) => animationPanel?.selectKeys(selections) ?? false,
+      toggleKeySelection: (track: number, key: number) => animationPanel?.toggleKeySelection(track, key) ?? false,
+      deleteSelection: () => animationPanel?.deleteSelection() ?? { ok: false, error: 'ANIMATION_PANEL_UNAVAILABLE' },
+      stagePoseMode: () => animationPanel?.stagePoseMode() ?? 'rotate',
+      setStagePoseMode: (mode: 'rotate' | 'translate') => animationPanel?.setStagePoseMode(mode),
+      poseBone: (boneName: string, arg2: 'rotate' | 'translate' | number, arg3: number, arg4: number | 'rotate' | 'translate') => {
+        const mode = typeof arg2 === 'string' ? arg2 : (arg4 as 'rotate' | 'translate');
+        const clientX = typeof arg2 === 'number' ? arg2 : arg3;
+        const clientY = typeof arg2 === 'number' ? arg3 : (arg4 as number);
+        return animationPanel?.poseBoneOnStage(boneName, mode, clientX, clientY) ?? { ok: false, error: 'ANIMATION_PANEL_UNAVAILABLE' };
+      },
+      overlaid: () => animationPanel?.overlaidInspection() ?? null,
+      boneWorld: (boneName: string) => animationPanel?.boneWorldMatrix(boneName) ?? null,
+      setKeyTime: (track: number, key: number, t: number) => animationPanel?.setKeyTime(track, key, t) ?? { ok: false, error: 'ANIMATION_PANEL_UNAVAILABLE' },
+      setKeyValue: (track: number, key: number, channel: number | undefined, value: number | readonly number[]) => animationPanel?.setKeyValue(track, key, channel, value) ?? { ok: false, error: 'ANIMATION_PANEL_UNAVAILABLE' },
+      setKeyCurve: (track: number, key: number, curve: readonly number[] | 'stepped' | null) => animationPanel?.setKeyCurve(track, key, curve) ?? { ok: false, error: 'ANIMATION_PANEL_UNAVAILABLE' },
+      setKeyEase: (track: number, key: number, ease: string | null) => animationPanel?.setKeyEase(track, key, ease) ?? { ok: false, error: 'ANIMATION_PANEL_UNAVAILABLE' },
+      insertKey: (track: number, t: number, value?: readonly number[]) => animationPanel?.insertKey(track, t, value) ?? { ok: false, error: 'ANIMATION_PANEL_UNAVAILABLE' },
+      deleteKey: (track: number, key: number) => animationPanel?.deleteKey(track, key) ?? { ok: false, error: 'ANIMATION_PANEL_UNAVAILABLE' },
+      moveSelection: (selections: ReadonlyArray<{ track: number; key: number }>, deltaTime: number) => animationPanel?.moveSelection(selections, deltaTime) ?? { ok: false, error: 'ANIMATION_PANEL_UNAVAILABLE' },
+      undoOp: () => animationPanel?.undoOp() ?? false,
+      clearPending: () => animationPanel?.clearPending(),
+      zoom: () => animationPanel?.zoomLevel() ?? 1,
+      setZoom: (z: number) => animationPanel?.setZoom(z),
+      apply: () => applyAnimation(animationPanel?.ops() ?? []),
+      reset: () => resetAnimationBuild(),
+      status: () => document.querySelector('[data-animation-editor-status]')?.textContent ?? '',
+    },
     stage: (side: Side = pickedSide) => ({
       side,
       modelHash: sides[side].stageModelHash,
@@ -2440,7 +2599,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       if (rebuildBusy) {
         return 'COMMENT_SOURCE_BUSY: wait for the rebuild or candidate model replacement before commenting';
       }
-      const preview = idleAdjust ? 'Idle tracks' : dialAdjust ? 'Rig fields turn dial' : physicsPreview.read().length ? 'Physics live overrides' :
+      const preview = idleAdjust ? 'Idle tracks' : (sides.a.animAdjust || sides.b.animAdjust) ? 'Keyed animation preview' : dialAdjust ? 'Rig fields turn dial' : physicsPreview.read().length ? 'Physics live overrides' :
         (sides.a.stripPending || sides.b.stripPending) ? 'Density strip candidate' :
         meshEditor?.overlay() ? 'Edit Mesh' : bonesPanel?.overlay() ? 'Bones anchors' :
         cutsPanel && (cutsPanel.overlayRegions().length || cutsPanel.overlayMarkers().length) ? 'Cuts/patches/joints' :
