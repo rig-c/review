@@ -8,6 +8,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38BDF8.svg?style=flat-square" alt="MIT"/></a>
 </p>
 
+<a id="review"></a>
+
 # @rig-c/review
 
 A reusable local workspace for a person to inspect an agent's rig output, compare source references, and export feedback ready to become an issue. The person receives a package or opens an existing output folder; the agent does not build a new viewer for each rig.
