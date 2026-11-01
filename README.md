@@ -30,7 +30,7 @@ existing compilation/playback dependencies.
 
 ## Start
 
-Install it beside the agent that produced the output, then open that output folder:
+Install beside the producing agent and open the output folder:
 
 ```sh
 npm i -D @rig-c/review
@@ -94,3 +94,4 @@ Development and releasing: [Contributing workflows](https://github.com/rig-c/rev
 - [Product design](docs/DESIGN.md)
 - [Animation inspection](docs/ANIMATION_INSPECTION.md)
 - [Installed-producer fixture](docs/LIVE_FIXTURE.md)
+- [Agent skill](skills/rig-review/SKILL.md)
