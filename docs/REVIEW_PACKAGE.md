@@ -587,7 +587,7 @@ Browser players retain play's default DOM mode and default mesh backend. Rigid
 parts remain DOM images; a WebGL mesh label does not claim full-frame GL drawing.
 WebGL is requested by the published default, with Canvas2D as the supported mesh
 fallback. Accurate public actual-flush telemetry requires play 1.11.1 or later;
-this checkout consumes pinned 1.14.0. The consumer does not probe GL or inspect
+this checkout consumes pinned 1.22.1. The consumer does not probe GL or inspect
 private renderer state. The separate Node strip exporter remains Canvas2D.
 
 The backend badge is sampled only after successful draw/frame calls. Fresh mesh

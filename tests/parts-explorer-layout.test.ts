@@ -297,6 +297,7 @@ test('Change 2: compare.ts reuses PartThumbnails, pageRegionTable, and loadPartM
         generation: 1,
         skin: 'default',
         set: null,
+        sets: [],
         slots: [
           { slot: 'hair_back', z: 0, skin: 'default', attachment: 'hair_back', reason: null },
           { slot: 'no_region_slot', z: 1, skin: null, attachment: null, reason: 'timeline-null' },
