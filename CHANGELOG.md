@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.1](https://github.com/rig-c/review/compare/v0.25.0...v0.25.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **view-bar:** wrap so every control stays reachable when narrow ([#282](https://github.com/rig-c/review/issues/282)) ([7f1a538](https://github.com/rig-c/review/commit/7f1a538b342e0d3d911b0799fa8794f66732a995)), closes [#279](https://github.com/rig-c/review/issues/279)
+
 ## [0.25.0](https://github.com/rig-c/review/compare/v0.24.1...v0.25.0) (2026-11-01)
 
 
