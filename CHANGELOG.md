@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0](https://github.com/rig-c/review/compare/v0.25.2...v1.0.0) (2026-11-01)
+
+
+### Bug Fixes
+
+* **deps:** move the play pin to 1.22.1 before 1.0 ([#292](https://github.com/rig-c/review/issues/292)) ([3e97f87](https://github.com/rig-c/review/commit/3e97f873ae04da3f38c51c33309791dadbb7242c)), closes [#288](https://github.com/rig-c/review/issues/288)
+* **front:** exit when the control directory is gone ([#290](https://github.com/rig-c/review/issues/290)) ([3f74232](https://github.com/rig-c/review/commit/3f742320b7f2d35ef329d18f65b06f19c76f4cbc)), closes [#287](https://github.com/rig-c/review/issues/287)
+* **i18n:** translate dynamic strings whole in Korean mode ([#295](https://github.com/rig-c/review/issues/295)) ([df449c5](https://github.com/rig-c/review/commit/df449c55d8f2446892c9c788114ba62159c1e63b))
+* **turn-pad:** keep the pad's height while its values change ([7e42575](https://github.com/rig-c/review/commit/7e425758bcc60fd6c8beaf42caed6782ce9586ea)), closes [#289](https://github.com/rig-c/review/issues/289)
+
 ## [0.25.2](https://github.com/rig-c/review/compare/v0.25.1...v0.25.2) (2026-11-01)
 
 
