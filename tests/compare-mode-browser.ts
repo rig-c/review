@@ -569,6 +569,74 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
       const buildA = await inspectPickedBuild('a');
       const buildB = await inspectPickedBuild('b');
+
+      // Defect 5 (#235 Slice 4a): in a comparison session, switching to Setup or Animate and clicking the block tabs
+      // marks aria-current="true" AND scrolls the panel container so the chosen block is in view (scrollTop > 0),
+      // while #animation-dock stays stationary in Animate.
+      await clickMode('rig');
+      const rigScrollRoot = document.getElementById('inspector-rig');
+      rigScrollRoot.scrollTop = 0;
+      await sleep(30);
+      const setupBlockTargets = [
+        ['Chest', 'chest-regions'],
+        ['Mesh', 'mesh-panel'],
+        ['Weights', 'weights'],
+        ['Bones', 'bones-panel'],
+        ['Fields', 'rig-fields'],
+        ['Cuts', 'cuts-panel'],
+        ['Cloth', 'cloth-panel'],
+      ];
+      const setupBlockScrolls = [];
+      for (const [label, targetId] of setupBlockTargets) {
+        const btn = rigScrollRoot.querySelector('.block-row button[data-block-target="' + targetId + '"]');
+        btn.click();
+        await sleep(40);
+        const targetEl = document.getElementById(targetId);
+        const rootRect = rigScrollRoot.getBoundingClientRect();
+        const targetRect = targetEl.getBoundingClientRect();
+        setupBlockScrolls.push({
+          label,
+          targetId,
+          ariaCurrent: btn.getAttribute('aria-current'),
+          scrollTop: Math.round(rigScrollRoot.scrollTop),
+          inView: targetRect.top < rootRect.bottom && targetRect.bottom > rootRect.top,
+        });
+      }
+
+      await clickMode('playback');
+      const animateScrollRoot = document.getElementById('animate-blocks');
+      const dockEl = document.getElementById('animation-dock');
+      animateScrollRoot.scrollTop = 0;
+      await sleep(30);
+      const dockBeforeRect = dockEl.getBoundingClientRect();
+      const animateBlockTargets = [
+        ['Physics', 'physics-panel'],
+        ['Idle tracks', 'idle-tracks'],
+        ['Readings', 'readings'],
+        ['Requirements', 'requirements'],
+        ['Retarget', 'retarget'],
+        ['Report', 'report-panel'],
+      ];
+      const animateBlockScrolls = [];
+      for (const [label, targetId] of animateBlockTargets) {
+        const btn = animateScrollRoot.querySelector('.block-row button[data-block-target="' + targetId + '"]');
+        btn.click();
+        await sleep(40);
+        const targetEl = document.getElementById(targetId);
+        const rootRect = animateScrollRoot.getBoundingClientRect();
+        const targetRect = targetEl.getBoundingClientRect();
+        const dockAfterRect = dockEl.getBoundingClientRect();
+        animateBlockScrolls.push({
+          label,
+          targetId,
+          ariaCurrent: btn.getAttribute('aria-current'),
+          scrollTop: Math.round(animateScrollRoot.scrollTop),
+          inView: targetRect.top < rootRect.bottom && targetRect.bottom > rootRect.top,
+          dockTopDelta: Math.round(Math.abs(dockAfterRect.top - dockBeforeRect.top)),
+        });
+      }
+      const blockScrolling = { setup: setupBlockScrolls, animate: animateBlockScrolls };
+
       const backToCompare = await clickMode('compare');
 
       // Place stage comments in Setup, Animate and Compare modes (before Apply · Rebuild puts a scratch build on stage)
@@ -856,6 +924,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         switches: [stepSetup1, stepAnimate, stepCompare, stepSetup2],
         buildA,
         buildB,
+        blockScrolling,
         backToCompare,
         applyIsolation: {
           bAppliedCount,
@@ -1002,6 +1071,17 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       }
       if (!b.animate.physicsHasStrength || !b.animate.idleHasMesh || !b.animate.retargetSequences.includes('pose-1'))
         failures.push(`${label}: physics/idle/retarget panels not populated: ${JSON.stringify(b.animate)}`);
+    }
+
+    for (const row of compareCheck.blockScrolling?.setup ?? []) {
+      if (row.ariaCurrent !== 'true' || !(row.scrollTop > 0) || !row.inView) {
+        failures.push(`Compare Setup block-tab scroll failed for ${row.label} (${row.targetId}): ${JSON.stringify(row)}`);
+      }
+    }
+    for (const row of compareCheck.blockScrolling?.animate ?? []) {
+      if (row.ariaCurrent !== 'true' || !(row.scrollTop > 0) || !row.inView || row.dockTopDelta !== 0) {
+        failures.push(`Compare Animate block-tab scroll failed for ${row.label} (${row.targetId}): ${JSON.stringify(row)}`);
+      }
     }
 
     if (

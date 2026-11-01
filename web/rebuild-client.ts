@@ -143,16 +143,23 @@ export function retargetOutcomeLine(result:RetargetJobView|RebuildRefusal):{text
  return {text:`Retargeted "${r.flags.animation}" from ${r.sequence.reference} with ${result.producer.package} ${result.producer.version} · ${wall} · ${kept} · ${result.files?filesDiffText(result.files):'no diff'} · Reset returns to the inspected build`,error:!!result.motion&&!result.motion.kept};
 }
 /** A keyed animation Apply's job (#235): spliced animations_from, `rig-parts rig`, compile, `rig-parts check`, per-file diff. */
-export interface AnimationJobView {id:string;kind:'animation';op:'rig';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;hint?:string;exitCode:number|null;wallMs:{op:number|null;compile:number|null;check:number|null};check:CheckSummary|null;files:FilesDiff|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{configHash:string;animationsFrom:{path:string;beforeSha256:string;afterSha256:string};ops:AnimationSourceOp[];opsSha256:string;args?:string[]};producer:{package:string;version:string};compiler:{package:string;version:string}}
-export interface AnimationRequestBody {animation:{configHash:string;animationsFromHash:string;ops:AnimationSourceOp[];args?:string[]}}
-export const animationAppliedRecord=(job:AnimationJobView):AppliedAnimation=>({schema:APPLIED_ANIMATION_SCHEMA,buildId:job.id,configHash:job.request.configHash,animationsFrom:{...job.request.animationsFrom},ops:JSON.parse(JSON.stringify(job.request.ops)),opsSha256:job.request.opsSha256,args:[...(job.request.args??[])],producer:job.producer,compiler:job.compiler,line:job.producerLine,check:job.check,files:job.files,modelHash:job.build!.modelHash});
+export interface AnimationJobView {id:string;kind:'animation';op:'rig';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;hint?:string;exitCode:number|null;wallMs:{op:number|null;compile:number|null;check:number|null};check:CheckSummary|null;files:FilesDiff|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{configHash:string;animationsFrom:{path:string;beforeSha256:string;afterSha256:string};ops:AnimationSourceOp[];opsSha256:string;args?:string[]};producer:{package:string;version:string};compiler:{package:string;version:string};environment?:{sha256:string;steps:number}}
+export interface AnimationRequestBody {animation:{configHash:string;animationsFromHash:string;ops:AnimationSourceOp[];args?:string[]};environment?:import('../src/environment-schedule.ts').EnvironmentSchedule}
+export const animationAppliedRecord=(job:AnimationJobView):AppliedAnimation=>({schema:APPLIED_ANIMATION_SCHEMA,buildId:job.id,configHash:job.request.configHash,animationsFrom:{...job.request.animationsFrom},ops:JSON.parse(JSON.stringify(job.request.ops)),opsSha256:job.request.opsSha256,args:[...(job.request.args??[])],producer:job.producer,compiler:job.compiler,line:job.producerLine,check:job.check,files:job.files,modelHash:job.build!.modelHash,...(job.environment?{environment:{...job.environment}}:{})});
 export function animationOutcomeLine(result:AnimationJobView|RebuildRefusal):{text:string;error:boolean} {
  if(!('id' in result))return {text:result.producerLine??result.error,error:true};
  if(result.status!=='built')return {text:refusedText(result),error:true};
  const check=result.check?(result.check.pass===null?`check refused: ${result.check.line??`exit ${result.check.exitCode}`}`:`check ${result.check.pass?'PASS':'FAIL'}`):'check not run';
- const wall=result.reused?'reused the scratch build of this exact animation edit':`rig ${seconds(result.wallMs.op)} + compile ${seconds(result.wallMs.compile)} + check ${seconds(result.wallMs.check)}`;
+ const wall=result.reused?'reused':`rig ${seconds(result.wallMs.op)} + compile ${seconds(result.wallMs.compile)} + check ${seconds(result.wallMs.check)}`;
  const anims=[...new Set(result.request.ops.map(o=>o.animation))];
- return {text:`Applied animation ${result.request.opsSha256.slice(0,12)}… (${result.request.ops.length} op(s) on ${anims.join(', ')}) with ${result.producer.package} ${result.producer.version} · ${wall} · ${check} · ${result.files?filesDiffText(result.files):'no diff'} · Reset returns to the inspected build`,error:!!result.check&&result.check.pass!==true};
+ const env=result.environment?` under the exported world (${result.environment.steps} step(s), sha256 ${result.environment.sha256.slice(0,16)})`:'';
+ const diff=result.files?(()=>{
+  const changed=result.files.documents.filter(d=>d.count>0);
+  const docs=changed.length?changed.map(d=>`${d.file} Δ${d.count}`).join(', '):'documents unchanged';
+  const imgs=result.files.images.changed>0?`, ${result.files.images.changed} image(s) changed`:'';
+  return `${docs}${imgs}`;
+ })():'no diff';
+ return {text:`Applied ${result.request.opsSha256.slice(0,12)}… (${result.request.ops.length} op(s) on ${anims.join(', ')}) with ${result.producer.package} ${result.producer.version} · ${wall} · ${check}${env} · ${diff}`,error:!!result.check&&result.check.pass!==true};
 }
 export type AnyJobView=RebuildJobView|PatchJobView|DeltaJobView|RetargetJobView|AnimationJobView;
 export const isPatchJob=(job:AnyJobView):job is PatchJobView=>(job as PatchJobView).kind==='patch';

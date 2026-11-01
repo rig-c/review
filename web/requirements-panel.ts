@@ -84,7 +84,7 @@ const labelled=(text:string,control:HTMLElement)=>make('label',{},text,control);
 
 export function bindRequirementsPanel(deps:RequirementsPanelDeps):RequirementsPanel {
  const body=node('requirements-body');
- const state=make('p',{className:'hint',id:'requirements-state',textContent:'No producer handoff loaded.'});
+ const state=make('p',{className:'hint',id:'requirements-state',textContent:'Reading the producer handoff…'});
  const kind=make('select',{id:'requirements-kind'}),animation=make('select',{id:'requirements-animation'});
  const fields=make('div',{className:'requirements-fields',id:'requirements-fields'}),note=make('p',{className:'hint',id:'requirements-note'});
  const name=make('input',{type:'text',id:'requirements-name',autocomplete:'off',placeholder:'NAME (letters, digits, _)'});

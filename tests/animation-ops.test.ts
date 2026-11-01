@@ -970,6 +970,13 @@ class StubElement extends EventTarget {
   getAttribute(k: string) {
     return this.attrs.get(k) ?? null;
   }
+  removeAttribute(k: string) {
+    this.attrs.delete(k);
+    if (k.startsWith('data-')) {
+      const camel = k.slice(5).replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+      delete this.dataset[camel];
+    }
+  }
   getBoundingClientRect() {
     return { left: 0, top: 0, right: this.clientWidth, bottom: this.clientHeight, width: this.clientWidth, height: this.clientHeight };
   }
@@ -1756,4 +1763,226 @@ test('PR #257 review findings 1-3 (compare read-only gate, retained key live tra
     else Reflect.deleteProperty(globalThis, 'window');
   }
 });
+
+test('Slice 4a: loading gate before /api/rebuild resolves, read-only badge subrow separation, and Curves view Bezier handle editing + coalescing', async () => {
+  const { AnimationInspectionPanel } = await import('../web/animation-inspection.ts');
+  const prevDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const prevWin = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const winTarget = new EventTarget();
+  Object.defineProperty(globalThis, 'document', {
+    value: {
+      activeElement: null,
+      createElement: (tag: string) => new StubElement(tag),
+      createElementNS: (_ns: string, tag: string) => new StubElement(tag),
+    },
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(globalThis, 'window', {
+    value: winTarget,
+    configurable: true,
+    writable: true,
+  });
+
+  try {
+    const demoText = readFileSync(new URL('./fixtures/motion/demo.json', import.meta.url), 'utf8');
+    const demoHash = sha256(demoText);
+    const model = {
+      spec: 'rigc-compiled/3',
+      skeleton: { width: 100, height: 100 },
+      pages: [],
+      bones: [
+        { name: 'root', x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'hip', parent: 'root', x: 0, y: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'chest', parent: 'hip', x: 0, y: 20, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'head', parent: 'chest', x: 0, y: 30, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'brow_r', parent: 'head', x: -5, y: 5, rotation: 0, scaleX: 1, scaleY: 1 },
+        { name: 'brow_l', parent: 'head', x: 5, y: 5, rotation: 0, scaleX: 1, scaleY: 1 },
+      ],
+      slots: [],
+      skins: [{ name: 'default', attachments: {} }],
+      animations: [
+        {
+          name: 'idle',
+          duration: 3.0,
+          bones: [
+            {
+              name: 'chest',
+              timelines: [
+                {
+                  name: 'rotate',
+                  keys: [
+                    { time: 0, value: 0 },
+                    { time: 1.5, value: 2 },
+                    { time: 3.0, value: 0 },
+                  ],
+                },
+              ],
+            },
+          ],
+          slots: [],
+        },
+        {
+          name: 'tilt',
+          duration: 1.6,
+          bones: [
+            {
+              name: 'head',
+              timelines: [
+                {
+                  name: 'rotate',
+                  keys: [
+                    { time: 0, value: 0, curve: [0.1, 0, 0.25, 10] },
+                    { time: 0.35, value: 10, curve: [0.55, 10, 0.75, 8.5] },
+                    { time: 0.95, value: 8.5 },
+                    { time: 1.3, value: -1.2 },
+                    { time: 1.6, value: 0 },
+                  ],
+                },
+              ],
+            },
+            {
+              name: 'brow_r',
+              timelines: [
+                {
+                  name: 'translate',
+                  keys: [
+                    { time: 0, x: 0, y: 0 },
+                    { time: 0.35, x: 0, y: -1.8 },
+                    { time: 1.3, x: 0, y: -1.8 },
+                    { time: 1.6, x: 0, y: 0 },
+                  ],
+                },
+              ],
+            },
+          ],
+          slots: [],
+        },
+      ],
+    };
+
+    const host = new StubElement('section');
+    const stage = new StubElement('div');
+    const panel = new AnimationInspectionPanel({
+      host: host as unknown as HTMLElement,
+      stage: stage as unknown as HTMLElement,
+      select: () => {},
+      seek: () => {},
+      project: (x, y) => ({ x, y }),
+      enabled: () => true,
+      preview: () => {},
+      apply: async () => {},
+    });
+
+    // 1. Defect 2: Before loadSource() resolves, model() shows ANIMATION_SOURCE_LOADING ("Reading the producer handoff…"), never ANIMATION_SOURCE_MISSING
+    panel.model(model, 'tilt');
+    expect(panel.gateInfo().code).toBe('ANIMATION_SOURCE_LOADING');
+    expect(panel.gateInfo().reason).toBe('Reading the producer handoff…');
+    expect(host.querySelector('[data-animation-gate]')?.textContent).toBe('Reading the producer handoff…');
+    expect(host.querySelector('[data-animation-gate]')?.dataset.loading).toBe('true');
+
+    // Once loadSource() resolves, gate becomes editable
+    panel.loadSource({
+      available: true,
+      reason: null,
+      path: 'animations.json',
+      sha256: demoHash,
+      text: demoText,
+      easings: {
+        sineInOut: [0.37, 0, 0.63, 1],
+        quadOut: [0.25, 0.46, 0.45, 0.94],
+      },
+    });
+    expect(panel.gateInfo().editable).toBe(true);
+    expect(host.querySelector('[data-animation-gate]')?.dataset.loading).toBeUndefined();
+
+    // Calling setSourceLoading() returns the panel to ANIMATION_SOURCE_LOADING
+    panel.setSourceLoading();
+    expect(panel.gateInfo().code).toBe('ANIMATION_SOURCE_LOADING');
+    panel.loadSource({
+      available: true,
+      reason: null,
+      path: 'animations.json',
+      sha256: demoHash,
+      text: demoText,
+      easings: {
+        sineInOut: [0.37, 0, 0.63, 1],
+        quadOut: [0.25, 0.46, 0.45, 0.94],
+      },
+    });
+
+    // 2. Defect 3: On read-only clip 'idle', key lanes with keys have ZERO .animation-readonly-badge children
+    panel.model(model, 'idle');
+    expect(panel.gateInfo().editable).toBe(false);
+    expect(panel.gateInfo().code).toBe('ANIMATION_IDLE_GOVERNED_BY_TURN_PAD');
+    const idleKeyLanes = host.querySelectorAll('.animation-key-lane');
+    expect(idleKeyLanes.length).toBeGreaterThan(0);
+    for (const kl of idleKeyLanes) {
+      expect(kl.querySelectorAll('.animation-readonly-badge')).toHaveLength(0);
+    }
+
+    // On editable clip 'tilt', brow_r.translate in compiled model is read-only with keys (not in demo.json tilt),
+    // so it renders its reason in .animation-readonly-subrow below .animation-key-lane (0 badges inside .animation-key-lane)
+    panel.model(model, 'tilt');
+    const tiltKeyLanes = host.querySelectorAll('.animation-key-lane');
+    for (const kl of tiltKeyLanes) {
+      expect(kl.querySelectorAll('.animation-readonly-badge')).toHaveLength(0);
+    }
+    const subrows = host.querySelectorAll('.animation-readonly-subrow');
+    expect(subrows).toHaveLength(1);
+    expect(subrows[0]!.parentElement?.classList.contains('has-readonly-note')).toBe(true);
+    expect(subrows[0]!.textContent).toContain('ANIMATION_TRACK_READ_ONLY');
+
+    // 3. Curves view: setKeyCurve & setKeyEase + coalescing consecutive set_key_curve ops during drag
+    panel.show('curves');
+
+    // Curve controls are enabled on editable track 0 (head.rotate)
+    const segSelect = host.querySelector('[data-curve-segment]')!;
+    const easeSelect = host.querySelector('[data-curve-ease]')!;
+    const roBadge = host.querySelector('[data-curve-readonly]')!;
+    expect(segSelect.disabled).toBe(false);
+    expect(easeSelect.disabled).toBe(false);
+    expect(roBadge.hidden).toBe(true);
+
+    // Switch segment 0 to named ease 'quadOut', then 'stepped', then cubic, then drag handle 1 across multiple steps
+    expect(panel.setKeyEase(0, 0, 'quadOut').ok).toBe(true);
+    expect(panel.ops()).toEqual([{ op: 'set_key_ease', animation: 'tilt', track: 0, key: 0, ease: 'quadOut' }]);
+    expect(panel.setKeyCurve(0, 0, 'stepped').ok).toBe(true);
+    expect(panel.ops()).toEqual([{ op: 'set_key_curve', animation: 'tilt', track: 0, key: 0, curve: 'stepped' }]);
+    expect(panel.setKeyCurve(0, 0, [0.08, 2.0, 0.25, 8.0]).ok).toBe(true);
+    expect(panel.setKeyCurve(0, 0, [0.12, 3.5, 0.28, 9.0]).ok).toBe(true);
+    // Coalesced into a single set_key_curve op on (tilt, track 0, key 0)!
+    expect(panel.ops()).toEqual([
+      { op: 'set_key_curve', animation: 'tilt', track: 0, key: 0, curve: [0.12, 3.5, 0.28, 9] },
+    ]);
+
+    // Dragging [data-curve-handle="1"] on [data-curve-plot] updates the cubic curve in place
+    const plotEl = host.querySelector('[data-curve-plot]')!;
+    const h1 = host.querySelector('[data-curve-handle="1"]')!;
+    expect(h1).toBeTruthy();
+    expect(h1.dataset.editable).toBe('true');
+    const pDown = new Event('pointerdown', { cancelable: true });
+    Object.assign(pDown, { isPrimary: true, button: 0, pointerId: 21, clientX: 120, clientY: 80 });
+    h1.dispatchEvent(pDown);
+    const pMove1 = new Event('pointermove', { cancelable: true });
+    Object.assign(pMove1, { isPrimary: true, button: 0, pointerId: 21, clientX: 180, clientY: 60 });
+    plotEl.dispatchEvent(pMove1);
+    const pMove2 = new Event('pointermove', { cancelable: true });
+    Object.assign(pMove2, { isPrimary: true, button: 0, pointerId: 21, clientX: 210, clientY: 50 });
+    plotEl.dispatchEvent(pMove2);
+    const pUp = new Event('pointerup', { cancelable: true });
+    Object.assign(pUp, { isPrimary: true, button: 0, pointerId: 21, clientX: 210, clientY: 50 });
+    plotEl.dispatchEvent(pUp);
+    expect(panel.ops()).toHaveLength(1);
+    expect(panel.ops()[0]!.op).toBe('set_key_curve');
+
+    panel.dispose();
+  } finally {
+    if (prevDoc) Object.defineProperty(globalThis, 'document', prevDoc);
+    else Reflect.deleteProperty(globalThis, 'document');
+    if (prevWin) Object.defineProperty(globalThis, 'window', prevWin);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
+
 

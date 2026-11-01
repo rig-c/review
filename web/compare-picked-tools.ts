@@ -739,7 +739,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const state = currentState();
     if (state.inspectedDocumentReason) { physicsPanel.load({ available: false, reason: state.inspectedDocumentReason }, []); return; }
     if (!state.inspectedDocument) return;
-    if (!state.rebuildStatus) { text('physics-panel-state', 'Reading the producer handoff…'); return; }
+    if (!state.rebuildStatus) { text('physics-panel-state', 'Reading the producer handoff…'); text('idle-tracks-state', 'Reading the producer handoff…'); return; }
     if (!state.rebuildStatus.inputs || !state.rebuildStatus.producer) {
       physicsPanel.load({ available: false, reason: state.rebuildStatus.reason ?? 'PHYSICS_TUNING_UNAVAILABLE: no producer handoff' }, []);
       return;
@@ -845,6 +845,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       meshPanel?.load(status.inputs ? status.meshes ?? {} : null, status.inputs ? null : status.reason ?? 'MESH_PANEL_UNAVAILABLE: no producer handoff');
       meshPanel?.select(currentSlot);
       animationPanel?.loadSource(status.animations ?? null, status.reason);
+    } else {
+      animationPanel?.setSourceLoading();
     }
     if (state.requirementsCatalog) {
       requirementsPanel?.load(state.requirementsCatalog, state.requirementsCatalog.reason);
@@ -864,7 +866,11 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       sides[side].rebuildStatus = await host.api<RebuildStatusView>(`${sideApiPrefix(side)}/rebuild`);
     } catch (error) {
       sides[side].rebuildStatus = null;
-      if (side === pickedSide) chestEditor?.notify(`REBUILD_STATUS_UNAVAILABLE: ${errorText(error)}`, true);
+      const reason = `REBUILD_STATUS_UNAVAILABLE: ${errorText(error)}`;
+      if (side === pickedSide) {
+        chestEditor?.notify(reason, true);
+        animationPanel?.loadSource(null, reason);
+      }
       return null;
     }
     if (side === pickedSide) applySideStateToPanels();

@@ -327,7 +327,7 @@ function buildMotionAnimations(
   for (const [name, anim] of Object.entries(motionDoc.animations || {})) {
     const bonesMap: Record<string, Array<{ name: string; keys: unknown[] }>> = {};
     for (const track of anim.tracks || []) {
-      if (!track.bone || track.property === 'inherit' || typeof track.lag === 'number') continue;
+      if (!track.bone || track.property === 'inherit') continue;
       if (track.keys.some((k) => k && typeof k === 'object' && 'derive' in k)) continue;
       const keys = track.keys.map((k, idx) => {
         const vArr = Array.isArray(k.v) ? (k.v as number[]) : [0];
@@ -393,6 +393,7 @@ export async function setupBrowserFixture(root: string) {
   writeFileSync(join(pkgDir, 'images', 'mesh.png'), meshPng);
 
   const demoAnimObj = JSON.parse(readFileSync(new URL('./fixtures/motion/demo.json', import.meta.url), 'utf8'));
+  demoAnimObj.easings = { ...(demoAnimObj.easings || {}), easeOutQuad: [0.25, 0.46, 0.45, 0.94] };
   // Add read-only tracks to 'tilt' for Bar 5 verification, plus 'idle' and the 16-track × 115-key (1,840-key) 'hello' clip for Bar 7
   demoAnimObj.animations.tilt.tracks.push(
     {
@@ -648,7 +649,7 @@ if (cmd === 'build') {
           process.exit(1);
         }
       }
-      if (!track.bone || track.property === 'inherit' || typeof track.lag === 'number') continue;
+      if (!track.bone || track.property === 'inherit') continue;
       if ((track.keys || []).some((k) => k && typeof k === 'object' && 'derive' in k)) continue;
       const keys = track.keys.map((k, idx) => {
         const entry = { time: keyTime(k.t) };
@@ -1044,15 +1045,15 @@ async function main() {
       const idleGate = ed.gate();
       const idleEditableLanes = document.querySelectorAll('.animation-lane[data-editable="true"]').length;
       const idleReadOnlyBadges = [...document.querySelectorAll('[data-readonly-badge]')].map((n) => n.textContent ?? '');
+      const idleBadgesInsideKeyLane = document.querySelectorAll('.animation-key-lane [data-readonly-badge]').length;
       const gateEl = document.querySelector('[data-animation-gate]');
       const emptyEl = document.querySelector('[data-key-inspector-empty]');
-      const badgeEl = document.querySelector('[data-readonly-badge]');
       const readable = (el) => {
         if (!el) return false;
         const cs = getComputedStyle(el);
         return cs.textOverflow !== 'ellipsis' && el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 2;
       };
-      const idleRefusalReadable = readable(gateEl) && readable(emptyEl) && readable(badgeEl);
+      const idleRefusalReadable = readable(gateEl) && readable(emptyEl) && idleBadgesInsideKeyLane === 0;
 
       return {
         tiltGate,
@@ -1920,10 +1921,305 @@ async function main() {
       await writeFile(join(screenshotDir, 'slice3b-dock-hello-1440x900.png'), helloPng);
     }
 
+    // Slice 4a Browser Verification:
+    // - Restore default 272px dock height and 1x zoom
+    // - Defect 2: Loading state shows ANIMATION_SOURCE_LOADING ('Reading the producer handoff…'), never ANIMATION_SOURCE_MISSING
+    // - Defect 3: Zero .animation-readonly-badge elements inside .animation-key-lane and 0 px overlap between badges and keys across idle, tilt, hello
+    // - Defect 1: Apply succeeds when environment schedule (#environment-use) is active, carrying {animation, environment}
+    // - Defect 4: After Apply, .animation-dock-status has 0 clipping at top and bottom (gateRect.top >= dockStatusRect.top, editorStatusRect.bottom <= dockStatusRect.bottom)
+    // - Curves view: Switch to Curves view, test segment/mode/ease controls, drag [data-curve-handle="1"] across 3 mouseMoved steps (coalesced to 1 set_key_curve op), live stage pose preview, and compiled parity (maxFroundDiff === 0)
+    const slice4aPreDrag = await session.evaluate<{
+      defect2LoadingGateCode: string;
+      defect2LoadingAttr: string | null;
+      defect2LoadingText: string;
+      defect3: {
+        idleBadgesInKeyLane: number;
+        tiltBadgesInKeyLane: number;
+        helloBadgesInKeyLane: number;
+        tiltLagTrackKeyMarks: number;
+        tiltSubrowBadges: number;
+        maxBadgeKeyOverlapPx: number;
+      };
+      defect1And4: {
+        envApplyBusy: boolean;
+        envAppliedSchema: string;
+        envAppliedSteps: number;
+        envAppliedSha256Len: number;
+        statusAfterEnvApply: string;
+        dockStatusTopClipPx: number;
+        dockStatusBottomClipPx: number;
+        dockStatusOverflowPx: number;
+      };
+      curveEaseOp: any;
+      curveHandle1Start: { x: number; y: number };
+      curvePlotRect: { left: number; top: number; width: number; height: number };
+      rotBeforeHandleDrag: number;
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      const sep = document.querySelector('.workspace-inspectorHeight');
+      if (sep) sep.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      const zoom1Btn = document.querySelector('[data-animation-zoom="1"]');
+      if (zoom1Btn) zoom1Btn.click();
+      await ed.animation.reset();
+
+      // Defect 2: Verify loading state does not show false ANIMATION_SOURCE_MISSING refusal
+      const fullStatus = await ed.status();
+      ed.animation.setSourceLoading();
+      const defect2LoadingGateCode = ed.animation.gate().code;
+      const gateBanner = document.querySelector('[data-animation-gate]');
+      const defect2LoadingAttr = gateBanner?.getAttribute('data-loading') ?? null;
+      const defect2LoadingText = gateBanner?.textContent ?? '';
+      ed.animation.setSource(fullStatus.animations, fullStatus.reason);
+
+      // Defect 3: Check read-only badges vs key marks across idle, hello, and tilt
+      const animSelect = document.getElementById('animation-select');
+      const selectClip = async (name) => {
+        animSelect.value = name;
+        animSelect.dispatchEvent(new Event('change'));
+        await new Promise((r) => setTimeout(r, 40));
+      };
+      const measureOverlap = () => {
+        const badges = [...document.querySelectorAll('[data-readonly-badge]')];
+        const keys = [...document.querySelectorAll('.animation-key')];
+        let maxOverlap = 0;
+        for (const b of badges) {
+          const br = b.getBoundingClientRect();
+          for (const k of keys) {
+            const kr = k.getBoundingClientRect();
+            const ox = Math.max(0, Math.min(br.right, kr.right) - Math.max(br.left, kr.left));
+            const oy = Math.max(0, Math.min(br.bottom, kr.bottom) - Math.max(br.top, kr.top));
+            const area = ox * oy;
+            if (area > maxOverlap) maxOverlap = area;
+          }
+        }
+        return Math.round(maxOverlap * 100) / 100;
+      };
+
+      await selectClip('idle');
+      const idleBadgesInKeyLane = document.querySelectorAll('.animation-key-lane:not(.readonly-lane-track) [data-readonly-badge]').length;
+      let maxBadgeKeyOverlapPx = measureOverlap();
+
+      await selectClip('hello');
+      const helloBadgesInKeyLane = document.querySelectorAll('.animation-key-lane:not(.readonly-lane-track) [data-readonly-badge]').length;
+      maxBadgeKeyOverlapPx = Math.max(maxBadgeKeyOverlapPx, measureOverlap());
+
+      await selectClip('tilt');
+      const tiltBadgesInKeyLane = document.querySelectorAll('.animation-key-lane:not(.readonly-lane-track) [data-readonly-badge]').length;
+      const tiltSubrowBadges = document.querySelectorAll('.animation-lane .animation-readonly-subrow[data-readonly-badge]').length;
+      const lagLane = document.querySelector('.animation-lane[data-source-track="5"]');
+      const tiltLagTrackKeyMarks = lagLane ? lagLane.querySelectorAll('.animation-key-lane .animation-key').length : 0;
+      maxBadgeKeyOverlapPx = Math.max(maxBadgeKeyOverlapPx, measureOverlap());
+
+      // Defect 1 & Defect 4: Engage environment + enable environment schedule (#environment-use), edit key on tilt, and Apply
+      const windBase = document.getElementById('wind-base');
+      windBase.value = '1.2';
+      windBase.dispatchEvent(new Event('input'));
+      ed.world.use(true);
+      ed.animation.selectKey(0, 1);
+      ed.animation.setKeyValue(0, 1, 0, 16);
+      await ed.animation.apply();
+
+      const applied = ed.stage().applied;
+      const statusAfterEnvApply = ed.animation.status();
+      const dockStatusEl = document.querySelector('.animation-dock-status');
+      const gateEl = document.querySelector('[data-animation-gate]');
+      const editorStatusEl = document.querySelector('[data-animation-editor-status]');
+      const dsr = dockStatusEl.getBoundingClientRect();
+      const gr = gateEl.getBoundingClientRect();
+      const esr = editorStatusEl.getBoundingClientRect();
+      const dockStatusTopClipPx = Math.max(0, Math.round((dsr.top - gr.top) * 100) / 100);
+      const dockStatusBottomClipPx = Math.max(0, Math.round((esr.bottom - dsr.bottom) * 100) / 100);
+      const dockStatusOverflowPx = Math.max(0, dockStatusEl.scrollHeight - dockStatusEl.clientHeight);
+
+      // Prepare Curves view on tilt (reset environment & animation to clean baseline first)
+      ed.world.use(false);
+      document.getElementById('physics-reset').click();
+      await ed.animation.reset();
+      await selectClip('tilt');
+
+      const curveBtn = document.querySelector('[data-animation-view="curve"]');
+      curveBtn.click();
+      ed.animation.selectKey(0, 0);
+
+      // Test ease mode & preset selector in Curves view
+      const easeSel = document.querySelector('[data-curve-ease]');
+      easeSel.value = 'ease:easeOutQuad';
+      easeSel.dispatchEvent(new Event('change'));
+      const curveEaseOp = ed.animation.ops()[0];
+      ed.animation.clearPending();
+
+      // Switch segment 0 to cubic mode via [data-curve-ease] (creates 1 set_key_curve op that the handle drag will coalesce into!)
+      easeSel.value = 'cubic';
+      easeSel.dispatchEvent(new Event('change'));
+
+      const scrub = document.getElementById('scrub');
+      scrub.value = '0.175';
+      scrub.dispatchEvent(new Event('input'));
+      const rotBeforeHandleDrag = Math.round((ed.bone('head').rotationX - ed.bone('chest').rotationX) * 1000) / 1000;
+
+      const h1 = document.querySelector('[data-curve-handle="1"]');
+      const hr = h1.getBoundingClientRect();
+      const plot = document.querySelector('[data-curve-plot]').getBoundingClientRect();
+
+      return {
+        defect2LoadingGateCode,
+        defect2LoadingAttr,
+        defect2LoadingText,
+        defect3: {
+          idleBadgesInKeyLane,
+          tiltBadgesInKeyLane,
+          helloBadgesInKeyLane,
+          tiltLagTrackKeyMarks,
+          tiltSubrowBadges,
+          maxBadgeKeyOverlapPx,
+        },
+        defect1And4: {
+          envApplyBusy: ed.stage().busy,
+          envAppliedSchema: applied?.schema ?? '',
+          envAppliedSteps: applied?.environment?.steps ?? 0,
+          envAppliedSha256Len: applied?.environment?.sha256?.length ?? 0,
+          statusAfterEnvApply,
+          dockStatusTopClipPx,
+          dockStatusBottomClipPx,
+          dockStatusOverflowPx,
+        },
+        curveEaseOp,
+        curveHandle1Start: { x: hr.left + hr.width / 2, y: hr.top + hr.height / 2 },
+        curvePlotRect: { left: plot.left, top: plot.top, width: plot.width, height: plot.height },
+        rotBeforeHandleDrag,
+      };
+    })()`);
+
+    // Drag [data-curve-handle="1"] across 3 mouseMoved steps on the curve SVG plot
+    const hx0 = slice4aPreDrag.curveHandle1Start.x;
+    const hy0 = slice4aPreDrag.curveHandle1Start.y;
+    await session.dispatchMouseEvent({ type: 'mousePressed', x: hx0, y: hy0, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: hx0 + 18, y: hy0 - 15, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: hx0 + 32, y: hy0 - 28, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: hx0 + 45, y: hy0 - 38, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: hx0 + 45, y: hy0 - 38, button: 'left', buttons: 0 });
+
+    if (screenshotDir) {
+      await writeFile(join(screenshotDir, 'slice4a-curves-drag-1440x900.png'), await session.screenshot());
+    }
+
+    const slice4aPostDrag = await session.evaluate<{
+      opsAfterHandleDrag: any[];
+      rotAfterHandleDrag: number;
+      curveApplyMaxFroundDiff: number;
+      curveReadOnlyBannerVisible: boolean;
+      curveReadOnlyText: string;
+    }>(`(async () => {
+      const ed = window.rigReviewEditor;
+      const opsAfterHandleDrag = ed.animation.ops();
+      const scrub = document.getElementById('scrub');
+      const seekTo = (t) => {
+        scrub.value = String(t);
+        scrub.dispatchEvent(new Event('input'));
+      };
+      seekTo(0.175);
+      const rotAfterHandleDrag = Math.round((ed.bone('head').rotationX - ed.bone('chest').rotationX) * 1000) / 1000;
+
+      // Measure preview vs compiled pose parity across segment 0 sample times
+      const sampleTimes = [0, 0.08, 0.175, 0.26, 0.35];
+      const previewRots = sampleTimes.map((t) => {
+        seekTo(t);
+        return Math.fround(ed.bone('head').rotationX);
+      });
+      await ed.animation.apply();
+      let curveApplyMaxFroundDiff = 0;
+      for (let i = 0; i < sampleTimes.length; i++) {
+        seekTo(sampleTimes[i]);
+        const diff = Math.abs(previewRots[i] - Math.fround(ed.bone('head').rotationX));
+        if (diff > curveApplyMaxFroundDiff) curveApplyMaxFroundDiff = diff;
+      }
+
+      // Select read-only track 5 (sleeve_l0.rotate, lag) in Curves view via [data-curve-channel] and verify read-only notice
+      const chSel = document.querySelector('[data-curve-channel]');
+      const lagOpt = [...chSel.options].find((o) => o.textContent?.includes('sleeve_l0'));
+      if (lagOpt) {
+        chSel.value = lagOpt.value;
+        chSel.dispatchEvent(new Event('change'));
+      }
+      const roBanner = document.querySelector('[data-curve-readonly]');
+      const curveReadOnlyBannerVisible = !!roBanner && !roBanner.hidden;
+      const curveReadOnlyText = roBanner?.textContent ?? '';
+
+      // Switch back to Timeline view on tilt so we can capture Defect 3 + Defect 4 screenshot cleanly
+      const timelineBtn = document.querySelector('[data-animation-view="timeline"]');
+      timelineBtn.click();
+      const lanes = document.querySelector('.animation-lanes');
+      lanes.scrollTop = lanes.scrollHeight;
+      await new Promise((r) => setTimeout(r, 25));
+
+      return {
+        opsAfterHandleDrag,
+        rotAfterHandleDrag,
+        curveApplyMaxFroundDiff,
+        curveReadOnlyBannerVisible,
+        curveReadOnlyText,
+      };
+    })()`);
+
+    if (screenshotDir) {
+      await writeFile(join(screenshotDir, 'slice4a-defect3-4-dopesheet-1440x900.png'), await session.screenshot());
+    }
+
+    if (
+      slice4aPreDrag.defect2LoadingGateCode !== 'ANIMATION_SOURCE_LOADING' ||
+      slice4aPreDrag.defect2LoadingAttr !== 'true' ||
+      !slice4aPreDrag.defect2LoadingText.includes('Reading the producer handoff') ||
+      slice4aPreDrag.defect3.idleBadgesInKeyLane !== 0 ||
+      slice4aPreDrag.defect3.tiltBadgesInKeyLane !== 0 ||
+      slice4aPreDrag.defect3.helloBadgesInKeyLane !== 0 ||
+      slice4aPreDrag.defect3.tiltLagTrackKeyMarks < 2 ||
+      slice4aPreDrag.defect3.tiltSubrowBadges < 1 ||
+      slice4aPreDrag.defect3.maxBadgeKeyOverlapPx !== 0 ||
+      slice4aPreDrag.defect1And4.envApplyBusy !== false ||
+      slice4aPreDrag.defect1And4.envAppliedSchema !== 'rig-review-applied/5' ||
+      slice4aPreDrag.defect1And4.envAppliedSteps < 1 ||
+      slice4aPreDrag.defect1And4.envAppliedSha256Len !== 64 ||
+      !slice4aPreDrag.defect1And4.statusAfterEnvApply.startsWith('Applied ') ||
+      !slice4aPreDrag.defect1And4.statusAfterEnvApply.includes('under the exported world') ||
+      slice4aPreDrag.defect1And4.dockStatusTopClipPx > 0.5 ||
+      slice4aPreDrag.defect1And4.dockStatusBottomClipPx > 0.5 ||
+      slice4aPreDrag.defect1And4.dockStatusOverflowPx > 1 ||
+      slice4aPreDrag.curveEaseOp?.op !== 'set_key_ease' ||
+      slice4aPreDrag.curveEaseOp?.ease !== 'easeOutQuad' ||
+      slice4aPostDrag.opsAfterHandleDrag.length !== 1 ||
+      slice4aPostDrag.opsAfterHandleDrag[0].op !== 'set_key_curve' ||
+      slice4aPostDrag.rotAfterHandleDrag === slice4aPreDrag.rotBeforeHandleDrag ||
+      slice4aPostDrag.curveApplyMaxFroundDiff !== 0 ||
+      !slice4aPostDrag.curveReadOnlyBannerVisible ||
+      !slice4aPostDrag.curveReadOnlyText.includes('ANIMATION_TRACK_READ_ONLY') ||
+      !slice4aPostDrag.curveReadOnlyText.includes('sleeve_l0.rotate')
+    ) {
+      throw new Error(
+        `Slice 4a browser verification failed: ${JSON.stringify({ slice4aPreDrag, slice4aPostDrag }, null, 2)}`,
+      );
+    }
+
     console.log(
       JSON.stringify(
         {
           ok: true,
+          slice4a: {
+            defect1And4: slice4aPreDrag.defect1And4,
+            defect2: {
+              gateCode: slice4aPreDrag.defect2LoadingGateCode,
+              loadingAttr: slice4aPreDrag.defect2LoadingAttr,
+              loadingText: slice4aPreDrag.defect2LoadingText,
+            },
+            defect3: slice4aPreDrag.defect3,
+            curves: {
+              easeOp: slice4aPreDrag.curveEaseOp,
+              opsAfterHandleDrag: slice4aPostDrag.opsAfterHandleDrag,
+              rotBeforeHandleDrag: slice4aPreDrag.rotBeforeHandleDrag,
+              rotAfterHandleDrag: slice4aPostDrag.rotAfterHandleDrag,
+              curveApplyMaxFroundDiff: slice4aPostDrag.curveApplyMaxFroundDiff,
+              curveReadOnlyBannerVisible: slice4aPostDrag.curveReadOnlyBannerVisible,
+            },
+          },
           slice3bDock1440x900: {
             viewport: `${slice3bDockCheck.viewportWidth}x${slice3bDockCheck.viewportHeight}`,
             windowScrollY: slice3bDockCheck.windowScrollY,

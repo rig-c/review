@@ -71,8 +71,8 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
  /** Scroll the block so its top sits just under the sticky row, then mark it. */
  function select(name:string,rawId:string):void {
   const entry=rows.get(name);if(!entry)return;const id=resolveId(entry,rawId);const button=entry.buttons.find(b=>b.dataset.blockTarget===id);const node=button&&targetOf(entry.scrollRoot,button);if(!node)return;
-  const {scrollRoot,row}=entry,offset=node.getBoundingClientRect().top-scrollRoot.getBoundingClientRect().top-row.getBoundingClientRect().height-blockScrollGap;
-  entry.hold=now()+holdMs;mark(name,id);scrollRoot.scrollTo({top:Math.max(0,scrollRoot.scrollTop+offset),behavior:reduced()?'auto':'smooth'});
+  const {scrollRoot,row}=entry,offset=node.getBoundingClientRect().top-scrollRoot.getBoundingClientRect().top-row.getBoundingClientRect().height-blockScrollGap,top=Math.max(0,scrollRoot.scrollTop+offset);
+  entry.hold=now()+holdMs;scrollRoot.scrollTop=top;scrollRoot.scrollTo({top,behavior:reduced()?'auto':'smooth'});if(typeof scrollRoot.dispatchEvent==='function')scrollRoot.dispatchEvent(new Event('scroll'));mark(name,id);
  }
  return {
   state:()=>({...state}),select,
