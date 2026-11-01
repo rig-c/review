@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.23.0](https://github.com/rig-c/review/compare/v0.22.0...v0.23.0) (2026-11-01)
+
+
+### Features
+
+* **apply:** state what a rebuild drops before the click ([#268](https://github.com/rig-c/review/issues/268)) ([d5447ad](https://github.com/rig-c/review/commit/d5447ad183e0d16078017b40ea1b9f45b96afd14)), closes [#250](https://github.com/rig-c/review/issues/250)
+
+
+### Bug Fixes
+
+* **readme:** show the npm badges ([#266](https://github.com/rig-c/review/issues/266)) ([cc13a13](https://github.com/rig-c/review/commit/cc13a130980a585fdf1d55714caab930363af87c)), closes [#265](https://github.com/rig-c/review/issues/265)
+
 ## [0.22.0](https://github.com/rig-c/review/compare/v0.21.0...v0.22.0) (2026-11-01)
 
 
