@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/rig-c/review/compare/v0.23.0...v0.24.0) (2026-11-01)
+
+
+### Features
+
+* ship the rig-review agent skill ([#270](https://github.com/rig-c/review/issues/270)) ([e08d217](https://github.com/rig-c/review/commit/e08d217d3fade2687fe0428d388e51a3bf26d8c1)), closes [#269](https://github.com/rig-c/review/issues/269)
+
 ## [0.23.0](https://github.com/rig-c/review/compare/v0.22.0...v0.23.0) (2026-11-01)
 
 
