@@ -26,7 +26,7 @@ import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
 import {animationAppliedRecord,animationOutcomeLine,retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type AnimationJobView,type AnimationRequestBody,type AnimationSourceOp,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {historyRow,isPatchJob,recordFor,refusedText,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {historyRow,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -56,7 +56,7 @@ import {barLine,beforeLine} from '../src/physics-tuning.ts';
 import {bindRequirementsPanel,type RequirementsCatalogView,type RequirementsJobView,type RequirementsPanel,type RequirementsRefusal} from './requirements-panel.ts';
 import {patchRoute} from '../src/retune-route.ts';
 import {appliedCheckRefusal,type CheckSummary} from '../src/applied-context.ts';
-import {appliedBlockOps,recordBlock,staleReadouts} from '../src/applied-blocks.ts';
+import {appliedBuildOwner,appliedPanelOps,dropNoticeForPanel,reconcilePanelStatuses,recordBlock,staleReadouts,type RebuildPanelKind} from '../src/applied-blocks.ts';
 import {bindPhysicsPanel,type PhysicsPanel} from './physics-panel.ts';
 import {bindIdlePanel,type BoneSetup,type IdlePanel} from './idle-panel.ts';
 import {composeAdjust,PhysicsPreview} from './preview.ts';
@@ -978,7 +978,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();if(part){activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){player.seek(time);drawRig(()=>player!.draw());}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();renderDropNotices();if(part){activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){player.seek(time);drawRig(()=>player!.draw());}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
@@ -1221,7 +1221,7 @@ function renderChest():void {
  el('chest-mapping').classList.toggle('error',!chestMapping.available);
  const value=chestEvaluation();text('chest-status',value.ok?`${value.document.mesh.value.contour.regions.map(r=>`${r.name} → ${r.bone}`).join(' · ')} · valid for export`:value.error);
  el('chest-status').classList.toggle('error',!value.ok);
- chestEditor?.sync();meshEditor?.sync();weightsView?.sync();bonesPanel?.sync();cutsPanel?.sync();clothPanel?.sync();redrawOverlay(false);
+ chestEditor?.sync();meshEditor?.sync();weightsView?.sync();bonesPanel?.sync();cutsPanel?.sync();clothPanel?.sync();renderDropNotices();redrawOverlay(false);
 }
 async function exportChest():Promise<void> {
  const value=chestEvaluation();if(!value.ok){message(`Chest regions not exported: ${value.error}`,true);return;}
@@ -1460,6 +1460,7 @@ async function applyMeshDelta(doc:MeshEditDocument,line:(text:string)=>void):Pro
   if(next.id===null||!('id' in result)){message(outcome.text,true);return {built:false,text:outcome.text,error:true};}
   await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
   appliedOnStage=deltaAppliedRecord(result);stageCheck=null;stageChanged({kind:'apply',via:'delta'});
+  meshEditor?.setStatusNote(outcome.text,false);
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   message(outcome.text);
   return {built:true,text:outcome.text,error:false};
@@ -1480,6 +1481,7 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  cutsPanel?.load(rebuildStatus.inputs&&rebuildStatus.cuts?rebuildStatus.cuts.config:null,rebuildStatus.bones??[],rebuildStatus.inputs?null:rebuildStatus.reason??'CUTS_UNAVAILABLE: no producer handoff',rebuildStatus.cuts?.build??null);
  meshPanel?.load(rebuildStatus.inputs?rebuildStatus.meshes??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'MESH_PANEL_UNAVAILABLE: no producer handoff');meshPanel?.select(parts?.value()?.slot??null);
  animationPanel?.loadSource(rebuildStatus.animations??null,rebuildStatus.reason);
+ renderDropNotices();
  return rebuildStatus;
 }
 /** The handoff line (#101): path, hash and how it was found, then the baseline; re-read while the baseline runs. */
@@ -1497,11 +1499,87 @@ async function refreshApplied():Promise<void> {
  try{appliedHistory=await api<AppliedHistoryView>('/api/rebuild/history');}catch{return;}
  renderApplied();
 }
-/** #172: the Cuts and Cloth blocks mark as applied only the ops the stage's applied record holds (none on the inspected build). */
+function chestPartForNotice():string|null {
+ if(!rebuildStatus)return null;
+ if(chestEditor?.mode()==='landmarks'){
+  const read=chestEditor.landmarks();
+  return 'derived' in read?pickBustPart(rebuildStatus,read.derived.regions):pickBustPart(rebuildStatus,[]);
+ }
+ const designated=designatedRegions(chestField);
+ return 'regions' in designated?pickPart(rebuildStatus,designated.regions):rebuildStatus.parts.length===1?rebuildStatus.parts[0]!.name:null;
+}
+function renderDropNotices():void {
+ const slot=parts?.value()?.slot??null,meshPart=meshPanel?.part()??slot,chestPart=chestPartForNotice();
+ for(const node of document.querySelectorAll<HTMLElement>('[data-rebuild-drop]')){
+  const panel=node.dataset.rebuildDrop as RebuildPanelKind;
+  const part=panel==='mesh'?meshPart:panel==='mesh-edit'?slot:panel==='chest'?chestPart:null;
+  let notice='';let isError=false;
+  try{notice=dropNoticeForPanel(appliedOnStage,panel,{part,handoff:rebuildStatus});}
+  catch(error){notice=errorText(error);isError=true;}
+  node.textContent=notice;node.hidden=!notice;node.classList.toggle('error',isError);
+ }
+}
+/** #172 / #250: every panel marks as applied only what the stage's applied record holds for that panel, and clears stale applied-outcome status text on non-owning panels (restoring it on Undo). */
 let readoutStage:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation|null=null;
-function renderAppliedBlocks():void {
- const on=appliedBlockOps(appliedOnStage);cutsPanel?.applied(on.cuts);clothPanel?.applied(on.cloth);
- animationPanel?.reconcileStageApplied(appliedOnStage?.schema==='rig-review-applied/5'?appliedOnStage:null);
+function renderAppliedBlocks(restoredJob:AnyJobView|null=null):void {
+ const on=appliedPanelOps(appliedOnStage);
+ cutsPanel?.applied(on.cuts);clothPanel?.applied(on.cloth);
+ physicsPanel?.applied(on.physics);bonesPanel?.applied(on.bones);
+ idlePanel?.applied(on.idle);rigFieldsPanel?.applied(on['rig-fields']);
+ const restored=restoredJob?restoredOutcomeForJob(restoredJob):null;
+ animationPanel?.reconcileStageApplied(
+  appliedOnStage?.schema==='rig-review-applied/5'?appliedOnStage:null,
+  restored?.panel==='animation'?{text:restored.text,error:restored.error}:null,
+ );
+ const statusText=(id:string)=>document.getElementById(id)?.textContent??'';
+ const reconciled=reconcilePanelStatuses(
+  {
+   chest:chestEditor?.noticeText()??'',
+   'mesh-edit':meshEditor?.statusNote()??'',
+   mesh:statusText('mesh-status'),
+   bones:statusText('bones-status'),
+   'rig-fields':statusText('rig-fields-status'),
+   cuts:statusText('cuts-status'),
+   cloth:statusText('cloth-status'),
+   physics:statusText('physics-apply-status'),
+   idle:statusText('idle-apply-status'),
+   retarget:statusText('retarget-status'),
+   animation:document.querySelector('[data-animation-editor-status]')?.textContent??'',
+  },
+  appliedOnStage,
+  restored,
+ );
+ const owner=appliedBuildOwner(appliedOnStage);
+ if(owner?.panel!=='chest'){
+  if(reconciled.chest!==(chestEditor?.noticeText()??''))chestEditor?.notify(null,false,[]);
+ }else if(restored?.panel==='chest'){
+  chestEditor?.notify(restored.text,restored.error,[]);
+ }
+ if(owner?.panel!=='mesh-edit'){
+  if(reconciled['mesh-edit']!==(meshEditor?.statusNote()??''))meshEditor?.setStatusNote('',false);
+ }else if(restored?.panel==='mesh-edit'){
+  meshEditor?.setStatusNote(restored.text,restored.error);
+ }
+ const syncPanelStatus=(panel:RebuildPanelKind,id:string,set:(t:string,e:boolean)=>void,clearExtra?:()=>void)=>{
+  const cur=statusText(id),next=reconciled[panel];
+  if(owner?.panel!==panel){
+   if(next!==cur){set('',false);clearExtra?.();}
+  }else if(restored?.panel===panel){
+   set(restored.text,restored.error);
+  }
+ };
+ syncPanelStatus('mesh','mesh-status',(t,e)=>meshPanel?.status(t,e),()=>{if(!stripPending){meshPanel?.counts([]);meshPanel?.readout([]);}});
+ syncPanelStatus('bones','bones-status',(t,e)=>bonesPanel?.status(t,e));
+ syncPanelStatus('rig-fields','rig-fields-status',(t,e)=>rigFieldsPanel?.status(t,e),()=>rigFieldsPanel?.readout([]));
+ syncPanelStatus('cuts','cuts-status',(t,e)=>cutsPanel?.status(t,e));
+ syncPanelStatus('cloth','cloth-status',(t,e)=>clothPanel?.status(t,e));
+ syncPanelStatus('physics','physics-apply-status',(t,e)=>physicsPanel?.status(t,e),()=>physicsPanel?.readout([]));
+ syncPanelStatus('idle','idle-apply-status',(t,e)=>idlePanel?.status(t,e),()=>idlePanel?.readout([]));
+ syncPanelStatus('retarget','retarget-status',(t,e)=>retargetPanel?.status(t,e),()=>retargetPanel?.result(null));
+ if(restored?.panel==='retarget'&&restoredJob&&(restoredJob as RetargetJobView).kind==='retarget'){
+  retargetPanel?.result(restoredJob as RetargetJobView);
+ }
+ renderDropNotices();
  // #186: when the stage record changes, a Cuts / Cloth readout the new record is not that block's names an older build.
  for(const block of staleReadouts(readoutStage,appliedOnStage))(block==='cuts'?cutsPanel:clothPanel)?.shown(null);
  readoutStage=appliedOnStage;
@@ -1535,21 +1613,18 @@ async function undoApply():Promise<UndoView|null> {
    result={status:'built',undone,job,history:await api<AppliedHistoryView>('/api/rebuild/history')};
   }
   if(result.status==='refused'){appliedStatus(result.error,true);message(result.error,true);return result;}
-  let ops:import('../src/config-patch.ts').PatchOp[]|null=null;
   if(result.status==='inspected'){await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;}
   else{
    const job=result.job;if(!job.build)throw new Error('the restored job carries no build');
    await swapRig(new URL(access.route(job.build.modelUrl),location.href).href,access.route(`/rebuild/${job.id}/`),job.build.modelHash,world);
    appliedOnStage=recordFor(job);stageCheck=(job as PatchJobView).kind==='patch'?{lines:[...job.lines],check:(job as PatchJobView).check}:null;
-   if((job as PatchJobView).kind==='patch')ops=(job as PatchJobView).request.patch.ops;
    // #186: a restored retarget build gets what its Apply set — its own clock, then its animation selected.
    const retarget=retargetStage(job,job.build.modelHash);stageClock=retarget?.clock??null;
    if(retarget&&assets?.animations.some(clip=>clip.name===retarget.animation))chooseAnimation(retarget.animation);
   }
   stageChanged({kind:'undo'});
   // The panels mark the ops the stage's build applied; the pending edits stay as they are.
-  physicsPanel?.applied(ops);idlePanel?.applied(ops);rigFieldsPanel?.applied(ops);bonesPanel?.applied(ops);
-  animationPanel?.reconcileStageApplied(appliedOnStage?.schema==='rig-review-applied/5'?appliedOnStage:null);
+  renderAppliedBlocks(result.status==='built'?result.job:null);
   // #172: the Cuts and Cloth readouts show the restored build's job when it is theirs, else nothing (never the reverted one).
   const restored=result.status==='built'&&isPatchJob(result.job)?result.job:null,block=recordBlock(appliedOnStage);
   cutsPanel?.shown(block==='cuts'?restored:null);clothPanel?.shown(block==='cloth'?restored:null);
@@ -1665,7 +1740,7 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
   apply:()=>applyIdle(idlePanel?.ops()??[],idlePanel?.keying()?.keys??null),reset:()=>resetIdleBuild(),
   sample:(bone:string,dt:number,n:number)=>sampleLocals(bone,dt,n),adjustSet:()=>!!player?.adjust},
  /** Mesh panel (#106): the selected part's pending entry, its edits, Apply, Reset, the folds reading and the overlay's triangle count per slot. */
- mesh:{part:()=>meshPanel?.part()??null,select:(part:string)=>meshPanel?.select(part),entry:()=>meshPanel?.entry()??null,configEntry:()=>meshPanel?.configEntry()??null,set:(path:string[],value:import('../src/config-patch.ts').JsonValue|undefined)=>meshPanel?.set(path,value),setEntry:(entry:MeshEntry)=>meshPanel?.setEntry(entry),
+ mesh:{part:()=>meshPanel?.part()??null,select:(part:string)=>{meshPanel?.select(part);renderDropNotices();},entry:()=>meshPanel?.entry()??null,configEntry:()=>meshPanel?.configEntry()??null,set:(path:string[],value:import('../src/config-patch.ts').JsonValue|undefined)=>meshPanel?.set(path,value),setEntry:(entry:MeshEntry)=>meshPanel?.setEntry(entry),
   regions:()=>meshPanel?.regions.list()??[],addRegion:(region:import('../src/mesh-entry.ts').MeshRegion)=>meshPanel?.regions.add(region),moveRegion:(region:number,vertex:number,to:[number,number])=>meshPanel?.regions.move(region,vertex,to),drawRegions:(on:boolean)=>meshPanel?.regions.draw(on),placing:()=>meshPanel?.regions.placing()??null,
   precheck:()=>meshPanel?.precheck()??[],apply:()=>{const part=meshPanel?.part(),entry=meshPanel?.entry();return part&&entry?applyMesh(part,entry):Promise.resolve(null);},reset:()=>resetMeshBuild(),folds:()=>meshFolds(),
   overlayTriangles:(slot:string)=>lastOverlay?.meshTriangles[slot]??null,status:()=>el('mesh-status').textContent,counts:()=>[...document.querySelectorAll('#mesh-counts code')].map(c=>c.textContent),readout:()=>[...document.querySelectorAll('#mesh-readout code')].map(c=>c.textContent),pending:()=>input('mesh-pending').value,lastPatch:()=>lastMeshPatch?JSON.parse(JSON.stringify(lastMeshPatch)):null,
@@ -2069,7 +2144,7 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
  {const animations=select('animation-select');animations.replaceChildren(...assets.animations.map(item=>option(item.name,data.manifest.animations.find(a=>a.id===item.name)?.label??item.name)));animations.disabled=assets.animations.length===0;}
  player.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
- try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
+ try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();meshEditor?.selectionChanged();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
  if(keepSet){try{player.setSet(keepSet);}catch{select('part-set').value='';player.setSet(null);}}
  // The same world before the first pose: a physics Apply resumes the wind (clock and pulse), the pending jolts, gravity and
  // whether the controls are engaged as they stood when Apply was pressed; then the seek re-poses under that world.

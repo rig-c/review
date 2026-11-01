@@ -104,7 +104,7 @@ export interface MeshEditorHost {
  confirm:(text:string)=>boolean;
  token:(name:string)=>string;
 }
-export interface MeshEditor {active:()=>boolean;overlay:()=>OverlayMeshEdit|null;sync:()=>void;selectionChanged:()=>void;dispose:()=>void;session:()=>MeshEditSession|null;mode:()=>MeshMode|null}
+export interface MeshEditor {active:()=>boolean;overlay:()=>OverlayMeshEdit|null;sync:()=>void;selectionChanged:()=>void;dispose:()=>void;session:()=>MeshEditSession|null;mode:()=>MeshMode|null;statusNote:()=>string;setStatusNote:(text:string,error?:boolean)=>void}
 
 type Drag={pointer:number;start:ScreenPoint;ids:number[];base:MeshView;ops:MeshOp[]}|{pointer:number;start:ScreenPoint;box:ScreenPoint;add:boolean};
 
@@ -112,7 +112,7 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
  const node=<T extends HTMLElement>(id:string)=>document.getElementById(id) as T;
  const toggle=node<HTMLButtonElement>('mesh-edit'),bar=node<HTMLElement>('mesh-editor-bar'),status=node<HTMLElement>('mesh-editor-status'),draft=node<HTMLTextAreaElement>('mesh-edit-draft');
  const chestToggle=document.getElementById('chest-edit') as HTMLButtonElement|null;
- let active=false,entering=false,applying=false,mode:MeshMode|null=null,session:MeshEditSession|null=null,space=false,drag:Drag|null=null,pending:number|null=null,hover:ReturnType<typeof hitMesh>=null,note='',noteError=false;
+ let active=false,entering=false,applying=false,mode:MeshMode|null=null,session:MeshEditSession|null=null,space=false,drag:Drag|null=null,pending:number|null=null,hover:ReturnType<typeof hitMesh>=null,note='',noteError=false,appliedOutcome='';
  let preview:MeshView|null=null;const selected=new Set<number>();
  const view=()=>preview??session?.view()??null;
  const cropToScreen=()=>{const project=host.project(),mapping=host.mapping();if(!project||!mapping.available)return null;return affineOf((x,y)=>{const w=mapping.toWorld(x,y);return project(w.x,w.y);});};
@@ -123,22 +123,24 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
   modify:'drag a vertex or edge · Shift-click selects more · drag empty space to box-select · arrows nudge 1 px (Shift 10)',
   create:'click empty space to add a vertex · click an edge to split it',
   delete:'click a vertex (with its edges) or an added constraint edge to remove it · hull and triangulation edges are the producer\'s',
-  edges:'click vertex A then vertex B to add a constraint edge · click a constraint edge to remove it',
+  edges:'click vertex A then start vertex B to add a constraint edge · click a constraint edge to remove it'.replace('start ',''),
  };
  const sync=()=>{
   const visible=meshEditVisible(host.inspector());toggle.hidden=!visible;
   if(!visible&&active){setActive(false);return;}
+  if(!host.applied()&&note.startsWith('Applied mesh edit ')){appliedOutcome='';note='';noteError=false;}
   toggle.setAttribute('aria-pressed',String(active));bar.hidden=!active;
   for(const button of bar.querySelectorAll<HTMLButtonElement>('[data-mesh-mode]'))button.setAttribute('aria-pressed',String(button.dataset.meshMode===mode));
   node<HTMLButtonElement>('mesh-undo').disabled=!session?.canUndo();node<HTMLButtonElement>('mesh-redo').disabled=!session?.canRedo();node<HTMLButtonElement>('mesh-reset').disabled=!session?.canUndo()&&!session?.ops().length&&!host.applied();node<HTMLButtonElement>('mesh-apply').disabled=applying;
-  if(!session){status.textContent='';return;}
+  if(!session){status.textContent=host.applied()&&appliedOutcome?appliedOutcome:'';status.classList.toggle('error',noteError);return;}
   const s=session.source,count=session.ops().length;
   status.textContent=`${note?note+' · ':''}${count} op${count===1?'':'s'} · setup pose · ${MESH_EDIT_PREVIEW_NOTE} · ${mode?hint[mode]:'no sub-mode — Escape again leaves mesh edit'} · Space-drag pans`;
   status.title=`${s.slot} / ${s.skin} / ${s.attachment} · ${s.vertices.length} vertices · ${s.triangles.length/3} triangles · hull ${s.hull} · ${status.textContent}`;
   status.classList.toggle('error',noteError);
   if(mode)host.pane.dataset.meshMode=mode;else delete host.pane.dataset.meshMode;
  };
- const say=(text:string,error=false)=>{note=text;noteError=error;if(text)host.message(text,error);sync();};
+ const say=(text:string,error=false)=>{if(text.startsWith('Applied mesh edit '))appliedOutcome=text;else if(!text)appliedOutcome='';note=text;noteError=error;if(text)host.message(text,error);sync();};
+ const setStatusNote=(text:string,error=false)=>{appliedOutcome=text.startsWith('Applied mesh edit ')?text:'';note=text;noteError=error;sync();};
  // While a delta revision is on the stage the draft keeps the delta that built it: edits over the revision are not written.
  const persist=()=>{if(!session||host.applied())return;const text=writeMeshDraft(parseMeshDraft(draft.value),session.source,session.ops());if(text.length>32768){say('MESH_EDIT_DRAFT_LIMIT: the local draft is full — download the JSON; edits after this are not kept on reload',true);return;}draft.value=text;draft.dispatchEvent(new Event('input',{bubbles:true}));};
  /** Reports a step: a refusal by its code, a no-op by its reason, a change by what it did. */
@@ -159,7 +161,7 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
    const hash=await sha256Hex(attachmentHashText(result.entry)),source:MeshSource={...result.source,hash};
    const restored=draftOps(parseMeshDraft(draft.value),source);session=new MeshEditSession(source,restored??[]);
    if(chestToggle?.getAttribute('aria-pressed')==='true')chestToggle.click();
-   host.pause();active=true;mode='modify';selected.clear();pending=null;note=restored?.length?`restored ${restored.length} draft op${restored.length===1?'':'s'}`:'';noteError=false;
+   host.pause();active=true;mode='modify';selected.clear();pending=null;note=host.applied()&&appliedOutcome?appliedOutcome:restored?.length?`restored ${restored.length} draft op${restored.length===1?'':'s'}`:'';noteError=false;
    sync();host.changed();
   }finally{entering=false;}
  };
@@ -294,11 +296,13 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
  const selectionChanged=()=>{
   if(!active||!session)return;const result=host.source();
   if(!result.ok){leave();sync();host.message(result.code,true);host.changed();return;}
-  if(result.source.slot!==session.source.slot||result.source.attachment!==session.source.attachment||result.source.skin!==session.source.skin){leave();void enter();}
+  if(result.source.slot!==session.source.slot||result.source.attachment!==session.source.attachment||result.source.skin!==session.source.skin){leave();void enter();return;}
+  const current=session;
+  void sha256Hex(attachmentHashText(result.entry)).then(hash=>{if(active&&session===current&&hash!==current.source.hash)void reenter();});
  };
  sync();
  return {
-  active:()=>active,overlay,sync,selectionChanged,session:()=>session,mode:()=>mode,
+  active:()=>active,overlay,sync,selectionChanged,session:()=>session,mode:()=>mode,statusNote:()=>note||appliedOutcome,setStatusNote,
   dispose:()=>{observer.disconnect();chestObserver.disconnect();host.pane.removeEventListener('pointerdown',down,true);host.pane.removeEventListener('pointermove',move,true);for(const type of ['pointerup','pointercancel'] as const)host.pane.removeEventListener(type,end,true);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);window.removeEventListener('blur',blur);},
  };
 }

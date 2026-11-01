@@ -234,6 +234,7 @@ export class AnimationInspectionPanel {
 </div>
 <div class="animation-dock-status">
  <div class="animation-gate-banner hint" data-animation-gate></div>
+ <p class="hint rebuild-drop-notice" data-rebuild-drop="animation" hidden></p>
  <p class="hint" data-animation-editor-status role="status"></p>
  <p class="hint" data-animation-apply-note></p>
  <p data-inspection-status class="hint"></p>
@@ -870,14 +871,23 @@ export class AnimationInspectionPanel {
   * When another kind of Apply (Bones, Mesh, Idle, Retarget, Chest, etc.) replaces the stage build, `applied` is `null`
   * and `this.appliedOps` clears to `[]` while `this.builder.ops` stays intact as pending unapplied edits.
   */
- reconcileStageApplied(applied:AppliedAnimation|null){
+ reconcileStageApplied(applied:AppliedAnimation|null,restoredOutcome?:{text:string;error:boolean}|null){
   const nextApplied=applied?applied.ops.map(o=>structuredClone(o)):[];
-  if(JSON.stringify(this.appliedOps)===JSON.stringify(nextApplied))return;
-  this.appliedOps=nextApplied;
-  this.syncEffectiveInspection(true);
-  this.renderEditorBar();
-  this.renderTimeline();
-  this.renderChannels();
+  if(JSON.stringify(this.appliedOps)!==JSON.stringify(nextApplied)){
+   this.appliedOps=nextApplied;
+   this.syncEffectiveInspection(true);
+   this.renderEditorBar();
+   this.renderTimeline();
+   this.renderChannels();
+  }
+  const curStatus=(this.editorStatus.textContent??'').trim();
+  if(applied){
+   if(restoredOutcome){
+    this.setEditorStatus(restoredOutcome.text,restoredOutcome.error);
+   }
+  }else if(/^Applied [0-9a-f]{6,}…/.test(curStatus)||(curStatus.startsWith('Applied ')&&curStatus.includes(' with ')&&curStatus.includes('Reset returns to the inspected build'))){
+   this.setEditorStatus('',false);
+  }
  }
 
  syncApplied(applied:AppliedAnimation|null){
