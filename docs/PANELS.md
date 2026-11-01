@@ -397,6 +397,10 @@ are supported. No degrees or range are inferred from the art or the bone name.
 
 **Applied** is the eased value sent through published Play's `player.adjust` /
 `BoneAdjust`, before constraints and physics; **target** is the pointer's value.
+Each readout reserves monospace character width from its dial's own `[min, max]`
+range and display precision (rounded to two decimals, or scaled for sub-unit
+spans) so live values never change the pad's row wrapping or height; the number
+field and `data-value` retain the exact value.
 The number field edits the target, applies that exact value immediately and turns
 **Hold** on. Hold freezes the current applied values and cancels pending travel;
 **Reset 0** applies zero and holds it. Neither operation changes inspection time.
