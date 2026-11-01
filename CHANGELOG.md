@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.21.0](https://github.com/rig-c/review/compare/v0.20.0...v0.21.0) (2026-11-01)
+
+
+### Features
+
+* **animate:** a ruler, playhead and internal scroll for the timeline ([#257](https://github.com/rig-c/review/issues/257)) ([90ea3a9](https://github.com/rig-c/review/commit/90ea3a9c1816fa3158377c218a8f8ffcf023feca))
+* **animate:** edit curves in the Curves view, and close five dock defects ([#259](https://github.com/rig-c/review/issues/259)) ([36091e7](https://github.com/rig-c/review/commit/36091e79dec552df6057c802f6ea5aff59439bb4))
+* **animate:** edit keys in the dopesheet with a pending preview ([#255](https://github.com/rig-c/review/issues/255)) ([2572b92](https://github.com/rig-c/review/commit/2572b924546d9916d1fbf04f3792cdf70ddf95db))
+* **animate:** give the timeline its own panel ([#258](https://github.com/rig-c/review/issues/258)) ([fe38d31](https://github.com/rig-c/review/commit/fe38d3180aa624a47d32240e4bfef8bdf4a2c9a4))
+
 ## [0.20.0](https://github.com/rig-c/review/compare/v0.19.0...v0.20.0) (2026-10-31)
 
 
