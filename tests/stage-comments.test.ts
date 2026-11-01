@@ -1,6 +1,22 @@
 import {expect,test} from 'bun:test';
-import {readFile} from 'node:fs/promises';
-test('Comment is visible on both stage toolbars without a menu',async()=>{for(const file of ['web/index.html','web/compare.html']){const html=await readFile(file,'utf8');expect(html).toContain('id="stage-comment"');expect(html).toContain('Comment');}});
+import {readFile,readdir} from 'node:fs/promises';
+test('Comment is visible as one control on both stage toolbars with no reference to the removed list-toggle id',async()=>{
+ const removedId='stage-comment-'+'list-toggle';
+ for(const file of ['web/index.html','web/compare.html']){
+  const html=await readFile(file,'utf8');
+  expect(html).toContain('id="stage-comment"');
+  expect(html).toContain('Comment · C (0)');
+  expect(html).toContain('aria-controls="stage-comment-list"');
+  expect(html).not.toContain(removedId);
+ }
+ for(const dir of ['src','web','docs','skills/rig-review','tests']){
+  for(const entry of await readdir(dir,{ withFileTypes:true })){
+   if(!entry.isFile())continue;
+   const text=await readFile(`${dir}/${entry.name}`,'utf8');
+   expect(text).not.toContain(removedId);
+  }
+ }
+});
 
 import {drawnSlots,projectMark,unprojectMark,region,parseStageComment} from '../src/stage-comment.ts';
 import type {PosedFrame} from '@rig-c/play';
@@ -99,21 +115,25 @@ test('B/reference hashes, viewport and bookmark are independently bound; loopbac
 
 const {bindStageComments}=await import(process.env.RIG_REVIEW_COMMENTS_ADAPTER??'../web/stage-comments.ts');
 /** Event/DOM adapter control only; this does not claim browser pixels or native capture. */
-function commentUI(feedback:any[]=[]) {
+function commentUI(feedback:any[]=[],options:{locked?:(id:string)=>boolean;cropImpl?:()=>Promise<any>;canvasFactory?:()=>any}={}) {
  class Node {
-  children:Node[]=[];style:any={};dataset:Record<string,string>={};className='';textContent='';hidden=false;clientWidth=100;clientHeight=100;clientLeft=0;clientTop=0;captured=new Set<number>();attributes=new Map<string,string>();listeners=new Map<string,Function[]>();onclick:Function|null=null;
+  children:Node[]=[];parent:Node|null=null;style:any={};dataset:Record<string,string>={};className='';id='';textContent='';title='Comment · C';value='';placeholder='';type='';maxLength=0;hidden=false;disabled=false;readOnly=false;clientWidth=100;clientHeight=100;clientLeft=0;clientTop=0;captured=new Set<number>();attributes=new Map<string,string>();listeners=new Map<string,Function[]>();onclick:Function|null=null;onsubmit:Function|null=null;onkeydown:Function|null=null;
   classList={toggle:()=>{}};
-  append(...nodes:Node[]){this.children.push(...nodes);}after(..._nodes:Node[]){}replaceChildren(...nodes:Node[]){this.children=[...nodes];}remove(){}setAttribute(k:string,v:string){this.attributes.set(k,v);}closest(){return null;}focus(){}getBoundingClientRect(){return {left:0,top:0};}
-  addEventListener(k:string,f:Function){this.listeners.set(k,[...(this.listeners.get(k)??[]),f]);}removeEventListener(k:string,f:Function){this.listeners.set(k,(this.listeners.get(k)??[]).filter(fn=>fn!==f));}dispatch(k:string,e:any={}){for(const f of this.listeners.get(k)??[])f(e);}setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);this.dispatch('lostpointercapture',{pointerId:id});}
+  append(...nodes:Node[]){for(const n of nodes){n.parent=this;this.children.push(n);}}after(...nodes:Node[]){for(const n of nodes){n.parent=this;this.children.push(n);}}replaceChildren(...nodes:Node[]){this.children=[];this.append(...nodes);}remove(){if(this.parent)this.parent.children=this.parent.children.filter(n=>n!==this);}setAttribute(k:string,v:string){this.attributes.set(k,v);}getAttribute(k:string){return this.attributes.get(k)??null;}closest(){return null;}focus(){}getBoundingClientRect(){return {left:0,top:0};}
+  addEventListener(k:string,f:Function){this.listeners.set(k,[...(this.listeners.get(k)??[]),f]);}removeEventListener(k:string,f:Function){this.listeners.set(k,(this.listeners.get(k)??[]).filter(fn=>fn!==f));}dispatch(k:string,e:any={}){for(const f of this.listeners.get(k)??[])f(e);}async emit(k:string,e:any={}){await Promise.all((this.listeners.get(k)??[]).map(f=>f(e)));}setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);this.dispatch('lostpointercapture',{pointerId:id});}
  }
- const toggle=new Node(),listToggle=new Node(),toolbar=new Node(),workspace=new Node(),pane=new Node(),doc=new Node() as any,win=new Node(),saved=new Map<string,any>();let next:Function=()=>{};
+ const toggle=new Node(),toolbar=new Node(),workspace=new Node(),pane=new Node(),doc=new Node() as any,win=new Node(),saved=new Map<string,any>(),errors:string[]=[];let next:Function=()=>{},restores=0,changes=0;
  toolbar.closest=((selector:string)=>selector==='main'?workspace:null) as any;
- doc.createElement=()=>new Node();doc.getElementById=(id:string)=>id==='stage-comment'?toggle:listToggle;
- for(const [k,v]of Object.entries({document:doc,window:win,requestAnimationFrame:(f:Function)=>{next=f;return 1;},cancelAnimationFrame:()=>{}})){saved.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;}
+ doc.createElement=(tag:string)=>tag==='canvas'&&options.canvasFactory?options.canvasFactory():new Node();
+ doc.getElementById=(id:string)=>id==='stage-comment'?toggle:null;
+ doc.documentElement=new Node();
+ const prevGetComputedStyle=(globalThis as any).getComputedStyle;
+ for(const [k,v]of Object.entries({document:doc,window:win,requestAnimationFrame:(f:Function)=>{next=f;return 1;},cancelAnimationFrame:()=>{},getComputedStyle:()=>({getPropertyValue:()=>'#3b82f6',backgroundColor:'rgb(20, 24, 32)',backgroundImage:'none',backgroundSize:'auto',backgroundPosition:'0% 0%',display:'block',visibility:'visible',opacity:'1',filter:'none',transformOrigin:'0px 0px',transform:'matrix(1, 0, 0, 1, 0, 0)',zIndex:'0',width:'100px',height:'100px',mixBlendMode:'normal'})})){saved.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;}
  let pose:any={mode:'animate',camera:mark({sourceHash:'a'.repeat(64)}).camera,frame:{index:0,basis:'producer'},time:0,animation:'idle',turn:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,rig:'probe'};
- const tool=bindStageComments({toolbar:toolbar as any,viewports:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>({}),restore:async()=>{},feedback:()=>feedback,locked:()=>false,add:()=>{},changed:()=>{},error:()=>{},blocked:()=>false});
+ const tool=bindStageComments({toolbar:toolbar as any,viewports:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>mark({sourceHash:'a'.repeat(64)}).bookmark,restore:async()=>{restores++;},feedback:()=>feedback,locked:options.locked??(()=>false),add:(f:any)=>feedback.push(f),changed:()=>{changes++;},error:(m:string)=>errors.push(m),blocked:()=>false});
  const event=(extra:any={})=>({button:0,isPrimary:true,pointerId:7,clientX:50,clientY:50,target:new Node(),preventDefault(){},stopImmediatePropagation(){},...extra});
- return {pane,workspace,tool,pose,tick:()=>next(),down:()=>{toggle.onclick?.();pane.dispatch('pointerdown',event());},escape:()=>doc.dispatch('keydown',event({key:'Escape'})),blur:()=>win.dispatch('blur'),cleanup:()=>{tool.dispose();for(const [k,v]of saved)(globalThis as any)[k]=v;}};
+ const list=()=>workspace.children.find(n=>n.id==='stage-comment-list')!;
+ return {toggle,pane,workspace,list,tool,pose,errors,restores:()=>restores,changes:()=>changes,tick:()=>next(),down:()=>{if(!tool.active())toggle.onclick?.();pane.dispatch('pointerdown',event());},up:()=>pane.emit('pointerup',event()),key:(k:string)=>doc.dispatch('keydown',event({key:k})),escape:()=>doc.dispatch('keydown',event({key:'Escape'})),blur:()=>win.dispatch('blur'),cleanup:()=>{tool.dispose();for(const [k,v]of saved)(globalThis as any)[k]=v;if(prevGetComputedStyle===undefined)delete (globalThis as any).getComputedStyle;}};
 }
 test('comment list overlay lives outside the measured workspace stage chrome',()=>{const ui=commentUI();try{expect(ui.workspace.children).toHaveLength(1);expect(ui.workspace.children[0]!.className).toContain('stage-comment-list');}finally{ui.cleanup();}});
 test('actual stage comment painter hides a mark on a different animation at the same frame/time/turn',()=>{
@@ -163,4 +183,310 @@ test('actual CLI exports a large crop as openable path/hash/dimensions without b
  }
  expect(JSON.stringify(saved)).toBe(before);expect(((await readSession(p,state)).feedback[0]!.context as any).comment.crop.png).toBe(c.crop.png);console.log('LARGE_CROP_EXPORT '+JSON.stringify(figures));
  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+import {createCanvas} from '@napi-rs/canvas';
+import {inflateSync} from 'node:zlib';
+import {validateCommentCrop} from '../src/comment-crops.ts';
+import {InspectionDraftStore,recoverSession,sessionFingerprint,parseBookmark,type InspectionBookmark,type LocalInspectionDraft} from '../web/inspection-persistence.ts';
+
+function realCanvasNode(width=100,height=100){
+ const c=createCanvas(width,height);
+ return {
+  get width(){return c.width;},
+  set width(v:number){c.width=v;},
+  get height(){return c.height;},
+  set height(v:number){c.height=v;},
+  getContext:(kind:'2d')=>c.getContext(kind),
+  toDataURL:(mime?:'image/png')=>c.toDataURL(mime as any),
+  raw:c,
+ };
+}
+
+test('#276 Bar 2: one control and one composer handle create, pin/row restore, edit, delete and submitted read-only; planted two-path controls fail',async()=>{
+ const rows:any[]=[],lockedIds=new Set<string>();
+ const sourceCanvas=createCanvas(100,100),sctx=sourceCanvas.getContext('2d');
+ sctx.fillStyle='#223344';sctx.fillRect(0,0,100,100);
+ (sourceCanvas as any).getBoundingClientRect=()=>({left:0,top:0,width:100,height:100});
+ const ui=commentUI(rows,{locked:id=>lockedIds.has(id),canvasFactory:()=>realCanvasNode(100,100)});
+ try{
+  (ui.pane as any).querySelectorAll=()=>[];
+  ui.pose.capture={pane:ui.pane,images:true,canvas:sourceCanvas,backend:'canvas2d'};
+  expect(ui.toggle.textContent).toBe('Comment · C (0)');
+  expect(ui.list().hidden).toBe(true);
+  expect(ui.tool.active()).toBe(false);
+
+  // Turning it on enters comment mode and opens the list; turning it off or Escape leaves both.
+  ui.toggle.onclick?.();
+  expect(ui.tool.active()).toBe(true);
+  expect(ui.list().hidden).toBe(false);
+  expect(ui.toggle.getAttribute('aria-pressed')).toBe('true');
+  expect(ui.toggle.getAttribute('aria-expanded')).toBe('true');
+  ui.toggle.onclick?.();
+  expect(ui.tool.active()).toBe(false);
+  expect(ui.list().hidden).toBe(true);
+  ui.key('c');
+  expect(ui.tool.active()).toBe(true);
+  expect(ui.list().hidden).toBe(false);
+  ui.escape();
+  expect(ui.tool.active()).toBe(false);
+  expect(ui.list().hidden).toBe(true);
+
+  // Create a comment through the composer.
+  ui.down();
+  await ui.up();
+  let composer=ui.pane.children.find(n=>n.className.includes('stage-comment-composer'))!;
+  expect(composer).toBeDefined();
+  expect(composer.children[1]!.textContent).toBe('Enter saves · Escape cancels');
+  expect(composer.children.find(n=>n.className==='stage-comment-delete')).toBeUndefined();
+  composer.children[0]!.value='Sleeve cuff gap';
+  await composer.onsubmit!({preventDefault(){}});
+  expect(rows).toHaveLength(1);
+  expect(rows[0].summary).toBe('Sleeve cuff gap');
+  expect(ui.toggle.textContent).toBe('Comment · C (1)');
+
+  // List row has only one button (no separate Edit or Delete button on the row).
+  const item=ui.list().children.find(n=>n.className==='stage-comment-item')!;
+  const rowButtons=item.children.filter(n=>n.type==='button'||n.onclick);
+  expect(rowButtons).toHaveLength(1);
+  expect(item.children.some(n=>n.textContent==='Edit'||n.textContent==='Delete')).toBe(false);
+
+  // Turn comment mode off: pins stay visible on stage, and clicking a pin enters the mode, restores pose and opens composer.
+  ui.toggle.onclick?.();
+  expect(ui.tool.active()).toBe(false);
+  expect(ui.list().hidden).toBe(true);
+  ui.tick();
+  const layer=ui.pane.children[0]!;
+  expect(layer.children).toHaveLength(2);
+  const pin=layer.children[1]!;
+  expect(pin.className).toContain('stage-comment-pin');
+  await pin.onclick!();
+  expect(ui.tool.active()).toBe(true);
+  expect(ui.list().hidden).toBe(false);
+  expect(ui.restores()).toBe(1);
+  composer=ui.pane.children.find(n=>n.className.includes('stage-comment-composer'))!;
+  expect(composer).toBeDefined();
+  expect(composer.children[0]!.value).toBe('Sleeve cuff gap');
+  expect(composer.children[0]!.readOnly).toBe(false);
+  expect(composer.children.find(n=>n.className==='stage-comment-delete')).toBeDefined();
+
+  // Edit via the same composer.
+  composer.children[0]!.value='Updated sleeve cuff gap';
+  await composer.onsubmit!({preventDefault(){}});
+  expect(rows).toHaveLength(1);
+  expect(rows[0].summary).toBe('Updated sleeve cuff gap');
+  expect(ui.list().children.find(n=>n.className==='stage-comment-item')!.children[0]!.textContent).toContain('Updated sleeve cuff gap');
+
+  // Clicking the list row restores pose and opens the composer; Delete inside composer removes the comment.
+  const rowBtn=ui.list().children.find(n=>n.className==='stage-comment-item')!.children[0]!;
+  await rowBtn.onclick!();
+  expect(ui.restores()).toBe(2);
+  composer=ui.pane.children.find(n=>n.className.includes('stage-comment-composer'))!;
+  const delBtn=composer.children.find(n=>n.className==='stage-comment-delete')!;
+  delBtn.onclick!();
+  expect(rows).toHaveLength(0);
+  expect(ui.toggle.textContent).toBe('Comment · C (0)');
+
+  // Submitted (locked) marks open read-only in the composer without a Delete button.
+  const lockedComment=mark({sourceHash:'a'.repeat(64)});lockedComment.animation='idle';
+  rows.push({id:'locked-1',frameStart:0,frameEnd:0,target:{kind:'rig',name:'probe'},category:'defect',summary:'Submitted shoulder note',context:{animation:'idle',time:0,frame:0,comment:lockedComment}});
+  lockedIds.add('locked-1');
+  ui.tool.refresh();ui.tick();
+  const lockedRowBtn=ui.list().children.find(n=>n.className==='stage-comment-item')!.children[0]!;
+  await lockedRowBtn.onclick!();
+  composer=ui.pane.children.find(n=>n.className.includes('stage-comment-composer'))!;
+  expect(composer.children[0]!.value).toBe('Submitted shoulder note');
+  expect(composer.children[0]!.readOnly).toBe(true);
+  expect(composer.children[0]!.getAttribute('aria-readonly')).toBe('true');
+  expect(composer.children[1]!.textContent).toBe('Read only · Escape closes');
+  expect(composer.children.find(n=>n.className==='stage-comment-delete')).toBeUndefined();
+  expect(ui.tool.draft()).toBe(false);
+  composer.children[0]!.value='Attempted mutation';
+  await composer.onsubmit!({preventDefault(){}});
+  expect(rows[0].summary).toBe('Submitted shoulder note');
+  expect(composer.children[2]!.textContent).toContain('COMMENT_SUBMITTED');
+
+  // Planted control for read-only hint text: old strings fail the read-only hint gate.
+  const isReadOnlyHintValid=(hint:string)=>hint==='Read only · Escape closes';
+  expect(isReadOnlyHintValid(composer.children[1]!.textContent)).toBe(true);
+  expect(isReadOnlyHintValid('Submitted · read-only · Escape cancels')).toBe(false);
+  expect(isReadOnlyHintValid('Enter saves · Escape cancels')).toBe(false);
+
+  // Planted controls that exhibit the old two-path behaviour (row Edit/Delete buttons, or pin not entering mode/composer) must fail the Bar 2 gate.
+  const checkOneComposerContract=(state:{rowButtons:number;rowHasEditOrDelete:boolean;pinEntersMode:boolean;pinOpensComposer:boolean;composerHasDelete:boolean})=>
+   state.rowButtons===1&&!state.rowHasEditOrDelete&&state.pinEntersMode&&state.pinOpensComposer&&state.composerHasDelete;
+  expect(checkOneComposerContract({rowButtons:1,rowHasEditOrDelete:false,pinEntersMode:true,pinOpensComposer:true,composerHasDelete:true})).toBe(true);
+  expect(checkOneComposerContract({rowButtons:3,rowHasEditOrDelete:true,pinEntersMode:true,pinOpensComposer:true,composerHasDelete:false})).toBe(false);
+  expect(checkOneComposerContract({rowButtons:1,rowHasEditOrDelete:false,pinEntersMode:false,pinOpensComposer:false,composerHasDelete:true})).toBe(false);
+ }finally{ui.cleanup();}
+});
+
+test('#276 Bar 4 & Bar 5: feedback output is byte-identical for a stored review with comments and stored 0.24.1 drafts still load',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'comment-0241-compat-'));
+ try{
+  const source=join(root,'package'),state=join(root,'state');
+  await mkdir(source);
+  await writeFile(join(source,'review.json'),JSON.stringify({schema:'rig-review/1',id:'compat-rig',title:'Compat rig',revision:'1'}));
+  const p=await loadReview(source);
+  const cSetup=mark(p);cSetup.mode='setup';cSetup.bookmark.selection.inspector='rig';
+  const cAnimate=mark(p);cAnimate.mode='animate';cAnimate.bookmark.selection.inspector='playback';
+  const feedback:any[]=[
+   {id:'comment-setup',frameStart:0,frameEnd:0,target:{kind:'rig',name:'compat-rig'},category:'defect',summary:'Setup seam check',context:{animation:null,time:0,frame:0,interval:{frameStart:0,frameEnd:0,inclusive:true},comment:cSetup}},
+   {id:'comment-animate',frameStart:0,frameEnd:0,target:{kind:'rig',name:'compat-rig'},category:'defect',summary:'Animate wrist check',context:{animation:null,time:0,frame:0,interval:{frameStart:0,frameEnd:0,inclusive:true},comment:cAnimate}},
+  ];
+  const sessionToSave={...freshSession(p),status:'changes-requested' as const,feedback};
+  const saved=await saveSession(p,sessionToSave,state);
+  const expectedJson=JSON.stringify(feedbackWithCommentGroups(commentCropPaths(saved,state)),null,2)+'\n';
+  const expectedIssue=formatFeedbackIssues(commentCropPaths(saved,state));
+  for(const [format,expected]of [['json',expectedJson],['issue',expectedIssue]] as const){
+   const proc=Bun.spawn([process.execPath,'src/cli.ts','feedback',source,'--format',format],{env:{...process.env,RIG_REVIEW_STATE_DIR:state},stdout:'pipe',stderr:'pipe'});
+   const out=await new Response(proc.stdout).text(),err=await new Response(proc.stderr).text();
+   expect(await proc.exited,err).toBe(0);
+   expect(out).toBe(expected);
+  }
+
+  // Bar 5: Stored 0.24.1 local draft in localStorage loads unchanged into session and stage comments.
+  const baseline=freshSession(p);
+  const draftSession={...freshSession(p),feedback:[feedback[1]]};
+  const bookmark0241:InspectionBookmark=cAnimate.bookmark;
+  const storageMap=new Map<string,string>();
+  const memoryStorage:Storage={
+   get length(){return storageMap.size;},
+   getItem:(k:string)=>storageMap.get(k)??null,
+   setItem:(k:string,v:string)=>storageMap.set(k,v),
+   removeItem:(k:string)=>storageMap.delete(k),
+   key:(i:number)=>[...storageMap.keys()][i]??null,
+   clear(){throw new Error('Global storage clear is forbidden');},
+  };
+  const draftRecord0241:LocalInspectionDraft={
+   schema:'rig-review-local-draft/1',
+   sourceHash:p.sourceHash,
+   baseline:await sessionFingerprint(baseline),
+   savedAt:'2026-10-30T00:00:00.000Z',
+   reviewDirty:true,
+   bookmark:bookmark0241,
+   inputs:{},
+   session:draftSession,
+   ui:{},
+  };
+  const warnings:string[]=[];
+  const store=new InspectionDraftStore('single:'+p.manifest.id,bookmark0241.binding,s=>warnings.push(s),memoryStorage);
+  expect(store.write(draftRecord0241)).toBe(true);
+  const loadedDraft=store.read();
+  expect(loadedDraft).toEqual(draftRecord0241);
+  expect(warnings).toEqual([]);
+  const recovered=recoverSession(loadedDraft!.session,baseline);
+  expect(recovered?.feedback).toHaveLength(1);
+  expect(recovered?.feedback[0]?.summary).toBe('Animate wrist check');
+  expect(parseBookmark(loadedDraft!.bookmark)).toEqual(bookmark0241);
+  const ui=commentUI(recovered!.feedback);
+  try{
+   expect(ui.toggle.textContent).toBe('Comment · C (1)');
+   expect(ui.list().children.filter(n=>n.className==='stage-comment-item')).toHaveLength(1);
+  }finally{ui.cleanup();}
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('#276 Bar 6 & Bar 10: docs, README row and skill describe one control and crop fitting while reader-side limits stay enforced',async()=>{
+ const readme=await readFile('README.md','utf8');
+ const panels=await readFile('docs/PANELS.md','utf8');
+ const workflows=await readFile('docs/WORKFLOWS.md','utf8');
+ const contract=await readFile('docs/REVIEW_PACKAGE.md','utf8');
+ const skill=await readFile('skills/rig-review/SKILL.md','utf8');
+ expect(readme).toContain('| Mark, read and edit stage comments | Comment · C (n) | [Stage comments — PANELS](docs/PANELS.md#stage-comments) |');
+ expect(skill).toContain('**Comment · C (n)**');
+ expect(workflows).toContain('**Comment · C (n)**');
+ expect(panels).toContain('**Comment · C (n)**');
+ expect(panels).toContain('re-renders at a smaller scale until the encoded PNG fits');
+ expect(panels).toContain('still opens the list read-only');
+ expect(contract).toContain('re-renders at a smaller scale when needed until the encoded PNG data URL fits inside the 200000-character limit');
+ expect(contract).toContain('without disabling the button');
+
+ // Reader-side record format limits (<= 200000 data-URL chars, <= 1024 px per side) remain unchanged.
+ const c=mark({sourceHash:'a'.repeat(64)});
+ expect(()=>parseStageComment({...c,crop:{...c.crop,png:'data:image/png;base64,'+'A'.repeat(200000)}})).toThrow('COMMENT_INVALID: bounded PNG crop');
+ expect(()=>parseStageComment({...c,crop:{...c.crop,width:1025}})).toThrow('COMMENT_INVALID: bounded PNG crop');
+});
+
+test('#276 Bar 8 & Bar 9: full-viewport region over noisy art scales down inside the 200000-char limit with matching PNG dimensions and visible mark; old single-pass control fails with COMMENT_CROP_LIMIT',async()=>{
+ const vw=768,vh=768;
+ const noisy=createCanvas(vw,vh),nctx=noisy.getContext('2d');
+ const img=nctx.createImageData(vw,vh);
+ let seed=0x9e3779b9;
+ for(let i=0;i<img.data.length;i+=4){
+  seed=(Math.imul(seed,1664525)+1013904223)>>>0;
+  img.data[i]=seed&0xff;
+  img.data[i+1]=(seed>>>8)&0xff;
+  img.data[i+2]=(seed>>>16)&0xff;
+  img.data[i+3]=255;
+ }
+ nctx.putImageData(img,0,0);
+ (noisy as any).getBoundingClientRect=()=>({left:0,top:0,width:vw,height:vh});
+
+ // Planted old single-pass control at 768x768 throws COMMENT_CROP_LIMIT.
+ const oldSinglePass=()=>{
+  const out=createCanvas(vw,vh),ctx=out.getContext('2d');
+  ctx.drawImage(noisy,0,0);
+  const url=out.toDataURL('image/png');
+  if(url.length>200000)throw new Error('COMMENT_CROP_LIMIT: mark a smaller region (PNG limit 150 KiB)');
+  return url;
+ };
+ expect(()=>oldSinglePass()).toThrow('COMMENT_CROP_LIMIT');
+
+ // Measure both a full-viewport box mark (768x768) and a point mark (0x0) over the noisy viewport through bindStageComments.
+ const rows:any[]=[];
+ const ui=commentUI(rows,{canvasFactory:()=>realCanvasNode(vw,vh)});
+ try{
+  ui.pane.clientWidth=vw;ui.pane.clientHeight=vh;
+  (ui.pane as any).querySelectorAll=()=>[];
+  ui.pose.camera={space:'world',center:{x:0,y:0},zoom:1,viewport:{width:vw,height:vh},visible:{x:-vw/2,y:-vh/2,width:vw,height:vh}};
+  ui.pose.capture={pane:ui.pane,images:true,canvas:noisy,backend:'canvas2d'};
+
+  for(const [label,start,end]of [['full-viewport',{x:0,y:0},{x:vw,y:vh}],['point',{x:384,y:384},{x:384,y:384}]] as const){
+   if(!ui.tool.active())ui.toggle.onclick?.();
+   ui.pane.dispatch('pointerdown',{button:0,isPrimary:true,pointerId:7,clientX:start.x,clientY:start.y,target:{closest:()=>null},preventDefault(){},stopImmediatePropagation(){}});
+   ui.pane.dispatch('pointermove',{button:0,isPrimary:true,pointerId:7,clientX:end.x,clientY:end.y,target:{closest:()=>null},preventDefault(){},stopImmediatePropagation(){}});
+   await ui.pane.emit('pointerup',{button:0,isPrimary:true,pointerId:7,clientX:end.x,clientY:end.y,target:{closest:()=>null},preventDefault(){},stopImmediatePropagation(){}});
+   const composer=ui.pane.children.find(n=>n.className.includes('stage-comment-composer'))!;
+   composer.children[0]!.value=`Noisy ${label}`;
+   await composer.onsubmit!({preventDefault(){}});
+  }
+  expect(rows).toHaveLength(2);
+  for(const f of rows){
+   const c=parseStageComment(f.context.comment);
+   expect(c.crop.png.length).toBeLessThanOrEqual(200000);
+   const bytes=validateCommentCrop(c);
+   const ihdrWidth=bytes.readUInt32BE(16),ihdrHeight=bytes.readUInt32BE(20);
+   expect(c.crop.width).toBe(ihdrWidth);
+   expect(c.crop.height).toBe(ihdrHeight);
+   expect(c.crop.width).toBeLessThan(vw);
+
+   // Decode PNG scanlines to verify the #3b82f6 (RGB 59, 130, 246) mark stroke is visible at the reduced scale.
+   const idat:Buffer[]=[];
+   let off=8;
+   while(off<bytes.length){
+    const len=bytes.readUInt32BE(off),type=bytes.toString('ascii',off+4,off+8);
+    if(type==='IDAT')idat.push(bytes.subarray(off+8,off+8+len));
+    off+=12+len;
+   }
+   const raw=inflateSync(Buffer.concat(idat)),stride=ihdrWidth*4+1;
+   const recon=Buffer.alloc(ihdrHeight*ihdrWidth*4);
+   const paeth=(a:number,b:number,c0:number)=>{const p=a+b-c0,pa=Math.abs(p-a),pb=Math.abs(p-b),pc=Math.abs(p-c0);return pa<=pb&&pa<=pc?a:pb<=pc?b:c0;};
+   let linkPixels=0;
+   for(let y=0;y<ihdrHeight;y++){
+    const filter=raw[y*stride]!;
+    for(let i=0;i<ihdrWidth*4;i++){
+     const v=raw[y*stride+1+i]!,a=i>=4?recon[y*ihdrWidth*4+i-4]!:0,b=y>0?recon[(y-1)*ihdrWidth*4+i]!:0,c0=y>0&&i>=4?recon[(y-1)*ihdrWidth*4+i-4]!:0;
+     recon[y*ihdrWidth*4+i]=(v+(filter===1?a:filter===2?b:filter===3?(a+b)>>1:filter===4?paeth(a,b,c0):0))&0xff;
+    }
+    for(let x=0;x<ihdrWidth;x++){
+     const idx=(y*ihdrWidth+x)*4;
+     if(recon[idx]===59&&recon[idx+1]===130&&recon[idx+2]===246&&recon[idx+3]===255)linkPixels++;
+    }
+   }
+   const paddedSide=f.summary.includes('point')?48:vw;
+   expect(linkPixels).toBeGreaterThan(10);
+   console.log('CROP_FIT_MEASUREMENT '+JSON.stringify({summary:f.summary,width:c.crop.width,height:c.crop.height,scale:+(c.crop.width/paddedSide).toFixed(6),dataUrlChars:c.crop.png.length,linkPixels}));
+  }
+ }finally{ui.cleanup();}
 });

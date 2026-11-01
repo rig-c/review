@@ -28,7 +28,7 @@ every rule lives.
 2. **Inspect, rebuild in scratch and submit (person in the browser):**
    `rig-review` never opens a browser itself. Only the person holding the
    `#cap=…` tab can inspect panels, run `Apply · Rebuild` through the installed
-   producer (`rig-parts`, `rig-pose`) into scratch, drag **Comment · C** crops,
+   producer (`rig-parts`, `rig-pose`) into scratch, place, read or edit **Comment · C (n)** crops,
    choose **approved** or **changes-requested** in **Write review**, and click
    **Submit review** — [Feedback ownership](https://github.com/rig-c/review/blob/main/docs/WORKFLOWS.md#feedback-ownership).
 3. **Act on what comes back (agent):**
