@@ -8,9 +8,11 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38BDF8.svg?style=flat-square" alt="MIT"/></a>
 </p>
 
-# review
+<a id="review"></a>
 
-A reusable local workspace for a person to inspect an agent's rig output, compare source references, and export feedback ready to become an issue. The person receives a package or opens an existing output folder; the agent does not build a new viewer for each rig.
+# @rig-c/review
+
+A local workspace for a person to inspect an agent's rig output, compare source references, and export feedback ready to become an issue. The person receives a package or opens an existing output folder; the agent does not build a new viewer for each rig.
 
 The app provides one inspection workspace for setup geometry and motion, compiled-model playback through `@rig-c/play`, local image, video and pose-sequence references, checkpoints, audio audition, and saved structured feedback. **The producer writes motion in scratch; review never authors keys.** Navigation changes inspection time; it never retimes, and review never writes the package's `motion.json`: motion edits are data (config patches, pose maps, retarget flags) the installed producer turns into a scratch build. Meshes are edited in setup space and rebuilt by the producer (`rig-parts remesh --delta`, #100/#135); weights and source art are not edited.
 
