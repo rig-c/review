@@ -30,6 +30,7 @@ import {historyRow,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retarg
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
+import {sourceTextContent,tr} from './i18n.ts';
 import {bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
 import {connectControl} from './control.ts';
 import {connectLiveWindow} from './live-connection.ts';
@@ -712,10 +713,10 @@ function renderProposals(): void {
   el('feedback-applied-check').hidden = !unchecked; text('feedback-applied-check', unchecked ? `${unchecked} · Submit refuses this review; delete the entry written on that build or Apply a build that passes check.` : '');
   warnings.textContent = session.feedbackWarnings.length ? `${session.feedbackWarnings.length} validation warnings in existing feedback · original records are preserved. Review the marked entries, delete them and add valid replacements before submitting. The saved session that rig-review feedback exports keeps both the original records and warnings.` : '';
   for (const feedback of session.feedback) {
-    const item = document.createElement('div'); item.className = 'proposal-item'; const title = document.createElement('strong'); title.textContent = `${feedback.category} · ${feedback.target.kind}:${feedback.target.name} · ${feedbackTimingLabel(feedback)}`; const description = document.createElement('span'); description.textContent = feedback.summary;
+    const item = document.createElement('div'); item.className = 'proposal-item'; const title = document.createElement('strong'); title.className = 'feedback-heading'; title.textContent = `${feedback.category} · ${feedback.target.kind}:${feedback.target.name} · ${feedbackTimingLabel(feedback)}`; const description = document.createElement('span'); description.className = 'feedback-summary'; description.textContent = feedback.summary;
     item.append(title, description);
     for (const warning of session.feedbackWarnings.filter(value => value.id === feedback.id)) { const note = document.createElement('p'); note.className = 'hint'; note.textContent = `Validation warning · ${warning.error}`; item.append(note); }
-    const details = document.createElement('details'), summary = document.createElement('summary'), source = document.createElement('pre'); summary.textContent = 'Saved feedback and inspection context'; source.textContent = JSON.stringify(feedback, null, 2); details.append(summary, source);
+    const details = document.createElement('details'), summary = document.createElement('summary'), source = document.createElement('pre'); summary.textContent = 'Saved feedback and inspection context'; source.className = 'feedback-json'; source.textContent = JSON.stringify(feedback, null, 2); details.append(summary, source);
     const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Delete'; remove.onclick = () => { session.feedback = session.feedback.filter(item => item.id !== feedback.id); session.feedbackWarnings = session.feedbackWarnings.filter(warning => warning.id !== feedback.id); markDirty(); renderProposals(); };
     item.append(details);if((feedback.context as any)?.comment?.schema!=='rig-review-comment/1'||!submittedBaseline?.feedback.some(f=>f.id===feedback.id))item.append(remove); area.append(item);
   }
@@ -910,7 +911,7 @@ function bind(): void {
   inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],changed:()=>persistence?.save()});
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
-  meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(text),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
+  meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(tr(text)),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
   weightsView=bindWeightsView({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,inspector:()=>selectedInspector(),slot:()=>parts?.value()?.slot??null,
    model:()=>data.manifest.model?partModel??undefined:null,setup:slot=>assets?setupPoseMesh(assets,partModel,slot,document.createElement('div')):null,changed:()=>redrawOverlay(false),
    token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
@@ -1531,7 +1532,7 @@ function renderAppliedBlocks(restoredJob:AnyJobView|null=null):void {
   appliedOnStage?.schema==='rig-review-applied/5'?appliedOnStage:null,
   restored?.panel==='animation'?{text:restored.text,error:restored.error}:null,
  );
- const statusText=(id:string)=>document.getElementById(id)?.textContent??'';
+ const statusText=(id:string)=>sourceTextContent(document.getElementById(id));
  const reconciled=reconcilePanelStatuses(
   {
    chest:chestEditor?.noticeText()??'',
@@ -1544,7 +1545,7 @@ function renderAppliedBlocks(restoredJob:AnyJobView|null=null):void {
    physics:statusText('physics-apply-status'),
    idle:statusText('idle-apply-status'),
    retarget:statusText('retarget-status'),
-   animation:document.querySelector('[data-animation-editor-status]')?.textContent??'',
+   animation:sourceTextContent(document.querySelector('[data-animation-editor-status]')),
   },
   appliedOnStage,
   restored,

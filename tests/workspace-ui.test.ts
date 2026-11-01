@@ -56,8 +56,11 @@ test('Settings changes future sync/idle defaults only; transient source state an
  const app=openHost();try{
   const held={cameraSync:false,idleRepeat:false,time:.75,part:'held'},before=structuredClone(held);app.choose('settings-sync',false);app.choose('settings-idle',false);expect(held).toEqual(before);expect(app.ui.defaults()).toMatchObject({defaultCameraSync:false,defaultIdleRepeat:false});expect(app.theme()).toBe('dark');
   app.choose('settings-theme','light');expect(app.theme()).toBe('light');
+  app.choose('settings-language','ko');expect(app.ui.defaults().language).toBe('ko');expect(held).toEqual(before);
   const other=new WorkspacePreferenceStore({storage:{getItem:key=>app.values.get(key)??null,setItem:(key,value)=>app.values.set(key,value)},events:null,writer:'other'});other.update({panels:{leftWidth:400,rightWidth:500}});const event=new Event('storage');Object.assign(event,{key:workspacePreferenceKey,newValue:app.values.get(workspacePreferenceKey)});app.events.dispatchEvent(event);app.flush();expect(app.ui.defaults().panels.leftWidth).toBe(400);expect(held).toEqual(before);
-  app.get('settings-reset').click();expect(app.ui.defaults()).toMatchObject({theme:'light',defaultCameraSync:false,defaultIdleRepeat:false,panels:{leftWidth:170,rightWidth:260,inspectorHeight:350}});expect(held).toEqual(before);other.dispose();
+  app.get('settings-reset').click();expect(app.ui.defaults()).toMatchObject({theme:'light',language:'ko',defaultCameraSync:false,defaultIdleRepeat:false,panels:{leftWidth:170,rightWidth:260,inspectorHeight:350}});expect(held).toEqual(before);
+  app.choose('settings-language','system');expect(app.ui.defaults().language).toBe('system');
+  other.dispose();
  }finally{app.close();}
 });
 

@@ -268,3 +268,9 @@ main{position:relative}.stage-comment-mode{cursor:crosshair}.stage-comment-mode 
 .animation-bone-pick[data-pose-editable=true]{border-color:var(--pass);background:var(--pass)}
 .animation-bone-pick[aria-pressed=true]{outline:3px solid var(--rv-bone-selected);outline-offset:2px}
 #motion-tools>.animation-inspection{flex-basis:100%;min-width:0}
+.workspace-settings>.sticky-header{gap:6px}
+.workspace-settings[data-collapsed=true]>.sticky-header{margin-bottom:0;padding-bottom:0;border-bottom:0}
+.settings-toggle{display:inline-flex;align-items:center;gap:4px;min-height:22px;padding:1px 7px;font-size:11px;font-weight:700;border-radius:4px}
+.settings-toggle::before{content:"▾";font-size:10px;line-height:1}
+.settings-toggle[aria-expanded=true]::before{content:"▴"}
+:root:lang(ko){word-break:keep-all;overflow-wrap:break-word}
