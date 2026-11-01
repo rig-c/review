@@ -41,10 +41,10 @@ import { bindRequirementsPanel, type RequirementsCatalogView, type RequirementsJ
 import { bindRetargetPanel, type PoseMap, type RetargetPanel } from './retarget-panel.ts';
 import type { RetargetFlags } from '../src/retarget.ts';
 import {
-  historyRow, isPatchJob, recordFor, refusedText, retargetStage, undoControl,
+  historyRow, isPatchJob, recordFor, refusedText, restoredOutcomeForJob, retargetStage, undoControl,
   animationAppliedRecord, animationOutcomeLine, appliedRecord, deltaAppliedRecord, deltaOutcomeLine, designatedRegions, handoffText,
   landmarksRequest, seedLandmarks, makePatch, outcomeLine, patchAppliedRecord, patchOutcomeLine,
-  pickPart, runRebuild, seedFields, stageModel, retargetAppliedRecord, retargetOutcomeLine, stripPendingAfter,
+  pickBustPart, pickPart, runRebuild, seedFields, stageModel, retargetAppliedRecord, retargetOutcomeLine, stripPendingAfter,
   type AnimationJobView, type AnimationRequestBody, type AppliedHistoryView, type UndoView, type AnyJobView, type AppliedAnimation, type AppliedDelta, type AppliedPatch,
   type AppliedRecord, type AppliedRetarget, type DeltaJobView, type DeltaRequestBody, type ConfigPatch,
   type PatchJobView, type RebuildJobView, type RebuildRefusal, type RebuildRequestBody, type RebuildStatusView,
@@ -52,7 +52,7 @@ import {
 } from './rebuild-client.ts';
 import { patchRoute } from '../src/retune-route.ts';
 import type { CheckSummary } from '../src/applied-context.ts';
-import { appliedBlockOps, recordBlock, staleReadouts } from '../src/applied-blocks.ts';
+import { appliedBuildOwner, appliedPanelOps, dropNoticeForPanel, reconcilePanelStatuses, recordBlock, staleReadouts, type RebuildPanelKind } from '../src/applied-blocks.ts';
 import { compareSeekStep } from '../src/compare-playhead.ts';
 import { composeAdjust, PhysicsPreview } from './preview.ts';
 import {
@@ -632,6 +632,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       currentState().chestInputs = snapshotChestInputs();
     }
     chestEditor?.sync(); meshEditor?.sync(); weightsView?.sync(); bonesPanel?.sync(); cutsPanel?.sync(); clothPanel?.sync();
+    renderDropNotices();
     host.redrawOverlays(false);
   }
 
@@ -788,11 +789,100 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     }
   }
 
-  function renderAppliedBlocks(): void {
+  function chestPartForNotice(): string | null {
+    const status = currentState().rebuildStatus;
+    if (!status) return null;
+    if (chestEditor?.mode() === 'landmarks') {
+      const read = chestEditor.landmarks();
+      return 'derived' in read ? pickBustPart(status, read.derived.regions) : pickBustPart(status, []);
+    }
+    const designated = designatedRegions(chestField);
+    return 'regions' in designated ? pickPart(status, designated.regions) : status.parts.length === 1 ? status.parts[0]!.name : null;
+  }
+
+  function renderDropNotices(): void {
     const state = currentState();
-    const on = appliedBlockOps(state.appliedOnStage);
+    const selectedPart = host.parts()?.value();
+    const slot = selectedPart?.side === pickedSide ? selectedPart.slot : null;
+    const meshPart = meshPanel?.part() ?? slot;
+    const chestPart = chestPartForNotice();
+    for (const node of document.querySelectorAll<HTMLElement>('[data-rebuild-drop]')) {
+      const panel = node.dataset.rebuildDrop as RebuildPanelKind;
+      const part = panel === 'mesh' ? meshPart : panel === 'mesh-edit' ? slot : panel === 'chest' ? chestPart : null;
+      let notice = '';
+      let isError = false;
+      try {
+        notice = dropNoticeForPanel(state.appliedOnStage, panel, { part, handoff: state.rebuildStatus });
+      } catch (error) {
+        notice = errorText(error);
+        isError = true;
+      }
+      node.textContent = notice;
+      node.hidden = !notice;
+      node.classList.toggle('error', isError);
+    }
+  }
+
+  function renderAppliedBlocks(restoredJob: AnyJobView | null = null): void {
+    const state = currentState();
+    const on = appliedPanelOps(state.appliedOnStage);
     cutsPanel?.applied(on.cuts); clothPanel?.applied(on.cloth);
-    animationPanel?.reconcileStageApplied(state.appliedOnStage?.schema === 'rig-review-applied/5' ? state.appliedOnStage : null);
+    physicsPanel?.applied(on.physics); bonesPanel?.applied(on.bones);
+    idlePanel?.applied(on.idle); rigFieldsPanel?.applied(on['rig-fields']);
+    const restored = restoredJob ? restoredOutcomeForJob(restoredJob) : null;
+    animationPanel?.reconcileStageApplied(
+      state.appliedOnStage?.schema === 'rig-review-applied/5' ? state.appliedOnStage : null,
+      restored?.panel === 'animation' ? { text: restored.text, error: restored.error } : null,
+    );
+    const statusText = (id: string) => document.getElementById(id)?.textContent ?? '';
+    const reconciled = reconcilePanelStatuses(
+      {
+        chest: chestEditor?.noticeText() ?? '',
+        'mesh-edit': meshEditor?.statusNote() ?? '',
+        mesh: statusText('mesh-status'),
+        bones: statusText('bones-status'),
+        'rig-fields': statusText('rig-fields-status'),
+        cuts: statusText('cuts-status'),
+        cloth: statusText('cloth-status'),
+        physics: statusText('physics-apply-status'),
+        idle: statusText('idle-apply-status'),
+        retarget: statusText('retarget-status'),
+        animation: document.querySelector('[data-animation-editor-status]')?.textContent ?? '',
+      },
+      state.appliedOnStage,
+      restored,
+    );
+    const owner = appliedBuildOwner(state.appliedOnStage);
+    if (owner?.panel !== 'chest') {
+      if (reconciled.chest !== (chestEditor?.noticeText() ?? '')) chestEditor?.notify(null, false, []);
+    } else if (restored?.panel === 'chest') {
+      chestEditor?.notify(restored.text, restored.error, []);
+    }
+    if (owner?.panel !== 'mesh-edit') {
+      if (reconciled['mesh-edit'] !== (meshEditor?.statusNote() ?? '')) meshEditor?.setStatusNote('', false);
+    } else if (restored?.panel === 'mesh-edit') {
+      meshEditor?.setStatusNote(restored.text, restored.error);
+    }
+    const syncPanelStatus = (panel: RebuildPanelKind, id: string, set: (t: string, e: boolean) => void, clearExtra?: () => void) => {
+      const cur = statusText(id), next = reconciled[panel];
+      if (owner?.panel !== panel) {
+        if (next !== cur) { set('', false); clearExtra?.(); }
+      } else if (restored?.panel === panel) {
+        set(restored.text, restored.error);
+      }
+    };
+    syncPanelStatus('mesh', 'mesh-status', (t, e) => meshPanel?.status(t, e), () => { if (!state.stripPending) { meshPanel?.counts([]); meshPanel?.readout([]); } });
+    syncPanelStatus('bones', 'bones-status', (t, e) => bonesPanel?.status(t, e));
+    syncPanelStatus('rig-fields', 'rig-fields-status', (t, e) => rigFieldsPanel?.status(t, e), () => rigFieldsPanel?.readout([]));
+    syncPanelStatus('cuts', 'cuts-status', (t, e) => cutsPanel?.status(t, e));
+    syncPanelStatus('cloth', 'cloth-status', (t, e) => clothPanel?.status(t, e));
+    syncPanelStatus('physics', 'physics-apply-status', (t, e) => physicsPanel?.status(t, e), () => physicsPanel?.readout([]));
+    syncPanelStatus('idle', 'idle-apply-status', (t, e) => idlePanel?.status(t, e), () => idlePanel?.readout([]));
+    syncPanelStatus('retarget', 'retarget-status', (t, e) => retargetPanel?.status(t, e), () => retargetPanel?.result(null));
+    if (restored?.panel === 'retarget' && restoredJob && (restoredJob as RetargetJobView).kind === 'retarget') {
+      retargetPanel?.result(restoredJob as RetargetJobView);
+    }
+    renderDropNotices();
     for (const block of staleReadouts(state.readoutStage, state.appliedOnStage)) {
       (block === 'cuts' ? cutsPanel : clothPanel)?.shown(null);
     }
@@ -1130,6 +1220,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     applyEnvironment();
     if (side === pickedSide) {
       refreshAnimationInspection();
+      weightsView?.refresh();
+      meshEditor?.selectionChanged();
     }
   }
 
@@ -1267,6 +1359,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       await swapPickedSide(side, new URL(host.route(next.url), location.href).href, host.route(`/compare-rebuild/${side}/${next.id}/`), next.hash);
       state.appliedOnStage = deltaAppliedRecord(result); state.stageCheck = null; stageChanged(side, { kind: 'apply', via: 'delta' });
       if (pickedSide === side) {
+        meshEditor?.setStatusNote(outcome.text, false);
         const draft = el<HTMLTextAreaElement>('rebuild-applied'); draft.value = JSON.stringify(state.appliedOnStage); draft.dispatchEvent(new Event('input', { bubbles: true }));
       } else if (state.animationState) {
         state.animationState.appliedOps = [];
@@ -1381,7 +1474,6 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         host.message(result.error, true);
         return result;
       }
-      let ops: PatchOp[] | null = null;
       if (result.status === 'inspected') {
         await swapPickedSide(side, state.inspectedModel.url, state.inspectedModel.prefix, state.inspectedModel.sha256);
         state.appliedOnStage = null; state.stageCheck = null;
@@ -1390,14 +1482,12 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         await swapPickedSide(side, new URL(host.route(job.build.modelUrl), location.href).href, host.route(`/compare-rebuild/${side}/${job.id}/`), job.build.modelHash);
         state.appliedOnStage = recordFor(job);
         state.stageCheck = (job as PatchJobView).kind === 'patch' ? { lines: [...job.lines], check: (job as PatchJobView).check } : null;
-        if ((job as PatchJobView).kind === 'patch') ops = (job as PatchJobView).request.patch.ops;
       }
       stageChanged(side, { kind: 'undo' });
       state.appliedHistory = result.history;
       const textMsg = `Undid ${result.undone.slice(0, 12)}… on Build ${side.toUpperCase()} · ${result.history.depth} applied record(s) left`;
       if (pickedSide === side) {
-        physicsPanel?.applied(ops); idlePanel?.applied(ops); rigFieldsPanel?.applied(ops); bonesPanel?.applied(ops);
-        animationPanel?.reconcileStageApplied(state.appliedOnStage?.schema === 'rig-review-applied/5' ? state.appliedOnStage : null);
+        renderAppliedBlocks(result.status === 'built' ? result.job : null);
         if (animationPanel) state.animationState = animationPanel.exportSideState();
         const restored = result.status === 'built' && isPatchJob(result.job) ? result.job : null, block = recordBlock(state.appliedOnStage);
         cutsPanel?.shown(block === 'cuts' ? restored : null); clothPanel?.shown(block === 'cloth' ? restored : null);
@@ -2428,7 +2518,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     },
     mesh: {
       part: () => meshPanel?.part() ?? null,
-      select: (part: string) => meshPanel?.select(part),
+      select: (part: string) => { meshPanel?.select(part); renderDropNotices(); },
       entry: () => meshPanel?.entry() ?? null,
       configEntry: () => meshPanel?.configEntry() ?? null,
       set: (path: string[], value: import('../src/config-patch.ts').JsonValue | undefined) => meshPanel?.set(path, value),
@@ -2670,6 +2760,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       animationPanel?.fromParts(activeSlot);
       meshPanel?.select(activeSlot);
       requirementsPanel?.selectionChanged();
+      renderDropNotices();
     },
     overlayInputFor: side => {
       if (side !== pickedSide) {

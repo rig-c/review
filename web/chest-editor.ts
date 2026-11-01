@@ -164,6 +164,8 @@ export interface ChestEditor {active:()=>boolean;flashing:(side:BustSide)=>boole
  armed:()=>LandmarkKey|null;
  /** Hold a status line (null clears it); `log` is the producer's latest lines. */
  notify:(text:string|null,error?:boolean,log?:readonly string[])=>void;
+ /** The current notice text (empty string when none). */
+ noticeText:()=>string;
  /** Apply is disabled while a rebuild runs; Reset is enabled while a rebuilt build is on the stage. */
  rebuildState:(state:{busy:boolean;applied:boolean})=>void}
 
@@ -288,6 +290,7 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
  return {
   active:()=>active,flashing:side=>flash.has(side),sync,mode,landmarks:()=>readLandmarks(read),armed:()=>{const l=readLandmarks(read);return nextLandmark(armed,'missing' in l?l.missing:[]);},
   notify:(text,error=false,lines)=>{notice=text===null?null:{text,error};if(lines){log.textContent=lines.join('\n');log.hidden=!lines.length;log.scrollTop=log.scrollHeight;}sync();},
+  noticeText:()=>notice?.text??'',
   rebuildState:({busy,applied})=>{apply.disabled=busy;apply.setAttribute('aria-busy',String(busy));reset.disabled=busy||!applied;},
   dispose:()=>{observer.disconnect();if(flashTimer)clearTimeout(flashTimer);host.pane.removeEventListener('pointerdown',down,true);host.pane.removeEventListener('pointermove',move,true);for(const type of ['pointerup','pointercancel','lostpointercapture'] as const)host.pane.removeEventListener(type,end,true);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);window.removeEventListener('blur',blur);},
  };

@@ -7,6 +7,8 @@ import {ellipsePolygon} from '../src/chest-regions.ts';
 import type {BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
 import {APPLIED_ANIMATION_SCHEMA,APPLIED_DELTA_SCHEMA,APPLIED_PATCH_SCHEMA,APPLIED_RETARGET_SCHEMA,filesDiffText,type AppliedAnimation,type AppliedAssembled,type AppliedDelta,type AppliedPatch,type AppliedRetarget,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
+import {appliedBuildOwner,type RestoredPanelOutcome} from '../src/applied-blocks.ts';
+import {meshApplyOutcome} from '../src/mesh-entry.ts';
 import type {AnimationSourceOp} from '../src/animation-ops.ts';
 import type {MotionSummary,RetargetFlags,RetargetLine,RetargetRecord} from '../src/retarget.ts';
 export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,AppliedRetarget,AppliedAnimation,AnimationSourceOp,CheckSummary,BustSpec};
@@ -296,4 +298,19 @@ export function stripPendingAfter<P>(pending:P|null,change:StageChange<P>):P|nul
  if(change.kind==='load')return change.row;
  if(change.kind==='refused')return pending;
  return null;
+}
+
+/** #250: the owning panel and status outcome line for a built job (used when Undo restores a previous Apply onto the stage). */
+export function restoredOutcomeForJob(job:AnyJobView):(RestoredPanelOutcome&{error:boolean})|null {
+ if(job.status!=='built'||!job.build)return null;
+ const owner=appliedBuildOwner(recordFor(job));
+ if(!owner)return null;
+ const outcome=
+  owner.panel==='chest'?outcomeLine(job as RebuildJobView)
+  :owner.panel==='mesh-edit'?deltaOutcomeLine(job as DeltaJobView)
+  :owner.panel==='mesh'?meshApplyOutcome(job as PatchJobView)
+  :owner.panel==='retarget'?retargetOutcomeLine(job as RetargetJobView)
+  :owner.panel==='animation'?animationOutcomeLine(job as AnimationJobView)
+  :patchOutcomeLine(job as PatchJobView);
+ return {panel:owner.panel,...(owner.part?{part:owner.part}:{}),text:outcome.text,error:outcome.error};
 }

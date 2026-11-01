@@ -83,6 +83,7 @@ export function bindRetargetPanel(deps:RetargetPanelDeps):RetargetPanel {
  const legScale={on:checkbox('retarget-leg-scale-on'),min:numberInput('retarget-leg-scale-min',0.8,'0.01','leg scale min'),max:numberInput('retarget-leg-scale-max',1.05,'0.01','leg scale max')};
  const plant=checkbox('retarget-plant-feet'),raised=checkbox('retarget-raised-by-head'),carry=checkbox('retarget-carry-idle');
  const apply=make('button',{id:'retarget-apply',type:'button',className:'primary',textContent:'Apply · Retarget',disabled:true}),reset=make('button',{id:'retarget-reset',type:'button',textContent:'Reset'});
+ const dropNotice=make('span',{className:'hint rebuild-drop-notice',hidden:true});dropNotice.setAttribute('data-rebuild-drop','retarget');
  const statusLine=make('p',{id:'retarget-status',className:'hint'});statusLine.setAttribute('aria-live','polite');
  const logView=make('pre',{id:'retarget-log',className:'retarget-log',hidden:true}),refusals=make('ul',{id:'retarget-refusals',className:'requirements-refusals'}),readings=make('ul',{id:'retarget-lines',className:'readings-worst'});readings.setAttribute('aria-label','Retarget lines');
  body.append(
@@ -95,7 +96,7 @@ export function bindRetargetPanel(deps:RetargetPanelDeps):RetargetPanel {
   make('div',{className:'row'},labelled('flip °',flip.on),flip.value,labelled('short',short.on),short.value,labelled('min score',minScore.on),minScore.value),
   make('div',{className:'row'},labelled('bends',bends),labelled('tolerance °',tolerance.on),tolerance.value,labelled('leg scale',legScale.on),legScale.min,legScale.max),
   make('div',{className:'row'},labelled('plant feet',plant),labelled('stance',stance.on),stance.value,labelled('raised by head',raised),labelled('carry idle',carry)),
-  make('div',{className:'row'},apply,reset),statusLine,refusals,logView,readings,
+  make('div',{className:'row'},apply,reset,dropNotice),statusLine,refusals,logView,readings,
  );
 
  const bonesOf=()=>status?.bones??[];
