@@ -373,3 +373,427 @@ test('stage comments (#276) switch live between en and ko including hints, refus
   for(const [k,v]of saved)(globalThis as any)[k]=v;
  }
 });
+
+test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comments, checkpoint notes, and finding inputs keep catalogue-matching reviewer text byte-identical in ko while old-code controls fail',async()=>{
+ const mainSource=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+ const compareSource=await readFile(new URL('../web/compare.ts',import.meta.url),'utf8');
+
+ // Extract the real renderProposals() from web/main.ts and renderFeedback() from web/compare.ts.
+ const rpStart=mainSource.indexOf('function renderProposals(): void {');
+ const rpEnd=mainSource.indexOf('\nfunction propose(',rpStart);
+ expect(rpStart).toBeGreaterThan(0);
+ expect(rpEnd).toBeGreaterThan(rpStart);
+ const rpSource=mainSource.slice(rpStart,rpEnd).replace('function renderProposals(): void {','function renderProposals() {');
+
+ const rfStart=compareSource.indexOf('function renderFeedback(): void {');
+ const rfEnd=compareSource.indexOf('\nfunction download(',rfStart);
+ expect(rfStart).toBeGreaterThan(0);
+ expect(rfEnd).toBeGreaterThan(rfStart);
+ const rfSource=compareSource.slice(rfStart,rfEnd).replace('function renderFeedback(): void {','function renderFeedback() {');
+
+ // Minimal DOM tree supporting applyDomI18n (querySelectorAll('*') + createTreeWalker(root, 4)).
+ class TestTextNode {
+  nodeType=3;
+  nodeValue:string;
+  parentElement:TestElement|null=null;
+  constructor(val:string){this.nodeValue=val;}
+ }
+ class TestElement {
+  nodeType=1;
+  tagName:string;
+  id='';
+  className='';
+  hidden=false;
+  disabled=false;
+  readOnly=false;
+  type='';
+  value='';
+  maxLength=0;
+  clientWidth=100;
+  clientHeight=100;
+  clientLeft=0;
+  clientTop=0;
+  parentElement:TestElement|null=null;
+  ownerDocument:any=null;
+  children:TestElement[]=[];
+  childNodes:(TestElement|TestTextNode)[]=[];
+  attrs=new Map<string,string>();
+  style:Record<string,string>={};
+  dataset:Record<string,string>={};
+  onclick:Function|null=null;
+  onsubmit:Function|null=null;
+  onkeydown:Function|null=null;
+  classList={
+   contains:(c:string)=>this.className.split(/\s+/).includes(c),
+   toggle:()=>{},
+  };
+  constructor(tag:string,ownerDoc?:any){
+   this.tagName=tag.toUpperCase();
+   this.ownerDocument=ownerDoc??null;
+  }
+  get title():string{return this.attrs.get('title')??'';}
+  set title(v:string){if(v)this.attrs.set('title',v);else this.attrs.delete('title');}
+  get placeholder():string{return this.attrs.get('placeholder')??'';}
+  set placeholder(v:string){if(v)this.attrs.set('placeholder',v);else this.attrs.delete('placeholder');}
+  get textContent():string{
+   return this.childNodes.map(n=>n.nodeType===3?(n as TestTextNode).nodeValue:(n as TestElement).textContent).join('');
+  }
+  set textContent(v:string){
+   this.children=[];
+   this.childNodes=[];
+   if(v!==''){
+    const tn=new TestTextNode(v);
+    tn.parentElement=this;
+    this.childNodes.push(tn);
+   }
+  }
+  getAttribute(k:string):string|null{return this.attrs.get(k)??null;}
+  setAttribute(k:string,v:string):void{this.attrs.set(k,v);}
+  removeAttribute(k:string):void{this.attrs.delete(k);}
+  append(...nodes:(TestElement|TestTextNode)[]):void{
+   for(const n of nodes){
+    n.parentElement=this;
+    this.childNodes.push(n);
+    if(n.nodeType===1)this.children.push(n as TestElement);
+   }
+  }
+  after(...nodes:TestElement[]):void{
+   if(!this.parentElement)return;
+   this.parentElement.append(...nodes);
+  }
+  replaceChildren(...nodes:(TestElement|TestTextNode)[]):void{
+   this.children=[];
+   this.childNodes=[];
+   this.append(...nodes);
+  }
+  remove():void{
+   if(!this.parentElement)return;
+   this.parentElement.children=this.parentElement.children.filter(c=>c!==this);
+   this.parentElement.childNodes=this.parentElement.childNodes.filter(c=>c!==this);
+  }
+  closest(selector:string):TestElement|null{
+   const tags=selector.split(',').map(s=>s.trim().toUpperCase());
+   let cur:TestElement|null=this;
+   while(cur){
+    if(tags.includes(cur.tagName))return cur;
+    if(selector==='p.hint'&&cur.tagName==='P'&&cur.classList.contains('hint'))return cur;
+    if(selector==='main'&&cur.tagName==='MAIN')return cur;
+    cur=cur.parentElement;
+   }
+   return null;
+  }
+  querySelectorAll(sel:string):TestElement[]{
+   const out:TestElement[]=[];
+   const walk=(el:TestElement)=>{
+    for(const c of el.children){
+     if(sel==='*'||c.classList.contains(sel.replace(/^\./,''))||c.tagName===sel.toUpperCase())out.push(c);
+     walk(c);
+    }
+   };
+   walk(this);
+   return out;
+  }
+  focus():void{}
+  getBoundingClientRect(){return {left:0,top:0};}
+  addEventListener():void{}
+  removeEventListener():void{}
+ }
+ function makeTestDoc(){
+  const doc:any={};
+  const root=new TestElement('HTML',doc);
+  doc.documentElement=root;
+  doc.createElement=(tag:string)=>new TestElement(tag,doc);
+  doc.addEventListener=()=>{};
+  doc.removeEventListener=()=>{};
+  doc.getElementById=(id:string)=>{
+   if(root.id===id)return root;
+   return root.querySelectorAll('*').find((e:TestElement)=>e.id===id)??null;
+  };
+  doc.createTreeWalker=(start:TestElement)=>{
+   const textNodes:TestTextNode[]=[];
+   const collect=(el:TestElement)=>{
+    for(const n of el.childNodes){
+     if(n.nodeType===3)textNodes.push(n as TestTextNode);
+     else collect(n as TestElement);
+    }
+   };
+   collect(start);
+   let idx=-1;
+   return {nextNode:()=>idx+1<textNodes.length?textNodes[++idx]!:null};
+  };
+  return {doc,root};
+ }
+
+ // Catalogue string that translates to '현재 포즈에서 그려지지 않음' in ko when unexempted.
+ const catalogSummary='Not drawn at current pose';
+ expect(tr(catalogSummary,'ko')).toBe('현재 포즈에서 그려지지 않음');
+ const compoundCatalogSummary='Check · Not drawn at current pose · end';
+ expect(tr(compoundCatalogSummary,'ko')).toBe('검사 · 현재 포즈에서 그려지지 않음 · end');
+ const catalogTargetName='Idle preview unavailable';
+ expect(tr(`defect · slot:${catalogTargetName} · F0–F12`,'ko')).toBe('defect · slot:Idle preview 사용 불가 · F0–F12');
+
+ try{
+  setLanguagePreference('ko');
+
+  // --- Surface 1: Single-package renderProposals() in web/main.ts ---
+  const runProposalSurface=(fnSource:string)=>{
+   const {doc,root}=makeTestDoc();
+   const proposalList=doc.createElement('div');proposalList.id='proposal-list';
+   const warnings=doc.createElement('p');warnings.id='feedback-warnings';
+   const appliedCheck=doc.createElement('p');appliedCheck.id='feedback-applied-check';
+   root.append(proposalList,warnings,appliedCheck);
+   const feedbackEntry={
+    id:'fb-single-1',
+    category:'defect',
+    target:{kind:'slot',name:catalogTargetName},
+    frameStart:0,
+    frameEnd:12,
+    summary:catalogSummary,
+    context:{note:compoundCatalogSummary},
+   };
+   const session={feedback:[feedbackEntry],feedbackWarnings:[]};
+   const jsSource=new Bun.Transpiler({loader:'ts'}).transformSync(fnSource);
+   const run=new Function('scope',`with(scope){${jsSource}; renderProposals();}`);
+   run({
+    comments:null,
+    el:(id:string)=>doc.getElementById(id),
+    text:(id:string,v:string)=>{const n=doc.getElementById(id);if(n)n.textContent=v;},
+    session,
+    appliedCheckRefusal:()=>null,
+    document:doc,
+    feedbackTimingLabel:(f:any)=>`F${f.frameStart}–F${f.frameEnd}`,
+    submittedBaseline:null,
+    markDirty:()=>{},
+    updateSavedState:()=>{},
+   });
+   applyDomI18n(doc as unknown as Document);
+   const item=proposalList.children[0]!;
+   const heading=item.children[0]!;
+   const summarySpan=item.children[1]!;
+   const details=item.children[2]!;
+   const detailsSummary=details.children[0]!;
+   const jsonPre=details.children[1]!;
+   const deleteBtn=item.children[3]!;
+   return {
+    headingText:heading.textContent,
+    summaryText:summarySpan.textContent,
+    jsonText:jsonPre.textContent,
+    expectedJson:JSON.stringify(feedbackEntry,null,2),
+    detailsHeadingText:detailsSummary.textContent,
+    deleteBtnText:deleteBtn.textContent,
+   };
+  };
+
+  const actualSingle=runProposalSurface(rpSource);
+  expect(actualSingle.summaryText).toBe(catalogSummary);
+  expect(actualSingle.headingText).toBe(`defect · slot:${catalogTargetName} · F0–F12`);
+  expect(actualSingle.jsonText).toBe(actualSingle.expectedJson);
+  expect(actualSingle.detailsHeadingText).toBe('저장된 피드백 및 점검 컨텍스트');
+  expect(actualSingle.deleteBtnText).toBe('삭제');
+
+  // Planted old-code control for Surface 1: unclassed <span> and <strong> as before the fix.
+  const oldRpSource=rpSource
+   .replace("title.className = 'feedback-heading'; ",'')
+   .replace("description.className = 'feedback-summary'; ",'');
+  expect(oldRpSource).not.toBe(rpSource);
+  const oldSingle=runProposalSurface(oldRpSource);
+  expect(oldSingle.summaryText).toBe('현재 포즈에서 그려지지 않음');
+  expect(oldSingle.headingText).toBe('defect · slot:Idle preview 사용 불가 · F0–F12');
+
+  // --- Surface 2: Compare renderFeedback() in web/compare.ts ---
+  const runCompareFeedbackSurface=(fnSource:string)=>{
+   const {doc,root}=makeTestDoc();
+   const feedbackList=doc.createElement('div');feedbackList.id='feedback-list';
+   const warnings=doc.createElement('p');warnings.id='feedback-warnings';
+   const appliedCheck=doc.createElement('p');appliedCheck.id='feedback-applied-check';
+   root.append(feedbackList,warnings,appliedCheck);
+   const feedbackEntry={
+    id:'fb-compare-1',
+    side:'a',
+    category:'defect',
+    target:{kind:'slot',name:catalogTargetName},
+    frameStart:0,
+    frameEnd:12,
+    summary:catalogSummary,
+    context:{note:compoundCatalogSummary},
+   };
+   const session={feedback:[feedbackEntry],feedbackWarnings:[]};
+   const jsSource=new Bun.Transpiler({loader:'ts'}).transformSync(fnSource);
+   const run=new Function('scope',`with(scope){${jsSource}; renderFeedback();}`);
+   run({
+    comments:null,
+    el:(id:string)=>doc.getElementById(id),
+    session,
+    appliedCheckRefusal:()=>null,
+    document:doc,
+    submittedBaseline:null,
+    markDirty:()=>{},
+    savedState:()=>{},
+   });
+   applyDomI18n(doc as unknown as Document);
+   const row=feedbackList.children[0]!;
+   const heading=row.children[0]!;
+   const summarySpan=row.children[1]!;
+   const details=row.children[2]!;
+   const detailsHeading=details.children[0]!;
+   const jsonPre=details.children[1]!;
+   const deleteBtn=row.children[3]!;
+   return {
+    headingText:heading.textContent,
+    summaryText:summarySpan.textContent,
+    jsonText:jsonPre.textContent,
+    expectedJson:JSON.stringify(feedbackEntry,null,2),
+    detailsHeadingText:detailsHeading.textContent,
+    deleteBtnText:deleteBtn.textContent,
+   };
+  };
+
+  const actualCompare=runCompareFeedbackSurface(rfSource);
+  expect(actualCompare.summaryText).toBe(catalogSummary);
+  expect(actualCompare.headingText).toBe(`A · defect · slot:${catalogTargetName} · F0–12`);
+  expect(actualCompare.jsonText).toBe(actualCompare.expectedJson);
+  expect(actualCompare.detailsHeadingText).toBe('저장된 피드백 및 점검 컨텍스트');
+  expect(actualCompare.deleteBtnText).toBe('삭제');
+
+  // Planted old-code control for Surface 2: unclassed <span> and <strong> as before the fix.
+  const oldRfSource=rfSource
+   .replace("title.className = 'feedback-heading'; ",'')
+   .replace("summary.className = 'feedback-summary'; ",'');
+  expect(oldRfSource).not.toBe(rfSource);
+  const oldCompare=runCompareFeedbackSurface(oldRfSource);
+  expect(oldCompare.summaryText).toBe('현재 포즈에서 그려지지 않음');
+  expect(oldCompare.headingText).toBe('A · defect · slot:Idle preview 사용 불가 · F0–12');
+
+  // --- Surfaces 3, 4, 5: Stage comments drawer row button, pin title/aria-label, and composer input ---
+  {
+   const {doc,root}=makeTestDoc();
+   const main=doc.createElement('main');
+   const toolbar=doc.createElement('div');
+   const toggle=doc.createElement('button');toggle.id='stage-comment';toggle.title='Comment · C (active mesh editor keeps C)';
+   toolbar.append(toggle);
+   const pane=doc.createElement('div');pane.clientWidth=100;pane.clientHeight=100;
+   main.append(toolbar,pane);
+   root.append(main);
+
+   const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABHNCSVQICAgIfAhkiAAAAAFzUkdCAK7OHOkAAAALSURBVAiZY2AAAgAABQABYlUyiAAAAABJRU5ErkJggg==';
+   const sha='b'.repeat(64);
+   const camera={space:'world' as const,center:{x:0,y:0},zoom:1,viewport:{width:100,height:100},visible:{x:-50,y:-50,width:100,height:100}};
+   const bookmark={schema:'rig-review-inspection/1',binding:{mode:'single',sourceHash:sha,rigs:[null]},time:0,animation:'idle',theme:'dark',layers:{images:true,meshes:false,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:camera,a:null,b:null,reference:null}},selection:{inspector:'playback'}};
+   const commentRecord={schema:'rig-review-comment/1',mode:'animate' as const,viewport:'rig' as const,frame:{index:0,basis:'producer' as const},time:0,animation:'idle',sourceHash:sha,modelHash:null,referenceHash:null,referenceId:null,camera,screen:{x:40,y:40,width:0,height:0},world:{x:0,y:0,width:0,height:0},slots:[],crop:{path:`comment-crops/${sha}.png`,sha256:sha,png:'data:image/png;base64,'+png,width:1,height:1},bookmark};
+   const feedbackRows:any[]=[{id:'sc-1',frameStart:0,frameEnd:0,target:{kind:'rig',name:'probe'},category:'defect',summary:catalogSummary,context:{animation:'idle',time:0,frame:0,comment:commentRecord}}];
+
+   const savedGlobals=new Map<string,any>();
+   for(const [k,v]of Object.entries({document:doc,window:root,requestAnimationFrame:()=>1,cancelAnimationFrame:()=>{}})){
+    savedGlobals.set(k,(globalThis as any)[k]);
+    (globalThis as any)[k]=v;
+   }
+   const tool=bindStageComments({
+    toolbar:toolbar as any,
+    viewports:{rig:pane as any},
+    pose:()=>({mode:'animate',camera,frame:{index:0,basis:'producer'},time:0,animation:'idle',turn:null,sourceHash:sha,modelHash:null,referenceHash:null,referenceId:null,rig:'probe'}),
+    pause:async()=>{},
+    bookmark:()=>bookmark,
+    restore:async()=>{},
+    feedback:()=>feedbackRows,
+    locked:()=>false,
+    add:f=>feedbackRows.push(f),
+    changed:()=>{},
+    error:()=>{},
+    refusal:()=>null,
+    blocked:()=>false,
+   });
+   try{
+    const list=main.children.find((n:TestElement)=>n.id==='stage-comment-list')!;
+    const item=list.children.find((n:TestElement)=>n.className==='stage-comment-item')!;
+    const rowBtn=item.children[0]!;
+    await rowBtn.onclick!();
+    applyDomI18n(doc as unknown as Document);
+
+    // Surface 3: Stage comment drawer row button preserves catalogue-matching summary in ko.
+    const koItem=list.children.find((n:TestElement)=>n.className==='stage-comment-item')!;
+    const koRowBtn=koItem.children[0]!;
+    expect(koRowBtn.className).toBe('stage-comment-summary');
+    expect(koRowBtn.textContent).toBe(`1 · ANIMATE · RIG · F0 (producer) · ${catalogSummary}`);
+
+    // Planted old-code control for Surface 3: unexempt row button gets its trailing summary translated by ' · ' splitting.
+    const unexemptRowBtn=doc.createElement('button');
+    unexemptRowBtn.textContent=`1 · ANIMATE · RIG · F0 (producer) · ${catalogSummary}`;
+    root.append(unexemptRowBtn);
+    applyDomI18n(doc as unknown as Document);
+    expect(unexemptRowBtn.textContent).toBe('1 · ANIMATE · RIG · F0 (producer) · 현재 포즈에서 그려지지 않음');
+
+    // Surface 4: Stage comment pin title and aria-label preserve catalogue-matching summary in ko.
+    const layer=pane.children.find((n:TestElement)=>n.className==='stage-comment-layer')!;
+    const pin=layer.children.find((n:TestElement)=>n.className.includes('stage-comment-pin'))!;
+    expect(pin.title).toBe(catalogSummary);
+    expect(pin.getAttribute('aria-label')).toBe(`코멘트 1: ${catalogSummary}`);
+
+    // Planted old-code control for Surface 4: pin without 'stage-comment-pin' exemption has its title rewritten in ko.
+    const unexemptPin=doc.createElement('button');
+    unexemptPin.className='stage-comment-ui';
+    unexemptPin.title=catalogSummary;
+    root.append(unexemptPin);
+    applyDomI18n(doc as unknown as Document);
+    expect(unexemptPin.title).toBe('현재 포즈에서 그려지지 않음');
+
+    // Surface 5: Stage comment composer input keeps catalogue-matching summary in .value while localizing placeholder/aria-label.
+    const composer=pane.children.find((n:TestElement)=>n.className.includes('stage-comment-composer'))!;
+    const composerInput=composer.children[0]!;
+    expect(composerInput.value).toBe(catalogSummary);
+    expect(composerInput.placeholder).toBe('이 지점에 대해 설명하세요…');
+    expect(composerInput.getAttribute('aria-label')).toBe('코멘트 내용');
+
+    // Planted old-code control for Surface 5: passing composer summary through tr() in ko rewrites reviewer words.
+    expect(tr(composerInput.value,'ko')).toBe('현재 포즈에서 그려지지 않음');
+   }finally{
+    tool.dispose();
+    for(const [k,v]of savedGlobals)(globalThis as any)[k]=v;
+   }
+  }
+
+  // --- Surface 6: Checkpoint review notes (<textarea id="checkpoint-note">) ---
+  {
+   const {doc,root}=makeTestDoc();
+   const noteArea=doc.createElement('textarea');
+   noteArea.id='checkpoint-note';
+   noteArea.placeholder='Describe the part, conditions and what looks wrong.';
+   noteArea.value=catalogSummary;
+   noteArea.textContent=catalogSummary;
+   root.append(noteArea);
+
+   applyDomI18n(doc as unknown as Document);
+   expect(noteArea.value).toBe(catalogSummary);
+   expect(noteArea.textContent).toBe(catalogSummary);
+   expect(noteArea.placeholder).toBe('파츠, 조건 및 무엇이 잘못되었는지 설명하세요.');
+
+   // Planted old-code control for Surface 6: an unexempt element holding the same text node is rewritten to ko.
+   const unexemptNote=doc.createElement('div');
+   unexemptNote.textContent=catalogSummary;
+   root.append(unexemptNote);
+   applyDomI18n(doc as unknown as Document);
+   expect(unexemptNote.textContent).toBe('현재 포즈에서 그려지지 않음');
+  }
+
+  // --- Surface 7: Finding form inputs (#feedback-summary, #feedback-target-name, #summary, #target-name) ---
+  {
+   const {doc,root}=makeTestDoc();
+   const singleSummary=doc.createElement('input');singleSummary.id='feedback-summary';singleSummary.placeholder='e.g. The left wrist moves outside the sleeve';singleSummary.value=catalogSummary;
+   const singleTarget=doc.createElement('input');singleTarget.id='feedback-target-name';singleTarget.placeholder='Actual bone or slot name';singleTarget.value=catalogSummary;
+   const compareSummary=doc.createElement('input');compareSummary.id='summary';compareSummary.placeholder='One-line summary';compareSummary.value=catalogSummary;
+   const compareTarget=doc.createElement('input');compareTarget.id='target-name';compareTarget.placeholder='Exact bone, slot or rig name';compareTarget.value=catalogSummary;
+   root.append(singleSummary,singleTarget,compareSummary,compareTarget);
+
+   applyDomI18n(doc as unknown as Document);
+   expect(singleSummary.value).toBe(catalogSummary);
+   expect(singleTarget.value).toBe(catalogSummary);
+   expect(compareSummary.value).toBe(catalogSummary);
+   expect(compareTarget.value).toBe(catalogSummary);
+   expect(singleSummary.placeholder).toBe('예: 왼쪽 손목이 소매 밖으로 벗어남');
+   expect(singleTarget.placeholder).toBe('실제 본 또는 슬롯 이름');
+   expect(compareSummary.placeholder).toBe('한 줄 요약');
+   expect(compareTarget.placeholder).toBe('정확한 본, 슬롯 또는 리그 이름');
+  }
+ }finally{
+  setLanguagePreference('system');
+ }
+});

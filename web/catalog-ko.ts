@@ -680,6 +680,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Entry": "항목",
   "Environment": "환경",
   "Environment unchanged: {0}": "환경 변경 없음: {0}",
+  "Exact bone, slot or rig name": "정확한 본, 슬롯 또는 리그 이름",
   "Exact frame selection unavailable: requestVideoFrameCallback required; seconds playback remains available.": "정확한 프레임 선택 불가: requestVideoFrameCallback이 필요합니다. 초 단위 재생은 계속 사용할 수 있습니다.",
   "Exact frame selection unavailable: {0}": "정확한 프레임 선택 불가: {0}",
   "Exact inspection seconds": "정확한 검사 시간(초)",

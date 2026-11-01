@@ -680,6 +680,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Entry": "Entry",
   "Environment": "Environment",
   "Environment unchanged: {0}": "Environment unchanged: {0}",
+  "Exact bone, slot or rig name": "Exact bone, slot or rig name",
   "Exact frame selection unavailable: requestVideoFrameCallback required; seconds playback remains available.": "Exact frame selection unavailable: requestVideoFrameCallback required; seconds playback remains available.",
   "Exact frame selection unavailable: {0}": "Exact frame selection unavailable: {0}",
   "Exact inspection seconds": "Exact inspection seconds",

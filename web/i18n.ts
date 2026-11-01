@@ -465,6 +465,9 @@ function isExemptElement(el: Element | null): boolean {
     const cls = typeof cur.className === 'string' ? cur.className : '';
     if (
       cls.includes('feedback-summary') ||
+      cls.includes('feedback-heading') ||
+      cls.includes('feedback-json') ||
+      cls.includes('stage-comment-summary') ||
       cls.includes('part-slot-name') ||
       cls.includes('animation-lane-label') ||
       cls.includes('animation-tree-bone-name') ||
@@ -559,7 +562,11 @@ function applyElementI18n(el: Element, lang: ResolvedLanguage): void {
 function applyTextNodeI18n(node: Node, lang: ResolvedLanguage): void {
   const parent = node.parentElement;
   if (!parent || isExemptElement(parent)) return;
-  if (parent.tagName?.toUpperCase() === 'P' && parent.classList?.contains('hint') && elementHintSource.has(parent)) {
+  const parentTagUpper = parent.tagName?.toUpperCase();
+  if (parentTagUpper === 'PRE' || parentTagUpper === 'TEXTAREA' || parent.closest?.('pre, textarea')) {
+    return;
+  }
+  if (parentTagUpper === 'P' && parent.classList?.contains('hint') && elementHintSource.has(parent)) {
     return;
   }
   const raw = node.nodeValue;
