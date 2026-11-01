@@ -20,6 +20,7 @@ import {freshSession,saveSession,readSession,sessionFile} from '../src/session.t
 import {readFeedbackSession} from '../src/session-history.ts';
 import {commentCropPaths} from '../src/comment-crops.ts';
 import {feedbackWithCommentGroups,formatFeedbackIssues} from '../src/feedback-export.ts';
+import {bindStageComments} from '../web/stage-comments.ts';
 
 test('Bar 1: English and Korean catalogues hold the exact same key and placeholder set, and a planted missing key fails it',()=>{
  expect(()=>assertCatalogParity(enCatalog,koCatalog)).not.toThrow();
@@ -52,14 +53,13 @@ test('Bar 2: checkWebHardcodedStrings passes on web/, lists every exemption with
  expect(clean.ok).toBe(true);
  expect(clean.violations).toEqual([]);
 
- // Every exemption has a non-empty reason, including the #276 stage-comments exemptions.
+ // Every exemption has a non-empty reason, and the temporary #276 stage-comments exemptions are removed.
  expect(WEB_STRING_EXEMPTIONS.length).toBeGreaterThan(0);
  for(const exemption of WEB_STRING_EXEMPTIONS){
   expect(exemption.reason.trim().length).toBeGreaterThan(10);
  }
- expect(WEB_STRING_EXEMPTIONS.some(e=>e.file==='web/stage-comments.ts'&&e.reason.includes('#276'))).toBe(true);
- expect(WEB_STRING_EXEMPTIONS.some(e=>e.file==='web/index.html'&&e.match.includes('Comment')&&e.reason.includes('#276'))).toBe(true);
- expect(WEB_STRING_EXEMPTIONS.some(e=>e.file==='web/compare.html'&&e.match.includes('Comment')&&e.reason.includes('#276'))).toBe(true);
+ expect(WEB_STRING_EXEMPTIONS.some(e=>e.file==='web/stage-comments.ts')).toBe(false);
+ expect(WEB_STRING_EXEMPTIONS.some(e=>e.match.includes('Comment'))).toBe(false);
 
  // An exemption without a reason is refused.
  expect(()=>checkWebHardcodedStrings(files,{exemptions:[...WEB_STRING_EXEMPTIONS,{file:'web/main.ts',match:'foo',reason:'   '}]})).toThrow('I18N_EXEMPTION_REASON_REQUIRED');
@@ -104,6 +104,14 @@ test('Bar 4: live language switching updates DOM text, rich hints, attributes, a
    .toBe('PREFERENCES_LANGUAGE: system, en 또는 ko여야 합니다');
   expect(tr('ANIMATION_BONE_NO_TRACK: unknown bone "root"','ko'))
    .toBe('ANIMATION_BONE_NO_TRACK: 알 수 없는 본 "root"');
+
+  // Stage-comments strings (#276) translate cleanly while keeping error codes intact.
+  expect(tr('Comment · C (0)','ko')).toBe('코멘트 · C (0)');
+  expect(tr('Comment · C (3)','ko')).toBe('코멘트 · C (3)');
+  expect(tr('Read only · Escape closes','ko')).toBe('읽기 전용 · Escape로 닫기');
+  expect(tr('Enter saves · Escape cancels','ko')).toBe('Enter로 저장 · Escape로 취소');
+  expect(tr('COMMENT_APPLIED_BUILD_UNSUPPORTED: return to the inspected source before commenting on this applied scratch build','ko'))
+   .toBe('COMMENT_APPLIED_BUILD_UNSUPPORTED: 적용된 임시 빌드에 코멘트를 남기려면 먼저 점검 중인 소스로 돌아가세요');
 
   // Dynamic templates translate prose while keeping rig bone/slot/animation identifiers intact.
   expect(tr('Select bone root','ko')).toBe('본 root 선택');
@@ -269,5 +277,99 @@ test('Bar 6: feedback output (JSON and Issue Markdown) for one reviewed build is
   setLanguagePreference('system');
   await rm(dirEn,{recursive:true,force:true});
   await rm(dirKo,{recursive:true,force:true});
+ }
+});
+
+test('stage comments (#276) switch live between en and ko including hints, refusal note, and toolbar count while preserving open draft and reviewer summary',async()=>{
+ class Node {
+  children:Node[]=[];parent:Node|null=null;style:any={};dataset:Record<string,string>={};className='';id='';textContent='';title='Comment · C (active mesh editor keeps C)';value='';placeholder='';type='';maxLength=0;hidden=false;disabled=false;readOnly=false;clientWidth=100;clientHeight=100;clientLeft=0;clientTop=0;captured=new Set<number>();attributes=new Map<string,string>();listeners=new Map<string,Function[]>();onclick:Function|null=null;onsubmit:Function|null=null;onkeydown:Function|null=null;
+  classList={toggle:()=>{}};
+  append(...nodes:Node[]){for(const n of nodes){n.parent=this;this.children.push(n);}}after(...nodes:Node[]){for(const n of nodes){n.parent=this.parent;this.parent?.children.push(n);}}replaceChildren(...nodes:Node[]){this.children=[];this.append(...nodes);}remove(){if(this.parent)this.parent.children=this.parent.children.filter(n=>n!==this);}setAttribute(k:string,v:string){this.attributes.set(k,v);}getAttribute(k:string){return this.attributes.get(k)??null;}closest(){return null;}focus(){}getBoundingClientRect(){return {left:0,top:0};}
+  addEventListener(k:string,f:Function){this.listeners.set(k,[...(this.listeners.get(k)??[]),f]);}removeEventListener(k:string,f:Function){this.listeners.set(k,(this.listeners.get(k)??[]).filter(fn=>fn!==f));}dispatch(k:string,e:any={}){for(const f of this.listeners.get(k)??[])f(e);}async emit(k:string,e:any={}){await Promise.all((this.listeners.get(k)??[]).map(f=>f(e)));}setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);this.dispatch('lostpointercapture',{pointerId:id});}
+ }
+ const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABHNCSVQICAgIfAhkiAAAAAFzUkdCAK7OHOkAAAALSURBVAiZY2AAAgAABQABYlUyiAAAAABJRU5ErkJggg==';
+ const sha='a'.repeat(64);
+ const camera={space:'world' as const,center:{x:0,y:0},zoom:1,viewport:{width:100,height:100},visible:{x:-50,y:-50,width:100,height:100}};
+ const bookmark={schema:'rig-review-inspection/1',binding:{mode:'single',sourceHash:sha,rigs:[null]},time:0,animation:'idle',theme:'dark',layers:{images:true,meshes:false,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:camera,a:null,b:null,reference:null}},selection:{inspector:'playback'}};
+ const commentRecord={schema:'rig-review-comment/1',mode:'animate',viewport:'rig',frame:{index:0,basis:'producer'},time:0,animation:'idle',sourceHash:sha,modelHash:null,referenceHash:null,referenceId:null,camera,screen:{x:50,y:50,width:0,height:0},world:{x:0,y:0,width:0,height:0},slots:[],crop:{path:`comment-crops/${sha}.png`,sha256:sha,png:'data:image/png;base64,'+png,width:1,height:1},bookmark};
+ // Use "Reset" as the reviewer's own summary to prove it is never translated even when matching a catalogue word.
+ const feedbackRows:any[]=[{id:'c-1',frameStart:0,frameEnd:0,target:{kind:'rig',name:'probe'},category:'defect',summary:'Reset',context:{animation:'idle',time:0,frame:0,comment:commentRecord}}];
+ const lockedIds=new Set<string>();
+ let refusalReason:string|null=null;
+ const toggle=new Node(),toolbar=new Node(),workspace=new Node(),pane=new Node(),doc=new Node() as any,win=new Node(),saved=new Map<string,any>();
+ toolbar.append(toggle);
+ toolbar.closest=((selector:string)=>selector==='main'?workspace:null) as any;
+ doc.createElement=()=>new Node();
+ doc.getElementById=(id:string)=>id==='stage-comment'?toggle:null;
+ doc.documentElement=new Node();
+ for(const [k,v]of Object.entries({document:doc,window:win,requestAnimationFrame:()=>1,cancelAnimationFrame:()=>{}})){saved.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;}
+ setLanguagePreference('en');
+ const tool=bindStageComments({
+  toolbar:toolbar as any,
+  viewports:{rig:pane as any},
+  pose:()=>({mode:'animate',camera,frame:{index:0,basis:'producer'},time:0,animation:'idle',turn:null,sourceHash:sha,modelHash:null,referenceHash:null,referenceId:null,rig:'probe'}),
+  pause:async()=>{},
+  bookmark:()=>bookmark,
+  restore:async()=>{},
+  feedback:()=>feedbackRows,
+  locked:id=>lockedIds.has(id),
+  add:f=>feedbackRows.push(f),
+  changed:()=>{},
+  error:()=>{},
+  refusal:()=>refusalReason,
+  blocked:()=>false,
+ });
+ try{
+  const list=workspace.children.find(n=>n.id==='stage-comment-list')!;
+  const refusalNote=toolbar.children.find(n=>n.id==='stage-comment-refusal')!;
+  expect(toggle.textContent).toBe('Comment · C (1)');
+  expect(toggle.title).toBe('Comment · C (active mesh editor keeps C)');
+
+  // Open existing comment in composer and type an in-progress draft edit.
+  const rowBtn=list.children.find(n=>n.className==='stage-comment-item')!.children[0]!;
+  expect(rowBtn.textContent).toContain('· Reset');
+  await rowBtn.onclick!();
+  const composer=pane.children.find(n=>n.className.includes('stage-comment-composer'))!;
+  expect(composer.children[1]!.textContent).toBe('Enter saves · Escape cancels');
+  expect(composer.children.find(n=>n.className==='stage-comment-delete')!.textContent).toBe('Delete');
+  composer.children[0]!.value='In-progress draft note';
+
+  // Switch live to Korean: composer stays open, draft text is untouched, UI chrome and pin aria-label translate, while reviewer summary "Reset" stays untouched.
+  setLanguagePreference('ko');
+  expect(toggle.textContent).toBe('코멘트 · C (1)');
+  expect(toggle.title).toBe('코멘트 · C (활성 메시 편집기가 C 키를 사용함)');
+  expect(list.getAttribute('aria-label')).toBe('스테이지 코멘트');
+  expect(list.children[0]!.textContent).toBe('코멘트 목록');
+  expect(composer.getAttribute('aria-label')).toBe('코멘트 작성기');
+  expect(composer.children[0]!.getAttribute('aria-label')).toBe('코멘트 내용');
+  expect(composer.children[0]!.placeholder).toBe('이 지점에 대해 설명하세요…');
+  expect(composer.children[0]!.value).toBe('In-progress draft note');
+  expect(composer.children[1]!.textContent).toBe('Enter로 저장 · Escape로 취소');
+  expect(composer.children.find(n=>n.className==='stage-comment-delete')!.textContent).toBe('삭제');
+  const koRowBtn=list.children.find(n=>n.className==='stage-comment-item')!.children[0]!;
+  expect(koRowBtn.textContent).toEndWith('· Reset');
+  const pin=pane.children[0]!.children[1]!;
+  expect(pin.getAttribute('aria-label')).toBe('코멘트 1: Reset');
+  expect(pin.title).toBe('Reset');
+
+  // Lock comment and trigger refusal note: verify read-only hint and refusal note translate between ko and en.
+  lockedIds.add('c-1');
+  refusalReason='COMMENT_APPLIED_BUILD_UNSUPPORTED: return to the inspected source before commenting on this applied scratch build';
+  await koRowBtn.onclick!();
+  const roComposer=pane.children.find(n=>n.className.includes('stage-comment-composer'))!;
+  expect(roComposer.children[1]!.textContent).toBe('읽기 전용 · Escape로 닫기');
+  expect(refusalNote.textContent).toBe('COMMENT_APPLIED_BUILD_UNSUPPORTED: 적용된 임시 빌드에 코멘트를 남기려면 먼저 점검 중인 소스로 돌아가세요');
+  expect(list.children.find(n=>n.className==='stage-comment-refusal-note')!.textContent)
+   .toBe('COMMENT_APPLIED_BUILD_UNSUPPORTED: 적용된 임시 빌드에 코멘트를 남기려면 먼저 점검 중인 소스로 돌아가세요');
+  expect(list.children.find(n=>n.className==='stage-comment-item')!.children[1]!.textContent).toBe('제출됨');
+
+  setLanguagePreference('en');
+  expect(roComposer.children[1]!.textContent).toBe('Read only · Escape closes');
+  expect(refusalNote.textContent).toBe('COMMENT_APPLIED_BUILD_UNSUPPORTED: return to the inspected source before commenting on this applied scratch build');
+  expect(list.children.find(n=>n.className==='stage-comment-item')!.children[1]!.textContent).toBe('Submitted');
+ }finally{
+  tool.dispose();
+  setLanguagePreference('system');
+  for(const [k,v]of saved)(globalThis as any)[k]=v;
  }
 });

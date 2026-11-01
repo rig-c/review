@@ -24,41 +24,6 @@ export interface HardcodedStringViolation {
 
 export const WEB_STRING_EXEMPTIONS: readonly WebStringExemption[] = [
   {
-    file: 'web/stage-comments.ts',
-    match: '*',
-    reason: 'Temporary exemption for rig-c/review#276: stage-comments UI stays untouched while #276 is in flight.'
-  },
-  {
-    file: 'web/index.html',
-    match: 'Comment',
-    reason: 'Temporary exemption for rig-c/review#276: #stage-comment button label stays untouched.'
-  },
-  {
-    file: 'web/index.html',
-    match: 'Comments (0)',
-    reason: 'Temporary exemption for rig-c/review#276: #stage-comment-list-toggle button label stays untouched.'
-  },
-  {
-    file: 'web/index.html',
-    match: 'Comment · C (active mesh editor keeps C)',
-    reason: 'Temporary exemption for rig-c/review#276: #stage-comment button title stays untouched.'
-  },
-  {
-    file: 'web/compare.html',
-    match: 'Comment',
-    reason: 'Temporary exemption for rig-c/review#276: #stage-comment button label stays untouched.'
-  },
-  {
-    file: 'web/compare.html',
-    match: 'Comments (0)',
-    reason: 'Temporary exemption for rig-c/review#276: #stage-comment-list-toggle button label stays untouched.'
-  },
-  {
-    file: 'web/compare.html',
-    match: 'Comment · C (active mesh editor keeps C)',
-    reason: 'Temporary exemption for rig-c/review#276: #stage-comment button title stays untouched.'
-  },
-  {
     file: 'web/index.html',
     match: 'boob_r',
     reason: 'Canonical rig bone identifier example on chest region right bone input.'
@@ -316,8 +281,12 @@ export function t(
   lang: ResolvedLanguage = currentLanguage
 ): string {
   const catalog = lang === 'ko' ? koCatalog : enCatalog;
+  if (!params) {
+    const direct = catalog[key];
+    if (direct !== undefined) return direct;
+    return tr(key, lang);
+  }
   const template = catalog[key] ?? enCatalog[key] ?? key;
-  if (!params) return template;
   return template.replace(/\{(\w+)\}/g, (full, token: string) => {
     if (Array.isArray(params)) {
       const idx = Number(token);
@@ -485,8 +454,6 @@ function isExemptElement(el: Element | null): boolean {
   while (cur) {
     const id = cur.id;
     if (
-      id === 'stage-comment' ||
-      id === 'stage-comment-list-toggle' ||
       id === 'target-names' ||
       id === 'feedback-target-names' ||
       id === 'lm-bones' ||
@@ -501,11 +468,15 @@ function isExemptElement(el: Element | null): boolean {
       cls.includes('part-slot-name') ||
       cls.includes('animation-lane-label') ||
       cls.includes('animation-tree-bone-name') ||
-      cls.includes('stage-comment')
+      cls.includes('stage-comment-pin')
     ) {
       return true;
     }
     const tag = cur.tagName?.toUpperCase();
+    const parentCls = typeof cur.parentElement?.className === 'string' ? cur.parentElement.className : '';
+    if (tag === 'BUTTON' && parentCls.includes('stage-comment-item')) {
+      return true;
+    }
     if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'KBD') {
       return true;
     }
