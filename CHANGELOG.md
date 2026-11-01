@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/rig-c/review/compare/v1.0.0...v1.0.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **cli:** answer --version instead of reading it as a path ([#297](https://github.com/rig-c/review/issues/297)) ([02ca2c9](https://github.com/rig-c/review/commit/02ca2c99e4cedec76c38a75dcd42b83b9d68fa25))
+
 ## [1.0.0](https://github.com/rig-c/review/compare/v0.25.2...v1.0.0) (2026-11-01)
 
 
