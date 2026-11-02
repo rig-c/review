@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/rig-c/review/compare/v1.1.0...v1.1.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **web:** a stale local draft no longer blocks a review ([#303](https://github.com/rig-c/review/issues/303)) ([b3cbd87](https://github.com/rig-c/review/commit/b3cbd87d3fb28b6a2f914f69ec147f974f1261e1)), closes [#301](https://github.com/rig-c/review/issues/301)
+
 ## [1.1.0](https://github.com/rig-c/review/compare/v1.0.1...v1.1.0) (2026-11-02)
 
 
