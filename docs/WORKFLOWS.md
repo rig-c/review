@@ -25,6 +25,8 @@ bun run review -- /absolute/path/to/package/review.json --checkpoint silhouette
 
 The server prints the exact link, for example `http://127.0.0.1:4317/?checkpoint=silhouette#cap=…`. The `#cap=` fragment is this server's write capability (see [Managed front and write capability](#managed-front-and-write-capability)). `--port 0` selects a free port. It binds only `127.0.0.1` and never opens a browser automatically. A folder containing `review.json` uses that explicit manifest.
 
+Add `lang=en` or `lang=ko` to a review link's query to open it in that language, ahead of the fragment: `…/?checkpoint=silhouette&lang=en#cap=…`. It outranks the browser and the saved choice and stores nothing, so a shared link cannot change a reader's setting. Picking a language in the settings menu takes over for the rest of the page.
+
 ## Compare two outputs
 
 Open two compiled packages against one explicitly selected local reference video:

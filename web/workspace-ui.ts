@@ -1,7 +1,7 @@
 /** Browser workspace presentation. Source selection, player clocks and review decisions stay with the page. */
 import {WorkspacePreferenceStore,panelBounds,type WorkspaceLanguage,type WorkspacePanels,type WorkspacePreferences,type WorkspaceTheme} from './workspace-preferences.ts';
 import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defaultWorkspaceColumns,InspectorScrollMemory,inspectorTabs,workspaceMinimums,type InspectorTab,type WorkspaceColumns,type WorkspacePanel,type SeparatorRange} from './workspace-layout.ts';
-import {bindDomI18n,setLanguagePreference,tr} from './i18n.ts';
+import {bindDomI18n,getLinkLanguage,setLanguagePreference,setLinkLanguage,tr} from './i18n.ts';
 
 /** Reachable effective bounds, accounting for the other panel's saved desired size. */
 export function workspaceResizeRange(available:{width:number;height:number},desired:WorkspacePanels,panel:WorkspacePanel,columns:WorkspaceColumns=defaultWorkspaceColumns):SeparatorRange {
@@ -91,8 +91,8 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
    layout.dataset.stageMinimum=String(effective.stageMinimumSatisfied);for(const binding of bindings)binding.refresh();options.changed();restore();
   }finally{applying=false;}
  }
- const renderSettings=()=>{const value=store.get();setLanguagePreference(value.language);settingsToggle.setAttribute('aria-expanded',String(!value.settingsCollapsed));settingsBody.hidden=value.settingsCollapsed;settings.dataset.collapsed=String(value.settingsCollapsed);theme.value=options.currentTheme?.()??value.theme;language.value=value.language;sync.checked=value.defaultCameraSync;idle.checked=value.defaultIdleRepeat;status.textContent=tr(store.status().detail);};
- theme.onchange=()=>{store.update({theme:theme.value as WorkspaceTheme});options.defaultTheme(store.get().theme);};language.onchange=()=>{store.update({language:language.value as WorkspaceLanguage});setLanguagePreference(store.get().language);};sync.onchange=()=>{store.update({defaultCameraSync:sync.checked});};idle.onchange=()=>{store.update({defaultIdleRepeat:idle.checked});};require<HTMLButtonElement>('settings-reset').onclick=()=>store.resetLayout();settingsToggle.onclick=()=>{store.update({settingsCollapsed:!store.get().settingsCollapsed});};
+ const renderSettings=()=>{const value=store.get();setLanguagePreference(value.language);settingsToggle.setAttribute('aria-expanded',String(!value.settingsCollapsed));settingsBody.hidden=value.settingsCollapsed;settings.dataset.collapsed=String(value.settingsCollapsed);theme.value=options.currentTheme?.()??value.theme;language.value=getLinkLanguage()??value.language;sync.checked=value.defaultCameraSync;idle.checked=value.defaultIdleRepeat;status.textContent=tr(store.status().detail);};
+ theme.onchange=()=>{store.update({theme:theme.value as WorkspaceTheme});options.defaultTheme(store.get().theme);};language.onchange=()=>{setLinkLanguage(null);store.update({language:language.value as WorkspaceLanguage});setLanguagePreference(store.get().language);};sync.onchange=()=>{store.update({defaultCameraSync:sync.checked});};idle.onchange=()=>{store.update({defaultIdleRepeat:idle.checked});};require<HTMLButtonElement>('settings-reset').onclick=()=>store.resetLayout();settingsToggle.onclick=()=>{store.update({settingsCollapsed:!store.get().settingsCollapsed});};
  bindDomI18n(document);const unsubscribe=store.subscribe(value=>{desired={...value.panels};renderSettings();schedule();});renderSettings();
  for(const tab of tabs){
   const panel=panelFor(tab);let timer:ReturnType<typeof setTimeout>|undefined;
