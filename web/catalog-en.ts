@@ -1431,6 +1431,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Saved inspection axis is unavailable or outside its range": "Saved inspection axis is unavailable or outside its range",
   "Saved inspection time is outside the selected clip/reference": "Saved inspection time is outside the selected clip/reference",
   "Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.": "Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.",
+  "Saved local draft conflicts with the current submitted review. Server status is unchanged; download or discard it.": "Saved local draft conflicts with the current submitted review. Server status is unchanged; download or discard it.",
   "Saved local draft was not restored: {0}. It remains in storage for recovery.": "Saved local draft was not restored: {0}. It remains in storage for recovery.",
   "Saved panel selection unavailable: {0}": "Saved panel selection unavailable: {0}",
   "Saved part preset is absent": "Saved part preset is absent",

@@ -1431,6 +1431,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Saved inspection axis is unavailable or outside its range": "저장된 점검 축을 사용할 수 없거나 범위를 벗어났습니다",
   "Saved inspection time is outside the selected clip/reference": "저장된 점검 시간이 선택된 클립/레퍼런스 범위를 벗어났습니다",
   "Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.": "저장된 로컬 초안이 현재 제출된 리뷰와 충돌합니다. 서버 상태는 변경되지 않았으며 다운로드하거나 보류 상태로 명시적 복구하세요.",
+  "Saved local draft conflicts with the current submitted review. Server status is unchanged; download or discard it.": "저장된 로컬 초안이 현재 제출된 리뷰와 충돌합니다. 서버 상태는 변경되지 않았으며 다운로드하거나 폐기하세요.",
   "Saved local draft was not restored: {0}. It remains in storage for recovery.": "저장된 로컬 초안이 복원되지 않았습니다: {0}. 복구를 위해 저장소에 유지됩니다.",
   "Saved panel selection unavailable: {0}": "저장된 패널 선택을 사용할 수 없음: {0}",
   "Saved part preset is absent": "저장된 파츠 프리셋이 없습니다",

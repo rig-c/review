@@ -175,3 +175,275 @@ test('the active Inspector block per section roundtrips through the stored local
  const read=store.read()!;expect(restoreActiveBlocksUI(read.ui)).toEqual({rig:'chest-regions',playback:'physics-panel'});
  expect(Object.keys(read.ui).filter(key=>!Object.hasOwn(draft().ui,key))).toEqual(['inspectorBlocks']);expect(read.bookmark).toEqual(draft().bookmark);
 });
+
+const singleSession=(viewer='0.2.0',runtime='0.3.0')=>({
+ id:'rig',revision:'1',sourceHash:binding.sourceHash,status:'pending',
+ checkpoints:{idle:{outcome:'pending',note:''}},feedback:[] as unknown[],feedbackWarnings:[] as unknown[],updatedAt:null as string|null,
+ reviewedSource:{packageRevision:'1',rig:{path:'rig.json',sha256:'b'.repeat(64)},motion:{path:'motion.json',sha256:'e'.repeat(64)},viewerVersion:viewer,runtimeVersion:runtime},
+ referenceBinding:null,
+});
+async function compareSession(viewer='0.2.0',runtime='0.3.0'){
+ const side=(id:string,rig:string)=>({id,revision:'1',sourceHash:rig,reviewedSource:{packageRevision:'1',rig:{path:'rig.json',sha256:rig},motion:{path:'motion.json',sha256:'e'.repeat(64)},viewerVersion:viewer,runtimeVersion:runtime}});
+ const compareBinding={schema:'rig-review-compare/1' as const,a:side('rig-a','b'.repeat(64)),b:side('rig-b','c'.repeat(64)),reference:{path:'ref.mp4',name:'ref.mp4',sha256:'f'.repeat(64)},animation:'idle'};
+ const sourceHash=await sessionFingerprint(compareBinding);
+ return {id:`compare-${sourceHash.slice(0,16)}`,revision:'1:1',sourceHash,binding:compareBinding,status:'pending',feedback:[] as unknown[],feedbackWarnings:[] as unknown[],updatedAt:null as string|null};
+}
+const feedbackItem=(summary='Left sleeve clips at peak')=>({id:'f-1',frameStart:2,frameEnd:6,target:{kind:'slot',name:'sleeve_l'},category:'defect',summary,context:{animation:'idle'}});
+
+async function openDraftReopenScenario(opts:{
+ mode:'single'|'compare';
+ saved:LocalInspectionDraft;
+ savedBinding?:InspectionBinding;
+ currentBaseline:Record<string,unknown>;
+ currentBinding:InspectionBinding;
+ legacyMain?:boolean;
+}){
+ const source=await readFile(new URL('../web/inspection-persistence.ts',import.meta.url),'utf8');
+ const inputs=source.slice(source.indexOf('export function captureInputs('),source.indexOf('function parseInputs(')).replaceAll('export function','function');
+ let connect=source.slice(source.indexOf('export async function connectInspectionPersistence')).replace('export async function','async function');
+ const ids=source.slice(source.indexOf('const viewInputIds='),source.indexOf('/** Restore once'));
+ if(opts.legacyMain){
+  connect=connect
+   .replace("let draft=store.read(session=>recoverSession(session,adapter.baseline)!==null);","const draft=store.read();")
+   .replace("const notices=[document.getElementById('draft-recovery'),document.getElementById('review-draft-recovery')].filter((node):node is HTMLElement=>node!==null);","const notices=[document.getElementById('draft-recovery')].filter((node):node is HTMLElement=>node!==null);")
+   .replace("const prior=recovered?recoverSession(adapter.baseline,draft.session as T):null;\n  sameBaseline=draft.baseline===baseline||(prior!==null&&draft.baseline===await sessionFingerprint(prior));\n  if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){store.clear();draft=null;recovered=null;}","sameBaseline=draft.baseline===baseline;")
+   .replace("status(recovered?'Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.':'Saved local draft conflicts with the current submitted review. Server status is unchanged; download or discard it.');","status('Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.');");
+ }
+ const legacyRecover=(value:unknown,base:typeof baseline):typeof baseline|null=>{
+  if(!value||typeof value!=='object'||Array.isArray(value))return null;const o=value as Record<string,unknown>;for(const key of Object.keys(o))if(!Object.keys(base).includes(key))return null;
+  for(const k of ['id','revision','sourceHash','reviewedSource','referenceBinding','binding'])if(JSON.stringify(o[k])!==JSON.stringify((base as Record<string,unknown>)[k]))return null;
+  return recoverSession(value,base);
+ };
+ const scope=opts.mode==='single'?`single:rig:${opts.currentBinding.sourceHash}`:`compare:rig-a:${'b'.repeat(64)}:rig-b:${'c'.repeat(64)}`;
+ const storage=new MemoryStorage();
+ new InspectionDraftStore(scope,opts.savedBinding??opts.currentBinding,()=>{},storage).write(opts.saved);
+ const script=`async function open(deps){const {InspectionDraftStore:Base,storage,scope,currentBaseline,currentBinding,bookmark,sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction,mode}=deps;
+ class HTMLInputElement{hasAttribute(name){return name==='data-app-preference'&&this.id.startsWith('settings-');}constructor(id,type,value,checked=false){Object.assign(this,{id,type,value,checked,name:''});}}class HTMLSelectElement{hasAttribute(name){return name==='data-app-preference'&&this.id.startsWith('settings-');}constructor(id,value,values){this.id=id;this.value=value;this.options=values.map(value=>({value}));}}class HTMLTextAreaElement{hasAttribute(){return false;}constructor(id,value=''){this.id=id;this.value=value;}}
+ const nodes=[new HTMLSelectElement('review-status',currentBaseline.status,['pending','approved','changes-requested']),new HTMLSelectElement('status',currentBaseline.status,['pending','approved','changes-requested']),new HTMLTextAreaElement('checkpoint-note',''),new HTMLInputElement('feedback-summary','text',''),new HTMLInputElement('summary','text','')];
+ const statusNotice={children:[],replaceChildren(){this.children=[];},append(button){this.children.push(button);}};
+ const dialogNotice={children:[],replaceChildren(){this.children=[];},append(button){this.children.push(button);}};
+ const downloads=[];const blobs=new Map();
+ const URL=class extends globalThis.URL{static createObjectURL(blob){const u='blob:draft-'+blobs.size;blobs.set(u,blob);return u;}static revokeObjectURL(){}};
+ const document={hidden:false,body:{inert:false},getElementById:id=>id==='draft-recovery'?statusNotice:id==='review-draft-recovery'&&mode==='single'?dialogNotice:null,querySelectorAll:()=>nodes,querySelector:selector=>nodes.find(n=>'#'+n.id===selector),createElement:tag=>tag==='a'?{href:'',download:'',click(){downloads.push({download:this.download,blob:blobs.get(this.href)});}}:{type:'',textContent:'',onclick:null}};
+ const window=new EventTarget(),location={href:'http://127.0.0.1:1234/',hash:''},history={replaceState(_state,_unused,value){const url=new globalThis.URL(value);location.href=url.href;location.hash=url.hash;}},navigator={clipboard:{writeText:async()=>{}}},CSS={escape:v=>v};
+ const InspectionDraftStore=class extends Base{constructor(s,b,warn){super(s,b,warn,storage);}};
+ let current=structuredClone(currentBaseline),dirty=false,conflict=false,restores=0,statusText='',dialogStatusText='';const messages=[];
+ const statusSelect=()=>nodes.find(n=>n.id===(mode==='single'?'review-status':'status'));
+ ${ids}\n${inputs}\n${connect}
+ const connection=await connectInspectionPersistence({scope,binding:currentBinding,baseline:currentBaseline,session:()=>current,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{current=value;dirty=isDirty;statusSelect().value=current.status;restores++;},bookmark:()=>({...bookmark,binding:currentBinding}),restoreBookmark:async()=>{},ui:()=>({}),restoreUI:()=>{},afterInputs:()=>{},onConflict:value=>{conflict=value;},onStatus:value=>{statusText=value;dialogStatusText=value;messages.push(value);}});
+ return {
+  connection,storage,
+  state:()=>({current,dirty,conflict,restores,statusWidget:statusSelect().value,statusText,dialogStatusText,messages:[...messages],draftKeys:[...storage.values.keys()].filter(k=>k.startsWith('rig-review-draft/1:'))}),
+  statusButtons:()=>statusNotice.children.map(b=>b.textContent),
+  dialogButtons:()=>mode==='single'?dialogNotice.children.map(b=>b.textContent):statusNotice.children.map(b=>b.textContent),
+  clickInDialog:label=>{const list=mode==='single'?dialogNotice.children:statusNotice.children,b=list.find(x=>x.textContent===label);if(!b)throw new Error('missing dialog recovery action: '+label);b.onclick();},
+  downloads:async()=>Promise.all(downloads.map(async d=>({download:d.download,text:await d.blob.text()}))),
+  submit:async()=>{if(conflict)throw new Error('Resolve the saved local draft conflict before submitting.');const saved={...structuredClone(current),updatedAt:'2026-11-02T00:00:00.000Z'};current=saved;dirty=false;await connection.submitted(saved);return saved;}
+ };}`;
+ const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script);
+ return await new Function('deps',code+';return open(deps);')({
+  InspectionDraftStore,storage,scope,currentBaseline:opts.currentBaseline,currentBinding:opts.currentBinding,bookmark:bookmark(),
+  sessionFingerprint,recoverSession:opts.legacyMain?legacyRecover:recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction,mode:opts.mode,
+ }) as {
+  connection:{dispose():void;save():void};
+  storage:MemoryStorage;
+  state():{current:Record<string,any>;dirty:boolean;conflict:boolean;restores:number;statusWidget:string;statusText:string;dialogStatusText:string;messages:string[];draftKeys:string[]};
+  statusButtons():string[];
+  dialogButtons():string[];
+  clickInDialog(label:string):void;
+  downloads():Promise<{download:string;text:string}[]>;
+  submit():Promise<Record<string,any>>;
+ };
+}
+
+test('#301 Bar 1: reopen after a version change with a clean draft drops it quietly, shows no banner, restores no stale status and submits cleanly in single and compare',async()=>{
+ // Single mode: v0.1.0 -> v0.2.0 with a clean draft carrying a stale status in session/inputs
+ const oldSingle=singleSession('0.1.0','0.2.0'),newSingle=singleSession('0.2.0','0.3.0');
+ const cleanSingleDraft:LocalInspectionDraft={...draft(),baseline:await sessionFingerprint(oldSingle),reviewDirty:false,inputs:{'review-status':{value:'approved'},'checkpoint-note':{value:'stale note'},'radio:outcome:fail':{value:'fail',checked:true}},session:{...oldSingle,status:'approved'}};
+ const singleApp=await openDraftReopenScenario({mode:'single',saved:cleanSingleDraft,currentBaseline:newSingle,currentBinding:binding});
+ try{
+  expect(singleApp.state()).toMatchObject({conflict:false,dirty:false,restores:0,statusWidget:'pending',statusText:'',dialogStatusText:'',messages:[],draftKeys:[]});
+  expect(singleApp.state().current.status).toBe('pending');
+  expect(singleApp.statusButtons()).toEqual([]);expect(singleApp.dialogButtons()).toEqual([]);
+  const submitted=await singleApp.submit();
+  expect(submitted.reviewedSource).toEqual(newSingle.reviewedSource);
+ }finally{singleApp.connection.dispose();}
+
+ // Compare mode: v0.1.0 -> v0.2.0 (where CompareBinding and sourceHash also change with tool versions)
+ const oldCompare=await compareSession('0.1.0','0.2.0'),newCompare=await compareSession('0.2.0','0.3.0');
+ const oldCompareBinding:InspectionBinding={mode:'compare',sourceHash:oldCompare.sourceHash,rigs:['b'.repeat(64),'c'.repeat(64)]};
+ const newCompareBinding:InspectionBinding={mode:'compare',sourceHash:newCompare.sourceHash,rigs:['b'.repeat(64),'c'.repeat(64)]};
+ const cleanCompareBookmark:InspectionBookmark={...bookmark(),binding:oldCompareBinding,selection:{...bookmark().selection,part:undefined,mode:'compare'}};
+ const cleanCompareDraft:LocalInspectionDraft={...draft(),sourceHash:oldCompare.sourceHash,baseline:await sessionFingerprint(oldCompare),reviewDirty:false,bookmark:cleanCompareBookmark,inputs:{status:{value:'approved'}},session:{...oldCompare,status:'approved'}};
+ const compareApp=await openDraftReopenScenario({mode:'compare',saved:cleanCompareDraft,savedBinding:oldCompareBinding,currentBaseline:newCompare,currentBinding:newCompareBinding});
+ try{
+  expect(compareApp.state()).toMatchObject({conflict:false,dirty:false,restores:0,statusWidget:'pending',statusText:'',messages:[],draftKeys:[]});
+  expect(compareApp.state().current.status).toBe('pending');
+  expect(compareApp.dialogButtons()).toEqual([]);
+  const submitted=await compareApp.submit();
+  expect(submitted.binding).toEqual(newCompare.binding);
+ }finally{compareApp.connection.dispose();}
+});
+
+test('#301 Bar 2: reopen after a version change with unsaved feedback recovers feedback with the current reviewedSource/binding and submits cleanly in single and compare',async()=>{
+ // Single mode: unsaved feedback across version upgrade
+ const oldSingle=singleSession('0.1.0','0.2.0'),newSingle=singleSession('0.2.0','0.3.0'),item=feedbackItem();
+ const dirtySingleDraft:LocalInspectionDraft={...draft(),baseline:await sessionFingerprint(oldSingle),reviewDirty:true,inputs:{'review-status':{value:'changes-requested'}},session:{...oldSingle,status:'changes-requested',feedback:[item]}};
+ const singleApp=await openDraftReopenScenario({mode:'single',saved:dirtySingleDraft,currentBaseline:newSingle,currentBinding:binding});
+ try{
+  expect(singleApp.state()).toMatchObject({conflict:false,dirty:true,restores:1,statusWidget:'changes-requested',statusText:'Restored local draft · not submitted'});
+  expect(singleApp.state().current.feedback).toEqual([item]);
+  expect(singleApp.state().current.reviewedSource).toEqual(newSingle.reviewedSource);
+  const submitted=await singleApp.submit();
+  expect(submitted.feedback).toEqual([item]);
+  expect(submitted.reviewedSource).toEqual(newSingle.reviewedSource);
+ }finally{singleApp.connection.dispose();}
+
+ // Compare mode: unsaved feedback across version upgrade (including CompareBinding sourceHash rebind)
+ const oldCompare=await compareSession('0.1.0','0.2.0'),newCompare=await compareSession('0.2.0','0.3.0'),compareItem={...feedbackItem('B rig lags reference'),side:'b'};
+ const oldCompareBinding:InspectionBinding={mode:'compare',sourceHash:oldCompare.sourceHash,rigs:['b'.repeat(64),'c'.repeat(64)]};
+ const newCompareBinding:InspectionBinding={mode:'compare',sourceHash:newCompare.sourceHash,rigs:['b'.repeat(64),'c'.repeat(64)]};
+ const compareBookmark:InspectionBookmark={...bookmark(),binding:oldCompareBinding,selection:{...bookmark().selection,part:undefined,mode:'compare'}};
+ const dirtyCompareDraft:LocalInspectionDraft={...draft(),sourceHash:oldCompare.sourceHash,baseline:await sessionFingerprint(oldCompare),reviewDirty:true,bookmark:compareBookmark,inputs:{status:{value:'changes-requested'}},session:{...oldCompare,status:'changes-requested',feedback:[compareItem]}};
+ const compareApp=await openDraftReopenScenario({mode:'compare',saved:dirtyCompareDraft,savedBinding:oldCompareBinding,currentBaseline:newCompare,currentBinding:newCompareBinding});
+ try{
+  expect(compareApp.state()).toMatchObject({conflict:false,dirty:true,restores:1,statusWidget:'changes-requested',statusText:'Restored local draft · not submitted',draftKeys:[`rig-review-draft/1:compare:rig-a:${'b'.repeat(64)}:rig-b:${'c'.repeat(64)}:${newCompare.sourceHash}`]});
+  expect(compareApp.state().current.feedback).toEqual([compareItem]);
+  expect(compareApp.state().current.binding).toEqual(newCompare.binding);
+  expect(compareApp.state().current.id).toBe(newCompare.id);
+  expect(compareApp.state().current.sourceHash).toBe(newCompare.sourceHash);
+  const submitted=await compareApp.submit();
+  expect(submitted.feedback).toEqual([compareItem]);
+  expect(submitted.binding).toEqual(newCompare.binding);
+ }finally{compareApp.connection.dispose();}
+});
+
+test('#301 Bar 3 & Bar 4: real conflict refuses submit, exposes download/recover/discard inside the dialog in single and compare, and omits recover from the banner when unrecoverable',async()=>{
+ const oldSingle=singleSession('0.1.0','0.2.0'),submittedSingle={...singleSession('0.2.0','0.3.0'),status:'approved',updatedAt:'2026-11-01T12:00:00.000Z'},item=feedbackItem();
+ const conflictingSingleDraft:LocalInspectionDraft={...draft(),baseline:await sessionFingerprint(oldSingle),reviewDirty:true,inputs:{'review-status':{value:'changes-requested'}},session:{...oldSingle,status:'changes-requested',feedback:[item]}};
+
+ // 1) Recoverable real conflict (including across tool upgrade): Download + Recover as pending + Discard all in dialog
+ const recoverApp=await openDraftReopenScenario({mode:'single',saved:conflictingSingleDraft,currentBaseline:submittedSingle,currentBinding:binding});
+ try{
+  expect(recoverApp.state().conflict).toBe(true);
+  await expect(recoverApp.submit()).rejects.toThrow('Resolve the saved local draft conflict before submitting.');
+  expect(recoverApp.dialogButtons()).toEqual(['Download saved local draft','Recover local draft as pending','Discard conflicting local draft']);
+  expect(recoverApp.statusButtons()).toEqual(['Download saved local draft','Recover local draft as pending','Discard conflicting local draft']);
+  expect(recoverApp.state().dialogStatusText).toBe('Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.');
+  recoverApp.clickInDialog('Download saved local draft');
+  const downloaded=await recoverApp.downloads();
+  expect(downloaded).toHaveLength(1);expect(downloaded[0]!.download).toBe('review-local-draft.json');expect(JSON.parse(downloaded[0]!.text).session.feedback).toEqual([item]);
+  recoverApp.clickInDialog('Recover local draft as pending');
+  expect(recoverApp.state()).toMatchObject({conflict:false,dirty:true,statusWidget:'pending',dialogStatusText:'Recovered local draft as pending · not submitted'});
+  expect(recoverApp.dialogButtons()).toEqual([]);expect(recoverApp.statusButtons()).toEqual([]);
+  expect(recoverApp.state().current.feedback).toEqual([item]);
+  expect(recoverApp.state().current.reviewedSource).toEqual(submittedSingle.reviewedSource);
+  const savedAfterRecover=await recoverApp.submit();
+  expect(savedAfterRecover.feedback).toEqual([item]);expect(savedAfterRecover.reviewedSource).toEqual(submittedSingle.reviewedSource);
+ }finally{recoverApp.connection.dispose();}
+
+ // 2) Discard from inside the dialog on a real conflict
+ const discardApp=await openDraftReopenScenario({mode:'single',saved:conflictingSingleDraft,currentBaseline:submittedSingle,currentBinding:binding});
+ try{
+  expect(discardApp.state().conflict).toBe(true);
+  discardApp.clickInDialog('Discard conflicting local draft');
+  expect(discardApp.state()).toMatchObject({conflict:false,dirty:false,statusWidget:'approved',dialogStatusText:'Local draft discarded · current submitted review retained.'});
+  expect(discardApp.dialogButtons()).toEqual([]);expect(discardApp.statusButtons()).toEqual([]);
+  const savedAfterDiscard=await discardApp.submit();
+  expect(savedAfterDiscard.status).toBe('approved');expect(savedAfterDiscard.feedback).toEqual([]);
+ }finally{discardApp.connection.dispose();}
+
+ // 3) Compare mode real conflict: Download, Recover as pending, and Discard work
+ const oldCompare=await compareSession('0.1.0','0.2.0'),submittedCompare={...(await compareSession('0.2.0','0.3.0')),status:'approved',updatedAt:'2026-11-01T12:00:00.000Z'},compareItem={...feedbackItem('Compare conflict item'),side:'a'};
+ const oldCompareBinding:InspectionBinding={mode:'compare',sourceHash:oldCompare.sourceHash,rigs:['b'.repeat(64),'c'.repeat(64)]};
+ const newCompareBinding:InspectionBinding={mode:'compare',sourceHash:submittedCompare.sourceHash,rigs:['b'.repeat(64),'c'.repeat(64)]};
+ const compareBookmark:InspectionBookmark={...bookmark(),binding:oldCompareBinding,selection:{...bookmark().selection,part:undefined,mode:'compare'}};
+ const conflictingCompareDraft:LocalInspectionDraft={...draft(),sourceHash:oldCompare.sourceHash,baseline:await sessionFingerprint(oldCompare),reviewDirty:true,bookmark:compareBookmark,inputs:{status:{value:'changes-requested'}},session:{...oldCompare,status:'changes-requested',feedback:[compareItem]}};
+ const compareConflictApp=await openDraftReopenScenario({mode:'compare',saved:conflictingCompareDraft,savedBinding:oldCompareBinding,currentBaseline:submittedCompare,currentBinding:newCompareBinding});
+ try{
+  expect(compareConflictApp.state().conflict).toBe(true);
+  await expect(compareConflictApp.submit()).rejects.toThrow('Resolve the saved local draft conflict before submitting.');
+  expect(compareConflictApp.dialogButtons()).toEqual(['Download saved local draft','Recover local draft as pending','Discard conflicting local draft']);
+  compareConflictApp.clickInDialog('Download saved local draft');
+  expect((await compareConflictApp.downloads())).toHaveLength(1);
+  compareConflictApp.clickInDialog('Recover local draft as pending');
+  expect(compareConflictApp.state()).toMatchObject({conflict:false,dirty:true,statusWidget:'pending'});
+  expect(compareConflictApp.state().current.feedback).toEqual([compareItem]);
+  expect(compareConflictApp.state().current.binding).toEqual(submittedCompare.binding);
+  await compareConflictApp.submit();
+ }finally{compareConflictApp.connection.dispose();}
+
+ // 4) Bar 4: Unrecoverable conflict (session cannot be recovered) never mentions "recover as pending" in the banner
+ const unrecoverableDraft:LocalInspectionDraft={...conflictingSingleDraft,session:{...oldSingle,id:'other-package',status:'changes-requested',feedback:[item]}};
+ const unrecoverableApp=await openDraftReopenScenario({mode:'single',saved:unrecoverableDraft,currentBaseline:submittedSingle,currentBinding:binding});
+ try{
+  expect(unrecoverableApp.state().conflict).toBe(true);
+  expect(unrecoverableApp.dialogButtons()).toEqual(['Download saved local draft','Discard conflicting local draft']);
+  expect(unrecoverableApp.state().dialogStatusText).toBe('Saved local draft conflicts with the current submitted review. Server status is unchanged; download or discard it.');
+  expect(unrecoverableApp.state().dialogStatusText).not.toContain('recover as pending');
+ }finally{unrecoverableApp.connection.dispose();}
+});
+
+test('#301 Bar 5: single and compare conflict banners and recovery buttons translate cleanly in English and Korean and round-trip without untranslated strings',async()=>{
+ const {tr,classifyKoreanDomString}=await import('../web/i18n.ts');
+ const {enCatalog}=await import('../web/catalog-en.ts');
+ const {koCatalog}=await import('../web/catalog-ko.ts');
+ const lines=[
+  'Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.',
+  'Saved local draft conflicts with the current submitted review. Server status is unchanged; download or discard it.',
+  'Restored local draft · not submitted',
+  'Recovered local draft as pending · not submitted',
+  'Local draft discarded · current submitted review retained.',
+  'Download saved local draft',
+  'Recover local draft as pending',
+  'Discard conflicting local draft',
+  'Discard unusable local draft',
+ ];
+ for(const line of lines){
+  expect(enCatalog[line]).toBe(line);
+  const ko=tr(line,'ko');
+  expect(ko).toBe(koCatalog[line]);
+  expect(ko).not.toBe(line);
+  expect(classifyKoreanDomString(ko)).toBe('ok');
+ }
+});
+
+test('#301 Bar 6: planted legacy-main controls fail every new #301 bar',async()=>{
+ const oldSingle=singleSession('0.1.0','0.2.0'),newSingle=singleSession('0.2.0','0.3.0'),item=feedbackItem();
+
+ // Control 1 (Bar 1 on today's main): clean draft after version upgrade falsely conflicts, shows banner, and blocks submit
+ const cleanSingleDraft:LocalInspectionDraft={...draft(),baseline:await sessionFingerprint(oldSingle),reviewDirty:false,inputs:{'review-status':{value:'approved'}},session:{...oldSingle,status:'approved'}};
+ const legacyClean=await openDraftReopenScenario({mode:'single',saved:cleanSingleDraft,currentBaseline:newSingle,currentBinding:binding,legacyMain:true});
+ try{
+  expect(legacyClean.state().conflict).toBe(true); // fails Bar 1 (conflict is false on fix)
+  expect(legacyClean.state().statusText).toContain('explicitly recover as pending'); // fails Bar 1 (no banner) and Bar 4 (offers absent button)
+  expect(legacyClean.statusButtons()).not.toContain('Recover local draft as pending');
+  await expect(legacyClean.submit()).rejects.toThrow('Resolve the saved local draft conflict');
+ }finally{legacyClean.connection.dispose();}
+
+ // Control 2 (Bar 2 on today's main): unsaved feedback after version upgrade fails recoverSession in single and is lost in compare
+ const dirtySingleDraft:LocalInspectionDraft={...draft(),baseline:await sessionFingerprint(oldSingle),reviewDirty:true,session:{...oldSingle,status:'changes-requested',feedback:[item]}};
+ const legacyDirtySingle=await openDraftReopenScenario({mode:'single',saved:dirtySingleDraft,currentBaseline:newSingle,currentBinding:binding,legacyMain:true});
+ try{
+  expect(legacyDirtySingle.state().conflict).toBe(true); // fails Bar 2
+  expect(legacyDirtySingle.state().current.feedback).toEqual([]); // feedback not recovered
+  expect(legacyDirtySingle.statusButtons()).not.toContain('Recover local draft as pending'); // cannot even recover manually!
+ }finally{legacyDirtySingle.connection.dispose();}
+
+ const oldCompare=await compareSession('0.1.0','0.2.0'),newCompare=await compareSession('0.2.0','0.3.0'),compareItem={...feedbackItem('Lost on legacy compare'),side:'a'};
+ const oldCompareBinding:InspectionBinding={mode:'compare',sourceHash:oldCompare.sourceHash,rigs:['b'.repeat(64),'c'.repeat(64)]};
+ const newCompareBinding:InspectionBinding={mode:'compare',sourceHash:newCompare.sourceHash,rigs:['b'.repeat(64),'c'.repeat(64)]};
+ const compareBookmark:InspectionBookmark={...bookmark(),binding:oldCompareBinding,selection:{...bookmark().selection,part:undefined,mode:'compare'}};
+ const dirtyCompareDraft:LocalInspectionDraft={...draft(),sourceHash:oldCompare.sourceHash,baseline:await sessionFingerprint(oldCompare),reviewDirty:true,bookmark:compareBookmark,session:{...oldCompare,status:'changes-requested',feedback:[compareItem]}};
+ const legacyDirtyCompare=await openDraftReopenScenario({mode:'compare',saved:dirtyCompareDraft,savedBinding:oldCompareBinding,currentBaseline:newCompare,currentBinding:newCompareBinding,legacyMain:true});
+ try{
+  expect(legacyDirtyCompare.state().current.feedback).toEqual([]); // fails Bar 2: unsaved compare feedback silently orphaned on upgrade
+ }finally{legacyDirtyCompare.connection.dispose();}
+
+ // Control 3 (Bar 3 & Bar 4 on today's main): review dialog has no recovery buttons, and unrecoverable conflict banner still says "recover as pending"
+ const submittedSingle={...newSingle,status:'approved',updatedAt:'2026-11-01T12:00:00.000Z'};
+ const legacyConflict=await openDraftReopenScenario({mode:'single',saved:{...dirtySingleDraft,session:{...newSingle,status:'changes-requested',feedback:[item]}},currentBaseline:submittedSingle,currentBinding:binding,legacyMain:true});
+ try{
+  expect(legacyConflict.dialogButtons()).toEqual([]); // fails Bar 3: no recovery controls inside #review-dialog
+ }finally{legacyConflict.connection.dispose();}
+});

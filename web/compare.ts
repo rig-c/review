@@ -587,7 +587,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
  }finally{cameraRestoring=false;}
 }
 async function setupPersistence():Promise<boolean> {
- persistence=await connectInspectionPersistence({scope:'compare:'+data.a.manifest.id+':'+data.a.sourceHash+':'+data.b.manifest.id+':'+data.b.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('status').value=session.status;renderFeedback();savedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
+ persistence=await connectInspectionPersistence({scope:'compare:'+data.a.manifest.id+':'+data.a.sourceHash+':'+data.b.manifest.id+':'+data.b.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('status').value=session.status;provenance();renderFeedback();savedState();},bookmark:inspectionBookmark,restoreBookmark:restoreInspection,
  ui:()=>({inspectorScroll:workspace?.scroll()??'{}',frameBasis:select('frame-basis').value,...(pickedTools?pickedTools.uiState():{})}),restoreUI:value=>{if(value.frameBasis==='a'||value.frameBasis==='b')select('frame-basis').value=value.frameBasis;frameControls();pickedTools?.restoreUiState(value);workspace?.restoreScroll(value.inspectorScroll);},afterInputs:()=>{video.muted=!input('reference-audio').checked;const name=input('target-name').value;renderFeedbackSelection();input('target-name').value=name;},onConflict:value=>{draftConflict=value;savedState();},onStatus:value=>{text('draft-state',value);el('draft-state').title=value;}});
  return persistence.restored;
 }
