@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/rig-c/review/compare/v1.0.1...v1.1.0) (2026-11-02)
+
+
+### Features
+
+* **i18n:** let a review link choose its language ([#300](https://github.com/rig-c/review/issues/300)) ([db2d6cc](https://github.com/rig-c/review/commit/db2d6cce5e2e3151bfaaaacbbae933fee2b10ac8)), closes [#299](https://github.com/rig-c/review/issues/299)
+
 ## [1.0.1](https://github.com/rig-c/review/compare/v1.0.0...v1.0.1) (2026-11-01)
 
 
