@@ -12,8 +12,11 @@ import {
  checkWebHardcodedStrings,
  classifyKoreanDomString,
  getLanguage,
+ getLanguagePreference,
+ languageFromSearch,
  resolveLanguage,
  setLanguagePreference,
+ setLinkLanguage,
  sourceTextContent,
  tr,
 } from '../web/i18n.ts';
@@ -1029,4 +1032,20 @@ test('#294: an attached optional suffix keeps a value that opens with a bare spa
   expect(tr(en,'ko')).toBe(ko);
   expect(tr(ko,'en')).toBe(en);
  }
+});
+
+test('#299: a link forces en or ko over the stored choice and the browser, and stores nothing',()=>{
+ expect(languageFromSearch('?input=a&lang=en')).toBe('en');
+ expect(languageFromSearch('?lang=ko')).toBe('ko');
+ for(const search of ['','?lang=','?lang=fr','?lang=EN','?input=a'])expect(languageFromSearch(search)).toBeNull();
+ const korean={languages:['ko-KR'],language:'ko-KR'};
+ setLinkLanguage('en');
+ expect(setLanguagePreference('ko',korean)).toBe('en');
+ expect(setLanguagePreference('system',korean)).toBe('en');
+ expect(getLanguagePreference()).toBe('system');
+ setLinkLanguage('ko');
+ expect(setLanguagePreference('en',{languages:['en-US'],language:'en-US'})).toBe('ko');
+ setLinkLanguage(null);
+ expect(setLanguagePreference('system',korean)).toBe('ko');
+ setLanguagePreference('system',{languages:['en-US'],language:'en-US'});
 });

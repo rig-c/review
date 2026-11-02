@@ -107,8 +107,15 @@ export function resolveLanguage(
   return tag === 'ko' || tag.startsWith('ko-') || tag.startsWith('ko_') ? 'ko' : 'en';
 }
 
+/** A link's `?lang=`: en and ko force the page, anything else is no opinion. */
+export function languageFromSearch(search: string): ResolvedLanguage | null {
+  const value = new URLSearchParams(search).get('lang');
+  return value === 'en' || value === 'ko' ? value : null;
+}
+
+let linkLanguage: ResolvedLanguage | null = typeof location !== 'undefined' ? languageFromSearch(location.search) : null;
 let currentPreference: WorkspaceLanguage = 'system';
-let currentLanguage: ResolvedLanguage = resolveLanguage('system');
+let currentLanguage: ResolvedLanguage = resolveLanguage(linkLanguage ?? 'system');
 const listeners = new Set<(lang: ResolvedLanguage) => void>();
 
 export function getLanguage(): ResolvedLanguage {
@@ -117,6 +124,16 @@ export function getLanguage(): ResolvedLanguage {
 
 export function getLanguagePreference(): WorkspaceLanguage {
   return currentPreference;
+}
+
+/** The language a link forces, never stored, so a shared link cannot change a reader's saved choice. */
+export function getLinkLanguage(): ResolvedLanguage | null {
+  return linkLanguage;
+}
+
+/** A pick in the settings menu outranks the link for the rest of the page. */
+export function setLinkLanguage(language: ResolvedLanguage | null): void {
+  linkLanguage = language;
 }
 
 export function syncDocumentLanguage(doc?: Document | null): void {
@@ -131,7 +148,7 @@ export function setLanguagePreference(
   nav?: NavigatorLanguageLike | null
 ): ResolvedLanguage {
   currentPreference = preference;
-  const resolved = resolveLanguage(preference, nav);
+  const resolved = resolveLanguage(linkLanguage ?? preference, nav);
   currentLanguage = resolved;
   syncDocumentLanguage();
   if (boundRoot) {
