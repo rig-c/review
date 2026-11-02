@@ -218,11 +218,14 @@ footer.status-bar{flex-wrap:nowrap}
 .review-dialog-header h2{margin:0;font-size:14px;font-weight:600;color:var(--fg-strong)}
 .review-dialog-header .hint{margin:0;flex:1;min-width:0}
 .review-dialog-body{flex:1;min-height:0;overflow:auto;padding:14px 16px;overscroll-behavior:contain}
-.review-dialog-actions{flex:none;display:flex;align-items:center;gap:12px;padding:10px 14px;border-top:1px solid var(--border)}
-.review-message{flex:1;min-width:0;font-size:11px;color:var(--fg-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.review-dialog-actions{flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;padding:10px 14px;border-top:1px solid var(--border)}
+.review-message{flex:1 1 200px;min-width:0;font-size:11px;color:var(--fg-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .review-message.error{color:var(--fail)}
 .review-draft-state{font-size:11px;color:var(--warn)}
 .review-draft-state:empty{display:none}
+.review-draft-recovery{display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px}
+.review-draft-recovery:empty{display:none}
+.review-draft-recovery button{font-size:11px;padding:2px 6px}
 .review-dialog .provenance{margin-top:10px}
 .review-dialog .review-summary>label{display:block;font-size:11px;margin:10px 0 5px}
 .review-dialog .report-panel{padding:10px 0}

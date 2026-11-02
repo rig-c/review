@@ -137,8 +137,8 @@ test('the top bar has no export buttons; Write review opens the review dialog ho
  expect(top).toContain('<button id="write-review" type="button" class="primary" aria-haspopup="dialog" aria-controls="review-dialog">Write review</button>');expect(top).not.toContain('id="save"');
  for(const id of feedbackIds){expect(dialog).toContain(` id="${id}"`);expect(html.split(` id="${id}"`).length).toBe(2);}
  expect(between(dialog,'<div class="review-dialog-actions">','</div>')).toContain('<button id="save" class="primary" disabled>Submit review</button>');
- // The modal makes the footer inert, so the dialog repeats the message and the draft readout for its reader.
- for(const id of ['review-message','review-draft-state'])expect(between(dialog,'<div class="review-dialog-actions">','</div>')).toContain(`id="${id}"`);
+ // The modal makes the footer inert, so the dialog repeats the message, draft readout and recovery actions for its reader.
+ for(const id of ['review-message','review-draft-state','review-draft-recovery'])expect(between(dialog,'<div class="review-dialog-actions">','</div>')).toContain(`id="${id}"`);
  const main=await mainSource();
  expect(main).toContain("button('write-review').onclick=openReview;");expect(main).toMatch(/function openReview\(\):void \{[^\n]*dialog\.showModal\(\);\}/);
  expect(main).toContain("dialog.addEventListener('close',()=>{button('write-review').setAttribute('aria-expanded','false');button('write-review').focus();});");

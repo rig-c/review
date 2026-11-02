@@ -109,13 +109,46 @@ function parseInputs(value:unknown):FormInputs {
  for(const [k,v]of entries){text(k,'input id');if(['__proto__','constructor','prototype'].includes(k))throw new Error('Draft input key invalid');const input=record(v,'input');keys(input,['value','checked'],'input');if(typeof input.value!=='string'||input.value.length>32768||input.checked!==undefined&&typeof input.checked!=='boolean')throw new Error('Draft input invalid');result[k]={value:input.value,...(input.checked===undefined?{}:{checked:input.checked as boolean})};}return result;
 }
 export async function sessionFingerprint(value:unknown):Promise<string> {const bytes=new TextEncoder().encode(JSON.stringify(value));return [...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(v=>v.toString(16).padStart(2,'0')).join('');}
+function sameReviewedSource(value:unknown,expected:unknown):boolean {
+ if(JSON.stringify(value)===JSON.stringify(expected))return true;
+ if(!value||typeof value!=='object'||Array.isArray(value)||!expected||typeof expected!=='object'||Array.isArray(expected))return false;
+ const v=value as Record<string,unknown>,e=expected as Record<string,unknown>,vk=Object.keys(v),ek=Object.keys(e);
+ if(vk.length!==ek.length||!vk.every(k=>ek.includes(k)))return false;
+ for(const k of ['viewerVersion','runtimeVersion'])if(typeof v[k]!=='string'||!v[k]||v[k].length>256||/[\x00-\x1f]/.test(v[k])||typeof e[k]!=='string'||!e[k])return false;
+ return ek.every(k=>k==='viewerVersion'||k==='runtimeVersion'||JSON.stringify(v[k])===JSON.stringify(e[k]));
+}
+function sameCompareBinding(value:unknown,expected:unknown):boolean {
+ if(JSON.stringify(value)===JSON.stringify(expected))return true;
+ if(!value||typeof value!=='object'||Array.isArray(value)||!expected||typeof expected!=='object'||Array.isArray(expected))return false;
+ const v=value as Record<string,unknown>,e=expected as Record<string,unknown>,vk=Object.keys(v),ek=Object.keys(e);
+ if(vk.length!==ek.length||!vk.every(k=>ek.includes(k))||v.schema!==e.schema||v.animation!==e.animation||JSON.stringify(v.reference)!==JSON.stringify(e.reference))return false;
+ for(const side of ['a','b'] as const){
+  const vs=v[side],es=e[side];if(!vs||typeof vs!=='object'||Array.isArray(vs)||!es||typeof es!=='object'||Array.isArray(es))return false;
+  const a=vs as Record<string,unknown>,b=es as Record<string,unknown>,ak=Object.keys(a),bk=Object.keys(b);
+  if(ak.length!==bk.length||!ak.every(k=>bk.includes(k))||a.id!==b.id||a.revision!==b.revision||a.sourceHash!==b.sourceHash||!sameReviewedSource(a.reviewedSource,b.reviewedSource))return false;
+ }
+ return true;
+}
 export function recoverSession<T extends {id:string;revision:string;sourceHash:string;status:string;feedback:unknown[]}>(value:unknown,baseline:T):T|null {
- if(!value||typeof value!=='object'||Array.isArray(value))return null;const o=value as Record<string,unknown>;for(const key of Object.keys(o))if(!Object.keys(baseline).includes(key))return null;
- for(const k of ['id','revision','sourceHash','reviewedSource','referenceBinding','binding'])if(JSON.stringify(o[k])!==JSON.stringify((baseline as Record<string,unknown>)[k]))return null;
+ if(!value||typeof value!=='object'||Array.isArray(value))return null;const o=value as Record<string,unknown>,base=baseline as Record<string,unknown>;for(const key of Object.keys(o))if(!Object.keys(baseline).includes(key))return null;
+ const isCompare='binding'in baseline&&base.binding!==undefined;
+ if(isCompare){
+  const sameBindingJson=JSON.stringify(o.binding)===JSON.stringify(base.binding);
+  if(o.revision!==base.revision||!sameCompareBinding(o.binding,base.binding)||(sameBindingJson?o.sourceHash!==base.sourceHash||o.id!==base.id:typeof o.sourceHash!=='string'||!/^[a-f0-9]{64}$/.test(o.sourceHash)||o.id!==(o.sourceHash===base.sourceHash?base.id:`compare-${o.sourceHash.slice(0,16)}`))||JSON.stringify(o.reviewedSource)!==JSON.stringify(base.reviewedSource)||JSON.stringify(o.referenceBinding)!==JSON.stringify(base.referenceBinding))return null;
+ }else{
+  for(const k of ['id','revision','sourceHash','referenceBinding','binding'])if(JSON.stringify(o[k])!==JSON.stringify(base[k]))return null;
+  if(!sameReviewedSource(o.reviewedSource,base.reviewedSource))return null;
+ }
  if(!['pending','approved','changes-requested'].includes(String(o.status))||!Array.isArray(o.feedback)||!Array.isArray(o.feedbackWarnings))return null;
  for(const item of o.feedback){if(!item||typeof item!=='object')return null;const f=item as Record<string,unknown>,target=f.target as Record<string,unknown>|undefined;const comment=(f.context as any)?.comment;if(hasStageComment(comment)){try{parseStageComment(comment);}catch{return null;}}if(hasStageComment(comment)&&(comment.frame===null||comment.timeBasis!==undefined)&&!isTimeOnlyFeedback(f))return null;if(typeof f.id!=='string'||typeof f.summary!=='string'||(!Number.isInteger(f.frameStart)||!Number.isInteger(f.frameEnd))&&!isTimeOnlyFeedback(f)||!target||!['bone','slot','rig'].includes(String(target.kind))||typeof target.name!=='string'||!['defect','quality'].includes(String(f.category)))return null;}
  if('checkpoints'in baseline){if(!o.checkpoints||typeof o.checkpoints!=='object'||Array.isArray(o.checkpoints))return null;for(const value of Object.values(o.checkpoints)){if(!value||typeof value!=='object'||Array.isArray(value))return null;const item=value as Record<string,unknown>;if(!['pending','pass','fail'].includes(String(item.outcome))||typeof item.note!=='string'||item.note.length>32768)return null;}}
- return o as T;
+ const next:Record<string,unknown>={...o};
+ if('reviewedSource'in baseline&&base.reviewedSource!==undefined)next.reviewedSource=structuredClone(base.reviewedSource);
+ if(isCompare){
+  next.id=base.id;next.sourceHash=base.sourceHash;next.binding=structuredClone(base.binding);
+  if(o.sourceHash!==base.sourceHash)next.feedback=(o.feedback as Record<string,unknown>[]).map(item=>{const c=(item.context as any)?.comment;return c?.bookmark?.binding?.sourceHash===o.sourceHash?{...item,context:{...(item.context as object),comment:{...c,bookmark:{...c.bookmark,binding:{...c.bookmark.binding,sourceHash:base.sourceHash}}}}}:item;});
+ }
+ return next as T;
 }
 /** Drafts kept per origin before least-recently-written eviction; recent drafts are never evicted. */
 export const maximumDrafts=32,protectedDraftMs=24*60*60*1000;
@@ -127,6 +160,7 @@ export class InspectionDraftStore {
  private storage:Storage|null=null;
  private blocked=false;
  private rawRecovery:string|null=null;
+ private priorKey:string|null=null;
  recovery():string|null{return this.rawRecovery;}
  readonly key:string;
  constructor(private readonly scope:string,private readonly binding:InspectionBinding,private readonly warn:(message:string)=>void,storage?:Storage,private readonly now:()=>number=Date.now){
@@ -140,18 +174,29 @@ export class InspectionDraftStore {
   return times;
  }
  private evict():void{
-  const storage=this.storage!,now=this.now(),times=this.written();times.set(this.key,now);
+  const storage=this.storage!,now=this.now(),times=this.written();if(this.priorKey&&this.priorKey!==this.key){storage.removeItem(this.priorKey);times.delete(this.priorKey);this.priorKey=null;}times.set(this.key,now);
   const old=[...times].filter(([key,time])=>key!==this.key&&now-time>protectedDraftMs).sort((a,b)=>a[1]-b[1]);
   for(const [key]of old){if(times.size<=maximumDrafts)break;storage.removeItem(key);times.delete(key);}
   storage.setItem(draftIndex,JSON.stringify(Object.fromEntries(times)));
  }
- read():LocalInspectionDraft|null {
-  if(!this.storage)return null;try{const raw=this.storage.getItem(this.key);if(!raw)return null;this.rawRecovery=raw;if(new TextEncoder().encode(raw).length>maximumDraftBytes)throw new Error('Draft exceeds 512 KiB');const o=record(JSON.parse(raw),'draft');keys(o,['schema','sourceHash','baseline','savedAt','reviewDirty','bookmark','inputs','session','ui'],'draft');if(o.schema!=='rig-review-local-draft/1'||o.sourceHash!==this.binding.sourceHash)throw new Error('Draft binding/version differs');if(typeof o.reviewDirty!=='boolean')throw new Error('Draft review state invalid');const bookmark=parseBookmark(o.bookmark,this.binding),baseline=hash(o.baseline);if(typeof o.savedAt!=='string'||!Number.isFinite(Date.parse(o.savedAt)))throw new Error('Draft timestamp invalid');const ui=record(o.ui,'draft UI');for(const [k,v]of Object.entries(ui)){text(k,'draft UI key');if(v!==null&&typeof v!=='string'&&typeof v!=='number'||typeof v==='number'&&!Number.isFinite(v))throw new Error('Draft UI value invalid');}return {schema:o.schema,sourceHash:this.binding.sourceHash,baseline,savedAt:o.savedAt,reviewDirty:o.reviewDirty,bookmark,inputs:parseInputs(o.inputs),session:o.session,ui:ui as LocalInspectionDraft['ui']};}catch(error){this.blocked=true;this.warn(`Saved local draft was not restored: ${error instanceof Error?error.message:String(error)}. It remains in storage for recovery.`);return null;}
+ private parseDraft(raw:string,expectedBinding:InspectionBinding):LocalInspectionDraft{
+  if(new TextEncoder().encode(raw).length>maximumDraftBytes)throw new Error('Draft exceeds 512 KiB');const o=record(JSON.parse(raw),'draft');keys(o,['schema','sourceHash','baseline','savedAt','reviewDirty','bookmark','inputs','session','ui'],'draft');if(o.schema!=='rig-review-local-draft/1'||o.sourceHash!==expectedBinding.sourceHash)throw new Error('Draft binding/version differs');if(typeof o.reviewDirty!=='boolean')throw new Error('Draft review state invalid');const bookmark=parseBookmark(o.bookmark,expectedBinding),baseline=hash(o.baseline);if(typeof o.savedAt!=='string'||!Number.isFinite(Date.parse(o.savedAt)))throw new Error('Draft timestamp invalid');const ui=record(o.ui,'draft UI');for(const [k,v]of Object.entries(ui)){text(k,'draft UI key');if(v!==null&&typeof v!=='string'&&typeof v!=='number'||typeof v==='number'&&!Number.isFinite(v))throw new Error('Draft UI value invalid');}return {schema:o.schema,sourceHash:this.binding.sourceHash,baseline,savedAt:o.savedAt,reviewDirty:o.reviewDirty,bookmark:{...bookmark,binding:{...bookmark.binding,sourceHash:this.binding.sourceHash}},inputs:parseInputs(o.inputs),session:o.session,ui:ui as LocalInspectionDraft['ui']};
+ }
+ read(canRecover?:(session:unknown)=>boolean):LocalInspectionDraft|null {
+  if(!this.storage)return null;try{const raw=this.storage.getItem(this.key);if(!raw){
+   if(this.binding.mode==='compare'&&canRecover){
+    const prefix=`${draftPrefix}${this.scope}:`,candidates=[...this.written().entries()].filter(([k])=>k!==this.key&&k.startsWith(prefix)).sort((a,b)=>b[1]-a[1]);
+    for(const [candidateKey]of candidates){
+     try{const candidateRaw=this.storage.getItem(candidateKey);if(!candidateRaw)continue;const sourceHash=hash(candidateKey.slice(prefix.length)),parsed=this.parseDraft(candidateRaw,{...this.binding,sourceHash});if(!canRecover(parsed.session))continue;this.priorKey=candidateKey;this.rawRecovery=candidateRaw;return parsed;}catch{}
+    }
+   }
+   return null;
+  }this.rawRecovery=raw;return this.parseDraft(raw,this.binding);}catch(error){this.blocked=true;this.warn(`Saved local draft was not restored: ${error instanceof Error?error.message:String(error)}. It remains in storage for recovery.`);return null;}
  }
  write(draft:LocalInspectionDraft):boolean {
   if(!this.storage||this.blocked)return false;try{const value=JSON.stringify(draft);if(new TextEncoder().encode(value).length>maximumDraftBytes)throw new Error('Draft exceeds 512 KiB');this.storage.setItem(this.key,value);try{this.evict();}catch{}return true;}catch(error){this.warn(`Local draft could not be saved: ${error instanceof Error?error.message:String(error)}. Export feedback before leaving.`);return false;}
  }
- clear():void {try{this.storage?.removeItem(this.key);this.blocked=false;this.rawRecovery=null;}catch{this.warn('Local draft could not be cleared.');}}
+ clear():void {try{this.storage?.removeItem(this.key);if(this.priorKey&&this.priorKey!==this.key){this.storage?.removeItem(this.priorKey);this.priorKey=null;}this.blocked=false;this.rawRecovery=null;}catch{this.warn('Local draft could not be cleared.');}}
 }
 
 interface PersistenceSession {id:string;revision:string;sourceHash:string;status:string;feedback:unknown[]}
@@ -171,31 +216,45 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
  let previousInert:boolean|null=null;
  const holdRestore=(value:boolean)=>{restoring=value;const body=document.body;if(value){if(body&&previousInert===null){previousInert=body.inert;body.inert=true;}}else if(body&&previousInert!==null){body.inert=previousInert;previousInert=null;}};
  let baseline=await sessionFingerprint(adapter.baseline);const status=adapter.onStatus,initialInputs=captureInputs();
- const store=new InspectionDraftStore(adapter.scope,adapter.binding,status),draft=store.read();
- const notice=document.getElementById('draft-recovery');if(notice)notice.replaceChildren();
+ const store=new InspectionDraftStore(adapter.scope,adapter.binding,status);
+ let draft=store.read(session=>recoverSession(session,adapter.baseline)!==null);
+ const notices=[document.getElementById('draft-recovery'),document.getElementById('review-draft-recovery')].filter((node):node is HTMLElement=>node!==null);
+ const clearNotices=()=>{for(const node of notices)node.replaceChildren();};
+ const appendAction=(label:string,onclick:()=>void)=>{for(const node of notices){const button=document.createElement('button');button.type='button';button.textContent=label;button.onclick=onclick;node.append(button);}};
+ clearNotices();
  const download=(raw:string)=>{const url=URL.createObjectURL(new Blob([raw],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='review-local-draft.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
- const raw=store.recovery();
- if(raw&&notice){const button=document.createElement('button');button.type='button';button.textContent='Download saved local draft';button.onclick=()=>download(raw);notice.append(button);}
  let explicit:InspectionBookmark|null=null;
  try{explicit=decodeBookmark(location.hash,adapter.binding);}catch(error){status(error instanceof Error?error.message:String(error));}
+ let recovered:T|null=null,sameBaseline=false;
  if(draft){
-  const recovered=recoverSession(draft.session,adapter.baseline);conflict=draft.baseline!==baseline||!recovered;
+  recovered=recoverSession(draft.session,adapter.baseline);
+  const prior=recovered?recoverSession(adapter.baseline,draft.session as T):null;
+  sameBaseline=draft.baseline===baseline||(prior!==null&&draft.baseline===await sessionFingerprint(prior));
+  if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){store.clear();draft=null;recovered=null;}
+ }
+ const raw=store.recovery();
+ if(draft){
+  conflict=!sameBaseline||!recovered;
   if(!conflict&&recovered&&draft.reviewDirty){try{adapter.restoreSession(recovered,true);status('Restored local draft · not submitted');}catch(error){conflict=true;adapter.onConflict(true);status(`Local draft needs explicit recovery: ${error instanceof Error?error.message:String(error)}`);}}
-  else if(conflict){status('Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.');adapter.onConflict(true);
-   if(recovered&&notice){const button=document.createElement('button');button.type='button';button.textContent='Recover local draft as pending';button.onclick=()=>{try{adapter.restoreSession({...recovered,status:'pending'},true);conflict=false;adapter.onConflict(false);status('Recovered local draft as pending · not submitted');save();}catch(error){status(`Local draft recovery refused: ${error instanceof Error?error.message:String(error)}`);}};notice.append(button);}
+  else if(conflict){
+   status(recovered?'Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.':'Saved local draft conflicts with the current submitted review. Server status is unchanged; download or discard it.');
+   adapter.onConflict(true);
   }
   try{adapter.restoreUI(draft.ui);}catch(error){status(`Saved panel selection unavailable: ${error instanceof Error?error.message:String(error)}`);}
  }
- if(conflict&&notice){const discard=document.createElement('button');discard.type='button';discard.textContent='Discard conflicting local draft';discard.onclick=()=>{adapter.restoreSession(structuredClone(adapter.baseline),false);restoreInputs(initialInputs,viewInputIds);adapter.afterInputs();store.clear();conflict=false;adapter.onConflict(false);notice.replaceChildren();status('Local draft discarded · current submitted review retained.');save();};notice.append(discard);}
+ if(raw&&(conflict||!draft))appendAction('Download saved local draft',()=>download(raw));
+ if(conflict&&recovered)appendAction('Recover local draft as pending',()=>{try{adapter.restoreSession({...recovered,status:'pending'},true);conflict=false;adapter.onConflict(false);clearNotices();status('Recovered local draft as pending · not submitted');save();}catch(error){status(`Local draft recovery refused: ${error instanceof Error?error.message:String(error)}`);}});
+ if(conflict)appendAction('Discard conflicting local draft',()=>{adapter.restoreSession(structuredClone(adapter.baseline),false);restoreInputs(initialInputs,viewInputIds);adapter.afterInputs();store.clear();conflict=false;adapter.onConflict(false);clearNotices();status('Local draft discarded · current submitted review retained.');save();});
  const selected=location.hash.startsWith('#review=')?explicit:draft?.bookmark;
  let restored=location.hash.startsWith('#review=')||!!draft;
  if(selected){try{await adapter.restoreBookmark(selected,new AbortController().signal);restored=true;}catch(error){status(`Inspection was not restored: ${error instanceof Error?error.message:String(error)}`);}}
  if(draft){
-  const excluded=new Set(viewInputIds);if(conflict){excluded.add('review-status');excluded.add('status');for(const key of Object.keys(draft.inputs))if(key.startsWith('radio:outcome:'))excluded.add(key);}
+  const excluded=new Set(viewInputIds);if(conflict||!draft.reviewDirty){excluded.add('review-status');excluded.add('status');excluded.add('checkpoint-note');for(const key of Object.keys(draft.inputs))if(key.startsWith('radio:outcome:'))excluded.add(key);}
   restoreInputs(draft.inputs,excluded);adapter.afterInputs();
  }
- if(raw&&!draft&&notice){const button=document.createElement('button');button.type='button';button.textContent='Discard unusable local draft';button.onclick=()=>{store.clear();notice.replaceChildren();status('Unusable local draft discarded for this review only.');save();};notice.append(button);}
+ if(raw&&!draft)appendAction('Discard unusable local draft',()=>{store.clear();clearNotices();status('Unusable local draft discarded for this review only.');save();});
  restoring=false;
+ if(draft&&!conflict&&draft.baseline!==baseline)save();
  function save():void {
   if(closed||restoring||conflict)return;
   try{const bookmark=parseBookmark(adapter.bookmark(),adapter.binding);const value:LocalInspectionDraft={schema:'rig-review-local-draft/1',sourceHash:adapter.binding.sourceHash,baseline,savedAt:new Date().toISOString(),reviewDirty:adapter.reviewDirty(),bookmark,inputs:captureInputs(),session:adapter.session(),ui:adapter.ui()};
