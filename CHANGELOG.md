@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.0](https://github.com/rig-c/review/compare/v1.3.0...v1.4.0) (2026-11-03)
+
+
+### Features
+
+* **stage:** a drag on the rig view pans and moves the physics, as the Family viewer does ([#331](https://github.com/rig-c/review/issues/331)) ([#337](https://github.com/rig-c/review/issues/337)) ([5e137de](https://github.com/rig-c/review/commit/5e137decd7bb07e9b242ce834ff4919011f12311))
+* **stage:** preview on hover which part a click would select ([#330](https://github.com/rig-c/review/issues/330)) ([#335](https://github.com/rig-c/review/issues/335)) ([1360932](https://github.com/rig-c/review/commit/1360932e0979bec34bbbb16507d940687343effb))
+
 ## [1.3.0](https://github.com/rig-c/review/compare/v1.2.1...v1.3.0) (2026-11-03)
 
 
