@@ -8,7 +8,7 @@ import {deriveBust,parseBustSpec,type BustSpec} from '../src/chest-landmarks.ts'
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
 import {APPLIED_ANIMATION_SCHEMA,APPLIED_DELTA_SCHEMA,APPLIED_PATCH_SCHEMA,APPLIED_RETARGET_SCHEMA,filesDiffText,type AppliedAnimation,type AppliedAssembled,type AppliedDelta,type AppliedPatch,type AppliedRetarget,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
 import {appliedBuildOwner,type RestoredPanelOutcome} from '../src/applied-blocks.ts';
-import {meshApplyOutcome} from '../src/mesh-entry.ts';
+import {meshApplyOutcome,meshMode} from '../src/mesh-entry.ts';
 import type {AnimationSourceOp} from '../src/animation-ops.ts';
 import type {MotionSummary,RetargetFlags,RetargetLine,RetargetRecord} from '../src/retarget.ts';
 export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,AppliedRetarget,AppliedAnimation,AnimationSourceOp,CheckSummary,BustSpec};
@@ -306,9 +306,31 @@ export function patchOutcomeLine(result:PatchJobView|RebuildRefusal):{text:strin
  const wall=building?`${result.reused?'reused the scratch build of this exact patch · ':''}${propose}build ${seconds(result.op==='cloth'?result.cloth?.wallMs.build??null:result.wallMs.op)} (assemble → rig → check) + compile ${seconds(result.wallMs.compile)}`:result.reused?'reused the scratch build of this exact patch':`${propose}${result.op==='cloth'?'rig':result.op??result.request.patch.op.cmd} ${seconds(result.op==='cloth'?result.cloth?.wallMs.build??null:result.wallMs.op)} + compile ${seconds(result.wallMs.compile)}${result.check?.source==='retune'||result.check?.source==='remesh'?'':` + check ${seconds(result.wallMs.check)}`}`;
  return {text:`Applied patch ${result.request.patchSha256.slice(0,12)}… (${result.request.patch.ops.length} op(s)) with ${result.producer.package} ${result.producer.version} · ${wall} · ${check}${result.environment?` under the exported world (${result.environment.steps} step(s), sha256 ${result.environment.sha256.slice(0,16)})`:''} · ${result.files?filesDiffText(result.files):`rig.json differs at ${result.diff?.count??'?'} path(s)`} · Reset returns to the inspected build`,error:!!result.check&&result.check.pass!==true};
 }
+/** The server's code when the config states no contour mesh (`src/rebuild.ts`); kept on the notice's last line for the record. */
+export const NO_CONTOUR_CODE='REBUILD_INPUTS_UNAVAILABLE: the config states no contour mesh';
+/**
+ * #342: why the chest tools cannot rebuild this rig, in words about the rig, or null when they can. A config with no
+ * contour mesh is a valid handoff (`src/rebuild.ts`); the chest regions and `contour.bust` simply have no part to
+ * target. The mesh kinds the config does state are counted from the config, never written into the text.
+ */
+export function noContourReason(status:Pick<RebuildStatusView,'inputs'|'parts'>&{meshes?:Record<string,unknown>}):{text:string;lines:string[]}|null {
+ if(!status.inputs||status.parts.length)return null;
+ const kinds=new Map<string,number>();
+ for(const [part,entry] of Object.entries(status.meshes??{})){const m=meshMode(entry,part),kind='mode' in m?m.mode:'unreadable';kinds.set(kind,(kinds.get(kind)??0)+1);}
+ const total=[...kinds.values()].reduce((a,b)=>a+b,0);
+ const lines=['This rig has no contour mesh. Chest regions and bust motion need the torso built as a contour mesh, which the builder declares in the config. Nothing is wrong with this rig.',
+  total?`The config states ${total} meshes, none of them contour: ${[...kinds].map(([kind,n])=>`${n} ${kind}`).join(', ')}`:'The config states no meshes.',
+  NO_CONTOUR_CODE];
+ return {text:lines.join('\n'),lines};
+}
+/** #342: a refusal a reviewer reads; REBUILD_PART_NOT_CONTOUR gets a statement about the rig first and keeps its line below. */
+export function reviewerRefusal(text:string):string {
+ if(!text.startsWith('REBUILD_PART_NOT_CONTOUR:'))return text;
+ return ["This part is not a contour mesh, so chest regions and bust motion cannot be rebuilt on it. The builder chooses each part's mesh kind in the config. Nothing is wrong with this rig.",text].join('\n');
+}
 /** The status line after a job: built (with the wall clock and whether the scratch build was reused) or the producer's line verbatim. */
 export function outcomeLine(result:RebuildJobView|RebuildRefusal):{text:string;error:boolean} {
- if(!('id' in result))return {text:result.producerLine??result.error,error:true};
+ if(!('id' in result))return {text:reviewerRefusal(result.producerLine??result.error),error:true};
  if(result.status!=='built')return {text:refusedText(result),error:true};
  const wall=[result.wallMs.remesh,result.wallMs.compile].every(v=>v!==null)?` · remesh ${(result.wallMs.remesh!/1000).toFixed(1)} s + compile ${(result.wallMs.compile!/1000).toFixed(1)} s`:'';
  return {text:`Applied ${result.request.part} with ${result.producer.package} ${result.producer.version}${result.reused?' · reused the scratch build of this exact designation':wall} · Reset returns to the inspected build`,error:false};

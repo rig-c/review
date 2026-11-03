@@ -44,7 +44,7 @@ import type { RetargetFlags } from '../src/retarget.ts';
 import {
   historyRow, isPatchJob, recordFor, refusedText, restoredOutcomeForJob, retargetStage, undoControl,
   animationAppliedRecord, animationOutcomeLine, appliedRecord, deltaAppliedRecord, deltaOutcomeLine, chestSeed, designatedRegions, handoffText,
-  landmarksRequest, seedLandmarks, makePatch, outcomeLine, patchAppliedRecord, patchOutcomeLine,
+  landmarksRequest, noContourReason, seedLandmarks, makePatch, outcomeLine, patchAppliedRecord, patchOutcomeLine,
   pickBustPart, pickPart, runRebuild, seedFields, stageModel, retargetAppliedRecord, retargetOutcomeLine, stripPendingAfter,
   type AnimationJobView, type AnimationRequestBody, type AppliedHistoryView, type UndoView, type AnyJobView, type AppliedAnimation, type AppliedDelta, type AppliedPatch,
   type AppliedRecord, type AppliedRetarget, type DeltaJobView, type DeltaRequestBody, type ConfigPatch,
@@ -949,7 +949,11 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       el('chest-regions').dispatchEvent(new Event('input', { bubbles: true }));
       // #315: a config polygon the editor cannot read as an ellipse is named, never shown as an empty row.
       const refused = chestSeed(status).refusals;
-      if (!status.available) chestEditor?.notify(status.reason, true);
+      // #342: a rig with no contour mesh disables the chest tools before use and says why in words about the rig.
+      const noContour = noContourReason(status);
+      chestEditor?.unavailable(noContour?.text ?? null);
+      if (noContour) chestEditor?.notify(noContour.text, false, noContour.lines);
+      else if (!status.available) chestEditor?.notify(status.reason, true);
       else if (refused.length) chestEditor?.notify(refused.join(' · '), true, refused);
       else chestEditor?.notify('', false);
       renderHandoff(status);
@@ -962,6 +966,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       meshPanel?.select(currentSlot);
       animationPanel?.loadSource(status.animations ?? null, status.reason);
     } else {
+      chestEditor?.unavailable(null);
       animationPanel?.setSourceLoading();
     }
     if (state.requirementsCatalog) {
@@ -1242,9 +1247,9 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const side = pickedSide, state = sides[side];
     const status = state.rebuildStatus ?? await loadRebuildStatus(side);
     if (!status || !status.available || !status.inputs) {
-      const reason = status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE';
-      if (pickedSide === side) chestEditor?.notify(reason, true, [reason]);
-      host.message(reason, true);
+      const noContour = status ? noContourReason(status) : null, reason = noContour?.text ?? status?.reason ?? 'REBUILD_STATUS_UNAVAILABLE';
+      if (pickedSide === side) chestEditor?.notify(reason, !noContour, noContour?.lines ?? [reason]);
+      host.message(reason, !noContour);
       return;
     }
     let part: string, body: RebuildRequestBody;
