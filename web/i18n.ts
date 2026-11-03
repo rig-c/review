@@ -573,7 +573,8 @@ function isExemptElement(el: Element | null): boolean {
       cls.includes('part-slot-name') ||
       cls.includes('animation-lane-label') ||
       cls.includes('animation-tree-bone-name') ||
-      cls.includes('stage-comment-pin')
+      cls.includes('stage-comment-pin') ||
+      cls.includes('stage-hover-label')
     ) {
       return true;
     }
