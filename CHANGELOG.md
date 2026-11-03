@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.3](https://github.com/rig-c/review/compare/v1.4.2...v1.4.3) (2026-11-03)
+
+
+### Bug Fixes
+
+* **chest:** disable the chest tools on a rig with no contour mesh, and say why in words ([#342](https://github.com/rig-c/review/issues/342)) ([#343](https://github.com/rig-c/review/issues/343)) ([b55b022](https://github.com/rig-c/review/commit/b55b022dcc8ea64cf5a1931e9851ab6cb3f492f2))
+
 ## [1.4.2](https://github.com/rig-c/review/compare/v1.4.1...v1.4.2) (2026-11-03)
 
 
