@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/rig-c/review/compare/v1.4.0...v1.4.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **deps:** move the play pin to 1.22.2, which draws a zoomed stage without corruption ([#332](https://github.com/rig-c/review/issues/332)) ([#338](https://github.com/rig-c/review/issues/338)) ([a7e951b](https://github.com/rig-c/review/commit/a7e951b996dd088c0c26a1e84cdcec5603779bcc))
+
 ## [1.4.0](https://github.com/rig-c/review/compare/v1.3.0...v1.4.0) (2026-11-03)
 
 
