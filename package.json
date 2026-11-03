@@ -7,7 +7,7 @@
   "scripts": {
     "review": "bun src/cli.ts",
     "check": "bun src/cli.ts check",
-    "demo": "bun src/cli.ts examples/demo/review.json",
+    "demo": "bun src/cli.ts examples/demo/review.json --view-only",
     "check:readme": "bun scripts/check-readme.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",

@@ -45,6 +45,8 @@ const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes
 
 /** Without any handoff, Apply refuses by this name and says which flag declares one. */
 export const modelingHandoffMissing = (reason: string | null) => `MODELING_HANDOFF_MISSING: no producer handoff — declare it with ${HANDOFF_DECLARATION}${reason ? ` (${reason})` : ''}`;
+/** Neutral status shown on `/api/rebuild` and the page when opened with `--view-only` and no producer handoff (#305). */
+export const VIEW_ONLY_HANDOFF_STATUS = 'view only, no producer handoff';
 /** What remesh needs from the handoff, or the line naming what is missing. */
 export function handoffGap(handoff: Handoff): string | null {
   if (!handoff.parts) return `MODELING_INPUT_UNAVAILABLE: ${handoff.record.missing.join(', ')}`;
@@ -59,6 +61,30 @@ export async function producerInputs(handoff: Handoff | null, reason: string | n
   const configText = await readFile(handoff.config, 'utf8'), configHash = sha256(configText);
   if (configHash !== handoff.record.config.sha256) throw new RebuildError('REBUILD_INPUTS_CHANGED', `${handoff.record.config.path} changed since the review was opened; restart review`);
   return { config: handoff.config, parts: handoff.parts!, rig: handoff.rig!, configText, configHash, handoff: handoff.record };
+}
+/**
+ * #305: fast producer handoff readiness check for `open` (`handoffGap`, `producerInputs`, `resolveProducer`,
+ * `contourParts`). With `viewOnly`, an absent handoff (`!p.handoff`) is permitted; a declared or partly discovered
+ * handoff with gaps is still refused by name.
+ */
+export async function verifyHandoffReadiness(p: ReviewPackage, starts: readonly string[], viewOnly = false): Promise<string | null> {
+  if (!p.handoff) return viewOnly ? null : (p.handoffReason ?? modelingHandoffMissing(null));
+  const gap = handoffGap(p.handoff);
+  if (gap) return gap;
+  let inputs: ProducerInputs;
+  try {
+    inputs = await producerInputs(p.handoff, p.handoffReason);
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+  const resolved = resolveProducer(starts);
+  if (!resolved.ok) return resolved.error;
+  try {
+    if (!contourParts(inputs.configText).length) return 'REBUILD_INPUTS_UNAVAILABLE: the config states no contour mesh';
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+  return null;
 }
 
 /** The config's `constraints` list as written, or null when it has none. */
@@ -468,6 +494,8 @@ export interface RebuildOptions {
   stripConcurrency?: number;
   assetPrefix?: string;
   stripPrefix?: string;
+  /** #305: viewer-only mode (`--view-only`); when there is no handoff, reports neutral view-only status instead of `MODELING_*`. */
+  viewOnly?: boolean;
 }
 /** #173: a density strip's scratch — one folder per package, holding at most the one strip on screen. */
 export const stripRoot = (stateDir: string, sourceHash: string) => join(stateDir, 'density-strip', sourceHash);
@@ -699,13 +727,15 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   async function describe() {
     await options.unchanged();
     const handoff = p.handoff, gap = handoff ? handoffGap(handoff) : null;
+    const viewOnly = Boolean((options.viewOnly ?? p.viewOnly) && !handoff);
     const inputs = handoff && !gap ? await producerInputs(handoff, p.handoffReason) : null;
     const resolved = resolveProducer(options.starts);
     const parts = inputs ? contourParts(inputs.configText).map(({ name, regions }) => ({ name, regions })) : [];
     const contour = inputs ? Object.fromEntries(contourParts(inputs.configText).map(({ name, entry }) => [name, entry])) : {};
-    const reason = !handoff ? (p.handoffReason ?? modelingHandoffMissing(null)) : gap ?? (!resolved.ok ? resolved.error : parts.length ? null : 'REBUILD_INPUTS_UNAVAILABLE: the config states no contour mesh');
+    const reason = !handoff ? (viewOnly ? VIEW_ONLY_HANDOFF_STATUS : (p.handoffReason ?? modelingHandoffMissing(null))) : gap ?? (!resolved.ok ? resolved.error : parts.length ? null : 'REBUILD_INPUTS_UNAVAILABLE: the config states no contour mesh');
     return {
       schema: 'rig-review-rebuild-status/1', available: !!inputs && resolved.ok && parts.length > 0,
+      ...(viewOnly ? { viewOnly: true } : {}),
       handoff: handoff ? handoff.record : null,
       inputs: inputs && handoff ? { config: handoff.record.config.path, parts: handoff.record.parts, rig: handoff.record.rig, configHash: inputs.configHash } : null,
       baseline: ensureBaseline(resolved),
@@ -729,19 +759,19 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       cloth: inputs && handoff ? await clothStatus(handoff, inputs, resolved) : null,
       producer: resolved.ok ? tool(resolved.producer) : null, compiler: resolved.ok ? tool(resolved.compiler) : null,
       // #114: what the retarget editor offers — the pose producer, the declared sequences, the rig's bones and animations.
-      retarget: await retargetStatus(inputs),
+      retarget: await retargetStatus(inputs, viewOnly),
       // #235: the handoff's motion.animations_from file (path, sha256, text) and the rig's easings table for the timeline editor.
-      animations: await animationsStatus(inputs),
+      animations: await animationsStatus(inputs, viewOnly),
       reason,
       running,
     };
   }
   /** #235: what the keyed animation editor starts from. */
-  async function animationsStatus(inputs: ProducerInputs | null): Promise<AnimationSourceStatus> {
+  async function animationsStatus(inputs: ProducerInputs | null, viewOnly = false): Promise<AnimationSourceStatus> {
     if (!inputs) {
       return {
         available: false,
-        reason: p.handoff ? handoffGap(p.handoff) : (p.handoffReason ?? modelingHandoffMissing(null)),
+        reason: p.handoff ? handoffGap(p.handoff) : viewOnly ? VIEW_ONLY_HANDOFF_STATUS : (p.handoffReason ?? modelingHandoffMissing(null)),
         path: null,
         sha256: null,
         text: null,
@@ -1498,13 +1528,13 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     return out;
   }
   /** `GET /api/rebuild`'s retarget section (#114): whether a retarget can run here and what the editor picks from. */
-  async function retargetStatus(inputs: ProducerInputs | null) {
+  async function retargetStatus(inputs: ProducerInputs | null, viewOnly = false) {
     const resolved = resolvePose(options.starts), sequences = await retargetSequences();
     const read = async (name: string): Promise<Record<string, unknown>> => { if (!inputs) return {}; try { const v = JSON.parse(await readFile(join(inputs.rig, name), 'utf8')); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; } };
     const rig = await read('rig.json'), motion = await read('motion.json');
     const bones = (Array.isArray(rig.bones) ? rig.bones : []).map(b => (b && typeof b === 'object' ? (b as Record<string, unknown>).name : null)).filter((n): n is string => typeof n === 'string');
     const animations = motion.animations && typeof motion.animations === 'object' && !Array.isArray(motion.animations) ? Object.keys(motion.animations) : [];
-    const reason = !inputs ? (p.handoff ? handoffGap(p.handoff) : p.handoffReason ?? modelingHandoffMissing(null)) : !resolved.ok ? resolved.error : sequences.length ? null : 'RETARGET_SEQUENCE_UNAVAILABLE: the package declares no rig-pose-sequence/1 reference (a pose reference in review.json, or a *pose*.json in the opened folder)';
+    const reason = !inputs ? (p.handoff ? handoffGap(p.handoff) : viewOnly ? VIEW_ONLY_HANDOFF_STATUS : p.handoffReason ?? modelingHandoffMissing(null)) : !resolved.ok ? resolved.error : sequences.length ? null : 'RETARGET_SEQUENCE_UNAVAILABLE: the package declares no rig-pose-sequence/1 reference (a pose reference in review.json, or a *pose*.json in the opened folder)';
     return { available: reason === null, reason, producer: resolved.ok ? tool(resolved.producer) : null, compiler: resolved.ok ? tool(resolved.compiler) : null, rig: p.handoff?.record.rig ?? null, sequences, bones, animations };
   }
 

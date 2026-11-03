@@ -3016,4 +3016,5 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Click the part to place the left apex (character's left, image right); drag its marker to move it": "Click the part to place the left apex (character's left, image right); drag its marker to move it",
   "Copy R's y, core radius and band to L (leaves L's x as is)": "Copy R's y, core radius and band to L (leaves L's x as is)",
   "Y·size symmetry": "Y·size symmetry",
+  "view only, no producer handoff": "view only, no producer handoff",
 };

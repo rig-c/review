@@ -26,7 +26,9 @@ export interface ReviewPackage { referenceHashes?:Record<string,string>; root: s
   /** The resolved producer handoff (#101) and, when there is none, the refusal line naming where it was looked for. */
   handoff: Handoff|null; handoffReason: string|null; handoffInputs?: HandoffFlags;
   /** #187: the rig-parts build root ({@link isBuildRoot}) whose `check/` this package is, however it was opened; review state stays outside it. */
-  buildRoot?: string }
+  buildRoot?: string;
+  /** #305: viewer-only open (`--view-only`). */
+  viewOnly?: boolean }
 function fail(field: string, expected: string): never { throw new Error(`${field}: expected ${expected}`); }
 export function object(value: unknown, field: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) fail(field, 'object'); return value as Record<string, unknown>; }
 export function string(value: unknown, field: string): string { if (typeof value !== 'string' || !value.trim() || value.length > 10000) fail(field, 'nonempty string (at most 10000 characters)'); return value; }

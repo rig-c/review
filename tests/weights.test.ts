@@ -1,5 +1,6 @@
 import {expect,test} from 'bun:test';
-import {readFile} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createCanvas} from '@napi-rs/canvas';
 import {readSetupMesh,type ModelAssets} from '@rig-c/play';
@@ -94,11 +95,15 @@ test('one setup-space reader (#100): Edit Mesh places exactly the vertices the w
 });
 
 test('bar 2: a package without the compiled model document refuses WEIGHTS_MODEL_UNAVAILABLE',async()=>{
- const demo=await loadReview(join(import.meta.dir,'../examples/demo/review.json'));
- expect(demo.manifest.model).toBeUndefined();
- const result=meshWeights(demo.manifest.model?{}:null,'mesh',null);
- expect(result.ok).toBe(false);expect(result.ok?'':result.code.split(':')[0]).toBe(WEIGHTS_MODEL_UNAVAILABLE);
- expect(meshWeights({spec:'other'},'mesh',null)).toMatchObject({ok:false});
- // The view's own path: no rig is posed for a package without the document.
- const assets=null as unknown as ModelAssets;expect(setupPoseMesh(assets,null,'mesh',root())).toMatchObject({ok:false,code:expect.stringMatching(/^WEIGHTS_MODEL_UNAVAILABLE: /)});
+ const dir=await mkdtemp(join(tmpdir(),'review-weights-nomodel-'));
+ try{
+  await writeFile(join(dir,'review.json'),JSON.stringify({schema:'rig-review/1',id:'no-model',title:'No model',revision:'1'}));
+  const pkg=await loadReview(join(dir,'review.json'));
+  expect(pkg.manifest.model).toBeUndefined();
+  const result=meshWeights(pkg.manifest.model?{}:null,'mesh',null);
+  expect(result.ok).toBe(false);expect(result.ok?'':result.code.split(':')[0]).toBe(WEIGHTS_MODEL_UNAVAILABLE);
+  expect(meshWeights({spec:'other'},'mesh',null)).toMatchObject({ok:false});
+  // The view's own path: no rig is posed for a package without the document.
+  const assets=null as unknown as ModelAssets;expect(setupPoseMesh(assets,null,'mesh',root())).toMatchObject({ok:false,code:expect.stringMatching(/^WEIGHTS_MODEL_UNAVAILABLE: /)});
+ }finally{await rm(dir,{recursive:true,force:true});}
 });

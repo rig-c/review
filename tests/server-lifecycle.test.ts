@@ -287,7 +287,7 @@ test('foreign and missing Origin headers are refused on the managed front and on
   const frontStateDir = join(root, 'state-front');
   const frontPort = freePort();
   const opened = await openReview(
-    { input: pkgA, animation: 'inspect' },
+    { input: pkgA, animation: 'inspect', viewOnly: true },
     { stateDir: frontStateDir, frontPort, graceMs: 300, idleMs: 5_000 },
   );
   const frontOrigin = new URL(opened.url).origin;
@@ -379,8 +379,8 @@ test('managed front relays 8 concurrent WebSocket windows across 2 instances and
 
   const stateDir = join(root, 'state');
   const frontPort = freePort();
-  const instA = await openReview({ input: pkgA, animation: 'inspect' }, { stateDir, frontPort, graceMs: 600, idleMs: 5_000 });
-  const instB = await openReview({ input: pkgB, animation: 'inspect' }, { stateDir, frontPort, graceMs: 600, idleMs: 5_000 });
+  const instA = await openReview({ input: pkgA, animation: 'inspect', viewOnly: true }, { stateDir, frontPort, graceMs: 600, idleMs: 5_000 });
+  const instB = await openReview({ input: pkgB, animation: 'inspect', viewOnly: true }, { stateDir, frontPort, graceMs: 600, idleMs: 5_000 });
 
   const urlA = new URL(instA.url);
   const urlB = new URL(instB.url);
@@ -641,7 +641,7 @@ test('saved feedback and session files survive exit byte-identically when the sa
   await cp(join(import.meta.dir, 'fixtures/strip-probe/motion.json'), join(pkg, 'motion.json'));
   const stateDir = join(root, 'state');
 
-  const first = await openReview({ input: pkg, animation: 'inspect', direct: true }, { stateDir, graceMs: 100, idleMs: 5_000 });
+  const first = await openReview({ input: pkg, animation: 'inspect', direct: true, viewOnly: true }, { stateDir, graceMs: 100, idleMs: 5_000 });
   const firstOrigin = new URL(first.url).origin;
   const cap = new URL(first.url).hash.slice(5);
 
@@ -684,7 +684,7 @@ test('saved feedback and session files survive exit byte-identically when the sa
   const bytesAfterExit = await Promise.all(sessionFiles.map(async f => ({ name: f, sha256: sha256(await readFile(join(stateDir, f))) })));
 
   // Reopen the exact same inputs and verify byte-identical session files and restored API response
-  const reopened = await openReview({ input: pkg, animation: 'inspect', direct: true }, { stateDir, graceMs: 100, idleMs: 5_000 });
+  const reopened = await openReview({ input: pkg, animation: 'inspect', direct: true, viewOnly: true }, { stateDir, graceMs: 100, idleMs: 5_000 });
   expect(reopened.reused).toBe(false);
   const secondOrigin = new URL(reopened.url).origin;
   const tab2 = await openLiveSocket(secondOrigin + LIVE_PATH);
@@ -711,7 +711,7 @@ test('reusing a worker inside its close grace window re-arms it as an unopened s
 
   const graceMs = 250;
   const idleMs = 900;
-  const first = await openReview({ input: pkg, animation: 'inspect', direct: true }, { stateDir, graceMs, idleMs });
+  const first = await openReview({ input: pkg, animation: 'inspect', direct: true, viewOnly: true }, { stateDir, graceMs, idleMs });
   expect(first.reused).toBe(false);
   const origin = new URL(first.url).origin;
 
@@ -721,7 +721,7 @@ test('reusing a worker inside its close grace window re-arms it as an unopened s
   await Bun.sleep(70);
 
   // Reuse the worker inside the 250ms grace period
-  const reused = await openReview({ input: pkg, animation: 'inspect', direct: true }, { stateDir, graceMs, idleMs });
+  const reused = await openReview({ input: pkg, animation: 'inspect', direct: true, viewOnly: true }, { stateDir, graceMs, idleMs });
   expect(reused.reused).toBe(true);
   expect(reused.url).toBe(first.url);
 
@@ -784,7 +784,7 @@ test('a front stays up while its control directory has a live record and exits w
   const idleMs = 120;
 
   await openReview(
-    { input: pkg, animation: 'inspect' },
+    { input: pkg, animation: 'inspect', viewOnly: true },
     { stateDir, frontPort, frontIdleMs: idleMs, graceMs: 300, idleMs: 5_000 },
   );
   await collectOpenDaemons(root);

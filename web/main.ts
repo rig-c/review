@@ -1383,7 +1383,7 @@ function refreshPhysics():void {
  if(inspectedDocumentReason){physicsPanel.load({available:false,reason:inspectedDocumentReason},[]);return;}
  if(!inspectedDocument)return;
  if(!rebuildStatus){text('physics-panel-state','Reading the producer handoff…');text('idle-tracks-state','Reading the producer handoff…');return;}
- if(!rebuildStatus.inputs||!rebuildStatus.producer){physicsPanel.load({available:false,reason:rebuildStatus.reason??'PHYSICS_TUNING_UNAVAILABLE: no producer handoff'},[]);return;}
+ if(!rebuildStatus.inputs||!rebuildStatus.producer){physicsPanel.load({available:false,reason:rebuildStatus.reason??'PHYSICS_TUNING_UNAVAILABLE: no producer handoff'},[]);refreshIdle();return;}
  const bones=(inspectedDocument as {bones?:unknown}).bones,list=Array.isArray(bones)?bones.filter((b):b is {name:string;parent?:string}=>!!b&&typeof (b as {name?:unknown}).name==='string'):[];
  physicsPanel.load(tuningRows(rebuildStatus.constraints??null,inspectedDocument),list);
  refreshIdle();
@@ -1477,7 +1477,7 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  try{rebuildStatus=await api<RebuildStatusView>('/api/rebuild');}catch(error){rebuildStatus=null;const reason=`REBUILD_STATUS_UNAVAILABLE: ${errorText(error)}`;chestEditor?.notify(reason,true);animationPanel?.loadSource(null,reason);return null;}
  const seed={...(seedFields(rebuildStatus,chestField)??{}),...(seedLandmarks(rebuildStatus,chestField)??{})};
  if(Object.keys(seed).length){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
- if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,true);
+ if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,!rebuildStatus.viewOnly);
  renderHandoff(rebuildStatus);refreshPhysics();
  retargetPanel?.load(rebuildStatus.retarget??null,rebuildStatus.reason);
  bonesPanel?.load(rebuildStatus.inputs?rebuildStatus.bones??[]:null,rebuildStatus.inputs?null:rebuildStatus.reason??'BONES_UNAVAILABLE: no producer handoff');

@@ -3016,4 +3016,5 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Click the part to place the left apex (character's left, image right); drag its marker to move it": "파츠를 클릭해 왼쪽 정점(캐릭터 기준, 화면 오른쪽)을 배치하고, 마커를 드래그해 이동합니다",
   "Copy R's y, core radius and band to L (leaves L's x as is)": "R의 y, 중심 반경(r), 밴드를 L에 복사합니다(L의 x는 유지)",
   "Y·size symmetry": "Y·크기 대칭",
+  "view only, no producer handoff": "뷰 전용, 프로듀서 핸드오프 없음",
 };

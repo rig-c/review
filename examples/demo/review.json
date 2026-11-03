@@ -3,6 +3,7 @@
   "id": "abstract-lantern",
   "title": "Lantern \u00b7 first inspection",
   "revision": "source-study-1",
+  "model": "skeleton.model.json",
   "references": [
     {
       "id": "source",
@@ -19,14 +20,21 @@
       "path": "pose.json"
     }
   ],
-  "animations": [],
+  "animations": [
+    {
+      "id": "idle",
+      "label": "Idle \u00b7 gentle sway",
+      "duration": 1
+    }
+  ],
   "checkpoints": [
     {
       "id": "silhouette",
       "title": "Check silhouette and hanging joint",
       "workspace": "modeling",
       "reference": "source",
-      "note": "This original abstract SVG is source material. No compiled model is included; record structured feedback rather than assuming playback."
+      "animation": "idle",
+      "note": "This original abstract SVG is source material beside a minimal synthetic compiled model. Inspect playback and record structured feedback."
     },
     {
       "id": "joints",

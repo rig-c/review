@@ -11,7 +11,7 @@ bun install
 bun run demo
 ```
 
-Open the printed loopback URL. The bundled original lantern study has source art, an explicitly synthetic canonical pose-sequence sample and an original synthetic chime. It has no compiled model: playback remains unavailable until a real model is supplied. Inside a clone, `bun run review -- <dir>`, `bun run check -- <dir>` and `bun src/cli.ts <command>` are the same CLI as `npx rig-review`.
+Open the printed loopback URL. The bundled original lantern study has source art, a minimal synthetic compiled model (`skeleton.model.json` + `lantern.png`), an explicitly synthetic canonical pose-sequence sample and an original synthetic chime; `bun run demo` opens it with `--view-only` because it carries no producer handoff. Inside a clone, `bun run review -- <dir>`, `bun run check -- <dir>` and `bun src/cli.ts <command>` are the same CLI as `npx rig-review`.
 
 ```sh
 bun run typecheck
