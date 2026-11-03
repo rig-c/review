@@ -1,7 +1,8 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {buildChestRegions,chestRegionsBinding,cropWorldMapping,ellipsePolygon,ChestRegionError,serializeChestRegions,type ChestRegionsInput} from '../src/chest-regions.ts';
-import {chestInputIds,chestOverlayPolygons,chestRowId,evaluateChestForm,type ChestFieldValue} from '../web/chest-regions-tool.ts';
+import {chestInputIds,chestOverlayCircles,chestOverlayPolygons,chestRowId,evaluateChestForm,type ChestFieldValue} from '../web/chest-regions-tool.ts';
+import {seedFields} from '../web/rebuild-client.ts';
 
 /** Public generator example files (parts-examples `family/*\/chest-regions.json`), copied unchanged under neutral names. */
 const fixture=(name:string)=>readFile(new URL(`./fixtures/chest-regions.${name}.json`,import.meta.url),'utf8');
@@ -179,4 +180,54 @@ test('#118: eight regions export with the overlap check on every pair; nine are 
  // The pair that overlaps is the last two, not the first: every pair is checked.
  expect(refusal({...input,regions:[...eight.slice(0,7),{...eight[7]!,center:[660,400]}]})).toBe('CHEST_REGIONS_OVERLAP region_6 region_7');
  expect(refusal({...input,regions:[...eight,{...eight[0]!,name:'region_8',center:[60,900]}]})).toBe('CHEST_REGIONS_COUNT 9 (1–8)');
+});
+
+// #318: the producer's contour block reads maxEdge, stray and bridges as optional, an absent one meaning none (no cut,
+// no island left out, the one-island rule); `bridges` has no false. The detail block reads absence the same way.
+const unseededMapping=()=>cropWorldMapping({x:-416,y:0,width:832,height:1216},{x:0,y:0});
+const bareContour={tolerance:2,margin:2,spacing:28,regions:[
+ {name:'bust_r',shape:'circle',cx:296,cy:640,r:38,bone:'boob_r',spacing:14,band:28},
+ {name:'bust_l',bone:'boob_l',shape:'polygon',points:ellipsePolygon([438,638],[40,52]),spacing:14,band:28},
+]};
+const bareValues=()=>{
+ const seed=seedFields({parts:[{name:'topwear',regions:bareContour.regions}],contour:{topwear:{contour:bareContour,r:15}}},()=>undefined);
+ if(!seed)throw new Error('no seed');
+ const values:Record<string,ChestFieldValue>=Object.fromEntries(Object.entries(seed).map(([id,value])=>[id,{value}]));
+ values['chest-generator']={value:'public generator'};
+ return values;
+};
+
+test('#318 Bar 1: a contour with no maxEdge, stray or bridges evaluates, draws the non-edit overlay and exports none of them',()=>{
+ const values=bareValues();
+ for(const id of ['chest-max-edge','chest-stray','chest-bridges'])expect(values[id]).toBeUndefined();
+ const mapped=unseededMapping(),result=evaluateChestForm(id=>values[id],mapped,['root','boob_r','boob_l']);
+ expect(result.ok?null:result.error).toBeNull();
+ expect(chestOverlayCircles(result,mapped).map(c=>c.name)).toEqual(['bust_r']);
+ expect(chestOverlayPolygons(result,mapped).map(p=>[p.name,p.points.length])).toEqual([['bust_l',32]]);
+ // Absent stays absent: no edge cap, island figure or `bridges: false` (which the producer refuses) is invented.
+ const exported=result.ok?JSON.parse(result.text)['meshes.topwear'].contour:null;
+ expect(Object.keys(exported)).toEqual(['tolerance','margin','spacing','regions']);
+ // Declared values still export in the examples' key order; bridges is written only as true.
+ const declared:Record<string,ChestFieldValue>={...values,'chest-max-edge':{value:'45'},'chest-stray':{value:'300'},'chest-bridges':{value:'on',checked:true}};
+ const full=evaluateChestForm(id=>declared[id],mapped,null);
+ expect(full.ok?Object.keys(JSON.parse(full.text)['meshes.topwear'].contour):full.error).toEqual(['tolerance','margin','spacing','maxEdge','stray','bridges','regions']);
+});
+
+test('#318 Bar 2: a maxEdge or stray that is written but not a number in range still refuses by name',async()=>{
+ // The other optional field is declared, so each refusal is about the field under test alone.
+ const values:Record<string,ChestFieldValue>={...bareValues(),'chest-max-edge':{value:'45'},'chest-stray':{value:'300'}};const mapped=unseededMapping();
+ const error=(id:string,value:string)=>{const result=evaluateChestForm(key=>key===id?{value}:values[key],mapped,null);return result.ok?null:result.error;};
+ expect(error('chest-max-edge','45')).toBeNull();
+ for(const value of ['-1','abc','NaN','Infinity'])expect(error('chest-max-edge',value)).toBe('CHEST_REGION_VALUE_INVALID contour maxEdge');
+ for(const value of ['-1','abc','NaN'])expect(error('chest-stray',value)).toBe('CHEST_REGION_VALUE_INVALID contour stray');
+ const {input}=await sample();
+ for(const maxEdge of [-1,Number.NaN,'45' as unknown as number])expect(refusal({...input,contour:{...input.contour,maxEdge}})).toBe('CHEST_REGION_VALUE_INVALID contour maxEdge');
+ expect(refusal({...input,contour:{...input.contour,bridges:'true' as unknown as boolean}})).toBe('CHEST_REGION_VALUE_INVALID contour bridges');
+});
+
+test('#318: maxEdge 0 refuses, as the producer\'s config rule for it is "positive"; stray 0 is a figure (no island left out)',()=>{
+ const values:Record<string,ChestFieldValue>={...bareValues(),'chest-max-edge':{value:'45'},'chest-stray':{value:'300'}};const mapped=unseededMapping();
+ const error=(id:string,value:string)=>{const result=evaluateChestForm(key=>key===id?{value}:values[key],mapped,null);return result.ok?null:result.error;};
+ expect(error('chest-max-edge','0')).toBe('CHEST_REGION_VALUE_INVALID contour maxEdge');
+ expect(error('chest-stray','0')).toBeNull();
 });

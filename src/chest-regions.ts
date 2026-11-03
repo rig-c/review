@@ -16,7 +16,13 @@ export interface ChestPolygonRegion { name: string; bone: string; shape: 'polygo
 /** The examples' `config.json` circle (key order as there): core radius r at full weight, linear falloff over band. */
 export interface ChestCircleRegion { name: string; shape: 'circle'; cx: number; cy: number; r: number; bone: string; spacing: number; band: number }
 export type ChestRegion = ChestPolygonRegion | ChestCircleRegion;
-export interface ChestContour { tolerance: number; margin: number; spacing: number; maxEdge: number; stray: number; bridges: boolean; regions: ChestRegion[] }
+/**
+ * The producer's contour block (@rig-c/parts, `meshes.<part>.contour`): `maxEdge`, `stray` and `bridges` are optional
+ * there, and an absent one is "none", never a guessed value — no outline edge is cut, no island is left out, a second
+ * island refuses (the one-island rule). `bridges` has one value, `true`; the producer refuses `false`. So a document
+ * carries each of the three only when it is declared, and review never writes a default for one (#318).
+ */
+export interface ChestContour { tolerance: number; margin: number; spacing: number; maxEdge?: number; stray?: number; bridges?: true; regions: ChestRegion[] }
 export interface ChestMesh { contour: ChestContour; r?: number; segments?: ChestSegment[] }
 export interface ChestRegionsDocument {
   spec: typeof CHEST_REGIONS_SPEC;
@@ -40,7 +46,8 @@ export interface ChestRegionsInput {
   crop: { w: number; h: number };
   generator: string;
   mesh?: string;
-  contour: Omit<ChestContour, 'regions'>;
+  /** `bridges` is the detail block's checkbox: `false` (unchecked) is absence, as the producer has no `false`. */
+  contour: Omit<ChestContour, 'regions' | 'bridges'> & { bridges?: boolean };
   regions: ChestRegionInput[];
   r?: number;
   segments?: unknown;
@@ -258,8 +265,11 @@ export function buildChestRegions(input: ChestRegionsInput): ChestRegionsDocumen
   if (typeof input.generator !== 'string' || !input.generator.trim()) throw new ChestRegionError('CHEST_REGIONS_GENERATOR_MISSING', '');
   if (input.regions.length < 1 || input.regions.length > CHEST_REGIONS_MAX) throw new ChestRegionError('CHEST_REGIONS_COUNT', `${input.regions.length} (1–${CHEST_REGIONS_MAX})`);
   const c = input.contour;
-  for (const field of ['tolerance', 'margin', 'spacing', 'maxEdge', 'stray'] as const) finite(c[field], 'contour', field, 0);
-  if (typeof c.bridges !== 'boolean') throw new ChestRegionError('CHEST_REGION_VALUE_INVALID', 'contour bridges');
+  for (const field of ['tolerance', 'margin', 'spacing'] as const) finite(c[field], 'contour', field, 0);
+  // #318: absent is the producer's "none"; written, maxEdge is a positive number (the producer's config rule) and stray 0 or more.
+  if (c.maxEdge !== undefined) finite(c.maxEdge, 'contour', 'maxEdge', 0, false);
+  if (c.stray !== undefined) finite(c.stray, 'contour', 'stray', 0);
+  if (c.bridges !== undefined && typeof c.bridges !== 'boolean') throw new ChestRegionError('CHEST_REGION_VALUE_INVALID', 'contour bridges');
   const names = new Set<string>(), regions: ChestRegion[] = [];
   for (const region of input.regions) {
     const name = region.name;
@@ -288,7 +298,7 @@ export function buildChestRegions(input: ChestRegionsInput): ChestRegionsDocumen
   for (let i = 0; i < regions.length; i++) for (let j = i + 1; j < regions.length; j++) {
     if (chestRegionsOverlap(regions[i]!, regions[j]!)) throw new ChestRegionError('CHEST_REGIONS_OVERLAP', `${regions[i]!.name} ${regions[j]!.name}`);
   }
-  const mesh: ChestMesh = { contour: { tolerance: c.tolerance, margin: c.margin, spacing: c.spacing, maxEdge: c.maxEdge, stray: c.stray, bridges: c.bridges, regions } };
+  const mesh: ChestMesh = { contour: { tolerance: c.tolerance, margin: c.margin, spacing: c.spacing, ...(c.maxEdge === undefined ? {} : { maxEdge: c.maxEdge }), ...(c.stray === undefined ? {} : { stray: c.stray }), ...(c.bridges === true ? { bridges: true as const } : {}), regions } };
   if (input.r !== undefined) mesh.r = finite(input.r, 'mesh', 'r', 0);
   if (input.segments !== undefined) mesh.segments = segmentList(input.segments);
   const meshName = input.mesh ?? 'topwear';
@@ -325,7 +335,8 @@ export function serializeChestRegions(doc: ChestRegionsDocument): string {
     publicGenerator: doc.publicGenerator,
     [`meshes.${doc.mesh.name}`]: {
       contour: {
-        tolerance: contour.tolerance, margin: contour.margin, spacing: contour.spacing, maxEdge: contour.maxEdge, stray: contour.stray, bridges: contour.bridges,
+        tolerance: contour.tolerance, margin: contour.margin, spacing: contour.spacing,
+        ...(contour.maxEdge === undefined ? {} : { maxEdge: contour.maxEdge }), ...(contour.stray === undefined ? {} : { stray: contour.stray }), ...(contour.bridges === true ? { bridges: true } : {}),
         regions: contour.regions.map((r): Emit => r.shape === 'circle'
           ? { name: r.name, shape: r.shape, cx: r.cx, cy: r.cy, r: r.r, bone: r.bone, spacing: r.spacing, band: r.band }
           : { name: r.name, bone: r.bone, shape: r.shape, points: r.points.map(([x, y]) => [{ float: x }, { float: y }]), spacing: r.spacing, band: r.band }),
