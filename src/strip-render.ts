@@ -20,6 +20,24 @@ interface OpenRig {id:StripSide;assets:ModelAssets;player:RigPlayer;renderer:Can
 function fail(code:string,text:string):never {throw new Error(`${code}: ${text}`);}
 let hostQueue=Promise.resolve();
 
+// @napi-rs/canvas does not resolve CSS generic families: `monospace`, `sans-serif`
+// or any unknown name silently becomes the first family in the machine's font
+// collection — Noto Color Emoji on one CI image, which drew grey glyphs and
+// wrapped the footer differently (#319). So the strip names concrete families,
+// one list per role, covering the common desktop and CI installs: DejaVu
+// (Debian/Ubuntu, pulled in by fontconfig), Liberation (Fedora/RHEL), then the
+// macOS and Windows system fonts. If no family of a list is installed the strip
+// refuses by name rather than draw in a font nobody chose.
+export const STRIP_MONO_FAMILIES=['DejaVu Sans Mono','Liberation Mono','Menlo','Consolas'] as const;
+export const STRIP_SANS_FAMILIES=['DejaVu Sans','Liberation Sans','Helvetica','Arial'] as const;
+const cssFamilies=(families:readonly string[])=>families.map(family=>`"${family}"`).join(', ');
+export const STRIP_MONO_FONT=`12px ${cssFamilies(STRIP_MONO_FAMILIES)}`;
+export const STRIP_SANS_FONT=`14px ${cssFamilies(STRIP_SANS_FAMILIES)}`;
+function requireStripFonts(native:NativeCanvas):void {
+  const missing=([['mono',STRIP_MONO_FAMILIES],['sans',STRIP_SANS_FAMILIES]] as const).filter(([,families])=>!families.some(family=>native.GlobalFonts.has(family))).map(([role])=>role);
+  if(missing.length)fail('STRIP_FONT',`no listed ${missing.join(' or ')} family is installed; mono needs one of ${cssFamilies(STRIP_MONO_FAMILIES)}, sans one of ${cssFamilies(STRIP_SANS_FAMILIES)}; the strip never draws in an unlisted fallback`);
+}
+
 function command(binary:string,args:string[],kind:string):Promise<Buffer>{
   return new Promise((resolveCommand,reject)=>{
     execFile(binary,args,{encoding:'buffer',timeout:60000,maxBuffer:32*1024*1024,windowsHide:true},(error,stdout,stderr)=>{
@@ -145,6 +163,7 @@ export async function renderStrip(input:StripRenderInput,tools:StripTools={}):Pr
   try {
     let native:NativeCanvas;
     try{native=await import('@napi-rs/canvas');}catch(error){fail('STRIP_CANVAS',`@napi-rs/canvas unavailable: ${error instanceof Error?error.message:String(error)}`);}
+    requireStripFonts(native);
     const images=new Map<string,Buffer>();restore=installHost(native,images);
     const ffmpeg=tools.ffmpeg??process.env.RIG_REVIEW_FFMPEG??'ffmpeg',ffprobe=tools.ffprobe??process.env.RIG_REVIEW_FFPROBE??'ffprobe';
     const video=await probeReference(input.referencePath,ffprobe);
@@ -167,13 +186,13 @@ export async function renderStrip(input:StripRenderInput,tools:StripTools={}):Pr
     const renderer={name:'@rig-c/play',version:versions.runtimeVersion,backend:`canvas2d / @napi-rs/canvas ${packageJson.version}`};
     // The plan reserves a maximum footer budget. Measure the complete wrapped
     // provenance with the drawing font before allocating the final raster.
-    const measure=native.createCanvas(1,1).getContext('2d');measure.font='12px monospace';
+    const measure=native.createCanvas(1,1).getContext('2d');measure.font=STRIP_MONO_FONT;
     const lines=wrapped(measure,footer(plan,renderer),width-20),footerHeight=lines.length*16+16;
     if(footerHeight>layout.footerHeight)fail('STRIP_LAYOUT_FOOTER',`need ${footerHeight}px for complete provenance, have ${layout.footerHeight}`);
     const groupHeight=layout.labelHeight*2+plan.rows.length*layout.cellHeight+layout.groupGap,height=plan.groups.length*groupHeight+footerHeight;
     if(!Number.isSafeInteger(width)||!Number.isSafeInteger(height)||width<=0||height<=0||width>16384||height>16384||width*height>64000000)fail('STRIP_LAYOUT','invalid or excessive canvas size');
     for(const rig of rigs){rig.renderer.viewport={x,y,width:worldWidth,height:worldHeight};rig.renderer.pixelRatio=Math.min(layout.cellWidth/worldWidth,layout.cellHeight/worldHeight);}
-    const out=native.createCanvas(width,height),ctx=out.getContext('2d');ctx.fillStyle='#f1f1f1';ctx.fillRect(0,0,width,height);ctx.font='14px sans-serif';ctx.textBaseline='top';
+    const out=native.createCanvas(width,height),ctx=out.getContext('2d');ctx.fillStyle='#f1f1f1';ctx.fillRect(0,0,width,height);ctx.font=STRIP_SANS_FONT;ctx.textBaseline='top';
     const samples:StripRenderSample[]=[];const decoded=new Map<number,Image>();
     for(const [groupIndex,group] of plan.groups.entries()){
       const top=groupIndex*groupHeight;ctx.fillStyle='#202b24';ctx.fillText(`${group.id} | ${group.basis} F${group.frameStart}–${group.frameEnd}`,8,top+8);
@@ -202,7 +221,7 @@ export async function renderStrip(input:StripRenderInput,tools:StripTools={}):Pr
         samples.push(record);
       }
     }
-    ctx.font='12px monospace';
+    ctx.font=STRIP_MONO_FONT;
     ctx.fillStyle='#172a22';lines.forEach((line,index)=>ctx.fillText(line,10,height-footerHeight+8+index*16));
     return {png:await out.encode('png'),width,height,renderer,samples};
   } finally {try{for(const rig of rigs){try{rig.player.dispose();}finally{rig.assets.dispose();}}}finally{try{restore();}finally{release();}}}

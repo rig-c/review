@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
-import { nearestReferenceFrame, referenceFramePng, renderStrip } from '../src/strip-render.ts';
+import { nearestReferenceFrame, referenceFramePng, renderStrip, STRIP_MONO_FAMILIES, STRIP_SANS_FAMILIES, STRIP_SANS_FONT } from '../src/strip-render.ts';
 import type { StripRenderInput, StripRenderResult } from '../src/strip.ts';
 
 const fixture=join(import.meta.dir,'fixtures/strip-probe');
@@ -16,7 +16,7 @@ async function pixels(result:StripRenderResult){const image=await loadImage(resu
 function region(p:{data:Uint8ClampedArray;width:number},x:number,y:number,w:number,h:number){const out:number[]=[];for(let iy=y;iy<y+h;iy++)for(let ix=x;ix<x+w;ix++){const i=(iy*p.width+ix)*4;out.push(p.data[i]!,p.data[i+1]!,p.data[i+2]!);}return out;}
 function colors(p:{data:Uint8ClampedArray;width:number},column:number){let red=0,green=0,redX=0;const left=120+column*220,top=64+260;for(let y=top+30;y<top+255;y++)for(let x=left+1;x<left+219;x++){const i=(y*p.width+x)*4,r=p.data[i]!,g=p.data[i+1]!,b=p.data[i+2]!;if(r>180&&g<80&&b<80){red++;redX+=x-left;}if(g>140&&r<90&&b<90)green++;}return {red,green,redCenter:redX/red};}
 function footerLineBins(p:{data:Uint8ClampedArray;width:number;height:number},top:number){const bins=new Set<number>();let lastInk=top;for(let y=top+8;y<p.height;y++)for(let x=10;x<p.width-10;x++){const i=(y*p.width+x)*4;if(p.data[i]!<100){bins.add(Math.floor((y-top-8)/16));lastInk=y;break;}}return {lines:bins.size,lastInk};}
-function labelPixels(text:string){const canvas=createCanvas(210,20),ctx=canvas.getContext('2d');ctx.fillStyle='#f1f1f1';ctx.fillRect(0,0,210,20);ctx.font='14px sans-serif';ctx.textBaseline='top';ctx.fillStyle='#172a22';ctx.fillText(text,0,0);return region({data:ctx.getImageData(0,0,210,20).data,width:210},0,0,210,20);}
+function labelPixels(text:string){const canvas=createCanvas(210,20),ctx=canvas.getContext('2d');ctx.fillStyle='#f1f1f1';ctx.fillRect(0,0,210,20);ctx.font=STRIP_SANS_FONT;ctx.textBaseline='top';ctx.fillStyle='#172a22';ctx.fillText(text,0,0);return region({data:ctx.getImageData(0,0,210,20).data,width:210},0,0,210,20);}
 
 describe('real public-player Node canvas strip',()=>{
  test('nearest decoded timestamp is explicit and ties keep earlier frames',()=>{
@@ -98,5 +98,20 @@ describe('real public-player Node canvas strip',()=>{
   const one=await pixels(outputs[0]!),footer=footerLineBins(one,608);expect(one.height).toBe(608+footer.lines*16+16);expect(one.height).toBeLessThan(1108);expect(footer.lastInk).toBeGreaterThan(one.height-24);
   const bad=await input();bad.rigs[0]!.modelPath=join(fixture,'../outside.model.json');await expect(renderStrip(bad)).rejects.toThrow();
   expect(Object.getOwnPropertyDescriptor(globalThis,'document')).toEqual(before);
+ },60000);
+ test('no listed font family installed refuses STRIP_FONT naming both lists, before probing or drawing',async()=>{
+  // A process with no fonts loaded is the case where @napi-rs/canvas would hand
+  // any unlisted name to whatever family it holds first (#319). The refusal must
+  // come before ffprobe runs, so the probe here is a binary that does not exist.
+  const code=`const {GlobalFonts}=await import('@napi-rs/canvas');const {renderStrip}=await import(${JSON.stringify(join(import.meta.dir,'../src/strip-render.ts'))});
+   const families=GlobalFonts.families.length;let outcome;try{await renderStrip(JSON.parse(process.env.STRIP_REQUEST),{ffprobe:'rig-review-font-probe-must-not-run',ffmpeg:'rig-review-font-probe-must-not-run'});outcome='rendered';}catch(error){outcome=error.message;}
+   console.log(JSON.stringify({families,outcome}));`;
+  const child=Bun.spawn([process.execPath,'-e',code],{cwd:join(import.meta.dir,'..'),env:{...process.env,DISABLE_SYSTEM_FONTS_LOAD:'1',STRIP_REQUEST:JSON.stringify(await input())},stdout:'pipe',stderr:'pipe'});
+  const [stdout,stderr,exit]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);
+  expect(stderr).toBe('');expect(exit).toBe(0);
+  const {families,outcome}=JSON.parse(stdout) as {families:number;outcome:string};
+  expect(families).toBe(0);
+  expect(outcome).toStartWith('STRIP_FONT: no listed mono or sans family is installed');
+  for(const family of [...STRIP_MONO_FAMILIES,...STRIP_SANS_FAMILIES])expect(outcome).toContain(`"${family}"`);
  },60000);
 });
