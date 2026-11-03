@@ -1035,6 +1035,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Ordered compare provenance:": "Ordered compare provenance:",
   "Original identifiers: {0}": "Original identifiers: {0}",
   "Original input pose sequence · joint states and confidence preserved": "Original input pose sequence · joint states and confidence preserved",
+  "Original painting": "Original painting",
   "Original set": "Original set",
   "Other bones": "Other bones",
   "Output folder: no recognized skeleton.*, build/skeleton.model.json, rig-parts build root (check/build/skeleton.model.json), motion.json, report.json, source video, pose sequence or contact strip": "Output folder: no recognized skeleton.*, build/skeleton.model.json, rig-parts build root (check/build/skeleton.model.json), motion.json, report.json, source video, pose sequence or contact strip",

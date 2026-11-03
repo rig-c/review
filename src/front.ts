@@ -55,7 +55,7 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  const session=mode==='single'?'/api/session':'/api/compare/session',strip=mode==='single'?'/api/strip':'/api/compare/strip';
  if(path===session)return read?get:method==='PUT'?{mutation:true,limit:1024*1024,timeoutMs:30000,control:false}:null;
  if(path===strip)return method==='POST'?{mutation:true,limit:1024*1024,timeoutMs:120000,control:false}:null;
- const reads=mode==='single'?['/api/review','/review-reference']:['/api/compare','/api/compare/reference-frames','/compare-reference'];
+ const reads=mode==='single'?['/api/review','/review-reference','/review-painting']:['/api/compare','/api/compare/reference-frames','/compare-reference'];
  if(reads.includes(path))return read?get:null;
  if((mode==='single'?/^\/assets\/[^/]/:/^\/compare-assets\/(a|b)\/[^/]/).test(path))return read?get:null;
  // Apply · Rebuild and producer checks: un-prefixed in single mode, side-scoped (/api/compare/(a|b)/*, /compare-rebuild/(a|b)/*) in compare mode (#234).

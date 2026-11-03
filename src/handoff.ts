@@ -16,6 +16,11 @@
  * config, so this is a location rule bounded by the build's own files, not a proof: the session baseline (the producer
  * rebuilding the inspected rig from that config) is the check. Discovered there, or declared with `--config` at exactly
  * one of those two files, the handoff's root is that file's folder and the parts directory is the build root.
+ *
+ * #329: a discovered handoff knows its source painting by one fixed name beside the config it found, `painting.png`
+ * (so `../painting.png` beside an opened `out/`, `../../painting.png` beside a build root), never by a search. It is
+ * held to the config's own refusals at that place — inside the same root, and at the two places outside the opened
+ * folder no symlink at all — and when present it is the record's `source` like a declared one.
  */
 import { createHash } from 'node:crypto';
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
@@ -34,6 +39,8 @@ export const CONFIG_NAMED_FILES = [['motion', 'animations_from'], ['generation',
 /** What `rig-parts rig` writes into its --out and remesh reads from --rig: the rig spec, its motion, the mesh report and the part images. */
 export const RIG_FILES = ['rig.json', 'motion.json', 'mesh_report.json'] as const;
 const MAX_LISTED = 4096;
+/** #329: the fixed name a discovered handoff's source painting has beside its config. */
+export const DISCOVERED_PAINTING = 'painting.png';
 
 export interface HandoffDeclaration { config: string; parts?: string; source?: string; full?: string; head?: string; keypoints?: string }
 export type HandoffFlags = HandoffDeclaration;
@@ -125,6 +132,18 @@ async function blockPath(root: string, value: unknown, field: string, kind: 'fil
   if (isAbsolute(value) || /^[a-zA-Z]:/.test(value) || value.split('/').includes('..')) throw new HandoffError('HANDOFF_PATH_OUTSIDE_ROOT', field, `${value} leaves the package root (absolute or ..)`);
   if (/[:\\%?#\x00-\x1f]/.test(value) || value.split('/').some(s => !s || s === '.') || posix.normalize(value) !== value) throw new HandoffError('HANDOFF_PATH_INVALID', field, `${value} is not a literal portable relative path`);
   return contained(root, join(root, value), field, kind, true);
+}
+
+/**
+ * #329: the painting beside a discovered config — `field` is the config's own place with its file name swapped — or
+ * undefined when nothing is there. `strict` (a place outside the opened folder) refuses any symlink, as for the config.
+ */
+async function discoveredPainting(base: string, config: string, configField: string, strict: boolean): Promise<string | undefined> {
+  const path = join(dirname(config), DISCOVERED_PAINTING), field = posix.join(posix.dirname(configField), DISCOVERED_PAINTING);
+  if (!(await exists(path))) return undefined;
+  const real = await contained(base, path, field, 'file', true);
+  if (strict && real !== path) throw new HandoffError('HANDOFF_SYMLINK_ESCAPE', field, `${path} is a symlink; only the file beside the config is discovered`);
+  return real;
 }
 
 /** `producer: {config, parts?, source?, full?, head?, keypoints?}` — strings only, no other key. Paths are checked at load. */
@@ -241,7 +260,8 @@ export async function resolveHandoff(root: string, declared: HandoffDeclaration 
     const path = join(root, name);
     if (!(await exists(path))) continue;
     const config = await contained(root, path, name, 'file', true);
-    return { handoff: await record(root, root, 'discovered', 'discovery', config, join(dirname(path), 'out'), {}, false), reason: null };
+    const source = await discoveredPainting(root, path, name, false);
+    return { handoff: await record(root, root, 'discovered', 'discovery', config, join(dirname(path), 'out'), { source }, false), reason: null };
   }
   // #149: the check package of a rig-parts build root — the build's own config, in the build root, else beside it.
   const build = await buildPlaces(root);
@@ -250,7 +270,8 @@ export async function resolveHandoff(root: string, declared: HandoffDeclaration 
       if (!(await exists(place.config))) continue;
       const config = await contained(place.base, place.config, place.field, 'file', true);
       if (config !== place.config) throw new HandoffError('HANDOFF_SYMLINK_ESCAPE', place.field, `${place.config} is a symlink; only the build's own config file is discovered`);
-      return { handoff: await record(root, place.base, 'discovered', 'discovery', config, build.build, {}, false), reason: null };
+      const source = await discoveredPainting(place.base, config, place.field, true);
+      return { handoff: await record(root, place.base, 'discovered', 'discovery', config, build.build, { source }, false), reason: null };
     }
     return { handoff: null, reason: BUILD_MODELING_INPUT_UNAVAILABLE };
   }
@@ -260,7 +281,8 @@ export async function resolveHandoff(root: string, declared: HandoffDeclaration 
     if (await exists(path)) {
       const config = await contained(parent, path, '../config.json', 'file', true);
       if (config !== path) throw new HandoffError('HANDOFF_SYMLINK_ESCAPE', '../config.json', `${path} is a symlink; only the file beside out/ is discovered`);
-      return { handoff: await record(root, parent, 'discovered', 'discovery', config, root, {}, false), reason: null };
+      const source = await discoveredPainting(parent, config, '../config.json', true);
+      return { handoff: await record(root, parent, 'discovered', 'discovery', config, root, { source }, false), reason: null };
     }
   }
   return { handoff: null, reason: MODELING_INPUT_UNAVAILABLE };
