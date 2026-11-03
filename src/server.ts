@@ -122,7 +122,7 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       return new Response(result.png?new Uint8Array(result.png):stripJson(result),{headers:{...headers,'Content-Type':result.png?'image/png':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="review-strip.${result.png?'png':'json'}"`}});
     }
       if(req.method!=='GET'&&req.method!=='HEAD')return json({error:'Method not allowed'},405);
-      if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,initialAnimation:options.initialAnimation??null,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,...(referenceBinding(p)?{referenceBinding:referenceBinding(p),explicitReference:{...referenceBinding(p)!.reference,url:'/review-reference'}}:{}),referenceHashes:{...p.referenceHashes,...(referenceBinding(p)?{[referenceBinding(p)!.reference.id]:referenceBinding(p)!.reference.sha256}:{})},report:p.report,feedbackCatalog:p.feedbackCatalog,assetsBase:'/assets/',capabilities:{playback:!!p.manifest.model,modeling:false,motion:false,feedback:true,audio:true}});}
+      if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,initialAnimation:options.initialAnimation??null,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,...(referenceBinding(p)?{referenceBinding:referenceBinding(p),explicitReference:{...referenceBinding(p)!.reference,url:'/review-reference'}}:{}),...(p.sourcePainting?{sourcePainting:{...p.sourcePainting,url:'/review-painting'}}:{}),referenceHashes:{...p.referenceHashes,...(referenceBinding(p)?{[referenceBinding(p)!.reference.id]:referenceBinding(p)!.reference.sha256}:{})},report:p.report,feedbackCatalog:p.feedbackCatalog,assetsBase:'/assets/',capabilities:{playback:!!p.manifest.model,modeling:false,motion:false,feedback:true,audio:true}});}
       if(url.pathname==='/api/session'){await unchanged();return json(await readSession(p,options.stateDir));}
       if(url.pathname==='/api/rebuild')return json(await rebuilds.describe());
       if(url.pathname==='/api/rebuild/history')return json(await rebuilds.history());
@@ -149,6 +149,8 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
         const file=Bun.file(full);return new Response(req.method==='HEAD'?null:file,{headers:{...headers,'Content-Security-Policy':"default-src 'none'; script-src 'none'; sandbox",'Content-Type':file.type||'application/octet-stream','Content-Length':String(file.size)}});
       }
       if(url.pathname==='/review-reference')return await serveReference(req,await safeSelectedReference(p),referenceBinding(p)!.reference.sha256,headers);
+      // #329: the handoff's source painting sits outside the package, so it is served by its pinned hash at one fixed route.
+      if(url.pathname==='/review-painting'&&p.sourcePainting&&p.handoff?.source)return await serveReference(req,p.handoff.source,p.sourcePainting.sha256,headers);
       if(url.pathname.startsWith('/assets/')){
         const path=packagePath(decodeURIComponent(url.pathname.slice('/assets/'.length)));if(!p.files.has(path))return json({error:'Asset not declared by package'},404);
         const file=Bun.file(await safeFile(p.root,path));const size=file.size;

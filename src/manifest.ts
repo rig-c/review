@@ -28,7 +28,9 @@ export interface ReviewPackage { referenceHashes?:Record<string,string>; root: s
   /** #187: the rig-parts build root ({@link isBuildRoot}) whose `check/` this package is, however it was opened; review state stays outside it. */
   buildRoot?: string;
   /** #305: viewer-only open (`--view-only`). */
-  viewOnly?: boolean }
+  viewOnly?: boolean;
+  /** #329: the handoff's source painting, served at a fixed route by its pinned hash; absent when the handoff knows none. */
+  sourcePainting?: SourcePainting }
 function fail(field: string, expected: string): never { throw new Error(`${field}: expected ${expected}`); }
 export function object(value: unknown, field: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) fail(field, 'object'); return value as Record<string, unknown>; }
 export function string(value: unknown, field: string): string { if (typeof value !== 'string' || !value.trim() || value.length > 10000) fail(field, 'nonempty string (at most 10000 characters)'); return value; }
@@ -106,21 +108,42 @@ export async function loadReview(input: string, options: { handoff?: HandoffFlag
     for(const j of joints) if(j.parent&&!joints.some(v=>v.id===j.parent&&v.id!==j.id)) fail(`pose ${r.id} joint ${j.id}.parent`,'another declared joint id');
   }
   const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;let modelMetadata:Record<string,unknown>|null=null;
+  // The handoff files are hashed beside the package: their record joins the reviewed identity (and so the session file).
+  const {handoff,reason:handoffReason}=await resolveHandoff(root,manifest.producer,options.handoff);
+  // #329: the source painting the handoff knows is the first reference, outside the package's own files.
+  const painting=sourcePainting(manifest,handoff,directory);
   const hash = createHash('sha256');hash.update(JSON.stringify(manifest));hash.update('\0');const fileHashes=new Map<string,string>();
   for(const p of [...files].sort()) { const full=await safeFile(root,p); const before=await stat(full); hash.update(p);hash.update('\0');hash.update(String(before.size));hash.update('\0'); const fileHash=createHash('sha256');const metadataChunks:Buffer[]=[];for await(const chunk of createReadStream(full)){hash.update(chunk);fileHash.update(chunk);if(p===reportPath||p===manifest.model)metadataChunks.push(chunk);}fileHashes.set(p,fileHash.digest('hex')); const after=await stat(full); if(before.size!==after.size||before.mtimeMs!==after.mtimeMs) throw new Error(`Asset ${p} changed while hashing; retry with stable package inputs`);
     // The parser and package hash consume the same bytes, never two file reads.
     if(p===manifest.model){if(fileHashes.get(p)!==modelBytesHash)throw new Error(`Model ${p} changed while hashing; retry with stable package inputs`);modelMetadata=object(JSON.parse(Buffer.concat(metadataChunks).toString('utf8')),'model');}
     if(p===reportPath){let value:unknown;try{value=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));}catch(e){throw new Error(`${p}: ${e instanceof Error?e.message:String(e)}`);}report=parseReport(value,p);}
   }
-  // The handoff files are hashed beside the package: their record joins the reviewed identity (and so the session file).
-  const {handoff,reason:handoffReason}=await resolveHandoff(root,manifest.producer,options.handoff);
+  if(painting){hash.update(SOURCE_PAINTING_ID);hash.update('\0');hash.update(painting.sha256);hash.update('\0');}
   // #192: the root is `check/` whether the folder or its review.json was opened, so the build root is kept either way.
   const buildRoot=basename(root)==='check'&&await isBuildRoot(dirname(root))?dirname(root):undefined;
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null,...(handoff?{handoff:handoff.record}:{})};
   const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations:modelAnimations(modelMetadata),clock:report?.clock??null,clockAnimation:report?.animation??null,...(discoverTurnDials(modelMetadata).length?{turnDials:discoverTurnDials(modelMetadata)}:{})};
-  return {referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{})};
+  return {referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{})};
 }
 
+/** #329: the reference id and served path of the handoff's source painting; the path is a name, never a package file. */
+export const SOURCE_PAINTING_ID='source-painting';
+export const SOURCE_PAINTING_PATH='__review_source_painting__.png';
+export interface SourcePainting {id:string;path:string;sha256:string}
+/**
+ * #329: when the handoff knows the source painting (declared `source`, or `painting.png` beside a discovered config),
+ * it becomes the first reference, labelled as the original, and — for the folder adapter, whose checkpoints are one per
+ * reference — the first checkpoint, so it is the reference selected on open. The manifest is changed in place before it
+ * is hashed; with no painting nothing is added. `path` is the handoff record's own display path.
+ */
+function sourcePainting(manifest:ReviewManifest,handoff:Handoff|null,folder:boolean):SourcePainting|null{
+  const record=handoff?.record.source;if(!record)return null;
+  if(manifest.references.some(r=>r.id===SOURCE_PAINTING_ID)||manifest.checkpoints.some(c=>c.id===SOURCE_PAINTING_ID))fail(`references ${SOURCE_PAINTING_ID}`,'an id the handoff source painting does not take');
+  const reference:Reference={id:SOURCE_PAINTING_ID,label:'Original painting · '+posix.basename(record.path),type:'image',path:SOURCE_PAINTING_PATH};
+  manifest.references.unshift(reference);
+  if(folder)manifest.checkpoints.unshift({id:reference.id,title:'Inspect '+reference.label,reference:reference.id,workspace:'motion'});
+  return {id:reference.id,path:record.path,sha256:record.sha256};
+}
 /**
  * #149: the `check/` package of a rig-parts build root ({@link isBuildRoot}), when the folder has neither of the two
  * adapter model paths itself (a folder that does keeps opening as before). Fixed names, no search.

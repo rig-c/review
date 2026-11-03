@@ -1035,6 +1035,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Ordered compare provenance:": "순서가 지정된 비교 출처:",
   "Original identifiers: {0}": "원본 식별자: {0}",
   "Original input pose sequence · joint states and confidence preserved": "원본 입력 포즈 시퀀스 · 관절 상태 및 신뢰도 보존됨",
+  "Original painting": "원본 그림",
   "Original set": "원본 세트",
   "Other bones": "기타 본",
   "Output folder: no recognized skeleton.*, build/skeleton.model.json, rig-parts build root (check/build/skeleton.model.json), motion.json, report.json, source video, pose sequence or contact strip": "출력 폴더: 인식된 skeleton.*, build/skeleton.model.json, rig-parts 빌드 루트(check/build/skeleton.model.json), motion.json, report.json, 소스 비디오, 포즈 시퀀스 또는 컨택트 스트립이 없습니다",
