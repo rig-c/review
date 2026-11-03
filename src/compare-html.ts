@@ -56,22 +56,22 @@ const REGIONS: readonly {
   {
     key: 'setupBlockRow',
     placeholder: '<!-- shared:setup-block-row -->',
-    start: '<nav class="block-row" aria-label="Setup blocks">',
+    start: '<nav class="block-row" role="tablist" aria-label="Setup blocks">',
     end: '<section id="selected-part"',
     compareEnd: '<section id="selected-part"',
   },
   {
     key: 'setupPanels',
     placeholder: '<!-- shared:setup-panels -->',
-    start: '<section id="modeling-tools">',
+    start: '<section id="modeling-tools"',
     end: '</section><section id="inspector-playback"',
     compareEnd: '</section><section id="inspector-playback"',
   },
   {
     key: 'animateBlockRow',
     placeholder: '<!-- shared:animate-block-row -->',
-    start: '<nav class="block-row" aria-label="Animate blocks">',
-    end: '<section id="motion-tools">',
+    start: '<nav class="block-row" role="tablist" aria-label="Animate blocks">',
+    end: '<section id="motion-tools"',
     compareEnd: '<div class="compare-info">',
   },
   {
@@ -84,7 +84,7 @@ const REGIONS: readonly {
   {
     key: 'animatePanels',
     placeholder: '<!-- shared:animate-panels -->',
-    start: '<section id="motion-tools">',
+    start: '<section id="motion-tools"',
     end: '</div></section></div></section></main>',
     compareEnd: '</div></section><section id="inspector-feedback"',
   },

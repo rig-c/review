@@ -1,8 +1,10 @@
 import {expect,test} from 'bun:test';
-import {readFile} from 'node:fs/promises';
-import {bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,parseActiveBlocks,inspectorBlocksKey,blockScrollGap} from '../web/inspector-blocks.ts';
+import {readFile,readdir} from 'node:fs/promises';
+import {bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,parseActiveBlocks,inspectorBlocksKey} from '../web/inspector-blocks.ts';
+import {renderCompareHtml} from '../src/compare-html.ts';
 
-const indexHtml=()=>readFile(new URL('../web/index.html',import.meta.url),'utf8');
+const webFile=(name:string)=>readFile(new URL(`../web/${name}`,import.meta.url),'utf8');
+const indexHtml=()=>webFile('index.html');
 const voids=new Set(['input','br','img','meta','link','hr','source','col','area','base','embed','param','track','wbr']);
 /** Direct children of the element whose opening tag carries `id="<id>"`, as {tag, attributes}. */
 function directChildren(html:string,id:string):{tag:string;attrs:string}[] {
@@ -15,46 +17,86 @@ function directChildren(html:string,id:string):{tag:string;attrs:string}[] {
  }
  return children;
 }
-const attr=(attrs:string,name:string)=>attrs.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1]??null;
-/** The row's buttons inside a section, in order. */
-function rowButtons(html:string,id:string){
- const section=html.slice(html.indexOf(` id="${id}"`)),row=section.slice(section.indexOf('<nav class="block-row"'),section.indexOf('</nav>'));
- return [...row.matchAll(/<button type="button" data-block-target="([^"]+)"(?: data-block-includes="([^"]+)")?>([^<]+)<\/button>/g)].map(m=>({target:m[1]!,includes:(m[2]??'').split(' ').filter(Boolean),label:m[3]!}));
+/** An attribute's value, `''` for a bare attribute, null when absent. */
+const attr=(attrs:string,name:string)=>{const m=attrs.match(new RegExp(`(?:^|[\\s<])${name}(?:="([^"]*)")?(?=[\\s/>]|$)`));return m?(m[1]??''):null;};
+/** The opening tag's attributes of the element with `id="<id>"`. */
+const openTag=(html:string,id:string)=>{const at=html.indexOf(` id="${id}"`);if(at<0)throw new Error('missing '+id);const open=html.lastIndexOf('<',at);return html.slice(open,html.indexOf('>',at)+1);};
+/** The row's tabs inside a container, in order, with every attribute the tabs pattern reads. */
+function rowTabs(html:string,id:string){
+ const section=html.slice(html.indexOf(` id="${id}"`)),start=section.indexOf('<nav class="block-row"'),row=section.slice(start,section.indexOf('</nav>',start));
+ const nav=row.slice(0,row.indexOf('>')+1);
+ const tabs=[...row.matchAll(/<button([^>]*)>([^<]+)<\/button>/g)].map(m=>({attrs:m[1]!,label:m[2]!,target:attr(m[1]!,'data-block-target')!,includes:(attr(m[1]!,'data-block-includes')??'').split(' ').filter(Boolean)}));
+ return {nav,tabs};
 }
+const expected={'inspector-rig':['Part','Modeling','Chest','Mesh','Weights','Bones','Fields','Cuts','Cloth'],'animate-blocks':['Transport','Sound','Environment','Physics','Idle tracks','Readings','Requirements','Retarget','Report']};
 
-test('every block of each Inspector section has a row button, and every row button targets a block of that section; in Animate the timeline is its own panel beside the scrolling blocks panel',async()=>{
+test('every block of each Inspector section has a row tab, and every row tab targets a block of that section; in Animate the timeline is its own panel beside the blocks panel',async()=>{
  const html=await indexHtml();
  const playbackPanels=directChildren(html,'inspector-playback');
  expect(playbackPanels.map(p=>attr(p.attrs,'id'))).toEqual(['animation-dock','animate-blocks']);
  const dockChildren=directChildren(html,'animation-dock');
  expect(dockChildren.map(c=>attr(c.attrs,'id'))).toEqual(['transport','frame-controls','animation-inspection']);
- const expected={'inspector-rig':['Part','Modeling','Chest','Mesh','Weights','Bones','Fields','Cuts','Cloth'],'animate-blocks':['Transport','Sound','Environment','Physics','Idle tracks','Readings','Requirements','Retarget','Report']};
  for(const [container,labels]of Object.entries(expected)){
-  const children=directChildren(html,container),buttons=rowButtons(html,container);
-  // The row is the scroll container's first child, so it stays above the blocks it scrolls.
+  const children=directChildren(html,container),{tabs}=rowTabs(html,container);
+  // The row is the container's first child, so it stays above the panel it switches.
   expect(children[0]?.tag).toBe('nav');expect(attr(children[0]!.attrs,'class')).toBe('block-row');
-  expect(buttons.map(b=>b.label)).toEqual(labels);
+  expect(tabs.map(b=>b.label)).toEqual(labels);
   const blocks=children.slice(1).map(child=>attr(child.attrs,'id'));expect(blocks.every(Boolean)).toBe(true);
-  // The timeline is never inside the scrolling blocks container.
+  // The timeline is never inside the blocks container.
   expect(blocks).not.toContain('animation-inspection');
-  const covered=new Set(buttons.flatMap(b=>[b.target,...b.includes]));
+  const covered=new Set(tabs.flatMap(b=>[b.target,...b.includes]));
   for(const block of blocks)expect({block,covered:covered.has(block!)}).toEqual({block,covered:true});
-  for(const button of buttons){expect(blocks).toContain(button.target);for(const id of button.includes)expect(blocks).toContain(id);}
-  // A button's target leads its group: the blocks it includes follow it in the section, before the next button's target.
-  const order=blocks as string[];for(const [i,button]of buttons.entries()){const at=order.indexOf(button.target),next=i+1<buttons.length?order.indexOf(buttons[i+1]!.target):order.length;expect(at).toBeLessThan(next);for(const id of button.includes){const k=order.indexOf(id);expect(k>at&&k<next).toBe(true);}}
+  for(const tab of tabs){expect(blocks).toContain(tab.target);for(const id of tab.includes)expect(blocks).toContain(id);}
+  // A tab's target leads its group: the blocks it includes follow it in the section, before the next tab's target.
+  const order=blocks as string[];for(const [i,tab]of tabs.entries()){const at=order.indexOf(tab.target),next=i+1<tabs.length?order.indexOf(tabs[i+1]!.target):order.length;expect(at).toBeLessThan(next);for(const id of tab.includes){const k=order.indexOf(id);expect(k>at&&k<next).toBe(true);}}
  }
  // The row ids are new; each kept block id still appears exactly once.
  for(const id of ['animation-dock','animate-blocks','animation-inspection','transport','environment','physics-panel','idle-tracks','readings','sound-panel','report-panel','selected-part','modeling-tools','chest-regions','mesh-panel','weights','bones-panel','rig-fields','cuts-panel','cloth-panel'])expect(html.split(` id="${id}"`).length).toBe(2);
 });
 
-/** Minimal element: layout comes from explicit `top`/`height`, relative to the section's scroll. */
+test('each block row is a WAI-ARIA tablist: role=tab buttons control role=tabpanel blocks, the first is selected, and every other panel ships hidden',async()=>{
+ const html=await indexHtml();
+ for(const container of Object.keys(expected)){
+  const {nav,tabs}=rowTabs(html,container);
+  expect(attr(nav,'role')).toBe('tablist');expect(attr(nav,'aria-label')).toBeTruthy();
+  for(const [i,tab]of tabs.entries()){
+   const selected=i===0,id=`block-tab-${tab.target}`;
+   expect({tab:tab.label,role:attr(tab.attrs,'role'),id:attr(tab.attrs,'id'),controls:attr(tab.attrs,'aria-controls'),selected:attr(tab.attrs,'aria-selected'),tabindex:attr(tab.attrs,'tabindex'),current:attr(tab.attrs,'aria-current')})
+    .toEqual({tab:tab.label,role:'tab',id,controls:tab.target,selected:String(selected),tabindex:selected?'0':'-1',current:null});
+   const panel=openTag(html,tab.target);
+   expect({panel:tab.target,role:attr(panel,'role'),labelledby:attr(panel,'aria-labelledby'),hidden:attr(panel,'hidden')!==null})
+    .toEqual({panel:tab.target,role:'tabpanel',labelledby:id,hidden:!selected});
+  }
+ }
+ // The included Angle block keeps its own hidden (the axis inspection owns it); the tab hides it by another attribute.
+ expect(attr(openTag(html,'angle-panel'),'hidden')).not.toBeNull();expect(attr(openTag(html,'angle-panel'),'role')).toBeNull();
+});
+
+test('the comparison page renders the same tablists, and its own Part block is a tabpanel too',async()=>{
+ const html=renderCompareHtml(await webFile('compare.html'),await indexHtml());
+ for(const container of Object.keys(expected)){const {nav,tabs}=rowTabs(html,container);expect(attr(nav,'role')).toBe('tablist');for(const tab of tabs){const panel=openTag(html,tab.target);expect({panel:tab.target,role:attr(panel,'role'),labelledby:attr(panel,'aria-labelledby')}).toEqual({panel:tab.target,role:'tabpanel',labelledby:`block-tab-${tab.target}`});}}
+});
+
+/** Minimal element. Every write the tabs code can make is a setter or method here, and each one is logged. */
+type Write={node:Node;what:string};
 class Node {
- listeners=new Map<string,Set<(event:{target:Node})=>void>>();
- addEventListener(type:string,fn:(event:{target:Node})=>void){if(!this.listeners.has(type))this.listeners.set(type,new Set());this.listeners.get(type)!.add(fn);}
- removeEventListener(type:string,fn:(event:{target:Node})=>void){this.listeners.get(type)?.delete(fn);}
- id='';hidden=false;children:Node[]=[];parent:Node|null=null;dataset:Record<string,string>={};classes=new Set<string>();attrs=new Map<string,string>();tag:string;
- top=0;height=0;scrollTop=0;clientHeight=300;scrollCalls:{top:number;behavior:string}[]=[];doc:{getElementById(id:string):Node|null}|null=null;
- textContent='';constructor(tag:string){this.tag=tag;}
+ static log:Write[]=[];
+ listeners=new Map<string,Set<(event:FakeEvent)=>void>>();
+ addEventListener(type:string,fn:(event:FakeEvent)=>void){if(!this.listeners.has(type))this.listeners.set(type,new Set());this.listeners.get(type)!.add(fn);}
+ removeEventListener(type:string,fn:(event:FakeEvent)=>void){this.listeners.get(type)?.delete(fn);}
+ children:Node[]=[];parent:Node|null=null;dataset:Record<string,string>={};classes=new Set<string>();attrs=new Map<string,string>();tag:string;
+ doc:{getElementById(id:string):Node|null;activeElement:Node|null}|null=null;textContent='';
+ /** Form state the page's modules keep in the DOM: a value, a checked box, an open details. Writes are logged. */
+ #value='';#checked=false;#open=false;#hidden=false;#tabIndex=-1;#scrollTop=0;
+ get value(){return this.#value;}set value(v:string){Node.log.push({node:this,what:'value'});this.#value=v;}
+ get checked(){return this.#checked;}set checked(v:boolean){Node.log.push({node:this,what:'checked'});this.#checked=v;}
+ get open(){return this.#open;}set open(v:boolean){Node.log.push({node:this,what:'open'});this.#open=v;}
+ get hidden(){return this.#hidden;}set hidden(v:boolean){Node.log.push({node:this,what:'hidden'});this.#hidden=v;if(v)this.attrs.set('hidden','');else this.attrs.delete('hidden');}
+ get tabIndex(){return this.#tabIndex;}set tabIndex(v:number){Node.log.push({node:this,what:'tabIndex'});this.#tabIndex=v;}
+ get scrollTop(){return this.#scrollTop;}set scrollTop(v:number){Node.log.push({node:this,what:'scrollTop'});this.#scrollTop=v;}
+ scrollTo(){Node.log.push({node:this,what:'scrollTo'});}scrollIntoView(){Node.log.push({node:this,what:'scrollIntoView'});}
+ constructor(tag:string){this.tag=tag;}
+ get id(){return this.attrs.get('id')??'';}
  get classList(){return {contains:(name:string)=>this.classes.has(name)};}
  get ownerDocument(){return this.root().doc!;}
  root():Node{return this.parent?this.parent.root():this;}
@@ -62,60 +104,188 @@ class Node {
  all():Node[]{return this.children.flatMap(n=>[n,...n.all()]);}
  contains(node:unknown):boolean{return node===this||this.children.some(n=>n.contains(node));}
  querySelectorAll(selector:string){if(selector!=='button[data-block-target]')throw new Error(selector);return this.all().filter(n=>n.tag==='button'&&'blockTarget'in n.dataset);}
- closest(selector:string){let node:Node|null=this;while(node){if(selector==='button[data-block-target]'&&node.tag==='button'&&'blockTarget'in node.dataset)return node;node=node.parent;}return null;}
- setAttribute(name:string,value:string){this.attrs.set(name,value);}removeAttribute(name:string){this.attrs.delete(name);}getAttribute(name:string){return this.attrs.get(name)??null;}
- /** Viewport rect: a section sits at 100; a block at 100 + top - section scroll. */
- getBoundingClientRect(){const section=this.section();if(this===section)return {top:100,bottom:100+this.clientHeight,height:this.clientHeight};if(this.classes.has('block-row'))return {top:100,bottom:100+this.height,height:this.height};const top=100+this.top-(section?.scrollTop??0);return {top,bottom:top+this.height,height:this.height};}
- section():Node|null{let node:Node|null=this;while(node&&!node.dataset.inspectorPanel)node=node.parent;return node;}
- get scrollHeight(){return Math.max(this.clientHeight,...this.children.map(n=>n.top+n.height));}
- scrollTo(options:{top:number;behavior:string}){this.scrollCalls.push(options);this.scrollTop=options.top;}
- /** A bubbling click whose target is this node. */
- click(){const event={target:this as Node};for(let node:Node|null=this;node;node=node.parent)for(const fn of node.listeners.get('click')??[])fn(event);}
+ closest(selector:string){if(selector!=='button[data-block-target]')throw new Error(selector);let node:Node|null=this;while(node){if(node.tag==='button'&&'blockTarget'in node.dataset)return node;node=node.parent;}return null;}
+ setAttribute(name:string,value:string){Node.log.push({node:this,what:name});this.attrs.set(name,value);if(name==='hidden')this.#hidden=true;}
+ removeAttribute(name:string){Node.log.push({node:this,what:name});this.attrs.delete(name);if(name==='hidden')this.#hidden=false;}
+ toggleAttribute(name:string,force?:boolean){const on=force??!this.attrs.has(name);if(on)this.setAttribute(name,'');else this.removeAttribute(name);return on;}
+ hasAttribute(name:string){return this.attrs.has(name);}
+ getAttribute(name:string){return this.attrs.get(name)??null;}
+ focus(){Node.log.push({node:this,what:'focus'});this.root().doc!.activeElement=this;}
+ /** A bubbling event whose target is this node. */
+ fire(type:string,extra:Partial<FakeEvent>={}):FakeEvent{const event:FakeEvent={type,target:this,defaultPrevented:false,key:'',preventDefault(){event.defaultPrevented=true;},...extra};for(let node:Node|null=this;node;node=node.parent)for(const fn of node.listeners.get(type)??[])fn(event);return event;}
+ click(){return this.fire('click');}
+ key(key:string){return this.fire('keydown',{key});}
 }
-function openSection(blocks:{id:string;label:string;top:number;height:number}[]){
- const page=new Node('body'),section=new Node('section'),row=new Node('nav');section.dataset.inspectorPanel='playback';row.classes.add('block-row');row.height=30;section.append(row);page.append(section);
- page.doc={getElementById:id=>page.all().find(n=>n.id===id)??null};
- const buttons:Record<string,Node>={};for(const block of blocks){const node=new Node('section');node.id=block.id;node.top=block.top;node.height=block.height;section.append(node);const button=new Node('button');button.dataset.blockTarget=block.id;button.textContent=block.label;row.append(button);buttons[block.id]=button;}
- let follow=()=>{};const observed:Node[]=[];let clock=0,changed=0;
- const ui=bindInspectorBlocks({sections:[section as unknown as HTMLElement],observer:(_root,changedFn)=>{follow=changedFn;return {observe:t=>observed.push(t as unknown as Node),disconnect(){}};},reducedMotion:()=>false,now:()=>clock,changed:()=>changed++});
- return {ui,section,row,buttons,observed,follow:()=>follow(),advance:(ms:number)=>{clock+=ms;},changed:()=>changed,current:()=>Object.entries(buttons).filter(([,b])=>b.getAttribute('aria-current')==='true').map(([id])=>id)};
-}
-const animate=[{id:'transport',label:'Transport',top:40,height:200},{id:'environment',label:'Environment',top:240,height:300},{id:'physics-panel',label:'Physics',top:540,height:400},{id:'report-panel',label:'Report',top:940,height:120}];
+interface FakeEvent {type:string;target:Node;key:string;defaultPrevented:boolean;preventDefault():void}
 
-test('a row button scrolls its block under the sticky row inside the section and marks it aria-current',()=>{
- const app=openSection(animate);
- expect(app.current()).toEqual(['transport']);expect(app.observed.map(n=>n.id)).toEqual(animate.map(b=>b.id));
- app.buttons['physics-panel']!.click();
- expect(app.current()).toEqual(['physics-panel']);expect(app.ui.state()).toEqual({playback:'physics-panel'});expect(app.changed()).toBe(1);
- // The section, not the page, scrolls: block top 540 lands just under the 30px row.
- expect(app.section.scrollCalls).toEqual([{top:540-30-blockScrollGap,behavior:'smooth'}]);
- expect(app.section.children.find(n=>n.id==='physics-panel')!.getBoundingClientRect().top).toBe(100+30+blockScrollGap);
+/** The fake page built from the real index.html: the two Inspector sections, every element in them, attributes and all. */
+async function openPage(changedFn?:()=>void){
+ const html=await indexHtml(),page=new Node('body'),doc={getElementById:(id:string)=>page.all().find(n=>n.id===id)??null,activeElement:null as Node|null};page.doc=doc;
+ for(const id of ['inspector-rig','inspector-playback']){
+  const at=html.indexOf(` id="${id}"`),open=html.lastIndexOf('<',at);const stack:Node[]=[page];
+  for(const match of html.slice(open).matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"]|"[^"]*")*)>/g)){
+   const [,close,raw,attrs]=match,tag=raw!.toLowerCase();
+   if(close){if(!voids.has(tag))stack.pop();if(stack.length===1)break;continue;}
+   const node=new Node(tag);
+   for(const a of attrs!.matchAll(/([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:="([^"]*)")?/g)){const name=a[1]!,value=a[2]??'';if(name==='class')for(const c of value.split(/\s+/).filter(Boolean))node.classes.add(c);if(name.startsWith('data-'))node.dataset[name.slice(5).replace(/-([a-z])/g,(_,c:string)=>c.toUpperCase())]=value;node.attrs.set(name,value);}
+   if(node.attrs.has('hidden'))node.hidden=true;if(node.attrs.has('tabindex'))node.tabIndex=Number(node.attrs.get('tabindex'));
+   stack.at(-1)!.append(node);if(!voids.has(tag)&&!attrs!.trimEnd().endsWith('/'))stack.push(node);
+  }
+ }
+ const section=(id:string)=>doc.getElementById(id)!;let changed=0;
+ Node.log=[];
+ const ui=bindInspectorBlocks({sections:[section('inspector-rig') as unknown as HTMLElement,section('inspector-playback') as unknown as HTMLElement],changed:()=>{changed++;changedFn?.();}});
+ const tab=(target:string)=>doc.getElementById(`block-tab-${target}`)!;
+ const shown=(container:string)=>section(container).children.filter(n=>n.attrs.get('role')==='tabpanel'&&!n.hidden).map(n=>n.id);
+ const selected=(container:string)=>section(container).all().filter(n=>n.attrs.get('role')==='tab'&&n.attrs.get('aria-selected')==='true').map(n=>n.dataset.blockTarget);
+ return {page,doc,ui,section,tab,shown,selected,changed:()=>changed};
+}
+
+test('selecting a tab shows its panel alone, moves aria-selected and the roving tabindex, and scrolls nothing',async()=>{
+ const app=await openPage();
+ expect(app.shown('inspector-rig')).toEqual(['selected-part']);expect(app.shown('animate-blocks')).toEqual(['motion-tools']);
+ Node.log=[];app.tab('mesh-panel').click();
+ expect(app.shown('inspector-rig')).toEqual(['mesh-panel']);expect(app.selected('inspector-rig')).toEqual(['mesh-panel']);
+ const rigTabs=app.section('inspector-rig').all().filter(n=>n.attrs.get('role')==='tab');expect(rigTabs.length).toBe(expected['inspector-rig'].length);
+ expect(rigTabs.map(n=>[n.dataset.blockTarget,n.tabIndex])).toEqual(rigTabs.map(n=>[n.dataset.blockTarget,n.dataset.blockTarget==='mesh-panel'?0:-1]));
+ expect(app.ui.state()).toEqual({rig:'mesh-panel',playback:'motion-tools'});expect(app.changed()).toBe(1);
+ // One block on screen, and no scrolling to get there: no smooth scroll, no scrollIntoView.
+ expect(Node.log.filter(w=>w.what==='scrollTo'||w.what==='scrollIntoView')).toEqual([]);
+ // The other section is untouched.
+ expect(app.shown('animate-blocks')).toEqual(['motion-tools']);
+ // Clicking the selected tab again changes nothing.
+ app.tab('mesh-panel').click();expect(app.changed()).toBe(1);
 });
 
-test('the active block follows scrolling, but not while a clicked block is still being scrolled to',()=>{
- const app=openSection(animate);
- app.section.scrollTop=260;app.follow();expect(app.current()).toEqual(['environment']);
- app.section.scrollTop=520;app.follow();expect(app.current()).toEqual(['physics-panel']);
- // At the end of the section the short closing block becomes active although it never reaches the row.
- app.section.scrollTop=app.section.scrollHeight-app.section.clientHeight;app.follow();expect(app.current()).toEqual(['report-panel']);
- app.buttons['transport']!.click();app.section.scrollTop=300;app.follow();expect(app.current()).toEqual(['transport']);
- app.advance(5000);app.follow();expect(app.current()).toEqual(['environment']);
+test('the Transport tab carries its included Angle block: hidden with the group by its own attribute, and the axis inspection keeps owning its hidden',async()=>{
+ const app=await openPage(),angle=app.doc.getElementById('angle-panel')!;
+ expect(angle.hidden).toBe(true);expect(angle.hasAttribute('data-block-hidden')).toBe(false);
+ // The axis inspection opens the Angle block while Transport is shown.
+ angle.hidden=false;
+ app.tab('physics-panel').click();expect(angle.hasAttribute('data-block-hidden')).toBe(true);expect(angle.hidden).toBe(false);
+ app.tab('motion-tools').click();expect(angle.hasAttribute('data-block-hidden')).toBe(false);expect(angle.hidden).toBe(false);
+ // Closed by the axis inspection, it stays closed whichever tab is shown.
+ angle.hidden=true;app.tab('sound-panel').click();app.tab('motion-tools').click();expect(angle.hidden).toBe(true);
 });
 
-test('the active block persists through the draft ui record and restores without scrolling',()=>{
+test('keyboard: Arrow keys move and wrap, Home and End jump, focus follows the selection, and other keys are left alone',async()=>{
+ const app=await openPage(),rig=expected['inspector-rig'],targets=app.section('inspector-rig').all().filter(n=>n.attrs.get('role')==='tab').map(n=>n.dataset.blockTarget!);
+ expect(targets.length).toBe(rig.length);const first=targets[0]!,second=targets[1]!,last=targets.at(-1)!;
+ const press=(key:string)=>{const from=app.doc.activeElement??app.tab(app.selected('inspector-rig')[0]!);return from.key(key);};
+ app.tab(first).focus();
+ let event=press('ArrowRight');expect(event.defaultPrevented).toBe(true);expect(app.selected('inspector-rig')).toEqual([second]);expect(app.doc.activeElement).toBe(app.tab(second));expect(app.shown('inspector-rig')).toEqual([second]);
+ press('ArrowLeft');press('ArrowLeft');expect(app.selected('inspector-rig')).toEqual([last]);expect(app.doc.activeElement).toBe(app.tab(last));
+ press('ArrowRight');expect(app.selected('inspector-rig')).toEqual([first]);
+ press('End');expect(app.selected('inspector-rig')).toEqual([last]);expect(app.shown('inspector-rig')).toEqual([last]);
+ press('Home');expect(app.selected('inspector-rig')).toEqual([first]);expect(app.doc.activeElement).toBe(app.tab(first));
+ for(const key of ['ArrowDown','ArrowUp','Enter','a','Tab']){event=press(key);expect({key,prevented:event.defaultPrevented}).toEqual({key,prevented:false});}
+ expect(app.selected('inspector-rig')).toEqual([first]);
+ // A key pressed inside a panel is not the tablist's.
+ app.tab('chest-regions').click();const field=app.doc.getElementById('chest-0-cx')!;expect(field.key('ArrowRight').defaultPrevented).toBe(false);expect(app.selected('inspector-rig')).toEqual(['chest-regions']);
+ // The Animate row is its own tablist: keys there never move Setup.
+ app.tab('motion-tools').focus();press('End');expect(app.selected('animate-blocks')).toEqual(['report-panel']);expect(app.selected('inspector-rig')).toEqual(['chest-regions']);
+});
+
+test('the active tab persists through the draft ui record, restores without moving the scroll, and refuses malformed values',async()=>{
  const saved=activeBlocksUI({rig:'mesh-panel',playback:'physics-panel'});expect(Object.keys(saved)).toEqual([inspectorBlocksKey]);
  const ui={inspectorScroll:'{}',reportCategory:'all',...JSON.parse(JSON.stringify(saved))};
  expect(restoreActiveBlocksUI(ui)).toEqual({rig:'mesh-panel',playback:'physics-panel'});
  for(const bad of [undefined,'nope','[]','{"playback":3}','{"Bad":"x"}'])expect(parseActiveBlocks(bad)).toEqual({});
- const app=openSection(animate);app.ui.restore({playback:'report-panel',rig:'unknown'});expect(app.current()).toEqual(['report-panel']);expect(app.section.scrollCalls).toEqual([]);
- app.ui.restore({playback:'missing'});expect(app.current()).toEqual(['report-panel']);
+ const app=await openPage();Node.log=[];
+ app.ui.restore({playback:'report-panel',rig:'unknown'});
+ expect(app.shown('animate-blocks')).toEqual(['report-panel']);expect(app.shown('inspector-rig')).toEqual(['selected-part']);
+ // The section's scroll offset is the workspace scroll memory's to restore; restoring a tab does not touch it.
+ expect(Node.log.filter(w=>['scrollTop','scrollTo','scrollIntoView','focus'].includes(w.what))).toEqual([]);
+ app.ui.restore({playback:'missing'});expect(app.shown('animate-blocks')).toEqual(['report-panel']);
+ // The pre-#258 id of the Transport block still restores to its tab.
+ app.ui.restore({playback:'transport'});expect(app.shown('animate-blocks')).toEqual(['motion-tools']);
 });
 
-test('the review page binds the row on both Inspector sections and carries the active block in its draft adapter',async()=>{
- const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+test('each panel keeps its own scroll offset: a tab switch remembers where the panel was and opens a new one at the top',async()=>{
+ const app=await openPage(),rig=app.section('inspector-rig'),animate=app.section('animate-blocks');
+ app.tab('mesh-panel').click();rig.scrollTop=140;
+ app.tab('chest-regions').click();expect(rig.scrollTop).toBe(0);rig.scrollTop=60;
+ app.tab('mesh-panel').click();expect(rig.scrollTop).toBe(140);
+ app.tab('chest-regions').click();expect(rig.scrollTop).toBe(60);
+ // Animate scrolls its blocks panel, not the section that also holds the timeline.
+ app.tab('physics-panel').click();animate.scrollTop=90;app.tab('readings').click();expect(animate.scrollTop).toBe(0);app.tab('physics-panel').click();expect(animate.scrollTop).toBe(90);
+ expect(app.section('inspector-playback').scrollTop).toBe(0);
+});
+
+/** Step 1's inventory: every block that holds state a hidden panel must not lose, with what holds it. `selected-part`
+ * is the one stateless block — a read-out of the Parts explorer's selection, which lives outside the Inspector. */
+const stateful:Record<string,string>={
+ 'modeling-tools':'the part-set select',
+ 'chest-regions':'27 crop, circle and mesher fields, the chest-more details, the pending textarea',
+ 'mesh-panel':'remesh params, region and segment editors, the pending textarea, the density strip fields',
+ 'weights':'show weights, mode and bone selects (they drive the stage overlay)',
+ 'bones-panel':'the anchor editor and its pending ops textarea',
+ 'rig-fields':'region, still, stops, inherit and turn groups and the pending textarea',
+ 'cuts-panel':'the cut editor, add form and pending textarea',
+ 'cloth-panel':'tag, declared and field controls and the pending textarea',
+ 'motion-tools':'the axis inspection state, with its included Angle block (axis select and slider)',
+ 'sound-panel':'sync audio and volume',
+ 'environment':'wind, gust, gravity, trail and use controls',
+ 'physics-panel':'chain pick, ramp fields, row editor, preview and the pending textarea',
+ 'idle-tracks':'track list and editor, blink marker, the pending textarea',
+ 'readings':'eleven reading toggles and names',
+ 'requirements':'slot, animation, kind and bar picks, rendered into its body',
+ 'retarget':'the pose-map editor, rendered into its body',
+ 'report-panel':'category, page and target selects, the selected event, the details disclosure',
+};
+
+test('the stateful inventory covers every tab but Part, and names no block the page does not have',async()=>{
+ const html=await indexHtml(),targets=Object.keys(expected).flatMap(c=>rowTabs(html,c).tabs.map(t=>t.target));
+ expect(targets.filter(t=>!(t in stateful))).toEqual(['selected-part']);expect(Object.keys(stateful).filter(id=>!targets.includes(id))).toEqual([]);
+});
+
+for(const [block,holds]of Object.entries(stateful))test(`a hidden panel loses nothing: ${block} (${holds})`,async()=>{
+ const app=await openPage(),panel=app.doc.getElementById(block)!,container=app.section('inspector-rig').contains(panel)?'inspector-rig':'animate-blocks';
+ const group=[panel,...(app.tab(block).dataset.blockIncludes??'').split(' ').filter(Boolean).map(id=>app.doc.getElementById(id)!)];
+ const nodes=group.flatMap(n=>[n,...n.all()]);
+ // Put state on every carrier the block has, then show the block: what the user typed, ticked or opened.
+ app.tab(block).click();
+ for(const [i,node]of nodes.entries()){node.value=`draft-${block}-${i}`;node.checked=i%2===0;node.open=i%3===0;node.dataset.probe=String(i);}
+ // A block that renders into a body (requirements, retarget) holds its editor as children it created.
+ const created=new Node('div');created.attrs.set('id',`${block}-created-probe`);panel.append(created);
+ const snapshot=()=>group.flatMap(n=>[n,...n.all()]).map(n=>({node:n,parent:n.parent,index:n.parent?.children.indexOf(n),value:n.value,checked:n.checked,open:n.open,probe:n.dataset.probe,attrs:[...n.attrs].filter(([k])=>k!=='hidden'&&k!=='data-block-hidden')}));
+ const before=snapshot();
+ const away=(container==='inspector-rig'?['mesh-panel','selected-part']:['report-panel','motion-tools']).find(t=>t!==block)!;
+ Node.log=[];app.tab(away).click();
+ expect(panel.hidden).toBe(true);for(const node of group.slice(1))expect(node.hasAttribute('data-block-hidden')).toBe(true);
+ // While hidden, nothing in the block was written but the panel's own visibility.
+ const inside=new Set(nodes.concat(created));
+ expect(Node.log.filter(w=>inside.has(w.node)).map(w=>({id:w.node.id,what:w.what}))).toEqual(group.map(n=>({id:n.id,what:n===panel?'hidden':'data-block-hidden'})));
+ app.tab(block).click();
+ expect(panel.hidden).toBe(false);for(const node of group.slice(1))expect(node.hasAttribute('data-block-hidden')).toBe(false);
+ // Shown again, it is the same nodes, in the same places, holding the same values.
+ expect(snapshot()).toEqual(before);
+});
+
+test('no page module reads a block\'s visibility, so nothing pauses or re-measures because its tab is hidden',async()=>{
+ // A hidden panel loses nothing only if no code depends on it being on screen. The visibility readers in web/ are
+ // named here with what they watch; a new one has to say what it watches before this passes.
+ const known:Record<string,string>={'part-thumbnails.ts':'the Parts explorer list (outside the Inspector)','live-connection.ts':'the document'};
+ const readers:string[]=[];
+ for(const name of (await readdir(new URL('../web/',import.meta.url))).filter(n=>n.endsWith('.ts')).sort()){
+  const text=await webFile(name);if(/IntersectionObserver|checkVisibility|offsetParent|visibilityState/.test(text))readers.push(name);
+ }
+ expect(readers).toEqual(Object.keys(known).sort());
+ // The tabs module itself no longer observes or scrolls anything.
+ const tabs=await webFile('inspector-blocks.ts');for(const word of ['IntersectionObserver','scrollTo(','scrollIntoView','smooth','scrollend','matchMedia'])expect({word,present:tabs.includes(word)}).toEqual({word,present:false});
+});
+
+test('the review page and the comparison tools bind both Inspector sections and carry the active tab in their draft adapters',async()=>{
+ const main=await webFile('main.ts');
  expect(main).toContain("inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')]");
  expect(main).toContain("...(inspectorBlocks?activeBlocksUI(inspectorBlocks.state()):{})");
- expect(main).toContain("inspectorBlocks?.restore(restoreActiveBlocksUI(value));");
- const css=await readFile(new URL('../web/styles.css',import.meta.url),'utf8');
- expect(css).toMatch(/\.block-row\{position:sticky;top:-12px;[^}]*overflow-x:auto/);expect(css).toContain('.block-row button[aria-current=true]{');
+ // The tab is restored before the section's scroll offset, so the offset is clamped against the panel it belongs to.
+ expect(main).toMatch(/inspectorBlocks\?\.restore\(restoreActiveBlocksUI\(value\)\);workspace\?\.restoreScroll\(value\.inspectorScroll\);/);
+ const compare=await webFile('compare-picked-tools.ts');
+ expect(compare).toContain('bindInspectorBlocks({');expect(compare).toContain('inspectorBlocks?.restore(restoreActiveBlocksUI(ui));');expect(compare).not.toContain('inspectorBlocks?.refresh()');
+ for(const sheet of ['styles.css','compare.css']){
+  const css=await webFile(sheet);
+  expect(css).toMatch(/\.block-row\{position:sticky;top:-12px;[^}]*overflow-x:auto/);expect(css).toContain('.block-row button[aria-selected=true]{');expect(css).not.toContain('.block-row button[aria-current=true]');
+  expect(css).toContain('[data-block-hidden]{display:none!important}');
+ }
 });

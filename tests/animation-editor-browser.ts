@@ -914,7 +914,7 @@ async function main() {
       tabsMeasured: Array<{
         label: string;
         targetId: string;
-        ariaCurrent: string | null;
+        ariaSelected: string | null;
         targetVisibleInBlocksPanel: boolean;
         animateBlocksScrollTop: number;
         maxDeltaPx: number;
@@ -960,15 +960,9 @@ async function main() {
 
       for (const btn of buttons) {
         btn.click();
-        // Wait for smooth/auto scroll on blocksPanel to settle
+        // A tab shows its block alone (#308): nothing scrolls to reach it.
         const targetId = btn.getAttribute('data-block-target') || '';
         const targetEl = document.getElementById(targetId);
-        const rowRect = blocksPanel.querySelector('.block-row').getBoundingClientRect();
-        const panelRect = blocksPanel.getBoundingClientRect();
-        if (targetEl) {
-          const desiredOffset = targetEl.getBoundingClientRect().top - panelRect.top - rowRect.height - 6;
-          blocksPanel.scrollTo({ top: Math.max(0, blocksPanel.scrollTop + desiredOffset), behavior: 'auto' });
-        }
         await new Promise((r) => setTimeout(r, 30));
         const nowRects = measureTracked();
         const deltas = {};
@@ -991,7 +985,7 @@ async function main() {
         tabsMeasured.push({
           label: btn.textContent?.trim() || '',
           targetId,
-          ariaCurrent: btn.getAttribute('aria-current'),
+          ariaSelected: btn.getAttribute('aria-selected'),
           targetVisibleInBlocksPanel: tr.bottom > pr.top && tr.top < pr.bottom,
           animateBlocksScrollTop: Math.round(blocksPanel.scrollTop),
           maxDeltaPx: Math.round(tabMax * 100) / 100,
@@ -1003,11 +997,6 @@ async function main() {
       const physicsBtn = buttons.find((b) => b.getAttribute('data-block-target') === 'physics-panel');
       if (physicsBtn) {
         physicsBtn.click();
-        const targetEl = document.getElementById('physics-panel');
-        const rowRect = blocksPanel.querySelector('.block-row').getBoundingClientRect();
-        const panelRect = blocksPanel.getBoundingClientRect();
-        const desiredOffset = targetEl.getBoundingClientRect().top - panelRect.top - rowRect.height - 6;
-        blocksPanel.scrollTo({ top: Math.max(0, blocksPanel.scrollTop + desiredOffset), behavior: 'auto' });
         await new Promise((r) => setTimeout(r, 30));
       }
 
@@ -1025,7 +1014,7 @@ async function main() {
       slice3cTabsResult.timelineInsideAnimateBlocks ||
       slice3cTabsResult.tabsMeasured.length !== 9 ||
       slice3cTabsResult.maxDeltaAcrossAllTabsPx !== 0 ||
-      slice3cTabsResult.tabsMeasured.some((t) => t.ariaCurrent !== 'true' || !t.targetVisibleInBlocksPanel)
+      slice3cTabsResult.tabsMeasured.some((t) => t.ariaSelected !== 'true' || !t.targetVisibleInBlocksPanel)
     ) {
       throw new Error(`Slice 3c Bar 1/2 tab switch verification failed: ${JSON.stringify(slice3cTabsResult, null, 2)}`);
     }

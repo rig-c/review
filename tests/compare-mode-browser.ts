@@ -721,9 +721,9 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       const buildA = await inspectPickedBuild('a');
       const buildB = await inspectPickedBuild('b');
 
-      // Defect 5 (#235 Slice 4a): in a comparison session, switching to Setup or Animate and clicking the block tabs
-      // marks aria-current="true" AND scrolls the panel container so the chosen block is in view (scrollTop > 0),
-      // while #animation-dock stays stationary in Animate.
+      // Defect 5 (#235 Slice 4a), as tabs since #308: in a comparison session, switching to Setup or Animate and clicking
+      // the block tabs marks aria-selected="true" and shows the chosen block alone in the panel container, with nothing
+      // scrolled to reach it, while #animation-dock stays stationary in Animate.
       await clickMode('rig');
       const rigScrollRoot = document.getElementById('inspector-rig');
       rigScrollRoot.scrollTop = 0;
@@ -748,7 +748,8 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         setupBlockScrolls.push({
           label,
           targetId,
-          ariaCurrent: btn.getAttribute('aria-current'),
+          ariaSelected: btn.getAttribute('aria-selected'),
+          alone: [...document.querySelectorAll('[role=tabpanel][aria-labelledby^="block-tab-"]')].filter((p) => p.getClientRects().length > 0 && btn.closest('[data-inspector-panel]')?.contains(p)).map((p) => p.id).join(',') === targetId,
           scrollTop: Math.round(rigScrollRoot.scrollTop),
           inView: targetRect.top < rootRect.bottom && targetRect.bottom > rootRect.top,
         });
@@ -780,7 +781,8 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         animateBlockScrolls.push({
           label,
           targetId,
-          ariaCurrent: btn.getAttribute('aria-current'),
+          ariaSelected: btn.getAttribute('aria-selected'),
+          alone: [...document.querySelectorAll('[role=tabpanel][aria-labelledby^="block-tab-"]')].filter((p) => p.getClientRects().length > 0 && btn.closest('[data-inspector-panel]')?.contains(p)).map((p) => p.id).join(',') === targetId,
           scrollTop: Math.round(animateScrollRoot.scrollTop),
           inView: targetRect.top < rootRect.bottom && targetRect.bottom > rootRect.top,
           dockTopDelta: Math.round(Math.abs(dockAfterRect.top - dockBeforeRect.top)),
@@ -1499,12 +1501,12 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
     }
 
     for (const row of compareCheck.blockScrolling?.setup ?? []) {
-      if (row.ariaCurrent !== 'true' || !(row.scrollTop > 0) || !row.inView) {
+      if (row.ariaSelected !== 'true' || !row.alone || row.scrollTop !== 0 || !row.inView) {
         failures.push(`Compare Setup block-tab scroll failed for ${row.label} (${row.targetId}): ${JSON.stringify(row)}`);
       }
     }
     for (const row of compareCheck.blockScrolling?.animate ?? []) {
-      if (row.ariaCurrent !== 'true' || !(row.scrollTop > 0) || !row.inView || row.dockTopDelta !== 0) {
+      if (row.ariaSelected !== 'true' || !row.alone || row.scrollTop !== 0 || !row.inView || row.dockTopDelta !== 0) {
         failures.push(`Compare Animate block-tab scroll failed for ${row.label} (${row.targetId}): ${JSON.stringify(row)}`);
       }
     }
