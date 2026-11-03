@@ -16,7 +16,7 @@ import type { AnimationSourceOp } from '../src/animation-ops.ts';
 import { partBounds, type PartExplorer } from './part-selection.ts';
 import { bindInspectorBlocks, activeBlocksUI, restoreActiveBlocksUI, type InspectorBlocks } from './inspector-blocks.ts';
 import { sourceTextContent, tr } from './i18n.ts';
-import { bindChestEditor, canvasToCrop, bustLabel, bustSides, LANDMARKS, landmarkInputId, rowCircle, type ChestEditor, type LandmarkKey } from './chest-editor.ts';
+import { bindChestEditor, canvasToCrop, bustLabel, bustSides, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, rowCircle, type ChestEditor, type LandmarkKey } from './chest-editor.ts';
 import { chestOverlayCircles, chestOverlayPolygons, chestRegionRows, chestRowId, evaluateChestForm } from './chest-regions-tool.ts';
 import { chestRegionsBinding, cropWorldMapping, type CropWorldMapping } from '../src/chest-regions.ts';
 import { bindMeshEditor, meshEditSource, sha256Hex, type MeshEditor } from './mesh-editor.ts';
@@ -87,6 +87,7 @@ interface SideBuildState {
   stageCheck: { lines: string[]; check: CheckSummary | null } | null;
   chestInputs: Record<string, string> | null;
   chestMapping: CropWorldMapping;
+  setupChestWorld: { x: number; y: number } | null;
   stripView: DensityStripViewLike | null;
   stripPending: {
     index: number;
@@ -122,6 +123,7 @@ function emptySideState(): SideBuildState {
     stageCheck: null,
     chestInputs: null,
     chestMapping: { available: false, reason: 'CHEST_REGION_MAPPING_UNAVAILABLE: no compiled model drawn' },
+    setupChestWorld: null,
     stripView: null,
     stripPending: null,
     readingsJob: null,
@@ -598,6 +600,11 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     return evaluateChestForm(chestField, currentState().chestMapping, currentSideData()?.feedbackCatalog.bones);
   }
 
+  function activeChestMapping(side: Side = pickedSide): CropWorldMapping {
+    const state = sides[side];
+    return posedChestMapping(state.chestMapping, chestPoseOffset(host.players[side], state.setupChestWorld));
+  }
+
   function updateChestMapping(side: Side = pickedSide): void {
     const state = sides[side];
     const player = host.players[side], sideAssets = host.assets[side];
@@ -639,7 +646,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   function chestRegions(): OverlayRegion[] {
     const style = getComputedStyle(document.documentElement), token = (name: string) => style.getPropertyValue(name).trim();
-    return chestOverlayPolygons(chestEvaluation(), currentState().chestMapping).map((region, i) => ({
+    return chestOverlayPolygons(chestEvaluation(), activeChestMapping()).map((region, i) => ({
       ...region,
       stroke: token(i ? '--rv-region-b' : '--rv-region-a'),
       fill: token(i ? '--rv-region-b-fill' : '--rv-region-a-fill'),
@@ -647,7 +654,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function chestCircles(): OverlayCircle[] {
-    const mapping = currentState().chestMapping;
+    const mapping = activeChestMapping();
     if (!mapping.available) return [];
     const style = getComputedStyle(document.documentElement), token = (name: string) => style.getPropertyValue(name).trim();
     const colors = (row: number, overlap: boolean) => ({
@@ -677,7 +684,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function chestMarkers(): OverlayMarker[] {
-    const mapping = currentState().chestMapping;
+    const mapping = activeChestMapping();
     if (!mapping.available || !chestEditor?.active() || chestEditor.mode() !== 'landmarks') return [];
     const style = getComputedStyle(document.documentElement), token = (name: string) => style.getPropertyValue(name).trim(), armed = chestEditor.armed();
     const at = (key: LandmarkKey) => {
@@ -2255,7 +2262,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     pane: paneProxy,
     canvas: overlayProxy,
     project: () => currentPlayer() ? rigProject() : null,
-    mapping: () => currentState().chestMapping,
+    mapping: () => activeChestMapping(),
     changed: renderChest,
     download: () => { void exportChest(); },
     apply: () => { void applyRebuild(); },
@@ -2692,6 +2699,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       st.stageSource = { url: modelUrl, prefix, hash: sha256 };
       st.stageModelHash = sha256;
       st.partModel = partModel;
+      const p = host.players[side];
+      try { const b = p?.bone('chest'); st.setupChestWorld = b && Number.isFinite(b.x) && Number.isFinite(b.y) ? { x: b.x, y: b.y } : null; } catch { st.setupChestWorld = null; }
       if (side !== pickedSide && st.animationState) {
         st.animationState.document = null;
         st.animationState.baseInspection = null;

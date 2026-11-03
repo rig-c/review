@@ -33,3 +33,24 @@ test('selected world fit centers actual bounds and sync propagates normalized ac
  expect(boundsFitSignature({x:40,y:10,width:.01,height:.01},world).zoom).toBe(8);
  expect(()=>boundsFitSignature({...box,width:0},world)).toThrow('PART_FIT_UNAVAILABLE');expect(()=>boundsFitSignature(box,world,500,400)).toThrow('PART_FIT_UNAVAILABLE');
 });
+
+test('cursor-anchored wheel zoom keeps the world/image point under the cursor stationary (#307)',()=>{
+ for(const [axis,bounds] of [['world',{x:-300,y:80,width:200,height:600}],['image',{x:0,y:0,width:1920,height:1080}]] as const){
+  const frame=cameraFrame(axis,bounds,600,400,28,58)!;
+  const start={zoom:1.25,pan:{x:0.15,y:-0.1}};
+  const cursor={x:430,y:130};
+  const screenToSource=(sig:typeof start,pt:{x:number;y:number})=>{
+   const cam=cameraFromSignature(sig,frame);
+   const s=frame.baseScale*cam.zoom;
+   return {
+    x:cam.center!.x+(pt.x-frame.width/2)/s,
+    y:cam.center!.y+(axis==='world'?(frame.height/2-pt.y)/s:(pt.y-frame.height/2)/s)
+   };
+  };
+  const before=screenToSource(start,cursor);
+  const next=zoomSignature(start,1.4,frame,cursor);
+  const after=screenToSource(next,cursor);
+  expect(after.x).toBeCloseTo(before.x,9);
+  expect(after.y).toBeCloseTo(before.y,9);
+ }
+});

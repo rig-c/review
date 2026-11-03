@@ -1,6 +1,6 @@
 /** Inspection graphics from the last successfully drawn public player pose. */
 import {partBounds} from './part-selection.ts';
-import {placeLabels} from './label-placement.ts';
+import {boxesIntersect,placeLabels,type LabelBox} from './label-placement.ts';
 import type {BoneWorld,PosedFrame,RigPlayer} from '@rig-c/play';
 
 export interface OverlayPoint {x:number;y:number}
@@ -75,6 +75,24 @@ export function projectCircle(project:OverlayProject,circle:Pick<OverlayCircle,'
  if(![center,edge,top].every(finite))return null;
  const pxR=Math.max(2,Math.hypot(edge.x-center.x,edge.y-center.y));
  return {center,pxR,pxBand:Math.max(pxR+2,Math.hypot(top.x-center.x,top.y-center.y))};
+}
+export interface CircleLabelInput {center:OverlayPoint;pxBand:number;width:number;height?:number;row?:number}
+/**
+ * Circle coordinate label rects (#307): R (row 0 / image-left) anchors below-left of its outer ring, L (row 1 / image-right)
+ * anchors below-right of its outer ring, away from the other circle. If two rects would still intersect, the later one
+ * stacks vertically below the earlier one.
+ */
+export function circleLabelRects(items:readonly CircleLabelInput[]):LabelBox[] {
+ const out:LabelBox[]=[];
+ for(let i=0;i<items.length;i++){
+  const item=items[i]!,w=item.width,h=item.height??15,other=items.length===2?items[1-i]:undefined;
+  const leftSide=item.row!==undefined?item.row===0:other?item.center.x<=other.center.x:true;
+  const x=items.length===1&&item.row===undefined?item.center.x-w/2:leftSide?item.center.x-w:item.center.x;
+  let box:LabelBox={x,y:item.center.y+item.pxBand+3,w,h};
+  while(out.some(p=>boxesIntersect(box,p))){const hit=out.find(p=>boxesIntersect(box,p))!;box={...box,y:hit.y+hit.h+2};}
+  out.push(box);
+ }
+ return out;
 }
 export interface OverlayRefresh extends OverlayView {player:OverlayPlayer|null;bones:readonly BoneOverlaySpec[];frame?:PosedFrame;selectedSlot?:string|null}
 const point=(x:number,y:number):OverlayPoint=>({x,y});
@@ -208,18 +226,27 @@ export class RigOverlays {
     if(region.name){ctx.font='600 11px ui-monospace, monospace';const width=ctx.measureText(region.name).width+8;ctx.fillStyle=c.labelBg;ctx.fillRect(top!.x-width/2,top!.y-24,width,15);ctx.fillStyle=region.stroke;ctx.fillText(region.name,top!.x-width/2+4,top!.y-13);}
    }
   }
-  if(this.playerAvailable)for(const circle of circles){
-   const at=projectCircle(project,circle);if(!at)continue;const {center,pxR,pxBand}=at,c=circle.colors;
-   ctx.globalAlpha=.95;
-   ctx.beginPath();ctx.setLineDash([5,4]);ctx.strokeStyle=c.stroke;ctx.lineWidth=1.6;ctx.arc(center.x,center.y,pxBand,0,Math.PI*2);ctx.stroke();
-   ctx.beginPath();ctx.setLineDash([]);ctx.fillStyle=c.fill;ctx.lineWidth=2.2;ctx.arc(center.x,center.y,pxR,0,Math.PI*2);ctx.fill();ctx.stroke();
-   if(!circle.handles)continue;
-   ctx.globalAlpha=1;
-   ctx.beginPath();ctx.moveTo(center.x-7,center.y);ctx.lineTo(center.x+7,center.y);ctx.moveTo(center.x,center.y-7);ctx.lineTo(center.x,center.y+7);ctx.stroke();
-   for(const [x,y,fill,stroke] of [[center.x,center.y,c.handle,c.stroke],[center.x+pxR,center.y,c.stroke,c.ink],[center.x,center.y-pxBand,c.ink,c.stroke]] as const){ctx.beginPath();ctx.fillStyle=fill;ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.arc(x,y,4.5,0,Math.PI*2);ctx.fill();ctx.stroke();}
-   if(circle.label){
-    ctx.font='600 11px ui-monospace, monospace';const width=ctx.measureText(circle.label).width+8,lx=center.x-width/2,ly=center.y+pxBand+14+(circle.labelRow??0)*17;
-    ctx.fillStyle=circle.flash?c.flash:c.labelBg;ctx.fillRect(lx,ly-11,width,15);ctx.fillStyle=circle.flash?c.ink:c.stroke;ctx.fillText(circle.label,lx+4,ly);
+  if(this.playerAvailable){
+   const drawnCircles=circles.flatMap(circle=>{const at=projectCircle(project,circle);return at?[{circle,at}]:[];});
+   for(const {circle,at} of drawnCircles){
+    const {center,pxR,pxBand}=at,c=circle.colors;
+    ctx.globalAlpha=.95;
+    ctx.beginPath();ctx.setLineDash([5,4]);ctx.strokeStyle=c.stroke;ctx.lineWidth=1.6;ctx.arc(center.x,center.y,pxBand,0,Math.PI*2);ctx.stroke();
+    ctx.beginPath();ctx.setLineDash([]);ctx.fillStyle=c.fill;ctx.lineWidth=2.2;ctx.arc(center.x,center.y,pxR,0,Math.PI*2);ctx.fill();ctx.stroke();
+    if(!circle.handles)continue;
+    ctx.globalAlpha=1;
+    ctx.beginPath();ctx.moveTo(center.x-7,center.y);ctx.lineTo(center.x+7,center.y);ctx.moveTo(center.x,center.y-7);ctx.lineTo(center.x,center.y+7);ctx.stroke();
+    for(const [x,y,fill,stroke] of [[center.x,center.y,c.handle,c.stroke],[center.x+pxR,center.y,c.stroke,c.ink],[center.x,center.y-pxBand,c.ink,c.stroke]] as const){ctx.beginPath();ctx.fillStyle=fill;ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.arc(x,y,4.5,0,Math.PI*2);ctx.fill();ctx.stroke();}
+   }
+   const labelled=drawnCircles.filter(({circle})=>circle.handles&&!!circle.label);
+   if(labelled.length){
+    ctx.globalAlpha=1;ctx.font='600 11px ui-monospace, monospace';
+    const rects=circleLabelRects(labelled.map(({circle,at})=>({center:at.center,pxBand:at.pxBand,width:ctx.measureText(circle.label!).width+8,row:circle.labelRow})));
+    labelled.forEach(({circle},i)=>{
+     const box=rects[i]!,c=circle.colors;
+     ctx.fillStyle=circle.flash?c.flash:c.labelBg;ctx.fillRect(box.x,box.y,box.w,box.h);
+     ctx.fillStyle=circle.flash?c.ink:c.stroke;ctx.fillText(circle.label!,box.x+4,box.y+11);
+    });
    }
   }
   if(this.playerAvailable){

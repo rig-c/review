@@ -6,7 +6,7 @@ import {PartExplorer,loadPartModel,partBounds} from './part-selection.ts';
 import {AnimationInspectionPanel} from './animation-inspection.ts';
 import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
 import { CanvasRenderer, loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBounds } from '@rig-c/play';
-import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature} from './camera-view.ts';
+import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraPoint,type CameraSignature} from './camera-view.ts';
 import {rendererStatus} from './renderer-status.ts';
 import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
 import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
@@ -16,7 +16,7 @@ import {densityField,densityPath} from '../src/density-strip.ts';
 import {assertMeshPatch,countsText,meshApplyOutcome,meshPatchOps,setEntryValue,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
 import {worstLine} from '../src/readings.ts';
 import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
-import {bindChestEditor,canvasToCrop,bustLabel,bustSides,LANDMARKS,landmarkInputId,rowCircle,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
+import {bindChestEditor,canvasToCrop,bustLabel,bustSides,chestPoseOffset,LANDMARKS,landmarkInputId,posedChestMapping,rowCircle,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
 import {readSetupPose} from './setup-pose.ts';
@@ -141,6 +141,9 @@ let controlDispose:(()=>void)|null=null;
 const viewDisposers:(()=>void)[]=[];
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let chestMapping:CropWorldMapping={available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: no compiled model drawn'};
+let setupChestWorld:{x:number;y:number}|null=null;
+const readSetupChest=(p:RigPlayer|null):{x:number;y:number}|null=>{if(!p)return null;try{const b=p.bone('chest');return b&&Number.isFinite(b.x)&&Number.isFinite(b.y)?{x:b.x,y:b.y}:null;}catch{return null;}};
+const activeChestMapping=():CropWorldMapping=>posedChestMapping(chestMapping,chestPoseOffset(player,setupChestWorld));
 let referenceSize: { width: number; height: number } | null = null;
 let video: HTMLVideoElement | null = null;
 let controlledVideoSample:{media:HTMLVideoElement;position:number;time:number}|null=null;
@@ -671,6 +674,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
       const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith(access.route('/assets/'))) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
     player = new RigPlayer(el('rig-root'), assets);
+    setupChestWorld = readSetupChest(player);
     // Parts inspection is an add-on: a catalog refusal is shown in the explorer and never aborts the rig.
     try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
     player.on('event', event => { text('event-log', `Runtime event: ${event.name} · ${event.time.toFixed(2)} s`); });
@@ -817,10 +821,10 @@ function updateCamera(target:CameraTarget,value:CameraSignature):void {
  for(const other of ['rig','reference'] as const){const update=updates[other];if(update)writeCamera(other,update);}activeCamera=target;
  fitCamera();renderCameraControls();
 }
-function zoomCamera(factor:number,target=availableCamera()):void {if(!target)return;const frame=paneFrame(target);if(frame)updateCamera(target,zoomSignature(cameraSignature(paneCamera(target),frame),factor));}
+function zoomCamera(factor:number,target=availableCamera(),point?:CameraPoint|null):void {if(!target)return;const frame=paneFrame(target);if(frame)updateCamera(target,zoomSignature(cameraSignature(paneCamera(target),frame),factor,frame,point));}
 function panCamera(target:CameraTarget,dx:number,dy:number):void {const frame=paneFrame(target);if(frame)updateCamera(target,dragSignature(cameraSignature(paneCamera(target),frame),frame,dx,dy));}
 function fitActiveCamera(target=availableCamera()):void {if(!target)return;const part=parts?.value();if(target==='rig'&&part){const box=parts?.bounds(),frame=paneFrame(target);if(!box||!frame){message('PART_FIT_UNAVAILABLE: selected slot has no positive drawn bounds.',true);return;}updateCamera(target,boundsFitSignature(box,frame,28,58));message('Selected slot fitted.');}else{if(!paneFrame(target))return;updateCamera(target,{zoom:1,pan:{x:0,y:0}});message('View fitted.');}}
-function zoomViewport(target:CameraTarget,deltaY:number):void {zoomCamera(deltaY<0?1.1:1/1.1,target);}
+function zoomViewport(target:CameraTarget,deltaY:number,point?:CameraPoint|null):void {zoomCamera(deltaY<0?1.1:1/1.1,target,point);}
 
 function bind(): void {
   button('strip-export').onclick = () => { void exportStrip(); };
@@ -839,7 +843,7 @@ function bind(): void {
   button('zoom-in').onclick=()=>cameraAction(()=>zoomCamera(1.25));button('zoom-out').onclick=()=>cameraAction(()=>zoomCamera(1/1.25));button('fit').onclick=()=>cameraAction(()=>fitActiveCamera());
   input('camera-sync').onchange=()=>cameraAction(()=>setCameraSync(input('camera-sync').checked));
   for(const target of ['rig','reference'] as const)for(const event of ['pointerdown','focusin'] as const)el(target+'-viewport').addEventListener(event,()=>activateCamera(target));
-  for (const id of ['reference-viewport', 'rig-viewport']) el(id).addEventListener('wheel', event => { event.preventDefault(); cameraAction(()=>zoomViewport(id==='rig-viewport'?'rig':'reference',event.deltaY)); }, { passive: false });
+  for (const id of ['reference-viewport', 'rig-viewport']) el(id).addEventListener('wheel', event => { event.preventDefault(); const rect=el(id).getBoundingClientRect(); cameraAction(()=>zoomViewport(id==='rig-viewport'?'rig':'reference',event.deltaY,{x:event.clientX-rect.left,y:event.clientY-rect.top})); }, { passive: false });
   input('scrub').oninput = () => { pause(); seek(Number(input('scrub').value)); };
   input('frame-number').onfocus = pause;
   input('frame-number').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); const value = input('frame-number').value.trim(); seekFrame(value ? Number(value) : NaN); } };
@@ -910,7 +914,7 @@ function bind(): void {
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],changed:()=>persistence?.save()});
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
-  chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
+  chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(tr(text)),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
   weightsView=bindWeightsView({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,inspector:()=>selectedInspector(),slot:()=>parts?.value()?.slot??null,
    model:()=>data.manifest.model?partModel??undefined:null,setup:slot=>assets?setupPoseMesh(assets,partModel,slot,document.createElement('div')):null,changed:()=>redrawOverlay(false),
@@ -1175,11 +1179,11 @@ function chestField(id:string){const node=document.getElementById(id) as HTMLInp
 function chestEvaluation(){return evaluateChestForm(chestField,chestMapping,data.feedbackCatalog.bones);}
 function chestRegions():OverlayRegion[]{
  const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim();
- return chestOverlayPolygons(chestEvaluation(),chestMapping).map((region,i)=>({...region,stroke:token(i?'--rv-region-b':'--rv-region-a'),fill:token(i?'--rv-region-b-fill':'--rv-region-a-fill')}));
+ return chestOverlayPolygons(chestEvaluation(),activeChestMapping()).map((region,i)=>({...region,stroke:token(i?'--rv-region-b':'--rv-region-a'),fill:token(i?'--rv-region-b-fill':'--rv-region-a-fill')}));
 }
 /** Circle regions: in edit mode the editor's circles straight from the fields (handles and labels), else the valid designation's. */
 function chestCircles():OverlayCircle[]{
- const mapping=chestMapping;if(!mapping.available)return [];
+ const mapping=activeChestMapping();if(!mapping.available)return [];
  const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim();
  const colors=(row:number,overlap:boolean)=>({stroke:token(overlap?'--rv-bust-overlap':row?'--rv-bust-l':'--rv-bust-r'),fill:token(overlap?'--rv-bust-overlap-fill':row?'--rv-bust-l-fill':'--rv-bust-r-fill'),handle:token('--rv-bust-handle'),ink:token('--rv-bust-ink'),labelBg:token('--rv-bust-label-bg'),flash:token('--rv-bust-flash')});
  if(chestEditor?.active()&&chestEditor.mode()==='landmarks'){
@@ -1198,7 +1202,7 @@ function chestCircles():OverlayCircle[]{
 }
 /** Landmark markers (#105) in Landmarks mode: apexes in the R / L colours, the cleavage with guides to both apexes. */
 function chestMarkers():OverlayMarker[]{
- const mapping=chestMapping;if(!mapping.available||!chestEditor?.active()||chestEditor.mode()!=='landmarks')return [];
+ const mapping=activeChestMapping();if(!mapping.available||!chestEditor?.active()||chestEditor.mode()!=='landmarks')return [];
  const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim(),armed=chestEditor.armed();
  const at=(key:LandmarkKey)=>{const x=Number(input(landmarkInputId(key,'x')).value.trim()||NaN),y=Number(input(landmarkInputId(key,'y')).value.trim()||NaN);return Number.isFinite(x)&&Number.isFinite(y)?mapping.toWorld(x,y):null;};
  const apexes=[at('apex_r'),at('apex_l')].filter((p):p is {x:number;y:number}=>!!p);
@@ -2141,7 +2145,7 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  inspectionSourceState='pending';partModel=null;pause();refreshAnimationInspection();
  const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}}).catch(error=>{inspectionSourceState='failed';refreshAnimationInspection();throw error;});
  physicsPanel?.clearPreview();
- pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
+ pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);setupChestWorld=readSetupChest(player);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
  {const animations=select('animation-select');animations.replaceChildren(...assets.animations.map(item=>option(item.name,data.manifest.animations.find(a=>a.id===item.name)?.label??item.name)));animations.disabled=assets.animations.length===0;}
  player.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
