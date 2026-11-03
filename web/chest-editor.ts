@@ -42,40 +42,77 @@ export function rowCircle(read:ChestFieldReader,row:number):ChestCircle|null {
  if(cx===null||cy===null||ax===null||band===null||ax<=0||ay!==ax||(read(chestRowId(row,'clip'))?.value??'').trim())return null;
  return {cx,cy,r:ax,band};
 }
-/** Field values that store a circle in a detail row: r writes both semi-axes. */
-export function circleFields(row:number,circle:Partial<ChestCircle>):Record<string,string> {
+/**
+ * #315: a row the handles edit — a circle, or an axis-aligned ellipse (`r` = ax, `ry` = ay) with an optional medial clip.
+ * The rule for an ellipse: the r handle sets ax and scales ay and the clip's offset from the centre by the same factor
+ * (the shape keeps its aspect); the band handle sets band from the core's top (ay); a move shifts the centre and the clip.
+ */
+export interface BustShape extends ChestCircle {ry?:number;clip?:number}
+export function rowShape(read:ChestFieldReader,row:number):BustShape|null {
+ const circle=rowCircle(read,row);if(circle)return circle;
+ const cx=number(read,chestRowId(row,'cx')),cy=number(read,chestRowId(row,'cy')),ax=number(read,chestRowId(row,'ax')),ay=number(read,chestRowId(row,'ay')),band=number(read,chestRowId(row,'band'));
+ const clipText=(read(chestRowId(row,'clip'))?.value??'').trim(),clip=clipText?number(read,chestRowId(row,'clip')):undefined;
+ if(cx===null||cy===null||ax===null||ay===null||band===null||ax<=0||ay<=0||clip===null)return null;
+ return {cx,cy,r:ax,ry:ay,band,...(clip===undefined?{}:{clip})};
+}
+const grid=(value:number)=>Math.round(value*256)/256;
+/** The ellipse rule's resize: r → ax, and ay and the clip offset scale with it; a circle just takes r. */
+export function resizeBust(from:BustShape,r:number):BustShape {
+ if(from.ry===undefined&&from.clip===undefined)return {...from,r};
+ const k=from.r>0?r/from.r:1;
+ return {...from,r,...(from.ry===undefined?{}:{ry:grid(from.ry*k)}),...(from.clip===undefined?{}:{clip:grid(from.cx+(from.clip-from.cx)*k)})};
+}
+/** Field values that store a shape in a detail row: a circle's r writes both semi-axes; an ellipse's ry writes ay. */
+export function circleFields(row:number,circle:Partial<BustShape>):Record<string,string> {
  const out:Record<string,string>={};
  if(circle.cx!==undefined)out[chestRowId(row,'cx')]=String(circle.cx);
  if(circle.cy!==undefined)out[chestRowId(row,'cy')]=String(circle.cy);
- if(circle.r!==undefined){out[chestRowId(row,'ax')]=String(circle.r);out[chestRowId(row,'ay')]=String(circle.r);}
+ if(circle.r!==undefined){out[chestRowId(row,'ax')]=String(circle.r);out[chestRowId(row,'ay')]=String(circle.ry??circle.r);}
  if(circle.band!==undefined)out[chestRowId(row,'band')]=String(circle.band);
+ if(circle.clip!==undefined)out[chestRowId(row,'clip')]=String(circle.clip);
  return out;
 }
-export const bustLabel=(side:BustSide,c:ChestCircle)=>`${sideTag(side)} (${Math.round(c.cx)},${Math.round(c.cy)}) r:${Math.round(c.r)} b:${Math.round(c.band)}`;
+export const bustLabel=(side:BustSide,c:BustShape)=>c.ry===undefined?`${sideTag(side)} (${Math.round(c.cx)},${Math.round(c.cy)}) r:${Math.round(c.r)} b:${Math.round(c.band)}`:`${sideTag(side)} (${Math.round(c.cx)},${Math.round(c.cy)}) r:${Math.round(c.r)}×${Math.round(c.ry)} b:${Math.round(c.band)}`;
 
-export interface ProjectedBust {side:BustSide;center:OverlayPoint;pxR:number;pxBand:number}
+export interface ProjectedBust {side:BustSide;center:OverlayPoint;pxR:number;pxBand:number;/** #315: an ellipse's vertical semi-axis in canvas px. */pxRy?:number}
+/** Canvas distance from the centre to the core's edge toward p: pxR for a circle, the ellipse's radius along p for an ellipse. */
+const edgeAlong=(c:ProjectedBust,dx:number,dy:number)=>{if(c.pxRy===undefined)return c.pxR;const d=Math.hypot(dx,dy);if(!d)return Math.min(c.pxR,c.pxRy);return c.pxR*c.pxRy/Math.hypot(c.pxRy*dx/d,c.pxR*dy/d);};
 /** The example's hit order: core handle or core edge → r, band handles or outer edge → band, anywhere inside the outer band disc → move (#307). */
 export function hitBustHandle(circles:readonly ProjectedBust[],p:OverlayPoint):{side:BustSide;mode:BustMode}|null {
  for(const c of circles){
   const toR=Math.hypot(p.x-(c.center.x+c.pxR),p.y-c.center.y),toBand=Math.min(Math.hypot(p.x-c.center.x,p.y-(c.center.y-c.pxBand)),Math.hypot(p.x-c.center.x,p.y-(c.center.y+c.pxBand))),toCenter=Math.hypot(p.x-c.center.x,p.y-c.center.y);
-  if(toR<=10||Math.abs(toCenter-c.pxR)<=6)return {side:c.side,mode:'r'};
-  if(toBand<=10||Math.abs(toCenter-c.pxBand)<=6)return {side:c.side,mode:'band'};
+  const core=edgeAlong(c,p.x-c.center.x,p.y-c.center.y),outer=core+(c.pxBand-(c.pxRy??c.pxR));
+  if(toR<=10||Math.abs(toCenter-core)<=6)return {side:c.side,mode:'r'};
+  if(toBand<=10||Math.abs(toCenter-outer)<=6)return {side:c.side,mode:'band'};
  }
  let best:{side:BustSide;dist:number}|null=null;
  for(const c of circles){
   const toCenter=Math.hypot(p.x-c.center.x,p.y-c.center.y);
-  if(toCenter<=Math.max(12,c.pxBand)&&(!best||toCenter<best.dist))best={side:c.side,dist:toCenter};
+  const outer=edgeAlong(c,p.x-c.center.x,p.y-c.center.y)+(c.pxBand-(c.pxRy??c.pxR));
+  if(toCenter<=Math.max(12,outer)&&(!best||toCenter<best.dist))best={side:c.side,dist:toCenter};
  }
  return best?{side:best.side,mode:'move'}:null;
 }
 const limit=(value:number,[low,high]:readonly [number,number])=>Math.max(low,Math.min(high,value));
-export interface BustDrag {side:BustSide;mode:BustMode;start:OverlayPoint;centre:OverlayPoint;from:ChestCircle}
-/** Pointer (canvas px) → source px through the camera scale (canvas px per source px), rounded as the example does. */
-export function dragBust(drag:BustDrag,p:OverlayPoint,scale:number):ChestCircle {
+export interface BustDrag {side:BustSide;mode:BustMode;start:OverlayPoint;centre:OverlayPoint;from:BustShape}
+/** Pointer (canvas px) → source px through the camera scale (canvas px per source px), rounded as the example does; an ellipse follows the BustShape rule. */
+export function dragBust(drag:BustDrag,p:OverlayPoint,scale:number):BustShape {
  const from=drag.from;if(!(scale>0)||!Number.isFinite(scale))return {...from};
- if(drag.mode==='move')return {...from,cx:Math.round(from.cx+(p.x-drag.start.x)/scale),cy:Math.round(from.cy+(p.y-drag.start.y)/scale)};
+ if(drag.mode==='move'){const cx=Math.round(from.cx+(p.x-drag.start.x)/scale),cy=Math.round(from.cy+(p.y-drag.start.y)/scale);return {...from,cx,cy,...(from.clip===undefined?{}:{clip:grid(from.clip+cx-from.cx)})};}
  const distance=Math.hypot(p.x-drag.centre.x,p.y-drag.centre.y)/scale;
- if(drag.mode==='r')return {...from,r:limit(Math.round(distance),CHEST_CIRCLE_LIMITS.r)};
+ if(from.ry!==undefined){
+  // #316: an ellipse is measured along the grab ray. The core's radius there (r_dir) is what the pointer holds, so a grab
+  // changes nothing until it moves, and +d along the ray scales the core by (r_dir + d) / r_dir or grows the band by d.
+  const gx=drag.start.x-drag.centre.x,gy=drag.start.y-drag.centre.y,grabbed=Math.hypot(gx,gy)/scale;
+  const [ux,uy]=grabbed>0?[gx,gy]:[p.x-drag.centre.x,p.y-drag.centre.y],u=Math.hypot(ux,uy);
+  const rDir=u>0?from.r*from.ry/Math.hypot(from.ry*ux/u,from.r*uy/u):from.r;
+  // A grab at the centre (no ray) reads the pointer as on the edge, or on the band ring, along its own ray.
+  const held=grabbed>0?grabbed:drag.mode==='r'?rDir:rDir+from.band,d=distance-held;
+  if(d===0)return {...from};
+  if(drag.mode==='r')return resizeBust(from,limit(Math.round(from.r*(rDir+d)/rDir),CHEST_CIRCLE_LIMITS.r));
+  return {...from,band:limit(Math.round(from.band+d),CHEST_CIRCLE_LIMITS.band)};
+ }
+ if(drag.mode==='r')return resizeBust(from,limit(Math.round(distance),CHEST_CIRCLE_LIMITS.r));
  return {...from,band:limit(Math.round(distance-from.r),CHEST_CIRCLE_LIMITS.band)};
 }
 /** Mirror: L takes R's y, core radius and band; L keeps its own x. */
@@ -204,17 +241,17 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
  const cropAt=(p:OverlayPoint):RigPoint|null=>{const project=host.project(),mapping=host.mapping();return project&&mapping.available?canvasToCrop(project,mapping.toWorld,p):null;};
  let active=false,space=false,drag:(BustDrag&{pointer:number;other:ChestCircle|null})|null=null;
  const flash=new Set<BustSide>();
- const write=(row:number,circle:Partial<ChestCircle>)=>{
+ const write=(row:number,circle:Partial<BustShape>)=>{
   for(const [id,value] of Object.entries(circleFields(row,circle))){const f=field(id);if(f)f.value=value;}
   const nameField=field(chestRowId(row,'name'));if(nameField&&!nameField.value.trim())nameField.value=row===0?'bust_r':'bust_l';
   const boneField=field(chestRowId(row,'bone'));if(boneField&&!boneField.value.trim())boneField.value=(field(row===0?'lm-bone_r':'lm-bone_l')?.value??'').trim()||(row===0?'boob_r':'boob_l');
   const spacingField=field(chestRowId(row,'spacing'));if(spacingField&&!spacingField.value.trim())spacingField.value='14';
  };
  /** Writes a changed side directly as Family does (without clamping overlapping outer bands across sides). */
- const commit=(side:BustSide,next:ChestCircle)=>{write(sideRow(side),next);};
+ const commit=(side:BustSide,next:BustShape)=>{write(sideRow(side),next);};
  const projected=():ProjectedBust[]=>{
   const project=host.project(),mapping=host.mapping();if(!project||!mapping.available)return [];
-  return bustSides.flatMap(({side,row})=>{const c=rowCircle(read,row);if(!c)return [];const at=projectCircle(project,{center:mapping.toWorld(c.cx,c.cy),r:c.r,band:c.band});return at?[{side,...at}]:[];});
+  return bustSides.flatMap(({side,row})=>{const c=rowShape(read,row);if(!c)return [];const at=projectCircle(project,{center:mapping.toWorld(c.cx,c.cy),r:c.r,...(c.ry===undefined?{}:{ry:c.ry}),band:c.band});return at?[{side,...at}]:[];});
  };
  const local=(event:PointerEvent):OverlayPoint=>{const rect=host.canvas.getBoundingClientRect();return {x:event.clientX-rect.left,y:event.clientY-rect.top};};
  const scale=()=>{const project=host.project();if(!project)return 0;const a=project(0,0),b=project(1,0);return Math.hypot(b.x-a.x,b.y-a.y);};
@@ -222,7 +259,7 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
   const visible=chestEditVisible(host.inspector());toggle.hidden=!visible;
   if(!visible&&active)setActive(false);
   for(const {side,row} of bustSides){
-   const circle=rowCircle(read,row),values={x:read(chestRowId(row,'cx'))?.value??'',y:read(chestRowId(row,'cy'))?.value??'',r:circle?String(circle.r):'',band:read(chestRowId(row,'band'))?.value??''};
+   const circle=rowShape(read,row),values={x:read(chestRowId(row,'cx'))?.value??'',y:read(chestRowId(row,'cy'))?.value??'',r:circle?String(circle.r):'',band:read(chestRowId(row,'band'))?.value??''};
    for(const f of bustFields){const input=field(bustInputId(side,f));if(input&&document.activeElement!==input)input.value=values[f];}
    const r=field(bustInputId(side,'r'));if(r)r.placeholder=circle||!(read(chestRowId(row,'ax'))?.value??'').trim()?'':'ellipse';
   }
@@ -242,17 +279,19 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
   const target=event.target as HTMLInputElement,match=/^bust-([rl])-(x|y|r|band)$/.exec(target.id);if(!match)return;
   const value=Number(target.value);if(!target.value.trim()||!Number.isFinite(value))return;
   const side=match[1] as BustSide,key=({x:'cx',y:'cy',r:'r',band:'band'} as const)[match[2] as typeof bustFields[number]];
-  write(sideRow(side),{[key]:value});host.changed();
+  // #315: r on an ellipse row follows the handles' rule (ay and the clip offset scale with it).
+  const shape=key==='r'?rowShape(read,sideRow(side)):null;
+  write(sideRow(side),shape?resizeBust(shape,value):{[key]:value});host.changed();
  });
  bar.addEventListener('change',event=>{
   const target=event.target as HTMLInputElement,match=/^bust-([rl])-/.exec(target.id);if(!match)return;
-  const side=match[1] as BustSide,mine=rowCircle(read,sideRow(side));
-  if(mine)commit(side,{...mine,r:limit(Math.round(mine.r),CHEST_CIRCLE_LIMITS.r),band:limit(Math.round(mine.band),CHEST_CIRCLE_LIMITS.band)});
+  const side=match[1] as BustSide,mine=rowShape(read,sideRow(side));
+  if(mine){const r=limit(Math.round(mine.r),CHEST_CIRCLE_LIMITS.r);commit(side,{...(r===mine.r?mine:resizeBust(mine,r)),band:limit(Math.round(mine.band),CHEST_CIRCLE_LIMITS.band)});}
   sync();host.changed();
  });
  for(const button of bar.querySelectorAll<HTMLButtonElement>('[data-bust-mode]'))button.addEventListener('click',()=>{
   const nextMode=button.dataset.bustMode==='landmarks'?'landmarks':'circles';
-  if(nextMode==='circles'&&!rowCircle(read,0)&&!rowCircle(read,1)){
+  if(nextMode==='circles'&&!rowShape(read,0)&&!rowShape(read,1)){
    const lm=readLandmarks(read);if('derived' in lm){const [r,l]=lm.derived.regions;write(0,{cx:r.cx,cy:r.cy,r:r.r,band:r.band});write(1,{cx:l.cx,cy:l.cy,r:l.r,band:l.band});}
   }
   if(modeInput){modeInput.value=nextMode;modeInput.dispatchEvent(new Event('input',{bubbles:true}));}
@@ -285,7 +324,7 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
    sync();host.changed();return;
   }
   const p=local(event),circles=projected(),hit=hitBustHandle(circles,p);if(!hit)return;
-  const row=sideRow(hit.side),from=rowCircle(read,row),at=circles.find(c=>c.side===hit.side);if(!from||!at)return;
+  const row=sideRow(hit.side),from=rowShape(read,row),at=circles.find(c=>c.side===hit.side);if(!from||!at)return;
   // A handle drag edits values; it never reaches the viewport's pan and never moves the camera.
   event.stopPropagation();event.preventDefault();
   drag={side:hit.side,mode:hit.mode,start:p,centre:at.center,from,pointer:event.pointerId,other:rowCircle(read,sideRow(hit.side==='r'?'l':'r'))};
