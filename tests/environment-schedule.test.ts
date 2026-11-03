@@ -90,7 +90,7 @@ test('#112: the schedule reads by rig-c\'s rules; no clip, a too-long clip and a
 const fakeParts=`const fs=require('fs'),path=require('path'),crypto=require('crypto');const a=process.argv.slice(2);const f=n=>a[a.indexOf(n)+1];
 if(a[0]==='rig'){const out=f('--out');fs.mkdirSync(path.join(out,'images'),{recursive:true});for(const n of ['rig.json','motion.json','mesh_report.json'])fs.copyFileSync(path.join(f('--parts'),'rig',n),path.join(out,n));console.log('rig-parts rig: wrote');process.exit(0);}
 if(a[0]!=='check')process.exit(3);
-fs.appendFileSync(process.env.FAKE_LOG,'check '+a.join(' ')+' @'+process.cwd()+'\\n');
+if(process.env.FAKE_LOG)fs.appendFileSync(process.env.FAKE_LOG,'check '+a.join(' ')+' @'+process.cwd()+'\\n');
 const out=f('--out'),env=a.includes('--environment')?f('--environment'):null;
 let rec=null,wind=1;
 if(env){const bytes=fs.readFileSync(path.resolve(env)),doc=JSON.parse(bytes);
@@ -163,7 +163,7 @@ test('#112: Check under this world writes the exported bytes, check.json records
   // The refused run is kept as its result (the same schedule is read back), its check output removed.
   expect((await readdir(join(state,'environment-check',p.sourceHash,refused.id))).sort()).toEqual(['environment.json','result.json']);
   expect(await readFile(join(state,'environment-check',p.sourceHash,job.id,'environment.json'),'utf8')).toBe(text);
- }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
+ }finally{delete process.env.FAKE_LOG;await server.stop(true);await rm(root,{recursive:true,force:true});}
 });
 
 test('#112: a producer before 1.48.0 is refused by name for check --environment and for Apply under the world; nothing runs',async()=>{
@@ -178,7 +178,7 @@ test('#112: a producer before 1.48.0 is refused by name for check --environment 
   const refused=await (await post(base,'/api/rebuild',{patch,environment:e.schedule})).json() as {status:string;error:string};
   expect(refused).toMatchObject({status:'refused',error:line});
   expect(await readFile(log,'utf8')).toBe('');
- }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
+ }finally{delete process.env.FAKE_LOG;await server.stop(true);await rm(root,{recursive:true,force:true});}
 });
 
 test('#112: Apply {patch, environment} hands check the same bytes; the job and its applied record carry the schedule\'s hash',async()=>{
@@ -204,7 +204,7 @@ test('#112: Apply {patch, environment} hands check the same bytes; the job and i
   // Malformed: a schedule key it does not read.
   expect((await post(base,'/api/rebuild',{patch,environment:{...e.schedule,out:'/tmp'}})).status).toBe(400);
   expect((await post(base,'/api/rebuild',{patch,environment:e.schedule,extra:1})).status).toBe(400);
- }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
+ }finally{delete process.env.FAKE_LOG;await server.stop(true);await rm(root,{recursive:true,force:true});}
 });
 
 test('#112 bar 2: feedback carries the schedule\'s sha256 and bytes through save and validation; a hash of other bytes is refused',async()=>{
