@@ -100,8 +100,20 @@ export function dragBust(drag:BustDrag,p:OverlayPoint,scale:number):BustShape {
  const from=drag.from;if(!(scale>0)||!Number.isFinite(scale))return {...from};
  if(drag.mode==='move'){const cx=Math.round(from.cx+(p.x-drag.start.x)/scale),cy=Math.round(from.cy+(p.y-drag.start.y)/scale);return {...from,cx,cy,...(from.clip===undefined?{}:{clip:grid(from.clip+cx-from.cx)})};}
  const distance=Math.hypot(p.x-drag.centre.x,p.y-drag.centre.y)/scale;
+ if(from.ry!==undefined){
+  // #316: an ellipse is measured along the grab ray. The core's radius there (r_dir) is what the pointer holds, so a grab
+  // changes nothing until it moves, and +d along the ray scales the core by (r_dir + d) / r_dir or grows the band by d.
+  const gx=drag.start.x-drag.centre.x,gy=drag.start.y-drag.centre.y,grabbed=Math.hypot(gx,gy)/scale;
+  const [ux,uy]=grabbed>0?[gx,gy]:[p.x-drag.centre.x,p.y-drag.centre.y],u=Math.hypot(ux,uy);
+  const rDir=u>0?from.r*from.ry/Math.hypot(from.ry*ux/u,from.r*uy/u):from.r;
+  // A grab at the centre (no ray) reads the pointer as on the edge, or on the band ring, along its own ray.
+  const held=grabbed>0?grabbed:drag.mode==='r'?rDir:rDir+from.band,d=distance-held;
+  if(d===0)return {...from};
+  if(drag.mode==='r')return resizeBust(from,limit(Math.round(from.r*(rDir+d)/rDir),CHEST_CIRCLE_LIMITS.r));
+  return {...from,band:limit(Math.round(from.band+d),CHEST_CIRCLE_LIMITS.band)};
+ }
  if(drag.mode==='r')return resizeBust(from,limit(Math.round(distance),CHEST_CIRCLE_LIMITS.r));
- return {...from,band:limit(Math.round(distance-(from.ry??from.r)),CHEST_CIRCLE_LIMITS.band)};
+ return {...from,band:limit(Math.round(distance-from.r),CHEST_CIRCLE_LIMITS.band)};
 }
 /** Mirror: L takes R's y, core radius and band; L keeps its own x. */
 export const mirrorBust=(right:ChestCircle,left:Pick<ChestCircle,'cx'>):ChestCircle=>({cx:left.cx,cy:right.cy,r:right.r,band:right.band});

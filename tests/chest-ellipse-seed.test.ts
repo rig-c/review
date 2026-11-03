@@ -102,3 +102,21 @@ test('Bar 5: the circle handles edit an ellipse row by one rule — r sets ax an
  expect(hitBustHandle([{side:'r',...at}],{x:200,y:280})).toEqual({side:'r',mode:'r'});
  expect(hitBustHandle([{side:'r',...at}],{x:200,y:262})).toEqual({side:'r',mode:'band'});
 });
+
+test('Bar 6 (#316 review): an ellipse grab anywhere on its edge or band ring changes nothing until the pointer moves; +d along the grab ray scales by (r_dir + d) / r_dir',()=>{
+ const from={cx:200,cy:300,r:40,ry:20,band:10},centre={x:200,y:300};
+ const rDir=(a:number)=>40*20/Math.hypot(20*Math.cos(a),40*Math.sin(a));
+ const along=(a:number,dist:number)=>({x:200+dist*Math.cos(a),y:300-dist*Math.sin(a)});
+ const drag=(mode:'r'|'band',start:{x:number;y:number},p:{x:number;y:number},shape:typeof from&{clip?:number}=from)=>dragBust({side:'r',mode,start,centre,from:shape},p,1);
+ for(const a of [Math.PI/2,0,Math.PI/4]){
+  const r=rDir(a),core=along(a,r),ring=along(a,r+10);
+  // Grabbed, not yet moved: ax, ay and band stay as they were (top, side and 45°).
+  expect(drag('r',core,core)).toEqual(from);
+  expect(drag('band',ring,ring)).toEqual(from);
+  // +d along the grab ray: the core scales by (r_dir + d) / r_dir (d = r_dir / 4 → ×1.25); band grows by d.
+  expect(drag('r',core,along(a,r*1.25))).toEqual({...from,r:50,ry:25});
+  expect(drag('band',ring,along(a,r+14))).toEqual({...from,band:14});
+ }
+ // The clip offset scales with the same factor (Bar 5's rule): top grab, +10 → ×1.5.
+ expect(drag('r',along(Math.PI/2,20),along(Math.PI/2,30),{...from,clip:220})).toEqual({...from,r:60,ry:30,clip:230});
+});
