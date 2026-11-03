@@ -1,5 +1,5 @@
 /** Setup's Chest regions tool: form fields → designation input, without DOM access (main.ts owns the elements). */
-import {buildChestRegions,ChestRegionError,serializeChestRegions,type ChestRegionsDocument,type ChestRegionsInput,type CropWorldMapping} from '../src/chest-regions.ts';
+import {buildChestRegions,chestDisplayRegions,ChestRegionError,serializeChestRegions,type ChestRegion,type ChestRegionsDocument,type ChestRegionsInput,type CropWorldMapping} from '../src/chest-regions.ts';
 
 export const chestRegionRows=[0,1] as const;
 export const chestRegionFields=['name','bone','cx','cy','ax','ay','spacing','band','clip'] as const;
@@ -40,19 +40,32 @@ export function readChestForm(read:ChestFieldReader,mapping:CropWorldMapping,bon
  return {crop,generator:(read('chest-generator')?.value??'').trim(),contour,regions,...(r===undefined?{}:{r}),...(segments===undefined?{}:{segments}),...(sourceRule?{sourceRule}:{}),bones};
 }
 
-export type ChestEvaluation={ok:true;document:ChestRegionsDocument;text:string}|{ok:false;error:string};
+/**
+ * A refused designation; `regions` (#323) only when the generator alone refused it — every other rule passed, so the
+ * overlay draws them while export, which reads `ok`, still refuses `CHEST_REGIONS_GENERATOR_MISSING`.
+ */
+export type ChestEvaluation={ok:true;document:ChestRegionsDocument;text:string}|{ok:false;error:string;regions?:ChestRegion[]};
 export function evaluateChestForm(read:ChestFieldReader,mapping:CropWorldMapping,bones:readonly string[]|null):ChestEvaluation {
- try{const document=buildChestRegions(readChestForm(read,mapping,bones));return {ok:true,document,text:serializeChestRegions(document)};}
- catch(error){if(error instanceof ChestRegionError)return {ok:false,error:error.message};throw error;}
+ let input:ChestRegionsInput|null=null;
+ try{input=readChestForm(read,mapping,bones);const document=buildChestRegions(input);return {ok:true,document,text:serializeChestRegions(document)};}
+ catch(error){
+  if(!(error instanceof ChestRegionError))throw error;
+  if(error.code!=='CHEST_REGIONS_GENERATOR_MISSING'||!input)return {ok:false,error:error.message};
+  // The export refusal stays the generator's; a region rule failing as well draws nothing, as before.
+  try{return {ok:false,error:error.message,regions:chestDisplayRegions(input)};}
+  catch(inner){if(inner instanceof ChestRegionError)return {ok:false,error:error.message};throw inner;}
+ }
 }
+/** The regions the overlay shows: a valid designation's, or (#323) those only the generator held back from export. */
+const shownRegions=(evaluation:ChestEvaluation):ChestRegion[]=>evaluation.ok?evaluation.document.mesh.value.contour.regions:evaluation.regions??[];
 
 /** Polygon regions in rig world coordinates for the overlay; none without a model-fixed mapping. Circles are drawn as circles. */
 export function chestOverlayPolygons(evaluation:ChestEvaluation,mapping:CropWorldMapping):{name:string;row:number;points:{x:number;y:number}[]}[] {
- if(!evaluation.ok||!mapping.available)return [];
- return evaluation.document.mesh.value.contour.regions.flatMap((region,row)=>region.shape==='polygon'?[{name:region.name,row,points:region.points.map(([x,y])=>mapping.toWorld(x,y))}]:[]);
+ if(!mapping.available)return [];
+ return shownRegions(evaluation).flatMap((region,row)=>region.shape==='polygon'?[{name:region.name,row,points:region.points.map(([x,y])=>mapping.toWorld(x,y))}]:[]);
 }
-/** Circle regions of a valid designation: world centre, core r and band (crop px = world px under the mapping). */
+/** Circle regions of a valid designation (or one only the generator refused): world centre, core r and band (crop px = world px under the mapping). */
 export function chestOverlayCircles(evaluation:ChestEvaluation,mapping:CropWorldMapping):{name:string;row:number;center:{x:number;y:number};r:number;band:number}[] {
- if(!evaluation.ok||!mapping.available)return [];
- return evaluation.document.mesh.value.contour.regions.flatMap((region,row)=>region.shape==='circle'?[{name:region.name,row,center:mapping.toWorld(region.cx,region.cy),r:region.r,band:region.band}]:[]);
+ if(!mapping.available)return [];
+ return shownRegions(evaluation).flatMap((region,row)=>region.shape==='circle'?[{name:region.name,row,center:mapping.toWorld(region.cx,region.cy),r:region.r,band:region.band}]:[]);
 }

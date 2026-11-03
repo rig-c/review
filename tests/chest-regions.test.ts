@@ -231,3 +231,50 @@ test('#318: maxEdge 0 refuses, as the producer\'s config rule for it is "positiv
  expect(error('chest-max-edge','0')).toBe('CHEST_REGION_VALUE_INVALID contour maxEdge');
  expect(error('chest-stray','0')).toBeNull();
 });
+
+// #323: the generator is the export file's own declaration ("the generator that will read this file"); the config
+// records none, so `seedFields` never fills it. It gates export, not display: an untouched seeded form draws.
+const seededUntouched=(contour:Record<string,unknown>)=>{
+ const seed=seedFields({parts:[{name:'topwear',regions:bareContour.regions}],contour:{topwear:{contour,r:15}}},()=>undefined);
+ if(!seed)throw new Error('no seed');
+ return Object.fromEntries(Object.entries(seed).map(([id,value])=>[id,{value}])) as Record<string,ChestFieldValue>;
+};
+
+test('#323 Bar 1: a seeded, untouched form draws the non-edit overlay with the generator field empty',()=>{
+ const mapped=unseededMapping(),bones=['root','boob_r','boob_l'];
+ for(const contour of [bareContour,{...bareContour,maxEdge:45,stray:300,bridges:true}]){
+  const values=seededUntouched(contour);
+  expect(values['chest-generator']).toBeUndefined();
+  const result=evaluateChestForm(id=>values[id],mapped,bones);
+  expect(result.ok?null:result.error).toBe('CHEST_REGIONS_GENERATOR_MISSING');
+  expect(chestOverlayCircles(result,mapped).map(c=>[c.name,c.row,c.r,c.band])).toEqual([['bust_r',0,38,28]]);
+  expect(chestOverlayPolygons(result,mapped).map(p=>[p.name,p.row,p.points.length])).toEqual([['bust_l',1,32]]);
+  // The overlay with the generator empty is the one a declared generator draws: same regions, same world points.
+  const declared:Record<string,ChestFieldValue>={...values,'chest-generator':{value:'public generator'}},full=evaluateChestForm(id=>declared[id],mapped,bones);
+  expect(full.ok).toBe(true);
+  expect(chestOverlayCircles(result,mapped)).toEqual(chestOverlayCircles(full,mapped));
+  expect(chestOverlayPolygons(result,mapped)).toEqual(chestOverlayPolygons(full,mapped));
+ }
+});
+
+test('#323 Bar 2: with the generator empty export still refuses by name, and only the generator is waived for display',()=>{
+ const mapped=unseededMapping(),values=seededUntouched(bareContour);
+ // Empty and blank are the same absence; the export path reads `ok`, which stays false.
+ for(const generator of [undefined,{value:''},{value:'   '}]){
+  const read=(id:string)=>id==='chest-generator'?generator:values[id],result=evaluateChestForm(read,mapped,null);
+  expect(result).toMatchObject({ok:false,error:'CHEST_REGIONS_GENERATOR_MISSING'});
+  expect(chestOverlayCircles(result,mapped).length+chestOverlayPolygons(result,mapped).length).toBe(2);
+ }
+ // Every other rule still holds the overlay back: an unknown bone, overlapping regions, a refused contour figure.
+ const blocked=(patch:Record<string,ChestFieldValue>,bones:readonly string[]|null=null)=>{
+  const read=(id:string)=>patch[id]??values[id],result=evaluateChestForm(read,mapped,bones);
+  return [result.ok?null:result.error,chestOverlayCircles(result,mapped).length+chestOverlayPolygons(result,mapped).length];
+ };
+ expect(blocked({},['root','chest'])).toEqual(['CHEST_REGIONS_GENERATOR_MISSING',0]);
+ expect(blocked({[chestRowId(1,'cx')]:{value:'330'}})).toEqual(['CHEST_REGIONS_GENERATOR_MISSING',0]);
+ expect(blocked({'chest-max-edge':{value:'0'}})).toEqual(['CHEST_REGIONS_GENERATOR_MISSING',0]);
+ // No model mapping, no overlay, as before.
+ const absent=cropWorldMapping(null,null),crop={'chest-crop-w':{value:'800'},'chest-crop-h':{value:'2284'}};
+ const off=evaluateChestForm(id=>(crop as Record<string,ChestFieldValue>)[id]??values[id],absent,null);
+ expect(chestOverlayCircles(off,absent)).toEqual([]);expect(chestOverlayPolygons(off,absent)).toEqual([]);
+});

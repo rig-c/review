@@ -263,6 +263,21 @@ function segmentList(value: unknown): ChestSegment[] {
 export function buildChestRegions(input: ChestRegionsInput): ChestRegionsDocument {
   const w = finite(input.crop?.w, 'crop', 'w', 0, false), h = finite(input.crop?.h, 'crop', 'h', 0, false);
   if (typeof input.generator !== 'string' || !input.generator.trim()) throw new ChestRegionError('CHEST_REGIONS_GENERATOR_MISSING', '');
+  const { mesh, meshName } = designate(input, w, h);
+  return { spec: CHEST_REGIONS_SPEC, coordinates: coordinatesText({ w, h }, input.regions), publicGenerator: input.generator, mesh: { name: meshName, value: mesh }, ...(input.sourceRule ? { sourceRule: input.sourceRule } : {}) };
+}
+
+/**
+ * #323: the regions a designation holds, refused by every rule `buildChestRegions` applies except the generator's. The
+ * generator is the export file's declaration of who will read it — the config records none — so it gates export, not
+ * the overlay that shows the regions.
+ */
+export function chestDisplayRegions(input: Omit<ChestRegionsInput, 'generator'>): ChestRegion[] {
+  const w = finite(input.crop?.w, 'crop', 'w', 0, false), h = finite(input.crop?.h, 'crop', 'h', 0, false);
+  return designate(input, w, h).mesh.contour.regions;
+}
+
+function designate(input: Omit<ChestRegionsInput, 'generator'>, w: number, h: number): { mesh: ChestMesh; meshName: string } {
   if (input.regions.length < 1 || input.regions.length > CHEST_REGIONS_MAX) throw new ChestRegionError('CHEST_REGIONS_COUNT', `${input.regions.length} (1–${CHEST_REGIONS_MAX})`);
   const c = input.contour;
   for (const field of ['tolerance', 'margin', 'spacing'] as const) finite(c[field], 'contour', field, 0);
@@ -303,7 +318,7 @@ export function buildChestRegions(input: ChestRegionsInput): ChestRegionsDocumen
   if (input.segments !== undefined) mesh.segments = segmentList(input.segments);
   const meshName = input.mesh ?? 'topwear';
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(meshName)) throw new ChestRegionError('CHEST_REGION_VALUE_INVALID', 'mesh name');
-  return { spec: CHEST_REGIONS_SPEC, coordinates: coordinatesText({ w, h }, input.regions), publicGenerator: input.generator, mesh: { name: meshName, value: mesh }, ...(input.sourceRule ? { sourceRule: input.sourceRule } : {}) };
+  return { mesh, meshName };
 }
 
 /** Python-style JSON text (`json.dumps(value, indent=2)` + newline), the examples' exact formatting; `{float}` marks a Python float. */
