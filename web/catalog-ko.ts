@@ -3003,4 +3003,5 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "back": "뒤",
   "@rig-c/pose is not installed beside the package or beside review, and review does not install it — bun add -d @rig-c/pose": "패키지 또는 리뷰 옆에 @rig-c/pose가 설치되어 있지 않으며 리뷰가 직접 설치하지 않습니다 — bun add -d @rig-c/pose",
   "CHEST_REGION_VALUE_INVALID contour tolerance": "CHEST_REGION_VALUE_INVALID: 윤곽 허용 오차(contour tolerance)",
+  "view only, no producer handoff": "뷰 전용, 프로듀서 핸드오프 없음",
 };

@@ -19,6 +19,8 @@ import {playPackagePath} from './versions.ts';
 import {HandoffError,HANDOFF_FLAGS,isBuildRoot,type HandoffFlags,type HandoffRecord} from './handoff.ts';
 import {stateDirInside,stateRoots} from './state-dir.ts';
 import {DEFAULT_UNOPENED_TIMEOUT_MS} from './live-lifecycle.ts';
+import {verifyCompiledModel} from './strip-render.ts';
+import {verifyHandoffReadiness} from './rebuild.ts';
 /** #149: an opened rig-parts build check package — its canonical path and the handoff record (or the refusal line). */
 export interface BuildOpen {package:string;handoff:HandoffRecord|null;reason:string|null}
 /** The stderr diagnostic for {@link BuildOpen}: the package opened, then how the config was found, its package-relative path and full SHA-256. */
@@ -26,22 +28,22 @@ export function buildOpenDiagnostic(build:BuildOpen):string{
  const h=build.handoff,how=!h?'':h.how==='declared'?`declared (${h.via})`:h.outside?'discovered outside the opened folder':'discovered';
  return `Package: rig-parts build check package ${build.package}\n${h?`Handoff ${how}: ${h.config.path} sha256 ${h.config.sha256}${h.parts?` · parts ${h.parts}`:''}`:`Handoff: ${build.reason??'none'}`}`;
 }
-/** `direct` chooses how the page is reached (own port instead of the managed front); it is not part of the instance identity. */
-export interface OpenInputs {input:string;compare?:string;reference?:string;animation?:string;control?:boolean;direct?:boolean;config?:string;parts?:string;source?:string;full?:string;head?:string;keypoints?:string}
+/** `direct` chooses how the page is reached (own port instead of the managed front); `viewOnly` permits opening without a producer handoff (#305); neither is part of the instance identity. */
+export interface OpenInputs {input:string;compare?:string;reference?:string;animation?:string;control?:boolean;direct?:boolean;viewOnly?:boolean;config?:string;parts?:string;source?:string;full?:string;head?:string;keypoints?:string}
 /** The producer handoff flags (#101) among the inputs, or undefined when none was given. */
 export function handoffFlags(inputs:OpenInputs):HandoffFlags|undefined{const present=HANDOFF_FLAGS.filter(f=>inputs[f]!==undefined);if(!present.length)return undefined;return Object.fromEntries(present.map(f=>[f,inputs[f]])) as unknown as HandoffFlags;}
 export type OpenPackage=({mode:'single';p:ReviewPackage;inputs:OpenInputs;contentHash:string}|{mode:'compare';p:ComparePackage;inputs:OpenInputs;contentHash:string})&{selection:AnimationSelection|null};
 /** Private 0600 record. `capability` is the 256-bit page write capability, handed out only in the printed `#cap=` fragment. */
 export interface RecordFile extends OpenIdentity {schema:'rig-review-open-instance/1';pid:number;origin:string;mode:'single'|'compare';capability:string;controlToken?:string}
 /** `cwd` is the launcher's working directory: the worker runs in the state directory, so Apply · Rebuild looks for the producer from here after the package's own directories. */
-interface WorkerRequest {schema:'rig-review-open-request/1';inputs:OpenInputs;identity:OpenIdentity;stateDir:string;registry:string;request:string;idleMs:number;graceMs?:number;controlToken?:string;cwd?:string}
+interface WorkerRequest {schema:'rig-review-open-request/1';inputs:OpenInputs;identity:OpenIdentity;stateDir:string;registry:string;request:string;idleMs:number;graceMs?:number;controlToken?:string;cwd?:string;viewOnly?:boolean}
 const appRoot=fileURLToPath(new URL('..',import.meta.url));
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep=(ms:number)=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 export const defaultStateDir=()=>process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review');
 export async function loadOpenPackage(inputs:OpenInputs):Promise<OpenPackage>{
  // Handoff flags become canonical absolute paths here, so the worker and every reload read exactly these files.
- if(!inputs.compare){const p=await loadReferencedReview(inputs.input,inputs.reference,handoffFlags(inputs)),selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);return {mode:'single',p,selection,contentHash:p.sourceHash,inputs:{input:p.manifestPath,...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{}),...(inputs.control?{control:true}:{}),...(p.handoffInputs??{})}};}
+ if(!inputs.compare){const p=await loadReferencedReview(inputs.input,inputs.reference,handoffFlags(inputs)),selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);if(inputs.viewOnly)p.viewOnly=true;return {mode:'single',p,selection,contentHash:p.sourceHash,inputs:{input:p.manifestPath,...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{}),...(inputs.control?{control:true}:{}),...(p.handoffInputs??{})}};}
  if(handoffFlags(inputs))throw new HandoffError('HANDOFF_FLAGS_INVALID','--config','compare takes no producer handoff; open one package with --config');
  if(!inputs.reference)throw new Error('open compare: explicit --reference required');
  const [a,b]=await Promise.all([loadReview(inputs.input),loadReview(inputs.compare)]),selection=selectAnimation([{label:'a',catalog:a.feedbackCatalog,report:a.report},{label:'b',catalog:b.feedbackCatalog,report:b.report}],inputs.animation)!;
@@ -104,10 +106,23 @@ async function openRefusal(error:unknown,inputs:OpenInputs):Promise<unknown>{
  const name=error.kind==='empty'?'OPEN_OPTION_INVALID --animation':error.kind==='unknown'?`OPEN_ANIMATION_UNKNOWN ${JSON.stringify(error.animation)}`:error.kind==='ambiguous'?'OPEN_ANIMATION_AMBIGUOUS':'OPEN_ANIMATION_UNVALIDATABLE';
  return new Error(`${name}: ${detail}`,{cause:error});
 }
+async function verifyOpenLoad(p:OpenPackage,viewOnly:boolean,cwd=process.cwd()):Promise<void>{
+ if(p.mode==='single'){
+  try{await verifyCompiledModel(p.p.root,p.p.manifest.model,p.selection?.name);}
+  catch(error){throw new Error(`OPEN_MODEL_UNAVAILABLE: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
+  const handoffReason=await verifyHandoffReadiness(p.p,[p.p.root,cwd],viewOnly);
+  if(handoffReason)throw new Error(`OPEN_MODEL_UNAVAILABLE: ${handoffReason}`);
+  return;
+ }
+ for(const [side,pkg] of [['a',p.p.a],['b',p.p.b]] as const){
+  try{await verifyCompiledModel(pkg.root,pkg.manifest.model,p.selection?.name);}
+  catch(error){throw new Error(`OPEN_MODEL_UNAVAILABLE: side ${side}: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
+ }
+}
 /** Managed is the default: the printed URL goes through the one loopback front (127.0.0.1:4318, or
  * RIG_REVIEW_FRONT_PORT) so browser storage keeps one origin across reopens. `direct` keeps the worker's own port. */
-export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idleMs?:number;graceMs?:number;direct?:boolean;frontPort?:number;frontIdleMs?:number}={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs;selection:AnimationSelection|null;direct:boolean;build:BuildOpen|null}>{
- const direct=options.direct??inputs.direct??false,port=direct?0:frontPort(options.frontPort);
+export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idleMs?:number;graceMs?:number;direct?:boolean;viewOnly?:boolean;cwd?:string;frontPort?:number;frontIdleMs?:number}={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs;selection:AnimationSelection|null;direct:boolean;build:BuildOpen|null}>{
+ const direct=options.direct??inputs.direct??false,viewOnly=options.viewOnly??inputs.viewOnly??false,port=direct?0:frontPort(options.frontPort);
  for(const path of [inputs.input,...(inputs.compare!==undefined?[inputs.compare]:[])])await assertOpenInput(path);
  if(inputs.compare!==undefined&&!inputs.reference)throw new Error('OPEN_REFERENCE_REQUIRED: compare: explicit --reference required');
  let p:OpenPackage;try{p=await loadOpenPackage(inputs);}catch(error){throw await openRefusal(error,inputs);}
@@ -115,14 +130,15 @@ export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idl
  // #187: canonical (symlinks and ancestors resolved) and outside every supplied folder: the package, the build root a check package belongs to, the handoff root.
  const stateDir=await canonicalDestination(resolve(options.stateDir??defaultStateDir())),roots=p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
  const inside=stateDirInside(stateDir,roots);if(inside)throw new Error(`OPEN_STATE_INSIDE_PACKAGE ${inside.kind}: the review state directory must be outside input packages; it is inside the ${inside.kind}; set RIG_REVIEW_STATE_DIR outside it`);
+ await verifyOpenLoad(p,viewOnly,options.cwd);
  const control=join(stateDir,'open');await mkdir(control,{recursive:true,mode:0o700});const canonicalControl=await realpath(control);if((await lstat(control)).isSymbolicLink())throw new Error('open.state: control directory cannot be a symlink');
- const worker=await ensureWorker(p,key,fingerprint,stateDir,canonicalControl,options.idleMs??DEFAULT_UNOPENED_TIMEOUT_MS,options.graceMs);
+ const worker=await ensureWorker(p,key,fingerprint,stateDir,canonicalControl,options.idleMs??DEFAULT_UNOPENED_TIMEOUT_MS,options.graceMs,viewOnly,options.cwd);
  const url=direct?openUrl(worker.row):openUrl(worker.row,await ensureFront({control:canonicalControl,port,fingerprint,idleMs:options.frontIdleMs}));
  // #149: the check package of a rig-parts build root says which package it opened and which config the handoff took.
  const build=p.mode==='single'&&basename(p.p.root)==='check'&&await isBuildRoot(dirname(p.p.root))?{package:p.p.root,handoff:p.p.reviewedSource.handoff??null,reason:p.p.handoffReason}:null;
  return {url,reused:worker.reused,nonce:worker.row.nonce,inputs:p.inputs,selection:p.selection,direct,build};
 }
-async function ensureWorker(p:OpenPackage,key:string,fingerprint:string,stateDir:string,canonicalControl:string,idleMs:number,graceMs?:number):Promise<{row:RecordFile;reused:boolean}>{
+async function ensureWorker(p:OpenPackage,key:string,fingerprint:string,stateDir:string,canonicalControl:string,idleMs:number,graceMs?:number,viewOnly=false,cwd=process.cwd()):Promise<{row:RecordFile;reused:boolean}>{
  const registry=join(canonicalControl,key+'.json'),claim=join(canonicalControl,key+'.claim'),nonce=randomUUID(),deadline=performance.now()+20000;
  const reuse=async()=>{const row=await readRecord(registry,key);return row&&row.fingerprint===fingerprint&&row.contentHash===p.contentHash&&row.mode===p.mode&&await alive(row)?row:null;};
  const ready=await reuse();if(ready)return {row:ready,reused:true};
@@ -131,7 +147,7 @@ async function ensureWorker(p:OpenPackage,key:string,fingerprint:string,stateDir
  try{
   const row=await reuse();if(row)return {row,reused:true};
   const identity:OpenIdentity={key,contentHash:p.contentHash,nonce,fingerprint};request=join(canonicalControl,`${key}.${nonce}.request.json`);const log=join(canonicalControl,`${key}.${nonce}.log`);
-  const spec:WorkerRequest={schema:'rig-review-open-request/1',inputs:p.inputs,identity,stateDir,registry,request,idleMs,...(graceMs!==undefined?{graceMs}:{}),cwd:process.cwd(),...(p.inputs.control?{controlToken:randomUUID()}:{} )};await writeFile(request,JSON.stringify(spec),{mode:0o600,flag:'wx'});
+  const spec:WorkerRequest={schema:'rig-review-open-request/1',inputs:p.inputs,identity,stateDir,registry,request,idleMs,...(graceMs!==undefined?{graceMs}:{}),cwd,...(viewOnly?{viewOnly:true}:{}),...(p.inputs.control?{controlToken:randomUUID()}:{} )};await writeFile(request,JSON.stringify(spec),{mode:0o600,flag:'wx'});
   const logHandle=await openFile(log,'a',0o600);let child;try{child=spawn(process.execPath,[join(appRoot,'src/open-worker.ts'),request],{cwd:canonicalControl,detached:true,stdio:['ignore',logHandle.fd,logHandle.fd],env:process.env});spawned=child;child.unref();}finally{await logHandle.close();}
   let exited:string|undefined;child.on('error',error=>{exited=error.message;});child.on('exit',(code,signal)=>{exited=`exit ${code} ${signal??''}`;});
   while(performance.now()<deadline){const record=await reuse();if(record){handedOff=true;return {row:record,reused:false};}if(exited)throw new Error(`OPEN_START: ${exited}; worker log ${log}`);await sleep(30);}throw new Error(`OPEN_TIMEOUT: worker did not become ready; log ${log}`);
@@ -145,7 +161,7 @@ export async function runOpenWorker(requestPath:string):Promise<void>{
  // The worker mints its own page capability; it lives only in this process and the private record.
  const removeRecord=async()=>{const current=await readRecord(spec.registry,spec.identity.key);if(current?.nonce===spec.identity.nonce)await unlink(spec.registry).catch(()=>{});};
  const capability=randomBytes(32).toString('hex');const options={port:0,stateDir:spec.stateDir,open:spec.identity,capability,unopenedTimeoutMs:spec.idleMs,...(spec.graceMs!==undefined?{graceMs:spec.graceMs}:{}),exitOnClose:true,onClose:removeRecord,...(spec.inputs.control?{control:{token:spec.controlToken!,instanceKey:spec.identity.key}}:{})};
- const server=p.mode==='single'?await startServer(p.p,{...options,initialAnimation:p.selection?.name,...(typeof spec.cwd==='string'&&isAbsolute(spec.cwd)?{cwd:spec.cwd}:{})}):await startCompareServer(p.p,options);
+ const server=p.mode==='single'?await startServer(p.p,{...options,initialAnimation:p.selection?.name,...(typeof spec.cwd==='string'&&isAbsolute(spec.cwd)?{cwd:spec.cwd}:{}),...(spec.viewOnly?{viewOnly:true}:{})}):await startCompareServer(p.p,options);
  const check=()=>p.mode==='single'?assertReviewUnchanged(p.p):assertCompareUnchanged(p.p);
  await check();const record:RecordFile={schema:'rig-review-open-instance/1',...spec.identity,pid:process.pid,origin:`http://127.0.0.1:${server.port}`,mode:p.mode,capability,...(spec.inputs.control?{controlToken:spec.controlToken}:{})};const tmp=spec.registry+'.'+spec.identity.nonce+'.tmp';await writeFile(tmp,JSON.stringify(record),{mode:0o600,flag:'wx'});await rename(tmp,spec.registry);
  await unlink(requestPath).catch(e=>{if(e.code!=='ENOENT')throw e;});

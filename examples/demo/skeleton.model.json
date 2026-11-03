@@ -1,0 +1,183 @@
+{
+  "spec": "rigc-compiled/3",
+  "referenceScale": 100,
+  "stage": {
+    "x": 0,
+    "y": 0,
+    "width": 80,
+    "height": 80
+  },
+  "bones": [
+    {
+      "name": "root"
+    },
+    {
+      "name": "lantern",
+      "parent": "root",
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "slots": [
+    {
+      "name": "lantern",
+      "bone": "lantern",
+      "setup": "lantern"
+    }
+  ],
+  "skins": [
+    {
+      "name": "default",
+      "bones": [],
+      "constraints": {
+        "ik": [],
+        "transform": [],
+        "path": [],
+        "physics": [],
+        "slider": []
+      },
+      "attachments": {
+        "lantern": {
+          "lantern": {
+            "kind": "region",
+            "path": "lantern",
+            "width": 20,
+            "height": 20,
+            "atlas": {
+              "width": 20,
+              "height": 20,
+              "offsetX": 0,
+              "offsetY": 0,
+              "originalWidth": 20,
+              "originalHeight": 20
+            }
+          }
+        }
+      }
+    }
+  ],
+  "constraints": [],
+  "events": [],
+  "animations": [
+    {
+      "name": "idle",
+      "duration": 1,
+      "bones": [
+        {
+          "name": "lantern",
+          "timelines": [
+            {
+              "name": "rotate",
+              "keys": [
+                {
+                  "time": 0,
+                  "value": -4
+                },
+                {
+                  "time": 0.5,
+                  "value": 4
+                },
+                {
+                  "time": 1,
+                  "value": -4
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "slots": [],
+      "constraints": {
+        "ik": [],
+        "transform": [],
+        "path": [],
+        "physics": [],
+        "slider": []
+      },
+      "attachments": [],
+      "drawOrder": [],
+      "events": []
+    }
+  ],
+  "editorOrder": {
+    "skins": [
+      {
+        "name": "default",
+        "slots": [
+          "lantern"
+        ]
+      }
+    ],
+    "animations": [
+      "idle"
+    ]
+  },
+  "images": [
+    {
+      "region": "lantern",
+      "page": "lantern.png",
+      "width": 20,
+      "height": 20,
+      "hasAlpha": true,
+      "isBase": false
+    }
+  ],
+  "pageGrids": [],
+  "droppedStates": [],
+  "absentParts": [],
+  "meshBones": [],
+  "meshes": [],
+  "physics": [],
+  "deformTransforms": [],
+  "trackDerivations": [],
+  "rig": {
+    "archetype": "abstract-lantern",
+    "axisBone": null,
+    "axisSubtree": [],
+    "detached": [],
+    "slotOrder": [
+      "lantern"
+    ],
+    "meshKinds": {},
+    "meshDeclaredBones": {},
+    "meshSoftBones": {},
+    "deformMayFold": [],
+    "consumerDrivenMix": [],
+    "idleDrivesMeshes": null,
+    "axes": [],
+    "basePlates": [],
+    "meshSlotBudget": null,
+    "meshTriangleBudget": null,
+    "contactDepth": null,
+    "capContainmentCeiling": null,
+    "massBone": null,
+    "inwardUnit": null
+  },
+  "pages": [
+    {
+      "name": "lantern.png",
+      "width": 20,
+      "height": 20,
+      "pma": false,
+      "scale": null,
+      "regions": [
+        {
+          "name": "lantern",
+          "x": 0,
+          "y": 0,
+          "width": 20,
+          "height": 20,
+          "offsetX": 0,
+          "offsetY": 0,
+          "originalWidth": 20,
+          "originalHeight": 20,
+          "degrees": 0,
+          "index": 0
+        }
+      ]
+    }
+  ],
+  "spine": {
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}
