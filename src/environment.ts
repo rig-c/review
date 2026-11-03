@@ -1,6 +1,6 @@
 /**
  * Inspection-only environment for Animate: a pure wind model (base, breeze, gust),
- * the jolt packet, the drag-to-trail mapping and the read-only physics constraint
+ * the jolt packet, the drag impulse and the read-only physics constraint
  * list. Nothing here writes the model or motion; the player stays the only solver.
  *
  * The wind model ports the semantics of the public parts-examples viewer's
@@ -134,10 +134,18 @@ export function dueJolts(queue:readonly JoltStep[],now:number):{due:JoltStep[];p
  due.sort((a,b)=>a.at-b.at);return {due,pending};
 }
 
-/** A page-pixel pointer delta as `player.moved` wants it: ÷ the root's scale, y negated (world y up). */
-export function dragMoved(dx:number,dy:number,scale:number):{x:number;y:number}|null {
+/**
+ * The drag impulse (#331), the Family viewer's tuning as written (rig-c/examples `family/viewer/index.html`, the stage's
+ * `pointermove`): the camera follows the pointer, and on the same move every player gets
+ * `{x: clamp(dx/scale*.25, 8), y: clamp(-dy/scale*.25, 6)}`. The factor and the two limits are that demo's choice, taken
+ * as they stand rather than derived; the clamp is symmetric (±limit) and applies per move.
+ */
+export const DRAG_IMPULSE=Object.freeze({factor:.25,limitX:8,limitY:6});
+/** One pointer move (page px, y down) as `player.moved` wants it: ÷ the root's scale, y negated (world y up), the demo's factor and clamps. */
+export function dragImpulse(dx:number,dy:number,scale:number):{x:number;y:number}|null {
  if(!Number.isFinite(dx)||!Number.isFinite(dy)||!Number.isFinite(scale)||scale<=0)return null;
- return {x:dx/scale,y:-dy/scale};
+ const clamp=(v:number,limit:number)=>Math.max(-limit,Math.min(limit,v))||0;
+ return {x:clamp(dx/scale*DRAG_IMPULSE.factor,DRAG_IMPULSE.limitX),y:clamp(-dy/scale*DRAG_IMPULSE.factor,DRAG_IMPULSE.limitY)};
 }
 
 /** Columns read as the compiled model declares them; an absent field stays absent. */

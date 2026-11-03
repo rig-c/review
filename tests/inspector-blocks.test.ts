@@ -225,7 +225,7 @@ const stateful:Record<string,string>={
  'cloth-panel':'tag, declared and field controls and the pending textarea',
  'motion-tools':'the axis inspection state, with its included Angle block (axis select and slider)',
  'sound-panel':'sync audio and volume',
- 'environment':'wind, gust, gravity, trail and use controls',
+ 'environment':'wind, gust, gravity and use controls',
  'physics-panel':'chain pick, ramp fields, row editor, preview and the pending textarea',
  'idle-tracks':'track list and editor, blink marker, the pending textarea',
  'readings':'eleven reading toggles and names',

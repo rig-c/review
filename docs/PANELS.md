@@ -50,14 +50,13 @@ inspect: a **Wind** base (−100…100), **Breeze**, a **Gust** pulse
 (peak 0…200, duration 0.1…20 s, **Repeat** every max(6, duration + 0.6) s)
 and **Gravity** (0…4), applied through `player.environment` in the same frame
 step that draws. The gust clock is the stepped player time, so pausing freezes
-it. **Jolt** sends a translate-and-return impulse through `player.moved`;
-with **Drag to trail** on, dragging the rig pane moves the rig's physics
-instead of the camera (Space still pans). **Reset physics** returns the
+it. **Jolt** sends a translate-and-return impulse through `player.moved`.
+**Reset physics** returns the
 runtime start values and re-poses from the current time, clearing the physics
 history. Until a control is touched the player stays at the runtime start values. The
 state is kept in the local draft and recorded in feedback as
-`context.environment`; nothing is written to the model or motion. The compare
-page does not have this block.
+`context.environment`; nothing is written to the model or motion. On the
+compare page the block is in Animate (shared markup, #234) and drives the picked build only.
 
 Below it, the **Physics tuning** panel (`#physics-panel`) edits the physics
 constraints through the producer. Each row is a constraint of the inspected
@@ -256,7 +255,9 @@ The pinned published `@rig-c/play`1.14.0 supplies `slotIdentity()` and frame gen
 
 Source-bound links/drafts and explicit feedback preserve that side/slot plus exact attachment/owning skin/set/active skin/null reason. A restored explicit target is checked after restoring its animation/time/set and drawing; `PART_IDENTITY_MISMATCH` rolls back rather than silently substituting another key. Older slot-only links remain readable and resolve from the current authoritative snapshot. Runtime generation is current observation/feedback evidence, never a persistent identity. Named vertex weights and original source alpha remain unavailable in this inspection; packed pages are not original part images.
 
-**Hover preview on the stage.** In **Animate**, where a click on drawn part geometry selects its slot, resting the mouse over the rig view previews that click: the part a click at that point would select gets a solid white outline (dark halo) over a faint light tint, and its slot name sits beside the pointer. It is distinct from the selection's dashed amber box. The preview and the click are one hit test (`web/stage-pick.ts` `pickAt`: the held drawn primitives with their resolved clip, the last drawn on top, only a slot the inspection lists); where a click would select nothing — empty stage, Setup, a button or handle under the pointer, Space held — nothing is shown. It is hidden while a button is pressed (pan, drag to trail), while Drag to trail is armed or comment mode or an editor handle owns the press, and when the pointer leaves the view. It repaints only when what it would draw changes, so a still pointer over a paused rig paints nothing. Touch and keyboard show no preview, and tap and keyboard selection are unchanged. On the compare page it follows the picked build's own rig. The preview is never recorded: sessions, drafts, feedback and exports are unchanged.
+**A drag on the rig view moves the physics.** A plain drag on the rig pane pans the camera and, on the same move, tells the rig's player it was carried, so hair and cloth trail the way they do in the Family viewer (rig-c/examples `family/viewer/index.html`, whose tuning this takes as written): each pointer move of `dx`, `dy` page px at root scale `s` calls `player.moved({x: clamp(dx/s × 0.25, ±8), y: clamp(−dy/s × 0.25, ±6)})`. A press is a click until it travels more than 3 px from where it went down (`CLICK_SLOP_PX` in `web/stage-pick.ts`, the one line both the pick and the drag read); a click selects a part as below and moves nothing, and a press that once passed the line is a drag even if it is released where it started. The first impulse carries the whole travel since the press. A press made with **Space** held pans only, a press an editor handle or comment mode takes is unchanged, and the reference pane pans without an impulse. On the compare page a drag on either build carries both, each by its own root scale, so A and B take the same stimulus. `player.moved` applies on the player's next step, so on a paused rig nothing swings until it steps. It is inspection only: nothing is recorded in drafts, feedback or exports. The earlier **Drag to trail** toggle, which moved the physics with the camera held, is retired (#331): the default drag covers it and **Jolt** gives an impulse without moving the camera.
+
+**Hover preview on the stage.** In **Animate**, where a click on drawn part geometry selects its slot, resting the mouse over the rig view previews that click: the part a click at that point would select gets a solid white outline (dark halo) over a faint light tint, and its slot name sits beside the pointer. It is distinct from the selection's dashed amber box. The preview and the click are one hit test (`web/stage-pick.ts` `pickAt`: the held drawn primitives with their resolved clip, the last drawn on top, only a slot the inspection lists); where a click would select nothing — empty stage, Setup, a button or handle under the pointer, Space held — nothing is shown. It is hidden while a button is pressed (a pan or a drag), while comment mode or an editor handle owns the press, and when the pointer leaves the view. It repaints only when what it would draw changes, so a still pointer over a paused rig paints nothing. Touch and keyboard show no preview, and tap and keyboard selection are unchanged. On the compare page it follows the picked build's own rig. The preview is never recorded: sessions, drafts, feedback and exports are unchanged.
 
 This explorer is inspection. Producer-backed optimization and candidate Apply/undo/export remain separate work; the explorer does not generate mesh, rig or motion bytes.
 

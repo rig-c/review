@@ -9,6 +9,7 @@ import { CanvasRenderer, loadModel, RigPlayer, type BoneAdjust, type ModelAssets
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraPoint,type CameraSignature} from './camera-view.ts';
 import {rendererStatus} from './renderer-status.ts';
 import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
+import {CLICK_SLOP_PX} from './stage-pick.ts';
 import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
 import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
 import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from './density-strip-panel.ts';
@@ -48,7 +49,7 @@ import { frameAtTime, lastFrame as lastProducerFrame, rigPaneLabel, timeAtFrame,
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, type FeedbackCatalog } from '../src/feedback-validation.ts';
 import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
-import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPacket,dueJolts,dragMoved,loadModelDocument,environmentContext,environmentJson,type JoltStep,type WindSnapshot,type WindState} from '../src/environment.ts';
+import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPacket,dueJolts,dragImpulse,loadModelDocument,environmentContext,environmentJson,type JoltStep,type WindSnapshot,type WindState} from '../src/environment.ts';
 import {tuningRows,readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {bindReadingsPanel,type ReadingsJobView,type ReadingsPanel,type ReadingsRefusal} from './readings-panel.ts';
 import {READINGS_SCHEMA,readingSeekTime,type ReadingsContext} from '../src/readings.ts';
@@ -957,7 +958,9 @@ function bind(): void {
   requirementsPanel=bindRequirementsPanel({check:runRequirements,seek:seekReading,animation:()=>animation,slot:()=>parts?.value()?.slot??null,hash:sha256Hex});
   const tickResize=new ResizeObserver(()=>renderReadingTicks());tickResize.observe(el('transport'));viewDisposers.push(()=>tickResize.disconnect());
   viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
-  for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy)),()=>!comments?.active()));
+  // #331: a plain drag on the rig pans and carries the rig, the Family viewer's gesture; the reference pane only pans.
+  const carryRig={threshold:CLICK_SLOP_PX,move:(dx:number,dy:number)=>{const impulse=dragImpulse(dx,dy,rigScale);if(impulse&&player)player.moved(impulse);}};
+  for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy)),()=>!comments?.active(),target==='rig'?carryRig:undefined));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
   viewDisposers.push(bindLayerShortcuts(document));describeLayerToggles(document,el('layer-state').textContent??'');
   input('idle-repeat').onchange=()=>{renderIdle();if(canRepeatIdle())void playPreview();};
@@ -1236,7 +1239,7 @@ async function exportChest():Promise<void> {
  message('Downloaded chest-regions.json and chest-regions.binding.json. The regions are review evidence, not an approval; the package is unchanged.');
 }
 /** Animate · Environment. Inspection only: the player is the solver, nothing is written to the model or motion. */
-const environmentInputs=['wind-base','wind-breeze','wind-gust','wind-repeat','wind-gust-peak','wind-gust-duration','gravity','jolt','drag-trail','physics-reset','environment-use','environment-export','environment-check'];
+const environmentInputs=['wind-base','wind-breeze','wind-gust','wind-repeat','wind-gust-peak','wind-gust-duration','gravity','jolt','physics-reset','environment-use','environment-export','environment-check'];
 function environmentApplied():boolean{return input('environment-applied').checked;}
 function gravityValue():number{return Number(input('gravity').value);}
 /** Called from `tick` right before `player.frame(dt)`: the gust clock is the stepped time, so a paused player freezes it. */
@@ -1334,23 +1337,6 @@ function bindEnvironment():void {
  };
  button('environment-export').onclick=()=>{const world=worldFor(animation);if('error' in world){message(world.error,true);return;}download('rigc-environment.json',world.text,'application/json');message(`Exported ${world.summary}. The download is the bytes readings, Apply and feedback carry; the package is unchanged.`);};
  button('environment-check').onclick=()=>{void runEnvironmentCheck();};
- input('drag-trail').onchange=()=>{el('rig-viewport').dataset.trail=String(input('drag-trail').checked);};
- // Drag to trail: the rig pane's pointer drag becomes `player.moved` before the pan handler sees it; Space still pans.
- let space=false,trail:{id:number;x:number;y:number}|null=null;
- const keys=(event:KeyboardEvent)=>{if(event.code==='Space')space=event.type==='keydown';};
- window.addEventListener('keydown',keys);window.addEventListener('keyup',keys);window.addEventListener('blur',()=>{space=false;});
- const pane=el('rig-pane'),viewport=el('rig-viewport');
- pane.addEventListener('pointerdown',event=>{
-  if(!input('drag-trail').checked||space||!player||!event.isPrimary||event.button!==0)return;
-  if(event.target instanceof Element&&event.target.closest('button,input,select,textarea,a'))return;
-  event.stopPropagation();event.preventDefault();trail={id:event.pointerId,x:event.clientX,y:event.clientY};viewport.setPointerCapture(event.pointerId);
- },{capture:true});
- pane.addEventListener('pointermove',event=>{
-  if(!trail||event.pointerId!==trail.id)return;event.stopPropagation();
-  const motion=dragMoved(event.clientX-trail.x,event.clientY-trail.y,rigScale);trail.x=event.clientX;trail.y=event.clientY;if(motion&&player)player.moved(motion);
- },{capture:true});
- const end=(event:PointerEvent)=>{if(!trail||event.pointerId!==trail.id)return;event.stopPropagation();if(viewport.hasPointerCapture(trail.id))viewport.releasePointerCapture(trail.id);trail=null;};
- pane.addEventListener('pointerup',end,{capture:true});pane.addEventListener('pointercancel',end,{capture:true});
 }
 /** Reset: the runtime's start values, then the player's reopen-then-step to the current time, so the physics history is cleared. */
 function resetPhysics():void {
@@ -1365,7 +1351,7 @@ function restoreEnvironment():void {
  const snapshot:WindSnapshot={version:1,base:Number(input('wind-base').value),breeze:input('wind-breeze').checked,repeat:input('wind-repeat').checked,gustPeak:Number(input('wind-gust-peak').value),gustDuration:Number(input('wind-gust-duration').value)};
  try{wind.restore(snapshot);environmentFor(wind.read(),gravityValue());}
  catch(error){wind.restore(null);input('environment-applied').checked=false;input('gravity').value='1';message(`Saved environment not restored: ${errorText(error)}`,true);}
- syncEnvironmentInputs();el('rig-viewport').dataset.trail=String(input('drag-trail').checked);
+ syncEnvironmentInputs();
  if(player){if(environmentApplied())applyEnvironment();else player.environment(null);}
 }
 function feedbackEnvironment(){return player?environmentJson(environmentContext(wind.read(),gravityValue(),environmentApplied(),player.environment())):null;}
