@@ -136,7 +136,6 @@ test('the draft keeps pending edits only while the config still holds what they 
  * bone nothing declares. `check` prints BLINK_NO_HOLE and FEET_STAY_LEVEL (PASS when foot_r keeps its setup angle).
  */
 const fakeParts=`const fs=require('fs'),path=require('path');const a=process.argv.slice(2);const f=n=>a[a.indexOf(n)+1];
-if(process.env.FAKE_LOG)fs.appendFileSync(process.env.FAKE_LOG,a.join(' ')+'\\n');
 const fail=l=>{console.log('[rig] reading config');console.log('  FAIL  '+l);console.log('refused: 1 problem(s)');process.exit(1);};
 if(a[0]==='rig'){const c=JSON.parse(fs.readFileSync(f('--config'),'utf8'));
  const names=['root'];for(const b of c.bones)if(b.name)names.push(b.name);else (b.points||[]).forEach((_,k)=>names.push(b.chain+k));
