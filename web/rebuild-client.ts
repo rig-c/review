@@ -66,13 +66,22 @@ export function designatedRegions(read:ChestFieldReader,seed:ChestSeed|null=null
 
 /** #320: the config regions `designatedRegions` appended as kept (#317), by identity; they never name the part to rebuild. */
 const keptRegions=new WeakSet<object>();
+/** #314: the two circles the producer derives from a contour's `contour.bust`, or none when it states none or one the loader would refuse. */
+function derivedBust(contour:unknown):readonly RegionEntry[] {
+ const bust=contour&&typeof contour==='object'?(contour as Record<string,unknown>).bust:undefined;
+ if(!bust||typeof bust!=='object')return [];
+ try{return deriveBust(parseBustSpec(bust)).regions;}catch{return [];}
+}
+/** #314: a part's regions as the producer reads them: the regions it writes, then the two it derives from `contour.bust`. */
+const producerRegions=(status:Partial<Pick<RebuildStatusView,'contour'>>,part:{name:string;regions:unknown[]}):readonly unknown[]=>[...part.regions,...derivedBust(status.contour?.[part.name]?.contour)];
 /**
- * The contour part to rebuild: the one whose regions name the first designated bone, else the only one, else none. Only
- * the rows count: a region carried back as kept (#317, #320) takes no part in the inference.
+ * The contour part to rebuild: the one whose regions name the designated bones, else the only one, else none. A part's
+ * regions are the producer's reading of them, so the circles derived from `contour.bust` count (#314). Only the rows
+ * count on the designation side: a region carried back as kept (#317, #320) takes no part in the inference.
  */
-export function pickPart(status:Pick<RebuildStatusView,'parts'>,regions:readonly RegionEntry[]):string|null {
+export function pickPart(status:Pick<RebuildStatusView,'parts'>&Partial<Pick<RebuildStatusView,'contour'>>,regions:readonly RegionEntry[]):string|null {
  const bones=new Set(regions.filter(r=>!keptRegions.has(r)).map(r=>r.bone));
- const named=status.parts.filter(p=>p.regions.some(r=>!!r&&typeof r==='object'&&bones.has(String((r as {bone?:unknown}).bone))));
+ const named=status.parts.filter(p=>producerRegions(status,p).some(r=>!!r&&typeof r==='object'&&bones.has(String((r as {bone?:unknown}).bone))));
  if(named.length===1)return named[0]!.name;
  return status.parts.length===1?status.parts[0]!.name:null;
 }
@@ -115,19 +124,20 @@ function notSendable(value:unknown,index:number):string|null {
 }
 const readable=(r:unknown)=>{const v=r as Record<string,unknown>;return !!v&&typeof v==='object'&&(v.shape==='circle'||(v.shape==='polygon'&&Array.isArray(v.points)&&fitChestEllipse(v.points as [number,number][]).ok));};
 /**
- * The chest part (#315): the first contour part with a region the editor can read (a circle or an axis-aligned ellipse
- * polygon), else the one stating `contour.bust`, else the first with any region (whose polygons are then refused by name).
+ * The chest part (#315): the contour part stating `contour.bust` (#314: it names the chest in the producer's own words,
+ * so another part's readable circles do not displace it), else the first with a region the editor can read (a circle or
+ * an axis-aligned ellipse polygon), else the first with any region (whose polygons are then refused by name).
  */
 function chestPart(status:Pick<RebuildStatusView,'parts'|'contour'>){
  const bust=(p:{name:string})=>{const c=status.contour[p.name]?.contour;return !!c&&typeof c==='object'&&'bust' in (c as Record<string,unknown>);};
- return status.parts.find(p=>p.regions.some(readable))??status.parts.find(bust)??status.parts.find(p=>p.regions.length);
+ return status.parts.find(bust)??status.parts.find(p=>p.regions.some(readable))??status.parts.find(p=>p.regions.length);
 }
 /** The config's regions as chest rows (at most two), read by measurement, never by point count. Pure: Apply recomputes it. */
 export function chestSeed(status:Pick<RebuildStatusView,'parts'|'contour'>):ChestSeed {
  const part=chestPart(status),entry=part?status.contour[part.name]:undefined;if(!part||!entry)return {part:null,rows:[],refusals:[],kept:[]};
  const contour=(entry.contour??{}) as Record<string,unknown>;
- let regions:readonly unknown[]=part.regions;
- if(!regions.length&&contour.bust&&typeof contour.bust==='object'){try{regions=deriveBust(parseBustSpec(contour.bust)).regions;}catch{/* invalid bust spec leaves regions empty */}}
+ // An invalid bust spec leaves the rows empty.
+ const regions:readonly unknown[]=part.regions.length?part.regions:derivedBust(contour);
  const rows:ChestSeedRow[]=[];
  regions.slice(0,chestRegionRows.length).forEach((value,row)=>{
   const r=value as Record<string,unknown>,fields:Record<string,string>={},id=(f:typeof chestRegionFields[number])=>chestRowId(row,f);

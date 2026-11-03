@@ -213,11 +213,14 @@ export function parseRebuildRequest(input: unknown, bones: readonly string[] | n
   return { part: v.part as string, regions, configHash: v.configHash as string };
 }
 
-/** The part's config entry with `contour.regions` replaced by the designation and every other field as written. */
+/** The part's config entry with `contour.regions` replaced by the designation (and, on a bust-only entry, `contour.bust` with it, #314) and every other field as written. */
 export function meshEntryText(configText: string, part: string, regions: readonly ProducerRegion[]): string {
   const found = contourParts(configText).find(p => p.name === part);
   if (!found) throw new RebuildError('REBUILD_PART_NOT_CONTOUR', `config meshes.${part} is not a contour entry; regions apply to contour meshes only`);
   const entry = structuredClone(found.entry), contour = entry.contour as Record<string, unknown>;
+  // #314: on a bust-only entry the editor's rows are the circles derived from `contour.bust`, so they replace the
+  // shorthand (the mirror of `bustMeshEntry`); kept beside it, the producer would meet bust_r and bust_l twice.
+  if (!found.regions.length) delete contour.bust;
   contour.regions = regions.map(r => ({ ...r }));
   return JSON.stringify(entry, null, 1) + '\n';
 }
