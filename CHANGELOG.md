@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/rig-c/review/compare/v1.2.1...v1.3.0) (2026-11-03)
+
+
+### Features
+
+* **reference:** show the source painting first when the producer handoff knows it ([#329](https://github.com/rig-c/review/issues/329)) ([#333](https://github.com/rig-c/review/issues/333)) ([f150583](https://github.com/rig-c/review/commit/f150583a0652f96f4167ff62f1ac894999282748))
+
 ## [1.2.1](https://github.com/rig-c/review/compare/v1.2.0...v1.2.1) (2026-11-03)
 
 
