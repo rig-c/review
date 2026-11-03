@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.2.0](https://github.com/rig-c/review/compare/v1.1.1...v1.2.0) (2026-11-03)
+
+
+### Features
+
+* **chest:** chest editor at parity with the Family editor ([#307](https://github.com/rig-c/review/issues/307), [#306](https://github.com/rig-c/review/issues/306)) ([#310](https://github.com/rig-c/review/issues/310)) ([5b508c4](https://github.com/rig-c/review/commit/5b508c4d102747903bc76799657faa00191429b4))
+* **inspector:** make the block rows real tabs, one panel on screen at a time ([#308](https://github.com/rig-c/review/issues/308)) ([#321](https://github.com/rig-c/review/issues/321)) ([1fb6a2b](https://github.com/rig-c/review/commit/1fb6a2b1732376e7eb79863940640f2231ff3932))
+
+
+### Bug Fixes
+
+* **chest:** apply seeded bust circles beside other contour parts ([#314](https://github.com/rig-c/review/issues/314)) ([#326](https://github.com/rig-c/review/issues/326)) ([0d4ea31](https://github.com/rig-c/review/commit/0d4ea3129c9a8f00e7083e00fb8f4f55b0031b44))
+* **chest:** draw the non-edit overlay when only the generator field is empty ([#323](https://github.com/rig-c/review/issues/323)) ([#325](https://github.com/rig-c/review/issues/325)) ([4e2e035](https://github.com/rig-c/review/commit/4e2e035f2c946b599b1555ca6ae2aa612c1c5933))
+* **chest:** keep contour regions the editor did not seed, refuse by name what cannot go back ([#317](https://github.com/rig-c/review/issues/317)) ([#320](https://github.com/rig-c/review/issues/320)) ([a94aea1](https://github.com/rig-c/review/commit/a94aea18a9e6ba43fb7113f5d8931c39f39b29f8))
+* **chest:** read an absent contour maxEdge, stray or bridges as the producer does ([#318](https://github.com/rig-c/review/issues/318)) ([#322](https://github.com/rig-c/review/issues/322)) ([e45108f](https://github.com/rig-c/review/commit/e45108fbc70f98e4d13c1f7c8664e8bf943d3289))
+* **chest:** seed ellipse-polygon bust regions, refuse other polygons by name ([#315](https://github.com/rig-c/review/issues/315)) ([#316](https://github.com/rig-c/review/issues/316)) ([c9a48a2](https://github.com/rig-c/review/commit/c9a48a287e4e0e2c2119d52dec3877db2eecf759))
+* **open:** refuse to start without a loadable model or a ready producer handoff; --view-only asks for the viewer ([#305](https://github.com/rig-c/review/issues/305)) ([#309](https://github.com/rig-c/review/issues/309)) ([579b34b](https://github.com/rig-c/review/commit/579b34b8805464101bd29d6c5d77554a26c4e9fb))
+* **strip:** draw in named font families, refuse STRIP_FONT when none is installed ([#319](https://github.com/rig-c/review/issues/319)) ([#324](https://github.com/rig-c/review/issues/324)) ([d18629c](https://github.com/rig-c/review/commit/d18629cc0cc4c302ec4e8d241900876346e07530))
+
 ## [1.1.1](https://github.com/rig-c/review/compare/v1.1.0...v1.1.1) (2026-11-02)
 
 
