@@ -221,7 +221,13 @@ export interface ChestEditor {active:()=>boolean;flashing:(side:BustSide)=>boole
  /** The current notice text (empty string when none). */
  noticeText:()=>string;
  /** Apply is disabled while a rebuild runs; Reset is enabled while a rebuilt build is on the stage. */
- rebuildState:(state:{busy:boolean;applied:boolean})=>void}
+ rebuildState:(state:{busy:boolean;applied:boolean})=>void;
+ /** #342: the toggle and Apply are disabled before use, naming the reason, when the rig has nothing to rebuild (null re-enables). */
+ unavailable:(reason:string|null)=>void}
+
+/** The toggle's and Apply's own tooltips, restored when the editor becomes available again (`web/index.html`). */
+const CHEST_EDIT_TITLE='Place the two chest regions on the rig: drag a centre, the core edge or the band';
+const BUST_APPLY_TITLE='Run the installed producer (rig-parts remesh) on these regions or landmarks into a scratch build and load it here; the package is unchanged';
 
 export function bindChestEditor(host:ChestEditorHost):ChestEditor {
  const node=<T extends HTMLElement>(id:string)=>document.getElementById(id) as T;
@@ -229,7 +235,12 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
  const field=(id:string)=>document.getElementById(id) as HTMLInputElement|null;
  const read:ChestFieldReader=id=>{const f=field(id);return f?{value:f.value}:undefined;};
  const log=node<HTMLElement>('chest-editor-log'),apply=node<HTMLButtonElement>('bust-apply'),reset=node<HTMLButtonElement>('bust-reset');
- let notice:{text:string;error:boolean}|null=null;
+ let notice:{text:string;error:boolean}|null=null,blocked:string|null=null,busy=false;
+ /** #342: a disabled control names its reason in its tooltip, the way an unavailable layout does. */
+ const gate=()=>{
+  for(const [button,title] of [[toggle,CHEST_EDIT_TITLE],[apply,BUST_APPLY_TITLE]] as const){button.title=blocked??title;if(blocked)button.setAttribute('aria-description',blocked);else button.removeAttribute('aria-description');}
+  toggle.disabled=!!blocked;apply.disabled=busy||!!blocked;
+ };
  const modeInput=field('bust-mode'),landmarkGroups=[...bar.querySelectorAll<HTMLElement>('[data-chest-mode]')],readout=node<HTMLElement>('lm-derived');
  const mode=():ChestMode=>modeInput?.value==='landmarks'?'landmarks':'circles';
  let armed:LandmarkKey|null=null,landmarkDrag:{key:LandmarkKey;pointer:number}|null=null;
@@ -274,7 +285,7 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
   status.textContent=shown.text;status.title=shown.text;status.classList.toggle('error',shown.error);
  };
  const setActive=(on:boolean)=>{active=on;toggle.setAttribute('aria-pressed',String(on));bar.hidden=!on;if(!on){drag=null;landmarkDrag=null;armed=null;delete host.pane.dataset.chestHover;}sync();host.changed();};
- toggle.addEventListener('click',()=>setActive(!active));
+ toggle.addEventListener('click',()=>{if(!blocked)setActive(!active);});
  bar.addEventListener('input',event=>{
   const target=event.target as HTMLInputElement,match=/^bust-([rl])-(x|y|r|band)$/.exec(target.id);if(!match)return;
   const value=Number(target.value);if(!target.value.trim()||!Number.isFinite(value))return;
@@ -305,7 +316,7 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
   write(0,right);write(1,mirrorBust(right,{cx:leftX}));sync();host.changed();
  });
  node<HTMLButtonElement>('bust-download').addEventListener('click',()=>host.download());
- apply.addEventListener('click',()=>host.apply());
+ apply.addEventListener('click',()=>{if(!blocked)host.apply();});
  reset.addEventListener('click',()=>host.reset());
  const keyDown=(event:KeyboardEvent)=>{if(event.code==='Space'&&!textEntryFocused(event.target))space=true;};
  const keyUp=(event:KeyboardEvent)=>{if(event.code==='Space')space=false;};
@@ -350,7 +361,8 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
   active:()=>active,flashing:side=>flash.has(side),sync,mode,landmarks:()=>readLandmarks(read),armed:()=>{const l=readLandmarks(read);return nextLandmark(armed,'missing' in l?l.missing:[]);},
   notify:(text,error=false,lines)=>{notice=text===null?null:{text,error};if(lines){log.textContent=lines.join('\n');log.hidden=!lines.length;log.scrollTop=log.scrollHeight;}sync();},
   noticeText:()=>notice?.text??'',
-  rebuildState:({busy,applied})=>{apply.disabled=busy;apply.setAttribute('aria-busy',String(busy));reset.disabled=busy||!applied;},
+  rebuildState:(state)=>{busy=state.busy;apply.setAttribute('aria-busy',String(busy));reset.disabled=busy||!state.applied;gate();},
+  unavailable:reason=>{blocked=reason;if(blocked&&active)setActive(false);gate();},
   dispose:()=>{observer.disconnect();host.pane.removeEventListener('pointerdown',down,true);host.pane.removeEventListener('pointermove',move,true);for(const type of ['pointerup','pointercancel','lostpointercapture'] as const)host.pane.removeEventListener(type,end,true);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);window.removeEventListener('blur',blur);},
  };
 }

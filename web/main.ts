@@ -27,7 +27,7 @@ import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
 import {animationAppliedRecord,animationOutcomeLine,retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type AnimationJobView,type AnimationRequestBody,type AnimationSourceOp,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {historyRow,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,chestSeed,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {historyRow,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -1465,7 +1465,9 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  if(Object.keys(seed).length){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
  // #315: a config polygon the editor cannot read as an ellipse is named, never shown as an empty row.
  const refused=chestSeed(rebuildStatus).refusals;if(refused.length)chestEditor?.notify(refused.join(' · '),true,refused);
- if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,!rebuildStatus.viewOnly);
+ // #342: a rig with no contour mesh disables the chest tools before use and says why in words about the rig.
+ const noContour=noContourReason(rebuildStatus);chestEditor?.unavailable(noContour?.text??null);
+ if(noContour)chestEditor?.notify(noContour.text,false,noContour.lines);else if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,!rebuildStatus.viewOnly);
  renderHandoff(rebuildStatus);refreshPhysics();
  retargetPanel?.load(rebuildStatus.retarget??null,rebuildStatus.reason);
  bonesPanel?.load(rebuildStatus.inputs?rebuildStatus.bones??[]:null,rebuildStatus.inputs?null:rebuildStatus.reason??'BONES_UNAVAILABLE: no producer handoff');
@@ -1634,7 +1636,7 @@ async function applyRebuild():Promise<void> {
  if(rebuildBusy)return;
  if(readOnly){chestEditor?.notify(readOnly,true);return;}
  const status=rebuildStatus??await loadRebuildStatus();
- if(!status||!status.available||!status.inputs){const reason=status?.reason??'REBUILD_STATUS_UNAVAILABLE';chestEditor?.notify(reason,true,[reason]);message(reason,true);return;}
+ if(!status||!status.available||!status.inputs){const noContour=status?noContourReason(status):null,reason=noContour?.text??status?.reason??'REBUILD_STATUS_UNAVAILABLE';chestEditor?.notify(reason,!noContour,noContour?.lines??[reason]);message(reason,!noContour);return;}
  let part:string,body:RebuildRequestBody;const lines:string[]=[];
  if(chestEditor?.mode()==='landmarks'){
   // #105: refused here, before anything is sent, when a point is missing or the circles would not clear.
