@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/rig-c/review/compare/v1.2.0...v1.2.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **open:** open a handoff whose config states no contour mesh ([#327](https://github.com/rig-c/review/issues/327)) ([e62b226](https://github.com/rig-c/review/commit/e62b22665d649cb28d80183e646f65f2d2ce29a7))
+
 ## [1.2.0](https://github.com/rig-c/review/compare/v1.1.1...v1.2.0) (2026-11-03)
 
 
