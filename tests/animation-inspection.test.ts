@@ -4,7 +4,7 @@ import {loadSetupAssets,setupRoot} from './helpers/setup-mesh.ts';
 import {boneHierarchy,channelSegments,evaluateBoneLocals,filterTracks,readAnimationInspection,CHANNELS,type LocalProperty} from '../src/animation-inspection.ts';
 import {InspectionSelection} from '../web/inspection-selection.ts';
 import {inspectionControl,properties,bytes,fixedTimes,matrixAnimations,recognizedCases} from './helpers/animation-inspection.ts';
-import {pickedSlot} from '../web/animation-inspection.ts';
+import {pickedSlot} from '../web/stage-pick.ts';
 
 test('stored lanes preserve count, index, time, channel handles and hierarchy; dropped-key plant is rejected',async()=>{
  const doc=await inspectionControl(),before=JSON.stringify(doc),actual=readAnimationInspection(doc,'control');

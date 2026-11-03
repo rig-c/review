@@ -28,6 +28,7 @@ import {
 import type {AppliedAnimation} from '../src/applied-context.ts';
 import {sourceTextContent} from './i18n.ts';
 import type {AnimationSourceView} from './rebuild-client.ts';
+import {bindStagePick,domHoverPainter,type StagePick} from './stage-pick.ts';
 import {InspectionSelection} from './inspection-selection.ts';
 import {animationPreviewAdjust} from './preview.ts';
 
@@ -96,16 +97,6 @@ export interface AnimationSideState {
  zoom:number;
 }
 
-/** All picking reads the last drawn primitives, including their resolved clip; never a setup bounding box. */
-export function pickedSlot(frame:PosedFrame,x:number,y:number):string|null {
- const inside=(p:readonly number[])=>{let hit=false;for(let i=0,j=p.length-2;i<p.length;j=i,i+=2){const ax=p[i]!,ay=p[i+1]!,bx=p[j]!,by=p[j+1]!;if((ay>y)!==(by>y)&&x<(bx-ax)*(y-ay)/(by-ay)+ax)hit=!hit;}return hit;};
- for(const row of [...frame.order].reverse()){
-  if(row.clip&&inside(row.clip.polygon)===row.clip.inverse)continue;
-  if(row.kind==='region'&&inside(row.corners))return row.slot;
-  if(row.kind==='mesh')for(let i=0;i<row.triangles.length;i+=3){const p=row.triangles.slice(i,i+3).flatMap(v=>[row.vertices[v*2]!,row.vertices[v*2+1]!]);if(inside(p))return row.slot;}
- }return null;
-}
-
 export const ANIMATION_APPLY_ISOLATION_NOTE =
  'An animation Apply builds from the handoff config.json and animations_from file into scratch (rig-parts rig → rigc build → rig-parts check), so it does not carry another kind\'s Apply on the stage.';
 
@@ -151,8 +142,8 @@ export class AnimationInspectionPanel {
  private picks:HTMLElement;
  private bones=new Map<string,{x:number;y:number;a:number;b:number;c:number;d:number;hasMatrix:boolean}>();
  private frame:PosedFrame|null=null;
- private down:{x:number;y:number}|null=null;
  private space=false;
+ private stagePick:StagePick|null=null;
  private disposers:(()=>void)[]=[];
  private boneButtons=new Map<string,HTMLButtonElement>();
  private bonePoints=false;
@@ -331,12 +322,11 @@ export class AnimationInspectionPanel {
   this.easeSelect.onchange=()=>{this.applyCurveModeChange(this.easeSelect.value);};
   this.bindCurveHandleDrag();
   this.picks=document.createElement('div');this.picks.className='animation-stage-picks';stage.append(this.picks);
-  const down=(e:PointerEvent)=>{this.down=e.isPrimary&&e.button===0?{x:e.clientX,y:e.clientY}:null;};
-  const up=(e:PointerEvent)=>{const start=this.down;this.down=null;if(!start||Math.hypot(e.clientX-start.x,e.clientY-start.y)>3||this.space||!options.enabled()||e.target instanceof Element&&e.target.closest('button,input,select,textarea')||!this.frame)return;
-   const rect=stage.getBoundingClientRect(),p0=options.project(0,0),px=options.project(1,0),py=options.project(0,1),x=(e.clientX-rect.left-p0.x)/(px.x-p0.x),y=(e.clientY-rect.top-p0.y)/(py.y-p0.y),slot=pickedSlot(this.frame,x,y);if(slot)this.select({kind:'slot',name:slot});
-  };
+  // #330: the click and the hover preview are one hit test (web/stage-pick.ts `pickAt`); the panel only supplies its state.
+  this.stagePick=bindStagePick({stage,project:(x,y)=>options.project(x,y),frame:()=>this.frame,enabled:()=>options.enabled(),held:()=>this.space,
+   selectable:slot=>this.has({kind:'slot',name:slot}),select:slot=>this.select({kind:'slot',name:slot}),paint:domHoverPainter(this.picks)});
   const key=(e:KeyboardEvent)=>{
-   if(e.code==='Space')this.space=e.type==='keydown';
+   if(e.code==='Space'){this.space=e.type==='keydown';this.stagePick?.refresh();}
    if(e.type==='keydown'&&(e.key==='Delete'||e.key==='Backspace')&&!this.isBusy){
     const active=document.activeElement as Element|null;
     const inField=active&&typeof active.closest==='function'&&active.closest('input,textarea,select');
@@ -352,9 +342,9 @@ export class AnimationInspectionPanel {
     }
    }
   };
-  const blur=()=>{this.space=false;this.down=null;};
-  stage.addEventListener('pointerdown',down);stage.addEventListener('pointerup',up);window.addEventListener('keydown',key);window.addEventListener('keyup',key);window.addEventListener('blur',blur);
-  this.disposers.push(()=>{stage.removeEventListener('pointerdown',down);stage.removeEventListener('pointerup',up);window.removeEventListener('keydown',key);window.removeEventListener('keyup',key);window.removeEventListener('blur',blur);});
+  const blur=()=>{this.space=false;this.stagePick?.reset();};
+  window.addEventListener('keydown',key);window.addEventListener('keyup',key);window.addEventListener('blur',blur);
+  this.disposers.push(()=>{this.stagePick?.dispose();window.removeEventListener('keydown',key);window.removeEventListener('keyup',key);window.removeEventListener('blur',blur);});
 
   if(typeof ResizeObserver!=='undefined'&&typeof host.closest==='function'){
    const playbackPanel=host.closest<HTMLElement>('[data-inspector-panel]');
@@ -2839,6 +2829,7 @@ export class AnimationInspectionPanel {
   stage.dataset.selectedName=selected?.name??'';
   const enabled=this.options.enabled();
   this.picks.hidden=!enabled;
+  this.stagePick?.refresh();
   const otherMode:'rotate'|'translate'=this.poseMode==='rotate'?'translate':'rotate';
   let order=0;
   for(const [name,p]of this.bones){
