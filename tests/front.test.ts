@@ -15,10 +15,10 @@ async function cli(args:string[],state:string,env:Record<string,string>={}){cons
 
 test('managed front routes by key, refuses unlisted/oversized/foreign-host requests and never serves a capability',async()=>{
  const f=await fixture(),other=join(f.root,'other');await cp(f.producer,other,{recursive:true});await writeFile(join(other,'report.json'),JSON.stringify({spec:'rig-pose-report/1',animation:'inspect',frameTimes:[0,.5,1]}));const port=freePort();
- const a=await openReview({input:f.producer,reference:f.reference},{stateDir:f.state,frontPort:port}),b=await openReview({input:other,control:true},{stateDir:f.state,frontPort:port});await track(f.state);
+ const a=await openReview({input:f.producer,reference:f.reference,viewOnly:true},{stateDir:f.state,frontPort:port}),b=await openReview({input:other,control:true,viewOnly:true},{stateDir:f.state,frontPort:port});await track(f.state);
  const front=`http://127.0.0.1:${port}`,aBase=front+new URL(a.url).pathname,bBase=front+new URL(b.url).pathname,ra=await record(f.state,a.url),rb=await record(f.state,b.url);
  expect(new URL(a.url).origin).toBe(front);expect(new URL(a.url).pathname).toBe(`/instances/${ra.key}/`);expect(a.direct).toBe(false);expect(cap(a.url)).toBe(ra.capability);expect(cap(b.url)).toBe(rb.capability);expect(ra.capability).not.toBe(rb.capability);
- const again=await openReview({input:f.producer,reference:f.reference},{stateDir:f.state,frontPort:port});expect(again.url).toBe(a.url);expect(again.reused).toBe(true);expect((await readdir(join(f.state,'open'))).filter(n=>/^front-\d+\.json$/.test(n))).toEqual([`front-${port}.json`]);
+ const again=await openReview({input:f.producer,reference:f.reference,viewOnly:true},{stateDir:f.state,frontPort:port});expect(again.url).toBe(a.url);expect(again.reused).toBe(true);expect((await readdir(join(f.state,'open'))).filter(n=>/^front-\d+\.json$/.test(n))).toEqual([`front-${port}.json`]);
  const landing=await fetch(a.url);expect(landing.status).toBe(200);expect(await landing.text()).toContain('src="main.js"');expect((await fetch(aBase)).status).toBe(409);
  const reviewA=await (await fetch(aBase+'api/review')).json(),reviewB=await (await fetch(bBase+'api/review')).json();expect(reviewA.sourceHash).toBe(ra.contentHash);expect(reviewB.sourceHash).toBe(rb.contentHash);expect(reviewA.sourceHash).not.toBe(reviewB.sourceHash);
  const asset=await fetch(aBase+'assets/build/skeleton.model.json');expect(asset.status).toBe(200);expect(asset.headers.get('content-security-policy')).toContain('sandbox');expect(asset.headers.get('x-review-open-key')).toBeNull();
@@ -50,7 +50,7 @@ test('managed front routes by key, refuses unlisted/oversized/foreign-host reque
 
 test('page A holding instance B key cannot mutate B; only B capability can, and a fragment-less copied link is read-only',async()=>{
  const f=await fixture(),other=join(f.root,'other');await cp(f.producer,other,{recursive:true});await writeFile(join(other,'report.json'),JSON.stringify({spec:'rig-pose-report/1',animation:'inspect',frameTimes:[0,.5,1]}));const port=freePort();
- const a=await openReview({input:f.producer},{stateDir:f.state,frontPort:port}),b=await openReview({input:other,control:true},{stateDir:f.state,frontPort:port});await track(f.state);
+ const a=await openReview({input:f.producer,viewOnly:true},{stateDir:f.state,frontPort:port}),b=await openReview({input:other,control:true,viewOnly:true},{stateDir:f.state,frontPort:port});await track(f.state);
  const front=`http://127.0.0.1:${port}`,bBase=front+new URL(b.url).pathname,ra=await record(f.state,a.url),rb=await record(f.state,b.url),session=await (await fetch(bBase+'api/session')).json();
  const page={sourceHash:rb.contentHash,inspection:{}},mutations:[string,string,unknown][]=[['PUT','api/session',{...session,status:'approved'}],['POST','api/strip',{format:'json',sourceHash:rb.contentHash,animation:'inspect',intervals:[]}],['POST','api/control/register',page],['POST','api/control/poll',{pageId:'x'}],['POST','api/control/ack',{pageId:'x'}],['POST','api/control/close',{pageId:'x'}]];
  for(const [method,path,body] of mutations)for(const capability of [ra.capability,null,'0'.repeat(64)]){
@@ -73,10 +73,10 @@ test('page A holding instance B key cannot mutate B; only B capability can, and 
 test('a busy front port fails by name with the way out, and --direct keeps the per-port worker',async()=>{
  const f=await fixture(),holder=Bun.serve({hostname:'127.0.0.1',port:0,fetch:()=>Response.json({unrelated:true})});
  try{
-  await expect(openReview({input:f.producer},{stateDir:f.state,frontPort:holder.port})).rejects.toThrow(/^FRONT_PORT_BUSY: 127\.0\.0\.1:\d+ is held by another listener; use --direct/);await track(f.state);
+  await expect(openReview({input:f.producer,viewOnly:true},{stateDir:f.state,frontPort:holder.port})).rejects.toThrow(/^FRONT_PORT_BUSY: 127\.0\.0\.1:\d+ is held by another listener; use --direct/);await track(f.state);
   expect(await (await fetch(`http://127.0.0.1:${holder.port}/`)).json()).toEqual({unrelated:true});
-  const busy=await cli(['open',f.producer],f.state,{RIG_REVIEW_FRONT_PORT:String(holder.port)});expect(busy.exit).toBe(1);expect(busy.stdout).toBe('');expect(busy.stderr).toContain('FRONT_PORT_BUSY');expect(busy.stderr).toContain('use --direct');
-  const direct=await cli(['open',f.producer,'--direct'],f.state,{RIG_REVIEW_FRONT_PORT:String(holder.port)});expect(direct.exit).toBe(0);const url=direct.stdout.trim(),origin=new URL(url).origin,row=await record(f.state,url);
+  const busy=await cli(['open',f.producer,'--view-only'],f.state,{RIG_REVIEW_FRONT_PORT:String(holder.port)});expect(busy.exit).toBe(1);expect(busy.stdout).toBe('');expect(busy.stderr).toContain('FRONT_PORT_BUSY');expect(busy.stderr).toContain('use --direct');
+  const direct=await cli(['open',f.producer,'--view-only','--direct'],f.state,{RIG_REVIEW_FRONT_PORT:String(holder.port)});expect(direct.exit).toBe(0);const url=direct.stdout.trim(),origin=new URL(url).origin,row=await record(f.state,url);
   expect(origin).toBe(row.origin);expect(new URL(url).pathname).toBe('/');expect(cap(url)).toBe(row.capability);expect((await fetch(url)).status).toBe(200);
   const session=await (await fetch(origin+'/api/session')).json(),put=(headers:Record<string,string>)=>fetch(origin+'/api/session',{method:'PUT',headers:{Origin:origin,'Content-Type':'application/json',...headers},body:JSON.stringify({...session,status:'approved'})});
   expect((await put({})).status).toBe(403);expect((await put({'X-Review-Capability':cap(url)})).status).toBe(200);
@@ -97,7 +97,7 @@ test('compare instances route through the front with their own assets, reference
 
 test('front stays up while control directory has a live record and exits within bound when control directory is deleted, while planted .catch(()=>{}) form fails',async()=>{
  const f=await fixture(),port=freePort(),idleMs=120;
- await openReview({input:f.producer},{stateDir:f.state,frontPort:port,frontIdleMs:idleMs,idleMs:5000});await track(f.state);
+ await openReview({input:f.producer,viewOnly:true},{stateDir:f.state,frontPort:port,frontIdleMs:idleMs,idleMs:5000});await track(f.state);
  const control=join(f.state,'open'),frontRec=JSON.parse(await readFile(join(control,`front-${port}.json`),'utf8')) as {pid:number;origin:string;nonce:string;fingerprint:string};
  // Bar 3: while control directory exists with a live instance record, front stays up past idleMs.
  await Bun.sleep(idleMs*3);

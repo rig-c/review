@@ -3003,4 +3003,5 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "back": "back",
   "@rig-c/pose is not installed beside the package or beside review, and review does not install it — bun add -d @rig-c/pose": "@rig-c/pose is not installed beside the package or beside review, and review does not install it — bun add -d @rig-c/pose",
   "CHEST_REGION_VALUE_INVALID contour tolerance": "CHEST_REGION_VALUE_INVALID contour tolerance",
+  "view only, no producer handoff": "view only, no producer handoff",
 };

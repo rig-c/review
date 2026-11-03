@@ -30,11 +30,11 @@ async function bodyJson(req:Request,limit=1024*1024,what='Session payload exceed
 }
 /** `capability` (open workers and foreground CLI serving) gates every non-GET request; tests may omit it.
  * `cwd` is where the producer is looked for after the package's own directories (review's working directory by default). */
-export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string;stripConcurrency?:number;graceMs?:number;unopenedTimeoutMs?:number;exitOnClose?:boolean;onClose?:(info:LiveExitInfo)=>void|Promise<void>;log?:(line:string)=>void}={}){
+export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string;stripConcurrency?:number;graceMs?:number;unopenedTimeoutMs?:number;exitOnClose?:boolean;onClose?:(info:LiveExitInfo)=>void|Promise<void>;log?:(line:string)=>void;viewOnly?:boolean}={}){
   const bundle=await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
-  const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones,...(options.stripConcurrency?{stripConcurrency:options.stripConcurrency}:{})});
+  const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones,...(options.stripConcurrency?{stripConcurrency:options.stripConcurrency}:{}),...(options.viewOnly??p.viewOnly?{viewOnly:true}:{})});
   // Readings (#108): rigc render's readings on the inspected build and on the latest scratch build, into scratch.
   const readings=createReadings(p,{stateDir,starts,unchanged,latest:rebuilds.latest});
   // Bones check (#109): propose --from-config and compare on a scratch copy of the patched handoff config.

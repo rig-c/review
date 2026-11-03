@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadCompare, assertCompareUnchanged, type ComparePackage } from '../src/compare.ts';
@@ -187,14 +187,17 @@ fs.writeFileSync(path.join(out,'page.png'),'rebuilt-png');console.log('rigc: wro
 
   for (const [side, r] of [['a', 50], ['b', 55]] as const) {
     const pkg = join(root, side);
-    await mkdir(join(pkg, 'build'), { recursive: true });
+    await cp(join(import.meta.dir, 'fixtures/strip-probe/build'), join(pkg, 'build'), { recursive: true });
     await mkdir(join(pkg, 'rig/out/rig'), { recursive: true });
     await mkdir(join(pkg, 'rig/out/parts'), { recursive: true });
     await writeFile(join(pkg, 'rig/config.json'), JSON.stringify(makeCfg(r), null, 1));
     await writeFile(join(pkg, 'rig/out/parts.json'), '{}');
     for (const n of ['rig.json', 'motion.json', 'mesh_report.json']) await writeFile(join(pkg, 'rig/out/rig', n), '{}');
-    await writeFile(join(pkg, 'build/skeleton.model.json'), JSON.stringify({ spec: 'rigc-compiled/3', pages: [{ name: 'page.png' }], animations: [{ name: 'inspect', duration: 2 }], bones: [{ name: 'probe' }], slots: [], side }));
-    await writeFile(join(pkg, 'build/page.png'), side + ' page bytes');
+    const modelPath = join(pkg, 'build/skeleton.model.json');
+    const modelDoc = JSON.parse(await readFile(modelPath, 'utf8'));
+    modelDoc.bones.push({ name: 'probe', parent: 'root', x: 0, y: 0 });
+    modelDoc.spine = { sha256: (side === 'a' ? 'a' : 'b').repeat(64) };
+    await writeFile(modelPath, JSON.stringify(modelDoc));
     await writeFile(join(pkg, 'motion.json'), JSON.stringify({ side }));
   }
   const refPath = join(root, 'ref.mp4');

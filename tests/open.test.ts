@@ -3,7 +3,26 @@ import {mkdtemp,mkdir,cp,readFile,writeFile,rm,realpath,readdir,symlink} from 'n
 import {shellWord} from '../src/open-shell.ts';
 import {freshCompareSession,saveCompareSession} from '../src/compare-session.ts';
 import {openReview,loadOpenPackage,openFingerprint,openKey,readOpenStatus} from '../src/open.ts';
+import {handoffText} from '../web/rebuild-client.ts';
 const roots:string[]=[],workers:{pid:number;origin:string;nonce:string}[]=[];
+const bustRegion={name:'bust',shape:'circle' as const,cx:414,cy:342,r:50,bone:'rigid',spacing:13,band:30};
+const validHandoffConfig=(key='k')=>({key,meshes:{topwear:{contour:{tolerance:2,margin:2,spacing:28,maxEdge:45,stray:300,bridges:true,regions:[bustRegion]},r:15,segments:[['rigid',[416,230],[416,600]]]}}});
+const fakePartsBin=`const fs=require('fs'),path=require('path');const a=process.argv.slice(2);const f=n=>a[a.indexOf(n)+1];if(a[0]==='--version'){console.log('1.42.0');process.exit(0);}if(a[0]==='rig'){const out=f('--out'),src=path.join(f('--parts'),'rig');fs.mkdirSync(out,{recursive:true});for(const n of fs.readdirSync(src))fs.copyFileSync(path.join(src,n),path.join(out,n));console.log('rig-parts rig: wrote '+out);process.exit(0);}process.exit(0);`;
+async function installProducer(root:string){
+ await mkdir(join(root,'node_modules/@rig-c/parts/bin'),{recursive:true});await mkdir(join(root,'node_modules/rig-c/bin'),{recursive:true});
+ await writeFile(join(root,'node_modules/@rig-c/parts/package.json'),JSON.stringify({name:'@rig-c/parts',version:'1.42.0',bin:{'rig-parts':'./bin/rig-parts.cjs'}}));
+ await writeFile(join(root,'node_modules/@rig-c/parts/bin/rig-parts.cjs'),fakePartsBin);
+ await writeFile(join(root,'node_modules/rig-c/package.json'),JSON.stringify({name:'rig-c',version:'2.64.1',bin:{rigc:'./bin/rigc.cjs'}}));
+ await writeFile(join(root,'node_modules/rig-c/bin/rigc.cjs'),'process.exit(0);');
+}
+async function addCompleteHandoff(pkg:string,dir='cfg',key='k'){
+ const base=dir?join(pkg,dir):pkg,cfg=join(base,'config.json');
+ await mkdir(join(base,'out/rig'),{recursive:true});await mkdir(join(base,'out/parts'),{recursive:true});
+ await writeFile(cfg,JSON.stringify(validHandoffConfig(key),null,1));
+ await writeFile(join(base,'out/parts.json'),'{}');
+ for(const name of ['rig.json','motion.json','mesh_report.json'])await writeFile(join(base,'out/rig',name),'{}');
+ return cfg;
+}
 const cleanupEvidence:{nonce:string;stopped:boolean}[]=[];
 afterEach(async()=>{for(const worker of workers.splice(0)){try{const r=await fetch(worker.origin+'/api/open-status',{headers:{authorization:`Bearer ${worker.nonce}`},signal:AbortSignal.timeout(500)});const data=await r.json();if(data.nonce===worker.nonce)process.kill(worker.pid,'SIGTERM');}catch{}let stopped=false;for(let attempt=0;attempt<40;attempt++){try{const r=await fetch(worker.origin+'/api/open-status',{headers:{authorization:`Bearer ${worker.nonce}`},signal:AbortSignal.timeout(100)});const data=await r.json();if(data.nonce!==worker.nonce){stopped=true;break;}}catch{stopped=true;break;}await new Promise(resolve=>setTimeout(resolve,25));}cleanupEvidence.push({nonce:worker.nonce,stopped});expect(stopped).toBe(true);}if(process.env.RIG_REVIEW_OPEN_EVIDENCE)await writeFile(process.env.RIG_REVIEW_OPEN_EVIDENCE,JSON.stringify(cleanupEvidence,null,2)+'\n');for(const root of roots.splice(0))await rm(root,{recursive:true,force:true});});
 async function fixture(){const root=await realpath(await mkdtemp(join(tmpdir(),'review-open-')));roots.push(root);const producer=join(root,'producer');await mkdir(producer);await cp(join(import.meta.dir,'fixtures/strip-probe/build'),join(producer,'build'),{recursive:true});await cp(join(import.meta.dir,'fixtures/strip-probe/motion.json'),join(producer,'motion.json'));await writeFile(join(producer,'report.json'),JSON.stringify({spec:'rig-pose-report/1',animation:'inspect',frameTimes:[0,.500003,.999997]}));const reference=join(root,'original.mov');await cp(join(import.meta.dir,'fixtures/strip-probe/reference.mov'),reference);return {root,producer,reference,state:join(root,'state')};}
@@ -11,28 +30,28 @@ async function records(state:string){return Promise.all((await readdir(join(stat
 async function track(state:string){const rows=await records(state);for(const row of rows)if(!workers.some(w=>w.nonce===row.data.nonce))workers.push(row.data);return rows;}
 function feedbackIds(markdown:string){return [...markdown.matchAll(/^#### Feedback (.*)$/gm)].map(match=>match[1]!.replace(/&#(\d+);/g,(_,code:string)=>String.fromCharCode(Number(code))));}
 async function cli(args:string[],state:string){const started=performance.now(),child=Bun.spawn([process.execPath,'src/cli.ts',...args],{env:{...process.env,RIG_REVIEW_STATE_DIR:state},stdout:'pipe',stderr:'pipe'});const [stdout,stderr,exit]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);return {stdout,stderr,exit,elapsed:performance.now()-started};}
-test('real executable cold/warm hash URL and submitted-reference feedback roundtrip',async()=>{const f=await fixture(),before=await readFile(join(f.producer,'motion.json')),cold=await cli(['open',f.producer,'--direct','--reference',f.reference],f.state);expect(cold.exit).toBe(0);const url=cold.stdout.trim(),origin=new URL(url).origin;expect(url).toContain('?input=');expect(url).toContain('&handoff=');await track(f.state);expect((await fetch(url)).status).toBe(200);expect((await fetch(origin)).status).toBe(409);const wrong=new URL(url);wrong.searchParams.set('input','0'.repeat(64));expect((await fetch(wrong)).status).toBe(409);const warm=await cli(['open',f.producer,'--direct','--reference',f.reference],f.state);expect(warm.exit).toBe(0);expect(warm.stdout.trim()).toBe(url);expect(warm.stderr).toContain('reused');expect(warm.elapsed).toBeLessThan(2000);const data=await (await fetch(origin+'/api/review')).json(),session=await (await fetch(origin+'/api/session')).json();expect(data.referenceBinding).toEqual(session.referenceBinding);expect(JSON.stringify(data)).not.toContain(f.root);const saved={...session,status:'changes-requested',feedback:[{id:'issue',frameStart:1,frameEnd:2,target:{kind:'bone',name:'rigid'},category:'quality',summary:'Inspect pose',context:{animation:'inspect',reference:data.explicitReference.id}}]};expect((await fetch(origin+'/api/session',{method:'PUT',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(saved)})).status).toBe(403);expect((await fetch(origin+'/api/session',{method:'PUT',headers:{Origin:origin,'Content-Type':'application/json','X-Review-Capability':new URL(url).hash.slice(5)},body:JSON.stringify(saved)})).status).toBe(200);const read=await cli(['feedback',f.producer,'--reference',f.reference],f.state);expect(read.exit).toBe(0);const feedback=JSON.parse(read.stdout);expect(feedback.status).toBe('changes-requested');expect(feedback.feedback[0].summary).toBe('Inspect pose');expect(feedback.referenceBinding).toEqual(session.referenceBinding);expect(JSON.parse((await cli(['feedback',f.producer],f.state)).stdout).status).toBe('pending');await writeFile(join(f.producer,'motion.json'),new Uint8Array([...before,32]));expect((await fetch(origin+'/api/session')).status).toBe(409);const changed=await cli(['open',f.producer,'--direct','--reference',f.reference],f.state);expect(changed.exit).toBe(0);expect(changed.stdout.trim()).not.toBe(url);await track(f.state);expect((await (await fetch(new URL(changed.stdout.trim()).origin+'/api/session')).json()).status).toBe('pending');},30000);
-test('simultaneous opens converge on one fixed worker and tool/source identities stay distinct',async()=>{const f=await fixture(),inputs={input:f.producer,reference:f.reference},results=await Promise.all(Array.from({length:3},()=>openReview(inputs,{stateDir:f.state,direct:true})));await track(f.state);expect(new Set(results.map(r=>r.url)).size).toBe(1);expect(new Set(results.map(r=>r.nonce)).size).toBe(1);expect(await records(f.state)).toHaveLength(1);const p=await loadOpenPackage(inputs),fp=await openFingerprint();expect(openKey(p,fp)).not.toBe(openKey(p,'0'.repeat(64)));await writeFile(f.reference,new Uint8Array([1,2,3]));const changed=await openReview(inputs,{stateDir:f.state,direct:true});await track(f.state);expect(changed.url).not.toBe(results[0].url);expect((await (await fetch(new URL(changed.url).origin+'/api/session')).json()).status).toBe('pending');},30000);
-test('stale record/unrelated service and dead claim never become reuse or a killed process',async()=>{const f=await fixture(),inputs={input:f.producer,reference:f.reference},first=await openReview(inputs,{stateDir:f.state,direct:true});const [entry]=await track(f.state);const unrelated=Bun.serve({hostname:'127.0.0.1',port:0,fetch:()=>Response.json({unrelated:true})});try{await writeFile(entry.file,JSON.stringify({...entry.data,pid:process.pid,origin:`http://127.0.0.1:${unrelated.port}`,nonce:crypto.randomUUID()}));const claim=entry.file.replace(/\.json$/,'.claim');await mkdir(claim);await writeFile(join(claim,'owner.json'),JSON.stringify({pid:2147483647,nonce:crypto.randomUUID()}));const next=await openReview(inputs,{stateDir:f.state,direct:true});await track(f.state);expect(next.reused).toBe(false);expect(next.nonce).not.toBe(first.nonce);expect(await (await fetch(`http://127.0.0.1:${unrelated.port}`)).json()).toEqual({unrelated:true});expect((await fetch(first.url)).status).toBe(200);}finally{unrelated.stop(true);}},30000);
+test('real executable cold/warm hash URL and submitted-reference feedback roundtrip',async()=>{const f=await fixture(),before=await readFile(join(f.producer,'motion.json')),cold=await cli(['open',f.producer,'--direct','--view-only','--reference',f.reference],f.state);expect(cold.exit).toBe(0);const url=cold.stdout.trim(),origin=new URL(url).origin;expect(url).toContain('?input=');expect(url).toContain('&handoff=');await track(f.state);expect((await fetch(url)).status).toBe(200);expect((await fetch(origin)).status).toBe(409);const wrong=new URL(url);wrong.searchParams.set('input','0'.repeat(64));expect((await fetch(wrong)).status).toBe(409);const warm=await cli(['open',f.producer,'--direct','--view-only','--reference',f.reference],f.state);expect(warm.exit).toBe(0);expect(warm.stdout.trim()).toBe(url);expect(warm.stderr).toContain('reused');expect(warm.elapsed).toBeLessThan(2000);const data=await (await fetch(origin+'/api/review')).json(),session=await (await fetch(origin+'/api/session')).json();expect(data.referenceBinding).toEqual(session.referenceBinding);expect(JSON.stringify(data)).not.toContain(f.root);const saved={...session,status:'changes-requested',feedback:[{id:'issue',frameStart:1,frameEnd:2,target:{kind:'bone',name:'rigid'},category:'quality',summary:'Inspect pose',context:{animation:'inspect',reference:data.explicitReference.id}}]};expect((await fetch(origin+'/api/session',{method:'PUT',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(saved)})).status).toBe(403);expect((await fetch(origin+'/api/session',{method:'PUT',headers:{Origin:origin,'Content-Type':'application/json','X-Review-Capability':new URL(url).hash.slice(5)},body:JSON.stringify(saved)})).status).toBe(200);const read=await cli(['feedback',f.producer,'--reference',f.reference],f.state);expect(read.exit).toBe(0);const feedback=JSON.parse(read.stdout);expect(feedback.status).toBe('changes-requested');expect(feedback.feedback[0].summary).toBe('Inspect pose');expect(feedback.referenceBinding).toEqual(session.referenceBinding);expect(JSON.parse((await cli(['feedback',f.producer],f.state)).stdout).status).toBe('pending');await writeFile(join(f.producer,'motion.json'),new Uint8Array([...before,32]));expect((await fetch(origin+'/api/session')).status).toBe(409);const changed=await cli(['open',f.producer,'--direct','--view-only','--reference',f.reference],f.state);expect(changed.exit).toBe(0);expect(changed.stdout.trim()).not.toBe(url);await track(f.state);expect((await (await fetch(new URL(changed.stdout.trim()).origin+'/api/session')).json()).status).toBe('pending');},30000);
+test('simultaneous opens converge on one fixed worker and tool/source identities stay distinct',async()=>{const f=await fixture(),inputs={input:f.producer,reference:f.reference,viewOnly:true},results=await Promise.all(Array.from({length:3},()=>openReview(inputs,{stateDir:f.state,direct:true})));await track(f.state);expect(new Set(results.map(r=>r.url)).size).toBe(1);expect(new Set(results.map(r=>r.nonce)).size).toBe(1);expect(await records(f.state)).toHaveLength(1);const p=await loadOpenPackage(inputs),fp=await openFingerprint();expect(openKey(p,fp)).not.toBe(openKey(p,'0'.repeat(64)));await writeFile(f.reference,new Uint8Array([1,2,3]));const changed=await openReview(inputs,{stateDir:f.state,direct:true});await track(f.state);expect(changed.url).not.toBe(results[0].url);expect((await (await fetch(new URL(changed.url).origin+'/api/session')).json()).status).toBe('pending');},30000);
+test('stale record/unrelated service and dead claim never become reuse or a killed process',async()=>{const f=await fixture(),inputs={input:f.producer,reference:f.reference,viewOnly:true},first=await openReview(inputs,{stateDir:f.state,direct:true});const [entry]=await track(f.state);const unrelated=Bun.serve({hostname:'127.0.0.1',port:0,fetch:()=>Response.json({unrelated:true})});try{await writeFile(entry.file,JSON.stringify({...entry.data,pid:process.pid,origin:`http://127.0.0.1:${unrelated.port}`,nonce:crypto.randomUUID()}));const claim=entry.file.replace(/\.json$/,'.claim');await mkdir(claim);await writeFile(join(claim,'owner.json'),JSON.stringify({pid:2147483647,nonce:crypto.randomUUID()}));const next=await openReview(inputs,{stateDir:f.state,direct:true});await track(f.state);expect(next.reused).toBe(false);expect(next.nonce).not.toBe(first.nonce);expect(await (await fetch(`http://127.0.0.1:${unrelated.port}`)).json()).toEqual({unrelated:true});expect((await fetch(first.url)).status).toBe(200);}finally{unrelated.stop(true);}},30000);
 test('state canonical containment refuses symlink aliases before writing any producer state',async()=>{const f=await fixture();await symlink(f.producer,join(f.root,'alias'));await expect(openReview({input:f.producer},{stateDir:join(f.root,'alias','should-not-exist')})).rejects.toThrow('outside input');expect((await readdir(f.producer)).sort()).toEqual(['build','motion.json','report.json']);});
 test('compare takes the bound report clip and retains ordered binding',async()=>{const f=await fixture(),other=join(f.root,'other');await cp(f.producer,other,{recursive:true});const fromReport=await openReview({input:f.producer,compare:other,reference:f.reference},{stateDir:f.state,direct:true});await track(f.state);expect(fromReport.selection?.source).toBe('report');const result=await openReview({input:f.producer,compare:other,reference:f.reference,animation:'inspect'},{stateDir:f.state,direct:true});await track(f.state);expect(result.url).toBe(fromReport.url);const origin=new URL(result.url).origin,data=await (await fetch(origin+'/api/compare')).json();expect(data.animation).toBe('inspect');expect(data.binding.a.sourceHash).not.toBe(data.binding.b.sourceHash);const session=await (await fetch(origin+'/api/compare/session')).json();expect((await fetch(origin+'/api/compare/session',{method:'PUT',headers:{Origin:origin,'Content-Type':'application/json','X-Review-Capability':new URL(result.url).hash.slice(5)},body:JSON.stringify({...session,status:'approved'})})).status).toBe(200);const read=await cli(['feedback',f.producer,'--compare',other,'--reference',f.reference,'--animation','inspect'],f.state);expect(read.exit).toBe(0);expect(JSON.parse(read.stdout).binding).toEqual(data.binding);expect(JSON.parse(read.stdout).status).toBe('approved');},30000);
-test('managed worker idle expiry removes its own registration',async()=>{const f=await fixture(),result=await openReview({input:f.producer},{stateDir:f.state,idleMs:200,direct:true});await track(f.state);await new Promise(resolve=>setTimeout(resolve,500));await expect(fetch(result.url,{signal:AbortSignal.timeout(500)})).rejects.toThrow();expect(await records(f.state)).toHaveLength(0);},30000);
+test('managed worker idle expiry removes its own registration',async()=>{const f=await fixture(),result=await openReview({input:f.producer,viewOnly:true},{stateDir:f.state,idleMs:200,direct:true});await track(f.state);await new Promise(resolve=>setTimeout(resolve,500));await expect(fetch(result.url,{signal:AbortSignal.timeout(500)})).rejects.toThrow();expect(await records(f.state)).toHaveLength(0);},30000);
 
 test('copyable retrieval command quotes literal shell words including substitutions',async()=>{const words=["space value","apostrophe's",'$(printf injected)','`printf injected`','semi; colon','line\nbreak'];const proc=Bun.spawn(['sh','-c',"printf '%s\\0' "+words.map(shellWord).join(' ')],{stdout:'pipe',stderr:'pipe'});const text=await new Response(proc.stdout).text();expect(await proc.exited).toBe(0);expect(text.split('\0').slice(0,-1)).toEqual(words);});
 test('status reader cancels at a hard byte ceiling and times out a stalled body',async()=>{let pulls=0,cancelled=false;const response=new Response(new ReadableStream<Uint8Array>({pull(controller){pulls++;controller.enqueue(new Uint8Array(32768));},cancel(){cancelled=true;}}));await expect(readOpenStatus(response)).rejects.toThrow('64 KiB');expect(cancelled).toBe(true);expect(pulls).toBeLessThanOrEqual(4);let slowCancelled=false;const started=performance.now();await expect(readOpenStatus(new Response(new ReadableStream<Uint8Array>({cancel(){slowCancelled=true;}})),20)).rejects.toThrow('timeout');expect(slowCancelled).toBe(true);expect(performance.now()-started).toBeLessThan(500);});
-test('legacy empty claim is recovered after a short grace without an ownerless busy loop',async()=>{const f=await fixture(),inputs={input:f.producer},p=await loadOpenPackage(inputs),key=openKey(p,await openFingerprint());await mkdir(join(f.state,'open'),{recursive:true});await mkdir(join(f.state,'open',key+'.claim'));const result=await openReview(inputs,{stateDir:f.state,direct:true});await track(f.state);expect((await fetch(result.url)).status).toBe(200);expect((await readdir(join(f.state,'open'))).some(name=>name.endsWith('.claim')||name.endsWith('.claiming'))).toBe(false);},30000);
+test('legacy empty claim is recovered after a short grace without an ownerless busy loop',async()=>{const f=await fixture(),inputs={input:f.producer,viewOnly:true},p=await loadOpenPackage(inputs),key=openKey(p,await openFingerprint());await mkdir(join(f.state,'open'),{recursive:true});await mkdir(join(f.state,'open',key+'.claim'));const result=await openReview(inputs,{stateDir:f.state,direct:true});await track(f.state);expect((await fetch(result.url)).status).toBe(200);expect((await readdir(join(f.state,'open'))).some(name=>name.endsWith('.claim')||name.endsWith('.claiming'))).toBe(false);},30000);
 
 test('report selects dance among 32 actual clips; single worker/API, diagnostics, explicit reuse and feedback preserve exact identity',async()=>{
  const f=await fixture(),modelPath=join(f.producer,'build/skeleton.model.json'),model=JSON.parse(await readFile(modelPath,'utf8')),original=model.animations[0];
  model.animations=Array.from({length:32},(_,i)=>({...original,name:i===0?'idle':i===1?'dance':i===2?'--format':i===3?'--help':i===4?'--':i===5?'-h':`clip${i}`}));model.editorOrder.animations=model.animations.map((clip:{name:string})=>clip.name);await writeFile(modelPath,JSON.stringify(model));await writeFile(join(f.producer,'report.json'),JSON.stringify({spec:'rig-pose-report/1',animation:'dance',frameTimes:[0,.5,1]}));
- const cold=await cli(['open',f.producer,'--direct','--reference',f.reference],f.state);await track(f.state);expect(cold.exit).toBe(0);expect(cold.stderr).toContain('animation: dance (from report.json)');expect(cold.stdout.trim().split('\n')).toHaveLength(1);const origin=new URL(cold.stdout.trim()).origin;
+ const cold=await cli(['open',f.producer,'--direct','--view-only','--reference',f.reference],f.state);await track(f.state);expect(cold.exit).toBe(0);expect(cold.stderr).toContain('animation: dance (from report.json)');expect(cold.stdout.trim().split('\n')).toHaveLength(1);const origin=new URL(cold.stdout.trim()).origin;
  const data=await (await fetch(origin+'/api/review')).json();expect(data.initialAnimation).toBe('dance');expect(data.feedbackCatalog.animations).toHaveLength(32);expect(data.feedbackCatalog.animations[0].name).toBe('idle');
- const explicit=await cli(['open',f.producer,'--direct','--reference',f.reference,'--animation','dance'],f.state);expect(explicit.exit).toBe(0);expect(explicit.stdout).toBe(cold.stdout);expect(explicit.stderr).toContain('from --animation');
+ const explicit=await cli(['open',f.producer,'--direct','--view-only','--reference',f.reference,'--animation','dance'],f.state);expect(explicit.exit).toBe(0);expect(explicit.stdout).toBe(cold.stdout);expect(explicit.stderr).toContain('from --animation');
  const saved=await (await fetch(origin+'/api/session')).json();const submit=await fetch(origin+'/api/session',{method:'PUT',headers:{Origin:origin,'Content-Type':'application/json','X-Review-Capability':new URL(cold.stdout.trim()).hash.slice(5)},body:JSON.stringify({...saved,status:'approved',feedback:[{id:'retained',frameStart:0,frameEnd:1,target:{kind:'bone',name:'rigid'},category:'quality',summary:'Keep the reviewed interval',context:{animation:'dance'}}]})});expect(submit.status).toBe(200);
  const read=await cli(['feedback',f.producer,'--reference',f.reference,'--animation','dance'],f.state);expect(read.exit).toBe(0);expect(JSON.parse(read.stdout).status).toBe('approved');expect(JSON.parse(read.stdout).reviewedSource).toEqual(saved.reviewedSource);
  const sourcePaths=[modelPath,join(f.producer,'motion.json'),join(f.producer,'report.json'),f.reference],sourceBefore=await Promise.all(sourcePaths.map(path=>readFile(path)));
  for(const name of ['--format','--help','--','-h']){
-  const result=await cli(['open',f.producer,'--direct','--reference',f.reference,'--animation',name],f.state);await track(f.state);expect(result.exit).toBe(0);expect((await (await fetch(new URL(result.stdout.trim()).origin+'/api/review')).json()).initialAnimation).toBe(name);
+  const result=await cli(['open',f.producer,'--direct','--view-only','--reference',f.reference,'--animation',name],f.state);await track(f.state);expect(result.exit).toBe(0);expect((await (await fetch(new URL(result.stdout.trim()).origin+'/api/review')).json()).initialAnimation).toBe(name);
   const singleArgs=['feedback',f.producer,'--reference',f.reference,'--animation',name],plain=await cli(singleArgs,f.state),json=await cli([...singleArgs,'--format','json'],f.state),issue=await cli([...singleArgs,'--format','issue'],f.state);
   expect(plain.exit).toBe(0);expect(json.exit).toBe(0);expect(json.stdout).toBe(plain.stdout);expect(JSON.parse(plain.stdout).status).toBe('approved');expect(JSON.parse(plain.stdout).reviewedSource).toEqual(saved.reviewedSource);expect(JSON.parse(plain.stdout).feedback[0].context.animation).toBe('dance');expect(issue.exit).toBe(0);expect(issue.stdout.split('#### Feedback retained')).toHaveLength(2);
   const separated=await cli(['--',...singleArgs,'--format','json'],f.state);expect(separated.exit).toBe(0);expect(separated.stdout).toBe(plain.stdout);
@@ -81,8 +100,8 @@ test('review, check and feedback help skips positional inputs and owned values b
 
 
 test('launcher contract: every open refusal exits 1 with empty stdout and leads stderr with its OPEN_* name',async()=>{
- const f=await fixture(),missing=join(f.root,'missing','dir'),absent=join(f.root,'absent'),notes=join(f.root,'notes.txt'),empty=join(f.root,'empty'),demo=join(import.meta.dir,'../examples/demo');
- await writeFile(notes,'not a package\n');await mkdir(empty);
+ const f=await fixture(),missing=join(f.root,'missing','dir'),absent=join(f.root,'absent'),notes=join(f.root,'notes.txt'),empty=join(f.root,'empty'),noModel=join(f.root,'no-model');
+ await writeFile(notes,'not a package\n');await mkdir(empty);await mkdir(noModel);await writeFile(join(noModel,'motion.json'),'{}');
  const cfg=join(f.producer,'cfg','config.json'),outsideCfg=join(f.root,'outside-config.json');await mkdir(join(f.producer,'cfg'));await writeFile(cfg,'{}');await writeFile(outsideCfg,'{}');await symlink(outsideCfg,join(f.producer,'cfg','escape.json'));
  const cases:[string[],string][]=[
   [['open',missing,'--direct'],`OPEN_INPUT_MISSING ${missing}: `],
@@ -93,7 +112,10 @@ test('launcher contract: every open refusal exits 1 with empty stdout and leads 
   [['open',f.producer,'--compare',f.producer,'--direct'],'OPEN_REFERENCE_REQUIRED: '],
   [['open',f.producer,'--animation','absent','--direct'],'OPEN_ANIMATION_UNKNOWN "absent": model has no animation "absent"'],
   [['open',f.producer,'--compare',f.producer,'--reference',f.reference,'--animation','absent','--direct'],'OPEN_ANIMATION_UNKNOWN "absent": side a: model has no animation "absent"'],
-  [['open',demo,'--animation','idle','--direct'],'OPEN_ANIMATION_UNVALIDATABLE: validation unavailable'],
+  [['open',noModel,'--animation','idle','--direct'],'OPEN_ANIMATION_UNVALIDATABLE: validation unavailable'],
+  [['open',noModel,'--direct'],'OPEN_MODEL_UNAVAILABLE: package has no compiled model'],
+  [['open',noModel,'--view-only','--direct'],'OPEN_MODEL_UNAVAILABLE: package has no compiled model'],
+  [['open',f.producer,'--direct'],'OPEN_MODEL_UNAVAILABLE: MODELING_INPUT_UNAVAILABLE: config.json'],
   [['open',f.producer,'--port','4317','--direct'],'OPEN_OPTION_INVALID --port: Unknown open option --port'],
   [['open',f.producer,'--animation',' ','--direct'],'OPEN_OPTION_INVALID --animation: '],
   // Producer handoff (#101): flags are checked before loading, paths before any state is written.
@@ -112,16 +134,16 @@ test('launcher contract: every open refusal exits 1 with empty stdout and leads 
 
 test('launcher contract: success prints the URL line alone; stderr is diagnostic, control notice, retrieval in that order',async()=>{
  const f=await fixture(),url=/^http:\/\/127\.0\.0\.1:\d+\/\?input=[a-f0-9]{64}&handoff=[a-f0-9]{64}#cap=[a-f0-9]{64}\n$/;
- const plain=await cli(['open',f.producer,'--direct','--reference',f.reference],f.state);await track(f.state);
+ const plain=await cli(['open',f.producer,'--direct','--view-only','--reference',f.reference],f.state);await track(f.state);
  expect(plain.exit).toBe(0);expect(plain.stdout).toMatch(url);
  expect(plain.stderr.split('\n')).toEqual(['animation: inspect (from report.json)',expect.stringMatching(/^Review started; feedback: rig-review feedback /),'']);
- const controlled=await cli(['open',f.producer,'--direct','--reference',f.reference,'--control'],f.state);await track(f.state);
+ const controlled=await cli(['open',f.producer,'--direct','--view-only','--reference',f.reference,'--control'],f.state);await track(f.state);
  expect(controlled.exit).toBe(0);expect(controlled.stdout).toMatch(url);
  expect(controlled.stderr.split('\n')).toEqual(['animation: inspect (from report.json)','Inspection control enabled; query the current connected page with rig-review control and the same inputs.',expect.stringMatching(/^Review started; feedback: rig-review feedback /),'']);
 },30000);
 
 test('launcher contract with --config: the URL line alone, the same inputs reuse the same URL, retrieval carries the flag and binds the handoff',async()=>{
- const f=await fixture(),cfg=join(f.producer,'cfg','config.json');await mkdir(join(f.producer,'cfg'));await writeFile(cfg,JSON.stringify({key:'k'}));
+ const f=await fixture();await installProducer(f.root);const cfg=await addCompleteHandoff(f.producer,'cfg','k');
  const url=/^http:\/\/127\.0\.0\.1:\d+\/\?input=[a-f0-9]{64}&handoff=[a-f0-9]{64}#cap=[a-f0-9]{64}\n$/;
  const first=await cli(['open',f.producer,'--direct','--config',cfg],f.state);await track(f.state);
  expect(first.exit).toBe(0);expect(first.stdout).toMatch(url);
@@ -132,6 +154,67 @@ test('launcher contract with --config: the URL line alone, the same inputs reuse
  const bound=await cli(['feedback',f.producer,'--config',cfg],f.state),plain=await cli(['feedback',f.producer],f.state);
  expect(bound.exit).toBe(0);expect(JSON.parse(bound.stdout).reviewedSource).toEqual(data.reviewedSource);expect(JSON.parse(plain.stdout).reviewedSource.handoff).toBeUndefined();
  // Changed config bytes: a different instance and a pending session.
- await writeFile(cfg,JSON.stringify({key:'changed'}));const changed=await cli(['open',f.producer,'--direct','--config',cfg],f.state);await track(f.state);
+ await writeFile(cfg,JSON.stringify(validHandoffConfig('changed'),null,1));const changed=await cli(['open',f.producer,'--direct','--config',cfg],f.state);await track(f.state);
  expect(changed.exit).toBe(0);expect(changed.stdout).not.toBe(first.stdout);expect((await (await fetch(new URL(changed.stdout.trim()).origin+'/api/session')).json()).status).toBe('pending');
+},30000);
+
+test('#305: open verifies compiled model load and producer handoff readiness before spawning or reusing a worker',async()=>{
+ const f=await fixture();await installProducer(f.root);
+ // 1. Package with no compiled model refuses OPEN_MODEL_UNAVAILABLE (even with --view-only) and spawns no worker.
+ const noModelDir=join(f.root,'no-model-pkg');await mkdir(noModelDir);await writeFile(join(noModelDir,'review.json'),JSON.stringify({schema:'rig-review/1',id:'nm',title:'No model',revision:'1'}));
+ for(const extra of [[],['--view-only']]){
+  const res=await cli(['open',noModelDir,'--direct',...extra],f.state);
+  expect(res.exit).toBe(1);expect(res.stdout).toBe('');expect(res.stderr).toStartWith('OPEN_MODEL_UNAVAILABLE: package has no compiled model');
+ }
+ expect(await readdir(f.root)).not.toContain('state');
+
+ // 2. Package with a compiled model whose page PNG is undecodable refuses OPEN_MODEL_UNAVAILABLE (even with --view-only).
+ const brokenModelDir=join(f.root,'broken-model-pkg');await cp(f.producer,brokenModelDir,{recursive:true});
+ await writeFile(join(brokenModelDir,'build/rigid.png'),'not-a-valid-png-image');
+ for(const extra of [[],['--view-only']]){
+  const res=await cli(['open',brokenModelDir,'--direct',...extra],f.state);
+  expect(res.exit).toBe(1);expect(res.stdout).toBe('');expect(res.stderr).toStartWith('OPEN_MODEL_UNAVAILABLE: ');
+ }
+ expect(await readdir(f.root)).not.toContain('state');
+
+ // 3. Package with a valid model and a handoff gap refuses OPEN_MODEL_UNAVAILABLE without --view-only.
+ const noHandoffRes=await cli(['open',f.producer,'--direct'],f.state);
+ expect(noHandoffRes.exit).toBe(1);expect(noHandoffRes.stdout).toBe('');
+ expect(noHandoffRes.stderr).toStartWith('OPEN_MODEL_UNAVAILABLE: MODELING_INPUT_UNAVAILABLE: config.json');
+
+ // 4. Package with a declared or partially-present handoff with a gap refuses OPEN_MODEL_UNAVAILABLE even WITH --view-only.
+ const partialDir=join(f.root,'partial-handoff-pkg');await cp(f.producer,partialDir,{recursive:true});
+ await writeFile(join(partialDir,'config.json'),JSON.stringify(validHandoffConfig(),null,1));
+ for(const extra of [[],['--view-only']]){
+  const res=await cli(['open',partialDir,'--direct',...extra],f.state);
+  expect(res.exit).toBe(1);expect(res.stdout).toBe('');
+  expect(res.stderr).toStartWith('OPEN_MODEL_UNAVAILABLE: MODELING_INPUT_UNAVAILABLE: parts out');
+ }
+
+ // 5. Package with a valid model and no handoff opened with --view-only succeeds and reports neutral view-only status with no MODELING_* error string.
+ const viewOnlyRes=await cli(['open',f.producer,'--direct','--view-only'],f.state);await track(f.state);
+ expect(viewOnlyRes.exit).toBe(0);
+ const viewOnlyOrigin=new URL(viewOnlyRes.stdout.trim()).origin;
+ const rebuildViewOnly=await (await fetch(viewOnlyOrigin+'/api/rebuild')).json();
+ expect(rebuildViewOnly).toMatchObject({available:false,viewOnly:true,handoff:null,reason:'view only, no producer handoff'});
+ expect(handoffText(rebuildViewOnly)).toEqual({text:'view only, no producer handoff',error:false});
+ expect(JSON.stringify(rebuildViewOnly)).not.toContain('MODELING_');
+ // Calling open without --view-only while the --view-only worker is alive still refuses before reusing it.
+ const refusedWithoutFlag=await cli(['open',f.producer,'--direct'],f.state);
+ expect(refusedWithoutFlag.exit).toBe(1);expect(refusedWithoutFlag.stdout).toBe('');
+ expect(refusedWithoutFlag.stderr).toStartWith('OPEN_MODEL_UNAVAILABLE: MODELING_INPUT_UNAVAILABLE: config.json');
+
+ // 6. Package with a valid model and complete handoff opens without --view-only; corrupting the model page afterwards refuses on reuse check.
+ const fullDir=join(f.root,'full-handoff-pkg');await cp(f.producer,fullDir,{recursive:true});
+ await addCompleteHandoff(fullDir,'','full');
+ const fullOpen=await cli(['open',fullDir,'--direct'],f.state);await track(f.state);
+ expect(fullOpen.exit).toBe(0);
+ const fullOrigin=new URL(fullOpen.stdout.trim()).origin;
+ const rebuildFull=await (await fetch(fullOrigin+'/api/rebuild')).json();
+ expect(rebuildFull.available).toBe(true);expect(rebuildFull.reason).toBeNull();
+ // Corrupt page image in place (keeping mtime/size different or same, openReview verifies model load before worker reuse).
+ await writeFile(join(fullDir,'build/rigid.png'),'corrupted-after-start');
+ const brokenReuse=await cli(['open',fullDir,'--direct'],f.state);
+ expect(brokenReuse.exit).toBe(1);expect(brokenReuse.stdout).toBe('');
+ expect(brokenReuse.stderr).toStartWith('OPEN_MODEL_UNAVAILABLE: ');
 },30000);
