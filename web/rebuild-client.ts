@@ -40,12 +40,14 @@ const number=(read:ChestFieldReader,id:string)=>{const raw=(read(id)?.value??'')
  * Rows with a centre x are designated; a row with equal semi-axes and no clip is the config's circle, else the 32-sample
  * polygon. With the config's seed (#315), a row whose fields still equal what the config seeded sends the config's own
  * polygon verbatim (an untouched Apply rebuilds the inspected rig), and a refused row left empty keeps its region as written.
+ * #317: the regions the rows do not show (`seed.kept`) follow as written, in their config order; one that cannot be sent
+ * back as written, a row left empty over such a region, or two regions of one name refuse Apply by name.
  */
 export function designatedRegions(read:ChestFieldReader,seed:ChestSeed|null=null):{regions:RegionEntry[]}|{error:string} {
  const regions:RegionEntry[]=[];
  for(const row of chestRegionRows){
   const seeded=seed?.rows.find(r=>r.row===row);
-  if(number(read,chestRowId(row,'cx'))===null){if(seeded?.refusal)regions.push(seeded.region);continue;}
+  if(number(read,chestRowId(row,'cx'))===null){if(seeded?.refusal){if(seeded.unsendable)return {error:seeded.refusal};regions.push(seeded.region);}continue;}
   if(seeded&&!seeded.refusal&&seeded.region.shape==='polygon'&&chestRegionFields.every(f=>(read(chestRowId(row,f))?.value??'').trim()===(seeded.fields[chestRowId(row,f)]??''))){regions.push(seeded.region);continue;}
   const name=(read(chestRowId(row,'name'))?.value??'').trim(),bone=(read(chestRowId(row,'bone'))?.value??'').trim(),tag=`row ${row+1}`;
   if(!name)return {error:`REBUILD_REGION_INCOMPLETE: ${tag} name`};if(!bone)return {error:`REBUILD_REGION_INCOMPLETE: ${name} bone`};
@@ -56,7 +58,10 @@ export function designatedRegions(read:ChestFieldReader,seed:ChestSeed|null=null
   if(ax===ay&&values.clip===null)regions.push({name,shape:'circle',cx,cy,r:ax,bone,spacing,band});
   else regions.push({name,bone,shape:'polygon',points:ellipsePolygon([cx,cy],[ax,ay],32,values.clip===null?undefined:clip),spacing,band});
  }
- return regions.length?{regions}:{error:'REBUILD_REGION_INCOMPLETE: no region has a centre'};
+ if(!regions.length)return {error:'REBUILD_REGION_INCOMPLETE: no region has a centre'};
+ for(const kept of seed?.kept??[]){if(kept.refusal)return {error:kept.refusal};regions.push(kept.region);}
+ const names=new Set<string>();for(const r of regions){if(names.has(r.name))return {error:`REBUILD_REGION_DUPLICATE: ${r.name} (two regions of the chest part carry this name)`};names.add(r.name);}
+ return {regions};
 }
 
 /** The contour part to rebuild: the one whose regions name the first designated bone, else the only one, else none. */
@@ -88,9 +93,21 @@ export function landmarksRequest(status:Pick<RebuildStatusView,'parts'|'contour'
 }
 
 /** #315: one config region as a chest row: its field values, the region as the producer reads it, or the refusal that names it. */
-export interface ChestSeedRow {row:number;fields:Record<string,string>;region:RegionEntry;refusal:string|null}
-/** #315: what the config seeds the chest editor with: the chest part, its rows, and every region refused by name. */
-export interface ChestSeed {part:string|null;rows:ChestSeedRow[];refusals:string[]}
+export interface ChestSeedRow {row:number;fields:Record<string,string>;region:RegionEntry;refusal:string|null;unsendable?:true}
+/** #317: a config region beyond the editor's rows: sent back as written, or the refusal that names why it cannot be. */
+export interface ChestKeptRegion {region:RegionEntry;refusal:string|null}
+/** #315: what the config seeds the chest editor with: the chest part, its rows, every region refused by name, and (#317) the regions the rows do not show. */
+export interface ChestSeed {part:string|null;rows:ChestSeedRow[];refusals:string[];kept:ChestKeptRegion[]}
+const REGION_KEYS={circle:'band,bone,cx,cy,name,r,shape,spacing',polygon:'band,bone,name,points,shape,spacing'} as const;
+/** #317: why a config region cannot go back to the producer as written (the server's key and shape rule), or null. */
+function notSendable(value:unknown,index:number):string|null {
+ const v=value as Record<string,unknown>,named=!!v&&typeof v==='object'&&typeof v.name==='string'&&v.name?v.name:`regions[${index}]`;
+ if(!v||typeof v!=='object'||Array.isArray(v))return `CHEST_REGION_NOT_KEPT: ${named} (not an object; Apply would drop it)`;
+ const shape=v.shape,keys=Object.keys(v).sort().join(',');
+ if(shape!=='circle'&&shape!=='polygon')return `CHEST_REGION_NOT_KEPT: ${named} (shape ${JSON.stringify(shape??null)}; Apply sends back circle and polygon regions only)`;
+ if(keys!==REGION_KEYS[shape])return `CHEST_REGION_NOT_KEPT: ${named} (${shape} with keys ${keys}; Apply sends back ${REGION_KEYS[shape]} only)`;
+ return null;
+}
 const readable=(r:unknown)=>{const v=r as Record<string,unknown>;return !!v&&typeof v==='object'&&(v.shape==='circle'||(v.shape==='polygon'&&Array.isArray(v.points)&&fitChestEllipse(v.points as [number,number][]).ok));};
 /**
  * The chest part (#315): the first contour part with a region the editor can read (a circle or an axis-aligned ellipse
@@ -102,7 +119,7 @@ function chestPart(status:Pick<RebuildStatusView,'parts'|'contour'>){
 }
 /** The config's regions as chest rows (at most two), read by measurement, never by point count. Pure: Apply recomputes it. */
 export function chestSeed(status:Pick<RebuildStatusView,'parts'|'contour'>):ChestSeed {
- const part=chestPart(status),entry=part?status.contour[part.name]:undefined;if(!part||!entry)return {part:null,rows:[],refusals:[]};
+ const part=chestPart(status),entry=part?status.contour[part.name]:undefined;if(!part||!entry)return {part:null,rows:[],refusals:[],kept:[]};
  const contour=(entry.contour??{}) as Record<string,unknown>;
  let regions:readonly unknown[]=part.regions;
  if(!regions.length&&contour.bust&&typeof contour.bust==='object'){try{regions=deriveBust(parseBustSpec(contour.bust)).regions;}catch{/* invalid bust spec leaves regions empty */}}
@@ -114,7 +131,7 @@ export function chestSeed(status:Pick<RebuildStatusView,'parts'|'contour'>):Ches
    for(const [field,key] of [['cx','cx'],['cy','cy'],['ax','r'],['ay','r']] as const)if(r[key]!==undefined)fields[id(field)]=String(r[key]);
    rows.push({row,fields,region:r as unknown as RegionEntry,refusal:null});return;
   }
-  if(r.shape!=='polygon'||!Array.isArray(r.points))return;
+  if(r.shape!=='polygon'||!Array.isArray(r.points)){rows.push({row,fields:{},region:value as RegionEntry,refusal:notSendable(value,row)??`CHEST_REGION_NOT_KEPT: ${String(r?.name??`regions[${row}]`)} (polygon without points)`,unsendable:true});return;}
   const points=r.points as [number,number][],region:RegionEntry={name:String(r.name),bone:String(r.bone),shape:'polygon',points,spacing:r.spacing as number,band:r.band as number};
   const fit=fitChestEllipse(points);
   if(!fit.ok){
@@ -128,7 +145,9 @@ export function chestSeed(status:Pick<RebuildStatusView,'parts'|'contour'>):Ches
   if(fit.clip!==undefined)fields[id('clip')]=String(fit.clip);
   rows.push({row,fields,region,refusal:null});
  });
- return {part:part.name,rows,refusals:rows.flatMap(r=>r.refusal?[r.refusal]:[])};
+ // #317: only regions the config writes are kept; regions derived from contour.bust are never sent back.
+ const kept:ChestKeptRegion[]=regions===part.regions?regions.slice(chestRegionRows.length).map((value,i)=>({region:value as RegionEntry,refusal:notSendable(value,chestRegionRows.length+i)})):[];
+ return {part:part.name,rows,refusals:[...rows,...kept].flatMap(r=>r.refusal?[r.refusal]:[]),kept};
 }
 
 /**
