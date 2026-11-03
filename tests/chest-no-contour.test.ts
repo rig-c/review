@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {bindChestEditor} from '../web/chest-editor.ts';
 import {NO_CONTOUR_CODE,noContourReason,outcomeLine,reviewerRefusal,type RebuildStatusView} from '../web/rebuild-client.ts';
-import {tr} from '../web/i18n.ts';
+import {bindDomI18n,setLanguagePreference,tr} from '../web/i18n.ts';
 import {configMeshes,contourParts} from '../src/rebuild.ts';
 
 // #342: a config whose meshes are all `grid` entries is a valid handoff with nothing for the chest tools to rebuild.
@@ -124,5 +124,51 @@ test('#342 both pages gate the chest editor on the same reason',async()=>{
   const source=await readFile(new URL(file,import.meta.url),'utf8');
   expect(source).toMatch(/noContourReason\((rebuildStatus|status)\)/);
   expect(source).toMatch(/chestEditor\?\.unavailable\(noContour\?\.text\s*\?\?\s*null\)/);
+ }
+});
+
+test('#342 aria-description follows the language: on a grid-only rig the toggle and Apply read the ko catalog, then en after a switch',()=>{
+ // A DOM whose attributes are real attributes and whose MutationObserver delivers only what its attributeFilter names,
+ // as a browser does; the i18n binding and the chest editor both observe through it.
+ type Obs={cb:(records:unknown[])=>void;opts:{attributeFilter?:string[]}|null};
+ const observers:Obs[]=[],els=new Map<string,any>();
+ const makeEl=(id:string)=>{
+  const attrs=new Map<string,string>();
+  const notify=(name:string)=>{for(const o of observers)if(o.opts&&(!o.opts.attributeFilter||o.opts.attributeFilter.includes(name)))o.cb([{type:'attributes',target:e,attributeName:name}]);};
+  const e:any={id,nodeType:1,tagName:'BUTTON',className:'',parentElement:null,value:'',textContent:'',hidden:id==='chest-editor-bar',disabled:false,dataset:{},listeners:new Map<string,Function[]>(),classList:{toggle:()=>{},contains:()=>false},
+   get title(){return attrs.get('title')??'';},set title(v:string){attrs.set('title',v);notify('title');},
+   setAttribute(k:string,v:string){attrs.set(k,v);notify(k);},getAttribute(k:string){return attrs.get(k)??null;},removeAttribute(k:string){attrs.delete(k);notify(k);},
+   addEventListener(k:string,fn:Function){this.listeners.set(k,[...(this.listeners.get(k)??[]),fn]);},removeEventListener(){},dispatch(k:string,ev:any={}){for(const fn of this.listeners.get(k)??[])fn(ev);},
+   querySelectorAll:()=>[],closest:()=>null,getBoundingClientRect:()=>({left:0,top:0}),setPointerCapture(){},hasPointerCapture:()=>false,releasePointerCapture(){}};
+  els.set(id,e);return e;
+ };
+ const getEl=(id:string)=>els.get(id)??makeEl(id);
+ getEl('bust-mode').value='circles';
+ const root:any={nodeType:1,tagName:'HTML',lang:'en',className:'',parentElement:null,getAttribute:()=>null,querySelectorAll:()=>[getEl('chest-edit'),getEl('bust-apply')]};
+ const doc:any={documentElement:root,getElementById:getEl,activeElement:null,addEventListener(){},removeEventListener(){},querySelectorAll:()=>[]};
+ root.ownerDocument=doc;
+ const prev=[(globalThis as any).document,(globalThis as any).window,(globalThis as any).MutationObserver];
+ (globalThis as any).document=doc;(globalThis as any).window={addEventListener(){},removeEventListener(){}};
+ (globalThis as any).MutationObserver=class{o:Obs;constructor(cb:(r:unknown[])=>void){this.o={cb,opts:null};observers.push(this.o);}observe(_t:unknown,opts:Obs['opts']){this.o.opts=opts;}disconnect(){this.o.opts=null;}};
+ try{
+  setLanguagePreference('en');bindDomI18n(doc);
+  const editor=bindChestEditor({pane:getEl('rig-pane'),canvas:getEl('rig-overlay'),project:()=>null,mapping:()=>({available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: no compiled model drawn'}) as any,changed(){},download(){},apply(){},reset(){},message(){},inspector:()=>'rig'});
+  try{
+   const reason=noContourReason(statusOf(gridOnly))!.text,ko=tr(reason,'ko');
+   expect(ko).not.toBe(reason);
+   // Set ko, then the reason arrives (the page loads the status after the language is chosen).
+   setLanguagePreference('ko');
+   editor.unavailable(reason);
+   for(const id of ['chest-edit','bust-apply']){expect(getEl(id).getAttribute('aria-description')).toBe(ko);expect(getEl(id).getAttribute('title')).toBe(ko);}
+   // Switch to en: both update.
+   setLanguagePreference('en');
+   for(const id of ['chest-edit','bust-apply']){expect(getEl(id).getAttribute('aria-description')).toBe(reason);expect(getEl(id).getAttribute('title')).toBe(reason);}
+   // And back to ko on a live switch, with the reason already shown.
+   setLanguagePreference('ko');
+   for(const id of ['chest-edit','bust-apply'])expect(getEl(id).getAttribute('aria-description')).toBe(ko);
+  }finally{editor.dispose();}
+ }finally{
+  setLanguagePreference('en');
+  [(globalThis as any).document,(globalThis as any).window,(globalThis as any).MutationObserver]=prev;
  }
 });

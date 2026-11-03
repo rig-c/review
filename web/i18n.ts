@@ -530,7 +530,8 @@ const textNodeSource = new WeakMap<Node, { en: string; lastApplied: string }>();
 const elementHintSource = new WeakMap<Element, { enHtml: string; lastAppliedHtml: string }>();
 const elementAttrSource = new WeakMap<Element, Map<string, { en: string; lastApplied: string }>>();
 
-const TRANSLATED_ATTRS = ['aria-label', 'title', 'placeholder', 'aria-valuetext'] as const;
+// #342: `aria-description` carries a disabled control's reason (the chest tools, unavailable layouts), so it follows the language too.
+const TRANSLATED_ATTRS = ['aria-label', 'title', 'placeholder', 'aria-valuetext', 'aria-description'] as const;
 
 function normalizeHtmlKey(html: string): string {
   return html.replace(/\s+/g, ' ').trim();
