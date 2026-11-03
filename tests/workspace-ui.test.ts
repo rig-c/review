@@ -112,7 +112,10 @@ const indexHtml=()=>readFile(new URL('../web/index.html',import.meta.url),'utf8'
 const between=(html:string,start:string,end:string)=>{const a=html.indexOf(start),b=html.indexOf(end,a);if(a<0||b<a)throw new Error(`index.html region missing: ${start} … ${end}`);return html.slice(a,b+end.length);};
 test('the Inspector has two sections, Setup and Animate; the header switch is the only section selector and none sits inside the Inspector',async()=>{
  const html=await indexHtml(),inspector=between(html,'<section class="inspector"','</main>');
- expect(inspector).not.toMatch(/data-inspector="/);expect(inspector).not.toContain('role="tablist"');expect(inspector).not.toContain('role="tab"');
+ expect(inspector).not.toMatch(/data-inspector="/);
+ // The only tablists inside are the two block rows (#308): they switch blocks within a section, never the section.
+ expect([...inspector.matchAll(/<[a-z]+[^>]*role="tablist"[^>]*>/g)].map(m=>m[0])).toEqual(['<nav class="block-row" role="tablist" aria-label="Setup blocks">','<nav class="block-row" role="tablist" aria-label="Animate blocks">']);
+ const tabs=[...inspector.matchAll(/<[a-z]+[^>]*role="tab"[^>]*>/g)].map(m=>m[0]);expect(tabs.length).toBe(18);for(const tab of tabs)expect(tab).toMatch(/ data-block-target="[a-z-]+"/);
  const selectors=[...html.matchAll(/<button type="button" data-mode="([^"]+)" data-inspector="([^"]+)" aria-controls="([^"]+)"[^>]*>([^<]+)<\/button>/g)].map(m=>m.slice(1));
  expect(selectors).toEqual([['rig','rig','inspector-rig','Setup'],['playback','playback','inspector-playback','Animate']]);
  expect(html.match(/data-inspector="/g)?.length).toBe(2);expect(between(html,'<div class="mode-switch"','</div>').match(/data-inspector="/g)?.length).toBe(2);

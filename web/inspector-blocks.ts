@@ -1,8 +1,12 @@
-/** Inspector block row: the sticky row of buttons at the top of each Inspector section (index.html
- * `.block-row`). A button scrolls its block into view inside the section (the section is the Inspector's
- * scroll container) and marks it `aria-current`; the active block then follows scrolling. The active block
- * per section is the only thing this adds to the inspection draft (its `ui` record, key `inspectorBlocks`);
- * the scroll offset itself stays with the Inspector scroll memory. */
+/** Inspector block row: the sticky row at the top of each Inspector section (index.html `.block-row`) is a WAI-ARIA
+ * tablist. Each `role=tab` button owns the `role=tabpanel` block its `aria-controls` names; selecting it shows that
+ * block alone and hides the others with `hidden`, so one block is on screen at a time and nothing scrolls between them.
+ * A tab may carry blocks that belong to its group (`data-block-includes`, e.g. Transport's Angle block): those keep
+ * their own `hidden` for their own reasons and are hidden with the group by `data-block-hidden` instead. Arrow keys,
+ * Home and End move between tabs and select as they go (the pattern compare.html's Inspector tabs follow).
+ * Hiding writes nothing inside a block, so a hidden block keeps whatever it held. Each block keeps its own scroll
+ * offset for the session; the section's saved offset stays with the Inspector scroll memory. The active tab per
+ * section is the only thing this adds to the inspection draft (its `ui` record, key `inspectorBlocks`). */
 export const inspectorBlocksKey='inspectorBlocks';
 export type ActiveBlocks=Record<string,string>;
 type DraftUI=Record<string,string|number|null>;
@@ -19,65 +23,72 @@ export function activeBlocksUI(state:ActiveBlocks):DraftUI {return {[inspectorBl
 /** The active blocks read back from a draft `ui` record. */
 export function restoreActiveBlocksUI(ui:DraftUI):ActiveBlocks {return parseActiveBlocks(ui[inspectorBlocksKey]);}
 
-export interface BlockObserver {observe(target:Element):void;disconnect():void}
 export interface InspectorBlocksOptions {
- /** Sections carrying `data-inspector-panel`, each with a `.block-row` first child. */
+ /** Sections carrying `data-inspector-panel`, each with a `.block-row` first child (or a child panel that has one). */
  sections:HTMLElement[];
- /** Creates the scroll-follow observer for one section; defaults to IntersectionObserver rooted at the section. */
- observer?:(root:HTMLElement,changed:()=>void)=>BlockObserver|null;
- /** Called when a click or scrolling changes a section's active block. */
+ /** Called when a click or a key changes a section's active tab. */
  changed?:()=>void;
- reducedMotion?:()=>boolean;now?:()=>number;
 }
-export interface InspectorBlocks {state():ActiveBlocks;restore(state:ActiveBlocks):void;select(section:string,id:string):void;refresh():void;dispose():void}
-/** Gap kept between the sticky row and a block scrolled under it, in CSS pixels. */
-export const blockScrollGap=6;
-/** How long a programmatic scroll (click or restore) holds the chosen block against scroll-follow, unless the user scrolls first. */
-const holdMs=1200;
+export interface InspectorBlocks {state():ActiveBlocks;restore(state:ActiveBlocks):void;select(section:string,id:string):void;dispose():void}
+
+interface Tab {button:HTMLButtonElement;id:string;panel:HTMLElement;included:HTMLElement[]}
+interface Row {scrollRoot:HTMLElement;row:HTMLElement;tabs:Tab[];scrolls:Map<string,number>}
+const isRow=(node:Element)=>node.classList.contains('block-row');
 
 export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlocks {
- const now=options.now??(()=>Date.now()),reduced=options.reducedMotion??(()=>typeof matchMedia==='function'&&matchMedia('(prefers-reduced-motion: reduce)').matches);
- const makeObserver=options.observer??((root,changed)=>typeof IntersectionObserver==='function'?new IntersectionObserver(changed,{root,threshold:[0,.25,.5,.75,1]}):null);
- let ready=false;const disposers:(()=>void)[]=[],state:ActiveBlocks={},rows=new Map<string,{section:HTMLElement;scrollRoot:HTMLElement;row:HTMLElement;buttons:HTMLButtonElement[];hold:number;follow:()=>void}>();
- const targetOf=(scrollRoot:HTMLElement,button:HTMLButtonElement)=>{const id=button.dataset.blockTarget??'';const node=id?scrollRoot.ownerDocument.getElementById(id):null;return node&&scrollRoot.contains(node)?node:null;};
- const resolveId=(entry:{buttons:HTMLButtonElement[]},id:string)=>entry.buttons.some(b=>b.dataset.blockTarget===id)?id:(id==='transport'&&entry.buttons.some(b=>b.dataset.blockTarget==='motion-tools')?'motion-tools':id);
- const mark=(name:string,rawId:string)=>{const entry=rows.get(name);if(!entry)return false;const id=resolveId(entry,rawId);if(!entry.buttons.some(button=>button.dataset.blockTarget===id))return false;for(const button of entry.buttons){if(button.dataset.blockTarget===id)button.setAttribute('aria-current','true');else button.removeAttribute('aria-current');}const before=state[name];state[name]=id;if(before!==id&&ready)options.changed?.();return true;};
+ const disposers:(()=>void)[]=[],state:ActiveBlocks={},rows=new Map<string,Row>();
+ // A saved id from before #258 named the Transport block by its old id.
+ const resolve=(entry:Row,id:string)=>entry.tabs.find(tab=>tab.id===id)??(id==='transport'?entry.tabs.find(tab=>tab.id==='motion-tools'):undefined);
+ /** Show one tab's panel and hide the rest. Writes only visibility and tab state, and only what changes. */
+ const show=(entry:Row,active:Tab)=>{
+  for(const tab of entry.tabs){
+   const on=tab===active;
+   if(tab.button.getAttribute('aria-selected')!==String(on))tab.button.setAttribute('aria-selected',String(on));
+   if(tab.button.tabIndex!==(on?0:-1))tab.button.tabIndex=on?0:-1;
+   if(tab.panel.hidden===on)tab.panel.hidden=!on;
+   for(const node of tab.included)if(node.hasAttribute('data-block-hidden')===on)node.toggleAttribute('data-block-hidden',!on);
+  }
+ };
+ /** Select a tab. A user's selection also swaps the scroll offset: the panel left keeps where it was, the one shown opens where it was left. */
+ const choose=(name:string,rawId:string,user:boolean)=>{
+  const entry=rows.get(name);if(!entry)return false;const tab=resolve(entry,rawId);if(!tab)return false;
+  const before=state[name];if(before===tab.id)return true;
+  if(user&&before!==undefined){entry.scrolls.set(before,entry.scrollRoot.scrollTop);const next=entry.scrolls.get(tab.id)??0;show(entry,tab);if(entry.scrollRoot.scrollTop!==next)entry.scrollRoot.scrollTop=next;}
+  else show(entry,tab);
+  state[name]=tab.id;if(before!==undefined)options.changed?.();return true;
+ };
  for(const section of options.sections){
   const name=section.dataset.inspectorPanel??'';if(!name)continue;
-  const directRow=[...section.children].find(node=>(node as HTMLElement).classList.contains('block-row')) as HTMLElement|undefined;
-  const nestedRoot=directRow?undefined:[...section.children].find(node=>[...((node as HTMLElement).children??[])].some(c=>(c as HTMLElement).classList.contains('block-row'))) as HTMLElement|undefined;
-  const scrollRoot=nestedRoot??section;
-  const row=directRow??([...(nestedRoot?.children??[])].find(node=>(node as HTMLElement).classList.contains('block-row')) as HTMLElement|undefined);
-  if(!row)continue;
-  const buttons=[...row.querySelectorAll<HTMLButtonElement>('button[data-block-target]')].filter(button=>targetOf(scrollRoot,button));if(!buttons.length)continue;
-  const entry={section,scrollRoot,row,buttons,hold:0,follow:()=>{}};rows.set(name,entry);
-  // Scroll-follow: the active block is the last one whose top has reached the row; at the end of the
-  // section it is the last visible one, so a short closing block can still become active.
-  entry.follow=()=>{
-   if(entry.hold>now()||section.hidden)return;const top=scrollRoot.getBoundingClientRect().top+row.getBoundingClientRect().height+blockScrollGap*4;
-   const visible=buttons.map(button=>({button,node:targetOf(scrollRoot,button)})).filter((item):item is {button:HTMLButtonElement;node:HTMLElement}=>!!item.node&&!item.node.hidden);if(!visible.length)return;
-   let current=visible[0]!;for(const item of visible)if(item.node.getBoundingClientRect().top<=top)current=item;
-   if(scrollRoot.scrollHeight-scrollRoot.clientHeight>0&&scrollRoot.scrollTop>=scrollRoot.scrollHeight-scrollRoot.clientHeight-2){const bottom=scrollRoot.getBoundingClientRect().bottom;for(const item of visible)if(item.node.getBoundingClientRect().top<bottom)current=item;}
-   mark(name,current.button.dataset.blockTarget!);
+  // In Animate the row heads the blocks panel beside the timeline; that panel is what scrolls.
+  const children=[...section.children],directRow=children.find(isRow) as HTMLElement|undefined;
+  const scrollRoot=directRow?section:children.find(node=>[...node.children].some(isRow)) as HTMLElement|undefined;if(!scrollRoot)continue;
+  const row=directRow??[...scrollRoot.children].find(isRow) as HTMLElement;
+  const doc=section.ownerDocument,inside=(id:string)=>{const node=id?doc.getElementById(id):null;return node&&scrollRoot.contains(node)?node:null;};
+  const tabs:Tab[]=[];
+  for(const button of row.querySelectorAll<HTMLButtonElement>('button[data-block-target]')){
+   const id=button.dataset.blockTarget??'',panel=inside(id);if(!panel)continue;
+   const included=(button.dataset.blockIncludes??'').split(' ').map(inside).filter((node):node is HTMLElement=>!!node);
+   tabs.push({button,id,panel,included});
+  }
+  if(!tabs.length)continue;
+  const entry:Row={scrollRoot,row,tabs,scrolls:new Map()};rows.set(name,entry);
+  const tabOf=(event:Event)=>{const button=(event.target as Element|null)?.closest?.('button[data-block-target]');return tabs.find(tab=>tab.button===button);};
+  const click=(event:Event)=>{const tab=tabOf(event);if(tab)choose(name,tab.id,true);};
+  const key=(event:KeyboardEvent)=>{
+   const tab=tabOf(event);if(!tab)return;const index=tabs.indexOf(tab);
+   const next=event.key==='ArrowRight'?(index+1)%tabs.length:event.key==='ArrowLeft'?(index+tabs.length-1)%tabs.length:event.key==='Home'?0:event.key==='End'?tabs.length-1:null;
+   if(next===null)return;event.preventDefault();const target=tabs[next]!;choose(name,target.id,true);target.button.focus();
   };
-  const click=(event:Event)=>{const button=(event.target as Element|null)?.closest?.('button[data-block-target]') as HTMLButtonElement|null;if(!button||!buttons.includes(button))return;select(name,button.dataset.blockTarget!);};
-  const release=()=>{entry.hold=0;};const intent=(event:Event)=>{if(!row.contains(event.target as Node))release();};
-  row.addEventListener('click',click);for(const type of ['wheel','touchstart','keydown','pointerdown'])scrollRoot.addEventListener(type,intent,{passive:true});scrollRoot.addEventListener('scrollend',release);
-  const observer=makeObserver(scrollRoot,()=>entry.follow());if(observer)for(const button of buttons)observer.observe(targetOf(scrollRoot,button)!);
-  disposers.push(()=>{row.removeEventListener('click',click);for(const type of ['wheel','touchstart','keydown','pointerdown'])scrollRoot.removeEventListener(type,intent);scrollRoot.removeEventListener('scrollend',release);observer?.disconnect();});
-  mark(name,buttons[0]!.dataset.blockTarget!);
- }
- ready=true;
- /** Scroll the block so its top sits just under the sticky row, then mark it. */
- function select(name:string,rawId:string):void {
-  const entry=rows.get(name);if(!entry)return;const id=resolveId(entry,rawId);const button=entry.buttons.find(b=>b.dataset.blockTarget===id);const node=button&&targetOf(entry.scrollRoot,button);if(!node)return;
-  const {scrollRoot,row}=entry,offset=node.getBoundingClientRect().top-scrollRoot.getBoundingClientRect().top-row.getBoundingClientRect().height-blockScrollGap,top=Math.max(0,scrollRoot.scrollTop+offset);
-  entry.hold=now()+holdMs;scrollRoot.scrollTop=top;scrollRoot.scrollTo({top,behavior:reduced()?'auto':'smooth'});if(typeof scrollRoot.dispatchEvent==='function')scrollRoot.dispatchEvent(new Event('scroll'));mark(name,id);
+  row.addEventListener('click',click);row.addEventListener('keydown',key as EventListener);
+  disposers.push(()=>{row.removeEventListener('click',click);row.removeEventListener('keydown',key as EventListener);});
+  // The markup ships its first tab selected; binding makes the DOM agree with it whatever the markup said.
+  const first=tabs.find(tab=>tab.button.getAttribute('aria-selected')==='true')??tabs[0]!;show(entry,first);state[name]=first.id;
  }
  return {
-  state:()=>({...state}),select,
-  restore(saved){for(const [name,id]of Object.entries(saved)){const entry=rows.get(name);if(entry&&mark(name,id))entry.hold=now()+holdMs;}},
-  refresh(){for(const entry of rows.values())entry.follow();},
+  state:()=>({...state}),
+  select:(name,id)=>{choose(name,id,true);},
+  /** Restore saved tabs. The section's scroll offset is the workspace scroll memory's, so this does not touch it. */
+  restore(saved){for(const [name,id]of Object.entries(saved))choose(name,id,false);},
   dispose(){for(const dispose of disposers)dispose();disposers.length=0;rows.clear();},
  };
 }

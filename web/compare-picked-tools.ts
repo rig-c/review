@@ -463,7 +463,6 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       else if (currentInspector() === 'rig' || currentInspector() === 'playback') selectInspectorTab('view');
     }
     refreshAnimationInspection();
-    inspectorBlocks?.refresh();
     host.redrawOverlays(modeBoundaryChanged);
     host.saveDraft();
   }
