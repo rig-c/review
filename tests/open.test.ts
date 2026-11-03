@@ -217,4 +217,14 @@ test('#305: open verifies compiled model load and producer handoff readiness bef
  const brokenReuse=await cli(['open',fullDir,'--direct'],f.state);
  expect(brokenReuse.exit).toBe(1);expect(brokenReuse.stdout).toBe('');
  expect(brokenReuse.stderr).toStartWith('OPEN_MODEL_UNAVAILABLE: ');
+
+ // 7. A complete handoff whose config states no contour mesh opens: the handoff loads, and only the mesh rebuild
+ // refuses, on the page, by name.
+ const noContourDir=join(f.root,'no-contour-pkg');await cp(f.producer,noContourDir,{recursive:true});
+ const noContourCfg=await addCompleteHandoff(noContourDir,'','nocontour');
+ await writeFile(noContourCfg,JSON.stringify({key:'nocontour',meshes:{}},null,1));
+ const noContourOpen=await cli(['open',noContourDir,'--direct'],f.state);await track(f.state);
+ expect(noContourOpen.stderr).not.toContain('OPEN_MODEL_UNAVAILABLE');expect(noContourOpen.exit).toBe(0);
+ const rebuildNoContour=await (await fetch(new URL(noContourOpen.stdout.trim()).origin+'/api/rebuild')).json();
+ expect(rebuildNoContour.available).toBe(false);expect(rebuildNoContour.reason).toBe('REBUILD_INPUTS_UNAVAILABLE: the config states no contour mesh');
 },30000);
