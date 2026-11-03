@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.2](https://github.com/rig-c/review/compare/v1.4.1...v1.4.2) (2026-11-03)
+
+
+### Bug Fixes
+
+* **deps:** pin @rig-c/play 1.22.3, meshes stay on WebGL past the drawing-buffer grant ([#340](https://github.com/rig-c/review/issues/340)) ([50bf7e1](https://github.com/rig-c/review/commit/50bf7e1b2d3c36f269c42f6a90d1bf6980d72182))
+
 ## [1.4.1](https://github.com/rig-c/review/compare/v1.4.0...v1.4.1) (2026-11-03)
 
 
