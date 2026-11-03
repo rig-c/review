@@ -128,3 +128,27 @@ test('the Landmarks mode sits beside Circles in the editor bar: three picks, two
  const source=await readFile(new URL('../web/chest-editor.ts',import.meta.url),'utf8');
  for(const word of ['fetch(','child_process','Bun.spawn','XMLHttpRequest','/api/'])expect(source).not.toContain(word);
 });
+
+test('landmarks and circles name whose side is R vs L (#306/#307), and contour.bust seeds Circles when regions are empty',async()=>{
+ const page=await readFile(new URL('../web/index.html',import.meta.url),'utf8');
+ const a=page.indexOf('<div id="chest-editor-bar"'),bar=page.slice(a,page.indexOf('id="stage-layout"',a));
+ expect(bar).toContain("R · character's right (image left)");
+ expect(bar).toContain("L · character's left (image right)");
+ expect(bar).toContain("Right apex (character's right, image left)");
+ expect(bar).toContain("Left apex (character's left, image right)");
+ expect(bar).toContain('Y·size symmetry');
+ const {LANDMARKS}=await import('../web/chest-editor.ts');
+ expect(LANDMARKS.find(l=>l.key==='apex_r')?.tag).toBe("Right apex (character's right, image left)");
+ expect(LANDMARKS.find(l=>l.key==='apex_l')?.tag).toBe("Left apex (character's left, image right)");
+ const {seedFields}=await import('../web/rebuild-client.ts');
+ const values:Record<string,ChestFieldValue>={};
+ const status={parts:[{name:'topwear',regions:[]}],contour:{topwear:{contour:{bust:{apex_r:[384,345],apex_l:[514,345],cleavage:[449,350],alpha:0.22,clearance:3.8}}}}};
+ const seeded=seedFields(status,id=>values[id]);
+ expect(seeded).not.toBeNull();
+ expect(seeded?.['chest-0-name']).toBe('bust_r');
+ expect(seeded?.['chest-0-cx']).toBe('384');
+ expect(seeded?.['chest-0-cy']).toBe('345');
+ expect(seeded?.['chest-1-name']).toBe('bust_l');
+ expect(seeded?.['chest-1-cx']).toBe('514');
+ expect(seeded?.['chest-1-cy']).toBe('345');
+});

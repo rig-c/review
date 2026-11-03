@@ -19,8 +19,21 @@ export const CHEST_REGIONS_CLAMPED='CHEST_REGIONS_CLAMPED';
 const sideRow=(side:BustSide)=>side==='r'?0:1;
 const sideTag=(side:BustSide)=>side==='r'?'R':'L';
 
-/** The toggle belongs to Setup only. */
-export function chestEditVisible(inspector:string|undefined):boolean {return inspector==='rig';}
+/** The toggle is available in both Setup and Animate so the overlay can be inspected and adjusted on the posed rig (#307). */
+export function chestEditVisible(inspector:string|undefined):boolean {return inspector==='rig'||inspector==='playback';}
+
+export interface BoneWorldReader {bone:(name:string)=>{x:number;y:number}|null|undefined}
+/** World-space delta of the posed `chest` bone from its setup-pose world position, matching Family's poseDx/poseDy. */
+export function chestPoseOffset(player:BoneWorldReader|null|undefined,setupChest:{x:number;y:number}|null|undefined):{x:number;y:number} {
+ if(!player||!setupChest)return {x:0,y:0};
+ try{const b=player.bone('chest');if(b&&Number.isFinite(b.x)&&Number.isFinite(b.y))return {x:b.x-setupChest.x,y:b.y-setupChest.y};}catch{/* rig lacks a chest bone */}
+ return {x:0,y:0};
+}
+/** Shifts a crop → world mapping by the posed chest bone's world offset so overlays and hit-testing follow the chest bone. */
+export function posedChestMapping<T extends CropWorldMapping>(mapping:T,offset:{x:number;y:number}):T {
+ if(!mapping.available||(!offset.x&&!offset.y))return mapping;
+ return {...mapping,toWorld:(x:number,y:number)=>{const w=mapping.toWorld(x,y);return {x:w.x+offset.x,y:w.y+offset.y};}};
+}
 
 const number=(read:ChestFieldReader,id:string)=>{const raw=(read(id)?.value??'').trim();if(!raw)return null;const value=Number(raw);return Number.isFinite(value)?value:null;};
 /** A row is a circle when its semi-axes are equal and it has no medial clip; then r is that semi-axis. */
@@ -41,15 +54,19 @@ export function circleFields(row:number,circle:Partial<ChestCircle>):Record<stri
 export const bustLabel=(side:BustSide,c:ChestCircle)=>`${sideTag(side)} (${Math.round(c.cx)},${Math.round(c.cy)}) r:${Math.round(c.r)} b:${Math.round(c.band)}`;
 
 export interface ProjectedBust {side:BustSide;center:OverlayPoint;pxR:number;pxBand:number}
-/** The example's hit order: core handle or core edge → r, band handle or outer edge → band, inside the core → move. */
+/** The example's hit order: core handle or core edge → r, band handles or outer edge → band, anywhere inside the outer band disc → move (#307). */
 export function hitBustHandle(circles:readonly ProjectedBust[],p:OverlayPoint):{side:BustSide;mode:BustMode}|null {
  for(const c of circles){
-  const toR=Math.hypot(p.x-(c.center.x+c.pxR),p.y-c.center.y),toBand=Math.hypot(p.x-c.center.x,p.y-(c.center.y-c.pxBand)),toCenter=Math.hypot(p.x-c.center.x,p.y-c.center.y);
+  const toR=Math.hypot(p.x-(c.center.x+c.pxR),p.y-c.center.y),toBand=Math.min(Math.hypot(p.x-c.center.x,p.y-(c.center.y-c.pxBand)),Math.hypot(p.x-c.center.x,p.y-(c.center.y+c.pxBand))),toCenter=Math.hypot(p.x-c.center.x,p.y-c.center.y);
   if(toR<=10||Math.abs(toCenter-c.pxR)<=6)return {side:c.side,mode:'r'};
   if(toBand<=10||Math.abs(toCenter-c.pxBand)<=6)return {side:c.side,mode:'band'};
-  if(toCenter<=Math.max(12,c.pxR))return {side:c.side,mode:'move'};
  }
- return null;
+ let best:{side:BustSide;dist:number}|null=null;
+ for(const c of circles){
+  const toCenter=Math.hypot(p.x-c.center.x,p.y-c.center.y);
+  if(toCenter<=Math.max(12,c.pxBand)&&(!best||toCenter<best.dist))best={side:c.side,dist:toCenter};
+ }
+ return best?{side:best.side,mode:'move'}:null;
 }
 const limit=(value:number,[low,high]:readonly [number,number])=>Math.max(low,Math.min(high,value));
 export interface BustDrag {side:BustSide;mode:BustMode;start:OverlayPoint;centre:OverlayPoint;from:ChestCircle}
@@ -79,7 +96,7 @@ export function editorStatus(notice:{text:string;error:boolean}|null,mapping:Cro
 
 /** Circles (#92/#99: the R / L rows) or Landmarks (#105: `contour.bust`). The mode lives in a hidden input, so the draft keeps it. */
 export type ChestMode='circles'|'landmarks';
-export const LANDMARKS=[{key:'apex_r',tag:'Apex R'},{key:'apex_l',tag:'Apex L'},{key:'cleavage',tag:'Cleavage'}] as const;
+export const LANDMARKS=[{key:'apex_r',tag:"Right apex (character's right, image left)"},{key:'apex_l',tag:"Left apex (character's left, image right)"},{key:'cleavage',tag:'Cleavage'}] as const;
 export type LandmarkKey=typeof LANDMARKS[number]['key'];
 export const landmarkInputId=(key:LandmarkKey,axis:'x'|'y')=>`lm-${key}-${axis}`;
 /** Slider ranges; the producer's defaults sit inside them. */
@@ -185,20 +202,16 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
   return LANDMARKS.flatMap(({key})=>{const x=Number((read(landmarkInputId(key,'x'))?.value??'').trim()||NaN),y=Number((read(landmarkInputId(key,'y'))?.value??'').trim()||NaN);if(!Number.isFinite(x)||!Number.isFinite(y))return [];const w=mapping.toWorld(x,y);return [{key,at:project(w.x,w.y)}];});
  };
  const cropAt=(p:OverlayPoint):RigPoint|null=>{const project=host.project(),mapping=host.mapping();return project&&mapping.available?canvasToCrop(project,mapping.toWorld,p):null;};
- let active=false,space=false,drag:(BustDrag&{pointer:number;other:ChestCircle|null})|null=null,flashTimer:ReturnType<typeof setTimeout>|null=null;
+ let active=false,space=false,drag:(BustDrag&{pointer:number;other:ChestCircle|null})|null=null;
  const flash=new Set<BustSide>();
- const write=(row:number,circle:Partial<ChestCircle>)=>{for(const [id,value] of Object.entries(circleFields(row,circle))){const f=field(id);if(f)f.value=value;}};
- const flashSides=(sides:readonly BustSide[])=>{
-  if(!sides.length)return;for(const side of sides)flash.add(side);
-  host.message(`${CHEST_REGIONS_CLAMPED}: ${sides.map(sideTag).join(' and ')} — both cores plus 8 px must fit the centre distance minus 2 px and the bands share the rest`,true);
-  if(flashTimer)clearTimeout(flashTimer);flashTimer=setTimeout(()=>{flash.clear();flashTimer=null;host.changed();},700);
+ const write=(row:number,circle:Partial<ChestCircle>)=>{
+  for(const [id,value] of Object.entries(circleFields(row,circle))){const f=field(id);if(f)f.value=value;}
+  const nameField=field(chestRowId(row,'name'));if(nameField&&!nameField.value.trim())nameField.value=row===0?'bust_r':'bust_l';
+  const boneField=field(chestRowId(row,'bone'));if(boneField&&!boneField.value.trim())boneField.value=(field(row===0?'lm-bone_r':'lm-bone_l')?.value??'').trim()||(row===0?'boob_r':'boob_l');
+  const spacingField=field(chestRowId(row,'spacing'));if(spacingField&&!spacingField.value.trim())spacingField.value='14';
  };
- /** Writes a changed side; when both rows are circles the pair is clamped as the rebuild script would. */
- const commit=(side:BustSide,next:ChestCircle,other:ChestCircle|null)=>{
-  if(!other){write(sideRow(side),next);return;}
-  const [right,left]=side==='r'?[next,other]:[other,next],settled=settleBust(right,left);
-  write(0,settled.right);write(1,settled.left);flashSides(settled.clamped);
- };
+ /** Writes a changed side directly as Family does (without clamping overlapping outer bands across sides). */
+ const commit=(side:BustSide,next:ChestCircle)=>{write(sideRow(side),next);};
  const projected=():ProjectedBust[]=>{
   const project=host.project(),mapping=host.mapping();if(!project||!mapping.available)return [];
   return bustSides.flatMap(({side,row})=>{const c=rowCircle(read,row);if(!c)return [];const at=projectCircle(project,{center:mapping.toWorld(c.cx,c.cy),r:c.r,band:c.band});return at?[{side,...at}]:[];});
@@ -233,17 +246,24 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
  });
  bar.addEventListener('change',event=>{
   const target=event.target as HTMLInputElement,match=/^bust-([rl])-/.exec(target.id);if(!match)return;
-  const side=match[1] as BustSide,mine=rowCircle(read,sideRow(side)),other=rowCircle(read,sideRow(side==='r'?'l':'r'));
-  if(mine)commit(side,{...mine,r:limit(Math.round(mine.r),CHEST_CIRCLE_LIMITS.r),band:limit(Math.round(mine.band),CHEST_CIRCLE_LIMITS.band)},other);
+  const side=match[1] as BustSide,mine=rowCircle(read,sideRow(side));
+  if(mine)commit(side,{...mine,r:limit(Math.round(mine.r),CHEST_CIRCLE_LIMITS.r),band:limit(Math.round(mine.band),CHEST_CIRCLE_LIMITS.band)});
   sync();host.changed();
  });
- for(const button of bar.querySelectorAll<HTMLButtonElement>('[data-bust-mode]'))button.addEventListener('click',()=>{if(modeInput){modeInput.value=button.dataset.bustMode==='landmarks'?'landmarks':'circles';modeInput.dispatchEvent(new Event('input',{bubbles:true}));}armed=null;sync();host.changed();});
+ for(const button of bar.querySelectorAll<HTMLButtonElement>('[data-bust-mode]'))button.addEventListener('click',()=>{
+  const nextMode=button.dataset.bustMode==='landmarks'?'landmarks':'circles';
+  if(nextMode==='circles'&&!rowCircle(read,0)&&!rowCircle(read,1)){
+   const lm=readLandmarks(read);if('derived' in lm){const [r,l]=lm.derived.regions;write(0,{cx:r.cx,cy:r.cy,r:r.r,band:r.band});write(1,{cx:l.cx,cy:l.cy,r:l.r,band:l.band});}
+  }
+  if(modeInput){modeInput.value=nextMode;modeInput.dispatchEvent(new Event('input',{bubbles:true}));}
+  armed=null;sync();host.changed();
+ });
  for(const button of bar.querySelectorAll<HTMLButtonElement>('[data-landmark]'))button.addEventListener('click',()=>{const key=button.dataset.landmark as LandmarkKey;armed=armed===key?null:key;sync();host.changed();});
  bar.addEventListener('input',event=>{const id=(event.target as HTMLElement).id;if(/^lm-/.test(id)){sync();host.changed();}});
  node<HTMLButtonElement>('bust-mirror').addEventListener('click',()=>{
   const right=rowCircle(read,0),leftX=Number((read(chestRowId(1,'cx'))?.value??'').trim()||NaN);
   if(!right||!Number.isFinite(leftX)){host.message('Mirror needs a complete R circle and an L x.',true);return;}
-  commit('l',mirrorBust(right,{cx:leftX}),right);sync();host.changed();
+  write(0,right);write(1,mirrorBust(right,{cx:leftX}));sync();host.changed();
  });
  node<HTMLButtonElement>('bust-download').addEventListener('click',()=>host.download());
  apply.addEventListener('click',()=>host.apply());
@@ -274,7 +294,7 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
  const move=(event:PointerEvent)=>{
   if(landmarkDrag&&event.pointerId===landmarkDrag.pointer){event.stopPropagation();const at=cropAt(local(event));if(at){writePoint(landmarkDrag.key,at);sync();host.changed();}return;}
   if(active&&!space&&mode()==='landmarks'){if(hitLandmark(landmarkMarkers(),local(event)))host.pane.dataset.chestHover='move';else delete host.pane.dataset.chestHover;return;}
-  if(drag&&event.pointerId===drag.pointer){event.stopPropagation();commit(drag.side,dragBust(drag,local(event),scale()),drag.other);sync();host.changed();return;}
+  if(drag&&event.pointerId===drag.pointer){event.stopPropagation();commit(drag.side,dragBust(drag,local(event),scale()));sync();host.changed();return;}
   if(active&&!space&&!drag){const hit=hitBustHandle(projected(),local(event));if(hit)host.pane.dataset.chestHover=hit.mode;else delete host.pane.dataset.chestHover;}
  };
  const end=(event:PointerEvent)=>{
@@ -292,6 +312,6 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
   notify:(text,error=false,lines)=>{notice=text===null?null:{text,error};if(lines){log.textContent=lines.join('\n');log.hidden=!lines.length;log.scrollTop=log.scrollHeight;}sync();},
   noticeText:()=>notice?.text??'',
   rebuildState:({busy,applied})=>{apply.disabled=busy;apply.setAttribute('aria-busy',String(busy));reset.disabled=busy||!applied;},
-  dispose:()=>{observer.disconnect();if(flashTimer)clearTimeout(flashTimer);host.pane.removeEventListener('pointerdown',down,true);host.pane.removeEventListener('pointermove',move,true);for(const type of ['pointerup','pointercancel','lostpointercapture'] as const)host.pane.removeEventListener(type,end,true);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);window.removeEventListener('blur',blur);},
+  dispose:()=>{observer.disconnect();host.pane.removeEventListener('pointerdown',down,true);host.pane.removeEventListener('pointermove',move,true);for(const type of ['pointerup','pointercancel','lostpointercapture'] as const)host.pane.removeEventListener(type,end,true);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);window.removeEventListener('blur',blur);},
  };
 }

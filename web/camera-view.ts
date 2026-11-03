@@ -24,10 +24,12 @@ export function cameraFromSignature(value:CameraSignature,frame:CameraFrame):Pan
  const camera={zoom:value.zoom,center:{x:frame.center.x-value.pan.x*frame.width/scale,y:frame.center.y+(frame.space==='world'?1:-1)*value.pan.y*frame.height/scale}};
  assertCameraView(camera,frame);return camera;
 }
-/** Zoom preserves the normalized location already being inspected. */
-export function zoomSignature(value:CameraSignature,factor:number):CameraSignature {
+/** Zoom preserves the point under the cursor when frame and point are given, or the viewport center otherwise. */
+export function zoomSignature(value:CameraSignature,factor:number,frame?:Pick<CameraFrame,'width'|'height'>|null,point?:CameraPoint|null):CameraSignature {
  const zoom=clampZoom(value.zoom*factor),ratio=zoom/value.zoom;
- return {zoom,pan:{x:value.pan.x*ratio,y:value.pan.y*ratio}};
+ const ox=frame&&point&&frame.width>0&&Number.isFinite(point.x)?(point.x-frame.width/2)/frame.width*(ratio-1):0;
+ const oy=frame&&point&&frame.height>0&&Number.isFinite(point.y)?(point.y-frame.height/2)/frame.height*(ratio-1):0;
+ return {zoom,pan:{x:value.pan.x*ratio-ox,y:value.pan.y*ratio-oy}};
 }
 export function dragSignature(value:CameraSignature,frame:CameraFrame,dx:number,dy:number):CameraSignature {
  return {zoom:value.zoom,pan:{x:value.pan.x+dx/frame.width,y:value.pan.y+dy/frame.height}};

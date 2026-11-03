@@ -4,7 +4,7 @@ import {sharedTurnDials,type TurnDial} from '../src/turn-pad.ts';
 import {bindTurnPad,type TurnPad} from './turn-pad.ts';
 import {PartExplorer,loadPartModel} from './part-selection.ts';
 import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
-import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraSignature,type PaneCamera} from './camera-view.ts';
+import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraPoint,type CameraSignature,type PaneCamera} from './camera-view.ts';
 import { CanvasRenderer, loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import type { CompareResponse, CompareSide } from '../src/compare.ts';
 import type { CompareFeedback, CompareSession } from '../src/compare-session.ts';
@@ -395,7 +395,7 @@ function bind(): void {
   button('zoom-in').onclick=()=>cameraAction(()=>zoomCamera(1.25));button('zoom-out').onclick=()=>cameraAction(()=>zoomCamera(1/1.25));button('fit').onclick=()=>cameraAction(()=>fitActiveCamera());
   input('camera-sync').onchange=()=>cameraAction(()=>setCameraSync(input('camera-sync').checked));
   for(const target of ['a','b','reference'] as const){
-   el(target+'-viewport').addEventListener('wheel',event=>{event.preventDefault();cameraAction(()=>zoomCamera(event.deltaY<0?1.1:1/1.1,target));},{passive:false});
+   el(target+'-viewport').addEventListener('wheel',event=>{event.preventDefault();const rect=el(target+'-viewport').getBoundingClientRect();cameraAction(()=>zoomCamera(event.deltaY<0?1.1:1/1.1,target,{x:event.clientX-rect.left,y:event.clientY-rect.top}));},{passive:false});
    for(const event of ['pointerdown','focusin'] as const)el(target+'-viewport').addEventListener(event,()=>activateCamera(target));
   }
   select('status').onchange = () => { session.status = select('status').value as CompareSession['status']; markDirty(); };
@@ -500,7 +500,7 @@ function updateCamera(target:CameraTarget,value:CameraSignature,rigGroup=false):
  for(const other of ['a','b','reference'] as const){if(other===target||!cameraSync&&!(rigGroup&&other!=='reference'))continue;const next=paneFrame(other);if(next)updates[other]=cameraFromSignature(value,next);}
  Object.assign(cameras,updates);activeCamera=target;fit();
 }
-function zoomCamera(factor:number,target=availableCamera()):void {if(!target)return;const frame=paneFrame(target);if(frame)updateCamera(target,zoomSignature(cameraSignature(cameras[target],frame),factor));}
+function zoomCamera(factor:number,target=availableCamera(),point?:CameraPoint|null):void {if(!target)return;const frame=paneFrame(target);if(frame)updateCamera(target,zoomSignature(cameraSignature(cameras[target],frame),factor,frame,point));}
 function panCamera(target:CameraTarget,dx:number,dy:number):void {const frame=paneFrame(target);if(frame)updateCamera(target,dragSignature(cameraSignature(cameras[target],frame),frame,dx,dy));}
 function fitActiveCamera(target=availableCamera()):void {if(!target)return;const tools=typeof pickedTools!=='undefined'?pickedTools:null,mode=tools?.mode()??'compare',picked=tools?.pickedSide()??'a',suffix=mode==='compare'?'':` on Build ${picked.toUpperCase()} (${data[picked].manifest.title})`;const part=parts?.value();if(part?.side===target){const box=parts?.bounds(),frame=paneFrame(target);if(!box||!frame){message('PART_FIT_UNAVAILABLE: selected slot has no positive drawn bounds.',true);return;}updateCamera(target,boundsFitSignature(box,frame,22,38));message(`Selected slot fitted${suffix}.`);}else{if(!paneFrame(target))return;updateCamera(target,{zoom:1,pan:{x:0,y:0}});message(`View fitted${suffix}.`);}}
 function referenceFit():void {const frame=paneFrame('reference');if(!frame)return;const signature=cameraSignature(cameras.reference,frame);video.style.transform=`translate(${signature.pan.x*frame.width}px,${signature.pan.y*frame.height}px) scale(${signature.zoom})`;}

@@ -4,7 +4,7 @@
  * (main.ts owns the elements and the player); the server owns every path and the producer's flags.
  */
 import {ellipsePolygon} from '../src/chest-regions.ts';
-import type {BustSpec} from '../src/chest-landmarks.ts';
+import {deriveBust,parseBustSpec,type BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
 import {APPLIED_ANIMATION_SCHEMA,APPLIED_DELTA_SCHEMA,APPLIED_PATCH_SCHEMA,APPLIED_RETARGET_SCHEMA,filesDiffText,type AppliedAnimation,type AppliedAssembled,type AppliedDelta,type AppliedPatch,type AppliedRetarget,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
 import {appliedBuildOwner,type RestoredPanelOutcome} from '../src/applied-blocks.ts';
@@ -87,9 +87,12 @@ export function landmarksRequest(status:Pick<RebuildStatusView,'parts'|'contour'
  */
 export function seedFields(status:Pick<RebuildStatusView,'parts'|'contour'>,read:ChestFieldReader):Record<string,string>|null {
  if(chestRegionRows.some(row=>(read(chestRowId(row,'cx'))?.value??'').trim()))return null;
- const part=status.parts.find(p=>p.regions.length),entry=part?status.contour[part.name]:undefined;if(!part||!entry)return null;
+ const part=status.parts.find(p=>p.regions.length)??status.parts.find(p=>{const c=status.contour[p.name]?.contour;return !!c&&typeof c==='object'&&'bust' in (c as Record<string,unknown>);});
+ const entry=part?status.contour[part.name]:undefined;if(!part||!entry)return null;
  const out:Record<string,string>={},contour=(entry.contour??{}) as Record<string,unknown>;
- part.regions.slice(0,chestRegionRows.length).forEach((value,row)=>{
+ let regions:readonly unknown[]=part.regions;
+ if(!regions.length&&contour.bust&&typeof contour.bust==='object'){try{regions=deriveBust(parseBustSpec(contour.bust)).regions;}catch{/* invalid bust spec leaves regions empty */}}
+ regions.slice(0,chestRegionRows.length).forEach((value,row)=>{
   const r=value as Record<string,unknown>;if(r.shape!=='circle')return;
   for(const [field,key] of [['name','name'],['bone','bone'],['cx','cx'],['cy','cy'],['ax','r'],['ay','r'],['spacing','spacing'],['band','band']] as const)if(r[key]!==undefined)out[chestRowId(row,field)]=String(r[key]);
  });
