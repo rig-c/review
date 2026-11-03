@@ -87,7 +87,7 @@ Strip times require the selected report's exact `frameTimes` and matching animat
 
 PNG export uses the pinned published `@rig-c/play` canvas player and real Node Canvas2D, with `ffmpeg` (5.1 or later, for `-fps_mode`) and `ffprobe` available on PATH for reference decoding. Missing capabilities fail by name. Each requested sample chooses the nearest actual decoded reference PTS (ties earlier); both rigs seek that actual PTS using the viewer's fixed step. JSON distinguishes requested time, actual PTS, delta, decoded frame index, actual player times and independently known producer frames. Requests outside the common domain refuse instead of clamping. The PNG shows source rows, chronological frame columns, and full source hashes/revisions/tool and renderer versions. Batch groups stack vertically. Exports are bounded to64 intervals,256 total frames,64 megapixels and16384 pixels per dimension; larger selections must be split.
 
-The footer fits its measured text while retaining full hashes. RGB/dark-tint features unsupported by the published Canvas2D path refuse with `STRIP_UNSUPPORTED_TINT`; they are not silently omitted.
+The footer fits its measured text while retaining full hashes. Text is drawn in named families (mono: DejaVu Sans Mono, Liberation Mono, Menlo, Consolas; sans: DejaVu Sans, Liberation Sans, Helvetica, Arial), because Node Canvas resolves `monospace`/`sans-serif` to whatever family the machine lists first; with none of a list installed, export refuses `STRIP_FONT` before decoding or drawing. RGB/dark-tint features unsupported by the published Canvas2D path refuse with `STRIP_UNSUPPORTED_TINT`; they are not silently omitted.
 
 ## One-command owner handoff
 
