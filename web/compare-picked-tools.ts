@@ -16,7 +16,7 @@ import type { AnimationSourceOp } from '../src/animation-ops.ts';
 import { partBounds, type PartExplorer } from './part-selection.ts';
 import { bindInspectorBlocks, activeBlocksUI, restoreActiveBlocksUI, type InspectorBlocks } from './inspector-blocks.ts';
 import { sourceTextContent, tr } from './i18n.ts';
-import { bindChestEditor, canvasToCrop, bustLabel, bustSides, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, rowCircle, type ChestEditor, type LandmarkKey } from './chest-editor.ts';
+import { bindChestEditor, canvasToCrop, bustLabel, bustSides, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, rowShape, type ChestEditor, type LandmarkKey } from './chest-editor.ts';
 import { chestOverlayCircles, chestOverlayPolygons, chestRegionRows, chestRowId, evaluateChestForm } from './chest-regions-tool.ts';
 import { chestRegionsBinding, cropWorldMapping, type CropWorldMapping } from '../src/chest-regions.ts';
 import { bindMeshEditor, meshEditSource, sha256Hex, type MeshEditor } from './mesh-editor.ts';
@@ -43,7 +43,7 @@ import { bindRetargetPanel, type PoseMap, type RetargetPanel } from './retarget-
 import type { RetargetFlags } from '../src/retarget.ts';
 import {
   historyRow, isPatchJob, recordFor, refusedText, restoredOutcomeForJob, retargetStage, undoControl,
-  animationAppliedRecord, animationOutcomeLine, appliedRecord, deltaAppliedRecord, deltaOutcomeLine, designatedRegions, handoffText,
+  animationAppliedRecord, animationOutcomeLine, appliedRecord, deltaAppliedRecord, deltaOutcomeLine, chestSeed, designatedRegions, handoffText,
   landmarksRequest, seedLandmarks, makePatch, outcomeLine, patchAppliedRecord, patchOutcomeLine,
   pickBustPart, pickPart, runRebuild, seedFields, stageModel, retargetAppliedRecord, retargetOutcomeLine, stripPendingAfter,
   type AnimationJobView, type AnimationRequestBody, type AppliedHistoryView, type UndoView, type AnyJobView, type AppliedAnimation, type AppliedDelta, type AppliedPatch,
@@ -674,10 +674,10 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       }));
     }
     if (chestEditor?.active()) {
-      const rows = bustSides.map(({ side, row }) => ({ side, row, circle: rowCircle(chestField, row) })), [r, l] = [rows[0]!.circle, rows[1]!.circle];
+      const rows = bustSides.map(({ side, row }) => ({ side, row, circle: rowShape(chestField, row) })), [r, l] = [rows[0]!.circle, rows[1]!.circle];
       const overlap = !!r && !!l && r.r + l.r > Math.hypot(l.cx - r.cx, l.cy - r.cy);
       return rows.flatMap(({ side, row, circle }) => circle ? [{
-        center: mapping.toWorld(circle.cx, circle.cy), r: circle.r, band: circle.band, label: bustLabel(side, circle), labelRow: row, handles: true, flash: chestEditor!.flashing(side), colors: colors(row, overlap),
+        center: mapping.toWorld(circle.cx, circle.cy), r: circle.r, ...(circle.ry === undefined ? {} : { ry: circle.ry }), ...(circle.clip === undefined ? {} : { clipX: mapping.toWorld(circle.clip, circle.cy).x }), band: circle.band, label: bustLabel(side, circle), labelRow: row, handles: true, flash: chestEditor!.flashing(side), colors: colors(row, overlap),
       }] : []);
     }
     return chestOverlayCircles(chestEvaluation(), mapping).map(c => ({ center: c.center, r: c.r, band: c.band, handles: false, colors: colors(c.row, false) }));
@@ -804,7 +804,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       const read = chestEditor.landmarks();
       return 'derived' in read ? pickBustPart(status, read.derived.regions) : pickBustPart(status, []);
     }
-    const designated = designatedRegions(chestField);
+    const designated = designatedRegions(chestField, chestSeed(status));
     return 'regions' in designated ? pickPart(status, designated.regions) : status.parts.length === 1 ? status.parts[0]!.name : null;
   }
 
@@ -948,7 +948,10 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         state.chestInputs = snapshotChestInputs();
       }
       el('chest-regions').dispatchEvent(new Event('input', { bubbles: true }));
+      // #315: a config polygon the editor cannot read as an ellipse is named, never shown as an empty row.
+      const refused = chestSeed(status).refusals;
       if (!status.available) chestEditor?.notify(status.reason, true);
+      else if (refused.length) chestEditor?.notify(refused.join(' · '), true, refused);
       else chestEditor?.notify('', false);
       renderHandoff(status);
       retargetPanel?.load(status.retarget ?? null, status.reason);
@@ -1256,7 +1259,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       }
       ({ part, body } = request);
     } else {
-      const designated = designatedRegions(chestField);
+      const designated = designatedRegions(chestField, chestSeed(status));
       if ('error' in designated) { if (pickedSide === side) chestEditor?.notify(designated.error, true); return; }
       const picked = pickPart(status, designated.regions);
       if (!picked) { if (pickedSide === side) chestEditor?.notify(`REBUILD_PART_AMBIGUOUS: the config states ${status.parts.length} contour meshes and the designated bones name none of them alone`, true); return; }

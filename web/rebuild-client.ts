@@ -3,7 +3,7 @@
  * goes to `/api/rebuild`, the job's lines stream back by polling, and the applied state is recorded. No DOM here
  * (main.ts owns the elements and the player); the server owns every path and the producer's flags.
  */
-import {ellipsePolygon} from '../src/chest-regions.ts';
+import {ellipsePolygon,fitChestEllipse,CHEST_ELLIPSE_MIN_POINTS} from '../src/chest-regions.ts';
 import {deriveBust,parseBustSpec,type BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
 import {APPLIED_ANIMATION_SCHEMA,APPLIED_DELTA_SCHEMA,APPLIED_PATCH_SCHEMA,APPLIED_RETARGET_SCHEMA,filesDiffText,type AppliedAnimation,type AppliedAssembled,type AppliedDelta,type AppliedPatch,type AppliedRetarget,type CheckSummary,type FilesDiff} from '../src/applied-context.ts';
@@ -12,7 +12,7 @@ import {meshApplyOutcome} from '../src/mesh-entry.ts';
 import type {AnimationSourceOp} from '../src/animation-ops.ts';
 import type {MotionSummary,RetargetFlags,RetargetLine,RetargetRecord} from '../src/retarget.ts';
 export type {ConfigPatch,PatchOp,AppliedPatch,AppliedDelta,AppliedRetarget,AppliedAnimation,AnimationSourceOp,CheckSummary,BustSpec};
-import {chestContourFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
+import {chestContourFields,chestRegionFields,chestRegionRows,chestRowId,type ChestFieldReader} from './chest-regions-tool.ts';
 import type {InspectedCheckView} from '../src/physics-tuning.ts';
 import {samplesClock,type StageClock} from '../src/frame-clock.ts';
 
@@ -36,11 +36,17 @@ export interface AppliedRecord {schema:'rig-review-applied/1';buildId:string;par
 
 const number=(read:ChestFieldReader,id:string)=>{const raw=(read(id)?.value??'').trim();if(!raw)return null;const value=Number(raw);return Number.isFinite(value)?value:Number.NaN;};
 
-/** Rows with a centre x are designated; a row with equal semi-axes and no clip is the config's circle, else the 32-sample polygon. */
-export function designatedRegions(read:ChestFieldReader):{regions:RegionEntry[]}|{error:string} {
+/**
+ * Rows with a centre x are designated; a row with equal semi-axes and no clip is the config's circle, else the 32-sample
+ * polygon. With the config's seed (#315), a row whose fields still equal what the config seeded sends the config's own
+ * polygon verbatim (an untouched Apply rebuilds the inspected rig), and a refused row left empty keeps its region as written.
+ */
+export function designatedRegions(read:ChestFieldReader,seed:ChestSeed|null=null):{regions:RegionEntry[]}|{error:string} {
  const regions:RegionEntry[]=[];
  for(const row of chestRegionRows){
-  if(number(read,chestRowId(row,'cx'))===null)continue;
+  const seeded=seed?.rows.find(r=>r.row===row);
+  if(number(read,chestRowId(row,'cx'))===null){if(seeded?.refusal)regions.push(seeded.region);continue;}
+  if(seeded&&!seeded.refusal&&seeded.region.shape==='polygon'&&chestRegionFields.every(f=>(read(chestRowId(row,f))?.value??'').trim()===(seeded.fields[chestRowId(row,f)]??''))){regions.push(seeded.region);continue;}
   const name=(read(chestRowId(row,'name'))?.value??'').trim(),bone=(read(chestRowId(row,'bone'))?.value??'').trim(),tag=`row ${row+1}`;
   if(!name)return {error:`REBUILD_REGION_INCOMPLETE: ${tag} name`};if(!bone)return {error:`REBUILD_REGION_INCOMPLETE: ${name} bone`};
   const values:Record<string,number|null>={};
@@ -81,21 +87,60 @@ export function landmarksRequest(status:Pick<RebuildStatusView,'parts'|'contour'
  return {part,body:{part,bust:read.spec,configHash:status.inputs.configHash}};
 }
 
+/** #315: one config region as a chest row: its field values, the region as the producer reads it, or the refusal that names it. */
+export interface ChestSeedRow {row:number;fields:Record<string,string>;region:RegionEntry;refusal:string|null}
+/** #315: what the config seeds the chest editor with: the chest part, its rows, and every region refused by name. */
+export interface ChestSeed {part:string|null;rows:ChestSeedRow[];refusals:string[]}
+const readable=(r:unknown)=>{const v=r as Record<string,unknown>;return !!v&&typeof v==='object'&&(v.shape==='circle'||(v.shape==='polygon'&&Array.isArray(v.points)&&fitChestEllipse(v.points as [number,number][]).ok));};
 /**
- * Field values that start the editor from the producer config: the first contour part's circle regions (at most two
- * rows) and its contour numbers. Only for an untouched editor — `null` once any row has a centre.
+ * The chest part (#315): the first contour part with a region the editor can read (a circle or an axis-aligned ellipse
+ * polygon), else the one stating `contour.bust`, else the first with any region (whose polygons are then refused by name).
+ */
+function chestPart(status:Pick<RebuildStatusView,'parts'|'contour'>){
+ const bust=(p:{name:string})=>{const c=status.contour[p.name]?.contour;return !!c&&typeof c==='object'&&'bust' in (c as Record<string,unknown>);};
+ return status.parts.find(p=>p.regions.some(readable))??status.parts.find(bust)??status.parts.find(p=>p.regions.length);
+}
+/** The config's regions as chest rows (at most two), read by measurement, never by point count. Pure: Apply recomputes it. */
+export function chestSeed(status:Pick<RebuildStatusView,'parts'|'contour'>):ChestSeed {
+ const part=chestPart(status),entry=part?status.contour[part.name]:undefined;if(!part||!entry)return {part:null,rows:[],refusals:[]};
+ const contour=(entry.contour??{}) as Record<string,unknown>;
+ let regions:readonly unknown[]=part.regions;
+ if(!regions.length&&contour.bust&&typeof contour.bust==='object'){try{regions=deriveBust(parseBustSpec(contour.bust)).regions;}catch{/* invalid bust spec leaves regions empty */}}
+ const rows:ChestSeedRow[]=[];
+ regions.slice(0,chestRegionRows.length).forEach((value,row)=>{
+  const r=value as Record<string,unknown>,fields:Record<string,string>={},id=(f:typeof chestRegionFields[number])=>chestRowId(row,f);
+  for(const [field,key] of [['name','name'],['bone','bone'],['spacing','spacing'],['band','band']] as const)if(r[key]!==undefined)fields[id(field)]=String(r[key]);
+  if(r.shape==='circle'){
+   for(const [field,key] of [['cx','cx'],['cy','cy'],['ax','r'],['ay','r']] as const)if(r[key]!==undefined)fields[id(field)]=String(r[key]);
+   rows.push({row,fields,region:r as unknown as RegionEntry,refusal:null});return;
+  }
+  if(r.shape!=='polygon'||!Array.isArray(r.points))return;
+  const points=r.points as [number,number][],region:RegionEntry={name:String(r.name),bone:String(r.bone),shape:'polygon',points,spacing:r.spacing as number,band:r.band as number};
+  const fit=fitChestEllipse(points);
+  if(!fit.ok){
+   const name=String(r.name),count=points.length;
+   const refusal=fit.points<CHEST_ELLIPSE_MIN_POINTS?`CHEST_REGION_NOT_ELLIPSE: ${name} (polygon, ${count} points, below the ${CHEST_ELLIPSE_MIN_POINTS} a fit needs)`
+    :fit.maxOff===null?`CHEST_REGION_NOT_ELLIPSE: ${name} (polygon, ${count} points, no ellipse fits)`
+    :`CHEST_REGION_NOT_ELLIPSE: ${name} (polygon, ${count} points, max off-ellipse ${fit.maxOff.toFixed(1)} px)`;
+   rows.push({row,fields:{},region,refusal});return;
+  }
+  fields[id('cx')]=String(fit.cx);fields[id('cy')]=String(fit.cy);fields[id('ax')]=String(fit.ax);fields[id('ay')]=String(fit.ay);
+  if(fit.clip!==undefined)fields[id('clip')]=String(fit.clip);
+  rows.push({row,fields,region,refusal:null});
+ });
+ return {part:part.name,rows,refusals:rows.flatMap(r=>r.refusal?[r.refusal]:[])};
+}
+
+/**
+ * Field values that start the editor from the producer config: the chest part's circle and ellipse-polygon regions (at
+ * most two rows, #315) and its contour numbers. Only for an untouched editor — `null` once any row has a centre. A
+ * refused polygon leaves its row empty; `chestSeed(status).refusals` names it.
  */
 export function seedFields(status:Pick<RebuildStatusView,'parts'|'contour'>,read:ChestFieldReader):Record<string,string>|null {
  if(chestRegionRows.some(row=>(read(chestRowId(row,'cx'))?.value??'').trim()))return null;
- const part=status.parts.find(p=>p.regions.length)??status.parts.find(p=>{const c=status.contour[p.name]?.contour;return !!c&&typeof c==='object'&&'bust' in (c as Record<string,unknown>);});
- const entry=part?status.contour[part.name]:undefined;if(!part||!entry)return null;
+ const part=chestPart(status),entry=part?status.contour[part.name]:undefined;if(!part||!entry)return null;
  const out:Record<string,string>={},contour=(entry.contour??{}) as Record<string,unknown>;
- let regions:readonly unknown[]=part.regions;
- if(!regions.length&&contour.bust&&typeof contour.bust==='object'){try{regions=deriveBust(parseBustSpec(contour.bust)).regions;}catch{/* invalid bust spec leaves regions empty */}}
- regions.slice(0,chestRegionRows.length).forEach((value,row)=>{
-  const r=value as Record<string,unknown>;if(r.shape!=='circle')return;
-  for(const [field,key] of [['name','name'],['bone','bone'],['cx','cx'],['cy','cy'],['ax','r'],['ay','r'],['spacing','spacing'],['band','band']] as const)if(r[key]!==undefined)out[chestRowId(row,field)]=String(r[key]);
- });
+ for(const row of chestSeed(status).rows)Object.assign(out,row.fields);
  for(const [key,id] of chestContourFields)if(typeof contour[key]==='number')out[id]=String(contour[key]);
  if(typeof contour.bridges==='boolean')out['chest-bridges']=String(contour.bridges);
  if(typeof entry.r==='number')out['chest-r']=String(entry.r);

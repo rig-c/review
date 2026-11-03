@@ -16,7 +16,7 @@ import {densityField,densityPath} from '../src/density-strip.ts';
 import {assertMeshPatch,countsText,meshApplyOutcome,meshPatchOps,setEntryValue,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
 import {worstLine} from '../src/readings.ts';
 import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
-import {bindChestEditor,canvasToCrop,bustLabel,bustSides,chestPoseOffset,LANDMARKS,landmarkInputId,posedChestMapping,rowCircle,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
+import {bindChestEditor,canvasToCrop,bustLabel,bustSides,chestPoseOffset,LANDMARKS,landmarkInputId,posedChestMapping,rowShape,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
 import {readSetupPose} from './setup-pose.ts';
@@ -26,7 +26,7 @@ import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
 import {animationAppliedRecord,animationOutcomeLine,retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type AnimationJobView,type AnimationRequestBody,type AnimationSourceOp,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {historyRow,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {historyRow,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,chestSeed,designatedRegions,handoffText,landmarksRequest,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -1193,10 +1193,10 @@ function chestCircles():OverlayCircle[]{
   return read.derived.regions.filter(r=>r.r>0&&r.band>=0).map((r,row)=>({center:mapping.toWorld(r.cx,r.cy),r:r.r,band:r.band,label:`${r.name} r:${r.r} b:${r.band}`,labelRow:row,handles:false,colors:colors(row,refused)}));
  }
  if(chestEditor?.active()){
-  const rows=bustSides.map(({side,row})=>({side,row,circle:rowCircle(chestField,row)})),[r,l]=[rows[0]!.circle,rows[1]!.circle];
+  const rows=bustSides.map(({side,row})=>({side,row,circle:rowShape(chestField,row)})),[r,l]=[rows[0]!.circle,rows[1]!.circle];
   // As in the example, overlapping cores turn both circles to the overlap colour.
   const overlap=!!r&&!!l&&r.r+l.r>Math.hypot(l.cx-r.cx,l.cy-r.cy);
-  return rows.flatMap(({side,row,circle})=>circle?[{center:mapping.toWorld(circle.cx,circle.cy),r:circle.r,band:circle.band,label:bustLabel(side,circle),labelRow:row,handles:true,flash:chestEditor!.flashing(side),colors:colors(row,overlap)}]:[]);
+  return rows.flatMap(({side,row,circle})=>circle?[{center:mapping.toWorld(circle.cx,circle.cy),r:circle.r,...(circle.ry===undefined?{}:{ry:circle.ry}),...(circle.clip===undefined?{}:{clipX:mapping.toWorld(circle.clip,circle.cy).x}),band:circle.band,label:bustLabel(side,circle),labelRow:row,handles:true,flash:chestEditor!.flashing(side),colors:colors(row,overlap)}]:[]);
  }
  return chestOverlayCircles(chestEvaluation(),mapping).map(c=>({center:c.center,r:c.r,band:c.band,handles:false,colors:colors(c.row,false)}));
 }
@@ -1477,6 +1477,8 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  try{rebuildStatus=await api<RebuildStatusView>('/api/rebuild');}catch(error){rebuildStatus=null;const reason=`REBUILD_STATUS_UNAVAILABLE: ${errorText(error)}`;chestEditor?.notify(reason,true);animationPanel?.loadSource(null,reason);return null;}
  const seed={...(seedFields(rebuildStatus,chestField)??{}),...(seedLandmarks(rebuildStatus,chestField)??{})};
  if(Object.keys(seed).length){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
+ // #315: a config polygon the editor cannot read as an ellipse is named, never shown as an empty row.
+ const refused=chestSeed(rebuildStatus).refusals;if(refused.length)chestEditor?.notify(refused.join(' · '),true,refused);
  if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,!rebuildStatus.viewOnly);
  renderHandoff(rebuildStatus);refreshPhysics();
  retargetPanel?.load(rebuildStatus.retarget??null,rebuildStatus.reason);
@@ -1510,7 +1512,7 @@ function chestPartForNotice():string|null {
   const read=chestEditor.landmarks();
   return 'derived' in read?pickBustPart(rebuildStatus,read.derived.regions):pickBustPart(rebuildStatus,[]);
  }
- const designated=designatedRegions(chestField);
+ const designated=designatedRegions(chestField,rebuildStatus?chestSeed(rebuildStatus):null);
  return 'regions' in designated?pickPart(rebuildStatus,designated.regions):rebuildStatus.parts.length===1?rebuildStatus.parts[0]!.name:null;
 }
 function renderDropNotices():void {
@@ -1653,7 +1655,7 @@ async function applyRebuild():Promise<void> {
   const request=landmarksRequest(status,chestEditor.landmarks());if('error' in request){chestEditor.notify(request.error,true,[request.error]);message(request.error,true);return;}
   ({part,body}=request);
  }else{
-  const designated=designatedRegions(chestField);if('error' in designated){chestEditor?.notify(designated.error,true);return;}
+  const designated=designatedRegions(chestField,chestSeed(status));if('error' in designated){chestEditor?.notify(designated.error,true);return;}
   const picked=pickPart(status,designated.regions);if(!picked){chestEditor?.notify(`REBUILD_PART_AMBIGUOUS: the config states ${status.parts.length} contour meshes and the designated bones name none of them alone`,true);return;}
   part=picked;body={part,regions:designated.regions,configHash:status.inputs.configHash};
  }

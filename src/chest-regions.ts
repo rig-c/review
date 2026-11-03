@@ -73,6 +73,79 @@ export function ellipsePolygon(center: [number, number], semiAxes: [number, numb
   return points;
 }
 
+/**
+ * #315: how far (crop px) a polygon vertex may sit off the fitted ellipse and still read back as that ellipse. The
+ * ellipses review and create write are quantized to 1/256 px, so they sit within ~0.003 px; 0.5 px also accepts an
+ * ellipse rounded to half pixels and refuses a hand-drawn shape.
+ */
+export const CHEST_ELLIPSE_TOLERANCE = 0.5;
+/** The fit has four unknowns (cx, cy, ax, ay); at least two more points than that, or any four points would "fit". */
+export const CHEST_ELLIPSE_MIN_POINTS = 6;
+export type ChestEllipseFit =
+  | { ok: true; cx: number; cy: number; ax: number; ay: number; clip?: number; maxOff: number }
+  | { ok: false; points: number; maxOff: number | null };
+
+/** Radial distance of p from the axis-aligned ellipse (≥ the normal distance, so the test never accepts more). */
+function offEllipse([x, y]: CropPoint, cx: number, cy: number, ax: number, ay: number): number {
+  const dx = x - cx, dy = y - cy, d = Math.hypot(dx, dy);
+  if (d === 0) return Math.min(ax, ay);
+  const c = dx / d, s = dy / d;
+  return Math.abs(d - ax * ay / Math.hypot(ay * c, ax * s));
+}
+/** Least squares A·x² + C·y² + D·x + E·y = 1 about the points' mean (inside a closed ring, so never on the curve). */
+function leastSquaresEllipse(points: readonly CropPoint[]): { cx: number; cy: number; ax: number; ay: number } | null {
+  const mx = points.reduce((s, p) => s + p[0], 0) / points.length, my = points.reduce((s, p) => s + p[1], 0) / points.length;
+  const m = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]];
+  for (const [px, py] of points) {
+    const x = px - mx, y = py - my, row = [x * x, y * y, x, y];
+    for (let i = 0; i < 4; i++) { for (let j = 0; j < 4; j++) m[i]![j]! += row[i]! * row[j]!; m[i]![4]! += row[i]!; }
+  }
+  for (let col = 0; col < 4; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < 4; r++) if (Math.abs(m[r]![col]!) > Math.abs(m[pivot]![col]!)) pivot = r;
+    if (Math.abs(m[pivot]![col]!) < 1e-12) return null;
+    [m[col], m[pivot]] = [m[pivot]!, m[col]!];
+    for (let r = 0; r < 4; r++) {
+      if (r === col) continue;
+      const f = m[r]![col]! / m[col]![col]!;
+      for (let k = col; k < 5; k++) m[r]![k]! -= f * m[col]![k]!;
+    }
+  }
+  const [A, C, D, E] = m.map((row, i) => row[4]! / row[i]!) as [number, number, number, number];
+  if (!(A > 0) || !(C > 0)) return null;
+  const G = 1 + D * D / (4 * A) + E * E / (4 * C);
+  if (!(G > 0)) return null;
+  return { cx: mx - D / (2 * A), cy: my - E / (2 * C), ax: Math.sqrt(G / A), ay: Math.sqrt(G / C) };
+}
+/**
+ * #315: reads an axis-aligned ellipse back from a polygon by measurement: every vertex lies within
+ * CHEST_ELLIPSE_TOLERANCE of the fitted ellipse. A clipped ellipse (ellipsePolygon's `clip`) is recognised when the
+ * vertices on its extreme x are left out of the fit, the rest fit, and the clipped ones lie inside the ellipse.
+ * Values are quantized to the 1/256 px grid the producer reads.
+ */
+export function fitChestEllipse(points: readonly CropPoint[]): ChestEllipseFit {
+  if (points.length < CHEST_ELLIPSE_MIN_POINTS) return { ok: false, points: points.length, maxOff: null };
+  const measure = (pts: readonly CropPoint[]) => {
+    const e = leastSquaresEllipse(pts);
+    if (!e) return null;
+    const q = { cx: quantize(e.cx), cy: quantize(e.cy), ax: quantize(e.ax), ay: quantize(e.ay) };
+    return { ...q, maxOff: Math.max(...pts.map(p => offEllipse(p, q.cx, q.cy, q.ax, q.ay))) };
+  };
+  const whole = measure(points);
+  if (whole && whole.maxOff <= CHEST_ELLIPSE_TOLERANCE) return { ok: true, ...whole };
+  const xs = points.map(p => p[0]);
+  for (const clip of [Math.max(...xs), Math.min(...xs)]) {
+    const clipped = points.filter(p => p[0] === clip), rest = points.filter(p => p[0] !== clip);
+    if (clipped.length < 2 || rest.length < CHEST_ELLIPSE_MIN_POINTS) continue;
+    const e = measure(rest);
+    if (!e || e.maxOff > CHEST_ELLIPSE_TOLERANCE) continue;
+    const facing = clip > e.cx ? clip < e.cx + e.ax : clip > e.cx - e.ax;
+    const inside = clipped.every(([x, y]) => ((x - e.cx) / e.ax) ** 2 + ((y - e.cy) / e.ay) ** 2 <= 1 + 1e-6);
+    if (facing && inside && onGrid(clip)) return { ok: true, ...e, clip };
+  }
+  return { ok: false, points: points.length, maxOff: whole ? whole.maxOff : null };
+}
+
 function finite(value: unknown, region: string, field: string, min: number, inclusive = true): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || (inclusive ? value < min : value <= min)) throw new ChestRegionError('CHEST_REGION_VALUE_INVALID', `${region} ${field}`);
   return value;

@@ -27,7 +27,7 @@ export interface OverlayRegion {name:string;points:OverlayPoint[];stroke:string;
  * outer circle at r + band. With handles it is the chest editor's drawing (centre, core edge on the right, band on
  * top, a label under the outer circle). Colours are theme token values.
  */
-export interface OverlayCircle {center:OverlayPoint;r:number;band:number;label?:string;/** Label rows below the outer circle, so two labels never overlap. */labelRow?:number;handles:boolean;flash?:boolean;colors:{stroke:string;fill:string;handle:string;ink:string;labelBg:string;flash:string}}
+export interface OverlayCircle {center:OverlayPoint;r:number;band:number;/** #315: an ellipse row's vertical semi-axis (world px); absent for a circle. */ry?:number;/** #315: a clipped ellipse's medial clip x (world px). */clipX?:number;label?:string;/** Label rows below the outer circle, so two labels never overlap. */labelRow?:number;handles:boolean;flash?:boolean;colors:{stroke:string;fill:string;handle:string;ink:string;labelBg:string;flash:string}}
 /**
  * Mesh edit preview in rig world coordinates: the selected slot's original triangles (cut out of the veil that dims the
  * rest of the rig), the edges after the delta by kind, moved-vertex ghosts and the vertices as handles. A box is in
@@ -70,11 +70,15 @@ export interface OverlayAnchors {
 }
 export interface OverlayView {project:OverlayProject;settings:RigOverlaySettings;dpr?:number;regions?:readonly OverlayRegion[];circles?:readonly OverlayCircle[];markers?:readonly OverlayMarker[];meshEdit?:OverlayMeshEdit|null;weights?:OverlayWeights|null;anchors?:OverlayAnchors|null}
 /** Canvas-pixel geometry of a circle designation, the same numbers the editor hit-tests against. */
-export function projectCircle(project:OverlayProject,circle:Pick<OverlayCircle,'center'|'r'|'band'>):{center:OverlayPoint;pxR:number;pxBand:number}|null {
- const {x,y}=circle.center,center=project(x,y),edge=project(x+circle.r,y),top=project(x,y+circle.r+circle.band);
+export function projectCircle(project:OverlayProject,circle:Pick<OverlayCircle,'center'|'r'|'band'|'ry'>):{center:OverlayPoint;pxR:number;pxBand:number;pxRy?:number}|null {
+ const {x,y}=circle.center,ry=circle.ry??circle.r,center=project(x,y),edge=project(x+circle.r,y),top=project(x,y+ry+circle.band);
  if(![center,edge,top].every(finite))return null;
  const pxR=Math.max(2,Math.hypot(edge.x-center.x,edge.y-center.y));
- return {center,pxR,pxBand:Math.max(pxR+2,Math.hypot(top.x-center.x,top.y-center.y))};
+ if(circle.ry===undefined)return {center,pxR,pxBand:Math.max(pxR+2,Math.hypot(top.x-center.x,top.y-center.y))};
+ // #315: an ellipse row — pxRy is its vertical core; pxBand stays the distance to the band's top, where its handle sits.
+ const low=project(x,y+ry);if(!finite(low))return null;
+ const pxRy=Math.max(2,Math.hypot(low.x-center.x,low.y-center.y));
+ return {center,pxR,pxRy,pxBand:Math.max(pxRy+2,Math.hypot(top.x-center.x,top.y-center.y))};
 }
 export interface CircleLabelInput {center:OverlayPoint;pxBand:number;width:number;height?:number;row?:number}
 /**
@@ -229,10 +233,15 @@ export class RigOverlays {
   if(this.playerAvailable){
    const drawnCircles=circles.flatMap(circle=>{const at=projectCircle(project,circle);return at?[{circle,at}]:[];});
    for(const {circle,at} of drawnCircles){
-    const {center,pxR,pxBand}=at,c=circle.colors;
+    const {center,pxR,pxBand}=at,pxRy=at.pxRy??pxR,c=circle.colors,ring=pxBand-pxRy;
     ctx.globalAlpha=.95;
-    ctx.beginPath();ctx.setLineDash([5,4]);ctx.strokeStyle=c.stroke;ctx.lineWidth=1.6;ctx.arc(center.x,center.y,pxBand,0,Math.PI*2);ctx.stroke();
-    ctx.beginPath();ctx.setLineDash([]);ctx.fillStyle=c.fill;ctx.lineWidth=2.2;ctx.arc(center.x,center.y,pxR,0,Math.PI*2);ctx.fill();ctx.stroke();
+    // #315: an ellipse row draws its own core and band ring; a clipped one is cut at its medial clip line.
+    const clipPx=circle.clipX===undefined?null:project(circle.clipX,circle.center.y).x;
+    ctx.save();
+    if(clipPx!==null&&Number.isFinite(clipPx)){ctx.beginPath();if(clipPx>center.x)ctx.rect(center.x-pxR-ring-4,center.y-pxBand-4,clipPx-(center.x-pxR-ring-4),2*pxBand+8);else ctx.rect(clipPx,center.y-pxBand-4,center.x+pxR+ring+4-clipPx,2*pxBand+8);ctx.clip();}
+    ctx.beginPath();ctx.setLineDash([5,4]);ctx.strokeStyle=c.stroke;ctx.lineWidth=1.6;ctx.ellipse(center.x,center.y,pxR+ring,pxBand,0,0,Math.PI*2);ctx.stroke();
+    ctx.beginPath();ctx.setLineDash([]);ctx.fillStyle=c.fill;ctx.lineWidth=2.2;ctx.ellipse(center.x,center.y,pxR,pxRy,0,0,Math.PI*2);ctx.fill();ctx.stroke();
+    ctx.restore();ctx.strokeStyle=c.stroke;ctx.lineWidth=2.2;ctx.setLineDash([]);
     if(!circle.handles)continue;
     ctx.globalAlpha=1;
     ctx.beginPath();ctx.moveTo(center.x-7,center.y);ctx.lineTo(center.x+7,center.y);ctx.moveTo(center.x,center.y-7);ctx.lineTo(center.x,center.y+7);ctx.stroke();
