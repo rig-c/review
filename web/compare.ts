@@ -14,6 +14,8 @@ import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection } fro
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 
 import {bindAppearance,bindPan,bindStageLayout,bindInspectorTabs,syncStageLayout,idleAvailable} from './view-controls.ts';
+import {CLICK_SLOP_PX} from './stage-pick.ts';
+import {dragImpulse} from '../src/environment.ts';
 import {RigOverlays} from './rig-overlays.ts';
 import {bindWorkspaceUI,type WorkspaceUI} from './workspace-ui.ts';
 import {connectControl} from './control.ts';
@@ -421,7 +423,10 @@ function bind(): void {
   cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('appearance'),workspace.defaults().theme);
   for(const side of ['a','b'] as const)overlays[side]=new RigOverlays({canvas:el<HTMLCanvasElement>(side+'-overlay'),rigRoot:el(side+'-root')});
-  for(const target of ['a','b','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy)),()=>!comments?.active()));
+  // #331: a plain drag on either rig pans and carries both rigs, each by its own root scale, so A and B take the same
+  // stimulus; the reference pane only pans, as the Family viewer's does.
+  const carryBoth={threshold:CLICK_SLOP_PX,move:(dx:number,dy:number)=>{for(const side of ['a','b'] as const){const impulse=dragImpulse(dx,dy,rigScales[side]);if(impulse)players[side]?.moved(impulse);}}};
+  for(const target of ['a','b','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy)),()=>!comments?.active(),target==='reference'?undefined:carryBoth));
   viewDisposers.push(bindStageLayout(el('stage-layout'),fit));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlays(false);};
   input('idle-repeat').onchange=()=>{renderIdle();if(canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));};

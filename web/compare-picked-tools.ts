@@ -57,7 +57,7 @@ import { appliedBuildOwner, appliedPanelOps, dropNoticeForPanel, reconcilePanelS
 import { compareSeekStep } from '../src/compare-playhead.ts';
 import { composeAdjust, PhysicsPreview } from './preview.ts';
 import {
-  createWindModel, environmentFor, windReadout, RUNTIME_START_READOUT, joltPacket, dueJolts, dragMoved,
+  createWindModel, environmentFor, windReadout, RUNTIME_START_READOUT, joltPacket, dueJolts,
   loadModelDocument, environmentContext, environmentJson, type JoltStep, type WindSnapshot, type WindState,
 } from '../src/environment.ts';
 import { environmentCheckRows, restartsWindClock, scheduleContext, worldExport, type ClipMove, type EnvironmentCheckView, type WorldExport } from './environment-world.ts';
@@ -2116,7 +2116,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function bindEnvironmentControls(): void {
-    const environmentInputs = ['wind-base', 'wind-breeze', 'wind-gust', 'wind-repeat', 'wind-gust-peak', 'wind-gust-duration', 'gravity', 'jolt', 'drag-trail', 'physics-reset', 'environment-use', 'environment-export', 'environment-check'];
+    const environmentInputs = ['wind-base', 'wind-breeze', 'wind-gust', 'wind-repeat', 'wind-gust-peak', 'wind-gust-duration', 'gravity', 'jolt', 'physics-reset', 'environment-use', 'environment-export', 'environment-check'];
     for (const id of environmentInputs) {
       const node = document.getElementById(id) as HTMLInputElement | HTMLButtonElement | null;
       if (node) node.disabled = false;
@@ -2174,9 +2174,6 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       host.message(`Exported ${w.summary}. The download is the bytes readings, Apply and feedback carry; the package is unchanged.`);
     };
     button('environment-check').onclick = () => { void runEnvironmentCheck(); };
-    input('drag-trail').onchange = () => {
-      for (const s of ['a', 'b'] as const) el(`${s}-viewport`).dataset.trail = String(s === pickedSide && input('drag-trail').checked);
-    };
   }
 
   function onInspectorTabChanged(): void {

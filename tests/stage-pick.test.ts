@@ -11,7 +11,7 @@ class Stage extends EventTarget {
  dataset:Record<string,string>={};
  owner=false;
  getBoundingClientRect(){return {left:100,top:50,width:400,height:400};}
- closest(selector:string){return this.owner&&selector.includes('[data-trail=true]')?this:null;}
+ closest(selector:string){return this.owner&&selector.includes('[data-panning]')?this:null;}
 }
 const region=(slot:string,x0:number,y0:number,x1:number,y1:number)=>({kind:'region',slot,corners:[x0,y0,x1,y0,x1,y1,x0,y1]});
 // World: y up. body is under hat where they overlap; arm is a two-triangle mesh beside them.

@@ -3,7 +3,7 @@ import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
-import {BASE_WIND_LIMIT,MAX_GUST_PEAK,MIN_GUST_DURATION,MAX_GUST_DURATION,GUST_PEAK,GUST_DURATION,breezeAt,gustEnvelope,gustPeriod,createWindModel,environmentFor,windReadout,joltPacket,dueJolts,JOLT_DELAY,dragMoved,physicsConstraints,loadPhysicsConstraints,CONSTRAINT_MIX_READONLY,environmentContext,parseEnvironmentContext,environmentSummary,environmentJson,RUNTIME_START} from '../src/environment.ts';
+import {BASE_WIND_LIMIT,MAX_GUST_PEAK,MIN_GUST_DURATION,MAX_GUST_DURATION,GUST_PEAK,GUST_DURATION,breezeAt,gustEnvelope,gustPeriod,createWindModel,environmentFor,windReadout,joltPacket,dueJolts,JOLT_DELAY,dragImpulse,DRAG_IMPULSE,physicsConstraints,loadPhysicsConstraints,CONSTRAINT_MIX_READONLY,environmentContext,parseEnvironmentContext,environmentSummary,environmentJson,RUNTIME_START} from '../src/environment.ts';
 import {loadReview} from '../src/manifest.ts';
 import {validatePackageFeedback,type Feedback} from '../src/session.ts';
 import {formatFeedbackIssues} from '../src/feedback-export.ts';
@@ -74,9 +74,11 @@ test('jolt packet is translate (18, −10) then its inverse 0.09 s later',()=>{
  expect(dueJolts([packet[1]!,packet[0]!],3).due).toEqual(packet);
 });
 
-test('drag to trail is the page delta ÷ the root scale with y negated',()=>{
- expect(dragMoved(12,-8,2)).toEqual({x:6,y:4});expect(dragMoved(-30,15,.5)).toEqual({x:-60,y:-30});
- expect(dragMoved(1,1,0)).toBeNull();expect(dragMoved(1,NaN,1)).toBeNull();
+test('#331: the drag impulse is the Family viewer\'s: page delta ÷ root scale × 0.25, y negated, clamped to ±8 and ±6 per move',()=>{
+ expect(DRAG_IMPULSE).toEqual({factor:.25,limitX:8,limitY:6});
+ expect(dragImpulse(12,-8,2)).toEqual({x:1.5,y:1});expect(dragImpulse(-30,15,.5)).toEqual({x:-8,y:-6});
+ expect(dragImpulse(200,0,2)).toEqual({x:8,y:0});expect(dragImpulse(0,200,2)).toEqual({x:0,y:-6});expect(dragImpulse(-63,47,2)).toEqual({x:-7.875,y:-5.875});
+ expect(dragImpulse(1,1,0)).toBeNull();expect(dragImpulse(1,NaN,1)).toBeNull();
 });
 
 const doc={spec:'rigc-compiled/3',constraints:[
@@ -141,7 +143,7 @@ test('the page records its evaluated environment; physics preview is explicit an
  expect(main).toContain('environment: feedbackEnvironment(),');
  expect(main).toContain('player.environment(null);if(player.current){player.seek(time);');
  const animate=html.slice(html.indexOf('<section id="inspector-playback"'),html.indexOf('</main>'));
- for(const id of ['environment','wind-base','wind-breeze','wind-gust','wind-gust-peak','wind-gust-duration','wind-repeat','wind-readout','gravity','jolt','drag-trail','physics-reset','physics-panel','physics-rows','physics-row-editor','physics-locked','physics-pending-list','physics-apply','physics-reset-build','physics-readout','physics-pending'])expect(animate).toContain(`id="${id}"`);
+ for(const id of ['environment','wind-base','wind-breeze','wind-gust','wind-gust-peak','wind-gust-duration','wind-repeat','wind-readout','gravity','jolt','physics-reset','physics-panel','physics-rows','physics-row-editor','physics-locked','physics-pending-list','physics-apply','physics-reset-build','physics-readout','physics-pending'])expect(animate).toContain(`id="${id}"`);
  const block=animate.slice(animate.indexOf('<section id="environment"'),animate.indexOf('</section>',animate.indexOf('<section id="environment"')));
  expect(block).toContain('min="-100" max="100"');expect(block).toContain('min="0" max="4"');expect(block).toContain('min="0" max="200"');expect(block).toContain('min="0.1" max="20"');
  // #103/#206: tuning stays outside the inspection-only environment block. Live preview now exists through Play's

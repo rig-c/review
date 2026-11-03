@@ -78,14 +78,19 @@ export interface StagePick {
  dispose():void;
 }
 
+/**
+ * The click/drag line, in client px (#331): a press that never travels more than this from where it went down is a click
+ * and may select; one that does is a drag, which pans and carries the rig (`bindPan`'s carry reads the same constant).
+ */
+export const CLICK_SLOP_PX=3;
 const CONTROL='button,input,select,textarea';
-/** A stage tool that takes the press before it reaches the stage: a drag to trail, comment mode, an editor handle under the pointer. */
-const OWNER='[data-chest-hover],[data-mesh-mode],[data-mesh-hover],[data-bones-hover],[data-cuts-hover],.stage-comment-mode,[data-trail=true],[data-panning]';
+/** A stage tool that takes the press before it reaches the stage: comment mode, an editor handle under the pointer, a pan in progress. */
+const OWNER='[data-chest-hover],[data-mesh-mode],[data-mesh-hover],[data-bones-hover],[data-cuts-hover],.stage-comment-mode,[data-panning]';
 const closest=(target:EventTarget|null|undefined,selector:string)=>{const node=target as {closest?:(s:string)=>Element|null}|null|undefined;return typeof node?.closest==='function'?node.closest(selector):null;};
 
 export function bindStagePick(o:StagePickOptions):StagePick {
  const {stage}=o;
- let down:{x:number;y:number}|null=null,pressed=false,last:{x:number;y:number;target:EventTarget|null;buttons:number}|null=null,painted='',hover:string|null=null;
+ let down:{x:number;y:number;far:boolean}|null=null,pressed=false,last:{x:number;y:number;target:EventTarget|null;buttons:number}|null=null,painted='',hover:string|null=null;
  const pickAt=(clientX:number,clientY:number,target:EventTarget|null):string|null=>{
   if(o.held()||!o.enabled()||closest(target,CONTROL))return null;
   const frame=o.frame();if(!frame)return null;
@@ -104,13 +109,14 @@ export function bindStagePick(o:StagePickOptions):StagePick {
   o.paint(preview);
  };
  const pointer=(e:PointerEvent)=>{last=e.pointerType==='mouse'?{x:e.clientX,y:e.clientY,target:e.target,buttons:e.buttons}:null;};
- const start=(e:PointerEvent)=>{down=e.isPrimary&&e.button===0?{x:e.clientX,y:e.clientY}:null;pressed=true;update();};
+ const start=(e:PointerEvent)=>{down=e.isPrimary&&e.button===0?{x:e.clientX,y:e.clientY,far:false}:null;pressed=true;update();};
  const end=(e:PointerEvent)=>{
   const from=down;down=null;pressed=false;
-  if(from&&Math.hypot(e.clientX-from.x,e.clientY-from.y)<=3){const slot=pickAt(e.clientX,e.clientY,e.target);if(slot)o.select(slot);}
+  if(from&&!from.far&&Math.hypot(e.clientX-from.x,e.clientY-from.y)<=CLICK_SLOP_PX){const slot=pickAt(e.clientX,e.clientY,e.target);if(slot)o.select(slot);}
   pointer(e);if(last)last.buttons=0;update();
  };
- const move=(e:PointerEvent)=>{pointer(e);update();};
+ // A press that went past the line is a drag even if it comes back: one line, read over the whole gesture.
+ const move=(e:PointerEvent)=>{if(down&&!down.far&&Math.hypot(e.clientX-down.x,e.clientY-down.y)>CLICK_SLOP_PX)down.far=true;pointer(e);update();};
  const leave=()=>{last=null;update();};
  const cancel=()=>{down=null;pressed=false;last=null;update();};
  stage.addEventListener('pointerdown',start);stage.addEventListener('pointerup',end);stage.addEventListener('pointermove',move);

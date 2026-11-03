@@ -62,8 +62,15 @@ export function describeLayerToggles(root:{getElementById(id:string):unknown},re
 
 // Nested or separately disposed pan binders must not restore another binder's override.
 const panVideoOverrides=new WeakMap<HTMLVideoElement,{owners:number;value:string;priority:string}>();
-export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,enabled:()=>boolean=()=>true):()=>void {
- let pointer:number|null=null,x=0,y=0,space=false;
+/**
+ * A drag that also carries the rig (#331): once the press has travelled more than `threshold` px from where it went down
+ * (the click/drag line, the same one a stage click reads), each move is handed to `move` as well as panned. The first
+ * delivery is the whole travel since the press, so nothing panned below the threshold is lost; a press that started
+ * with Space held is a pan only, and a press that never passes the threshold is a click and carries nothing.
+ */
+export interface PanCarry {threshold:number;move:(dx:number,dy:number)=>void}
+export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,enabled:()=>boolean=()=>true,carry?:PanCarry):()=>void {
+ let pointer:number|null=null,x=0,y=0,space=false,press:{x:number;y:number;far:boolean}|null=null;
  const videos=new Set<HTMLVideoElement>();
  const releaseVideo=(video:HTMLVideoElement)=>{
   const previous=panVideoOverrides.get(video);if(!previous)return;
@@ -80,13 +87,18 @@ export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,en
  };
  const observer=new MutationObserver(()=>{if(space)syncVideos();});
  const releaseSpace=()=>{space=false;observer.disconnect();for(const video of videos)releaseVideo(video);videos.clear();};
- const releasePointer=()=>{const id=pointer;pointer=null;delete viewport.dataset.panning;if(id!==null&&viewport.hasPointerCapture(id))viewport.releasePointerCapture(id);};
+ const releasePointer=()=>{const id=pointer;pointer=null;press=null;delete viewport.dataset.panning;if(id!==null&&viewport.hasPointerCapture(id))viewport.releasePointerCapture(id);};
  const keyDown=(event:KeyboardEvent)=>{if(event.code==='Space'&&enabled()&&!(event.target instanceof Element&&event.target.closest('input,textarea,select,button'))){
   if(!space){space=true;syncVideos();observer.observe(viewport,{childList:true,subtree:true,attributes:true,attributeFilter:['controls']});}event.preventDefault();
  }};
  const keyUp=(event:KeyboardEvent)=>{if(event.code==='Space')releaseSpace();};const blur=()=>{releaseSpace();releasePointer();};
- const start=(event:PointerEvent)=>{if(!enabled()||!event.isPrimary||event.button!==0)return;const target=event.target;if(target instanceof Element&&(target.closest('button,input,select,textarea,a')||target.closest('video[controls]')&&!space))return;pointer=event.pointerId;x=event.clientX;y=event.clientY;viewport.setPointerCapture(pointer);viewport.dataset.panning='true';event.preventDefault();};
- const drag=(event:PointerEvent)=>{if(event.pointerId!==pointer)return;const dx=event.clientX-x,dy=event.clientY-y;x=event.clientX;y=event.clientY;move(dx,dy);event.preventDefault();};
+ const start=(event:PointerEvent)=>{if(!enabled()||!event.isPrimary||event.button!==0)return;const target=event.target;if(target instanceof Element&&(target.closest('button,input,select,textarea,a')||target.closest('video[controls]')&&!space))return;pointer=event.pointerId;x=event.clientX;y=event.clientY;press=carry&&!space?{x,y,far:false}:null;viewport.setPointerCapture(pointer);viewport.dataset.panning='true';event.preventDefault();};
+ const drag=(event:PointerEvent)=>{
+  if(event.pointerId!==pointer)return;const dx=event.clientX-x,dy=event.clientY-y;x=event.clientX;y=event.clientY;move(dx,dy);event.preventDefault();
+  if(!press||!carry)return;
+  if(press.far)carry.move(dx,dy);
+  else if(Math.hypot(x-press.x,y-press.y)>carry.threshold){press.far=true;carry.move(x-press.x,y-press.y);}
+ };
  const end=(event:PointerEvent)=>{if(event.pointerId===pointer)releasePointer();};
  const native=(event:DragEvent)=>event.preventDefault();
  window.addEventListener('blur',blur);document.addEventListener('keydown',keyDown,true);window.addEventListener('keyup',keyUp,true);viewport.addEventListener('pointerdown',start);viewport.addEventListener('pointermove',drag);viewport.addEventListener('pointerup',end);viewport.addEventListener('pointercancel',end);viewport.addEventListener('lostpointercapture',end);viewport.addEventListener('dragstart',native);
