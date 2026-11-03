@@ -59,14 +59,19 @@ export function designatedRegions(read:ChestFieldReader,seed:ChestSeed|null=null
   else regions.push({name,bone,shape:'polygon',points:ellipsePolygon([cx,cy],[ax,ay],32,values.clip===null?undefined:clip),spacing,band});
  }
  if(!regions.length)return {error:'REBUILD_REGION_INCOMPLETE: no region has a centre'};
- for(const kept of seed?.kept??[]){if(kept.refusal)return {error:kept.refusal};regions.push(kept.region);}
+ for(const kept of seed?.kept??[]){if(kept.refusal)return {error:kept.refusal};keptRegions.add(kept.region);regions.push(kept.region);}
  const names=new Set<string>();for(const r of regions){if(names.has(r.name))return {error:`REBUILD_REGION_DUPLICATE: ${r.name} (two regions of the chest part carry this name)`};names.add(r.name);}
  return {regions};
 }
 
-/** The contour part to rebuild: the one whose regions name the first designated bone, else the only one, else none. */
+/** #320: the config regions `designatedRegions` appended as kept (#317), by identity; they never name the part to rebuild. */
+const keptRegions=new WeakSet<object>();
+/**
+ * The contour part to rebuild: the one whose regions name the first designated bone, else the only one, else none. Only
+ * the rows count: a region carried back as kept (#317, #320) takes no part in the inference.
+ */
 export function pickPart(status:Pick<RebuildStatusView,'parts'>,regions:readonly RegionEntry[]):string|null {
- const bones=new Set(regions.map(r=>r.bone));
+ const bones=new Set(regions.filter(r=>!keptRegions.has(r)).map(r=>r.bone));
  const named=status.parts.filter(p=>p.regions.some(r=>!!r&&typeof r==='object'&&bones.has(String((r as {bone?:unknown}).bone))));
  if(named.length===1)return named[0]!.name;
  return status.parts.length===1?status.parts[0]!.name:null;

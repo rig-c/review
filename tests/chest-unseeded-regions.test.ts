@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {ellipsePolygon} from '../src/chest-regions.ts';
 import {parseRebuildRequest,meshEntryText} from '../src/rebuild.ts';
-import {chestSeed,designatedRegions,seedFields} from '../web/rebuild-client.ts';
+import {chestSeed,designatedRegions,pickPart,seedFields} from '../web/rebuild-client.ts';
 import {chestRowId,type ChestFieldValue} from '../web/chest-regions-tool.ts';
 
 // #317: Apply from the chest editor keeps every region the editor did not seed (beyond its two rows), unchanged and in
@@ -67,4 +67,19 @@ test('the kept regions are announced with the seed refusals at load, and a two-r
  const seed=chestSeed(statusOf([circle('bust_r','boob_r',213,318,17),circle('bust_l','boob_l',283,318,17),{...third,note:'x'}]));
  expect(seed.kept).toHaveLength(1);
  expect(seed.refusals).toEqual([expect.stringMatching(/^CHEST_REGION_NOT_KEPT: belly \(polygon with keys /)]);
+});
+
+test('#320 review: kept regions take no part in part inference; rows that are truly ambiguous still refuse',()=>{
+ const regions=[circle('bust_r','boob_r',213,318,17),circle('bust_l','boob_l',283,318,17),third];
+ const status={parts:[{name:'topwear',regions},{name:'skirt',regions:[circle('waist','spine',200,500,20)]}],contour:{topwear:{contour:{regions}},skirt:{contour:{regions:[circle('waist','spine',200,500,20)]}}}};
+ const values=seeded(regions);values[chestRowId(0,'cx')]='220';
+ const out=designatedRegions(reader(values),chestSeed(status));
+ if(!('regions' in out))throw new Error(out.error);
+ expect(pickPart(status,out.regions)).toBe('topwear');
+ expect(JSON.stringify(out.regions[2])).toBe(JSON.stringify(third));
+ // A row the user designates on spine names both meshes: still ambiguous.
+ values[chestRowId(1,'bone')]='spine';values[chestRowId(1,'cx')]='290';
+ const both=designatedRegions(reader(values),chestSeed(status));
+ if(!('regions' in both))throw new Error(both.error);
+ expect(pickPart(status,both.regions)).toBeNull();
 });
