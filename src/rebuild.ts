@@ -79,8 +79,11 @@ export async function verifyHandoffReadiness(p: ReviewPackage, starts: readonly 
   }
   const resolved = resolveProducer(starts);
   if (!resolved.ok) return resolved.error;
+  // A config with no contour mesh is a loadable handoff: only the mesh rebuild has nothing to target, and its panel
+  // says so (REBUILD_INPUTS_UNAVAILABLE). Refusing the open for it locked a review of a rig with no contour part out of
+  // the page entirely. A config that does not parse is still a load failure.
   try {
-    if (!contourParts(inputs.configText).length) return 'REBUILD_INPUTS_UNAVAILABLE: the config states no contour mesh';
+    contourParts(inputs.configText);
   } catch (e) {
     return e instanceof Error ? e.message : String(e);
   }
