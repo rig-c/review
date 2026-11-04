@@ -31,7 +31,7 @@ import {historyRow,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retarg
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
-import {sourceTextContent,tr} from './i18n.ts';
+import {setSourceText,sourceAttribute,sourceTextContent,tr} from './i18n.ts';
 import {bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
 import {connectControl} from './control.ts';
 import {connectLiveWindow} from './live-connection.ts';
@@ -81,7 +81,8 @@ const input = (id: string) => el<HTMLInputElement>(id);
 const select = (id: string) => el<HTMLSelectElement>(id);
 const button = (id: string) => el<HTMLButtonElement>(id);
 const titledIds = new Set(['message', 'player-state', 'layout-state', 'renderer-state', 'layer-state', 'idle-state', 'control-state', 'draft-state', 'rig-label', 'reference-label', 'coordinates']);
-const text = (id: string, value: string) => { const node = el(id); node.textContent = value; if (titledIds.has(id)) node.title = value; };
+// #347: write only a changed source, so a played frame does not rewrite (and re-translate) unchanged text.
+const text = (id: string, value: string) => { const node = el(id); setSourceText(node, value); if (titledIds.has(id) && sourceAttribute(node, 'title') !== value) node.title = value; };
 const option = (value: string, label: string) => { const item = document.createElement('option'); item.value = value; item.textContent = label; return item; };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
