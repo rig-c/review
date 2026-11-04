@@ -46,3 +46,12 @@ export function advancePlayback(input: PlaybackInput): PlaybackAdvance {
  }
  return { steps, time, carry, wrapped, ended };
 }
+
+/**
+ * Whether an audio cue at `at` seconds falls in the interval this frame played. On a wrap that is
+ * (previous, duration] and then [0, time], so a cue just before the clip's end still sounds.
+ */
+export function cueDue(at: number, previous: number, next: PlaybackAdvance, duration: number): boolean {
+ if (next.wrapped) return (previous < at && at <= duration) || at <= next.time;
+ return (previous < at && at <= next.time) || (previous === 0 && at === 0 && next.steps.length > 0);
+}

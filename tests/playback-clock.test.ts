@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {RigPlayer} from '@rig-c/play';
 import {loadSetupAssets,setupRoot} from './helpers/setup-mesh.ts';
-import {advancePlayback,PLAYBACK_STEP} from '../web/playback-clock.ts';
+import {advancePlayback,cueDue,PLAYBACK_STEP} from '../web/playback-clock.ts';
 
 // #346: physics carries across the loop wrap, and steps at a fixed rate whatever the display refreshes at.
 const fixture=new URL('./fixtures/compare-probe/skeleton.model.json',import.meta.url);
@@ -65,4 +65,26 @@ test('a physics chain is continuous across two loop wraps; the replaced seek-at-
   for(const jump of carry.wraps)expect(jump).toBeLessThanOrEqual(carry.inside);
   expect(Math.max(...seek.wraps)).toBeGreaterThan(seek.inside);
  }finally{loaded.dispose();}
+});
+
+test('a wrapping frame sounds the cues before the clip end and after the wrap',()=>{
+ // 1.95 s + 0.1 s of a 2 s clip: the frame plays (1.95, 2] and then [0, 0.05].
+ const next=advancePlayback({time:1.95,duration:2,carry:0,elapsed:0.1,repeat:true});
+ expect(next.wrapped).toBe(true);expect(next.time).toBeCloseTo(1/60*6-0.05,9);
+ expect(cueDue(1.98,1.95,next,2)).toBe(true);
+ expect(cueDue(2,1.95,next,2)).toBe(true);
+ expect(cueDue(0,1.95,next,2)).toBe(true);
+ expect(cueDue(next.time,1.95,next,2)).toBe(true);
+ expect(cueDue(1.9,1.95,next,2)).toBe(false);
+ expect(cueDue(next.time+0.01,1.95,next,2)).toBe(false);
+ const plain=advancePlayback({time:0.5,duration:2,carry:0,elapsed:1/60,repeat:true});
+ expect(cueDue(0.51,0.5,plain,2)).toBe(true);expect(cueDue(0.5,0.5,plain,2)).toBe(false);
+});
+
+test('the loop wrap re-holds the video reference as the replaced seek(0) did',async()=>{
+ const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+ const wrap=main.slice(main.indexOf('if (next.wrapped) {'),main.indexOf('if (player && player.current && next.steps.length)'));
+ expect(wrap).toContain("clipMoved({ kind: 'replay' })");
+ expect(wrap).toContain('holdVideoReference(video, referenceGeneration)');
+ expect(wrap.indexOf('holdVideoReference')).toBeLessThan(wrap.indexOf('video.play()'));
 });
