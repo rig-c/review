@@ -17,6 +17,8 @@ export interface PlaybackInput {
  /** Wall-clock seconds since the previous frame. */
  elapsed: number;
  repeat: boolean;
+ /** Keep the clip time fixed while supplying wall-clock physics steps. */
+ held?: boolean;
  step?: number;
 }
 export interface PlaybackAdvance {
@@ -33,16 +35,16 @@ export interface PlaybackAdvance {
 export function advancePlayback(input: PlaybackInput): PlaybackAdvance {
  const step = input.step ?? PLAYBACK_STEP, duration = input.duration, steps: number[] = [];
  let time = input.time, carry = input.carry + Math.max(0, input.elapsed), wrapped = false, ended = false;
- if (!(duration > 0)) return { steps, time, carry: 0, wrapped, ended };
+ if (!input.held && !(duration > 0)) return { steps, time, carry: 0, wrapped, ended };
  while (carry >= step - STEP_SLACK) {
-  if (!input.repeat && time + step >= duration) {
+  if (!input.held && !input.repeat && time + step >= duration) {
    const last = duration - time;
    if (last > 0) steps.push(last);
    time = duration; carry = 0; ended = true;
    break;
   }
-  steps.push(step); carry = Math.max(0, carry - step); time += step;
-  if (input.repeat) while (time >= duration) { time -= duration; wrapped = true; }
+  steps.push(step); carry = Math.max(0, carry - step); if (!input.held) time += step;
+  if (!input.held && input.repeat) while (time >= duration) { time -= duration; wrapped = true; }
  }
  return { steps, time, carry, wrapped, ended };
 }

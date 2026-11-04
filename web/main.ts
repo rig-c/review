@@ -101,6 +101,7 @@ let assets: ModelAssets | null = null;
 let player: RigPlayer | null = null;
 let animation = '';
 let playing = false;
+let heldPhysicsFailed = false;
 let time = 0;
 /** The clock a scratch build on the stage states for its own animation (a retarget's report frameTimes, #164). */
 let stageClock: StageClock | null = null;
@@ -524,7 +525,7 @@ function seek(value: number, move?: ClipMove): void {
 }
 
 function stopAudio(): void { for (const audio of audioPlaying) audio.pause(); audioPlaying.clear(); }
-function pause(): void { ++playbackIntent;desiredPlay=false;suspendedPreview=false;idleHeld=true; playing = false; lastFrame = 0; playbackCarry = 0; player?.pause(); video?.pause(); stopAudio(); button('play').textContent = '▶'; button('play').setAttribute('aria-label', 'Play'); }
+function pause(): void { ++playbackIntent;desiredPlay=false;suspendedPreview=false;idleHeld=true; heldPhysicsFailed=false; playing = false; lastFrame = 0; playbackCarry = 0; player?.hold(true); player?.resume(); video?.pause(); stopAudio(); button('play').textContent = '▶'; button('play').setAttribute('aria-label', 'Play'); }
 
 async function audition(clipId: string): Promise<void> {
   const clip = data.manifest.audio.clips.find(item => item.id === clipId); if (!clip) return;
@@ -651,7 +652,21 @@ function seekReading(clip: string, frame: number, exact: number | null, label: s
 function tick(now: number): void {
   // #356: the scrub box is read before this frame writes anything (a read after the writes forces a layout).
   if (playing) try { holdScrubBox(input('scrub')); tickPlaying(now); } finally { releaseScrubBox(); }
+  else tickHeldPhysics(now);
   requestAnimationFrame(tick);
+}
+
+/** Animate steps held physics under the standing environment; wind time and queued jolts stay frozen. */
+function tickHeldPhysics(now:number):void {
+ const elapsed=lastFrame?Math.min((now-lastFrame)/1000,.1):0;lastFrame=now;
+ if(heldPhysicsFailed||!player?.current||document.hidden||selectedInspector(document)!=='playback'||seekingControl){playbackCarry=0;return;}
+ const next=advancePlayback({time,duration,carry:playbackCarry,elapsed,repeat:false,held:true});
+ playbackCarry=next.carry;
+ if(!next.steps.length)return;
+ try{
+  player.hold(true);player.resume();
+  drawRig(()=>{for(const step of next.steps)player!.advance(step);player!.draw();});
+ }catch(error){heldPhysicsFailed=true;player.pause();playbackCarry=0;message(errorText(error),true);}
 }
 
 function tickPlaying(now: number): void {
@@ -1058,7 +1073,7 @@ async function playPreview():Promise<void> {
  if((!player&&!video&&!sequence)||duration<=0)return;
  const intent=++playbackIntent;desiredPlay=true;idleHeld=false;syncPlayerLoop();if(time>=duration)seek(0,{kind:'replay'});
  if(video&&referenceInput.state==='loaded'){try{await video.play();}catch(error){pause();message(`Playback is paused: ${errorText(error)}. Use Play to retry.`,true);return;}}
- if(intent!==playbackIntent||!desiredPlay){if(!desiredPlay)video?.pause();return;}playing=true;lastFrame=0;player?.resume();button('play').textContent='Ⅱ';button('play').setAttribute('aria-label','Pause');
+ if(intent!==playbackIntent||!desiredPlay){if(!desiredPlay)video?.pause();return;}playing=true;lastFrame=0;player?.hold(false);player?.resume();button('play').textContent='Ⅱ';button('play').setAttribute('aria-label','Pause');
 }
 function localDraft():boolean{return !!comments?.draft()||dirty||!!input('feedback-summary').value.trim()||!!input('feedback-start').value.trim()||!!input('feedback-end').value.trim()||!!select('feedback-category').value||!!input('feedback-target-name').value.trim()&&input('feedback-target-name').value!==data.manifest.id;}
 function controlState():ControlInspection {
@@ -1742,8 +1757,8 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  replay:(t:number,dt:number,steps:readonly {t:number;wind?:[number,number];gravity?:[number,number]}[]=[])=>{
   if(!player?.current||!(dt>0)||!(t>=0))return null;
   const at=(k:number)=>{for(const step of steps)if(Math.max(0,Math.ceil(step.t/dt-1e-9))===k)player!.environment({...(step.wind?{wind:step.wind}:{}),...(step.gravity?{gravity:step.gravity}:{})});};
-  pause();if(steps.length)player.environment(null);at(0);player.seek(0);player.resume();
-  try{for(let k=1,n=Math.round(t/dt);k<=n;k++){at(k);player.frame(dt);}}finally{player.pause();}
+  pause();if(steps.length)player.environment(null);at(0);player.seek(0);player.hold(false);player.resume();
+  try{for(let k=1,n=Math.round(t/dt);k<=n;k++){at(k);player.frame(dt);}}finally{player.hold(true);player.pause();}
   drawRig(()=>player!.draw());time=player.time;renderTransport();
   const posedTime=player.time;if(steps.length){if(environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));else player.environment(null);}
   return posedTime;},
@@ -2138,8 +2153,8 @@ function sampleLocals(bone:string,dt:number,n:number):{t:number;rotation:number;
  let recording=false;
  const read:BoneAdjust=(bones,ctx)=>{inner?.(bones,ctx);if(!recording)return;const l=bones.bone(bone);rows.set(ctx.trackTime??0,{t:ctx.trackTime??0,rotation:l.rotation,x:l.x,y:l.y,scaleX:l.scaleX,scaleY:l.scaleY,shearX:l.shearX,shearY:l.shearY});};
  pause();p.adjust=read;
- try{p.seek(0);recording=true;p.repose();p.resume();for(let k=1;k<=n;k++)p.frame(dt);}
- finally{recording=false;p.pause();p.adjust=inner;drawRig(()=>p.draw());time=p.time;renderTransport();}
+ try{p.seek(0);recording=true;p.repose();p.hold(false);p.resume();for(let k=1;k<=n;k++)p.frame(dt);}
+ finally{recording=false;p.hold(true);p.pause();p.adjust=inner;drawRig(()=>p.draw());time=p.time;renderTransport();}
  return [...rows.values()].sort((a,b)=>a.t-b.t);
 }
 async function resetRebuild(world:StageWorld|null=null):Promise<void> {
