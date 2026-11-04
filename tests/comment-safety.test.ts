@@ -10,12 +10,29 @@ import {loadCompare} from '../src/compare.ts';
 import {freshCompareSession,saveCompareSession} from '../src/compare-session.ts';
 const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
 function singleHost(patch:Record<string,any>={}){
- let host:any;const scope:any={comments:null,bindStageComments:(h:any)=>{host=h;return {};},el:()=>({parentElement:{},hidden:true,childElementCount:0}),document:{getElementById:()=>null},saving:false,persistence:null,seekingControl:false,video:null,rebuildBusy:false,appliedOnStage:null,stripPending:null,idleAdjust:null,dialAdjust:null,physicsPreview:{read:()=>[]},meshEditor:null,bonesPanel:null,cutsPanel:null,clothPanel:null,meshPanel:null,rigFieldsPanel:null,idlePanel:null,chestRegions:()=>[],chestCircles:()=>[],chestMarkers:()=>[],inspectionBookmark:()=>({}),session:{feedback:[]},submittedBaseline:null,markDirty(){},renderProposals(){},message(){},restoreInspection(){},parseBookmark(){},inspectionBinding(){},playing:false,player:{pause(){}},turnPad:null,playbackIntent:0,desiredPlay:false,suspendedPreview:false,idleHeld:false,lastFrame:0,stopAudio(){},button:()=>({setAttribute(){}}),...patch};
+ let host:any;const scope:any={comments:null,bindStageComments:(h:any)=>{host=h;return {};},el:()=>({parentElement:{},hidden:true,childElementCount:0}),document:{getElementById:()=>null},saving:false,persistence:null,seekingControl:false,video:null,rebuildBusy:false,appliedOnStage:null,stripPending:null,idleAdjust:null,dialAdjust:null,physicsPreview:{read:()=>[]},meshEditor:null,bonesPanel:null,cutsPanel:null,clothPanel:null,meshPanel:null,rigFieldsPanel:null,idlePanel:null,chestRegions:()=>[],chestCircles:()=>[],chestMarkers:()=>[],inspectionBookmark:()=>({}),session:{feedback:[]},submittedBaseline:null,markDirty(){},renderProposals(){},message(){},restoreInspection(){},parseBookmark(){},inspectionBinding(){},playing:false,player:{held:false,paused:true,pause(){this.paused=true;},hold(on:boolean){this.held=on;},resume(){this.paused=false;}},turnPad:null,playbackIntent:0,desiredPlay:false,suspendedPreview:false,idleHeld:false,heldPhysicsFailed:false,lastFrame:0,playbackCarry:0,stopAudio(){},button:()=>({setAttribute(){}}),...patch};
  const pauseLine=source.slice(source.indexOf('function pause():')).split('\n')[0];const start=source.includes('function commentCaptureRefusal(')?source.indexOf('function commentCaptureRefusal('):source.indexOf('function setupComments():');
  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(pauseLine+'\n'+source.slice(start));new Function('scope',`with(scope){${code};setupComments();}`)(scope);return {host,scope};
 }
 test('P1 real idle preview survives actual pause and must refuse stage capture by name',async()=>{
- const idleAdjust=idlePreviewAdjust({tracks:1,refusals:[],writes:[{bone:'root',channel:'rotation',prop:'rotate',sine:{amp:5,period:2,phase:0,base:0}}]},{names:['root'],get:()=>({rotation:0})});expect(idleAdjust).not.toBeNull();const {host,scope}=singleHost({idleAdjust});await host.pause();expect(scope.idleAdjust).toBe(idleAdjust);console.log('P1_CALLBACK_STATE '+JSON.stringify({idlePreviewActive:!!scope.idleAdjust,blocked:host.blocked(),refusal:host.refusal?.()??null}));expect(host.refusal?.()).toContain('COMMENT_UNAPPLIED_PREVIEW');
+ const idleAdjust=idlePreviewAdjust({tracks:1,refusals:[],writes:[{bone:'root',channel:'rotation',prop:'rotate',sine:{amp:5,period:2,phase:0,base:0}}]},{names:['root'],get:()=>({rotation:0})});
+ expect(idleAdjust).not.toBeNull();
+ const {host,scope}=singleHost({idleAdjust});
+ await host.pause();
+ expect(scope.player.held).toBe(true);
+ expect(scope.player.paused).toBe(false);
+ expect(scope.idleAdjust).toBe(idleAdjust);
+ const refusal=host.refusal();
+ expect(refusal).toContain('COMMENT_UNAPPLIED_PREVIEW: Idle tracks');
+ const ui=commentController();
+ try{
+  ui.setReason(refusal);
+  ui.enable();
+  await ui.down();await ui.up();
+  expect(ui.crops()).toBe(0);
+  expect(ui.rows()).toHaveLength(0);
+  expect(ui.tool.active()).toBe(false);
+ }finally{ui.tool.dispose();}
 });
 const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABHNCSVQICAgIfAhkiAAAAAFzUkdCAK7OHOkAAAALSURBVAiZY2AAAgAABQABYlUyiAAAAABJRU5ErkJggg==';
 async function referenceFixture(fn:(args:{root:string;a:string;b:string;video:string;p:any;feedback:any})=>Promise<void>){
