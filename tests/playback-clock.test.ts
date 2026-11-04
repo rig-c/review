@@ -88,3 +88,16 @@ test('the loop wrap re-holds the video reference as the replaced seek(0) did',as
  expect(wrap).toContain('holdVideoReference(video, referenceGeneration)');
  expect(wrap.indexOf('holdVideoReference')).toBeLessThan(wrap.indexOf('video.play()'));
 });
+
+
+test('held physics steps at 60 Hz across refresh rates and at the clip end without advancing time',()=>{
+ for(const hz of [30,60,120,144]){
+  let carry=0,count=0;
+  for(let frame=0;frame<hz;frame++){
+   const next=advancePlayback({time:2,duration:2,carry,elapsed:1/hz,repeat:false,held:true});
+   expect(next.time).toBe(2);expect(next.ended).toBe(false);expect(next.wrapped).toBe(false);
+   expect(next.steps.every(step=>step===PLAYBACK_STEP)).toBe(true);carry=next.carry;count+=next.steps.length;
+  }
+  expect(count).toBe(60);
+ }
+});
