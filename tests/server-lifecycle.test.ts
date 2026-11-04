@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadCompare } from '../src/compare.ts';
@@ -73,6 +73,47 @@ afterEach(async () => {
   for (const r of roots.splice(0)) {
     await rm(r, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+/**
+ * Makes `path` unreadable with chmod 000 and proves it with `read`. Returns null when the read is refused with
+ * EACCES (the path stays at 000 for the caller to restore). When the read still succeeds, the process can override
+ * file modes (root's DAC override, some container mounts), so the restriction cannot be tested here: the mode is
+ * restored and the reason is returned for a skip. Detected by the probe, not by uid (#354).
+ */
+async function makeUnreadable(path: string, mode: number, read: (path: string) => Promise<unknown>): Promise<string | null> {
+  await chmod(path, 0o000);
+  try {
+    await read(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EACCES') return null;
+    await chmod(path, mode);
+    throw error;
+  }
+  await chmod(path, mode);
+  return 'chmod 000 did not block the read, so this process can override file modes (a privileged user such as root)';
+}
+
+test('makeUnreadable returns a skip reason and restores the mode when a read succeeds after chmod, and null on EACCES', async () => {
+  const root = await makeTempRoot();
+  const file = join(root, 'probe.json');
+  await writeFile(file, '{}', { mode: 0o600 });
+
+  const privileged = await makeUnreadable(file, 0o600, async () => '{}');
+  expect(privileged).toContain('can override file modes');
+  expect((await stat(file)).mode & 0o777).toBe(0o600);
+
+  const refused = await makeUnreadable(file, 0o600, async () => {
+    throw Object.assign(new Error('denied'), { code: 'EACCES' });
+  });
+  expect(refused).toBeNull();
+  expect((await stat(file)).mode & 0o777).toBe(0o000);
+  await chmod(file, 0o600);
+
+  await expect(makeUnreadable(file, 0o600, async () => {
+    throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+  })).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await stat(file)).mode & 0o777).toBe(0o600);
 });
 
 const sha256 = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
@@ -709,35 +750,54 @@ test('reusing a worker inside its close grace window re-arms it as an unopened s
   await cp(join(import.meta.dir, 'fixtures/strip-probe/motion.json'), join(pkg, 'motion.json'));
   const stateDir = join(root, 'state');
 
-  const graceMs = 250;
+  // The reuse must land inside the grace window, and the time it takes to get there is the test's own
+  // openReview (input hashing, fingerprint) — measured up to 2.6s under CPU contention (#354). So the grace
+  // is far longer than any reuse, and the test never sleeps past it: it waits for the worker's own exit and
+  // reads the reason the worker prints. A worker that was not re-armed would sit out the 60s grace instead.
+  const graceMs = 60_000;
   const idleMs = 900;
   const first = await openReview({ input: pkg, animation: 'inspect', direct: true, viewOnly: true }, { stateDir, graceMs, idleMs });
   expect(first.reused).toBe(false);
   const origin = new URL(first.url).origin;
 
-  // Connect a window and then close it so the worker enters its 250ms grace window
+  // Keep a window connected for longer than idleMs, so the unopened clock from the worker's start is spent:
+  // a re-arm that does not restart it would exit at once. This wait is a lower bound; oversleeping is harmless.
   const tab1 = await openLiveSocket(origin + LIVE_PATH);
-  tab1.abort();
-  await Bun.sleep(70);
+  await Bun.sleep(idleMs + 100);
 
-  // Reuse the worker inside the 250ms grace period
+  // Close the window and wait for the close handshake: the worker has dropped to 0 live connections
+  // (its grace window is running) before the reuse asks for it.
+  await new Promise<void>(resolve => {
+    tab1.ws.onclose = () => resolve();
+    tab1.abort();
+  });
+
   const reused = await openReview({ input: pkg, animation: 'inspect', direct: true, viewOnly: true }, { stateDir, graceMs, idleMs });
   expect(reused.reused).toBe(true);
   expect(reused.url).toBe(first.url);
-
-  // Wait 380ms (well past the 250ms close grace, still within the 900ms unopened timeout): the printed link must still be alive
-  await Bun.sleep(380);
+  const landingAt = performance.now();
   const landingRes = await fetch(reused.url);
   expect(landingRes.status).toBe(200);
 
-  // If no window connects within the fresh unopened timeout (900ms from the last request), the worker exits and removes its record
-  for (let i = 0; i < 50; i++) {
-    const openFiles = (await readdir(join(stateDir, 'open'))).filter(n => /^[a-f0-9]{64}\.json$/.test(n));
-    if (openFiles.length === 0) break;
-    await Bun.sleep(50);
+  // With no window connecting, the re-armed worker exits on the unopened timeout (900ms after the landing
+  // request, not on the grace), removes its record and says why.
+  const control = join(stateDir, 'open');
+  const logName = (await readdir(control)).find(n => n.endsWith(`.${reused.nonce}.log`));
+  expect(logName).toBeDefined();
+  const reason = `no review window connected within ${idleMs}ms`;
+  const deadline = performance.now() + 15_000;
+  let log = '';
+  while (performance.now() < deadline) {
+    log = await readFile(join(control, logName!), 'utf8');
+    if (log.includes('exiting')) break;
+    await Bun.sleep(25);
   }
-  expect((await readdir(join(stateDir, 'open'))).filter(n => /^[a-f0-9]{64}\.json$/.test(n))).toEqual([]);
-});
+  const exitedAt = performance.now();
+  expect(log).toContain(reason);
+  expect(exitedAt - landingAt).toBeGreaterThanOrEqual(idleMs);
+  expect((await readdir(control)).filter(n => /^[a-f0-9]{64}\.json$/.test(n))).toEqual([]);
+  // Two openReview calls take several seconds under contention; the cap is not a wait, nothing sleeps toward it.
+}, 30_000);
 
 test('wall-clock sleep jump resets pending countdown instead of exiting prematurely on wake', async () => {
   let fakeNow = 1_000;
@@ -804,14 +864,32 @@ test('a front stays up while its control directory has a live record and exits w
   });
   expect(statusRes.status).toBe(200);
 
-  // Any other read error (such as ENOTDIR) stays as it is and does not stop the front.
-  await rm(control, { recursive: true, force: true });
-  await writeFile(control, 'not-a-directory');
-  await Bun.sleep(idleMs * 3);
-  expect(running(frontRec.pid)).toBe(true);
+  // Any other read error (here EACCES) stays as it is and does not stop the front. One chmod makes the error
+  // in place: replacing the directory with a file (rm, then writeFile) left a moment where the path was empty
+  // or missing, which is the front's exit signal, and a front tick under load landed in it (#354).
+  const dirSkip = await makeUnreadable(control, 0o700, readdir);
+  if (dirSkip) {
+    console.warn(`SKIP front unreadable-directory step: ${dirSkip}`);
+  } else {
+    await Bun.sleep(idleMs * 3);
+    expect(running(frontRec.pid)).toBe(true);
+    await chmod(control, 0o700);
+  }
+
+  // The same holds for a worker record that cannot be read while its directory can: it is not a gone instance.
+  const workerRecord = (await readdir(control)).find(n => /^[a-f0-9]{64}\.json$/.test(n));
+  expect(workerRecord).toBeDefined();
+  const recordSkip = await makeUnreadable(join(control, workerRecord!), 0o600, readFile);
+  if (recordSkip) {
+    console.warn(`SKIP front unreadable-record step: ${recordSkip}`);
+  } else {
+    await Bun.sleep(idleMs * 3);
+    expect(running(frontRec.pid)).toBe(true);
+    await chmod(join(control, workerRecord!), 0o600);
+  }
 
   // Bar 1: deleting the control directory causes the front to exit within the bound.
-  await rm(control, { force: true });
+  await rm(control, { recursive: true, force: true });
   const deadline = performance.now() + 1_500;
   while (performance.now() < deadline && running(frontRec.pid)) {
     await Bun.sleep(25);
@@ -821,6 +899,9 @@ test('a front stays up while its control directory has a live record and exits w
   // Planted pre-#287 control: unguarded readdir(control) swallowed by .catch(()=>{}) fails the exit bound.
   const plantedControl = join(root, 'planted-open');
   await mkdir(plantedControl, { recursive: true, mode: 0o700 });
+  // A live claim keeps the planted front up while its directory exists, so the only way it can stop is through the
+  // deletion below. Without one, any tick before the rm finished saw an empty directory and exited (#354).
+  await writeFile(join(plantedControl, `${'0'.repeat(64)}.claim`), '', { mode: 0o600 });
   const plantedPort = freePort();
   const plantedNonce = crypto.randomUUID();
   const plantedReq = join(plantedControl, `front-${plantedPort}.${plantedNonce}.request.json`);
@@ -874,16 +955,22 @@ test('a front stays up while its control directory has a live record and exits w
     { cwd: plantedControl, stdout: 'ignore', stderr: 'ignore' },
   );
   subprocs.push(plantedProc);
-  for (let i = 0; i < 80; i++) {
+  // Wait until the planted front answers: deleting its directory while it still starts makes its startup read
+  // fail, and it exits for that reason instead of the one this control is about (#354).
+  let plantedReady = false;
+  const plantedDeadline = performance.now() + 15_000;
+  while (!plantedReady && performance.now() < plantedDeadline) {
     try {
       const r = await fetch(`http://127.0.0.1:${plantedPort}/api/front-status`, {
         headers: { authorization: `Bearer ${plantedNonce}` },
       });
-      if (r.ok) break;
+      plantedReady = r.ok;
     } catch {}
-    await Bun.sleep(25);
+    if (!plantedReady) await Bun.sleep(25);
   }
+  expect(plantedReady).toBe(true);
   await rm(plantedControl, { recursive: true, force: true });
   await Bun.sleep(idleMs * 4);
   expect(running(plantedProc.pid)).toBe(true);
-});
+  // Process starts take seconds under contention; the cap is not a wait, nothing sleeps toward it.
+}, 30_000);
