@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { chmod, cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadCompare } from '../src/compare.ts';
@@ -73,6 +73,47 @@ afterEach(async () => {
   for (const r of roots.splice(0)) {
     await rm(r, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+/**
+ * Makes `path` unreadable with chmod 000 and proves it with `read`. Returns null when the read is refused with
+ * EACCES (the path stays at 000 for the caller to restore). When the read still succeeds, the process can override
+ * file modes (root's DAC override, some container mounts), so the restriction cannot be tested here: the mode is
+ * restored and the reason is returned for a skip. Detected by the probe, not by uid (#354).
+ */
+async function makeUnreadable(path: string, mode: number, read: (path: string) => Promise<unknown>): Promise<string | null> {
+  await chmod(path, 0o000);
+  try {
+    await read(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EACCES') return null;
+    await chmod(path, mode);
+    throw error;
+  }
+  await chmod(path, mode);
+  return 'chmod 000 did not block the read, so this process can override file modes (a privileged user such as root)';
+}
+
+test('makeUnreadable returns a skip reason and restores the mode when a read succeeds after chmod, and null on EACCES', async () => {
+  const root = await makeTempRoot();
+  const file = join(root, 'probe.json');
+  await writeFile(file, '{}', { mode: 0o600 });
+
+  const privileged = await makeUnreadable(file, 0o600, async () => '{}');
+  expect(privileged).toContain('can override file modes');
+  expect((await stat(file)).mode & 0o777).toBe(0o600);
+
+  const refused = await makeUnreadable(file, 0o600, async () => {
+    throw Object.assign(new Error('denied'), { code: 'EACCES' });
+  });
+  expect(refused).toBeNull();
+  expect((await stat(file)).mode & 0o777).toBe(0o000);
+  await chmod(file, 0o600);
+
+  await expect(makeUnreadable(file, 0o600, async () => {
+    throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+  })).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await stat(file)).mode & 0o777).toBe(0o600);
 });
 
 const sha256 = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
@@ -826,20 +867,26 @@ test('a front stays up while its control directory has a live record and exits w
   // Any other read error (here EACCES) stays as it is and does not stop the front. One chmod makes the error
   // in place: replacing the directory with a file (rm, then writeFile) left a moment where the path was empty
   // or missing, which is the front's exit signal, and a front tick under load landed in it (#354).
-  await chmod(control, 0o000);
-  await expect(readdir(control)).rejects.toMatchObject({ code: 'EACCES' });
-  await Bun.sleep(idleMs * 3);
-  expect(running(frontRec.pid)).toBe(true);
-  await chmod(control, 0o700);
+  const dirSkip = await makeUnreadable(control, 0o700, readdir);
+  if (dirSkip) {
+    console.warn(`SKIP front unreadable-directory step: ${dirSkip}`);
+  } else {
+    await Bun.sleep(idleMs * 3);
+    expect(running(frontRec.pid)).toBe(true);
+    await chmod(control, 0o700);
+  }
 
   // The same holds for a worker record that cannot be read while its directory can: it is not a gone instance.
   const workerRecord = (await readdir(control)).find(n => /^[a-f0-9]{64}\.json$/.test(n));
   expect(workerRecord).toBeDefined();
-  await chmod(join(control, workerRecord!), 0o000);
-  await expect(readFile(join(control, workerRecord!))).rejects.toMatchObject({ code: 'EACCES' });
-  await Bun.sleep(idleMs * 3);
-  expect(running(frontRec.pid)).toBe(true);
-  await chmod(join(control, workerRecord!), 0o600);
+  const recordSkip = await makeUnreadable(join(control, workerRecord!), 0o600, readFile);
+  if (recordSkip) {
+    console.warn(`SKIP front unreadable-record step: ${recordSkip}`);
+  } else {
+    await Bun.sleep(idleMs * 3);
+    expect(running(frontRec.pid)).toBe(true);
+    await chmod(join(control, workerRecord!), 0o600);
+  }
 
   // Bar 1: deleting the control directory causes the front to exit within the bound.
   await rm(control, { recursive: true, force: true });
