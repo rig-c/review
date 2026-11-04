@@ -22,7 +22,7 @@ type Flag =
 interface ViewData {
   mode: 'parts' | 'atlas'; title: string; rigSize: [number, number] | null; items: Item[]; pages: Page[]; flags: Flag[];
   flagSources: string[]; flagMissing: string[]; verdictFile: string;
-  verdict: { status: string; parts: Record<string, { outcome: Outcome; note: string }> } | null; verdictStale: boolean;
+  verdict: { status: string; parts: Record<string, { outcome: Outcome; note: string }> } | null; verdictStale: 'files' | 'flags' | null;
 }
 
 /** Page pixels shown around a region in its own view, so the packer's bleed and padding are visible. */
@@ -212,7 +212,7 @@ async function boot(): Promise<void> {
   $('pv-title').textContent = data.title;
   $('pv-mode').textContent = data.mode === 'parts' ? t('Parts package, before rigging') : t('Atlas of a built rig');
   $('pv-list-title').textContent = data.mode === 'parts' ? t('PARTS') : t('REGIONS');
-  $('pv-load').textContent = data.verdictStale ? t('A saved sign-off was made on other files; this review starts fresh.') : data.verdict ? t('Saved sign-off loaded.') : '';
+  $('pv-load').textContent = data.verdictStale === 'files' ? t('A saved sign-off was made on other files; this review starts fresh.') : data.verdictStale === 'flags' ? t('The saved sign-off is for different producer flags; this review starts fresh.') : data.verdict ? t('Saved sign-off loaded.') : '';
   $('pv-atlas-switch').hidden = data.mode !== 'atlas';
   const footprints = $<HTMLInputElement>('pv-footprints');
   if (data.mode === 'atlas') { footprints.disabled = true; $('pv-footprint-control').title = t('Footprints need a parts package: atlas regions carry no rig placement.'); }

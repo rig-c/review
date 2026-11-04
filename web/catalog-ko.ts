@@ -3084,4 +3084,5 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Producer line": "프로듀서 원문",
   "Page {name}: {width}×{height} px, 1 region. The background shows through padding; a region box is the packer's, and pixels outside it are bleed.": "페이지 {name}: {width}×{height} px, 영역 1개. 패딩에는 배경이 비쳐 보이고, 영역 상자는 패커가 정한 것이며 상자 밖의 픽셀은 블리드입니다.",
   "Tinted: the footprint of the part drawn in front ({names}).": "색칠된 부분: 앞에 그려지는 파츠의 풋프린트({names}).",
+  "The saved sign-off is for different producer flags; this review starts fresh.": "저장된 승인은 다른 프로듀서 플래그에 대해 내려진 것이라, 이번 검수는 처음부터 시작합니다.",
 };

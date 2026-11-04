@@ -71,6 +71,15 @@ writes `parts-review.json` beside `parts.json` (atlas mode: beside the model), o
 
 Refusals, by name: `PARTS_VERDICT_MISSING_PART`, `PARTS_VERDICT_UNKNOWN_PART`, `PARTS_VERDICT_NOTE_REQUIRED`,
 `PARTS_VERDICT_NOT_CLEAN`, `PARTS_VERDICT_NOTHING_FLAGGED`, `PARTS_VERDICT_INVALID`, and `PARTS_VIEW_SOURCE_CHANGED`
-when a file changed after the view opened. A saved sign-off made on other files is not offered when the view reopens.
+when a file changed after the view opened.
+
+On reopen, a saved sign-off is offered only when both `source.sha256` and `source.flags` match the files on disk. When
+only the producer flags differ, the page says the saved sign-off is for different producer flags and starts fresh.
+Consumers that gate on the sign-off (rig-c/create) check `source.sha256`.
+
+Every file the view reads from a package resolves inside it: a part PNG or `parts.json` that symlinks out is refused
+as `PARTS_IMAGE_OUTSIDE` / `PARTS_FILE_OUTSIDE`, and a discovered `mesh_report.json` or `check.json` as
+`PARTS_FLAGS_OUTSIDE`. Atlas pages go through the review package's own `safeFile`. A file named on the command line
+(`--mesh-report`, `--check`) is read where it is.
 
 Editing parts is out of scope: repairs go through the producer's source ladder, never the browser.

@@ -17,8 +17,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, posix, relative, resolve, sep } from 'node:path';
-import { loadReview } from './manifest.ts';
+import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
+import { loadReview, safeFile } from './manifest.ts';
 
 export const PARTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/1';
 export const PARTS_VERDICT_FILE = 'parts-review.json';
@@ -76,6 +76,17 @@ export interface PartsViewOptions { meshReport?: string; check?: string; verdict
 const record = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
 const finite = (v: unknown, min: number): v is number => typeof v === 'number' && Number.isFinite(v) && v >= min;
 const refuse = (code: string, message: string): never => { throw new Error(`${code}: ${message}`); };
+
+/**
+ * The file's real path, refused by name when it resolves outside `root`. The same invariant `safeFile` holds for a
+ * review package: a symlink inside the package may not reach a file outside it, since the view hashes and serves it.
+ */
+export async function insideRoot(root: string, path: string, code: string, what: string): Promise<string> {
+  const realRoot = await realpath(root), real = await realpath(path);
+  const rel = relative(realRoot, real);
+  if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) refuse(code, `${what} resolves outside ${basename(realRoot)}/ (symlinks may not escape the package)`);
+  return real;
+}
 
 async function hashFile(abs: string): Promise<LocalFile> {
   const bytes = await readFile(abs);
@@ -170,18 +181,23 @@ async function readJson(abs: string, what: string): Promise<unknown> {
  */
 async function producerFlags(rigDir: string | null, buildRoot: string | null, names: ReadonlySet<string>, options: PartsViewOptions): Promise<{ flags: ProducerFlag[]; files: LocalFile[]; notes: string[] }> {
   const flags: ProducerFlag[] = [], files: LocalFile[] = [], notes: string[] = [];
-  const pick = (explicit: string | undefined, candidates: (string | null)[]): string | null => explicit !== undefined ? resolve(explicit) : candidates.find((c): c is string => !!c && existsSync(c)) ?? null;
-  const mesh = pick(options.meshReport, [rigDir && join(rigDir, 'mesh_report.json'), buildRoot && join(buildRoot, 'rig', 'mesh_report.json')]);
+  // A discovered file must resolve inside the directory it was discovered in; a path given on the command line is the user's own choice.
+  const pick = async (explicit: string | undefined, candidates: ([string, string] | null)[], what: string): Promise<string | null> => {
+    if (explicit !== undefined) return resolve(explicit);
+    const found = candidates.find((c): c is [string, string] => !!c && existsSync(c[1]));
+    return found ? insideRoot(found[0], found[1], 'PARTS_FLAGS_OUTSIDE', what) : null;
+  };
+  const mesh = await pick(options.meshReport, [rigDir ? [rigDir, join(rigDir, 'mesh_report.json')] : null, buildRoot ? [buildRoot, join(buildRoot, 'rig', 'mesh_report.json')] : null], 'mesh_report.json');
   if (mesh) { files.push(await hashFile(mesh)); flags.push(...meshReportFlags(await readJson(mesh, 'mesh_report.json'), names)); }
   else notes.push('mesh_report.json');
-  const check = pick(options.check, [rigDir && join(dirname(rigDir), 'check', 'check.json'), buildRoot && join(buildRoot, 'check', 'check.json')]);
+  const check = await pick(options.check, [rigDir ? [dirname(rigDir), join(dirname(rigDir), 'check', 'check.json')] : null, buildRoot ? [buildRoot, join(buildRoot, 'check', 'check.json')] : null], 'check/check.json');
   if (check) { files.push(await hashFile(check)); flags.push(...checkFlags(await readJson(check, 'check.json'), names)); }
   else notes.push('check.json');
   return { flags, files, notes };
 }
 
 async function loadPartsMode(root: string, options: PartsViewOptions): Promise<PartsViewPackage> {
-  const partsJson = join(root, 'parts.json');
+  const partsJson = await insideRoot(root, join(root, 'parts.json'), 'PARTS_FILE_OUTSIDE', 'parts.json');
   const doc = record(await readJson(partsJson, 'parts.json'));
   const list = doc?.parts;
   if (!doc || !Array.isArray(list)) return refuse('PARTS_JSON_MALFORMED', 'parts.json has no parts[] array');
@@ -197,8 +213,10 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     seen.add(part.name);
     const abs = join(root, 'parts', partFileName(part.name));
     if (!existsSync(abs)) refuse('PARTS_IMAGE_MISSING', `parts/${part.name}.png is named in parts.json and is not on disk`);
-    files.push(await hashFile(abs));
-    imagePaths.push(abs);
+    // Hashed and served by its real path, so a link swapped after load cannot redirect what the page is shown.
+    const real = await insideRoot(root, abs, 'PARTS_IMAGE_OUTSIDE', `parts/${part.name}.png`);
+    files.push(await hashFile(real));
+    imagePaths.push(real);
     items.push({ name: part.name, index, x: part.x, y: part.y, w: part.w, h: part.h, image: true });
   }
   const { flags, files: flagFiles, notes } = await producerFlags(root, null, seen, options);
@@ -209,7 +227,7 @@ async function loadAtlasMode(input: string, options: PartsViewOptions): Promise<
   const p = await loadReview(input);
   const modelPath = p.manifest.model;
   if (!modelPath) return refuse('PARTS_VIEW_NO_ATLAS', `${input} holds neither parts.json nor a compiled model with pages`);
-  const modelAbs = join(p.root, modelPath);
+  const modelAbs = await safeFile(p.root, modelPath);
   const model = record(JSON.parse(await readFile(modelAbs, 'utf8')));
   const pagesRaw = model?.pages;
   if (!Array.isArray(pagesRaw)) return refuse('PARTS_VIEW_NO_ATLAS', `${modelPath} declares no pages`);
@@ -218,7 +236,7 @@ async function loadAtlasMode(input: string, options: PartsViewOptions): Promise<
   for (const raw of pagesRaw) {
     const page = record(raw);
     if (!page || typeof page.name !== 'string' || !finite(page.width, 1) || !finite(page.height, 1) || !Array.isArray(page.regions)) continue;
-    const abs = join(p.root, posix.join(posix.dirname(modelPath), page.name));
+    const abs = await safeFile(p.root, posix.join(posix.dirname(modelPath), page.name));
     const index = pages.length;
     pages.push({ name: page.name, width: page.width, height: page.height, index });
     pagePaths.push(abs);
@@ -322,17 +340,25 @@ export async function saveVerdict(pkg: PartsViewPackage, input: unknown): Promis
   return verdict;
 }
 
-/** The saved verdict, when it was made on exactly these sources; otherwise why it is not offered. */
-export async function readVerdict(pkg: PartsViewPackage): Promise<{ verdict: PartsVerdict | null; stale: boolean }> {
+/** Why a saved verdict is not offered: made on other part files, or on the same files with other producer flags. */
+export type VerdictStale = 'files' | 'flags' | null;
+
+/**
+ * The saved verdict, when it was made on exactly these files and these producer flags. create gates on
+ * `source.sha256` alone; the page also requires `source.flags`, so a reviewer never sees a sign-off over flags they
+ * were not shown.
+ */
+export async function readVerdict(pkg: PartsViewPackage): Promise<{ verdict: PartsVerdict | null; stale: VerdictStale }> {
   let raw: unknown;
-  try { raw = JSON.parse(await readFile(pkg.verdictPath, 'utf8')); } catch { return { verdict: null, stale: false }; }
-  const v = record(raw);
-  if (!v || v.schema !== PARTS_VERDICT_SCHEMA || v.mode !== pkg.mode || record(v.source)?.sha256 !== verdictSource(pkg).sha256) return { verdict: null, stale: true };
-  return { verdict: v as unknown as PartsVerdict, stale: false };
+  try { raw = JSON.parse(await readFile(pkg.verdictPath, 'utf8')); } catch { return { verdict: null, stale: null }; }
+  const v = record(raw), source = record(v?.source), now = verdictSource(pkg);
+  if (!v || v.schema !== PARTS_VERDICT_SCHEMA || v.mode !== pkg.mode || source?.sha256 !== now.sha256) return { verdict: null, stale: 'files' };
+  if (JSON.stringify(source.flags) !== JSON.stringify(now.flags)) return { verdict: null, stale: 'flags' };
+  return { verdict: v as unknown as PartsVerdict, stale: null };
 }
 
 /** What the page reads: no absolute path leaves the server but the verdict file's name. */
-export function partsViewJson(pkg: PartsViewPackage, saved: { verdict: PartsVerdict | null; stale: boolean }) {
+export function partsViewJson(pkg: PartsViewPackage, saved: { verdict: PartsVerdict | null; stale: VerdictStale }) {
   return {
     schema: 'rig-review-parts-view/1', mode: pkg.mode, title: pkg.title, rigSize: pkg.rigSize,
     items: pkg.items, pages: pkg.pages, flags: pkg.flags,

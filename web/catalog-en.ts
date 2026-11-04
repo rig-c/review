@@ -3084,4 +3084,5 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Producer line": "Producer line",
   "Page {name}: {width}×{height} px, 1 region. The background shows through padding; a region box is the packer's, and pixels outside it are bleed.": "Page {name}: {width}×{height} px, 1 region. The background shows through padding; a region box is the packer's, and pixels outside it are bleed.",
   "Tinted: the footprint of the part drawn in front ({names}).": "Tinted: the footprint of the part drawn in front ({names}).",
+  "The saved sign-off is for different producer flags; this review starts fresh.": "The saved sign-off is for different producer flags; this review starts fresh.",
 };

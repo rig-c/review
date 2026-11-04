@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildVerdict, checkFlags, loadPartsView, meshReportFlags, partsViewJson, readVerdict, saveVerdict, sourceSha256, verdictSource } from '../src/parts-view.ts';
@@ -27,7 +27,7 @@ test('#348: a parts package opens in parts mode, in draw order, with every produ
   expect(faint).toEqual([{ id: 'faint:0', item: 'back_defect', source: 'mesh_report', kind: 'faint', art: FAINT.art, maxAlpha: FAINT.maxAlpha, box: FAINT.box }]);
   expect(pkg.flags.filter(f => f.kind === 'check').map(f => [f.id, f.item]).sort()).toEqual([['check:seam_pairs[0]', 'back_control'], ['check:seam_pairs[0]', 'front']]);
   // The page sees no local path.
-  expect(JSON.stringify(partsViewJson(pkg, { verdict: null, stale: false }))).not.toContain(root);
+  expect(JSON.stringify(partsViewJson(pkg, { verdict: null, stale: null }))).not.toContain(root);
 });
 
 test('#348: flag readers keep only parts the view holds, and skip malformed rows rather than repair them', () => {
@@ -160,4 +160,43 @@ test('#348: each known producer line reads as one labelled line, in en and ko; a
   expect(flagLabel(gate, ko)).toBe('handwear_l에서 TIP_OVER_ROOT FAIL · root_rig_px 1.478 · tip_rig_px 7.034 · ratio 4.761');
   expect(flagLabel({ ...opening, entry: { under: 'hair_back' } }, en)).toBe('Check line figure_openings.openings[0]');
   expect(flagLabel({ kind: 'faint', item: 'a', art: 12, maxAlpha: 15, box: [2, 2, 4, 3] }, en)).toBe('Faint island left out of the mesh: 12 px, brightest alpha 15, at 2,2 4×3 (part-image px).');
+});
+
+test('#348 P1: a part image or a discovered producer file that symlinks outside the package is refused by name, never hashed or served', async () => {
+  const root = await planted(), outside = await mkdtemp(join(tmpdir(), 'parts-outside-'));
+  roots.push(outside);
+  await writeFile(join(outside, 'secret.png'), 'not part of the package');
+  // Control: the package as written loads.
+  expect((await loadPartsView(root)).items.length).toBe(3);
+  await unlink(join(root, 'rig', 'parts', 'front.png'));
+  await symlink(join(outside, 'secret.png'), join(root, 'rig', 'parts', 'front.png'));
+  await expect(loadPartsView(root)).rejects.toThrow('PARTS_IMAGE_OUTSIDE');
+  // The same for a discovered check.json; a link that stays inside the package is fine.
+  const second = await planted();
+  await unlink(join(second, 'check', 'check.json'));
+  await symlink(join(outside, 'secret.png'), join(second, 'check', 'check.json'));
+  await expect(loadPartsView(second)).rejects.toThrow('PARTS_FLAGS_OUTSIDE');
+  const third = await planted();
+  await unlink(join(third, 'rig', 'parts', 'front.png'));
+  await writeFile(join(third, 'rig', 'front-real.png'), 'a file inside the package');
+  await symlink(join(third, 'rig', 'front-real.png'), join(third, 'rig', 'parts', 'front.png'));
+  const inside = await loadPartsView(third);
+  expect(inside.imagePaths[2]).toBe(join(await realpath(third), 'rig', 'front-real.png'));
+});
+
+test('#348 P1: a saved sign-off is not restored when only the producer flags changed, and the page is told why', async () => {
+  const root = await planted(), names = ['back_defect', 'back_control', 'front'];
+  await saveVerdict(await loadPartsView(root), { status: 'approved', parts: clean(names) });
+  const same = await loadPartsView(root);
+  expect(await readVerdict(same)).toMatchObject({ stale: null, verdict: { status: 'approved' } });
+  // Only check.json changes: the part files, and so source.sha256 (what create gates on), are the same.
+  await writeFile(join(root, 'check', 'check.json'), JSON.stringify({ seam_pairs: [{ parts: ['front', 'back_defect'], px_over_40: 9, px_over_80: 2 }] }) + '\n');
+  const changed = await loadPartsView(root);
+  expect(verdictSource(changed).sha256).toBe(verdictSource(same).sha256);
+  const read = await readVerdict(changed);
+  expect(read).toEqual({ verdict: null, stale: 'flags' });
+  expect(partsViewJson(changed, read)).toMatchObject({ verdict: null, verdictStale: 'flags' });
+  // A part file change reads as other files.
+  await writeFile(join(root, 'rig', 'parts', 'front.png'), Buffer.from('changed'));
+  expect((await readVerdict(await loadPartsView(root))).stale).toBe('files');
 });
