@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.3](https://github.com/rig-c/review/compare/v1.5.2...v1.5.3) (2026-11-04)
+
+
+### Performance Improvements
+
+* **animate:** cut review's per-frame cost on a heavy rig ([#356](https://github.com/rig-c/review/issues/356)) ([#361](https://github.com/rig-c/review/issues/361)) ([2574a7e](https://github.com/rig-c/review/commit/2574a7efa3bc50ffe0287bc3a719be995b823f2e))
+
 ## [1.5.2](https://github.com/rig-c/review/compare/v1.5.1...v1.5.2) (2026-11-04)
 
 
