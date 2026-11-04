@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.0](https://github.com/rig-c/review/compare/v1.4.4...v1.5.0) (2026-11-04)
+
+
+### Features
+
+* **chest:** compact detail block layout; draw chest markers only while toggled ([#351](https://github.com/rig-c/review/issues/351)) ([3093e59](https://github.com/rig-c/review/commit/3093e5912fbf33e9aa10dab2ff66f59af653426c))
+* **parts:** parts and atlas view with per-part sign-off before rigging ([#348](https://github.com/rig-c/review/issues/348)) ([#353](https://github.com/rig-c/review/issues/353)) ([eabe05d](https://github.com/rig-c/review/commit/eabe05dcd30f3eb5794a6129b0886b48e4710f49))
+
 ## [1.4.4](https://github.com/rig-c/review/compare/v1.4.3...v1.4.4) (2026-11-04)
 
 
