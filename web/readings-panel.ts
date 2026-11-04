@@ -5,6 +5,7 @@
  * tick a button that seeks to its frame's time. The server runs `rigc render`; this draws what came back.
  */
 import {readingTicks,ticksOnClip,TICK_EDGE,worstLine,type ReadingBuild,type ReadingRequest,type ReadingResult,type ReadingTick} from '../src/readings.ts';
+import {scrubBox} from './scrub-box.ts';
 
 export interface ReadingsJobView {id:string;status:'running'|'done'|'failed';error:string|null;request:{animation:string;readings:ReadingRequest[];environment:import('../src/readings.ts').ReadingsRequest['environment']};environment:{requested:boolean;flag:boolean;passed:boolean};compiler:{package:string;version:string};runs:{build:ReadingBuild;id:string;modelHash:string;results:ReadingResult[]}[]}
 export interface ReadingsRefusal {status:'refused';error:string}
@@ -80,7 +81,7 @@ export function bindReadingsPanel(deps:ReadingsPanelDeps):ReadingsPanel {
   strip.hidden=!visible.length;transport.classList.toggle('has-reading-ticks',!!visible.length);
   if(!visible.length)return visible;
   // Under the scrub's track: its own box inside the transport row.
-  strip.style.left=`${scrub.offsetLeft+THUMB/2}px`;strip.style.width=`${Math.max(0,scrub.offsetWidth-THUMB)}px`;strip.style.top=`${scrub.offsetTop+scrub.offsetHeight}px`;
+  const box=scrubBox(scrub);strip.style.left=`${box.left+THUMB/2}px`;strip.style.width=`${Math.max(0,box.width-THUMB)}px`;strip.style.top=`${box.top+box.height}px`;
   // One button per (build, frame): the labels of every reading that lists the frame, so overlapping ticks stay one target.
   const byFrame=new Map<string,ReadingTick[]>();for(const t of visible){const key=`${t.build}:${t.frame}`;byFrame.set(key,[...(byFrame.get(key)??[]),t]);}
   for(const group of byFrame.values()){

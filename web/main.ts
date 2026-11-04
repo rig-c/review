@@ -31,7 +31,8 @@ import {historyRow,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retarg
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
-import {setSourceText,sourceAttribute,sourceTextContent,tr} from './i18n.ts';
+import {setSourceAttribute,setSourceText,sourceTextContent,tr} from './i18n.ts';
+import {holdScrubBox,releaseScrubBox,scrubBox} from './scrub-box.ts';
 import {bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
 import {connectControl} from './control.ts';
 import {connectLiveWindow} from './live-connection.ts';
@@ -82,7 +83,7 @@ const select = (id: string) => el<HTMLSelectElement>(id);
 const button = (id: string) => el<HTMLButtonElement>(id);
 const titledIds = new Set(['message', 'player-state', 'layout-state', 'renderer-state', 'layer-state', 'idle-state', 'control-state', 'draft-state', 'rig-label', 'reference-label', 'coordinates']);
 // #347: write only a changed source, so a played frame does not rewrite (and re-translate) unchanged text.
-const text = (id: string, value: string) => { const node = el(id); setSourceText(node, value); if (titledIds.has(id) && sourceAttribute(node, 'title') !== value) node.title = value; };
+const text = (id: string, value: string) => { const node = el(id); setSourceText(node, value); if (titledIds.has(id)) setSourceAttribute(node, 'title', value); };
 const option = (value: string, label: string) => { const item = document.createElement('option'); item.value = value; item.textContent = label; return item; };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
@@ -437,7 +438,7 @@ function renderTransport(): void {
 /** Re-lay the reading ticks only when what places them changes (renderTransport runs every played frame). */
 function renderReadingTicks(force = false): void {
   if (!readingsPanel) return;
-  const scrub = input('scrub'), key = `${readingsJob?.id ?? ''}|${readingsJob?.runs.map(r => r.results.length).join(',')}|${animation}|${duration}|${scrub.offsetLeft},${scrub.offsetTop},${scrub.offsetWidth}`;
+  const box = scrubBox(input('scrub')), key = `${readingsJob?.id ?? ''}|${readingsJob?.runs.map(r => r.results.length).join(',')}|${animation}|${duration}|${box.left},${box.top},${box.width}`;
   if (!force && key === readingsTickKey) return;
   readingsTickKey = key; readingsPanel.ticks(readingsJob, animation, duration);
 }
@@ -648,20 +649,23 @@ function seekReading(clip: string, frame: number, exact: number | null, label: s
 }
 
 function tick(now: number): void {
-  if (playing) {
-    const dt = lastFrame ? Math.min((now - lastFrame) / 1000, .1) : 0;
-    // #346: fixed PLAYBACK_STEP steps from wall-clock time; a repeating clip wraps here with no seek, so physics carries across the loop.
-    const previous = time, next = advancePlayback({ time, duration, carry: playbackCarry, elapsed: dt, repeat: canRepeatIdle() && !idleHeld });
-    playbackCarry = next.carry; time = next.time;
-    const stepped = next.steps.reduce((sum, step) => sum + step, 0);
-    // The wrap does what the replaced seek(0) did besides the player: restart the wind clock and re-hold the reference at the wrapped time.
-    if (next.wrapped) { stopAudio(); clipMoved({ kind: 'replay' }); if (video) { if (video.readyState >= 1) holdVideoReference(video, referenceGeneration); void video.play().catch(error => { pause(); message(errorText(error), true); }); } }
-    if (player && player.current && next.steps.length) { try { stepEnvironment(stepped); drawRig(()=>{ for (const step of next.steps) player!.advance(step); player!.draw(); }); } catch (error) { pause(); message(errorText(error), true); } }
-    if (video && video.readyState >= 1 && time > video.duration) { if (referenceInput.state !== 'out-of-domain') holdVideoReference(video, referenceGeneration); } else if (video && referenceInput.state === 'loaded' && Math.abs(video.currentTime - time) > .15) video.currentTime = time;
-    if (input('sync-audio').checked) for (const cue of activeCues()) if (cueDue(cue.time, previous, next, duration)) void audition(cue.clip);
-    renderSequenceFrame(); renderTransport(); if (next.ended) pause(); lastFrame = now;
-  }
+  // #356: the scrub box is read before this frame writes anything (a read after the writes forces a layout).
+  if (playing) try { holdScrubBox(input('scrub')); tickPlaying(now); } finally { releaseScrubBox(); }
   requestAnimationFrame(tick);
+}
+
+function tickPlaying(now: number): void {
+  const dt = lastFrame ? Math.min((now - lastFrame) / 1000, .1) : 0;
+  // #346: fixed PLAYBACK_STEP steps from wall-clock time; a repeating clip wraps here with no seek, so physics carries across the loop.
+  const previous = time, next = advancePlayback({ time, duration, carry: playbackCarry, elapsed: dt, repeat: canRepeatIdle() && !idleHeld });
+  playbackCarry = next.carry; time = next.time;
+  const stepped = next.steps.reduce((sum, step) => sum + step, 0);
+  // The wrap does what the replaced seek(0) did besides the player: restart the wind clock and re-hold the reference at the wrapped time.
+  if (next.wrapped) { stopAudio(); clipMoved({ kind: 'replay' }); if (video) { if (video.readyState >= 1) holdVideoReference(video, referenceGeneration); void video.play().catch(error => { pause(); message(errorText(error), true); }); } }
+  if (player && player.current && next.steps.length) { try { stepEnvironment(stepped); drawRig(()=>{ for (const step of next.steps) player!.advance(step); player!.draw(); }); } catch (error) { pause(); message(errorText(error), true); } }
+  if (video && video.readyState >= 1 && time > video.duration) { if (referenceInput.state !== 'out-of-domain') holdVideoReference(video, referenceGeneration); } else if (video && referenceInput.state === 'loaded' && Math.abs(video.currentTime - time) > .15) video.currentTime = time;
+  if (input('sync-audio').checked) for (const cue of activeCues()) if (cueDue(cue.time, previous, next, duration)) void audition(cue.clip);
+  renderSequenceFrame(); renderTransport(); if (next.ended) pause(); lastFrame = now;
 }
 
 function configureTurnPad(model:unknown):void {
@@ -1273,7 +1277,7 @@ function renderEnvironment():void {
  if(!player)return;
  const reading=wind.read();
  text('wind-readout',(environmentApplied()?windReadout(reading,gravityValue()):RUNTIME_START_READOUT)+environmentNote);
- const gust=button('wind-gust');gust.disabled=reading.gusting;gust.setAttribute('aria-pressed',String(reading.gusting));gust.textContent=reading.gusting?'Gusting…':'Gust';
+ const gust=button('wind-gust');gust.disabled=reading.gusting;if(gust.getAttribute('aria-pressed')!==String(reading.gusting))gust.setAttribute('aria-pressed',String(reading.gusting));setSourceText(gust,reading.gusting?'Gusting…':'Gust');
  text('wind-base-label',input('wind-base').value);text('gravity-label',gravityValue().toFixed(2));
  renderSchedule();
 }

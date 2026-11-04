@@ -151,7 +151,9 @@ export function bindStageComments(host:Host):{refresh:()=>void;dispose:()=>void;
  window.addEventListener('blur',cancel);window.addEventListener('resize',placeList);document.addEventListener('keydown',key);toggle.onclick=()=>setOpen(list.hidden);
  const ro=typeof ResizeObserver==='function'?new ResizeObserver(()=>{if(!disposed&&!list.hidden)placeList();}):null;if(ro){try{ro.observe(host.toolbar);if(workspace)ro.observe(workspace);}catch{}}
  const renderPins=()=>{if(disposed)return;if(!list.hidden)placeList();const refusal=updateRefusal();if(refusal&&(enabled||pending||composer&&!composerReadOnly)){cancel();setCapture(false);host.error(refusal);}const all=host.feedback().map(f=>({f,mark:markOf(f)})).filter(x=>x.mark);
- const poses=new Map([...layers.keys()].map(view=>[view,host.pose(view)]));
+ // #356: a pose reads the pane's size (a forced layout after the played frame's writes); with no mark, draft or pending
+ // capture there is nothing to place, so this per-frame loop skips it.
+ const poses=new Map(all.length||draftMark||pending?[...layers.keys()].map(view=>[view,host.pose(view)]):[]);
  if(draftMark&&poses.get(draftMark.view)?.mode!==draftMark.mode||pending&&poses.get(pending.view)?.mode!==pending.mode)cancel();
  const signature=JSON.stringify([curLang(),refusal,all.map(({f,mark})=>[f.id,f.summary,mark!.mode,mark!.world]),[...poses].map(([view,p])=>[view,p?.mode,p?.animation,p?.frame,p?.timeBasis,p?.time,p?.turn,p?.camera,p?.referenceId,p?.referenceHash]),draftMark]);
  if(signature!==last){last=signature;for(const layer of layers.values())layer.replaceChildren();for(const [i,{f,mark:m}]of all.entries()){

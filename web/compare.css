@@ -221,7 +221,7 @@ main{position:relative}.viewbar,.toolbar{anchor-name:--stage-comment-bar}#stage-
 .animation-ruler{position:sticky;top:0;z-index:6;display:grid;grid-template-columns:190px minmax(340px,1fr);height:20px;min-height:20px;align-items:center;background:var(--rv-bar);border-bottom:1px solid var(--border-strong);user-select:none;-webkit-user-select:none}
 .animation-ruler-corner{position:sticky;left:0;z-index:7;display:flex;align-items:center;height:100%;padding:0 6px;background:var(--rv-bar);border-right:1px solid var(--border)}
 .animation-axis{color:var(--fg-muted);font:10px var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.animation-ruler-track{position:relative;height:100%;margin:0 8px;cursor:ew-resize;touch-action:none}
+.animation-ruler-track{position:relative;height:100%;margin:0 8px;cursor:ew-resize;touch-action:none;container-type:inline-size}
 .animation-ruler-tick{position:absolute;top:0;bottom:0;transform:translateX(-50%);display:inline-flex;align-items:center;padding-left:3px;border-left:1px solid var(--border-strong);color:var(--fg-muted);font:9px var(--font-mono);white-space:nowrap;pointer-events:none}
 .animation-ruler-tick:first-child{transform:none}
 .animation-ruler-tick:nth-last-child(2){transform:translateX(-100%);border-left:0;border-right:1px solid var(--border-strong);padding-left:0;padding-right:3px}
@@ -236,12 +236,13 @@ main{position:relative}.viewbar,.toolbar{anchor-name:--stage-comment-bar}#stage-
 .animation-readonly-badge{display:block;font:8.5px/10px var(--font-mono);color:var(--fg-muted);white-space:normal;overflow-wrap:anywhere;text-overflow:clip;max-width:100%;padding:1px 4px;pointer-events:none}
 .animation-readonly-subrow{grid-column:2;margin:0 8px;padding:0 4px;font:8.5px/10px var(--font-mono)}
 .readonly-lane-track .animation-readonly-badge{max-width:100%;padding:1px 4px}
-.animation-key-lane{position:relative;height:22px;margin:0 8px}
+.animation-key-lane{position:relative;height:22px;margin:0 8px;container-type:inline-size}
 .animation-key{position:absolute;top:0;transform:translateX(-50%);padding:0 2px;border:0;background:transparent;color:var(--link);font-size:11px;line-height:22px;height:22px;min-width:10px;touch-action:none;user-select:none;-webkit-user-select:none;z-index:2}
 .animation-key[data-editable=true]{cursor:ew-resize}
 .animation-key.selected{color:var(--warn);font-weight:700;z-index:4;text-shadow:0 0 4px var(--code-bg)}
 .animation-key:hover,.animation-key:focus-visible{color:var(--pass);z-index:3}
-.animation-playhead{position:absolute;top:0;bottom:0;width:1px;background:var(--warn);pointer-events:none;z-index:5}
+/* #356: the playhead moves by an inline translate in its lane's container units (cqw), not by left: a left change relaid every lane on each played frame. */
+.animation-playhead{position:absolute;top:0;bottom:0;left:0;width:1px;background:var(--warn);pointer-events:none;z-index:5}
 .animation-selection-box{position:absolute;border:1.5px dashed var(--link);background:transparent;pointer-events:none;z-index:1;box-sizing:border-box}
 .animation-curve-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;font-size:11px;margin-bottom:4px}
 .animation-curve-toolbar select,.animation-curve-toolbar input{width:auto;padding:2px 6px;font-size:11px}

@@ -8,6 +8,7 @@
  * pending ops (`#idle-pending`) and the panel's own inputs carry no ids.
  */
 import {AMP_RANGE,addTrack,entryChanged,idleDraftState,idleDraftText,idleOps,initialState,isChain,orderedEntries,periodFits,periodOffers,precheck,previewPlan,removeTrack,setBlink,stateFromOps,setField,setLinkAmp,SINGLE_PROPS,type BlinkField,type ChainField,type IdleKeying,type IdleSource,type IdleState,type IdleStatus,type PreviewPlan,type SingleField} from '../src/idle-tracks.ts';
+import {scrubBox} from './scrub-box.ts';
 import type {PatchOp} from '../src/config-patch.ts';
 import type {BoneAdjust} from '@rig-c/play';
 import {idlePreviewAdjust,type BoneSetup} from './preview.ts';
@@ -224,11 +225,11 @@ export function bindIdlePanel(deps:IdlePanelDeps):IdlePanel {
  function placeMarker(duration:number,force=false){
   lastDuration=duration;
   const b=state?.blink,visible=!!b&&duration>0&&!!source&&Math.abs(duration-source.duration)<1e-6;
-  const key=`${visible}|${b?.t}|${duration}|${scrub.offsetLeft},${scrub.offsetTop},${scrub.offsetWidth}|${busy}`;
+  const box=scrubBox(scrub),key=`${visible}|${b?.t}|${duration}|${box.left},${box.top},${box.width}|${busy}`;
   if(!force&&key===markerKey)return;markerKey=key;
   strip.hidden=!visible;transport.classList.toggle('has-idle-blink',visible);
   if(!visible)return;
-  strip.style.left=`${scrub.offsetLeft+THUMB/2}px`;strip.style.width=`${Math.max(0,scrub.offsetWidth-THUMB)}px`;strip.style.top=`${scrub.offsetTop-12}px`;
+  strip.style.left=`${box.left+THUMB/2}px`;strip.style.width=`${Math.max(0,box.width-THUMB)}px`;strip.style.top=`${box.top-12}px`;
   marker.style.left=`${(b!.t/duration)*100}%`;marker.disabled=busy;
   const text=`blink t ${shown(b!.t)} s${b!.t!==source!.blink!.t?` (was ${shown(source!.blink!.t)})`:''} · drag to move`;marker.title=text;marker.setAttribute('aria-label',text);marker.classList.toggle('pending',b!.t!==source!.blink!.t);
  }

@@ -325,6 +325,10 @@ function buildPatterns(fromCatalog: Readonly<Record<string, string>>, toCatalog:
 }
 
 function getPatterns(lang: ResolvedLanguage): readonly CompiledPattern[] {
+  // #356: return the compiled list before expanding the catalogs (that expansion walked every entry on each
+  // uncached translation, and a string that changes every played frame is always uncached).
+  const cached = lang === 'ko' ? enToKoPatterns : koToEnPatterns;
+  if (cached) return cached;
   const { enToKo } = ensureMaps();
   const expandedEn: Record<string, string> = {};
   const expandedKo: Record<string, string> = {};
@@ -753,9 +757,40 @@ export function sourceTextContent(node: Node | null | undefined): string {
  * a translated UI and a played frame would rewrite (and re-translate) unchanged text.
  */
 export function setSourceText(node: Element, value: string): boolean {
-  if ((node.childNodes?.length ?? 0) <= 1 && sourceTextContent(node) === value) return false;
-  node.textContent = value;
+  const count = node.childNodes?.length ?? 0;
+  if (count <= 1 && sourceTextContent(node) === value) return false;
+  // #356: a lone text child keeps its node (a characterData change, not a childList swap that wakes every
+  // subtree observer), and the text is translated here, so the DOM observer has nothing left to do.
+  const only = count === 1 ? node.childNodes[0] : null;
+  if (only && only.nodeType === 3) only.nodeValue = value;
+  else node.textContent = value;
+  const written = node.childNodes?.[0];
+  if (written && written.nodeType === 3) translateNow(() => applyTextNodeI18n(written, currentLanguage));
   return true;
+}
+
+/** #356: apply the observer's own translation at the write, so the frame's mutation records arrive already settled. */
+function translateNow(apply: () => void): void {
+  if (!domObserver || isApplyingDom) return;
+  isApplyingDom = true;
+  try {
+    apply();
+  } finally {
+    isApplyingDom = false;
+  }
+}
+
+/** #356: a record whose node already shows what the observer would write (it was translated at the write). */
+function settledRecord(m: MutationRecord): boolean {
+  if (m.type === 'characterData') {
+    const entry = textNodeSource.get(m.target);
+    return !!entry && m.target.nodeValue === entry.lastApplied;
+  }
+  if (m.type === 'attributes' && m.attributeName && m.target.nodeType === 1) {
+    const entry = elementAttrSource.get(m.target as Element)?.get(m.attributeName);
+    return !!entry && (m.target as Element).getAttribute(m.attributeName) === entry.lastApplied;
+  }
+  return false;
 }
 
 /** #347: an attribute's English source: what the caller last wrote, before the DOM observer translated it. */
@@ -769,6 +804,7 @@ export function sourceAttribute(el: Element, attr: string): string | null {
 export function setSourceAttribute(el: Element, attr: string, value: string): boolean {
   if (sourceAttribute(el, attr) === value) return false;
   el.setAttribute(attr, value);
+  translateNow(() => applyElementI18n(el, currentLanguage));
   return true;
 }
 
@@ -811,6 +847,13 @@ export function applyDomI18n(root: Document | Element = boundRoot ?? document): 
   }
 }
 
+/** Stop following DOM writes (the counterpart of `bindDomI18n`). */
+export function unbindDomI18n(): void {
+  domObserver?.disconnect();
+  domObserver = null;
+  boundRoot = null;
+}
+
 export function bindDomI18n(root?: Document | Element | null): void {
   const target = root === undefined ? (typeof document !== 'undefined' ? document : null) : root;
   if (!target) return;
@@ -835,6 +878,7 @@ export function bindDomI18n(root?: Document | Element | null): void {
         try {
           const lang = currentLanguage;
           for (const m of mutations) {
+            if (settledRecord(m)) continue;
             if (m.type === 'characterData') {
               applyTextNodeI18n(m.target, lang);
             } else if (m.type === 'attributes' && m.target.nodeType === 1) {

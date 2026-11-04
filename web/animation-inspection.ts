@@ -26,7 +26,7 @@ import {
  type TrackClassification,
 } from '../src/animation-ops.ts';
 import type {AppliedAnimation} from '../src/applied-context.ts';
-import {sourceTextContent} from './i18n.ts';
+import {setSourceText,sourceTextContent} from './i18n.ts';
 import type {AnimationSourceView} from './rebuild-client.ts';
 import {bindStagePick,domHoverPainter,type StagePick} from './stage-pick.ts';
 import {InspectionSelection} from './inspection-selection.ts';
@@ -129,6 +129,9 @@ export class AnimationInspectionPanel {
  private curvePlot:SVGSVGElement;
  private curveSegment=0;
  private readout:HTMLOutputElement;
+ /** #356: nodes update() writes every played frame, found once (the curve time input is static template). */
+ private curveTimeInput:HTMLInputElement|null=null;
+ private playheadNodes:ArrayLike<HTMLElement>|null=null; private readonly playheadTranslate=new WeakMap<HTMLElement,string>();
  private status:HTMLElement;
  private gateBanner:HTMLElement;
  private previewBadge:HTMLElement;
@@ -1389,7 +1392,7 @@ export class AnimationInspectionPanel {
   timeIn.type='number';
   timeIn.step='any';
   timeIn.min='0';
-  timeIn.dataset.insertTime='';
+  timeIn.dataset.insertTime='';timeIn.classList.add('animation-insert-time');
   timeIn.disabled=!gate.editable||editableTracks.length===0;
   timeIn.value=String(cleanMotionNumber(this.at));
   timeLabel.append(timeIn);
@@ -2504,18 +2507,34 @@ export class AnimationInspectionPanel {
  }
 
  update(time:number,duration:number){
-  this.at=time;this.runtimeDuration=duration;const timeInput=this.options.host.querySelector<HTMLInputElement>('[data-curve-time]')!;timeInput.max=String(formatSeconds(duration));if(document.activeElement!==timeInput)timeInput.value=String(formatSeconds(time));
-  const insertTimeInput=this.options.host.querySelector<HTMLInputElement>('[data-insert-time]');
+  this.at=time;this.runtimeDuration=duration;
+  const host=this.options.host,timeInput=this.curveTimeInput??=host.querySelector<HTMLInputElement>('[data-curve-time]')!;
+  const max=String(formatSeconds(duration));if(timeInput.max!==max)timeInput.max=max;if(document.activeElement!==timeInput)timeInput.value=String(formatSeconds(time));
+  const insertTimeInput=typeof host.getElementsByClassName==='function'?host.getElementsByClassName('animation-insert-time')[0] as HTMLInputElement|undefined:host.querySelector<HTMLInputElement>('[data-insert-time]');
   if(insertTimeInput&&document.activeElement!==insertTimeInput)insertTimeInput.value=String(cleanMotionNumber(time));
-  this.placePlayheads();const t=this.track,c=t&&CHANNELS[t.name]?.[this.channel];this.readout.textContent=`Runtime evaluation unavailable: ${this.unavailableChannel||'select a numeric stored channel'}.`;for(const key of ['time','channelValue','localValue','bone','property'])delete this.readout.dataset[key];
-  if(!t||!c||!this.inspection)return;
+  this.placePlayheads();const t=this.track,c=t&&CHANNELS[t.name]?.[this.channel];
+  // #356: the readout is written once per update, and only when its text or data changes (it was written twice
+  // per call, unavailable first, and update runs twice per played frame).
+  if(!t||!c||!this.inspection){
+   for(const key of ['time','channelValue','localValue','bone','property'])if(key in this.readout.dataset)delete this.readout.dataset[key];
+   setSourceText(this.readout,`Runtime evaluation unavailable: ${this.unavailableChannel||'select a numeric stored channel'}.`);return;
+  }
   const value=evaluateStoredChannel(t,this.channel,time),local=evaluateBoneLocals(this.inspection,t.target,time)[c.local];
-  Object.assign(this.readout.dataset,{time:String(time),channelValue:value===null?'setup':numeric(value),localValue:numeric(local),bone:t.target,property:c.local});
-  this.readout.textContent=`Runtime evaluation · ${formatSeconds(time)} s · ${c.local} track: ${value===null?'before first key (setup)':numeric(value)} · authored local: ${numeric(local)}`;
-  if(this.cursor&&this.plot){this.cursor.setAttribute('visibility',value===null?'hidden':'visible');if(value!==null){const p=this.plot(time,value);this.cursor.setAttribute('cx',String(p.x));this.cursor.setAttribute('cy',String(p.y));}}
+  const data:Record<string,string>={time:String(time),channelValue:value===null?'setup':numeric(value),localValue:numeric(local),bone:t.target,property:c.local};
+  for(const [key,v] of Object.entries(data))if(this.readout.dataset[key]!==v)this.readout.dataset[key]=v;
+  setSourceText(this.readout,`Runtime evaluation · ${formatSeconds(time)} s · ${c.local} track: ${value===null?'before first key (setup)':numeric(value)} · authored local: ${numeric(local)}`);
+  if(this.cursor&&this.plot){const cursor=this.cursor,set=(name:string,v:string)=>{if(cursor.getAttribute(name)!==v)cursor.setAttribute(name,v);};set('visibility',value===null?'hidden':'visible');if(value!==null){const p=this.plot(time,value);set('cx',String(p.x));set('cy',String(p.y));}}
  }
 
- private placePlayheads(){const end=this.effectiveEnd();for(const n of this.options.host.querySelectorAll<HTMLElement>('[data-playhead]'))n.style.left=`${Math.max(0,Math.min(100,this.at/end*100))}%`;}
+ private placePlayheads(){
+  // #356: a translate in the lane's container units (each playhead parent is an inline-size container), snapped to
+  // the device pixel the way a left offset is: moving it needs no layout, where a left change relaid every lane.
+  const end=this.effectiveEnd(),at=Math.max(0,Math.min(100,this.at/end*100)),step=1/(globalThis.devicePixelRatio||1),host=this.options.host;
+  const translate=`round(${at}cqw,${step}px)`;
+  // #356: a live collection of the playheads (one query for the panel's life) instead of a subtree query per call.
+  const nodes=typeof host.getElementsByClassName==='function'?(this.playheadNodes??=host.getElementsByClassName('animation-playhead') as unknown as ArrayLike<HTMLElement>):host.querySelectorAll<HTMLElement>('[data-playhead]');
+  for(let i=0;i<nodes.length;i++){const n=nodes[i]!;if(this.playheadTranslate.get(n)!==translate){this.playheadTranslate.set(n,translate);n.style.translate=translate;}}
+ }
 
  boneWorldMatrix(boneName:string):{x:number;y:number;a:number;b:number;c:number;d:number}{
   const captured=this.bones.get(boneName);

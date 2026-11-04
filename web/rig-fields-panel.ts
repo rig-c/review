@@ -253,7 +253,9 @@ export function bindRigFieldsPanel(deps:RigFieldsDeps):RigFieldsPanel {
    const out=turnArea.querySelector('output');if(out)out.textContent=`${dial} px`;const r=turnArea.querySelector<HTMLInputElement>('input[aria-label="turn dial (rig px)"]');if(r&&Number(r.value)!==dial)r.value=String(dial);
   },
   dialState:()=>({x:dial,on:!dialLabel.hidden,label:dialLabel.textContent??''}),
-  handles(){const rect=stage.getBoundingClientRect();return stage.hidden?[]:[...stage.querySelectorAll<HTMLElement>('.rig-fields-handle')].map(h=>({kind:h.dataset.kind!,x:rect.left+parseFloat(h.style.left),y:rect.top+parseFloat(h.style.top)}));},
+  // #356: the comment layer asks for these on every played frame; the stage rect (a forced layout after that frame's
+  // writes) is read only when there is a handle to place.
+  handles(){if(stage.hidden)return [];const list=[...stage.querySelectorAll<HTMLElement>('.rig-fields-handle')];if(!list.length)return [];const rect=stage.getBoundingClientRect();return list.map(h=>({kind:h.dataset.kind!,x:rect.left+parseFloat(h.style.left),y:rect.top+parseFloat(h.style.top)}));},
   revert(path){const next=new Map(edits);next.delete(path);change(()=>next);},
   applied(list){appliedOps=(list??[]).map(o=>JSON.stringify({path:o.path,value:o.value??null}));renderPending();},
   status:panelStatus,
