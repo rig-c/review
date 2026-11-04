@@ -35,8 +35,11 @@ test('#348: flag readers keep only parts the view holds, and skip malformed rows
   expect(meshReportFlags([{ part: 'a', contour: { bridges: { faint: [{ art: 3, maxAlpha: 9, box: [0, 0, 1, 1] }, { art: 'x' }] } } }, { part: 'b', contour: { bridges: { faint: [{ art: 3, maxAlpha: 9, box: [0, 0, 1, 1] }] } } }], names).map(f => f.id)).toEqual(['faint:0']);
   expect(() => meshReportFlags({}, names)).toThrow('PARTS_FLAGS_MALFORMED');
   // A passing gate, a population figure and a bone that shares the part's name are not flags; a failing gate is.
-  const doc = { OK_GATE: { status: 'PASS', parts: ['a'] }, BAD_GATE: { status: 'FAIL', rows: [{ part: 'a' }, { bone: 'a' }] }, seam_scope: { population: { pairs: [{ parts: ['a'] }] } }, loop_physics: [{ name: 'a_phys', bone: 'a' }], seam_pairs: [{ a: 'a', b: 'z' }] };
-  expect(checkFlags(doc, names).map(f => f.id)).toEqual(['check:BAD_GATE.rows[0]', 'check:seam_pairs[0]']);
+  // CLEAR, SKIP and REPORTED are rig-parts statuses that report no problem; WARN does.
+  const doc = { OK_GATE: { status: 'PASS', parts: ['a'] }, CLEAR_GATE: { status: 'CLEAR', parts: ['a'] }, SKIP_GATE: { status: 'SKIP', parts: ['a'] }, REPORTED_GATE: { status: 'REPORTED', parts: ['a'] }, WARN_GATE: { status: 'WARN', parts: ['a'] }, BAD_GATE: { status: 'FAIL', rows: [{ part: 'a' }, { bone: 'a' }] }, seam_scope: { population: { pairs: [{ parts: ['a'] }] } }, loop_physics: [{ name: 'a_phys', bone: 'a' }], seam_pairs: [{ parts: ['a', 'z'], px_over_40: 3 }] };
+  const read = checkFlags(doc, names);
+  expect(read.map(f => f.id)).toEqual(['check:WARN_GATE', 'check:BAD_GATE.rows[0]', 'check:seam_pairs[0]']);
+  expect(read.map(f => f.kind === 'check' ? [f.root, f.status] : null)).toEqual([['WARN_GATE', 'WARN'], ['BAD_GATE', 'FAIL'], ['seam_pairs', null]]);
 });
 
 /** Pixels of a painted part view that are the footprint tint over the bare sentinel: (0, 255, ~128). */
@@ -140,4 +143,21 @@ test('#348: the server serves the view, gates the sign-off on the capability, an
     expect(saved.status).toBe(200);
     expect(JSON.parse(await readFile(join(root, 'rig', 'parts-review.json'), 'utf8')).status).toBe('approved');
   } finally { server.stop(true); }
+});
+
+test('#348: each known producer line reads as one labelled line, in en and ko; an unknown shape falls back to its path', async () => {
+  const { flagLabel } = await import('../web/parts-flags.ts'), { t } = await import('../web/i18n.ts');
+  const en = (k: string, p?: Readonly<Record<string, string | number>>) => t(k, p, 'en'), ko = (k: string, p?: Readonly<Record<string, string | number>>) => t(k, p, 'ko');
+  // The opening the public demo's check.json reports, as written there.
+  const opening = { kind: 'check' as const, item: 'hair_back', path: 'figure_openings.openings[0]', root: 'figure_openings', status: null, entry: { pair: 'hair_back|handwear_r', under: 'hair_back', above: 'handwear_r', animation: 'hop', frame: 5, time: 0.417, opens: [5, 6], cell: 2.517, found_cells: 40, allowed_cells: 28 } };
+  expect(flagLabel(opening, en)).toBe('hair_back opens under handwear_r · hop f5 (0.417 s) · 40 cells found / 28 allowed');
+  expect(flagLabel(opening, ko)).toBe('hair_back이(가) handwear_r 아래에서 벌어짐 · hop f5 (0.417초) · 셀 40개 발견 / 허용 28개');
+  const seam = { kind: 'check' as const, item: 'front', path: 'seam_pairs[0]', root: 'seam_pairs', status: null, entry: { parts: ['front', 'back_control'], px_over_40: 3, px_over_80: 1, rig_box: [30, 14, 6, 4] } };
+  expect(flagLabel(seam, en)).toBe('Seam front | back_control · 3 px over 40 · 1 px over 80 · rig box 30,14 6×4');
+  expect(flagLabel(seam, ko)).toBe('이음매 front | back_control · 40 초과 3 px · 80 초과 1 px · 리그 상자 30,14 6×4');
+  const gate = { kind: 'check' as const, item: 'handwear_l', path: 'TIP_OVER_ROOT.parts[0]', root: 'TIP_OVER_ROOT', status: 'FAIL', entry: { part: 'handwear_l', root_rig_px: 1.478, tip_rig_px: 7.034, ratio: 4.761 } };
+  expect(flagLabel(gate, en)).toBe('TIP_OVER_ROOT FAIL on handwear_l · root_rig_px 1.478 · tip_rig_px 7.034 · ratio 4.761');
+  expect(flagLabel(gate, ko)).toBe('handwear_l에서 TIP_OVER_ROOT FAIL · root_rig_px 1.478 · tip_rig_px 7.034 · ratio 4.761');
+  expect(flagLabel({ ...opening, entry: { under: 'hair_back' } }, en)).toBe('Check line figure_openings.openings[0]');
+  expect(flagLabel({ kind: 'faint', item: 'a', art: 12, maxAlpha: 15, box: [2, 2, 4, 3] }, en)).toBe('Faint island left out of the mesh: 12 px, brightest alpha 15, at 2,2 4×3 (part-image px).');
 });

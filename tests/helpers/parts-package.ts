@@ -49,5 +49,5 @@ export async function writePartsPackage(root: string): Promise<void> {
     { part: 'back_defect', vertices: 10, triangles: 8, mode: 'contour', contour: { bridges: { islands: [900, 12], units: [[900]], joins: [], faint: [FAINT] } } },
     { part: 'back_control', vertices: 10, triangles: 8, mode: 'contour', contour: {} },
   ]) + '\n');
-  await writeFile(join(root, 'check', 'check.json'), JSON.stringify({ gate_spine_html_green: true, seam_pairs: [{ a: 'front', b: 'back_control', px: 3 }] }) + '\n');
+  await writeFile(join(root, 'check', 'check.json'), JSON.stringify({ gate_spine_html_green: true, seam_pairs: [{ parts: ['front', 'back_control'], px_over_40: 3, px_over_80: 1, frame_box: [30, 14, 6, 4], rig_box: [30, 14, 6, 4] }] }) + '\n');
 }

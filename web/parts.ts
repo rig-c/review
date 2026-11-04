@@ -10,6 +10,7 @@
 import { bindDomI18n, onLanguageChange, t } from './i18n.ts';
 import { pageInstanceAccess } from './instance-access.ts';
 import { connectLiveWindow } from './live-connection.ts';
+import { flagLabel } from './parts-flags.ts';
 import { frontParts, paintAlphaOnly, paintBackground, paintPart } from './parts-render.ts';
 
 type Outcome = 'pending' | 'clean' | 'flagged';
@@ -17,7 +18,7 @@ interface Item { name: string; index: number; x: number; y: number; w: number; h
 interface Page { name: string; width: number; height: number; index: number }
 type Flag =
   | { id: string; item: string; source: 'mesh_report'; kind: 'faint'; art: number; maxAlpha: number; box: [number, number, number, number] }
-  | { id: string; item: string; source: 'check'; kind: 'check'; path: string; line: string };
+  | { id: string; item: string; source: 'check'; kind: 'check'; path: string; line: string; root: string; status: string | null; entry: Record<string, unknown> };
 interface ViewData {
   mode: 'parts' | 'atlas'; title: string; rigSize: [number, number] | null; items: Item[]; pages: Page[]; flags: Flag[];
   flagSources: string[]; flagMissing: string[]; verdictFile: string;
@@ -82,7 +83,10 @@ async function paint(): Promise<void> {
       box.onclick = () => { select(r.index); setView('item'); };
       return box;
     }));
-    caption.textContent = t('Page {name}: {width}×{height} px, {count} regions. The background shows through padding; a region box is the packer\'s, and pixels outside it are bleed.', { name: page.name, width: page.width, height: page.height, count: data.items.filter(r => r.page === page.name).length });
+    const regions = data.items.filter(r => r.page === page.name).length;
+    caption.textContent = regions === 1
+      ? t('Page {name}: {width}×{height} px, 1 region. The background shows through padding; a region box is the packer\'s, and pixels outside it are bleed.', { name: page.name, width: page.width, height: page.height })
+      : t('Page {name}: {width}×{height} px, {count} regions. The background shows through padding; a region box is the packer\'s, and pixels outside it are bleed.', { name: page.name, width: page.width, height: page.height, count: regions });
     return;
   }
   if (data.mode === 'atlas') {
@@ -110,12 +114,7 @@ async function paint(): Promise<void> {
     return box;
   }));
   caption.textContent = t('{name}: {width}×{height} px at {x},{y} in rig px, draw order {order} of {count}.', { name: item.name, width: item.w, height: item.h, x: item.x, y: item.y, order: item.index + 1, count: data.items.length })
-    + (state.footprints ? ' ' + (front.length ? t('Tinted: the footprints of {count} parts drawn in front ({names}).', { count: front.length, names: front.map(o => o.name).join(', ') }) : t('No part is drawn in front of it.')) : '');
-}
-
-function flagText(f: Flag): string {
-  if (f.kind === 'faint') return t('Faint island left out of the mesh: {art} px, brightest alpha {alpha}, at {x},{y} {width}×{height} (part-image px).', { art: f.art, alpha: f.maxAlpha, x: f.box[0], y: f.box[1], width: f.box[2], height: f.box[3] });
-  return t('Check line {path}:', { path: f.path });
+    + (state.footprints ? ' ' + (front.length === 1 ? t('Tinted: the footprint of the part drawn in front ({names}).', { names: front[0]!.name }) : front.length ? t('Tinted: the footprints of {count} parts drawn in front ({names}).', { count: front.length, names: front.map(o => o.name).join(', ') }) : t('No part is drawn in front of it.')) : '');
 }
 
 function renderFlags(): void {
@@ -125,8 +124,14 @@ function renderFlags(): void {
   list.replaceChildren(...flags.map(f => {
     const li = document.createElement('li');
     li.dataset.flagId = f.id; li.dataset.flagSource = f.source;
-    li.append(document.createTextNode(flagText(f)));
-    if (f.kind === 'check') { const code = document.createElement('code'); code.textContent = ' ' + f.line; li.append(code); }
+    const label = document.createElement('span'); label.className = 'pv-flag-label'; label.textContent = flagLabel(f, t);
+    li.append(label);
+    if (f.kind === 'check') {
+      // The producer's object, verbatim, one click away: the label names its fields and hides none of it.
+      const raw = document.createElement('details'), summary = document.createElement('summary'), code = document.createElement('code');
+      summary.textContent = t('Producer line'); code.textContent = `${f.path}: ${f.line}`;
+      raw.append(summary, code); li.append(raw);
+    }
     return li;
   }));
   if (!flags.length) { const li = document.createElement('li'); li.className = 'pv-none'; li.textContent = t('No producer flag names this part.'); list.replaceChildren(li); }

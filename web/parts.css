@@ -39,7 +39,9 @@ h2{font-size:11px;letter-spacing:.06em;color:var(--muted);margin:4px 0 8px}
 #pv-caption{padding:0 12px 8px;margin:0}
 #pv-flags{list-style:none;margin:0;padding:0}
 #pv-flags li{border-left:3px solid var(--flag);padding:4px 6px;margin-bottom:6px;background:color-mix(in srgb,var(--flag) 8%,transparent);word-break:break-word}
-#pv-flags code{font-size:11px}
+#pv-flags code{font-size:11px;display:block;margin-top:4px;color:var(--muted)}
+#pv-flags details{margin-top:3px}
+#pv-flags summary{cursor:pointer;font-size:11px;color:var(--muted)}
 #pv-flags li.pv-none{border-left-color:var(--line);background:none;color:var(--muted)}
 .pv-verdict{margin-top:16px;display:flex;flex-direction:column;gap:6px}
 .pv-outcomes{display:flex;gap:10px}

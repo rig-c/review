@@ -30,12 +30,12 @@ is written), `--port <n>`. Like `review`, it serves in the foreground and exits 
   occluder's shape at a glance. Nothing is measured; the tint is the front parts' own alpha.
 - **Atlas mode**: the pages as packed, with each region's box and name; the background shows through padding, and a
   region's own view keeps 4 page pixels around its box (dashed) so bleed is visible. Clicking a region opens it.
-- **Producer flags**, read from the files rig-parts writes and shown on the part they name. None is re-measured here.
+- **Producer flags**, read from the files rig-parts writes and shown on the part they name. None is re-measured here. Each reads as one labelled line (an opening's parts, animation, frame and cells; a seam pair's pixel counts; a gate's name, status and readings), with the producer's object verbatim under a collapsed **Producer line**.
 
 | Flag | Read from | When |
 | --- | --- | --- |
 | `faint:<i>` | `mesh_report.json` beside `parts.json` (`rig` writes it there): a row's `contour.bridges.faint[i]` | a faint island the mesh left out (rig-parts #326) |
-| `check:<path>` | `check/check.json` beside `rig/` | a gate whose `status` is not `PASS`, or a `seam_pairs` / `figure_openings` entry, that names the part by a string field; bone fields (`bone`, `root`, `tip`, `link`) never attribute |
+| `check:<path>` | `check/check.json` beside `rig/` | a gate whose `status` is `FAIL` or `WARN` (not `PASS`, `CLEAR`, `SKIP` or `REPORTED`), or a `seam_pairs` / `figure_openings` entry, that names the part by a string field; bone fields (`bone`, `root`, `tip`, `link`) never attribute |
 
 The occlusion-coverage report (rig-c/parts#998) is not read yet; the footprint toggle stands without it.
 

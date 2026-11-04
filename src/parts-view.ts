@@ -8,7 +8,7 @@
  *
  * Producer flags are read from the files rig-parts writes and shown on their part; nothing is re-measured here:
  * - `mesh_report.json` rows: `contour.bridges.faint[]` (rig-parts #326), each a faint island the mesh left out;
- * - `check.json`: a failing gate (`status` not `PASS`), `seam_pairs` and `figure_openings`, on every part they name.
+ * - `check.json`: a gate whose `status` is FAIL or WARN, `seam_pairs` and `figure_openings`, on every part they name.
  *
  * The sign-off is `rig-review-parts-verdict/1` (docs/PARTS_VIEW.md), written beside `parts.json` by default. Its
  * `source.sha256` is the sha256 over the UTF-8 lines `<path>\t<sha256>\n`, sorted by path bytewise, where every path
@@ -47,7 +47,9 @@ export interface ViewPage { name: string; width: number; height: number; index: 
 /** A producer flag on one item. `id` is stable for the same producer file, and is what the verdict records. */
 export type ProducerFlag =
   | { id: string; item: string; source: 'mesh_report'; kind: 'faint'; art: number; maxAlpha: number; box: [number, number, number, number] }
-  | { id: string; item: string; source: 'check'; kind: 'check'; path: string; line: string };
+  | { id: string; item: string; source: 'check'; kind: 'check'; path: string; line: string;
+      /** The top-level check.json key the line sits under, the gate's status when it is a gate, and the object as written. */
+      root: string; status: string | null; entry: Record<string, unknown> };
 
 export interface PartsViewPackage {
   mode: PartsViewMode;
@@ -122,17 +124,19 @@ export function meshReportFlags(rows: unknown, names: ReadonlySet<string>): Prod
 const BONE_FIELDS = new Set(['bone', 'bones', 'root', 'tip', 'link', 'links', 'head_bone']);
 /** check.json lists that are problem lines by themselves (rig-parts STABILITY: written when a bar fails or on request). */
 const PROBLEM_LISTS = new Set(['seam_pairs', 'figure_openings']);
+/** Gate statuses that report a problem; PASS, CLEAR, SKIP and REPORTED do not (rig-parts `CheckStatus`). */
+export const PROBLEM_STATUSES = new Set(['FAIL', 'WARN']);
 
 /**
- * The lines of `check.json` that report a problem and name a held part: a gate whose `status` is not `PASS`, or an
+ * The lines of `check.json` that report a problem and name a held part: a gate whose `status` is FAIL or WARN, or an
  * entry of `seam_pairs` / `figure_openings`. Every object inside that names a part by a string field (or a string in
  * an array field), bone fields excepted, is quoted as the producer wrote it. A passing gate is not a flag.
  */
 export function checkFlags(doc: unknown, names: ReadonlySet<string>): ProducerFlag[] {
   const flags: ProducerFlag[] = [];
-  const walk = (value: unknown, path: string, depth: number): void => {
+  const walk = (value: unknown, path: string, depth: number, root: string, status: string | null): void => {
     if (depth > 32) return;
-    if (Array.isArray(value)) { value.forEach((v, i) => walk(v, `${path}[${i}]`, depth + 1)); return; }
+    if (Array.isArray(value)) { value.forEach((v, i) => walk(v, `${path}[${i}]`, depth + 1, root, status)); return; }
     const obj = record(value);
     if (!obj) return;
     const named = new Set<string>();
@@ -144,13 +148,13 @@ export function checkFlags(doc: unknown, names: ReadonlySet<string>): ProducerFl
     if (named.size) {
       const text = JSON.stringify(obj);
       const line = text.length > 600 ? text.slice(0, 599) + '…' : text;
-      for (const item of named) flags.push({ id: `check:${path}`, item, source: 'check', kind: 'check', path, line });
+      for (const item of named) flags.push({ id: `check:${path}`, item, source: 'check', kind: 'check', path, line, root, status, entry: obj });
     }
-    for (const [k, v] of Object.entries(obj)) if (v && typeof v === 'object') walk(v, `${path}.${k}`, depth + 1);
+    for (const [k, v] of Object.entries(obj)) if (v && typeof v === 'object') walk(v, `${path}.${k}`, depth + 1, root, status);
   };
   for (const [key, value] of Object.entries(record(doc) ?? {})) {
     const status = record(value)?.status;
-    if (typeof status === 'string' ? status !== 'PASS' : PROBLEM_LISTS.has(key)) walk(value, key, 0);
+    if (typeof status === 'string' ? PROBLEM_STATUSES.has(status) : PROBLEM_LISTS.has(key)) walk(value, key, 0, key, typeof status === 'string' ? status : null);
   }
   return flags;
 }
