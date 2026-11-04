@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.4](https://github.com/rig-c/review/compare/v1.5.3...v1.5.4) (2026-11-04)
+
+
+### Bug Fixes
+
+* **animate:** keep physics stepping while the clip is paused ([#346](https://github.com/rig-c/review/issues/346)) ([#363](https://github.com/rig-c/review/issues/363)) ([8309837](https://github.com/rig-c/review/commit/8309837aaad4d5f27af2e8ed754b3b725c756490))
+
 ## [1.5.3](https://github.com/rig-c/review/compare/v1.5.2...v1.5.3) (2026-11-04)
 
 
