@@ -3,7 +3,9 @@
  * enabled) and on one with grid meshes only (disabled, reason shown).
  *
  * - Marker toggle: no chest overlay is drawn at load, it is drawn after one click on the toggle, and gone after a second.
- * - `--shots <dir>`: panel screenshots at 1440 and 1024 px wide in en and ko for both rigs.
+ * - Compare → Setup → Chest (the compare page serves its own stylesheet): the Markers button shows exactly one state label,
+ *   following its pressed state, and the regions are the table layout.
+ * - `--shots <dir>`: panel screenshots at 1440 and 1024 px wide in en and ko for both rigs, and the Compare block.
  *
  * The rigs are synthetic: the `strip-probe` test model with a config that declares a contour mesh, or grid meshes only.
  * Stand-in producers answer `--version`; nothing is rebuilt.
@@ -16,6 +18,9 @@ import {join} from 'node:path';
 import {homedir,tmpdir} from 'node:os';
 import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
+import {loadCompare} from '../src/compare.ts';
+import {startCompareServer} from '../src/compare-server.ts';
+import {PROBE_MP4_BASE64} from './compare-mode-browser.ts';
 
 interface Page {viewport(w:number,h:number):Promise<void>;goto(url:string):Promise<void>;evaluate<T>(expression:string):Promise<T>;screenshot(clip?:{x:number;y:number;width:number;height:number}):Promise<Buffer>;close():Promise<void>}
 
@@ -92,10 +97,32 @@ export async function runChestPanelBrowser(shots:string|null):Promise<string[]> 
  const failures:string[]=[];let page:Page|null=null;const servers:{stop:()=>unknown}[]=[];
  try{
   await writeProducers(root);
-  const contour=await writePackage(root,'contour','contour'),grid=await writePackage(root,'grid','grid');
+  const contour=await writePackage(root,'contour','contour'),grid=await writePackage(root,'grid','grid'),contourB=await writePackage(root,'contour-b','contour');
+  const reference=join(root,'ref.mp4');await writeFile(reference,Buffer.from(PROBE_MP4_BASE64,'base64'));
   page=await launch(join(root,'profile'));
   const urls:Record<string,string>={};
-  for(const [name,dir] of [['contour',contour],['grid',grid]] as const){const server=await startServer(await loadReview(dir),{port:0,stateDir:join(root,'state',name),graceMs:3_600_000,unopenedTimeoutMs:3_600_000,exitOnClose:false});servers.push(server as any);urls[name]=`http://127.0.0.1:${(server as any).port}/`;}
+  const keep={graceMs:3_600_000,unopenedTimeoutMs:3_600_000,exitOnClose:false};
+  for(const [name,dir] of [['contour',contour],['grid',grid]] as const){const server=await startServer(await loadReview(dir),{port:0,stateDir:join(root,'state',name),...keep});servers.push(server as any);urls[name]=`http://127.0.0.1:${(server as any).port}/`;}
+  {const server=await startCompareServer(await loadCompare({a:contour,b:contourB,reference,animation:'inspect'}),{port:0,stateDir:join(root,'state','compare'),...keep});servers.push(server as any);urls.compare=`http://127.0.0.1:${(server as any).port}/`;}
+
+  // Compare → Setup → Chest: one state label that follows pressed, and the table layout.
+  await page.viewport(1440,900);await page.goto(urls.compare+'?lang=en');
+  const compareReads=await page.evaluate<{pressed:string|null;labels:string[];table:string;rowCols:string}[]>(`(async()=>{const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+   for(let i=0;i<400;i++){const play=document.getElementById('play'),h=document.getElementById('handoff-line');if(play&&!play.disabled&&document.querySelector('#a-root canvas, #a-root img')&&h&&h.textContent&&!/Reading/.test(h.textContent))break;await sleep(25);}
+   const setup=document.querySelector('.mode-switch [data-mode="rig"]');
+   for(let i=0;i<200&&setup.getAttribute('aria-pressed')!=='true';i++){if(i%20===0)setup.click();await sleep(25);}
+   for(let i=0;i<200;i++){const m=document.getElementById('chest-markers');if(m&&!m.disabled)break;await sleep(25);}
+   document.getElementById('block-tab-chest-regions')?.click();await sleep(200);
+   const read=()=>{const m=document.getElementById('chest-markers');return {pressed:m.getAttribute('aria-pressed'),labels:[...m.querySelectorAll('.chest-markers-state')].filter(e=>getComputedStyle(e).display!=='none').map(e=>e.textContent),table:getComputedStyle(document.querySelector('.chest-table')).tableLayout,rowCols:getComputedStyle(document.querySelector('.chest-contour')).gridTemplateColumns};};
+   const out=[read()];document.getElementById('chest-markers').click();await sleep(150);out.push(read());document.getElementById('chest-markers').click();await sleep(150);out.push(read());return out;})()`);
+  console.log(JSON.stringify({compare:compareReads}));
+  for(const [i,r] of compareReads.entries()){
+   const want=i===1?'true':'false';
+   if(r.pressed!==want||r.labels.length!==1||r.labels[0]!==(want==='true'?'On':'Off'))failures.push(`COMPARE_MARKERS_STATE: step ${i} pressed=${r.pressed} labels=${JSON.stringify(r.labels)}`);
+   // The new layout: a fixed-layout regions table, and the contour settings in one auto-filled row (the old sheet's 2-column grid).
+   if(r.table!=='fixed'||/^repeat\(2,/.test(r.rowCols)||r.rowCols.split(' ').length<3)failures.push(`COMPARE_CHEST_TABLE_LAYOUT: step ${i} table-layout=${r.table} contour columns=${r.rowCols}`);
+  }
+  if(shots){await mkdir(shots,{recursive:true});await page.evaluate(`(async()=>{const s=document.getElementById('chest-regions');s.scrollIntoView({block:'start'});await new Promise(r=>setTimeout(r,100));})()`);await writeFile(join(shots,'chest-compare-1440-en-block.png'),await page.screenshot());}
 
   // The marker toggle: off at load, on after one click, off after a second.
   await page.viewport(1440,900);await page.goto(urls.contour+'?lang=en');await page.evaluate(READY);

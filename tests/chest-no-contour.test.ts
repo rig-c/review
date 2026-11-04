@@ -123,6 +123,18 @@ test('#345 both pages draw the chest overlay only while the toggle is on',async(
  }
 });
 
+/** Every rule of a sheet whose selector names the chest detail block (#345), in source order. */
+function chestBlockRules(css:string):string[] {
+ return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(m=>/\.chest-(regions|head|markers|crop|label|unavailable|table|side|row|check|more|foot|contour)\b|#chest-(status|export)\b/.test(m[1]!)).map(m=>`${m[1]!.trim()}{${m[2]}}`);
+}
+test('#345 the compare page (served web/compare.css) carries the same chest block rules as web/styles.css',async()=>{
+ const [main,compare]=await Promise.all(['styles.css','compare.css'].map(f=>readFile(new URL('../web/'+f,import.meta.url),'utf8')));
+ const rules=chestBlockRules(main!);
+ // The rules the new layout needs: one Markers state label at a time, the regions table, the crop pair, the one-row contour.
+ for(const needle of ['.chest-markers[aria-pressed=true] .chest-markers-off,.chest-markers:not([aria-pressed=true]) .chest-markers-on{display:none}','.chest-table{','.chest-crop{','.chest-row{'])expect(rules.some(r=>r.startsWith(needle)||r.includes(needle))).toBe(true);
+ expect(chestBlockRules(compare!)).toEqual(rules);
+});
+
 test('#342 planted control: a re-enabled button on a grid-only config fails the bar by name',()=>withEditor((getEl,editor)=>{
  const reason=noContourReason(statusOf(gridOnly))!.text;
  editor.unavailable(reason);
