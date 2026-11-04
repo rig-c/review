@@ -1,0 +1,49 @@
+:root{--bg:#f6f7f9;--panel:#fff;--line:#d9dde3;--text:#1d232b;--muted:#5f6b7a;--accent:#2563eb;--flag:#d97706;--clean:#15803d;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--bg:#14171c;--panel:#1b2027;--line:#2d343e;--text:#e6e9ee;--muted:#9aa5b4;--accent:#60a5fa;--flag:#f59e0b;--clean:#4ade80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+.pv-app{display:flex;flex-direction:column;height:100vh}
+.pv-top{display:flex;align-items:center;gap:16px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
+.pv-brand{font-weight:600;display:flex;align-items:center;gap:6px}
+.pv-mark{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:5px;background:var(--accent);color:#fff;font-size:12px}
+#pv-load{margin-left:auto}
+.pv-subtle{color:var(--muted)}
+.pv-layout{flex:1;display:grid;grid-template-columns:240px minmax(0,1fr) 300px;min-height:0}
+.pv-list,.pv-side{background:var(--panel);overflow:auto;padding:10px}
+.pv-list{border-right:1px solid var(--line)}
+.pv-side{border-left:1px solid var(--line)}
+h2{font-size:11px;letter-spacing:.06em;color:var(--muted);margin:4px 0 8px}
+#pv-items{list-style:none;margin:0;padding:0}
+#pv-items li button{width:100%;display:flex;gap:6px;align-items:center;text-align:left;border:0;background:none;color:inherit;padding:4px 6px;border-radius:5px;cursor:pointer;font:inherit}
+#pv-items li button[aria-current="true"]{background:color-mix(in srgb,var(--accent) 18%,transparent)}
+.pv-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pv-badge{font-size:10px;padding:0 5px;border-radius:8px;border:1px solid var(--line);color:var(--muted)}
+.pv-badge[data-outcome="clean"]{color:var(--clean);border-color:var(--clean)}
+.pv-badge[data-outcome="flagged"]{color:var(--flag);border-color:var(--flag)}
+.pv-count{font-size:10px;color:var(--flag)}
+.pv-stage{display:flex;flex-direction:column;min-width:0;min-height:0}
+.pv-toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line)}
+.pv-field{display:flex;align-items:center;gap:5px}
+.pv-group{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.pv-group button{border:0;background:var(--panel);color:inherit;padding:3px 9px;cursor:pointer;font:inherit}
+.pv-group button[aria-pressed="true"]{background:var(--accent);color:#fff}
+.pv-canvas-wrap{flex:1;overflow:auto;padding:16px}
+.pv-canvas-box{position:relative;display:inline-block;line-height:0}
+#pv-canvas{image-rendering:pixelated;image-rendering:crisp-edges;display:block}
+.pv-overlay{position:absolute;inset:0;pointer-events:none}
+.pv-box{position:absolute;border:1px solid #ff0;outline:1px solid #000;pointer-events:auto;cursor:pointer}
+.pv-box[data-flag]{border-color:var(--flag);border-style:dashed;pointer-events:none}
+.pv-box[aria-current="true"]{border-color:#0ff;border-width:2px}
+.pv-box span{position:absolute;left:0;top:-14px;font-size:10px;line-height:12px;background:#000c;color:#fff;padding:0 3px;white-space:nowrap}
+.pv-region-edge{position:absolute;border:1px dashed #0ff;pointer-events:none}
+#pv-caption{padding:0 12px 8px;margin:0}
+#pv-flags{list-style:none;margin:0;padding:0}
+#pv-flags li{border-left:3px solid var(--flag);padding:4px 6px;margin-bottom:6px;background:color-mix(in srgb,var(--flag) 8%,transparent);word-break:break-word}
+#pv-flags code{font-size:11px}
+#pv-flags li.pv-none{border-left-color:var(--line);background:none;color:var(--muted)}
+.pv-verdict{margin-top:16px;display:flex;flex-direction:column;gap:6px}
+.pv-outcomes{display:flex;gap:10px}
+.pv-label{font-size:11px;color:var(--muted);margin-top:4px}
+textarea,select{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:4px}
+.pv-primary{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer;font:inherit}
+@media (max-width:900px){.pv-layout{grid-template-columns:1fr}.pv-list,.pv-side{max-height:30vh}}

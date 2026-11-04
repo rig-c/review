@@ -15,12 +15,14 @@ import { readFeedbackSession, readFeedbackCompareSession } from './session-histo
 import { startServer } from './server.ts';
 import { loadCompare } from './compare.ts';
 import { startCompareServer } from './compare-server.ts';
+import { loadPartsView, type PartsViewOptions } from './parts-view.ts';
+import { startPartsServer } from './parts-server.ts';
 import { readSession, type Feedback } from './session.ts';
 import { readCompareSession } from './compare-session.ts';
 import { exportReviewStrip, exportCompareStrip, stripJson, writeStripOutput, validateStripOutput } from './strip-export.ts';
 import type { StripInterval, StripRequest } from './strip.ts';
 const handoffUsage='[--config <path> [--parts <dir>] [--source <png> --full <dir> [--head <dir>]] [--keypoints <file>]]';
-const usage='Usage: rig-review open <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--control] [--direct] [--view-only] '+handoffUsage+'\n       --config declares the producer handoff (wins over the review.json "producer" block and discovery of config.json, rig/config.json, ../config.json beside an opened out/); feedback and control take the same flags; --view-only opens without a producer handoff.\n       open is managed by default: one loopback front at 127.0.0.1:4318 (RIG_REVIEW_FRONT_PORT overrides) serves /instances/<key>/; --direct serves the worker on its own port.\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--format json|issue]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID] [--view-only]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>\n       rig-review --version';
+const usage='Usage: rig-review open <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--control] [--direct] [--view-only] '+handoffUsage+'\n       --config declares the producer handoff (wins over the review.json "producer" block and discovery of config.json, rig/config.json, ../config.json beside an opened out/); feedback and control take the same flags; --view-only opens without a producer handoff.\n       open is managed by default: one loopback front at 127.0.0.1:4318 (RIG_REVIEW_FRONT_PORT overrides) serves /instances/<key>/; --direct serves the worker on its own port.\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--format json|issue]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID] [--view-only]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>\n       rig-review parts <build root | parts dir | review package> [--mesh-report <file>] [--check <file>] [--verdict <file>] [--port <n>]\n       rig-review --version';
 async function stripCommand(args:string[],options:{stateDir?:string}){
   const compare=args[0]==='compare';if(compare)args.shift();const a=args.shift(),b=compare?args.shift():undefined;if(!a||compare&&!b)throw new Error('strip: expected package input(s)');
   let reference:string|undefined,referenceVideo:string|undefined,animation:string|undefined,basis:'a'|'b'|undefined,range:string|undefined,output:string|undefined,jsonOnly=false,all=false;
@@ -93,12 +95,27 @@ function commandHelpRequested(args:readonly string[],command:'open'|'review'|'ch
  }
  return false;
 }
+const partsUsage='Usage: rig-review parts <build root | parts dir | review package> [--mesh-report <file>] [--check <file>] [--verdict <file>] [--port <n>]\n       A directory holding parts.json (or a build root whose rig/ holds it) opens in parts mode, before rigging; a review package or check/ folder opens its atlas.\n       The sign-off is written to parts-review.json beside parts.json (or the model), or to --verdict.';
+/** `rig-review parts` (#348): the parts and atlas view, served in the foreground; exits when its last tab closes. */
+async function partsCommand(args:string[]){
+ const input=args.shift();if(!input||input==='--help'||input==='-h'){console.log(partsUsage);return;}
+ const options:PartsViewOptions={};let port=4317;const seen=new Set<string>();
+ while(args.length){const flag=args.shift()!;if(flag==='--help'||flag==='-h'){console.log(partsUsage);return;}if(seen.has(flag))throw new Error(`parts: duplicate option ${flag}`);seen.add(flag);const value=args.shift();if(!value)throw new Error(`Missing value for ${flag}`);
+  if(flag==='--mesh-report')options.meshReport=value;else if(flag==='--check')options.check=value;else if(flag==='--verdict')options.verdict=value;
+  else if(flag==='--port'){port=Number(value);if(!Number.isInteger(port)||port<0||port>65535)throw new Error('--port: expected integer 0..65535');}
+  else throw new Error(`Unknown option ${flag}\n${partsUsage}`);}
+ const pkg=await loadPartsView(input,options);
+ const capability=randomBytes(32).toString('hex'),server=await startPartsServer(pkg,{port,capability,exitOnClose:true});
+ const stop=(sig:string)=>{server.stop(true);console.log(`review parts: exiting — received ${sig}.`);process.exit(0);};process.once('SIGINT',()=>stop('SIGINT'));process.once('SIGTERM',()=>stop('SIGTERM'));
+ console.log(`Parts view ready: http://127.0.0.1:${server.port}/#cap=${capability}\nMode: ${pkg.mode} · ${pkg.items.length} ${pkg.mode==='parts'?'parts':'regions'} · ${pkg.flags.length} producer flags\nSign-off: ${pkg.verdictPath}\nPress Ctrl+C to stop.`);
+}
 export async function main(args:string[],options:{stateDir?:string}={}){
   options={stateDir:options.stateDir??defaultStateDir()};if(args[0]==='--')args.shift();
   if(args[0]==='--version'||args[0]==='-v'){console.log((JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')) as {version:string}).version);return;}
   if(args[0]==='control')return controlCommand(args.slice(1),options.stateDir);
   if(args[0]==='open'){const openArgs=args.slice(1);if(commandHelpRequested(openArgs,'open')){console.log(usage);return;}const inputs=parseOpenInputs(openArgs);const result=await openReview(inputs,options);// Launcher contract (README): stdout is the URL line alone; stderr is diagnostic, control notice, retrieval, in that order.
     console.log(result.url);if(result.build)console.error(buildOpenDiagnostic(result.build));if(result.selection)console.error(animationDiagnostic(result.selection));if(inputs.control)console.error('Inspection control enabled; query the current connected page with rig-review control and the same inputs.');console.error(`Review ${result.reused?'reused':'started'}; feedback: rig-review feedback ${[result.inputs.input,...(result.inputs.compare?['--compare',result.inputs.compare]:[]),...(result.inputs.reference?['--reference',result.inputs.reference]:[]),...(result.inputs.animation?['--animation',result.inputs.animation]:[]),...handoffWords(result.inputs)].map(shellWord).join(' ')}`);return;}
+  if(args[0]==='parts')return partsCommand(args.slice(1));
   if(args[0]==='strip'){args.shift();if(args.includes('--help')){console.log(usage+'\nStrip: strip <package> --reference <declared-video-id> --animation <name> (--frames FIRST:LAST | --all-feedback) [--json] [--out path]\n       strip compare <a> <b> --reference <video> --animation <name> --basis a|b (--frames FIRST:LAST | --all-feedback) [--json] [--out path]');return;}return stripCommand(args,options);}let command:'review'|'check'|'feedback'='review';if(args[0]==='check'||args[0]==='feedback'){command=args.shift() as 'check'|'feedback';}
   if(args[0]==='--help'||args[0]==='-h'){console.log(usage);return;}
   let format:'json'|'issue'='json';if(command==='feedback'){const parsed=feedbackFormat(args);args=parsed.args;format=parsed.format;}

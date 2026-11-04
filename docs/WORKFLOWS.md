@@ -27,6 +27,9 @@ The server prints the exact link, for example `http://127.0.0.1:4317/?checkpoint
 
 Add `lang=en` or `lang=ko` to a review link's query to open it in that language, ahead of the fragment: `…/?checkpoint=silhouette&lang=en#cap=…`. It outranks the browser and the saved choice and stores nothing, so a shared link cannot change a reader's setting. Picking a language in the settings menu takes over for the rest of the page.
 
+## Review parts before rigging
+`rig-review parts <out>` opens a rig-parts build root's parts (`rig/parts.json` and `rig/parts/*.png`) before any rig is built: each part on a sentinel background, the footprints of the parts in front of it, the producer's flags on it, and a per-part sign-off written to `parts-review.json` for the create pipeline. `rig-review parts <out>/check` shows a built rig's atlas. See [Parts and atlas view](PARTS_VIEW.md).
+
 ## Compare two outputs
 
 Open two compiled packages against one explicitly selected local reference video:
