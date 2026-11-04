@@ -98,6 +98,43 @@ test('#342 positive control: a config with a contour mesh leaves the chest tools
  editor.rebuildState({busy:true,applied:false});expect(getEl('bust-apply').disabled).toBe(true);
 }));
 
+test('#345 the detail block\'s Markers button mirrors the toggle: off at bind, either button turns both on and off, and a grid-only config disables it with the reason shown',()=>withEditor((getEl,editor)=>{
+ const pressed=()=>[getEl('chest-edit').getAttribute('aria-pressed'),getEl('chest-markers').getAttribute('aria-pressed')];
+ expect(editor.active()).toBe(false);expect(getEl('chest-editor-bar').hidden).toBe(true);
+ getEl('chest-markers').dispatch('click');expect(editor.active()).toBe(true);expect(pressed()).toEqual(['true','true']);
+ getEl('chest-edit').dispatch('click');expect(editor.active()).toBe(false);expect(pressed()).toEqual(['false','false']);
+ const reason=noContourReason(statusOf(gridOnly))!.text;
+ editor.unavailable(reason);
+ expect(getEl('chest-markers').disabled).toBe(true);expect(getEl('chest-markers').title).toBe(reason);expect(getEl('chest-markers').getAttribute('aria-description')).toBe(reason);
+ expect(getEl('chest-unavailable').hidden).toBe(false);expect(getEl('chest-unavailable').textContent).toBe(reason);
+ getEl('chest-markers').dispatch('click');expect(editor.active()).toBe(false);
+ editor.unavailable(null);
+ expect(getEl('chest-markers').disabled).toBe(false);expect(getEl('chest-markers').title).toBe('Draw the chest regions on the rig and edit them there; the same toggle as Chest regions in the view bar');
+ expect(getEl('chest-unavailable').hidden).toBe(true);
+}));
+
+test('#345 both pages draw the chest overlay only while the toggle is on',async()=>{
+ for(const file of ['../web/main.ts','../web/compare-picked-tools.ts']){
+  const source=await readFile(new URL(file,import.meta.url),'utf8');
+  // The guard sits at the top of each overlay source, before anything is drawn.
+  for(const name of ['chestRegions','chestCircles']){const at=source.indexOf(`function ${name}()`);expect(at).toBeGreaterThan(-1);expect(source.slice(at,at+260)).toMatch(/!chestEditor\?\.active\(\)\)\s*return \[\]/);}
+  // The valid-designation fallback (drawn with the toggle off) is gone.
+  expect(source).not.toContain('chestOverlayCircles(');
+ }
+});
+
+/** Every rule of a sheet whose selector names the chest detail block (#345), in source order. */
+function chestBlockRules(css:string):string[] {
+ return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(m=>/\.chest-(regions|head|markers|crop|label|unavailable|table|side|row|check|more|foot|contour)\b|#chest-(status|export)\b/.test(m[1]!)).map(m=>`${m[1]!.trim()}{${m[2]}}`);
+}
+test('#345 the compare page (served web/compare.css) carries the same chest block rules as web/styles.css',async()=>{
+ const [main,compare]=await Promise.all(['styles.css','compare.css'].map(f=>readFile(new URL('../web/'+f,import.meta.url),'utf8')));
+ const rules=chestBlockRules(main!);
+ // The rules the new layout needs: one Markers state label at a time, the regions table, the crop pair, the one-row contour.
+ for(const needle of ['.chest-markers[aria-pressed=true] .chest-markers-off,.chest-markers:not([aria-pressed=true]) .chest-markers-on{display:none}','.chest-table{','.chest-crop{','.chest-row{'])expect(rules.some(r=>r.startsWith(needle)||r.includes(needle))).toBe(true);
+ expect(chestBlockRules(compare!)).toEqual(rules);
+});
+
 test('#342 planted control: a re-enabled button on a grid-only config fails the bar by name',()=>withEditor((getEl,editor)=>{
  const reason=noContourReason(statusOf(gridOnly))!.text;
  editor.unavailable(reason);

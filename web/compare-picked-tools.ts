@@ -17,7 +17,7 @@ import { partBounds, type PartExplorer } from './part-selection.ts';
 import { bindInspectorBlocks, activeBlocksUI, restoreActiveBlocksUI, type InspectorBlocks } from './inspector-blocks.ts';
 import { sourceTextContent, tr } from './i18n.ts';
 import { bindChestEditor, canvasToCrop, bustLabel, bustSides, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, rowShape, type ChestEditor, type LandmarkKey } from './chest-editor.ts';
-import { chestOverlayCircles, chestOverlayPolygons, chestRegionRows, chestRowId, evaluateChestForm } from './chest-regions-tool.ts';
+import { chestOverlayPolygons, chestRegionRows, chestRowId, evaluateChestForm } from './chest-regions-tool.ts';
 import { chestRegionsBinding, cropWorldMapping, type CropWorldMapping } from '../src/chest-regions.ts';
 import { bindMeshEditor, meshEditSource, sha256Hex, type MeshEditor } from './mesh-editor.ts';
 import { meshEditBinding, meshEditText, type MeshEditDocument } from '../src/mesh-edit.ts';
@@ -644,6 +644,8 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function chestRegions(): OverlayRegion[] {
+    // #345: the chest overlay is drawn only while the Chest regions toggle is on.
+    if (!chestEditor?.active()) return [];
     const style = getComputedStyle(document.documentElement), token = (name: string) => style.getPropertyValue(name).trim();
     return chestOverlayPolygons(chestEvaluation(), activeChestMapping()).map((region, i) => ({
       ...region,
@@ -654,7 +656,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
 
   function chestCircles(): OverlayCircle[] {
     const mapping = activeChestMapping();
-    if (!mapping.available) return [];
+    if (!mapping.available || !chestEditor?.active()) return [];
     const style = getComputedStyle(document.documentElement), token = (name: string) => style.getPropertyValue(name).trim();
     const colors = (row: number, overlap: boolean) => ({
       stroke: token(overlap ? '--rv-bust-overlap' : row ? '--rv-bust-l' : '--rv-bust-r'),
@@ -679,7 +681,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
         center: mapping.toWorld(circle.cx, circle.cy), r: circle.r, ...(circle.ry === undefined ? {} : { ry: circle.ry }), ...(circle.clip === undefined ? {} : { clipX: mapping.toWorld(circle.clip, circle.cy).x }), band: circle.band, label: bustLabel(side, circle), labelRow: row, handles: true, flash: chestEditor!.flashing(side), colors: colors(row, overlap),
       }] : []);
     }
-    return chestOverlayCircles(chestEvaluation(), mapping).map(c => ({ center: c.center, r: c.r, band: c.band, handles: false, colors: colors(c.row, false) }));
+    return [];
   }
 
   function chestMarkers(): OverlayMarker[] {

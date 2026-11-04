@@ -227,6 +227,8 @@ export interface ChestEditor {active:()=>boolean;flashing:(side:BustSide)=>boole
 
 /** The toggle's and Apply's own tooltips, restored when the editor becomes available again (`web/index.html`). */
 const CHEST_EDIT_TITLE='Place the two chest regions on the rig: drag a centre, the core edge or the band';
+/** #345: the detail block's mirror of the toggle, so its state shows where the values are edited. */
+const CHEST_MARKERS_TITLE='Draw the chest regions on the rig and edit them there; the same toggle as Chest regions in the view bar';
 const BUST_APPLY_TITLE='Run the installed producer (rig-parts remesh) on these regions or landmarks into a scratch build and load it here; the package is unchanged';
 
 export function bindChestEditor(host:ChestEditorHost):ChestEditor {
@@ -235,11 +237,14 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
  const field=(id:string)=>document.getElementById(id) as HTMLInputElement|null;
  const read:ChestFieldReader=id=>{const f=field(id);return f?{value:f.value}:undefined;};
  const log=node<HTMLElement>('chest-editor-log'),apply=node<HTMLButtonElement>('bust-apply'),reset=node<HTMLButtonElement>('bust-reset');
+ // #345: optional, so a page without the detail block still binds.
+ const markers=document.getElementById('chest-markers') as HTMLButtonElement|null,unavailableLine=document.getElementById('chest-unavailable');
  let notice:{text:string;error:boolean}|null=null,blocked:string|null=null,busy=false;
  /** #342: a disabled control names its reason in its tooltip, the way an unavailable layout does. */
  const gate=()=>{
-  for(const [button,title] of [[toggle,CHEST_EDIT_TITLE],[apply,BUST_APPLY_TITLE]] as const){button.title=blocked??title;if(blocked)button.setAttribute('aria-description',blocked);else button.removeAttribute('aria-description');}
-  toggle.disabled=!!blocked;apply.disabled=busy||!!blocked;
+  for(const [button,title] of [[toggle,CHEST_EDIT_TITLE],[apply,BUST_APPLY_TITLE],...(markers?[[markers,CHEST_MARKERS_TITLE] as const]:[])] as const){button.title=blocked??title;if(blocked)button.setAttribute('aria-description',blocked);else button.removeAttribute('aria-description');}
+  toggle.disabled=!!blocked;apply.disabled=busy||!!blocked;if(markers)markers.disabled=!!blocked;
+  if(unavailableLine){unavailableLine.textContent=blocked??'';unavailableLine.hidden=!blocked;}
  };
  const modeInput=field('bust-mode'),landmarkGroups=[...bar.querySelectorAll<HTMLElement>('[data-chest-mode]')],readout=node<HTMLElement>('lm-derived');
  const mode=():ChestMode=>modeInput?.value==='landmarks'?'landmarks':'circles';
@@ -284,8 +289,9 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
   const shown=editorStatus(notice,host.mapping(),m);
   status.textContent=shown.text;status.title=shown.text;status.classList.toggle('error',shown.error);
  };
- const setActive=(on:boolean)=>{active=on;toggle.setAttribute('aria-pressed',String(on));bar.hidden=!on;if(!on){drag=null;landmarkDrag=null;armed=null;delete host.pane.dataset.chestHover;}sync();host.changed();};
+ const setActive=(on:boolean)=>{active=on;toggle.setAttribute('aria-pressed',String(on));markers?.setAttribute('aria-pressed',String(on));bar.hidden=!on;if(!on){drag=null;landmarkDrag=null;armed=null;delete host.pane.dataset.chestHover;}sync();host.changed();};
  toggle.addEventListener('click',()=>{if(!blocked)setActive(!active);});
+ markers?.addEventListener('click',()=>{if(!blocked)setActive(!active);});
  bar.addEventListener('input',event=>{
   const target=event.target as HTMLInputElement,match=/^bust-([rl])-(x|y|r|band)$/.exec(target.id);if(!match)return;
   const value=Number(target.value);if(!target.value.trim()||!Number.isFinite(value))return;
