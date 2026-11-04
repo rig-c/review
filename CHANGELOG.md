@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.2](https://github.com/rig-c/review/compare/v1.5.1...v1.5.2) (2026-11-04)
+
+
+### Bug Fixes
+
+* **front:** keep the front up on unreadable records; lifecycle tests wait on server events ([#354](https://github.com/rig-c/review/issues/354)) ([#358](https://github.com/rig-c/review/issues/358)) ([77eed85](https://github.com/rig-c/review/commit/77eed8577f52ccdb7f097f8d14480a15fde62ed1))
+
 ## [1.5.1](https://github.com/rig-c/review/compare/v1.5.0...v1.5.1) (2026-11-04)
 
 
