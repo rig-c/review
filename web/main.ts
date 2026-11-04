@@ -62,6 +62,7 @@ import {appliedBuildOwner,appliedPanelOps,dropNoticeForPanel,reconcilePanelStatu
 import {bindPhysicsPanel,type PhysicsPanel} from './physics-panel.ts';
 import {bindIdlePanel,type BoneSetup,type IdlePanel} from './idle-panel.ts';
 import {composeAdjust,PhysicsPreview} from './preview.ts';
+import {advancePlayback} from './playback-clock.ts';
 import {bindRigFieldsPanel,type RigFieldsPanel} from './rig-fields-panel.ts';
 import {assertRigFieldOps,RIG_FIELDS_READOUT_BARS,TURN_BONE} from '../src/rig-fields.ts';
 import {IDLE_READOUT_BARS,type LocalChannel} from '../src/idle-tracks.ts';
@@ -103,6 +104,8 @@ let time = 0;
 let stageClock: StageClock | null = null;
 let duration = 0;
 let lastFrame = 0;
+/** #346: wall-clock seconds accumulated toward the next fixed playback step. */
+let playbackCarry = 0;
 type CameraTarget='rig'|'reference';
 let cameraSync=true,activeCamera:CameraTarget='rig',cameraRestoring=false,cameraLayout='';
 const cameraFrames:Partial<Record<CameraTarget,CameraFrame>>={};
@@ -505,7 +508,7 @@ function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): voi
   select('animation-select').value = name;
   // #191: the wind restarts before the clip's first frame is drawn, so the paused stage shows the schedule's t=0 world.
   time = 0; clipMoved(move);
-  if (player && runtimeAnimation) { drawRig(()=>{player!.play(name,{loop:false});player!.pause();refreshAnimationInspection();player!.draw();}); }
+  if (player && runtimeAnimation) { drawRig(()=>{player!.play(name,{loop:canRepeatIdle()});player!.pause();refreshAnimationInspection();player!.draw();}); }
   else if (player && name){text('renderer-state',rendererStatus(null,'failed').label);message(`Animation "${name}" is not present in the rig.`, true);}
   renderTransport(); renderCues();renderIdle();
 }
@@ -519,7 +522,7 @@ function seek(value: number, move?: ClipMove): void {
 }
 
 function stopAudio(): void { for (const audio of audioPlaying) audio.pause(); audioPlaying.clear(); }
-function pause(): void { ++playbackIntent;desiredPlay=false;suspendedPreview=false;idleHeld=true; playing = false; lastFrame = 0; player?.pause(); video?.pause(); stopAudio(); button('play').textContent = '▶'; button('play').setAttribute('aria-label', 'Play'); }
+function pause(): void { ++playbackIntent;desiredPlay=false;suspendedPreview=false;idleHeld=true; playing = false; lastFrame = 0; playbackCarry = 0; player?.pause(); video?.pause(); stopAudio(); button('play').textContent = '▶'; button('play').setAttribute('aria-label', 'Play'); }
 
 async function audition(clipId: string): Promise<void> {
   const clip = data.manifest.audio.clips.find(item => item.id === clipId); if (!clip) return;
@@ -646,11 +649,15 @@ function seekReading(clip: string, frame: number, exact: number | null, label: s
 function tick(now: number): void {
   if (playing) {
     const dt = lastFrame ? Math.min((now - lastFrame) / 1000, .1) : 0;
-    const previous = time; time = Math.min(duration, time + dt);
-    if (player && player.current) { try { stepEnvironment(dt); drawRig(()=>player!.frame(dt)); } catch (error) { pause(); message(errorText(error), true); } }
+    // #346: fixed PLAYBACK_STEP steps from wall-clock time; a repeating clip wraps here with no seek, so physics carries across the loop.
+    const previous = time, next = advancePlayback({ time, duration, carry: playbackCarry, elapsed: dt, repeat: canRepeatIdle() && !idleHeld });
+    playbackCarry = next.carry; time = next.time;
+    const stepped = next.steps.reduce((sum, step) => sum + step, 0);
+    if (next.wrapped) { stopAudio(); clipMoved({ kind: 'replay' }); if (video) void video.play().catch(error => { pause(); message(errorText(error), true); }); }
+    if (player && player.current && next.steps.length) { try { stepEnvironment(stepped); drawRig(()=>{ for (const step of next.steps) player!.advance(step); player!.draw(); }); } catch (error) { pause(); message(errorText(error), true); } }
     if (video && video.readyState >= 1 && time > video.duration) { if (referenceInput.state !== 'out-of-domain') holdVideoReference(video, referenceGeneration); } else if (video && referenceInput.state === 'loaded' && Math.abs(video.currentTime - time) > .15) video.currentTime = time;
-    if (input('sync-audio').checked) for (const cue of activeCues()) if ((previous < cue.time && cue.time <= time) || (previous === 0 && cue.time === 0 && dt > 0)) void audition(cue.clip);
-    renderSequenceFrame(); renderTransport(); if(time>=duration){if(canRepeatIdle()&&!idleHeld){stopAudio();seek(0,{kind:'replay'});player?.resume();if(video)void video.play().catch(error=>{pause();message(errorText(error),true);});}else pause();} lastFrame = now;
+    if (input('sync-audio').checked) for (const cue of activeCues()) if (next.wrapped ? cue.time <= time : (previous < cue.time && cue.time <= time) || (previous === 0 && cue.time === 0 && stepped > 0)) void audition(cue.clip);
+    renderSequenceFrame(); renderTransport(); if (next.ended) pause(); lastFrame = now;
   }
   requestAnimationFrame(tick);
 }
@@ -700,7 +707,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
 function chooseAxis(): void {
   const axis = data.manifest.axes.find(item => item.id === select('axis-select').value);
   const clip = assets?.animations.find(item => item.name === axis?.animation); if (!axis || !clip || !player) return;
-  pause(); chooseAnimation(clip.name); axisInspection = true; el('angle-panel').hidden = false;
+  pause(); chooseAnimation(clip.name); axisInspection = true; syncPlayerLoop(); el('angle-panel').hidden = false;
   input('axis-value').min = String(axis.min); input('axis-value').max = String(axis.max); input('axis-value').step = String((axis.max - axis.min) / 200); input('axis-value').value = String((axis.max + axis.min) / 2); text('axis-label', axis.label); applyAxis();
 }
 
@@ -963,7 +970,7 @@ function bind(): void {
   for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy)),()=>!comments?.active(),target==='rig'?carryRig:undefined));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
   viewDisposers.push(bindLayerShortcuts(document));describeLayerToggles(document,el('layer-state').textContent??'');
-  input('idle-repeat').onchange=()=>{renderIdle();if(canRepeatIdle())void playPreview();};
+  input('idle-repeat').onchange=()=>{syncPlayerLoop();renderIdle();if(canRepeatIdle())void playPreview();};
   bindEnvironment();
   for(const id of ['proposal-panel','checkpoint-detail'])el(id).addEventListener('focusin',pause);
   bindInspector();bindReviewDialog();
@@ -1029,11 +1036,21 @@ function redrawOverlay(fresh:boolean):void {
  lastOverlay=value;
  text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');idlePanel?.place(duration);rigFieldsPanel?.place();if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
 }
+/**
+ * #346: the player loops exactly when Animate repeats, so a repeating clip wraps inside the track and its physics
+ * carries across the seam. Changing the mode reopens the track at the current time, as a seek does.
+ */
+function syncPlayerLoop():void {
+ const want=canRepeatIdle();
+ if(!player?.current||player.composed||player.entry(0)?.loop===want)return;
+ try{drawRig(()=>{player!.play(animation,{loop:want});if(!playing)player!.pause();player!.seek(time);player!.draw();});}
+ catch(error){message(errorText(error),true);}
+}
 function canRepeatIdle():boolean{return !!player&&idleAvailable(assets?.animations.map(a=>a.name)??[],animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
 function renderIdle():void {text('idle-state',canRepeatIdle()?'Actual idle · repeat enabled':animation==='idle'?'Idle repeat paused':'Non-idle inspection · no automatic playback');}
 async function playPreview():Promise<void> {
  if((!player&&!video&&!sequence)||duration<=0)return;
- const intent=++playbackIntent;desiredPlay=true;idleHeld=false;if(time>=duration)seek(0,{kind:'replay'});
+ const intent=++playbackIntent;desiredPlay=true;idleHeld=false;syncPlayerLoop();if(time>=duration)seek(0,{kind:'replay'});
  if(video&&referenceInput.state==='loaded'){try{await video.play();}catch(error){pause();message(`Playback is paused: ${errorText(error)}. Use Play to retry.`,true);return;}}
  if(intent!==playbackIntent||!desiredPlay){if(!desiredPlay)video?.pause();return;}playing=true;lastFrame=0;player?.resume();button('play').textContent='Ⅱ';button('play').setAttribute('aria-label','Pause');
 }
@@ -1242,7 +1259,7 @@ async function exportChest():Promise<void> {
 const environmentInputs=['wind-base','wind-breeze','wind-gust','wind-repeat','wind-gust-peak','wind-gust-duration','gravity','jolt','physics-reset','environment-use','environment-export','environment-check'];
 function environmentApplied():boolean{return input('environment-applied').checked;}
 function gravityValue():number{return Number(input('gravity').value);}
-/** Called from `tick` right before `player.frame(dt)`: the gust clock is the stepped time, so a paused player freezes it. */
+/** Called from `tick` right before the fixed playback steps (#346): the gust clock is the stepped time, so a paused player freezes it. */
 function stepEnvironment(dt:number):void {
  if(!player)return;
  wind.advance(dt);

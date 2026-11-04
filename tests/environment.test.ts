@@ -139,7 +139,7 @@ test('issue export names the environment of a note; a note without one has no en
 
 test('the page records its evaluated environment; physics preview is explicit and Apply keeps the producer patch path',async()=>{
  const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),html=await readFile(new URL('../web/index.html',import.meta.url),'utf8');
- expect(main).toContain('stepEnvironment(dt); drawRig(()=>player!.frame(dt));');
+ expect(main).toContain('stepEnvironment(stepped); drawRig(()=>{ for (const step of next.steps) player!.advance(step); player!.draw(); });');
  expect(main).toContain('environment: feedbackEnvironment(),');
  expect(main).toContain('player.environment(null);if(player.current){player.seek(time);');
  const animate=html.slice(html.indexOf('<section id="inspector-playback"'),html.indexOf('</main>'));
