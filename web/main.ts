@@ -656,7 +656,7 @@ function tick(now: number): void {
   requestAnimationFrame(tick);
 }
 
-/** Animate keeps its held pose alive with the same fixed physics clock as playback. */
+/** Animate steps held physics under the standing environment; wind time and queued jolts stay frozen. */
 function tickHeldPhysics(now:number):void {
  const elapsed=lastFrame?Math.min((now-lastFrame)/1000,.1):0;lastFrame=now;
  if(heldPhysicsFailed||!player?.current||document.hidden||selectedInspector(document)!=='playback'||seekingControl){playbackCarry=0;return;}
@@ -664,7 +664,7 @@ function tickHeldPhysics(now:number):void {
  playbackCarry=next.carry;
  if(!next.steps.length)return;
  try{
-  player.hold(true);player.resume();stepEnvironment(next.steps.reduce((sum,step)=>sum+step,0));
+  player.hold(true);player.resume();
   drawRig(()=>{for(const step of next.steps)player!.advance(step);player!.draw();});
  }catch(error){heldPhysicsFailed=true;player.pause();playbackCarry=0;message(errorText(error),true);}
 }
