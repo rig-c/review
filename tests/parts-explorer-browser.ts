@@ -79,7 +79,7 @@ export interface PanelMeasurement {
   };
 }
 
-interface CdpSession {
+export interface CdpSession {
   setViewport(width: number, height: number): Promise<void>;
   goto(url: string): Promise<void>;
   evaluate<T>(expression: string): Promise<T>;
@@ -134,7 +134,7 @@ function findBrowserBinary(): string {
   throw new Error('No headless Chromium/Chrome/Edge binary found');
 }
 
-async function launchCdpSession(profileDir: string): Promise<CdpSession> {
+export async function launchCdpSession(profileDir: string): Promise<CdpSession> {
   const bin = findBrowserBinary();
   const isHeadlessShell = bin.includes('headless');
   const childEnv: Record<string, string | undefined> = {
