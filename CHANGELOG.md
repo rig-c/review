@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/rig-c/review/compare/v1.5.0...v1.5.1) (2026-11-04)
+
+
+### Performance Improvements
+
+* **animate:** stop re-translating unchanged text on every played frame ([#355](https://github.com/rig-c/review/issues/355)) ([c3303c4](https://github.com/rig-c/review/commit/c3303c434a4aa0d4e3f26b19b4fcbd337a447ac7))
+
 ## [1.5.0](https://github.com/rig-c/review/compare/v1.4.4...v1.5.0) (2026-11-04)
 
 
