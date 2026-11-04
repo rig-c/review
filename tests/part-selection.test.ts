@@ -1,4 +1,5 @@
 import {readFile} from 'node:fs/promises';
+import {setSourceAttribute,setSourceText,sourceAttribute} from '../web/i18n.ts';
 import {ComparePresentation} from '../src/compare-presentation.ts';
 import type {InspectionPlayer} from '../src/compare-playhead.ts';
 import {expect,test} from 'bun:test';
@@ -110,7 +111,7 @@ async function explorerHarness(){
  for(const [selector,tag]of [['[data-part-search]','INPUT'],['[data-part-list]','UL'],['[data-part-solo]','INPUT'],['[data-part-whole]','BUTTON'],['[data-part-status]','P']]){const node=new DetailNode(tag!);node.selector=selector!;host.append(node);}
  const source=await readFile(new URL('../web/part-selection.ts',import.meta.url),'utf8'),begin=source.indexOf('export class PartExplorer extends');if(begin<0)throw new Error('Actual explorer class boundary absent');
  const script=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(begin).replace('export class','class'));
- const Explorer=new Function('PartInspection','orderedParts','partIdentity','document','HTMLElement',script+';return PartExplorer;')(PartInspection,orderedParts,partIdentity,document,DetailNode) as typeof PartExplorer;
+ const Explorer=new Function('PartInspection','orderedParts','partIdentity','document','HTMLElement','setSourceText','setSourceAttribute','sourceAttribute',script+';return PartExplorer;')(PartInspection,orderedParts,partIdentity,document,DetailNode,setSourceText,setSourceAttribute,sourceAttribute) as typeof PartExplorer;
  return {document,host,detail,Explorer,DetailNode,counter};
 }
 test('animated Inspector details retain the focused feedback action and use the current selection',async()=>{

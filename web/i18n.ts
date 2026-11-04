@@ -516,9 +516,23 @@ function translateCore(text: string, lang: ResolvedLanguage, depth: number): str
   return text;
 }
 
+/**
+ * #347: `tr` is pure over the catalogs, which are built once and never change. Animate re-applies the same
+ * strings on every played frame (the DOM observer re-translates each rewritten title, label and text), and a
+ * string with no exact entry walks every parameterized pattern, so the results are memoized per language.
+ */
+const TR_CACHE_LIMIT = 8192;
+const trCache: Record<ResolvedLanguage, Map<string, string>> = { en: new Map(), ko: new Map() };
+
 export function tr(raw: string, lang: ResolvedLanguage = currentLanguage): string {
   if (!raw) return raw;
-  return translateCore(raw, lang, 0);
+  const cache = trCache[lang];
+  const hit = cache.get(raw);
+  if (hit !== undefined) return hit;
+  const out = translateCore(raw, lang, 0);
+  if (cache.size >= TR_CACHE_LIMIT) cache.clear();
+  cache.set(raw, out);
+  return out;
 }
 
 // DOM binding state
@@ -731,6 +745,31 @@ export function sourceTextContent(node: Node | null | undefined): string {
   }
   const raw = node.textContent ?? '';
   return raw ? tr(raw, 'en') : '';
+}
+
+/**
+ * #347: write `value` (English source) as the element's text only when its source text differs. Callers write
+ * English and the DOM observer shows it translated, so comparing against `textContent` is always unequal under
+ * a translated UI and a played frame would rewrite (and re-translate) unchanged text.
+ */
+export function setSourceText(node: Element, value: string): boolean {
+  if ((node.childNodes?.length ?? 0) <= 1 && sourceTextContent(node) === value) return false;
+  node.textContent = value;
+  return true;
+}
+
+/** #347: an attribute's English source: what the caller last wrote, before the DOM observer translated it. */
+export function sourceAttribute(el: Element, attr: string): string | null {
+  const current = typeof el.getAttribute === 'function' ? el.getAttribute(attr) : null;
+  const entry = elementAttrSource.get(el)?.get(attr);
+  return entry && current === entry.lastApplied ? entry.en : current;
+}
+
+/** #347: the attribute counterpart of `setSourceText`, for attributes the DOM observer translates. */
+export function setSourceAttribute(el: Element, attr: string, value: string): boolean {
+  if (sourceAttribute(el, attr) === value) return false;
+  el.setAttribute(attr, value);
+  return true;
 }
 
 export function applyDomI18n(root: Document | Element = boundRoot ?? document): void {

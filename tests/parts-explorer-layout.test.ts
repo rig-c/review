@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { setSourceAttribute, setSourceText, sourceAttribute } from '../web/i18n.ts';
 import type { PosedFrame, SlotIdentitySnapshot } from '@rig-c/play';
 import {
   PartInspection,
@@ -224,8 +225,11 @@ test('Change 2: compare.ts reuses PartThumbnails, pageRegionTable, and loadPartM
     'partIdentity',
     'document',
     'HTMLElement',
+    'setSourceText',
+    'setSourceAttribute',
+    'sourceAttribute',
     script + ';return PartExplorer;',
-  )(PartInspection, orderedParts, partIdentity, doc, DetailNode) as typeof PartExplorer;
+  )(PartInspection, orderedParts, partIdentity, doc, DetailNode, setSourceText, setSourceAttribute, sourceAttribute) as typeof PartExplorer;
 
   const oldDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
   const oldIO = Object.getOwnPropertyDescriptor(globalThis, 'IntersectionObserver');

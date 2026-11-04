@@ -2853,8 +2853,10 @@ export class AnimationInspectionPanel {
    }
    const isSelected=selected?.kind==='bone'&&selected.name===name;
    const visible=enabled&&(bonePoints||isSelected);
-   b.hidden=!bonePoints&&!isSelected;
-   b.setAttribute('aria-pressed',String(isSelected));
+   // #347: placed on every played frame; write only what changed.
+   const hidden=!bonePoints&&!isSelected,pressed=String(isSelected);
+   if(b.hidden!==hidden)b.hidden=hidden;
+   if(b.getAttribute('aria-pressed')!==pressed)b.setAttribute('aria-pressed',pressed);
    if(!visible){
     order++;
     continue;
