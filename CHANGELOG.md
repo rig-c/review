@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.4](https://github.com/rig-c/review/compare/v1.4.3...v1.4.4) (2026-11-04)
+
+
+### Bug Fixes
+
+* **animate:** carry physics across the loop wrap and step at a fixed rate ([#349](https://github.com/rig-c/review/issues/349)) ([8ecae37](https://github.com/rig-c/review/commit/8ecae3738f3686cfc5236b445fb3ab3bc3e557d4))
+
 ## [1.4.3](https://github.com/rig-c/review/compare/v1.4.2...v1.4.3) (2026-11-03)
 
 
