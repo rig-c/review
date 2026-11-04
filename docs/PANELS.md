@@ -30,6 +30,12 @@ body. A drawer keeps its title and close button in place while its body
 scrolls. The per-inspection **Repeat idle** toggle sits in the Animate
 transport row.
 
+Animate plays in fixed 1/60 s steps taken from wall-clock time
+(`web/playback-clock.ts`), so the clip and its physics advance the same way at
+any display refresh rate; a frame with less than one step's worth of time draws
+nothing new. A repeating clip wraps without a seek, so physics carries across
+the loop seam; only **Reset physics**, a seek or choosing a clip restarts it.
+
 **Settings** (`#workspace-settings`) stores workspace-level preferences across
 tabs under `rig-review.workspace.v1` (`web/workspace-preferences.ts`):
 **Appearance** (`system`, `dark`, `light`), **Language** (`system`, `en`, `ko`),
