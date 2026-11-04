@@ -16,7 +16,7 @@ import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from 
 import {densityField,densityPath} from '../src/density-strip.ts';
 import {assertMeshPatch,countsText,meshApplyOutcome,meshPatchOps,setEntryValue,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
 import {worstLine} from '../src/readings.ts';
-import {chestOverlayCircles,chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
+import {chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
 import {bindChestEditor,canvasToCrop,bustLabel,bustSides,chestPoseOffset,LANDMARKS,landmarkInputId,posedChestMapping,rowShape,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
@@ -1181,27 +1181,26 @@ async function setupPersistence():Promise<boolean> {
 function chestField(id:string){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;return node?{value:node.value,...(node instanceof HTMLInputElement&&node.type==='checkbox'?{checked:node.checked}:{})}:undefined;}
 function chestEvaluation(){return evaluateChestForm(chestField,chestMapping,data.feedbackCatalog.bones);}
 function chestRegions():OverlayRegion[]{
+ // #345: the chest overlay is drawn only while the Chest regions toggle is on.
+ if(!chestEditor?.active())return [];
  const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim();
  return chestOverlayPolygons(chestEvaluation(),activeChestMapping()).map((region,i)=>({...region,stroke:token(i?'--rv-region-b':'--rv-region-a'),fill:token(i?'--rv-region-b-fill':'--rv-region-a-fill')}));
 }
-/** Circle regions: in edit mode the editor's circles straight from the fields (handles and labels), else the valid designation's. */
+/** Circle regions, only while the toggle is on (#345): the editor's circles straight from the fields (handles and labels), or the landmarks' derivation. */
 function chestCircles():OverlayCircle[]{
- const mapping=activeChestMapping();if(!mapping.available)return [];
+ const mapping=activeChestMapping();if(!mapping.available||!chestEditor?.active())return [];
  const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim();
  const colors=(row:number,overlap:boolean)=>({stroke:token(overlap?'--rv-bust-overlap':row?'--rv-bust-l':'--rv-bust-r'),fill:token(overlap?'--rv-bust-overlap-fill':row?'--rv-bust-l-fill':'--rv-bust-r-fill'),handle:token('--rv-bust-handle'),ink:token('--rv-bust-ink'),labelBg:token('--rv-bust-label-bg'),flash:token('--rv-bust-flash')});
- if(chestEditor?.active()&&chestEditor.mode()==='landmarks'){
+ if(chestEditor.mode()==='landmarks'){
   // #105: the producer's derivation drawn live; a CONFIG_BUST_CLEARANCE refusal turns both to the overlap colour.
   const read=chestEditor.landmarks();if(!('derived' in read))return [];
   const refused=!!read.derived.refusal;
   return read.derived.regions.filter(r=>r.r>0&&r.band>=0).map((r,row)=>({center:mapping.toWorld(r.cx,r.cy),r:r.r,band:r.band,label:`${r.name} r:${r.r} b:${r.band}`,labelRow:row,handles:false,colors:colors(row,refused)}));
  }
- if(chestEditor?.active()){
-  const rows=bustSides.map(({side,row})=>({side,row,circle:rowShape(chestField,row)})),[r,l]=[rows[0]!.circle,rows[1]!.circle];
-  // As in the example, overlapping cores turn both circles to the overlap colour.
-  const overlap=!!r&&!!l&&r.r+l.r>Math.hypot(l.cx-r.cx,l.cy-r.cy);
-  return rows.flatMap(({side,row,circle})=>circle?[{center:mapping.toWorld(circle.cx,circle.cy),r:circle.r,...(circle.ry===undefined?{}:{ry:circle.ry}),...(circle.clip===undefined?{}:{clipX:mapping.toWorld(circle.clip,circle.cy).x}),band:circle.band,label:bustLabel(side,circle),labelRow:row,handles:true,flash:chestEditor!.flashing(side),colors:colors(row,overlap)}]:[]);
- }
- return chestOverlayCircles(chestEvaluation(),mapping).map(c=>({center:c.center,r:c.r,band:c.band,handles:false,colors:colors(c.row,false)}));
+ const rows=bustSides.map(({side,row})=>({side,row,circle:rowShape(chestField,row)})),[r,l]=[rows[0]!.circle,rows[1]!.circle];
+ // As in the example, overlapping cores turn both circles to the overlap colour.
+ const overlap=!!r&&!!l&&r.r+l.r>Math.hypot(l.cx-r.cx,l.cy-r.cy);
+ return rows.flatMap(({side,row,circle})=>circle?[{center:mapping.toWorld(circle.cx,circle.cy),r:circle.r,...(circle.ry===undefined?{}:{ry:circle.ry}),...(circle.clip===undefined?{}:{clipX:mapping.toWorld(circle.clip,circle.cy).x}),band:circle.band,label:bustLabel(side,circle),labelRow:row,handles:true,flash:chestEditor!.flashing(side),colors:colors(row,overlap)}]:[]);
 }
 /** Landmark markers (#105) in Landmarks mode: apexes in the R / L colours, the cleavage with guides to both apexes. */
 function chestMarkers():OverlayMarker[]{
@@ -1696,6 +1695,8 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  /** #166: undo the last Apply, and the applied records as the server holds them. */
  undo:()=>undoApply(),history:()=>appliedHistory?JSON.parse(JSON.stringify(appliedHistory)):null,
  status:async()=>rebuildStatus??await loadRebuildStatus(),
+ /** #345: what the stage draws for the chest tools right now (zero of each while the toggle is off). */
+ chest:{drawn:()=>({circles:chestCircles().length,regions:chestRegions().length,markers:chestMarkers().length})},
  physics:{rows:()=>physicsPanel?.rows()??[],chains:()=>physicsPanel?.chains()??[],edits:()=>physicsPanel?.edits()??[],preview:()=>physicsPreview.read(),clearPreview:()=>physicsPanel?.clearPreview(),set:(name:string,field:Parameters<PhysicsPanel['set']>[1],value:number)=>physicsPanel?.set(name,field,value),ramp:(id:string,field:Parameters<PhysicsPanel['set']>[1],root:number,tip:number)=>physicsPanel?.ramp(id,field,root,tip),select:(name:string)=>physicsPanel?.select(name),apply:()=>applyPhysics(physicsPanel?.edits().map(e=>({op:e.op,path:e.path,value:e.value,name:e.name}))??[]),reset:()=>resetPhysicsBuild()},
  /** Inspection only: one slot's posed world geometry on the drawn frame (what the stage drew), for comparing against `rigc render --geometry`. */
  posed:(slot:string)=>{const frame=player?.posedFrame();const found=frame?.order.find(item=>item.slot===slot);return found?JSON.parse(JSON.stringify(found,(key,value)=>key==='bitmap'||key==='image'||key==='page'?undefined:value)):null;},
