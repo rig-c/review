@@ -97,6 +97,20 @@ export function stageFrameQuery(mode:'single'|'compare',search:string):boolean {
  const allowed=mode==='single'?['stageEmbed','lang']:['stageEmbed','lang','side'];
  return keys.length===allowed.length&&new Set(keys).size===keys.length&&keys.every(k=>allowed.includes(k))&&params.get('stageEmbed')==='1'&&['en','ko'].includes(params.get('lang')??'')&&(mode==='single'||['a','b'].includes(params.get('side')??''));
 }
+/** Preserve only this closed, bounded stage-data refusal; never relay arbitrary worker text. */
+async function stagePartsRefusal(mode:'single'|'compare',method:string,path:string,response:Response):Promise<string|null>{
+ const stageData=mode==='single'?path==='/api/stage-parts':/^\/api\/compare\/(?:a|b)\/stage-parts$/.test(path);
+ if(!stageData||method!=='GET'||response.status!==409||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))return null;
+ const limit=512,declared=response.headers.get('content-length');if(declared!==null&&(!/^\d+$/.test(declared)||Number(declared)>limit))return null;
+ const reader=response.body?.getReader();if(!reader)return null;
+ try{
+  const chunks:Uint8Array[]=[];let bytes=0;
+  for(;;){const {value,done}=await reader.read();if(done)break;bytes+=value.byteLength;if(bytes>limit){void reader.cancel().catch(()=>{});return null;}chunks.push(value);}
+  const body=new Uint8Array(bytes);let offset=0;for(const chunk of chunks){body.set(chunk,offset);offset+=chunk.byteLength;}
+  const data:unknown=JSON.parse(new TextDecoder().decode(body)),named='PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.';
+  return data!==null&&typeof data==='object'&&!Array.isArray(data)&&Object.keys(data).length===1&&(data as {error?:unknown}).error===named?named:null;
+ }catch{return null;}finally{reader.releaseLock();}
+}
 export const maximumUpstreamStreams=32;
 interface FrontLiveRelay {upstream:WebSocket;client:ServerWebSocket<FrontLiveRelay>|null}
 export function startFront(options:{control:string;port:number;nonce:string;fingerprint:string}){
@@ -161,7 +175,7 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
    try{upstream=await fetch(record.origin+path+(landing||stageFrame?url.search:''),{method:req.method,headers,...(body?{body}:{}),redirect:'manual',signal:abort.signal});}
    catch{release();return abort.signal.aborted&&!req.signal.aborted?refuse('FRONT_UPSTREAM_TIMEOUT',504):refuse('FRONT_INSTANCE_EXPIRED: reopen with rig-review open',410);}
    if(upstream.headers.get(openKeyHeader)!==key){void upstream.body?.cancel().catch(()=>{});release();return refuse('FRONT_INSTANCE_REPLACED: reopen with rig-review open',410);}
-   if(upstream.status>=400&&upstream.status!==416){void upstream.body?.cancel().catch(()=>{});release();const code=upstreamFailure[upstream.status];return refuse(code??'FRONT_UPSTREAM_FAILED',code?upstream.status:502);}
+   if(upstream.status>=400&&upstream.status!==416){const named=await stagePartsRefusal(record.mode,req.method,path,upstream);void upstream.body?.cancel().catch(()=>{});release();if(named)return refuse(named,409);const code=upstreamFailure[upstream.status];return refuse(code??'FRONT_UPSTREAM_FAILED',code?upstream.status:502);}
    const out=new Headers();for(const name of responseHeaders){const value=upstream.headers.get(name);if(value!==null)out.set(name,value);}
    if(!upstream.body||req.method==='HEAD'){void upstream.body?.cancel().catch(()=>{});release();return new Response(null,{status:upstream.status,headers:out});}
    if(timer)clearTimeout(timer);const reader=upstream.body.getReader();

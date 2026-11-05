@@ -242,12 +242,18 @@ async function save(): Promise<void> {
 async function boot(): Promise<void> {
   bindDomI18n(document);
   bindStageNav({partsOnly:true,model:false});
-  if(stageEmbedded){document.querySelector('.pv-top')?.setAttribute('hidden','');document.querySelector<HTMLElement>('.pv-verdict')!.hidden=true;const saveButton=$<HTMLButtonElement>('pv-save');saveButton.disabled=true;saveButton.title=t('Embedded atlas inspection is read-only. Use the parts command for a separate sign-off.');}
+  if(stageEmbedded){
+    const header=document.querySelector<HTMLElement>('.pv-top')!,status=$('pv-load');
+    header.hidden=true;status.classList.add('pv-embedded-status');header.after(status);
+    document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;
+    document.querySelector<HTMLElement>('.pv-verdict')!.hidden=true;
+    const saveButton=$<HTMLButtonElement>('pv-save');saveButton.disabled=true;saveButton.title=t('Embedded atlas inspection is read-only. Use the parts command for a separate sign-off.');
+  }
   window.addEventListener('message',event=>{if(event.source!==parent||event.origin!==location.origin||event.data?.type!=='review-stage-language'||!['en','ko'].includes(event.data.language))return;setLinkLanguage(null);setLanguagePreference(event.data.language);});
   connectLiveWindow(access);
   const res = await fetch(access.route(partsApi), { headers: access.headers() });
   const data = await res.json() as ViewData & { error?: string };
-  if (!res.ok) { $('pv-load').textContent = t(data.error ?? 'Load failed.'); return; }
+  if (!res.ok) { const status=$('pv-load');status.textContent=t(data.error??'Load failed.');status.dataset.result='refused';return; }
   state.data = data;
   for (const item of data.items) state.verdict.set(item.name, { outcome: 'pending', note: '', ...(item.mesh ? { mesh: { outcome: 'pending' as Outcome, note: '' } } : {}) });
   if (data.verdict) { for (const [name, v] of Object.entries(data.verdict.parts)) if (state.verdict.has(name)) state.verdict.set(name, { outcome: v.outcome, note: v.note ?? '', ...(v.mesh ? { mesh: v.mesh } : {}) }); $<HTMLSelectElement>('pv-overall').value = data.verdict.status; }
@@ -256,6 +262,7 @@ async function boot(): Promise<void> {
   $('pv-mode').textContent = data.mode === 'parts' ? t('Parts package, before rigging') : t('Atlas of a built rig');
   $('pv-list-title').textContent = data.mode === 'parts' ? t('PARTS') : t('REGIONS');
   $('pv-load').textContent = data.verdictStale === 'files' ? t('A saved sign-off was made on other files; this review starts fresh.') : data.verdictStale === 'flags' ? t('The saved sign-off is for different producer flags; this review starts fresh.') : data.verdict ? t('Saved sign-off loaded.') : '';
+  if(stageEmbedded){$('pv-load').hidden=$('pv-load').textContent==='';document.querySelector<HTMLElement>('.pv-layout')!.hidden=false;}
   $('pv-atlas-switch').hidden = data.mode !== 'atlas';
   const footprints = $<HTMLInputElement>('pv-footprints');
   if (data.mode === 'atlas') { footprints.disabled = true; $('pv-footprint-control').title = t('Footprints need a parts package: atlas regions carry no rig placement.'); }

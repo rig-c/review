@@ -71,3 +71,7 @@ textarea,select{font:inherit;color:inherit;background:var(--bg);border:1px solid
 
 /* Availability controls remain absent when the controller marks them hidden. */
 .pv-app [hidden]{display:none!important}
+
+/* Embedded loading/refusals must stay outside the deliberately hidden app header. */
+#pv-load.pv-embedded-status{margin:0;padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+#pv-load.pv-embedded-status[data-result="refused"]{color:var(--flag)}

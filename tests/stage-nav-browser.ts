@@ -12,6 +12,54 @@ import {loadPartsView} from '../src/parts-view.ts';
 import {startPartsServer} from '../src/parts-server.ts';
 import {writePartsPackage} from './helpers/parts-package.ts';
 import {launchCdpSession,type CdpSession} from './parts-explorer-browser.ts';
+/** Focused PR379 refusal visibility check; does not run the unrelated navigation/producer matrix. */
+async function runEmbeddedAvailabilityBrowser():Promise<void> {
+ const fixtureRoot=await mkdtemp(join(tmpdir(),'stage-availability-')),shots='stage-availability-evidence',ownedServers:{stop:(force?:boolean)=>unknown}[]=[],managedStates:string[]=[],rows:unknown[]=[];
+ await mkdir(shots,{recursive:true});const session=await launchCdpSession(join(fixtureRoot,'profile')),cap='d'.repeat(64);
+ const check=(value:unknown,why:string)=>{if(!value)throw new Error(why);};
+ const until=async(expression:string)=>{for(let n=0;n<240;n++){if(await session.evaluate<boolean>(expression))return;await session.evaluate('new Promise(resolve=>requestAnimationFrame(()=>resolve(true)))');}throw new Error('Availability condition unavailable: '+expression);};
+ const visibleState=`(()=>{const frame=document.querySelector('.review-stage-panel iframe:not([hidden])'),doc=frame?.contentDocument,status=doc?.getElementById('pv-load'),layout=doc?.querySelector('.pv-layout');if(!doc||!status||!layout)return null;const box=status.getBoundingClientRect();return {text:status.textContent,result:status.dataset.result??null,statusVisible:status.getClientRects().length>0&&box.width>0&&box.height>0&&getComputedStyle(status).visibility!=='hidden',outsideHeader:!status.closest('.pv-top'),role:status.getAttribute('role'),headerHidden:doc.querySelector('.pv-top').hidden,layoutVisible:layout.getClientRects().length>0,visibleTools:[...layout.querySelectorAll('button,input,select,textarea')].filter(node=>node.getClientRects().length>0).length,ready:doc.body.dataset.ready??null,language:doc.documentElement.lang,canvasWidth:doc.getElementById('pv-canvas').width,items:doc.querySelectorAll('[data-pv-item]').length}})()`;
+ try{
+  await session.setViewport(1440,1000);
+  for(const lang of ['en','ko'])for(const transport of ['direct','managed'])for(const kind of ['missing-atlas','changed-source']){
+   const fixture=join(fixtureRoot,`${kind}-${transport}-${lang}`);await cp('examples/demo',fixture,{recursive:true});
+   const manifestPath=join(fixture,'review.json'),manifest=JSON.parse(await readFile(manifestPath,'utf8')),modelPath=join(fixture,manifest.model),model=JSON.parse(await readFile(modelPath,'utf8'));
+   if(kind==='missing-atlas'){
+    // A real bone-only compiled envelope has no image atlas; an empty region list inside a page is invalid.
+    const skeletal={...model,slots:[],skins:model.skins.map((skin:any)=>({...skin,attachments:{}})),images:[],pages:[],editorOrder:{...model.editorOrder,skins:model.editorOrder.skins.map((skin:any)=>({...skin,slots:[]}))},rig:{...model.rig,slotOrder:[]}};
+    await writeFile(modelPath,JSON.stringify(skeletal));
+   }
+   let url:string;
+   if(transport==='direct'){const pkg=await loadReview(manifestPath),server=await startServer(pkg,{port:0,capability:cap,stateDir:join(fixtureRoot,`state-${kind}-${lang}`),viewOnly:true,graceMs:60000});ownedServers.push(server);url=`http://127.0.0.1:${server.port}/?lang=${lang}#cap=${cap}`;}
+   else{const state=join(fixtureRoot,`managed-${kind}-${lang}`);managedStates.push(state);const probe=Bun.serve({hostname:'127.0.0.1',port:0,fetch:()=>new Response('')}),port=probe.port!;probe.stop(true);const opened=await openReview({input:manifestPath,viewOnly:true},{stateDir:state,frontPort:port}),parsed=new URL(opened.url);parsed.searchParams.set('lang',lang);url=parsed.href;}
+   await session.goto(url);await until(`!!document.querySelector('[data-review-stage="1"]')`);await session.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
+   let normal:unknown=null;
+   if(kind==='changed-source'){
+    await until('document.querySelector(".review-stage-panel iframe:not([hidden])")?.contentDocument?.body?.dataset.ready==="true"&&document.querySelector(".review-stage-panel iframe:not([hidden])")?.contentDocument?.getElementById("pv-canvas")?.width>1');
+    normal=await session.evaluate(visibleState);const n=normal as any;check(n.layoutVisible&&n.items>0&&n.canvasWidth>1&&!n.statusVisible&&n.text==='','normal loaded atlas unchanged');
+    await writeFile(join(shots,`normal-${transport}-${lang}.png`),await session.screenshot());
+    // Only the generated synthetic page is changed; the inspected snapshot stays bound to its original hash.
+    const image=join(fixture,model.pages[0].name),bytes=await readFile(image);await writeFile(image,Buffer.concat([bytes,Buffer.from('generated-source-change')]));
+    await session.evaluate('document.querySelector(".review-stage-panel iframe:not([hidden])").contentWindow.location.reload()');
+   }
+   await until('document.querySelector(".review-stage-panel iframe:not([hidden])")?.contentDocument?.getElementById("pv-load")?.dataset.result==="refused"');
+   const refusal=await session.evaluate<any>(visibleState),code='PARTS_ATLAS_UNAVAILABLE';
+   check(refusal.statusVisible&&refusal.outsideHeader&&refusal.headerHidden&&refusal.role==='status'&&refusal.text.includes(code),'named refusal must be visibly outside hidden embedded header');check(!refusal.layoutVisible&&refusal.visibleTools===0&&refusal.ready===null,'unavailable atlas must not present usable inspection controls');check(refusal.language===lang,'refusal language binding retained');
+   if(lang==='ko')check(refusal.text.includes('검사 패키지'),'existing Korean refusal detail stays translated');
+   // Planted DOM-only control proves checking text alone would miss the original hidden-ancestor bug.
+   const hiddenControl=await session.evaluate<boolean>(`(()=>{const doc=document.querySelector('.review-stage-panel iframe:not([hidden])').contentDocument,status=doc.getElementById('pv-load'),parent=status.parentElement,next=status.nextSibling;doc.querySelector('.pv-top').append(status);const detected=status.getClientRects().length===0;parent.insertBefore(status,next);return detected&&status.getClientRects().length>0})()`);check(hiddenControl,'visibility oracle detects original hidden-header ancestry');
+   await writeFile(join(shots,`${kind}-${transport}-${lang}.png`),await session.screenshot());rows.push({lang,transport,kind,normal,refusal,hiddenAncestorControlDetected:hiddenControl});
+  }
+  const standaloneRoot=join(fixtureRoot,'standalone');await writePartsPackage(standaloneRoot);const standalone=await startPartsServer(await loadPartsView(standaloneRoot),{port:0,capability:cap,graceMs:60000});ownedServers.push(standalone);
+  for(const lang of ['en','ko']){await session.goto(`http://127.0.0.1:${standalone.port}/?lang=${lang}#cap=${cap}`);await until('document.body?.dataset.ready==="true"');const ordinary=await session.evaluate<boolean>(`(()=>{const h=document.querySelector('.pv-top');return !h.hidden&&h.getClientRects().length>0&&h.contains(document.getElementById('pv-load'))&&document.querySelector('.pv-layout').getClientRects().length>0})()`);check(ordinary,'ordinary standalone header/status ownership unchanged');rows.push({lang,standaloneHeaderUnchanged:ordinary});}
+  await writeFile(join(shots,'report.json'),JSON.stringify(rows,null,2)+'\n');console.log(JSON.stringify(rows,null,2));
+ }finally{
+  await session.close();for(const server of ownedServers)server.stop(true);
+  for(const state of managedStates){const directory=join(state,'open');for(const name of await readdir(directory).catch(()=>[])){if(!/^(?:[a-f0-9]{64}|front-\d+)\.json$/.test(name))continue;const record=JSON.parse(await readFile(join(directory,name),'utf8')),path=name.startsWith('front-')?'/api/front-status':'/api/open-status';try{const response=await fetch(record.origin+path,{headers:{authorization:'Bearer '+record.nonce},signal:AbortSignal.timeout(500)});if((await response.json()).nonce===record.nonce)process.kill(record.pid,'SIGTERM');}catch{}}}
+  await rm(fixtureRoot,{recursive:true,force:true});
+ }
+}
+if(process.argv.includes('--availability-only')){await runEmbeddedAvailabilityBrowser();process.exit(0);}
 const root=await mkdtemp(join(tmpdir(),'stage-nav-')),shots='stage-nav-evidence';await mkdir(shots,{recursive:true});
 const capability='d'.repeat(64),hash=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
 const results:unknown[]=[];let page:CdpSession|null=null;const servers:{stop:(force?:boolean)=>unknown}[]=[];

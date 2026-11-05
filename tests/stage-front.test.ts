@@ -30,3 +30,26 @@ test('actual managed front validates and forwards the complete trusted iframe qu
   expect((await fetch(base+'stage-parts.html?stageEmbed=1&lang=en')).status).toBe(410);
  }finally{front.stop();upstream.stop(true);await rm(control,{recursive:true,force:true});}
 });
+
+test('actual front preserves only the bounded closed stage-data refusal after nonce/key checks',async()=>{
+ const control=await mkdtemp(join(tmpdir(),'stage-front-refusal-')),key='a'.repeat(64),nonce=crypto.randomUUID(),fingerprint='f'.repeat(64),named='PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.';
+ let reply={status:409,type:'application/json',body:JSON.stringify({error:named}),correctKey:true,chunked:false};
+ const upstream=Bun.serve({hostname:'127.0.0.1',port:0,fetch(req){if(req.headers.get(openNonceHeader)!==nonce)return new Response(null,{status:403});const headers={'Content-Type':reply.type,[openKeyHeader]:reply.correctKey?key:'0'.repeat(64)};return new Response(reply.chunked?new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(reply.body));controller.close();}}):reply.body,{status:reply.status,headers});}});
+ const front=startFront({control,port:freePort(),nonce:crypto.randomUUID(),fingerprint}),base=front.origin+'/instances/'+key;
+ const record={schema:'rig-review-open-instance/1',key,contentHash:'b'.repeat(64),nonce,fingerprint,pid:process.pid,origin:`http://127.0.0.1:${upstream.port}`,capability:'c'.repeat(64)};
+ try{
+  for(const mode of ['single','compare']){
+   await writeFile(join(control,key+'.json'),JSON.stringify({...record,mode}),{mode:0o600});const path=mode==='single'?'/api/stage-parts':'/api/compare/b/stage-parts';
+   let response=await fetch(base+path);expect(response.status).toBe(409);expect(await response.json()).toEqual({error:named});
+   for(const body of [JSON.stringify({error:'/private/not-allowed'}),JSON.stringify({error:named,extra:'secret'}),'not JSON',JSON.stringify({error:named,padding:'x'.repeat(1024)})]){
+    reply.body=body;response=await fetch(base+path);expect(response.status).toBe(409);expect(await response.json()).toEqual({error:'FRONT_UPSTREAM_CONFLICT'});
+   }
+   reply.body=JSON.stringify({error:named,padding:'x'.repeat(1024)});reply.chunked=true;response=await fetch(base+path);expect(await response.json()).toEqual({error:'FRONT_UPSTREAM_CONFLICT'});reply.chunked=false;
+   reply.body=JSON.stringify({error:named});reply.type='text/html';response=await fetch(base+path);expect(await response.json()).toEqual({error:'FRONT_UPSTREAM_CONFLICT'});reply.type='application/json';
+   response=await fetch(base+(mode==='single'?'/api/review':'/api/compare'));expect(await response.json()).toEqual({error:'FRONT_UPSTREAM_CONFLICT'});
+   reply.status=400;response=await fetch(base+path);expect(await response.json()).toEqual({error:'FRONT_UPSTREAM_REJECTED'});reply.status=409;
+   reply.correctKey=false;response=await fetch(base+path);expect(response.status).toBe(410);expect((await response.json()).error).toStartWith('FRONT_INSTANCE_REPLACED');reply.correctKey=true;
+   response=await fetch(base+path,{headers:{Origin:'http://foreign.invalid'}});expect(response.status).toBe(403);
+  }
+ }finally{front.stop();upstream.stop(true);await rm(control,{recursive:true,force:true});}
+});
