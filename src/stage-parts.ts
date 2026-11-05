@@ -44,7 +44,7 @@ export function stagePartsRoutes(packages:{single:ReviewPackage}|{a:ReviewPackag
     // Every image is served against the same full pinned draft, including geometry and flags.
     await assertReviewUnchanged(p);await assertPartsUnchanged(pkg);
     if(kind){const file=servedImage(pkg,kind,Number(index));if(!file)return Response.json({error:'PARTS_IMAGE_UNAVAILABLE'},{status:404,headers});const pinned=pkg.files.find(f=>f.abs===file)!;return serveReference(req,file,pinned.sha256,headers);}
-    return Response.json({...partsViewJson(pkg,{verdict:null,stale:null}),readOnly:true,inspectionSourceHash:p.sourceHash,...(metadata?{draft:metadata}:{draftUnavailable:stageDraftRefusals.STAGE_DRAFT_NO_MESH})},{headers});
+    return Response.json({...partsViewJson(pkg,{verdict:null,stale:null}),differenceAvailable:false,readOnly:true,inspectionSourceHash:p.sourceHash,...(metadata?{draft:metadata}:{draftUnavailable:stageDraftRefusals.STAGE_DRAFT_NO_MESH})},{headers});
    }
    let promise=loaded.get(key);
    const initializing=!promise;
@@ -58,7 +58,7 @@ export function stagePartsRoutes(packages:{single:ReviewPackage}|{a:ReviewPackag
    if(!kind&&!initializing){await assertReviewUnchanged(p);await assertPartsUnchanged(pkg);}
    if(kind){const model=pkg.files[0]!;await serveReference(new Request(req.url,{method:'HEAD'}),model.abs,model.sha256,headers);}
    if(kind){const file=servedImage(pkg,kind,Number(index));if(!file)return Response.json({error:'PARTS_IMAGE_UNAVAILABLE'},{status:404,headers});const pinned=pkg.files.find(f=>f.abs===file);if(!pinned)throw new Error('Unbound atlas page');return await serveReference(req,file,pinned.sha256,headers);}
-   return Response.json({...partsViewJson(pkg,{verdict:null,stale:null}),readOnly:true,inspectionSourceHash:p.sourceHash,draftUnavailable:stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE},{headers});
+   return Response.json({...partsViewJson(pkg,{verdict:null,stale:null}),differenceAvailable:false,readOnly:true,inspectionSourceHash:p.sourceHash,draftUnavailable:stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE},{headers});
   }catch(error){const code=error instanceof Error?error.message.split(':')[0]:'';const named=stageDraftRefusals[code??'']??(code==='PARTS_MESH_IMAGE_MISMATCH'?stageDraftRefusals.STAGE_DRAFT_MISMATCH:undefined);return Response.json({error:named??'PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.'},{status:409,headers});}
  };
 }

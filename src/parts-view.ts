@@ -340,8 +340,10 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     if(!d||Object.keys(d).length!==3||typeof d.path!=='string'||typeof d.sha256!=='string'||!/^[a-f0-9]{64}$/.test(d.sha256)||d.resample!=='lanczos3-rgb-opaque')refuse('PARTS_DIFFERENCE_PROVENANCE','declared path, lowercase SHA-256 and lanczos3-rgb-opaque required');
     try{packagePath(d!.path,'painting_in_rig');}catch{refuse('PARTS_DIFFERENCE_PATH','literal portable inside-package path required');}
     const declaredPath=join(root,d!.path as string);
-    const abs=await insideRoot(root,declaredPath,'PARTS_DIFFERENCE_PATH','painting_in_rig').catch(()=>refuse('PARTS_DIFFERENCE_PATH','declared painting must be readable inside the package'));
-    const bytes=await readFile(abs),sha256=createHash('sha256').update(bytes).digest('hex');
+    const unreadable=()=>refuse('PARTS_DIFFERENCE_PATH','declared painting must be readable inside the package');
+    const abs=await safeFile(root,d!.path as string).catch(unreadable);
+    const bytes=await readFile(abs).catch(unreadable);
+    const sha256=createHash('sha256').update(bytes).digest('hex');
     if(sha256!==d!.sha256)refuse('PARTS_DIFFERENCE_HASH','declared painting hash differs');
     let png:PNG;try{png=PNG.sync.read(bytes);}catch{refuse('PARTS_DIFFERENCE_PNG','declared painting must be RGBA8 PNG');}
     if(bytes[24]!==8||bytes[25]!==6)refuse('PARTS_DIFFERENCE_PNG','declared painting must be RGBA8 PNG');

@@ -72,3 +72,12 @@ test('#390 repair: footprint Off ignores unsupported front encoding; On refuses 
  await writeDifferencePackage(root,true);const path=join(root,'parts/front.png'),png=PNG.sync.read(await readFile(path));await writeFile(path,PNG.sync.write(png,{colorType:2}));const pkg=await loadPartsView(root);
  expect((await partsDifference(pkg,0,0,false)).count).toBe(81);await expect(partsDifference(pkg,0,0,true)).rejects.toThrow('PARTS_DIFFERENCE_PNG');
 }));
+
+test('#390 refuses a directory as the declared painting path', () => fixture(async root => {
+  await writeDifferencePackage(root);
+  const manifest = join(root, 'parts.json');
+  const doc = JSON.parse(await readFile(manifest, 'utf8'));
+  doc.painting_in_rig.path = 'parts';
+  await writeFile(manifest, JSON.stringify(doc));
+  await expect(loadPartsView(root)).rejects.toThrow('PARTS_DIFFERENCE_PATH');
+}));
