@@ -11,10 +11,12 @@ import { bindDomI18n, onLanguageChange, t } from './i18n.ts';
 import { pageInstanceAccess } from './instance-access.ts';
 import { connectLiveWindow } from './live-connection.ts';
 import { flagLabel } from './parts-flags.ts';
-import { frontParts, paintAlphaOnly, paintBackground, paintPart } from './parts-render.ts';
+import { frontParts, paintAlphaOnly, paintBackground, paintPart, paintMesh } from './parts-render.ts';
 
 type Outcome = 'pending' | 'clean' | 'flagged';
-interface Item { name: string; index: number; x: number; y: number; w: number; h: number; page?: string; degrees?: number; image?: boolean }
+interface Mesh { vertices: number[]; triangles: number[]; figures: Record<string, unknown> }
+interface Entry { outcome: Outcome; note: string; mesh?: { outcome: Outcome; note: string } }
+interface Item { mesh?: Mesh; name: string; index: number; x: number; y: number; w: number; h: number; page?: string; degrees?: number; image?: boolean }
 interface Page { name: string; width: number; height: number; index: number }
 type Flag =
   | { id: string; item: string; source: 'mesh_report'; kind: 'faint'; art: number; maxAlpha: number; box: [number, number, number, number] }
@@ -22,7 +24,7 @@ type Flag =
 interface ViewData {
   mode: 'parts' | 'atlas'; title: string; rigSize: [number, number] | null; items: Item[]; pages: Page[]; flags: Flag[];
   flagSources: string[]; flagMissing: string[]; verdictFile: string;
-  verdict: { status: string; parts: Record<string, { outcome: Outcome; note: string }> } | null; verdictStale: 'files' | 'flags' | null;
+  verdict: { status: string; parts: Record<string, Entry> } | null; verdictStale: 'files' | 'flags' | null;
 }
 
 /** Page pixels shown around a region in its own view, so the packer's bleed and padding are visible. */
@@ -30,7 +32,7 @@ export const REGION_MARGIN = 4;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const access = pageInstanceAccess();
-const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, view: 'item' as 'item' | 'page', page: 0, verdict: new Map<string, { outcome: Outcome; note: string }>() };
+const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, view: 'item' as 'item' | 'page', page: 0, meshShown: new Set<string>(), verdict: new Map<string, Entry>() };
 const images = new Map<string, HTMLImageElement>();
 
 function load(src: string): Promise<HTMLImageElement> {
@@ -108,6 +110,7 @@ async function paint(): Promise<void> {
   if (token !== paintToken) return;
   const ctx = setCanvas(canvas, item.w, item.h);
   paintPart(ctx, item, img, { bg: state.bg, alpha: state.alpha, fronts: fronts.map(f => ({ box: f.o, image: f.img })), makeCanvas: (w, h) => Object.assign(document.createElement('canvas'), { width: w, height: h }) });
+  if (item.mesh && state.meshShown.has(item.name)) paintMesh(ctx, img, item.w, item.h, item.mesh, (w, h) => Object.assign(document.createElement('canvas'), { width: w, height: h }));
   overlay.replaceChildren(...data.flags.filter((f): f is Extract<Flag, { kind: 'faint' }> => f.item === item.name && f.kind === 'faint').map(f => {
     const box = overlayBox(f.box[0], f.box[1], f.box[2], f.box[3]);
     box.dataset.flag = f.id;
@@ -169,12 +172,43 @@ function renderVerdict(): void {
   $<HTMLTextAreaElement>('pv-note').value = entry.note;
 }
 
+function renderMesh(): void {
+  document.getElementById('pv-mesh-panel')?.remove();
+  document.getElementById('pv-mesh-control')?.remove();
+  const item = state.data!.items[state.selected]!;
+  if (!item.mesh) return;
+  const control = document.createElement('label'); control.id = 'pv-mesh-control'; control.className = 'pv-field';
+  const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = state.meshShown.has(item.name);
+  toggle.onchange = () => { if (toggle.checked) state.meshShown.add(item.name); else state.meshShown.delete(item.name); void paint(); };
+  control.append(toggle, t('mesh from rig.json UVs')); document.querySelector('.pv-toolbar')!.append(control);
+  const panel = document.createElement('section'); panel.id = 'pv-mesh-panel';
+  const heading = document.createElement('h2'); heading.textContent = t('Mesh geometry'); panel.append(heading);
+  const figures = document.createElement('dl');
+  for (const key of ['mode', 'vertices', 'triangles', 'art_coverage', 'stray_cleared']) {
+    const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = key;
+    dd.textContent = Object.hasOwn(item.mesh.figures, key) ? JSON.stringify(item.mesh.figures[key]) : t('not reported');
+    dd.dataset.meshFigure = key; figures.append(dt, dd);
+  }
+  panel.append(figures);
+  const help = document.createElement('p'); help.textContent = t('Pink: art pixels outside every triangle.'); panel.append(help);
+  const entry = state.verdict.get(item.name)!;
+  const select = document.createElement('select'); select.setAttribute('aria-label', t('Mesh outcome'));
+  for (const [value, label] of [['pending', 'Pending'], ['clean', 'Clean'], ['flagged', 'Flagged']]) { const option = document.createElement('option'); option.value = value!; option.textContent = t(label!); select.append(option); }
+  select.value = entry.mesh!.outcome;
+  const note = document.createElement('textarea'); note.maxLength = 10000; note.value = entry.mesh!.note; note.setAttribute('aria-label', t('Mesh note'));
+  select.onchange = () => { entry.mesh!.outcome = select.value as Outcome; };
+  note.oninput = () => { entry.mesh!.note = note.value; };
+  const outcomeLabel = document.createElement('label'), noteLabel = document.createElement('label');
+  outcomeLabel.append(t('Mesh outcome'), select); noteLabel.append(t('Mesh note'), note);
+  panel.append(outcomeLabel, noteLabel); document.querySelector('.pv-verdict')!.before(panel);
+}
+
 function select(index: number): void {
   const data = state.data!;
   state.selected = index;
   const item = data.items[index]!;
   if (item.page !== undefined) state.page = data.pages.findIndex(p => p.name === item.page);
-  renderList(); renderFlags(); renderVerdict(); void paint();
+  renderList(); renderFlags(); renderVerdict(); renderMesh(); void paint();
 }
 
 function setView(view: 'item' | 'page'): void {
@@ -206,8 +240,8 @@ async function boot(): Promise<void> {
   const data = await res.json() as ViewData & { error?: string };
   if (!res.ok) { $('pv-load').textContent = data.error ?? t('Load failed.'); return; }
   state.data = data;
-  for (const item of data.items) state.verdict.set(item.name, { outcome: 'pending', note: '' });
-  if (data.verdict) { for (const [name, v] of Object.entries(data.verdict.parts)) if (state.verdict.has(name)) state.verdict.set(name, { outcome: v.outcome, note: v.note ?? '' }); $<HTMLSelectElement>('pv-overall').value = data.verdict.status; }
+  for (const item of data.items) state.verdict.set(item.name, { outcome: 'pending', note: '', ...(item.mesh ? { mesh: { outcome: 'pending' as Outcome, note: '' } } : {}) });
+  if (data.verdict) { for (const [name, v] of Object.entries(data.verdict.parts)) if (state.verdict.has(name)) state.verdict.set(name, { outcome: v.outcome, note: v.note ?? '', ...(v.mesh ? { mesh: v.mesh } : {}) }); $<HTMLSelectElement>('pv-overall').value = data.verdict.status; }
   document.title = data.title;
   $('pv-title').textContent = data.title;
   $('pv-mode').textContent = data.mode === 'parts' ? t('Parts package, before rigging') : t('Atlas of a built rig');

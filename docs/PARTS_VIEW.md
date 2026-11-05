@@ -10,7 +10,7 @@ npx rig-review parts <out>/rig        # the same package, named directly
 npx rig-review parts <out>/check      # a built rig's atlas (any review package with a compiled model)
 ```
 
-Options: `--mesh-report <file>`, `--check <file>` (producer flags; see below), `--verdict <file>` (where the sign-off
+Options: `--rig <file>` (mesh geometry), `--mesh-report <file>`, `--check <file>` (producer flags; see below), `--verdict <file>` (where the sign-off
 is written), `--port <n>`. Like `review`, it serves in the foreground and exits 3 s after its last tab closes.
 
 ## Inputs
@@ -91,3 +91,60 @@ as `PARTS_IMAGE_OUTSIDE` / `PARTS_FILE_OUTSIDE`, and a discovered `mesh_report.j
 (`--mesh-report`, `--check`) is read where it is.
 
 Editing parts is out of scope: repairs go through the producer's source ladder, never the browser.
+
+## Mesh geometry
+
+In parts mode, a `rig.json` beside `parts.json` supplies optional mesh geometry;
+`--rig <file>` selects an explicit input instead. The per-part **mesh from
+rig.json UVs** toggle starts off. It draws edges and vertices over the sentinel
+background, and tints nontransparent art pixels pink when their centres lie
+outside every nondegenerate triangle (triangle boundaries count as covered).
+The mesh outcome has its own Pending / Clean / Flagged states and note; Flagged
+requires a note. Approval requires both part and mesh outcomes to be Clean.
+A part without a mesh has no mesh controls or outcome.
+
+Image-space positions are `(u × width, v × height)` from each attachment's own
+UVs and dimensions, never reconstructed through bones or weights. The mesh's raster
+is the rig image; the parts PNG is located inside it by pixel equality. The
+attachment's literal `image` under the rig spec's literal `images` directory must
+be a local PNG of exactly the declared dimensions. Its centred window must match
+the parts PNG RGBA exactly, and every pixel outside must have alpha zero. The
+window offset `((W-w)/2,(H-h)/2)` is subtracted from mesh positions. Fractional
+or negative offsets refuse; no padding constant is assumed. Border vertices
+are allowed and drawn clipped. The rig raster is hashed in `source.files`. The producer
+rounds UVs to six decimals: the coordinate error is at most `0.5e-6 × dimension`
+pixels on each axis (for a 598×465 image, at most 0.000299 and 0.0002325 px).
+The overlay cannot show this subpixel error, and coverage tint works at whole
+pixels, so it cannot move a tinted pixel unless a triangle edge lies within that
+rounding distance of a pixel centre. Coverage describes these derived triangles,
+not an exact recovery of the producer's original unrounded positions.
+
+Mode, vertex count, triangle count, `art_coverage` and `stray_cleared` are copied
+from the part's `mesh_report.json` row without recomputing them. Absent fields
+say **not reported**; faint islands remain in Producer flags. A report count may
+differ from the loaded geometry; it is the producer's reading. The verdict's
+`parts[name].mesh` contains `{outcome,note}` only for a mesh-bearing part.
+`rig.json` and the loaded mesh report enter `source.files`, and the mesh report
+also remains in `source.flags`. Changes invalidate the saved sign-off. No rig
+means the existing parts view and verdict format remain unchanged.
+
+| Refusal | Found / required |
+| --- | --- |
+| `PARTS_MESH_UNKNOWN_PART` | An attachment name not in parts.json / a known part |
+| `PARTS_MESH_UV` | Invalid coordinate pairs or UV outside [0,1] / finite UV pairs in [0,1] |
+| `PARTS_MESH_TRIANGLE` | Invalid triples or index / integer indices within the vertex array |
+| `PARTS_MESH_SIZE` | Invalid declared dimensions / positive integer dimensions and image |
+| `PARTS_MESH_IMAGE_SIZE` | Raster size / attachment dimensions |
+| `PARTS_MESH_IMAGE_MISMATCH` | First differing RGBA pixel, nontransparent border or incompatible crop / exact centred window and transparent border |
+| `PARTS_MESH_IMAGE_PATH` | Unsafe or missing rig raster / literal inside path |
+| `PARTS_MESH_IMAGE_FORMAT` | Undecodable raster / PNG |
+| `PARTS_MESH_AMBIGUOUS` | Multiple mesh attachments for one name / one mesh |
+| `PARTS_MESH_REPORT_AMBIGUOUS` | Multiple report rows for a mesh part / at most one |
+| `PARTS_MESH_MALFORMED` | Missing skins object / a rig spec with skins |
+| `PARTS_MESH_OUTSIDE` | A discovered rig symlink escaping the package / an inside file |
+| `PARTS_MESH_OUTCOME` | Missing or invalid mesh outcome or oversized note / a valid outcome and bounded note |
+| `PARTS_MESH_OUTCOME_UNAVAILABLE` | Mesh outcome on a part without a mesh / no mesh outcome |
+
+Explicit CLI file paths are the user's designation, as with `--mesh-report`;
+discovered paths cannot escape the package. This view never writes geometry,
+bones, weights or source images. Repairs remain producer config changes.
