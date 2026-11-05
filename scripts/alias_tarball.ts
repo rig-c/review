@@ -27,15 +27,30 @@ export class AliasTarballError extends Error {}
 /** An alias that was packed and reads as different from its package beyond the name. Exit 1. */
 export class AliasDiffersError extends AliasTarballError {}
 
+/** Per-process bounds; the CLI may pack twice and extract three times. */
+export const PACK_TIMEOUT_MS = 15_000;
+const TAR_TIMEOUT_MS = 5_000;
+export const ALIAS_COMMAND_TIMEOUT_MS = 2 * PACK_TIMEOUT_MS + 3 * TAR_TIMEOUT_MS + 5_000;
+
 interface Ran {
   status: number;
   out: string;
+  timedOut: boolean;
+  signal: string | null;
+  elapsedMs: number;
 }
 
-function run(cmd: string, args: readonly string[], cwd: string): Ran {
-  const r = spawnSync(cmd, [...args], { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+function run(cmd: string, args: readonly string[], cwd: string, timeout = TAR_TIMEOUT_MS): Ran {
+  const started = performance.now();
+  const r = spawnSync(cmd, [...args], { cwd, timeout, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
   const failed = r.error === undefined ? '' : `\n${r.error.message}`;
-  return { status: typeof r.status === 'number' ? r.status : 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}${failed}` };
+  return {
+    status: typeof r.status === 'number' ? r.status : 1,
+    out: `${r.stdout ?? ''}${r.stderr ?? ''}${failed}`,
+    timedOut: (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT',
+    signal: r.signal,
+    elapsedMs: Math.round(performance.now() - started),
+  };
 }
 
 /** Every file under a directory, by its path relative to it, sorted so two listings compare line for line. */
@@ -55,7 +70,7 @@ function filesUnder(dir: string): string[] {
 function extract(tgz: string, into: string): void {
   mkdirSync(into, { recursive: true });
   const unpacked = run('tar', ['-xzf', tgz, '-C', into], into);
-  if (unpacked.status !== 0) throw new AliasTarballError(`\`tar -xzf ${tgz}\` exited ${unpacked.status}: ${unpacked.out.trim().slice(0, 2000)}`);
+  if (unpacked.status !== 0) throw new AliasTarballError(`\`tar -xzf ${tgz}\` exited ${unpacked.status}; elapsed=${unpacked.elapsedMs} ms; limit=${TAR_TIMEOUT_MS} ms; signal=${unpacked.signal ?? 'none'}${unpacked.timedOut ? '; TIMEOUT' : ''}: ${unpacked.out.trim().slice(0, 2000) || '(no output)'}`);
   if (!existsSync(join(into, MANIFEST))) throw new AliasTarballError(`${tgz} holds no ${MANIFEST}, so it is not an npm package tarball`);
 }
 
@@ -159,7 +174,10 @@ export function compareTarballs(packageTgz: string, aliasTgz: string): AliasComp
  * pack alone an empty script shell as well: lifecycle text is never evaluated,
  * including on that path. The manifest and installed npm stay untouched.
  */
-export function packInto(dir: string, into: string): string {
+export function packInto(dir: string, into: string, timeoutMs = PACK_TIMEOUT_MS): string {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > PACK_TIMEOUT_MS) {
+    throw new AliasTarballError(`npm pack timeout must be an integer in 1..${PACK_TIMEOUT_MS} ms`);
+  }
   const source = resolve(dir);
   const destination = resolve(into);
   mkdirSync(destination, { recursive: true });
@@ -168,10 +186,11 @@ export function packInto(dir: string, into: string): string {
   try {
     const shell = join(shellDir, 'skip-lifecycle');
     writeFileSync(shell, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
-    const packed = run('npm', ['pack', '.', '--ignore-scripts', '--dry-run=false', '--script-shell', shell, '--pack-destination', destination, '--loglevel=error'], source);
+    const packed = run('npm', ['pack', '.', '--ignore-scripts', '--dry-run=false', '--script-shell', shell, '--pack-destination', destination, '--loglevel=error'], source, timeoutMs);
     const made = readdirSync(destination).filter((f) => f.endsWith('.tgz') && !before.has(f));
-    if (packed.status !== 0 || made.length !== 1) {
-      throw new AliasTarballError(`\`npm pack ${dir}\` exited ${packed.status} and left ${made.length} new tarball(s); one was required. ${packed.out.trim().slice(0, 2000)}`);
+    if (packed.timedOut || packed.status !== 0 || made.length !== 1) {
+      const diagnostic = `cwd=${source}; destination=${destination}; elapsed=${packed.elapsedMs} ms; limit=${timeoutMs} ms; signal=${packed.signal ?? 'none'}${packed.timedOut ? '; TIMEOUT' : ''}`;
+      throw new AliasTarballError(`\`npm pack ${dir}\` exited ${packed.status} and left ${made.length} new tarball(s); one was required. ${diagnostic}. ${packed.out.trim().slice(0, 2000) || '(no output)'}`);
     }
     return join(destination, made[0]);
   } finally {
