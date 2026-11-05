@@ -52,7 +52,10 @@ jobs:
       contents: write # release commit, tag, GitHub release
       pull-requests: write # open and update the release PR
       issues: write # release-please labels
-      id-token: write # OIDC token for npm trusted publishing
+    outputs:
+      publish: ${{ steps.target.outputs.publish }}
+      tag: ${{ steps.target.outputs.tag }}
+      sha: ${{ steps.target.outputs.sha }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -121,52 +124,76 @@ jobs:
           if served="$(npm view "@rig-c/review@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/review@$version"; exit 1; fi
           echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
 
-      # Everything below runs only when a tag is to be published.
+  publish:
+    needs: release
+    if: ${{ needs.release.outputs.publish == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # check out the validated commit
+      actions: read # read the source run and receipt
+      pull-requests: read # resolve the merged PR
+      id-token: write # OIDC token for npm trusted publishing
+    steps:
       - uses: actions/checkout@v4
-        if: ${{ steps.target.outputs.publish == 'true' }}
         with:
           # Both paths check out the commit that passed provenance validation, not the (mutable) tag name.
-          ref: ${{ steps.target.outputs.sha }}
+          ref: ${{ needs.release.outputs.sha }}
 
       - uses: oven-sh/setup-bun@v2
-        if: ${{ steps.target.outputs.publish == 'true' }}
         with:
           bun-version: latest
 
       - uses: actions/setup-node@v4
-        if: ${{ steps.target.outputs.publish == 'true' }}
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
       # Node 22 ships npm 10; the OIDC exchange landed in npm 11.5.1.
       - name: Use an npm that speaks OIDC
-        if: ${{ steps.target.outputs.publish == 'true' }}
         run: |
           npm install -g npm@latest
           npm --version
 
       - name: Install dependencies
-        if: ${{ steps.target.outputs.publish == 'true' }}
         run: bun install --frozen-lockfile
 
-      # prepublishOnly runs the full check, including reference video export.
+      # A verdict miss runs the full check, including reference video export.
       - name: Install reference video export tools
         # Same bounded install as Check, inside the existing 20-minute job.
         timeout-minutes: 3
-        if: ${{ steps.target.outputs.publish == 'true' }}
         uses: ./.github/actions/reference-video-tools
+
+      - id: reuse
+        uses: rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3
+        with:
+          declaration: scripts/tree-verdict.json
+          purpose: publish
+
+      # Tarball publication has no lifecycle hook. Gate both publications
+      # here before packing either tarball.
+      - id: publication-reader
+        env:
+          TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration scripts/tree-verdict.json --verdict-path "$TREE_VERDICT_PATH"
 
       # `--access public`: a scoped package is restricted unless told otherwise.
       - name: Publish @rig-c/review
-        if: ${{ steps.target.outputs.publish == 'true' }}
-        run: npm publish --provenance --access public
+        env:
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
+        run: |
+          set -euo pipefail
+          x="$(npm pack . --pack-destination .)"
+          npm publish "$x" --provenance --access public
 
       # The scoped publish has gated these files. Internal packs run no scripts;
       # only the manifest name changes, and equality is required before publish.
       # Each of the two packs may take five minutes, within this job's 20 minutes.
       - name: Publish the alias rig-review
-        if: ${{ steps.target.outputs.publish == 'true' }}
+        env:
+          TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
         run: |
           set -euo pipefail
           alias_tgz=$(bun scripts/alias_tarball.ts pack --name rig-review --out "$RUNNER_TEMP/alias-rig-review" --pack-timeout-ms 300000)
@@ -177,9 +204,8 @@ jobs:
       # 15 minutes; a red here un-publishes nothing, it says the confirmation
       # was not taken.
       - name: Confirm the registry serves both names and the alias installs
-        if: ${{ steps.target.outputs.publish == 'true' }}
         env:
-          TAG_NAME: ${{ steps.target.outputs.tag }}
+          TAG_NAME: ${{ needs.release.outputs.tag }}
         run: |
           set -euo pipefail
           version="${TAG_NAME#v}"

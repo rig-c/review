@@ -12,6 +12,8 @@ type Step = {
 };
 type Job = {
   steps: Step[];
+  needs?: string;
+  if?: string;
   'timeout-minutes'?: number;
   'continue-on-error'?: boolean;
 };
@@ -41,19 +43,20 @@ function checkBound(job: Job) {
   expect(installer.with).toBeUndefined(); // Both callers use the same pin defaults.
 }
 
-for (const [file, name] of [['check.yml', 'check'], ['release.yml', 'release']] as const) {
+for (const [file, name] of [['check.yml', 'check'], ['release.yml', 'publish']] as const) {
   const workflow = Bun.YAML.parse(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8')) as Workflow;
   const job = workflow.jobs[name]!;
   test(`${file}: the required tool install is bounded within its owning job`, () => {
     checkBound(job);
     const installer = job.steps.find(step => step.name === installerName)!;
-    if (name === 'release') {
+    if (name === 'publish') {
       expect(job['timeout-minutes']).toBe(20);
-      expect(installer.if).toBe("${{ steps.target.outputs.publish == 'true' }}");
+      expect(job.needs).toBe('release');
+      expect(job.if).toBe("${{ needs.release.outputs.publish == 'true' }}");
     } else {
       expect(job['timeout-minutes']).toBe(10);
-      expect(installer.if).toBeUndefined();
     }
+    expect(installer.if).toBeUndefined();
   });
 
   // Mutate detached data only: never edit shared source or wait for apt.

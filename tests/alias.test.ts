@@ -188,19 +188,19 @@ test('pack refuses an unsupported alias and unreadable input by name', () => {
 
 test('release packs after the scoped gate and publishes only an equal alias with the same OIDC flags', () => {
   const wf = Bun.YAML.parse(readFileSync(join(ROOT, '.github/workflows/release.yml'), 'utf8')) as {
-    jobs: { release: { permissions: Record<string, string>; environment?: string; steps: { name?: string; run?: string; if?: string }[] } };
+    jobs: { publish: { permissions: Record<string, string>; environment?: string; steps: { name?: string; run?: string; if?: string }[] } };
   };
-  const steps = wf.jobs.release.steps;
+  const steps = wf.jobs.publish.steps;
   const scoped = steps.findIndex(step => step.name === 'Publish @rig-c/review');
   const at = steps.findIndex(step => step.name === 'Publish the alias rig-review');
   const confirm = steps.findIndex(step => step.name === 'Confirm the registry serves both names and the alias installs');
   expect(scoped).toBeGreaterThan(-1);
   expect(at).toBeGreaterThan(scoped);
   expect(confirm).toBeGreaterThan(at);
-  expect(wf.jobs.release.permissions['id-token']).toBe('write');
-  expect(wf.jobs.release.environment).toBeUndefined();
+  expect(wf.jobs.publish.permissions['id-token']).toBe('write');
+  expect(wf.jobs.publish.environment).toBeUndefined();
   expect(steps[at].if).toBe(steps[scoped].if);
-  expect(steps[scoped].run!.trim()).toBe('npm publish --provenance --access public');
+  expect(steps[scoped].run).toContain('npm publish "$x" --provenance --access public');
   const bin = join(work, 'mock-bin');
   mkdirSync(bin);
   for (const [name, body] of Object.entries({
@@ -230,8 +230,6 @@ test('release packs after the scoped gate and publishes only an equal alias with
 }, commandBudget(2));
 
 test('publish gates the full repository and smoke overrides only internal lifecycle and dry-run settings', () => {
-  const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
-  expect(manifest.scripts.prepublishOnly).toBe('bun run typecheck && bun test && bun run build && bun run check -- examples/demo/review.json && bun run smoke');
   const smoke = readFileSync(join(ROOT, 'scripts/install-smoke.ts'), 'utf8');
   expect(smoke).toContain("['npm','pack','--json','--ignore-scripts','--dry-run=false','--pack-destination',work]");
   expect(smoke).toContain("['npm','i','-D','--dry-run=false','--no-audit','--no-fund',join(work,info!.filename)]");
