@@ -148,7 +148,9 @@ test('parsed YAML preserves release authority, triggers and gates, and checks ou
  expect(publish.steps[0]).toMatchObject({uses:'actions/checkout@v4',with:{ref:'${{ needs.release.outputs.sha }}'}});
  expect(publish.steps.find(step=>step.env?.TAG_NAME)?.env?.TAG_NAME).toBe('${{ needs.release.outputs.tag }}');
  expect(publish.steps.filter(step=>step.run?.includes('npm publish')).map(step=>step.name)).toEqual(['Publish @rig-c/review','Publish the alias rig-review']);
- expect(publish.steps.find(step=>step.name==='Publish @rig-c/review')!.run!.trim()).toBe('npm publish --provenance --access public');
+ expect(publish.steps.find(step=>step.name==='Publish @rig-c/review')!.run!.trim()).toBe(
+  'set -euo pipefail\nx="$(npm pack . --pack-destination .)"\nnpm publish "$x" --provenance --access public',
+ );
 });
 
 test('recorded API bodies retain exact byte hashes, HTTP statuses and annotated identity',()=>{

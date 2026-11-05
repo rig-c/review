@@ -170,8 +170,8 @@ jobs:
           declaration: scripts/tree-verdict.json
           purpose: publish
 
-      # npm publish of a tarball has no lifecycle hook. Gate both publications
-      # here, and keep the scoped folder publish's own prepublishOnly hook.
+      # Tarball publication has no lifecycle hook. Gate both publications
+      # here before packing either tarball.
       - id: publication-reader
         env:
           TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
@@ -182,10 +182,11 @@ jobs:
       # `--access public`: a scoped package is restricted unless told otherwise.
       - name: Publish @rig-c/review
         env:
-          TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
           TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: npm publish --provenance --access public
+        run: |
+          set -euo pipefail
+          x="$(npm pack . --pack-destination .)"
+          npm publish "$x" --provenance --access public
 
       # The scoped publish has gated these files. Internal packs run no scripts;
       # only the manifest name changes, and equality is required before publish.

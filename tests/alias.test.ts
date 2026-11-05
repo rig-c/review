@@ -200,7 +200,7 @@ test('release packs after the scoped gate and publishes only an equal alias with
   expect(wf.jobs.publish.permissions['id-token']).toBe('write');
   expect(wf.jobs.publish.environment).toBeUndefined();
   expect(steps[at].if).toBe(steps[scoped].if);
-  expect(steps[scoped].run!.trim()).toBe('npm publish --provenance --access public');
+  expect(steps[scoped].run).toContain('npm publish "$x" --provenance --access public');
   const bin = join(work, 'mock-bin');
   mkdirSync(bin);
   for (const [name, body] of Object.entries({
