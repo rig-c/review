@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.7.0](https://github.com/rig-c/review/compare/v1.6.0...v1.7.0) (2026-11-05)
+
+
+### Features
+
+* **parts:** add source-bound pointed comments and shared viewports ([#389](https://github.com/rig-c/review/issues/389)) ([07c07d2](https://github.com/rig-c/review/commit/07c07d254725c97cfc63aa7b028cb8ef8ccf9045))
+* **parts:** compare original painting with visual overlays ([#391](https://github.com/rig-c/review/issues/391)) ([80e2a49](https://github.com/rig-c/review/commit/80e2a4986bc60060f68920fc9789c8d9938af7f1))
+* **workspace:** add four-stage inspection navigation ([#379](https://github.com/rig-c/review/issues/379)) ([b5f03d8](https://github.com/rig-c/review/commit/b5f03d82e7cf45fe05677910e5d1874f1f8518ed))
+
+
+### Bug Fixes
+
+* **parts:** distinguish producer rows and group source counts ([#386](https://github.com/rig-c/review/issues/386)) ([c9e5d87](https://github.com/rig-c/review/commit/c9e5d8745f8380574c338779038754f48e8ad944))
+
 ## [1.6.0](https://github.com/rig-c/review/compare/v1.5.4...v1.6.0) (2026-11-05)
 
 
