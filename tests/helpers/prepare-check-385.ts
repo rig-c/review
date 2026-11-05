@@ -1,0 +1,31 @@
+/** Explicit development fixture preparation, never called by the application. */
+import {mkdir,readFile,writeFile,stat} from 'node:fs/promises';
+import {resolve,join} from 'node:path';
+import {createHash} from 'node:crypto';
+const out=resolve(process.argv[2]!),pin='971b3a7fab1109adf5be11750886687a7addb306';
+await mkdir(out,{recursive:true});
+const installed=resolve(process.argv[3]!);
+for(const file of ['package.json','bin/rig-parts.cjs','cli.ts','src/checkrow.ts','src/coords.ts','src/layers.ts','src/parts.ts','src/raster/png.ts','src/raster/types.ts'])if(!(await stat(join(installed,file))).isFile())throw Error('PREFLIGHT_FILE '+file);
+if(JSON.parse(await readFile(join(installed,'package.json'),'utf8')).version!=='2.17.0')throw Error('PIN_REQUIRED');
+const url=`https://raw.githubusercontent.com/rig-c/parts/${pin}/fixtures/checkrig.ts`;
+const res=await fetch(url);if(!res.ok)throw Error('FIXTURE_FETCH '+res.status);
+const source=await res.text(),sha=(b:string|Uint8Array)=>createHash('sha256').update(b).digest('hex');
+if(sha(source)!=='b3c86c8f69fe35a2c5181b4724df7dd65cb5c8b3f3920fad43582c66727349b4')throw Error('PINNED_FIXTURE_HASH');
+// Relocate only imports in our development copy; installed package bytes stay immutable.
+await writeFile(join(out,'checkrig.ts'),source.replaceAll("'../src/",`'${installed}/src/`));
+const {writeCheckRig}=await import(join(out,'checkrig.ts'));
+if(typeof writeCheckRig!=='function')throw Error('PREFLIGHT_IMPORT');
+writeCheckRig(join(out,'rig'),{stretchMesh:80});
+for(const file of ['rig.json','motion.json','parts.json','images/back.png','images/front.png','parts/back.png','parts/front.png'])if(!(await stat(join(out,'rig',file))).isFile())throw Error('PREFLIGHT_RIG '+file);
+console.log('PREFLIGHT_OK '+JSON.stringify({version:'2.17.0',fixtureSourceSha256:sha(source),installed,out}));
+if(process.argv.includes('--preflight'))process.exit(0);
+const command=[process.execPath,join(installed,'cli.ts'),'check','--rig',join(out,'rig'),'--parts',join(out,'rig'),'--out',join(out,'check'),'--no-extremes','--json'];
+const start=performance.now(),child=Bun.spawn(command,{stdout:'pipe',stderr:'pipe'});
+const [stdout,stderr]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text()]);
+const exit=await child.exited;
+await writeFile(join(out,'stdout.txt'),stdout);await writeFile(join(out,'stderr.txt'),stderr);
+const bytes=await readFile(join(out,'check/check.json')),doc=JSON.parse(bytes.toString()),combinations=new Set<string>();
+function walk(v:any){if(Array.isArray(v))v.forEach(walk);else if(v&&typeof v==='object'){if(v.row_scope)combinations.add(v.row_scope+'/'+v.row_kind);Object.values(v).forEach(walk);}}walk(doc);
+const receipt={producer:'@rig-c/parts@2.17.0',gitHead:pin,fixtureSource:url,fixtureSourceSha256:sha(source),checkrowSha256:sha(await readFile(join(installed,'src/checkrow.ts'))),checkSha256:sha(bytes),exit,elapsedMs:performance.now()-start,combinations:[...combinations].sort(),command:'bun <parts@2.17.0>/cli.ts check --rig rig --parts rig --out check --no-extremes --json',options:{stretchMesh:80}};
+await writeFile(join(out,'receipt.json'),JSON.stringify(receipt,null,2)+'\n');console.log(JSON.stringify(receipt));
+if(!combinations.size)throw Error('NO_REAL_ROWS');

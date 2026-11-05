@@ -8,7 +8,8 @@
  *
  * Producer flags are read from the files rig-parts writes and shown on their part; nothing is re-measured here:
  * - `mesh_report.json` rows: `contour.bridges.faint[]` (rig-parts #326), each a faint island the mesh left out;
- * - `check.json`: a gate whose `status` is FAIL or WARN, `seam_pairs` and `figure_openings`, on every part they name.
+ * - `check.json`: read-only row metadata drives display counts; the historical FAIL/WARN extraction below
+ *   stays separate for verdict/2 compatibility. No display classification rewrites saved flag IDs.
  *
  * The sign-off is `rig-review-parts-verdict/2` (docs/PARTS_VIEW.md), written beside `parts.json` by default. Its
  * `source.sha256` is the sha256 over the UTF-8 lines `<path>\t<sha256>\n`, sorted by path bytewise, where every path
@@ -56,7 +57,8 @@ export type ProducerFlag =
   | { id: string; item: string; source: 'mesh_report'; kind: 'faint'; art: number; maxAlpha: number; box: [number, number, number, number] }
   | { id: string; item: string; source: 'check'; kind: 'check'; path: string; line: string;
       /** The top-level check.json key the line sits under, the gate's status when it is a gate, and the object as written. */
-      root: string; status: string | null; entry: Record<string, unknown> };
+      root: string; status: string | null; entry: Record<string, unknown>;
+      classification?: 'part' | 'pair' | 'evidence' | 'unclassified' };
 
 export interface PartsViewPackage {
   painting?:{sha256:string;width:number;height:number;abs:string};
@@ -67,6 +69,8 @@ export interface PartsViewPackage {
   items: ViewItem[];
   pages: ViewPage[];
   flags: ProducerFlag[];
+  /** Read-only check presentation; never serialized into verdict/2. */
+  readings?: ProducerFlag[];
   /** The files the sign-off rests on (parts.json and every part PNG; or the model and every page). */
   files: LocalFile[];
   /** The producer files the flags were read from. */
@@ -180,6 +184,40 @@ export function checkFlags(doc: unknown, names: ReadonlySet<string>): ProducerFl
   return flags;
 }
 
+/** Additive check-row metadata is authoritative only as a complete valid tuple.
+ * Walk all roots (including PASS/SKIP), nested arrays, sets and requirements.lines.
+ * Legacy extraction and verdict IDs deliberately remain in checkFlags above.
+ */
+export function checkReadings(doc: unknown, names: ReadonlySet<string>): ProducerFlag[] {
+  const rows: ProducerFlag[] = [];
+  let labelled = false;
+  const visit = (value: unknown, path: string, root: string, status: string | null, row = false, depth = 0): void => {
+    if (depth > 32) return;
+    if (Array.isArray(value)) { value.forEach((v, i) => visit(v, `${path}[${i}]`, root, status, true, depth + 1)); return; }
+    const obj = record(value); if (!obj) return;
+    const hasMetadata = ['row_scope', 'row_kind', 'row_subjects'].some(k => Object.hasOwn(obj, k));
+    labelled ||= hasMetadata;
+    if (hasMetadata || row) {
+      const scope = obj.row_scope, kind = obj.row_kind, subjects = obj.row_subjects;
+      const valid = ['part', 'pair', 'rig'].includes(String(scope)) && ['finding', 'evidence'].includes(String(kind)) &&
+        Array.isArray(subjects) && subjects.length === (scope === 'part' ? 1 : scope === 'pair' ? 2 : 0) &&
+        subjects.every(s => typeof s === 'string' && s.length > 0) && new Set(subjects).size === subjects.length;
+      const classification = !valid ? 'unclassified' : scope === 'rig' || kind === 'evidence' ? 'evidence' : scope === 'part' ? 'part' : 'pair';
+      // Invalid/missing metadata has no implied subjects. Keep it visible globally, unclassified.
+      const items = valid ? (subjects as string[]).filter(s => names.has(s)) : [];
+      for (const item of items.length ? items : ['']) rows.push({id: `check:${path}`, item, source:'check', kind:'check', path, root, status, entry:obj, line:JSON.stringify(obj), classification});
+    }
+    for (const [key, child] of Object.entries(obj)) {
+      // requirements.lines is the producer's dictionary of individual rows, not an array.
+      if (key === 'lines' && /(?:^|\.)requirements$/.test(path) && record(child)) {
+        for (const [name, entry] of Object.entries(child as Record<string, unknown>)) visit(entry, `${path}.lines.${name}`, root, status, true, depth + 1);
+      } else visit(child, path ? `${path}.${key}` : key, root, status, false, depth + 1);
+    }
+  };
+  for (const [root, value] of Object.entries(record(doc) ?? {})) visit(value, root, root, typeof record(value)?.status === 'string' ? record(value)!.status as string : null);
+  return labelled ? rows : checkFlags(doc, names).map(f => ({...f, classification:'unclassified' as const, ...(f.kind === 'check' ? {line:JSON.stringify(f.entry)} : {})}));
+}
+
 async function readJson(abs: string, what: string): Promise<unknown> {
   try { return JSON.parse(await readFile(abs, 'utf8')); } catch (e) { return refuse('PARTS_FLAGS_MALFORMED', `${what}: ${e instanceof Error ? e.message : String(e)}`); }
 }
@@ -189,8 +227,8 @@ async function readJson(abs: string, what: string): Promise<unknown> {
  * writes `mesh_report.json` beside `parts.json` in `rig/`, and `check` writes `check/check.json` beside `rig/`.
  * `rigDir` is that `rig/` directory (parts mode) or null (atlas mode: explicit paths only, or `buildRoot`'s files).
  */
-async function producerFlags(rigDir: string | null, buildRoot: string | null, names: ReadonlySet<string>, options: PartsViewOptions): Promise<{ flags: ProducerFlag[]; files: LocalFile[]; notes: string[] }> {
-  const flags: ProducerFlag[] = [], files: LocalFile[] = [], notes: string[] = [];
+async function producerFlags(rigDir: string | null, buildRoot: string | null, names: ReadonlySet<string>, options: PartsViewOptions): Promise<{ flags: ProducerFlag[]; readings: ProducerFlag[]; files: LocalFile[]; notes: string[] }> {
+  const flags: ProducerFlag[] = [], readings: ProducerFlag[] = [], files: LocalFile[] = [], notes: string[] = [];
   // A discovered file must resolve inside the directory it was discovered in; a path given on the command line is the user's own choice.
   const pick = async (explicit: string | undefined, candidates: ([string, string] | null)[], what: string): Promise<string | null> => {
     if (explicit !== undefined) return resolve(explicit);
@@ -201,9 +239,9 @@ async function producerFlags(rigDir: string | null, buildRoot: string | null, na
   if (mesh) { files.push(await hashFile(mesh)); flags.push(...meshReportFlags(await readJson(mesh, 'mesh_report.json'), names)); }
   else notes.push('mesh_report.json');
   const check = await pick(options.check, [rigDir ? [dirname(rigDir), join(dirname(rigDir), 'check', 'check.json')] : null, buildRoot ? [buildRoot, join(buildRoot, 'check', 'check.json')] : null], 'check/check.json');
-  if (check) { files.push(await hashFile(check)); flags.push(...checkFlags(await readJson(check, 'check.json'), names)); }
+  if (check) { files.push(await hashFile(check)); const doc = await readJson(check, 'check.json'); flags.push(...checkFlags(doc, names)); readings.push(...checkReadings(doc, names)); }
   else notes.push('check.json');
-  return { flags, files, notes };
+  return { flags, readings, files, notes };
 }
 
 /** Exact attachment identity and UV-derived geometry; never reconstruct through weights. */
@@ -300,7 +338,7 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     assertOriginalPaintingSize(png!.width,png!.height,rigSize,doc.scale_rig_per_source);
     const file={abs:abs!,bytes:bytes!.length,sha256:createHash('sha256').update(bytes!).digest('hex')};painting={...file,width:png!.width,height:png!.height};files.push(file);
   }
-  const { flags, files: flagFiles, notes } = await producerFlags(root, null, seen, options);
+  const { flags, readings, files: flagFiles, notes } = await producerFlags(root, null, seen, options);
   const protectedPaths = [join(root, 'rig.json'), join(root, 'config.json'), join(root, 'review.json'), join(root, 'report.json')];
   if (basename(root) === 'rig') protectedPaths.push(...['parts.json', 'config.json', 'review.json', 'report.json'].map(name => join(dirname(root), name)));
   if (options.rig !== undefined) protectedPaths.push(resolve(options.rig));
@@ -319,7 +357,7 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     files.push({ abs: rigPath, bytes: rigBytes.length, sha256: createHash('sha256').update(rigBytes).digest('hex') });
     if (report) files.push(report);
   }
-  return { ...(painting?{painting}:{}),mode: 'parts', root, title: basename(root) === 'rig' ? basename(dirname(root)) : basename(root), rigSize, items, pages: [], flags, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath, imagePaths, pagePaths: [] };
+  return { ...(painting?{painting}:{}),mode: 'parts', root, title: basename(root) === 'rig' ? basename(dirname(root)) : basename(root), rigSize, items, pages: [], flags, readings, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath, imagePaths, pagePaths: [] };
 }
 
 async function loadAtlasMode(input: string, options: PartsViewOptions): Promise<PartsViewPackage> {
@@ -356,12 +394,12 @@ export async function loadPartsAtlas(p: ReviewPackage, options: PartsViewOptions
   }
   // A build root opens as its check package (#149); its own rig/ and check/ hold the flags.
   const buildRoot = p.buildRoot ?? null;
-  const { flags, files: flagFiles, notes } = await producerFlags(null, buildRoot, names, options);
+  const { flags, readings, files: flagFiles, notes } = await producerFlags(null, buildRoot, names, options);
   const protectedPaths = [...p.files].map(path => resolve(p.root, path));
   protectedPaths.push(...['rig.json', 'config.json', 'report.json', 'review.json'].map(name => join(p.root, name)));
   if (p.handoff) protectedPaths.push(...p.handoff.record.files.map(file => resolve(p.root, file.path)));
   if (buildRoot) protectedPaths.push(...['parts.json', 'config.json', 'rig/rig.json', 'rig/parts.json'].map(name => join(buildRoot, name)));
-  return { mode: 'atlas', root: p.root, title: p.manifest.title, rigSize: null, items, pages, flags, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath: options.verdict ? resolve(options.verdict) : join(dirname(modelAbs), PARTS_VERDICT_FILE), imagePaths: [], pagePaths };
+  return { mode: 'atlas', root: p.root, title: p.manifest.title, rigSize: null, items, pages, flags, readings, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath: options.verdict ? resolve(options.verdict) : join(dirname(modelAbs), PARTS_VERDICT_FILE), imagePaths: [], pagePaths };
 }
 
 /**
@@ -517,7 +555,7 @@ export function partsViewJson(pkg: PartsViewPackage, saved: { verdict: PartsVerd
     schema: 'rig-review-parts-view/1', mode: pkg.mode, title: pkg.title, rigSize: pkg.rigSize,
     painting:pkg.painting?{sha256:pkg.painting.sha256,width:pkg.painting.width,height:pkg.painting.height}:null,
     sourceHash:verdictSource(pkg).sha256,
-    items:pkg.items.map(item=>({...item,...(pkg.mode==='parts'?{imageHash:pkg.files.find(f=>f.abs===pkg.imagePaths[item.index])?.sha256}:{})})), pages: pkg.pages, flags: pkg.flags,
+    items:pkg.items.map(item=>({...item,...(pkg.mode==='parts'?{imageHash:pkg.files.find(f=>f.abs===pkg.imagePaths[item.index])?.sha256}:{})})), pages: pkg.pages, flags: pkg.flags, readings: pkg.readings ?? [],
     flagSources: pkg.flagFiles.map(f => basename(f.abs)), flagMissing: pkg.flagNotes,
     verdictFile: basename(pkg.verdictPath), verdict: saved.verdict, verdictStale: saved.stale,
   };

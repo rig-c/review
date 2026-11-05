@@ -1,0 +1,31 @@
+{
+  "producer": "@rig-c/parts@2.17.0",
+  "gitHead": "971b3a7fab1109adf5be11750886687a7addb306",
+  "fixtureSource": "https://raw.githubusercontent.com/rig-c/parts/971b3a7fab1109adf5be11750886687a7addb306/fixtures/checkrig.ts",
+  "fixtureSourceSha256": "b3c86c8f69fe35a2c5181b4724df7dd65cb5c8b3f3920fad43582c66727349b4",
+  "checkrowSha256": "5d4e01744c001711824603a1bcd444d09736de36fb1fbaf2fe49c93b49e70a62",
+  "checkSha256": "58a0fea58a5dcce10f3cd0b513b017db2ddd2d086f2bc47aec6df015a509a896",
+  "exit": 1,
+  "elapsedMs": 1837.061934,
+  "combinations": [
+    "pair/evidence",
+    "part/evidence",
+    "part/finding",
+    "rig/evidence"
+  ],
+  "command": "bun <parts@2.17.0>/cli.ts check --rig rig --parts rig --out check --no-extremes --json",
+  "options": {
+    "stretchMesh": 80
+  },
+  "integrity": "sha512-JLCpUyTuu/QW0RojEVvEy5LjfseUcI8IGcb9lfjOw9we9OiUOZ+PLcX8O9wAnR7vcLbG+14lQExSwQCK223mpQ==",
+  "realDocument": "parts-check-385-real.json",
+  "realDocumentBytes": 6247,
+  "privacyInspection": "All recursive string fields inspected; no private names or absolute/local paths. No bytes sanitized.",
+  "syntheticDocument": "parts-check-385.json",
+  "syntheticSha256": "aa907d026faf3789efe7087ac735d5dbbfd7cf1a642093ade02e805c8fa326e5",
+  "syntheticMeaning": "Hand-authored six scope/kind combinations and contradictory legacy fields; not producer measurements.",
+  "reproduction": "Run tests/helpers/check-385-job.sh through nova-run from an isolated review checkout; it initializes a private producer package before installation and checks all input paths. Never invoked by the app.",
+  "runnerExit": 0,
+  "producerExitMeaning": "Planted TEXTURE_STRETCH finding; not a passing rig",
+  "rawOutputSha256": "58a0fea58a5dcce10f3cd0b513b017db2ddd2d086f2bc47aec6df015a509a896"
+}

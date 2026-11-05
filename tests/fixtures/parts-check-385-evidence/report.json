@@ -1,0 +1,172 @@
+{
+  "pass": true,
+  "fixtureSha256": "aa907d026faf3789efe7087ac735d5dbbfd7cf1a642093ade02e805c8fa326e5",
+  "checks": [
+    {
+      "name": "en only part + mesh badges",
+      "ok": true,
+      "actual": {
+        "back_defect": "mesh 1 · check 0",
+        "back_control": "",
+        "front": "mesh 0 · check 1"
+      }
+    },
+    {
+      "name": "en collapsed part/pair/evidence groups",
+      "ok": true,
+      "actual": [
+        {
+          "kind": "part",
+          "open": false,
+          "label": "Part findings",
+          "rows": 1
+        },
+        {
+          "kind": "pair",
+          "open": false,
+          "label": "Pair readings",
+          "rows": 1
+        },
+        {
+          "kind": "evidence",
+          "open": false,
+          "label": "Check evidence",
+          "rows": 4
+        }
+      ]
+    },
+    {
+      "name": "en expanded rows are visible and preserve explicit subjects",
+      "ok": true,
+      "actual": [
+        {
+          "label": "UNKNOWN_ROOT · UNKNOWN_ROOT.rows[0] · row_scope: \"part\" · row_kind: \"finding\" · row_subjects: [\"front\"] · part: \"back_control\" · status: \"unavailable\" · reason: \"synthetic explicit subject wins\" · Block UNKNOWN_ROOT: PASS · front",
+          "raw": "UNKNOWN_ROOT.rows[0]: {\"row_scope\":\"part\",\"row_kind\":\"finding\",\"row_subjects\":[\"front\"],\"part\":\"back_control\",\"status\":\"unavailable\",\"reason\":\"synthetic explicit subject wins\"}",
+          "visible": true
+        },
+        {
+          "label": "UNKNOWN_ROOT · UNKNOWN_ROOT.rows[2] · row_scope: \"pair\" · row_kind: \"finding\" · row_subjects: [\"front\",\"back_defect\"] · reason: \"synthetic pair finding\" · Block UNKNOWN_ROOT: PASS · front",
+          "raw": "UNKNOWN_ROOT.rows[2]: {\"row_scope\":\"pair\",\"row_kind\":\"finding\",\"row_subjects\":[\"front\",\"back_defect\"],\"reason\":\"synthetic pair finding\"}",
+          "visible": true
+        },
+        {
+          "label": "UNKNOWN_ROOT · UNKNOWN_ROOT.rows[1] · row_scope: \"part\" · row_kind: \"evidence\" · row_subjects: [\"front\"] · status: \"FAIL\" · reason: \"synthetic evidence stays evidence\" · Block UNKNOWN_ROOT: PASS · front",
+          "raw": "UNKNOWN_ROOT.rows[1]: {\"row_scope\":\"part\",\"row_kind\":\"evidence\",\"row_subjects\":[\"front\"],\"status\":\"FAIL\",\"reason\":\"synthetic evidence stays evidence\"}",
+          "visible": true
+        },
+        {
+          "label": "UNKNOWN_ROOT · UNKNOWN_ROOT.rows[3] · row_scope: \"pair\" · row_kind: \"evidence\" · row_subjects: [\"front\",\"back_defect\"] · reason: \"synthetic pair evidence\" · Block UNKNOWN_ROOT: PASS · front",
+          "raw": "UNKNOWN_ROOT.rows[3]: {\"row_scope\":\"pair\",\"row_kind\":\"evidence\",\"row_subjects\":[\"front\",\"back_defect\"],\"reason\":\"synthetic pair evidence\"}",
+          "visible": true
+        },
+        {
+          "label": "UNKNOWN_ROOT · UNKNOWN_ROOT.rows[4] · row_scope: \"rig\" · row_kind: \"finding\" · bone: \"back_control\" · reason: \"synthetic rig finding\" · Block UNKNOWN_ROOT: PASS · ",
+          "raw": "UNKNOWN_ROOT.rows[4]: {\"row_scope\":\"rig\",\"row_kind\":\"finding\",\"row_subjects\":[],\"bone\":\"back_control\",\"reason\":\"synthetic rig finding\"}",
+          "visible": true
+        },
+        {
+          "label": "UNKNOWN_ROOT · UNKNOWN_ROOT.rows[5] · row_scope: \"rig\" · row_kind: \"evidence\" · reason: \"synthetic rig evidence\" · Block UNKNOWN_ROOT: PASS · ",
+          "raw": "UNKNOWN_ROOT.rows[5]: {\"row_scope\":\"rig\",\"row_kind\":\"evidence\",\"row_subjects\":[],\"reason\":\"synthetic rig evidence\"}",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "name": "en pair shown on second explicit subject",
+      "ok": true
+    },
+    {
+      "name": "en save keeps original IDs",
+      "ok": true
+    },
+    {
+      "name": "ko only part + mesh badges",
+      "ok": true,
+      "actual": {
+        "back_defect": "메시 1 · 체크 0",
+        "back_control": "",
+        "front": "메시 0 · 체크 1"
+      }
+    },
+    {
+      "name": "ko collapsed part/pair/evidence groups",
+      "ok": true,
+      "actual": [
+        {
+          "kind": "part",
+          "open": false,
+          "label": "파츠 발견 사항",
+          "rows": 1
+        },
+        {
+          "kind": "pair",
+          "open": false,
+          "label": "쌍 측정값",
+          "rows": 1
+        },
+        {
+          "kind": "evidence",
+          "open": false,
+          "label": "검사 근거",
+          "rows": 4
+        }
+      ]
+    },
+    {
+      "name": "ko expanded rows are visible and preserve explicit subjects",
+      "ok": true,
+      "actual": [
+        {
+          "label": "UNKNOWN_ROOT · UNKNOWN_ROOT.rows[0] · row_scope: \"part\" · row_kind: \"finding\" · row_subjects: [\"front\"] · part: \"back_control\" · status: \"unavailable\" · reason: \"synthetic explicit subject wins\" · 블록 UNKNOWN_ROOT: 통과(PASS) · front",
+          "raw": "UNKNOWN_ROOT.rows[0]: {\"row_scope\":\"part\",\"row_kind\":\"finding\",\"row_subjects\":[\"front\"],\"part\":\"back_control\",\"status\":\"unavailable\",\"reason\":\"synthetic explicit subject wins\"}",
+          "visible": true
+        },
+        {
+          "label": "UNKNOWN_ROOT · UNKNOWN_ROOT.rows[2] · row_scope: \"pair\" · row_kind: \"finding\" · row_subjects: [\"front\",\"back_defect\"] · reason: \"synthetic pair finding\" · 블록 UNKNOWN_ROOT: 통과(PASS) · front",
+          "raw": "UNKNOWN_ROOT.rows[2]: {\"row_scope\":\"pair\",\"row_kind\":\"finding\",\"row_subjects\":[\"front\",\"back_defect\"],\"reason\":\"synthetic pair finding\"}",
+          "visible": true
+        },
+        {
+          "label": "UNKNOWN_ROOT · UNKNOWN_ROOT.rows[1] · row_scope: \"part\" · row_kind: \"evidence\" · row_subjects: [\"front\"] · status: \"FAIL\" · reason: \"synthetic evidence stays evidence\" · 블록 UNKNOWN_ROOT: 통과(PASS) · front",
+          "raw": "UNKNOWN_ROOT.rows[1]: {\"row_scope\":\"part\",\"row_kind\":\"evidence\",\"row_subjects\":[\"front\"],\"status\":\"FAIL\",\"reason\":\"synthetic evidence stays evidence\"}",
+          "visible": true
+        },
+        {
+          "label": "UNKNOWN_ROOT · UNKNOWN_ROOT.rows[3] · row_scope: \"pair\" · row_kind: \"evidence\" · row_subjects: [\"front\",\"back_defect\"] · reason: \"synthetic pair evidence\" · 블록 UNKNOWN_ROOT: 통과(PASS) · front",
+          "raw": "UNKNOWN_ROOT.rows[3]: {\"row_scope\":\"pair\",\"row_kind\":\"evidence\",\"row_subjects\":[\"front\",\"back_defect\"],\"reason\":\"synthetic pair evidence\"}",
+          "visible": true
+        },
+        {
+          "label": "UNKNOWN_ROOT · UNKNOWN_ROOT.rows[4] · row_scope: \"rig\" · row_kind: \"finding\" · bone: \"back_control\" · reason: \"synthetic rig finding\" · 블록 UNKNOWN_ROOT: 통과(PASS) · ",
+          "raw": "UNKNOWN_ROOT.rows[4]: {\"row_scope\":\"rig\",\"row_kind\":\"finding\",\"row_subjects\":[],\"bone\":\"back_control\",\"reason\":\"synthetic rig finding\"}",
+          "visible": true
+        },
+        {
+          "label": "UNKNOWN_ROOT · UNKNOWN_ROOT.rows[5] · row_scope: \"rig\" · row_kind: \"evidence\" · reason: \"synthetic rig evidence\" · 블록 UNKNOWN_ROOT: 통과(PASS) · ",
+          "raw": "UNKNOWN_ROOT.rows[5]: {\"row_scope\":\"rig\",\"row_kind\":\"evidence\",\"row_subjects\":[],\"reason\":\"synthetic rig evidence\"}",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "name": "ko pair shown on second explicit subject",
+      "ok": true
+    },
+    {
+      "name": "ko save keeps original IDs",
+      "ok": true
+    },
+    {
+      "name": "en legacy no fabricated check count",
+      "ok": true
+    },
+    {
+      "name": "ko legacy no fabricated check count",
+      "ok": true
+    },
+    {
+      "name": "all inspected source files unchanged",
+      "ok": true
+    }
+  ]
+}

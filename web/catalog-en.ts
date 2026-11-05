@@ -3145,4 +3145,11 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Assembly unavailable: rig_size is not declared.": "Assembly unavailable: rig_size is not declared.",
   "Assembled package \u00b7 {count} visible parts. Selection and verdict remain per part.": "Assembled package · {count} visible parts. Selection and verdict remain per part.",
   "PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment": "PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment",
+  "Mesh flags": "Mesh flags",
+  "Part findings": "Part findings",
+  "Pair readings": "Pair readings",
+  "Check evidence": "Check evidence",
+  "Unclassified check rows": "Unclassified check rows",
+  "Badges count only mesh flags and explicit part findings. Pair readings and check evidence are not counted.": "Badges count only mesh flags and explicit part findings. Pair readings and check evidence are not counted.",
+  "Missing or invalid row metadata: source-root rows remain unclassified and are not counted.": "Missing or invalid row metadata: source-root rows remain unclassified and are not counted.",
 };

@@ -1,0 +1,13 @@
+{
+  "UNKNOWN_ROOT": {
+    "status": "PASS",
+    "rows": [
+      {"row_scope":"part","row_kind":"finding","row_subjects":["front"],"part":"back_control","status":"unavailable","reason":"synthetic explicit subject wins"},
+      {"row_scope":"part","row_kind":"evidence","row_subjects":["front"],"status":"FAIL","reason":"synthetic evidence stays evidence"},
+      {"row_scope":"pair","row_kind":"finding","row_subjects":["front","back_defect"],"reason":"synthetic pair finding"},
+      {"row_scope":"pair","row_kind":"evidence","row_subjects":["front","back_defect"],"reason":"synthetic pair evidence"},
+      {"row_scope":"rig","row_kind":"finding","row_subjects":[],"bone":"back_control","reason":"synthetic rig finding"},
+      {"row_scope":"rig","row_kind":"evidence","row_subjects":[],"reason":"synthetic rig evidence"}
+    ]
+  }
+}
