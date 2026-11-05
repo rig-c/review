@@ -1,6 +1,6 @@
 /** The convenience name carries the scoped package's files; every exception is planted. */
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { AliasTarballError, packInto } from '../scripts/alias_tarball.ts';
+import { ALIAS_COMMAND_TIMEOUT_MS, PACK_TIMEOUT_MS, AliasTarballError, packInto } from '../scripts/alias_tarball.ts';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,9 +14,11 @@ const manifest = { name: '@rig-c/review', version: '1.2.3', files: ['payload.bin
 let primary: string;
 let alias: string;
 const run = (cmd: string, args: string[], cwd = ROOT, env = process.env) => {
-  const result = spawnSync(cmd, args, { cwd, env, encoding: 'utf8', timeout: 30000 });
+  const result = spawnSync(cmd, args, { cwd, env, encoding: 'utf8', timeout: ALIAS_COMMAND_TIMEOUT_MS, killSignal: 'SIGKILL' });
   return { status: result.status, out: `${result.stdout ?? ''}${result.stderr ?? ''}`, stdout: result.stdout ?? '' };
 };
+// An outer Bun clock must outlive every bounded synchronous child in that test.
+const commandBudget = (calls = 1) => calls * ALIAS_COMMAND_TIMEOUT_MS + 5_000;
 const cli = (...args: string[]) => run(process.execPath, [script, ...args]);
 function tar(tree: string, name: string): string {
   const path = join(work, `${name}.tgz`);
@@ -37,7 +39,7 @@ beforeAll(() => {
   writeFileSync(join(fixture, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(join(fixture, 'payload.bin'), Buffer.from([0, 1, 2, 255]));
   primary = packInto(fixture, work);
-});
+}, PACK_TIMEOUT_MS + 5_000);
 afterAll(() => rmSync(work, { recursive: true, force: true }));
 
 test('native npm pack reaches the prepare refusal when lifecycle scripts are enabled', () => {
@@ -51,7 +53,7 @@ test('native npm pack reaches the prepare refusal when lifecycle scripts are ena
   expect(made.out).toContain('prepare');
   expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(text);
   console.log(`PREPARE_PLANT: native npm pack exit ${made.status}\n${made.out.trim()}`);
-});
+}, commandBudget(1));
 
 test('pack keeps manifest bytes and caller config while suppressing every lifecycle from an unrelated cwd', () => {
   const before = readFileSync(join(fixture, 'package.json'));
@@ -84,7 +86,7 @@ test('pack keeps manifest bytes and caller config while suppressing every lifecy
   expect(run('tar', ['-xzf', made.stdout.trim(), '-C', unpacked]).status).toBe(0);
   expect(readFileSync(join(unpacked, 'package/package.json')).equals(before)).toBe(true);
   expect(readFileSync(join(unpacked, 'package/payload.bin'))).toEqual(Buffer.from([0, 1, 2, 255]));
-});
+}, commandBudget(2));
 
 test('pack control: same files and bytes except the name; source stays unchanged', () => {
   const before = readFileSync(join(fixture, 'package.json'), 'utf8');
@@ -99,7 +101,7 @@ test('pack control: same files and bytes except the name; source stays unchanged
   expect(same.out).toContain('@rig-c/review@1.2.3');
   expect(same.out).toContain('2 file(s)');
   console.log(same.out.trim());
-});
+}, commandBudget(2));
 
 // npm supplies these flags to a real lifecycle child, as publish does. The
 // dry-run control must still write the private fixture tarballs, never publish.
@@ -122,7 +124,7 @@ for (const dryRun of [false, true]) {
     expect(made.status, made.out).toBe(0);
     expect(made.out).toContain('LIFECYCLE_PACK: 2 files, 0 faults');
     console.log(`LIFECYCLE dry-run=${dryRun}: exit ${made.status}\n${made.out.trim()}`);
-  });
+  }, commandBudget(1));
 }
 
 test('pack refuses successful stdout without a tarball and a failed npm by name', () => {
@@ -142,7 +144,7 @@ test('pack refuses successful stdout without a tarball and a failed npm by name'
       process.env.PATH = previous;
     }
   }
-});
+}, commandBudget(4));
 
 for (const kind of ['byte', 'missing', 'extra', 'version', 'format'] as const) {
   test(`planted ${kind} difference is refused by path with exit 1`, () => {
@@ -165,14 +167,14 @@ for (const kind of ['byte', 'missing', 'extra', 'version', 'format'] as const) {
     expect(compared.out).toContain(kind === 'extra' ? 'package/extra.txt' : kind === 'version' || kind === 'format' ? 'package/package.json' : 'package/payload.bin');
     if (kind === 'byte') expect(compared.out).toContain('first parting at byte 2');
     console.log(`PLANT ${kind}: exit ${compared.status}\n${compared.out.trim()}`);
-  });
+  }, commandBudget(3));
 }
 
 test('the scoped tarball cannot be passed off as its own alias', () => {
   const compared = cli('compare', primary, primary);
   expect(compared.status, compared.out).toBe(1);
   expect(compared.out).toContain('not under another name');
-});
+}, commandBudget(1));
 
 test('pack refuses an unsupported alias and unreadable input by name', () => {
   const wrong = cli('pack', '--name', 'other', '--out', work, '--tarball', primary);
@@ -181,7 +183,7 @@ test('pack refuses an unsupported alias and unreadable input by name', () => {
   const bad = join(work, 'bad.tgz');
   writeFileSync(bad, 'not a tarball');
   expect(cli('compare', primary, bad).status).toBe(2);
-});
+}, commandBudget(2));
 
 
 test('release packs after the scoped gate and publishes only an equal alias with the same OIDC flags', () => {
@@ -219,12 +221,13 @@ test('release packs after the scoped gate and publishes only an equal alias with
     const calls = readFileSync(trace, 'utf8');
     expect(result.status, result.out).toBe(packExit === '0' ? 0 : 2);
     expect(calls).toContain('bun scripts/alias_tarball.ts pack --name rig-review --out ');
+    expect(calls).toContain('--pack-timeout-ms 300000\n');
     if (packExit === '0') expect(calls).toContain(`npm publish ${tgz} --provenance --access public\n`);
     else expect(calls).not.toContain('npm publish');
   }
   expect(steps[confirm].run).toContain('for package in @rig-c/review rig-review; do');
   expect(steps[confirm].run).toContain('bun scripts/confirm-alias.ts "$version"');
-});
+}, commandBudget(2));
 
 test('publish gates the full repository and smoke overrides only internal lifecycle and dry-run settings', () => {
   const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
@@ -247,4 +250,4 @@ test('confirmation really installs despite inherited publish dry-run, checks ver
     expect(result.status, result.out).toBe(version === '1.2.3' ? 0 : 1);
     expect(result.out).toContain(version === '1.2.3' ? 'empty install · rig-review --help exit 0' : 'ALIAS_INSTALL_IDENTITY: found rig-review@1.2.3; required rig-review@1.2.4');
   }
-});
+}, commandBudget(3));

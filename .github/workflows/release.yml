@@ -166,11 +166,12 @@ jobs:
 
       # The scoped publish has gated these files. Internal packs run no scripts;
       # only the manifest name changes, and equality is required before publish.
+      # Each of the two packs may take five minutes, within this job's 20 minutes.
       - name: Publish the alias rig-review
         if: ${{ steps.target.outputs.publish == 'true' }}
         run: |
           set -euo pipefail
-          alias_tgz=$(bun scripts/alias_tarball.ts pack --name rig-review --out "$RUNNER_TEMP/alias-rig-review")
+          alias_tgz=$(bun scripts/alias_tarball.ts pack --name rig-review --out "$RUNNER_TEMP/alias-rig-review" --pack-timeout-ms 300000)
           npm publish "$alias_tgz" --provenance --access public
 
       # Reads what the registry serves, not what this tree packs. The registry

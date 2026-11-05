@@ -27,15 +27,38 @@ export class AliasTarballError extends Error {}
 /** An alias that was packed and reads as different from its package beyond the name. Exit 1. */
 export class AliasDiffersError extends AliasTarballError {}
 
+/** Per-process bounds; the CLI may pack twice and extract three times. */
+export const PACK_TIMEOUT_MS = 15_000;
+/** Explicit release override: at most five minutes for each of the two packs. */
+export const MAX_PACK_TIMEOUT_MS = 300_000;
+const TAR_TIMEOUT_MS = 5_000;
+export const ALIAS_COMMAND_TIMEOUT_MS = 2 * PACK_TIMEOUT_MS + 3 * TAR_TIMEOUT_MS + 5_000;
+
+function validatePackTimeout(timeoutMs: number): void {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_PACK_TIMEOUT_MS) {
+    throw new AliasTarballError(`--pack-timeout-ms must be an integer in 1..${MAX_PACK_TIMEOUT_MS} ms`);
+  }
+}
+
 interface Ran {
   status: number;
   out: string;
+  timedOut: boolean;
+  signal: string | null;
+  elapsedMs: number;
 }
 
-function run(cmd: string, args: readonly string[], cwd: string): Ran {
-  const r = spawnSync(cmd, [...args], { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+function run(cmd: string, args: readonly string[], cwd: string, timeout = TAR_TIMEOUT_MS): Ran {
+  const started = performance.now();
+  const r = spawnSync(cmd, [...args], { cwd, timeout, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
   const failed = r.error === undefined ? '' : `\n${r.error.message}`;
-  return { status: typeof r.status === 'number' ? r.status : 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}${failed}` };
+  return {
+    status: typeof r.status === 'number' ? r.status : 1,
+    out: `${r.stdout ?? ''}${r.stderr ?? ''}${failed}`,
+    timedOut: (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT',
+    signal: r.signal,
+    elapsedMs: Math.round(performance.now() - started),
+  };
 }
 
 /** Every file under a directory, by its path relative to it, sorted so two listings compare line for line. */
@@ -55,7 +78,7 @@ function filesUnder(dir: string): string[] {
 function extract(tgz: string, into: string): void {
   mkdirSync(into, { recursive: true });
   const unpacked = run('tar', ['-xzf', tgz, '-C', into], into);
-  if (unpacked.status !== 0) throw new AliasTarballError(`\`tar -xzf ${tgz}\` exited ${unpacked.status}: ${unpacked.out.trim().slice(0, 2000)}`);
+  if (unpacked.status !== 0) throw new AliasTarballError(`\`tar -xzf ${tgz}\` exited ${unpacked.status}; elapsed=${unpacked.elapsedMs} ms; limit=${TAR_TIMEOUT_MS} ms; signal=${unpacked.signal ?? 'none'}${unpacked.timedOut ? '; TIMEOUT' : ''}: ${unpacked.out.trim().slice(0, 2000) || '(no output)'}`);
   if (!existsSync(join(into, MANIFEST))) throw new AliasTarballError(`${tgz} holds no ${MANIFEST}, so it is not an npm package tarball`);
 }
 
@@ -159,7 +182,8 @@ export function compareTarballs(packageTgz: string, aliasTgz: string): AliasComp
  * pack alone an empty script shell as well: lifecycle text is never evaluated,
  * including on that path. The manifest and installed npm stay untouched.
  */
-export function packInto(dir: string, into: string): string {
+export function packInto(dir: string, into: string, timeoutMs = PACK_TIMEOUT_MS): string {
+  validatePackTimeout(timeoutMs);
   const source = resolve(dir);
   const destination = resolve(into);
   mkdirSync(destination, { recursive: true });
@@ -168,10 +192,11 @@ export function packInto(dir: string, into: string): string {
   try {
     const shell = join(shellDir, 'skip-lifecycle');
     writeFileSync(shell, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
-    const packed = run('npm', ['pack', '.', '--ignore-scripts', '--dry-run=false', '--script-shell', shell, '--pack-destination', destination, '--loglevel=error'], source);
+    const packed = run('npm', ['pack', '.', '--ignore-scripts', '--dry-run=false', '--script-shell', shell, '--pack-destination', destination, '--loglevel=error'], source, timeoutMs);
     const made = readdirSync(destination).filter((f) => f.endsWith('.tgz') && !before.has(f));
-    if (packed.status !== 0 || made.length !== 1) {
-      throw new AliasTarballError(`\`npm pack ${dir}\` exited ${packed.status} and left ${made.length} new tarball(s); one was required. ${packed.out.trim().slice(0, 2000)}`);
+    if (packed.timedOut || packed.status !== 0 || made.length !== 1) {
+      const diagnostic = `cwd=${source}; destination=${destination}; elapsed=${packed.elapsedMs} ms; limit=${timeoutMs} ms; signal=${packed.signal ?? 'none'}${packed.timedOut ? '; TIMEOUT' : ''}`;
+      throw new AliasTarballError(`\`npm pack ${dir}\` exited ${packed.status} and left ${made.length} new tarball(s); one was required. ${diagnostic}. ${packed.out.trim().slice(0, 2000) || '(no output)'}`);
     }
     return join(destination, made[0]);
   } finally {
@@ -184,12 +209,13 @@ export function packInto(dir: string, into: string): string {
  * the package tarball it was made from. `packageTgz` is packed from this tree
  * when not given.
  */
-export function packAlias(alias: string, out: string, packageTgz?: string): { tgz: string; comparison: AliasComparison } {
+export function packAlias(alias: string, out: string, packageTgz?: string, timeoutMs = PACK_TIMEOUT_MS): { tgz: string; comparison: AliasComparison } {
+  validatePackTimeout(timeoutMs);
   if (!ALIASES.includes(alias)) throw new AliasTarballError(`--name ${JSON.stringify(alias)} is not the convenience name ${ALIASES.join(', ')}`);
   mkdirSync(out, { recursive: true });
   const work = mkdtempSync(join(tmpdir(), 'rig-review-alias-pack-'));
   try {
-    const primary = packageTgz ?? packInto(ROOT, join(work, 'package'));
+    const primary = packageTgz ?? packInto(ROOT, join(work, 'package'), timeoutMs);
     const tree = join(work, 'tree');
     extract(primary, tree);
     const manifest = join(tree, MANIFEST);
@@ -199,7 +225,7 @@ export function packAlias(alias: string, out: string, packageTgz?: string): { tg
     const next = renamed(text, name, alias);
     if (next === null) throw new AliasTarballError(`${primary}'s ${MANIFEST} does not carry exactly one "name": ${JSON.stringify(name)} line, so there is no one line to change`);
     writeFileSync(manifest, next);
-    const tgz = packInto(join(tree, 'package'), out);
+    const tgz = packInto(join(tree, 'package'), out, timeoutMs);
     const comparison = compareTarballs(primary, tgz);
     if (comparison.faults.length > 0) {
       rmSync(tgz, { force: true });
@@ -214,12 +240,14 @@ export function packAlias(alias: string, out: string, packageTgz?: string): { tg
 const HELP = `rig-review alias tarball — the package under another name, with nothing else changed
 
 usage:
-  bun scripts/alias_tarball.ts pack --name <alias> --out <dir> [--tarball <tgz>]
+  bun scripts/alias_tarball.ts pack --name <alias> --out <dir> [--tarball <tgz>] [--pack-timeout-ms <ms>]
   bun scripts/alias_tarball.ts compare <package.tgz> <alias.tgz>
 
 pack     packs this tree (or takes --tarball), rewrites the one "name" line of its
          package.json to <alias>, packs it again into <dir>, holds the result to the
          package tarball with compare, and prints the alias tarball's path last
+         --pack-timeout-ms bounds each npm pack (default ${PACK_TIMEOUT_MS} ms,
+         maximum ${MAX_PACK_TIMEOUT_MS} ms); release opts into the larger bound
 compare  the same paths, every file the same bytes, and package.json the same once
          the alias's name line reads the package's name
 
@@ -255,7 +283,7 @@ function main(): number {
       const flags = new Map<string, string>();
       for (let i = 0; i < rest.length; i += 2) {
         const [flag, value] = [rest[i], rest[i + 1]];
-        if (!['--name', '--out', '--tarball'].includes(flag) || value === undefined || value.startsWith('--')) {
+        if (!['--name', '--out', '--tarball', '--pack-timeout-ms'].includes(flag) || value === undefined || value.startsWith('--')) {
           console.error(`alias_tarball: "${flag}" is not an argument pack takes with a value; --help lists them`);
           return EXIT_USAGE;
         }
@@ -264,6 +292,12 @@ function main(): number {
       const alias = flags.get('--name');
       const out = flags.get('--out');
       const tarball = flags.get('--tarball');
+      const timeoutText = flags.get('--pack-timeout-ms');
+      if (timeoutText !== undefined && !/^[1-9]\d*$/.test(timeoutText)) {
+        throw new AliasTarballError(`--pack-timeout-ms must be an integer in 1..${MAX_PACK_TIMEOUT_MS} ms`);
+      }
+      const timeoutMs = timeoutText === undefined ? PACK_TIMEOUT_MS : Number(timeoutText);
+      validatePackTimeout(timeoutMs);
       if (alias === undefined || out === undefined) {
         console.error('alias_tarball: pack needs --name <alias> and --out <dir>');
         return EXIT_USAGE;
@@ -272,7 +306,7 @@ function main(): number {
         console.error(`alias_tarball: --tarball ${tarball} names no file`);
         return EXIT_USAGE;
       }
-      const made = packAlias(alias, resolve(out), tarball === undefined ? undefined : resolve(tarball));
+      const made = packAlias(alias, resolve(out), tarball === undefined ? undefined : resolve(tarball), timeoutMs);
       console.error(
         `alias_tarball: ${made.comparison.alias}@${made.comparison.aliasVersion} carries the ${made.comparison.files} file(s) of ${made.comparison.name}@${made.comparison.version}, byte for byte but for the name line of ${MANIFEST}`,
       );
