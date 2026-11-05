@@ -69,8 +69,9 @@ const panVideoOverrides=new WeakMap<HTMLVideoElement,{owners:number;value:string
  * with Space held is a pan only, and a press that never passes the threshold is a click and carries nothing.
  */
 export interface PanCarry {threshold:number;move:(dx:number,dy:number)=>void}
-export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,enabled:()=>boolean=()=>true,carry?:PanCarry):()=>void {
+export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,enabled:()=>boolean=()=>true,carry?:PanCarry,pinch?:(factor:number,at:ViewPoint,delta:ViewPoint)=>void):()=>void {
  let pointer:number|null=null,x=0,y=0,space=false,press:{x:number;y:number;far:boolean}|null=null;
+ const touches=new Map<number,ViewPoint>();let pinching=false;const pair=()=>{const [a,b]=[...touches.values()];return a&&b?{distance:Math.hypot(a.x-b.x,a.y-b.y),center:{x:(a.x+b.x)/2,y:(a.y+b.y)/2}}:null;};
  const videos=new Set<HTMLVideoElement>();
  const releaseVideo=(video:HTMLVideoElement)=>{
   const previous=panVideoOverrides.get(video);if(!previous)return;
@@ -91,15 +92,16 @@ export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,en
  const keyDown=(event:KeyboardEvent)=>{if(event.code==='Space'&&enabled()&&!(event.target instanceof Element&&event.target.closest('input,textarea,select,button'))){
   if(!space){space=true;syncVideos();observer.observe(viewport,{childList:true,subtree:true,attributes:true,attributeFilter:['controls']});}event.preventDefault();
  }};
- const keyUp=(event:KeyboardEvent)=>{if(event.code==='Space')releaseSpace();};const blur=()=>{releaseSpace();releasePointer();};
- const start=(event:PointerEvent)=>{if(!enabled()||!event.isPrimary||event.button!==0)return;const target=event.target;if(target instanceof Element&&(target.closest('button,input,select,textarea,a')||target.closest('video[controls]')&&!space))return;pointer=event.pointerId;x=event.clientX;y=event.clientY;press=carry&&!space?{x,y,far:false}:null;viewport.setPointerCapture(pointer);viewport.dataset.panning='true';event.preventDefault();};
+ const keyUp=(event:KeyboardEvent)=>{if(event.code==='Space')releaseSpace();};const blur=()=>{for(const id of touches.keys())if(viewport.hasPointerCapture(id))viewport.releasePointerCapture(id);touches.clear();pinching=false;releaseSpace();releasePointer();};
+ const start=(event:PointerEvent)=>{if(enabled()&&pinch&&event.pointerType==='touch'&&!(event.target as Element)?.closest?.('button,input,select,textarea,a,[data-viewport-action]')){touches.set(event.pointerId,{x:event.clientX,y:event.clientY});if(touches.size===2){pointer=null;press=null;delete viewport.dataset.panning;pinching=true;viewport.setPointerCapture(event.pointerId);event.preventDefault();return;}}if(!enabled()||!event.isPrimary||event.button!==0)return;const target=event.target;if(target instanceof Element&&(target.closest('button,input,select,textarea,a,[data-viewport-action]')||target.closest('video[controls]')&&!space))return;pointer=event.pointerId;x=event.clientX;y=event.clientY;press=carry&&!space?{x,y,far:false}:null;viewport.setPointerCapture(pointer);viewport.dataset.panning='true';event.preventDefault();};
  const drag=(event:PointerEvent)=>{
+  if(touches.has(event.pointerId)){const before=pair();touches.set(event.pointerId,{x:event.clientX,y:event.clientY});const after=pair();if(pinching){if(enabled()&&before&&after&&before.distance>0&&after.distance>0){const r=viewport.getBoundingClientRect();pinch?.(after.distance/before.distance,{x:before.center.x-r.left,y:before.center.y-r.top},{x:after.center.x-before.center.x,y:after.center.y-before.center.y});}event.preventDefault();return;}}
   if(event.pointerId!==pointer)return;const dx=event.clientX-x,dy=event.clientY-y;x=event.clientX;y=event.clientY;move(dx,dy);event.preventDefault();
   if(!press||!carry)return;
   if(press.far)carry.move(dx,dy);
   else if(Math.hypot(x-press.x,y-press.y)>carry.threshold){press.far=true;carry.move(x-press.x,y-press.y);}
  };
- const end=(event:PointerEvent)=>{if(event.pointerId===pointer)releasePointer();};
+ const end=(event:PointerEvent)=>{touches.delete(event.pointerId);if(event.pointerType==='touch'&&viewport.hasPointerCapture(event.pointerId))viewport.releasePointerCapture(event.pointerId);if(touches.size===0)pinching=false;if(event.pointerId===pointer)releasePointer();};
  const native=(event:DragEvent)=>event.preventDefault();
  window.addEventListener('blur',blur);document.addEventListener('keydown',keyDown,true);window.addEventListener('keyup',keyUp,true);viewport.addEventListener('pointerdown',start);viewport.addEventListener('pointermove',drag);viewport.addEventListener('pointerup',end);viewport.addEventListener('pointercancel',end);viewport.addEventListener('lostpointercapture',end);viewport.addEventListener('dragstart',native);
  return ()=>{blur();window.removeEventListener('blur',blur);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);viewport.removeEventListener('pointerdown',start);viewport.removeEventListener('pointermove',drag);viewport.removeEventListener('pointerup',end);viewport.removeEventListener('pointercancel',end);viewport.removeEventListener('lostpointercapture',end);viewport.removeEventListener('dragstart',native);};

@@ -11,7 +11,7 @@ npx rig-review parts <out>/check      # a built rig's atlas (any review package 
 ```
 
 Options: `--rig <file>` (mesh geometry), `--mesh-report <file>`, `--check <file>` (producer flags; see below), `--verdict <file>` (where the sign-off
-is written), `--port <n>`. Like `review`, it serves in the foreground and exits 3 s after its last tab closes.
+is written), `--painting <png>` (the original painting), `--format json|issue` (export the saved verdict), `--port <n>`. Like `review`, it serves in the foreground and exits 3 s after its last tab closes.
 
 ## Inputs
 
@@ -23,7 +23,7 @@ is written), `--port <n>`. Like `review`, it serves in the foreground and exits 
 ## What it shows
 
 - **Every part on its own**, on a sentinel background (green, magenta, black, white or checker), at native scale with
-  2× and 4× nearest-neighbour zoom. **Alpha only** shows the alpha channel as grey (white is opaque).
+  Fit and exact **1:1**, cursor-anchored wheel zoom, pinch and drag pan in the shared rig/reference viewport pair. Sampling stays nearest-neighbour. **Alpha only** shows the alpha channel as grey (white is opaque).
 - **Footprints of parts in front** (parts mode): the alpha of every part later in `parts.json` whose box meets the
   selected part's box, placed by its rig box and tinted cyan at 50 %. Where the selected part has no pixel under its
   occluder, the tint lands on the bare sentinel, so a back part that stops exactly at its occluder's edge shows the
@@ -72,7 +72,7 @@ writes `parts-review.json` beside `parts.json` (atlas mode: beside the model), o
 
 ```json
 {
-  "schema": "rig-review-parts-verdict/1",
+  "schema": "rig-review-parts-verdict/2",
   "mode": "parts",
   "tool": { "name": "@rig-c/review", "version": "1.4.3" },
   "source": {
@@ -82,6 +82,7 @@ writes `parts-review.json` beside `parts.json` (atlas mode: beside the model), o
   },
   "status": "pending",
   "parts": { "hair_back": { "outcome": "flagged", "note": "no material under the arm", "flags": ["faint:0"] } },
+  "comments": [],
   "updatedAt": "2026-11-04T00:00:00.000Z"
 }
 ```
@@ -176,3 +177,67 @@ discovered paths cannot escape the package. This view never writes geometry,
 bones, weights or source images. Repairs remain producer config changes.
 
 The four-stage navigator preserves this entry and its explicit save behavior. Compiled sessions reuse the atlas surface read-only; see [Four inspection stages](PANELS.md#four-inspection-stages).
+
+## Pointed parts comments
+
+**Comment · C (n)** uses the same capture toggle, dragged region, composer and pins as the rig stage.
+While capture is on, drag draws only a region; close the toggle to pan. Enter adds the comment;
+**Save sign-off** persists the verdict. Select a comment row or pin after reopening to restore its
+part, camera, background, alpha, footprints and mesh view. There is no frame, animation or slot
+placeholder in a parts comment. Atlas inspection remains read only for pointed comments.
+
+`rig-review-parts-verdict/2` adds `comments[]`; a `/1` file reads with an empty comment array.
+Each closed `rig-review-parts-comment/1` carries `id`, original reviewer `summary`, `part`,
+`imageHash` (SHA-256 of the original part PNG), `sourceHash` (the verdict source identity),
+`imageRegion`, `rigRegion`, `view`, `crop` and `nativeCrop`. `imageRegion` has integer native
+pixel edges snapped outward from the drag. `rigRegion` is exact placement plus that region,
+including fractional placement; it is never rounded. `view.camera` records native scale,
+center and viewport extent, plus `cameraSync` and the actual `referenceCamera` (or null), alongside `background`, `alpha`, `footprints` and `mesh`.
+
+The viewport `crop` comes from the shared displayed-pixel compositor and includes its mark.
+`nativeCrop` is cut on the server from the hash-bound original PNG, preserving all RGBA bytes,
+including alpha. Both use the common PNG validator/content-addressed store; paths are selected
+by the server. The native crop has no alpha-mask, background or zoom transform. The saved
+viewport crop includes its private inline PNG; exported JSON and issue Markdown replace it
+with a resolved file path and hash. Both exports name the part and both regions and crops.
+
+```sh
+npx rig-review parts <out>/rig --painting painting.png
+npx rig-review parts <out>/rig --painting painting.png --format json
+npx rig-review parts <out>/rig --painting painting.png --format issue
+```
+
+The optional painting must be a PNG contained in the parts package (including symlink resolution), with a portable source path. Format, size and hash derive from one buffer read. It must match the declared rig canvas exactly (`PARTS_PAINTING_SIZE`),
+is included in the hashed/protected input set and cannot be a verdict destination. The reference
+viewport shows the selected part's rectangle of the original painting; no resizing is inferred.
+Without this input the reference pane names `PARTS_REFERENCE_UNAVAILABLE`. Overlay and difference
+views belong to #384. Neither comparison nor opening a package supplies an approval.
+
+Parts native zoom ranges from `min(fit, 1)` to 16; exact native 1 is always reachable. **Fit** is
+a separate action, and **1:1** is shown only at exactly 1. Out-of-range requests refuse as
+`PARTS_CAMERA_RANGE`; the compiled rig's Fit-relative 0.25–8 policy stays unchanged.
+
+Named comment refusals include `PARTS_COMMENT_EMPTY`, `PARTS_COMMENT_FRACTIONAL`,
+`PARTS_COMMENT_OUT_OF_BOUNDS`, `PARTS_COMMENT_STALE_SOURCE`, `PARTS_COMMENT_RIG_REGION`,
+`COMMENT_CROP_INVALID` and `PARTS_COMMENT_NATIVE_CROP_TAMPERED`. Request bodies retain the
+4 MiB limit and same-origin capability gate. Native crops are limited to 16 million pixels;
+viewport crops retain the rig comment's 200,000-character PNG limit.
+
+Contract guards: `tests/parts-comments.test.ts`, `tests/viewport-controller.test.ts`,
+`tests/comment-safety.test.ts`, `tests/stage-comments.test.ts` and `tests/i18n.test.ts`.
+`tests/parts-comments-browser.ts` is separate real-browser evidence for cursor/pan/pinch,
+two comments, save/reload, view restoration, both exports, EN/KO, native RGBA parity, painting
+subrectangle parity, immutable source files and the compiled Stage 1 canonical host.
+The superseded #387 byte-equality comparator scripts are retired; commit #388 retains their
+original reproduction. Camera persistence wiring tests with live callers remain.
+
+Native-crop revalidation checks the stored PNG file hash/dimensions and decoded RGBA against the
+original subrectangle, rather than requiring a particular encoder's PNG bytes. Verdict reads never
+create or rewrite crop files. Missing/unreadable stored evidence surfaces
+`COMMENT_CROP_STATE_UNAVAILABLE`; invalid native pixels surface `PARTS_COMMENT_NATIVE_CROP_TAMPERED`.
+These are validation failures, not a stale-source warning or a reset: a subsequent save also refuses
+while the existing verdict cannot be revalidated. Real source/flag identity changes retain their
+separate stale warning. `PARTS_PAINTING_OUTSIDE` and `PARTS_PAINTING_PNG` refuse external or non-PNG
+painting inputs. `tests/parts-comments.test.ts` covers these read and cross-encoding boundaries;
+`tests/parts-async-navigation.test.ts` guards reordered painting loads and actionable atlas clicks.
+A downstream create consumer must support verdict/2 before a review release can ship.

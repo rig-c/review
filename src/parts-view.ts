@@ -10,10 +10,13 @@
  * - `mesh_report.json` rows: `contour.bridges.faint[]` (rig-parts #326), each a faint island the mesh left out;
  * - `check.json`: a gate whose `status` is FAIL or WARN, `seam_pairs` and `figure_openings`, on every part they name.
  *
- * The sign-off is `rig-review-parts-verdict/1` (docs/PARTS_VIEW.md), written beside `parts.json` by default. Its
+ * The sign-off is `rig-review-parts-verdict/2` (docs/PARTS_VIEW.md), written beside `parts.json` by default. Its
  * `source.sha256` is the sha256 over the UTF-8 lines `<path>\t<sha256>\n`, sorted by path bytewise, where every path
  * is relative to the verdict file's directory. rig-c/create recomputes it, so the definition is fixed here.
  */
+import {parsePartsComment,assertPartsCommentBinding,type PartsComment} from './parts-comment.ts';
+import {preparePartsComment,validateStoredPartsComment} from './parts-comment-crops.ts';
+import {resolvedCropPath} from './comment-crops.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -21,7 +24,7 @@ import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } fr
 import { PNG } from 'pngjs';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
 
-export const PARTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/1';
+export const PARTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/2';
 export const PARTS_VERDICT_FILE = 'parts-review.json';
 export const PARTS_NOTE_LIMIT = 10000;
 export type PartsViewMode = 'parts' | 'atlas';
@@ -55,6 +58,7 @@ export type ProducerFlag =
       root: string; status: string | null; entry: Record<string, unknown> };
 
 export interface PartsViewPackage {
+  painting?:{sha256:string;width:number;height:number;abs:string};
   mode: PartsViewMode;
   root: string;
   title: string;
@@ -76,7 +80,7 @@ export interface PartsViewPackage {
   pagePaths: string[];
 }
 
-export interface PartsViewOptions { rig?: string; meshReport?: string; check?: string; verdict?: string }
+export interface PartsViewOptions { rig?: string; meshReport?: string; check?: string; verdict?: string;painting?:string }
 
 const record = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
 const finite = (v: unknown, min: number): v is number => typeof v === 'number' && Number.isFinite(v) && v >= min;
@@ -288,6 +292,13 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     imagePaths.push(real);
     items.push({ name: part.name, index, x: part.x, y: part.y, w: part.w, h: part.h, image: true });
   }
+  let painting:PartsViewPackage['painting'];if(options.painting){
+    const candidate=resolve(options.painting),rel=relative(resolve(root),candidate);if(!rel||rel==='..'||rel.startsWith('..'+sep)||isAbsolute(rel))refuse('PARTS_PAINTING_OUTSIDE','painting must be inside the parts package');
+    let abs:string,bytes:Buffer;try{abs=await insideRoot(root,candidate,'PARTS_PAINTING_OUTSIDE','painting');packagePath(relative(root,abs).split(sep).join('/'),'painting');bytes=await readFile(abs);}catch(error){if(error instanceof Error&&error.message.startsWith('PARTS_PAINTING_OUTSIDE:'))throw error;refuse('PARTS_PAINTING_UNAVAILABLE','painting must be a readable portable package PNG');}
+    let png:PNG;try{png=PNG.sync.read(bytes!);}catch{refuse('PARTS_PAINTING_PNG','painting must be a valid PNG');}
+    if(!rigSize||png!.width!==rigSize[0]||png!.height!==rigSize[1])refuse('PARTS_PAINTING_SIZE','painting must match the declared rig canvas exactly');
+    const file={abs:abs!,bytes:bytes!.length,sha256:createHash('sha256').update(bytes!).digest('hex')};painting={...file,width:png!.width,height:png!.height};files.push(file);
+  }
   const { flags, files: flagFiles, notes } = await producerFlags(root, null, seen, options);
   const protectedPaths = [join(root, 'rig.json'), join(root, 'config.json'), join(root, 'review.json'), join(root, 'report.json')];
   if (basename(root) === 'rig') protectedPaths.push(...['parts.json', 'config.json', 'review.json', 'report.json'].map(name => join(dirname(root), name)));
@@ -307,10 +318,11 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     files.push({ abs: rigPath, bytes: rigBytes.length, sha256: createHash('sha256').update(rigBytes).digest('hex') });
     if (report) files.push(report);
   }
-  return { mode: 'parts', root, title: basename(root) === 'rig' ? basename(dirname(root)) : basename(root), rigSize, items, pages: [], flags, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath, imagePaths, pagePaths: [] };
+  return { ...(painting?{painting}:{}),mode: 'parts', root, title: basename(root) === 'rig' ? basename(dirname(root)) : basename(root), rigSize, items, pages: [], flags, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath, imagePaths, pagePaths: [] };
 }
 
 async function loadAtlasMode(input: string, options: PartsViewOptions): Promise<PartsViewPackage> {
+  if(options.painting)refuse('PARTS_PAINTING_UNAVAILABLE','atlas regions have no rig placement; use a pre-rig parts package');
   const p = await loadReview(input);
   if (!p.manifest.model) return refuse('PARTS_VIEW_NO_ATLAS', `${input} holds neither parts.json nor a compiled model with pages`);
   return loadPartsAtlas(p, options);
@@ -398,6 +410,7 @@ export interface PartsVerdict {
   source: ReturnType<typeof verdictSource>;
   status: VerdictStatus;
   parts: Record<string, { outcome: PartOutcome; note: string; flags: string[]; mesh?: { outcome: PartOutcome; note: string } }>;
+  comments: PartsComment[];
   updatedAt: string;
 }
 
@@ -408,7 +421,7 @@ export interface VerdictSubmission { status: VerdictStatus; parts: Record<string
 export const itemNames = (pkg: Pick<PartsViewPackage, 'items'>): string[] => [...new Set(pkg.items.map(i => i.name))];
 
 /** Builds the verdict document, or refuses by name. Pure but for the clock. */
-export function buildVerdict(pkg: Pick<PartsViewPackage, 'mode' | 'items' | 'flags' | 'files' | 'flagFiles' | 'verdictPath'>, input: unknown, version: string, now = new Date()): PartsVerdict {
+export function buildVerdict(pkg: Pick<PartsViewPackage, 'mode' | 'items' | 'flags' | 'files' | 'flagFiles' | 'verdictPath' | 'imagePaths'>, input: unknown, version: string, now = new Date()): PartsVerdict {
   const body = record(input);
   if (!body) return refuse('PARTS_VERDICT_INVALID', 'expected { status, parts }');
   const status = body.status;
@@ -442,7 +455,9 @@ export function buildVerdict(pkg: Pick<PartsViewPackage, 'mode' | 'items' | 'fla
   const outcomes = Object.values(parts).flatMap(p => p.mesh ? [p.outcome, p.mesh.outcome] : [p.outcome]);
   if (status === 'approved' && outcomes.some(o => o !== 'clean')) refuse('PARTS_VERDICT_NOT_CLEAN', `approved needs every part clean; ${outcomes.filter(o => o !== 'clean').length} are not`);
   if (status === 'changes-requested' && !outcomes.includes('flagged')) refuse('PARTS_VERDICT_NOTHING_FLAGGED', 'changes-requested needs at least one flagged part');
-  return { schema: PARTS_VERDICT_SCHEMA, mode: pkg.mode, tool: { name: '@rig-c/review', version }, source: verdictSource(pkg), status, parts, updatedAt: now.toISOString() };
+  const comments=body.comments??[];if(!Array.isArray(comments)||comments.length>1000)refuse('PARTS_COMMENT_LIMIT','comments must be an array of at most 1000 entries');
+  const ids=new Set<string>();for(const raw of comments as unknown[]){const c=parsePartsComment(raw),item=pkg.items.find(i=>i.name===c.part);if(!item||pkg.mode!=='parts')refuse('PARTS_COMMENT_UNAVAILABLE','original part required');if(ids.has(c.id))refuse('PARTS_COMMENT_DUPLICATE','duplicate comment id');ids.add(c.id);const file=pkg.files.find(f=>f.abs===pkg.imagePaths[item!.index]);assertPartsCommentBinding(c,item!,file?.sha256??'',verdictSource(pkg).sha256);}
+  return { schema: PARTS_VERDICT_SCHEMA, mode: pkg.mode, tool: { name: '@rig-c/review', version }, source: verdictSource(pkg), status, parts, comments:comments as PartsComment[], updatedAt: now.toISOString() };
 }
 
 /** Every file the package was loaded from still has the bytes it was loaded with. */
@@ -461,7 +476,10 @@ async function packageVersion(): Promise<string> {
 export async function saveVerdict(pkg: PartsViewPackage, input: unknown): Promise<PartsVerdict> {
   await assertVerdictDestination(pkg);
   await assertPartsUnchanged(pkg);
+  await readVerdict(pkg); // Existing read-side evidence errors must never become an implicit reset.
   const verdict = buildVerdict(pkg, input, await packageVersion());
+  for(const comment of verdict.comments)await preparePartsComment(pkg,comment,true);
+  await assertPartsUnchanged(pkg);
   await mkdir(dirname(pkg.verdictPath), { recursive: true });
   const tmp = `${pkg.verdictPath}.${crypto.randomUUID()}.tmp`;
   try {
@@ -482,18 +500,23 @@ export type VerdictStale = 'files' | 'flags' | null;
  */
 export async function readVerdict(pkg: PartsViewPackage): Promise<{ verdict: PartsVerdict | null; stale: VerdictStale }> {
   let raw: unknown;
-  try { raw = JSON.parse(await readFile(pkg.verdictPath, 'utf8')); } catch { return { verdict: null, stale: null }; }
+  let text:string;try{text=await readFile(pkg.verdictPath,'utf8');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {verdict:null,stale:null};throw new Error('PARTS_VERDICT_READ: saved verdict cannot be read');}
+  try{raw=JSON.parse(text);}catch{throw new Error('PARTS_VERDICT_INVALID: saved verdict is not valid JSON');}
   const v = record(raw), source = record(v?.source), now = verdictSource(pkg);
-  if (!v || v.schema !== PARTS_VERDICT_SCHEMA || v.mode !== pkg.mode || source?.sha256 !== now.sha256) return { verdict: null, stale: 'files' };
+  if(!v||![PARTS_VERDICT_SCHEMA,'rig-review-parts-verdict/1'].includes(String(v.schema))||typeof source?.sha256!=='string')throw new Error('PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid');
+  if(v.mode!==pkg.mode||source.sha256!==now.sha256)return {verdict:null,stale:'files'};
   if (JSON.stringify(source.flags) !== JSON.stringify(now.flags)) return { verdict: null, stale: 'flags' };
-  return { verdict: v as unknown as PartsVerdict, stale: null };
+  const date=new Date(String(v.updatedAt));if(!Number.isFinite(date.getTime()))throw new Error('PARTS_VERDICT_INVALID: saved verdict date is invalid');
+  const normalized=buildVerdict(pkg,{...v,comments:v.schema==='rig-review-parts-verdict/1'?[]:v.comments},String(record(v.tool)?.version??''),date);for(const c of normalized.comments)await validateStoredPartsComment(pkg,c);return {verdict:normalized,stale:null};
 }
 
 /** What the page reads: no absolute path leaves the server but the verdict file's name. */
 export function partsViewJson(pkg: PartsViewPackage, saved: { verdict: PartsVerdict | null; stale: VerdictStale }) {
   return {
     schema: 'rig-review-parts-view/1', mode: pkg.mode, title: pkg.title, rigSize: pkg.rigSize,
-    items: pkg.items, pages: pkg.pages, flags: pkg.flags,
+    painting:pkg.painting?{sha256:pkg.painting.sha256,width:pkg.painting.width,height:pkg.painting.height}:null,
+    sourceHash:verdictSource(pkg).sha256,
+    items:pkg.items.map(item=>({...item,...(pkg.mode==='parts'?{imageHash:pkg.files.find(f=>f.abs===pkg.imagePaths[item.index])?.sha256}:{})})), pages: pkg.pages, flags: pkg.flags,
     flagSources: pkg.flagFiles.map(f => basename(f.abs)), flagMissing: pkg.flagNotes,
     verdictFile: basename(pkg.verdictPath), verdict: saved.verdict, verdictStale: saved.stale,
   };
@@ -505,3 +528,10 @@ export function servedImage(pkg: PartsViewPackage, kind: 'image' | 'page', index
   return Number.isInteger(index) && index >= 0 && index < list.length ? list[index]! : null;
 }
 
+
+/** Both export forms preserve original text, native and rig coordinates and resolved evidence. */
+export function exportPartsVerdict(verdict:PartsVerdict,format:'json'|'issue'):string {
+ const comments=verdict.comments.map(c=>{const {png,...crop}=c.crop;return {...c,crop:{...crop,path:resolvedCropPath(crop.path)},nativeCrop:c.nativeCrop?{...c.nativeCrop,path:resolvedCropPath(c.nativeCrop.path)}:null};});
+ if(format==='json')return JSON.stringify({...verdict,comments},null,2)+'\n';
+ return [`# Parts review`, `Source: ${verdict.source.sha256}`,`Status: ${verdict.status}`,...Object.entries(verdict.parts).flatMap(([name,p])=>[`\n## ${name}`,`${p.outcome}: ${p.note}`,...comments.filter(c=>c.part===name).flatMap(c=>[`\n### ${c.summary}`,`Part: ${c.part} · image SHA-256: ${c.imageHash}`,`Image region: ${JSON.stringify(c.imageRegion)}`,`Rig region: ${JSON.stringify(c.rigRegion)}`,`Viewport crop: ${c.crop.path} · SHA-256 ${c.crop.sha256}`,`Native crop: ${c.nativeCrop!.path} · SHA-256 ${c.nativeCrop!.sha256}`,`View: ${JSON.stringify(c.view)}`])])].join('\n')+'\n';
+}

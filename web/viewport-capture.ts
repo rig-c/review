@@ -15,7 +15,7 @@ export function pixelAlignedCrop(area:CaptureRect,origin:{x:number;y:number},rat
 }
 export interface BackgroundLayer {rect:CaptureRect;color:string;image:string;size:string;position:string}
 export interface PixelLayer {image:CanvasImageSource;rect:CaptureRect;opacity:number}
-export interface ViewportCapture {pane:HTMLElement;root?:HTMLElement;images:boolean;canvas?:HTMLCanvasElement;backend:CanvasBackend}
+export interface ViewportCapture {pane:HTMLElement;root?:HTMLElement;images:boolean;canvas?:HTMLCanvasElement;backend:CanvasBackend;nearest?:boolean}
 const transparent=(color:string)=>color==='transparent'||/^rgba\([^)]*,\s*0\s*\)$/.test(color);
 /** Read only this app's computed backgrounds, in their actual viewport coordinates. */
 export function viewportBackground(pane:HTMLElement):BackgroundLayer[]{
@@ -61,6 +61,7 @@ function displayedRig(ctx:CanvasRenderingContext2D,capture:ViewportCapture,frame
  }return true;
 }
 export function paintInspectionViewport(ctx:CanvasRenderingContext2D,area:MarkRegion,capture:ViewportCapture,pose:{camera:ControlNumericCamera;posed?:PosedFrame;assets?:ModelAssets;media?:HTMLVideoElement|HTMLImageElement}):void {
+ if(capture.nearest)ctx.imageSmoothingEnabled=false;
  const overlays=[...capture.pane.querySelectorAll<HTMLCanvasElement>('canvas')].filter(node=>!capture.root?.contains(node)&&node!==capture.canvas).map(node=>displayedPixels(node,capture.pane)).filter((v):v is PixelLayer=>v!==null);
  paintViewportLayers(ctx,area,viewportBackground(capture.pane),capture.images,()=>{
   if(capture.canvas){const pixels=displayedPixels(capture.canvas,capture.pane,!capture.root?.contains(capture.canvas));if(pixels){ctx.save();ctx.globalAlpha=pixels.opacity;ctx.drawImage(pixels.image,pixels.rect.x,pixels.rect.y,pixels.rect.width,pixels.rect.height);ctx.restore();return;}}

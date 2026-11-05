@@ -817,3 +817,12 @@ The comment mode is captured once at gesture start; switching mode cancels an un
 Stage comment capture refuses unrecorded authoring effects, by `COMMENT_UNAPPLIED_PREVIEW` plus tool name: actual idle/dial adjust functions, live physics parameter patches, a pending loaded density-strip model, visible authoring geometry (Chest/Bones/Cuts/Cloth/Mesh), and Idle/Rig fields stage handles. Unapplied form operations alone do not trigger this refusal. The **Comment · C (n)** control displays the reason without disabling the button, so the list still opens read-only and rows still restore while placing and editing are refused by name; active capture is cancelled if a preview begins, and capture/save recheck after asynchronous pause/crop. No preview is automatically cleared/applied or omitted from a crop. Applied scratch builds retain their refusal (`COMMENT_APPLIED_BUILD_UNSUPPORTED`); rebuild/model swaps refuse `COMMENT_SOURCE_BUSY`. Turn pad, world/reference and source inspection remain inspection, not authored previews.
 
 `frame.basis:reference` remains valid comment evidence and is retained in JSON/issue reports, but it is not a producer frame interval. `COMMENT_REFERENCE_STRIP_UNAVAILABLE` refuses its CLI and browser batch strip exports before planning/render, independently of viewport side. No reference→producer time/index mapping occurs. Numeric producer/manual ranges remain unchanged; unavailable time-only ranges still refuse `COMMENT_CLOCK_UNAVAILABLE`.
+
+
+### Parts pointed evidence
+
+Pre-rig parts uses `rig-review-parts-verdict/2` and the closed `rig-review-parts-comment/1`;
+existing verdict/1 records read with no comments. This identity comes from the existing
+parts verdict source digest and actual original PNG SHA-256, without a fabricated review
+manifest id, revision or compiled model. The rig's `rig-review-comment/1` schema stays closed.
+See [the parts contract and validation instruments](PARTS_VIEW.md#pointed-parts-comments).
