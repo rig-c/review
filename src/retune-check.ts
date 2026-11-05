@@ -40,7 +40,7 @@ export const provenanceFile = (op: CarryingOp): string => FILE[op];
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** check.json's bar keys as review's `checkSummary` reads them: an upper-case name. */
 const BAR = /^[A-Z][A-Z0-9_]+$/;
-const STATUSES = new Set(['PASS', 'FAIL', 'SKIP', 'WARN', 'CLEAR', 'REPORTED']);
+const STATUSES = new Set(['PASS', 'FAIL', 'SKIP', 'WARN', 'CLEAR', 'REPORTED', 'UNCLASSIFIED']);
 
 export interface RetuneRevisionRow { path: string; bytes: number; sha256: string }
 export interface CarriedCheck { pass: boolean; line: string; status: Record<string, string> }
