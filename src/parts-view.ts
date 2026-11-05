@@ -14,6 +14,7 @@
  * `source.sha256` is the sha256 over the UTF-8 lines `<path>\t<sha256>\n`, sorted by path bytewise, where every path
  * is relative to the verdict file's directory. rig-c/create recomputes it, so the definition is fixed here.
  */
+import {assertOriginalPaintingSize} from './parts-comparison.ts';
 import {parsePartsComment,assertPartsCommentBinding,type PartsComment} from './parts-comment.ts';
 import {preparePartsComment,validateStoredPartsComment} from './parts-comment-crops.ts';
 import {resolvedCropPath} from './comment-crops.ts';
@@ -296,7 +297,7 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     const candidate=resolve(options.painting),rel=relative(resolve(root),candidate);if(!rel||rel==='..'||rel.startsWith('..'+sep)||isAbsolute(rel))refuse('PARTS_PAINTING_OUTSIDE','painting must be inside the parts package');
     let abs:string,bytes:Buffer;try{abs=await insideRoot(root,candidate,'PARTS_PAINTING_OUTSIDE','painting');packagePath(relative(root,abs).split(sep).join('/'),'painting');bytes=await readFile(abs);}catch(error){if(error instanceof Error&&error.message.startsWith('PARTS_PAINTING_OUTSIDE:'))throw error;refuse('PARTS_PAINTING_UNAVAILABLE','painting must be a readable portable package PNG');}
     let png:PNG;try{png=PNG.sync.read(bytes!);}catch{refuse('PARTS_PAINTING_PNG','painting must be a valid PNG');}
-    if(!rigSize||png!.width!==rigSize[0]||png!.height!==rigSize[1])refuse('PARTS_PAINTING_SIZE','painting must match the declared rig canvas exactly');
+    assertOriginalPaintingSize(png!.width,png!.height,rigSize,doc.scale_rig_per_source);
     const file={abs:abs!,bytes:bytes!.length,sha256:createHash('sha256').update(bytes!).digest('hex')};painting={...file,width:png!.width,height:png!.height};files.push(file);
   }
   const { flags, files: flagFiles, notes } = await producerFlags(root, null, seen, options);
@@ -421,7 +422,7 @@ export interface VerdictSubmission { status: VerdictStatus; parts: Record<string
 export const itemNames = (pkg: Pick<PartsViewPackage, 'items'>): string[] => [...new Set(pkg.items.map(i => i.name))];
 
 /** Builds the verdict document, or refuses by name. Pure but for the clock. */
-export function buildVerdict(pkg: Pick<PartsViewPackage, 'mode' | 'items' | 'flags' | 'files' | 'flagFiles' | 'verdictPath' | 'imagePaths'>, input: unknown, version: string, now = new Date()): PartsVerdict {
+export function buildVerdict(pkg: Pick<PartsViewPackage, 'mode' | 'items' | 'flags' | 'files' | 'flagFiles' | 'verdictPath' | 'imagePaths' | 'painting'>, input: unknown, version: string, now = new Date()): PartsVerdict {
   const body = record(input);
   if (!body) return refuse('PARTS_VERDICT_INVALID', 'expected { status, parts }');
   const status = body.status;
@@ -456,7 +457,7 @@ export function buildVerdict(pkg: Pick<PartsViewPackage, 'mode' | 'items' | 'fla
   if (status === 'approved' && outcomes.some(o => o !== 'clean')) refuse('PARTS_VERDICT_NOT_CLEAN', `approved needs every part clean; ${outcomes.filter(o => o !== 'clean').length} are not`);
   if (status === 'changes-requested' && !outcomes.includes('flagged')) refuse('PARTS_VERDICT_NOTHING_FLAGGED', 'changes-requested needs at least one flagged part');
   const comments=body.comments??[];if(!Array.isArray(comments)||comments.length>1000)refuse('PARTS_COMMENT_LIMIT','comments must be an array of at most 1000 entries');
-  const ids=new Set<string>();for(const raw of comments as unknown[]){const c=parsePartsComment(raw),item=pkg.items.find(i=>i.name===c.part);if(!item||pkg.mode!=='parts')refuse('PARTS_COMMENT_UNAVAILABLE','original part required');if(ids.has(c.id))refuse('PARTS_COMMENT_DUPLICATE','duplicate comment id');ids.add(c.id);const file=pkg.files.find(f=>f.abs===pkg.imagePaths[item!.index]);assertPartsCommentBinding(c,item!,file?.sha256??'',verdictSource(pkg).sha256);}
+  const ids=new Set<string>();for(const raw of comments as unknown[]){const c=parsePartsComment(raw);if(c.view.comparison?.mode==='overlay'&&!pkg.painting)refuse('PARTS_COMPARISON_UNAVAILABLE','original painting required');const item=pkg.items.find(i=>i.name===c.part);if(!item||pkg.mode!=='parts')refuse('PARTS_COMMENT_UNAVAILABLE','original part required');if(ids.has(c.id))refuse('PARTS_COMMENT_DUPLICATE','duplicate comment id');ids.add(c.id);const file=pkg.files.find(f=>f.abs===pkg.imagePaths[item!.index]);assertPartsCommentBinding(c,item!,file?.sha256??'',verdictSource(pkg).sha256);}
   return { schema: PARTS_VERDICT_SCHEMA, mode: pkg.mode, tool: { name: '@rig-c/review', version }, source: verdictSource(pkg), status, parts, comments:comments as PartsComment[], updatedAt: now.toISOString() };
 }
 

@@ -9,6 +9,7 @@
 export interface Box { name: string; index: number; x: number; y: number; w: number; h: number }
 type Ctx = CanvasRenderingContext2D;
 type Source = CanvasImageSource;
+import type {PaintingRectangle} from '../src/parts-comparison.ts';
 
 /** Sentinel backgrounds: colours no art is expected to hold, so a sliver of empty canvas is plain. */
 export const SENTINELS: Readonly<Record<string, string>> = { green: '#00ff00', magenta: '#ff00ff', black: '#000000', white: '#ffffff' };
@@ -45,15 +46,30 @@ export function paintPart(ctx: Ctx, item: Box, image: Source, options: { bg: str
   const { w, h } = item;
   if (options.alpha) paintAlphaOnly(ctx, image, 0, 0, w, h);
   else { paintBackground(ctx, w, h, options.bg); ctx.drawImage(image, 0, 0); }
-  if (!options.fronts.length) return;
-  const mask = options.makeCanvas(w, h), m = mask.getContext('2d')!;
-  for (const f of options.fronts) m.drawImage(f.image, f.box.x - item.x, f.box.y - item.y);
+  paintFootprints(ctx,item,options.fronts,options.makeCanvas);
+}
+export function paintFootprints(ctx:Ctx,item:Box,fronts:readonly {box:Box;image:Source}[],makeCanvas:(w:number,h:number)=>HTMLCanvasElement):void {
+  if (!fronts.length) return;
+  const {w,h}=item;
+  const mask = makeCanvas(w, h), m = mask.getContext('2d')!;
+  for (const f of fronts) m.drawImage(f.image, f.box.x - item.x, f.box.y - item.y);
   m.globalCompositeOperation = 'source-in';
   m.fillStyle = `rgb(${FOOTPRINT_RGB.join(',')})`;
   m.fillRect(0, 0, w, h);
   ctx.globalAlpha = FOOTPRINT_ALPHA;
   ctx.drawImage(mask, 0, 0);
   ctx.globalAlpha = 1;
+}
+
+/** Original painting's continuous rectangle, displayed with browser interpolation; no native-pixel parity claim. */
+export function paintPaintingCrop(ctx:Ctx,painting:Source,source:PaintingRectangle,w:number,h:number,bg:string):void {
+ paintBackground(ctx,w,h,bg);ctx.imageSmoothingEnabled=true;
+ ctx.drawImage(painting,source.x,source.y,source.width,source.height,0,0,w,h);
+ ctx.imageSmoothingEnabled=false;
+}
+export function paintOverlay(ctx:Ctx,item:Box,image:Source,painting:Source,source:PaintingRectangle,opacity:number,bg:string):void {
+ paintPaintingCrop(ctx,painting,source,item.w,item.h,bg);
+ ctx.globalAlpha=opacity;ctx.drawImage(image,0,0);ctx.globalAlpha=1;
 }
 
 export interface MeshGeometry { vertices: readonly number[]; triangles: readonly number[] }

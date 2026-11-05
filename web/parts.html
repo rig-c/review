@@ -14,6 +14,10 @@
     <button type="button" id="stage-comment" aria-pressed="false" aria-controls="stage-comment-list">Comment · C (0)</button>
     <label class="pv-field"><input type="checkbox" id="pv-alpha" data-pv-alpha> Alpha only</label>
     <label class="pv-field" id="pv-footprint-control"><input type="checkbox" id="pv-footprints" data-pv-footprints> Footprints of parts in front</label>
+    <span id="pv-comparison" class="pv-comparison" hidden>
+     <span class="pv-field">Painting comparison <span class="pv-group" role="group" aria-label="Painting comparison"><button type="button" data-pv-comparison="part" aria-pressed="true">Part</button><button type="button" data-pv-comparison="overlay" aria-pressed="false">Overlay</button></span></span>
+     <label class="pv-field" id="pv-opacity-control" hidden>Part opacity <input type="range" id="pv-opacity" min="0" max="1" step="0.001" value="0.5"><output id="pv-opacity-value">50.0%</output></label>
+    </span>
     <span class="pv-group" role="group" aria-label="Atlas view" id="pv-atlas-switch" hidden><button type="button" data-pv-view="item" aria-pressed="true">Region</button><button type="button" data-pv-view="page" aria-pressed="false">Pages</button></span>
    </div>
    <div class="pv-canvas-wrap" id="stage-layout"><div class="pv-canvas-box" id="pv-canvas-box"><canvas id="pv-canvas" data-pv-canvas width="1" height="1"></canvas><div id="pv-overlay" class="pv-overlay"></div></div></div>

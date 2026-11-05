@@ -3132,4 +3132,10 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "PARTS_VERDICT_INVALID: saved verdict is not valid JSON": "PARTS_VERDICT_INVALID: 저장된 판정이 올바른 JSON이 아니에요",
   "PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid": "PARTS_VERDICT_INVALID: 저장된 판정의 스키마나 원본 연결이 잘못됐어요",
   "PARTS_VERDICT_INVALID: saved verdict date is invalid": "PARTS_VERDICT_INVALID: 저장된 판정의 날짜가 잘못됐어요",
+  "Painting comparison": "원화 비교",
+  "Overlay": "오버레이",
+  "Part opacity": "파츠 불투명도",
+  "PARTS_COMPARISON_UNAVAILABLE: original painting required": "PARTS_COMPARISON_UNAVAILABLE: 원본 원화가 필요해요",
+  "PARTS_COMPARISON_INVALID: part/overlay mode and opacity 0..1 required": "PARTS_COMPARISON_INVALID: 파트/오버레이 모드와 0..1 불투명도가 필요해요",
+  "PARTS_PAINT_FAILED: view could not be rendered; select the part to retry": "PARTS_PAINT_FAILED: 화면을 그리지 못했어요. 파츠를 선택해 다시 시도해 주세요",
 };

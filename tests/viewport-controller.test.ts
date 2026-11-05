@@ -2,6 +2,7 @@ import {expect,test} from 'bun:test';
 import {createViewportController,createViewportState,type ViewportProvider} from '../web/viewport-controller.ts';
 import {unprojectMark} from '../src/stage-comment.ts';
 import {viewportPairMarkup,expandViewportPair,viewportPairPlaceholder} from '../web/viewport-pair.ts';
+import {createPartsViewport} from '../web/parts-viewport-provider.ts';
 function host(){
  const nodes=new Map<string,any>();for(const target of ['rig','reference']){nodes.set(target+'-viewport',{clientWidth:640,clientHeight:480});nodes.set(target+'-pane',{hidden:false});}
  const state=createViewportState();let renders=0;
@@ -39,4 +40,14 @@ test('#382 common two-pointer gesture anchors source point at moving pinch centr
  pane.emit('pointerup',{pointerId:1,pointerType:'touch'});pane.emit('pointerup',{pointerId:2,pointerType:'touch'});expect(pane.captured.size).toBe(0);
  const before=structuredClone(c.paneCamera('rig'));enabled=false;pane.emit('pointerdown',{pointerId:3,pointerType:'touch',clientX:160,clientY:190});pane.emit('pointerdown',{pointerId:4,pointerType:'touch',isPrimary:false,clientX:260,clientY:190});pane.emit('pointermove',{pointerId:4,pointerType:'touch',clientX:460,clientY:190});expect(c.paneCamera('rig')).toEqual(before);dispose();
  }finally{for(const [k,v]of saved){if(v===undefined)delete(globalThis as any)[k];else(globalThis as any)[k]=v;}}
+});
+
+test('#384 delayed original reference size realigns the canonical pair before any camera gesture',()=>{
+ const nodes=new Map<string,any>();const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:450,clientHeight:842,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ const canvas={width:590,height:457},reference={width:300,height:150};
+ const c=createPartsViewport({el,canvas:canvas as HTMLCanvasElement,reference:()=>reference as HTMLCanvasElement,message:()=>{}});c.state.cameraSync=true;c.fitCamera();
+ expect(c.numericView().cameras.reference!.center).toEqual({x:150,y:75});
+ reference.width=590;reference.height=457;c.fitCamera();
+ expect(c.numericView().cameras.reference!.center).toEqual(c.numericView().cameras.rig!.center);
+ expect(c.numericView().cameras.reference!.center).toEqual({x:295,y:228.5});
 });

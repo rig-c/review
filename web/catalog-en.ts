@@ -3132,4 +3132,10 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "PARTS_VERDICT_INVALID: saved verdict is not valid JSON": "PARTS_VERDICT_INVALID: saved verdict is not valid JSON",
   "PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid": "PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid",
   "PARTS_VERDICT_INVALID: saved verdict date is invalid": "PARTS_VERDICT_INVALID: saved verdict date is invalid",
+  "Painting comparison": "Painting comparison",
+  "Overlay": "Overlay",
+  "Part opacity": "Part opacity",
+  "PARTS_COMPARISON_UNAVAILABLE: original painting required": "PARTS_COMPARISON_UNAVAILABLE: original painting required",
+  "PARTS_COMPARISON_INVALID: part/overlay mode and opacity 0..1 required": "PARTS_COMPARISON_INVALID: part/overlay mode and opacity 0..1 required",
+  "PARTS_PAINT_FAILED: view could not be rendered; select the part to retry": "PARTS_PAINT_FAILED: view could not be rendered; select the part to retry",
 };
