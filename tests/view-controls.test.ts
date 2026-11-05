@@ -145,7 +145,7 @@ function open(video,hasPlayer){let time=.1,duration=2,controlledVideoSample=null
  }
  // Source-only readback must use the acknowledged actual sample, not the
  // browser's requested currentTime (which can be between decoded frames).
- const observe=source.slice(source.indexOf('function controlState()'),source.indexOf('async function applyControl('));expect(observe).toContain('time:player?.time??time,');expect(observe).not.toContain('video?.currentTime');
+ const observe=source.slice(source.indexOf('function controlState()'),source.indexOf('async function applyControl('));expect(observe).toContain('animation:animation||null,time,');expect(observe).not.toContain('video?.currentTime');
 });
 
 test('actual single camera adapters synchronize normalized views by default, then preserve independent panes and active toolbar behavior',async()=>{
