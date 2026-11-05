@@ -5,9 +5,11 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
 type Step={id?:string;name?:string;uses?:string;if?:string;env?:Record<string,string>;with?:Record<string,unknown>;run?:string};
-type Workflow={on:unknown;permissions:unknown;concurrency:unknown;jobs:{release:{'runs-on':string;permissions:unknown;steps:Step[]}}};
+type Job={'runs-on':string;'timeout-minutes':number;permissions:unknown;steps:Step[];outputs?:Record<string,string>;needs?:string;if?:string};
+type Workflow={on:unknown;permissions:unknown;concurrency:unknown;jobs:{release:Job;publish:Job}};
 const workflow=Bun.YAML.parse(readFileSync(new URL('../.github/workflows/release.yml',import.meta.url),'utf8')) as Workflow;
 const steps=workflow.jobs.release.steps;
+const publish=workflow.jobs.publish;
 const target=steps.find(step=>step.id==='target')!;
 const tag='v0.11.1',commitSha='a'.repeat(40),oldSha='b'.repeat(40);
 type Fixture={
@@ -128,18 +130,25 @@ test('parsed YAML preserves release authority, triggers and gates, and checks ou
  expect(workflow.permissions).toEqual({});
  expect(workflow.concurrency).toEqual({group:'release-${{ github.ref }}','cancel-in-progress':false});
  expect(workflow.jobs.release['runs-on']).toBe('ubuntu-latest');
- expect(workflow.jobs.release.permissions).toEqual({contents:'write','pull-requests':'write',issues:'write','id-token':'write'});
+ expect(workflow.jobs.release.permissions).toEqual({contents:'write','pull-requests':'write',issues:'write'});
+ expect(workflow.jobs.release.outputs).toEqual({
+  publish:'${{ steps.target.outputs.publish }}',tag:'${{ steps.target.outputs.tag }}',sha:'${{ steps.target.outputs.sha }}',
+ });
  expect(steps[0]).toMatchObject({id:'release',uses:'googleapis/release-please-action@v4',if:"${{ github.event_name == 'push' }}"});
  expect(steps[0]!.with).toEqual({token:'${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}','config-file':'release-please-config.json','manifest-file':'.release-please-manifest.json'});
  expect(steps.slice(0,steps.indexOf(target)).filter(step=>step.uses==='actions/checkout@v4')).toEqual([
   {uses:'actions/checkout@v4',if:"${{ github.event_name == 'workflow_dispatch' }}",with:{ref:'main','fetch-depth':0,'persist-credentials':false}},
  ]);
  expect(target.env).toMatchObject({EVENT:'${{ github.event_name }}',CREATED:'${{ steps.release.outputs.release_created }}',CUT_TAG:'${{ steps.release.outputs.tag_name }}',INPUT_TAG:'${{ inputs.tag }}',GH_TOKEN:'${{ github.token }}',REPO:'${{ github.repository }}',RELEASE_AUTHOR:'github-actions[bot]'});
- const downstream=steps.slice(steps.indexOf(target)+1);
- expect(downstream[0]).toMatchObject({uses:'actions/checkout@v4',with:{ref:'${{ steps.target.outputs.sha }}'}});
- for(const step of downstream)expect(step.if).toBe("${{ steps.target.outputs.publish == 'true' }}");
- expect(steps.filter(step=>step.run?.includes('npm publish')).map(step=>step.name)).toEqual(['Publish @rig-c/review','Publish the alias rig-review']);
- expect(steps.find(step=>step.name==='Publish @rig-c/review')!.run!.trim()).toBe('npm publish --provenance --access public');
+ expect(steps.at(-1)).toBe(target);
+ expect(publish).toMatchObject({
+  needs:'release',if:"${{ needs.release.outputs.publish == 'true' }}",'runs-on':'ubuntu-latest','timeout-minutes':20,
+ });
+ expect(publish.permissions).toEqual({contents:'read',actions:'read','pull-requests':'read','id-token':'write'});
+ expect(publish.steps[0]).toMatchObject({uses:'actions/checkout@v4',with:{ref:'${{ needs.release.outputs.sha }}'}});
+ expect(publish.steps.find(step=>step.env?.TAG_NAME)?.env?.TAG_NAME).toBe('${{ needs.release.outputs.tag }}');
+ expect(publish.steps.filter(step=>step.run?.includes('npm publish')).map(step=>step.name)).toEqual(['Publish @rig-c/review','Publish the alias rig-review']);
+ expect(publish.steps.find(step=>step.name==='Publish @rig-c/review')!.run!.trim()).toBe('npm publish --provenance --access public');
 });
 
 test('recorded API bodies retain exact byte hashes, HTTP statuses and annotated identity',()=>{

@@ -7,6 +7,7 @@
   "scripts": {
     "review": "bun src/cli.ts",
     "check": "bun src/cli.ts check",
+    "check:demo": "bun run check -- examples/demo/review.json",
     "demo": "bun src/cli.ts examples/demo/review.json --view-only",
     "check:readme": "bun scripts/check-readme.ts",
     "typecheck": "tsc --noEmit",
@@ -15,7 +16,7 @@
     "feedback": "bun src/cli.ts feedback",
     "open": "bun src/cli.ts open",
     "smoke": "bun scripts/install-smoke.ts",
-    "prepublishOnly": "bun run typecheck && bun test && bun run build && bun run check -- examples/demo/review.json && bun run smoke"
+    "prepublishOnly": "node scripts/prepublish.cjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "1.0.11",
