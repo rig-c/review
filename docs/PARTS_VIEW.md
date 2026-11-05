@@ -183,7 +183,7 @@ The four-stage navigator preserves this entry and its explicit save behavior. Co
 **Comment · C (n)** uses the same capture toggle, dragged region, composer and pins as the rig stage.
 While capture is on, drag draws only a region; close the toggle to pan. Enter adds the comment;
 **Save sign-off** persists the verdict. Select a comment row or pin after reopening to restore its
-part, camera, background, alpha, footprints and mesh view. There is no frame, animation or slot
+part, both cameras, background, alpha, footprints, mesh and painting comparison view. There is no frame, animation or slot
 placeholder in a parts comment. Atlas inspection remains read only for pointed comments.
 
 `rig-review-parts-verdict/2` adds `comments[]`; a `/1` file reads with an empty comment array.
@@ -192,7 +192,9 @@ Each closed `rig-review-parts-comment/1` carries `id`, original reviewer `summar
 `imageRegion`, `rigRegion`, `view`, `crop` and `nativeCrop`. `imageRegion` has integer native
 pixel edges snapped outward from the drag. `rigRegion` is exact placement plus that region,
 including fractional placement; it is never rounded. `view.camera` records native scale,
-center and viewport extent, plus `cameraSync` and the actual `referenceCamera` (or null), alongside `background`, `alpha`, `footprints` and `mesh`.
+center and viewport extent, plus `cameraSync` and the actual `referenceCamera` (or null), alongside `background`, `alpha`, `footprints` and `mesh`. New comments add optional
+`view.comparison: {mode:"part"|"overlay", opacity:0..1}`; older comments omit it and restore the
+ordinary part view. Unknown modes/keys and out-of-range opacity refuse `PARTS_COMPARISON_INVALID`.
 
 The viewport `crop` comes from the shared displayed-pixel compositor and includes its mark.
 `nativeCrop` is cut on the server from the hash-bound original PNG, preserving all RGBA bytes,
@@ -207,11 +209,42 @@ npx rig-review parts <out>/rig --painting painting.png --format json
 npx rig-review parts <out>/rig --painting painting.png --format issue
 ```
 
-The optional painting must be a PNG contained in the parts package (including symlink resolution), with a portable source path. Format, size and hash derive from one buffer read. It must match the declared rig canvas exactly (`PARTS_PAINTING_SIZE`),
-is included in the hashed/protected input set and cannot be a verdict destination. The reference
-viewport shows the selected part's rectangle of the original painting; no resizing is inferred.
-Without this input the reference pane names `PARTS_REFERENCE_UNAVAILABLE`. Overlay and difference
-views belong to #384. Neither comparison nor opening a package supplies an approval.
+The optional painting must be a PNG contained in the parts package (including symlink resolution),
+with a portable source path. Format, size and hash derive from one buffer read. Its original dimensions
+must satisfy `trunc(width × scale_rig_per_source) = rig_size[0]` and the equivalent height check
+(`PARTS_PAINTING_SIZE`); missing/invalid declared geometry refuses `PARTS_PAINTING_MAPPING`.
+The painting stays in `source.files` and the protected input set. Adding it to an older verdict changes
+source identity and shows the existing stale-files warning; it never reuses that earlier approval.
+`tests/parts-comparison.test.ts` and `tests/parts-comments.test.ts` guard these contracts and refusals.
+
+### Visual painting comparison
+
+The existing reference viewport provides side-by-side A/B. **Overlay** draws the selected part over
+that original painting at adjustable **Part opacity** (0 = painting, 1 = part composited over painting).
+Both use the existing canvas host/camera/capture. The original source rectangle is exactly
+`(x × originalWidth/rigWidth, y × originalHeight/rigHeight, w × originalWidth/rigWidth,
+h × originalHeight/rigHeight)`, retaining fractional placement. Browser image interpolation displays
+this continuous rectangle; it does not reproduce the producer's resampling or claim native pixel equality.
+Alpha-only and mesh diagnostics are disabled in Overlay; front footprints remain available.
+Without a painting the comparison controls are absent and the reference pane names
+`PARTS_REFERENCE_UNAVAILABLE`. No comparison changes the verdict. These behaviors are guarded by
+`tests/parts-comparison.test.ts`; `tests/parts-overlay-browser.ts` separately exercises trusted input,
+actual displayed pixels, camera preservation, mode/opacity save/reload/restore and both exports in EN/KO.
+Its native crop remains the original part RGBA, while the viewport crop shows the displayed comparison.
+
+The transform follows the whole-canvas geometry in pinned
+[parts 2.17.0 sourceInRig](https://github.com/rig-c/parts/blob/971b3a7fab1109adf5be11750886687a7addb306/src/assemble.ts#L2141)
+and the [parts coordinate contract](https://github.com/rig-c/parts/blob/971b3a7fab1109adf5be11750886687a7addb306/src/parts.ts#L14).
+`tests/parts-comparison.test.ts` pins scale 0.5, fractional coordinates and truncated canvas dimensions.
+`tests/viewport-controller.test.ts` guards a delayed reference-size change realigning the pair before gestures.
+The public synthetic overlapping fixture is generated by `tests/helpers/parts-comparison-package.ts`.
+For real scaled evidence, `scripts/prepare-parts-overlay-demo.ts` fetches hash-verified public demo
+inputs at `ba99e403d4058fc1cfe40699bdcde8aaf00a90c0`, then runs explicitly installed `@rig-c/parts@2.17.0`
+assemble in a separate fixture directory. It is an evidence script, never an app action.
+
+**Difference remains absent** pending the producer-declared rig-space painting raster and
+[the waiting consumer #390](https://github.com/rig-c/review/issues/390). Review adds no producer resampler.
+Neither visual comparison nor opening a package supplies an approval.
 
 Parts native zoom ranges from `min(fit, 1)` to 16; exact native 1 is always reachable. **Fit** is
 a separate action, and **1:1** is shown only at exactly 1. Out-of-range requests refuse as

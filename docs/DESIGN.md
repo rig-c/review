@@ -187,7 +187,12 @@ rig/reference DOM. `parts-viewport-provider.ts` supplies raster geometry and pai
 and the common two-pointer pinch. Parts' native scale policy is separate from the unchanged
 compiled-rig Fit-relative policy. `parts-render.ts` remains the source of part, footprint and
 mesh painting. The optional protected `--painting` input supplies the real reference crop;
-advanced painting comparisons remain a later feature.
+A/B and adjustable-opacity Overlay share the original painting
+transform from declared rig/source canvas geometry, with exact fractional placement. This is a visual
+comparison using browser interpolation, not native pixel parity with the producer's resampled raster.
+Difference waits for the producer-declared rig-space painting artifact (#390).
+`tests/parts-comparison.test.ts` guards the geometry/settings; `tests/parts-overlay-browser.ts` verifies
+displayed overlay pixels and comment restoration in both languages.
 
 `stage-comments.ts` shares capture/composer/pins with a codec boundary for the closed parts
 variant; no rig frame/slot/model placeholder is manufactured. `viewport-capture.ts` supplies

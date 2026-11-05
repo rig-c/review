@@ -12,6 +12,7 @@ async function resolvePartsComment(pkg:PartsViewPackage,raw:unknown,requireNativ
  if(pkg.mode!=='parts'||!item)throw new Error('PARTS_COMMENT_UNAVAILABLE: original part image required');
  const path=pkg.imagePaths[item.index],file=pkg.files.find(f=>f.abs===path);if(!path||!file)throw new Error('PARTS_COMMENT_UNAVAILABLE: bound original PNG required');
  assertPartsCommentBinding(c,item,file.sha256,verdictSource(pkg).sha256);
+ if(c.view.comparison?.mode==='overlay'&&!pkg.painting)throw new Error('PARTS_COMPARISON_UNAVAILABLE: original painting required');
  const bytes=await readFile(path);if(createHash('sha256').update(bytes).digest('hex')!==file.sha256)throw new Error('PARTS_COMMENT_STALE_SOURCE: original PNG changed');
  validatePngCrop(c.crop);
  const original=PNG.sync.read(bytes),r=c.imageRegion;
