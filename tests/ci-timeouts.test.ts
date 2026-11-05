@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 
 type Step = {
   name?: string;
+  uses?: string;
   run?: string;
+  with?: Record<string, unknown>;
   if?: string;
   'timeout-minutes'?: number;
   'continue-on-error'?: boolean;
@@ -15,12 +17,7 @@ type Job = {
 };
 type Workflow = { jobs: Record<string, Job> };
 const installerName = 'Install reference video export tools';
-const commands = [
-  'sudo apt-get update',
-  'sudo apt-get install --no-install-recommends -y ffmpeg',
-  'ffmpeg -version',
-  'ffprobe -version',
-];
+const actionPath = './.github/actions/reference-video-tools';
 
 // Parse the real YAML so a bound at workflow level, on another job, or under
 // `with` cannot masquerade as the named job/step's Actions timeout.
@@ -38,7 +35,10 @@ function checkBound(job: Job) {
   expect(limit!).toBeGreaterThan(0);
   expect(limit!).toBeLessThan(budget!);
   expect(installer['continue-on-error'] ?? false).toBe(false);
-  expect(installer.run?.trim().split('\n').map(line => line.trim())).toEqual(commands);
+  expect(limit).toBe(3);
+  expect(installer.uses).toBe(actionPath);
+  expect(installer.run).toBeUndefined();
+  expect(installer.with).toBeUndefined(); // Both callers use the same pin defaults.
 }
 
 for (const [file, name] of [['check.yml', 'check'], ['release.yml', 'release']] as const) {
@@ -50,7 +50,10 @@ for (const [file, name] of [['check.yml', 'check'], ['release.yml', 'release']] 
     if (name === 'release') {
       expect(job['timeout-minutes']).toBe(20);
       expect(installer.if).toBe("${{ steps.target.outputs.publish == 'true' }}");
-    } else expect(installer.if).toBeUndefined();
+    } else {
+      expect(job['timeout-minutes']).toBe(10);
+      expect(installer.if).toBeUndefined();
+    }
   });
 
   // Mutate detached data only: never edit shared source or wait for apt.
@@ -64,11 +67,11 @@ for (const [file, name] of [['check.yml', 'check'], ['release.yml', 'release']] 
     'step outlives job': (copy, step) => { step['timeout-minutes'] = copy['timeout-minutes']; },
     'unbounded job': copy => { copy['timeout-minutes'] = 360; },
     'job masks failures': copy => { copy['continue-on-error'] = true; },
+    'installer bypasses shared action': (_, step) => { delete step.uses; step.run = 'ffmpeg -version'; },
+    'caller overrides pin': (_, step) => { step.with = { version: 'latest' }; },
+    'longer install bound': (_, step) => { step['timeout-minutes'] = 4; },
     'step masks failures': (_, step) => { step['continue-on-error'] = true; },
   };
-  for (const command of commands) {
-    plants[`missing ${command}`] = (_, step) => { step.run = step.run!.replace(command, ''); };
-  }
   for (const [label, mutate] of Object.entries(plants)) {
     test(`${file}: rejects ${label} control`, () => {
       const copy = structuredClone(job);

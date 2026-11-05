@@ -17,13 +17,8 @@ jobs:
       - run: bun run check:readme
       - run: bun run typecheck
       - name: Install reference video export tools
-        # Successful installs took 14–15 seconds; allow network/runner margin.
         timeout-minutes: 3
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y ffmpeg
-          ffmpeg -version
-          ffprobe -version
+        uses: ./.github/actions/reference-video-tools
       - run: bun test
       - run: bun run build
       - run: bun run check -- examples/demo/review.json
