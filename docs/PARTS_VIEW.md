@@ -207,7 +207,7 @@ npx rig-review parts <out>/rig --painting painting.png --format json
 npx rig-review parts <out>/rig --painting painting.png --format issue
 ```
 
-The optional painting must match the declared rig canvas exactly (`PARTS_PAINTING_SIZE`),
+The optional painting must be a PNG contained in the parts package (including symlink resolution), with a portable source path. Format, size and hash derive from one buffer read. It must match the declared rig canvas exactly (`PARTS_PAINTING_SIZE`),
 is included in the hashed/protected input set and cannot be a verdict destination. The reference
 viewport shows the selected part's rectangle of the original painting; no resizing is inferred.
 Without this input the reference pane names `PARTS_REFERENCE_UNAVAILABLE`. Overlay and difference
@@ -230,3 +230,14 @@ two comments, save/reload, view restoration, both exports, EN/KO, native RGBA pa
 subrectangle parity, immutable source files and the compiled Stage 1 canonical host.
 The superseded #387 byte-equality comparator scripts are retired; commit #388 retains their
 original reproduction. Camera persistence wiring tests with live callers remain.
+
+Native-crop revalidation checks the stored PNG file hash/dimensions and decoded RGBA against the
+original subrectangle, rather than requiring a particular encoder's PNG bytes. Verdict reads never
+create or rewrite crop files. Missing/unreadable stored evidence surfaces
+`COMMENT_CROP_STATE_UNAVAILABLE`; invalid native pixels surface `PARTS_COMMENT_NATIVE_CROP_TAMPERED`.
+These are validation failures, not a stale-source warning or a reset: a subsequent save also refuses
+while the existing verdict cannot be revalidated. Real source/flag identity changes retain their
+separate stale warning. `PARTS_PAINTING_OUTSIDE` and `PARTS_PAINTING_PNG` refuse external or non-PNG
+painting inputs. `tests/parts-comments.test.ts` covers these read and cross-encoding boundaries;
+`tests/parts-async-navigation.test.ts` guards reordered painting loads and actionable atlas clicks.
+A downstream create consumer must support verdict/2 before a review release can ship.

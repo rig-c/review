@@ -22,6 +22,12 @@ export async function storePngCrop(crop:PngCrop,state?:string):Promise<void>{
  try{await writeFile(path,bytes,{mode:0o600,flag:'wx'});}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;const info=await lstat(path);if(!info.isFile()||createHash('sha256').update(await readFile(path)).digest('hex')!==crop.sha256)throw new Error('COMMENT_CROP_PATH: existing crop is not the bound regular PNG');}
 }
 export function resolvedCropPath(path:string,state?:string):string {if(!/^comment-crops\/[a-f0-9]{64}\.png$/.test(path))throw new Error('COMMENT_CROP_PATH: content-addressed PNG required');return resolve(stateRoot(state),path);}
+/** Read and validate stored evidence without creating state directories or rewriting a PNG. */
+export async function readPngCrop(crop:Omit<PngCrop,'png'>,state?:string):Promise<Buffer>{
+ const path=resolvedCropPath(crop.path,state);let bytes:Buffer;
+ try{const info=await lstat(path);if(!info.isFile())throw new Error('COMMENT_CROP_PATH: stored crop must be a regular PNG');bytes=await readFile(path);}catch(error){if(error instanceof Error&&error.message.startsWith('COMMENT_CROP_PATH:'))throw error;throw new Error('COMMENT_CROP_STATE_UNAVAILABLE: stored crop cannot be read');}
+ return validatePngCrop({...crop,png:'data:image/png;base64,'+bytes.toString('base64')});
+}
 export async function saveCommentCrops(feedback:Feedback[],state?:string):Promise<void>{
  for(const f of feedback){const context=f.context as Record<string,unknown>|undefined;if(!hasStageComment(context?.comment))continue;await storePngCrop(parseStageComment(context?.comment).crop,state);}
 }

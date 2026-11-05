@@ -76,11 +76,11 @@ function overlayBox(x: number, y: number, w: number, h: number): HTMLDivElement 
 }
 
 let paintToken = 0;
-async function paint():Promise<void>{painting++;try{await paintRaster();await paintReference();viewport?.fitCamera();}finally{painting--;}}
-async function paintRaster(): Promise<void> {
+async function paint():Promise<void>{painting++;const token=++paintToken;try{await paintRaster(token);if(token!==paintToken)return;await paintReference(token);if(token===paintToken)viewport?.fitCamera();}finally{painting--;}}
+async function paintRaster(token:number): Promise<void> {
   const data = state.data;
   if (!data || !data.items.length) return;
-  const token = ++paintToken, canvas = $<HTMLCanvasElement>('pv-canvas'), overlay = $('pv-overlay'), caption = $('pv-caption');
+  const canvas = $<HTMLCanvasElement>('pv-canvas'), overlay = $('pv-overlay'), caption = $('pv-caption');
   const item = data.items[state.selected]!;
   if (data.mode === 'atlas' && state.view === 'page') {
     const page = data.pages[state.page]!, img = await pageImage(page.name);
@@ -90,6 +90,7 @@ async function paintRaster(): Promise<void> {
     else { paintBackground(ctx, page.width, page.height, state.bg); ctx.drawImage(img, 0, 0); }
     overlay.replaceChildren(...data.items.filter(r => r.page === page.name).map(r => {
       const box = overlayBox(r.x, r.y, r.w, r.h);
+      box.dataset.viewportAction = 'select-region';
       box.dataset.region = r.name; box.dataset.x = String(r.x); box.dataset.y = String(r.y); box.dataset.w = String(r.w); box.dataset.h = String(r.h);
       if (r.index === item.index) box.setAttribute('aria-current', 'true');
       const label = document.createElement('span'); label.textContent = r.name; box.append(label);
@@ -132,7 +133,7 @@ async function paintRaster(): Promise<void> {
     + (state.footprints ? ' ' + (front.length === 1 ? t('Tinted: the footprint of the part drawn in front ({names}).', { names: front[0]!.name }) : front.length ? t('Tinted: the footprints of {count} parts drawn in front ({names}).', { count: front.length, names: front.map(o => o.name).join(', ') }) : t('No part is drawn in front of it.')) : '');
 }
 
-async function paintReference():Promise<void>{const data=state.data,item=data?.items[state.selected];if(!data?.painting||!item)return;const img=await load('/api/parts/painting'),canvas=$<HTMLCanvasElement>('pv-reference');canvas.width=item.w;canvas.height=item.h;const ctx=canvas.getContext('2d')!;ctx.imageSmoothingEnabled=false;paintBackground(ctx,item.w,item.h,state.bg);ctx.drawImage(img,item.x,item.y,item.w,item.h,0,0,item.w,item.h);}
+async function paintReference(token:number):Promise<void>{const data=state.data,item=data?.items[state.selected];if(!data?.painting||!item)return;const img=await load('/api/parts/painting');if(token!==paintToken||data!==state.data||item!==state.data?.items[state.selected])return;const canvas=$<HTMLCanvasElement>('pv-reference');canvas.width=item.w;canvas.height=item.h;const ctx=canvas.getContext('2d')!;ctx.imageSmoothingEnabled=false;paintBackground(ctx,item.w,item.h,state.bg);ctx.drawImage(img,item.x,item.y,item.w,item.h,0,0,item.w,item.h);}
 
 function renderFlags(): void {
   const data = state.data!, item = data.items[state.selected];

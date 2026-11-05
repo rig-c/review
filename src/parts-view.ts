@@ -15,7 +15,7 @@
  * is relative to the verdict file's directory. rig-c/create recomputes it, so the definition is fixed here.
  */
 import {parsePartsComment,assertPartsCommentBinding,type PartsComment} from './parts-comment.ts';
-import {preparePartsComment} from './parts-comment-crops.ts';
+import {preparePartsComment,validateStoredPartsComment} from './parts-comment-crops.ts';
 import {resolvedCropPath} from './comment-crops.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -292,7 +292,13 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     imagePaths.push(real);
     items.push({ name: part.name, index, x: part.x, y: part.y, w: part.w, h: part.h, image: true });
   }
-  let painting:PartsViewPackage['painting'];if(options.painting){const abs=await realpath(resolve(options.painting)),file=await hashFile(abs),png=PNG.sync.read(await readFile(abs));if(!rigSize||png.width!==rigSize[0]||png.height!==rigSize[1])refuse('PARTS_PAINTING_SIZE','painting must match the declared rig canvas exactly');painting={...file,width:png.width,height:png.height};files.push(file);}
+  let painting:PartsViewPackage['painting'];if(options.painting){
+    const candidate=resolve(options.painting),rel=relative(resolve(root),candidate);if(!rel||rel==='..'||rel.startsWith('..'+sep)||isAbsolute(rel))refuse('PARTS_PAINTING_OUTSIDE','painting must be inside the parts package');
+    let abs:string,bytes:Buffer;try{abs=await insideRoot(root,candidate,'PARTS_PAINTING_OUTSIDE','painting');packagePath(relative(root,abs).split(sep).join('/'),'painting');bytes=await readFile(abs);}catch(error){if(error instanceof Error&&error.message.startsWith('PARTS_PAINTING_OUTSIDE:'))throw error;refuse('PARTS_PAINTING_UNAVAILABLE','painting must be a readable portable package PNG');}
+    let png:PNG;try{png=PNG.sync.read(bytes!);}catch{refuse('PARTS_PAINTING_PNG','painting must be a valid PNG');}
+    if(!rigSize||png!.width!==rigSize[0]||png!.height!==rigSize[1])refuse('PARTS_PAINTING_SIZE','painting must match the declared rig canvas exactly');
+    const file={abs:abs!,bytes:bytes!.length,sha256:createHash('sha256').update(bytes!).digest('hex')};painting={...file,width:png!.width,height:png!.height};files.push(file);
+  }
   const { flags, files: flagFiles, notes } = await producerFlags(root, null, seen, options);
   const protectedPaths = [join(root, 'rig.json'), join(root, 'config.json'), join(root, 'review.json'), join(root, 'report.json')];
   if (basename(root) === 'rig') protectedPaths.push(...['parts.json', 'config.json', 'review.json', 'report.json'].map(name => join(dirname(root), name)));
@@ -470,6 +476,7 @@ async function packageVersion(): Promise<string> {
 export async function saveVerdict(pkg: PartsViewPackage, input: unknown): Promise<PartsVerdict> {
   await assertVerdictDestination(pkg);
   await assertPartsUnchanged(pkg);
+  await readVerdict(pkg); // Existing read-side evidence errors must never become an implicit reset.
   const verdict = buildVerdict(pkg, input, await packageVersion());
   for(const comment of verdict.comments)await preparePartsComment(pkg,comment,true);
   await assertPartsUnchanged(pkg);
@@ -493,11 +500,14 @@ export type VerdictStale = 'files' | 'flags' | null;
  */
 export async function readVerdict(pkg: PartsViewPackage): Promise<{ verdict: PartsVerdict | null; stale: VerdictStale }> {
   let raw: unknown;
-  try { raw = JSON.parse(await readFile(pkg.verdictPath, 'utf8')); } catch { return { verdict: null, stale: null }; }
+  let text:string;try{text=await readFile(pkg.verdictPath,'utf8');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {verdict:null,stale:null};throw new Error('PARTS_VERDICT_READ: saved verdict cannot be read');}
+  try{raw=JSON.parse(text);}catch{throw new Error('PARTS_VERDICT_INVALID: saved verdict is not valid JSON');}
   const v = record(raw), source = record(v?.source), now = verdictSource(pkg);
-  if (!v || ![PARTS_VERDICT_SCHEMA,'rig-review-parts-verdict/1'].includes(String(v.schema)) || v.mode !== pkg.mode || source?.sha256 !== now.sha256) return { verdict: null, stale: 'files' };
+  if(!v||![PARTS_VERDICT_SCHEMA,'rig-review-parts-verdict/1'].includes(String(v.schema))||typeof source?.sha256!=='string')throw new Error('PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid');
+  if(v.mode!==pkg.mode||source.sha256!==now.sha256)return {verdict:null,stale:'files'};
   if (JSON.stringify(source.flags) !== JSON.stringify(now.flags)) return { verdict: null, stale: 'flags' };
-  try{const normalized=buildVerdict(pkg,{...v,comments:v.schema==='rig-review-parts-verdict/1'?[]:v.comments},String(record(v.tool)?.version??''),new Date(String(v.updatedAt)));for(const c of normalized.comments)await preparePartsComment(pkg,c,true);return {verdict:normalized,stale:null};}catch{return {verdict:null,stale:'files'};}
+  const date=new Date(String(v.updatedAt));if(!Number.isFinite(date.getTime()))throw new Error('PARTS_VERDICT_INVALID: saved verdict date is invalid');
+  const normalized=buildVerdict(pkg,{...v,comments:v.schema==='rig-review-parts-verdict/1'?[]:v.comments},String(record(v.tool)?.version??''),date);for(const c of normalized.comments)await validateStoredPartsComment(pkg,c);return {verdict:normalized,stale:null};
 }
 
 /** What the page reads: no absolute path leaves the server but the verdict file's name. */

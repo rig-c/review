@@ -3126,4 +3126,10 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Export JSON": "JSON 내보내기",
   "PARTS_CAMERA_RANGE: native zoom outside supported range": "PARTS_CAMERA_RANGE: 네이티브 배율이 지원 범위 밖이에요",
   "Comments on this part: {count}": "이 파트의 코멘트: {count}",
+  "COMMENT_CROP_STATE_UNAVAILABLE: stored crop cannot be read": "COMMENT_CROP_STATE_UNAVAILABLE: 저장된 크롭을 읽을 수 없어요",
+  "PARTS_COMMENT_NATIVE_CROP_TAMPERED: native crop differs from bound original": "PARTS_COMMENT_NATIVE_CROP_TAMPERED: 네이티브 크롭이 연결된 원본과 달라요",
+  "PARTS_VERDICT_READ: saved verdict cannot be read": "PARTS_VERDICT_READ: 저장된 판정을 읽을 수 없어요",
+  "PARTS_VERDICT_INVALID: saved verdict is not valid JSON": "PARTS_VERDICT_INVALID: 저장된 판정이 올바른 JSON이 아니에요",
+  "PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid": "PARTS_VERDICT_INVALID: 저장된 판정의 스키마나 원본 연결이 잘못됐어요",
+  "PARTS_VERDICT_INVALID: saved verdict date is invalid": "PARTS_VERDICT_INVALID: 저장된 판정의 날짜가 잘못됐어요",
 };

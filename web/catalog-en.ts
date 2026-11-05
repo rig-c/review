@@ -3126,4 +3126,10 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Export JSON": "Export JSON",
   "PARTS_CAMERA_RANGE: native zoom outside supported range": "PARTS_CAMERA_RANGE: native zoom outside supported range",
   "Comments on this part: {count}": "Comments on this part: {count}",
+  "COMMENT_CROP_STATE_UNAVAILABLE: stored crop cannot be read": "COMMENT_CROP_STATE_UNAVAILABLE: stored crop cannot be read",
+  "PARTS_COMMENT_NATIVE_CROP_TAMPERED: native crop differs from bound original": "PARTS_COMMENT_NATIVE_CROP_TAMPERED: native crop differs from bound original",
+  "PARTS_VERDICT_READ: saved verdict cannot be read": "PARTS_VERDICT_READ: saved verdict cannot be read",
+  "PARTS_VERDICT_INVALID: saved verdict is not valid JSON": "PARTS_VERDICT_INVALID: saved verdict is not valid JSON",
+  "PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid": "PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid",
+  "PARTS_VERDICT_INVALID: saved verdict date is invalid": "PARTS_VERDICT_INVALID: saved verdict date is invalid",
 };
