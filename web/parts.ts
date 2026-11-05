@@ -268,7 +268,7 @@ function renderList(): void {
     li.append(button);
     if(data.mode==='parts'){
       const label=document.createElement('label'),visible=document.createElement('input');visible.type='checkbox';visible.checked=!state.hidden.has(item.name);visible.dataset.pvVisible=item.name;visible.setAttribute('aria-label',t('Show {name} in assembly',{name:item.name}));
-      visible.onchange=()=>{if(visible.checked)state.hidden.delete(item.name);else state.hidden.add(item.name);void paint();};label.append(visible,t('Visible'));li.append(label);
+      visible.onchange=()=>{if(visible.checked)state.hidden.delete(item.name);else state.hidden.add(item.name);void paint();};label.append(visible);li.append(label);
     }
     return li;
   }));
@@ -338,6 +338,30 @@ function updateEntry(change: Partial<{ outcome: Outcome; note: string }>): void 
   renderList();
 }
 
+/** Explicit approval only: refuse before changing any pending entry when a flag remains. */
+async function approveAll(): Promise<void> {
+  if (stageEmbedded || !state.data) return;
+  const entries = state.data.items.map(item => state.verdict.get(item.name));
+  if (entries.some(entry => entry?.outcome === 'flagged' || entry?.mesh?.outcome === 'flagged')) {
+    const status = $('pv-save-status');
+    status.textContent = t('PARTS_APPROVE_ALL_FLAGGED: resolve flagged part and mesh outcomes before approving all.');
+    status.dataset.result = 'refused';
+    return;
+  }
+  for (const item of state.data.items) {
+    const entry = state.verdict.get(item.name) ?? { outcome: 'pending' as Outcome, note: '' };
+    if (entry.outcome === 'pending') entry.outcome = 'clean';
+    if (item.mesh) {
+      entry.mesh ??= { outcome: 'pending', note: '' };
+      if (entry.mesh.outcome === 'pending') entry.mesh.outcome = 'clean';
+    }
+    state.verdict.set(item.name, entry);
+  }
+  $<HTMLSelectElement>('pv-overall').value = 'approved';
+  renderList(); renderVerdict(); renderMesh();
+  await save();
+}
+
 async function save(): Promise<void> {
   if(stageEmbedded)return;
   const status = $('pv-save-status');
@@ -359,6 +383,7 @@ async function boot(): Promise<void> {
     header.hidden=true;status.classList.add('pv-embedded-status');header.after(status);
     document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;
     document.querySelector<HTMLElement>('.pv-verdict')!.hidden=true;
+    const approveButton=$<HTMLButtonElement>('pv-approve-all');approveButton.disabled=true;
     const saveButton=$<HTMLButtonElement>('pv-save');saveButton.disabled=true;saveButton.title=t('Embedded atlas inspection is read-only. Use the parts command for a separate sign-off.');
   }
   window.addEventListener('message',event=>{if(event.source!==parent||event.origin!==location.origin||event.data?.type!=='review-stage-language'||!['en','ko'].includes(event.data.language))return;setLinkLanguage(null);setLanguagePreference(event.data.language);});
@@ -391,6 +416,7 @@ async function boot(): Promise<void> {
   for (const r of document.querySelectorAll<HTMLInputElement>('input[data-pv-outcome]')) r.onchange = () => { if (r.checked) updateEntry({ outcome: r.value as Outcome }); };
   $<HTMLTextAreaElement>('pv-note').oninput = e => updateEntry({ note: (e.target as HTMLTextAreaElement).value });
   $('pv-save').onclick = () => { void save(); };
+  $('pv-approve-all').onclick = () => approveAll();
   for(const format of ['json','issue'])$('pv-export-'+format).onclick=async()=>{const res=await fetch(access.route('/api/parts/export?format='+format),{headers:access.headers()});const value=await res.text();if(!res.ok){$('pv-save-status').textContent=value;return;}const url=URL.createObjectURL(new Blob([value],{type:format==='json'?'application/json':'text/markdown'})),a=document.createElement('a');a.href=url;a.download=format==='json'?'parts-review-export.json':'parts-review-export.md';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
   onLanguageChange(() => { if (state.data) select(state.selected); });
   if (data.items.length) select(0);

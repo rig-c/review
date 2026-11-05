@@ -32,6 +32,8 @@ is written), `--painting <png>` (the original painting), `--format json|issue` (
   region's own view keeps 4 page pixels around its box (dashed) so bleed is visible. Clicking a region opens it.
 - **Producer flags**, read from the files rig-parts writes and shown on the part they name. None is re-measured here. Each reads as one labelled line (an opening's parts, animation, frame and cells; a seam pair's pixel counts; a gate's name, status and readings), with the producer's object verbatim under a collapsed **Producer line**.
 
+The [23-part EN/KO comparison](https://github.com/rig-c/review/tree/main/tests/fixtures/parts-approve-all-evidence) records the same 1600×1100 initial view against installed 1.8.0: row height 49.375 → 26.1875 px, with all 23 after rows on one line (`tests/parts-approve-all-browser.ts`).
+
 ### Producer row groups
 
 The sidebar counts **only mesh-report flags and explicit part findings**. A check row counts only
@@ -91,6 +93,8 @@ or an approval decision. Changing the check document still invalidates an offere
 The occlusion-coverage report (rig-c/parts#998) is not read yet; the footprint toggle stands without it.
 
 ## The sign-off
+
+**Approve all** marks every pending part and available mesh clean, then saves an explicit approved sign-off. It preserves notes and existing clean outcomes; any flagged part or mesh refuses with `PARTS_APPROVE_ALL_FLAGGED` before changes are made. Individual approval remains available. `tests/parts-approve-all.test.ts` exercises the page action and unchanged verdict guard; `tests/parts-approve-all-browser.ts` checks the real save and refusal flows.
 
 Each item is **pending**, **clean** or **flagged** with a note (a note is optional on clean). **Save sign-off**
 writes `parts-review.json` beside `parts.json` (atlas mode: beside the model), or to `--verdict`:
@@ -308,8 +312,8 @@ A downstream create consumer must support verdict/2 before a review release can 
 
 **Assembled** toggles the existing rig/reference pair from the selected part to the declared
 `rig_size` canvas. Parts draw back to front in package order at their exact fractional rig-pixel
-placements. **Visible** beside each part controls assembly visibility only; the verdict remains
-per part. A tap selects the frontmost visible part with nonzero native source alpha, including
+placements. The checkbox beside each part controls assembly visibility only; the verdict remains
+per part. List rows occupy one line, with full part names available to assistive technology and on hover, separate source counts and the outcome badge. The former **Visible / 표시** caption is removed; the checkbox retains its per-part accessible name (`tests/parts-approve-all.test.ts`, with full-list geometry in `tests/parts-approve-all-browser.ts`). A tap selects the frontmost visible part with nonzero native source alpha, including
 through transparent holes; drags remain camera gestures. The selected part's alpha edge is a
 separate outline, outside the comparison raster. Background, alpha-only, Fit, 1:1 and the shared
 camera controls remain available. `tests/parts-assembly.test.ts` guards fractional placement,
