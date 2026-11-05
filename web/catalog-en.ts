@@ -6,6 +6,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Draft rig · structure evidence only": "Draft rig · structure evidence only",
   "Mesh parameters": "Mesh parameters",
   "Correction-record export unavailable: waiting for the shared correction contract.": "Correction-record export unavailable: waiting for the shared correction contract.",
+  "REBUILD_PART_NOT_CONTOUR: {0}": "REBUILD_PART_NOT_CONTOUR: {0}",
+  "STAGE_DRAFT_NO_MESH: this part has no mesh attachment; direct correction is unavailable.": "STAGE_DRAFT_NO_MESH: this part has no mesh attachment; direct correction is unavailable.",
   "STAGE_DRAFT_UNAVAILABLE: no producer-compatible draft is supplied.": "STAGE_DRAFT_UNAVAILABLE: no producer-compatible draft is supplied.",
   "STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.": "STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.",
   "STAGE_DRAFT_STALE: the requested revision is pending or no longer applied.": "STAGE_DRAFT_STALE: the requested revision is pending or no longer applied.",

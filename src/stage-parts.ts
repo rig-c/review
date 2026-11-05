@@ -37,14 +37,14 @@ export function stagePartsRoutes(packages:{single:ReviewPackage}|{a:ReviewPackag
       const pkg=await loadPartsView(p.handoff!.parts!,{rig,meshReport:join(applied?.spec??p.handoff!.rig!,'mesh_report.json')});
       const mappings=await draftMappings(model,rig,pkg);
       await assertReviewUnchanged(p);await assertPartsUnchanged(pkg);
-      return {pkg,metadata:{label:'Draft rig · structure evidence only',buildId:build,inspectionSourceHash:p.sourceHash,mappings,evidence:applied?.evidence??null}};
+      return {pkg,metadata:mappings.length?{label:'Draft rig · structure evidence only',buildId:build,inspectionSourceHash:p.sourceHash,mappings,evidence:applied?.evidence??null}:null};
      })();corrections.set(build,promise);
     }
     const {pkg,metadata}=await promise;
     // Every image is served against the same full pinned draft, including geometry and flags.
     await assertReviewUnchanged(p);await assertPartsUnchanged(pkg);
     if(kind){const file=servedImage(pkg,kind,Number(index));if(!file)return Response.json({error:'PARTS_IMAGE_UNAVAILABLE'},{status:404,headers});const pinned=pkg.files.find(f=>f.abs===file)!;return serveReference(req,file,pinned.sha256,headers);}
-    return Response.json({...partsViewJson(pkg,{verdict:null,stale:null}),readOnly:true,inspectionSourceHash:p.sourceHash,draft:metadata},{headers});
+    return Response.json({...partsViewJson(pkg,{verdict:null,stale:null}),readOnly:true,inspectionSourceHash:p.sourceHash,...(metadata?{draft:metadata}:{draftUnavailable:stageDraftRefusals.STAGE_DRAFT_NO_MESH})},{headers});
    }
    let promise=loaded.get(key);
    const initializing=!promise;
@@ -69,6 +69,7 @@ export type DraftReader=(id:string)=>Promise<DraftSnapshot>;
 export const stageDraftRefusals:Record<string,string>={
  STAGE_DRAFT_GEOMETRY_UNSUPPORTED:'STAGE_DRAFT_GEOMETRY_UNSUPPORTED: raw indexed vertex geometry is unavailable in this draft connection.',
  STAGE_DRAFT_UNAVAILABLE:'STAGE_DRAFT_UNAVAILABLE: no producer-compatible draft is supplied.',
+ STAGE_DRAFT_NO_MESH:'STAGE_DRAFT_NO_MESH: this part has no mesh attachment; direct correction is unavailable.',
  STAGE_DRAFT_MISMATCH:'STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.',
  STAGE_DRAFT_STALE:'STAGE_DRAFT_STALE: the requested revision is pending or no longer applied.',
  STAGE_DRAFT_CHANGED:'STAGE_DRAFT_CHANGED: scratch inputs changed after Apply.',
@@ -95,7 +96,6 @@ async function draftMappings(modelPath:string,rigPath:string,pkg:PartsViewPackag
   if(candidates.length!==1)throw new Error('STAGE_DRAFT_MISMATCH');
   mappings.push(candidates[0]!);
  }
- if(!mappings.length)throw new Error('STAGE_DRAFT_UNAVAILABLE');
  return mappings;
 }
 

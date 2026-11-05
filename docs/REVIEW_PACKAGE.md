@@ -836,6 +836,11 @@ routes use the same binding. The closed `X-Review-Stage-Build` read header is
 The managed front forwards it only for these single-inspection read routes.
 Without a separated draft, the existing inspected atlas remains read-only and
 names direct-correction absence. Compare stays read-only and side-closed.
+Region-only handoff drafts retain the separated-parts view and image inspection;
+`STAGE_DRAFT_NO_MESH` names unavailable direct correction on a part without a
+mesh attachment, in English and Korean. It does not turn inspection into an error.
+Opening another chest-capable part rebinds both region rows and landmarks to
+that part's config and kept-region seed. Reopening the same part keeps its edits.
 
 The draft response adds `draft:{label,buildId,inspectionSourceHash,mappings,evidence}`
 to the existing parts-view response; `mappings` names the exact part,
@@ -855,10 +860,20 @@ producers run the existing check operation on scratch. A new null, failed or
 nonzero-exit mesh check refuses `EDIT_SUBMIT_UNCHECKED`. Historical `/1` and `/3`
 without those optional fields stay readable and never gain synthesized checks.
 A newly requested Apply does not reuse a historical result lacking check data.
-New made-mesh submissions with an input pin must exactly equal their applied
-record and revalidate its scratch/compiled bytes (`STAGE_DRAFT_STALE` or
-`STAGE_DRAFT_CHANGED` otherwise). Retained predecessor evidence is checked
-against its own revision, never the latest revision by name.
+Each settled Apply writes a server-owned, SHA-256-verified evidence seal under
+`<state>/applied-evidence/<package hash>/<build id>.json`, bounded to 1 MiB per
+build. It holds the exact applied record, package binding, operation, input and
+output digests, model hash and check summary. Seals remain for the state directory's
+lifetime, independently of the eight-build Undo cache; pending strip candidates
+are not applied and receive no seal. Add feedback remains local until Submit.
+New made-mesh submissions with an input pin must exactly equal their sealed
+record, including after Undo, eviction or a server restart. Missing, damaged or
+different evidence refuses `STAGE_DRAFT_STALE`; client fields or `result.json`
+alone are never evidence. Historical feedback describes the recorded Apply,
+not the currently displayed revision. Stage reads separately re-hash the live
+revision and compiled files, require the settled current Apply and successful
+check, and retain `STAGE_DRAFT_CHANGED`/pending refusals. A seal never authorizes
+drawing an evicted, changed or pending build as current.
 
 Original `sourceHash`, `reviewedSource`, session/draft scope and parts verdict/2
 remain unchanged. The scratch parts digest changes with its geometry; original

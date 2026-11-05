@@ -632,7 +632,8 @@ async function namedDirDigest(root: string, dir: string, field: string): Promise
 /** #115: what a build-routed patch runs with — the handoff's painting and runs, absolute; never from the client. */
 /** Inputs and produced spec share a revision pin; result.json and compiled outputs have their separate records. */
 async function stageInputDigest(dir:string,spec:string):Promise<string>{
- const rows:[string,string][]=[['revision',await namedDirDigest(dir,spec,'scratch revision')]];
+ const root=await realpath(dir);
+ const rows:[string,string][]=[['revision',await namedDirDigest(root,spec,'scratch revision')]];
  for(const name of ['mesh.json','mesh-edit.json','config.json','patch.json','environment.json']){
   if(await exists(join(dir,name))){const path=await safeFile(await realpath(dir),name);rows.push([name,sha256(await readFile(path))]);}
  }
@@ -899,21 +900,37 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     } else throw new RebuildError('STAGE_DRAFT_OPERATION', 'only applied mesh corrections belong to this inspection');
     return {id, spec: current.spec, model: join(current.build, 'skeleton.model.json'), evidence: snapshot(job)};
   }
-  /** New made-mesh claims revalidate the original recorded revision on submit, including a retained predecessor. */
+  /** Historical evidence is independent of the disposable Undo cache; current-stage reads still use stageDraft. */
+  const evidenceBinding={id:p.manifest.id,revision:p.manifest.revision,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource};
+  const evidencePath=(id:string)=>join(options.stateDir,'applied-evidence',p.sourceHash,id+'.json');
+  const evidenceLimit=1024*1024;
+  async function sealApplied(job:RebuildJob|PatchJob|DeltaJob|RetargetJob|AnimationJob):Promise<void>{
+    if(!job.build||job.status!=='built')throw new RebuildError('STAGE_DRAFT_STALE','only a settled applied build can be sealed');
+    const dir=rebuildDir(options.stateDir,p.sourceHash,job.id);
+    const spec=join(dir,!('kind' in job)?'revision':job.op==='build'||(job.kind==='patch'&&job.cloth?.route==='build')?'out/rig':'rig');
+    const inputHash='stageInputHash' in job?job.stageInputHash??null:null;
+    if(inputHash&&await stageInputDigest(dir,spec)!==inputHash)throw new RebuildError('STAGE_DRAFT_CHANGED','scratch inputs differ before evidence settlement');
+    const now=await hashBuild(join(dir,'build'),job.id,assetPrefix);
+    if(!isDeepStrictEqual(now.files,job.build.files))throw new RebuildError('STAGE_DRAFT_CHANGED','compiled files differ before evidence settlement');
+    const body={schema:'rig-review-applied-evidence/1',binding:evidenceBinding,buildId:job.id,operation:!('kind' in job)?'regions':job.kind==='patch'?job.op:job.kind,inputHash,outputHash:sha256(JSON.stringify(now.files)),modelHash:now.modelHash,check:'check' in job?job.check:null,record:recordFor(job as AnyJobView)};
+    const text=JSON.stringify({body,digest:sha256(JSON.stringify(body))})+'\n';
+    if(Buffer.byteLength(text)>evidenceLimit)throw new RebuildError('STAGE_DRAFT_STALE','applied evidence exceeds the bounded record size');
+    const file=evidencePath(job.id);await mkdir(dirname(file),{recursive:true,mode:0o700});
+    const temporary=file+'.'+crypto.randomUUID()+'.tmp';
+    try{await writeFile(temporary,text,{mode:0o600,flag:'wx'});await rename(temporary,file);}finally{await rm(temporary,{force:true});}
+  }
+  /** A made claim names historical settled evidence, not a claim that its build is still current or on disk. */
   async function validateApplied(value:unknown):Promise<void>{
     if(!value||typeof value!=='object'||!('stageInputHash' in value))return;
     const v=value as Record<string,unknown>;
     if(!['rig-review-applied/1','rig-review-applied/3'].includes(String(v.schema))&&!(v.schema==='rig-review-applied/2'&&v.op==='remesh'))return;
     if(typeof v.buildId!=='string'||!/^[a-f0-9]{64}$/.test(v.buildId))throw new RebuildError('STAGE_DRAFT_STALE','invalid applied identity');
-    const id=v.buildId;
-    let dir=rebuildDir(options.stateDir,p.sourceHash,id);
-    if(!await exists(dir))dir=join(keptRoot(options.stateDir,p.sourceHash),id);
-    const job=jobs.get(id)??JSON.parse(await readFile(join(dir,'result.json'),'utf8').catch(()=>{throw new RebuildError('STAGE_DRAFT_STALE','the recorded revision is unavailable');}));
-    if(job.status!=='built'||!job.build||!isDeepStrictEqual(recordFor(job as AnyJobView),v))throw new RebuildError('STAGE_DRAFT_STALE','the made claim differs from its applied record');
-    const spec=join(dir,!('kind' in job)?'revision':'rig');
-    if(await stageInputDigest(dir,spec)!==job.stageInputHash)throw new RebuildError('STAGE_DRAFT_CHANGED','scratch inputs differ from Apply');
-    const now=await hashBuild(join(dir,'build'),id,assetPrefix);
-    if(!isDeepStrictEqual(now.files,job.build.files))throw new RebuildError('STAGE_DRAFT_CHANGED','compiled files differ from Apply');
+    try{
+      const file=await safeFile(await realpath(dirname(evidencePath(v.buildId))),v.buildId+'.json');
+      if((await lstat(file)).size>evidenceLimit)throw new Error('oversized evidence');
+      const seal=JSON.parse(await readFile(file,'utf8')),body=seal.body;
+      if(!body||body.schema!=='rig-review-applied-evidence/1'||seal.digest!==sha256(JSON.stringify(body))||!isDeepStrictEqual(body.binding,evidenceBinding)||body.buildId!==v.buildId||body.inputHash!==v.stageInputHash||body.modelHash!==v.modelHash||!isDeepStrictEqual(body.check,v.check)||!isDeepStrictEqual(body.record,v))throw new Error('evidence mismatch');
+    }catch{throw new RebuildError('STAGE_DRAFT_STALE','the made claim has no matching sealed applied evidence');}
   }
   /**
    * #166: the line refusing an undo's re-run whose build is not the one its record names (the first differing file by
@@ -952,6 +969,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     else if (stack.at(-1)?.id !== job.id && job.build) stack.push({ id: job.id, body: bodies.get(job.id) ?? null, configHash: job.request.configHash, producer: { ...job.producer }, compiler: { ...job.compiler }, files: { ...job.build.files }, modelHash: job.build.modelHash, job: snapshot(job) });
     latestId = stack.at(-1)?.id ?? null;
     await arrange();
+    // Seal only after settlement succeeds; pending candidates and failed settlement have no authority.
+    await sealApplied(job);
   }
   async function arrange(): Promise<void> {
     const root = rebuildRoot(options.stateDir, p.sourceHash), kept = keptRoot(options.stateDir, p.sourceHash);

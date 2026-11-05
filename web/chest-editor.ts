@@ -214,6 +214,8 @@ export interface ChestEditor {active:()=>boolean;flashing:(side:BustSide)=>boole
  mode:()=>ChestMode;
  /** The landmark fields read as the producer's entry and derivation (Landmarks mode). */
  landmarks:()=>LandmarkRead;
+ /** A different part has its own designation and no pointer gesture from the previous part. */
+ rebind:()=>void;
  /** The point the next click places, for the overlay's highlight. */
  armed:()=>LandmarkKey|null;
  /** Hold a status line (null clears it); `log` is the producer's latest lines. */
@@ -365,6 +367,7 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
  sync();
  return {
   active:()=>active,flashing:side=>flash.has(side),sync,mode,landmarks:()=>readLandmarks(read),armed:()=>{const l=readLandmarks(read);return nextLandmark(armed,'missing' in l?l.missing:[]);},
+  rebind:()=>{for(const pointer of [drag?.pointer,landmarkDrag?.pointer])if(pointer!==undefined&&host.pane.hasPointerCapture(pointer))host.pane.releasePointerCapture(pointer);drag=null;landmarkDrag=null;armed=null;notice=null;log.textContent='';log.hidden=true;delete host.pane.dataset.chestHover;sync();},
   notify:(text,error=false,lines)=>{notice=text===null?null:{text,error};if(lines){log.textContent=lines.join('\n');log.hidden=!lines.length;log.scrollTop=log.scrollHeight;}sync();},
   noticeText:()=>notice?.text??'',
   rebuildState:(state)=>{busy=state.busy;apply.setAttribute('aria-busy',String(busy));reset.disabled=busy||!state.applied;gate();},

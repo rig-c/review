@@ -6,6 +6,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Draft rig · structure evidence only": "초안 리그 · 구조 확인 근거만 제공",
   "Mesh parameters": "메시 매개변수",
   "Correction-record export unavailable: waiting for the shared correction contract.": "보정 기록 내보내기 불가: 공통 보정 계약을 기다리고 있어요.",
+  "REBUILD_PART_NOT_CONTOUR: {0}": "REBUILD_PART_NOT_CONTOUR: {0} (컨투어 메시가 아님)",
+  "STAGE_DRAFT_NO_MESH: this part has no mesh attachment; direct correction is unavailable.": "STAGE_DRAFT_NO_MESH: 이 파츠에는 메시 부착물이 없어 직접 수정할 수 없습니다.",
   "STAGE_DRAFT_UNAVAILABLE: no producer-compatible draft is supplied.": "STAGE_DRAFT_UNAVAILABLE: 제작기와 호환되는 초안이 제공되지 않았어요.",
   "STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.": "STAGE_DRAFT_MISMATCH: 분리 파츠와 초안 메시의 식별 정보가 달라요.",
   "STAGE_DRAFT_STALE: the requested revision is pending or no longer applied.": "STAGE_DRAFT_STALE: 요청한 리비전이 대기 중이거나 더 이상 적용 상태가 아니에요.",

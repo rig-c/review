@@ -132,6 +132,14 @@ function chestPart(status:Pick<RebuildStatusView,'parts'|'contour'>){
  const bust=(p:{name:string})=>{const c=status.contour[p.name]?.contour;return !!c&&typeof c==='object'&&'bust' in (c as Record<string,unknown>);};
  return status.parts.find(bust)??status.parts.find(p=>p.regions.some(readable))??status.parts.find(p=>p.regions.length);
 }
+/** The fields and kept-region seed must use the same explicit part as Stage 1's correction request. */
+export function chestStatusForPart<T extends Pick<RebuildStatusView,'parts'|'contour'>>(status:T,part:string|null):T {
+ return part?{...status,parts:status.parts.filter(p=>p.name===part),contour:Object.fromEntries(Object.entries(status.contour).filter(([name])=>name===part))}:status;
+}
+export function chestPartFields(status:Pick<RebuildStatusView,'parts'|'contour'>,part:string):{fields:Record<string,string>;mode:'circles'|'landmarks';seed:ChestSeed} {
+ const scoped=chestStatusForPart(status,part),empty=()=>undefined,landmarks=seedLandmarks(scoped,empty);
+ return {fields:{...(seedFields(scoped,empty)??{}),...(landmarks??{})},mode:landmarks?'landmarks':'circles',seed:chestSeed(scoped)};
+}
 /** The config's regions as chest rows (at most two), read by measurement, never by point count. Pure: Apply recomputes it. */
 export function chestSeed(status:Pick<RebuildStatusView,'parts'|'contour'>):ChestSeed {
  const part=chestPart(status),entry=part?status.contour[part.name]:undefined;if(!part||!entry)return {part:null,rows:[],refusals:[],kept:[]};

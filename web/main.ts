@@ -18,7 +18,7 @@ import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from 
 import {densityField,densityPath} from '../src/density-strip.ts';
 import {assertMeshPatch,countsText,meshApplyOutcome,meshPatchOps,setEntryValue,triangleAgreement,type MeshEntry} from '../src/mesh-entry.ts';
 import {worstLine} from '../src/readings.ts';
-import {chestOverlayPolygons,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
+import {chestOverlayPolygons,chestInputIds,chestRegionRows,chestRowId,evaluateChestForm} from './chest-regions-tool.ts';
 import {bindChestEditor,canvasToCrop,bustLabel,bustSides,chestPoseOffset,LANDMARKS,landmarkInputId,posedChestMapping,rowShape,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
@@ -29,7 +29,7 @@ import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
 import {animationAppliedRecord,animationOutcomeLine,retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type AnimationJobView,type AnimationRequestBody,type AnimationSourceOp,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {historyRow,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {historyRow,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -1426,13 +1426,30 @@ async function applyMeshDelta(doc:MeshEditDocument,line:(text:string)=>void):Pro
  }catch(error){const text=`REBUILD_FAILED: ${errorText(error)}`;message(text,true);return {built:false,text,error:true};}
  finally{rebuildBusy=false;rebuildState();}
 }
+let chestFormPart:string|null=null;
+/** Rebinding is explicit: defaults and both modes belong to the new part, while reopening the same part keeps edits. */
+function rebindChestPart(status:RebuildStatusView,part:string):void {
+ if(chestFormPart===part)return;
+ const next=chestPartFields(status,part);
+ const ids=[...chestInputIds,...LANDMARKS.flatMap(({key})=>['x','y'].map(axis=>`lm-${key}-${axis}`)),'lm-alpha','lm-clearance','lm-bone_r','lm-bone_l','bust-mode'];
+ for(const id of ids){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;
+  if(node instanceof HTMLInputElement){node.value=node.defaultValue;node.checked=node.defaultChecked;}
+  else if(node instanceof HTMLTextAreaElement)node.value=node.defaultValue;
+  else node.value=[...node.options].find(option=>option.defaultSelected)?.value??node.options[0]?.value??'';
+ }
+ for(const [id,value] of Object.entries(next.fields)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}
+ input('bust-mode').value=next.mode;chestFormPart=part;chestEditor?.rebind();
+ const refusal=next.seed.refusals.join(' · ');chestEditor?.notify(refusal||null,!!refusal,next.seed.refusals);
+ el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));
+}
 /** `GET /api/rebuild`: whether Apply can run, and the producer config's regions to start an untouched editor from. */
 async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  try{rebuildStatus=await api<RebuildStatusView>('/api/rebuild');}catch(error){rebuildStatus=null;const reason=`REBUILD_STATUS_UNAVAILABLE: ${errorText(error)}`;chestEditor?.notify(reason,true);animationPanel?.loadSource(null,reason);return null;}
  const seed={...(seedFields(rebuildStatus,chestField)??{}),...(seedLandmarks(rebuildStatus,chestField)??{})};
  if(Object.keys(seed).length){for(const [id,value] of Object.entries(seed)){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;if(!node)continue;if(node instanceof HTMLInputElement&&node.type==='checkbox')node.checked=value==='true';else node.value=value;}el('chest-regions').dispatchEvent(new Event('input',{bubbles:true}));}
  // #315: a config polygon the editor cannot read as an ellipse is named, never shown as an empty row.
- const refused=chestSeed(rebuildStatus).refusals;if(refused.length)chestEditor?.notify(refused.join(' · '),true,refused);
+ chestFormPart??=chestSeed(rebuildStatus).part;
+ const refused=chestSeed(chestStatusForPart(rebuildStatus,chestFormPart)).refusals;if(refused.length)chestEditor?.notify(refused.join(' · '),true,refused);
  // #342: a rig with no contour mesh disables the chest tools before use and says why in words about the rig.
  const noContour=noContourReason(rebuildStatus);chestEditor?.unavailable(noContour?.text??null);
  if(noContour)chestEditor?.notify(noContour.text,false,noContour.lines);else if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,!rebuildStatus.viewOnly);
@@ -1468,7 +1485,7 @@ function chestPartForNotice():string|null {
   const read=chestEditor.landmarks();
   return 'derived' in read?pickBustPart(rebuildStatus,read.derived.regions):pickBustPart(rebuildStatus,[]);
  }
- const designated=designatedRegions(chestField,rebuildStatus?chestSeed(rebuildStatus):null);
+ const designated=designatedRegions(chestField,rebuildStatus?chestSeed(chestStatusForPart(rebuildStatus,chestFormPart)):null);
  return 'regions' in designated?pickPart(rebuildStatus,designated.regions):rebuildStatus.parts.length===1?rebuildStatus.parts[0]!.name:null;
 }
 function renderDropNotices():void {
@@ -1604,7 +1621,7 @@ async function applyRebuild():Promise<void> {
  if(rebuildBusy)return;
  if(readOnly){chestEditor?.notify(readOnly,true);return;}
  const loadedStatus=rebuildStatus??await loadRebuildStatus();
- const status=loadedStatus&&stageCorrectionPart?{...loadedStatus,parts:loadedStatus.parts.filter(p=>p.name===stageCorrectionPart),contour:Object.fromEntries(Object.entries(loadedStatus.contour).filter(([name])=>name===stageCorrectionPart))}:loadedStatus;
+ const status=loadedStatus?chestStatusForPart(loadedStatus,stageCorrectionPart):loadedStatus;
  if(stageCorrectionPart&&parts?.value()?.slot!==stageCorrectionPart){chestEditor?.notify('STAGE_DRAFT_MISMATCH',true);return;}
  if(!status||!status.available||!status.inputs){const noContour=status?noContourReason(status):null,reason=noContour?.text??status?.reason??'REBUILD_STATUS_UNAVAILABLE';chestEditor?.notify(reason,!noContour,noContour?.lines??[reason]);message(reason,!noContour);return;}
  let part:string,body:RebuildRequestBody;const lines:string[]=[];
@@ -2311,6 +2328,10 @@ async function openStageCorrection(request:{part:string;sourceHash:string;buildI
  if(!mapping||data.sourceHash!==request.sourceHash||data.draft?.buildId!==buildId||mapping.slot!==mapping.part)throw new Error('STAGE_DRAFT_MISMATCH');
  pause();seek(0);showInspector('rig');parts?.select({side:'single',slot:mapping.slot,mode:'context'});meshPanel?.select(mapping.part);
  const identity=parts?.value()?.identity;if(!identity||identity.skin!==mapping.skin||identity.attachment!==mapping.attachment)throw new Error('STAGE_DRAFT_MISMATCH');
+ const status=rebuildStatus??await loadRebuildStatus();
+ if(!status)throw new Error('REBUILD_STATUS_UNAVAILABLE');
+ if(request.instrument==='chest'&&!status.parts.some(part=>part.name===mapping.part))throw new Error(`REBUILD_PART_NOT_CONTOUR: ${mapping.part}`);
+ rebindChestPart(status,mapping.part);
  stageCorrectionPart=mapping.part;
  let label=document.getElementById('stage-draft-label');if(!label){label=document.createElement('p');label.id='stage-draft-label';label.setAttribute('data-i18n','Draft rig · structure evidence only');document.querySelector('.viewbar')?.prepend(label);}label.textContent=tr('Draft rig · structure evidence only');
  inspectorBlocks?.select('rig',request.instrument==='chest'?'chest-regions':request.instrument==='mesh'?'mesh-panel':'modeling-tools');

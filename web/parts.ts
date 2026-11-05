@@ -470,7 +470,7 @@ if (typeof document !== 'undefined' && document.getElementById('parts-app')) voi
 function renderCorrections():void {
  let host=document.getElementById('pv-corrections');if(!host){host=document.createElement('section');host.id='pv-corrections';document.querySelector('.pv-toolbar')!.after(host);}
  host.replaceChildren();const data=state.data,item=data?.items[state.selected],mapping=data?.draft?.mappings.find(m=>m.part===item?.name);
- const label=document.createElement('p');label.textContent=t(data?.draft?.label??data?.draftUnavailable??'STAGE_DRAFT_UNAVAILABLE: no producer-compatible draft is supplied.');host.append(label);
+ const label=document.createElement('p');label.textContent=t(data?.draft&&!mapping?'STAGE_DRAFT_NO_MESH: this part has no mesh attachment; direct correction is unavailable.':data?.draft?.label??data?.draftUnavailable??'STAGE_DRAFT_UNAVAILABLE: no producer-compatible draft is supplied.');host.append(label);
  if(!mapping||!data?.draft)return;
  label.textContent+=` · ${mapping.part} · ${mapping.skin}/${mapping.slot}/${mapping.attachment} · v ${mapping.vertices} t ${mapping.triangles} · ${data.draft.buildId}`;
  for(const [instrument,title,operation]of [['chest','Chest regions',t('rig-parts remesh --mesh')],['mesh','Mesh parameters',t('rig-parts remesh --mesh')],['delta','Edit Mesh',t('rig-parts remesh --delta')]]){

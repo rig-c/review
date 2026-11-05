@@ -6,6 +6,39 @@ import {writeMeshPackage} from './helpers/parts-mesh-package.ts';
 import {loadReview} from '../src/manifest.ts';
 import {loadPartsView,saveVerdict,readVerdict} from '../src/parts-view.ts';
 import {stagePartsRoutes} from '../src/stage-parts.ts';
+import {chestPartFields,chestSeed,chestStatusForPart,seedFields,seedLandmarks,designatedRegions} from '../web/rebuild-client.ts';
+
+test('two chest parts keep independent row, landmark and kept-region seeds; the global seed is a negative control',()=>{
+ const region=(name:string,cx:number)=>({name,shape:'circle' as const,cx,cy:40,r:10,bone:name,spacing:4,band:2});
+ const bust=(n:number)=>({apex_r:[n,50],apex_l:[n+50,50],cleavage:[n+25,40],bone_r:'r'+n,bone_l:'l'+n,alpha:.6,clearance:3});
+ const a=[region('A',20),region('A2',60),region('keptA',90)],b=[region('B',120)];
+ const status={parts:[{name:'A',regions:a},{name:'B',regions:b}],contour:{A:{r:15,contour:{regions:a,bust:bust(20)}},B:{contour:{regions:b,bust:bust(120)}}}};
+ expect(seedFields(status,()=>undefined)?.['chest-0-cx']).toBe('20');
+ const scoped=chestStatusForPart(status,'B'),next=chestPartFields(status,'B');
+ expect(next.fields['chest-0-cx']).toBe('120');expect(next.fields['chest-1-cx']).toBeUndefined();expect(next.fields['chest-r']).toBeUndefined();
+ expect(next.fields['lm-apex_r-x']).toBe('120');expect(next.fields['lm-bone_r']).toBe('r120');expect(next.seed.kept).toEqual([]);
+ expect(seedLandmarks(status,()=>undefined)?.['lm-apex_r-x']).toBe('20');
+ const read=(id:string)=>({value:next.fields[id]??''});
+ expect(designatedRegions(read,chestSeed(scoped))).toEqual({regions:b});
+ expect(chestPartFields({...status,contour:{...status.contour,B:{contour:{regions:b}}}},'B').mode).toBe('circles');
+ expect(chestPartFields(status,'B').mode).toBe('landmarks');
+});
+
+test('a region-only handoff keeps separated-parts inspection and image routes with only correction unavailable',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'stage1-regions-'));
+ try{
+  const parts=join(root,'out');await mkdir(parts);await writeMeshPackage(parts);await mkdir(join(parts,'rig'));await cp(join(parts,'images'),join(parts,'rig/images'),{recursive:true});
+  const attachments=Object.fromEntries(['gap','covered'].map(name=>[name,{[name]:{type:'region',image:name+'.png',width:64,height:64}}]));
+  await writeFile(join(parts,'rig/rig.json'),JSON.stringify({images:'images',skins:{default:attachments}}));await writeFile(join(parts,'rig/motion.json'),'{}');await writeFile(join(parts,'rig/mesh_report.json'),'[]');
+  await writeFile(join(root,'config.json'),JSON.stringify({regions:{gap:'root',covered:'root'}}));
+  await writeFile(join(root,'draft.model.json'),JSON.stringify({spec:'rigc-compiled/3',bones:[],slots:[],skins:[{name:'default',attachments}],pages:[]}));
+  await writeFile(join(root,'review.json'),JSON.stringify({schema:'rig-review/1',id:'regions',title:'Region draft',revision:'1',model:'draft.model.json',producer:{config:'config.json',parts:'out'}}));
+  const route=stagePartsRoutes({single:await loadReview(root)}),response=await route(new Request('http://127.0.0.1/api/stage-parts')),data=await response!.json();
+  expect(response!.status).toBe(200);expect(data.mode).toBe('parts');expect(data.items.map((item:any)=>item.name)).toEqual(['gap','covered']);expect(data.items.every((item:any)=>!item.mesh)).toBe(true);
+  expect(data.draft).toBeUndefined();expect(data.draftUnavailable).toStartWith('STAGE_DRAFT_NO_MESH');expect(data.verdict).toBeNull();
+  const image=await route(new Request('http://127.0.0.1/api/stage-parts/image/0'));expect(image!.status).toBe(200);expect((await image!.arrayBuffer()).byteLength).toBeGreaterThan(0);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
 
 /** Independent controls: original vs changed selected UV, wrong raster bytes, stale original, Reset. */
 test('stage 1 follows the explicitly drawn draft, refuses wrong bytes, and Reset restores original geometry',async()=>{
