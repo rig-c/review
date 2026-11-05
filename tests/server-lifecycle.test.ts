@@ -927,6 +927,7 @@ test('a front stays up while its control directory has a live record and exits w
     'versions.ts',
     'handoff.ts',
     'state-dir.ts',
+    'stage-parts.ts',
   ]) {
     await writeFile(join(plantedDir, name), `export * from ${JSON.stringify(join(import.meta.dir, '../src', name))};\n`);
   }
