@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.10.0](https://github.com/rig-c/review/compare/v1.9.0...v1.10.0) (2026-11-05)
+
+
+### Features
+
+* **parts:** compare the declared rig-space painting ([#412](https://github.com/rig-c/review/issues/412)) ([01def15](https://github.com/rig-c/review/commit/01def158d6536d80910e49f011d3f33b64f607d4))
+* **stage1:** connect source-bound draft mesh corrections ([#403](https://github.com/rig-c/review/issues/403)) ([60865d1](https://github.com/rig-c/review/commit/60865d128c457d707926747df9e484b7869a8677))
+
+
+### Bug Fixes
+
+* persist bounded inspection time after idle loops ([#404](https://github.com/rig-c/review/issues/404)) ([63756b3](https://github.com/rig-c/review/commit/63756b3fd463f4cd72aa556d7c383c6caca7e2a2))
+* retain inspection phase in animation panels and rebuilds ([#409](https://github.com/rig-c/review/issues/409)) ([677064e](https://github.com/rig-c/review/commit/677064ec5655da92460d0f1b4f88e3eadc87b8d2))
+* retain unclassified carried producer reports ([#401](https://github.com/rig-c/review/issues/401)) ([fc96810](https://github.com/rig-c/review/commit/fc96810b78484f9eab928d98434173b09c45f2f7))
+
 ## [1.9.0](https://github.com/rig-c/review/compare/v1.8.0...v1.9.0) (2026-11-05)
 
 
