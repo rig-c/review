@@ -99,7 +99,7 @@ test('#348: the verdict records parts.json and every PNG relative to the verdict
   const ok = buildVerdict(pkg, { status: 'approved', parts: { ...clean(names), front: { outcome: 'clean', note: 'edge checked at 4x' } } }, '9.9.9');
   expect(ok.parts.front).toEqual({ outcome: 'clean', note: 'edge checked at 4x', flags: ['check:seam_pairs[0]'] });
   expect(ok.parts.back_defect!.flags).toEqual(['faint:0']);
-  expect(ok.schema).toBe('rig-review-parts-verdict/1');
+  expect(ok.schema).toBe('rig-review-parts-verdict/2');
   expect(ok.mode).toBe('parts');
 });
 

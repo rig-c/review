@@ -177,3 +177,21 @@ changes retain both the original workspace and each side's atlas controller in
 the document. Language changes update retained frames without reloading them.
 The parts-only entry retains its part selection, geometry and pending verdict
 while visiting unavailable stages; it needs no compiled model.
+
+
+## Shared parts viewport and comments
+
+Standalone pre-rig parts and the compiled Stage 1 atlas frame mount `viewport-pair.ts`'s actual
+rig/reference DOM. `parts-viewport-provider.ts` supplies raster geometry and painting-crop pixels;
+`viewport-controller.ts` and `view-controls.ts` own camera writes, cursor zoom, pan, fit, resize
+and the common two-pointer pinch. Parts' native scale policy is separate from the unchanged
+compiled-rig Fit-relative policy. `parts-render.ts` remains the source of part, footprint and
+mesh painting. The optional protected `--painting` input supplies the real reference crop;
+advanced painting comparisons remain a later feature.
+
+`stage-comments.ts` shares capture/composer/pins with a codec boundary for the closed parts
+variant; no rig frame/slot/model placeholder is manufactured. `viewport-capture.ts` supplies
+displayed viewport pixels, while `parts-comment-crops.ts` cuts native RGBA evidence on the server
+from the bound original PNG. `comment-crops.ts` supplies their common PNG validator and immutable
+store. [Parts view](PARTS_VIEW.md#pointed-parts-comments) names the format, refusals and the unit
+and real-browser instruments that verify these behaviors.

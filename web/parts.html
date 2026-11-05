@@ -9,12 +9,14 @@
   <main class="pv-stage">
    <div class="pv-toolbar" role="toolbar" aria-label="View">
     <label class="pv-field">Background <select id="pv-bg" data-pv-bg><option value="green">Green</option><option value="magenta">Magenta</option><option value="black">Black</option><option value="white">White</option><option value="checker">Checker</option></select></label>
-    <span class="pv-group" role="group" aria-label="Zoom"><button type="button" data-pv-zoom="1" aria-pressed="true">1×</button><button type="button" data-pv-zoom="2" aria-pressed="false">2×</button><button type="button" data-pv-zoom="4" aria-pressed="false">4×</button></span>
+    <span class="pv-group" role="group" aria-label="Zoom"><button type="button" id="zoom-out">−</button><span id="zoom-value">1:1</span><button type="button" id="zoom-in">+</button><button type="button" id="fit">Fit</button><button type="button" id="native-one" aria-pressed="true">1:1</button></span>
+    <label class="pv-field"><input id="camera-sync" type="checkbox">Sync cameras</label>
+    <button type="button" id="stage-comment" aria-pressed="false" aria-controls="stage-comment-list">Comment · C (0)</button>
     <label class="pv-field"><input type="checkbox" id="pv-alpha" data-pv-alpha> Alpha only</label>
     <label class="pv-field" id="pv-footprint-control"><input type="checkbox" id="pv-footprints" data-pv-footprints> Footprints of parts in front</label>
     <span class="pv-group" role="group" aria-label="Atlas view" id="pv-atlas-switch" hidden><button type="button" data-pv-view="item" aria-pressed="true">Region</button><button type="button" data-pv-view="page" aria-pressed="false">Pages</button></span>
    </div>
-   <div class="pv-canvas-wrap"><div class="pv-canvas-box" id="pv-canvas-box"><canvas id="pv-canvas" data-pv-canvas width="1" height="1"></canvas><div id="pv-overlay" class="pv-overlay"></div></div></div>
+   <div class="pv-canvas-wrap" id="stage-layout"><div class="pv-canvas-box" id="pv-canvas-box"><canvas id="pv-canvas" data-pv-canvas width="1" height="1"></canvas><div id="pv-overlay" class="pv-overlay"></div></div></div>
    <p id="pv-caption" class="pv-subtle"></p>
   </main>
   <aside class="pv-side">
@@ -25,9 +27,11 @@
      <label><input type="radio" name="pv-outcome" value="clean" data-pv-outcome> Clean</label>
      <label><input type="radio" name="pv-outcome" value="flagged" data-pv-outcome> Flagged</label>
     </div>
+    <p id="pv-comment-count" role="status"></p>
     <label class="pv-label" for="pv-note">Note</label><textarea id="pv-note" rows="4" maxlength="10000"></textarea>
     <label class="pv-label" for="pv-overall">Sign-off</label><select id="pv-overall"><option value="pending">Pending</option><option value="approved">Approved</option><option value="changes-requested">Changes requested</option></select>
     <button id="pv-save" type="button" class="pv-primary">Save sign-off</button>
+    <span><button id="pv-export-json" type="button">Export JSON</button><button id="pv-export-issue" type="button">Export issue</button></span>
     <p id="pv-save-status" class="pv-subtle" role="status"></p>
    </section>
   </aside>

@@ -11,13 +11,22 @@ export interface CommentPose {
  turn:unknown;sourceHash:string;modelHash:string|null;referenceHash:string|null;referenceId:string|null;frameReason?:string;
  capture?:ViewportCapture;rig:string;side?:'a'|'b';posed?:PosedFrame;assets?:ModelAssets;media?:HTMLVideoElement|HTMLImageElement;
 }
-interface Host {
+export interface CommentRow {id:string;summary:string;context?:unknown}
+export interface CommentUiPose extends Partial<Omit<CommentPose,'mode'>> {mode:string;camera:ControlNumericCamera}
+export interface CommentUiMark extends Partial<Omit<StageComment,'mode'>> {mode:string;viewport:StageComment['viewport'];screen:MarkRegion;world:MarkRegion;crop:StageComment['crop'];bookmark:unknown}
+/** A codec supplies only source-specific evidence; gesture, composer, pins and pixel capture stay here. */
+export interface CommentCodec<Row extends CommentRow,Pose extends CommentUiPose> {
+ read:(row:Row)=>CommentUiMark|null;signature:(pose:Pose)=>unknown;matches:(mark:CommentUiMark,pose:Pose,row:Row)=>boolean;
+ label:(row:Row,mark:CommentUiMark)=>string;
+ create:(pose:Pose,view:StageComment['viewport'],screen:MarkRegion,crop:StageComment['crop'],bookmark:unknown,summary:string)=>Promise<Row>;
+}
+interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=CommentPose> {
  toolbar:HTMLElement;viewports:Partial<Record<StageComment['viewport'],HTMLElement>>;
- pose:(view:StageComment['viewport'])=>CommentPose|null;pause:()=>Promise<void>;
+ pose:(view:StageComment['viewport'])=>Pose|null;pause:()=>Promise<void>;
  bookmark:()=>unknown;restore:(bookmark:unknown,timeOnly?:boolean)=>Promise<void>;
- feedback:()=>Feedback[];locked:(id:string)=>boolean;
- add:(feedback:Feedback,side?:'a'|'b')=>void;changed:()=>void;error:(message:string)=>void;
- refusal?:()=>string|null;blocked:()=>boolean;shortcutBlocked?:()=>boolean;
+ feedback:()=>Row[];locked:(id:string)=>boolean;
+ add:(feedback:Row,side?:'a'|'b')=>void;changed:()=>void;error:(message:string)=>void;
+ refusal?:()=>string|null;blocked:()=>boolean;shortcutBlocked?:()=>boolean;codec?:CommentCodec<Row,Pose>;
 }
 const markOf=(f:Feedback):StageComment|null=>{try{const c=f.context as Record<string,unknown>|undefined;return c?.comment?parseStageComment(c.comment):null;}catch{return null;}};
 const copy=<T>(v:T):T=>JSON.parse(JSON.stringify(v));
@@ -26,7 +35,7 @@ const toEn=(s:string)=>typeof i18nTr==='function'?i18nTr(s,'en'):s;
 const onLang=(fn:()=>void)=>typeof i18nOnChange==='function'?i18nOnChange(fn):()=>{};
 const curLang=()=>typeof i18nLang==='function'?i18nLang():'en';
 function rectElement(r:MarkRegion):HTMLDivElement{const node=document.createElement('div');node.className='stage-comment-region';Object.assign(node.style,{left:r.x+'px',top:r.y+'px',width:Math.max(2,r.width)+'px',height:Math.max(2,r.height)+'px'});return node;}
-async function crop(pose:CommentPose,r:MarkRegion):Promise<StageComment['crop']>{
+async function crop(pose:CommentUiPose,r:MarkRegion):Promise<StageComment['crop']>{
  if(!pose.capture)throw new Error(t('COMMENT_CROP_UNAVAILABLE: viewport pixel source unavailable'));
  const camera=pose.camera,padding=24,rawLeft=Math.max(0,Math.floor(r.x-padding)),rawTop=Math.max(0,Math.floor(r.y-padding)),pane=pose.capture.pane,bounds=pane.getBoundingClientRect(),ratio=globalThis.devicePixelRatio||1;
  const {x:left,y:top,width,height}=pixelAlignedCrop({x:rawLeft,y:rawTop,width:Math.min(camera.viewport.width-rawLeft,Math.ceil(r.width+2*padding)),height:Math.min(camera.viewport.height-rawTop,Math.ceil(r.height+2*padding))},{x:bounds.left+pane.clientLeft,y:bounds.top+pane.clientTop},ratio);
@@ -50,7 +59,8 @@ async function crop(pose:CommentPose,r:MarkRegion):Promise<StageComment['crop']>
  const bytes=Uint8Array.from(atob(png.split(',')[1]!),c=>c.charCodeAt(0)),sha256=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(n=>n.toString(16).padStart(2,'0')).join('');
  return {path:`comment-crops/${sha256}.png`,sha256,png,width:out.width,height:out.height};
 }
-export function bindStageComments(host:Host):{refresh:()=>void;dispose:()=>void;active:()=>boolean;draft:()=>boolean}{
+export function bindStageComments<Row extends CommentRow=Feedback,Pose extends CommentUiPose=CommentPose>(host:Host<Row,Pose>):{refresh:()=>void;dispose:()=>void;active:()=>boolean;draft:()=>boolean}{
+ const readMark=(row:Row):CommentUiMark|null=>host.codec?host.codec.read(row):markOf(row as unknown as Feedback);
  const toggle=document.getElementById('stage-comment') as HTMLButtonElement;Object.assign(toggle.style,{whiteSpace:'nowrap',flex:'none'});
  const list=document.createElement('section');list.id='stage-comment-list';list.className='stage-comment-list stage-comment-ui';list.setAttribute('aria-label',t('Stage comments'));list.hidden=true;
  // An absolute overlay is not stage chrome: workspace measures stack children
@@ -61,12 +71,12 @@ export function bindStageComments(host:Host):{refresh:()=>void;dispose:()=>void;
  const refusalNote=document.createElement('small');refusalNote.id='stage-comment-refusal';refusalNote.setAttribute('role','status');refusalNote.hidden=true;Object.assign(refusalNote.style,{position:'absolute',width:'1px',height:'1px',overflow:'hidden',clipPath:'inset(50%)',whiteSpace:'nowrap'});toggle.after(refusalNote);toggle.setAttribute('aria-describedby',refusalNote.id);toggle.setAttribute('aria-controls',list.id);toggle.setAttribute('aria-expanded','false');const originalTitle=toEn(toggle.title);
  const updateRefusal=()=>{const raw=host.refusal?.()??null,reason=raw?t(raw):null,prev=refusalNote.textContent||'',nextTitle=reason??t(originalTitle);toggle.disabled=false;if(toggle.title!==nextTitle)toggle.title=nextTitle;if(refusalNote.title!==(reason??''))refusalNote.title=reason??'';if(refusalNote.textContent!==(reason??''))refusalNote.textContent=reason??'';refusalNote.hidden=!reason;if(!list.hidden&&(reason??'')!==prev)renderList();return reason;};
  const layers=new Map<StageComment['viewport'],HTMLDivElement>();for(const [key,pane]of Object.entries(host.viewports)){const layer=document.createElement('div');layer.className='stage-comment-layer';pane!.append(layer);layers.set(key as StageComment['viewport'],layer);}
- let enabled=false,disposed=false,pending:{view:StageComment['viewport'];start:MarkPoint;end:MarkPoint;mode:StageComment['mode'];id:number;interaction:number;settled:Promise<void>}|null=null,composer:HTMLFormElement|null=null,composerReadOnly=false,syncComposerLang:(()=>void)|null=null,draftMark:{view:StageComment['viewport'];mode:StageComment['mode'];screen:MarkRegion}|null=null,busy=false,last='',raf=0,interaction=0;
+ let enabled=false,disposed=false,pending:{view:StageComment['viewport'];start:MarkPoint;end:MarkPoint;mode:string;id:number;interaction:number;settled:Promise<void>}|null=null,composer:HTMLFormElement|null=null,composerReadOnly=false,syncComposerLang:(()=>void)|null=null,draftMark:{view:StageComment['viewport'];mode:string;screen:MarkRegion}|null=null,busy=false,last='',raf=0,interaction=0;
  const setCapture=(value:boolean)=>{enabled=value;toggle.setAttribute('aria-pressed',String(value||!list.hidden));for(const pane of Object.values(host.viewports))pane!.classList.toggle('stage-comment-mode',value);};
  const cancel=()=>{++interaction;const previous=pending;pending=null;if(previous){const pane=host.viewports[previous.view];if(pane?.hasPointerCapture(previous.id))pane.releasePointerCapture(previous.id);}composer?.remove();composer=null;composerReadOnly=false;syncComposerLang=null;draftMark=null;last='';};
  const assertCapture=()=>{const reason=updateRefusal();if(reason){cancel();setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
  const assertEdit=()=>{const reason=updateRefusal();if(reason){setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
- const jump=async(f:Feedback):Promise<boolean>=>{const mark=markOf(f);if(!mark)return false;const panes=Object.values(host.viewports).map(p=>({pane:p!,visibility:p!.style.visibility}));try{cancel();for(const {pane}of panes)pane.style.visibility='hidden';await host.restore(mark.bookmark,mark.frame===null);last='';return true;}catch(error){host.error(String(error));return false;}finally{for(const {pane,visibility}of panes)pane.style.visibility=visibility;}};
+ const jump=async(f:Row):Promise<boolean>=>{const mark=readMark(f);if(!mark)return false;const panes=Object.values(host.viewports).map(p=>({pane:p!,visibility:p!.style.visibility}));try{cancel();for(const {pane}of panes)pane.style.visibility='hidden';await host.restore(mark.bookmark,mark.frame===null);last='';return true;}catch(error){host.error(String(error));return false;}finally{for(const {pane,visibility}of panes)pane.style.visibility=visibility;}};
  const setOpen=(value:boolean)=>{
   if(!value){cancel();list.hidden=true;toggle.setAttribute('aria-expanded','false');setCapture(false);return;}
   if(host.shortcutBlocked?.()){host.error(t('COMMENT_BUSY: close the active editor or wait for the inspection to settle'));return;}
@@ -76,15 +86,15 @@ export function bindStageComments(host:Host):{refresh:()=>void;dispose:()=>void;
   if(reason){setCapture(false);host.error(reason);return;}
   setCapture(true);
  };
- const openComment=async(f:Feedback)=>{const mark=markOf(f);if(!mark)return;if(list.hidden)setOpen(true);if(list.hidden)return;if(await jump(f)){const reason=updateRefusal();setCapture(!reason&&!host.blocked());openComposer(mark.viewport,mark.screen,f,host.pose(mark.viewport)?.mode??mark.mode);}};
- const renderList=()=>{placeList();list.setAttribute('aria-label',t('Stage comments'));list.replaceChildren();const title=document.createElement('strong');title.textContent=t('Comments');list.append(title);const rawReason=host.refusal?.()??null,reason=rawReason?t(rawReason):null;if(reason){const note=document.createElement('small');note.className='stage-comment-refusal-note';note.title=reason;note.textContent=reason;Object.assign(note.style,{display:'block',marginTop:'4px',maxWidth:'100%',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'});list.append(note);}const all=host.feedback().filter(f=>markOf(f));toggle.textContent=t(`Comment · C (${all.length})`);if(!all.length){const empty=document.createElement('p');empty.textContent=t(reason?'Read only · Escape closes':'Mark a point or region, then type. Enter saves · Escape cancels.');list.append(empty);}for(const [i,f]of all.entries()){
-  const mark=markOf(f)!,row=document.createElement('div');row.className='stage-comment-item';row.dataset.commentId=f.id;
-  const go=document.createElement('button');go.type='button';go.className='stage-comment-summary';go.textContent=`${i+1} · ${mark.mode.toUpperCase()} · ${mark.viewport.toUpperCase()} · ${mark.frame?`F${mark.frame.index} (${mark.frame.basis})`:t(feedbackTimingLabel(f))} · ${f.summary}`;go.onclick=()=>openComment(f);row.append(go);
+ const openComment=async(f:Row)=>{const mark=readMark(f);if(!mark)return;if(list.hidden)setOpen(true);if(list.hidden)return;if(await jump(f)){const reason=updateRefusal();setCapture(!reason&&!host.blocked());openComposer(mark.viewport,mark.screen,f,host.pose(mark.viewport)?.mode??mark.mode);}};
+ const renderList=()=>{placeList();list.setAttribute('aria-label',t('Stage comments'));list.replaceChildren();const title=document.createElement('strong');title.textContent=t('Comments');list.append(title);const rawReason=host.refusal?.()??null,reason=rawReason?t(rawReason):null;if(reason){const note=document.createElement('small');note.className='stage-comment-refusal-note';note.title=reason;note.textContent=reason;Object.assign(note.style,{display:'block',marginTop:'4px',maxWidth:'100%',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'});list.append(note);}const all=host.feedback().filter(f=>readMark(f));toggle.textContent=t(`Comment · C (${all.length})`);if(!all.length){const empty=document.createElement('p');empty.textContent=t(reason?'Read only · Escape closes':'Mark a point or region, then type. Enter saves · Escape cancels.');list.append(empty);}for(const [i,f]of all.entries()){
+  const mark=readMark(f)!,row=document.createElement('div');row.className='stage-comment-item';row.dataset.commentId=f.id;
+  const go=document.createElement('button');go.type='button';go.className='stage-comment-summary';go.textContent=host.codec?`${i+1} · ${host.codec.label(f,mark)}`:`${i+1} · ${mark.mode.toUpperCase()} · ${mark.viewport.toUpperCase()} · ${mark.frame?`F${mark.frame.index} (${mark.frame.basis})`:t(feedbackTimingLabel(f as unknown as Feedback))} · ${f.summary}`;go.onclick=()=>openComment(f);row.append(go);
   if(host.locked(f.id)){const submitted=document.createElement('span');submitted.textContent=t('Submitted');row.append(submitted);}
   list.append(row);
  }};
  const refresh=()=>{last='';renderList();};
- const openComposer=(view:StageComment['viewport'],screen:MarkRegion,existing?:Feedback,placementMode=host.pose(view)?.mode)=>{
+ const openComposer=(view:StageComment['viewport'],screen:MarkRegion,existing?:Row,placementMode=host.pose(view)?.mode)=>{
   if(!existing){try{assertCapture();}catch{return;}}
   const currentMode=host.pose(view)?.mode;
   if(!placementMode||currentMode&&currentMode!==placementMode){cancel();return;}
@@ -109,12 +119,12 @@ export function bindStageComments(host:Host):{refresh:()=>void;dispose:()=>void;
    form.append(remove);
   }
   // Capture all view context now; camera or dial changes while typing cannot rebind the mark.
-  const pose=host.pose(view),bookmark=copy(host.bookmark()),turn=pose?copy(pose.turn):null;
+  const pose=host.pose(view),bookmark=copy(host.bookmark()),turn=pose?.turn===undefined?null:copy(pose.turn);
   if(initialRefusal){errorSource=toEn(host.refusal?.()??initialRefusal);error.textContent=t(errorSource);host.error(t(errorSource));}
-  else if(!existing&&pose&&!pose.frame&&!pose.timeBasis){errorSource=toEn(pose.frameReason??'COMMENT_FRAME_UNAVAILABLE: no explicit frame index');error.textContent=t(errorSource);}
+  else if(!host.codec&&!existing&&pose&&!pose.frame&&!pose.timeBasis){errorSource=toEn(pose.frameReason??'COMMENT_FRAME_UNAVAILABLE: no explicit frame index');error.textContent=t(errorSource);}
   syncComposerLang=()=>{if(composer!==form)return;form.setAttribute('aria-label',t('Comment composer'));field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');hint.textContent=t(composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels');if(removeBtn)removeBtn.textContent=t('Delete');if(errorSource)error.textContent=t(errorSource);};
   pane.append(form);place();
-  const previous=existing?markOf(existing):null;
+  const previous=existing?readMark(existing):null;
   const prepared=previous?Promise.resolve(previous.crop):pose?crop(pose,screen):Promise.reject(new Error('COMMENT_VIEW_UNAVAILABLE'));
   prepared.catch(()=>{});
   form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();setOpen(false);pane.focus();}};
@@ -124,14 +134,17 @@ export function bindStageComments(host:Host):{refresh:()=>void;dispose:()=>void;
     busy=true;field.disabled=true;
     existing.summary=summary;
    }else{
-    assertCapture();if(!pose||!pose.frame&&!pose.timeBasis)throw new Error(t(pose?.frameReason??'COMMENT_FRAME_UNAVAILABLE: provide an explicit producer clock or a decoded reference frame index'));
+    assertCapture();if(!pose||!host.codec&&!pose.frame&&!pose.timeBasis)throw new Error(t(pose?.frameReason??'COMMENT_FRAME_UNAVAILABLE: provide an explicit producer clock or a decoded reference frame index'));
     busy=true;field.disabled=true;
-    const world=region(unprojectMark(screen,pose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},pose.camera));
-    const slots=pose.posed?drawnSlots(pose.posed,world):[];
-    const comment:StageComment={schema:'rig-review-comment/1',mode:placementMode,viewport:view,frame:pose.frame,...(pose.timeBasis?{timeBasis:pose.timeBasis}:{}),time:pose.time,animation:pose.animation,sourceHash:pose.sourceHash,modelHash:pose.modelHash,referenceHash:pose.referenceHash,referenceId:pose.referenceId,camera:copy(pose.camera),screen,world,slots,crop:await prepared,bookmark};
+    if(host.codec){const row=await host.codec.create(pose,view,screen,await prepared,bookmark,summary);assertCapture();if(disposed||generation!==interaction||host.pose(view)?.mode!==placementMode)return;host.add(row);}
+    else {const rigPose=pose as unknown as CommentPose;
+    const world=region(unprojectMark(screen,rigPose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},rigPose.camera));
+    const slots=rigPose.posed?drawnSlots(rigPose.posed,world):[];
+    const comment:StageComment={schema:'rig-review-comment/1',mode:placementMode as StageComment['mode'],viewport:view,frame:rigPose.frame,...(rigPose.timeBasis?{timeBasis:rigPose.timeBasis}:{}),time:rigPose.time,animation:rigPose.animation,sourceHash:rigPose.sourceHash,modelHash:rigPose.modelHash,referenceHash:rigPose.referenceHash,referenceId:rigPose.referenceId,camera:copy(rigPose.camera),screen,world,slots,crop:await prepared,bookmark};
     assertCapture();
     if(disposed||generation!==interaction||host.pose(view)?.mode!==placementMode)return;
-    const n=pose.frame?.index??null;host.add({id:crypto.randomUUID(),frameStart:n,frameEnd:n,target:slots[0]?{kind:'slot',name:slots[0].slot}:{kind:'rig',name:pose.rig},category:'defect',summary,context:{animation:pose.animation,time:pose.time,frame:pose.frame?.basis==='producer'?n:null,...(turn?{turn:turn as any}:{}),interval:n===null?null:{frameStart:n,frameEnd:n,inclusive:true},comment:comment as any}},pose.side);
+    const n=rigPose.frame?.index??null;host.add({id:crypto.randomUUID(),frameStart:n,frameEnd:n,target:slots[0]?{kind:'slot',name:slots[0].slot}:{kind:'rig',name:rigPose.rig},category:'defect',summary,context:{animation:rigPose.animation,time:rigPose.time,frame:rigPose.frame?.basis==='producer'?n:null,...(turn?{turn:turn as any}:{}),interval:n===null?null:{frameStart:n,frameEnd:n,inclusive:true},comment:comment as any} } as unknown as Row,rigPose.side);
+    }
    }
    cancel();host.changed();refresh();
   }catch(e){const msg=e instanceof Error?e.message:String(e);errorSource=toEn(msg);error.textContent=t(errorSource);place();if(locked)host.error(t(errorSource));field.disabled=false;field.focus();}finally{busy=false;}};
@@ -150,14 +163,14 @@ export function bindStageComments(host:Host):{refresh:()=>void;dispose:()=>void;
  const key=(e:KeyboardEvent)=>{if(e.key==='Escape'&&(pending||composer||(enabled||!list.hidden)&&!host.shortcutBlocked?.()&&!textEntryFocused(e.target))){e.preventDefault();setOpen(false);return;}if(e.defaultPrevented||e.repeat||e.ctrlKey||e.metaKey||e.altKey||textEntryFocused(e.target)||host.shortcutBlocked?.())return;if(e.key.toLowerCase()==='c'){e.preventDefault();setOpen(list.hidden);}};
  window.addEventListener('blur',cancel);window.addEventListener('resize',placeList);document.addEventListener('keydown',key);toggle.onclick=()=>setOpen(list.hidden);
  const ro=typeof ResizeObserver==='function'?new ResizeObserver(()=>{if(!disposed&&!list.hidden)placeList();}):null;if(ro){try{ro.observe(host.toolbar);if(workspace)ro.observe(workspace);}catch{}}
- const renderPins=()=>{if(disposed)return;if(!list.hidden)placeList();const refusal=updateRefusal();if(refusal&&(enabled||pending||composer&&!composerReadOnly)){cancel();setCapture(false);host.error(refusal);}const all=host.feedback().map(f=>({f,mark:markOf(f)})).filter(x=>x.mark);
+ const renderPins=()=>{if(disposed)return;if(!list.hidden)placeList();const refusal=updateRefusal();if(refusal&&(enabled||pending||composer&&!composerReadOnly)){cancel();setCapture(false);host.error(refusal);}const all=host.feedback().map(f=>({f,mark:readMark(f)})).filter(x=>x.mark);
  // #356: a pose reads the pane's size (a forced layout after the played frame's writes); with no mark, draft or pending
  // capture there is nothing to place, so this per-frame loop skips it.
  const poses=new Map(all.length||draftMark||pending?[...layers.keys()].map(view=>[view,host.pose(view)]):[]);
  if(draftMark&&poses.get(draftMark.view)?.mode!==draftMark.mode||pending&&poses.get(pending.view)?.mode!==pending.mode)cancel();
- const signature=JSON.stringify([curLang(),refusal,all.map(({f,mark})=>[f.id,f.summary,mark!.mode,mark!.world]),[...poses].map(([view,p])=>[view,p?.mode,p?.animation,p?.frame,p?.timeBasis,p?.time,p?.turn,p?.camera,p?.referenceId,p?.referenceHash]),draftMark]);
+ const signature=JSON.stringify([curLang(),refusal,all.map(({f,mark})=>[f.id,f.summary,mark!.mode,mark!.world]),[...poses].map(([view,p])=>[view,host.codec&&p?host.codec.signature(p):[p?.mode,p?.animation,p?.frame,p?.timeBasis,p?.time,p?.turn,p?.camera,p?.referenceId,p?.referenceHash]]),draftMark]);
  if(signature!==last){last=signature;for(const layer of layers.values())layer.replaceChildren();for(const [i,{f,mark:m}]of all.entries()){
-  const mark=m!,pose=poses.get(mark.viewport),layer=layers.get(mark.viewport);if(refusal||!pose||!layer||pose.mode!==mark.mode||pose.animation!==mark.animation||pose.sourceHash!==mark.sourceHash||pose.modelHash!==mark.modelHash||pose.referenceId!==mark.referenceId||pose.referenceHash!==mark.referenceHash||JSON.stringify(pose.frame)!==JSON.stringify(mark.frame)||JSON.stringify(pose.timeBasis??null)!==JSON.stringify(mark.timeBasis??null)||Math.abs(pose.time-mark.time)>1e-7||JSON.stringify(pose.turn)!==JSON.stringify((f.context as any)?.turn??null))continue;
+  const mark=m!,pose=poses.get(mark.viewport),layer=layers.get(mark.viewport);if(refusal||!pose||!layer||(host.codec?!host.codec.matches(mark,pose,f):pose.mode!==mark.mode||pose.animation!==mark.animation||pose.sourceHash!==mark.sourceHash||pose.modelHash!==mark.modelHash||pose.referenceId!==mark.referenceId||pose.referenceHash!==mark.referenceHash||JSON.stringify(pose.frame)!==JSON.stringify(mark.frame)||JSON.stringify(pose.timeBasis??null)!==JSON.stringify(mark.timeBasis??null)||Math.abs((pose.time??0)-(mark.time??0))>1e-7||JSON.stringify(pose.turn)!==JSON.stringify((f.context as any)?.turn??null)))continue;
   const a=projectMark(mark.world,pose.camera),b=projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera),r=region(a,b),box=rectElement(r),pin=document.createElement('button');pin.type='button';pin.className='stage-comment-pin stage-comment-ui';pin.textContent=String(i+1);pin.setAttribute('aria-label',`${t('Comment {0}:').replace('{0}',String(i+1))} ${f.summary}`);pin.title=f.summary;Object.assign(pin.style,{left:r.x+'px',top:r.y+'px'});pin.onclick=()=>openComment(f);layer.append(box,pin);
  }if(draftMark)layers.get(draftMark.view)?.append(rectElement(draftMark.screen));}};
  const paint=()=>{if(disposed)return;renderPins();raf=requestAnimationFrame(paint);};

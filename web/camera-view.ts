@@ -1,7 +1,7 @@
 /** Fit-relative inspection cameras. Images and world geometry retain their own units. */
 export interface CameraPoint {x:number;y:number}
 export interface PaneCamera {zoom:number;center:CameraPoint|null}
-export interface CameraFrame {space:'image'|'world';center:CameraPoint;baseScale:number;width:number;height:number}
+export interface CameraFrame {space:'image'|'world';center:CameraPoint;baseScale:number;width:number;height:number;fitScale?:number}
 export interface CameraSignature {zoom:number;pan:CameraPoint}
 export const clampZoom=(zoom:number):number=>Math.max(.25,Math.min(8,zoom));
 export function cameraFrame(space:CameraFrame['space'],box:{x:number;y:number;width:number;height:number},width:number,height:number,marginX=0,marginY=0):CameraFrame|null {
@@ -13,20 +13,21 @@ export function cameraSignature(camera:PaneCamera,frame:CameraFrame):CameraSigna
  return {zoom:camera.zoom,pan:{x:(frame.center.x-center.x)*scale/frame.width,y:(frame.space==='world'?center.y-frame.center.y:frame.center.y-center.y)*scale/frame.height}};
 }
 /** Match the closed numeric observation before a candidate can replace a live camera. */
-export function assertCameraView(camera:PaneCamera,frame:CameraFrame):void {
+export function assertCameraView(camera:PaneCamera,frame:CameraFrame,range={min:.25,max:8}):void {
  const center=camera.center??frame.center,scale=frame.baseScale*camera.zoom,width=frame.width/scale,height=frame.height/scale;
  const coordinate=(value:number)=>Number.isFinite(value)&&Math.abs(value)<=Number.MAX_SAFE_INTEGER;
- if(![center.x,center.y,center.x-width/2,center.y-height/2,(frame.center.x-center.x)*scale,(frame.center.y-center.y)*scale].every(coordinate)||![width,height].every(value=>Number.isFinite(value)&&value>0&&value<=Number.MAX_SAFE_INTEGER)||!Number.isFinite(scale)||scale<=0||!Number.isFinite(camera.zoom)||camera.zoom<.25||camera.zoom>8||![frame.width,frame.height].every(value=>Number.isFinite(value)&&value>0&&value<=65536))throw new Error('VIEW_CAMERA_RANGE: derived camera exceeds numeric source-coordinate limits');
+ if(![center.x,center.y,center.x-width/2,center.y-height/2,(frame.center.x-center.x)*scale,(frame.center.y-center.y)*scale].every(coordinate)||![width,height].every(value=>Number.isFinite(value)&&value>0&&value<=Number.MAX_SAFE_INTEGER)||!Number.isFinite(scale)||scale<=0||!Number.isFinite(camera.zoom)||camera.zoom<range.min||camera.zoom>range.max||![frame.width,frame.height].every(value=>Number.isFinite(value)&&value>0&&value<=65536))throw new Error('VIEW_CAMERA_RANGE: derived camera exceeds numeric source-coordinate limits');
 }
-export function cameraFromSignature(value:CameraSignature,frame:CameraFrame):PaneCamera {
- if(![value.zoom,value.pan.x,value.pan.y].every(Number.isFinite)||value.zoom<.25||value.zoom>8)throw new Error('Camera signature requires finite pan and zoom 0.25..8');
+export function cameraFromSignature(value:CameraSignature,frame:CameraFrame,range={min:.25,max:8}):PaneCamera {
+ if(![value.zoom,value.pan.x,value.pan.y].every(Number.isFinite)||value.zoom<range.min||value.zoom>range.max)throw new Error('Camera signature requires finite pan and zoom 0.25..8');
  const scale=frame.baseScale*value.zoom;
  const camera={zoom:value.zoom,center:{x:frame.center.x-value.pan.x*frame.width/scale,y:frame.center.y+(frame.space==='world'?1:-1)*value.pan.y*frame.height/scale}};
- assertCameraView(camera,frame);return camera;
+ assertCameraView(camera,frame,range);return camera;
 }
 /** Zoom preserves the point under the cursor when frame and point are given, or the viewport center otherwise. */
-export function zoomSignature(value:CameraSignature,factor:number,frame?:Pick<CameraFrame,'width'|'height'>|null,point?:CameraPoint|null):CameraSignature {
- const zoom=clampZoom(value.zoom*factor),ratio=zoom/value.zoom;
+export function zoomSignature(value:CameraSignature,factor:number,frame?:Pick<CameraFrame,'width'|'height'>|null,point?:CameraPoint|null,range?:{min:number;max:number}):CameraSignature {
+ const candidate=value.zoom*factor;if(range&&(!Number.isFinite(candidate)||candidate<range.min||candidate>range.max))throw new Error('PARTS_CAMERA_RANGE: native zoom outside supported range');
+ const zoom=range?candidate:clampZoom(candidate),ratio=zoom/value.zoom;
  const ox=frame&&point&&frame.width>0&&Number.isFinite(point.x)?(point.x-frame.width/2)/frame.width*(ratio-1):0;
  const oy=frame&&point&&frame.height>0&&Number.isFinite(point.y)?(point.y-frame.height/2)/frame.height*(ratio-1):0;
  return {zoom,pan:{x:value.pan.x*ratio-ox,y:value.pan.y*ratio-oy}};

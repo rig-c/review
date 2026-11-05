@@ -87,6 +87,11 @@ export interface CdpSession {
   close(): Promise<void>;
 }
 
+export interface InputCdpSession extends CdpSession {
+  mouse(type:'mouseMoved'|'mousePressed'|'mouseReleased'|'mouseWheel',x:number,y:number,deltaY?:number):Promise<void>;
+  touch(type:'touchStart'|'touchMove'|'touchEnd',points:{x:number;y:number;id:number}[]):Promise<void>;
+}
+
 function findBrowserBinary(): string {
   const pwRoot = join(homedir(), '.cache', 'ms-playwright');
   const pwCandidates: string[] = [];
@@ -134,9 +139,9 @@ function findBrowserBinary(): string {
   throw new Error('No headless Chromium/Chrome/Edge binary found');
 }
 
-export async function launchCdpSession(profileDir: string): Promise<CdpSession> {
+export async function launchCdpSession(profileDir: string): Promise<InputCdpSession> {
   const bin = findBrowserBinary();
-  const isHeadlessShell = bin.includes('headless');
+  const isHeadlessShell = bin.includes('headless');let mouseButtons=0;
   const childEnv: Record<string, string | undefined> = {
     ...process.env,
     DBUS_SESSION_BUS_ADDRESS: '/dev/null',
@@ -288,6 +293,8 @@ export async function launchCdpSession(profileDir: string): Promise<CdpSession> 
       }
       return res?.result?.value as T;
     },
+    async mouse(type,x,y,deltaY=0){if(type==='mousePressed')mouseButtons=1;if(type==='mouseReleased')mouseButtons=0;await send('Input.dispatchMouseEvent',{type,x,y,buttons:mouseButtons,...(type==='mouseWheel'?{deltaX:0,deltaY}:type==='mouseMoved'?{}:{button:'left',clickCount:1})},sessionId);},
+    async touch(type,points){await send('Input.dispatchTouchEvent',{type,touchPoints:points},sessionId);},
     async screenshot(clip?: { x: number; y: number; width: number; height: number }): Promise<Buffer> {
       const res = await send(
         'Page.captureScreenshot',

@@ -3,7 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { appRoot, buildWeb } from './build.ts';
 import { accessGate } from './open-protocol.ts';
 import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
-import { partsViewJson, readVerdict, saveVerdict, servedImage, type PartsViewPackage } from './parts-view.ts';
+import {preparePartsComment} from './parts-comment-crops.ts';
+import {serveReference} from './reference.ts';
+import { partsViewJson, exportPartsVerdict, assertPartsUnchanged, readVerdict, saveVerdict, servedImage, type PartsViewPackage } from './parts-view.ts';
 
 const headers = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers });
@@ -52,18 +54,21 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
       }
       live.onRequestStart(url.pathname);
       try {
-        if (url.pathname === '/api/parts' && req.method === 'GET') return json(partsViewJson(pkg, await readVerdict(pkg)));
+        if (url.pathname === '/api/parts' && req.method === 'GET'){await assertPartsUnchanged(pkg);return json(partsViewJson(pkg,await readVerdict(pkg)));}
+        if(url.pathname==='/api/parts/comment'&&req.method==='POST'){if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);await assertPartsUnchanged(pkg);return json({comment:await preparePartsComment(pkg,await bodyJson(req))});}
+        if(url.pathname==='/api/parts/export'&&req.method==='GET'){const saved=await readVerdict(pkg);if(!saved.verdict)return json({error:'PARTS_VERDICT_UNAVAILABLE: save a verdict first'},409);return new Response(exportPartsVerdict(saved.verdict,url.searchParams.get('format')==='issue'?'issue':'json'),{headers:{...headers,'Content-Type':url.searchParams.get('format')==='issue'?'text/markdown':'application/json'}});}
         if (url.pathname === '/api/parts/verdict' && req.method === 'POST') {
           if (req.headers.get('origin') !== origin) return json({ error: 'Same-origin Origin required' }, 403);
           saving = true;
           try { return json({ verdict: await saveVerdict(pkg, await bodyJson(req)) }); } finally { saving = false; }
         }
+        if(url.pathname==='/api/parts/painting'&&req.method==='GET'){if(!pkg.painting)return json({error:'PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting'},404);return serveReference(req,pkg.painting.abs,pkg.painting.sha256,headers);}
         const image = /^\/api\/parts\/(image|page)\/(\d+)$/.exec(url.pathname);
         if (image && (req.method === 'GET' || req.method === 'HEAD')) {
           const path = servedImage(pkg, image[1] as 'image' | 'page', Number(image[2]));
           if (!path) return json({ error: 'Not found' }, 404);
-          const file = Bun.file(path);
-          return new Response(req.method === 'HEAD' ? null : file, { headers: { ...headers, 'Content-Security-Policy': "default-src 'none'; sandbox", 'Content-Type': file.type || 'application/octet-stream' } });
+          const pinned=pkg.files.find(f=>f.abs===path);if(!pinned)return json({error:'PARTS_IMAGE_UNBOUND'},409);return serveReference(req,path,pinned.sha256,headers);
+
         }
         if (url.pathname === '/parts.js') return new Response(req.method === 'HEAD' ? null : bundle, { headers: { ...headers, 'Content-Type': 'text/javascript' } });
         if (url.pathname === '/' || url.pathname === '/parts.html') return new Response(req.method === 'HEAD' ? null : await readFile(appRoot + 'web/parts.html'), { headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' } });
