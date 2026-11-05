@@ -26,7 +26,7 @@ test('#385 missing, partial and invalid row metadata is visible unclassified, ne
  const good={row_scope:'part',row_kind:'finding',row_subjects:['front']};
  const bad=[{part:'front',status:'FAIL'},{...good,row_subjects:[]},{...good,row_kind:'wat'},{...good,row_scope:'pair',row_subjects:['front','front']},{...good,row_subjects:'front'}];
  const rows=reader.checkReadings({ROOT:{status:'FAIL',rows:[good,...bad]}},names);
- expect(rows).toHaveLength(6);expect(rows.slice(1).every(r=>labels.readingGroup(r)==='unclassified'&&r.item==='')).toBe(true);
+ expect(rows).toHaveLength(7);expect(rows.filter(r=>r.kind==='check'&&r.path!=='ROOT.rows[0]').every(r=>labels.readingGroup(r)==='unclassified'&&r.item==='')).toBe(true);
  expect(rows.filter(labels.countedFlag)).toHaveLength(1);
  const legacy={ROOT:{status:'FAIL',rows:[{part:'front',reason:'looks like a finding'}]}};
  expect(reader.checkReadings(legacy,names)).toMatchObject([{item:'front',classification:'unclassified',entry:legacy.ROOT.rows[0]}]);
@@ -87,4 +87,41 @@ test('#385 actual renderFlags/renderList callers collapse nonflags and count onl
  state.data.readings=reader.checkReadings({FAIL:{status:'FAIL',rows:[{part:'front'}]}},names);run();expect(badges().filter(Boolean)).toEqual([]);
  expect($('pv-flag-sources').textContent).toContain('unclassified');
  expect(descend($('pv-flags')).some(n=>n.dataset.pvRoot==='FAIL')).toBe(true);
+});
+
+test('#385 adopted P1: any unheld subject demotes the entire tuple without partial attribution',()=>{
+ const rows=reader.checkReadings({ROOT:{status:'PASS',rows:[
+  {row_scope:'part',row_kind:'finding',row_subjects:['ghost']},
+  {row_scope:'pair',row_kind:'finding',row_subjects:['ghost','other']},
+  {row_scope:'pair',row_kind:'finding',row_subjects:['front','ghost']},
+  {row_scope:'part',row_kind:'evidence',row_subjects:['ghost']},
+ ]}},names);
+ expect(rows).toHaveLength(4);
+ expect(rows.map(r=>[r.item,labels.readingGroup(r)])).toEqual(Array.from({length:4},()=>['','unclassified']));
+ expect(rows.filter(labels.countedFlag)).toHaveLength(0);
+});
+
+test('#385 adopted P1: real BREATH_VISIBLE FAIL/WARN without tuple remains visible and unclassified',async()=>{
+ const bytes=readFileSync(new URL('./fixtures/parts-check-385-real.json',import.meta.url)),original=JSON.parse(bytes.toString());
+ const held=new Set(['back','front']);
+ for(const status of ['FAIL','WARN']){
+  const doc=structuredClone(original);doc.BREATH_VISIBLE.status=status;
+  expect(reader.checkFlags(doc,held).filter(r=>r.kind==='check'&&r.root==='BREATH_VISIBLE').map(r=>r.item)).toEqual(['back','front']);
+  const rows=reader.checkReadings(doc,held),gate=rows.filter(r=>r.kind==='check'&&r.path==='BREATH_VISIBLE');
+  expect(gate).toHaveLength(1);expect(gate[0]).toMatchObject({item:'',classification:'unclassified',root:'BREATH_VISIBLE',status,entry:doc.BREATH_VISIBLE});
+  expect(gate.filter(labels.countedFlag)).toHaveLength(0);
+  // Execute the actual panel caller: it must render the global unclassified root on either held part.
+  const source=await readFile('web/parts.ts','utf8'),code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(source.indexOf('function renderFlags()'),source.indexOf('function renderList()')));
+  const {t}=await import('../web/i18n.ts');
+  for(const name of held){
+   const nodes=new Map<string,Node>(),$=(id:string)=>{if(!nodes.has(id))nodes.set(id,new Node('ul'));return nodes.get(id)!;};
+   const run=new Function('scope',`with(scope){${code};return renderFlags;}`)({state:{selected:0,data:{items:[{name}],flags:reader.checkFlags(doc,held),readings:rows,flagSources:['check.json'],flagMissing:['mesh_report.json']}},$,document:{createElement:(tag:string)=>new Node(tag)},...labels,t});
+   run();
+   const group=descend($('pv-flags')).find(n=>n.dataset.pvCategory==='unclassified');
+   expect(group).toBeDefined();expect(descend(group!).some(n=>n.dataset.pvRoot==='BREATH_VISIBLE')).toBe(true);
+   expect(descend(group!).some(n=>n.tag==='code'&&n.textContent.includes(JSON.stringify(doc.BREATH_VISIBLE)))).toBe(true);
+  }
+ }
+ expect(JSON.stringify(original)).toBe(JSON.stringify(JSON.parse(bytes.toString())));
+ expect(new Bun.CryptoHasher('sha256').update(bytes).digest('hex')).toBe('58a0fea58a5dcce10f3cd0b513b017db2ddd2d086f2bc47aec6df015a509a896');
 });

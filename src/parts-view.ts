@@ -197,13 +197,15 @@ export function checkReadings(doc: unknown, names: ReadonlySet<string>): Produce
     const obj = record(value); if (!obj) return;
     const hasMetadata = ['row_scope', 'row_kind', 'row_subjects'].some(k => Object.hasOwn(obj, k));
     labelled ||= hasMetadata;
-    if (hasMetadata || row) {
+    // Preserve failed/warning root gates even when only their child rows carry metadata.
+    const unlabelledProblemRoot = path === root && !hasMetadata && PROBLEM_STATUSES.has(String(obj.status));
+    if (hasMetadata || row || unlabelledProblemRoot) {
       const scope = obj.row_scope, kind = obj.row_kind, subjects = obj.row_subjects;
       const valid = ['part', 'pair', 'rig'].includes(String(scope)) && ['finding', 'evidence'].includes(String(kind)) &&
         Array.isArray(subjects) && subjects.length === (scope === 'part' ? 1 : scope === 'pair' ? 2 : 0) &&
-        subjects.every(s => typeof s === 'string' && s.length > 0) && new Set(subjects).size === subjects.length;
+        subjects.every(s => typeof s === 'string' && s.length > 0 && names.has(s)) && new Set(subjects).size === subjects.length;
       const classification = !valid ? 'unclassified' : scope === 'rig' || kind === 'evidence' ? 'evidence' : scope === 'part' ? 'part' : 'pair';
-      // Invalid/missing metadata has no implied subjects. Keep it visible globally, unclassified.
+      // Invalid/missing metadata or any unheld subject has no implied attribution. Keep the whole row globally unclassified.
       const items = valid ? (subjects as string[]).filter(s => names.has(s)) : [];
       for (const item of items.length ? items : ['']) rows.push({id: `check:${path}`, item, source:'check', kind:'check', path, root, status, entry:obj, line:JSON.stringify(obj), classification});
     }

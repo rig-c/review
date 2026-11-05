@@ -48,10 +48,12 @@ Rows appear beneath **mesh_report.json** / **check.json**, with collapsed catego
 - **Unclassified check rows**: incomplete or invalid metadata, never counted. In a mixed document an object row
   without a complete tuple remains visible here globally, without guessed subject attribution. The tuple requires
   scope part/pair/rig, kind finding/evidence, and respectively 1/2/0 distinct nonempty string subjects.
-  Valid subjects not present in this view do not acquire a substitute part.
+  If any subject is not held in this view, the entire tuple is unclassified globally, including a pair with one held subject. No partial or substitute attribution is made.
 
 The reader walks all roots regardless of block status, nested observation arrays, alternate sets and
-`requirements.lines` dictionaries. Singleton summaries are not rows. Each headline preserves root, exact path,
+`requirements.lines` dictionaries. Singleton summaries are not rows, except that a top-level FAIL/WARN gate
+without a tuple is preserved globally as unclassified, even in a labelled document. Its status does not make
+it a classified finding. Each headline preserves root, exact path,
 producer string fields and measurements. **Block** labels the enclosing block status; it never overrides the
 row's kind. **Producer line** holds the full original row object. Producer values are never translated.
 
