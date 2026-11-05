@@ -2,11 +2,12 @@ import {expect,test} from 'bun:test';
 import {mkdir,mkdtemp,readFile,realpath,rm,writeFile,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
+import {createHash} from 'node:crypto';
 import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch} from '../src/config-patch.ts';
 import {parseAppliedContext} from '../src/applied-context.ts';
-import {carriedCheck,RETUNE_CHECK_SINCE,retuneCheckSummary} from '../src/retune-check.ts';
+import {carriedCheck,carriedCheckSummary,revisionBinding,RETUNE_CHECK_SINCE,retuneCheckSummary} from '../src/retune-check.ts';
 import {patchAppliedRecord,patchOutcomeLine,type PatchJobView} from '../web/rebuild-client.ts';
 
 /**
@@ -130,3 +131,32 @@ test('#139: the carried side maps by the one rule — upper-case blocks are bars
  const s=retuneCheckSummary({pass:true,line:'check: PASS; 2 of 2 bar(s) measured',status:{gate:'FAIL',loop:'SKIP',seam:'PASS',BLINK_NO_HOLE:'PASS'}});
  expect(s).toEqual({schema:'rig-review-check-summary/1',pass:true,exitCode:0,line:'check: PASS; 2 of 2 bar(s) measured',bars:{BLINK_NO_HOLE:'PASS'},gate:false,source:'retune'});
 });
+
+for(const op of ['retune','remesh'] as const){
+ test(`#400: ${op} retains UNCLASSIFIED reports independently of pass and gate`,()=>{
+  for(const pass of [true,false])for(const gate of ['PASS','FAIL']){
+   const side={pass,line:`check: ${pass?'PASS':'FAIL'}; report unclassified`,status:{gate,PART_SUPPORT_REPORT:'UNCLASSIFIED'}};
+   const carried=carriedCheck({check:{revision:side}},op)!;
+   expect(carried).toEqual(side);
+   expect(carriedCheckSummary(carried,op)).toEqual({schema:'rig-review-check-summary/1',pass,exitCode:pass?0:1,line:side.line,bars:{PART_SUPPORT_REPORT:'UNCLASSIFIED'},gate:gate==='PASS',source:op});
+  }
+ });
+ test(`#400: ${op} refuses UNCLASSIFIED gate and unknown report values`,()=>{
+  const side={pass:true,line:'check: PASS; report unclassified',status:{gate:'PASS',PART_SUPPORT_REPORT:'UNCLASSIFIED'}};
+  expect(()=>carriedCheck({check:{revision:{...side,status:{...side.status,gate:'UNCLASSIFIED'}}}},op)).toThrow(`${op}.json: check.revision.status.gate is not PASS or FAIL`);
+  expect(()=>carriedCheck({check:{revision:{...side,status:{...side.status,PART_SUPPORT_REPORT:'UNKNOWN'}}}},op)).toThrow(`${op}.json: check.revision.status is not {block: status}`);
+ });
+ test(`#400: ${op} UNCLASSIFIED check remains bound to every revision file`,async()=>{
+  const root=await mkdtemp(join(tmpdir(),'review-unclassified-'));
+  try{
+   const body='{"animations":{}}',sha256=createHash('sha256').update(body).digest('hex');
+   const provenance={revision:[{path:'motion.json',bytes:Buffer.byteLength(body),sha256}],check:{revision:{pass:true,line:'check: PASS; report unclassified',status:{gate:'PASS',PART_SUPPORT_REPORT:'UNCLASSIFIED'}}}};
+   await writeFile(join(root,'motion.json'),body);
+   await writeFile(join(root,`${op}.json`),JSON.stringify(provenance));
+   expect(carriedCheck(provenance,op)?.status.PART_SUPPORT_REPORT).toBe('UNCLASSIFIED');
+   expect(await revisionBinding(root,provenance,op)).toBeNull();
+   await writeFile(join(root,'motion.json'),body+' ');
+   expect(await revisionBinding(root,provenance,op)).toStartWith(`${op.toUpperCase()}_CHECK_STALE: motion.json sha256 ${sha256}`);
+  }finally{await rm(root,{recursive:true,force:true});}
+ });
+}
