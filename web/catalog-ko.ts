@@ -3138,4 +3138,11 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "PARTS_COMPARISON_UNAVAILABLE: original painting required": "PARTS_COMPARISON_UNAVAILABLE: 원본 원화가 필요해요",
   "PARTS_COMPARISON_INVALID: part/overlay mode and opacity 0..1 required": "PARTS_COMPARISON_INVALID: 파트/오버레이 모드와 0..1 불투명도가 필요해요",
   "PARTS_PAINT_FAILED: view could not be rendered; select the part to retry": "PARTS_PAINT_FAILED: 화면을 그리지 못했어요. 파츠를 선택해 다시 시도해 주세요",
+  "Assembled": "조립 보기",
+  "Visible": "표시",
+  "Show {name} in assembly": "조립 보기에서 {name} 표시",
+  "Assembly unavailable: atlas regions carry no rig placement.": "조립 불가: 아틀라스 영역에는 리그 배치 정보가 없어요.",
+  "Assembly unavailable: rig_size is not declared.": "조립 불가: rig_size가 선언되지 않았어요.",
+  "Assembled package \u00b7 {count} visible parts. Selection and verdict remain per part.": "조립 패키지 · 파트 {count}개 표시. 선택과 판정은 파트별로 유지돼요.",
+  "PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment": "PARTS_COMMENT_UNAVAILABLE: 댓글을 쓰려면 개별 파트 보기로 전환해 주세요",
 };

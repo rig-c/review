@@ -278,3 +278,26 @@ separate stale warning. `PARTS_PAINTING_OUTSIDE` and `PARTS_PAINTING_PNG` refuse
 painting inputs. `tests/parts-comments.test.ts` covers these read and cross-encoding boundaries;
 `tests/parts-async-navigation.test.ts` guards reordered painting loads and actionable atlas clicks.
 A downstream create consumer must support verdict/2 before a review release can ship.
+
+### Assembled package
+
+**Assembled** toggles the existing rig/reference pair from the selected part to the declared
+`rig_size` canvas. Parts draw back to front in package order at their exact fractional rig-pixel
+placements. **Visible** beside each part controls assembly visibility only; the verdict remains
+per part. A tap selects the frontmost visible part with nonzero native source alpha, including
+through transparent holes; drags remain camera gestures. The selected part's alpha edge is a
+separate outline, outside the comparison raster. Background, alpha-only, Fit, 1:1 and the shared
+camera controls remain available. `tests/parts-assembly.test.ts` guards fractional placement,
+order controls, picking, hidden layers, separate outline pixels and per-part verdict invariance.
+
+With `--painting`, the reference pane and optional Overlay use the same whole-canvas visual
+mapping described above. No producer resampler, Difference or assembled verdict is added.
+Without painting the reference keeps `PARTS_REFERENCE_UNAVAILABLE`; atlas assembly is disabled
+because atlas regions carry no rig placement, and missing `rig_size` is named separately.
+Comments remain bound to individual original PNGs: switch out of assembly to capture one;
+restoring a saved comment returns to its individual part view. Assembly visibility is temporary
+inspection state and is never saved into a verdict or comment. `tests/parts-assembly-browser.ts`
+checks real EN/KO assembly/reference pixels against an independent browser draw after a
+base-vs-base control, tap/hole/hide selection, pan, camera preservation, background, alpha,
+verdict save and missing-input refusals. Existing `tests/parts-comparison.test.ts` and
+`tests/parts-comments.test.ts` retain the painting-size and protected-input guards.

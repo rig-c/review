@@ -109,3 +109,25 @@ export function paintMesh(ctx: Ctx, source: Source, w: number, h: number, mesh: 
   ctx.stroke();
   for (let i = 0; i < v.length; i += 2) { ctx.beginPath(); ctx.arc(v[i]!, v[i + 1]!, .8, 0, Math.PI * 2); ctx.fill(); }
 }
+
+/** Package order is back to front. Placements remain continuous rig pixels. */
+export function paintAssembly(ctx:Ctx,w:number,h:number,layers:readonly {box:Box;image:Source}[],options:{bg:string;alpha:boolean}):void {
+ ctx.imageSmoothingEnabled=false;
+ if(!options.alpha)paintBackground(ctx,w,h,options.bg);else ctx.clearRect(0,0,w,h);
+ for(const {box,image} of layers)ctx.drawImage(image,box.x,box.y);
+ if(options.alpha){const data=ctx.getImageData(0,0,w,h),px=data.data;for(let i=0;i<px.length;i+=4){px[i]=px[i+1]=px[i+2]=px[i+3]!;px[i+3]=255;}ctx.putImageData(data,0,0);}
+}
+/** Native source alpha, independent of the sentinel, overlay opacity and selection decoration. */
+export function pickAssembly<T extends Box>(layers:readonly {box:T;alpha:Uint8ClampedArray}[],x:number,y:number,hidden:ReadonlySet<string>=new Set()):T|null {
+ for(let i=layers.length-1;i>=0;i--){const {box,alpha}=layers[i]!;if(hidden.has(box.name))continue;const px=Math.floor(x-box.x),py=Math.floor(y-box.y);if(px>=0&&py>=0&&px<box.w&&py<box.h&&alpha[py*box.w+px]!>0)return box;}
+ return null;
+}
+/** Exposed native-alpha cell edges; decoration is separate from comparison pixels. */
+export function paintAssemblyOutline(ctx:Ctx,box:Box,alpha:Uint8ClampedArray):void {
+ const at=(x:number,y:number)=>x>=0&&y>=0&&x<box.w&&y<box.h&&alpha[y*box.w+x]!>0;
+ ctx.strokeStyle='#00bfff';ctx.lineWidth=1;ctx.beginPath();
+ for(let y=0;y<box.h;y++)for(let x=0;x<box.w;x++)if(at(x,y)){
+ const edge=(ax:number,ay:number,bx:number,by:number)=>{ctx.moveTo(box.x+ax,box.y+ay);ctx.lineTo(box.x+bx,box.y+by);};
+ if(!at(x,y-1))edge(x,y,x+1,y);if(!at(x,y+1))edge(x,y+1,x+1,y+1);if(!at(x-1,y))edge(x,y,x,y+1);if(!at(x+1,y))edge(x+1,y,x+1,y+1);
+ }ctx.stroke();
+}

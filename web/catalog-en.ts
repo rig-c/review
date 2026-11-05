@@ -3138,4 +3138,11 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "PARTS_COMPARISON_UNAVAILABLE: original painting required": "PARTS_COMPARISON_UNAVAILABLE: original painting required",
   "PARTS_COMPARISON_INVALID: part/overlay mode and opacity 0..1 required": "PARTS_COMPARISON_INVALID: part/overlay mode and opacity 0..1 required",
   "PARTS_PAINT_FAILED: view could not be rendered; select the part to retry": "PARTS_PAINT_FAILED: view could not be rendered; select the part to retry",
+  "Assembled": "Assembled",
+  "Visible": "Visible",
+  "Show {name} in assembly": "Show {name} in assembly",
+  "Assembly unavailable: atlas regions carry no rig placement.": "Assembly unavailable: atlas regions carry no rig placement.",
+  "Assembly unavailable: rig_size is not declared.": "Assembly unavailable: rig_size is not declared.",
+  "Assembled package \u00b7 {count} visible parts. Selection and verdict remain per part.": "Assembled package · {count} visible parts. Selection and verdict remain per part.",
+  "PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment": "PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment",
 };

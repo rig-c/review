@@ -18,7 +18,7 @@ import { bindDomI18n, onLanguageChange, setLinkLanguage, setLanguagePreference, 
 import { pageInstanceAccess } from './instance-access.ts';
 import { connectLiveWindow } from './live-connection.ts';
 import { flagLabel } from './parts-flags.ts';
-import { frontParts, paintAlphaOnly, paintBackground, paintPart, paintMesh, paintOverlay, paintPaintingCrop, paintFootprints } from './parts-render.ts';
+import { paintAssembly, pickAssembly, paintAssemblyOutline, frontParts, paintAlphaOnly, paintBackground, paintPart, paintMesh, paintOverlay, paintPaintingCrop, paintFootprints } from './parts-render.ts';
 
 type Outcome = 'pending' | 'clean' | 'flagged';
 interface Mesh { vertices: number[]; triangles: number[]; figures: Record<string, unknown> }
@@ -43,7 +43,7 @@ const stageEmbedded=new URL(location.href).searchParams.get('stageEmbed')==='1';
 const stageSide=new URL(location.href).searchParams.get('side');
 const partsApi=stageEmbedded?(stageSide==='a'||stageSide==='b'?`/api/compare/${stageSide}/stage-parts`:'/api/stage-parts'):'/api/parts';
 
-const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, comparison:defaultPartsComparison(), view: 'item' as 'item' | 'page', page: 0, meshShown: new Set<string>(), verdict: new Map<string, Entry>() };
+const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, comparison:defaultPartsComparison(), hidden: new Set<string>(), view: 'item' as 'item' | 'page' | 'assembled', page: 0, meshShown: new Set<string>(), verdict: new Map<string, Entry>() };
 const comments:PartsComment[]=[];let commentUi:ReturnType<typeof bindStageComments>|null=null;let viewport:ReturnType<typeof createPartsViewport>|null=null;let painting=false;
 const images = new Map<string, HTMLImageElement>();
 
@@ -91,11 +91,34 @@ async function paint():Promise<void>{
   $('pv-caption').textContent=t(paintFailure);$('pv-save-status').textContent=t(paintFailure);commentUi?.refresh();
  }finally{if(token===paintToken)painting=false;}
 }
+const assemblyAlpha=new Map<string,Uint8ClampedArray>();
+function sourceAlpha(item:Item,img:HTMLImageElement):Uint8ClampedArray {
+ const cached=assemblyAlpha.get(item.name);if(cached)return cached;
+ const c=document.createElement('canvas');c.width=item.w;c.height=item.h;const ctx=c.getContext('2d')!;ctx.drawImage(img,0,0);
+ const rgba=ctx.getImageData(0,0,item.w,item.h).data,alpha=new Uint8ClampedArray(item.w*item.h);for(let i=0;i<alpha.length;i++)alpha[i]=rgba[i*4+3]!;assemblyAlpha.set(item.name,alpha);return alpha;
+}
+
 async function paintRaster(token:number): Promise<void> {
   const data = state.data;
   if (!data || !data.items.length) return;
   const canvas = $<HTMLCanvasElement>('pv-canvas'), overlay = $('pv-overlay'), caption = $('pv-caption');
   const item = data.items[state.selected]!;
+  if(state.view==='assembled'&&data.mode==='parts'&&data.rigSize){
+    const [w,h]=data.rigSize,shown=data.items.filter(i=>!state.hidden.has(i.name));
+    const layers=await Promise.all(shown.map(async box=>({box,image:await itemImage(box)})));
+    const original=state.comparison.mode==='overlay'&&data.painting?await load('/api/parts/painting'):null;
+    if(token!==paintToken)return;
+    const ctx=setCanvas(canvas,w,h);
+    if(original){
+      paintPaintingCrop(ctx,original,paintingRectangle({x:0,y:0,w,h},data.rigSize,data.painting!),w,h,state.bg);
+      const assembled=document.createElement('canvas');assembled.width=w;assembled.height=h;const a=assembled.getContext('2d')!;a.imageSmoothingEnabled=false;for(const l of layers)a.drawImage(l.image,l.box.x,l.box.y);ctx.globalAlpha=state.comparison.opacity;ctx.drawImage(assembled,0,0);ctx.globalAlpha=1;
+    }else paintAssembly(ctx,w,h,layers,{bg:state.bg,alpha:state.alpha});
+    overlay.replaceChildren();
+    const selected=layers.find(l=>l.box.name===item.name);
+    if(selected){const outline=document.createElement('canvas');outline.width=w;outline.height=h;outline.dataset.assemblyOutline=item.name;paintAssemblyOutline(outline.getContext('2d')!,item,sourceAlpha(item,selected.image));overlay.append(outline);}
+    caption.textContent=t('Assembled package · {count} visible parts. Selection and verdict remain per part.',{count:shown.length});
+    return;
+  }
   if (data.mode === 'atlas' && state.view === 'page') {
     const page = data.pages[state.page]!, img = await pageImage(page.name);
     if (token !== paintToken) return;
@@ -150,14 +173,15 @@ async function paintRaster(token:number): Promise<void> {
     + (state.footprints ? ' ' + (front.length === 1 ? t('Tinted: the footprint of the part drawn in front ({names}).', { names: front[0]!.name }) : front.length ? t('Tinted: the footprints of {count} parts drawn in front ({names}).', { count: front.length, names: front.map(o => o.name).join(', ') }) : t('No part is drawn in front of it.')) : '');
 }
 
-async function paintReference(token:number):Promise<void>{const data=state.data,item=data?.items[state.selected];if(!data?.painting||!item)return;const img=await load('/api/parts/painting');if(token!==paintToken||data!==state.data||item!==state.data?.items[state.selected])return;const canvas=$<HTMLCanvasElement>('pv-reference');canvas.width=item.w;canvas.height=item.h;const ctx=canvas.getContext('2d')!;paintPaintingCrop(ctx,img,paintingRectangle(item,data.rigSize!,data.painting),item.w,item.h,state.bg);}
+async function paintReference(token:number):Promise<void>{const data=state.data,item=data?.items[state.selected];if(!data?.painting||!item)return;const img=await load('/api/parts/painting');if(token!==paintToken||data!==state.data||item!==state.data?.items[state.selected])return;const box=state.view==='assembled'?{x:0,y:0,w:data.rigSize![0],h:data.rigSize![1]}:item;const canvas=$<HTMLCanvasElement>('pv-reference');canvas.width=box.w;canvas.height=box.h;const ctx=canvas.getContext('2d')!;paintPaintingCrop(ctx,img,paintingRectangle(box,data.rigSize!,data.painting),box.w,box.h,state.bg);}
 
 function renderComparison():void {
  const active=state.data?.mode==='parts'&&!!state.data.painting,overlay=active&&state.comparison.mode==='overlay';
  $('pv-comparison').hidden=!active;for(const b of document.querySelectorAll<HTMLElement>('[data-pv-comparison]'))b.setAttribute('aria-pressed',String(b.dataset.pvComparison===state.comparison.mode));
  $('pv-opacity-control').hidden=!overlay;$<HTMLInputElement>('pv-opacity').value=String(state.comparison.opacity);$('pv-opacity-value').textContent=(state.comparison.opacity*100).toFixed(1)+'%';
  $<HTMLInputElement>('pv-alpha').disabled=overlay;
- const mesh=document.querySelector<HTMLInputElement>('#pv-mesh-control input');if(mesh)mesh.disabled=overlay;
+ const mesh=document.querySelector<HTMLInputElement>('#pv-mesh-control input');if(mesh)mesh.disabled=overlay||state.view==='assembled';
+ $<HTMLInputElement>('pv-footprints').disabled=state.data?.mode==='atlas'||state.view==='assembled';
 }
 
 function renderFlags(): void {
@@ -231,6 +255,10 @@ function renderList(): void {
     button.append(name, flags, badge);
     button.onclick = () => { select(item.index); if (data.mode === 'atlas') setView('item'); };
     li.append(button);
+    if(data.mode==='parts'){
+      const label=document.createElement('label'),visible=document.createElement('input');visible.type='checkbox';visible.checked=!state.hidden.has(item.name);visible.dataset.pvVisible=item.name;visible.setAttribute('aria-label',t('Show {name} in assembly',{name:item.name}));
+      visible.onchange=()=>{if(visible.checked)state.hidden.delete(item.name);else state.hidden.add(item.name);void paint();};label.append(visible,t('Visible'));li.append(label);
+    }
     return li;
   }));
 }
@@ -250,7 +278,7 @@ function renderMesh(): void {
   const item = state.data!.items[state.selected]!;
   if (!item.mesh) return;
   const control = document.createElement('label'); control.id = 'pv-mesh-control'; control.className = 'pv-field';
-  const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = state.meshShown.has(item.name); toggle.disabled=state.comparison.mode==='overlay';
+  const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = state.meshShown.has(item.name); toggle.disabled=state.comparison.mode==='overlay'||state.view==='assembled';
   toggle.onchange = () => { if (toggle.checked) state.meshShown.add(item.name); else state.meshShown.delete(item.name); void paint(); };
   control.append(toggle, t('mesh from rig.json UVs')); document.querySelector('.pv-toolbar')!.append(control);
   const panel = document.createElement('section'); panel.id = 'pv-mesh-panel';
@@ -277,15 +305,17 @@ function renderMesh(): void {
 
 function select(index: number): void {
   const data = state.data!;
-  const changed=state.selected!==index;state.selected = index;if(changed&&viewport){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
+  const changed=state.selected!==index;state.selected = index;if(changed&&viewport&&state.view!=='assembled'){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
   commentUi?.refresh();
   const item = data.items[index]!;
   if (item.page !== undefined) state.page = data.pages.findIndex(p => p.name === item.page);
   renderList(); renderFlags(); renderVerdict(); renderMesh(); renderComparison(); void paint();
 }
 
-function setView(view: 'item' | 'page'): void {
-  state.view = view;
+function setView(view: 'item' | 'page' | 'assembled'): void {
+  if(view==='assembled'&&(state.data?.mode!=='parts'||!state.data.rigSize))return;
+  if(state.view!==view&&viewport){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
+  state.view = view;renderMesh();renderComparison();$('rig-label').textContent=t(view==='assembled'?'Assembled':'Selected part');commentUi?.refresh();
   for (const b of document.querySelectorAll<HTMLButtonElement>('[data-pv-view]')) b.setAttribute('aria-pressed', String(b.dataset.pvView === view));
   void paint();
 }
@@ -335,6 +365,9 @@ async function boot(): Promise<void> {
   $('pv-load').textContent = data.verdictStale === 'files' ? t('A saved sign-off was made on other files; this review starts fresh.') : data.verdictStale === 'flags' ? t('The saved sign-off is for different producer flags; this review starts fresh.') : data.verdict ? t('Saved sign-off loaded.') : '';
   if(stageEmbedded){$('pv-load').hidden=$('pv-load').textContent==='';document.querySelector<HTMLElement>('.pv-layout')!.hidden=false;}
   $('pv-atlas-switch').hidden = data.mode !== 'atlas';
+  const assemble=$<HTMLButtonElement>('pv-assemble');assemble.disabled=data.mode!=='parts'||!data.rigSize;assemble.title=assemble.disabled?t(data.mode==='atlas'?'Assembly unavailable: atlas regions carry no rig placement.':'Assembly unavailable: rig_size is not declared.'):'';
+  assemble.onclick=()=>{setView(state.view==='assembled'?'item':'assembled');assemble.setAttribute('aria-pressed',String(state.view==='assembled'));};
+  bindAssemblyPicking();
   for(const button of document.querySelectorAll<HTMLElement>('[data-pv-comparison]'))button.onclick=()=>{state.comparison.mode=button.dataset.pvComparison as 'part'|'overlay';if(state.comparison.mode==='overlay'){state.alpha=false;$<HTMLInputElement>('pv-alpha').checked=false;state.meshShown.delete(state.data!.items[state.selected]!.name);renderMesh();}renderComparison();void paint();};
   $<HTMLInputElement>('pv-opacity').oninput=e=>{state.comparison.opacity=Number((e.target as HTMLInputElement).value);renderComparison();void paint();};
   const footprints = $<HTMLInputElement>('pv-footprints');
@@ -353,6 +386,21 @@ async function boot(): Promise<void> {
   document.body.dataset.ready = 'true';
 }
 
+/** Observe taps only; the shared controller exclusively owns pan, zoom and pinch. */
+function bindAssemblyPicking():void {
+ const pane=$('rig-viewport');let tap:{id:number;x:number;y:number}|null=null;const pointers=new Set<number>();
+ pane.addEventListener('pointerdown',e=>{pointers.add(e.pointerId);if(pointers.size===1&&e.button===0)tap={id:e.pointerId,x:e.clientX,y:e.clientY};else tap=null;});
+ pane.addEventListener('pointermove',e=>{if(tap&&Math.hypot(e.clientX-tap.x,e.clientY-tap.y)>4)tap=null;});
+ pane.addEventListener('pointercancel',e=>{pointers.delete(e.pointerId);tap=null;});
+ pane.addEventListener('pointerup',e=>{
+  pointers.delete(e.pointerId);const start=tap;tap=null;
+  if(!start||start.id!==e.pointerId||Math.hypot(e.clientX-start.x,e.clientY-start.y)>4||state.view!=='assembled'||painting||paintFailure||commentUi?.active())return;
+  const data=state.data!,r=$('pv-canvas').getBoundingClientRect(),zoom=viewport!.paneCamera('rig').zoom;
+  const layers=data.items.flatMap(box=>{const img=images.get(`${partsApi}/image/${box.index}`);return img?[{box,alpha:sourceAlpha(box,img)}]:[];});
+  const hit=pickAssembly(layers,(e.clientX-r.left)/zoom,(e.clientY-r.top)/zoom,state.hidden);if(hit)select(hit.index);
+ });
+}
+
 interface PartsPose extends CommentUiPose {item:Item;sourceHash:string;view:PartsComment['view']}
 function setupPartsComments():void {
  const codec:CommentCodec<PartsComment,PartsPose>={
@@ -364,8 +412,8 @@ function setupPartsComments():void {
  };
  const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||state.view!=='item')return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshShown.has(item.name),comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
  commentUi=bindStageComments({toolbar:document.querySelector<HTMLElement>('.pv-toolbar')!,viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
- restore:async(raw)=>{const b=raw as {part:string;imageHash:string;sourceHash:string;view:PartsComment['view']},item=state.data!.items.find(i=>i.name===b.part);if(!item||item.imageHash!==b.imageHash||state.data!.sourceHash!==b.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');select(item.index);state.bg=b.view.background;state.alpha=b.view.alpha;state.footprints=b.view.footprints;state.comparison={...(b.view.comparison??defaultPartsComparison())};renderComparison();if(b.view.mesh)state.meshShown.add(item.name);else state.meshShown.delete(item.name);$<HTMLSelectElement>('pv-bg').value=state.bg;$<HTMLInputElement>('pv-alpha').checked=state.alpha;$<HTMLInputElement>('pv-footprints').checked=state.footprints;renderMesh();viewport!.state.cameraRestoring=true;try{await paint();viewport!.writeCamera('rig',{zoom:b.view.camera.zoom,center:{...b.view.camera.center}});if(b.view.referenceCamera)viewport!.writeCamera('reference',{zoom:b.view.referenceCamera.zoom,center:{...b.view.referenceCamera.center}});viewport!.state.cameraSync=b.view.cameraSync;viewport!.fitCamera();}finally{viewport!.state.cameraRestoring=false;}},
- feedback:()=>comments,locked:()=>false,add:c=>comments.push(c),changed:()=>renderVerdict(),error:m=>{$('pv-save-status').textContent=t(m);},blocked:()=>painting,refusal:()=>paintFailure??(state.data?.mode!=='parts'||stageEmbedded?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
+ restore:async(raw)=>{const b=raw as {part:string;imageHash:string;sourceHash:string;view:PartsComment['view']},item=state.data!.items.find(i=>i.name===b.part);if(!item||item.imageHash!==b.imageHash||state.data!.sourceHash!==b.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');setView('item');$('pv-assemble').setAttribute('aria-pressed','false');select(item.index);state.bg=b.view.background;state.alpha=b.view.alpha;state.footprints=b.view.footprints;state.comparison={...(b.view.comparison??defaultPartsComparison())};renderComparison();if(b.view.mesh)state.meshShown.add(item.name);else state.meshShown.delete(item.name);$<HTMLSelectElement>('pv-bg').value=state.bg;$<HTMLInputElement>('pv-alpha').checked=state.alpha;$<HTMLInputElement>('pv-footprints').checked=state.footprints;renderMesh();viewport!.state.cameraRestoring=true;try{await paint();viewport!.writeCamera('rig',{zoom:b.view.camera.zoom,center:{...b.view.camera.center}});if(b.view.referenceCamera)viewport!.writeCamera('reference',{zoom:b.view.referenceCamera.zoom,center:{...b.view.referenceCamera.center}});viewport!.state.cameraSync=b.view.cameraSync;viewport!.fitCamera();}finally{viewport!.state.cameraRestoring=false;}},
+ feedback:()=>comments,locked:()=>false,add:c=>comments.push(c),changed:()=>renderVerdict(),error:m=>{$('pv-save-status').textContent=t(m);},blocked:()=>painting,refusal:()=>paintFailure??(state.view==='assembled'?'PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment':null)??(state.data?.mode!=='parts'||stageEmbedded?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
 }
 
 if (typeof document !== 'undefined' && document.getElementById('parts-app')) void boot();
