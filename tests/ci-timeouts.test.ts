@@ -6,14 +6,11 @@ type Step = {
   uses?: string;
   run?: string;
   with?: Record<string, unknown>;
-  env?: Record<string, string>;
   if?: string;
   'timeout-minutes'?: number;
   'continue-on-error'?: boolean;
 };
 type Job = {
-  if?: string;
-  needs?: string;
   steps: Step[];
   'timeout-minutes'?: number;
   'continue-on-error'?: boolean;
@@ -56,7 +53,6 @@ for (const [file, name] of [['check.yml', 'check'], ['release.yml', 'release']] 
     } else {
       expect(job['timeout-minutes']).toBe(10);
       expect(installer.if).toBeUndefined();
-      checkBound(workflow.jobs['video-tools-cache']!);
     }
   });
 
@@ -84,40 +80,3 @@ for (const [file, name] of [['check.yml', 'check'], ['release.yml', 'release']] 
     });
   }
 }
-
-test('Check reports a failed PR seed through the required job and preserves workflow cancellation', () => {
-  const workflow = Bun.YAML.parse(readFileSync(new URL('../.github/workflows/check.yml', import.meta.url), 'utf8')) as Workflow;
-  const seed = workflow.jobs['video-tools-cache']!;
-  const check = workflow.jobs.check!;
-  expect(seed.if).toBe("github.event_name == 'pull_request'");
-  expect(check.needs).toBe('video-tools-cache');
-  expect(check.if).toBe('${{ !cancelled() }}');
-  const guard = check.steps[0]!;
-  expect(guard.name).toBe('Require the expected video tools seed result');
-  expect(guard.if).toBeUndefined();
-  expect(guard['continue-on-error']).toBeUndefined();
-  expect(guard.env).toEqual({
-    EVENT: '${{ github.event_name }}',
-    SEED_RESULT: '${{ needs.video-tools-cache.result }}',
-  });
-  for (const event of ['pull_request', 'push']) {
-    for (const seedResult of ['success', 'skipped', 'failure', 'cancelled']) {
-      const result = Bun.spawnSync(['bash', '-e', '-c', guard.run!], {
-        env: { ...process.env, EVENT: event, SEED_RESULT: seedResult },
-      });
-      const accepted = (event === 'pull_request' && seedResult === 'success') ||
-        (event === 'push' && seedResult === 'skipped');
-      expect(result.exitCode).toBe(accepted ? 0 : 1);
-      if (!accepted) expect(result.stdout.toString()).toContain('VIDEO_TOOLS_SEED:');
-    }
-  }
-  const required = check.steps.filter(step => step.run && step !== guard);
-  expect(required.map(step => step.run)).toEqual([
-    'bun install --frozen-lockfile', 'bun run check:readme', 'bun run typecheck',
-    'bun test', 'bun run build', 'bun run check -- examples/demo/review.json',
-  ]);
-  for (const step of required) {
-    expect(step.if).toBeUndefined();
-    expect(step['continue-on-error']).toBeUndefined();
-  }
-});

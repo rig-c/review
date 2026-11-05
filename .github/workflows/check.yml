@@ -4,38 +4,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  video-tools-cache:
-    # Seed the archive in a separate runner so PR Check can measure a real restore.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install reference video export tools
-        timeout-minutes: 3
-        uses: ./.github/actions/reference-video-tools
   check:
-    needs: video-tools-cache
-    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # Recent full check: ~3 minutes; allow setup and shared-runner variance.
     timeout-minutes: 10
     steps:
-      # A skipped required job can satisfy branch protection. Fail this job
-      # explicitly if the PR seed did not complete successfully.
-      - name: Require the expected video tools seed result
-        shell: bash
-        env:
-          EVENT: ${{ github.event_name }}
-          SEED_RESULT: ${{ needs.video-tools-cache.result }}
-        run: |
-          case "$EVENT:$SEED_RESULT" in
-            pull_request:success|push:skipped) ;;
-            *)
-              echo "::error::VIDEO_TOOLS_SEED: unexpected $EVENT seed result: $SEED_RESULT"
-              exit 1
-              ;;
-          esac
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
