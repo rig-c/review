@@ -17,7 +17,7 @@ import {bindStageNav} from './stage-nav.ts';
 import { bindDomI18n, onLanguageChange, setLinkLanguage, setLanguagePreference, t } from './i18n.ts';
 import { pageInstanceAccess } from './instance-access.ts';
 import { connectLiveWindow } from './live-connection.ts';
-import { flagLabel } from './parts-flags.ts';
+import { flagLabel, readingGroup, countedFlag } from './parts-flags.ts';
 import { paintAssembly, pickAssembly, paintAssemblyOutline, frontParts, paintAlphaOnly, paintBackground, paintPart, paintMesh, paintOverlay, paintPaintingCrop, paintFootprints } from './parts-render.ts';
 
 type Outcome = 'pending' | 'clean' | 'flagged';
@@ -27,9 +27,9 @@ interface Item { mesh?: Mesh; name: string; index: number; x: number; y: number;
 interface Page { name: string; width: number; height: number; index: number }
 type Flag =
   | { id: string; item: string; source: 'mesh_report'; kind: 'faint'; art: number; maxAlpha: number; box: [number, number, number, number] }
-  | { id: string; item: string; source: 'check'; kind: 'check'; path: string; line: string; root: string; status: string | null; entry: Record<string, unknown> };
+  | { id: string; item: string; source: 'check'; kind: 'check'; path: string; line: string; root: string; status: string | null; entry: Record<string, unknown>; classification?: 'part' | 'pair' | 'evidence' | 'unclassified' };
 interface ViewData {
-  painting:{sha256:string;width:number;height:number}|null;sourceHash:string;mode: 'parts' | 'atlas'; title: string; rigSize: [number, number] | null; items: Item[]; pages: Page[]; flags: Flag[];
+  painting:{sha256:string;width:number;height:number}|null;sourceHash:string;mode: 'parts' | 'atlas'; title: string; rigSize: [number, number] | null; items: Item[]; pages: Page[]; flags: Flag[]; readings?: Flag[];
   flagSources: string[]; flagMissing: string[]; verdictFile: string;
   verdict: { comments?:PartsComment[];status: string; parts: Record<string, Entry> } | null; verdictStale: 'files' | 'flags' | null;
 }
@@ -187,7 +187,7 @@ function renderComparison():void {
 function renderFlags(): void {
   const data = state.data!, item = data.items[state.selected];
   const list = $('pv-flags');
-  const flags = item ? data.flags.filter(f => f.item === item.name) : [];
+  const flags = item ? [...data.flags.filter(f => f.kind === 'faint' && f.item === item.name), ...(data.readings ?? data.flags.filter(f => f.kind === 'check')).filter(f => f.item === item.name || f.item === '')] : [];
   const row = (f: Flag): HTMLLIElement => {
     const li = document.createElement('li');
     li.dataset.flagId = f.id; li.dataset.flagSource = f.source;
@@ -209,8 +209,16 @@ function renderFlags(): void {
     sourceItem.dataset.pvSource = source;
     heading.textContent = source === 'mesh_report' ? 'mesh_report.json' : 'check.json';
     sourceItem.append(heading);
+    const categories = source === 'mesh_report' ? ['mesh'] as const : ['part', 'pair', 'evidence', 'unclassified'] as const;
+    for (const category of categories) {
+    const selected = fromSource.filter(f => readingGroup(f) === category);
+    if (!selected.length) continue;
+    const section = document.createElement('details'), title = document.createElement('summary');
+    section.dataset.pvCategory = category;
+    title.textContent = t(category === 'mesh' ? 'Mesh flags' : category === 'part' ? 'Part findings' : category === 'pair' ? 'Pair readings' : category === 'evidence' ? 'Check evidence' : 'Unclassified check rows');
+    section.append(title);
     const roots = new Map<string, Flag[]>();
-    for (const f of fromSource) {
+    for (const f of selected) {
       const root = f.kind === 'check' ? f.root : 'contour.bridges.faint';
       const group = roots.get(root) ?? [];
       group.push(f); roots.set(root, group);
@@ -219,7 +227,9 @@ function renderFlags(): void {
       const details = document.createElement('details'), summary = document.createElement('summary'), rows = document.createElement('ul');
       details.dataset.pvRoot = root; details.dataset.flagSource = source;
       summary.textContent = group.length === 1 ? t('{root} · 1 row', { root }) : t('{root} · {count} rows', { root, count: group.length });
-      rows.append(...group.map(row)); details.append(summary, rows); sourceItem.append(details);
+      rows.append(...group.map(row)); details.append(summary, rows); section.append(details);
+    }
+    sourceItem.append(section);
     }
     return [sourceItem];
   }));
@@ -228,7 +238,8 @@ function renderFlags(): void {
     data.flagSources.length ? t('Read from: {files}.', { files: data.flagSources.join(', ') }) : '',
     data.flagMissing.length ? t('Not found: {files}.', { files: data.flagMissing.join(', ') }) : '',
     t('Occlusion coverage is not read yet: the producer does not write it.'),
-    t('Grouped by source and producer root; counts are rows, not a classification of defects.'),
+    t('Badges count only mesh flags and explicit part findings. Pair readings and check evidence are not counted.'),
+    flags.some(f => readingGroup(f) === 'unclassified') ? t('Missing or invalid row metadata: source-root rows remain unclassified and are not counted.') : '',
   ].filter(Boolean).join(' ');
 }
 
@@ -240,7 +251,7 @@ function renderList(): void {
     button.type = 'button'; button.dataset.pvItem = item.name; button.title = item.name;
     if (data.items[state.selected]?.name === item.name) button.setAttribute('aria-current', 'true');
     const name = document.createElement('span'); name.className = 'pv-name'; name.textContent = item.name;
-    const onItem = data.flags.filter(f => f.item === item.name);
+    const onItem = [...data.flags.filter(f => f.kind === 'faint'), ...(data.readings ?? [])].filter(f => f.item === item.name && countedFlag(f));
     const flags = document.createElement('span'); flags.className = 'pv-count';
     // flagSources holds actual basenames (including custom.json); flagMissing canonically names unread kinds.
     const meshRead = !data.flagMissing.includes('mesh_report.json'), checkRead = !data.flagMissing.includes('check.json');

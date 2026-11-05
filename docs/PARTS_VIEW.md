@@ -34,34 +34,59 @@ is written), `--painting <png>` (the original painting), `--format json|issue` (
 
 ### Producer row groups
 
-The sidebar reports separate source counts, for example **mesh 1 · check 4**, rather than a combined flag total.
-Only sources actually read get a count; an absent report is never shown as zero. A part with no flags from any
-read source has no count badge. Custom input filenames follow the same rule.
-The selected part's rows sit under **mesh_report.json** and **check.json**, each with collapsed producer-root groups
-and their row counts. Open a group to inspect its rows. A check headline includes its root, exact JSON path and
-the row's own string fields (including pair names, part names, status and reason when present), followed by the
-existing labelled readings. The enclosing block's status is labelled **Block**; a row's own `unavailable` does not
-become `WARN` merely because its block warns. Producer field values and the raw object are never translated.
+The sidebar counts **only mesh-report flags and explicit part findings**. A check row counts only
+when `row_scope: "part"`, `row_kind: "finding"` and a valid `row_subjects` array names that part.
+A block status, a JSON path, a reason or a legacy part/slot/bone field never determines classification.
+Counts stay separate by source, for example **mesh 1 · check 1**; an absent report is not shown as zero.
+A part with no counted flags has no count badge, even when it has other readings.
 
-This is grouping by input source, **not classification of defects**. The existing extraction rules below are
-unchanged: unavailable support rows, informational pair readings and unknown rows that the reader already
-attributed remain present, counted under their source. One producer row can name multiple parts and appear on each;
-counts are per-part attributions, not unique problems across a rig. No scope, finding/evidence kind or acceptance
-verdict is inferred. Source hashes, saved flag ids and sign-off binding remain unchanged.
+Rows appear beneath **mesh_report.json** / **check.json**, with collapsed categories and producer-root groups:
+- **Part findings**: the explicitly attributed findings counted in the badge.
+- **Pair readings**: pair findings on both explicit subjects, never counted.
+- **Check evidence**: every evidence row and every rig row (including rig findings), never counted.
+  Subject-bound evidence appears on its subjects; rig rows have no implied part and are visible on every selection.
+- **Unclassified check rows**: incomplete or invalid metadata, never counted. In a mixed document an object row
+  without a complete tuple remains visible here globally, without guessed subject attribution. The tuple requires
+  scope part/pair/rig, kind finding/evidence, and respectively 1/2/0 distinct nonempty string subjects.
+  If any subject is not held in this view, the entire tuple is unclassified globally, including a pair with one held subject. No partial or substitute attribution is made.
 
-The public regression input [`parts-check-380.json`](https://github.com/rig-c/review/blob/main/tests/fixtures/parts-check-380.json)
-is synthetic data, not a producer run or a private package. Its fields follow the producer's
-[`SupportReport` / `SupportPair`](https://github.com/rig-c/parts/blob/main/src/coincide.ts),
-[`MotionSeamLine` / `MotionSeamPair` and `LimbLine` / `LimbRow`](https://github.com/rig-c/parts/blob/main/src/check.ts).
-Alongside the public planted parts package, it retains 1 mesh attribution and 11 check attributions: on the back
-defect part **mesh 1 · check 4**, on the control **mesh 0 · check 2**, and on the front **mesh 0 · check 5**.
-The fixture deliberately keeps unavailable support, pair and part rows together. DOM checks exercise collapsed
-root counts, distinct same-part pair headlines, separate source badges and unchanged input hashes in both languages.
+The reader walks all roots regardless of block status, nested observation arrays, alternate sets and
+`requirements.lines` dictionaries. Singleton summaries are not rows, except that a top-level FAIL/WARN gate
+without a tuple is preserved globally as unclassified, even in a labelled document. Its status does not make
+it a classified finding. Each headline preserves root, exact path,
+producer string fields and measurements. **Block** labels the enclosing block status; it never overrides the
+row's kind. **Producer line** holds the full original row object. Producer values are never translated.
 
-| Flag | Read from | When |
+A document with no row metadata keeps #380's source-root extraction and attribution, explicitly **unclassified**.
+It can retain unavailable support and informational pairs; none becomes a counted finding. The public legacy
+[`parts-check-380.json`](https://github.com/rig-c/review/blob/main/tests/fixtures/parts-check-380.json) remains a
+synthetic compatibility fixture. Its 11 historical check attributions remain in the verdict wire collection,
+while its sidebar check finding count is absent (only the back defect's mesh flag counts).
+
+The fixture contract is pinned to published **@rig-c/parts@2.17.0**, source
+[`971b3a7`](https://github.com/rig-c/parts/tree/971b3a7fab1109adf5be11750886687a7addb306),
+whose [consumer row table](https://github.com/rig-c/parts/blob/971b3a7fab1109adf5be11750886687a7addb306/docs/AUTHORING.md#consumer-check-rows-issue-1089)
+and `src/checkrow.ts` define the fields. This is an evidence pin, not a runtime dependency or automatic install.
+`tests/fixtures/parts-check-385-real.json` is the byte-exact public synthetic-rig check output from the installed
+producer; check exit **1** is its deliberately planted stretch finding, not a green rig. The measurement packet's
+exit 0 means capture completed. The separate `parts-check-385.json` is a clearly synthetic six-combination matrix,
+including status/subject decoys. `parts-check-385.provenance.json` records hashes, source and the reproduction recipe.
+`tests/parts-classification.test.ts` guards the actual DOM callers, API, classification and unchanged wire binding;
+`tests/parts-classification-browser.ts` supplies real bilingual screenshots and collapsed/expanded/legacy checks.
+Representative public screenshots: [English collapsed](https://github.com/rig-c/review/blob/main/tests/fixtures/parts-check-385-evidence/collapsed-en.png),
+[English expanded](https://github.com/rig-c/review/blob/main/tests/fixtures/parts-check-385-evidence/expanded-en.png),
+[Korean collapsed](https://github.com/rig-c/review/blob/main/tests/fixtures/parts-check-385-evidence/collapsed-ko.png),
+[Korean expanded](https://github.com/rig-c/review/blob/main/tests/fixtures/parts-check-385-evidence/expanded-ko.png).
+
+Classification is a separate read-only `readings` collection in the view response. The historical `flags`
+collection and `buildVerdict` extraction remain unchanged: verdict/2 `parts.<name>.flags`, source file hashes,
+comment serialization and create consumption keep their existing semantics. Display counts are not verdict IDs
+or an approval decision. Changing the check document still invalidates an offered saved sign-off.
+
+| Stored flag ID | Read from | Existing verdict/2 extraction (unchanged) |
 | --- | --- | --- |
-| `faint:<i>` | `mesh_report.json` beside `parts.json` (`rig` writes it there): a row's `contour.bridges.faint[i]` | a faint island the mesh left out (rig-parts #326) |
-| `check:<path>` | `check/check.json` beside `rig/` | a gate whose `status` is `FAIL` or `WARN` (not `PASS`, `CLEAR`, `SKIP` or `REPORTED`), or a `seam_pairs` / `figure_openings` entry, that names the part by a string field; bone fields (`bone`, `root`, `tip`, `link`) never attribute |
+| `faint:<i>` | `mesh_report.json` beside `parts.json` | a faint island the mesh left out |
+| `check:<path>` | `check/check.json` beside `rig/` | historical FAIL/WARN gates or seam/opening lists naming a part by a non-bone string field; this is not the new sidebar classification |
 
 The occlusion-coverage report (rig-c/parts#998) is not read yet; the footprint toggle stands without it.
 
@@ -92,7 +117,7 @@ writes `parts-review.json` beside `parts.json` (atlas mode: beside the model), o
   verdict file's directory**, POSIX separators. A part added, removed or repainted after sign-off changes the hash.
 - `source.sha256` is the SHA-256 of the UTF-8 lines `<path>\t<sha256>\n`, one per `source.files` entry, sorted by path
   bytewise. Consumers recompute it from the files on disk.
-- `source.flags` lists the producer files the flags were read from; `parts.<name>.flags` the flag ids shown on that part.
+- `source.flags` lists the producer files the flags were read from; `parts.<name>.flags` the historical producer-attribution IDs defined above, not the classified sidebar count.
 - `status`: `approved` only when every part is clean; `changes-requested` only with at least one part flagged;
   otherwise `pending`.
 

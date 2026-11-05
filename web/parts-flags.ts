@@ -7,7 +7,7 @@ type Params = Readonly<Record<string, string | number>>;
 export type Translate = (key: string, params?: Params) => string;
 export type LabelledFlag =
   | { kind: 'faint'; item: string; art: number; maxAlpha: number; box: readonly [number, number, number, number] }
-  | { kind: 'check'; item: string; path: string; root: string; status: string | null; entry: Readonly<Record<string, unknown>> };
+  | { kind: 'check'; item: string; path: string; root: string; status: string | null; entry: Readonly<Record<string, unknown>>; classification?: 'part' | 'pair' | 'evidence' | 'unclassified' };
 
 const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const str = (v: unknown): v is string => typeof v === 'string';
@@ -37,4 +37,12 @@ function checkReadings(flag: Extract<LabelledFlag, { kind: 'check' }>, t: Transl
     return [t('Block {gate}: {status} · {part}', { gate: flag.root, status: flag.status, part: flag.item }), ...readings].join(' · ');
   }
   return t('Check line {path}', { path: flag.path });
+}
+
+/** Presentation only: verdict/2 keeps its original producer IDs and hash binding. */
+export function readingGroup(flag: LabelledFlag): 'mesh' | 'part' | 'pair' | 'evidence' | 'unclassified' {
+  return flag.kind === 'faint' ? 'mesh' : flag.classification ?? 'unclassified';
+}
+export function countedFlag(flag: LabelledFlag): boolean {
+  return flag.kind === 'faint' || readingGroup(flag) === 'part';
 }

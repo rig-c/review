@@ -26,7 +26,7 @@ const page = await launchCdpSession(profile);
 // Static, concrete expectations. Both custom single-source reports deliberately have the SAME basename.
 const cases = [
   { name: 'no-check-cli', sources: ['mesh_report.json'], missing: ['check.json'], en: { back_defect: 'mesh 1', back_control: '', front: '' }, ko: { back_defect: '메시 1', back_control: '', front: '' } },
-  { name: 'custom-check-only', sources: ['custom.json'], missing: ['mesh_report.json'], en: { back_defect: 'check 4', back_control: 'check 2', front: 'check 5' }, ko: { back_defect: '체크 4', back_control: '체크 2', front: '체크 5' } },
+  { name: 'custom-check-only', sources: ['custom.json'], missing: ['mesh_report.json'], en: { back_defect: '', back_control: '', front: '' }, ko: { back_defect: '', back_control: '', front: '' } },
   { name: 'custom-mesh-only', sources: ['custom.json'], missing: ['check.json'], en: { back_defect: 'mesh 1', back_control: '', front: '' }, ko: null },
   { name: 'both-read-empty', sources: ['mesh_report.json', 'check.json'], missing: [], en: { back_defect: '', back_control: '', front: '' }, ko: null },
 ] as const;
