@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/rig-c/review/compare/v1.7.0...v1.8.0) (2026-11-05)
+
+
+### Features
+
+* **parts:** inspect assembled package placements and draw order ([#392](https://github.com/rig-c/review/issues/392)) ([48f2a5d](https://github.com/rig-c/review/commit/48f2a5dd23a1f38f8cbc57d356a9d02ff69f0270))
+
 ## [1.7.0](https://github.com/rig-c/review/compare/v1.6.0...v1.7.0) (2026-11-05)
 
 
