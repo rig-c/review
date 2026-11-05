@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { ALIAS_COMMAND_TIMEOUT_MS, PACK_TIMEOUT_MS } from '../scripts/alias_tarball.ts';
+import { ALIAS_COMMAND_TIMEOUT_MS, MAX_PACK_TIMEOUT_MS, PACK_TIMEOUT_MS } from '../scripts/alias_tarball.ts';
 
 const ROOT = resolve(import.meta.dir, '..');
 const helper = join(ROOT, 'scripts/alias_tarball.ts');
@@ -113,3 +113,51 @@ for (const status of [0, 7]) {
     });
   }, ALIAS_COMMAND_TIMEOUT_MS + 10_000);
 }
+
+// This private tiny package exercises the real CLI path with no --tarball:
+// both the primary and alias npm processes must receive the explicit budget.
+test('CLI release override reaches both real packs beyond the default bound and still gates equality', () => {
+  control((dir, bin) => {
+    const scripts = join(dir, 'scripts');
+    mkdirSync(scripts);
+    const copy = join(scripts, 'alias_tarball.ts');
+    writeFileSync(copy, readFileSync(helper));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@rig-c/review', version: '1.2.3', files: ['payload.bin'] }, null, 2) + '\n');
+    writeFileSync(join(dir, 'payload.bin'), Buffer.from([0, 1, 2, 255]));
+    const trace = join(dir, 'calls');
+    fakeNpm(bin, `
+      import { appendFileSync } from 'node:fs';
+      import { spawnSync } from 'node:child_process';
+      appendFileSync(${JSON.stringify(trace)}, 'pack\\n');
+      Bun.sleepSync(${PACK_TIMEOUT_MS + 250});
+      const r = spawnSync(${JSON.stringify(npm)}, process.argv.slice(2), { stdio: 'inherit', timeout: ${PACK_TIMEOUT_MS}, killSignal: 'SIGKILL' });
+      process.exit(r.status ?? 1);
+    `);
+    const started = performance.now();
+    const result = run(copy, bin, ['pack', '--name', 'rig-review', '--out', join(dir, 'out'), '--pack-timeout-ms', String(MAX_PACK_TIMEOUT_MS)]);
+    const elapsed = Math.round(performance.now() - started);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(readFileSync(trace, 'utf8')).toBe('pack\npack\n');
+    expect(result.stderr).toContain('byte for byte but for the name line');
+    expect(readFileSync(result.stdout.trim()).byteLength).toBeGreaterThan(0);
+    expect(elapsed).toBeGreaterThan(2 * PACK_TIMEOUT_MS);
+    expect(elapsed).toBeLessThan(ALIAS_COMMAND_TIMEOUT_MS + 5_000);
+    console.log(`ALIAS_RELEASE_OVERRIDE: ${elapsed} ms; two native packs each delayed beyond ${PACK_TIMEOUT_MS} ms; CLI equality gate passed`);
+  });
+}, ALIAS_COMMAND_TIMEOUT_MS + 10_000);
+
+test('CLI refuses above-ceiling and malformed pack bounds before invoking npm', () => {
+  control((dir, bin) => {
+    const trace = join(dir, 'called');
+    fakeNpm(bin, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(trace)}, 'unexpected npm'); process.exit(9);`);
+    expect(PACK_TIMEOUT_MS).toBe(15_000);
+    expect(MAX_PACK_TIMEOUT_MS).toBe(300_000);
+    for (const value of [String(MAX_PACK_TIMEOUT_MS + 1), '0', '-1', 'NaN', 'Infinity', '1.5', '9007199254740992']) {
+      const result = run(helper, bin, ['pack', '--name', 'rig-review', '--out', join(dir, 'out'), '--pack-timeout-ms', value]);
+      expect(result.status, `${value}: ${result.stderr}`).toBe(2);
+      expect(result.stderr).toContain('--pack-timeout-ms must be an integer in 1..300000 ms');
+      expect(result.stdout).toBe('');
+    }
+    expect(readdirSync(dir)).toEqual(['bin']);
+  });
+}, ALIAS_COMMAND_TIMEOUT_MS + 10_000);

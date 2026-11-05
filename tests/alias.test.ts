@@ -221,6 +221,7 @@ test('release packs after the scoped gate and publishes only an equal alias with
     const calls = readFileSync(trace, 'utf8');
     expect(result.status, result.out).toBe(packExit === '0' ? 0 : 2);
     expect(calls).toContain('bun scripts/alias_tarball.ts pack --name rig-review --out ');
+    expect(calls).toContain('--pack-timeout-ms 300000\n');
     if (packExit === '0') expect(calls).toContain(`npm publish ${tgz} --provenance --access public\n`);
     else expect(calls).not.toContain('npm publish');
   }
