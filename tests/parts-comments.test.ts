@@ -1,6 +1,6 @@
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
-import {expect,test} from 'bun:test';
+import {beforeAll,expect,test} from 'bun:test';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -13,6 +13,8 @@ import {resolvedCropPath,storePngCrop} from '../src/comment-crops.ts';
 import {parsePartsComment,snapImageRegion,type PartsComment} from '../src/parts-comment.ts';
 import {parseStageComment} from '../src/stage-comment.ts';
 import {commentFixture,candidate} from './helpers/parts-comments-package.ts';
+// Prime the implicit spawn environment before any per-test state exists; children must get explicit state.
+beforeAll(async()=>{const warmup=Bun.spawn([process.execPath,'-e','void 0'],{stdout:'ignore',stderr:'pipe'});expect(await warmup.exited).toBe(0);});
 test('parts comments: two records round-trip in verdict/2 and both exports; decoded server native RGBA equals original subrect including alpha',async()=>{
  const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'parts-comments-'));try{const pkg=await commentFixture(root),before=await Promise.all(pkg.files.map(f=>readFile(f.abs))),one=await preparePartsComment(pkg,candidate(pkg)),two=await preparePartsComment(pkg,{...candidate(pkg),id:'comment-two',summary:'Second edge'});
  const parts=Object.fromEntries(pkg.items.map(i=>[i.name,{outcome:'pending',note:''}]));const saved=await saveVerdict(pkg,{status:'pending',parts,comments:[one,two]});expect(saved.schema).toBe('rig-review-parts-verdict/2');expect((await readVerdict(pkg)).verdict!.comments).toEqual([one,two]);
@@ -49,7 +51,8 @@ test('parts comment HTTP routes enforce origin/capability/closed paths and CLI e
  const pathInjection=await post({...c,crop:{...c.crop,path:'../../outside.png'}});expect(pathInjection.status).toBe(400);expect((await pathInjection.json()).error).toContain('PARTS_COMMENT_CROP_INVALID');
  for(const [body,name]of [[{...c,imageHash:'0'.repeat(64)},'PARTS_COMMENT_STALE_SOURCE'],[{...c,imageRegion:{...c.imageRegion,x:1.5}},'PARTS_COMMENT_FRACTIONAL'],[{...c,crop:{...c.crop,png:c.crop.png.replace('AAAA','BBBB')}},'COMMENT_CROP_INVALID'],[{...c,view:{...c.view,camera:{...c.view.camera,zoom:17}}},'PARTS_CAMERA_RANGE'],[{...c,view:{...c.view,camera:{...c.view.camera,unknown:1}}},'PARTS_COMMENT_INVALID']] as const){const res=await post(body);expect(res.status).toBe(400);expect((await res.json()).error).toContain(name);}
  const res=await post(c);expect(res.status).toBe(200);const one=(await res.json()).comment;await saveVerdict(pkg,{status:'pending',parts:Object.fromEntries(pkg.items.map(i=>[i.name,{outcome:'pending'}])),comments:[one]});
- for(const format of ['json','issue']){const proc=Bun.spawn([process.execPath,'src/cli.ts','parts',root,'--format',format],{stdout:'pipe',stderr:'pipe'}),text=await new Response(proc.stdout).text(),error=await new Response(proc.stderr).text();expect(await proc.exited).toBe(0);expect(error).toBe('');expect(text).toContain(one.nativeCrop.sha256);expect(text).toContain(one.crop.sha256);expect(text).not.toContain('data:image');}
+ const cliState=process.env.RIG_REVIEW_STATE_DIR!;
+ for(const format of ['json','issue']){const proc=Bun.spawn([process.execPath,'src/cli.ts','parts',root,'--format',format],{env:{...process.env,RIG_REVIEW_STATE_DIR:cliState},stdout:'pipe',stderr:'pipe'}),text=await new Response(proc.stdout).text(),error=await new Response(proc.stderr).text();expect(await proc.exited,error).toBe(0);expect(error).toBe('');expect(text).toContain(one.nativeCrop.sha256);expect(text).toContain(one.crop.sha256);expect(text).not.toContain('data:image');}
  expect((await fetch(origin+'/api/parts/comment-crops/../../outside.png')).status).toBe(404);
  }finally{server.stop(true);await rm(root,{recursive:true,force:true});}
 });
