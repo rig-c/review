@@ -129,7 +129,7 @@ function renderFlags(): void {
   const data = state.data!, item = data.items[state.selected];
   const list = $('pv-flags');
   const flags = item ? data.flags.filter(f => f.item === item.name) : [];
-  list.replaceChildren(...flags.map(f => {
+  const row = (f: Flag): HTMLLIElement => {
     const li = document.createElement('li');
     li.dataset.flagId = f.id; li.dataset.flagSource = f.source;
     const label = document.createElement('span'); label.className = 'pv-flag-label'; label.textContent = flagLabel(f, t);
@@ -141,12 +141,35 @@ function renderFlags(): void {
       raw.append(summary, code); li.append(raw);
     }
     return li;
+  };
+  // Source and producer-root groups are presentation only. Every original row and verdict flag id is retained.
+  list.replaceChildren(...(['mesh_report', 'check'] as const).flatMap(source => {
+    const fromSource = flags.filter(f => f.source === source);
+    if (!fromSource.length) return [];
+    const sourceItem = document.createElement('li'), heading = document.createElement('h3');
+    sourceItem.dataset.pvSource = source;
+    heading.textContent = source === 'mesh_report' ? 'mesh_report.json' : 'check.json';
+    sourceItem.append(heading);
+    const roots = new Map<string, Flag[]>();
+    for (const f of fromSource) {
+      const root = f.kind === 'check' ? f.root : 'contour.bridges.faint';
+      const group = roots.get(root) ?? [];
+      group.push(f); roots.set(root, group);
+    }
+    for (const [root, group] of roots) {
+      const details = document.createElement('details'), summary = document.createElement('summary'), rows = document.createElement('ul');
+      details.dataset.pvRoot = root; details.dataset.flagSource = source;
+      summary.textContent = group.length === 1 ? t('{root} · 1 row', { root }) : t('{root} · {count} rows', { root, count: group.length });
+      rows.append(...group.map(row)); details.append(summary, rows); sourceItem.append(details);
+    }
+    return [sourceItem];
   }));
   if (!flags.length) { const li = document.createElement('li'); li.className = 'pv-none'; li.textContent = t('No producer flag names this part.'); list.replaceChildren(li); }
   $('pv-flag-sources').textContent = [
     data.flagSources.length ? t('Read from: {files}.', { files: data.flagSources.join(', ') }) : '',
     data.flagMissing.length ? t('Not found: {files}.', { files: data.flagMissing.join(', ') }) : '',
     t('Occlusion coverage is not read yet: the producer does not write it.'),
+    t('Grouped by source and producer root; counts are rows, not a classification of defects.'),
   ].filter(Boolean).join(' ');
 }
 
@@ -158,8 +181,16 @@ function renderList(): void {
     button.type = 'button'; button.dataset.pvItem = item.name; button.title = item.name;
     if (data.items[state.selected]?.name === item.name) button.setAttribute('aria-current', 'true');
     const name = document.createElement('span'); name.className = 'pv-name'; name.textContent = item.name;
-    const count = data.flags.filter(f => f.item === item.name).length;
-    const flags = document.createElement('span'); flags.className = 'pv-count'; flags.textContent = count ? `⚑${count}` : '';
+    const onItem = data.flags.filter(f => f.item === item.name);
+    const flags = document.createElement('span'); flags.className = 'pv-count';
+    // flagSources holds actual basenames (including custom.json); flagMissing canonically names unread kinds.
+    const meshRead = !data.flagMissing.includes('mesh_report.json'), checkRead = !data.flagMissing.includes('check.json');
+    const mesh = onItem.filter(f => f.source === 'mesh_report').length, check = onItem.filter(f => f.source === 'check').length;
+    if (onItem.length) {
+      if (meshRead && checkRead) flags.textContent = t('mesh {mesh} · check {check}', { mesh, check });
+      else if (meshRead) flags.textContent = t('mesh {mesh}', { mesh });
+      else if (checkRead) flags.textContent = t('check {check}', { check });
+    }
     const outcome = state.verdict.get(item.name)?.outcome ?? 'pending';
     const badge = document.createElement('span'); badge.className = 'pv-badge'; badge.dataset.outcome = outcome; badge.textContent = t(outcome === 'clean' ? 'Clean' : outcome === 'flagged' ? 'Flagged' : 'Pending');
     button.append(name, flags, badge);

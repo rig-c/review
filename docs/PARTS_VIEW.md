@@ -32,6 +32,32 @@ is written), `--port <n>`. Like `review`, it serves in the foreground and exits 
   region's own view keeps 4 page pixels around its box (dashed) so bleed is visible. Clicking a region opens it.
 - **Producer flags**, read from the files rig-parts writes and shown on the part they name. None is re-measured here. Each reads as one labelled line (an opening's parts, animation, frame and cells; a seam pair's pixel counts; a gate's name, status and readings), with the producer's object verbatim under a collapsed **Producer line**.
 
+### Producer row groups
+
+The sidebar reports separate source counts, for example **mesh 1 · check 4**, rather than a combined flag total.
+Only sources actually read get a count; an absent report is never shown as zero. A part with no flags from any
+read source has no count badge. Custom input filenames follow the same rule.
+The selected part's rows sit under **mesh_report.json** and **check.json**, each with collapsed producer-root groups
+and their row counts. Open a group to inspect its rows. A check headline includes its root, exact JSON path and
+the row's own string fields (including pair names, part names, status and reason when present), followed by the
+existing labelled readings. The enclosing block's status is labelled **Block**; a row's own `unavailable` does not
+become `WARN` merely because its block warns. Producer field values and the raw object are never translated.
+
+This is grouping by input source, **not classification of defects**. The existing extraction rules below are
+unchanged: unavailable support rows, informational pair readings and unknown rows that the reader already
+attributed remain present, counted under their source. One producer row can name multiple parts and appear on each;
+counts are per-part attributions, not unique problems across a rig. No scope, finding/evidence kind or acceptance
+verdict is inferred. Source hashes, saved flag ids and sign-off binding remain unchanged.
+
+The public regression input [`parts-check-380.json`](https://github.com/rig-c/review/blob/main/tests/fixtures/parts-check-380.json)
+is synthetic data, not a producer run or a private package. Its fields follow the producer's
+[`SupportReport` / `SupportPair`](https://github.com/rig-c/parts/blob/main/src/coincide.ts),
+[`MotionSeamLine` / `MotionSeamPair` and `LimbLine` / `LimbRow`](https://github.com/rig-c/parts/blob/main/src/check.ts).
+Alongside the public planted parts package, it retains 1 mesh attribution and 11 check attributions: on the back
+defect part **mesh 1 · check 4**, on the control **mesh 0 · check 2**, and on the front **mesh 0 · check 5**.
+The fixture deliberately keeps unavailable support, pair and part rows together. DOM checks exercise collapsed
+root counts, distinct same-part pair headlines, separate source badges and unchanged input hashes in both languages.
+
 | Flag | Read from | When |
 | --- | --- | --- |
 | `faint:<i>` | `mesh_report.json` beside `parts.json` (`rig` writes it there): a row's `contour.bridges.faint[i]` | a faint island the mesh left out (rig-parts #326) |
