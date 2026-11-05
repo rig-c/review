@@ -446,3 +446,34 @@ Each mark is an ordinary feedback row, category defect, with its available singl
 Placing and editing comments are refused while an unapplied authoring preview or designation is on stage, without disabling the **Comment · C (n)** button. The control's tooltip and adjacent status note name `COMMENT_UNAPPLIED_PREVIEW` and the active tool (Idle tracks, Rig fields dial/handles, Physics live overrides, a loaded density-strip candidate, or Chest/Bones/Cuts/Cloth/Mesh editing geometry/handles), and clicking **Comment · C (n)** still opens the list read-only so existing comments stay reachable and restorable while placing and editing are refused by that same named reason. Pending form values with no stage effect remain allowed. Stop that preview explicitly; Comment never clears or applies it. An applied scratch build retains its refusal (`COMMENT_APPLIED_BUILD_UNSUPPORTED`), and a model replacement names `COMMENT_SOURCE_BUSY`. Enable-before-preview and asynchronous pause/crop transitions are rechecked before capture/save. Standalone Turn pad, world/reference inspection and source mesh/bone/selection/weights inspection stay available. Retarget has no unapplied live pose path; Apply is a rebuild.
 
 A reference-basis comment cannot become a producer-frame strip: CLI and browser batch export refuse `COMMENT_REFERENCE_STRIP_UNAVAILABLE` for reference-frame comments on any viewport, including compare A/B fallback. No frame-rate/time mapping is attempted. Ordinary manual and producer-frame intervals still export; time-only comments retain `COMMENT_CLOCK_UNAVAILABLE`. Comments and their JSON/issue reports remain savable/readable with their original reference timing.
+
+## Four inspection stages
+
+The same numbered navigation appears on parts, compiled and compare inspections:
+1 Parts + mesh, 2 Interview, 3 Rig + animation, 4 Direction. These are navigation,
+not create pipeline stages or sign-offs. Opening or switching never submits a
+verdict, applies an edit or starts a producer job. Interview and Direction name
+their missing consumer contracts; no tools are fabricated for them.
+
+Stage 1 on compiled sessions embeds the existing **atlas inspection, read only**.
+Its atlas is always the **inspected input package**, never a subsequently applied
+scratch revision. The parent keeps pending edits and applied builds untouched;
+applied-scratch atlas inspection is unavailable. Data reads revalidate the full
+inspection binding. The initial atlas cache resolves only after post-load Review and Parts binding
+checks. Indexed image reads validate the pinned model and requested
+page hash through the same opened file, without rehashing unrelated reference
+video bytes. Pre-rig parts, mesh sign-off and draft corrections are not
+available in this embedding. Use the existing `parts` command for pre-rig parts
+and its separate explicit sign-off. Missing model/atlas inputs name the missing
+capability. No sibling package is guessed.
+
+Only Stage 3 shows the legacy Setup, Animate and Compare switch; its existing
+instruments, DOM and mode IDs are retained. In Stage 1 a compare session keeps
+the A/B source picker usable and shows the selected side's cached atlas frame.
+**Open setup mesh instruments** returns from the atlas to Setup; it does not
+rebuild. Existing bookmarks, Apply/Reset provenance, selected slot, compare side,
+time, pending edits and applied build stay owned by those original tools. Stage
+changes retain both the original workspace and each side's atlas controller in
+the document. Language changes update retained frames without reloading them.
+The parts-only entry retains its part selection, geometry and pending verdict
+while visiting unavailable stages; it needs no compiled model.

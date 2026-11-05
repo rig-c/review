@@ -148,3 +148,5 @@ means the existing parts view and verdict format remain unchanged.
 Explicit CLI file paths are the user's designation, as with `--mesh-report`;
 discovered paths cannot escape the package. This view never writes geometry,
 bones, weights or source images. Repairs remain producer config changes.
+
+The four-stage navigator preserves this entry and its explicit save behavior. Compiled sessions reuse the atlas surface read-only; see [Four inspection stages](PANELS.md#four-inspection-stages).

@@ -1,3 +1,4 @@
+import {stagePartsRoutes} from './stage-parts.ts';
 import {createControlServer,type ControlIdentity} from './control-server.ts';
 import {openGate,staleOpenStatus,accessGate,openNonceGate,openNonceHeader,sameSecret,stampOpen,type OpenIdentity} from './open-protocol.ts';
 import { readFile } from 'node:fs/promises';
@@ -21,7 +22,7 @@ import { createEnvironmentCheck, ENVIRONMENT_CHECK_LIMIT, EnvironmentCheckError 
 import { renderCompareHtml } from './compare-html.ts';
 import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
 
-const headers={'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
+const headers={'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; frame-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
 const MALFORMED=new Set(['REBUILD_REQUEST_INVALID','DENSITY_STRIP_REQUEST_INVALID','DENSITY_STRIP_FIELD','MESH_PATCH_SCOPE','EDIT_PATCH_INVALID','EDIT_PATCH_OP_UNKNOWN','EDIT_PATCH_POINTER_INVALID','EDIT_PATCH_CMD_UNKNOWN','EDIT_PATCH_ARG_UNKNOWN','BONES_OP_OUT_OF_SCOPE','RETARGET_REQUEST_INVALID']);
 const json=(value:unknown,status=200)=>Response.json(value,{status,headers});
 async function bodyJson(req:Request,limit=1024*1024,what='Session payload exceeds 1 MiB'):Promise<unknown>{
@@ -43,6 +44,7 @@ function serveAsset(req:Request,path:string):Response{
 }
 /** `capability` (open workers and foreground CLI serving) gates every non-GET request; tests may omit it. */
 export async function startCompareServer(p:ComparePackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string;stripConcurrency?:number;graceMs?:number;unopenedTimeoutMs?:number;exitOnClose?:boolean;onClose?:(info:LiveExitInfo)=>void|Promise<void>;log?:(line:string)=>void}={}){
+  const stageParts=stagePartsRoutes({a:p.a,b:p.b});
   const bundle=await buildWeb('compare');
   const frames=referenceFrameIndex(p.referencePath,p.response.binding.reference.sha256,p.response.sourceHash);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review');
@@ -79,6 +81,8 @@ export async function startCompareServer(p:ComparePackage,options:{port?:number;
     }
     live.onRequestStart(url.pathname);
     try {
+    const stageResponse=await stageParts(req);if(stageResponse)return stageResponse;
+
     const controlled=await control?.(req,origin);if(controlled)return controlled;
     options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await assertCompareUnchanged(p);}catch{return staleOpenStatus(options.open!);}if(!live.rearmUnopened())return json({error:'Server is closing'},503);}return gate;}
     if(req.method==='PUT'&&url.pathname==='/api/compare/session'){

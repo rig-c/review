@@ -786,6 +786,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
           scrollTop: Math.round(animateScrollRoot.scrollTop),
           inView: targetRect.top < rootRect.bottom && targetRect.bottom > rootRect.top,
           dockTopDelta: Math.round(Math.abs(dockAfterRect.top - dockBeforeRect.top)),
+          geometry: {root:[rootRect.top,rootRect.bottom],target:[targetRect.top,targetRect.bottom],parent:targetEl.parentElement.id,hidden:targetEl.hidden,display:getComputedStyle(targetEl).display},
         });
       }
       const blockScrolling = { setup: setupBlockScrolls, animate: animateBlockScrolls };
@@ -1215,6 +1216,10 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       scrub.dispatchEvent(new Event('input', { bubbles: true }));
       await sleep(30);
 
+      // #366: stage navigation preserves actual pending ops, picked side and held time.
+      const stagePendingBefore = JSON.stringify({ops:ed.animation.ops(),stage:ed.stage('b'),time:scrub.value});
+      for(const number of [1,2,4,3]) {document.querySelector('[data-review-stage="'+number+'"]').click();if((getComputedStyle(document.querySelector('.mode-switch')).display!=='none')!==(number===3))throw new Error('STAGE_PRIMARY_HIERARCHY_LOST');}
+      if(JSON.stringify({ops:ed.animation.ops(),stage:ed.stage('b'),time:scrub.value})!==stagePendingBefore) throw new Error('STAGE_NAV_PENDING_STATE_LOST');
       const bOpsBeforeSwitch = ed.animation.ops();
       const bPosePreviewAt05 = ed.bone('rigid', 'b');
       const aPoseDuringBPreviewAt05 = ed.bone('rigid', 'a');
@@ -1264,6 +1269,13 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
     if (screenshotDir) {
       await mkdir(screenshotDir, { recursive: true });
       await writeFile(join(screenshotDir, 'slice4c-compare-side-b-1440x900.png'), await session.screenshot());
+      const beforeLanguage=await session.evaluate<string>(`JSON.stringify({side:window.rigReviewEditor.pickedSide?.(),a:window.rigReviewEditor.stage('a'),b:window.rigReviewEditor.stage('b'),ops:window.rigReviewEditor.animation.ops(),time:document.getElementById('scrub').value})`);
+      await session.evaluate(`(()=>{const s=document.getElementById('settings-language');s.value='ko';s.dispatchEvent(new Event('change'))})()`);
+      await writeFile(join(screenshotDir,'compare-stage3-ko.png'),await session.screenshot());
+      await session.evaluate(`(()=>{const s=document.getElementById('settings-language');s.value='en';s.dispatchEvent(new Event('change'))})()`);
+      const afterLanguage=await session.evaluate<string>(`JSON.stringify({side:window.rigReviewEditor.pickedSide?.(),a:window.rigReviewEditor.stage('a'),b:window.rigReviewEditor.stage('b'),ops:window.rigReviewEditor.animation.ops(),time:document.getElementById('scrub').value})`);
+      if(beforeLanguage!==afterLanguage)throw new Error('COMPARE_LANGUAGE_STATE_LOST');
+
     }
 
     const compareAnimationApplyAndUndoCheck = await session.evaluate<{
@@ -1300,6 +1312,10 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
       // Click Apply · Rebuild on Build B
       await ed.animation.apply();
+      document.querySelector('[data-review-stage="1"]').click();if(!document.querySelector('.review-stage-panel [role=status]').textContent.includes('inspected package'))throw new Error('STAGE_ATLAS_PROVENANCE_UNLABELLED');document.querySelector('[data-review-stage="3"]').click();
+      const stageAppliedBefore=JSON.stringify({a:ed.stage('a'),b:ed.stage('b'),ops:ed.animation.ops(),time:scrub.value});
+      for(const number of [1,2,4,3]) {document.querySelector('[data-review-stage="'+number+'"]').click();if((getComputedStyle(document.querySelector('.mode-switch')).display!=='none')!==(number===3))throw new Error('STAGE_PRIMARY_HIERARCHY_LOST');}
+      if(JSON.stringify({a:ed.stage('a'),b:ed.stage('b'),ops:ed.animation.ops(),time:scrub.value})!==stageAppliedBefore) throw new Error('STAGE_NAV_APPLIED_STATE_LOST');
       const bStage = ed.stage('b');
       const aStage = ed.stage('a');
 

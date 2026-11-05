@@ -50,6 +50,8 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  const read=method==='GET'||method==='HEAD',get:Route={mutation:false,limit:0,timeoutMs:30000,control:false};
  if(path===LIVE_PATH)return method==='GET'?{...get,live:true}:null;
  if(['/','/index.html','/main.js','/styles.css','/api/access'].includes(path))return read?get:null;
+ if(['/stage-parts.html','/parts.js','/parts.css'].includes(path))return read?get:null;
+ if((mode==='single'?/^\/api\/stage-parts(?:\/(?:image|page)\/\d+)?$/:/^\/api\/compare\/(?:a|b)\/stage-parts(?:\/(?:image|page)\/\d+)?$/).test(path))return read?get:null;
  if(path==='/api/control/config')return method==='GET'?{...get,control:true}:null;
  if(['/api/control/register','/api/control/poll','/api/control/ack','/api/control/close'].includes(path))return method==='POST'?{mutation:true,limit:16384,timeoutMs:10000,control:true}:null;
  const session=mode==='single'?'/api/session':'/api/compare/session',strip=mode==='single'?'/api/strip':'/api/compare/strip';
@@ -89,6 +91,26 @@ async function instanceRecord(control:string,key:string):Promise<RecordFile|null
 /** Worker statuses map to named front codes; worker text never reaches the client. */
 const upstreamFailure:Record<number,string>={400:'FRONT_UPSTREAM_REJECTED',403:'FRONT_UPSTREAM_FORBIDDEN',404:'FRONT_UPSTREAM_NOT_FOUND',405:'FRONT_UPSTREAM_METHOD',409:'FRONT_UPSTREAM_CONFLICT'};
 const responseHeaders=['content-type','content-length','content-range','accept-ranges','content-disposition','cache-control','content-security-policy','x-content-type-options','referrer-policy'];
+/** The trusted atlas frame alone may carry this closed navigation query. */
+export function stageFrameQuery(mode:'single'|'compare',search:string):boolean {
+ const params=new URLSearchParams(search),keys=[...params.keys()];
+ const allowed=mode==='single'?['stageEmbed','lang']:['stageEmbed','lang','side'];
+ return keys.length===allowed.length&&new Set(keys).size===keys.length&&keys.every(k=>allowed.includes(k))&&params.get('stageEmbed')==='1'&&['en','ko'].includes(params.get('lang')??'')&&(mode==='single'||['a','b'].includes(params.get('side')??''));
+}
+/** Preserve only this closed, bounded stage-data refusal; never relay arbitrary worker text. */
+async function stagePartsRefusal(mode:'single'|'compare',method:string,path:string,response:Response):Promise<string|null>{
+ const stageData=mode==='single'?path==='/api/stage-parts':/^\/api\/compare\/(?:a|b)\/stage-parts$/.test(path);
+ if(!stageData||method!=='GET'||response.status!==409||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))return null;
+ const limit=512,declared=response.headers.get('content-length');if(declared!==null&&(!/^\d+$/.test(declared)||Number(declared)>limit))return null;
+ const reader=response.body?.getReader();if(!reader)return null;
+ try{
+  const chunks:Uint8Array[]=[];let bytes=0;
+  for(;;){const {value,done}=await reader.read();if(done)break;bytes+=value.byteLength;if(bytes>limit){void reader.cancel().catch(()=>{});return null;}chunks.push(value);}
+  const body=new Uint8Array(bytes);let offset=0;for(const chunk of chunks){body.set(chunk,offset);offset+=chunk.byteLength;}
+  const data:unknown=JSON.parse(new TextDecoder().decode(body)),named='PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.';
+  return data!==null&&typeof data==='object'&&!Array.isArray(data)&&Object.keys(data).length===1&&(data as {error?:unknown}).error===named?named:null;
+ }catch{return null;}finally{reader.releaseLock();}
+}
 export const maximumUpstreamStreams=32;
 interface FrontLiveRelay {upstream:WebSocket;client:ServerWebSocket<FrontLiveRelay>|null}
 export function startFront(options:{control:string;port:number;nonce:string;fingerprint:string}){
@@ -108,7 +130,7 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
    if(req.headers.get('sec-fetch-site')==='cross-site'||sentOrigin!==null&&sentOrigin!==origin)return refuse('FRONT_SAME_ORIGIN_REQUIRED',403);
    const record=await instanceRecord(options.control,key);if(!record)return refuse('FRONT_INSTANCE_UNKNOWN: reopen with rig-review open',404);
    const route=frontRoute(record.mode,req.method,path);if(!route)return refuse('FRONT_ROUTE_REFUSED',404);
-   const landing=path==='/'||path==='/index.html';if(!landing&&url.search)return refuse('FRONT_QUERY_REFUSED',400);
+   const landing=path==='/'||path==='/index.html',stageFrame=path==='/stage-parts.html';if(stageFrame?!stageFrameQuery(record.mode,url.search):!landing&&!!url.search)return refuse('FRONT_QUERY_REFUSED',400);
    if(route.live){
     if(sentOrigin!==origin)return refuse('FRONT_SAME_ORIGIN_REQUIRED',403);
     if(req.headers.get('upgrade')?.toLowerCase()!=='websocket')return refuse('FRONT_UPGRADE_REQUIRED',426);
@@ -150,10 +172,10 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
    active++;let released=false;const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),route.timeoutMs);const release=()=>{if(released)return;released=true;active--;clearTimeout(timer);};
    req.signal.addEventListener('abort',()=>abort.abort(),{once:true});
    let upstream:Response;
-   try{upstream=await fetch(record.origin+path+(landing?url.search:''),{method:req.method,headers,...(body?{body}:{}),redirect:'manual',signal:abort.signal});}
+   try{upstream=await fetch(record.origin+path+(landing||stageFrame?url.search:''),{method:req.method,headers,...(body?{body}:{}),redirect:'manual',signal:abort.signal});}
    catch{release();return abort.signal.aborted&&!req.signal.aborted?refuse('FRONT_UPSTREAM_TIMEOUT',504):refuse('FRONT_INSTANCE_EXPIRED: reopen with rig-review open',410);}
    if(upstream.headers.get(openKeyHeader)!==key){void upstream.body?.cancel().catch(()=>{});release();return refuse('FRONT_INSTANCE_REPLACED: reopen with rig-review open',410);}
-   if(upstream.status>=400&&upstream.status!==416){void upstream.body?.cancel().catch(()=>{});release();const code=upstreamFailure[upstream.status];return refuse(code??'FRONT_UPSTREAM_FAILED',code?upstream.status:502);}
+   if(upstream.status>=400&&upstream.status!==416){const named=await stagePartsRefusal(record.mode,req.method,path,upstream);void upstream.body?.cancel().catch(()=>{});release();if(named)return refuse(named,409);const code=upstreamFailure[upstream.status];return refuse(code??'FRONT_UPSTREAM_FAILED',code?upstream.status:502);}
    const out=new Headers();for(const name of responseHeaders){const value=upstream.headers.get(name);if(value!==null)out.set(name,value);}
    if(!upstream.body||req.method==='HEAD'){void upstream.body?.cancel().catch(()=>{});release();return new Response(null,{status:upstream.status,headers:out});}
    if(timer)clearTimeout(timer);const reader=upstream.body.getReader();

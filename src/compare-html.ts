@@ -72,7 +72,7 @@ const REGIONS: readonly {
     placeholder: '<!-- shared:animate-block-row -->',
     start: '<nav class="block-row" role="tablist" aria-label="Animate blocks">',
     end: '<section id="motion-tools"',
-    compareEnd: '<div class="compare-info">',
+    compareEnd: '<section id="compare-transport-context">',
   },
   {
     key: 'transportStrips',

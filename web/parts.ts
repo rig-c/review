@@ -1,3 +1,4 @@
+import {bindStageNav} from './stage-nav.ts';
 /**
  * The parts and atlas view (#348). Every part on its own, on a sentinel background, at native scale with 2× and 4×
  * nearest-neighbour zoom; the footprints of the parts drawn in front of it; the producer's flags on it; and a
@@ -7,7 +8,7 @@
  * Nothing here measures the art: flags come from the producer's files, and the footprint is the front parts' own
  * alpha drawn over the selected part (the parts.json draw order, back first, says which parts are in front).
  */
-import { bindDomI18n, onLanguageChange, t } from './i18n.ts';
+import { bindDomI18n, onLanguageChange, setLinkLanguage, setLanguagePreference, t } from './i18n.ts';
 import { pageInstanceAccess } from './instance-access.ts';
 import { connectLiveWindow } from './live-connection.ts';
 import { flagLabel } from './parts-flags.ts';
@@ -32,6 +33,10 @@ export const REGION_MARGIN = 4;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const access = pageInstanceAccess();
+const stageEmbedded=new URL(location.href).searchParams.get('stageEmbed')==='1';
+const stageSide=new URL(location.href).searchParams.get('side');
+const partsApi=stageEmbedded?(stageSide==='a'||stageSide==='b'?`/api/compare/${stageSide}/stage-parts`:'/api/stage-parts'):'/api/parts';
+
 const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, view: 'item' as 'item' | 'page', page: 0, meshShown: new Set<string>(), verdict: new Map<string, Entry>() };
 const images = new Map<string, HTMLImageElement>();
 
@@ -45,8 +50,8 @@ function load(src: string): Promise<HTMLImageElement> {
     img.src = access.route(src);
   });
 }
-const itemImage = (item: Item) => load(`/api/parts/image/${item.index}`);
-const pageImage = (name: string) => { const page = state.data!.pages.find(p => p.name === name)!; return load(`/api/parts/page/${page.index}`); };
+const itemImage = (item: Item) => load(`${partsApi}/image/${item.index}`);
+const pageImage = (name: string) => { const page = state.data!.pages.find(p => p.name === name)!; return load(`${partsApi}/page/${page.index}`); };
 
 function setCanvas(canvas: HTMLCanvasElement, w: number, h: number): CanvasRenderingContext2D {
   canvas.width = w; canvas.height = h;
@@ -225,6 +230,7 @@ function updateEntry(change: Partial<{ outcome: Outcome; note: string }>): void 
 }
 
 async function save(): Promise<void> {
+  if(stageEmbedded)return;
   const status = $('pv-save-status');
   const body = { status: $<HTMLSelectElement>('pv-overall').value, parts: Object.fromEntries(state.verdict) };
   const res = await fetch(access.route('/api/parts/verdict'), { method: 'POST', headers: access.headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
@@ -235,10 +241,19 @@ async function save(): Promise<void> {
 
 async function boot(): Promise<void> {
   bindDomI18n(document);
+  bindStageNav({partsOnly:true,model:false});
+  if(stageEmbedded){
+    const header=document.querySelector<HTMLElement>('.pv-top')!,status=$('pv-load');
+    header.hidden=true;status.classList.add('pv-embedded-status');header.after(status);
+    document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;
+    document.querySelector<HTMLElement>('.pv-verdict')!.hidden=true;
+    const saveButton=$<HTMLButtonElement>('pv-save');saveButton.disabled=true;saveButton.title=t('Embedded atlas inspection is read-only. Use the parts command for a separate sign-off.');
+  }
+  window.addEventListener('message',event=>{if(event.source!==parent||event.origin!==location.origin||event.data?.type!=='review-stage-language'||!['en','ko'].includes(event.data.language))return;setLinkLanguage(null);setLanguagePreference(event.data.language);});
   connectLiveWindow(access);
-  const res = await fetch(access.route('/api/parts'), { headers: access.headers() });
+  const res = await fetch(access.route(partsApi), { headers: access.headers() });
   const data = await res.json() as ViewData & { error?: string };
-  if (!res.ok) { $('pv-load').textContent = data.error ?? t('Load failed.'); return; }
+  if (!res.ok) { const status=$('pv-load');status.textContent=t(data.error??'Load failed.');status.dataset.result='refused';return; }
   state.data = data;
   for (const item of data.items) state.verdict.set(item.name, { outcome: 'pending', note: '', ...(item.mesh ? { mesh: { outcome: 'pending' as Outcome, note: '' } } : {}) });
   if (data.verdict) { for (const [name, v] of Object.entries(data.verdict.parts)) if (state.verdict.has(name)) state.verdict.set(name, { outcome: v.outcome, note: v.note ?? '', ...(v.mesh ? { mesh: v.mesh } : {}) }); $<HTMLSelectElement>('pv-overall').value = data.verdict.status; }
@@ -247,6 +262,7 @@ async function boot(): Promise<void> {
   $('pv-mode').textContent = data.mode === 'parts' ? t('Parts package, before rigging') : t('Atlas of a built rig');
   $('pv-list-title').textContent = data.mode === 'parts' ? t('PARTS') : t('REGIONS');
   $('pv-load').textContent = data.verdictStale === 'files' ? t('A saved sign-off was made on other files; this review starts fresh.') : data.verdictStale === 'flags' ? t('The saved sign-off is for different producer flags; this review starts fresh.') : data.verdict ? t('Saved sign-off loaded.') : '';
+  if(stageEmbedded){$('pv-load').hidden=$('pv-load').textContent==='';document.querySelector<HTMLElement>('.pv-layout')!.hidden=false;}
   $('pv-atlas-switch').hidden = data.mode !== 'atlas';
   const footprints = $<HTMLInputElement>('pv-footprints');
   if (data.mode === 'atlas') { footprints.disabled = true; $('pv-footprint-control').title = t('Footprints need a parts package: atlas regions carry no rig placement.'); }

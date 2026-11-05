@@ -1,3 +1,4 @@
+import {stagePartsRoutes} from './stage-parts.ts';
 import {createControlServer,type ControlIdentity} from './control-server.ts';
 import { readFile } from 'node:fs/promises';
 import { appRoot, buildWeb } from './build.ts';
@@ -17,7 +18,7 @@ import { createEnvironmentCheck, ENVIRONMENT_CHECK_LIMIT, EnvironmentCheckError 
 import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
+const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; frame-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
 /** Request shapes the page or an edit card got wrong: 400. Everything else a refusal names is an outcome (200). */
 const MALFORMED=new Set(['REBUILD_REQUEST_INVALID','DENSITY_STRIP_REQUEST_INVALID','DENSITY_STRIP_FIELD','MESH_PATCH_SCOPE','EDIT_PATCH_INVALID','EDIT_PATCH_OP_UNKNOWN','EDIT_PATCH_POINTER_INVALID','EDIT_PATCH_CMD_UNKNOWN','EDIT_PATCH_ARG_UNKNOWN','BONES_OP_OUT_OF_SCOPE','RETARGET_REQUEST_INVALID']);
 function json(data:unknown,status=200){return Response.json(data,{status,headers});}
@@ -31,6 +32,7 @@ async function bodyJson(req:Request,limit=1024*1024,what='Session payload exceed
 /** `capability` (open workers and foreground CLI serving) gates every non-GET request; tests may omit it.
  * `cwd` is where the producer is looked for after the package's own directories (review's working directory by default). */
 export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string;stripConcurrency?:number;graceMs?:number;unopenedTimeoutMs?:number;exitOnClose?:boolean;onClose?:(info:LiveExitInfo)=>void|Promise<void>;log?:(line:string)=>void;viewOnly?:boolean}={}){
+  const stageParts=stagePartsRoutes({single:p});
   const bundle=await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
@@ -66,6 +68,8 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       }
       live.onRequestStart(url.pathname);
       try {
+    const stageResponse=await stageParts(req);if(stageResponse)return stageResponse;
+
       const controlled=await control?.(req,origin);if(controlled)return controlled;
       options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await unchanged();}catch{return staleOpenStatus(options.open!);}if(!live.rearmUnopened())return json({error:'Server is closing'},503);}return gate;}
       if(req.method==='PUT'&&url.pathname==='/api/session'){
