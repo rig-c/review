@@ -90,3 +90,5 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 #pv-reference{image-rendering:pixelated;image-rendering:crisp-edges;display:block}
 
 .pv-comparison{display:flex;flex-wrap:wrap;align-items:center;gap:12px}#pv-opacity{width:100px}
+
+.pv-overlay canvas{position:absolute;left:0;top:0;pointer-events:none}
