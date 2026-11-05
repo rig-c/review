@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/rig-c/review/compare/v1.10.0...v1.10.1) (2026-11-05)
+
+
+### Performance Improvements
+
+* **ci:** reuse verified verdicts for identical trees ([#415](https://github.com/rig-c/review/issues/415)) ([001ea9f](https://github.com/rig-c/review/commit/001ea9f936ca0fabb0eb4f01805170977b9362ad))
+
 ## [1.10.0](https://github.com/rig-c/review/compare/v1.9.0...v1.10.0) (2026-11-05)
 
 
