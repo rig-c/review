@@ -26,9 +26,9 @@ function compare(a: Snapshot, b: Snapshot) {
   const domDiff = propertyDiff(a.dom, b.dom);
   return { canvasBytes, domPropertyDifferences: domDiff.length, domDiff };
 }
-export async function provePartsEquivalence(page: CdpSession, load: (baseline: boolean, language: string) => Promise<void>, directory: string) {
-  const capture = async (baseline: boolean, language: string, name: string) => {
-    await load(baseline, language);
+export async function provePartsEquivalence(page: CdpSession, load: (baseline: boolean, language: string, cssMutation?: boolean) => Promise<void>, directory: string) {
+  const capture = async (baseline: boolean, language: string, name: string, cssMutation = false) => {
+    await load(baseline, language, cssMutation);
     await page.evaluate(`document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))`);
     const value = await page.evaluate<Snapshot>(expression);
     await writeFile(join(directory, name + '.json'), JSON.stringify(value));
@@ -44,9 +44,9 @@ export async function provePartsEquivalence(page: CdpSession, load: (baseline: b
   await page.evaluate(`(()=>{const c=document.getElementById('pv-canvas'),x=c.getContext('2d'),d=x.getImageData(0,0,c.width,c.height);d.data[0]^=1;x.putImageData(d,0,0)})()`);
   const pixel = await page.evaluate<Snapshot>(expression), pixelDiff = compare(before, pixel);
   await writeFile(join(directory, 'instrument-mutant-pixel.json'), JSON.stringify({ snapshot: pixel, diff: pixelDiff }));
-  // Restore only the deliberately changed backing-store byte, then plant exactly one inline CSS declaration.
-  await page.evaluate(`(()=>{const c=document.getElementById('pv-canvas'),x=c.getContext('2d'),d=x.getImageData(0,0,c.width,c.height);d.data[0]^=1;x.putImageData(d,0,0);document.getElementById('pv-bg').style.setProperty('opacity','0.5')})()`);
-  const css = await page.evaluate<Snapshot>(expression), cssDiff = compare(before, css);
+  // A fresh head document receives the mutant from its actual stylesheet response, not an inline edit.
+  const headBeforeCss = await capture(false, 'en', 'instrument-head-before-css');
+  const css = await capture(false, 'en', 'instrument-head-css-mutant', true), cssDiff = compare(headBeforeCss, css);
   const actualOpacityDiff = cssDiff.domDiff.filter(d => d.path.endsWith('.style.opacity') && d.left === '1' && d.right === '0.5');
   await writeFile(join(directory, 'instrument-mutant-css.json'), JSON.stringify({ snapshot: css, diff: cssDiff, actualOpacityDiff }));
   const languages = [];

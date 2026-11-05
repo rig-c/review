@@ -1,10 +1,10 @@
-/** Focused browser receipt; --baseline names the base commit's web/parts.ts, placed beside web dependencies.
- * Run with --baseline web/parts365-baseline.ts [--public <copied public build>]. The baseline is an external
- * receipt input, generated with git show before submission, and is never a shipped fixture.
+/** Focused browser receipt; --baseline-root names the exact frozen original source tree.
+ * Exact gate: --baseline-root <frozen original source> --instruments. All baseline imports and HTML/CSS/JS
+ * come from the preserved source tree, never head sources. This nonshipping receipt input is not a fixture.
  */
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { loadPartsView } from '../src/parts-view.ts';
 import { startPartsServer } from '../src/parts-server.ts';
@@ -12,8 +12,10 @@ import { writeMeshPackage } from './helpers/parts-mesh-package.ts';
 import { provePartsEquivalence } from './helpers/parts-equivalence.ts';
 import { launchSoftwareCapture } from './helpers/software-capture.ts';
 import { launchCdpSession } from './parts-explorer-browser.ts';
-const baselineArg = Bun.argv.indexOf('--baseline');
-if (baselineArg < 0 || !Bun.argv[baselineArg + 1]) throw new Error('Required: --baseline <base parts.ts entrypoint beside web dependencies>');
+const baselineArg = Bun.argv.indexOf('--baseline'), baselineRootArg = Bun.argv.indexOf('--baseline-root');
+const baselineRoot = baselineRootArg >= 0 ? resolve(Bun.argv[baselineRootArg + 1]!) : null;
+if (!baselineRoot && (baselineArg < 0 || !Bun.argv[baselineArg + 1])) throw new Error('Required: --baseline-root <frozen original source root>');
+if (Bun.argv.includes('--instruments') && !baselineRoot) throw new Error('Exact instruments require frozen original HTML/CSS/JS via --baseline-root');
 const root = await mkdtemp(join(tmpdir(), 'mesh-browser-')), profile = await mkdtemp(join(tmpdir(), 'mesh-profile-'));
 const shots = 'mesh-evidence'; await mkdir(shots, { recursive: true });
 await writeMeshPackage(root);
@@ -43,7 +45,7 @@ try {
   const sources = [...loaded.files, ...loaded.flagFiles];
   const hashSources = async () => Promise.all(sources.map(async f => ({ file: f.abs.slice(root.length + 1), sha256: new Bun.CryptoHasher('sha256').update(await readFile(f.abs)).digest('hex') })));
   const sourceBefore = await hashSources();
-  if (!Bun.argv.includes('--no-rig-only')) {
+  if (!Bun.argv.includes('--no-rig-only') || Bun.argv.includes('--capture-overlays')) {
   const server = await startPartsServer(loaded, { port: 0, capability, graceMs: 60000 });
   try {
     for (const lang of ['en', 'ko']) {
@@ -58,6 +60,7 @@ try {
       await writeFile(join(shots, `mesh-overlay-${lang}.png`), await page.screenshot());
       report[lang] = { figures, differences: 0, hiddenByDefault: before, gapCentre };
     }
+    if (!Bun.argv.includes('--no-rig-only')) {
     await ready(`http://127.0.0.1:${server.port}/?lang=en#cap=${capability}`);
     for (const name of ['gap', 'covered']) {
       await choose(name);
@@ -80,6 +83,7 @@ try {
     const sourceAfter = await hashSources();
     report.saveReopen = { pending, flagged, reopenedInBothLanguages: true, sourceBytesUnchanged: JSON.stringify(sourceBefore) === JSON.stringify(sourceAfter), sources: sourceAfter };
     if (JSON.stringify(sourceBefore) !== JSON.stringify(sourceAfter)) throw new Error('source bytes changed by sign-off');
+    }
   } finally { server.stop(true); }
   }
   // The independent no-rig fixture phase starts after the source-invariance proof.
@@ -93,18 +97,84 @@ try {
     await writeFile(join(shots, 'no-rig-current.png'), current);
     const noControls = await page.evaluate<boolean>(`!document.getElementById('pv-mesh-panel')&&!document.getElementById('pv-mesh-control')`);
     if (!noControls) throw new Error('mesh controls without rig');
-    // The HQ base entrypoint, built against unchanged shared view dependencies, supplied by the receipt adapter.
-    const base = await Bun.build({ entrypoints: [Bun.argv[baselineArg + 1]!], target: 'browser' }); if (!base.success) throw new Error('baseline bundle failed');
+    const digest = (bytes: string | Uint8Array) => new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+    const provenance = baselineRoot ? JSON.parse(await readFile(join(baselineRoot, 'baseline-provenance.json'), 'utf8')) as { authoritativeCommit: string; files: Record<string, string> } : null;
+    if (provenance) {
+      if (provenance.authoritativeCommit !== '37fe22adc46c8a55f86787982e3162f6984a7490') throw new Error('Wrong authoritative baseline');
+      for (const [name, hash] of Object.entries(provenance.files)) if (digest(await readFile(join(baselineRoot!, name))) !== hash) throw new Error(`Baseline source changed: ${name}`);
+    }
+    const base = await Bun.build({ entrypoints: [baselineRoot ? join(baselineRoot, 'web/parts.ts') : Bun.argv[baselineArg + 1]!], target: 'browser', format: 'esm', minify: false, metafile: true });
+    if (!base.success) throw new Error('baseline bundle failed');
+    const bundleInputs = Object.keys(base.metafile?.inputs ?? {});
+    const entryPoint = Object.values(base.metafile?.outputs ?? {}).find(o => o.entryPoint)?.entryPoint;
+    const expectedEntry = baselineRoot ? join(baselineRoot, 'web/parts.ts') : resolve(Bun.argv[baselineArg + 1]!);
+    let bundleInputRoot = process.cwd();
+    if (entryPoint && !isAbsolute(entryPoint)) {
+      if (!expectedEntry.endsWith('/' + entryPoint)) throw new Error('Cannot establish baseline metafile input root');
+      bundleInputRoot = expectedEntry.slice(0, -entryPoint.length);
+    }
+    if (baselineRoot) {
+      if (!bundleInputs.length) throw new Error('No baseline build input provenance');
+      for (const input of bundleInputs) {
+        const abs = resolve(bundleInputRoot, input), rel = relative(baselineRoot, abs);
+        if ((rel === '..' || rel.startsWith('../') || isAbsolute(rel)) && !abs.includes('/node_modules/')) throw new Error(`Baseline imported nonbaseline runtime source: ${input}`);
+      }
+    }
     const baseScript = await base.outputs[0]!.text();
-    let serveBaseline = true;
-    const headScript = Bun.argv.includes('--instruments') ? await (await fetch(`http://127.0.0.1:${server2.port}/parts.js`)).text() : '';
-    const proxy = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) { const u = new URL(req.url); if (u.pathname === '/api/live') return new Response(null, { status: 204 }); if (u.pathname === '/parts.js') return new Response(serveBaseline ? baseScript : headScript, { headers: { 'Content-Type': 'text/javascript' } }); return fetch(`http://127.0.0.1:${server2.port}${u.pathname}${u.search}`); } });
+    let serveBaseline = true, mutateHeadCss = false;
+    const headScript = await (await fetch(`http://127.0.0.1:${server2.port}/parts.js`)).text();
+    const headHtml = await readFile('web/parts.html', 'utf8'), headCss = await readFile('web/parts.css', 'utf8');
+    const baseHtml = baselineRoot ? await readFile(join(baselineRoot, 'web/parts.html'), 'utf8') : headHtml;
+    const baseCss = baselineRoot ? await readFile(join(baselineRoot, 'web/parts.css'), 'utf8') : headCss;
+    const cssMutant = headCss + '\n#pv-bg { opacity: 0.5 !important; }\n';
+    const baselineAssets: Record<string, string> = { '/': baseHtml, '/parts.css': baseCss, '/parts.js': baseScript };
+    const headAssets: Record<string, string> = { '/': headHtml, '/parts.css': headCss, '/parts.js': headScript };
+    const hashes = { baseline: Object.fromEntries(Object.entries(baselineAssets).map(([p, v]) => [p, digest(v)])), head: Object.fromEntries(Object.entries(headAssets).map(([p, v]) => [p, digest(v)])), headCssMutant: digest(cssMutant) };
+    if (Bun.argv.includes('--instruments') && (hashes.baseline['/parts.js'] === hashes.head['/parts.js'] || hashes.baseline['/parts.css'] === hashes.head['/parts.css'])) throw new Error('Distinct frozen baseline/head JS and CSS required; shared assets could hide regressions');
+    const dependencyComparison: Record<string, unknown> = {};
+    if (baselineRoot) {
+      const original = JSON.parse(await readFile(join(baselineRoot, 'package.json'), 'utf8')), head = JSON.parse(await readFile('package.json', 'utf8'));
+      for (const category of ['dependencies', 'devDependencies']) {
+        const shared: unknown[] = [], added: unknown[] = [], removed: unknown[] = [];
+        for (const [name, version] of Object.entries(original[category])) {
+          const installed = JSON.parse(await readFile(join('node_modules', name, 'package.json'), 'utf8')).version;
+          if (!(name in head[category])) { removed.push({ name, version }); continue; }
+          if (head[category][name] !== version) throw new Error(`Baseline/head dependency specification differs: ${name}`);
+          if (category === 'dependencies' && installed !== version) throw new Error(`Pinned dependency mismatch: ${name}`);
+          shared.push({ name, specification: version, installed });
+        }
+        for (const [name, version] of Object.entries(head[category])) if (!(name in original[category])) added.push({ name, specification: version, installed: JSON.parse(await readFile(join('node_modules', name, 'package.json'), 'utf8')).version });
+        dependencyComparison[category] = { shared, headOnly: added, baselineOnly: removed };
+      }
+    }
+    for (const [side, assets] of [['baseline', baselineAssets], ['head', headAssets]] as const) for (const [path, body] of Object.entries(assets)) await writeFile(join(shots, `asset-${side}-${path === '/' ? 'parts.html' : path.slice(1)}`), body);
+    report.assetProvenance = { provenance, bundleInputs, entryPoint, bundleInputRoot, hashes, dependencyComparison };
+    await writeFile(join(shots, 'asset-provenance.json'), JSON.stringify(report.assetProvenance, null, 2));
+    const routeAssertions: unknown[] = [];
+    const proxy = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
+      const u = new URL(req.url);
+      if (u.pathname === '/api/live') return new Response(null, { status: 204 });
+      if (Object.hasOwn(baselineAssets, u.pathname)) {
+        const body = !serveBaseline && mutateHeadCss && u.pathname === '/parts.css' ? cssMutant : (serveBaseline ? baselineAssets : headAssets)[u.pathname]!;
+        return new Response(body, { headers: { 'Content-Type': u.pathname === '/parts.js' ? 'text/javascript' : u.pathname === '/parts.css' ? 'text/css' : 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Receipt-Side': serveBaseline ? 'baseline' : mutateHeadCss ? 'head-css-mutant' : 'head', 'X-Receipt-Asset-SHA256': digest(body) } });
+      }
+      return fetch(`http://127.0.0.1:${server2.port}${u.pathname}${u.search}`);
+    } });
     try {
       if (Bun.argv.includes('--instruments')) {
-        const equivalence = await provePartsEquivalence(page, async (baseline, language) => {
-          serveBaseline = baseline;
+        const equivalence = await provePartsEquivalence(page, async (baseline, language, cssMutation = false) => {
+          serveBaseline = baseline; mutateHeadCss = cssMutation;
           await ready(`http://127.0.0.1:${proxy.port}/?lang=${language}#cap=${capability}`);
+          const actual = await page.evaluate<Record<string, { sha256: string; side: string | null }>>(`Promise.all(['/', '/parts.css', '/parts.js'].map(async path=>{const r=await fetch(path,{cache:'no-store'}),bytes=await r.arrayBuffer(),hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(v=>v.toString(16).padStart(2,'0')).join('');return [path,{sha256:hash,side:r.headers.get('X-Receipt-Side')}]})).then(Object.fromEntries)`);
+          for (const path of ['/', '/parts.css', '/parts.js']) {
+            const expected = !baseline && cssMutation && path === '/parts.css' ? hashes.headCssMutant : (baseline ? hashes.baseline : hashes.head)[path];
+            const side = baseline ? 'baseline' : cssMutation ? 'head-css-mutant' : 'head';
+            if (actual[path]?.sha256 !== expected || actual[path]?.side !== side) throw new Error(`Wrong served asset: ${side} ${path}`);
+          }
+          routeAssertions.push({ baseline, language, cssMutation, actual });
         }, shots);
+        report.routeAssertions = routeAssertions;
+        await writeFile(join(shots, 'asset-route-assertions.json'), JSON.stringify(routeAssertions, null, 2));
         report.instruments = equivalence;
         report.noRig = { rgbaByteDifferences: equivalence.languages[0]!.canvasBytes, replacementInstruments: true, noControls };
         await writeFile(join(shots, 'browser.json'), JSON.stringify(report, null, 2));
