@@ -123,7 +123,7 @@ let playbackIntent=0,desiredPlay=false,seekingControl=false;
 let parts:PartExplorer|null=null;
 let animationPanel:AnimationInspectionPanel|null=null;
 let inspectionSourceState:'ready'|'pending'|'failed'='ready';
-function refreshAnimationInspection(){if(inspectionSourceState!=='ready'){animationPanel?.unavailable(`ANIMATION_INSPECTION_SOURCE_${inspectionSourceState.toUpperCase()}: current model source is unavailable`);return;}animationPanel?.update(player?.time??time,duration);animationPanel?.model(partModel,player?.current??'');animationPanel?.update(player?.time??time,duration);}
+function refreshAnimationInspection(){if(inspectionSourceState!=='ready'){animationPanel?.unavailable(`ANIMATION_INSPECTION_SOURCE_${inspectionSourceState.toUpperCase()}: current model source is unavailable`);return;}animationPanel?.update(time,duration);animationPanel?.model(partModel,player?.current??'');animationPanel?.update(time,duration);}
 let overlays:RigOverlays|null=null;
 let chestEditor:ChestEditor|null=null;
 let meshEditor:MeshEditor|null=null;
@@ -2123,7 +2123,7 @@ let stageSource:{url:string;prefix:string;hash:string}|null=null;
 async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWorld|null=null):Promise<void> {
  stageCorrectionRebinding++;try{
  const keepPart=stageCorrectionPart?parts?.value():null;
- const keepAnimation=animation,keepTime=player?.time??time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
+ const keepAnimation=animation,keepTime=time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
  inspectionSourceState='pending';partModel=null;pause();refreshAnimationInspection();
  const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}}).catch(error=>{inspectionSourceState='failed';refreshAnimationInspection();throw error;});
  physicsPanel?.clearPreview();
