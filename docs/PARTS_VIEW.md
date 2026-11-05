@@ -35,6 +35,8 @@ is written), `--port <n>`. Like `review`, it serves in the foreground and exits 
 ### Producer row groups
 
 The sidebar reports separate source counts, for example **mesh 1 · check 4**, rather than a combined flag total.
+Only sources actually read get a count; an absent report is never shown as zero. A part with no flags from any
+read source has no count badge. Custom input filenames follow the same rule.
 The selected part's rows sit under **mesh_report.json** and **check.json**, each with collapsed producer-root groups
 and their row counts. Open a group to inspect its rows. A check headline includes its root, exact JSON path and
 the row's own string fields (including pair names, part names, status and reason when present), followed by the

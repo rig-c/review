@@ -3101,6 +3101,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "{root} · 1 row": "{root} · 1행",
   "{root} · {count} rows": "{root} · {count}행",
   "mesh {mesh} · check {check}": "메시 {mesh} · 체크 {check}",
+  "mesh {mesh}": "메시 {mesh}",
+  "check {check}": "체크 {check}",
   "Grouped by source and producer root; counts are rows, not a classification of defects.": "출처와 프로듀서 루트별로 묶었습니다. 수치는 행 수이며 결함 분류가 아닙니다.",
   "Page {name}: {width}×{height} px, 1 region. The background shows through padding; a region box is the packer's, and pixels outside it are bleed.": "페이지 {name}: {width}×{height} px, 영역 1개. 패딩에는 배경이 비쳐 보이고, 영역 상자는 패커가 정한 것이며 상자 밖의 픽셀은 블리드입니다.",
   "Tinted: the footprint of the part drawn in front ({names}).": "색칠된 부분: 앞에 그려지는 파츠의 풋프린트({names}).",

@@ -3101,6 +3101,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "{root} · 1 row": "{root} · 1 row",
   "{root} · {count} rows": "{root} · {count} rows",
   "mesh {mesh} · check {check}": "mesh {mesh} · check {check}",
+  "mesh {mesh}": "mesh {mesh}",
+  "check {check}": "check {check}",
   "Grouped by source and producer root; counts are rows, not a classification of defects.": "Grouped by source and producer root; counts are rows, not a classification of defects.",
   "Page {name}: {width}×{height} px, 1 region. The background shows through padding; a region box is the packer's, and pixels outside it are bleed.": "Page {name}: {width}×{height} px, 1 region. The background shows through padding; a region box is the packer's, and pixels outside it are bleed.",
   "Tinted: the footprint of the part drawn in front ({names}).": "Tinted: the footprint of the part drawn in front ({names}).",

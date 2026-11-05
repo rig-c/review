@@ -183,7 +183,14 @@ function renderList(): void {
     const name = document.createElement('span'); name.className = 'pv-name'; name.textContent = item.name;
     const onItem = data.flags.filter(f => f.item === item.name);
     const flags = document.createElement('span'); flags.className = 'pv-count';
-    flags.textContent = t('mesh {mesh} · check {check}', { mesh: onItem.filter(f => f.source === 'mesh_report').length, check: onItem.filter(f => f.source === 'check').length });
+    // flagSources holds actual basenames (including custom.json); flagMissing canonically names unread kinds.
+    const meshRead = !data.flagMissing.includes('mesh_report.json'), checkRead = !data.flagMissing.includes('check.json');
+    const mesh = onItem.filter(f => f.source === 'mesh_report').length, check = onItem.filter(f => f.source === 'check').length;
+    if (onItem.length) {
+      if (meshRead && checkRead) flags.textContent = t('mesh {mesh} · check {check}', { mesh, check });
+      else if (meshRead) flags.textContent = t('mesh {mesh}', { mesh });
+      else if (checkRead) flags.textContent = t('check {check}', { check });
+    }
     const outcome = state.verdict.get(item.name)?.outcome ?? 'pending';
     const badge = document.createElement('span'); badge.className = 'pv-badge'; badge.dataset.outcome = outcome; badge.textContent = t(outcome === 'clean' ? 'Clean' : outcome === 'flagged' ? 'Flagged' : 'Pending');
     button.append(name, flags, badge);
