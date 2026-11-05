@@ -1,4 +1,6 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+  "Approve all": "Approve all",
+  "PARTS_APPROVE_ALL_FLAGGED: resolve flagged part and mesh outcomes before approving all.": "PARTS_APPROVE_ALL_FLAGGED: resolve flagged part and mesh outcomes before approving all.",
   "Atlas source build": "Atlas source build",
   "1 Parts + mesh": "1 Parts + mesh",
   "2 Interview": "2 Interview",

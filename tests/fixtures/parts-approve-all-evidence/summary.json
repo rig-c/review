@@ -1,0 +1,98 @@
+{
+  "fixture": {
+    "partsJsonSha256": "5d3047499e2dd1ca85f8041815ccd294d89121323d7dedf278140b26da49761b",
+    "paintingSha256": "81b0c67699b3c51e54664990b4445a8a272025f7f076b01a8334fdb7e690b099",
+    "parts": 23,
+    "rigSize": [
+      832,
+      1216
+    ],
+    "scale": 0.5
+  },
+  "viewport": {
+    "width": 1600,
+    "height": 1100
+  },
+  "state": "initial selected hair_back, native 1:1, all visibility boxes checked, no painting option; no sign-off",
+  "baseline": {
+    "package": "rig-review",
+    "version": "1.8.0",
+    "metadataSha256": "3652e3f67bdbbf2d06e35ad31e21acd6eed431152912678eb6e188d3e2a2058b"
+  },
+  "visuals": {
+    "baseline-en": {
+      "rows": 23,
+      "rowHeightPx": [
+        49.375
+      ],
+      "singleLineRows": 0,
+      "fullyVisibleRows": 20,
+      "caption": [
+        "Visible"
+      ],
+      "servedAssets": {
+        "/": "27afa1f766bab80e4c33e833ad152c9c87fa90657cc5a41d7924152bf907612e",
+        "/parts.js": "9772c5cdfa7404e19ace7cac41823420d0335503643a2872e87987e16e780425",
+        "/parts.css": "2339d0ae0cdd0daa9ffa30c6f0cf263beac56da34ffc5cdd274eda9970c9da17"
+      }
+    },
+    "baseline-ko": {
+      "rows": 23,
+      "rowHeightPx": [
+        49.375
+      ],
+      "singleLineRows": 0,
+      "fullyVisibleRows": 20,
+      "caption": [
+        "\ud45c\uc2dc"
+      ],
+      "servedAssets": {
+        "/": "27afa1f766bab80e4c33e833ad152c9c87fa90657cc5a41d7924152bf907612e",
+        "/parts.js": "9772c5cdfa7404e19ace7cac41823420d0335503643a2872e87987e16e780425",
+        "/parts.css": "2339d0ae0cdd0daa9ffa30c6f0cf263beac56da34ffc5cdd274eda9970c9da17"
+      }
+    },
+    "after-en": {
+      "rows": 23,
+      "rowHeightPx": [
+        26.1875
+      ],
+      "singleLineRows": 23,
+      "fullyVisibleRows": 23,
+      "caption": [
+        ""
+      ],
+      "servedAssets": {
+        "/": "a0463f3df54b0f4bc6bbf085035af0a5ce3970174fae7776290305d54af37a93",
+        "/parts.js": "20318164c4cc758507e54c3076814cf18ebcb838ca6409cfef0711c3b55d45f7",
+        "/parts.css": "bc6b35d319ff855fbf5e39bbef152584d785d6d39d213906e98810d6ca7bf40e"
+      }
+    },
+    "after-ko": {
+      "rows": 23,
+      "rowHeightPx": [
+        26.1875
+      ],
+      "singleLineRows": 23,
+      "fullyVisibleRows": 23,
+      "caption": [
+        ""
+      ],
+      "servedAssets": {
+        "/": "a0463f3df54b0f4bc6bbf085035af0a5ce3970174fae7776290305d54af37a93",
+        "/parts.js": "20318164c4cc758507e54c3076814cf18ebcb838ca6409cfef0711c3b55d45f7",
+        "/parts.css": "bc6b35d319ff855fbf5e39bbef152584d785d6d39d213906e98810d6ca7bf40e"
+      }
+    }
+  },
+  "apiCases": [
+    "fresh-en",
+    "part-refused-en",
+    "mesh-refused-en",
+    "fresh-ko",
+    "part-refused-ko",
+    "mesh-refused-ko",
+    "notes-comments-and-individual"
+  ],
+  "eyeReview": "Inspected baseline EN, after EN/KO, synthetic EN/KO and flagged-mesh KO screenshots; all after rows occupy one line. Missing painting/reference text overlaps pane labels in both arms; unchanged and outside this card."
+}
