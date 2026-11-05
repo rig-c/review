@@ -11,9 +11,26 @@ const BODY_LIMIT = 4 * 1024 * 1024;
 
 async function bodyJson(req: Request): Promise<unknown> {
   if (!/^application\/json(?:\s*;|$)/i.test(req.headers.get('content-type') ?? '')) throw new Error('Expected application/json');
-  const text = await req.text();
-  if (text.length > BODY_LIMIT) throw new Error('Verdict payload exceeds 4 MiB');
-  return JSON.parse(text);
+  const reader = req.body?.getReader();
+  if (!reader) return JSON.parse('');
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > BODY_LIMIT) {
+        await reader.cancel().catch(() => {});
+        throw new Error('Verdict payload exceeds 4 MiB');
+      }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const body = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+  return JSON.parse(new TextDecoder().decode(body));
 }
 
 export interface PartsServerOptions { port?: number; capability?: string; exitOnClose?: boolean; graceMs?: number; unopenedTimeoutMs?: number; onClose?: (info: LiveExitInfo) => void | Promise<void>; log?: (line: string) => void }
