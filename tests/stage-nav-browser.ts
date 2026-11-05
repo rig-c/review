@@ -89,4 +89,3 @@ try{
 }finally{await page?.close();for(const server of servers)server.stop(true);
  for(const state of ['managed','managed-compare']){const directory=join(root,state,'open');for(const name of await readdir(directory).catch(()=>[])){if(!/^(?:[a-f0-9]{64}|front-\d+)\.json$/.test(name))continue;const row=JSON.parse(await readFile(join(directory,name),'utf8'));const path=name.startsWith('front-')?'/api/front-status':'/api/open-status';try{const response=await fetch(row.origin+path,{headers:{authorization:'Bearer '+row.nonce},signal:AbortSignal.timeout(500)});if((await response.json()).nonce===row.nonce)process.kill(row.pid,'SIGTERM');}catch{}}}
  await rm(root,{recursive:true,force:true});}
-
