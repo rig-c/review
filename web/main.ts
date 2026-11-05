@@ -7,10 +7,11 @@ import {PartExplorer,loadPartModel,partBounds} from './part-selection.ts';
 import {AnimationInspectionPanel} from './animation-inspection.ts';
 import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
 import { CanvasRenderer, loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBounds } from '@rig-c/play';
-import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature,type CameraFrame,type CameraPoint,type CameraSignature} from './camera-view.ts';
+import {createViewportController,createViewportState,type CameraTarget} from './viewport-controller.ts';
+import {createRigViewportProvider,rigPanCarry} from './rig-viewport-provider.ts';
+import {mountViewportPair} from './viewport-pair.ts';
 import {rendererStatus} from './renderer-status.ts';
-import {bindAppearance,bindPan,bindStageLayout,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
-import {CLICK_SLOP_PX} from './stage-pick.ts';
+import {bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
 import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
 import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
 import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from './density-strip-panel.ts';
@@ -40,7 +41,7 @@ import {connectLiveWindow} from './live-connection.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
 import {controlComparison,type ControlCommand,type ControlInspection,type ControlView} from '../src/control.ts';
 import {singleEligibility,videoReferenceAt,type InputState,type SingleLayout} from '../src/comparison-eligibility.ts';
-import {parseBookmark,connectInspectionPersistence,serializableView,numericCamera,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
+import {parseBookmark,connectInspectionPersistence,serializableView,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
 import {initialPlayerAnimation,keptAnimation} from '../src/animation-selection.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import type {ReferenceBinding} from '../src/reference.ts';
@@ -87,6 +88,10 @@ const titledIds = new Set(['message', 'player-state', 'layout-state', 'renderer-
 const text = (id: string, value: string) => { const node = el(id); setSourceText(node, value); if (titledIds.has(id)) setSourceAttribute(node, 'title', value); };
 const option = (value: string, label: string) => { const item = document.createElement('option'); item.value = value; item.textContent = label; return item; };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+mountViewportPair(el('stage-layout'));
+const viewportState=createViewportState();
+const viewport=createViewportController(createRigViewportProvider({el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay},viewportState),viewportState);
+const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera}=viewport;
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
 const access = pageInstanceAccess();
 connectLiveWindow(access);
@@ -110,18 +115,10 @@ let duration = 0;
 let lastFrame = 0;
 /** #346: wall-clock seconds accumulated toward the next fixed playback step. */
 let playbackCarry = 0;
-type CameraTarget='rig'|'reference';
-let cameraSync=true,activeCamera:CameraTarget='rig',cameraRestoring=false,cameraLayout='';
-const cameraFrames:Partial<Record<CameraTarget,CameraFrame>>={};
 let comments:ReturnType<typeof bindStageComments>|null=null;
 let view: 'compare' | 'reference' | 'rig' = 'compare';
 // Requested layout persists in the source-bound draft; the effective one follows actual load events only.
 let rigInput:InputState={state:'pending'},referenceInput:InputState={state:'absent'},effectiveView:SingleLayout|null=null;
-let zoom = 1;
-let cameraCenter: { x: number; y: number } | null = null;
-let referenceCenter:ViewPoint|null=null;
-let rigScale=1,referenceScale=1,referenceZoom=1;
-let displayedCenter:ViewPoint|null=null;
 let playbackIntent=0,desiredPlay=false,seekingControl=false;
 let parts:PartExplorer|null=null;
 let animationPanel:AnimationInspectionPanel|null=null;
@@ -256,14 +253,14 @@ async function chooseCheckpoint(point: Checkpoint,initial?:{referenceId?:string;
   if (referenceId && select('reference-select').value !== referenceId) {
     select('reference-select').value = referenceId; await showReference(referenceId);
   }
-  zoom = Math.min(8, Math.max(.25, point.camera?.zoom ?? 1));
-  if(cameraSync)activeCamera=player?'rig':'reference';
-  cameraCenter = point.camera ? { x: point.camera.x, y: point.camera.y } : null;
+  viewport.state.zoom = Math.min(8, Math.max(.25, point.camera?.zoom ?? 1));
+  if(viewport.state.cameraSync)viewport.state.activeCamera=player?'rig':'reference';
+  viewport.state.cameraCenter = point.camera ? { x: point.camera.x, y: point.camera.y } : null;
   seek(time);
   if (point.axis && player && !input('axis-value').disabled) {
     select('axis-select').value = point.axis.id; chooseAxis(); input('axis-value').value = String(point.axis.value); applyAxis();
   }
-  if(cameraSync)alignCameras();fitCamera(); renderCheckpoint(); renderCheckpoints();
+  if(viewport.state.cameraSync)alignCameras();fitCamera(); renderCheckpoint(); renderCheckpoints();
 }
 
 function renderCheckpoint(): void {
@@ -357,7 +354,7 @@ function renderSequenceFrame(): void {
 
 async function showReference(id: string): Promise<void> {
   const generation = ++referenceGeneration;
-  video?.pause(); video = null;controlledVideoSample=null;delete cameraFrames.reference; referenceCenter=null; referenceSize = null; sequence = null; sequenceSvg = null; selectedPerson=''; lastPoseFrame = -1; el('person-control').hidden = true;
+  video?.pause(); video = null;controlledVideoSample=null;delete viewport.state.cameraFrames.reference; viewport.state.referenceCenter=null; referenceSize = null; sequence = null; sequenceSvg = null; selectedPerson=''; lastPoseFrame = -1; el('person-control').hidden = true;
   const content = el('reference-content'); content.replaceChildren();
   const reference = data.manifest.references.find(item => item.id === id);
   el('reference-empty').hidden = false;setReferenceInput(reference?{state:'pending'}:{state:'absent'});
@@ -399,30 +396,6 @@ async function showReference(id: string): Promise<void> {
       media.onerror = () => fail('reference video could not be decoded'); media.src = referenceUrl(reference); video = media; content.append(media);
     }
   } catch (error) { fail(errorText(error)); message(errorText(error), true); }
-}
-
-function referenceFit(): void {
-  if (!referenceSize || !paneFrame('reference')) return;
-  const viewport = el('reference-viewport'), content = el('reference-content');
-  const scale = referenceScale = Math.max(.001,Math.min((viewport.clientWidth - 24) / referenceSize.width, (viewport.clientHeight - 56) / referenceSize.height) * referenceZoom);
-  const center=referenceCenter??{x:referenceSize.width/2,y:referenceSize.height/2};
-  content.style.left = `${viewport.clientWidth/2-center.x*scale}px`;
-  content.style.top = `${viewport.clientHeight/2-center.y*scale}px`;
-  content.style.transform = `scale(${scale})`;
-}
-
-function fitCamera(): void {
-  const boxKey=assets?.stage??player?.bounds();
-  const layout=['rig','reference'].map(target=>{const v=el(target+'-viewport');return `${v.clientWidth}:${v.clientHeight}`;}).join('|')+view+referenceGeneration+!!player+JSON.stringify(referenceSize)+JSON.stringify(boxKey);
-  if(cameraSync&&!cameraRestoring&&layout!==cameraLayout)alignCameras();cameraLayout=layout;
-  referenceFit();renderNumericView();renderCameraControls();
-  if (!player || !assets) return;
-  const box: PoseBounds | null = assets.stage ?? player.bounds(); if (!box || box.width <= 0 || box.height <= 0) return;
-  const viewport = el('rig-viewport');if(!paneFrame('rig'))return;
-  const scale = rigScale = Math.max(.001,Math.min((viewport.clientWidth - 28) / box.width, (viewport.clientHeight - 58) / box.height) * zoom);
-  const center = cameraCenter ?? { x: box.x + box.width / 2, y: box.y + box.height / 2 };displayedCenter={...center};
-  const root = el('rig-root'); root.style.left = `${viewport.clientWidth / 2 - center.x * scale}px`; root.style.top = `${viewport.clientHeight / 2 + center.y * scale}px`; root.style.transform = `scale(${scale})`;
-  player.renderer.syncPixelRatio();redrawOverlay(false);renderNumericView();
 }
 
 function renderTransport(): void {
@@ -822,40 +795,6 @@ async function exportStrip(): Promise<void> {
 }
 
 
-function paneFrame(target:CameraTarget,hidden=false):CameraFrame|null {
- const viewport=el(target+'-viewport'),pane=el(target+'-pane');
- const box=target==='rig'?assets?.stage??player?.bounds():referenceSize?{x:0,y:0,...referenceSize}:null;
- if(!box||target==='rig'&&!player){delete cameraFrames[target];return null;}
- if(pane.hidden||viewport.clientWidth<=0||viewport.clientHeight<=0)return hidden?cameraFrames[target]??null:null;
- const frame=cameraFrame(target==='rig'?'world':'image',box,viewport.clientWidth,viewport.clientHeight,target==='rig'?28:24,target==='rig'?58:56);
- if(frame)cameraFrames[target]=frame;return frame;
-}
-function paneCamera(target:CameraTarget){return target==='rig'?{zoom,center:cameraCenter}:{zoom:referenceZoom,center:referenceCenter};}
-function writeCamera(target:CameraTarget,value:ReturnType<typeof cameraFromSignature>):void {if(target==='rig'){zoom=value.zoom;cameraCenter=value.center;}else{referenceZoom=value.zoom;referenceCenter=value.center;}}
-function activateCamera(target:CameraTarget):void {if(paneFrame(target)){activeCamera=target;renderCameraControls();}}
-function availableCamera():CameraTarget|null {return paneFrame(activeCamera)?activeCamera:paneFrame('rig')?'rig':paneFrame('reference')?'reference':null;}
-function alignCameras():void {
- const target=availableCamera();if(!target)return;
- const frame=paneFrame(target)!;assertCameraView(paneCamera(target),frame);const signature=cameraSignature(paneCamera(target),frame);
- const updates:Partial<Record<CameraTarget,ReturnType<typeof cameraFromSignature>>>={};
- for(const other of ['rig','reference'] as const){if(other===target)continue;const next=paneFrame(other);if(next)updates[other]=cameraFromSignature(signature,next);}
- for(const other of ['rig','reference'] as const){const update=updates[other];if(update)writeCamera(other,update);}activeCamera=target;
-}
-function renderCameraControls():void {input('camera-sync').checked=cameraSync;const target=availableCamera();text('zoom-value',`${Math.round((target?paneCamera(target).zoom:1)*100)}% · ${target==='reference'?'Reference':'Rig'}`);button('fit').textContent=cameraSync?'Fit views':'Fit active';text('coordinates',cameraSync?'Cameras synchronized · drag to pan · scroll to zoom':'Independent cameras · drag to pan · scroll to zoom');}
-function setCameraSync(value:boolean):void {if(value)alignCameras();cameraSync=value;fitCamera();renderCameraControls();}
-function cameraAction(action:()=>void):void {try{action();}catch(error){renderCameraControls();message(errorText(error),true);}}
-function updateCamera(target:CameraTarget,value:CameraSignature):void {
- const frame=paneFrame(target);if(!frame)return;
- const updates:Partial<Record<CameraTarget,ReturnType<typeof cameraFromSignature>>>={[target]:cameraFromSignature(value,frame)};
- if(cameraSync)for(const other of ['rig','reference'] as const){if(other===target)continue;const next=paneFrame(other);if(next)updates[other]=cameraFromSignature(value,next);}
- for(const other of ['rig','reference'] as const){const update=updates[other];if(update)writeCamera(other,update);}activeCamera=target;
- fitCamera();renderCameraControls();
-}
-function zoomCamera(factor:number,target=availableCamera(),point?:CameraPoint|null):void {if(!target)return;const frame=paneFrame(target);if(frame)updateCamera(target,zoomSignature(cameraSignature(paneCamera(target),frame),factor,frame,point));}
-function panCamera(target:CameraTarget,dx:number,dy:number):void {const frame=paneFrame(target);if(frame)updateCamera(target,dragSignature(cameraSignature(paneCamera(target),frame),frame,dx,dy));}
-function fitActiveCamera(target=availableCamera()):void {if(!target)return;const part=parts?.value();if(target==='rig'&&part){const box=parts?.bounds(),frame=paneFrame(target);if(!box||!frame){message('PART_FIT_UNAVAILABLE: selected slot has no positive drawn bounds.',true);return;}updateCamera(target,boundsFitSignature(box,frame,28,58));message('Selected slot fitted.');}else{if(!paneFrame(target))return;updateCamera(target,{zoom:1,pan:{x:0,y:0}});message('View fitted.');}}
-function zoomViewport(target:CameraTarget,deltaY:number,point?:CameraPoint|null):void {zoomCamera(deltaY<0?1.1:1/1.1,target,point);}
-
 function bind(): void {
   button('strip-export').onclick = () => { void exportStrip(); };
   button('chest-export').onclick = () => { void exportChest(); };
@@ -870,10 +809,7 @@ function bind(): void {
   select('animation-select').onchange = () => {chooseAnimation(select('animation-select').value);if(canRepeatIdle())void playPreview();};
   select('part-set').onchange = () => { try { if(!player)return;player.setSet(select('part-set').value || null);drawRig(()=>player!.draw());fitCamera(); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } };
   select('axis-select').onchange = chooseAxis; input('axis-value').oninput = applyAxis;
-  button('zoom-in').onclick=()=>cameraAction(()=>zoomCamera(1.25));button('zoom-out').onclick=()=>cameraAction(()=>zoomCamera(1/1.25));button('fit').onclick=()=>cameraAction(()=>fitActiveCamera());
-  input('camera-sync').onchange=()=>cameraAction(()=>setCameraSync(input('camera-sync').checked));
-  for(const target of ['rig','reference'] as const)for(const event of ['pointerdown','focusin'] as const)el(target+'-viewport').addEventListener(event,()=>activateCamera(target));
-  for (const id of ['reference-viewport', 'rig-viewport']) el(id).addEventListener('wheel', event => { event.preventDefault(); const rect=el(id).getBoundingClientRect(); cameraAction(()=>zoomViewport(id==='rig-viewport'?'rig':'reference',event.deltaY,{x:event.clientX-rect.left,y:event.clientY-rect.top})); }, { passive: false });
+  viewport.bindControls();
   input('scrub').oninput = () => { pause(); seek(Number(input('scrub').value)); };
   input('frame-number').onfocus = pause;
   input('frame-number').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); const value = input('frame-number').value.trim(); seekFrame(value ? Number(value) : NaN); } };
@@ -905,13 +841,13 @@ function bind(): void {
     const selectedAnimation = feedbackAnimation();
     try { validateFeedbackSelection(data.feedbackCatalog, { frameStart, frameEnd, target, animation: selectedAnimation }); } catch (error) { message(errorText(error), true); return; }
     const box = assets?.stage ?? player?.bounds();
-    const center = cameraCenter ?? (box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null);
+    const center = viewport.state.cameraCenter ?? (box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null);
     session.feedback.push({ id: crypto.randomUUID(), frameStart, frameEnd, target, category: select('feedback-category').value as Feedback['category'], summary, context: {...(turnPad?{turn:JSON.parse(JSON.stringify(turnPad.snapshot())) as Json}:{}),part:parts?.feedback()??null,
       interval: { frameStart, frameEnd, inclusive: true },
       checkpoint: checkpoint?.id ?? null, animation: selectedAnimation, time, frame: frameAtTime(activeFrameClock(), time),
       reference: select('reference-select').value || null, person: selectedPerson || null,
       sourceTime: sequence ? sequence.frames[0]!.t + time : time,
-      camera: center ? { zoom, x: center.x, y: center.y, coordinateSystem: 'world-y-up' } : { zoom, coordinateSystem: 'reference-fit' },
+      camera: center ? { zoom:viewport.state.zoom, x: center.x, y: center.y, coordinateSystem: 'world-y-up' } : { zoom:viewport.state.zoom, coordinateSystem: 'reference-fit' },
       view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},
       axis: axisInspection ? { id: select('axis-select').value, value: Number(input('axis-value').value) } : null,
       environment: feedbackEnvironment(),
@@ -941,7 +877,7 @@ function bind(): void {
   // Saved browser defaults seed a new inspection; explicit links and source drafts restore over them.
   viewDisposers.push(bindStageNav({model:!!data.manifest.model,setup:()=>showInspector('rig')}));
   workspace=bindWorkspaceUI({changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
-  cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
+  viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],changed:()=>persistence?.save()});
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
@@ -987,10 +923,7 @@ function bind(): void {
   retargetPanel=bindRetargetPanel({apply:body=>applyRetarget(body),reset:()=>{void resetRebuild(stageWorld());},seek:seekReading});
   requirementsPanel=bindRequirementsPanel({check:runRequirements,seek:seekReading,animation:()=>animation,slot:()=>parts?.value()?.slot??null,hash:sha256Hex});
   const tickResize=new ResizeObserver(()=>renderReadingTicks());tickResize.observe(el('transport'));viewDisposers.push(()=>tickResize.disconnect());
-  viewDisposers.push(bindStageLayout(el('stage-layout'),fitCamera));
-  // #331: a plain drag on the rig pans and carries the rig, the Family viewer's gesture; the reference pane only pans.
-  const carryRig={threshold:CLICK_SLOP_PX,move:(dx:number,dy:number)=>{const impulse=dragImpulse(dx,dy,rigScale);if(impulse&&player)player.moved(impulse);}};
-  for(const target of ['rig','reference'] as const)viewDisposers.push(bindPan(el(target+'-viewport'),(dx,dy)=>cameraAction(()=>panCamera(target,dx,dy)),()=>!comments?.active(),target==='rig'?carryRig:undefined));
+  viewDisposers.push(viewport.bindNavigation(rigPanCarry({player:()=>player},viewport.state),()=>!comments?.active()));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
   viewDisposers.push(bindLayerShortcuts(document));describeLayerToggles(document,el('layer-state').textContent??'');
   input('idle-repeat').onchange=()=>{syncPlayerLoop();renderIdle();if(canRepeatIdle())void playPreview();};
@@ -998,7 +931,7 @@ function bind(): void {
   for(const id of ['proposal-panel','checkpoint-detail'])el(id).addEventListener('focusin',pause);
   bindInspector();bindReviewDialog();
   document.addEventListener('visibilitychange',()=>{if(document.hidden){const resume=playing;pause();suspendedPreview=resume;}else if(suspendedPreview){suspendedPreview=false;void playPreview();}});
-  const resize = new ResizeObserver(fitCamera); resize.observe(el('rig-viewport')); resize.observe(el('reference-viewport'));
+  const resize = viewport.observeResize();
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
   window.addEventListener('pagehide', () => { comments?.dispose();persistence?.dispose();turnPad?.dispose();workspace?.dispose();pause();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());overlays?.dispose(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
 }
@@ -1016,7 +949,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();renderDropNotices();if(part){activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){player.seek(time);drawRig(()=>player!.draw());}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){player.seek(time);drawRig(()=>player!.draw());}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
@@ -1025,7 +958,7 @@ async function start(): Promise<void> {
     updateChestMapping();
     rigInput=player?{state:'loaded'}:data.manifest.model?{state:'failed',reason:el('rig-empty').textContent||'compiled player unavailable'}:{state:'absent'};renderLayout();
     if (first) await chooseCheckpoint(first,initial); else renderCheckpoint();
-    activeCamera=player?'rig':'reference';if(cameraSync)alignCameras();renderTransport();fitCamera();
+    viewport.state.activeCamera=player?'rig':'reference';if(viewport.state.cameraSync)alignCameras();renderTransport();fitCamera();
     if (requestedId && !first) message(`Checkpoint "${requestedId}" is not in this package. Select one from the list.`, true);
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
@@ -1049,7 +982,7 @@ function bindReviewDialog():void {
 }
 
 /** Rig world → rig-pane pixels for the current camera. */
-function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*rigScale,y:parseFloat(root.style.top||'0')-y*rigScale});}
+function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*viewport.state.rigScale,y:parseFloat(root.style.top||'0')-y*viewport.state.rigScale});}
 function redrawOverlay(fresh:boolean):void {
  animationPanel?.redraw(layers.bones);
  if(!overlays||!player)return;
@@ -1080,7 +1013,7 @@ async function playPreview():Promise<void> {
 function localDraft():boolean{return !!comments?.draft()||dirty||!!input('feedback-summary').value.trim()||!!input('feedback-start').value.trim()||!!input('feedback-end').value.trim()||!!select('feedback-category').value||!!input('feedback-target-name').value.trim()&&input('feedback-target-name').value!==data.manifest.id;}
 function controlState():ControlInspection {
  const box=assets?.stage??player?.bounds(),center=box?{x:box.x+box.width/2,y:box.y+box.height/2}:null;
- return {part:parts?.value()??null,partGeneration:parts?.observation()?.generation??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?zoom:1,pan:{x:center&&cameraCenter?(center.x-cameraCenter.x)*rigScale:0,y:center&&cameraCenter?(cameraCenter.y-center.y)*rigScale:0}},reference:{zoom:referenceSize?referenceZoom:1,pan:{x:referenceSize&&referenceCenter?(referenceSize.width/2-referenceCenter.x)*referenceScale:0,y:referenceSize&&referenceCenter?(referenceSize.height/2-referenceCenter.y)*referenceScale:0}}},animation:animation||null,time:player?.time??time,playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!!data,seeking:seekingControl||!!video?.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring(),comparison:controlComparison(layoutEligibility()),capabilities:{camera:!!player,referenceCamera:!!referenceSize,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
+ return {part:parts?.value()??null,partGeneration:parts?.observation()?.generation??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?viewport.state.zoom:1,pan:{x:center&&viewport.state.cameraCenter?(center.x-viewport.state.cameraCenter.x)*viewport.state.rigScale:0,y:center&&viewport.state.cameraCenter?(viewport.state.cameraCenter.y-center.y)*viewport.state.rigScale:0}},reference:{zoom:referenceSize?viewport.state.referenceZoom:1,pan:{x:referenceSize&&viewport.state.referenceCenter?(referenceSize.width/2-viewport.state.referenceCenter.x)*viewport.state.referenceScale:0,y:referenceSize&&viewport.state.referenceCenter?(referenceSize.height/2-viewport.state.referenceCenter.y)*viewport.state.referenceScale:0}}},animation:animation||null,time:player?.time??time,playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!!data,seeking:seekingControl||!!video?.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring(),comparison:controlComparison(layoutEligibility()),capabilities:{camera:!!player,referenceCamera:!!referenceSize,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
 }
 async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
@@ -1140,11 +1073,7 @@ async function decodedControlTime(media:HTMLVideoElement,target:number,signal:Ab
   media.currentTime=target;
  });
 }
-function numericView():ControlView {
- const numeric=(target:CameraTarget)=>{const frame=paneFrame(target,true);if(!frame)return null;const camera=paneCamera(target);return numericCamera(frame.space,camera.center??frame.center,camera.zoom,frame.baseScale*camera.zoom,frame.width,frame.height);};
- return {schema:'rig-review-view/1',cameraSync,activeCamera,cameras:{rig:numeric('rig'),a:null,b:null,reference:numeric('reference')}};
-}
-function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
+function numericView():ControlView {return viewport.numericView();}
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data.sourceHash,rigs:[data.reviewedSource.rig?.sha256??null]};}
 function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time:player?.time??time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:selectedInspector()??'view',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false):Promise<void> {
@@ -1183,7 +1112,7 @@ async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal)
  if(signal.aborted)throw new Error('Inspection restore superseded');
 }
 async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false):Promise<void> {
- cameraRestoring=true;try{
+ viewport.state.cameraRestoring=true;try{
  const selection=bookmark.selection;
  if(turnPad){if(selection.turn)turnPad.restore(selection.turn);else{turnPad.state.reset();turnPad.restore(turnPad.snapshot());}}
  parts?.select(selection.part??null);
@@ -1203,13 +1132,13 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,pr
  // while restoration is held, before measuring/applying the saved pane camera.
  await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));if(signal.aborted)throw new Error('Inspection restore superseded');fitCamera();
  const camera=bookmark.view.cameras.rig,ref=bookmark.view.cameras.reference,rigViewport=el('rig-viewport'),referenceViewport=el('reference-viewport');
- const nextZoom=camera&&player&&rigViewport.clientWidth&&rigViewport.clientHeight?restoredZoom(camera,rigScale/zoom,rigViewport.clientWidth,rigViewport.clientHeight):camera?.zoom??null;
- const nextReferenceZoom=ref&&referenceSize&&referenceViewport.clientWidth&&referenceViewport.clientHeight?restoredZoom(ref,referenceScale/referenceZoom,referenceViewport.clientWidth,referenceViewport.clientHeight):ref?.zoom??null;
- if(nextZoom!==null&&camera){zoom=nextZoom;cameraCenter={...camera.center};}
- if(nextReferenceZoom!==null&&ref){referenceZoom=nextReferenceZoom;referenceCenter={...ref.center};}
- cameraSync=bookmark.view.cameraSync??false;activeCamera=bookmark.view.activeCamera==='reference'?'reference':'rig';
+ const nextZoom=camera&&player&&rigViewport.clientWidth&&rigViewport.clientHeight?restoredZoom(camera,viewport.state.rigScale/viewport.state.zoom,rigViewport.clientWidth,rigViewport.clientHeight):camera?.zoom??null;
+ const nextReferenceZoom=ref&&referenceSize&&referenceViewport.clientWidth&&referenceViewport.clientHeight?restoredZoom(ref,viewport.state.referenceScale/viewport.state.referenceZoom,referenceViewport.clientWidth,referenceViewport.clientHeight):ref?.zoom??null;
+ if(nextZoom!==null&&camera){viewport.state.zoom=nextZoom;viewport.state.cameraCenter={...camera.center};}
+ if(nextReferenceZoom!==null&&ref){viewport.state.referenceZoom=nextReferenceZoom;viewport.state.referenceCenter={...ref.center};}
+ viewport.state.cameraSync=bookmark.view.cameraSync??false;viewport.state.activeCamera=bookmark.view.activeCamera==='reference'?'reference':'rig';
  if(player)drawRig(()=>player!.draw());if(selection.part)parts?.assertIdentity(selection.part);fitCamera();redrawOverlay(false);pause();renderTransport();renderCameraControls();
- }finally{cameraRestoring=false;}
+ }finally{viewport.state.cameraRestoring=false;}
 }
 async function waitReferenceMetadata(media:HTMLVideoElement,signal:AbortSignal):Promise<void> {if(media.readyState>=1)return;await new Promise<void>((resolve,reject)=>{const clean=()=>{clearTimeout(timer);media.removeEventListener('loadedmetadata',ready);media.removeEventListener('error',fail);signal.removeEventListener('abort',fail);};const ready=()=>{clean();resolve();},fail=()=>{clean();reject(new Error('Saved reference metadata unavailable'));};const timer=setTimeout(fail,10000);media.addEventListener('loadedmetadata',ready,{once:true});media.addEventListener('error',fail,{once:true});signal.addEventListener('abort',fail,{once:true});});}
 async function setupPersistence():Promise<boolean> {
