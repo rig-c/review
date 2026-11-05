@@ -49,3 +49,10 @@ h2{font-size:11px;letter-spacing:.06em;color:var(--muted);margin:4px 0 8px}
 textarea,select{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:4px}
 .pv-primary{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer;font:inherit}
 @media (max-width:900px){.pv-layout{grid-template-columns:1fr}.pv-list,.pv-side{max-height:30vh}}
+
+#pv-mesh-panel{margin-top:16px;display:flex;flex-direction:column;gap:6px}
+#pv-mesh-panel dl{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;margin:0}
+#pv-mesh-panel dd{margin:0;overflow-wrap:anywhere}
+#pv-mesh-panel p{margin:4px 0}
+#pv-mesh-panel label{display:flex;flex-direction:column;gap:4px}
+#pv-mesh-panel textarea{height:48px;resize:vertical}

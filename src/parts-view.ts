@@ -18,7 +18,8 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
-import { loadReview, safeFile } from './manifest.ts';
+import { PNG } from 'pngjs';
+import { loadReview, safeFile, packagePath } from './manifest.ts';
 
 export const PARTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/1';
 export const PARTS_VERDICT_FILE = 'parts-review.json';
@@ -32,7 +33,9 @@ export interface HashedFile { path: string; bytes: number; sha256: string }
 interface LocalFile { abs: string; bytes: number; sha256: string }
 
 /** A part (parts mode) or a named region (atlas mode). Boxes are rig px (parts) or page px (atlas). */
+export interface PartMesh { vertices: number[]; triangles: number[]; figures: Record<string, unknown>; width: number; height: number; image: string }
 export interface ViewItem {
+  mesh?: PartMesh;
   name: string;
   /** Draw order, back first (parts mode); the region's place in the atlas file (atlas mode). */
   index: number;
@@ -71,7 +74,7 @@ export interface PartsViewPackage {
   pagePaths: string[];
 }
 
-export interface PartsViewOptions { meshReport?: string; check?: string; verdict?: string }
+export interface PartsViewOptions { rig?: string; meshReport?: string; check?: string; verdict?: string }
 
 const record = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
 const finite = (v: unknown, min: number): v is number => typeof v === 'number' && Number.isFinite(v) && v >= min;
@@ -196,6 +199,70 @@ async function producerFlags(rigDir: string | null, buildRoot: string | null, na
   return { flags, files, notes };
 }
 
+/** Exact attachment identity and UV-derived geometry; never reconstruct through weights. */
+export function readPartMeshes(raw: unknown, items: ViewItem[], reports: unknown): void {
+  const skins = record(record(raw)?.skins);
+  if (!skins) refuse('PARTS_MESH_MALFORMED', 'rig.json requires skins object');
+  const byName = new Map(items.map(i => [i.name, i]));
+  for (const slots of Object.values(skins!)) for (const attachments of Object.values(record(slots) ?? {})) {
+    for (const [name, value] of Object.entries(record(attachments) ?? {})) {
+      const a = record(value);
+      if (a?.type !== 'mesh') continue;
+      const item = byName.get(name);
+      if (!item) refuse('PARTS_MESH_UNKNOWN_PART', `${name}: found mesh; required a part in parts.json`);
+      if (item!.mesh) refuse('PARTS_MESH_AMBIGUOUS', `${name}: found multiple meshes; required one attachment`);
+      if (!finite(a.width, 1) || !Number.isInteger(a.width) || !finite(a.height, 1) || !Number.isInteger(a.height) || typeof a.image !== 'string') refuse('PARTS_MESH_SIZE', `${name}: found invalid raster declaration; required image and positive integer dimensions`);
+      const uv = a.uvs, triangles = a.triangles;
+      if (!Array.isArray(uv) || !uv.length || uv.length % 2) refuse('PARTS_MESH_UV', `${name}: found invalid uvs; required nonempty coordinate pairs in [0,1]`);
+      for (const v of uv as unknown[]) if (!finite(v, 0) || v > 1) refuse('PARTS_MESH_UV', `${name}: found ${String(v)}; required UV in [0,1]`);
+      const count = (uv as number[]).length / 2;
+      if (!Array.isArray(triangles) || !triangles.length || triangles.length % 3) refuse('PARTS_MESH_TRIANGLE', `${name}: found invalid triangles; required nonempty index triples`);
+      for (const v of triangles as unknown[]) if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v >= count) refuse('PARTS_MESH_TRIANGLE', `${name}: found ${String(v)}; required integer index in [0,${count - 1}]`);
+      const rows = Array.isArray(reports) ? reports.filter(r => record(r)?.part === name) : [];
+      if (rows.length > 1) refuse('PARTS_MESH_REPORT_AMBIGUOUS', `${name}: found ${rows.length} report rows; required at most one`);
+      const row = record(rows[0]) ?? {}, figures: Record<string, unknown> = {};
+      for (const field of ['mode', 'vertices', 'triangles', 'art_coverage', 'stray_cleared']) if (Object.hasOwn(row, field)) figures[field] = row[field];
+      item!.mesh = { vertices: (uv as number[]).map((v, i) => v * (i % 2 ? a.height as number : a.width as number)), triangles: triangles as number[], figures, width: a.width as number, height: a.height as number, image: a.image as string };
+    }
+  }
+}
+
+/** Prove the crop window in the mesh raster byte-for-byte; accept no inferred producer padding. */
+async function locateMeshRasters(rig: unknown, root: string, items: ViewItem[], images: string[], files: LocalFile[]): Promise<void> {
+  const directory = record(rig)?.images;
+  for (const item of items) {
+    const mesh = item.mesh; if (!mesh) continue;
+    let path: string;
+    try {
+      // Validate both literal components before joining: normalization must not hide traversal.
+      path = await safeFile(root, `${packagePath(directory, 'rig.images')}/${packagePath(mesh.image, 'mesh.image')}`);
+    } catch { return refuse('PARTS_MESH_IMAGE_PATH', `${item.name}: found unavailable or unsafe rig image; required a literal local raster inside the rig directory`); }
+    const bytes = await readFile(path);
+    let image: ReturnType<typeof PNG.sync.read>, part: ReturnType<typeof PNG.sync.read>;
+    try {
+      const partBytes = await readFile(images[item.index]!);
+      image = PNG.sync.read(bytes); part = PNG.sync.read(partBytes);
+      // Retain all sixteen bits where present; 8-bit downsampling would hide a differing sample.
+      if (image.depth === 16) image = PNG.sync.read(bytes, { skipRescale: true });
+      if (part.depth === 16) part = PNG.sync.read(partBytes, { skipRescale: true });
+    }
+    catch { return refuse('PARTS_MESH_IMAGE_FORMAT', `${item.name}: found undecodable PNG; required PNG raster`); }
+    if (image.width !== mesh.width || image.height !== mesh.height) refuse('PARTS_MESH_IMAGE_SIZE', `${item.name}: found ${image.width}×${image.height}; required ${mesh.width}×${mesh.height}`);
+    const ox = (mesh.width - part.width) / 2, oy = (mesh.height - part.height) / 2;
+    if (part.width !== item.w || part.height !== item.h || ox < 0 || oy < 0 || !Number.isInteger(ox) || !Number.isInteger(oy)) refuse('PARTS_MESH_IMAGE_MISMATCH', `${item.name}: found incompatible raster window ${ox},${oy}; required a centred integer window of ${item.w}×${item.h}`);
+    const raster = image.data, original = part.data;
+    const rasterScale = image.depth === 16 ? 1 : 257, partScale = part.depth === 16 ? 1 : 257;
+    for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
+      const i = (y * image.width + x) * 4;
+      const inside = x >= ox && x < ox + part.width && y >= oy && y < oy + part.height;
+      const j = ((y - oy) * part.width + x - ox) * 4;
+      if (inside ? [0, 1, 2, 3].some(c => raster[i + c]! * rasterScale !== original[j + c]! * partScale) : raster[i + 3] !== 0) refuse('PARTS_MESH_IMAGE_MISMATCH', `${item.name}: first differing rig pixel (${x},${y}) found RGBA [${[...raster.slice(i, i + 4)]}]; required ${inside ? `RGBA [${[...original.slice(j, j + 4)]}]` : 'border alpha 0'}`);
+    }
+    mesh.vertices = mesh.vertices.map((v, i) => v - (i % 2 ? oy : ox));
+    files.push({ abs: path, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+  }
+}
+
 async function loadPartsMode(root: string, options: PartsViewOptions): Promise<PartsViewPackage> {
   const partsJson = await insideRoot(root, join(root, 'parts.json'), 'PARTS_FILE_OUTSIDE', 'parts.json');
   const doc = record(await readJson(partsJson, 'parts.json'));
@@ -220,6 +287,19 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     items.push({ name: part.name, index, x: part.x, y: part.y, w: part.w, h: part.h, image: true });
   }
   const { flags, files: flagFiles, notes } = await producerFlags(root, null, seen, options);
+  const rigPath = options.rig !== undefined ? resolve(options.rig) : existsSync(join(root, 'rig.json')) ? await insideRoot(root, join(root, 'rig.json'), 'PARTS_MESH_OUTSIDE', 'rig.json') : null;
+  if (rigPath) {
+    const report = notes.includes('mesh_report.json') ? undefined : flagFiles[0];
+    const rigBytes = await readFile(rigPath);
+    let rig: unknown;
+    try { rig = JSON.parse(rigBytes.toString('utf8')); }
+    catch (e) { return refuse('PARTS_MESH_MALFORMED', `rig.json: ${e instanceof Error ? e.message : String(e)}`); }
+    readPartMeshes(rig, items, report ? await readJson(report.abs, 'mesh_report.json') : null);
+    await locateMeshRasters(rig, dirname(rigPath), items, imagePaths, files);
+    // Bind exactly the bytes parsed above, even if the path is replaced during raster checks.
+    files.push({ abs: rigPath, bytes: rigBytes.length, sha256: createHash('sha256').update(rigBytes).digest('hex') });
+    if (report) files.push(report);
+  }
   return { mode: 'parts', root, title: basename(root) === 'rig' ? basename(dirname(root)) : basename(root), rigSize, items, pages: [], flags, files, flagFiles, flagNotes: notes, verdictPath: options.verdict ? resolve(options.verdict) : join(root, PARTS_VERDICT_FILE), imagePaths, pagePaths: [] };
 }
 
@@ -280,7 +360,7 @@ export interface PartsVerdict {
   tool: { name: '@rig-c/review'; version: string };
   source: ReturnType<typeof verdictSource>;
   status: VerdictStatus;
-  parts: Record<string, { outcome: PartOutcome; note: string; flags: string[] }>;
+  parts: Record<string, { outcome: PartOutcome; note: string; flags: string[]; mesh?: { outcome: PartOutcome; note: string } }>;
   updatedAt: string;
 }
 
@@ -309,9 +389,20 @@ export function buildVerdict(pkg: Pick<PartsViewPackage, 'mode' | 'items' | 'fla
     const note = entry.note === undefined ? '' : entry.note;
     if (typeof note !== 'string' || note.length > PARTS_NOTE_LIMIT) return refuse('PARTS_VERDICT_INVALID', `${name}.note is a string of at most ${PARTS_NOTE_LIMIT} characters`);
     if (outcome === 'flagged' && !note.trim()) return refuse('PARTS_VERDICT_NOTE_REQUIRED', `${name} is flagged and has no note saying what is wrong`);
-    parts[name] = { outcome, note, flags: [...new Set(pkg.flags.filter(f => f.item === name).map(f => f.id))] };
+    const meshInput = record(entry.mesh);
+    const hasMesh = pkg.items.some(i => i.name === name && i.mesh);
+    if (!hasMesh && entry.mesh !== undefined) refuse('PARTS_MESH_OUTCOME_UNAVAILABLE', `${name}: no mesh; required no mesh outcome`);
+    let mesh: { outcome: PartOutcome; note: string } | undefined;
+    if (hasMesh) {
+      if (!meshInput || !['pending', 'clean', 'flagged'].includes(String(meshInput.outcome))) refuse('PARTS_MESH_OUTCOME', `${name}: required mesh outcome pending, clean or flagged`);
+      const meshNote = meshInput!.note ?? '';
+      if (typeof meshNote !== 'string' || meshNote.length > PARTS_NOTE_LIMIT) refuse('PARTS_MESH_OUTCOME', `${name}: required mesh note up to ${PARTS_NOTE_LIMIT} characters`);
+      if (meshInput!.outcome === 'flagged' && !(meshNote as string).trim()) refuse('PARTS_VERDICT_NOTE_REQUIRED', `${name}.mesh is flagged and has no note`);
+      mesh = { outcome: meshInput!.outcome as PartOutcome, note: meshNote as string };
+    }
+    parts[name] = { ...(mesh ? { mesh } : {}), outcome, note, flags: [...new Set(pkg.flags.filter(f => f.item === name).map(f => f.id))] };
   }
-  const outcomes = Object.values(parts).map(p => p.outcome);
+  const outcomes = Object.values(parts).flatMap(p => p.mesh ? [p.outcome, p.mesh.outcome] : [p.outcome]);
   if (status === 'approved' && outcomes.some(o => o !== 'clean')) refuse('PARTS_VERDICT_NOT_CLEAN', `approved needs every part clean; ${outcomes.filter(o => o !== 'clean').length} are not`);
   if (status === 'changes-requested' && !outcomes.includes('flagged')) refuse('PARTS_VERDICT_NOTHING_FLAGGED', 'changes-requested needs at least one flagged part');
   return { schema: PARTS_VERDICT_SCHEMA, mode: pkg.mode, tool: { name: '@rig-c/review', version }, source: verdictSource(pkg), status, parts, updatedAt: now.toISOString() };

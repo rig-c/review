@@ -55,3 +55,41 @@ export function paintPart(ctx: Ctx, item: Box, image: Source, options: { bg: str
   ctx.drawImage(mask, 0, 0);
   ctx.globalAlpha = 1;
 }
+
+export interface MeshGeometry { vertices: readonly number[]; triangles: readonly number[] }
+/** Closed triangle union at pixel centres. Degenerate triangles cover no area. */
+export function meshCoverage(w: number, h: number, mesh: MeshGeometry): Uint8Array {
+  const mask = new Uint8Array(w * h), v = mesh.vertices;
+  const cross = (ax: number, ay: number, bx: number, by: number, x: number, y: number) => (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+  for (let i = 0; i < mesh.triangles.length; i += 3) {
+    const a = mesh.triangles[i]! * 2, b = mesh.triangles[i + 1]! * 2, c = mesh.triangles[i + 2]! * 2;
+    const ax = v[a]!, ay = v[a + 1]!, bx = v[b]!, by = v[b + 1]!, cx = v[c]!, cy = v[c + 1]!;
+    if (cross(ax, ay, bx, by, cx, cy) === 0) continue;
+    for (let y = Math.max(0, Math.ceil(Math.min(ay, by, cy) - .5)); y <= Math.min(h - 1, Math.floor(Math.max(ay, by, cy) - .5)); y++) {
+      for (let x = Math.max(0, Math.ceil(Math.min(ax, bx, cx) - .5)); x <= Math.min(w - 1, Math.floor(Math.max(ax, bx, cx) - .5)); x++) {
+        const p = cross(ax, ay, bx, by, x + .5, y + .5), q = cross(bx, by, cx, cy, x + .5, y + .5), r = cross(cx, cy, ax, ay, x + .5, y + .5);
+        if ((p >= 0 && q >= 0 && r >= 0) || (p <= 0 && q <= 0 && r <= 0)) mask[y * w + x] = 1;
+      }
+    }
+  }
+  return mask;
+}
+/** Tint only nontransparent source-art pixels outside the triangle union, before drawing diagnostic edges. */
+export function paintMesh(ctx: Ctx, source: Source, w: number, h: number, mesh: MeshGeometry, makeCanvas: (w: number, h: number) => HTMLCanvasElement): void {
+  const scratch = makeCanvas(w, h), s = scratch.getContext('2d')!;
+  s.drawImage(source, 0, 0);
+  const art = s.getImageData(0, 0, w, h), tint = s.createImageData(w, h), mask = meshCoverage(w, h, mesh);
+  for (let i = 0; i < mask.length; i++) if (!mask[i] && art.data[i * 4 + 3]) {
+    tint.data[i * 4] = 255; tint.data[i * 4 + 2] = 80; tint.data[i * 4 + 3] = 160;
+  }
+  s.putImageData(tint, 0, 0); ctx.drawImage(scratch, 0, 0);
+  ctx.strokeStyle = '#00bfff'; ctx.fillStyle = '#ffffff'; ctx.lineWidth = .5;
+  ctx.beginPath();
+  const v = mesh.vertices;
+  for (let i = 0; i < mesh.triangles.length; i += 3) {
+    for (let j = 0; j < 3; j++) { const a = mesh.triangles[i + j]! * 2; if (!j) ctx.moveTo(v[a]!, v[a + 1]!); else ctx.lineTo(v[a]!, v[a + 1]!); }
+    ctx.closePath();
+  }
+  ctx.stroke();
+  for (let i = 0; i < v.length; i += 2) { ctx.beginPath(); ctx.arc(v[i]!, v[i + 1]!, .8, 0, Math.PI * 2); ctx.fill(); }
+}
