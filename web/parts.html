@@ -16,8 +16,9 @@
     <label class="pv-field"><input type="checkbox" id="pv-alpha" data-pv-alpha> Alpha only</label>
     <label class="pv-field" id="pv-footprint-control"><input type="checkbox" id="pv-footprints" data-pv-footprints> Footprints of parts in front</label>
     <span id="pv-comparison" class="pv-comparison" hidden>
-     <span class="pv-field">Painting comparison <span class="pv-group" role="group" aria-label="Painting comparison"><button type="button" data-pv-comparison="part" aria-pressed="true">Part</button><button type="button" data-pv-comparison="overlay" aria-pressed="false">Overlay</button></span></span>
+     <span class="pv-field">Painting comparison <span class="pv-group" role="group" aria-label="Painting comparison"><button type="button" data-pv-comparison="part" aria-pressed="true">Part</button><button type="button" data-pv-comparison="overlay" aria-pressed="false">Overlay</button><button type="button" data-pv-comparison="difference" aria-pressed="false">Difference</button></span></span>
      <label class="pv-field" id="pv-opacity-control" hidden>Part opacity <input type="range" id="pv-opacity" min="0" max="1" step="0.001" value="0.5"><output id="pv-opacity-value">50.0%</output></label>
+     <label class="pv-field" id="pv-threshold-control" hidden>Threshold <input type="number" id="pv-threshold" min="0" max="255" step="1" value="0"></label>
     </span>
     <span class="pv-group" role="group" aria-label="Atlas view" id="pv-atlas-switch" hidden><button type="button" data-pv-view="item" aria-pressed="true">Region</button><button type="button" data-pv-view="page" aria-pressed="false">Pages</button></span>
    </div>

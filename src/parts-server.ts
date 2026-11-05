@@ -1,11 +1,12 @@
 /** Serves the parts and atlas view (#348): the page, its bundle, the part and page images by index, and the sign-off. */
+import { PNG } from 'pngjs';
 import { readFile } from 'node:fs/promises';
 import { appRoot, buildWeb } from './build.ts';
 import { accessGate } from './open-protocol.ts';
 import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
 import {serveReference} from './reference.ts';
-import { partsViewJson, exportPartsVerdict, assertPartsUnchanged, readVerdict, saveVerdict, servedImage, type PartsViewPackage } from './parts-view.ts';
+import { partsDifference, partsViewJson, exportPartsVerdict, assertPartsUnchanged, readVerdict, saveVerdict, servedImage, type PartsViewPackage } from './parts-view.ts';
 
 const headers = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers });
@@ -56,13 +57,21 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
       try {
         if (url.pathname === '/api/parts' && req.method === 'GET'){await assertPartsUnchanged(pkg);return json(partsViewJson(pkg,await readVerdict(pkg)));}
         if(url.pathname==='/api/parts/comment'&&req.method==='POST'){if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);await assertPartsUnchanged(pkg);return json({comment:await preparePartsComment(pkg,await bodyJson(req))});}
-        if(url.pathname==='/api/parts/export'&&req.method==='GET'){const saved=await readVerdict(pkg);if(!saved.verdict)return json({error:'PARTS_VERDICT_UNAVAILABLE: save a verdict first'},409);return new Response(exportPartsVerdict(saved.verdict,url.searchParams.get('format')==='issue'?'issue':'json'),{headers:{...headers,'Content-Type':url.searchParams.get('format')==='issue'?'text/markdown':'application/json'}});}
+        if(url.pathname==='/api/parts/export'&&req.method==='GET'){await assertPartsUnchanged(pkg);const saved=await readVerdict(pkg);if(!saved.verdict)return json({error:'PARTS_VERDICT_UNAVAILABLE: save a verdict first'},409);return new Response(exportPartsVerdict(saved.verdict,url.searchParams.get('format')==='issue'?'issue':'json'),{headers:{...headers,'Content-Type':url.searchParams.get('format')==='issue'?'text/markdown':'application/json'}});}
         if (url.pathname === '/api/parts/verdict' && req.method === 'POST') {
           if (req.headers.get('origin') !== origin) return json({ error: 'Same-origin Origin required' }, 403);
           saving = true;
           try { return json({ verdict: await saveVerdict(pkg, await bodyJson(req)) }); } finally { saving = false; }
         }
         if(url.pathname==='/api/parts/painting'&&req.method==='GET'){if(!pkg.painting)return json({error:'PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting'},404);return serveReference(req,pkg.painting.abs,pkg.painting.sha256,headers);}
+        const difference=/^\/api\/parts\/difference\/(\d+)$/.exec(url.pathname);
+        if(difference&&req.method==='GET'){
+          const t=url.searchParams.get('threshold'),f=url.searchParams.get('footprints');
+          if(!t||!/^\d{1,3}$/.test(t)||!['true','false'].includes(f??''))throw new Error('PARTS_COMPARISON_INVALID: threshold and footprints required');
+          const r=await partsDifference(pkg,Number(difference[1]),Number(t),f==='true');
+          const png=new PNG({width:r.width,height:r.height});png.data=Buffer.from(r.data);
+          return new Response(new Uint8Array(PNG.sync.write(png)),{headers:{...headers,'Content-Type':'image/png','X-Difference-Count':String(r.count),'X-Difference-Covered':String(r.covered),'X-Difference-Compared':String(r.compared)}});
+        }
         const image = /^\/api\/parts\/(image|page)\/(\d+)$/.exec(url.pathname);
         if (image && (req.method === 'GET' || req.method === 'HEAD')) {
           const path = servedImage(pkg, image[1] as 'image' | 'page', Number(image[2]));
