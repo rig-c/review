@@ -214,7 +214,7 @@ mesh painting. The optional protected `--painting` input supplies the real refer
 A/B and adjustable-opacity Overlay share the original painting
 transform from declared rig/source canvas geometry, with exact fractional placement. This is a visual
 comparison using browser interpolation, not native pixel parity with the producer's resampled raster.
-Difference waits for the producer-declared rig-space painting artifact (#390).
+Difference uses the producer-declared rig-space painting artifact; see [Declared-grid Difference](PARTS_VIEW.md#declared-grid-difference).
 `tests/parts-comparison.test.ts` guards the geometry/settings; `tests/parts-overlay-browser.ts` verifies
 displayed overlay pixels and comment restoration in both languages.
 

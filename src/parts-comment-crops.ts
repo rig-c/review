@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {PNG} from 'pngjs';
 import {parsePartsComment,assertPartsCommentBinding,type PartsComment} from './parts-comment.ts';
 import {validatePngCrop,storePngCrop,readPngCrop} from './comment-crops.ts';
-import {verdictSource,type PartsViewPackage} from './parts-view.ts';
+import {assertPartsUnchanged,partsDifference,verdictSource,type PartsViewPackage} from './parts-view.ts';
 export async function preparePartsComment(pkg:PartsViewPackage,raw:unknown,requireNative=false):Promise<PartsComment>{return resolvePartsComment(pkg,raw,requireNative,true);}
 export async function validateStoredPartsComment(pkg:PartsViewPackage,raw:unknown):Promise<PartsComment>{return resolvePartsComment(pkg,raw,true,false);}
 async function resolvePartsComment(pkg:PartsViewPackage,raw:unknown,requireNative:boolean,persist:boolean):Promise<PartsComment>{
@@ -13,7 +13,9 @@ async function resolvePartsComment(pkg:PartsViewPackage,raw:unknown,requireNativ
  const path=pkg.imagePaths[item.index],file=pkg.files.find(f=>f.abs===path);if(!path||!file)throw new Error('PARTS_COMMENT_UNAVAILABLE: bound original PNG required');
  assertPartsCommentBinding(c,item,file.sha256,verdictSource(pkg).sha256);
  if(c.view.comparison?.mode==='overlay'&&!pkg.painting)throw new Error('PARTS_COMPARISON_UNAVAILABLE: original painting required');
+ if(c.view.comparison?.mode==='difference')await partsDifference(pkg,item.index,c.view.comparison.threshold,c.view.footprints);
  const bytes=await readFile(path);if(createHash('sha256').update(bytes).digest('hex')!==file.sha256)throw new Error('PARTS_COMMENT_STALE_SOURCE: original PNG changed');
+ await assertPartsUnchanged(pkg);
  validatePngCrop(c.crop);
  const original=PNG.sync.read(bytes),r=c.imageRegion;
  if(original.width!==item.w||original.height!==item.h)throw new Error('PARTS_COMMENT_IMAGE_SIZE: original dimensions differ from placement');

@@ -1,4 +1,4 @@
-import {defaultPartsComparison,paintingRectangle} from '../src/parts-comparison.ts';
+import {defaultPartsComparison,paintingRectangle,type PartsComparison} from '../src/parts-comparison.ts';
 import {mountViewportPair} from './viewport-pair.ts';
 import {createPartsViewport} from './parts-viewport-provider.ts';
 import {bindStageComments,type CommentUiPose,type CommentCodec} from './stage-comments.ts';
@@ -31,7 +31,7 @@ type Flag =
 interface ViewData {
  inspectionSourceHash?:string;
  draft?:{label:string;buildId:string;inspectionSourceHash:string;mappings:{part:string;skin:string;slot:string;attachment:string;vertices:number;triangles:number}[];evidence:unknown};draftUnavailable?:string;
-  painting:{sha256:string;width:number;height:number}|null;sourceHash:string;mode: 'parts' | 'atlas'; title: string; rigSize: [number, number] | null; items: Item[]; pages: Page[]; flags: Flag[]; readings?: Flag[];
+  differenceAvailable?:boolean;painting:{sha256:string;width:number;height:number}|null;sourceHash:string;mode: 'parts' | 'atlas'; title: string; rigSize: [number, number] | null; items: Item[]; pages: Page[]; flags: Flag[]; readings?: Flag[];
   flagSources: string[]; flagMissing: string[]; verdictFile: string;
   verdict: { comments?:PartsComment[];status: string; parts: Record<string, Entry> } | null; verdictStale: 'files' | 'flags' | null;
 }
@@ -49,7 +49,7 @@ if(typeof window!=='undefined')window.addEventListener('message',event=>{if(even
 const stageHeaders=()=>access.headers(stageEmbedded?{'X-Review-Stage-Build':stageBuild}:{});
 const partsApi=stageEmbedded?(stageSide==='a'||stageSide==='b'?`/api/compare/${stageSide}/stage-parts`:'/api/stage-parts'):'/api/parts';
 
-const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, comparison:defaultPartsComparison(), hidden: new Set<string>(), view: 'item' as 'item' | 'page' | 'assembled', page: 0, meshShown: new Set<string>(), verdict: new Map<string, Entry>() };
+const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, comparison:defaultPartsComparison(), differenceThreshold:0, hidden: new Set<string>(), view: 'item' as 'item' | 'page' | 'assembled', page: 0, meshShown: new Set<string>(), verdict: new Map<string, Entry>() };
 const comments:PartsComment[]=[];let commentUi:ReturnType<typeof bindStageComments>|null=null;let viewport:ReturnType<typeof createPartsViewport>|null=null;let painting=false;
 const images = new Map<string, HTMLImageElement>();
 
@@ -91,9 +91,9 @@ async function paint():Promise<void>{
   await paintRaster(token);if(token!==paintToken)return;
   await paintReference(token);if(token!==paintToken)return;
   viewport?.fitCamera();if(paintFailure)$('pv-save-status').textContent='';paintFailure=null;commentUi?.refresh();
- }catch{
+ }catch(error){
   if(token!==paintToken)return;
-  paintFailure='PARTS_PAINT_FAILED: view could not be rendered; select the part to retry';
+  paintFailure=error instanceof Error&&error.message.startsWith('PARTS_DIFFERENCE_')?error.message:'PARTS_PAINT_FAILED: view could not be rendered; select the part to retry';
   const canvas=$<HTMLCanvasElement>('pv-canvas');canvas.getContext('2d')?.clearRect(0,0,canvas.width,canvas.height);$('pv-overlay').replaceChildren();
   $('pv-caption').textContent=t(paintFailure);$('pv-save-status').textContent=t(paintFailure);commentUi?.refresh();
  }finally{if(token===paintToken)painting=false;}
@@ -162,6 +162,14 @@ async function paintRaster(token:number): Promise<void> {
     caption.textContent = t('Region {name} on {page} at {x},{y}, {width}×{height} px, with {margin} px of the page around it (dashed: the region box).', { name: item.name, page: item.page!, x: item.x, y: item.y, width: item.w, height: item.h, margin: REGION_MARGIN }) + (item.degrees ? ' ' + t('Packed at {degrees}°.', { degrees: item.degrees }) : '');
     return;
   }
+  if(state.comparison.mode==='difference'){
+    const response=await fetch(access.route(`${partsApi}/difference/${item.index}?threshold=${state.comparison.threshold}&footprints=${state.footprints}`),{headers:stageHeaders()});
+    if(!response.ok){const out=await response.json() as {error:string};throw new Error(out.error);}
+    const image=await createImageBitmap(await response.blob());
+    try{if(token!==paintToken)return;const ctx=setCanvas(canvas,item.w,item.h);paintBackground(ctx,item.w,item.h,state.bg);ctx.drawImage(image,0,0);overlay.replaceChildren();
+      caption.textContent=t('Difference: {count} pixels above threshold · {covered} covered pixels excluded · visual comparison, no automatic verdict.',{count:response.headers.get('X-Difference-Count')??'',covered:response.headers.get('X-Difference-Covered')??''});
+    }finally{image.close();}return;
+  }
   const img = await itemImage(item), front = state.footprints ? frontParts(data.items, item) : [];
   const fronts = await Promise.all(front.map(async o => ({ o, img: await itemImage(o) })));
   const original=state.comparison.mode==='overlay'&&data.painting?await load('/api/parts/painting'):null;
@@ -183,11 +191,14 @@ async function paintRaster(token:number): Promise<void> {
 async function paintReference(token:number):Promise<void>{const data=state.data,item=data?.items[state.selected];if(!data?.painting||!item)return;const img=await load('/api/parts/painting');if(token!==paintToken||data!==state.data||item!==state.data?.items[state.selected])return;const box=state.view==='assembled'?{x:0,y:0,w:data.rigSize![0],h:data.rigSize![1]}:item;const canvas=$<HTMLCanvasElement>('pv-reference');canvas.width=box.w;canvas.height=box.h;const ctx=canvas.getContext('2d')!;paintPaintingCrop(ctx,img,paintingRectangle(box,data.rigSize!,data.painting),box.w,box.h,state.bg);}
 
 function renderComparison():void {
- const active=state.data?.mode==='parts'&&!!state.data.painting,overlay=active&&state.comparison.mode==='overlay';
+ const active=state.data?.mode==='parts'&&(!!state.data.painting||!!state.data.differenceAvailable),overlay=active&&state.comparison.mode==='overlay',difference=state.comparison.mode==='difference';
+ const button=document.querySelector<HTMLButtonElement>('[data-pv-comparison="difference"]');if(button){button.disabled=!state.data?.differenceAvailable||state.view!=='item';button.title=button.disabled?t('PARTS_DIFFERENCE_UNAVAILABLE: declared painting_in_rig and individual part view required.'):'';}
+ document.querySelector<HTMLButtonElement>('[data-pv-comparison="overlay"]')!.disabled=!state.data?.painting;
+ $('pv-threshold-control').hidden=!difference;$<HTMLInputElement>('pv-threshold').value=String(state.comparison.mode==='difference'?state.comparison.threshold:state.differenceThreshold);
  $('pv-comparison').hidden=!active;for(const b of document.querySelectorAll<HTMLElement>('[data-pv-comparison]'))b.setAttribute('aria-pressed',String(b.dataset.pvComparison===state.comparison.mode));
  $('pv-opacity-control').hidden=!overlay;$<HTMLInputElement>('pv-opacity').value=String(state.comparison.opacity);$('pv-opacity-value').textContent=(state.comparison.opacity*100).toFixed(1)+'%';
- $<HTMLInputElement>('pv-alpha').disabled=overlay;
- const mesh=document.querySelector<HTMLInputElement>('#pv-mesh-control input');if(mesh)mesh.disabled=overlay||state.view==='assembled';
+ $<HTMLInputElement>('pv-alpha').disabled=overlay||difference;
+ const mesh=document.querySelector<HTMLInputElement>('#pv-mesh-control input');if(mesh)mesh.disabled=overlay||difference||state.view==='assembled';
  $<HTMLInputElement>('pv-footprints').disabled=state.data?.mode==='atlas'||state.view==='assembled';
 }
 
@@ -296,7 +307,7 @@ function renderMesh(): void {
   const item = state.data!.items[state.selected]!;
   if (!item.mesh) return;
   const control = document.createElement('label'); control.id = 'pv-mesh-control'; control.className = 'pv-field';
-  const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = state.meshShown.has(item.name); toggle.disabled=state.comparison.mode==='overlay'||state.view==='assembled';
+  const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = state.meshShown.has(item.name); toggle.disabled=state.comparison.mode!=='part'||state.view==='assembled';
   toggle.onchange = () => { if (toggle.checked) state.meshShown.add(item.name); else state.meshShown.delete(item.name); void paint(); };
   control.append(toggle, t('mesh from rig.json UVs')); document.querySelector('.pv-toolbar')!.append(control);
   const panel = document.createElement('section'); panel.id = 'pv-mesh-panel';
@@ -335,6 +346,7 @@ function select(index: number): void {
 function setView(view: 'item' | 'page' | 'assembled'): void {
   if(view==='assembled'&&(state.data?.mode!=='parts'||!state.data.rigSize))return;
   if(state.view!==view&&viewport){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
+  if(view!=='item'&&state.comparison.mode==='difference')state.comparison={mode:'part',opacity:state.comparison.opacity};
   state.view = view;renderMesh();renderComparison();$('rig-label').textContent=t(view==='assembled'?'Assembled':'Selected part');commentUi?.refresh();
   for (const b of document.querySelectorAll<HTMLButtonElement>('[data-pv-view]')) b.setAttribute('aria-pressed', String(b.dataset.pvView === view));
   void paint();
@@ -401,7 +413,7 @@ async function boot(): Promise<void> {
   const res = await fetch(access.route(partsApi), { headers: stageHeaders() });
   const data = await res.json() as ViewData & { error?: string };
   if (!res.ok) { const status=$('pv-load');status.textContent=t(data.error??'Load failed.');status.dataset.result='refused';return; }
-  state.data = data;if(stageEmbedded)for(const item of data.items)if(item.mesh)state.meshShown.add(item.name);$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;comments.push(...data.verdict?.comments??[]);setupPartsComments();viewport.bindNavigation(undefined,()=>!commentUi?.active());viewport.observeResize();
+  state.data = data;if(!data.differenceAvailable)document.querySelector('[data-pv-comparison="difference"]')?.remove();if(stageEmbedded)for(const item of data.items)if(item.mesh)state.meshShown.add(item.name);$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;comments.push(...data.verdict?.comments??[]);setupPartsComments();viewport.bindNavigation(undefined,()=>!commentUi?.active());viewport.observeResize();
   for (const item of data.items) state.verdict.set(item.name, { outcome: 'pending', note: '', ...(item.mesh ? { mesh: { outcome: 'pending' as Outcome, note: '' } } : {}) });
   if (data.verdict) { for (const [name, v] of Object.entries(data.verdict.parts)) if (state.verdict.has(name)) state.verdict.set(name, { outcome: v.outcome, note: v.note ?? '', ...(v.mesh ? { mesh: v.mesh } : {}) }); $<HTMLSelectElement>('pv-overall').value = data.verdict.status; }
   document.title = data.title;
@@ -414,8 +426,21 @@ async function boot(): Promise<void> {
   const assemble=$<HTMLButtonElement>('pv-assemble');assemble.disabled=data.mode!=='parts'||!data.rigSize;assemble.title=assemble.disabled?t(data.mode==='atlas'?'Assembly unavailable: atlas regions carry no rig placement.':'Assembly unavailable: rig_size is not declared.'):'';
   assemble.onclick=()=>{setView(state.view==='assembled'?'item':'assembled');assemble.setAttribute('aria-pressed',String(state.view==='assembled'));};
   bindAssemblyPicking();
-  for(const button of document.querySelectorAll<HTMLElement>('[data-pv-comparison]'))button.onclick=()=>{state.comparison.mode=button.dataset.pvComparison as 'part'|'overlay';if(state.comparison.mode==='overlay'){state.alpha=false;$<HTMLInputElement>('pv-alpha').checked=false;state.meshShown.delete(state.data!.items[state.selected]!.name);renderMesh();}renderComparison();void paint();};
+  for(const button of document.querySelectorAll<HTMLElement>('[data-pv-comparison]'))button.onclick=()=>{const mode=button.dataset.pvComparison as PartsComparison['mode'];state.comparison=mode==='difference'?{mode,opacity:state.comparison.opacity,threshold:state.differenceThreshold}:{mode,opacity:state.comparison.opacity};if(state.comparison.mode!=='part'){state.alpha=false;$<HTMLInputElement>('pv-alpha').checked=false;state.meshShown.delete(state.data!.items[state.selected]!.name);renderMesh();}renderComparison();void paint();};
   $<HTMLInputElement>('pv-opacity').oninput=e=>{state.comparison.opacity=Number((e.target as HTMLInputElement).value);renderComparison();void paint();};
+  $<HTMLInputElement>('pv-threshold').oninput=e=>{
+    const input=e.target as HTMLInputElement,threshold=input.valueAsNumber,status=$('pv-save-status');
+    if(!Number.isInteger(threshold)||threshold<0||threshold>255){
+      input.value=String(state.differenceThreshold);
+      status.dataset.thresholdRefused='true';
+      status.textContent=t('PARTS_COMPARISON_INVALID: enter an integer threshold from 0 to 255. Last valid value restored.');
+      return;
+    }
+    if(status.dataset.thresholdRefused){delete status.dataset.thresholdRefused;status.textContent='';}
+    state.differenceThreshold=threshold;
+    if(state.comparison.mode==='difference')state.comparison.threshold=threshold;
+    void paint();
+  };
   const footprints = $<HTMLInputElement>('pv-footprints');
   if (data.mode === 'atlas') { footprints.disabled = true; $('pv-footprint-control').title = t('Footprints need a parts package: atlas regions carry no rig placement.'); }
   $<HTMLSelectElement>('pv-bg').onchange = e => { state.bg = (e.target as HTMLSelectElement).value; void paint(); };
@@ -461,7 +486,7 @@ function setupPartsComments():void {
  };
  const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||state.view!=='item')return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshShown.has(item.name),comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
  commentUi=bindStageComments({toolbar:document.querySelector<HTMLElement>('.pv-toolbar')!,viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
- restore:async(raw)=>{const b=raw as {part:string;imageHash:string;sourceHash:string;view:PartsComment['view']},item=state.data!.items.find(i=>i.name===b.part);if(!item||item.imageHash!==b.imageHash||state.data!.sourceHash!==b.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');setView('item');$('pv-assemble').setAttribute('aria-pressed','false');select(item.index);state.bg=b.view.background;state.alpha=b.view.alpha;state.footprints=b.view.footprints;state.comparison={...(b.view.comparison??defaultPartsComparison())};renderComparison();if(b.view.mesh)state.meshShown.add(item.name);else state.meshShown.delete(item.name);$<HTMLSelectElement>('pv-bg').value=state.bg;$<HTMLInputElement>('pv-alpha').checked=state.alpha;$<HTMLInputElement>('pv-footprints').checked=state.footprints;renderMesh();viewport!.state.cameraRestoring=true;try{await paint();viewport!.writeCamera('rig',{zoom:b.view.camera.zoom,center:{...b.view.camera.center}});if(b.view.referenceCamera)viewport!.writeCamera('reference',{zoom:b.view.referenceCamera.zoom,center:{...b.view.referenceCamera.center}});viewport!.state.cameraSync=b.view.cameraSync;viewport!.fitCamera();}finally{viewport!.state.cameraRestoring=false;}},
+ restore:async(raw)=>{const res=await fetch(access.route(partsApi),{headers:stageHeaders()});const current=await res.json() as ViewData&{error?:string};if(!res.ok||current.sourceHash!==state.data?.sourceHash)throw new Error(current.error??'PARTS_COMMENT_STALE_SOURCE');const b=raw as {part:string;imageHash:string;sourceHash:string;view:PartsComment['view']},item=state.data!.items.find(i=>i.name===b.part);if(!item||item.imageHash!==b.imageHash||state.data!.sourceHash!==b.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');setView('item');$('pv-assemble').setAttribute('aria-pressed','false');select(item.index);state.bg=b.view.background;state.alpha=b.view.alpha;state.footprints=b.view.footprints;state.comparison={...(b.view.comparison??defaultPartsComparison())};if(state.comparison.mode==='difference')state.differenceThreshold=state.comparison.threshold;renderComparison();if(b.view.mesh)state.meshShown.add(item.name);else state.meshShown.delete(item.name);$<HTMLSelectElement>('pv-bg').value=state.bg;$<HTMLInputElement>('pv-alpha').checked=state.alpha;$<HTMLInputElement>('pv-footprints').checked=state.footprints;renderMesh();viewport!.state.cameraRestoring=true;try{await paint();viewport!.writeCamera('rig',{zoom:b.view.camera.zoom,center:{...b.view.camera.center}});if(b.view.referenceCamera)viewport!.writeCamera('reference',{zoom:b.view.referenceCamera.zoom,center:{...b.view.referenceCamera.center}});viewport!.state.cameraSync=b.view.cameraSync;viewport!.fitCamera();}finally{viewport!.state.cameraRestoring=false;}},
  feedback:()=>comments,locked:()=>false,add:c=>comments.push(c),changed:()=>renderVerdict(),error:m=>{$('pv-save-status').textContent=t(m);},blocked:()=>painting,refusal:()=>paintFailure??(state.view==='assembled'?'PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment':null)??(state.data?.mode!=='parts'||stageEmbedded?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
 }
 

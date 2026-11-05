@@ -15,7 +15,7 @@
  * `source.sha256` is the sha256 over the UTF-8 lines `<path>\t<sha256>\n`, sorted by path bytewise, where every path
  * is relative to the verdict file's directory. rig-c/create recomputes it, so the definition is fixed here.
  */
-import {assertOriginalPaintingSize} from './parts-comparison.ts';
+import {differencePixels,assertOriginalPaintingSize} from './parts-comparison.ts';
 import {parsePartsComment,assertPartsCommentBinding,type PartsComment} from './parts-comment.ts';
 import {preparePartsComment,validateStoredPartsComment} from './parts-comment-crops.ts';
 import {resolvedCropPath} from './comment-crops.ts';
@@ -61,6 +61,7 @@ export type ProducerFlag =
       classification?: 'part' | 'pair' | 'evidence' | 'unclassified' };
 
 export interface PartsViewPackage {
+  paintingInRig?: LocalFile & {width:number;height:number;declaredPath:string};
   painting?:{sha256:string;width:number;height:number;abs:string};
   mode: PartsViewMode;
   root: string;
@@ -333,6 +334,21 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     imagePaths.push(real);
     items.push({ name: part.name, index, x: part.x, y: part.y, w: part.w, h: part.h, image: true });
   }
+  let paintingInRig:PartsViewPackage['paintingInRig'];
+  if(Object.hasOwn(doc,'painting_in_rig')){
+    const d=record(doc.painting_in_rig);
+    if(!d||Object.keys(d).length!==3||typeof d.path!=='string'||typeof d.sha256!=='string'||!/^[a-f0-9]{64}$/.test(d.sha256)||d.resample!=='lanczos3-rgb-opaque')refuse('PARTS_DIFFERENCE_PROVENANCE','declared path, lowercase SHA-256 and lanczos3-rgb-opaque required');
+    try{packagePath(d!.path,'painting_in_rig');}catch{refuse('PARTS_DIFFERENCE_PATH','literal portable inside-package path required');}
+    const declaredPath=join(root,d!.path as string);
+    const abs=await insideRoot(root,declaredPath,'PARTS_DIFFERENCE_PATH','painting_in_rig').catch(()=>refuse('PARTS_DIFFERENCE_PATH','declared painting must be readable inside the package'));
+    const bytes=await readFile(abs),sha256=createHash('sha256').update(bytes).digest('hex');
+    if(sha256!==d!.sha256)refuse('PARTS_DIFFERENCE_HASH','declared painting hash differs');
+    let png:PNG;try{png=PNG.sync.read(bytes);}catch{refuse('PARTS_DIFFERENCE_PNG','declared painting must be RGBA8 PNG');}
+    if(bytes[24]!==8||bytes[25]!==6)refuse('PARTS_DIFFERENCE_PNG','declared painting must be RGBA8 PNG');
+    if(!rigSize||!rigSize.every(Number.isSafeInteger)||png!.width!==rigSize[0]||png!.height!==rigSize[1])refuse('PARTS_DIFFERENCE_SIZE','declared painting dimensions must equal integer rig_size');
+    for(let i=3;i<png!.data.length;i+=4)if(png!.data[i]!==255)refuse('PARTS_DIFFERENCE_ALPHA','declared painting must have alpha 255');
+    paintingInRig={abs,declaredPath,bytes:bytes.length,sha256,width:png!.width,height:png!.height};files.push(paintingInRig);
+  }
   let painting:PartsViewPackage['painting'];if(options.painting){
     const candidate=resolve(options.painting),rel=relative(resolve(root),candidate);if(!rel||rel==='..'||rel.startsWith('..'+sep)||isAbsolute(rel))refuse('PARTS_PAINTING_OUTSIDE','painting must be inside the parts package');
     let abs:string,bytes:Buffer;try{abs=await insideRoot(root,candidate,'PARTS_PAINTING_OUTSIDE','painting');packagePath(relative(root,abs).split(sep).join('/'),'painting');bytes=await readFile(abs);}catch(error){if(error instanceof Error&&error.message.startsWith('PARTS_PAINTING_OUTSIDE:'))throw error;refuse('PARTS_PAINTING_UNAVAILABLE','painting must be a readable portable package PNG');}
@@ -359,7 +375,7 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     files.push({ abs: rigPath, bytes: rigBytes.length, sha256: createHash('sha256').update(rigBytes).digest('hex') });
     if (report) files.push(report);
   }
-  return { ...(painting?{painting}:{}),mode: 'parts', root, title: basename(root) === 'rig' ? basename(dirname(root)) : basename(root), rigSize, items, pages: [], flags, readings, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath, imagePaths, pagePaths: [] };
+  return { ...(paintingInRig?{paintingInRig}:{}),...(painting?{painting}:{}),mode: 'parts', root, title: basename(root) === 'rig' ? basename(dirname(root)) : basename(root), rigSize, items, pages: [], flags, readings, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath, imagePaths, pagePaths: [] };
 }
 
 async function loadAtlasMode(input: string, options: PartsViewOptions): Promise<PartsViewPackage> {
@@ -462,7 +478,7 @@ export interface VerdictSubmission { status: VerdictStatus; parts: Record<string
 export const itemNames = (pkg: Pick<PartsViewPackage, 'items'>): string[] => [...new Set(pkg.items.map(i => i.name))];
 
 /** Builds the verdict document, or refuses by name. Pure but for the clock. */
-export function buildVerdict(pkg: Pick<PartsViewPackage, 'mode' | 'items' | 'flags' | 'files' | 'flagFiles' | 'verdictPath' | 'imagePaths' | 'painting'>, input: unknown, version: string, now = new Date()): PartsVerdict {
+export function buildVerdict(pkg: Pick<PartsViewPackage, 'mode' | 'items' | 'flags' | 'files' | 'flagFiles' | 'verdictPath' | 'imagePaths' | 'painting' | 'paintingInRig'>, input: unknown, version: string, now = new Date()): PartsVerdict {
   const body = record(input);
   if (!body) return refuse('PARTS_VERDICT_INVALID', 'expected { status, parts }');
   const status = body.status;
@@ -497,12 +513,13 @@ export function buildVerdict(pkg: Pick<PartsViewPackage, 'mode' | 'items' | 'fla
   if (status === 'approved' && outcomes.some(o => o !== 'clean')) refuse('PARTS_VERDICT_NOT_CLEAN', `approved needs every part clean; ${outcomes.filter(o => o !== 'clean').length} are not`);
   if (status === 'changes-requested' && !outcomes.includes('flagged')) refuse('PARTS_VERDICT_NOTHING_FLAGGED', 'changes-requested needs at least one flagged part');
   const comments=body.comments??[];if(!Array.isArray(comments)||comments.length>1000)refuse('PARTS_COMMENT_LIMIT','comments must be an array of at most 1000 entries');
-  const ids=new Set<string>();for(const raw of comments as unknown[]){const c=parsePartsComment(raw);if(c.view.comparison?.mode==='overlay'&&!pkg.painting)refuse('PARTS_COMPARISON_UNAVAILABLE','original painting required');const item=pkg.items.find(i=>i.name===c.part);if(!item||pkg.mode!=='parts')refuse('PARTS_COMMENT_UNAVAILABLE','original part required');if(ids.has(c.id))refuse('PARTS_COMMENT_DUPLICATE','duplicate comment id');ids.add(c.id);const file=pkg.files.find(f=>f.abs===pkg.imagePaths[item!.index]);assertPartsCommentBinding(c,item!,file?.sha256??'',verdictSource(pkg).sha256);}
+  const ids=new Set<string>();for(const raw of comments as unknown[]){const c=parsePartsComment(raw);if(c.view.comparison?.mode==='overlay'&&!pkg.painting)refuse('PARTS_COMPARISON_UNAVAILABLE','original painting required');if(c.view.comparison?.mode==='difference'&&!pkg.paintingInRig)refuse('PARTS_DIFFERENCE_UNAVAILABLE','declared painting_in_rig required');const item=pkg.items.find(i=>i.name===c.part);if(!item||pkg.mode!=='parts')refuse('PARTS_COMMENT_UNAVAILABLE','original part required');if(ids.has(c.id))refuse('PARTS_COMMENT_DUPLICATE','duplicate comment id');ids.add(c.id);const file=pkg.files.find(f=>f.abs===pkg.imagePaths[item!.index]);assertPartsCommentBinding(c,item!,file?.sha256??'',verdictSource(pkg).sha256);}
   return { schema: PARTS_VERDICT_SCHEMA, mode: pkg.mode, tool: { name: '@rig-c/review', version }, source: verdictSource(pkg), status, parts, comments:comments as PartsComment[], updatedAt: now.toISOString() };
 }
 
 /** Every file the package was loaded from still has the bytes it was loaded with. */
-export async function assertPartsUnchanged(pkg: Pick<PartsViewPackage, 'files' | 'flagFiles'>): Promise<void> {
+export async function assertPartsUnchanged(pkg: Pick<PartsViewPackage, 'files' | 'flagFiles' | 'paintingInRig'>): Promise<void> {
+  if(pkg.paintingInRig&&await realpath(pkg.paintingInRig.declaredPath).catch(()=>null)!==pkg.paintingInRig.abs)refuse('PARTS_VIEW_SOURCE_CHANGED','declared painting path changed');
   for (const f of [...pkg.files, ...pkg.flagFiles]) {
     const now = await hashFile(f.abs).catch(() => null);
     if (!now || now.sha256 !== f.sha256) refuse('PARTS_VIEW_SOURCE_CHANGED', `${basename(f.abs)} changed after the view opened; reopen it to review what is on disk`);
@@ -555,6 +572,7 @@ export async function readVerdict(pkg: PartsViewPackage): Promise<{ verdict: Par
 export function partsViewJson(pkg: PartsViewPackage, saved: { verdict: PartsVerdict | null; stale: VerdictStale }) {
   return {
     schema: 'rig-review-parts-view/1', mode: pkg.mode, title: pkg.title, rigSize: pkg.rigSize,
+    differenceAvailable:!!pkg.paintingInRig,
     painting:pkg.painting?{sha256:pkg.painting.sha256,width:pkg.painting.width,height:pkg.painting.height}:null,
     sourceHash:verdictSource(pkg).sha256,
     items:pkg.items.map(item=>({...item,...(pkg.mode==='parts'?{imageHash:pkg.files.find(f=>f.abs===pkg.imagePaths[item.index])?.sha256}:{})})), pages: pkg.pages, flags: pkg.flags, readings: pkg.readings ?? [],
@@ -575,4 +593,16 @@ export function exportPartsVerdict(verdict:PartsVerdict,format:'json'|'issue'):s
  const comments=verdict.comments.map(c=>{const {png,...crop}=c.crop;return {...c,crop:{...crop,path:resolvedCropPath(crop.path)},nativeCrop:c.nativeCrop?{...c.nativeCrop,path:resolvedCropPath(c.nativeCrop.path)}:null};});
  if(format==='json')return JSON.stringify({...verdict,comments},null,2)+'\n';
  return [`# Parts review`, `Source: ${verdict.source.sha256}`,`Status: ${verdict.status}`,...Object.entries(verdict.parts).flatMap(([name,p])=>[`\n## ${name}`,`${p.outcome}: ${p.note}`,...comments.filter(c=>c.part===name).flatMap(c=>[`\n### ${c.summary}`,`Part: ${c.part} · image SHA-256: ${c.imageHash}`,`Image region: ${JSON.stringify(c.imageRegion)}`,`Rig region: ${JSON.stringify(c.rigRegion)}`,`Viewport crop: ${c.crop.path} · SHA-256 ${c.crop.sha256}`,`Native crop: ${c.nativeCrop!.path} · SHA-256 ${c.nativeCrop!.sha256}`,`View: ${JSON.stringify(c.view)}`])])].join('\n')+'\n';
+}
+
+/** Numeric comparison is decoded from bound original PNG bytes on the server, never browser pixels. */
+export async function partsDifference(pkg:PartsViewPackage,index:number,threshold:number,footprints:boolean){
+ await assertPartsUnchanged(pkg);
+ if(!pkg.paintingInRig)refuse('PARTS_DIFFERENCE_UNAVAILABLE','declared painting_in_rig required; legacy records remain readable');
+ const item=pkg.items[index];if(pkg.mode!=='parts'||!Number.isInteger(index)||!item)refuse('PARTS_DIFFERENCE_UNAVAILABLE','known original part required');
+ const decode=async(path:string)=>{const bytes=await readFile(path);if(bytes[24]!==8||bytes[25]!==6)refuse('PARTS_DIFFERENCE_PNG','exact RGBA8 operands required');return PNG.sync.read(bytes);};
+ const painting=await decode(pkg.paintingInRig!.abs),part=await decode(pkg.imagePaths[index]!);
+ const fronts=footprints?await Promise.all(pkg.items.filter(f=>f.index>index&&f.x<item!.x+item!.w&&f.x+f.w>item!.x&&f.y<item!.y+item!.h&&f.y+f.h>item!.y).map(async box=>({box,raster:await decode(pkg.imagePaths[box.index]!)}))):[];
+ const result=differencePixels(part,item!,painting,fronts,threshold,footprints);
+ await assertPartsUnchanged(pkg);return result;
 }

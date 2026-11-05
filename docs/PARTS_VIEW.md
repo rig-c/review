@@ -360,3 +360,52 @@ names the absent draft instead of offering an Apply that cannot run.
 Correction-record export is unfinished, blocked on review#369/create#91. Existing
 comments and feedback preserve reviewer wording, but are not a substitute for
 that shared export or for create-owned structure decisions.
+
+### Declared-grid Difference
+
+**Difference** in an individual part view reads the optional producer declaration
+`painting_in_rig: {path, sha256, resample:"lanczos3-rgb-opaque"}` in `parts.json`.
+The literal portable path resolves inside the package. Its PNG must be RGBA8,
+alpha 255 and exactly `rig_size`; its bytes must match the declared SHA-256.
+The artifact joins `source.files` and protected inputs. Original `--painting`
+A/B and Overlay remain independent. Legacy manifests without the declaration
+still open normally; Difference requests refuse `PARTS_DIFFERENCE_UNAVAILABLE`.
+
+The consumer is pinned to the published contract in
+[@rig-c/parts 2.19.0](https://github.com/rig-c/parts/tree/193380b36b61a44daa3a4fcc5824a58efd6750a4).
+This is assemble's operand: source RGB forced opaque, then producer Lanczos3.
+Check instead flattens source alpha over its backdrop before resizing. The
+[producer's per-example report](https://github.com/rig-c/parts/pull/1101)
+reports equality for its five opaque example sources. That report is provenance,
+not a consumer verdict or proof of `SETUP_MATCHES_PAINTING`.
+
+For each original part cell with alpha > 0, the server compares stored RGB to
+`painting_in_rig[x+cellX,y+cellY]`. No premultiplication, resampling or browser
+pixel readback enters the metric. Difference is
+`max(abs(dR),abs(dG),abs(dB))`, counted only when **strictly greater** than the
+integer Threshold (0–255). Above-threshold cells are red with intensity equal
+to the difference; others are black. Alpha-zero cells show the sentinel.
+Invalid threshold input is refused and visibly restored to the last valid value.
+There is no automatic approval or pass/fail verdict.
+
+With Footprints enabled, a cell held at alpha > 0 by any overlapping later
+part at the same integer rig coordinate is grey (128,128,128) and excluded
+from the count. Off compares the selected part without decoding or sampling front
+rasters. The selected part and any front parts sampled with Footprints on need
+integer x/y, PNG dimensions equal to w/h, and native RGBA8 operands.
+A nontransparent selected cell outside the rig grid or fractional placement
+refuses `PARTS_DIFFERENCE_ALIGNMENT`; review never rounds placement or invents
+edge coverage. Assembly remains a separate visual view.
+
+Difference comments retain `view.comparison:{mode:"difference",opacity,threshold}`
+and the existing footprints, background and cameras. Older part/overlay states
+keep their two-field shape. The common viewport crop captures the displayed
+comparison; the native crop keeps original RGBA. Save, reopen, restore, JSON
+and issue Markdown retain this state, with source checks before use.
+
+Named input refusals: `PARTS_DIFFERENCE_PROVENANCE`, `PARTS_DIFFERENCE_PATH`,
+`PARTS_DIFFERENCE_HASH`, `PARTS_DIFFERENCE_PNG`, `PARTS_DIFFERENCE_SIZE`,
+`PARTS_DIFFERENCE_ALPHA`. A changed loaded input uses
+`PARTS_VIEW_SOURCE_CHANGED`. No producer command executes for Difference.
+`tests/parts-difference.test.ts` supplies literal independent numeric controls;
+`tests/parts-difference-browser.ts` exercises bilingual display and saved evidence.
