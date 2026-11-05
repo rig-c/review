@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.0](https://github.com/rig-c/review/compare/v1.5.4...v1.6.0) (2026-11-05)
+
+
+### Features
+
+* **parts:** inspect and sign off per-part mesh geometry ([#377](https://github.com/rig-c/review/issues/377)) ([136746a](https://github.com/rig-c/review/commit/136746a3d1a581a8ae79c335c9bc6c0b77fcc875))
+
+
+### Bug Fixes
+
+* **parts:** protect inputs and bound verdict request bytes ([#374](https://github.com/rig-c/review/issues/374)) ([4cccdb3](https://github.com/rig-c/review/commit/4cccdb3e444f31d1fb9e742df6b670d6b952bc8a))
+
 ## [1.5.4](https://github.com/rig-c/review/compare/v1.5.3...v1.5.4) (2026-11-04)
 
 
