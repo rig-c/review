@@ -44,7 +44,7 @@ const stageSide=new URL(location.href).searchParams.get('side');
 const partsApi=stageEmbedded?(stageSide==='a'||stageSide==='b'?`/api/compare/${stageSide}/stage-parts`:'/api/stage-parts'):'/api/parts';
 
 const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, comparison:defaultPartsComparison(), view: 'item' as 'item' | 'page', page: 0, meshShown: new Set<string>(), verdict: new Map<string, Entry>() };
-const comments:PartsComment[]=[];let commentUi:ReturnType<typeof bindStageComments>|null=null;let viewport:ReturnType<typeof createPartsViewport>|null=null;let painting=0;
+const comments:PartsComment[]=[];let commentUi:ReturnType<typeof bindStageComments>|null=null;let viewport:ReturnType<typeof createPartsViewport>|null=null;let painting=false;
 const images = new Map<string, HTMLImageElement>();
 
 function load(src: string): Promise<HTMLImageElement> {
@@ -77,7 +77,20 @@ function overlayBox(x: number, y: number, w: number, h: number): HTMLDivElement 
 }
 
 let paintToken = 0;
-async function paint():Promise<void>{painting++;const token=++paintToken;try{await paintRaster(token);if(token!==paintToken)return;await paintReference(token);if(token===paintToken)viewport?.fitCamera();}finally{painting--;}}
+let paintFailure:string|null=null;
+async function paint():Promise<void>{
+ const token=++paintToken;painting=true;
+ try{
+  await paintRaster(token);if(token!==paintToken)return;
+  await paintReference(token);if(token!==paintToken)return;
+  viewport?.fitCamera();if(paintFailure)$('pv-save-status').textContent='';paintFailure=null;commentUi?.refresh();
+ }catch{
+  if(token!==paintToken)return;
+  paintFailure='PARTS_PAINT_FAILED: view could not be rendered; select the part to retry';
+  const canvas=$<HTMLCanvasElement>('pv-canvas');canvas.getContext('2d')?.clearRect(0,0,canvas.width,canvas.height);$('pv-overlay').replaceChildren();
+  $('pv-caption').textContent=t(paintFailure);$('pv-save-status').textContent=t(paintFailure);commentUi?.refresh();
+ }finally{if(token===paintToken)painting=false;}
+}
 async function paintRaster(token:number): Promise<void> {
   const data = state.data;
   if (!data || !data.items.length) return;
@@ -352,7 +365,7 @@ function setupPartsComments():void {
  const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||state.view!=='item')return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshShown.has(item.name),comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
  commentUi=bindStageComments({toolbar:document.querySelector<HTMLElement>('.pv-toolbar')!,viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
  restore:async(raw)=>{const b=raw as {part:string;imageHash:string;sourceHash:string;view:PartsComment['view']},item=state.data!.items.find(i=>i.name===b.part);if(!item||item.imageHash!==b.imageHash||state.data!.sourceHash!==b.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');select(item.index);state.bg=b.view.background;state.alpha=b.view.alpha;state.footprints=b.view.footprints;state.comparison={...(b.view.comparison??defaultPartsComparison())};renderComparison();if(b.view.mesh)state.meshShown.add(item.name);else state.meshShown.delete(item.name);$<HTMLSelectElement>('pv-bg').value=state.bg;$<HTMLInputElement>('pv-alpha').checked=state.alpha;$<HTMLInputElement>('pv-footprints').checked=state.footprints;renderMesh();viewport!.state.cameraRestoring=true;try{await paint();viewport!.writeCamera('rig',{zoom:b.view.camera.zoom,center:{...b.view.camera.center}});if(b.view.referenceCamera)viewport!.writeCamera('reference',{zoom:b.view.referenceCamera.zoom,center:{...b.view.referenceCamera.center}});viewport!.state.cameraSync=b.view.cameraSync;viewport!.fitCamera();}finally{viewport!.state.cameraRestoring=false;}},
- feedback:()=>comments,locked:()=>false,add:c=>comments.push(c),changed:()=>renderVerdict(),error:m=>{$('pv-save-status').textContent=t(m);},blocked:()=>painting>0,refusal:()=>state.data?.mode!=='parts'||stageEmbedded?'PARTS_COMMENT_UNAVAILABLE: original part image required':null,codec});
+ feedback:()=>comments,locked:()=>false,add:c=>comments.push(c),changed:()=>renderVerdict(),error:m=>{$('pv-save-status').textContent=t(m);},blocked:()=>painting,refusal:()=>paintFailure??(state.data?.mode!=='parts'||stageEmbedded?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
 }
 
 if (typeof document !== 'undefined' && document.getElementById('parts-app')) void boot();

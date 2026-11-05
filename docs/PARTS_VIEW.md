@@ -231,6 +231,10 @@ Without a painting the comparison controls are absent and the reference pane nam
 `tests/parts-comparison.test.ts`; `tests/parts-overlay-browser.ts` separately exercises trusted input,
 actual displayed pixels, camera preservation, mode/opacity save/reload/restore and both exports in EN/KO.
 Its native crop remains the original part RGBA, while the viewport crop shows the displayed comparison.
+A current image/painting render failure clears the part pixels and refuses comment creation/editing
+as `PARTS_PAINT_FAILED` until a successful repaint. Older failed generations cannot invalidate a
+newer successful view (`tests/parts-async-navigation.test.ts`; focused browser evidence in
+`tests/parts-paint-failure-browser.ts`).
 
 The transform follows the whole-canvas geometry in pinned
 [parts 2.17.0 sourceInRig](https://github.com/rig-c/parts/blob/971b3a7fab1109adf5be11750886687a7addb306/src/assemble.ts#L2141)

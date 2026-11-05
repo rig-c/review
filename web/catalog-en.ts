@@ -3137,4 +3137,5 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Part opacity": "Part opacity",
   "PARTS_COMPARISON_UNAVAILABLE: original painting required": "PARTS_COMPARISON_UNAVAILABLE: original painting required",
   "PARTS_COMPARISON_INVALID: part/overlay mode and opacity 0..1 required": "PARTS_COMPARISON_INVALID: part/overlay mode and opacity 0..1 required",
+  "PARTS_PAINT_FAILED: view could not be rendered; select the part to retry": "PARTS_PAINT_FAILED: view could not be rendered; select the part to retry",
 };
