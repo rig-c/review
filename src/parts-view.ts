@@ -16,7 +16,7 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { PNG } from 'pngjs';
 import { loadReview, safeFile, packagePath } from './manifest.ts';
@@ -68,6 +68,8 @@ export interface PartsViewPackage {
   flagFiles: LocalFile[];
   /** Where flags were looked for and not found, said in words. */
   flagNotes: string[];
+  /** Additional package/producer inputs protected from verdict writes, without changing verdict identity. */
+  protectedPaths?: string[];
   verdictPath: string;
   /** Absolute paths, served by index. */
   imagePaths: string[];
@@ -287,6 +289,11 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     items.push({ name: part.name, index, x: part.x, y: part.y, w: part.w, h: part.h, image: true });
   }
   const { flags, files: flagFiles, notes } = await producerFlags(root, null, seen, options);
+  const protectedPaths = [join(root, 'rig.json'), join(root, 'config.json'), join(root, 'review.json'), join(root, 'report.json')];
+  if (basename(root) === 'rig') protectedPaths.push(...['parts.json', 'config.json', 'review.json', 'report.json'].map(name => join(dirname(root), name)));
+  if (options.rig !== undefined) protectedPaths.push(resolve(options.rig));
+  const verdictPath = options.verdict ? resolve(options.verdict) : join(root, PARTS_VERDICT_FILE);
+  await assertVerdictDestination({ files, flagFiles, protectedPaths, verdictPath });
   const rigPath = options.rig !== undefined ? resolve(options.rig) : existsSync(join(root, 'rig.json')) ? await insideRoot(root, join(root, 'rig.json'), 'PARTS_MESH_OUTSIDE', 'rig.json') : null;
   if (rigPath) {
     const report = notes.includes('mesh_report.json') ? undefined : flagFiles[0];
@@ -300,7 +307,7 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     files.push({ abs: rigPath, bytes: rigBytes.length, sha256: createHash('sha256').update(rigBytes).digest('hex') });
     if (report) files.push(report);
   }
-  return { mode: 'parts', root, title: basename(root) === 'rig' ? basename(dirname(root)) : basename(root), rigSize, items, pages: [], flags, files, flagFiles, flagNotes: notes, verdictPath: options.verdict ? resolve(options.verdict) : join(root, PARTS_VERDICT_FILE), imagePaths, pagePaths: [] };
+  return { mode: 'parts', root, title: basename(root) === 'rig' ? basename(dirname(root)) : basename(root), rigSize, items, pages: [], flags, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath, imagePaths, pagePaths: [] };
 }
 
 async function loadAtlasMode(input: string, options: PartsViewOptions): Promise<PartsViewPackage> {
@@ -331,7 +338,11 @@ async function loadAtlasMode(input: string, options: PartsViewOptions): Promise<
   // A build root opens as its check package (#149); its own rig/ and check/ hold the flags.
   const buildRoot = p.buildRoot ?? null;
   const { flags, files: flagFiles, notes } = await producerFlags(null, buildRoot, names, options);
-  return { mode: 'atlas', root: p.root, title: p.manifest.title, rigSize: null, items, pages, flags, files, flagFiles, flagNotes: notes, verdictPath: options.verdict ? resolve(options.verdict) : join(dirname(modelAbs), PARTS_VERDICT_FILE), imagePaths: [], pagePaths };
+  const protectedPaths = [...p.files].map(path => resolve(p.root, path));
+  protectedPaths.push(...['rig.json', 'config.json', 'report.json', 'review.json'].map(name => join(p.root, name)));
+  if (p.handoff) protectedPaths.push(...p.handoff.record.files.map(file => resolve(p.root, file.path)));
+  if (buildRoot) protectedPaths.push(...['parts.json', 'config.json', 'rig/rig.json', 'rig/parts.json'].map(name => join(buildRoot, name)));
+  return { mode: 'atlas', root: p.root, title: p.manifest.title, rigSize: null, items, pages, flags, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath: options.verdict ? resolve(options.verdict) : join(dirname(modelAbs), PARTS_VERDICT_FILE), imagePaths: [], pagePaths };
 }
 
 /**
@@ -341,10 +352,30 @@ async function loadAtlasMode(input: string, options: PartsViewOptions): Promise<
 export async function loadPartsView(input: string, options: PartsViewOptions = {}): Promise<PartsViewPackage> {
   const abs = await realpath(resolve(input)).catch(() => refuse('PARTS_VIEW_INPUT_MISSING', `${input} does not exist`));
   if ((await stat(abs)).isDirectory()) {
-    if (existsSync(join(abs, 'parts.json'))) return loadPartsMode(abs, options);
-    if (existsSync(join(abs, 'rig', 'parts.json')) && !existsSync(join(abs, 'review.json'))) return loadPartsMode(join(abs, 'rig'), options);
+    if (existsSync(join(abs, 'parts.json'))) return checkedVerdict(await loadPartsMode(abs, options));
+    if (existsSync(join(abs, 'rig', 'parts.json')) && !existsSync(join(abs, 'review.json'))) return checkedVerdict(await loadPartsMode(join(abs, 'rig'), options));
   }
-  return loadAtlasMode(input, options);
+  return checkedVerdict(await loadAtlasMode(input, options));
+}
+
+/** Compare names, real paths (including parent links), and filesystem identities before creating output. */
+async function assertVerdictDestination(pkg: Pick<PartsViewPackage, 'files' | 'flagFiles' | 'protectedPaths' | 'verdictPath'>): Promise<void> {
+  const target = resolve(pkg.verdictPath);
+  const targetReal = await realpath(target).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; return null; });
+  const targetStat = await stat(target, { bigint: true }).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; return null; });
+  const parent = await realpath(dirname(target)).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; return null; });
+  for (const path of [...pkg.files, ...pkg.flagFiles].map(file => file.abs).concat(pkg.protectedPaths ?? [])) {
+    const input = resolve(path);
+    const real = await realpath(input).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; return null; });
+    const sameName = target === input || (real !== null && (targetReal === real || (parent !== null && join(parent, basename(target)) === real)));
+    const identity = targetStat && real ? await stat(real, { bigint: true }) : null;
+    if (sameName || (targetStat && identity && targetStat.dev === identity.dev && targetStat.ino === identity.ino)) refuse('PARTS_VERDICT_INPUT_COLLISION', `${basename(target)} is a protected input; choose a separate verdict file`);
+  }
+}
+
+async function checkedVerdict(pkg: PartsViewPackage): Promise<PartsViewPackage> {
+  await assertVerdictDestination(pkg);
+  return pkg;
 }
 
 /** The hashed files as the verdict records them: relative to the verdict file's directory. */
@@ -422,12 +453,16 @@ async function packageVersion(): Promise<string> {
 
 /** Writes the verdict atomically beside its sources. */
 export async function saveVerdict(pkg: PartsViewPackage, input: unknown): Promise<PartsVerdict> {
+  await assertVerdictDestination(pkg);
   await assertPartsUnchanged(pkg);
   const verdict = buildVerdict(pkg, input, await packageVersion());
   await mkdir(dirname(pkg.verdictPath), { recursive: true });
   const tmp = `${pkg.verdictPath}.${crypto.randomUUID()}.tmp`;
-  await writeFile(tmp, JSON.stringify(verdict, null, 2) + '\n');
-  await rename(tmp, pkg.verdictPath);
+  try {
+    await writeFile(tmp, JSON.stringify(verdict, null, 2) + '\n', { flag: 'wx' });
+    await assertVerdictDestination(pkg);
+    await rename(tmp, pkg.verdictPath);
+  } finally { await rm(tmp, { force: true }); }
   return verdict;
 }
 

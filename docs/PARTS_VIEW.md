@@ -73,6 +73,14 @@ Refusals, by name: `PARTS_VERDICT_MISSING_PART`, `PARTS_VERDICT_UNKNOWN_PART`, `
 `PARTS_VERDICT_NOT_CLEAN`, `PARTS_VERDICT_NOTHING_FLAGGED`, `PARTS_VERDICT_INVALID`, and `PARTS_VIEW_SOURCE_CHANGED`
 when a file changed after the view opened.
 
+A verdict destination matching a protected part, producer report, rig/package input, model or atlas image is
+refused as `PARTS_VERDICT_INPUT_COLLISION`, including normalized paths, symbolic links and filesystem aliases.
+Choose a separate verdict file; saving an existing verdict again remains supported.
+
+Sign-off JSON requests are limited to 4 MiB (4,194,304 bytes) of UTF-8 while streaming. An over-limit body is
+cancelled before its remainder is read; a valid request exactly at the byte limit is accepted. Same-origin and
+write-capability requirements remain unchanged.
+
 On reopen, a saved sign-off is offered only when both `source.sha256` and `source.flags` match the files on disk. When
 only the producer flags differ, the page says the saved sign-off is for different producer flags and starts fresh.
 Consumers that gate on the sign-off (rig-c/create) check `source.sha256`.
