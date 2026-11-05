@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.9.0](https://github.com/rig-c/review/compare/v1.8.0...v1.9.0) (2026-11-05)
+
+
+### Features
+
+* **parts:** approve pending outcomes together and compact the list ([#397](https://github.com/rig-c/review/issues/397)) ([b711ff9](https://github.com/rig-c/review/commit/b711ff99e348ed0ad0dfe76cc48dfa7df927560a))
+* **parts:** count explicit part findings separately from check evidence ([#394](https://github.com/rig-c/review/issues/394)) ([1210d7b](https://github.com/rig-c/review/commit/1210d7b2de7e5da4510de741dee3f14c4d4300b0))
+
 ## [1.8.0](https://github.com/rig-c/review/compare/v1.7.0...v1.8.0) (2026-11-05)
 
 
