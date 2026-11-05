@@ -1,3 +1,5 @@
+import {isDeepStrictEqual} from 'node:util';
+import {recordFor,type AnyJobView} from '../web/rebuild-client.ts';
 /**
  * Apply · Rebuild (issue #99): the user's chest-region designation goes to the installed producer as one mesh entry,
  * `rig-parts remesh` re-fits that one part of the package's gated rig into a scratch revision, `rigc build` compiles
@@ -263,6 +265,10 @@ export interface AppliedHistory { schema: 'rig-review-applied-history/1'; depth:
 export type RebuildStatus = 'running' | 'built' | 'refused' | 'failed';
 export interface RebuildBuild { model: string; modelUrl: string; modelHash: string; files: Record<string, string> }
 export interface RebuildJob {
+  files?: FilesDiff | null;
+  remesh?: (RemeshCounts & {modelTriangles:number|null}) | null;
+  stageInputHash?: string;
+  check?: CheckSummary | null;
   schema: typeof REBUILD_SCHEMA; id: string; status: RebuildStatus; reused: boolean;
   request: { part: string; regions: ProducerRegion[]; configHash: string; entrySha256: string; bust?: BustSpec };
   producer: { package: string; version: string }; compiler: { package: string; version: string };
@@ -277,6 +283,7 @@ export interface RebuildJob {
  * inspected one (`diff`) — and, #125, every document the producer writes, per file, with the images by hash (`files`).
  */
 export interface PatchJob {
+  stageInputHash?: string;
   schema: typeof REBUILD_SCHEMA; kind: 'patch'; id: string; status: RebuildStatus; reused: boolean;
   /** #136: the producer op that ran — a `rig` patch runs `retune` when `patchRoute` routes it there, else `rig`; a remesh patch `remesh`. */
   op: AppliedOp;
@@ -359,6 +366,7 @@ export const BUILD_SOURCE_UNAVAILABLE = 'MODELING_INPUT_UNAVAILABLE: source pain
  * motion holds against the inspected rig's.
  */
 export interface RetargetJob {
+  stageInputHash?: string;
   schema: typeof REBUILD_SCHEMA; kind: 'retarget'; id: string; status: RebuildStatus; reused: boolean; op: 'retarget';
   request: { record: RetargetRecord; recordSha256: string; configHash: string };
   producer: { package: string; version: string }; compiler: { package: string; version: string };
@@ -398,6 +406,8 @@ export function deltaId(input: { sourceHash: string; configHash: string; part: s
 }
 /** A delta Apply's job (#135): `remesh --delta`, then the shared tail with the per-file diff (#125); remesh's own gate holds check. */
 export interface DeltaJob {
+  stageInputHash?: string;
+  check?: CheckSummary | null;
   schema: typeof REBUILD_SCHEMA; kind: 'delta'; id: string; status: RebuildStatus; reused: boolean; op: 'remesh';
   request: { part: string; delta: Record<string, unknown>; deltaSha256: string; configHash: string };
   producer: { package: string; version: string }; compiler: { package: string; version: string };
@@ -446,6 +456,7 @@ export function animationId(input: { sourceHash: string; configHash: string; ani
   return sha256(JSON.stringify([REBUILD_SCHEMA, 'animation', input.sourceHash, input.configHash, input.animationsFromHash, input.opsText, input.producer, input.compiler, ...(input.args?.length ? [input.args] : []), ...(input.environment ? ['environment', input.environment] : [])]));
 }
 export interface AnimationJob {
+  stageInputHash?: string;
   schema: typeof REBUILD_SCHEMA; kind: 'animation'; id: string; status: RebuildStatus; reused: boolean; op: 'rig';
   request: { configHash: string; animationsFrom: { path: string; beforeSha256: string; afterSha256: string }; ops: AnimationSourceOp[]; opsSha256: string; args?: string[] };
   producer: { package: string; version: string }; compiler: { package: string; version: string };
@@ -619,6 +630,14 @@ async function namedDirDigest(root: string, dir: string, field: string): Promise
 }
 
 /** #115: what a build-routed patch runs with — the handoff's painting and runs, absolute; never from the client. */
+/** Inputs and produced spec share a revision pin; result.json and compiled outputs have their separate records. */
+async function stageInputDigest(dir:string,spec:string):Promise<string>{
+ const rows:[string,string][]=[['revision',await namedDirDigest(dir,spec,'scratch revision')]];
+ for(const name of ['mesh.json','mesh-edit.json','config.json','patch.json','environment.json']){
+  if(await exists(join(dir,name))){const path=await safeFile(await realpath(dir),name);rows.push([name,sha256(await readFile(path))]);}
+ }
+ return sha256(JSON.stringify(rows));
+}
 export interface BuildPlan { source: string; full: string; head: string | null; inputsHash: string; inputs: AssembledView['inputs'] }
 /**
  * The build's inputs for a patch (`null` refusal line when the handoff declares no painting and full run): the painting
@@ -864,6 +883,38 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const dir = job ? rebuildDir(options.stateDir, p.sourceHash, job.id) : '';
     return job && job.status === 'built' && job.build ? { id: job.id, build: join(dir, 'build'), modelHash: job.build.modelHash, spec: join(dir, !('kind' in job) ? 'revision' : job.op === 'build' || (job.kind === 'patch' && job.cloth?.route === 'build') ? 'out/rig' : 'rig') } : null;
   }
+  /** Stage 1 can read only the revision explicitly drawn by the page, never a pending candidate. */
+  async function stageDraft(id: string) {
+    await options.unchanged();
+    const current = latest();
+    if (!current || current.id !== id || busy()) throw new RebuildError('STAGE_DRAFT_STALE', 'the requested scratch build is not the settled applied revision');
+    const job = jobs.get(id)!;
+    if (!job.stageInputHash || await stageInputDigest(rebuildDir(options.stateDir,p.sourceHash,id),current.spec) !== job.stageInputHash) throw new RebuildError('STAGE_DRAFT_CHANGED', 'scratch revision bytes differ from Apply');
+    const now = await hashBuild(current.build, id, assetPrefix);
+    if (JSON.stringify(now.files) !== JSON.stringify(job.build!.files)) throw new RebuildError('STAGE_DRAFT_CHANGED', 'scratch build bytes differ from the applied record');
+    if (!('check' in job) || !job.check || job.check.pass !== true || job.check.exitCode !== 0) throw new RebuildError('STAGE_DRAFT_UNCHECKED', 'this revision has no successful recorded producer check');
+    if (!('kind' in job) || job.kind === 'delta' || (job.kind === 'patch' && job.op === 'remesh')) {
+      const carried = await opCarried('remesh', current.spec, null, () => {});
+      if (carried && 'refused' in carried) throw new RebuildError('STAGE_DRAFT_CHANGED', carried.refused);
+    } else throw new RebuildError('STAGE_DRAFT_OPERATION', 'only applied mesh corrections belong to this inspection');
+    return {id, spec: current.spec, model: join(current.build, 'skeleton.model.json'), evidence: snapshot(job)};
+  }
+  /** New made-mesh claims revalidate the original recorded revision on submit, including a retained predecessor. */
+  async function validateApplied(value:unknown):Promise<void>{
+    if(!value||typeof value!=='object'||!('stageInputHash' in value))return;
+    const v=value as Record<string,unknown>;
+    if(!['rig-review-applied/1','rig-review-applied/3'].includes(String(v.schema))&&!(v.schema==='rig-review-applied/2'&&v.op==='remesh'))return;
+    if(typeof v.buildId!=='string'||!/^[a-f0-9]{64}$/.test(v.buildId))throw new RebuildError('STAGE_DRAFT_STALE','invalid applied identity');
+    const id=v.buildId;
+    let dir=rebuildDir(options.stateDir,p.sourceHash,id);
+    if(!await exists(dir))dir=join(keptRoot(options.stateDir,p.sourceHash),id);
+    const job=jobs.get(id)??JSON.parse(await readFile(join(dir,'result.json'),'utf8').catch(()=>{throw new RebuildError('STAGE_DRAFT_STALE','the recorded revision is unavailable');}));
+    if(job.status!=='built'||!job.build||!isDeepStrictEqual(recordFor(job as AnyJobView),v))throw new RebuildError('STAGE_DRAFT_STALE','the made claim differs from its applied record');
+    const spec=join(dir,!('kind' in job)?'revision':'rig');
+    if(await stageInputDigest(dir,spec)!==job.stageInputHash)throw new RebuildError('STAGE_DRAFT_CHANGED','scratch inputs differ from Apply');
+    const now=await hashBuild(join(dir,'build'),id,assetPrefix);
+    if(!isDeepStrictEqual(now.files,job.build.files))throw new RebuildError('STAGE_DRAFT_CHANGED','compiled files differ from Apply');
+  }
   /**
    * #166: the line refusing an undo's re-run whose build is not the one its record names (the first differing file by
    * hash), or null — also null for any job that is not an undo's re-run.
@@ -990,6 +1041,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     try {
       const stored = JSON.parse(await readFile(resultFile, 'utf8')) as J;
       if (stored.schema !== REBUILD_SCHEMA || stored.id !== id || stored.status !== 'built' || !stored.build) return null;
+      if ((!('kind' in stored) || stored.kind === 'delta'||(stored.kind==='patch'&&stored.op==='remesh')) && (!Object.hasOwn(stored, 'check')||!stored.stageInputHash)) return null;
       const now = await hashBuild(join(dir, 'build'), id, assetPrefix);
       if (JSON.stringify(now.files) !== JSON.stringify(stored.build.files)) return null;
       const job = { ...stored, build: now, reused: true };
@@ -1057,6 +1109,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       // The package and its producer inputs must still be the bytes the request was made against.
       // The handoff files are in the reviewed identity, so this also catches a config, parts or rig change.
       try { await options.unchanged(); } catch { throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild'); }
+      if(!('kind' in job)||job.kind==='delta'||(job.kind==='patch'&&job.op==='remesh'))job.stageInputHash = await stageInputDigest(dir, join(dir, op.spec));
       job.build = await hashBuild(join(dir, 'build'), job.id, assetPrefix);
       if (steps.hashed) await steps.hashed();
       // #166: an undo's re-run must reproduce the build its record names, file for file; otherwise it is refused, not guessed.
@@ -1081,6 +1134,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
 
   /** #99: the designation's entry → `rig-parts remesh` → a scratch revision, compiled with the revision's own pack flags. */
   function execute(job: RebuildJob, dir: string, inputs: ProducerInputs, resolved: Resolved, entry: string): Promise<void> {
+    let counts:RemeshCounts|null=null;
     return apply(job, dir, inputs, resolved, {
       cmd: 'remesh', spec: 'revision',
       async run(push) {
@@ -1091,8 +1145,14 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       wallMs: ms => { job.wallMs.remesh = ms; },
       async flags() {
         const provenance = object(JSON.parse(await readFile(join(dir, 'revision', 'remesh.json'), 'utf8')), 'remesh.json'), request = object(provenance.request, 'remesh.json request');
+        counts = remeshCounts(provenance);
         return { pageEdges: request.page_edges === 'pot' ? 'pot' : 'free', packShape: request.pack_shape === 'rect' ? 'rect' : 'polygon', note: ' (the revision\'s own pack flags)' };
       },
+    }, {
+      check: summary => { job.check = summary; },
+      carried: push => opCarried('remesh', join(dir, 'revision'), null, push),
+      diff: files => {job.files=files;},
+      hashed: async()=>{if(counts)job.remesh={...counts,modelTriangles:modelMeshTriangles(JSON.parse(await readFile(join(dir,'build/skeleton.model.json'),'utf8')),counts.part)};},
     });
   }
 
@@ -1480,6 +1540,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         return { pageEdges: request.page_edges === 'pot' ? 'pot' : 'free', packShape: request.pack_shape === 'rect' ? 'rect' : 'polygon', note: ' (remesh.json\'s pack flags)' };
       },
     }, {
+      check: summary => { job.check = summary; },
+      carried: push => opCarried('remesh', join(dir, 'rig'), null, push),
       diff: files => { job.files = files; },
       hashed: async () => { if (counts) job.remesh = { ...counts, modelTriangles: modelMeshTriangles(JSON.parse(await readFile(join(dir, 'build', 'skeleton.model.json'), 'utf8')), counts.part) }; },
     });
@@ -1515,6 +1577,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       const reused = await reuse<DeltaJob>(dir, id);
       if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, input); await landed(reused); return { status: 200, body: snapshot(reused) }; }
       const job: DeltaJob = { schema: REBUILD_SCHEMA, kind: 'delta', id, status: 'running', reused: false, op: 'remesh', request: { part: request.part, delta: request.delta, deltaSha256: sha256(text), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null }, files: null, remesh: null, build: null };
+      if (!('kind' in job) || job.kind === 'delta') job.check = null;
       jobs.set(id, job); running = id; bodies.set(id, input);
       void executeDelta(job, dir, inputs, resolved, text).finally(() => { if (running === id) running = null; });
       return { status: 202, body: snapshot(job) };
@@ -1832,6 +1895,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       const reused = await reuse(dir, id);
       if (reused) { jobs.set(id, reused); latestId = id; bodies.set(id, input); await landed(reused); return { status: 200, body: snapshot(reused) }; }
       const job: RebuildJob = { schema: REBUILD_SCHEMA, id, status: 'running', reused: false, request: { ...request, entrySha256: sha256(entry) }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { remesh: null, compile: null }, build: null };
+      if (!('kind' in job) || job.kind === 'delta') job.check = null;
       jobs.set(id, job); running = id; bodies.set(id, input);
       void execute(job, dir, inputs, resolved, entry).finally(() => { if (running === id) running = null; });
       return { status: 202, body: snapshot(job) };
@@ -1853,5 +1917,5 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     return safeFile(await realpath(join(rebuildDir(options.stateDir, p.sourceHash, id), 'build')), packagePath(name));
   }
 
-  return { describe, start, read, file, running: () => running, busy: () => busy() !== null, baseline: settledBaseline, inspectedCheck: settledInspectedCheck, latest, undo, history, startStrip, readStrip, stripJob, closeStrip, stripFile };
+  return { describe, start, read, file, running: () => running, busy: () => busy() !== null, baseline: settledBaseline, inspectedCheck: settledInspectedCheck, latest, stageDraft, validateApplied, undo, history, startStrip, readStrip, stripJob, closeStrip, stripFile };
 }

@@ -24,7 +24,7 @@ test('loaded atlas preserves standalone identity, detects changed bytes and neve
   const old=await loadPartsView(join(root,'review.json')),atlas=await loadPartsAtlas(p);
   expect(verdictSource(atlas)).toEqual(verdictSource(old));expect(atlas.protectedPaths).toEqual(old.protectedPaths);
   const route=stagePartsRoutes({single:p}),req=(path:string,method='GET')=>new Request('http://127.0.0.1'+path,{method});
-  const data=await route(req('/api/stage-parts'));expect(data?.status).toBe(200);expect((await data!.json()).readOnly).toBe(true);
+  const data=await route(req('/api/stage-parts'));expect(data?.status).toBe(200);const atlasData=await data!.json();expect(atlasData.readOnly).toBe(true);expect(atlasData.draftUnavailable).toStartWith('STAGE_DRAFT_UNAVAILABLE');
   expect(await route(req('/api/stage-parts','POST'))).toBeNull();
   expect((await route(req('/api/stage-parts/page/999999')))?.status).toBe(404);
   const image=await route(req('/api/stage-parts/page/0'));expect(image?.status).toBe(200);expect(image?.headers.get('content-security-policy')).toContain('sandbox');

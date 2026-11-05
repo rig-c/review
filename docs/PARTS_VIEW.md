@@ -330,3 +330,33 @@ checks real EN/KO assembly/reference pixels against an independent browser draw 
 base-vs-base control, tap/hole/hide selection, pan, camera preservation, background, alpha,
 verdict save and missing-input refusals. Existing `tests/parts-comparison.test.ts` and
 `tests/parts-comments.test.ts` retain the painting-size and protected-input guards.
+
+## Draft mesh correction connection
+
+In a single compiled inspection with a live producer handoff, Stage 1 reads the
+same original `parts.json`/PNGs through the existing reader and uses the exact
+inspected or checked applied scratch `rig.json` for its mesh overlay. The
+skin/slot/attachment, float32 UVs, dimensions and triangle arrays must match the
+compiled model; raster equality is still proved by `locateMeshRasters`. Neither
+matching names nor a shared folder is enough. Mismatch refuses by name.
+
+The selected part opens the actual Chest regions, Mesh parameters or Edit Mesh
+instrument, naming `remesh --mesh` or `remesh --delta`. The existing installed
+producer writes only scratch. Return to Stage 1 after Apply to inspect the
+recorded revision; Reset restores the original revision. New applied chest and
+delta records carry the producer check, counts, file diff and a scratch input
+pin. Changed scratch input, pending builds and missing/failed checks cannot be
+submitted as new checked made evidence. Historical records with no check remain
+readable as historical evidence; no PASS is synthesized for them.
+
+Stage 1 does not rewrite `rig-review-parts-verdict/2`: `source.files`,
+`source.flags`, their digest, per-part outcomes and comment/crop/comparison
+bindings remain the standalone original-parts contract. Scratch inspection
+returns no inherited verdict. Its own parts digest and build evidence accompany
+the original package `sourceHash`; original Review sessions/drafts remain scoped
+to their original `sourceHash`/`reviewedSource`. A standalone parts-only package
+names the absent draft instead of offering an Apply that cannot run.
+
+Correction-record export is unfinished, blocked on review#369/create#91. Existing
+comments and feedback preserve reviewer wording, but are not a substitute for
+that shared export or for create-owned structure decisions.

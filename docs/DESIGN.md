@@ -155,17 +155,40 @@ not create pipeline stages or sign-offs. Opening or switching never submits a
 verdict, applies an edit or starts a producer job. Interview and Direction name
 their missing consumer contracts; no tools are fabricated for them.
 
-Stage 1 on compiled sessions embeds the existing **atlas inspection, read only**.
-Its atlas is always the **inspected input package**, never a subsequently applied
-scratch revision. The parent keeps pending edits and applied builds untouched;
-applied-scratch atlas inspection is unavailable. Data reads revalidate the full
-inspection binding. The initial atlas cache resolves only after post-load Review and Parts binding
-checks. Indexed image reads validate the pinned model and requested
-page hash through the same opened file, without rehashing unrelated reference
-video bytes. Pre-rig parts, mesh sign-off and draft corrections are not
-available in this embedding. Use the existing `parts` command for pre-rig parts
-and its separate explicit sign-off. Missing model/atlas inputs name the missing
-capability. No sibling package is guessed.
+Stage 1 in a single compiled inspection with a producer handoff shows the
+handoff's **separated parts and draft meshes**, labelled **Draft rig · structure
+evidence only**. It proves each part's original raster crop against the rig image
+and binds its exact skin/slot/attachment, dimensions, UVs and triangle indices to
+the compiled mesh. UV values compare as exact float32 values, including the
+compiler's shortest round-trip decimal representation; no numeric tolerance is
+used. A name alone is insufficient. This is structure inspection, never final
+rigging approval or evidence of unmeasured compiler gates.
+
+Choose **Chest regions**, **Mesh parameters** or **Edit Mesh** on the selected
+part to open the existing Setup precision instrument. The part and exact
+`rig-parts remesh --mesh` or `rig-parts remesh --delta` operation remain visible.
+Apply/Rebuild and Reset are the existing producer-backed actions. Return with
+**1 Parts + mesh** to inspect the revision actually drawn by the parent, including
+a checked scratch revision. Each entry reloads against that explicit build ID;
+a pending candidate or the server's unrelated latest build is never substituted.
+Reset returns to the inspected revision. New scratch reads and made-mesh feedback
+submissions recheck pinned producer inputs, revision files and compiled files.
+A changed scratch input cannot inherit clean checked evidence.
+
+The embedding is read-only: original verdicts and comments are never copied onto
+scratch geometry or saved by navigating. Use the standalone `parts` command for
+its separate explicit original-parts sign-off. Parts-only inputs remain
+inspectable and name `STAGE_DRAFT_UNAVAILABLE` for direct correction. A missing
+handoff keeps the inspected atlas available where supplied. Compare retains its
+read-only, side-specific inspected atlas. Neither flow guesses a sibling draft.
+
+Named draft boundaries are `STAGE_DRAFT_UNAVAILABLE`, `STAGE_DRAFT_MISMATCH`,
+`STAGE_DRAFT_STALE`, `STAGE_DRAFT_CHANGED`, `STAGE_DRAFT_UNCHECKED` and
+`STAGE_DRAFT_OPERATION`. Producer discovery and its named missing/old-producer
+refusals are unchanged; Review never installs a producer. Correction-record
+export remains unavailable pending review#369 and create#91. Existing reviewer
+requests remain verbatim in their existing feedback/comment contracts; there
+is no fake Apply for art repair.
 
 Only Stage 3 shows the legacy Setup, Animate and Compare switch; its existing
 instruments, DOM and mode IDs are retained. In Stage 1 a compare session keeps
@@ -173,8 +196,9 @@ the A/B source picker usable and shows the selected side's cached atlas frame.
 **Open setup mesh instruments** returns from the atlas to Setup; it does not
 rebuild. Existing bookmarks, Apply/Reset provenance, selected slot, compare side,
 time, pending edits and applied build stay owned by those original tools. Stage
-changes retain both the original workspace and each side's atlas controller in
-the document. Language changes update retained frames without reloading them.
+changes retain the original workspace and each compare side's atlas controller.
+Single draft frames are rebound on revision changes. Language changes update retained
+frames without applying or submitting.
 The parts-only entry retains its part selection, geometry and pending verdict
 while visiting unavailable stages; it needs no compiled model.
 

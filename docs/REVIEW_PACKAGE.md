@@ -826,3 +826,54 @@ existing verdict/1 records read with no comments. This identity comes from the e
 parts verdict source digest and actual original PNG SHA-256, without a fabricated review
 manifest id, revision or compiled model. The rig's `rig-review-comment/1` schema stays closed.
 See [the parts contract and validation instruments](PARTS_VIEW.md#pointed-parts-comments).
+
+## Stage-1 draft mesh inspection
+
+`GET /api/stage-parts` in single inspections uses the live handoff's original
+separated parts when a compatible draft is supplied. Its fixed indexed image
+routes use the same binding. The closed `X-Review-Stage-Build` read header is
+`inspected` or a 64-hex applied build ID; it is not a path or an execution request.
+The managed front forwards it only for these single-inspection read routes.
+Without a separated draft, the existing inspected atlas remains read-only and
+names direct-correction absence. Compare stays read-only and side-closed.
+
+The draft response adds `draft:{label,buildId,inspectionSourceHash,mappings,evidence}`
+to the existing parts-view response; `mappings` names the exact part,
+skin/slot/attachment and mesh counts. It includes no inherited verdict or
+submission authority. Raster/crop, float32 UV, triangle and source-hash checks
+bind the displayed geometry. `evidence` is the actual applied producer job, not
+a guessed correction-export object. A changed original refuses; scratch is never
+quietly repinned. Every scratch read revalidates the recorded revision and build.
+
+New `rig-review-applied/1` (Chest regions) and `/3` (Edit Mesh) records add optional
+`check` and `stageInputHash`. Chest records also support `files` and `mesh`, as
+existing patch/delta records do; `/2` can carry `stageInputHash` too. The input
+pin hashes the whole revision plus the present scratch mesh/config/delta/world
+inputs; compiled file hashes stay in their existing build record. Producer
+remesh checks are reused only when their revision hash rows validate; older
+producers run the existing check operation on scratch. A new null, failed or
+nonzero-exit mesh check refuses `EDIT_SUBMIT_UNCHECKED`. Historical `/1` and `/3`
+without those optional fields stay readable and never gain synthesized checks.
+A newly requested Apply does not reuse a historical result lacking check data.
+New made-mesh submissions with an input pin must exactly equal their applied
+record and revalidate its scratch/compiled bytes (`STAGE_DRAFT_STALE` or
+`STAGE_DRAFT_CHANGED` otherwise). Retained predecessor evidence is checked
+against its own revision, never the latest revision by name.
+
+Original `sourceHash`, `reviewedSource`, session/draft scope and parts verdict/2
+remain unchanged. The scratch parts digest changes with its geometry; original
+approvals never become scratch mesh approvals. Reset returns inspection to the
+original. Draft geometry is structure evidence only. Correction-record export
+remains blocked on review#369/create#91; no universal export, artwork Apply,
+source-key write or automatic message is introduced.
+
+
+Draft correspondence supports producer-authored named `weights` (compiled
+weighted bindings) and authored unweighted `vertices` (compiled `xy`), comparing
+the bone names and each represented float32 component exactly. Raw bone-indexed
+vertex runs refuse `STAGE_DRAFT_GEOMETRY_UNSUPPORTED`; Review does not infer their
+index mapping. This does not restrict standalone parts-mode UV inspection.
+Equal UV/index arrays alone are insufficient when compiled vertex data differs.
+Single Stage-1 controllers retain selection/camera on same-build navigation;
+cross-revision restoration requires the same original package/image/placement
+and exact draft skin/slot/attachment address, with named refusal if absent.

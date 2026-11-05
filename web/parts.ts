@@ -4,7 +4,7 @@ import {createPartsViewport} from './parts-viewport-provider.ts';
 import {bindStageComments,type CommentUiPose,type CommentCodec} from './stage-comments.ts';
 import {parsePartsComment,snapImageRegion,type PartsComment} from '../src/parts-comment.ts';
 import {projectMark,unprojectMark,region} from '../src/stage-comment.ts';
-import {bindStageNav} from './stage-nav.ts';
+import {bindStageNav,stagePartsSelectionIndex,type StagePartsState,type StagePartsWindow} from './stage-nav.ts';
 /**
  * The parts and atlas view (#348). Every part on its own, on a sentinel background, through the shared native-scale
  * viewport controller; the footprints of the parts drawn in front of it; the producer's flags on it; and a
@@ -29,6 +29,8 @@ type Flag =
   | { id: string; item: string; source: 'mesh_report'; kind: 'faint'; art: number; maxAlpha: number; box: [number, number, number, number] }
   | { id: string; item: string; source: 'check'; kind: 'check'; path: string; line: string; root: string; status: string | null; entry: Record<string, unknown>; classification?: 'part' | 'pair' | 'evidence' | 'unclassified' };
 interface ViewData {
+ inspectionSourceHash?:string;
+ draft?:{label:string;buildId:string;inspectionSourceHash:string;mappings:{part:string;skin:string;slot:string;attachment:string;vertices:number;triangles:number}[];evidence:unknown};draftUnavailable?:string;
   painting:{sha256:string;width:number;height:number}|null;sourceHash:string;mode: 'parts' | 'atlas'; title: string; rigSize: [number, number] | null; items: Item[]; pages: Page[]; flags: Flag[]; readings?: Flag[];
   flagSources: string[]; flagMissing: string[]; verdictFile: string;
   verdict: { comments?:PartsComment[];status: string; parts: Record<string, Entry> } | null; verdictStale: 'files' | 'flags' | null;
@@ -41,6 +43,10 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const access = pageInstanceAccess();
 const stageEmbedded=new URL(location.href).searchParams.get('stageEmbed')==='1';
 const stageSide=new URL(location.href).searchParams.get('side');
+let stageBuild='inspected',stageRestore:StagePartsState|null=null;
+let receiveSource:()=>void=()=>{};const sourceReady=new Promise<void>(resolve=>{receiveSource=resolve;});
+if(typeof window!=='undefined')window.addEventListener('message',event=>{if(event.source===parent&&event.origin===location.origin&&event.data?.type==='review-stage-source'&&(event.data.buildId==='inspected'||/^[a-f0-9]{64}$/.test(event.data.buildId))){stageBuild=event.data.buildId;stageRestore=event.data.state??null;receiveSource();}});
+const stageHeaders=()=>access.headers(stageEmbedded?{'X-Review-Stage-Build':stageBuild}:{});
 const partsApi=stageEmbedded?(stageSide==='a'||stageSide==='b'?`/api/compare/${stageSide}/stage-parts`:'/api/stage-parts'):'/api/parts';
 
 const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, comparison:defaultPartsComparison(), hidden: new Set<string>(), view: 'item' as 'item' | 'page' | 'assembled', page: 0, meshShown: new Set<string>(), verdict: new Map<string, Entry>() };
@@ -54,7 +60,8 @@ function load(src: string): Promise<HTMLImageElement> {
     const img = new Image();
     img.onload = () => { images.set(src, img); resolve(img); };
     img.onerror = () => reject(new Error(src));
-    img.src = access.route(src);
+    if(stageEmbedded)void fetch(access.route(src),{headers:stageHeaders()}).then(async res=>{if(!res.ok)throw new Error('STAGE_DRAFT_CHANGED');const url=URL.createObjectURL(await res.blob());img.addEventListener('load',()=>URL.revokeObjectURL(url),{once:true});img.src=url;}).catch(reject);
+    else img.src = access.route(src);
   });
 }
 const itemImage = (item: Item) => load(`${partsApi}/image/${item.index}`);
@@ -302,6 +309,7 @@ function renderMesh(): void {
   }
   panel.append(figures);
   const help = document.createElement('p'); help.textContent = t('Pink: art pixels outside every triangle.'); panel.append(help);
+  if(stageEmbedded){document.querySelector('.pv-verdict')!.before(panel);return;}
   const entry = state.verdict.get(item.name)!;
   const select = document.createElement('select'); select.setAttribute('aria-label', t('Mesh outcome'));
   for (const [value, label] of [['pending', 'Pending'], ['clean', 'Clean'], ['flagged', 'Flagged']]) { const option = document.createElement('option'); option.value = value!; option.textContent = t(label!); select.append(option); }
@@ -315,6 +323,7 @@ function renderMesh(): void {
 }
 
 function select(index: number): void {
+  queueMicrotask(renderCorrections);
   const data = state.data!;
   const changed=state.selected!==index;state.selected = index;if(changed&&viewport&&state.view!=='assembled'){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
   commentUi?.refresh();
@@ -388,10 +397,11 @@ async function boot(): Promise<void> {
   }
   window.addEventListener('message',event=>{if(event.source!==parent||event.origin!==location.origin||event.data?.type!=='review-stage-language'||!['en','ko'].includes(event.data.language))return;setLinkLanguage(null);setLanguagePreference(event.data.language);});
   connectLiveWindow(access);
-  const res = await fetch(access.route(partsApi), { headers: access.headers() });
+  if(stageEmbedded)await sourceReady;
+  const res = await fetch(access.route(partsApi), { headers: stageHeaders() });
   const data = await res.json() as ViewData & { error?: string };
   if (!res.ok) { const status=$('pv-load');status.textContent=t(data.error??'Load failed.');status.dataset.result='refused';return; }
-  state.data = data;$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;comments.push(...data.verdict?.comments??[]);setupPartsComments();viewport.bindNavigation(undefined,()=>!commentUi?.active());viewport.observeResize();
+  state.data = data;if(stageEmbedded)for(const item of data.items)if(item.mesh)state.meshShown.add(item.name);$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;comments.push(...data.verdict?.comments??[]);setupPartsComments();viewport.bindNavigation(undefined,()=>!commentUi?.active());viewport.observeResize();
   for (const item of data.items) state.verdict.set(item.name, { outcome: 'pending', note: '', ...(item.mesh ? { mesh: { outcome: 'pending' as Outcome, note: '' } } : {}) });
   if (data.verdict) { for (const [name, v] of Object.entries(data.verdict.parts)) if (state.verdict.has(name)) state.verdict.set(name, { outcome: v.outcome, note: v.note ?? '', ...(v.mesh ? { mesh: v.mesh } : {}) }); $<HTMLSelectElement>('pv-overall').value = data.verdict.status; }
   document.title = data.title;
@@ -419,7 +429,9 @@ async function boot(): Promise<void> {
   $('pv-approve-all').onclick = () => approveAll();
   for(const format of ['json','issue'])$('pv-export-'+format).onclick=async()=>{const res=await fetch(access.route('/api/parts/export?format='+format),{headers:access.headers()});const value=await res.text();if(!res.ok){$('pv-save-status').textContent=value;return;}const url=URL.createObjectURL(new Blob([value],{type:format==='json'?'application/json':'text/markdown'})),a=document.createElement('a');a.href=url;a.download=format==='json'?'parts-review-export.json':'parts-review-export.md';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
   onLanguageChange(() => { if (state.data) select(state.selected); });
-  if (data.items.length) select(0);
+  if(stageEmbedded)(window as StagePartsWindow).rigReviewStageParts={snapshot:stagePartsSnapshot};
+  if(data.items.length){if(stageRestore)await restoreStageParts(stageRestore);else select(0);}
+  renderCorrections();
   document.body.dataset.ready = 'true';
 }
 
@@ -454,3 +466,37 @@ function setupPartsComments():void {
 }
 
 if (typeof document !== 'undefined' && document.getElementById('parts-app')) void boot();
+
+function renderCorrections():void {
+ let host=document.getElementById('pv-corrections');if(!host){host=document.createElement('section');host.id='pv-corrections';document.querySelector('.pv-toolbar')!.after(host);}
+ host.replaceChildren();const data=state.data,item=data?.items[state.selected],mapping=data?.draft?.mappings.find(m=>m.part===item?.name);
+ const label=document.createElement('p');label.textContent=t(data?.draft?.label??data?.draftUnavailable??'STAGE_DRAFT_UNAVAILABLE: no producer-compatible draft is supplied.');host.append(label);
+ if(!mapping||!data?.draft)return;
+ label.textContent+=` · ${mapping.part} · ${mapping.skin}/${mapping.slot}/${mapping.attachment} · v ${mapping.vertices} t ${mapping.triangles} · ${data.draft.buildId}`;
+ for(const [instrument,title,operation]of [['chest','Chest regions',t('rig-parts remesh --mesh')],['mesh','Mesh parameters',t('rig-parts remesh --mesh')],['delta','Edit Mesh',t('rig-parts remesh --delta')]]){
+  const button=document.createElement('button');button.type='button';button.textContent=t(title!);button.title=`${mapping.part} · ${operation}`;button.onclick=()=>parent.postMessage({type:'review-stage-correction',part:mapping.part,sourceHash:data.sourceHash,buildId:data.draft!.buildId,instrument},location.origin);host.append(button);
+ }
+ const unavailable=document.createElement('p');unavailable.textContent=t('Correction-record export unavailable: waiting for the shared correction contract.');host.append(unavailable);
+}
+
+function stagePartsSnapshot():StagePartsState|null {
+ const data=state.data,item=data?.items[state.selected],mapping=data?.draft?.mappings.find(m=>m.part===item?.name);
+ if(!data?.inspectionSourceHash||!item?.imageHash||!mapping||!viewport)return null;
+ return {inspectionSourceHash:data.inspectionSourceHash,part:item.name,imageHash:item.imageHash,box:{x:item.x,y:item.y,w:item.w,h:item.h},mapping:{skin:mapping.skin,slot:mapping.slot,attachment:mapping.attachment},rig:{...viewport.paneCamera('rig')},reference:{...viewport.paneCamera('reference')},cameraSync:viewport.state.cameraSync,bg:state.bg,alpha:state.alpha,footprints:state.footprints,view:state.view,mesh:state.meshShown.has(item.name)};
+}
+async function restoreStageParts(saved:StagePartsState):Promise<void>{
+ if(!state.data||!viewport)return;
+ try{
+  const index=stagePartsSelectionIndex(state.data,saved);
+  viewport.state.cameraRestoring=true;state.bg=saved.bg;state.alpha=saved.alpha;state.footprints=saved.footprints;state.view=saved.view;
+  if(saved.mesh)state.meshShown.add(saved.part);else state.meshShown.delete(saved.part);
+  select(index);await paint();viewport.writeCamera('rig',saved.rig);if(state.data.painting)viewport.writeCamera('reference',saved.reference);viewport.state.cameraSync=saved.cameraSync;viewport.fitCamera();
+ }catch{const status=$('pv-load');status.hidden=false;status.dataset.result='refused';status.textContent=t('STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.');document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;}
+ finally{viewport.state.cameraRestoring=false;}
+}
+if(typeof window!=='undefined')window.addEventListener('message',event=>{if(event.source===parent&&event.origin===location.origin&&event.data?.type==='review-stage-restore'&&event.data.state)void restoreStageParts(event.data.state);});
+
+if(typeof window!=='undefined')window.addEventListener('message',event=>{if(event.source!==parent||event.origin!==location.origin||event.data?.type!=='review-stage-revalidate')return;void (async()=>{
+ try{const response=await fetch(access.route(partsApi),{headers:stageHeaders()}),data=await response.json() as ViewData&{error?:string};if(!response.ok||data.sourceHash!==state.data?.sourceHash)throw new Error(data.error??'STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.');if(event.data.state)await restoreStageParts(event.data.state);}
+ catch(error){const status=$('pv-load');status.hidden=false;status.dataset.result='refused';status.textContent=t(error instanceof Error?error.message:String(error));document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;}
+})();});

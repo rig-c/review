@@ -94,3 +94,10 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .pv-comparison{display:flex;flex-wrap:wrap;align-items:center;gap:12px}#pv-opacity{width:100px}
 
 .pv-overlay canvas{position:absolute;left:0;top:0;pointer-events:none}
+
+/* Draft correction tools wrap independently of the raster viewport and compact part list. */
+#pv-corrections{flex:none;padding:8px 12px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+#pv-corrections p{margin:0 0 8px}
+#pv-corrections p:last-child{margin:8px 0 0;color:var(--muted)}
+#pv-corrections button{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:5px 9px;margin:0 6px 4px 0;cursor:pointer}
+#reference-empty{padding:30px 12px 12px;color:var(--muted);overflow-wrap:anywhere}

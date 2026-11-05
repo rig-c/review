@@ -55,6 +55,7 @@ export interface CheckSummary {
 }
 export interface Tool { package: string; version: string }
 export interface AppliedPatch {
+  stageInputHash?: string;
   schema: typeof APPLIED_PATCH_SCHEMA;
   buildId: string;
   patch: ConfigPatch;
@@ -104,6 +105,8 @@ function parseAssembled(v: unknown, field: string): void {
 }
 /** #135: Edit Mesh's delta as applied by `rig-parts remesh --delta`. */
 export interface AppliedDelta {
+  stageInputHash?: string;
+  check?: CheckSummary | null;
   schema: typeof APPLIED_DELTA_SCHEMA;
   buildId: string;
   part: string;
@@ -191,7 +194,7 @@ const meshCounts = (v: unknown, field: string) => {
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const hex = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 const exact = (v: unknown, keys: string, field: string): Record<string, unknown> => {
-  if (!isObject(v) || Object.keys(v).sort().join(',') !== keys) throw new Error(`${field}: expected exactly {${keys.split(',').join(', ')}}`);
+  if (!isObject(v) || Object.keys(v).sort().join(',') !== keys.split(',').sort().join(',')) throw new Error(`${field}: expected exactly {${keys.split(',').join(', ')}}`);
   return v;
 };
 const tool = (v: unknown, field: string) => { const t = exact(v, 'package,version', field); if (typeof t.package !== 'string' || typeof t.version !== 'string') throw new Error(`${field}: package and version are strings`); };
@@ -223,9 +226,15 @@ export function parseAppliedContext(value: unknown): void {
   if (value === null) return;
   if (!isObject(value)) throw new Error('feedback.context.applied: expected an applied record or null');
   const field = 'feedback.context.applied';
+  if(Object.hasOwn(value,'stageInputHash')&&!hex(value.stageInputHash))throw new Error(`${field}.stageInputHash: SHA-256 required`);
   if (value.schema === APPLIED_REGIONS_SCHEMA) {
     // #105: a landmarks Apply adds `bust` (the contour.bust entry as sent); its `regions` are review's derived circles.
-    const v = exact(value, Object.hasOwn(value, 'bust') ? 'buildId,bust,compiler,configHash,entrySha256,line,modelHash,part,producer,regions,schema' : 'buildId,compiler,configHash,entrySha256,line,modelHash,part,producer,regions,schema', field);
+    const keys = Object.hasOwn(value, 'bust') ? 'buildId,bust,compiler,configHash,entrySha256,line,modelHash,part,producer,regions,schema' : 'buildId,compiler,configHash,entrySha256,line,modelHash,part,producer,regions,schema';
+    const v = exact(value, keys + ['check','stageInputHash','files','mesh'].filter(k=>Object.hasOwn(value,k)).map(k=>','+k).join(''), field);
+    if (Object.hasOwn(v, 'check')) parseCheck(v.check, `${field}.check`);
+    if (Object.hasOwn(v, 'stageInputHash')&&!hex(v.stageInputHash))throw new Error(`${field}.stageInputHash: SHA-256 required`);
+    if(Object.hasOwn(v,'files'))parseFilesDiff(v.files,`${field}.files`);
+    if(Object.hasOwn(v,'mesh')){const m=exact(v.mesh,'after,before,part',`${field}.mesh`);if(m.part!==v.part)throw new Error(`${field}.mesh.part: expected the designated part`);meshCounts(m.before,`${field}.mesh.before`);meshCounts(m.after,`${field}.mesh.after`);}
     if (Object.hasOwn(v, 'bust')) { try { parseBustSpec(v.bust, `${field}.bust`); } catch (e) { throw new Error(e instanceof Error ? e.message : String(e)); } }
     if (![v.buildId, v.configHash, v.entrySha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, entrySha256 and modelHash are SHA-256 hex`);
     if (typeof v.part !== 'string' || !Array.isArray(v.regions)) throw new Error(`${field}: part and regions`);
@@ -233,7 +242,7 @@ export function parseAppliedContext(value: unknown): void {
     return;
   }
   if (value.schema === APPLIED_PATCH_SCHEMA) {
-    const v = exact(value, `${Object.hasOwn(value, 'assembled') ? 'assembled,' : ''}buildId,check,${Object.hasOwn(value, 'cloth') ? 'cloth,' : ''}compiler,configHash,diff,${Object.hasOwn(value, 'environment') ? 'environment,' : ''}${Object.hasOwn(value, 'files') ? 'files,' : ''}line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,${Object.hasOwn(value, 'op') ? 'op,' : ''}patch,patchSha256,producer,schema`, field);
+    const v = exact(value, `${Object.hasOwn(value, 'stageInputHash')?'stageInputHash,':''}${Object.hasOwn(value, 'assembled') ? 'assembled,' : ''}buildId,check,${Object.hasOwn(value, 'cloth') ? 'cloth,' : ''}compiler,configHash,diff,${Object.hasOwn(value, 'environment') ? 'environment,' : ''}${Object.hasOwn(value, 'files') ? 'files,' : ''}line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,${Object.hasOwn(value, 'op') ? 'op,' : ''}patch,patchSha256,producer,schema`, field);
     if (![v.buildId, v.configHash, v.patchSha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, patchSha256 and modelHash are SHA-256 hex`);
     let patch: ConfigPatch;
     try { patch = parseConfigPatch(v.patch); } catch (e) { throw new Error(`${field}.patch: ${e instanceof Error ? e.message : String(e)}`); }
@@ -263,13 +272,14 @@ export function parseAppliedContext(value: unknown): void {
     return;
   }
   if (value.schema === APPLIED_DELTA_SCHEMA) {
-    const v = exact(value, `buildId,compiler,configHash,delta,deltaSha256,files,line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,op,part,producer,schema`, field);
+    const v = exact(value, `${Object.hasOwn(value,'stageInputHash')?'stageInputHash,':''}buildId,${Object.hasOwn(value, 'check') ? 'check,' : ''}compiler,configHash,delta,deltaSha256,files,line,${Object.hasOwn(value, 'mesh') ? 'mesh,' : ''}modelHash,op,part,producer,schema`, field);
     if (![v.buildId, v.configHash, v.deltaSha256, v.modelHash].every(hex)) throw new Error(`${field}: buildId, configHash, deltaSha256 and modelHash are SHA-256 hex`);
     if (typeof v.part !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(v.part)) throw new Error(`${field}.part: the part remesh --delta ran on`);
     const d = v.delta;
     if (!isObject(d) || d.schema !== MESH_EDIT_SCHEMA || d.basis !== MESH_EDIT_BASIS || d.slot !== v.part || !isObject(d.source) || !hex(d.source.hash) || !Array.isArray(d.ops) || d.ops.length > MESH_EDIT_MAX_OPS) throw new Error(`${field}.delta: a ${MESH_EDIT_SCHEMA} document (basis "${MESH_EDIT_BASIS}", slot the part, source.hash, at most ${MESH_EDIT_MAX_OPS} ops)`);
     if (v.op !== 'remesh') throw new Error(`${field}.op: "remesh" for a mesh-edit delta`);
     tool(v.producer, `${field}.producer`); tool(v.compiler, `${field}.compiler`); lineOrNull(v.line, `${field}.line`);
+    if (Object.hasOwn(v, 'check')) parseCheck(v.check, `${field}.check`);
     parseFilesDiff(v.files, `${field}.files`);
     if (Object.hasOwn(v, 'mesh')) {
       const m = exact(v.mesh, 'after,before,part', `${field}.mesh`);
@@ -350,6 +360,9 @@ export function appliedSummary(value: unknown): string | null {
  * else the first bar check.json marks FAIL — verbatim. Null when the record is not a patch or its check did not FAIL.
  */
 export function appliedCheckRefusal(value: unknown): string | null {
+  if (isObject(value) && [APPLIED_REGIONS_SCHEMA, APPLIED_DELTA_SCHEMA].includes(String(value.schema)) && Object.hasOwn(value, 'check')) {
+    if (!isObject(value.check) || value.check.pass !== true || value.check.exitCode !== 0) return 'EDIT_SUBMIT_UNCHECKED: applied mesh has no successful producer check';
+  }
   if (!isObject(value) || (value.schema !== APPLIED_PATCH_SCHEMA && value.schema !== APPLIED_ANIMATION_SCHEMA) || !isObject(value.check) || value.check.pass !== false) return null;
   const check = value.check as unknown as CheckSummary;
   const bar = Object.entries(check.bars ?? {}).find(([, status]) => status === 'FAIL')?.[0];
