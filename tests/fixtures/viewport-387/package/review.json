@@ -1,0 +1,28 @@
+{
+  "schema": "rig-review/1",
+  "id": "viewport-387-public",
+  "title": "Viewport extraction public control",
+  "revision": "1",
+  "model": "skeleton.model.json",
+  "references": [
+    {
+      "id": "raster",
+      "type": "image",
+      "label": "Public raster reference",
+      "path": "rigid.png"
+    }
+  ],
+  "authoring": [
+    {
+      "label": "Authored synthetic sample clock",
+      "path": "report.json"
+    }
+  ],
+  "animations": [
+    {
+      "id": "inspect",
+      "label": "Inspect"
+    }
+  ],
+  "checkpoints": []
+}

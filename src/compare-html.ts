@@ -1,3 +1,4 @@
+import {expandViewportPair} from '../web/viewport-pair.ts';
 /**
  * Single-source Setup and Animate workspace markup for comparison sessions (#234).
  *
@@ -99,6 +100,7 @@ function sliceRegion(html: string, start: string, end: string, label: string): s
 }
 
 export function extractSharedWorkspaceMarkup(indexHtml: string): SharedWorkspaceMarkup {
+  indexHtml=expandViewportPair(indexHtml);
   const out = {} as Record<keyof SharedWorkspaceMarkup, string>;
   for (const r of REGIONS) out[r.key] = sliceRegion(indexHtml, r.start, r.end, r.key);
   return out;
