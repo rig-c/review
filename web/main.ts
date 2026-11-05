@@ -1,3 +1,4 @@
+import {bindStageNav} from './stage-nav.ts';
 import {timeOnlyBasis,feedbackTimingLabel,requireFeedbackFrames,isTimeOnlyFeedback} from '../src/stage-comment.ts';
 import {bindStageComments,type CommentPose} from './stage-comments.ts';
 import {discoverTurnDials,TurnState} from '../src/turn-pad.ts';
@@ -938,6 +939,7 @@ function bind(): void {
     } catch (error) { message(`Submission failed: ${errorText(error)}`, true); } finally { saving = false; updateSavedState(); }
   };
   // Saved browser defaults seed a new inspection; explicit links and source drafts restore over them.
+  viewDisposers.push(bindStageNav({model:!!data.manifest.model,setup:()=>showInspector('rig')}));
   workspace=bindWorkspaceUI({changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
@@ -1037,7 +1039,7 @@ async function start(): Promise<void> {
 function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)workspace?.revealInspector();const selector=document.querySelector<HTMLButtonElement>(`[data-inspector="${name}"]`);if(selector&&selector.getAttribute('aria-pressed')!=='true'&&selector.getAttribute('aria-selected')!=='true')selector.click();}
 function bindInspector():void {bindInspectorTabs(()=>{workspace?.afterTab();fitCamera();},()=>workspace?.beforeTab());}
 /** Opening the review pauses playback, as selecting Feedback did. Its inputs stay in the document whether or not it is open, so the draft keeps them. */
-function openReview():void {const dialog=el<HTMLDialogElement>('review-dialog');for(const drawer of document.querySelectorAll<HTMLDialogElement>('dialog.workspace-drawer[open]'))drawer.close();pause();if(!dialog.open)dialog.showModal();}
+function openReview():void {document.querySelector<HTMLButtonElement>('[data-review-stage="3"]')?.click();const dialog=el<HTMLDialogElement>('review-dialog');for(const drawer of document.querySelectorAll<HTMLDialogElement>('dialog.workspace-drawer[open]'))drawer.close();pause();if(!dialog.open)dialog.showModal();}
 function bindReviewDialog():void {
  const dialog=el<HTMLDialogElement>('review-dialog');
  button('write-review').onclick=openReview;button('review-dialog-close').onclick=()=>dialog.close();

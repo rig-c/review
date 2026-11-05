@@ -19,7 +19,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { PNG } from 'pngjs';
-import { loadReview, safeFile, packagePath } from './manifest.ts';
+import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
 
 export const PARTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/1';
 export const PARTS_VERDICT_FILE = 'parts-review.json';
@@ -312,8 +312,14 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
 
 async function loadAtlasMode(input: string, options: PartsViewOptions): Promise<PartsViewPackage> {
   const p = await loadReview(input);
+  if (!p.manifest.model) return refuse('PARTS_VIEW_NO_ATLAS', `${input} holds neither parts.json nor a compiled model with pages`);
+  return loadPartsAtlas(p, options);
+}
+
+/** Atlas inspector bound to an already loaded package; never rediscover a different source. */
+export async function loadPartsAtlas(p: ReviewPackage, options: PartsViewOptions = {}): Promise<PartsViewPackage> {
   const modelPath = p.manifest.model;
-  if (!modelPath) return refuse('PARTS_VIEW_NO_ATLAS', `${input} holds neither parts.json nor a compiled model with pages`);
+  if (!modelPath) return refuse('PARTS_VIEW_NO_ATLAS', `The inspected package holds no compiled model with pages`);
   const modelAbs = await safeFile(p.root, modelPath);
   const model = record(JSON.parse(await readFile(modelAbs, 'utf8')));
   const pagesRaw = model?.pages;
