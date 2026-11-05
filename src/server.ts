@@ -32,11 +32,11 @@ async function bodyJson(req:Request,limit=1024*1024,what='Session payload exceed
 /** `capability` (open workers and foreground CLI serving) gates every non-GET request; tests may omit it.
  * `cwd` is where the producer is looked for after the package's own directories (review's working directory by default). */
 export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string;stripConcurrency?:number;graceMs?:number;unopenedTimeoutMs?:number;exitOnClose?:boolean;onClose?:(info:LiveExitInfo)=>void|Promise<void>;log?:(line:string)=>void;viewOnly?:boolean}={}){
-  const stageParts=stagePartsRoutes({single:p});
   const bundle=await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
   const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones,...(options.stripConcurrency?{stripConcurrency:options.stripConcurrency}:{}),...(options.viewOnly??p.viewOnly?{viewOnly:true}:{})});
+  const stageParts=stagePartsRoutes({single:p},undefined,rebuilds.stageDraft);
   // Readings (#108): rigc render's readings on the inspected build and on the latest scratch build, into scratch.
   const readings=createReadings(p,{stateDir,starts,unchanged,latest:rebuilds.latest});
   // Bones check (#109): propose --from-config and compare on a scratch copy of the patched handoff config.
@@ -74,7 +74,9 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await unchanged();}catch{return staleOpenStatus(options.open!);}if(!live.rearmUnopened())return json({error:'Server is closing'},503);}return gate;}
       if(req.method==='PUT'&&url.pathname==='/api/session'){
         if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
-        const input=await bodyJson(req);await unchanged();return json(await saveSession(p,input,options.stateDir));
+        const input=await bodyJson(req);await unchanged();
+        if(input&&typeof input==='object'&&Array.isArray((input as any).feedback))for(const feedback of (input as any).feedback)await rebuilds.validateApplied(feedback?.context?.applied);
+        return json(await saveSession(p,input,options.stateDir));
       }
     // Apply · Rebuild (#99 regions, #102 {patch}): typed data, never a path; the server runs the installed producer into scratch.
     if(req.method==='POST'&&url.pathname==='/api/rebuild'){

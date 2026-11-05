@@ -1,3 +1,4 @@
+import {stageDraftRefusals} from '../src/stage-parts.ts';
 import {test,expect} from 'bun:test';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -7,8 +8,8 @@ import {openNonceHeader,openKeyHeader} from '../src/open-protocol.ts';
 
 function freePort(){const probe=Bun.serve({hostname:'127.0.0.1',port:0,fetch:()=>new Response('')}),port=probe.port!;probe.stop(true);return port;}
 test('actual managed front validates and forwards the complete trusted iframe query using this instance nonce',async()=>{
- const control=await mkdtemp(join(tmpdir(),'stage-front-')),key='a'.repeat(64),nonce=crypto.randomUUID(),fingerprint='f'.repeat(64);let forwarded=0;
- const upstream=Bun.serve({hostname:'127.0.0.1',port:0,fetch(req){if(req.headers.get(openNonceHeader)!==nonce)return new Response(null,{status:403});forwarded++;const url=new URL(req.url);return Response.json({path:url.pathname,search:url.search},{headers:{[openKeyHeader]:key}});}});
+ const control=await mkdtemp(join(tmpdir(),'stage-front-')),key='a'.repeat(64),nonce=crypto.randomUUID(),fingerprint='f'.repeat(64);let forwarded=0,forwardedBuild:string|null=null;
+ const upstream=Bun.serve({hostname:'127.0.0.1',port:0,fetch(req){if(req.headers.get(openNonceHeader)!==nonce)return new Response(null,{status:403});forwarded++;forwardedBuild=req.headers.get('X-Review-Stage-Build');const url=new URL(req.url);return Response.json({path:url.pathname,search:url.search},{headers:{[openKeyHeader]:key}});}});
  const front=startFront({control,port:freePort(),nonce:crypto.randomUUID(),fingerprint}),base=front.origin+'/instances/'+key+'/';
  const record={schema:'rig-review-open-instance/1',key,contentHash:'b'.repeat(64),nonce,fingerprint,pid:process.pid,origin:`http://127.0.0.1:${upstream.port}`,capability:'c'.repeat(64)};
  try{
@@ -19,6 +20,7 @@ test('actual managed front validates and forwards the complete trusted iframe qu
     const search=`?stageEmbed=1&lang=${lang}${suffix}`,response=await fetch(base+'stage-parts.html'+search);expect(response.status).toBe(200);expect(await response.json()).toEqual({path:'/stage-parts.html',search});
     expect((await fetch(base+'stage-parts.html'+search,{method:'HEAD'})).status).toBe(200);
    }
+   if(mode==='single'){for(const build of ['inspected','d'.repeat(64)]){expect((await fetch(base+'api/stage-parts',{headers:{'X-Review-Stage-Build':build}})).status).toBe(200);expect(String(forwardedBuild)).toBe(build);}const count=forwarded;expect((await fetch(base+'api/stage-parts',{headers:{'X-Review-Stage-Build':'../escape'}})).status).toBe(400);expect(forwarded).toBe(count);}
    const before=forwarded;
    const invalid=['','?stageEmbed=1','?stageEmbed=0&lang=en'+suffix,'?stageEmbed=1&lang=fr'+suffix,'?stageEmbed=1&lang=en&lang=ko'+suffix,'?stageEmbed=1&stageEmbed=1&lang=en'+suffix,'?stageEmbed=1&lang=en&path=/tmp'+suffix,'?stageEmbed=1&lang=en&cap=secret'+suffix,'?stageEmbed=1&lang=en&command=apply'+suffix,'?stageEmbed=1&lang=en&side=c',mode==='single'?'?stageEmbed=1&lang=en&side=a':'?stageEmbed=1&lang=en'];
    for(const query of invalid){const response=await fetch(base+'stage-parts.html'+query);expect(response.status).toBe(400);expect((await response.json()).error).toBe('FRONT_QUERY_REFUSED');}
@@ -41,6 +43,7 @@ test('actual front preserves only the bounded closed stage-data refusal after no
   for(const mode of ['single','compare']){
    await writeFile(join(control,key+'.json'),JSON.stringify({...record,mode}),{mode:0o600});const path=mode==='single'?'/api/stage-parts':'/api/compare/b/stage-parts';
    let response=await fetch(base+path);expect(response.status).toBe(409);expect(await response.json()).toEqual({error:named});
+   for(const error of Object.values(stageDraftRefusals)){reply.body=JSON.stringify({error});response=await fetch(base+path);expect(response.status).toBe(409);expect(await response.json()).toEqual({error});}
    for(const body of [JSON.stringify({error:'/private/not-allowed'}),JSON.stringify({error:named,extra:'secret'}),'not JSON',JSON.stringify({error:named,padding:'x'.repeat(1024)})]){
     reply.body=body;response=await fetch(base+path);expect(response.status).toBe(409);expect(await response.json()).toEqual({error:'FRONT_UPSTREAM_CONFLICT'});
    }

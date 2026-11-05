@@ -13,7 +13,8 @@ import {CONFIG_PATCH_SCHEMA,type ConfigPatch} from '../src/config-patch.ts';
  * (three built, two refused) with stand-in producers and compares every settled response, every job line, every build
  * hash and the whole scratch tree after each Apply against the record taken from the runners before the refactor
  * (`tests/fixtures/runner-tail.json`). Wall clocks are the only field normalized (a number becomes "ms").
- * `RUNNER_TAIL_RECORD=1` rewrites the record.
+ * #367 adds checked mesh evidence; it is asserted separately while every historical field/file stays exact.
+ * `RUNNER_TAIL_RECORD=1` rewrites the record (not used for evidence-only extensions).
  */
 const RECORD=join(import.meta.dir,'fixtures/runner-tail.json');
 const constraints=[{type:'physics',name:'c0',bone:'chest',rotate:1,strength:100,damping:0.85}];
@@ -104,6 +105,30 @@ async function replay():Promise<Step[]>{
  }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
 }
 
+const meshCheck={schema:'rig-review-check-summary/1',pass:true,exitCode:0,line:'check: PASS; 1 of 1 bar(s) measured',bars:{TEXTURE_STRETCH:'PASS'},gate:true};
+/** Only explicit #367 additions are projected away after independent assertions; unknown drift still fails the old record. */
+function historicalResponse(current:unknown,old:unknown,index:number):unknown {
+ const value=structuredClone(current) as Record<string,any>,before=old as Record<string,any>;
+ const extra=index===0?['check','files','remesh','stageInputHash']:index===2?['stageInputHash']:index===3?['check']:[];
+ expect(Object.keys(value).filter(k=>!Object.hasOwn(before,k)).sort()).toEqual([...extra].sort());
+ if(index===0){
+  expect(value.check).toEqual(meshCheck);
+  expect(value.files).toEqual({documents:[{file:'rig.json',count:1,paths:['/mesh']},{file:'motion.json',count:0,paths:[]},{file:'sets.json',count:0,paths:[]},{file:'mesh_report.json',count:1,paths:['/parts/topwear/vertices']}],images:{changed:0,unchanged:2,names:[]}});
+  // Fixture remesh writes these counts; the stand-in compiled model has no skin table to measure, so null stays explicit.
+  expect(value.remesh).toEqual({part:'topwear',before:{vertices:178,triangles:296,hull:58},after:{vertices:179,triangles:296,hull:58},modelTriangles:null});
+  expect(value.lines).toEqual([...before.lines.slice(0,3),
+   'review: against the inspected rig — rig.json differs at 1 path(s) · mesh_report.json differs at 1 path(s) · motion.json, sets.json unchanged · 2 images unchanged',
+   'review: rig.json: /mesh','review: mesh_report.json: /parts/topwear/vertices',...before.lines.slice(3),
+   'review: remesh.json carries no check line or block statuses (@rig-c/parts before 1.49.0), so check runs on the revision',
+   'review: @rig-c/parts 1.42.0 check --rig revision --out check --parts <handoff parts>',meshCheck.line]);
+  value.lines=before.lines;
+ }
+ if(index===0||index===2)expect(value.stageInputHash).toMatch(/^[a-f0-9]{64}$/);
+ if(index===3)expect(value.check).toBeNull(); // A producer refusal is never given a synthetic PASS.
+ for(const key of extra)delete value[key];
+ return value;
+}
+
 test('#121 bar: both runners give the same responses, job lines, build hashes and scratch trees as before the shared tail',async()=>{
  const steps=await replay();
  if(process.env.RUNNER_TAIL_RECORD){await writeFile(RECORD,JSON.stringify(steps,null,1)+'\n');return;}
@@ -114,7 +139,19 @@ test('#121 bar: both runners give the same responses, job lines, build hashes an
  for(const [i,step] of steps.entries()){
   // Build hashes first, so a skipped hash names itself before the larger comparisons.
   expect({step:step.name,build:(step.response as {build:unknown}).build}).toEqual({step:record[i]!.name,build:(record[i]!.response as {build:unknown}).build});
-  expect({step:step.name,response:step.response}).toEqual({step:record[i]!.name,response:record[i]!.response});
-  expect({step:step.name,tree:step.tree}).toEqual({step:record[i]!.name,tree:record[i]!.tree});
+  expect({step:step.name,response:historicalResponse(step.response,record[i]!.response,i)}).toEqual({step:record[i]!.name,response:record[i]!.response});
+  const tree=structuredClone(step.tree);
+  if(i===0){
+   const id=(step.response as {id:string}).id,dir=id+'/check/',file=dir+'check.json';
+   expect(tree[dir]).toBeNull();expect(tree[file]).toBe(md5(JSON.stringify({gate_spine_html_green:true,TEXTURE_STRETCH:{status:'PASS'},PASS:true})));
+   delete tree[dir];delete tree[file];
+  }
+  for(const path of Object.keys(tree).filter(p=>p.endsWith('/result.json'))){
+   const result=tree[path] as Record<string,any>,old=record[i]!.tree[path];
+   const owner=record.findIndex(s=>(s.response as {id:string}).id===result.id);expect(owner).toBeGreaterThanOrEqual(0);
+   if(owner===0||owner===2){const response=steps[owner]!.response as Record<string,unknown>;expect(result.stageInputHash).toBe(response.stageInputHash);}
+   tree[path]=historicalResponse(result,old,owner);
+  }
+  expect({step:step.name,tree}).toEqual({step:record[i]!.name,tree:record[i]!.tree});
  }
 });
