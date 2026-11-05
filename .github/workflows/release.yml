@@ -152,6 +152,8 @@ jobs:
 
       # prepublishOnly runs the full check, including reference video export.
       - name: Install reference video export tools
+        # Same bounded install as Check, inside the existing 20-minute job.
+        timeout-minutes: 3
         if: ${{ steps.target.outputs.publish == 'true' }}
         run: |
           sudo apt-get update

@@ -6,6 +6,8 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Recent full check: ~3 minutes; allow setup and shared-runner variance.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -15,6 +17,8 @@ jobs:
       - run: bun run check:readme
       - run: bun run typecheck
       - name: Install reference video export tools
+        # Successful installs took 14–15 seconds; allow network/runner margin.
+        timeout-minutes: 3
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y ffmpeg
