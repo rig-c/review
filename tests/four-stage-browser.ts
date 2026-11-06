@@ -40,6 +40,34 @@ const {collectItems} = await import(join(fixture.create, 'src/check.ts'));
 const chain = join(fixture.create, 'templates/example-chain');
 const frame = "document.querySelector('.review-stage-panel iframe:not([hidden]):not(.review-interview-frame)')";
 const interview = "document.querySelector('.review-interview-frame:not([hidden])')";
+const interviewNote = JSON.stringify('form > fieldset > label > textarea');
+const interviewDom = `(()=>{
+  const iframe=${interview},d=iframe?.contentDocument;
+  if(!d)return null;
+  const note=d.querySelector(${interviewNote}),submit=d.querySelector('form button[type=submit]');
+  return {
+    path:new URL(iframe.src).pathname,
+    status:d.querySelector('form [role=status]')?.textContent??null,
+    note:note?{value:note.value,visible:!!note.getClientRects().length,insideAsk:!!note.closest('fieldset fieldset')}:null,
+    submit:submit?{disabled:submit.matches(':disabled'),visible:!!submit.getClientRects().length}:null,
+    selected:[...d.querySelectorAll('form input[type=radio]:checked')].map(input=>({ask:input.name,option_id:input.value}))
+  };
+})()`;
+type PicksExchange = {request:string; response?:{status:number; body:string}; error?:string};
+const actionGuard = `function action(element, selector) {
+  const refuse = reason => { throw Error('FOUR_STAGE_ACTION_TARGET: ' + selector + ' (' + reason + ')'); };
+  if (!element) refuse('missing');
+  if (element.matches(':disabled') || element.closest('[aria-disabled=true]')) refuse('disabled');
+  if (element.closest('[hidden], [inert]')) refuse('hidden or inert ancestor');
+  const view = element.ownerDocument.defaultView;
+  for (let current=element;current;current=current.parentElement) {
+    const style=view.getComputedStyle(current);
+    if (style.display==='none'||style.visibility==='hidden'||style.visibility==='collapse') refuse('computed hidden');
+  }
+  if (![...element.getClientRects()].some(rect=>rect.width>0&&rect.height>0)) refuse('empty rectangle');
+  return element;
+}`;
+
 type Language = 'en' | 'ko';
 
 async function command(name: string, args: string[], refusal?: RegExp) {
@@ -69,13 +97,14 @@ async function wait<T>(readValue: () => Promise<T>, ready: (value: T) => boolean
 
 async function click(page: InputCdpSession, selector: string, iframe?: string) {
   const point = await page.evaluate<{x: number; y: number}>(`(()=>{
+    ${actionGuard}
     const f=${iframe ?? 'null'},d=f?f.contentDocument:document;
-    const button=d.querySelector(${JSON.stringify(selector)});
-    if(!button||button.disabled)throw Error('Missing enabled control: '+${JSON.stringify(selector)});
+    if(f)action(f,${JSON.stringify(iframe ?? 'iframe')});
+    const button=action(d.querySelector(${JSON.stringify(selector)}),${JSON.stringify(selector)});
     button.scrollIntoView({block:'nearest'});
     const r=button.getBoundingClientRect(),b=f?.getBoundingClientRect();
     const x=r.left+r.width/2,y=r.top+r.height/2;
-    if(!r.width||!r.height||!button.contains(d.elementFromPoint(x,y)))throw Error('Control is obscured');
+    if(!r.width||!r.height||!button.contains(d.elementFromPoint(x,y)))throw Error('FOUR_STAGE_ACTION_TARGET: '+${JSON.stringify(selector)}+' (obscured)');
     return {x:x+(b?b.left+f.clientLeft:0),y:y+(b?b.top+f.clientTop:0)};
   })()`);
   await page.mouse('mouseMoved', point.x, point.y);
@@ -169,17 +198,23 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     const partNote = lang === 'en' ? '  Inspect the torso seam.\nKeep the wording.  ' : '  몸통 이음새 확인.\n문구를 유지해 주세요.  ';
     const meshNote = lang === 'en' ? '  Torso mesh reviewed.  ' : '  몸통 메시를 확인했어요.  ';
     await evaluate(`(()=>{
-      const d=${frame}.contentDocument;
+      ${actionGuard}
+      const d=action(${frame},'parts iframe').contentDocument;
+      const field=selector=>action(d.querySelector(selector),selector);
       for(const item of d.querySelectorAll('[data-pv-item]')){
-        item.click();d.querySelector('[data-pv-outcome][value=clean]').click();
+        action(item,'[data-pv-item='+item.dataset.pvItem+']').click();
+        field('[data-pv-outcome][value=clean]').click();
         const mesh=d.querySelector('#pv-mesh-panel select');
-        if(mesh){mesh.value='clean';mesh.dispatchEvent(new Event('change'));}
+        if(mesh){
+          action(mesh,'#pv-mesh-panel select').value='clean';
+          mesh.dispatchEvent(new Event('change'));
+        }
       }
-      d.querySelector('[data-pv-item=torso]').click();
+      field('[data-pv-item=torso]').click();
       for(const [selector,value] of [['#pv-note',${JSON.stringify(partNote)}],['#pv-mesh-panel textarea',${JSON.stringify(meshNote)}]]){
-        const field=d.querySelector(selector);field.value=value;field.dispatchEvent(new Event('input'));
+        const note=field(selector);note.value=value;note.dispatchEvent(new Event('input'));
       }
-      d.getElementById('pv-overall').value='approved';
+      field('#pv-overall').value='approved';
     })()`);
     await choose(3);
     await choose(1);
@@ -208,7 +243,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     await write(label('parts-verdict.json'), verdictBytes);
     await navigate((await open(firstInput)).url);
     await until(`${frame}?.contentDocument?.body.dataset.ready==='true'`, 'parts-reopen');
-    await evaluate(`${frame}.contentDocument.querySelector('[data-pv-item=torso]').click()`);
+    await click(page, '[data-pv-item=torso]', frame);
     assert.equal(await evaluate(`${frame}.contentDocument.querySelector('#pv-note').value`), partNote);
     await shot('stage1');
     const checkVerdict = (root: string, path: string, bytes: string, findings: unknown[]) =>
@@ -260,17 +295,57 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-' + item.question);
       const note = lang === 'en' ? '  Keep these choices.  ' : '  이 선택을 유지해 주세요.  ';
       await evaluate(`(()=>{
-        const d=${interview}.contentDocument,s=d.querySelector('main select');
-        s.selectedIndex=[...s.options].findIndex(o=>o.text.includes(${JSON.stringify('chain-' + item.question)}));
+        ${actionGuard}
+        const d=action(${interview},'interview iframe').contentDocument;
+        const s=action(d.querySelector('main select'),'interview set picker');
+        const index=[...s.options].findIndex(o=>o.text.includes(${JSON.stringify('chain-' + item.question)}));
+        if(index<0||s.options[index].disabled)throw Error('FOUR_STAGE_ACTION_TARGET: interview set option');
+        s.selectedIndex=index;
         s.dispatchEvent(new Event('change'));
-        for(const choice of d.querySelectorAll('form input[value=keep]'))choice.click();
-        const note=d.querySelector('form textarea');note.value=${JSON.stringify(note)};note.dispatchEvent(new Event('input'));
+        for(const choice of d.querySelectorAll('form input[value=keep]'))action(choice,'keep option for '+choice.name).click();
+        const notes=d.querySelectorAll(${interviewNote}), note=action(notes[0],${interviewNote});
+        if(notes.length!==1||note.closest('fieldset fieldset'))throw Error('FOUR_STAGE_ACTION_TARGET: expected exactly one form-level interview note');
+        note.value=${JSON.stringify(note)};note.dispatchEvent(new Event('input'));
       })()`);
       const sha = digest(await readFile(join(second.root, item.path)));
       const picksPath = 'gate-picks/' + sha + '.json';
       await assert.rejects(readFile(join(second.root, picksPath)), {code:'ENOENT'});
-      await click(page, 'form button[type=submit]', interview);
-      await until(`${interview}.contentDocument.querySelector('form [role=status]').textContent===${JSON.stringify(catalog['interview.saved'])}`, 'picks-' + item.question);
+      await evaluate(`(()=>{
+        const child=${interview}.contentWindow, original=child.fetch;
+        child.__gatePicksExchanges=[];
+        child.fetch=async function(input,init){
+          if(init?.method!=='POST'||!new URL(input,child.location.href).pathname.endsWith('/api/interview/picks'))return original.call(child,input,init);
+          const exchange={request:init.body};
+          child.__gatePicksExchanges.push(exchange);
+          try {
+            const response=await original.call(child,input,init);
+            exchange.response={status:response.status,body:await response.clone().text()};
+            return response;
+          } catch(error) {
+            exchange.error=String(error);
+            throw error;
+          }
+        };
+        child.__gateRestorePicksFetch=()=>{child.fetch=original;};
+      })()`);
+      const readPicksSave = () => evaluate<{dom:{status:string|null}|null; exchanges:PicksExchange[]}>(`({
+        dom:${interviewDom}, exchanges:${interview}?.contentWindow?.__gatePicksExchanges??[]
+      })`);
+      try {
+        await click(page, 'form button[type=submit]', interview);
+        const save = await wait(readPicksSave, result => result.exchanges.some(exchange => !!exchange.error ||
+          (!!exchange.response && (exchange.response.status >= 400 || result.dom?.status === catalog['interview.saved']))),
+        label('picks-' + item.question));
+        assert.equal(save.exchanges.length, 1);
+        assert.equal(save.exchanges[0]!.response?.status, 200);
+        assert.equal(save.dom?.status, catalog['interview.saved']);
+        const payload = JSON.parse(save.exchanges[0]!.request);
+        assert.equal(payload.note, note);
+        assert(payload.picks.every((pick: {option_id:string}) => pick.option_id === 'keep' && !('other_text' in pick)));
+      } finally {
+        await put(label('picks-' + item.question + '-save'), await readPicksSave().catch(() => null));
+        await evaluate(`${interview}?.contentWindow?.__gateRestorePicksFetch?.()`);
+      }
       await choose(1);
       await choose(2);
       await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-back-' + item.question);
@@ -278,11 +353,20 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       await choose(2);
       await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-reopen-' + item.question);
       await evaluate(`(()=>{
-        const select=${interview}.contentDocument.querySelector('main select');
-        select.selectedIndex=[...select.options].findIndex(option=>option.text.includes(${JSON.stringify('chain-' + item.question)}));
+        ${actionGuard}
+        const d=action(${interview},'interview iframe').contentDocument;
+        const select=action(d.querySelector('main select'),'interview set picker');
+        const index=[...select.options].findIndex(option=>option.text.includes(${JSON.stringify('chain-' + item.question)}));
+        if(index<0||select.options[index].disabled)throw Error('FOUR_STAGE_ACTION_TARGET: interview set option');
+        select.selectedIndex=index;
         select.dispatchEvent(new Event('change'));
       })()`);
-      await until(`${interview}.contentDocument.querySelector('form textarea').value===${JSON.stringify(note)}`, 'picks-reopen-' + item.question);
+      await until(`(()=>{
+        const fields=${interview}.contentDocument.querySelectorAll(${interviewNote}), field=fields[0];
+        if(fields.length!==1||field.closest('fieldset fieldset'))return false;
+        ${actionGuard}
+        return action(field,${interviewNote}).value===${JSON.stringify(note)};
+      })()`, 'picks-reopen-' + item.question);
       await shot('stage2-' + item.question);
       const bytes = await readFile(join(second.root, picksPath), 'utf8');
       const picks = JSON.parse(bytes);
@@ -313,14 +397,17 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     async function correctionForm(stage: 'rig-review' | 'direction-review', path: 'made' | 'described', words: string) {
       await click(page, '#write-review');
       await evaluate(`(()=>{
-        const el=id=>document.getElementById(id);
-        el('correction-controls').open=true;
+        ${actionGuard}
+        const el=id=>action(document.getElementById(id),'#'+id);
+        const details=el('correction-controls');
+        if(!details.open)action(details.querySelector('summary'),'#correction-controls summary').click();
         for(const [id,value] of Object.entries({
           'feedback-start':'0','feedback-end':'0','feedback-target-kind':'rig','feedback-category':'quality',
           'correction-stage':${JSON.stringify(stage)},'correction-selector':${stage === 'rig-review' ? '"1"' : '"2"'},
-          'correction-model':'build/skeleton.model.json','correction-path':${JSON.stringify(path)}
+          'correction-path':${JSON.stringify(path)}
         }))el(id).value=value;
         el('correction-stage').dispatchEvent(new Event('change',{bubbles:true}));
+        if(${stage === 'direction-review'})el('correction-model').value='build/skeleton.model.json';
         const transfer=new DataTransfer();
         transfer.items.add(new File([${JSON.stringify(words)}],'request.txt',{type:'text/plain'}));
         el('correction-words').files=transfer.files;
@@ -395,11 +482,13 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       await click(page, '#block-tab-idle-tracks');
       await click(page, '#idle-track-list button');
       await evaluate(`(()=>{
-        const field=document.querySelector('#idle-track-editor input[aria-label="amp value"]')
-          || document.querySelector('#idle-track-editor input[type=number]');
+        ${actionGuard}
+        const selector='#idle-track-editor input[type=number][aria-label="amp value"]';
+        const field=action(document.querySelector(selector),selector);
         if(field.value!=='0.5')throw Error('Wrong initial amplitude');
         field.value=${JSON.stringify(String(amplitude))};field.dispatchEvent(new Event('change',{bubbles:true}));
-        const preview=document.querySelector('[data-idle-preview]');if(!preview.checked)preview.click();
+        const preview=action(document.querySelector('[data-idle-preview]'),'[data-idle-preview]');
+        if(!preview.checked)preview.click();
       })()`);
       await until('!document.getElementById("idle-preview-label").hidden', name + '-preview');
       assert.equal(await evaluate('document.getElementById("rebuild-applied").value'), '');
@@ -608,8 +697,9 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     const directionReady = '!!document.querySelector("#direction-panel:not([hidden]) ul") && !!document.querySelector("#direction-panel pre")?.textContent';
     await until(directionReady, 'direction-authored-ready');
     const keys = await evaluate<{rows:string; keys:unknown}>(`(()=>{
-      const panel=document.getElementById('direction-panel');
-      panel.querySelector('div details').open=true;
+      ${actionGuard}
+      const panel=document.getElementById('direction-panel'), details=panel.querySelector('div details');
+      if(!details.open)action(details.querySelector('summary'),'#direction-panel authored keys summary').click();
       return {rows:panel.querySelector('ul').innerText,keys:JSON.parse(panel.querySelector('pre').textContent)};
     })()`);
     await put(label('direction-visible'), keys);
@@ -692,7 +782,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         save:save?{disabled:save.disabled,title:save.title,hidden:save.hidden}:null
       };
     })()`).catch(() => null);
-    await put(label('first-error'), {error:String(error), iframeDiagnostics});
+    await put(label('first-error'), {error:String(error), iframeDiagnostics, interviewDiagnostics:await evaluate(interviewDom).catch(() => null)});
     await shot('first-error').catch(() => {});
     throw error;
   } finally {
