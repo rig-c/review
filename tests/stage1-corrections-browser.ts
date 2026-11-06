@@ -10,6 +10,177 @@ import {loadReview} from '../src/manifest.ts';
 import {freshSession} from '../src/session.ts';
 import {rebuildDir} from '../src/rebuild.ts';
 import {startServer} from '../src/server.ts';
+import { WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
+
+const CDP_SEND_DEADLINE_MS = 10_000;
+// Preserve the original Apply allowance of 1,200 × 25 ms.
+const APPLY_DEADLINE_MS = 30_000;
+// Default EN/KO baseline (n=2): 8,872.501 and 8,891.143 ms.
+// Four times the longer full CDP hold, rounded up to the next 10 s.
+const MESH_SETTLE_DEADLINE_MS = 40_000;
+const PARTS_DOCUMENT = "document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument";
+const PARTS_READY = `(() => {
+  const d = ${PARTS_DOCUMENT};
+  return {ready: d?.body.dataset.ready === 'true', detail: d?.body.textContent};
+})()`;
+
+export const STAGE1_READINESS = {
+  PAGE_NOT_READY: {ms: 10_000, expression: `(() => {
+    const text = document.getElementById('handoff-line')?.textContent;
+    return {ready: Boolean(window.rigReviewEditor && text && !/Reading/.test(text))};
+  })()`},
+  PARTS_NOT_READY: {ms: 10_000, expression: PARTS_READY},
+  CHEST_NOT_OPEN: {ms: 5_000, expression: `({
+    ready: document.documentElement.dataset.inspectionStage === '3' &&
+      document.getElementById('chest-edit').getAttribute('aria-pressed') === 'true'
+  })`},
+  SCRATCH_NOT_READY: {ms: 10_000, expression: PARTS_READY},
+  MESH_ROUTE_TIMEOUT: {ms: 10_000, expression: PARTS_READY},
+  DELTA_ROUTE_TIMEOUT: {ms: 10_000, expression: PARTS_READY},
+  DELTA_EDITOR_NOT_OPEN: {ms: 5_000, expression: `(() => {
+    const edit = window.rigReviewEditor.meshEdit();
+    return {ready: Boolean(edit), value: edit};
+  })()`},
+  RESET_TIMEOUT: {ms: 5_000, expression: "({ready: Boolean(document.getElementById('bust-reset').disabled)})"},
+} as const;
+
+type Stage1Page = Pick<InputCdpSession, 'evaluate'>;
+type Readiness = keyof typeof STAGE1_READINESS;
+
+function withStage1Deadline<T>(name: string, timeout: number, operation: (check: () => void) => Promise<T>): Promise<T> {
+  const expiresAt = performance.now() + timeout;
+  return withDeadline(name, timeout, signal => operation(() => {
+    signal.throwIfAborted();
+    if (performance.now() >= expiresAt) throw new WalkDeadlineError(name, timeout);
+  }));
+}
+
+async function pollStage1<T>(check: () => void, read: () => Promise<T | undefined>): Promise<T> {
+  for (;;) {
+    check();
+    const value = await read();
+    check();
+    if (value !== undefined) return value;
+    await Bun.sleep(25);
+  }
+}
+
+export async function waitForStage1Readiness<T = void>(
+  page: Stage1Page, name: Readiness, timeout: number = STAGE1_READINESS[name].ms,
+): Promise<T> {
+  let detail: string | null | undefined;
+  try {
+    const ready = await withStage1Deadline(name, timeout, check => pollStage1(check, async () => {
+      const status = await page.evaluate<{ready: boolean; value: T; detail?: string | null}>(STAGE1_READINESS[name].expression);
+      detail = status.detail;
+      return status.ready ? {value: status.value} : undefined;
+    }));
+    return ready.value;
+  } catch (error) {
+    if (error instanceof WalkDeadlineError && detail !== undefined &&
+        (name === 'PARTS_NOT_READY' || name === 'SCRATCH_NOT_READY')) error.message += ' ' + detail;
+    throw error;
+  }
+}
+
+const CHEST_FIELD = "document.getElementById('bust-r-x')";
+function chestInput(increment: number): string {
+  return `const field = ${CHEST_FIELD};
+    field.value = String(Number(field.value) + ${increment});
+    field.dispatchEvent(new Event('input', {bubbles: true}));`;
+}
+
+const APPLIED_VALUE = "document.getElementById('rebuild-applied').value";
+const CHEST_APPLY = "document.getElementById('bust-apply')";
+const MESH_APPLY = "document.getElementById('mesh-apply')";
+type ApplyName = 'CHEST_APPLY_SETTLE' | 'CHEST_REPEAT_APPLY_SETTLE' | 'MESH_DELTA_APPLY_SETTLE';
+
+export function stage1ApplyRead(name: ApplyName, previous?: string): string {
+  if (name === 'MESH_DELTA_APPLY_SETTLE') return `(() => {
+    const value = ${APPLIED_VALUE};
+    if (value) {
+      const applied = JSON.parse(value);
+      if (applied.schema === 'rig-review-applied/3' && !${MESH_APPLY}.disabled) return {applied};
+    }
+    return {detail: document.getElementById('mesh-editor-status').textContent};
+  })()`;
+  const changed = name === 'CHEST_REPEAT_APPLY_SETTLE' ? ` && value !== ${JSON.stringify(previous)}` : '';
+  return `(() => {
+    const value = ${APPLIED_VALUE};
+    if (value${changed} && !${CHEST_APPLY}.disabled) return {applied: JSON.parse(value)};
+    const status = document.getElementById('chest-editor-status');
+    if (status?.classList.contains('error')) throw Error(status.textContent);
+    return {detail: status?.textContent};
+  })()`;
+}
+
+export async function settleStage1Apply<T>(
+  page: Stage1Page, name: ApplyName, increment: number, timeout = APPLY_DEADLINE_MS,
+): Promise<T> {
+  let detail: string | null | undefined;
+  try {
+    return await withStage1Deadline(name, timeout, async check => {
+      check();
+      let dispatch: string;
+      if (name === 'CHEST_APPLY_SETTLE') {
+        dispatch = `document.querySelector('[data-part-list] button[data-slot="badge"]').click();
+          if (document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot !== 'badge') throw Error('NATIVE_SELECTION_FAILED');
+          ${chestInput(increment)}
+          ${CHEST_APPLY}.click();`;
+      } else if (name === 'CHEST_REPEAT_APPLY_SETTLE') {
+        dispatch = `${chestInput(increment)}
+          const previous = ${APPLIED_VALUE};
+          ${CHEST_APPLY}.click();
+          return previous;`;
+      } else {
+        dispatch = `if (!window.rigReviewEditor.meshEdit().ops.length) throw Error('NO_DELTA_OPS');
+          ${MESH_APPLY}.click();`;
+      }
+      // Dispatch may already have taken effect if its CDP reply was lost.
+      const previous = await page.evaluate<string | undefined>(`(() => { ${dispatch} })()`);
+      const expression = stage1ApplyRead(name, previous);
+      return pollStage1(check, async () => {
+        const status = await page.evaluate<{applied?: T; detail?: string | null}>(expression);
+        detail = status.detail;
+        return status.applied;
+      });
+    });
+  } catch (error) {
+    if (error instanceof WalkDeadlineError && detail !== undefined && name !== 'CHEST_APPLY_SETTLE') {
+      error.message += ' ' + detail;
+    }
+    throw error;
+  }
+}
+
+type MeshState<T> =
+  | {state: 'pending'}
+  | {state: 'fulfilled'; job: T}
+  | {state: 'rejected'; error: string};
+
+export function settleStage1Mesh<T>(page: Stage1Page, spacing: number, timeout = MESH_SETTLE_DEADLINE_MS): Promise<T> {
+  return withStage1Deadline('STAGE1_MESH_SETTLE', timeout, async check => {
+    await Bun.sleep(200);
+    check();
+    await page.evaluate(`(() => {
+      const m = window.rigReviewEditor.mesh;
+      if (m.part() !== 'torso') throw Error('WRONG_PARAMETER_PART');
+      m.set(['contour','spacing'], ${spacing});
+      window.stage1Mesh = {state: 'pending'};
+      Promise.resolve(m.apply()).then(
+        job => { window.stage1Mesh = {state: 'fulfilled', job}; },
+        error => { window.stage1Mesh = {state: 'rejected', error: String(error?.stack || error)}; }
+      );
+    })()`);
+    return pollStage1(check, async () => {
+      const status = await page.evaluate<MeshState<T>>('window.stage1Mesh');
+      if (status.state === 'rejected') throw Error('Browser evaluate error: ' + status.error);
+      return status.state === 'fulfilled' ? status.job : undefined;
+    });
+  });
+}
+
+if (import.meta.main) {
 const bench=process.env.RV367_BENCH!;if(!bench)throw Error('Installed producer bench required');
 const root=await mkdtemp(join(tmpdir(),'r.')),pkg=join(root,'pkg'),artifacts=join(process.cwd(),'artifacts/stage1-browser');
 await mkdir(artifacts,{recursive:true});
@@ -32,33 +203,36 @@ try{
  await writeFile(join(artifacts,'inspected-rig.json'),await readFile(join(pkg,'out/rig/rig.json')));await writeFile(join(artifacts,'inspected-model.json'),await readFile(join(pkg,'out/check/build/skeleton.model.json')));
  const original=await hashes(pkg),p=await loadReview(pkg);server=await startServer(p,{port:0,stateDir:join(root,'state'),cwd:bench,capability:'a'.repeat(64),graceMs:600000,unopenedTimeoutMs:600000,exitOnClose:false});
  const base=`http://127.0.0.1:${server.port}`;
- page=await launchCdpSession(join(tmpdir(),'c'));await page.setViewport(1440,1000);
+ page=await launchCdpSession(join(tmpdir(),'c'),{sendDeadlineMs:CDP_SEND_DEADLINE_MS});await page.setViewport(1440,1000);
  for(const lang of process.env.RV367_FOCUS?['en']:['en','ko']){
   await page.goto(base+'/?lang='+lang+'#cap='+'a'.repeat(64));
-  await page.evaluate(`(async()=>{for(let i=0;i<400;i++){if(window.rigReviewEditor&&document.getElementById('handoff-line')?.textContent&&!/Reading/.test(document.getElementById('handoff-line').textContent))return;await new Promise(r=>setTimeout(r,25));}throw Error('PAGE_NOT_READY')})()`);
-  const before=await page.evaluate(`(async()=>{document.querySelector('[data-review-stage="1"]').click();for(let i=0;i<400;i++){const d=document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument;if(d?.body.dataset.ready==='true'){d.querySelector('[data-pv-item=torso]').click();d.getElementById('zoom-in').click();await new Promise(r=>setTimeout(r,50));return {snapshot:d.defaultView.rigReviewStageParts.snapshot(),text:d.querySelector('#pv-corrections')?.textContent,buttons:[...d.querySelectorAll('#pv-corrections button')].map(b=>b.textContent)}};await new Promise(r=>setTimeout(r,25));}throw Error('PARTS_NOT_READY '+document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument?.body.textContent)})()`);
+  await waitForStage1Readiness(page, 'PAGE_NOT_READY');
+  await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
+  await waitForStage1Readiness(page, 'PARTS_NOT_READY');
+  const before=await page.evaluate(`(async()=>{const d=${PARTS_DOCUMENT};d.querySelector('[data-pv-item=torso]').click();d.getElementById('zoom-in').click();await new Promise(r=>setTimeout(r,50));return {snapshot:d.defaultView.rigReviewStageParts.snapshot(),text:d.querySelector('#pv-corrections')?.textContent,buttons:[...d.querySelectorAll('#pv-corrections button')].map(b=>b.textContent)}})()`);
   await page.evaluate(`document.querySelector('[data-review-stage="3"]').click();document.querySelector('[data-review-stage="1"]').click()`);
   const retained=await page.evaluate<any>(`document.querySelector('.review-stage-panel iframe:not([hidden])').contentWindow.rigReviewStageParts.snapshot()`);
   if(retained.part!=='torso'||JSON.stringify(retained.rig)!==JSON.stringify((before as any).snapshot.rig))throw Error('NON_FIRST_PART_OR_CAMERA_LOST_ON_NAV');
   receipts.push({lang,before,retained});await writeFile(join(artifacts,lang+'-parts.png'),await page.screenshot());
   // Enter via the actual Chest-regions button, designate with its own fields and click its Apply button twice.
   await page.evaluate(`document.querySelector('.review-stage-panel iframe:not([hidden])').contentDocument.querySelector('#pv-corrections button').click()`);
-  await page.evaluate(`(async()=>{for(let i=0;i<200;i++){if(document.documentElement.dataset.inspectionStage==='3'&&document.getElementById('chest-edit').getAttribute('aria-pressed')==='true')return;await new Promise(r=>setTimeout(r,25));}throw Error('CHEST_NOT_OPEN')})()`);
+  await waitForStage1Readiness(page, 'CHEST_NOT_OPEN');
   await writeFile(join(artifacts,lang+'-chest.png'),await page.screenshot());
   receipts.push({lang,controls:await page.evaluate(`({buttons:[...document.querySelectorAll('#chest-editor-bar button')].map(b=>({id:b.id,text:b.textContent})),fields:[...document.querySelectorAll('#chest-regions input')].map(n=>({id:n.id,value:n.value}))})`)});
   if(process.env.RV367_FOCUS==='selection-exit'){
-   const applied=await page.evaluate<any>(`(async()=>{document.querySelector('[data-part-list] button[data-slot="badge"]').click();if(document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot!=='badge')throw Error('NATIVE_SELECTION_FAILED');document.getElementById('bust-r-x').value=String(Number(document.getElementById('bust-r-x').value)+1);document.getElementById('bust-r-x').dispatchEvent(new Event('input',{bubbles:true}));document.getElementById('bust-apply').click();for(let i=0;i<1200;i++){const value=document.getElementById('rebuild-applied').value;if(value&&!document.getElementById('bust-apply').disabled)return JSON.parse(value);const status=document.getElementById('chest-editor-status');if(status?.classList.contains('error'))throw Error(status.textContent);await new Promise(r=>setTimeout(r,25));}throw Error('NATIVE_CHEST_FLOW_LOCKED')})()`);
+   const applied=await settleStage1Apply<any>(page, 'CHEST_APPLY_SETTLE', 1);
    if(applied.part!=='torso'||applied.check?.pass!==true)throw Error('NATIVE_CHEST_TARGET_CHANGED');
    if(await page.evaluate(`!!document.getElementById('stage-draft-label')`))throw Error('SCOPED_LABEL_NOT_CLEARED');
    receipts.push({lang,focus:'explicit native badge selection exits old Stage1 scope; native Chest target resolves torso',applied});
    await writeFile(join(artifacts,'selection-exit.png'),await page.screenshot());continue;
   }
   for(let repeat=0;repeat<2;repeat++){
-   const applied=await page.evaluate<any>(`(async()=>{const field=document.getElementById('bust-r-x');field.value=String(Number(field.value)+${lang==='en'?1:2});field.dispatchEvent(new Event('input',{bubbles:true}));const previous=document.getElementById('rebuild-applied').value;document.getElementById('bust-apply').click();for(let i=0;i<1200;i++){const value=document.getElementById('rebuild-applied').value;if(value&&value!==previous&&!document.getElementById('bust-apply').disabled)return JSON.parse(value);const status=document.getElementById('chest-editor-status');if(status?.classList.contains('error'))throw Error(status.textContent);await new Promise(r=>setTimeout(r,25));}throw Error('APPLY_TIMEOUT '+document.getElementById('chest-editor-status').textContent)})()`);
+   const applied=await settleStage1Apply<any>(page, 'CHEST_REPEAT_APPLY_SETTLE', lang==='en'?1:2);
    const selectedAfter=await page.evaluate<any>(`document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot`);if(selectedAfter!=='torso')throw Error('SELECTED_PART_LOST_AFTER_APPLY');
    if(applied.check?.pass!==true||!applied.stageInputHash||!applied.mesh)throw Error('UNCHECKED_APPLIED_RECORD '+JSON.stringify(applied));
    await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
-   const watched=await page.evaluate<any>(`(async()=>{for(let i=0;i<400;i++){const d=document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument;if(d?.body.dataset.ready==='true'){const res=await fetch('/api/stage-parts',{headers:{'X-Review-Stage-Build':'${applied.buildId}'}});return {snapshot:d.defaultView.rigReviewStageParts.snapshot(),text:d.querySelector('#pv-corrections').textContent,data:await res.json()};}await new Promise(r=>setTimeout(r,25));}throw Error('SCRATCH_NOT_READY '+document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument?.body.textContent)})()`);
+   await waitForStage1Readiness(page, 'SCRATCH_NOT_READY');
+   const watched=await page.evaluate<any>(`(async()=>{const d=${PARTS_DOCUMENT};const res=await fetch('/api/stage-parts',{headers:{'X-Review-Stage-Build':'${applied.buildId}'}});return {snapshot:d.defaultView.rigReviewStageParts.snapshot(),text:d.querySelector('#pv-corrections').textContent,data:await res.json()};})()`);
    if(watched.snapshot.part!=='torso'||JSON.stringify(watched.snapshot.rig)!==JSON.stringify((before as any).snapshot.rig))throw Error('NON_FIRST_PART_OR_CAMERA_LOST_ON_REBUILD');
    const mapping=watched.data.draft.mappings.find((m:any)=>m.part==='torso');
    if(mapping.vertices!==applied.mesh.after.vertices||mapping.triangles!==applied.mesh.after.triangles)throw Error('GEOMETRY_COUNTS_DIFFER');
@@ -68,8 +242,9 @@ try{
   }
   // Parameter editor: enter from the selected part, change a producer field, run its existing Apply.
   await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
-  await page.evaluate(`(async()=>{for(let i=0;i<400;i++){const d=document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument;if(d?.body.dataset.ready==='true'){d.querySelectorAll('#pv-corrections button')[1].click();return;}await new Promise(r=>setTimeout(r,25));}throw Error('MESH_ROUTE_TIMEOUT')})()`);
-  const meshJob=await page.evaluate<any>(`(async()=>{await new Promise(r=>setTimeout(r,200));const m=window.rigReviewEditor.mesh;if(m.part()!=='torso')throw Error('WRONG_PARAMETER_PART');m.set(['contour','spacing'],${lang==='en'?18:20});return await m.apply()})()`);
+  await waitForStage1Readiness(page, 'MESH_ROUTE_TIMEOUT');
+  await page.evaluate(`${PARTS_DOCUMENT}.querySelectorAll('#pv-corrections button')[1].click()`);
+  const meshJob=await settleStage1Mesh<any>(page, lang==='en'?18:20);
   if(meshJob.status!=='built'||meshJob.check?.pass!==true)throw Error('MESH_PARAMETER_APPLY_REFUSED '+JSON.stringify(meshJob));
   if(await page.evaluate(`document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot`)!=='torso')throw Error('MESH_SELECTION_LOST');
   receipts.push({lang,instrument:'mesh',applied:await page.evaluate(`JSON.parse(document.getElementById('rebuild-applied').value)`)});
@@ -77,11 +252,12 @@ try{
   // Reset before the typed delta: it must use the inspected producer input, not silently delta an unrelated scratch revision.
   await page.evaluate(`window.rigReviewEditor.reset()`);
   await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
-  await page.evaluate(`(async()=>{for(let i=0;i<400;i++){const d=document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument;if(d?.body.dataset.ready==='true'){d.querySelectorAll('#pv-corrections button')[2].click();return;}await new Promise(r=>setTimeout(r,25));}throw Error('DELTA_ROUTE_TIMEOUT')})()`);
-  const selected=await page.evaluate<any>(`(async()=>{for(let i=0;i<200;i++){const edit=window.rigReviewEditor.meshEdit();if(edit)return edit;await new Promise(r=>setTimeout(r,25));}throw Error('DELTA_EDITOR_NOT_OPEN')})()`);
+  await waitForStage1Readiness(page, 'DELTA_ROUTE_TIMEOUT');
+  await page.evaluate(`${PARTS_DOCUMENT}.querySelectorAll('#pv-corrections button')[2].click()`);
+  const selected=await waitForStage1Readiness<any>(page, 'DELTA_EDITOR_NOT_OPEN');
   const vertex=selected.drawn[selected.hull+1];if(!vertex)throw Error('NO_INTERIOR_VERTEX');
   await page.mouse('mouseMoved',vertex.x,vertex.y);await page.mouse('mousePressed',vertex.x,vertex.y);await page.mouse('mouseMoved',vertex.x+2,vertex.y+1);await page.mouse('mouseReleased',vertex.x+2,vertex.y+1);
-  const delta=await page.evaluate<any>(`(async()=>{if(!window.rigReviewEditor.meshEdit().ops.length)throw Error('NO_DELTA_OPS');document.getElementById('mesh-apply').click();for(let i=0;i<1200;i++){const value=document.getElementById('rebuild-applied').value;if(value){const a=JSON.parse(value);if(a.schema==='rig-review-applied/3'&&!document.getElementById('mesh-apply').disabled)return a;}await new Promise(r=>setTimeout(r,25));}throw Error('DELTA_APPLY_TIMEOUT '+document.getElementById('mesh-editor-status').textContent)})()`);
+  const delta=await settleStage1Apply<any>(page, 'MESH_DELTA_APPLY_SETTLE', 0);
   if(await page.evaluate(`document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot`)!=='torso')throw Error('DELTA_SELECTION_LOST');
   if(delta.check?.pass!==true)throw Error('DELTA_UNCHECKED');receipts.push({lang,instrument:'delta',applied:delta});
   await writeFile(join(artifacts,lang+'-delta.png'),await page.screenshot());
@@ -96,10 +272,11 @@ try{
   receipts.push({lang,submit:'historical sealed evidence saved; changed current scratch refused; input restored',inputSha256:createHash('sha256').update(beforeInput).digest('hex')});
   await page.evaluate(`window.rigReviewEditor.reset()`);
   await page.evaluate(`document.getElementById('bust-reset').click()`);
-  await page.evaluate(`(async()=>{for(let i=0;i<200;i++){if(document.getElementById('bust-reset').disabled)return;await new Promise(r=>setTimeout(r,25));}throw Error('RESET_TIMEOUT')})()`);
+  await waitForStage1Readiness(page, 'RESET_TIMEOUT');
 
  }
  if(JSON.stringify(original)!==JSON.stringify(await hashes(pkg)))throw Error('ORIGINALS_CHANGED');
  await writeFile(join(artifacts,'receipt.json'),JSON.stringify({versions:{...versions,partsCompiler},receipts,originals:original,immutable:true},null,2));
  console.log('STAGE1_BROWSER_RECEIPT '+JSON.stringify(receipts.filter(r=>r.applied).map(r=>({lang:r.lang,repeat:r.repeat,buildId:r.applied.buildId,mesh:r.applied.mesh,check:r.applied.check?.pass}))));
 }finally{if(server){for(let i=0;i<300;i++){const state:any=await (await fetch(`http://127.0.0.1:${server.port}/api/rebuild`)).json();if(state.baseline?.status!=='running'&&state.inspectedCheck?.status!=='running')break;await Bun.sleep(100);}}await page?.close();await Bun.sleep(200);server?.stop(true);await rm(root,{recursive:true,force:true});}
+}
