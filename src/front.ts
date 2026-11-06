@@ -99,7 +99,7 @@ async function boundedBody(req:Request,limit:number,timeoutMs=10000):Promise<Arr
 }
 /** Owner-only regular record for this key, or null. */
 async function instanceRecord(control:string,key:string):Promise<RecordFile|null>{const file=join(control,key+'.json');try{const info=await lstat(file);if(!info.isFile()||(info.mode&0o077)!==0)return null;}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return null;throw e;}return readRecord(file,key);}
-/** Worker statuses map to named front codes; worker text never reaches the client. */
+/** Worker errors default to front codes unless an inspection refusal is allowlisted. */
 const upstreamFailure:Record<number,string>={400:'FRONT_UPSTREAM_REJECTED',403:'FRONT_UPSTREAM_FORBIDDEN',404:'FRONT_UPSTREAM_NOT_FOUND',405:'FRONT_UPSTREAM_METHOD',409:'FRONT_UPSTREAM_CONFLICT'};
 const responseHeaders=['content-type','content-length','content-range','accept-ranges','content-disposition','cache-control','content-security-policy','x-content-type-options','referrer-policy'];
 /** The trusted atlas frame alone may carry this closed navigation query. */
@@ -108,6 +108,26 @@ export function stageFrameQuery(mode:'single'|'compare',search:string):boolean {
  const allowed=mode==='single'?['stageEmbed','lang']:['stageEmbed','lang','side'];
  return keys.length===allowed.length&&new Set(keys).size===keys.length&&keys.every(k=>allowed.includes(k))&&params.get('stageEmbed')==='1'&&['en','ko'].includes(params.get('lang')??'')&&(mode==='single'||['a','b'].includes(params.get('side')??''));
 }
+// The submitted Apply can supply the check line. Accept the producer's structured
+// summary fields, never an arbitrary suffix after the failed-check code.
+const submitCheckPrefix = 'EDIT_SUBMIT_UNCHECKED: applied build failed check — ';
+const checkBarName = '(?:[A-Z][A-Z0-9_]*|gate|loop|seam)';
+const submitCheckSummary = new RegExp(
+ String.raw`^check: FAIL — \d+ bar\(s\) not met(?:, \d+ declared requirement\(s\) not PASS)?; ` +
+ String.raw`\d+ of \d+ bar\(s\) measured, \d+ skipped(?: \(${checkBarName}(?:, ${checkBarName})*\))?` +
+ String.raw`(?:; \d+ warning\(s\) \((?:SEAM_OVER_MOTION(?:, CLOTH_SETTLES)?|CLOTH_SETTLES), not a bar\))?$`
+);
+const submitCheckFallback = new RegExp(String.raw`^(?:${checkBarName}: FAIL|check exited -?\d+)$`);
+const fixedSubmitRefusals = new Set([
+ 'EDIT_SUBMIT_UNCHECKED: applied mesh has no successful producer check',
+ 'CORRECTION_CHECK_FAILED: the settled Apply requires a passing producer check',
+]);
+function isSubmitCheckRefusal(error: string): boolean {
+ if(fixedSubmitRefusals.has(error))return true;
+ if(!error.startsWith(submitCheckPrefix))return false;
+ const detail=error.slice(submitCheckPrefix.length);
+ return submitCheckSummary.test(detail)||submitCheckFallback.test(detail);
+}
 /** Preserve only closed, bounded inspection refusals. */
 async function inspectionRefusal(mode:'single'|'compare',method:string,path:string,response:Response,sameFingerprint:boolean):Promise<string|null>{
  const stageData=mode==='single'?path==='/api/stage-parts':/^\/api\/compare\/(?:a|b)\/stage-parts$/.test(path);
@@ -115,8 +135,9 @@ async function inspectionRefusal(mode:'single'|'compare',method:string,path:stri
  // Both reads race during the single-package page bootstrap.
  const direction=sameFingerprint&&mode==='single'&&method==='GET'&&response.status===409&&
   (path==='/api/review'||path==='/api/session');
+ const submit=sameFingerprint&&mode==='single'&&method==='PUT'&&path==='/api/session'&&response.status===400;
  const verdict=mode==='single'&&['/api/stage-parts/verdict','/api/stage-parts/export/json','/api/stage-parts/export/issue'].includes(path)&&[400,409].includes(response.status);
- if(!(direction||interview||verdict||stageData&&method==='GET'&&response.status===409)||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))return null;
+ if(!(submit||direction||interview||verdict||stageData&&method==='GET'&&response.status===409)||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))return null;
  const limit=512,declared=response.headers.get('content-length');if(declared!==null&&(!/^\d+$/.test(declared)||Number(declared)>limit))return null;
  const reader=response.body?.getReader();if(!reader)return null;
  try{
@@ -126,6 +147,7 @@ async function inspectionRefusal(mode:'single'|'compare',method:string,path:stri
   const data:unknown=JSON.parse(new TextDecoder().decode(body)),named='PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.';
   if(data===null||typeof data!=='object'||Array.isArray(data)||Object.keys(data).length!==1)return null;
   const error=(data as {error?:unknown}).error;
+  if(submit)return typeof error==='string'&&isSubmitCheckRefusal(error)?error:null;
   if(direction)return error===directionStale?directionStale:null;
   return typeof error==='string'&&(interview?[...interviewRefusals]:[...(stageData&&response.status===409?[named,...Object.values(stageDraftRefusals),...stageVerdictRefusals]:[]),interviewStale,...(verdict?stageVerdictRefusals:[])] as readonly string[]).some(code=>code===error)?error:null;
  }catch{return null;}finally{reader.releaseLock();}

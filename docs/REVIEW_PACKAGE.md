@@ -73,6 +73,7 @@ Audio clips contain `id`, local `path` and optional `label`. Cues require `id`, 
 - `GET /assets/<path>` serves an allowlisted local asset. Encode each path segment when building the URL. Responses use no-store and nosniff headers.
 - `GET /api/session` returns the current session or a fresh pending session.
 - `PUT /api/session` accepts the full session object below, with matching schema/id/revision/sourceHash. It requires the server's exact Origin, `application/json`, and <= 1 MiB. It returns the saved session with server-generated `updatedAt`.
+- On a single-package session PUT, the managed front preserves allowlisted failed-check refusals from a matching worker as HTTP 400. It accepts the structured check summary or fallback and fixed check refusals in a JSON error object of at most 512 bytes. Other worker 400 errors use `FRONT_UPSTREAM_REJECTED`.
 
 ```json
 {
