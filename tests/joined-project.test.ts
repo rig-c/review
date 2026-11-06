@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { realpathSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,7 +31,7 @@ test('joined front allowlists only the existing bounded interview routes and fix
 });
 
 test('real Create v2 joins existing Stage 1 and 2 without changing the feedback address', async () => {
-  const scratch = await mkdtemp(join(tmpdir(),'review-'));
+  const scratch = await mkdtemp(join(realpathSync(tmpdir()),'review-'));
   const root = join(scratch,'project'), other = join(scratch,'other'), stateDir = join(scratch,'state');
   const capability = 'a'.repeat(64);
   const servers: Awaited<ReturnType<typeof startServer>>[] = [];
