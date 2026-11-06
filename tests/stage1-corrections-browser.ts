@@ -30,18 +30,9 @@ export const STAGE1_READINESS = {
     return {ready: Boolean(window.rigReviewEditor && text && !/Reading/.test(text))};
   })()`},
   PARTS_NOT_READY: {ms: 10_000, expression: PARTS_READY},
-  CHEST_NOT_OPEN: {ms: 5_000, expression: `({
-    ready: document.documentElement.dataset.inspectionStage === '3' &&
-      document.getElementById('chest-edit').getAttribute('aria-pressed') === 'true'
-  })`},
   SCRATCH_NOT_READY: {ms: 10_000, expression: PARTS_READY},
   MESH_ROUTE_TIMEOUT: {ms: 10_000, expression: PARTS_READY},
   DELTA_ROUTE_TIMEOUT: {ms: 10_000, expression: PARTS_READY},
-  DELTA_EDITOR_NOT_OPEN: {ms: 5_000, expression: `(() => {
-    const edit = window.rigReviewEditor.meshEdit();
-    return {ready: Boolean(edit), value: edit};
-  })()`},
-  RESET_TIMEOUT: {ms: 5_000, expression: "({ready: Boolean(document.getElementById('bust-reset').disabled)})"},
 } as const;
 
 type Stage1Page = Pick<InputCdpSession, 'evaluate'>;
@@ -65,17 +56,16 @@ async function pollStage1<T>(check: () => void, read: () => Promise<T | undefine
   }
 }
 
-export async function waitForStage1Readiness<T = void>(
+export async function waitForStage1Readiness(
   page: Stage1Page, name: Readiness, timeout: number = STAGE1_READINESS[name].ms,
-): Promise<T> {
+): Promise<void> {
   let detail: string | null | undefined;
   try {
-    const ready = await withStage1Deadline(name, timeout, check => pollStage1(check, async () => {
-      const status = await page.evaluate<{ready: boolean; value: T; detail?: string | null}>(STAGE1_READINESS[name].expression);
+    await withStage1Deadline(name, timeout, check => pollStage1(check, async () => {
+      const status = await page.evaluate<{ready: boolean; detail?: string | null}>(STAGE1_READINESS[name].expression);
       detail = status.detail;
-      return status.ready ? {value: status.value} : undefined;
+      return status.ready ? true : undefined;
     }));
-    return ready.value;
   } catch (error) {
     if (error instanceof WalkDeadlineError && detail !== undefined &&
         (name === 'PARTS_NOT_READY' || name === 'SCRATCH_NOT_READY')) error.message += ' ' + detail;
@@ -216,7 +206,7 @@ try{
   receipts.push({lang,before,retained});await writeFile(join(artifacts,lang+'-parts.png'),await page.screenshot());
   // Enter via the actual Chest-regions button, designate with its own fields and click its Apply button twice.
   await page.evaluate(`document.querySelector('.review-stage-panel iframe:not([hidden])').contentDocument.querySelector('#pv-corrections button').click()`);
-  await waitForStage1Readiness(page, 'CHEST_NOT_OPEN');
+  await page.evaluate(`(async()=>{for(let i=0;i<200;i++){if(document.documentElement.dataset.inspectionStage==='3'&&document.getElementById('chest-edit').getAttribute('aria-pressed')==='true')return;await new Promise(r=>setTimeout(r,25));}throw Error('CHEST_NOT_OPEN')})()`);
   await writeFile(join(artifacts,lang+'-chest.png'),await page.screenshot());
   receipts.push({lang,controls:await page.evaluate(`({buttons:[...document.querySelectorAll('#chest-editor-bar button')].map(b=>({id:b.id,text:b.textContent})),fields:[...document.querySelectorAll('#chest-regions input')].map(n=>({id:n.id,value:n.value}))})`)});
   if(process.env.RV367_FOCUS==='selection-exit'){
@@ -254,7 +244,7 @@ try{
   await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
   await waitForStage1Readiness(page, 'DELTA_ROUTE_TIMEOUT');
   await page.evaluate(`${PARTS_DOCUMENT}.querySelectorAll('#pv-corrections button')[2].click()`);
-  const selected=await waitForStage1Readiness<any>(page, 'DELTA_EDITOR_NOT_OPEN');
+  const selected=await page.evaluate<any>(`(async()=>{for(let i=0;i<200;i++){const edit=window.rigReviewEditor.meshEdit();if(edit)return edit;await new Promise(r=>setTimeout(r,25));}throw Error('DELTA_EDITOR_NOT_OPEN')})()`);
   const vertex=selected.drawn[selected.hull+1];if(!vertex)throw Error('NO_INTERIOR_VERTEX');
   await page.mouse('mouseMoved',vertex.x,vertex.y);await page.mouse('mousePressed',vertex.x,vertex.y);await page.mouse('mouseMoved',vertex.x+2,vertex.y+1);await page.mouse('mouseReleased',vertex.x+2,vertex.y+1);
   const delta=await settleStage1Apply<any>(page, 'MESH_DELTA_APPLY_SETTLE', 0);
@@ -272,7 +262,7 @@ try{
   receipts.push({lang,submit:'historical sealed evidence saved; changed current scratch refused; input restored',inputSha256:createHash('sha256').update(beforeInput).digest('hex')});
   await page.evaluate(`window.rigReviewEditor.reset()`);
   await page.evaluate(`document.getElementById('bust-reset').click()`);
-  await waitForStage1Readiness(page, 'RESET_TIMEOUT');
+  await page.evaluate(`(async()=>{for(let i=0;i<200;i++){if(document.getElementById('bust-reset').disabled)return;await new Promise(r=>setTimeout(r,25));}throw Error('RESET_TIMEOUT')})()`);
 
  }
  if(JSON.stringify(original)!==JSON.stringify(await hashes(pkg)))throw Error('ORIGINALS_CHANGED');

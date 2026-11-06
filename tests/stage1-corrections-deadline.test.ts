@@ -33,28 +33,11 @@ function handoffPage(editor: object | undefined, text?: string) {
   });
 }
 
-function chestPage(stage: string, pressed: string) {
-  return pageWith({
-    document: {
-      documentElement: {dataset: {inspectionStage: stage}},
-      getElementById: () => ({getAttribute: () => pressed}),
-    },
-  });
-}
-
-const edit = {hull: 1, drawn: []};
-const deltaPage = (value: unknown) => pageWith({window: {rigReviewEditor: {meshEdit: () => value}}});
-const resetPage = (disabled: boolean) => pageWith({document: {getElementById: () => ({disabled})}});
-
 const unready: [ReadyName, string, ReturnType<typeof pageWith>][] = [
   ['PAGE_NOT_READY', 'editor absent', handoffPage(undefined, 'ready')],
   ['PAGE_NOT_READY', 'handoff missing', handoffPage({})],
   ['PAGE_NOT_READY', 'handoff empty', handoffPage({}, '')],
   ['PAGE_NOT_READY', 'handoff still reading', handoffPage({}, 'Reading producer')],
-  ['CHEST_NOT_OPEN', 'wrong stage', chestPage('1', 'true')],
-  ['CHEST_NOT_OPEN', 'not pressed', chestPage('3', 'false')],
-  ['DELTA_EDITOR_NOT_OPEN', 'editor returned null', deltaPage(null)],
-  ['RESET_TIMEOUT', 'button enabled', resetPage(false)],
 ];
 for (const name of partsNames) {
   unready.push([name, 'false marker is truthy but not ready', partsPage('false')]);
@@ -69,16 +52,13 @@ for (const [name, label, page] of unready) {
   });
 }
 
-test('the actual readiness waiter accepts complete state and returns the delta editor value', async () => {
+test('the actual readiness waiter accepts complete state', async () => {
   await waitForStage1Readiness(handoffPage({}, 'Ready'), 'PAGE_NOT_READY');
   for (const name of partsNames) {
     const page = partsPage('true');
     await waitForStage1Readiness(page, name);
     expect(page.reads[0]).toContain(visibleFrame);
   }
-  await waitForStage1Readiness(chestPage('3', 'true'), 'CHEST_NOT_OPEN');
-  expect(await waitForStage1Readiness<typeof edit>(deltaPage(edit), 'DELTA_EDITOR_NOT_OPEN')).toEqual(edit);
-  await waitForStage1Readiness(resetPage(true), 'RESET_TIMEOUT');
 });
 
 function applyPage() {
