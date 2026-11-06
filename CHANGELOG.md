@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.3](https://github.com/rig-c/review/compare/v1.16.2...v1.16.3) (2026-11-06)
+
+
+### Bug Fixes
+
+* expand authored direction keys into the stage ([#454](https://github.com/rig-c/review/issues/454)) ([c747e5e](https://github.com/rig-c/review/commit/c747e5e484d0ce5ae474e3fbf60126efd6b2fc7a))
+
 ## [1.16.2](https://github.com/rig-c/review/compare/v1.16.1...v1.16.2) (2026-11-06)
 
 
