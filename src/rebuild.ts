@@ -1205,7 +1205,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         const check = await runTool(producer.bin, ['check', '--rig', op.spec, '--out', 'check', '--parts', inputs.parts, '--page-edges', pageEdges, '--pack-shape', packShape, ...(steps.world ? ['--environment', 'environment.json'] : [])], { cwd: dir, onLine: push });
         let checkJson: unknown = null;
         try { checkJson = JSON.parse(await readFile(join(dir, 'check', 'check.json'), 'utf8')); } catch { /* check refused before writing it; its line says why */ }
-        steps.check(checkSummary(checkJson, check.exitCode, check.lines, firstRefusal(check.lines)), check.wallMs);
+        steps.check({ ...checkSummary(checkJson, check.exitCode, check.lines, firstRefusal(check.lines)), source: 'check' }, check.wallMs);
       }
       // The package and its producer inputs must still be the bytes the request was made against.
       // The handoff files are in the reviewed identity, so this also catches a config, parts or rig change.

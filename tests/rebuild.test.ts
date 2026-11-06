@@ -245,7 +245,16 @@ test('patch producer receives the exact bound scratch requirements and its seal 
  try{
   await install(root,'2.16.0');
   const bin=join(root,'node_modules/@rig-c/parts/bin/rig-parts.cjs');
-  await writeFile(bin,fakeParts.replace("if(a[0]==='rig'){",`if(a[0]==='rig'&&!path.isAbsolute(f('--config'))){
+  await writeFile(bin,fakeParts.replace("if(a[0]==='rig'){",`if(a[0]==='check'){
+const failed=fs.existsSync('config.json')&&JSON.parse(fs.readFileSync('config.json','utf8')).constraints[0].name==='check-fails';
+const out=f('--out');fs.mkdirSync(out,{recursive:true});
+const status=failed?'FAIL':'PASS';
+fs.writeFileSync(path.join(out,'check.json'),JSON.stringify({PASS:!failed,gate_spine_html_green:true,
+  BREATH_VISIBLE:{status},BLINK_NO_HOLE:{status:'SKIP'},PART_SUPPORT_REPORT:{status:'UNCLASSIFIED'}}));
+console.log('check: '+status+' — exact producer summary');
+process.exit(failed?1:0);
+}
+if(a[0]==='rig'&&!path.isAbsolute(f('--config'))){
 const configFile=f('--config'),config=JSON.parse(fs.readFileSync(configFile,'utf8'));
 const file=path.resolve(path.dirname(configFile),config.requirements);
 if(!config.requirements.startsWith('config-inputs/')||fs.readFileSync(file,'utf8')!==${JSON.stringify(requirementBytes)})throw Error('FAKE_REQUIREMENTS_RELOCATION');
@@ -269,6 +278,9 @@ if(a[0]==='rig'){`));
   expect(response.status).toBe(202);
   const job=await settle(base,await response.json()) as unknown as PatchJobView;
   expect(job).toMatchObject({status:'built',op:'rig'});
+  const directCheck={schema:'rig-review-check-summary/1',source:'check',pass:true,exitCode:0,gate:true,
+    line:'check: PASS — exact producer summary',bars:{BREATH_VISIBLE:'PASS',BLINK_NO_HOLE:'SKIP',PART_SUPPORT_REPORT:'UNCLASSIFIED'}} as const;
+  expect(job.check).toEqual(directCheck);
   expect(job.stageInputHash).toMatch(/^[a-f0-9]{64}$/);
   const dir=rebuildDir(state,p.sourceHash,job.id);
   const scratchConfig=JSON.parse(await readFile(join(dir,'config.json'),'utf8'));
@@ -280,6 +292,7 @@ if(a[0]==='rig'){`));
   const record=JSON.parse(JSON.stringify(patchAppliedRecord(job)));
   const seal=JSON.parse(await readFile(join(state,'applied-evidence',p.sourceHash,job.id+'.json'),'utf8'));
   expect(seal.body.record).toEqual(record);
+  expect(seal.body.check).toEqual(directCheck);
   expect(seal.body.inputHash).toBe(record.stageInputHash);
   expect((await rebuilds.correctionEvidence(record))?.modelSha256).toBe(record.modelHash);
   await writeFile(scratchPath,requirementBytes+' ');
@@ -287,6 +300,18 @@ if(a[0]==='rig'){`));
   await writeFile(scratchPath,requirementBytes);
   expect(digest(await readFile(scratchPath))).toBe(digest(requirementBytes));
   expect((await rebuilds.correctionEvidence(record))?.modelSha256).toBe(record.modelHash);
+  const failedPatch={...patch,ops:[{...patch.ops[0]!,value:'check-fails'}]};
+  const failedResponse=await post(base,{patch:failedPatch});
+  expect(failedResponse.status).toBe(202);
+  const failed=await settle(base,await failedResponse.json()) as unknown as PatchJobView;
+  const failedCheck={...directCheck,pass:false,exitCode:1,line:'check: FAIL — exact producer summary',
+    bars:{...directCheck.bars,BREATH_VISIBLE:'FAIL'}};
+  expect(failed.status).toBe('built');
+  expect(failed.check).toEqual(failedCheck);
+  const failedSeal=JSON.parse(await readFile(join(state,'applied-evidence',p.sourceHash,failed.id+'.json'),'utf8'));
+  expect(failedSeal.body.check).toEqual(failedCheck);
+  expect(failedSeal.body.record.check).toEqual(failedCheck);
+  expect(JSON.parse(await readFile(join(state,'applied-evidence',p.sourceHash,job.id+'.json'),'utf8'))).toEqual(seal);
   expect(await treeHash(pkg)).toBe(before);
   await rm(requirementsPath);
   await expect(producerInputs(p.handoff,p.handoffReason)).rejects.toThrow('REBUILD_REQUIREMENTS_UNAVAILABLE');
