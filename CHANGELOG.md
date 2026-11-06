@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.0](https://github.com/rig-c/review/compare/v1.13.0...v1.14.0) (2026-11-06)
+
+
+### Features
+
+* open the joined project interview in the standard host ([#432](https://github.com/rig-c/review/issues/432)) ([2470116](https://github.com/rig-c/review/commit/24701161695d2159e92fefbc6eb952f3b05b7b91))
+
 ## [1.13.0](https://github.com/rig-c/review/compare/v1.12.0...v1.13.0) (2026-11-06)
 
 
