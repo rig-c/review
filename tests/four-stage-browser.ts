@@ -14,6 +14,7 @@ import { enCatalog } from '../web/catalog-en.ts';
 import { koCatalog } from '../web/catalog-ko.ts';
 import { inventory, materializeFourStages } from './helpers/four-stage-fixture.ts';
 import { walkCheckpoint, WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
+import { walkDialogs } from './helpers/walk-dialog.ts';
 import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
 
 const archive = process.env.REVIEW_371_CREATE_ARCHIVE;
@@ -83,6 +84,7 @@ const actionGuard = `function action(element, selector) {
 }`;
 
 type Language = 'en' | 'ko';
+let activeDialogs: ReturnType<typeof walkDialogs>;
 
 // An in-process open has no cancellation contract. End the walk before it can start more work.
 // Nova owns descendant cleanup and collects the already flushed evidence.
@@ -96,7 +98,7 @@ function terminalDeadline(key: string, error: WalkDeadlineError): never {
 }
 
 async function command(name: string, args: string[], refusal?: RegExp) {
-  checkpoint(name + '.command');
+  activeDialogs.enter(name + '.command');
   const child = Bun.spawn([process.execPath, ...args], {cwd: bench, stdout: 'pipe', stderr: 'pipe'});
   const [stdout, stderr, exit] = await withDeadline(name + '.command', 30000,
     () => Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]))
@@ -111,6 +113,7 @@ async function command(name: string, args: string[], refusal?: RegExp) {
     });
   await put(name + '-command', {args, exit, stderr});
   await write(name + '.stdout', stdout);
+  activeDialogs.assertClear();
   if (refusal) {
     assert.notEqual(exit, 0, name);
     assert.match(stderr + stdout, refusal, name);
@@ -138,6 +141,7 @@ async function wait<T>(readValue: (signal: AbortSignal) => Promise<T>, ready: (v
 }
 
 function fetchBody<T>(key: string, url: URL, readBody: (response: Response) => Promise<T>, init?: RequestInit) {
+  activeDialogs.assertClear();
   return withDeadline(key, 15000, async signal => {
     const requestSignal = init?.signal ? AbortSignal.any([signal, init.signal]) : signal;
     return await readBody(await fetch(url, {...init, signal:requestSignal}));
@@ -177,7 +181,7 @@ function flipHash(bytes: string, key: string, hash: string) {
   return mutateOne(bytes, match[0], match[0].replace(hash, (hash.startsWith('0') ? '1' : '0') + hash.slice(1)));
 }
 
-async function runLanguage(lang: Language, page: InputCdpSession) {
+async function runLanguage(lang: Language, page: InputCdpSession, dialogs: ReturnType<typeof walkDialogs>) {
   const catalog = lang === 'en' ? enCatalog : koCatalog;
   const label = (name: string) => lang + '-' + name;
   const shot = async (name: string) => write(label(name) + '.png', await page.screenshot());
@@ -187,10 +191,10 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
   const state = join(scratch, 'state-' + lang);
   const scratchCopies: {index: number; root: string; changes: Set<string>}[] = [];
   const frontPorts = new Map<string, number>();
-  const mark = (name: string) => checkpoint(label(name));
+  const mark = (name: string) => dialogs.enter(label(name));
   const open = async (name: string, inputs: OpenInputs, stateDir = state) => {
     const key = label(name + '.open');
-    checkpoint(key);
+    dialogs.enter(key);
     let frontPort = frontPorts.get(stateDir);
     if (frontPort === undefined) {
       const portProbe = Bun.serve({hostname:'127.0.0.1', port:0, fetch:() => new Response()});
@@ -207,11 +211,13 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.match(new URL(opened.url).pathname, /^\/instances\/[a-f0-9]{64}\/$/);
     return opened;
   };
-  async function navigate(name: string, url: string) {
+  async function navigate(name: string, url: string, failedSubmitSource?: string) {
     mark(name + '.navigate');
     const destination = new URL(url);
     destination.searchParams.set('lang', lang);
-    await page.goto(destination.href, lang);
+    const go = () => page.goto(destination.href, lang);
+    if (failedSubmitSource) await dialogs.departFailedSubmit(failedSubmitSource, go);
+    else await go();
     await until(`document.documentElement?.lang===${JSON.stringify(lang)} && !!document.querySelector('[data-review-stage="1"]')`, name + '.shell');
   }
   async function projectCopy(index: number, suffix = '') {
@@ -557,9 +563,9 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       await until('document.getElementById("review-dialog")?.open===false', 'preview-modal-closed');
     }
 
-    async function idleApply(amplitude: number, stateDir: string, name: string) {
+    async function idleApply(amplitude: number, stateDir: string, name: string, failedSubmitSource?: string) {
       const opened = await open(name, thirdInput, stateDir);
-      await navigate(name, opened.url);
+      await navigate(name, opened.url, failedSubmitSource);
       await until('!!window.rigReviewEditor?.idle?.source?.()?.tracks?.length', name + '-idle');
       mark(name + '.controls');
       await choose(3);
@@ -609,6 +615,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       return {record, job, hashes, check, opened};
     }
 
+    let failedSubmitSource: string | undefined;
     if (lang === 'en') {
       const failedState = join(scratch, 'failed-check-state');
       const frozen = process.env.REVIEW_371_FAILED_APPLIED;
@@ -711,9 +718,10 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       /CORRECTION_APPLIED_INVALID:[\s\S]*claimed checked Apply lacks a passing producer check summary/);
       mark('stage3.post-resolve-project');
       assert.deepEqual(await readFile(join(negative.root, 'project.json')), beforeResolve);
+      failedSubmitSource = failed.opened.url;
     }
 
-    const applied = await idleApply(2.5, state, 'stage3');
+    const applied = await idleApply(2.5, state, 'stage3', failedSubmitSource);
     assert(applied.check.BREATH_VISIBLE.torso_heat_mean >= 6.12);
     assert.equal(applied.record.check.pass, true);
     assert.equal(applied.record.check.exitCode, 0);
@@ -922,7 +930,14 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.deepEqual(described.on.direction, checked.direction);
     await create(label('direction-consumer-check'), ['interview','--check',fourth.root,'--json']);
   } catch (error) {
-    mark('failure.capture');
+    const first = dialogs.error ?? error;
+    checkpoint(label('failure.capture'));
+    if (dialogs.open || dialogs.error) {
+      checkpoint('dialog.diagnostics-skipped', {step:dialogs.step});
+      await put(label('first-error'), {error:String(first), iframeDiagnostics:null, interviewDiagnostics:null,
+        diagnostics:'DIALOG_BLOCKED', dialogOpen:dialogs.open});
+      throw first;
+    }
     const iframeDiagnostics = await evaluate(`(()=>{
       const frame=${frame};
       const doc=frame?.contentDocument;
@@ -947,11 +962,11 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         overall:doc?.querySelector('#pv-overall')?.value??null
       };
     })()`).catch(() => null);
-    await put(label('first-error'), {error:String(error), iframeDiagnostics, interviewDiagnostics:await evaluate(interviewDom).catch(() => null)});
+    await put(label('first-error'), {error:String(first), iframeDiagnostics, interviewDiagnostics:await evaluate(interviewDom).catch(() => null)});
     await shot('first-error').catch(() => {});
-    throw error;
+    throw first;
   } finally {
-    mark('inventory.copies');
+    checkpoint(label('inventory.copies'));
     for (const copy of scratchCopies) {
       const before = fixture.stages[copy.index]!.original;
       const after = await inventory(copy.root);
@@ -960,31 +975,33 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         if (!copy.changes.has(path)) assert.equal(after[path], sha, `Source changed: ${path}`);
       }
     }
-    mark('inventory.copies.complete');
+    checkpoint(label('inventory.copies.complete'));
   }
 }
 
 for (const stage of fixture.stages) await put(stage.name + '-original', stage.original);
 try {
   for (const lang of languages) {
+    const dialogs = activeDialogs = walkDialogs(checkpoint, lang + '-browser.launch');
     const previousTmp = process.env.TMPDIR;
     let page: InputCdpSession;
     try {
       process.env.TMPDIR = '/tmp'; // Chromium's startup temp must stay short on Nova.
       checkpoint(lang + '-browser.launch');
-      page = await launchCdpSession(join(scratch, 'chromium-' + lang), {sendDeadlineMs:10000});
+      page = await launchCdpSession(join(scratch, 'chromium-' + lang), {sendDeadlineMs:10000,onEvent:dialogs.onEvent});
     } finally {
       if (previousTmp === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = previousTmp;
     }
     try {
-      checkpoint(lang + '-browser.viewport');
+      dialogs.enter(lang + '-browser.viewport');
       await page.setViewport(1440, 1080);
-      await runLanguage(lang, page);
+      await runLanguage(lang, page, dialogs);
     } finally {
       checkpoint(lang + '-browser.close');
       await page.close();
     }
+    dialogs.assertClear();
   }
 } finally {
   checkpoint('inventory.originals');

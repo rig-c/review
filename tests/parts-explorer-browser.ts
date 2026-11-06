@@ -93,23 +93,44 @@ export interface InputCdpSession extends CdpSession {
   touch(type:'touchStart'|'touchMove'|'touchEnd',points:{x:number;y:number;id:number}[]):Promise<void>;
 }
 
-export function cdpRequests(sendMessage: (message: string) => void, timeout?: number) {
+export type CdpPageEvent = {method:string; params?:Record<string, unknown>; sessionId?:string};
+type CdpEventHandler = (event: CdpPageEvent, send: (method: string, params?: Record<string, unknown>) => Promise<unknown>) => void | Promise<void>;
+
+export function cdpRequests(sendMessage: (message: string) => void, timeout?: number, onEvent?: CdpEventHandler) {
   let nextId = 1;
+  let failure: Error | undefined;
   const pending = new Map<number, {method:string; resolve:(value:any)=>void; reject:(error:Error)=>void}>();
+  function fail(error: unknown) {
+    const first = failure ??= error instanceof Error ? error : new Error(String(error));
+    for (const entry of pending.values()) entry.reject(first);
+    pending.clear();
+  }
+  async function send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> {
+    if (failure) throw failure;
+    const id = nextId++;
+    try {
+      const request = () => new Promise((resolve, reject) => {
+        pending.set(id, {method, resolve, reject});
+        sendMessage(JSON.stringify({id, method, params, ...(sessionId ? {sessionId} : {})}));
+      });
+      return await (timeout === undefined ? request() : withDeadline('CDP.' + method, timeout, request));
+    } finally {
+      pending.delete(id);
+    }
+  }
   return {
-    async send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> {
-      const id = nextId++;
-      try {
-        const request = () => new Promise((resolve, reject) => {
-          pending.set(id, {method, resolve, reject});
-          sendMessage(JSON.stringify({id, method, params, ...(sessionId ? {sessionId} : {})}));
-        });
-        return await (timeout === undefined ? request() : withDeadline('CDP.' + method, timeout, request));
-      } finally {
-        pending.delete(id);
+    send,
+    receive(message: {id?:number; result?:unknown; error?:{message?:string}; method?:string; params?:Record<string, unknown>; sessionId?:string}) {
+      if (typeof message.method === 'string' && onEvent) {
+        try {
+          const result = onEvent({method:message.method, params:message.params, sessionId:message.sessionId},
+            (method, params) => send(method, params, message.sessionId));
+          if (result) void result.catch(fail);
+        } catch (error) {
+          fail(error);
+        }
+        return;
       }
-    },
-    receive(message: {id?:number; result?:unknown; error?:{message?:string}}) {
       const entry = typeof message.id === 'number' ? pending.get(message.id) : undefined;
       if (!entry) return;
       if (message.error) entry.reject(new Error(`${entry.method}: ${message.error.message || JSON.stringify(message.error)}`));
@@ -179,7 +200,7 @@ function findBrowserBinary(): string {
   throw new Error('No headless Chromium/Chrome/Edge binary found');
 }
 
-export async function launchCdpSession(profileDir: string, options: {sendDeadlineMs?: number} = {}): Promise<InputCdpSession> {
+export async function launchCdpSession(profileDir: string, options: {sendDeadlineMs?: number; onEvent?: CdpEventHandler} = {}): Promise<InputCdpSession> {
   const bin = findBrowserBinary();
   const isHeadlessShell = bin.includes('headless');let mouseButtons=0;
   const childEnv: Record<string, string | undefined> = {
@@ -269,7 +290,7 @@ export async function launchCdpSession(profileDir: string, options: {sendDeadlin
       socket.onerror = err => reject(err);
       socket.onclose = () => reject(new Error('WebSocket closed during CDP.connect'));
     }));
-    const requests = cdpRequests(message => socket.send(message), options.sendDeadlineMs);
+    const requests = cdpRequests(message => socket.send(message), options.sendDeadlineMs, options.onEvent);
     socket.onmessage = event => requests.receive(JSON.parse(String(event.data)));
     socket.onclose = socket.onerror = () => requests.disconnect(`bin=${bin}: ${stderrTail}`);
     const {send} = requests;
