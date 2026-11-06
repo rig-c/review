@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.2](https://github.com/rig-c/review/compare/v1.10.1...v1.10.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* **ci:** condition verdict uploads on producer receipts ([#418](https://github.com/rig-c/review/issues/418)) ([69ae749](https://github.com/rig-c/review/commit/69ae7491388333f9540e1ec271e2d86ad1302e51))
+
 ## [1.10.1](https://github.com/rig-c/review/compare/v1.10.0...v1.10.1) (2026-11-05)
 
 
