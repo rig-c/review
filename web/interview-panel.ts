@@ -33,7 +33,7 @@ async function request(access: InstanceAccess, path: string, body?: Picks) {
 }
 
 export async function mountInterview(host: HTMLElement, access: InstanceAccess) {
-  let data: {questions:Question[];historical:HistoricalInterview[]; binding?:{projectHash:string;sourceHash:string;version:number}};
+  let data: {questions:Question[];historical:HistoricalInterview[]; binding?:{projectHash:string;sourceHash:string;version?:number;draftId?:string}};
   try {data = await request(access, '/api/interview');}
   catch (error) {
     const render = () => {host.textContent = t(errorKey(error));};
@@ -53,7 +53,7 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
   let busy = false;
   const render = () => {
     const joined = data.binding;
-    const source = joined ? element('p', t('interview.joined', [String(joined.version), joined.projectHash, joined.sourceHash])) : null;
+    const source = joined ? element('p', t(joined.draftId===undefined?'interview.joined':'interview.joinedDraft', [joined.draftId??String(joined.version), joined.projectHash, joined.sourceHash])) : null;
     if (source) source.className = 'interview-binding';
     const archive = element('details');
     archive.append(element('summary', t('interview.legacy')));

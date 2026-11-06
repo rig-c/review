@@ -73,7 +73,7 @@ import {assertRigFieldOps,RIG_FIELDS_READOUT_BARS,TURN_BONE} from '../src/rig-fi
 import {IDLE_READOUT_BARS,type LocalChannel} from '../src/idle-tracks.ts';
 import type {PatchOp} from '../src/config-patch.ts';
 
-interface ReviewResponse { direction?:DirectionInspection; setsHash?:string; referenceHashes?:Record<string,string>; initialAnimation?:string|null; manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourcePainting?:{id:string;path:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { interview?:true; playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
+interface ReviewResponse { direction?:DirectionInspection; setsHash?:string; referenceHashes?:Record<string,string>; initialAnimation?:string|null; manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourcePainting?:{id:string;path:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { interview?:true; preRig?:true; playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
 interface PoseReference { schema: 'rig-review-pose/1'; coordinateSystem: 'image-pixels-y-down'; width: number; height: number; joints: { id: string; x: number; y: number; parent?: string }[] }
 interface SequenceJoint { state: 'observed' | 'occluded' | 'missing' | 'inferred'; at?: [number, number]; score?: number }
 interface PoseSequence { spec: 'rig-pose-sequence/1'; space: { units: 'picture-px'; origin: 'top-left'; y: 'down' }; width: number; height: number; source?: string; frames: { t: number; people: { id: string; joints: Record<string, SequenceJoint> }[] }[]; camera?: { s: number; tx: number; ty: number; inliers: number }[]; cameraSource?: unknown }
@@ -986,7 +986,7 @@ function bind(): void {
     const picker=select('part-set');picker.value=name;picker.dispatchEvent(new Event('change',{bubbles:true}));
   });
   viewDisposers.push(()=>directionPanel?.dispose());
-  viewDisposers.push(bindStageNav({access,interview:data.capabilities.interview,model:!!data.manifest.model,direction:active=>directionPanel?.show(active),setup:()=>showInspector('rig'),draftBuild:()=>appliedOnStage?.buildId??'inspected',correction:openStageCorrection}));
+  viewDisposers.push(bindStageNav({access,interview:data.capabilities.interview,preRig:data.capabilities.preRig,model:!!data.manifest.model,direction:active=>directionPanel?.show(active),setup:()=>showInspector('rig'),draftBuild:()=>appliedOnStage?.buildId??'inspected',correction:data.capabilities.preRig?undefined:openStageCorrection}));
   workspace=bindWorkspaceUI({changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
@@ -1052,6 +1052,7 @@ async function start(): Promise<void> {
     let writes: { capabilityRequired: boolean; control?: boolean };
     [data, session, writes] = await Promise.all([api<ReviewResponse>('/api/review'), api<ReviewSession>('/api/session'), api<{ capabilityRequired: boolean; control?: boolean }>('/api/access')]);
     readOnly = readOnlyReason(access, writes.capabilityRequired);
+    if(data.capabilities.preRig)el('write-review').hidden=true;
     submittedBaseline=structuredClone(session);
     text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; select('feedback-target-kind').value = 'rig'; input('feedback-target-name').value = data.manifest.id;
     select('reference-select').replaceChildren(); for (const reference of data.manifest.references) select('reference-select').append(option(reference.id, `${reference.label} · ${reference.type}`));

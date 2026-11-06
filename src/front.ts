@@ -1,7 +1,7 @@
 import { interviewRefusals, interviewRequest } from './interview-routes.ts';
 import { directionStale, interviewStale } from './joined-project.ts';
 import { picksLimit } from './interview-picks.ts';
-import {stageDraftRefusals} from './stage-parts.ts';
+import {stageDraftRefusals,stageVerdictLimit,stageVerdictRefusals} from './stage-parts.ts';
 /** Managed loopback front: one stable origin (127.0.0.1:4318 by default) routing `/instances/<key>/…` to the
  * worker named by that key's private open record. It is a router, not an authority: it never reads packages,
  * never serves or logs a capability, and forwards a mutation (rewriting Origin) only with the page capability. */
@@ -57,6 +57,8 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  if(['/stage-parts.html','/parts.js','/parts.css'].includes(path))return read?get:null;
  if((mode==='single'?/^\/api\/stage-parts(?:\/(?:image|page)\/\d+)?$/:/^\/api\/compare\/(?:a|b)\/stage-parts(?:\/(?:image|page)\/\d+)?$/).test(path))return read?get:null;
  if(mode==='single'){
+  if(path==='/api/stage-parts/verdict')return method==='POST'?{...get,mutation:true,limit:stageVerdictLimit}:null;
+  if(path==='/api/stage-parts/export/json'||path==='/api/stage-parts/export/issue')return read?get:null;
   if(['/stage-interview.html','/interview.js','/interview.css'].includes(path))return method==='GET'?get:null;
   if(interviewRequest(path))return path==='/api/interview/picks'?
    method==='POST'?{...get,mutation:true,limit:picksLimit}:null:method==='GET'?get:null;
@@ -113,7 +115,8 @@ async function inspectionRefusal(mode:'single'|'compare',method:string,path:stri
  // Both reads race during the single-package page bootstrap.
  const direction=sameFingerprint&&mode==='single'&&method==='GET'&&response.status===409&&
   (path==='/api/review'||path==='/api/session');
- if(!(direction||interview||stageData&&method==='GET'&&response.status===409)||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))return null;
+ const verdict=mode==='single'&&['/api/stage-parts/verdict','/api/stage-parts/export/json','/api/stage-parts/export/issue'].includes(path)&&[400,409].includes(response.status);
+ if(!(direction||interview||verdict||stageData&&method==='GET'&&response.status===409)||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))return null;
  const limit=512,declared=response.headers.get('content-length');if(declared!==null&&(!/^\d+$/.test(declared)||Number(declared)>limit))return null;
  const reader=response.body?.getReader();if(!reader)return null;
  try{
@@ -124,7 +127,7 @@ async function inspectionRefusal(mode:'single'|'compare',method:string,path:stri
   if(data===null||typeof data!=='object'||Array.isArray(data)||Object.keys(data).length!==1)return null;
   const error=(data as {error?:unknown}).error;
   if(direction)return error===directionStale?directionStale:null;
-  return typeof error==='string'&&(interview?[...interviewRefusals]:[named,interviewStale,...Object.values(stageDraftRefusals)] as readonly string[]).some(code=>code===error)?error:null;
+  return typeof error==='string'&&(interview?[...interviewRefusals]:[...(stageData&&response.status===409?[named,...Object.values(stageDraftRefusals),...stageVerdictRefusals]:[]),interviewStale,...(verdict?stageVerdictRefusals:[])] as readonly string[]).some(code=>code===error)?error:null;
  }catch{return null;}finally{reader.releaseLock();}
 }
 export const maximumUpstreamStreams=32;
@@ -182,11 +185,11 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
     body=await boundedBody(req,route.limit);
     // A stale interview worker must still prove its identity before it receives picks.
     // It revalidates the join before saving and returns the specific stale refusal.
-    if(!await alive(record,path==='/api/interview/picks'))return refuse('FRONT_INSTANCE_EXPIRED: reopen with rig-review open',410);
+    if(!await alive(record,(path==='/api/interview/picks'||path==='/api/stage-parts/verdict')))return refuse('FRONT_INSTANCE_EXPIRED: reopen with rig-review open',410);
    }
    if(active>=maximumUpstreamStreams)return refuse('FRONT_BUSY: too many concurrent upstream streams',503);
    const headers=new Headers({[openNonceHeader]:record.nonce});for(const name of ['accept','range','if-range',...(route.mutation?['content-type']:[]),...(route.control?['authorization']:[])]){const value=req.headers.get(name);if(value!==null)headers.set(name,value);}
-   if(/^\/api\/stage-parts(?:\/(?:image|page)\/\d+)?$/.test(path)){const build=req.headers.get('X-Review-Stage-Build');if(build!==null){if(build!=='inspected'&&!/^[a-f0-9]{64}$/.test(build))return refuse('FRONT_QUERY_REFUSED',400);headers.set('X-Review-Stage-Build',build);}}
+   if(/^\/api\/stage-parts(?:\/(?:image|page)\/\d+|\/verdict|\/export\/(?:json|issue))?$/.test(path)){const build=req.headers.get('X-Review-Stage-Build');if(build!==null){if(build!=='inspected'&&!/^[a-f0-9]{64}$/.test(build))return refuse('FRONT_QUERY_REFUSED',400);headers.set('X-Review-Stage-Build',build);}}
    if(route.mutation){headers.set('origin',record.origin);headers.set(capabilityHeader,record.capability);}
    active++;let released=false;const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),route.timeoutMs);const release=()=>{if(released)return;released=true;active--;clearTimeout(timer);};
    req.signal.addEventListener('abort',()=>abort.abort(),{once:true});

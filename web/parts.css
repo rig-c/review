@@ -50,6 +50,7 @@ h2{font-size:11px;letter-spacing:.06em;color:var(--muted);margin:4px 0 8px}
 #pv-flags summary{cursor:pointer;font-size:11px;color:var(--muted)}
 #pv-flags li.pv-none{border-left-color:var(--line);background:none;color:var(--muted)}
 .pv-verdict{margin-top:16px;display:flex;flex-direction:column;gap:6px}
+#pv-save-status{overflow-wrap:anywhere}
 .pv-outcomes{display:flex;gap:10px}
 .pv-label{font-size:11px;color:var(--muted);margin-top:4px}
 textarea,select{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:4px}

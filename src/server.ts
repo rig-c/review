@@ -2,7 +2,7 @@ import { interviewHeaders, interviewRequest, interviewRoutes } from './interview
 import { directionStale, interviewUnavailable, interviewStale, type JoinedProject } from './joined-project.ts';
 import {isDeepStrictEqual} from 'node:util';
 import {appliedValue,parseCorrection,projectSessionCorrection} from './correction-handoff.ts';
-import {stagePartsRoutes} from './stage-parts.ts';
+import {stagePartsRoutes,stageVerdictLimit} from './stage-parts.ts';
 import {createControlServer,type ControlIdentity} from './control-server.ts';
 import { readFile } from 'node:fs/promises';
 import { appRoot, buildWeb } from './build.ts';
@@ -39,13 +39,18 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
   const joined = options.joined;
   if (joined && !options.capability) throw new Error('Joined interview requires an instance capability');
   const interview = joined && interviewRoutes(joined.opened.root, joined.designation.picksDir, options.capability!,
-    {...joined, sourceHash:p.sourceHash, version:joined.designation.version});
+    {...joined, sourceHash:p.sourceHash, version:joined.designation.version,draftId:joined.designation.draftId});
   let interviewBundle: Promise<Blob> | undefined;
   const bundle=await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
   const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones,...(options.stripConcurrency?{stripConcurrency:options.stripConcurrency}:{}),...(options.viewOnly??p.viewOnly?{viewOnly:true}:{})});
-  const stageParts=stagePartsRoutes({single:p},undefined,rebuilds.stageDraft);
+  const stageParts=stagePartsRoutes({single:p},undefined,rebuilds.stageDraft,joined?.draft?{
+    joined,viewOnly:options.viewOnly??p.viewOnly??false,readInput:async req=>{
+      try{return await bodyJson(req,stageVerdictLimit,'PARTS_VERDICT_BODY_LIMIT');}
+      catch(error){if(error instanceof Error&&error.message==='PARTS_VERDICT_BODY_LIMIT')throw error;throw new Error('PARTS_VERDICT_INVALID');}
+    },
+  }:undefined);
   // Readings (#108): rigc render's readings on the inspected build and on the latest scratch build, into scratch.
   const readings=createReadings(p,{stateDir,starts,unchanged,latest:rebuilds.latest});
   // Bones check (#109): propose --from-config and compare on a scratch copy of the patched handoff config.
@@ -100,6 +105,7 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       const controlled=await control?.(req,origin);if(controlled)return controlled;
       options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await unchanged();}catch{return staleOpenStatus(options.open!);}if(!live.rearmUnopened())return json({error:'Server is closing'},503);}return gate;}
       if(req.method==='PUT'&&url.pathname==='/api/session'){
+        if(joined?.draft)return json({error:'MODEL_UNAVAILABLE'},409);
         if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
         const input=await bodyJson(req);await unchanged();
         return json(await saveSession(p,input,options.stateDir,async(session,sessionBytes,previous)=>{
@@ -170,7 +176,7 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       return new Response(result.png?new Uint8Array(result.png):stripJson(result),{headers:{...headers,'Content-Type':result.png?'image/png':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="review-strip.${result.png?'png':'json'}"`}});
     }
       if(req.method!=='GET'&&req.method!=='HEAD')return json({error:'Method not allowed'},405);
-      if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,...(p.direction?{direction:p.direction}:{}),...(p.setsHash?{setsHash:p.setsHash}:{}),initialAnimation:options.initialAnimation??null,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,...(referenceBinding(p)?{referenceBinding:referenceBinding(p),explicitReference:{...referenceBinding(p)!.reference,url:'/review-reference'}}:{}),...(p.sourcePainting?{sourcePainting:{...p.sourcePainting,url:'/review-painting'}}:{}),referenceHashes:{...p.referenceHashes,...(referenceBinding(p)?{[referenceBinding(p)!.reference.id]:referenceBinding(p)!.reference.sha256}:{})},report:p.report,feedbackCatalog:p.feedbackCatalog,assetsBase:'/assets/',capabilities:{...(joined?.available?{interview:true}:{}),playback:!!p.manifest.model,modeling:false,motion:false,feedback:true,audio:true}});}
+      if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,...(p.direction?{direction:p.direction}:{}),...(p.setsHash?{setsHash:p.setsHash}:{}),initialAnimation:options.initialAnimation??null,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,...(referenceBinding(p)?{referenceBinding:referenceBinding(p),explicitReference:{...referenceBinding(p)!.reference,url:'/review-reference'}}:{}),...(p.sourcePainting?{sourcePainting:{...p.sourcePainting,url:'/review-painting'}}:{}),referenceHashes:{...p.referenceHashes,...(referenceBinding(p)?{[referenceBinding(p)!.reference.id]:referenceBinding(p)!.reference.sha256}:{})},report:p.report,feedbackCatalog:p.feedbackCatalog,assetsBase:'/assets/',capabilities:{...(joined?.available?{interview:true}:{}),...(joined?.draft?{preRig:true}:{}),playback:!!p.manifest.model,modeling:false,motion:false,feedback:!joined?.draft,audio:true}});}
       if(url.pathname==='/api/session'){await unchanged();return json(await readSession(p,options.stateDir));}
       if(url.pathname==='/api/rebuild')return json(await rebuilds.describe());
       if(url.pathname==='/api/rebuild/history')return json(await rebuilds.history());

@@ -30,7 +30,9 @@ type Flag =
   | { id: string; item: string; source: 'check'; kind: 'check'; path: string; line: string; root: string; status: string | null; entry: Record<string, unknown>; classification?: 'part' | 'pair' | 'evidence' | 'unclassified' };
 interface ViewData {
  inspectionSourceHash?:string;
- draft?:{label:string;buildId:string;inspectionSourceHash:string;mappings:{part:string;skin:string;slot:string;attachment:string;vertices:number;triangles:number}[];evidence:unknown};draftUnavailable?:string;
+ joinedVerdictBinding?:string;
+ verdictReadOnlyReason?:string;
+ draft?:{inspectionOnly?:boolean;label:string;buildId:string;inspectionSourceHash:string;mappings:{part:string;skin:string;slot:string;attachment:string;vertices:number;triangles:number}[];evidence:unknown};draftUnavailable?:string;
   differenceAvailable?:boolean;painting:{sha256:string;width:number;height:number}|null;sourceHash:string;mode: 'parts' | 'atlas'; title: string; rigSize: [number, number] | null; items: Item[]; pages: Page[]; flags: Flag[]; readings?: Flag[];
   flagSources: string[]; flagMissing: string[]; verdictFile: string;
   verdict: { comments?:PartsComment[];status: string; parts: Record<string, Entry> } | null; verdictStale: 'files' | 'flags' | null;
@@ -320,7 +322,7 @@ function renderMesh(): void {
   }
   panel.append(figures);
   const help = document.createElement('p'); help.textContent = t('Pink: art pixels outside every triangle.'); panel.append(help);
-  if(stageEmbedded){document.querySelector('.pv-verdict')!.before(panel);return;}
+  if(stageEmbedded&&!state.data?.joinedVerdictBinding){document.querySelector('.pv-verdict')!.before(panel);return;}
   const entry = state.verdict.get(item.name)!;
   const select = document.createElement('select'); select.setAttribute('aria-label', t('Mesh outcome'));
   for (const [value, label] of [['pending', 'Pending'], ['clean', 'Clean'], ['flagged', 'Flagged']]) { const option = document.createElement('option'); option.value = value!; option.textContent = t(label!); select.append(option); }
@@ -384,13 +386,21 @@ async function approveAll(): Promise<void> {
 }
 
 async function save(): Promise<void> {
-  if(stageEmbedded)return;
-  const status = $('pv-save-status');
-  const body = { status: $<HTMLSelectElement>('pv-overall').value, parts: Object.fromEntries(state.verdict),comments };
-  const res = await fetch(access.route('/api/parts/verdict'), { method: 'POST', headers: access.headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
-  const out = await res.json() as { error?: string; verdict?: { source: { sha256: string } } };
-  status.textContent = res.ok ? t('Saved {file}: source {hash}.', { file: state.data!.verdictFile, hash: out.verdict!.source.sha256.slice(0, 12) }) : out.error ?? t('Save failed.');
-  status.dataset.result = res.ok ? 'saved' : 'refused';
+  const data=state.data;
+  if(!data||stageEmbedded&&(!data.joinedVerdictBinding||!access.capability||stageBuild!=='inspected'))return;
+  const status = $('pv-save-status'),button=$<HTMLButtonElement>('pv-save');
+  const body = { status: $<HTMLSelectElement>('pv-overall').value, parts: Object.fromEntries(state.verdict),
+    ...(stageEmbedded?{binding:data.joinedVerdictBinding}:{comments}) };
+  button.disabled=true;
+  try{
+    const headers=stageEmbedded?stageHeaders():access.headers();headers.set('Content-Type','application/json');
+    const res = await fetch(access.route(stageEmbedded?partsApi+'/verdict':'/api/parts/verdict'), { method: 'POST', headers, body: JSON.stringify(body) });
+    const out = await res.json() as { error?: string; verdict?: { source: { sha256: string } } };
+    status.textContent = res.ok ? t('Saved {file}: source {hash}.', { file: data.verdictFile, hash: out.verdict!.source.sha256.slice(0, 12) }) : out.error ? t(out.error) : t('Save failed.');
+    status.dataset.result = res.ok ? 'saved' : 'refused';
+  }catch{
+    status.textContent=t('Save failed.');status.dataset.result='refused';
+  }finally{button.disabled=false;}
 }
 
 async function boot(): Promise<void> {
@@ -405,7 +415,7 @@ async function boot(): Promise<void> {
     document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;
     document.querySelector<HTMLElement>('.pv-verdict')!.hidden=true;
     const approveButton=$<HTMLButtonElement>('pv-approve-all');approveButton.disabled=true;
-    const saveButton=$<HTMLButtonElement>('pv-save');saveButton.disabled=true;saveButton.title=t('Embedded atlas inspection is read-only. Use the parts command for a separate sign-off.');
+    const saveButton=$<HTMLButtonElement>('pv-save');saveButton.disabled=true;
   }
   window.addEventListener('message',event=>{if(event.source!==parent||event.origin!==location.origin||event.data?.type!=='review-stage-language'||!['en','ko'].includes(event.data.language))return;setLinkLanguage(null);setLanguagePreference(event.data.language);});
   connectLiveWindow(access);
@@ -414,6 +424,14 @@ async function boot(): Promise<void> {
   const data = await res.json() as ViewData & { error?: string };
   if (!res.ok) { const status=$('pv-load');status.textContent=t(data.error??'Load failed.');status.dataset.result='refused';return; }
   state.data = data;if(!data.differenceAvailable)document.querySelector('[data-pv-comparison="difference"]')?.remove();if(stageEmbedded)for(const item of data.items)if(item.mesh)state.meshShown.add(item.name);$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;comments.push(...data.verdict?.comments??[]);setupPartsComments();viewport.bindNavigation(undefined,()=>!commentUi?.active());viewport.observeResize();
+  if(stageEmbedded&&data.joinedVerdictBinding){
+    document.querySelector<HTMLElement>('.pv-verdict')!.hidden=false;
+    $('pv-approve-all').hidden=true;
+    $('pv-comment-count').hidden=true;
+    const save=$<HTMLButtonElement>('pv-save');
+    save.disabled=!access.capability;
+    if(!access.capability)save.title=t('Read-only view: reopen with rig-review open to edit.');
+  }
   document.getElementById('parts-correction-hint')!.hidden = data.mode !== 'parts' || stageEmbedded;
   for (const item of data.items) state.verdict.set(item.name, { outcome: 'pending', note: '', ...(item.mesh ? { mesh: { outcome: 'pending' as Outcome, note: '' } } : {}) });
   if (data.verdict) { for (const [name, v] of Object.entries(data.verdict.parts)) if (state.verdict.has(name)) state.verdict.set(name, { outcome: v.outcome, note: v.note ?? '', ...(v.mesh ? { mesh: v.mesh } : {}) }); $<HTMLSelectElement>('pv-overall').value = data.verdict.status; }
@@ -421,7 +439,7 @@ async function boot(): Promise<void> {
   $('pv-title').textContent = data.title;
   $('pv-mode').textContent = data.mode === 'parts' ? t('Parts package, before rigging') : t('Atlas of a built rig');
   $('pv-list-title').textContent = data.mode === 'parts' ? t('PARTS') : t('REGIONS');
-  $('pv-load').textContent = data.verdictStale === 'files' ? t('A saved sign-off was made on other files; this review starts fresh.') : data.verdictStale === 'flags' ? t('The saved sign-off is for different producer flags; this review starts fresh.') : data.verdict ? t('Saved sign-off loaded.') : '';
+  $('pv-load').textContent = data.verdictStale === 'files' ? t('A saved sign-off was made on other files; this review starts fresh.') : data.verdictStale === 'flags' ? t('The saved sign-off is for different producer flags; this review starts fresh.') : data.verdict ? t('Saved sign-off loaded.') : data.verdictReadOnlyReason?t(data.verdictReadOnlyReason):'';
   if(stageEmbedded){$('pv-load').hidden=$('pv-load').textContent==='';document.querySelector<HTMLElement>('.pv-layout')!.hidden=false;}
   $('pv-atlas-switch').hidden = data.mode !== 'atlas';
   const assemble=$<HTMLButtonElement>('pv-assemble');assemble.disabled=data.mode!=='parts'||!data.rigSize;assemble.title=assemble.disabled?t(data.mode==='atlas'?'Assembly unavailable: atlas regions carry no rig placement.':'Assembly unavailable: rig_size is not declared.'):'';
@@ -453,7 +471,7 @@ async function boot(): Promise<void> {
   $<HTMLTextAreaElement>('pv-note').oninput = e => updateEntry({ note: (e.target as HTMLTextAreaElement).value });
   $('pv-save').onclick = () => { void save(); };
   $('pv-approve-all').onclick = () => approveAll();
-  for(const format of ['json','issue'])$('pv-export-'+format).onclick=async()=>{const res=await fetch(access.route('/api/parts/export?format='+format),{headers:access.headers()});const value=await res.text();if(!res.ok){$('pv-save-status').textContent=value;return;}const url=URL.createObjectURL(new Blob([value],{type:format==='json'?'application/json':'text/markdown'})),a=document.createElement('a');a.href=url;a.download=format==='json'?'parts-review-export.json':'parts-review-export.md';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+  for(const format of ['json','issue'])$('pv-export-'+format).onclick=async()=>{const res=await fetch(access.route(stageEmbedded?partsApi+'/export/'+format:'/api/parts/export?format='+format),{headers:stageHeaders()});const value=await res.text();if(!res.ok){$('pv-save-status').textContent=JSON.parse(value).error??t('Save failed.');return;}const url=URL.createObjectURL(new Blob([value],{type:format==='json'?'application/json':'text/markdown'})),a=document.createElement('a');a.href=url;a.download=stageEmbedded?(format==='json'?data.verdictFile:data.verdictFile.replace(/\.json$/,'.md')):format==='json'?'parts-review-export.json':'parts-review-export.md';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
   onLanguageChange(() => { if (state.data) select(state.selected); });
   if(stageEmbedded)(window as StagePartsWindow).rigReviewStageParts={snapshot:stagePartsSnapshot};
   if(data.items.length){if(stageRestore)await restoreStageParts(stageRestore);else select(0);}
@@ -499,6 +517,7 @@ function renderCorrections():void {
  const label=document.createElement('p');label.textContent=t(data?.draft&&!mapping?'STAGE_DRAFT_NO_MESH: this part has no mesh attachment; direct correction is unavailable.':data?.draft?.label??data?.draftUnavailable??'STAGE_DRAFT_UNAVAILABLE: no producer-compatible draft is supplied.');host.append(label);
  if(!mapping||!data?.draft)return;
  label.textContent+=` · ${mapping.part} · ${mapping.skin}/${mapping.slot}/${mapping.attachment} · v ${mapping.vertices} t ${mapping.triangles} · ${data.draft.buildId}`;
+ if(data.draft.inspectionOnly)return;
  for(const [instrument,title,operation]of [['chest','Chest regions',t('rig-parts remesh --mesh')],['mesh','Mesh parameters',t('rig-parts remesh --mesh')],['delta','Edit Mesh',t('rig-parts remesh --delta')]]){
   const button=document.createElement('button');button.type='button';button.textContent=t(title!);button.title=`${mapping.part} · ${operation}`;button.onclick=()=>parent.postMessage({type:'review-stage-correction',part:mapping.part,sourceHash:data.sourceHash,buildId:data.draft!.buildId,instrument},location.origin);host.append(button);
  }
@@ -524,5 +543,5 @@ if(typeof window!=='undefined')window.addEventListener('message',event=>{if(even
 
 if(typeof window!=='undefined')window.addEventListener('message',event=>{if(event.source!==parent||event.origin!==location.origin||event.data?.type!=='review-stage-revalidate')return;void (async()=>{
  try{const response=await fetch(access.route(partsApi),{headers:stageHeaders()}),data=await response.json() as ViewData&{error?:string};if(!response.ok||data.sourceHash!==state.data?.sourceHash)throw new Error(data.error??'STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.');if(event.data.state)await restoreStageParts(event.data.state);}
- catch(error){const status=$('pv-load');status.hidden=false;status.dataset.result='refused';status.textContent=t(error instanceof Error?error.message:String(error));document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;}
+ catch(error){document.querySelector<HTMLElement>('.pv-verdict')!.hidden=true;if(state.data)delete state.data.joinedVerdictBinding;const status=$('pv-load');status.hidden=false;status.dataset.result='refused';status.textContent=t(error instanceof Error?error.message:String(error));document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;}
 })();});

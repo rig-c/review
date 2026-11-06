@@ -43,7 +43,7 @@ export function interviewRequest(path: string) {
 }
 
 export function interviewRoutes(root: string, output: string, capability: string,
-    joined?: {opened: ReturnType<typeof readProject>; assertCurrent: () => Promise<void>; available: boolean; sourceHash: string; version: number}) {
+    joined?: {opened: ReturnType<typeof readProject>; assertCurrent: () => Promise<void>; available: boolean; sourceHash: string; version?: number; draftId?:string}) {
   const opened = joined?.opened ?? readProject(root);
   const outputPath = outputDirectory(opened.root, output, opened.project);
   const openedOutput = lstatSync(outputPath);
@@ -67,7 +67,7 @@ export function interviewRoutes(root: string, output: string, capability: string
       if (req.method === 'GET' && url.pathname === '/api/interview') {
         await current();
         const dir = destination();
-        return json({...(joined ? {binding:{projectHash:opened.hash, sourceHash:joined.sourceHash, version:joined.version}} : {}), historical:opened.historical, questions:opened.questions.map(question => ({
+        return json({...(joined ? {binding:{projectHash:opened.hash, sourceHash:joined.sourceHash,  ...(joined.draftId===undefined?{version:joined.version}:{draftId:joined.draftId})}} : {}), historical:opened.historical, questions:opened.questions.map(question => ({
           ...question, saved:question.editable ? readPicks(dir, question) : null,
           images:question.images.map(({name}, index) => ({name, url:'/api/interview/image/' + question.ref.sha256 + '/' + index})),
         }))});

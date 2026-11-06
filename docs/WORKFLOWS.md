@@ -384,6 +384,28 @@ to the joined command. The post must explicitly name the selected
 printed feedback command, including the project, rig, post and picks arguments,
 to export from that session.
 
+### Open a recorded draft before rig review
+
+Select a Create draft explicitly and open its recorded compiled check directory.
+Create the picks directory and, for a pending parts verdict, a separate verdict
+directory inside the project before opening the host.
+
+```sh
+rig-review open /path/to/project/derived/drafts/chain/out/check \
+  --project /path/to/project --project-draft chain --picks-dir scratch/review-picks \
+  --parts-verdict-dir scratch/review-verdicts
+```
+
+**1 Parts + mesh** displays the draft's recorded parts and matching mesh.
+Use **Save sign-off** to write a standard parts verdict with the part and mesh
+outcomes and notes. Its filename is bound to the inspected project and source.
+Keep the JSON file at its saved location for Create to resolve the source paths.
+The verdict does not sign the Create project. A closed parts review or an open
+without `--parts-verdict-dir` keeps this surface read-only. **2 Interview**
+offers the registered pending sets and displays historical answers read-only.
+**3 Rig + animation** and **4 Direction** report that the recorded rig review
+package is unavailable. Reopen with a rig version once Create records one.
+
 From a create project with retained choice sets, create a dedicated output
 directory and open the foreground Stage 2 view:
 
