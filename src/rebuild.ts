@@ -13,7 +13,7 @@ import {recordFor,type AnyJobView} from '../web/rebuild-client.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, readdir, realpath, rename, rm, writeFile, lstat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts';
 import { compileArgs, firstRefusal, modelingProducerTooOld, REMESH_DELTA_SINCE, remeshArgs, remeshDeltaArgs, resolvePose, resolveProducer, runTool, versionAtLeast, type CompileRequest, type InstalledTool, type ProcessResult } from './producer.ts';
 import { meshEditText } from './mesh-edit.ts';
@@ -75,7 +75,9 @@ export async function producerInputs(handoff: Handoff | null, reason: string | n
       if(source!==lexical)throw new Error('source redirected');
     }
     catch { throw new RebuildError('REBUILD_REQUIREMENTS_UNAVAILABLE', 'config.requirements is missing or outside the bound handoff'); }
-    const binding = handoff.record.files.find(file => file.path === relative(handoff.root, source).split(sep).join('/'));
+    // The containment root can be above the inspected check package. Inventory paths are relative to the check package.
+    const recordedPath = posix.join(posix.dirname(handoff.record.config.path), value);
+    const binding = handoff.record.files.find(file => file.path === recordedPath);
     if (!binding) throw new RebuildError('REBUILD_REQUIREMENTS_UNAVAILABLE', 'config.requirements has no bound handoff hash');
     requirements = { source, sha256: binding.sha256 };
   }

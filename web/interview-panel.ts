@@ -5,6 +5,8 @@ import type { InstanceAccess } from './instance-access.ts';
 
 type Question = Omit<InterviewQuestion,'images'> & {images:{name:string;url:string}[]; saved:Picks|null};
 export const interviewErrors: Readonly<Record<string,string>> = {
+  INTERVIEW_UNAVAILABLE:'INTERVIEW_UNAVAILABLE: No interview is attached to this inspection.',
+  INTERVIEW_SOURCE_MISMATCH:'interview.mismatch',
   INTERVIEW_CHOICE_INVALID:'interview.invalid',
   INTERVIEW_CHOICE_CONSTRAINT:'interview.constraint',
   INTERVIEW_CHOICE_REQUIRED:'interview.required',
@@ -31,7 +33,7 @@ async function request(access: InstanceAccess, path: string, body?: Picks) {
 }
 
 export async function mountInterview(host: HTMLElement, access: InstanceAccess) {
-  let data: {questions:Question[];historical:HistoricalInterview[]};
+  let data: {questions:Question[];historical:HistoricalInterview[]; binding?:{projectHash:string;sourceHash:string;version:number}};
   try {data = await request(access, '/api/interview');}
   catch (error) {
     const render = () => {host.textContent = t(errorKey(error));};
@@ -50,6 +52,9 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
   let selected = 0;
   let busy = false;
   const render = () => {
+    const joined = data.binding;
+    const source = joined ? element('p', t('interview.joined', [String(joined.version), joined.projectHash, joined.sourceHash])) : null;
+    if (source) source.className = 'interview-binding';
     const archive = element('details');
     archive.append(element('summary', t('interview.legacy')));
     for (const answer of legacy) {
@@ -60,6 +65,7 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
     }
     if (!questions.length) {
       host.replaceChildren(element('p', t('interview.empty')));
+      if (source) host.prepend(source);
       if (legacy.length) {archive.open = true; host.append(archive);}
       return;
     }
@@ -174,6 +180,7 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
       finally {busy = false; render();}
     };
     grid.append(art, form); host.replaceChildren(picker, grid);
+    if (source) host.prepend(source);
     if (legacy.length) host.append(archive);
   };
   onLanguageChange(render); render();

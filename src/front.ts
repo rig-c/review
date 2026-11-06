@@ -1,3 +1,6 @@
+import { interviewRefusals, interviewRequest } from './interview-routes.ts';
+import { interviewStale } from './joined-project.ts';
+import { picksLimit } from './interview-picks.ts';
 import {stageDraftRefusals} from './stage-parts.ts';
 /** Managed loopback front: one stable origin (127.0.0.1:4318 by default) routing `/instances/<key>/…` to the
  * worker named by that key's private open record. It is a router, not an authority: it never reads packages,
@@ -53,6 +56,11 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  if(['/','/index.html','/main.js','/styles.css','/api/access'].includes(path))return read?get:null;
  if(['/stage-parts.html','/parts.js','/parts.css'].includes(path))return read?get:null;
  if((mode==='single'?/^\/api\/stage-parts(?:\/(?:image|page)\/\d+)?$/:/^\/api\/compare\/(?:a|b)\/stage-parts(?:\/(?:image|page)\/\d+)?$/).test(path))return read?get:null;
+ if(mode==='single'){
+  if(['/stage-interview.html','/interview.js','/interview.css'].includes(path))return method==='GET'?get:null;
+  if(interviewRequest(path))return path==='/api/interview/picks'?
+   method==='POST'?{...get,mutation:true,limit:picksLimit}:null:method==='GET'?get:null;
+ }
  if(path==='/api/control/config')return method==='GET'?{...get,control:true}:null;
  if(['/api/control/register','/api/control/poll','/api/control/ack','/api/control/close'].includes(path))return method==='POST'?{mutation:true,limit:16384,timeoutMs:10000,control:true}:null;
  const session=mode==='single'?'/api/session':'/api/compare/session',strip=mode==='single'?'/api/strip':'/api/compare/strip';
@@ -98,10 +106,11 @@ export function stageFrameQuery(mode:'single'|'compare',search:string):boolean {
  const allowed=mode==='single'?['stageEmbed','lang']:['stageEmbed','lang','side'];
  return keys.length===allowed.length&&new Set(keys).size===keys.length&&keys.every(k=>allowed.includes(k))&&params.get('stageEmbed')==='1'&&['en','ko'].includes(params.get('lang')??'')&&(mode==='single'||['a','b'].includes(params.get('side')??''));
 }
-/** Preserve only this closed, bounded stage-data refusal; never relay arbitrary worker text. */
-async function stagePartsRefusal(mode:'single'|'compare',method:string,path:string,response:Response):Promise<string|null>{
+/** Preserve only closed, bounded inspection refusals. */
+async function inspectionRefusal(mode:'single'|'compare',method:string,path:string,response:Response):Promise<string|null>{
  const stageData=mode==='single'?path==='/api/stage-parts':/^\/api\/compare\/(?:a|b)\/stage-parts$/.test(path);
- if(!stageData||method!=='GET'||response.status!==409||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))return null;
+ const interview=mode==='single'&&interviewRequest(path)&&[400,404,409].includes(response.status);
+ if(!(interview||stageData&&method==='GET'&&response.status===409)||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))return null;
  const limit=512,declared=response.headers.get('content-length');if(declared!==null&&(!/^\d+$/.test(declared)||Number(declared)>limit))return null;
  const reader=response.body?.getReader();if(!reader)return null;
  try{
@@ -111,7 +120,7 @@ async function stagePartsRefusal(mode:'single'|'compare',method:string,path:stri
   const data:unknown=JSON.parse(new TextDecoder().decode(body)),named='PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.';
   if(data===null||typeof data!=='object'||Array.isArray(data)||Object.keys(data).length!==1)return null;
   const error=(data as {error?:unknown}).error;
-  return typeof error==='string'&&[named,...Object.values(stageDraftRefusals)].includes(error)?error:null;
+  return typeof error==='string'&&(interview?[...interviewRefusals]:[named,interviewStale,...Object.values(stageDraftRefusals)] as readonly string[]).some(code=>code===error)?error:null;
  }catch{return null;}finally{reader.releaseLock();}
 }
 export const maximumUpstreamStreams=32;
@@ -133,7 +142,7 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
    if(req.headers.get('sec-fetch-site')==='cross-site'||sentOrigin!==null&&sentOrigin!==origin)return refuse('FRONT_SAME_ORIGIN_REQUIRED',403);
    const record=await instanceRecord(options.control,key);if(!record)return refuse('FRONT_INSTANCE_UNKNOWN: reopen with rig-review open',404);
    const route=frontRoute(record.mode,req.method,path);if(!route)return refuse('FRONT_ROUTE_REFUSED',404);
-   const landing=path==='/'||path==='/index.html',stageFrame=path==='/stage-parts.html';if(stageFrame?!stageFrameQuery(record.mode,url.search):!landing&&!!url.search)return refuse('FRONT_QUERY_REFUSED',400);
+   const landing=path==='/'||path==='/index.html',stageFrame=path==='/stage-parts.html'||path==='/stage-interview.html';if(stageFrame?!stageFrameQuery(record.mode,url.search):!landing&&!!url.search)return refuse('FRONT_QUERY_REFUSED',400);
    if(route.live){
     if(sentOrigin!==origin)return refuse('FRONT_SAME_ORIGIN_REQUIRED',403);
     if(req.headers.get('upgrade')?.toLowerCase()!=='websocket')return refuse('FRONT_UPGRADE_REQUIRED',426);
@@ -167,7 +176,9 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
     if(sentOrigin!==origin)return refuse('FRONT_SAME_ORIGIN_REQUIRED',403);
     if(!sameSecret(req.headers.get(capabilityHeader),record.capability))return refuse('FRONT_CAPABILITY_REQUIRED: reopen with rig-review open to edit',403);
     body=await boundedBody(req,route.limit);
-    if(!await alive(record))return refuse('FRONT_INSTANCE_EXPIRED: reopen with rig-review open',410);
+    // A stale interview worker must still prove its identity before it receives picks.
+    // It revalidates the join before saving and returns the specific stale refusal.
+    if(!await alive(record,path==='/api/interview/picks'))return refuse('FRONT_INSTANCE_EXPIRED: reopen with rig-review open',410);
    }
    if(active>=maximumUpstreamStreams)return refuse('FRONT_BUSY: too many concurrent upstream streams',503);
    const headers=new Headers({[openNonceHeader]:record.nonce});for(const name of ['accept','range','if-range',...(route.mutation?['content-type']:[]),...(route.control?['authorization']:[])]){const value=req.headers.get(name);if(value!==null)headers.set(name,value);}
@@ -179,7 +190,7 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
    try{upstream=await fetch(record.origin+path+(landing||stageFrame?url.search:''),{method:req.method,headers,...(body?{body}:{}),redirect:'manual',signal:abort.signal});}
    catch{release();return abort.signal.aborted&&!req.signal.aborted?refuse('FRONT_UPSTREAM_TIMEOUT',504):refuse('FRONT_INSTANCE_EXPIRED: reopen with rig-review open',410);}
    if(upstream.headers.get(openKeyHeader)!==key){void upstream.body?.cancel().catch(()=>{});release();return refuse('FRONT_INSTANCE_REPLACED: reopen with rig-review open',410);}
-   if(upstream.status>=400&&upstream.status!==416){const named=await stagePartsRefusal(record.mode,req.method,path,upstream);void upstream.body?.cancel().catch(()=>{});release();if(named)return refuse(named,409);const code=upstreamFailure[upstream.status];return refuse(code??'FRONT_UPSTREAM_FAILED',code?upstream.status:502);}
+   if(upstream.status>=400&&upstream.status!==416){const named=await inspectionRefusal(record.mode,req.method,path,upstream);void upstream.body?.cancel().catch(()=>{});release();if(named)return refuse(named,upstream.status);const code=upstreamFailure[upstream.status];return refuse(code??'FRONT_UPSTREAM_FAILED',code?upstream.status:502);}
    const out=new Headers();for(const name of responseHeaders){const value=upstream.headers.get(name);if(value!==null)out.set(name,value);}
    if(!upstream.body||req.method==='HEAD'){void upstream.body?.cancel().catch(()=>{});release();return new Response(null,{status:upstream.status,headers:out});}
    if(timer)clearTimeout(timer);const reader=upstream.body.getReader();

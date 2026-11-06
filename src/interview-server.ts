@@ -1,14 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
-import { appRoot } from './build.ts';
+import { appRoot, buildWeb } from './build.ts';
 import { createLiveLifecycle, LIVE_PATH } from './live-lifecycle.ts';
 import { interviewHeaders, interviewRoutes } from './interview-routes.ts';
 
 export async function startInterviewServer(root: string, output: string, port: number, exitOnClose = false) {
   const capability = randomBytes(32).toString('hex');
   const route = interviewRoutes(root, output, capability);
-  const bundle = await Bun.build({entrypoints:[appRoot + 'web/interview.ts'], target:'browser', format:'esm'});
-  if (!bundle.success || !bundle.outputs[0]) throw new Error('Interview frontend bundle failed');
+  const bundle = await buildWeb('interview');
   const [html, css] = await Promise.all(['interview.html','interview.css'].map(path => readFile(appRoot + 'web/' + path)));
   const live = createLiveLifecycle({label:'review interview', exitOnClose, stopServer:() => server.stop(true)});
   const server = Bun.serve({hostname:'127.0.0.1', port, websocket:live.websocket, async fetch(req, srv) {
@@ -25,7 +24,7 @@ export async function startInterviewServer(root: string, output: string, port: n
       const files = new Map([
         ['/', [html, 'text/html; charset=utf-8']],
         ['/interview.css', [css, 'text/css']],
-        ['/interview.js', [bundle.outputs[0], 'text/javascript']],
+        ['/interview.js', [bundle, 'text/javascript']],
       ] as const);
       const file = req.method === 'GET' ? files.get(pathname as '/' | '/interview.css' | '/interview.js') : undefined;
       return file ? new Response(file[0] as BodyInit, {headers:{...interviewHeaders,'Content-Type':file[1]}}) :

@@ -1,6 +1,7 @@
 /** Four inspection stages. Existing tools remain mounted; navigation never submits or applies. */
 import {getLanguage,onLanguageChange,t} from './i18n.ts';
-import {pageInstanceAccess} from './instance-access.ts';
+import {interviewErrors} from './interview-panel.ts';
+import {pageInstanceAccess,type InstanceAccess} from './instance-access.ts';
 export const reviewStages = ['1 Parts + mesh','2 Interview','3 Rig + animation','4 Direction'] as const;
 export type ReviewStage = 1|2|3|4;
 export interface StagePartsState {
@@ -16,13 +17,13 @@ export function stagePartsSelectionIndex(data:{inspectionSourceHash?:string;item
  if(i<0||data.inspectionSourceHash!==saved.inspectionSourceHash||!m||(['skin','slot','attachment']as const).some(k=>m[k]!==saved.mapping[k]))throw new Error('STAGE_DRAFT_MISMATCH');
  return i;
 }
-export function stageReason(stage:ReviewStage,model:boolean,direction=false):string|null {
- if(stage===2)return 'INTERVIEW_UNAVAILABLE: Open a designated create project with rig-review interview.';
+export function stageReason(stage:ReviewStage,model:boolean,direction=false,interview=false):string|null {
+ if(stage===2&&!interview)return 'INTERVIEW_UNAVAILABLE: No interview is attached to this inspection.';
  if(stage===4&&!direction)return 'DIRECTION_UNAVAILABLE: no direction inspection contract is installed.';
  if(stage===3&&!model)return 'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.';
  return null;
 }
-export function bindStageNav(options:{interviewOnly?:boolean;partsOnly?:boolean;model:boolean;direction?:(active:boolean)=>void;side?:()=> 'a'|'b';setup?:()=>void;draftBuild?:()=>string;correction?:(request:{part:string;sourceHash:string;buildId:string;instrument:string})=>Promise<void>}):()=>void {
+export function bindStageNav(options:{interviewOnly?:boolean;interview?:boolean;access?:InstanceAccess;partsOnly?:boolean;model:boolean;direction?:(active:boolean)=>void;side?:()=> 'a'|'b';setup?:()=>void;draftBuild?:()=>string;correction?:(request:{part:string;sourceHash:string;buildId:string;instrument:string})=>Promise<void>}):()=>void {
  const host=document.querySelector<HTMLElement>('[data-stage-nav]');if(!host)return ()=>{};
  if(options.interviewOnly){
   const button=document.createElement('button');button.type='button';button.dataset.reviewStage='2';button.setAttribute('aria-current','step');host.append(button);
@@ -32,8 +33,9 @@ export function bindStageNav(options:{interviewOnly?:boolean;partsOnly?:boolean;
  }
  const embedded=new URL(location.href).searchParams.get('stageEmbed')==='1';
  if(embedded){host.hidden=true;return ()=>{};}
- const access=pageInstanceAccess(),panel=document.createElement('section');panel.className='review-stage-panel';panel.hidden=true;panel.setAttribute('aria-live','polite');document.body.append(panel);
+ const access=options.access??pageInstanceAccess(),panel=document.createElement('section');panel.className='review-stage-panel';panel.hidden=true;panel.setAttribute('aria-live','polite');document.body.append(panel);
  const status=document.createElement('p');status.setAttribute('role','status');panel.append(status);
+ let interview:HTMLIFrameElement|undefined,interviewError:string|null=null,entry=0;
  const sourcePicker=document.getElementById('mode-build-picker');
  const frames=new Map<string,HTMLIFrameElement>();let lastFrame:HTMLIFrameElement|null=null;let current:ReviewStage=options.partsOnly?1:3;
  const workspace=document.querySelector<HTMLElement>(options.partsOnly?'.pv-layout':'.layout');const wasInert=workspace?.inert??false;
@@ -41,14 +43,44 @@ export function bindStageNav(options:{interviewOnly?:boolean;partsOnly?:boolean;
  const mesh=document.createElement('button');mesh.type='button';mesh.onclick=()=>{show(3);options.setup?.();};panel.append(mesh);
  const render=()=>{buttons.forEach((b,i)=>{b.textContent=t(reviewStages[i]!);b.setAttribute('aria-current',current===i+1?'step':'false');});host.setAttribute('aria-label',t('Inspection stages'));if(sourcePicker)sourcePicker.setAttribute('aria-label',t(current===1?'Atlas source build':'Picked build for Setup and Animate'));mesh.textContent=t('Open setup mesh instruments');};
  const place=()=>{panel.style.top=`${(host.closest('header')??host).getBoundingClientRect().bottom}px`;};
+ const reasonFor=(stage:ReviewStage)=>stageReason(stage,options.model,!!options.direction,!!options.interview);
+ const setFrameLanguage=(frame:HTMLIFrameElement)=>frame.contentWindow?.postMessage({type:'review-stage-language',language:getLanguage()},location.origin);
+ async function showInterview(revision:number) {
+  try {
+   const response=await fetch(access.route('/api/interview'));
+   if(!response.ok){const {error}=await response.json();throw new Error(error);}
+   if(revision!==entry)return;
+   if(!interview){
+    interview=document.createElement('iframe');
+    interview.title=t('interview.title');interview.className='review-interview-frame';
+    const url=new URL(access.route('/stage-interview.html'),location.href);
+    url.searchParams.set('stageEmbed','1');url.searchParams.set('lang',getLanguage());
+    if(access.capability)url.hash='cap='+access.capability;
+    const frame=interview;
+    frame.src=url.href;frame.addEventListener('load',()=>setFrameLanguage(frame));
+    panel.append(frame);
+   }
+   status.textContent='';showParts();interview.hidden=false;panel.classList.add('with-interview');
+  } catch(error) {
+   if(revision!==entry)return;
+   interviewError=error instanceof Error ? (error.message==='INTERVIEW_OPTIONS_STALE' ? error.message : interviewErrors[error.message]??'interview.failed') : 'interview.failed';
+   status.textContent=t(interviewError);
+  }
+ }
  function show(stage:ReviewStage):void {
-  current=stage;document.documentElement.dataset.inspectionStage=String(stage);render();place();const reason=stageReason(stage,options.model,!!options.direction);
+  current=stage;document.documentElement.dataset.inspectionStage=String(stage);render();place();const reason=reasonFor(stage);const revision=++entry;interviewError=null;
   options.direction?.(stage===4);
   panel.hidden=!reason&&(stage===(options.partsOnly?1:3)||stage===4);
   if(workspace)workspace.inert=!panel.hidden||wasInert;
   status.textContent=reason?t(reason):stage===1&&!options.partsOnly?t(options.correction?'Draft rig · structure evidence only':'Atlas inspection, read only — inspected package. Applied scratch atlas, pre-rig parts, mesh sign-off and draft corrections are unavailable here.'):'';mesh.hidden=stage!==1||!options.model||!!options.partsOnly;
   for(const frame of frames.values())frame.hidden=true;
-  if(stage===1&&!options.partsOnly){const saved=(lastFrame?.contentWindow as StagePartsWindow|null)?.rigReviewStageParts?.snapshot()??null;const side=options.side?.(),key=(side??'single')+':'+(options.draftBuild?.()??'inspected');let frame=frames.get(key);if(!frame){if(options.correction){for(const old of frames.values())old.remove();frames.clear();}frame=document.createElement('iframe');frame.title=t('Parts and atlas inspection');frame.src=access.route('/stage-parts.html')+'?stageEmbed=1&lang='+getLanguage()+(side?'&side='+side:'');frame.addEventListener('load',()=>{frame!.contentWindow?.postMessage({type:'review-stage-language',language:getLanguage()},location.origin);frame!.contentWindow?.postMessage({type:'review-stage-source',buildId:options.draftBuild?.()??'inspected',state:saved},location.origin);});frames.set(key,frame);panel.append(frame);}else if(options.correction){frame.contentWindow?.postMessage({type:'review-stage-revalidate',state:lastFrame!==frame?saved:null},location.origin);}frame.hidden=false;lastFrame=frame;}
+  if(interview)interview.hidden=true;
+  panel.classList.remove('with-interview');
+  if(stage===1&&!options.partsOnly)showParts();
+  if(stage===2&&!reason){status.textContent=t('interview.loading');void showInterview(revision);}
+ }
+ function showParts(){
+  const saved=(lastFrame?.contentWindow as StagePartsWindow|null)?.rigReviewStageParts?.snapshot()??null;const side=options.side?.(),key=(side??'single')+':'+(options.draftBuild?.()??'inspected');let frame=frames.get(key);if(!frame){if(options.correction){for(const old of frames.values())old.remove();frames.clear();}frame=document.createElement('iframe');frame.title=t('Parts and atlas inspection');frame.src=access.route('/stage-parts.html')+'?stageEmbed=1&lang='+getLanguage()+(side?'&side='+side:'');frame.addEventListener('load',()=>{frame!.contentWindow?.postMessage({type:'review-stage-language',language:getLanguage()},location.origin);frame!.contentWindow?.postMessage({type:'review-stage-source',buildId:options.draftBuild?.()??'inspected',state:saved},location.origin);});frames.set(key,frame);panel.append(frame);}else if(options.correction){frame.contentWindow?.postMessage({type:'review-stage-revalidate',state:lastFrame!==frame?saved:null},location.origin);}frame.hidden=false;lastFrame=frame;
  }
  const correction=async(event:MessageEvent)=>{if(event.origin!==location.origin||![...frames.values()].some(f=>f.contentWindow===event.source)||event.data?.type!=='review-stage-correction'||!options.correction)return;const r=event.data;if(typeof r.part!=='string'||typeof r.sourceHash!=='string'||typeof r.buildId!=='string'||!['chest','mesh','delta'].includes(r.instrument))return;try{await options.correction(r);show(3);}catch(error){status.textContent=error instanceof Error?error.message:String(error);}};
  window.addEventListener('message',correction);
@@ -61,7 +93,7 @@ export function bindStageNav(options:{interviewOnly?:boolean;partsOnly?:boolean;
  // Legacy bookmark/control restoration writes these canonical attributes even when a mode is unchanged.
  const canonical=new MutationObserver(()=>{if(current!==3&&!options.partsOnly&&!pickingSource)show(3);});
  document.querySelectorAll('[data-inspector]').forEach(button=>canonical.observe(button,{attributes:true,attributeFilter:['aria-selected','aria-pressed']}));
- const language=onLanguageChange(()=>{render();if(!panel.hidden)status.textContent=t(stageReason(current,options.model,!!options.direction)??(current===1&&options.correction?'Draft rig · structure evidence only':current===1?'Atlas inspection, read only — inspected package. Applied scratch atlas, pre-rig parts, mesh sign-off and draft corrections are unavailable here.':''));for(const f of frames.values()){f.title=t('Parts and atlas inspection');f.contentWindow?.postMessage({type:'review-stage-language',language:getLanguage()},location.origin);}});
+ const language=onLanguageChange(()=>{render();if(!panel.hidden)status.textContent=t(reasonFor(current)??(current===2?(interviewError??(interview&&!interview.hidden?'':'interview.loading')):current===1&&options.correction?'Draft rig · structure evidence only':current===1?'Atlas inspection, read only — inspected package. Applied scratch atlas, pre-rig parts, mesh sign-off and draft corrections are unavailable here.':''));for(const f of frames.values()){f.title=t('Parts and atlas inspection');setFrameLanguage(f);}if(interview){interview.title=t('interview.title');setFrameLanguage(interview);}});
  window.addEventListener('resize',place);show(current);
- return ()=>{window.removeEventListener('message',correction);language();canonical.disconnect();sourcePicker?.querySelectorAll('[data-build-side]').forEach(button=>button.removeEventListener('click',sourceChanged));delete document.documentElement.dataset.inspectionStage;if(workspace)workspace.inert=wasInert;panel.remove();window.removeEventListener('resize',place);document.querySelectorAll('[data-mode],[data-inspector]').forEach(b=>b.removeEventListener('click',legacy));};
+ return ()=>{entry++;window.removeEventListener('message',correction);language();canonical.disconnect();sourcePicker?.querySelectorAll('[data-build-side]').forEach(button=>button.removeEventListener('click',sourceChanged));delete document.documentElement.dataset.inspectionStage;if(workspace)workspace.inert=wasInert;panel.remove();window.removeEventListener('resize',place);document.querySelectorAll('[data-mode],[data-inspector]').forEach(b=>b.removeEventListener('click',legacy));};
 }

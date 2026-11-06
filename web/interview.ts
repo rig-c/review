@@ -5,7 +5,9 @@ import { connectLiveWindow } from './live-connection.ts';
 import { bindStageNav } from './stage-nav.ts';
 
 const access = pageInstanceAccess();
-const lang = new URL(location.href).searchParams.get('lang');
+const url = new URL(location.href);
+const embedded = url.pathname.endsWith('/stage-interview.html');
+const lang = url.searchParams.get('lang');
 setLanguagePreference(lang === 'en' || lang === 'ko' ? lang : 'system');
 const title = document.querySelector('h1')!;
 const languages = document.querySelector('select')!;
@@ -20,8 +22,19 @@ languages.onchange = () => {
   localize();
 };
 localize();
-bindStageNav({interviewOnly:true, model:false});
-connectLiveWindow(access);
+if (embedded) {
+  languages.hidden = true;
+  window.addEventListener('message', event => {
+    if (event.source !== parent || event.origin !== location.origin || event.data?.type !== 'review-stage-language' ||
+        (event.data.language !== 'en' && event.data.language !== 'ko')) return;
+    setLinkLanguage(null);
+    setLanguagePreference(event.data.language);
+    localize();
+  });
+} else {
+  bindStageNav({interviewOnly:true, model:false});
+  connectLiveWindow(access);
+}
 const host = document.querySelector('main')!;
 host.textContent = t('interview.loading');
 await mountInterview(host, access);

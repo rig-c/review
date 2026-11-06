@@ -415,3 +415,16 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 #direction-panel{flex:none;max-height:40%;overflow:auto;padding:.5rem .75rem;overflow-wrap:anywhere}
 #direction-panel ul{margin:.4rem 0;padding-inline-start:1.4rem}
 #direction-panel pre{max-height:12rem;overflow:auto}
+.review-stage-panel.with-interview {
+  display: grid;
+  grid-template: min-content minmax(240px, 1fr) / minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+.review-stage-panel.with-interview[hidden] { display: none; }
+.review-stage-panel.with-interview > p { grid-column: 1 / -1; margin: 0; }
+.review-stage-panel.with-interview > iframe { height: 100%; grid-area: 2 / 1; }
+.review-stage-panel.with-interview > .review-interview-frame { grid-area: 2 / 2; }
+@media (max-width: 65rem) {
+  .review-stage-panel.with-interview { grid-template: min-content repeat(2, minmax(420px, 1fr)) / minmax(0, 1fr); }
+  .review-stage-panel.with-interview > .review-interview-frame { grid-area: 3 / 1; }
+}

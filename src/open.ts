@@ -1,3 +1,4 @@
+import { joinProject, type JoinedProject, type ProjectDesignation } from './joined-project.ts';
 import {parseControlCommand,type ControlCommand,type ControlReceipt} from './control.ts';
 /** One fixed-package worker per exact binding. There is no general daemon API. */
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
@@ -29,10 +30,10 @@ export function buildOpenDiagnostic(build:BuildOpen):string{
  return `Package: rig-parts build check package ${build.package}\n${h?`Handoff ${how}: ${h.config.path} sha256 ${h.config.sha256}${h.parts?` · parts ${h.parts}`:''}`:`Handoff: ${build.reason??'none'}`}`;
 }
 /** `direct` chooses how the page is reached (own port instead of the managed front); `viewOnly` permits opening without a producer handoff (#305); neither is part of the instance identity. */
-export interface OpenInputs {input:string;compare?:string;reference?:string;animation?:string;control?:boolean;direct?:boolean;viewOnly?:boolean;config?:string;parts?:string;source?:string;full?:string;head?:string;keypoints?:string}
+export interface OpenInputs {input:string;project?:ProjectDesignation;compare?:string;reference?:string;animation?:string;control?:boolean;direct?:boolean;viewOnly?:boolean;config?:string;parts?:string;source?:string;full?:string;head?:string;keypoints?:string}
 /** The producer handoff flags (#101) among the inputs, or undefined when none was given. */
 export function handoffFlags(inputs:OpenInputs):HandoffFlags|undefined{const present=HANDOFF_FLAGS.filter(f=>inputs[f]!==undefined);if(!present.length)return undefined;return Object.fromEntries(present.map(f=>[f,inputs[f]])) as unknown as HandoffFlags;}
-export type OpenPackage=({mode:'single';p:ReviewPackage;inputs:OpenInputs;contentHash:string}|{mode:'compare';p:ComparePackage;inputs:OpenInputs;contentHash:string})&{selection:AnimationSelection|null};
+export type OpenPackage=({mode:'single';p:ReviewPackage;joined?:JoinedProject;inputs:OpenInputs;contentHash:string}|{mode:'compare';p:ComparePackage;inputs:OpenInputs;contentHash:string})&{selection:AnimationSelection|null};
 /** Private 0600 record. `capability` is the 256-bit page write capability, handed out only in the printed `#cap=` fragment. */
 export interface RecordFile extends OpenIdentity {schema:'rig-review-open-instance/1';pid:number;origin:string;mode:'single'|'compare';capability:string;controlToken?:string}
 /** `cwd` is the launcher's working directory: the worker runs in the state directory, so Apply · Rebuild looks for the producer from here after the package's own directories. */
@@ -43,7 +44,8 @@ const sleep=(ms:number)=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 export const defaultStateDir=()=>process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review');
 export async function loadOpenPackage(inputs:OpenInputs):Promise<OpenPackage>{
  // Handoff flags become canonical absolute paths here, so the worker and every reload read exactly these files.
- if(!inputs.compare){const p=await loadReferencedReview(inputs.input,inputs.reference,handoffFlags(inputs)),selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);if(inputs.viewOnly)p.viewOnly=true;return {mode:'single',p,selection,contentHash:p.sourceHash,inputs:{input:p.manifestPath,...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{}),...(inputs.control?{control:true}:{}),...(p.handoffInputs??{})}};}
+ if(!inputs.compare){const p=await loadReferencedReview(inputs.input,inputs.reference,handoffFlags(inputs)),selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);const joined=inputs.project?joinProject(p,inputs.project):undefined;if(inputs.viewOnly)p.viewOnly=true;return {mode:'single',p,selection,contentHash:p.sourceHash,...(joined?{joined}:{}),inputs:{input:p.manifestPath,...(joined?{project:joined.designation}:{}),...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{}),...(inputs.control?{control:true}:{}),...(p.handoffInputs??{})}};}
+ if(inputs.project)throw new Error('INTERVIEW_SOURCE_MISMATCH: compare takes no joined project');
  if(handoffFlags(inputs))throw new HandoffError('HANDOFF_FLAGS_INVALID','--config','compare takes no producer handoff; open one package with --config');
  if(!inputs.reference)throw new Error('open compare: explicit --reference required');
  const [a,b]=await Promise.all([loadReview(inputs.input),loadReview(inputs.compare)]),selection=selectAnimation([{label:'a',catalog:a.feedbackCatalog,report:a.report},{label:'b',catalog:b.feedbackCatalog,report:b.report}],inputs.animation)!;
@@ -59,7 +61,7 @@ export async function openFingerprint():Promise<string>{
  hash.update('bun.lock\0');try{hash.update(await readFile(join(appRoot,'bun.lock')));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;hash.update('(absent)');}
  hash.update('@rig-c/play/package.json\0');hash.update(await readFile(playPackagePath()));return hash.digest('hex');
 }
-export function openKey(p:OpenPackage,fingerprint:string):string {return digest({fingerprint,installation:appRoot,mode:p.mode,inputs:p.inputs,content:p.contentHash,identity:p.mode==='single'?p.p.reviewedSource:p.p.response.binding});}
+export function openKey(p:OpenPackage,fingerprint:string):string {return digest({fingerprint,installation:appRoot,mode:p.mode,inputs:p.inputs,content:p.contentHash,identity:p.mode==='single'?p.p.reviewedSource:p.p.response.binding,...(p.mode==='single'&&p.joined?{projectHash:p.joined.opened.hash}:{})});}
 /** Handoff URL: the managed front's `/instances/<key>/` path (or the worker's own origin when direct). The
  * capability rides in the fragment, which browsers never send to a server; the page stores and strips it. */
 export function openUrl(record:Pick<RecordFile,'origin'|'key'|'contentHash'|'capability'>,front?:string):string {const url=new URL(front?`${front}/instances/${record.key}/`:record.origin);url.searchParams.set('input',record.contentHash);url.searchParams.set('handoff',record.key);url.hash='cap='+record.capability;return url.href;}
@@ -72,7 +74,7 @@ export async function readOpenStatus(response:Response,timeoutMs=1500):Promise<u
  try{return await Promise.race([(async()=>{const chunks:Uint8Array[]=[];let size=0;while(true){const next=await reader.read();if(next.done)break;size+=next.value.length;if(size>65536)throw new Error('open status: exceeds 64 KiB');chunks.push(next.value);}const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}return JSON.parse(new TextDecoder().decode(bytes));})(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('open status: body timeout')),timeoutMs);})]);}
  finally{if(timer)clearTimeout(timer);void reader.cancel().catch(()=>{});try{reader.releaseLock();}catch{}}
 }
-export async function alive(record:RecordFile):Promise<boolean>{try{const response=await fetch(record.origin+'/api/open-status',{headers:{authorization:`Bearer ${record.nonce}`},redirect:'error',signal:AbortSignal.timeout(1500)});if(!response.ok){void response.body?.cancel();return false;}const v=await readOpenStatus(response) as OpenIdentity&{schema:string};return v.schema==='rig-review-open-status/1'&&v.key===record.key&&v.contentHash===record.contentHash&&v.nonce===record.nonce&&v.fingerprint===record.fingerprint;}catch{return false;}}
+export async function alive(record:RecordFile,allowStale=false):Promise<boolean>{try{const response=await fetch(record.origin+'/api/open-status',{headers:{authorization:`Bearer ${record.nonce}`},redirect:'error',signal:AbortSignal.timeout(1500)});if(!response.ok&&!(allowStale&&response.status===409)){void response.body?.cancel();return false;}const v=await readOpenStatus(response) as OpenIdentity&{schema:string;ready?:boolean};return (response.ok||v.ready===false)&&v.schema==='rig-review-open-status/1'&&v.key===record.key&&v.contentHash===record.contentHash&&v.nonce===record.nonce&&v.fingerprint===record.fingerprint;}catch{return false;}}
 
 export function running(pid:number):boolean{try{process.kill(pid,0);return true;}catch(e){return (e as NodeJS.ErrnoException).code==='EPERM';}}
 async function claimOwner(claim:string):Promise<{file:string;pid:number;nonce:string}|null>{
@@ -129,6 +131,7 @@ export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idl
  const fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
  // #187: canonical (symlinks and ancestors resolved) and outside every supplied folder: the package, the build root a check package belongs to, the handoff root.
  const stateDir=await canonicalDestination(resolve(options.stateDir??defaultStateDir())),roots=p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
+ if(p.mode==='single'&&p.joined&&stateDirInside(stateDir,[{kind:'package',path:p.joined.opened.root}]))throw new Error('OPEN_STATE_INSIDE_PACKAGE: review state must be outside the joined project');
  const inside=stateDirInside(stateDir,roots);if(inside)throw new Error(`OPEN_STATE_INSIDE_PACKAGE ${inside.kind}: the review state directory must be outside input packages; it is inside the ${inside.kind}; set RIG_REVIEW_STATE_DIR outside it`);
  await verifyOpenLoad(p,viewOnly,options.cwd);
  const control=join(stateDir,'open');await mkdir(control,{recursive:true,mode:0o700});const canonicalControl=await realpath(control);if((await lstat(control)).isSymbolicLink())throw new Error('open.state: control directory cannot be a symlink');
@@ -161,7 +164,7 @@ export async function runOpenWorker(requestPath:string):Promise<void>{
  // The worker mints its own page capability; it lives only in this process and the private record.
  const removeRecord=async()=>{const current=await readRecord(spec.registry,spec.identity.key);if(current?.nonce===spec.identity.nonce)await unlink(spec.registry).catch(()=>{});};
  const capability=randomBytes(32).toString('hex');const options={port:0,stateDir:spec.stateDir,open:spec.identity,capability,unopenedTimeoutMs:spec.idleMs,...(spec.graceMs!==undefined?{graceMs:spec.graceMs}:{}),exitOnClose:true,onClose:removeRecord,...(spec.inputs.control?{control:{token:spec.controlToken!,instanceKey:spec.identity.key}}:{})};
- const server=p.mode==='single'?await startServer(p.p,{...options,initialAnimation:p.selection?.name,...(typeof spec.cwd==='string'&&isAbsolute(spec.cwd)?{cwd:spec.cwd}:{}),...(spec.viewOnly?{viewOnly:true}:{})}):await startCompareServer(p.p,options);
+ const server=p.mode==='single'?await startServer(p.p,{...options,joined:p.joined,initialAnimation:p.selection?.name,...(typeof spec.cwd==='string'&&isAbsolute(spec.cwd)?{cwd:spec.cwd}:{}),...(spec.viewOnly?{viewOnly:true}:{})}):await startCompareServer(p.p,options);
  const check=()=>p.mode==='single'?assertReviewUnchanged(p.p):assertCompareUnchanged(p.p);
  await check();const record:RecordFile={schema:'rig-review-open-instance/1',...spec.identity,pid:process.pid,origin:`http://127.0.0.1:${server.port}`,mode:p.mode,capability,...(spec.inputs.control?{controlToken:spec.controlToken}:{})};const tmp=spec.registry+'.'+spec.identity.nonce+'.tmp';await writeFile(tmp,JSON.stringify(record),{mode:0o600,flag:'wx'});await rename(tmp,spec.registry);
  await unlink(requestPath).catch(e=>{if(e.code!=='ENOENT')throw e;});

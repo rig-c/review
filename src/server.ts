@@ -1,3 +1,5 @@
+import { interviewHeaders, interviewRequest, interviewRoutes } from './interview-routes.ts';
+import { interviewUnavailable, interviewStale, type JoinedProject } from './joined-project.ts';
 import {isDeepStrictEqual} from 'node:util';
 import {appliedValue,parseCorrection,projectSessionCorrection} from './correction-handoff.ts';
 import {stagePartsRoutes} from './stage-parts.ts';
@@ -33,7 +35,12 @@ async function bodyJson(req:Request,limit=1024*1024,what='Session payload exceed
 }
 /** `capability` (open workers and foreground CLI serving) gates every non-GET request; tests may omit it.
  * `cwd` is where the producer is looked for after the package's own directories (review's working directory by default). */
-export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string;stripConcurrency?:number;graceMs?:number;unopenedTimeoutMs?:number;exitOnClose?:boolean;onClose?:(info:LiveExitInfo)=>void|Promise<void>;log?:(line:string)=>void;viewOnly?:boolean}={}){
+export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;joined?:JoinedProject;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string;stripConcurrency?:number;graceMs?:number;unopenedTimeoutMs?:number;exitOnClose?:boolean;onClose?:(info:LiveExitInfo)=>void|Promise<void>;log?:(line:string)=>void;viewOnly?:boolean}={}){
+  const joined = options.joined;
+  if (joined && !options.capability) throw new Error('Joined interview requires an instance capability');
+  const interview = joined && interviewRoutes(joined.opened.root, joined.designation.picksDir, options.capability!,
+    {...joined, sourceHash:p.sourceHash, version:joined.designation.version});
+  let interviewBundle: Promise<Blob> | undefined;
   const bundle=await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
@@ -70,6 +77,24 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       }
       live.onRequestStart(url.pathname);
       try {
+    const path = url.pathname;
+    if (interviewRequest(path)) {
+      return await interview?.(req, origin) ?? json({error:interviewUnavailable},404);
+    }
+    if (req.method === 'GET' && ['/stage-interview.html','/interview.js','/interview.css'].includes(path)) {
+      if (!joined?.available) return json({error:interviewUnavailable},404);
+      const script = path === '/interview.js';
+      const html = path === '/stage-interview.html';
+      const body = script ? await (interviewBundle ??= buildWeb('interview')) :
+        await readFile(appRoot + 'web/' + (html ? 'interview.html' : 'interview.css'));
+      return new Response(body as BodyInit, {headers:{...interviewHeaders, 'Referrer-Policy':'no-referrer',
+        'Content-Security-Policy':interviewHeaders['Content-Security-Policy'].replace("frame-ancestors 'none'", "frame-ancestors 'self'"),
+        'Content-Type':script?'text/javascript':html?'text/html; charset=utf-8':'text/css'}});
+    }
+    if (joined && /^\/api\/stage-parts(?:\/|$)/.test(path)) {
+      try {await joined.assertCurrent();}
+      catch {return json({error:interviewStale},409);}
+    }
     const stageResponse=await stageParts(req);if(stageResponse)return stageResponse;
 
       const controlled=await control?.(req,origin);if(controlled)return controlled;
@@ -145,7 +170,7 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       return new Response(result.png?new Uint8Array(result.png):stripJson(result),{headers:{...headers,'Content-Type':result.png?'image/png':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="review-strip.${result.png?'png':'json'}"`}});
     }
       if(req.method!=='GET'&&req.method!=='HEAD')return json({error:'Method not allowed'},405);
-      if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,...(p.direction?{direction:p.direction}:{}),...(p.setsHash?{setsHash:p.setsHash}:{}),initialAnimation:options.initialAnimation??null,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,...(referenceBinding(p)?{referenceBinding:referenceBinding(p),explicitReference:{...referenceBinding(p)!.reference,url:'/review-reference'}}:{}),...(p.sourcePainting?{sourcePainting:{...p.sourcePainting,url:'/review-painting'}}:{}),referenceHashes:{...p.referenceHashes,...(referenceBinding(p)?{[referenceBinding(p)!.reference.id]:referenceBinding(p)!.reference.sha256}:{})},report:p.report,feedbackCatalog:p.feedbackCatalog,assetsBase:'/assets/',capabilities:{playback:!!p.manifest.model,modeling:false,motion:false,feedback:true,audio:true}});}
+      if(url.pathname==='/api/review'){await unchanged();return json({manifest:p.manifest,...(p.direction?{direction:p.direction}:{}),...(p.setsHash?{setsHash:p.setsHash}:{}),initialAnimation:options.initialAnimation??null,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource,...(referenceBinding(p)?{referenceBinding:referenceBinding(p),explicitReference:{...referenceBinding(p)!.reference,url:'/review-reference'}}:{}),...(p.sourcePainting?{sourcePainting:{...p.sourcePainting,url:'/review-painting'}}:{}),referenceHashes:{...p.referenceHashes,...(referenceBinding(p)?{[referenceBinding(p)!.reference.id]:referenceBinding(p)!.reference.sha256}:{})},report:p.report,feedbackCatalog:p.feedbackCatalog,assetsBase:'/assets/',capabilities:{...(joined?.available?{interview:true}:{}),playback:!!p.manifest.model,modeling:false,motion:false,feedback:true,audio:true}});}
       if(url.pathname==='/api/session'){await unchanged();return json(await readSession(p,options.stateDir));}
       if(url.pathname==='/api/rebuild')return json(await rebuilds.describe());
       if(url.pathname==='/api/rebuild/history')return json(await rebuilds.history());
