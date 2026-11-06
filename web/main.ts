@@ -225,7 +225,9 @@ function renderProvenance(): void {
   const provenance = session.reviewedSource;
   text('provenance-version', provenance.packageRevision);
   text('provenance-rig', provenance.rig ? provenance.rig.sha256.slice(0, 12) + '…' : 'Not supplied');
-  text('provenance-motion', provenance.motion ? provenance.motion.sha256.slice(0, 12) + '…' : 'Not supplied');
+  el('provenance-motion').hidden = !provenance.motion;
+  el('provenance-motion-missing').hidden = !!provenance.motion;
+  text('provenance-motion', provenance.motion ? provenance.motion.sha256.slice(0, 12) + '…' : '');
   text('provenance-full', JSON.stringify({ sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: provenance }, null, 2));
 }
 
@@ -748,8 +750,11 @@ function renderProposals(): void {
   el('feedback-applied-check').hidden = !unchecked; text('feedback-applied-check', unchecked ? `${unchecked} · Submit refuses this review; delete the entry written on that build or Apply a build that passes check.` : '');
   warnings.textContent = session.feedbackWarnings.length ? `${session.feedbackWarnings.length} validation warnings in existing feedback · original records are preserved. Review the marked entries, delete them and add valid replacements before submitting. The saved session that rig-review feedback exports keeps both the original records and warnings.` : '';
   for (const feedback of session.feedback) {
-    const item = document.createElement('div'); item.className = 'proposal-item'; const title = document.createElement('strong'); title.className = 'feedback-heading'; title.textContent = `${feedback.category} · ${feedback.target.kind}:${feedback.target.name} · ${feedbackTimingLabel(feedback)}`; const description = document.createElement('span'); description.className = 'feedback-summary'; description.textContent = feedback.summary;
-    item.append(title, description);
+    const item = document.createElement('div'); item.className = 'proposal-item'; const heading = document.createElement('strong');
+    const title = document.createElement('span'); title.className = 'feedback-heading'; title.textContent = `${feedback.category} · ${feedback.target.kind}:${feedback.target.name} · `;
+    const timing = document.createElement('span'); timing.textContent = feedbackTimingLabel(feedback); heading.append(title, timing);
+    const description = document.createElement('span'); description.className = 'feedback-summary'; description.textContent = feedback.summary;
+    item.append(heading, description);
     const context = feedback.context as Record<string, Json> | undefined;
     const correction = context?.correction as {path?: string;selector?:{kind?:string}} | undefined;
     if (correction) {

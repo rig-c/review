@@ -33,8 +33,9 @@ test('exact entry holds, reset is exact zero, snapshot copies, restoration valid
 });
 
 test('#289: reserved width derives from each dial range and precision, keeps exact values on number/dataset, and planted unreserved mutant fails',async()=>{
+ const yawMax='29.999995200000384';
  const ranges=[
-  {axis:'yaw' as const,bone:'yaw_dial',slider:'yaw_dial',channel:'rotation' as const,min:-15,max:15},
+  {axis:'yaw' as const,bone:'yaw_dial',slider:'yaw_dial',channel:'rotation' as const,min:-30,max:Number(yawMax)},
   {axis:'pitch' as const,bone:'pitch_dial',slider:'pitch_dial',channel:'rotation' as const,min:0,max:10},
   {axis:'body' as const,bone:'body_yaw_dial',slider:'body_yaw_dial',channel:'rotation' as const,min:-120,max:45},
  ];
@@ -154,8 +155,14 @@ test('#289: reserved width derives from each dial range and precision, keeps exa
    samples.push(measureLayout());
    const exactPreserved=yawNum.value==='-14.839201'&&yawOut.dataset.value==='-14.839201'&&yawTarget.dataset.value==='-14.839201';
    const minWidths=outputs.map(o=>o.style.minWidth??'');
+   const yawOutValue=yawOut.value;
+   const yawLabel=panel.children.find(child=>typeof child!=='string'&&child.children.includes(yawNum)) as FakeNode;
+   yawNum.value=yawMax;
+   yawNum.onchange!();
+   const endpoint={label:yawLabel.textContent,inputMax:yawNum.max,inputValue:yawNum.value,
+    applied:yawOut.dataset.value,target:yawTarget.dataset.value,readouts:[yawOut.value,yawTarget.value]};
    pad.dispose();
-   return {samples,exactPreserved,yawOutValue:yawOut.value,minWidths};
+   return {samples,exactPreserved,yawOutValue,minWidths,endpoint};
   }finally{
    for(const [k,v] of saved)(globalThis as any)[k]=v;
   }
@@ -168,6 +175,8 @@ test('#289: reserved width derives from each dial range and precision, keeps exa
    expect(res.minWidths).toEqual(['6ch','6ch','5ch','5ch','7ch','7ch']);
    expect(res.exactPreserved).toBe(true);
    expect(res.yawOutValue).toBe('-14.84');
+   expect(res.endpoint).toEqual({label:'yaw · yaw_dial [-30, 30] °',inputMax:yawMax,inputValue:yawMax,
+    applied:yawMax,target:yawMax,readouts:['30','30']});
    expect(new Set(res.samples.map(s=>s.rows)).size).toBe(1);
    expect(new Set(res.samples.map(s=>s.height)).size).toBe(1);
    expect(new Set(res.samples.map(s=>s.stageTop)).size).toBe(1);
@@ -176,17 +185,24 @@ test('#289: reserved width derives from each dial range and precision, keeps exa
  }
 
  // 2. Planted mutant: remove reserved minWidth and display rounding -> outputWidths and row wrapping change during sweep, failing the bar.
- const mutantSource=padSource
+ const binderSource=padSource
   .replace(/import \{[^}]+\} from '\.\.\/src\/turn-pad\.ts';\n/,'')
   .replace(/export interface TurnPad[^\n]+\n/,'')
-  .replace('export function bindTurnPad','function bindTurnPad')
+  .replace('export function bindTurnPad','function bindTurnPad');
+ const compileBinder=(source:string)=>{
+  const js=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source);
+  return new Function('scope',`with(scope){${js};return bindTurnPad;}`)({TurnState,pointerPosition,turnDialWidthCh,formatTurnValue}) as typeof bindTurnPad;
+ };
+ const rawRangeBinder=compileBinder(binderSource.replace('[${formatTurnValue(d.min,d)}, ${formatTurnValue(d.max,d)}]','[${d.min}, ${d.max}]'));
+ expect(sweepPad(rawRangeBinder,ranges,1440,'en').endpoint.label).toBe(`yaw · yaw_dial [-30, ${yawMax}] °`);
+
+ const mutantSource=binderSource
   .replace('output.style.width=width;output.style.minWidth=width;','')
   .replace('target.style.width=width;target.style.minWidth=width;','')
   .replace('formatTurnValue(value,row.dial)','String(Number(value.toFixed(6)))')
   .replace('formatTurnValue(targetValue,row.dial)','String(Number(targetValue.toFixed(6)))');
- expect(mutantSource).not.toBe(padSource);
- const jsMutant=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(mutantSource);
- const mutantBinder=new Function('scope',`with(scope){${jsMutant};return bindTurnPad;}`)({TurnState,pointerPosition,turnDialWidthCh,formatTurnValue}) as typeof bindTurnPad;
+ expect(mutantSource).not.toBe(binderSource);
+ const mutantBinder=compileBinder(mutantSource);
  const mutantRes=sweepPad(mutantBinder,ranges,1440,'en');
  expect(mutantRes.minWidths).toEqual(['','','','','','']);
  expect(new Set(mutantRes.samples.map(s=>s.outputWidths.join(','))).size).toBeGreaterThan(1);
