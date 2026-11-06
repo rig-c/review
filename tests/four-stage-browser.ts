@@ -108,8 +108,19 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
   const choose = (stage: number) => click(page, `[data-review-stage="${stage}"]`);
   const state = join(scratch, 'state-' + lang);
   const scratchCopies: {index: number; root: string; changes: Set<string>}[] = [];
-  const open = (inputs: OpenInputs, stateDir = state) =>
-    openReview(inputs, {stateDir, cwd: bench, direct: true, idleMs: 180000, graceMs: 30000});
+  const frontPorts = new Map<string, number>();
+  const open = async (inputs: OpenInputs, stateDir = state) => {
+    let frontPort = frontPorts.get(stateDir);
+    if (frontPort === undefined) {
+      const portProbe = Bun.serve({hostname:'127.0.0.1', port:0, fetch:() => new Response()});
+      frontPort = portProbe.port!;
+      portProbe.stop(true);
+      frontPorts.set(stateDir, frontPort);
+    }
+    const opened = await openReview(inputs, {stateDir, cwd:bench, frontPort, idleMs:180000, graceMs:30000});
+    assert.match(new URL(opened.url).pathname, /^\/instances\/[a-f0-9]{64}\/$/);
+    return opened;
+  };
   async function navigate(url: string) {
     const destination = new URL(url);
     destination.searchParams.set('lang', lang);
@@ -191,7 +202,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     const verdict = JSON.parse(verdictBytes);
     assert.equal(verdict.parts.torso.note, partNote);
     assert.equal(verdict.parts.torso.mesh.note, meshNote);
-    const exportedVerdict = await fetch(new URL('/api/stage-parts/export/json', firstOpen.url));
+    const exportedVerdict = await fetch(new URL('api/stage-parts/export/json', firstOpen.url));
     assert.equal(exportedVerdict.status, 200);
     assert.equal(await exportedVerdict.text(), verdictBytes);
     await write(label('parts-verdict.json'), verdictBytes);
@@ -399,7 +410,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       await click(page, '#idle-apply');
       const applied = await wait(() => evaluate<string>('document.getElementById("rebuild-applied").value'), Boolean, label(name + '-apply'), 120000);
       const record = JSON.parse(applied);
-      const response = await fetch(new URL('/api/rebuild/' + record.buildId, opened.url));
+      const response = await fetch(new URL('api/rebuild/' + record.buildId, opened.url));
       const job = await response.json();
       const revision = rebuildDir(stateDir, inspected.contentHash, record.buildId);
       const hashes = await inventory(revision);
@@ -524,12 +535,12 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       const capability = new URLSearchParams(url.hash.slice(1)).get('cap');
       assert(capability);
       const headers = {Origin:url.origin, 'Content-Type':'application/json', 'X-Review-Capability':capability};
-      const response = await fetch(new URL('/api/rebuild', url), {method:'POST', headers,
+      const response = await fetch(new URL('api/rebuild', url), {method:'POST', headers,
         body:JSON.stringify({patch:JSON.parse(madeIssue.patchBytes)})});
       const initial = await response.json();
       await put('replay-initial', {status:response.status, job:initial});
       assert(response.ok && initial.id);
-      const replay = await wait(async () => (await fetch(new URL('/api/rebuild/' + initial.id, url))).json(),
+      const replay = await wait(async () => (await fetch(new URL('api/rebuild/' + initial.id, url))).json(),
         job => job.status !== 'running', 'made-replay', 120000);
       await put('replay-job', replay);
       const replayRoot = rebuildDir(replayState, inspected.contentHash, replay.id);
@@ -667,7 +678,21 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.deepEqual(described.on.direction, checked.direction);
     await create(label('direction-consumer-check'), ['interview','--check',fourth.root,'--json']);
   } catch (error) {
-    await put(label('first-error'), String(error));
+    const iframeDiagnostics = await evaluate(`(()=>{
+      const frame=${frame};
+      const doc=frame?.contentDocument;
+      const save=doc?.querySelector('#pv-save');
+      const status=doc?.querySelector('#pv-load');
+      return {
+        pagePath:location.pathname,
+        iframePath:frame?new URL(frame.src).pathname:null,
+        ready:doc?.body.dataset.ready??null,
+        reason:status?.textContent??null,
+        reasonResult:status?.dataset.result??null,
+        save:save?{disabled:save.disabled,title:save.title,hidden:save.hidden}:null
+      };
+    })()`).catch(() => null);
+    await put(label('first-error'), {error:String(error), iframeDiagnostics});
     await shot('first-error').catch(() => {});
     throw error;
   } finally {

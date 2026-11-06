@@ -470,7 +470,10 @@ The inventory names a retained Create-side input. Review does not read that path
 ## Four-stage acceptance fixture
 
 The explicit browser runner in the Review checkout walks four independent Create
-checkpoint prefixes. Its inputs come from one archive of Create
+checkpoint prefixes using the managed loopback route for every stage and the
+independent replay. The direct-route Save defect is tracked in
+[Review #443](https://github.com/rig-c/review/issues/443).
+Its inputs come from one archive of Create
 [a1a5162](https://github.com/rig-c/create/commit/a1a5162cf4ce7fdef8caba50dc3979cf416467dd)
 with SHA-256
 `68034a42a70765ddda434195b945c9d87da85cf86443c657c31848ee163a8096`.
