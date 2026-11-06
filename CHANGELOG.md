@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.1](https://github.com/rig-c/review/compare/v1.16.0...v1.16.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* preserve bounded correction submit refusals ([#445](https://github.com/rig-c/review/issues/445)) ([cc33832](https://github.com/rig-c/review/commit/cc33832670fc36a037b188499f92054fc3f9cdc0))
+
 ## [1.16.0](https://github.com/rig-c/review/compare/v1.15.0...v1.16.0) (2026-11-06)
 
 
