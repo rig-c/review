@@ -25,6 +25,13 @@ export function stageReason(stage:ReviewStage,model:boolean,direction=false,inte
  if(stage===3&&!model)return 'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.';
  return null;
 }
+function stageFrameRoute(access:InstanceAccess,path:'/stage-parts.html'|'/stage-interview.html',side?:'a'|'b'):string {
+ const query=new URLSearchParams({stageEmbed:'1',lang:getLanguage()});
+ if(side)query.set('side',side);
+ // Managed paths already identify the slot and their front accepts only the closed stage query.
+ if(access.base==='/'&&/^[a-f0-9]{64}$/.test(access.key))query.set('handoff',access.key);
+ return access.route(path)+'?'+query;
+}
 export function bindStageNav(options:{preRig?:boolean;interviewOnly?:boolean;interview?:boolean;access?:InstanceAccess;partsOnly?:boolean;model:boolean;direction?:(active:boolean)=>void;side?:()=> 'a'|'b';setup?:()=>void;draftBuild?:()=>string;correction?:(request:{part:string;sourceHash:string;buildId:string;instrument:string})=>Promise<void>}):()=>void {
  const host=document.querySelector<HTMLElement>('[data-stage-nav]');if(!host)return ()=>{};
  if(options.interviewOnly){
@@ -55,8 +62,7 @@ export function bindStageNav(options:{preRig?:boolean;interviewOnly?:boolean;int
    if(!interview){
     interview=document.createElement('iframe');
     interview.title=t('interview.title');interview.className='review-interview-frame';
-    const url=new URL(access.route('/stage-interview.html'),location.href);
-    url.searchParams.set('stageEmbed','1');url.searchParams.set('lang',getLanguage());
+    const url=new URL(stageFrameRoute(access,'/stage-interview.html'),location.href);
     if(access.capability)url.hash='cap='+access.capability;
     const frame=interview;
     frame.src=url.href;frame.addEventListener('load',()=>setFrameLanguage(frame));
@@ -82,7 +88,7 @@ export function bindStageNav(options:{preRig?:boolean;interviewOnly?:boolean;int
   if(stage===2&&!reason){status.textContent=t('interview.loading');void showInterview(revision);}
  }
  function showParts(){
-  const saved=(lastFrame?.contentWindow as StagePartsWindow|null)?.rigReviewStageParts?.snapshot()??null;const side=options.side?.(),key=(side??'single')+':'+(options.draftBuild?.()??'inspected');let frame=frames.get(key);if(!frame){if(options.correction){for(const old of frames.values())old.remove();frames.clear();}frame=document.createElement('iframe');frame.title=t('Parts and atlas inspection');frame.src=access.route('/stage-parts.html')+'?stageEmbed=1&lang='+getLanguage()+(side?'&side='+side:'');frame.addEventListener('load',()=>{frame!.contentWindow?.postMessage({type:'review-stage-language',language:getLanguage()},location.origin);frame!.contentWindow?.postMessage({type:'review-stage-source',buildId:options.draftBuild?.()??'inspected',state:saved},location.origin);});frames.set(key,frame);panel.append(frame);}else if(options.correction||options.preRig){frame.contentWindow?.postMessage({type:'review-stage-revalidate',state:lastFrame!==frame?saved:null},location.origin);}frame.hidden=false;lastFrame=frame;
+  const saved=(lastFrame?.contentWindow as StagePartsWindow|null)?.rigReviewStageParts?.snapshot()??null;const side=options.side?.(),key=(side??'single')+':'+(options.draftBuild?.()??'inspected');let frame=frames.get(key);if(!frame){if(options.correction){for(const old of frames.values())old.remove();frames.clear();}frame=document.createElement('iframe');frame.title=t('Parts and atlas inspection');frame.src=stageFrameRoute(access,'/stage-parts.html',side);frame.addEventListener('load',()=>{frame!.contentWindow?.postMessage({type:'review-stage-language',language:getLanguage()},location.origin);frame!.contentWindow?.postMessage({type:'review-stage-source',buildId:options.draftBuild?.()??'inspected',state:saved},location.origin);});frames.set(key,frame);panel.append(frame);}else if(options.correction||options.preRig){frame.contentWindow?.postMessage({type:'review-stage-revalidate',state:lastFrame!==frame?saved:null},location.origin);}frame.hidden=false;lastFrame=frame;
  }
  const correction=async(event:MessageEvent)=>{if(event.origin!==location.origin||![...frames.values()].some(f=>f.contentWindow===event.source)||event.data?.type!=='review-stage-correction'||!options.correction)return;const r=event.data;if(typeof r.part!=='string'||typeof r.sourceHash!=='string'||typeof r.buildId!=='string'||!['chest','mesh','delta'].includes(r.instrument))return;try{await options.correction(r);show(3);}catch(error){status.textContent=error instanceof Error?error.message:String(error);}};
  window.addEventListener('message',correction);
