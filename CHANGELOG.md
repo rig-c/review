@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/rig-c/review/compare/v1.12.0...v1.13.0) (2026-11-06)
+
+
+### Features
+
+* bind described direction corrections to inspected sources ([#429](https://github.com/rig-c/review/issues/429)) ([8bb37b2](https://github.com/rig-c/review/commit/8bb37b24cba58fe2a72e61e7723ae64339c982fb))
+
 ## [1.12.0](https://github.com/rig-c/review/compare/v1.11.0...v1.12.0) (2026-11-06)
 
 
