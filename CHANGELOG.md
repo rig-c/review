@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.0](https://github.com/rig-c/review/compare/v1.14.1...v1.15.0) (2026-11-06)
+
+
+### Features
+
+* transport selected Create direction through joined review ([#438](https://github.com/rig-c/review/issues/438)) ([b10e367](https://github.com/rig-c/review/commit/b10e36764d81da4744c0258fa5f41280c8d102a9))
+
 ## [1.14.1](https://github.com/rig-c/review/compare/v1.14.0...v1.14.1) (2026-11-06)
 
 
