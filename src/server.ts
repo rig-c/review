@@ -1,5 +1,5 @@
 import { interviewHeaders, interviewRequest, interviewRoutes } from './interview-routes.ts';
-import { interviewUnavailable, interviewStale, type JoinedProject } from './joined-project.ts';
+import { directionStale, interviewUnavailable, interviewStale, type JoinedProject } from './joined-project.ts';
 import {isDeepStrictEqual} from 'node:util';
 import {appliedValue,parseCorrection,projectSessionCorrection} from './correction-handoff.ts';
 import {stagePartsRoutes} from './stage-parts.ts';
@@ -218,7 +218,7 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       if(url.pathname==='/styles.css')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/styles.css'),{headers:{...headers,'Content-Type':'text/css'}});
       return json({error:'Not found'},404);
       } finally { live.onRequestEnd(url.pathname); }
-    }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message.includes('inputs changed')?409:400);}};
+    }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message===directionStale || message.startsWith(interviewStale) || message.includes('inputs changed')?409:400);}};
   const server=Bun.serve({hostname:'127.0.0.1',port:options.port??4317,websocket:live.websocket,async fetch(req,srv){const res=await handle(req,srv.port,srv);if(!res)return undefined as unknown as Response;return stampOpen(req,res,options.open);}});
   rawStop=server.stop.bind(server);
   server.stop=((closeActiveConnections?:boolean)=>{live.stop();return rawStop!(closeActiveConnections);}) as typeof server.stop;

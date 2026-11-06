@@ -54,6 +54,70 @@ test('managed front relays the named stale interview picks refusal', async () =>
  }finally{worker.stop(true);}
 });
 
+test('managed front relays only the exact joined direction stale refusal on the bootstrap routes', async () => {
+ const root = await realpath(await mkdtemp(join(tmpdir(),'review-front-')));
+ roots.push(root);
+ const project = join(root,'project'), control = join(root,'open');
+ await mkdir(project);
+ await mkdir(control);
+ const archive = await readFile(new URL('./fixtures/create-example-chain/project.tar.gz',import.meta.url));
+ const extracted = Bun.spawnSync(['tar','-xzf','-','-C',project],{stdin:archive});
+ if(extracted.exitCode!==0)throw new Error(extracted.stderr.toString());
+ await mkdir(join(project,'picks'));
+ const loaded = await loadOpenPackage({input:join(project,'derived/review/v1/out'),project:{root:project,version:1,postVersion:2,picksDir:'picks'}});
+ if(loaded.mode!=='single'||!loaded.joined||!loaded.p.direction)throw new Error('Expected a joined authored direction');
+ const identity = {key:'a'.repeat(64),nonce:crypto.randomUUID(),fingerprint:await openFingerprint(),contentHash:loaded.contentHash};
+ const capability = 'b'.repeat(64);
+ const worker = await startServer(loaded.p,{port:0,stateDir:join(root,'state'),open:identity,joined:loaded.joined,capability});
+ const front = startFront({control,port:freePort(),nonce:crypto.randomUUID(),fingerprint:identity.fingerprint});
+ const writeRecord = async (port: number, override: Partial<RecordFile> = {}) => {
+  const row:RecordFile = {schema:'rig-review-open-instance/1',...identity,pid:process.pid,origin:`http://127.0.0.1:${port}`,mode:'single',capability,...override};
+  await writeFile(join(control,identity.key+'.json'),JSON.stringify(row),{mode:0o600});
+ };
+ const get = (path = '/api/review') => fetch(`${front.origin}/instances/${identity.key}${path}`,{signal:AbortSignal.timeout(5000)});
+ const direction = join(project,loaded.p.direction.file.path);
+ const bytes = await readFile(direction);
+ const body = {error:'DIRECTION_SOURCE_STALE'};
+ let reply = new Response();
+ const mock = Bun.serve({hostname:'127.0.0.1',port:0,fetch:() => reply});
+ try{
+  await writeRecord(worker.port!);
+  const healthy = await get();
+  expect(healthy.status).toBe(200);
+  expect((await healthy.json()).direction.joined.postVersion).toBe(2);
+  await writeFile(direction,Buffer.concat([bytes,Buffer.from(' ')]));
+  const stale = await get();
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toEqual(body);
+  expect(await (await get('/api/session')).json()).toEqual(body);
+  await writeRecord(worker.port!,{nonce:crypto.randomUUID()});
+  expect((await get()).status).toBe(410);
+  await writeRecord(worker.port!,{fingerprint:'c'.repeat(64)});
+  expect(await (await get()).json()).toEqual({error:'FRONT_UPSTREAM_CONFLICT'});
+  await writeRecord(mock.port!);
+  const headers = {'X-Review-Open-Key':identity.key};
+  for(const [path,response,status,error] of [
+   ['/api/review',Response.json({error:body.error+': /private/file'},{status:409,headers}),409,'FRONT_UPSTREAM_CONFLICT'],
+   ['/api/review',Response.json({...body,path:'/private/file'},{status:409,headers}),409,'FRONT_UPSTREAM_CONFLICT'],
+   ['/api/review',Response.json(body,{status:409}),410,'FRONT_INSTANCE_REPLACED: reopen with rig-review open'],
+   ['/api/review',Response.json(body,{status:400,headers}),400,'FRONT_UPSTREAM_REJECTED'],
+   ['/api/review',new Response(JSON.stringify(body),{status:409,headers}),409,'FRONT_UPSTREAM_CONFLICT'],
+   ['/api/review',new Response(JSON.stringify(body)+' '.repeat(512),{status:409,headers:{...headers,'Content-Type':'application/json'}}),409,'FRONT_UPSTREAM_CONFLICT'],
+   ['/api/access',Response.json(body,{status:409,headers}),409,'FRONT_UPSTREAM_CONFLICT'],
+  ] as const){
+   reply = response;
+   const refused = await get(path);
+   expect(refused.status).toBe(status);
+   expect(await refused.json()).toEqual({error});
+  }
+ }finally{
+  mock.stop(true);
+  front.stop();
+  worker.stop(true);
+  await writeFile(direction,bytes);
+ }
+});
+
 test('managed front routes by key, refuses unlisted/oversized/foreign-host requests and never serves a capability',async()=>{
  const f=await fixture(),other=join(f.root,'other');await cp(f.producer,other,{recursive:true});await writeFile(join(other,'report.json'),JSON.stringify({spec:'rig-pose-report/1',animation:'inspect',frameTimes:[0,.5,1]}));const port=freePort();
  const a=await openReview({input:f.producer,reference:f.reference,viewOnly:true},{stateDir:f.state,frontPort:port}),b=await openReview({input:other,control:true,viewOnly:true},{stateDir:f.state,frontPort:port});await track(f.state);

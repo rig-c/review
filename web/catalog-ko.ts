@@ -98,6 +98,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "direction.authored": "작성된 연출 · 리그 v{0} · {1} · SHA-256 {2}",
   "direction.authoredUnavailable": "DIRECTION_METADATA_UNAVAILABLE · 화면의 모델에 연결된 연출 데이터가 없습니다.",
   "direction.runtimeCameraUnavailable": "CAMERA_PLAYBACK_UNAVAILABLE · 작성된 카메라와 타이밍은 여기서 읽기 전용입니다. 이동과 확대는 검사 화면에만 적용됩니다.",
+  "direction.joined": "Create 포스트 {0} · 프로젝트 기준 모델 {1} · 기록된 패키지 {2} · 프로젝트 SHA-256 {3} · 패키지 소스 SHA-256 {4}",
+  "Choose the joined Create post version.": "연결된 Create 포스트 버전을 선택하세요.",
   "direction.cameraApplyUnavailable": "CAMERA_APPLY_UNSUPPORTED · 카메라 적용을 지원하지 않습니다.",
   "direction.keys": "작성된 카메라 및 타이밍 키",
   "DIRECTION_UNAVAILABLE: no direction inspection contract is installed.": "DIRECTION_UNAVAILABLE: 연출 검사 계약이 설치되어 있지 않습니다.",

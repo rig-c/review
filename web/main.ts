@@ -35,7 +35,7 @@ import {historyRow,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retarg
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
-import {setSourceAttribute,setSourceText,sourceTextContent,tr} from './i18n.ts';
+import {setSourceAttribute,setSourceText,sourceTextContent,t,tr} from './i18n.ts';
 import {holdScrubBox,releaseScrubBox,scrubBox} from './scrub-box.ts';
 import {bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
 import {connectControl} from './control.ts';
@@ -794,6 +794,11 @@ function syncCorrectionStage(): void {
 
 function correctionSelection(path: 'described' | 'made'): Json {
   const stage = select('correction-stage').value, identity = input('correction-selector').value;
+  const joined = data.direction?.joined;
+  if (stage === 'direction-review' && joined) {
+    if (path === 'made') throw new Error(t('direction.cameraApplyUnavailable'));
+    if (identity !== String(joined.postVersion)) throw new Error(tr('Choose the joined Create post version.'));
+  }
   if (stage === 'parts-review' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(identity)) {
     return { path, selector: { stage, kind: 'draft', id: identity } };
   }

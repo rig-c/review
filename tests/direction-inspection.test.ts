@@ -130,3 +130,13 @@ test('the single-package API binds declared attachment sets and direction to the
     await rm(temp, { recursive: true, force: true });
   }
 });
+
+test('joined Made correction refusal uses the direction catalog ID in both languages', async () => {
+  const main = await readFile(new URL('../web/main.ts', import.meta.url), 'utf8');
+  const selection = main.slice(main.indexOf('function correctionSelection('), main.indexOf('function propose('));
+  const refusal = /if \(stage === 'direction-review' && joined\) \{\s*if \(path === 'made'\) throw new Error\(t\('([^']+)'\)\)/.exec(selection);
+  expect(refusal?.[1]).toBe('direction.cameraApplyUnavailable');
+  const id = refusal![1]!;
+  expect(t(id, undefined, 'en')).toBe('CAMERA_APPLY_UNSUPPORTED · Camera Apply is unavailable.');
+  expect(t(id, undefined, 'ko')).toBe('CAMERA_APPLY_UNSUPPORTED · 카메라 적용을 지원하지 않습니다.');
+});

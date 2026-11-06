@@ -1,5 +1,5 @@
 import { interviewRefusals, interviewRequest } from './interview-routes.ts';
-import { interviewStale } from './joined-project.ts';
+import { directionStale, interviewStale } from './joined-project.ts';
 import { picksLimit } from './interview-picks.ts';
 import {stageDraftRefusals} from './stage-parts.ts';
 /** Managed loopback front: one stable origin (127.0.0.1:4318 by default) routing `/instances/<key>/…` to the
@@ -107,10 +107,13 @@ export function stageFrameQuery(mode:'single'|'compare',search:string):boolean {
  return keys.length===allowed.length&&new Set(keys).size===keys.length&&keys.every(k=>allowed.includes(k))&&params.get('stageEmbed')==='1'&&['en','ko'].includes(params.get('lang')??'')&&(mode==='single'||['a','b'].includes(params.get('side')??''));
 }
 /** Preserve only closed, bounded inspection refusals. */
-async function inspectionRefusal(mode:'single'|'compare',method:string,path:string,response:Response):Promise<string|null>{
+async function inspectionRefusal(mode:'single'|'compare',method:string,path:string,response:Response,sameFingerprint:boolean):Promise<string|null>{
  const stageData=mode==='single'?path==='/api/stage-parts':/^\/api\/compare\/(?:a|b)\/stage-parts$/.test(path);
  const interview=mode==='single'&&interviewRequest(path)&&[400,404,409].includes(response.status);
- if(!(interview||stageData&&method==='GET'&&response.status===409)||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))return null;
+ // Both reads race during the single-package page bootstrap.
+ const direction=sameFingerprint&&mode==='single'&&method==='GET'&&response.status===409&&
+  (path==='/api/review'||path==='/api/session');
+ if(!(direction||interview||stageData&&method==='GET'&&response.status===409)||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')??''))return null;
  const limit=512,declared=response.headers.get('content-length');if(declared!==null&&(!/^\d+$/.test(declared)||Number(declared)>limit))return null;
  const reader=response.body?.getReader();if(!reader)return null;
  try{
@@ -120,6 +123,7 @@ async function inspectionRefusal(mode:'single'|'compare',method:string,path:stri
   const data:unknown=JSON.parse(new TextDecoder().decode(body)),named='PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.';
   if(data===null||typeof data!=='object'||Array.isArray(data)||Object.keys(data).length!==1)return null;
   const error=(data as {error?:unknown}).error;
+  if(direction)return error===directionStale?directionStale:null;
   return typeof error==='string'&&(interview?[...interviewRefusals]:[named,interviewStale,...Object.values(stageDraftRefusals)] as readonly string[]).some(code=>code===error)?error:null;
  }catch{return null;}finally{reader.releaseLock();}
 }
@@ -190,7 +194,7 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
    try{upstream=await fetch(record.origin+path+(landing||stageFrame?url.search:''),{method:req.method,headers,...(body?{body}:{}),redirect:'manual',signal:abort.signal});}
    catch{release();return abort.signal.aborted&&!req.signal.aborted?refuse('FRONT_UPSTREAM_TIMEOUT',504):refuse('FRONT_INSTANCE_EXPIRED: reopen with rig-review open',410);}
    if(upstream.headers.get(openKeyHeader)!==key){void upstream.body?.cancel().catch(()=>{});release();return refuse('FRONT_INSTANCE_REPLACED: reopen with rig-review open',410);}
-   if(upstream.status>=400&&upstream.status!==416){const named=await inspectionRefusal(record.mode,req.method,path,upstream);void upstream.body?.cancel().catch(()=>{});release();if(named)return refuse(named,upstream.status);const code=upstreamFailure[upstream.status];return refuse(code??'FRONT_UPSTREAM_FAILED',code?upstream.status:502);}
+   if(upstream.status>=400&&upstream.status!==416){const named=await inspectionRefusal(record.mode,req.method,path,upstream,record.fingerprint===options.fingerprint);void upstream.body?.cancel().catch(()=>{});release();if(named)return refuse(named,upstream.status);const code=upstreamFailure[upstream.status];return refuse(code??'FRONT_UPSTREAM_FAILED',code?upstream.status:502);}
    const out=new Headers();for(const name of responseHeaders){const value=upstream.headers.get(name);if(value!==null)out.set(name,value);}
    if(!upstream.body||req.method==='HEAD'){void upstream.body?.cancel().catch(()=>{});release();return new Response(null,{status:upstream.status,headers:out});}
    if(timer)clearTimeout(timer);const reader=upstream.body.getReader();

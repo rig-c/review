@@ -15,6 +15,7 @@ export interface DirectionView {
 
 export function directionRows(view: DirectionView): { key: string; values?: string[] }[] {
   const model = view.model;
+  const joined = model?.inspected ? view.authored?.joined : undefined;
   return [
     model ? { key: model.inspected ? 'direction.inspected' : 'direction.scratch', values: [model.path, model.sha256] }
       : { key: 'direction.modelUnavailable' },
@@ -26,6 +27,8 @@ export function directionRows(view: DirectionView): { key: string; values?: stri
     model?.inspected && view.authored
       ? { key: 'direction.authored', values: [String(view.authored.rigVersion), view.authored.file.path, view.authored.file.sha256] }
       : { key: 'direction.authoredUnavailable' },
+    ...(joined ? [{ key: 'direction.joined', values: [String(joined.postVersion), joined.projectModel.path,
+      joined.packageRoot, joined.projectHash, joined.packageSourceHash] }] : []),
     { key: 'direction.runtimeCameraUnavailable' },
     { key: 'direction.cameraApplyUnavailable' },
   ];

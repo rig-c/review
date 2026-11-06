@@ -378,6 +378,12 @@ requires reopening and a project without interview content reports
 Use **Save explicit picks** to persist pending choices. Historical answers
 remain read-only and opening or saving picks does not sign off any stage.
 
+To inspect authored direction in **4 Direction**, add `--post-version <post>`
+to the joined command. The post must explicitly name the selected
+`--project-version` rig and bind an authored direction document. Reuse the
+printed feedback command, including the project, rig, post and picks arguments,
+to export from that session.
+
 From a create project with retained choice sets, create a dedicated output
 directory and open the foreground Stage 2 view:
 
