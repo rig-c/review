@@ -1004,6 +1004,21 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     await until(rigVisible, 'direction-collapsed-rig');
     assert.equal(await evaluate('document.querySelector("#direction-authored-keys").open'), false);
     await clickDirection('initial-expand');
+    const stageDisplayWithTurnPad = await evaluate<string>(`(()=>{
+      const stage=document.getElementById('stage-layout');
+      const existing=document.getElementById('turn-pad-host');
+      const fixture=existing??document.createElement('div');
+      if(!existing){
+        fixture.id='turn-pad-host';
+        stage.before(fixture);
+      }
+      try {
+        return getComputedStyle(stage).display;
+      } finally {
+        if(!existing)fixture.remove();
+      }
+    })()`);
+    assert.equal(stageDisplayWithTurnPad, 'none', 'Expanded Direction hides the rig with a Turn Pad before the stage');
     const readExpandedDirection = () => evaluate<{
       heading:string; headingVisible:boolean; rows:string; keys:unknown;
       properties:{text:string; visible:boolean; geometry:ReturnType<typeof visibilityGeometry>}[];

@@ -421,7 +421,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 #direction-panel[open]:not([hidden]):has(#direction-authored-keys[open]:not([hidden])) + #direction-authored-body{
   display:block
 }
-#direction-panel[open]:not([hidden]):has(#direction-authored-keys[open]:not([hidden])) + #direction-authored-body + #stage-layout{
+#direction-panel[open]:not([hidden]):has(#direction-authored-keys[open]:not([hidden])) + #direction-authored-body ~ #stage-layout{
   display:none
 }
 .review-stage-panel.with-interview {
