@@ -1,3 +1,4 @@
+import {DIRECTION_MAX_BYTES, readDirectionInspection, type DirectionInspection} from './direction-inspection.ts';
 import {discoverTurnDials} from './turn-pad.ts';
 import { createHash } from 'node:crypto';
 import { toolVersions } from './versions.ts';
@@ -14,6 +15,7 @@ export interface Reference { id: string; label: string; type: 'image' | 'video' 
 export interface Checkpoint { id: string; title: string; time?: number; animation?: string; reference?: string; note?: string; workspace?: 'modeling' | 'motion'; camera?: { zoom: number; x: number; y: number }; axis?: {id:string;value:number} }
 export interface ReviewManifest {
   schema: 'rig-review/1'; id: string; title: string; revision: string; model?: string; motion?: string;
+  direction?: string; sets?: string;
   references: Reference[]; animations: { id: string; label?: string; duration?: number }[];
   checkpoints: Checkpoint[]; authoring: { label: string; path: string }[];
   axes: { id: string; label: string; animation: string; min: number; max: number }[];
@@ -22,7 +24,7 @@ export interface ReviewManifest {
   producer?: HandoffDeclaration;
 }
 export interface ReviewedSource { readonly packageRevision:string; readonly viewerVersion:string; readonly runtimeVersion:string; readonly rig:{readonly path:string;readonly sha256:string}|null; readonly motion:{readonly path:string;readonly sha256:string}|null; readonly handoff?:HandoffRecord }
-export interface ReviewPackage { referenceHashes?:Record<string,string>; root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; feedbackCatalog:FeedbackCatalog;
+export interface ReviewPackage { direction?:DirectionInspection; setsHash?:string; referenceHashes?:Record<string,string>; root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; feedbackCatalog:FeedbackCatalog;
   /** The resolved producer handoff (#101) and, when there is none, the refusal line naming where it was looked for. */
   handoff: Handoff|null; handoffReason: string|null; handoffInputs?: HandoffFlags;
   /** #187: the rig-parts build root ({@link isBuildRoot}) whose `check/` this package is, however it was opened; review state stays outside it. */
@@ -37,6 +39,7 @@ export function string(value: unknown, field: string): string { if (typeof value
 function id(value: unknown, field: string): string { const s = string(value, field); if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(s)) fail(field, 'identifier [A-Za-z0-9][A-Za-z0-9._-], at most 128 characters'); return s; }
 export function choice<T extends string>(value: unknown, choices: readonly T[], field: string): T { if (!choices.includes(value as T)) fail(field, choices.join(' | ')); return value as T; }
 function number(value: unknown, field: string, min = 0): number { if (typeof value !== 'number' || !Number.isFinite(value) || value < min) fail(field, `finite number >= ${min}`); return value; }
+export { number as numberField };
 function optionalString(value: unknown, field: string): string | undefined { return value === undefined ? undefined : string(value, field); }
 function optionalNumber(value: unknown, field: string): number | undefined { return value === undefined ? undefined : number(value, field); }
 function list<T>(value: unknown, field: string, parse: (v: Record<string, unknown>, field: string) => T): T[] {
@@ -62,6 +65,8 @@ export function parseManifest(input: unknown): ReviewManifest {
   const manifest: ReviewManifest = {
     schema: 'rig-review/1', id: id(m.id, 'id'), title: string(m.title, 'title'), revision: string(m.revision, 'revision'),
     model: m.model === undefined ? undefined : packagePath(m.model, 'model'),
+    ...(m.direction===undefined?{}:{direction:packagePath(m.direction,'direction')}),
+    ...(m.sets===undefined?{}:{sets:packagePath(m.sets,'sets')}),
     motion:m.motion===undefined?undefined:packagePath(m.motion,'motion'),
     references: list(m.references, 'references', (v,f) => ({ id:id(v.id,f+'.id'), label:string(v.label,f+'.label'), type:choice(v.type,['image','video','pose'],f+'.type'), path:packagePath(v.path,f+'.path'), width:v.width===undefined?undefined:number(v.width,f+'.width',Number.EPSILON), height:v.height===undefined?undefined:number(v.height,f+'.height',Number.EPSILON) })),
     animations: list(m.animations,'animations',(v,f) => ({id:id(v.id,f+'.id'),label:optionalString(v.label,f+'.label'),duration:optionalNumber(v.duration,f+'.duration')})),
@@ -72,6 +77,8 @@ export function parseManifest(input: unknown): ReviewManifest {
     audio:{clips:list(audio.clips,'audio.clips',(v,f)=>({id:id(v.id,f+'.id'),label:optionalString(v.label,f+'.label'),path:packagePath(v.path,f+'.path')})),cues:list(audio.cues,'audio.cues',(v,f)=>({id:id(v.id,f+'.id'),clip:string(v.clip,f+'.clip'),time:number(v.time,f+'.time'),animation:optionalString(v.animation,f+'.animation')}))}
   };
   if(manifest.model&&!manifest.model.endsWith('.model.json'))fail('model','compiled model path ending .model.json (the play runtime input)');
+  if(manifest.sets&&!manifest.model)fail('sets','compiled model declaration');
+  if(manifest.direction&&!manifest.model)fail('direction','compiled model declaration');
   for (const c of manifest.checkpoints) { if(c.reference && !manifest.references.some(r=>r.id===c.reference)) fail(`checkpoint ${c.id}.reference`,'declared reference id'); if(c.animation && !manifest.animations.some(a=>a.id===c.animation)) fail(`checkpoint ${c.id}.animation`,'declared animation id'); }
   for (const c of manifest.audio.cues) { if(!manifest.audio.clips.some(a=>a.id===c.clip)) fail(`cue ${c.id}.clip`,'declared audio clip id'); if(c.animation && !manifest.animations.some(a=>a.id===c.animation)) fail(`cue ${c.id}.animation`,'declared animation id'); }
   for (const a of manifest.axes) { if(a.min >= a.max) fail(`axis ${a.id}`,'min < max'); if(!manifest.animations.some(v=>v.id===a.animation)) fail(`axis ${a.id}.animation`,'declared animation id'); }
@@ -87,6 +94,8 @@ export async function loadReview(input: string, options: { handoff?: HandoffFlag
   const manifestPath=inputPath;const root=directory?inputPath:await realpath(dirname(inputPath));
   const manifest=directory?await folderManifest(root):parseManifest(JSON.parse(await readFile(manifestPath,'utf8')));
   const files = new Set([...(directory?[]:[relative(root,manifestPath)]),...manifest.references.map(v=>v.path),...manifest.authoring.map(v=>v.path),...manifest.audio.clips.map(v=>v.path)]);
+  if(manifest.direction)files.add(manifest.direction);
+  if(manifest.sets)files.add(manifest.sets);
   const rootFile=async(name:string):Promise<string|undefined>=>{try{await safeFile(root,name);return name;}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw e;}};
   const authoringPath=(name:string):string|undefined=>{const paths=manifest.authoring.filter(v=>posix.basename(v.path)===name);return paths.length===1?paths[0].path:undefined;};
   const rigPath=manifest.model??await rootFile('skeleton.json')??authoringPath('skeleton.json')??await rootFile('skeleton.skel')??authoringPath('skeleton.skel');
@@ -107,23 +116,26 @@ export async function loadReview(input: string, options: { handoff?: HandoffFlag
     const joints=list(pose.joints,`pose ${r.id}.joints`,(v,f)=>({id:id(v.id,f+'.id'),x:number(v.x,f+'.x',-Number.MAX_VALUE),y:number(v.y,f+'.y',-Number.MAX_VALUE),parent:optionalString(v.parent,f+'.parent')}));
     for(const j of joints) if(j.parent&&!joints.some(v=>v.id===j.parent&&v.id!==j.id)) fail(`pose ${r.id} joint ${j.id}.parent`,'another declared joint id');
   }
-  const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;let modelMetadata:Record<string,unknown>|null=null;
+  const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;let modelMetadata:Record<string,unknown>|null=null;let directionInput:unknown;
   // The handoff files are hashed beside the package: their record joins the reviewed identity (and so the session file).
   const {handoff,reason:handoffReason}=await resolveHandoff(root,manifest.producer,options.handoff);
   // #329: the source painting the handoff knows is the first reference, outside the package's own files.
   const painting=sourcePainting(manifest,handoff,directory);
   const hash = createHash('sha256');hash.update(JSON.stringify(manifest));hash.update('\0');const fileHashes=new Map<string,string>();
-  for(const p of [...files].sort()) { const full=await safeFile(root,p); const before=await stat(full); hash.update(p);hash.update('\0');hash.update(String(before.size));hash.update('\0'); const fileHash=createHash('sha256');const metadataChunks:Buffer[]=[];for await(const chunk of createReadStream(full)){hash.update(chunk);fileHash.update(chunk);if(p===reportPath||p===manifest.model)metadataChunks.push(chunk);}fileHashes.set(p,fileHash.digest('hex')); const after=await stat(full); if(before.size!==after.size||before.mtimeMs!==after.mtimeMs) throw new Error(`Asset ${p} changed while hashing; retry with stable package inputs`);
+  for(const p of [...files].sort()) { const full=await safeFile(root,p); const before=await stat(full); hash.update(p);hash.update('\0');hash.update(String(before.size));hash.update('\0'); const fileHash=createHash('sha256');const metadataChunks:Buffer[]=[];const isDirection=p===manifest.direction;let bytesRead=0;
+    if(isDirection&&before.size>DIRECTION_MAX_BYTES)throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');for await(const chunk of createReadStream(full)){hash.update(chunk);fileHash.update(chunk);if(isDirection&&(bytesRead+=chunk.length)>DIRECTION_MAX_BYTES)throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');if(p===reportPath||p===manifest.model||isDirection)metadataChunks.push(chunk);}fileHashes.set(p,fileHash.digest('hex')); const after=await stat(full); if(before.size!==after.size||before.mtimeMs!==after.mtimeMs) throw new Error(`Asset ${p} changed while hashing; retry with stable package inputs`);
     // The parser and package hash consume the same bytes, never two file reads.
     if(p===manifest.model){if(fileHashes.get(p)!==modelBytesHash)throw new Error(`Model ${p} changed while hashing; retry with stable package inputs`);modelMetadata=object(JSON.parse(Buffer.concat(metadataChunks).toString('utf8')),'model');}
+    if(isDirection)directionInput=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));
     if(p===reportPath){let value:unknown;try{value=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));}catch(e){throw new Error(`${p}: ${e instanceof Error?e.message:String(e)}`);}report=parseReport(value,p);}
   }
   if(painting){hash.update(SOURCE_PAINTING_ID);hash.update('\0');hash.update(painting.sha256);hash.update('\0');}
   // #192: the root is `check/` whether the folder or its review.json was opened, so the build root is kept either way.
   const buildRoot=basename(root)==='check'&&await isBuildRoot(dirname(root))?dirname(root):undefined;
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null,...(handoff?{handoff:handoff.record}:{})};
+  const direction=manifest.direction?readDirectionInspection(directionInput,{path:manifest.direction,sha256:fileHashes.get(manifest.direction)!},reviewedSource.rig):undefined;
   const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations:modelAnimations(modelMetadata),clock:report?.clock??null,clockAnimation:report?.animation??null,...(discoverTurnDials(modelMetadata).length?{turnDials:discoverTurnDials(modelMetadata)}:{})};
-  return {referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{})};
+  return {...(direction?{direction}:{}),...(manifest.sets?{setsHash:fileHashes.get(manifest.sets)!}:{}),referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{})};
 }
 
 /** #329: the reference id and served path of the handoff's source painting; the path is a name, never a package file. */

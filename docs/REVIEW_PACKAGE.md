@@ -37,9 +37,9 @@ The illustrative `look` animation in `axes` must also be declared in `animations
 
 ## Files and references
 
-Every path is a literal relative path, including `model`, optional read-only `motion`, each reference `path`, authoring `path`, clip `path`, and every page name in the compiled model. Manifest paths accept no absolute paths, URL schemes, colon, percent encoding, traversal, backslash, query, fragment, empty segment, or symlink escape. Compiled-model page names are resolved relative to the model directory: a page such as `../parts/page.png` is accepted only when its normalized destination remains inside the review package. This permits portable local builds without letting a page escape the package. All declared files must exist as regular files. The asset endpoint serves only declared files, the manifest, and compiled-model page images. There is no arbitrary directory endpoint. Keep a package focused on the files intended for inspection.
+Every path is a literal relative path, including `model`, optional `direction` and `sets`, optional read-only `motion`, each reference `path`, authoring `path`, clip `path`, and every page name in the compiled model. Manifest paths accept no absolute paths, URL schemes, colon, percent encoding, traversal, backslash, query, fragment, empty segment, or symlink escape. Compiled-model page names are resolved relative to the model directory: a page such as `../parts/page.png` is accepted only when its normalized destination remains inside the review package. This permits portable local builds without letting a page escape the package. All declared files must exist as regular files. The asset endpoint serves only declared files, the manifest, and compiled-model page images. There is no arbitrary directory endpoint. Keep a package focused on the files intended for inspection.
 
-`model` is optional and must point to `rigc-compiled/3` under a filename ending `.model.json`, produced by an upstream gated rigc build. Review uses the public `@rig-c/play` loader and player; Spine JSON/skel is not its input. Its pages are resolved relative to the model document. Missing model means unavailable playback, never a mock playback success. The runtime's optional attachment-set sidecar is not part of v1; attachment presets must remain unavailable rather than guessed.
+`model` is optional and must point to `rigc-compiled/3` under a filename ending `.model.json`, produced by an upstream gated rigc build. Review uses the public `@rig-c/play` loader and player; Spine JSON/skel is not its input. Its pages are resolved relative to the model document. Missing model means unavailable playback, never a mock playback success. The optional `sets` path declares an attachment-set sidecar for single-package playback. Without that declaration, attachment presets are unavailable. See [Direction inspection](#direction-inspection).
 
 Reference `type` is `image`, `video`, or `pose`. `width` and `height` optionally state image pixel dimensions. The primary animated pose input is the canonical `rig-pose-sequence/1` format documented by `@rig-c/pose`, consumed directly:
 
@@ -920,3 +920,26 @@ file's path and byte hash in the handoff. Apply copies those bytes into its
 private scratch directory and points the scratch config at that copy. The
 copied input is checked with the retained result. A missing or redirected
 requirements file refuses the handoff or Apply by name.
+
+### Direction inspection
+
+In a single-package inspection, **4 Direction** keeps the stage, reference picker
+and Turn Pad visible. The panel names the current model and its SHA-256, the
+package revision and source SHA-256, and the installed Play version. It reports
+the compiled sliders available through the Turn Pad and the attachment sets
+loaded through Play. Independent depth control is unavailable on this surface.
+
+A manifest may declare `direction` as the literal package-relative path to a
+retained Create `rig-create/direction@1` document (up to 256 KiB). Preserve the
+document's model path relative to the Review package root. Review requires that
+path and SHA-256 to match the inspected compiled model and includes the direction
+file in the package source hash. The panel shows authored camera keys and timing
+read-only while that inspected model is on stage. Create remains responsible
+for validating project history and citations. Viewport pan and zoom affect only
+inspection. Authored camera playback and camera Apply are unavailable.
+
+The optional `sets` manifest path names a package-local Play attachment-set
+sidecar for the inspected single-package build. Review includes it in the
+source hash and loads its sets through the published runtime. Scratch builds
+use their own model and do not inherit the inspected build's sidecar. Compare
+and standalone parts retain their existing inspection surfaces.

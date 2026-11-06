@@ -1,3 +1,5 @@
+import {bindDirectionPanel} from './direction-panel.ts';
+import type {DirectionInspection} from '../src/direction-inspection.ts';
 import {bindStageNav} from './stage-nav.ts';
 import {timeOnlyBasis,feedbackTimingLabel,requireFeedbackFrames,isTimeOnlyFeedback} from '../src/stage-comment.ts';
 import {bindStageComments,type CommentPose} from './stage-comments.ts';
@@ -71,7 +73,7 @@ import {assertRigFieldOps,RIG_FIELDS_READOUT_BARS,TURN_BONE} from '../src/rig-fi
 import {IDLE_READOUT_BARS,type LocalChannel} from '../src/idle-tracks.ts';
 import type {PatchOp} from '../src/config-patch.ts';
 
-interface ReviewResponse { referenceHashes?:Record<string,string>; initialAnimation?:string|null; manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourcePainting?:{id:string;path:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
+interface ReviewResponse { direction?:DirectionInspection; setsHash?:string; referenceHashes?:Record<string,string>; initialAnimation?:string|null; manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourcePainting?:{id:string;path:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
 interface PoseReference { schema: 'rig-review-pose/1'; coordinateSystem: 'image-pixels-y-down'; width: number; height: number; joints: { id: string; x: number; y: number; parent?: string }[] }
 interface SequenceJoint { state: 'observed' | 'occluded' | 'missing' | 'inferred'; at?: [number, number]; score?: number }
 interface PoseSequence { spec: 'rig-pose-sequence/1'; space: { units: 'picture-px'; origin: 'top-left'; y: 'down' }; width: number; height: number; source?: string; frames: { t: number; people: { id: string; joints: Record<string, SequenceJoint> }[] }[]; camera?: { s: number; tx: number; ty: number; inliers: number }[]; cameraSource?: unknown }
@@ -97,6 +99,7 @@ const access = pageInstanceAccess();
 connectLiveWindow(access);
 let readOnly: string | null = null;
 let data: ReviewResponse;
+let directionPanel:ReturnType<typeof bindDirectionPanel>|undefined;
 let session: ReviewSession;
 let dirty = false;
 let saving = false;
@@ -666,6 +669,30 @@ function configureTurnPad(model:unknown):void {
  if(previous&&turnPad){try{turnPad.restore(previous);}catch{message('TURN_STATE_MODEL_MISMATCH: turn values reset for this build.',true);}}
  workspace?.refresh();
 }
+/** Verify the same response consumed by Play, rather than a second read of its source. */
+function stageLoadInputs(modelUrl:string, modelHash:string) {
+ const setsUrl=modelUrl===inspectedModel?.url&&data.manifest.sets&&data.setsHash
+  ?new URL(assetUrl(data.manifest.sets),location.href).href:null;
+ const checkedFetch=new Proxy(fetch,{apply:async(_target,_this,args:Parameters<typeof fetch>)=>{
+  const expected=String(args[0])===modelUrl?modelHash:String(args[0])===setsUrl?data.setsHash:null;
+  if(!expected)throw new Error('DIRECTION_SOURCE_CHANGED: undeclared playback input');
+  const response=await fetch(...args);
+  if(!response.ok)return response;
+  const bytes=await response.clone().arrayBuffer();
+  const sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),v=>v.toString(16).padStart(2,'0')).join('');
+  if(sha256!==expected)throw new Error('DIRECTION_SOURCE_CHANGED: playback bytes differ from the bound SHA-256');
+  return response;
+ }});
+ return {setsUrl,fetch:checkedFetch};
+}
+
+function configurePartSets(keep=''):void {
+ const picker=select('part-set'),presets=player?.sets()??[];
+ picker.replaceChildren(option('', 'Original set'),...presets.map(set=>option(set.name,set.name)));
+ picker.disabled=!presets.length;
+ if(keep&&presets.some(set=>set.name===keep)){player!.setSet(keep);picker.value=keep;}
+}
+
 async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
   text('renderer-state',rendererStatus(null,'pending').label);
   if (!data.manifest.model) { text('player-state', 'No rig supplied · reference review is available'); return; }
@@ -673,7 +700,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
   try {
     const modelUrl = new URL(assetUrl(data.manifest.model), location.href).href;
     inspectedModel={url:modelUrl,prefix:access.route('/assets/'),sha256:data.reviewedSource.rig?.sha256??''};stageModelHash=inspectedModel.sha256||null;
-    assets = await loadModel({ modelUrl, setsUrl: null, resolvePage: (name, url) => {
+    assets = await loadModel({ modelUrl, ...stageLoadInputs(modelUrl,inspectedModel.sha256), resolvePage: (name, url) => {
       const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith(access.route('/assets/'))) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
     player = new RigPlayer(el('rig-root'), assets);
@@ -687,7 +714,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     const names=assets.animations.map(clip=>clip.name),initial=initialIdleAnimation(names,initialPlayerAnimation(names,data.initialAnimation??undefined,initialCheckpoint),!!data.initialAnimation||!!initialCheckpoint?.animation||!!initialCheckpoint?.axis);
     if(initial)chooseAnimation(initial);else drawRig(()=>player!.draw());
     el('rig-empty').hidden = true; text('player-state', '@rig-c/play · Actual rig');
-    const presets = player.sets(); if (presets.length) { select('part-set').replaceChildren(option('', 'Original set')); for (const set of presets) select('part-set').append(option(set.name, set.name)); select('part-set').disabled = false; }
+    configurePartSets();
     const validAxes = data.manifest.axes.filter(axis => assets?.animations.some(item => item.name === axis.animation));
     text('axis-state', validAxes.length ? `${validAxes.length} axes` : 'No inspection axes supplied');
     select('axis-select').replaceChildren(); for (const axis of validAxes) select('axis-select').append(option(axis.id, axis.label));
@@ -697,6 +724,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     describeLayerToggles(document,el('layer-state').textContent??'');
     fitCamera();
   } catch (error) { turnPad?.dispose();turnPad=null;document.getElementById('turn-pad-host')?.remove();text('renderer-state',rendererStatus(null,'failed').label);player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${errorText(error)}`); message(errorText(error), true); }
+  directionPanel?.refresh();
 }
 
 function chooseAxis(): void {
@@ -930,7 +958,16 @@ function bind(): void {
     } catch (error) { message(`Submission failed: ${errorText(error)}`, true); } finally { saving = false; updateSavedState(); }
   };
   // Saved browser defaults seed a new inspection; explicit links and source drafts restore over them.
-  viewDisposers.push(bindStageNav({model:!!data.manifest.model,setup:()=>showInspector('rig'),draftBuild:()=>appliedOnStage?.buildId??'inspected',correction:openStageCorrection}));
+  directionPanel=bindDirectionPanel(el('stage-layout'),()=>{
+    const inspected=!!inspectedModel&&(!stageSource||stageSource.url===inspectedModel.url);
+    const model=player&&stageModelHash?{path:inspected?data.manifest.model!:new URL(stageSource!.url).pathname,sha256:stageModelHash,inspected}:null;
+    return {model,revision:data.manifest.revision,sourceHash:data.sourceHash,runtime:data.reviewedSource.runtimeVersion,
+      dials:player?turnPad?.state.dials??[]:[],sets:player?.sets().map(set=>set.name)??[],activeSet:select('part-set').value,authored:data.direction};
+  },name=>{
+    const picker=select('part-set');picker.value=name;picker.dispatchEvent(new Event('change',{bubbles:true}));
+  });
+  viewDisposers.push(()=>directionPanel?.dispose());
+  viewDisposers.push(bindStageNav({model:!!data.manifest.model,direction:active=>directionPanel?.show(active),setup:()=>showInspector('rig'),draftBuild:()=>appliedOnStage?.buildId??'inspected',correction:openStageCorrection}));
   workspace=bindWorkspaceUI({changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
@@ -2181,14 +2218,14 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  const keepPart=stageCorrectionPart?parts?.value():null;
  const keepAnimation=animation,keepTime=time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
  inspectionSourceState='pending';partModel=null;pause();refreshAnimationInspection();
- const next=await loadModel({modelUrl,setsUrl:null,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}}).catch(error=>{inspectionSourceState='failed';refreshAnimationInspection();throw error;});
+ const next=await loadModel({modelUrl,...stageLoadInputs(modelUrl,sha256),resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}}).catch(error=>{inspectionSourceState='failed';refreshAnimationInspection();throw error;});
  physicsPanel?.clearPreview();
  pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);setupChestWorld=readSetupChest(player);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
  {const animations=select('animation-select');animations.replaceChildren(...assets.animations.map(item=>option(item.name,data.manifest.animations.find(a=>a.id===item.name)?.label??item.name)));animations.disabled=assets.animations.length===0;}
  player.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
  try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();meshEditor?.selectionChanged();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
- if(keepSet){try{player.setSet(keepSet);}catch{select('part-set').value='';player.setSet(null);}}
+ configurePartSets(keepSet);
  // The same world before the first pose: a physics Apply resumes the wind (clock and pulse), the pending jolts, gravity and
  // whether the controls are engaged as they stood when Apply was pressed; then the seek re-poses under that world.
  if(world){wind.resume(world.wind);joltQueue=world.jolts.map(step=>({...step}));input('environment-applied').checked=world.applied;input('gravity').value=String(world.gravity);syncEnvironmentInputs();}
@@ -2205,7 +2242,7 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  // The preview (#104) drives the new player once its bone setups are read (an idle Apply cleared it first).
  stageDocumentSet=true;void loadModelDocument(modelUrl,sha256).then(loaded=>{if(loaded.ok&&stageModelHash===sha256)idlePanel?.model(boneSetup(loaded.document));});
  if(wasPlaying)void playPreview();
- }finally{stageCorrectionRebinding--;}
+ }finally{stageCorrectionRebinding--;directionPanel?.refresh();}
 }
 /**
  * Mesh Apply (#106): the pending `meshes.<part>` entry becomes one config patch — `replace /meshes/<part>` and nothing

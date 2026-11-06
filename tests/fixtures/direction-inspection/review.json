@@ -1,0 +1,11 @@
+{
+  "schema": "rig-review/1",
+  "id": "example-direction",
+  "title": "Create direction probe",
+  "revision": "post-v2",
+  "model": "derived/review/v1/out/check/build/skeleton.model.json",
+  "direction": "evidence/direction/v2.json",
+  "references": [
+    {"id": "rectangle", "label": "Rectangle source", "type": "image", "path": "derived/review/v1/out/check/build/rectangle.png"}
+  ]
+}
