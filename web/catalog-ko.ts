@@ -1,5 +1,9 @@
 export const koCatalog: Readonly<Record<string, string>> = {
+  "RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.": "RIG_VERSION_UNAVAILABLE: 이 초안에는 기록된 리그 검토 패키지가 없습니다.",
+  "DIRECTION_VERSION_UNAVAILABLE: this draft has no recorded rig review package.": "DIRECTION_VERSION_UNAVAILABLE: 이 초안에는 기록된 리그 검토 패키지가 없습니다.",
+  "PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.": "PARTS_VERDICT_READ_ONLY: 대기 중인 파츠 검토와 명시적으로 지정한 판정 출력 디렉터리가 필요합니다.",
   "INTERVIEW_OPTIONS_STALE": "INTERVIEW_OPTIONS_STALE: 프로젝트 또는 원본이 바뀌었어요. 검토를 다시 여세요.",
+  "interview.joinedDraft": "초안 {0} · 프로젝트 {1} · 원본 {2}",
   "interview.joined": "Create 버전 {0} · 프로젝트 SHA-256 {1} · 검토 SHA-256 {2}",
   "interview.mismatch": "INTERVIEW_SOURCE_MISMATCH: 검토 대상이 지정한 Create 패키지와 일치하지 않아요.",
   "interview.imageUnavailable": "INTERVIEW_IMAGE_INVALID: 바인딩된 이미지를 표시할 수 없습니다.",

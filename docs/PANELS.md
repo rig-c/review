@@ -475,12 +475,12 @@ Reset returns to the inspected revision. New scratch reads and made-mesh feedbac
 submissions recheck pinned producer inputs, revision files and compiled files.
 A changed scratch input cannot inherit clean checked evidence.
 
-The embedding is read-only: original verdicts and comments are never copied onto
+The compiled inspection embedding is read-only: original verdicts and comments are never copied onto
 scratch geometry or saved by navigating. Use the standalone `parts` command for
 its separate explicit original-parts sign-off. Parts-only inputs remain
 inspectable and name `STAGE_DRAFT_UNAVAILABLE` for direct correction. A missing
 handoff keeps the inspected atlas available where supplied. Compare retains its
-read-only, side-specific inspected atlas. Neither flow guesses a sibling draft.
+read-only, side-specific inspected atlas. Neither flow guesses a sibling draft. A [joined Create draft](WORKFLOWS.md#open-a-recorded-draft-before-rig-review) displays its recorded parts and mesh without a production rig package. A pending parts review with an explicit output directory can save a separate verdict here.
 
 Named draft boundaries are `STAGE_DRAFT_UNAVAILABLE`, `STAGE_DRAFT_MISMATCH`,
 `STAGE_DRAFT_STALE`, `STAGE_DRAFT_CHANGED`, `STAGE_DRAFT_UNCHECKED` and

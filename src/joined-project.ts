@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { lstatSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { boundBytes, checkedPath, digest, jsonObject, literalPath, object, readProject, readRegular } from './interview-project.ts';
 import { DIRECTION_MAX_BYTES, readDirectionInspection } from './direction-inspection.ts';
@@ -6,13 +6,33 @@ import { outputDirectory } from './interview-picks.ts';
 import { packagePath, type ReviewPackage } from './manifest.ts';
 import { assertReviewUnchanged, withReviewAssertion } from './reference.ts';
 
-export interface ProjectDesignation {root: string; version: number; postVersion?: number; picksDir: string}
+export type ProjectDesignation={root:string;picksDir:string}&(
+  {version:number;postVersion?:number;draftId?:never;partsVerdictDir?:never} |
+  {draftId:string;partsVerdictDir?:string;version?:never;postVersion?:never}
+);
+interface DraftSource {
+  parts:string;
+  rig:string;
+  meshReport:string;
+  model:string;
+  files:ReadonlyMap<string,string>;
+}
+interface JoinedSource {
+  review:ReviewPackage;
+  opened:ReturnType<typeof readProject>;
+  designation:ProjectDesignation;
+  assertCurrent:()=>Promise<void>;
+  available:boolean;
+  draft?:DraftSource;
+  verdictDirectory?:()=>string;
+}
 export const interviewUnavailable = 'INTERVIEW_UNAVAILABLE';
 export const interviewMismatch = 'INTERVIEW_SOURCE_MISMATCH';
 export const interviewStale = 'INTERVIEW_OPTIONS_STALE';
 export const directionStale = 'DIRECTION_SOURCE_STALE';
 
-export function joinProject(p: ReviewPackage, designation: ProjectDesignation) {
+export function joinProject(p: ReviewPackage, designation: ProjectDesignation):JoinedSource {
+  if(designation.draftId!==undefined)return joinDraft(p,designation);
   const opened = readProject(designation.root);
   const {root, hash, project} = opened;
   const {version} = designation;
@@ -126,5 +146,88 @@ export function joinProject(p: ReviewPackage, designation: ProjectDesignation) {
   }, assertCurrent) : p;
   return {review, opened, designation:{...designation, root}, assertCurrent,
     available:opened.questions.length > 0 || opened.historical.length > 0};
+}
+/** Match the draft writer's explicit parts and rig inventories, independently of a production version. */
+function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draftId:string}>):JoinedSource {
+  const opened=readProject(designation.root);
+  const {root,hash,project}=opened;
+  const {draftId}=designation;
+  const path='derived/drafts/'+draftId;
+  const fail=():never=>{throw new Error('INTERVIEW_SOURCE_MISMATCH: expected the selected Create pre-rig draft and exact recorded files');};
+  if(!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(draftId)||!Array.isArray(project.versions)||project.versions.length||
+     !Array.isArray(project.drafts)||!Array.isArray(project.signoffs)||!p.manifest.model||!p.reviewedSource.rig||
+     p.direction||p.handoffInputs)return fail();
+  const matches=project.drafts.map(object).filter(draft=>draft.id===draftId);
+  const record=matches[0],parts=object(record?.parts);
+  if(matches.length!==1||record?.kind!=='draft-rig'||!literalPath(parts.path)||!parts.path.startsWith(path+'/')||
+     !Array.isArray(parts.files)||!Array.isArray(record.files)||
+     (record.config_inputs!==undefined&&!Array.isArray(record.config_inputs)))return fail();
+  const files=new Map<string,string>();
+  const inventory=(refs:unknown[],prefix:string)=>{
+    const paths:string[]=[];
+    for(const ref of refs){
+      const {path,sha256}=object(ref);
+      if(!literalPath(path)||!path.startsWith(prefix+'/')||typeof sha256!=='string'||!/^[a-f0-9]{64}$/.test(sha256))return fail();
+      packagePath(path);
+      if(paths.includes(path)||(files.has(path)&&files.get(path)!==sha256))return fail();
+      paths.push(path);
+      files.set(path,sha256);
+    }
+    return paths;
+  };
+  let draft:DraftSource;
+  try{
+    inventory([record.config,...(record.config_inputs??[])],path);
+    const input=inventory(parts.files,parts.path);
+    if(!input.includes(parts.path+'/parts.json')||!input.some(file=>file.startsWith(parts.path+'/parts/')))return fail();
+    const output=inventory(record.files,path);
+    const rigs=output.filter(file=>file.endsWith('/rig.json'));
+    if(rigs.length!==1)return fail();
+    const rig=rigs[0]!,dir=rig.slice(0,-'/rig.json'.length);
+    const meshReport=dir+'/mesh_report.json';
+    const model=relative(root,join(p.root,p.manifest.model)).split(sep).join('/');
+    const checkRoot=dir.endsWith('/rig')?dir.slice(0,-'/rig'.length):dir;
+    if(!output.includes(meshReport)||!output.includes(dir+'/motion.json')||
+       !model.startsWith(checkRoot+'/check/')||!output.includes(model)||files.get(model)!==p.reviewedSource.rig.sha256||
+       ![...p.files].every(file=>output.includes(relative(root,join(p.root,file)).split(sep).join('/'))))return fail();
+    draft={parts:checkedPath(root,parts.path,true),rig:checkedPath(root,rig),meshReport:checkedPath(root,meshReport),
+      model:checkedPath(root,model),files:new Map([...files].map(([file,sha])=>[checkedPath(root,file),sha]))};
+    for(const [path,sha256] of files)boundBytes(root,{path,sha256});
+  }catch{return fail();}
+  outputDirectory(root,designation.picksDir,project);
+  const assertCurrent=async()=>{
+    try{
+      await assertReviewUnchanged(p);
+      for(const [path,sha256] of files)boundBytes(root,{path,sha256});
+      if(digest(readRegular(checkedPath(root,'project.json'),8*1024*1024))!==hash)throw new Error('Project changed');
+    }catch{throw new Error(interviewStale+': project or draft changed; reopen the project');}
+  };
+  const dir=designation.partsVerdictDir;
+  // An explicit output selects the write surface. A recorded parts approval closes it.
+  const pending=['parts','parts-review'].includes(String(project.stage))&&
+    !project.signoffs.map(object).some(signoff=>signoff.stage==='parts-review');
+  let verdictDirectory:JoinedSource['verdictDirectory'];
+  if(dir!==undefined){
+    const locate=()=>{
+      const portable=(value:string)=>value.normalize('NFC').toLowerCase();
+      const overlaps=(a:string,b:string)=>a===b||a.startsWith(b+'/')||b.startsWith(a+'/');
+      if(overlaps(portable(dir),portable(path))||overlaps(portable(dir),portable(designation.picksDir)))
+        throw new Error('PARTS_VERDICT_OUTPUT');
+      try{return outputDirectory(root,dir,project);}
+      catch{throw new Error('PARTS_VERDICT_OUTPUT');}
+    };
+    const original=lstatSync(locate());
+    if(pending)verdictDirectory=()=>{
+      const output=locate(),stat=lstatSync(output);
+      if(stat.dev!==original.dev||stat.ino!==original.ino)throw new Error('PARTS_VERDICT_OUTPUT');
+      return output;
+    };
+  }
+  const review=withReviewAssertion({...p,manifest:{...p.manifest,model:undefined},handoff:null,report:null,
+    feedbackCatalog:{rig:p.feedbackCatalog.rig,bones:null,slots:null,animations:null,clock:null,clockAnimation:null},
+    sourceHash:digest(JSON.stringify({schema:'rig-review-joined-draft/1',draftId,projectHash:hash,packageSourceHash:p.sourceHash})),
+  },assertCurrent);
+  return {review,opened,designation:{...designation,root},assertCurrent,draft,verdictDirectory,
+    available:opened.questions.length>0||opened.historical.length>0};
 }
 export type JoinedProject = ReturnType<typeof joinProject>;

@@ -532,8 +532,9 @@ async function packageVersion(): Promise<string> {
   return (JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 }
 
-/** Writes the verdict atomically beside its sources. */
-export async function saveVerdict(pkg: PartsViewPackage, input: unknown): Promise<PartsVerdict> {
+/** Writes the verdict atomically at its designated destination. */
+export async function saveVerdict(pkg: PartsViewPackage, input: unknown, assertCurrent?: () => Promise<void>): Promise<PartsVerdict> {
+  await assertCurrent?.();
   await assertVerdictDestination(pkg);
   await assertPartsUnchanged(pkg);
   await readVerdict(pkg); // Existing read-side evidence errors must never become an implicit reset.
@@ -545,6 +546,7 @@ export async function saveVerdict(pkg: PartsViewPackage, input: unknown): Promis
   try {
     await writeFile(tmp, JSON.stringify(verdict, null, 2) + '\n', { flag: 'wx' });
     await assertVerdictDestination(pkg);
+    await assertCurrent?.();
     await rename(tmp, pkg.verdictPath);
   } finally { await rm(tmp, { force: true }); }
   return verdict;

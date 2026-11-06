@@ -1,3 +1,4 @@
+import { joinProject } from '../src/joined-project.ts';
 import { expect, test } from 'bun:test';
 import { realpathSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
@@ -175,6 +176,23 @@ test('joined authored post maps the recorded package and isolates feedback and s
     const doc = JSON.parse(directionBytes.toString());
     expect(authored.joined).toEqual({postVersion:2, projectHash:digest(projectBytes),
       packageSourceHash:standalone.contentHash, packageRoot:'derived/review/v1', projectModel:doc.rig.model});
+    // Isolate the package identity: the selected video contributes to the package hash
+    // while the Create project, its rig package and direction document stay identical.
+    const video=join(scratch,'explicit.mp4');
+    await writeFile(video,'Reference bytes for source identity');
+    const differentPackage=await loadOpenPackage({...inputs,reference:video});
+    if(differentPackage.mode!=='single')throw new Error('Expected joined package with explicit reference');
+    expect(differentPackage.p.direction?.joined?.projectHash).toBe(authored.joined!.projectHash);
+    expect(differentPackage.p.direction?.joined?.packageSourceHash).not.toBe(authored.joined!.packageSourceHash);
+    expect(differentPackage.contentHash).not.toBe(joined.contentHash);
+    // Isolate the project identity: its raw bytes can change with the package bytes held fixed.
+    try {
+      await writeFile(projectPath,Buffer.concat([projectBytes,Buffer.from('\n')]));
+      const differentProject=joinProject(standalone.p,joined.joined.designation).review;
+      expect(differentProject.direction?.joined?.packageSourceHash).toBe(authored.joined!.packageSourceHash);
+      expect(differentProject.direction?.joined?.projectHash).not.toBe(authored.joined!.projectHash);
+      expect(differentProject.sourceHash).not.toBe(joined.contentHash);
+    } finally {await writeFile(projectPath,projectBytes);}
     expect(authored.rigVersion).toBe(1);
     expect(authored.camera).toEqual(doc.camera);
     expect(authored.timing).toEqual(doc.timing.keys);
@@ -233,8 +251,8 @@ test('joined authored post maps the recorded package and isolates feedback and s
         await refusal('/api/review', code);
       } finally { await writeFile(path, bytes); }
     }
-    await expect(loadOpenPackage({...inputs,project:{...inputs.project!,postVersion:1}})).rejects.toThrow('DIRECTION_VERSION');
-    await expect(loadOpenPackage({...inputs,project:{...inputs.project!,version:2}})).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
+    await expect(loadOpenPackage({...inputs,project:{...inputs.project!,version:1,postVersion:1,draftId:undefined,partsVerdictDir:undefined}})).rejects.toThrow('DIRECTION_VERSION');
+    await expect(loadOpenPackage({...inputs,project:{...inputs.project!,version:2,draftId:undefined,partsVerdictDir:undefined}})).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
 
     const mutateProject = async (edit: (post: any) => void) => {
       const record = JSON.parse(projectBytes.toString());

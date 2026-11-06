@@ -1,5 +1,9 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+  "RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.": "RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.",
+  "DIRECTION_VERSION_UNAVAILABLE: this draft has no recorded rig review package.": "DIRECTION_VERSION_UNAVAILABLE: this draft has no recorded rig review package.",
+  "PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.": "PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.",
   "INTERVIEW_OPTIONS_STALE": "INTERVIEW_OPTIONS_STALE: Project or source changed. Reopen the inspection.",
+  "interview.joinedDraft": "Draft {0} · project {1} · source {2}",
   "interview.joined": "Create version {0} · project SHA-256 {1} · inspection SHA-256 {2}",
   "interview.mismatch": "INTERVIEW_SOURCE_MISMATCH: The inspection does not match the designated Create package.",
   "interview.imageUnavailable": "INTERVIEW_IMAGE_INVALID: The bound image could not be displayed.",
