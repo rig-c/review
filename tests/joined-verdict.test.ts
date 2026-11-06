@@ -133,3 +133,41 @@ test('checkpoint 2 exposes only the registered pending bones set, while its part
     expect(await readdir(fixture.output)).toEqual([]);
   }finally{server?.stop(true);await rm(root,{recursive:true,force:true});}
 });
+
+test('draft source identity includes the project hash independently of the package',async()=>{
+  const root=await mkdtemp(join(await realpath(tmpdir()),'review-draft-project-'));
+  try{
+    const f=await joinedVerdictFixture(root);
+    const before=await loadOpenPackage({input:f.input});
+    const file=join(root,'project.json'),bytes=await readFile(file);
+    try{
+      // A whitespace-only project change leaves every recorded artifact and the package identity intact.
+      await writeFile(file,Buffer.concat([bytes,Buffer.from('\n')]));
+      const standalone=await loadOpenPackage({input:f.input});
+      const joined=await loadOpenPackage({input:f.input,project:f.project});
+      if(joined.mode!=='single'||!joined.joined?.draft)throw new Error('Expected joined draft');
+      expect(standalone.contentHash).toBe(before.contentHash);
+      expect(joined.joined.opened.hash).not.toBe(f.joined.opened.hash);
+      expect(joined.contentHash).not.toBe(f.p.sourceHash);
+    }finally{await writeFile(file,bytes);}
+    await f.assertFixture();
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('draft source identity includes the package hash independently of the project',async()=>{
+  const root=await mkdtemp(join(await realpath(tmpdir()),'review-draft-package-'));
+  try{
+    const f=await joinedVerdictFixture(join(root,'project'));
+    const before=await loadOpenPackage({input:f.input});
+    // Open's explicit reference changes package identity without editing the draft or its project.
+    const reference=join(root,'identity-reference.mp4');
+    await writeFile(reference,'Reference bytes for package identity');
+    const standalone=await loadOpenPackage({input:f.input,reference});
+    const joined=await loadOpenPackage({input:f.input,project:f.project,reference});
+    if(joined.mode!=='single'||!joined.joined?.draft)throw new Error('Expected joined draft');
+    expect(standalone.contentHash).not.toBe(before.contentHash);
+    expect(joined.joined.opened.hash).toBe(f.joined.opened.hash);
+    expect(joined.contentHash).not.toBe(f.p.sourceHash);
+    await f.assertFixture();
+  }finally{await rm(root,{recursive:true,force:true});}
+});

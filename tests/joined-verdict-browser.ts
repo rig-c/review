@@ -16,6 +16,7 @@ const probe=Bun.serve({hostname:'127.0.0.1',port:0,fetch:()=>new Response()});
 const frontPort=probe.port!;probe.stop(true);
 const launchOptions={stateDir:join(root,'state'),frontPort,frontIdleMs:1200,graceMs:400,idleMs:15000};
 const state=[];
+const wrapOnly=process.env.RV436_WRAP_ONLY==='1';
 const page=await launchCdpSession(join(root,'browser'));
 const frame="document.querySelector('.review-stage-panel iframe:not([hidden]):not(.review-interview-frame)')";
 const interview="document.querySelector('.review-interview-frame:not([hidden])')";
@@ -75,7 +76,6 @@ try{
     await clickFrame(frame,'#pv-save');
     await until(`${frame}.contentDocument.querySelector('#pv-save-status').dataset.result==='saved'`);
     assert.equal(await page.evaluate(`${frame}.contentDocument.body.dataset.trustedSave`),'true');
-    await writeFile(join(artifacts,lang+'-verdict.png'),await page.screenshot());
     const names=await readdir(fixture.output);assert.equal(names.length,1);
     const filename=names[0]!,bytes=await readFile(join(fixture.output,filename));
     const verdict=JSON.parse(bytes.toString());
@@ -86,6 +86,44 @@ try{
     const exported=await fetch(new URL(prefix+'api/stage-parts/export/json',opened.url));
     assert.equal(exported.status,200);assert.equal(await exported.text(),bytes.toString());
     await writeFile(join(artifacts,lang+'-'+filename),bytes);
+    const wrap=await page.evaluate<{
+      text:string;rule:string;current:{statusClientWidth:number;statusScrollWidth:number;sidebarClientWidth:number;sidebarScrollWidth:number;lines:number};
+      withoutWrap:{statusClientWidth:number;statusScrollWidth:number;sidebarClientWidth:number;sidebarScrollWidth:number;lines:number};
+    }>(`(()=>{
+      const d=${frame}.contentDocument,status=d.getElementById('pv-save-status'),side=status.closest('.pv-side');
+      const read=()=>{
+        const range=d.createRange();range.selectNodeContents(status);
+        const lines=new Set([...range.getClientRects()].map(rect=>rect.top)).size;
+        return {statusClientWidth:status.clientWidth,statusScrollWidth:status.scrollWidth,
+          sidebarClientWidth:side.clientWidth,sidebarScrollWidth:side.scrollWidth,lines};
+      };
+      const rule=d.defaultView.getComputedStyle(status).overflowWrap,current=read(),before=status.style.overflowWrap;
+      let withoutWrap;
+      try{status.style.overflowWrap='normal';withoutWrap=read();}
+      finally{status.style.overflowWrap=before;}
+      return {text:status.textContent,rule,current,withoutWrap};
+    })()`);
+    await writeFile(join(artifacts,lang+'-verdict.png'),await page.screenshot());
+    await writeFile(join(artifacts,lang+'-wrap.json'),JSON.stringify(wrap,null,2)+'\n');
+    assert(wrap.text.includes(filename),'Saved status must retain the full filename');
+    assert.equal(wrap.rule,'anywhere');
+    assert(wrap.current.statusScrollWidth<=wrap.current.statusClientWidth,'Saved status overflows horizontally');
+    assert(wrap.current.sidebarScrollWidth<=wrap.current.sidebarClientWidth,'Parts sidebar overflows horizontally');
+    assert(wrap.current.lines>1,'Expected wrapped status text');
+    assert(wrap.withoutWrap.statusScrollWidth>wrap.withoutWrap.statusClientWidth&&
+      wrap.withoutWrap.sidebarScrollWidth>wrap.withoutWrap.sidebarClientWidth,'Removing only wrapping must reproduce the overflow');
+    if(wrapOnly){
+      await chooseStage(3);
+      const reason=await page.evaluate<string>(`document.querySelector('.review-stage-panel > [role=status]').textContent`);
+      const partsFrameVisible=await page.evaluate<boolean>(`!!${frame}`);
+      await writeFile(join(artifacts,lang+'-stage3.png'),await page.screenshot());
+      await writeFile(join(artifacts,lang+'-stage3.json'),JSON.stringify({reason,partsFrameVisible},null,2)+'\n');
+      assert.equal(reason,catalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.']);
+      assert.equal(partsFrameVisible,false);
+      await fixture.assertFixture();
+      state.push({lang,filename,wrap,stage3:reason});
+      continue;
+    }
     const refusals=[];
     for(const [stage,reason] of [[3,'RIG_VERSION_UNAVAILABLE'],[4,'DIRECTION_VERSION_UNAVAILABLE']] as const){
       await chooseStage(stage);
