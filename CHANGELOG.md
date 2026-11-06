@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.1](https://github.com/rig-c/review/compare/v1.14.0...v1.14.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* localize generated inspection labels and round turn range ([#434](https://github.com/rig-c/review/issues/434)) ([e398497](https://github.com/rig-c/review/commit/e398497f66631de74ad0d528d13fc1c13b26fd57))
+
 ## [1.14.0](https://github.com/rig-c/review/compare/v1.13.0...v1.14.0) (2026-11-06)
 
 
