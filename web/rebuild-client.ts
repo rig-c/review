@@ -372,7 +372,10 @@ export function renderHistoryCheck(node:HTMLElement, record:AppliedHistoryView['
  const state=appliedCheckState(record.check);
  node.dataset.checkVerdict=state;
  const label=state==='passed'?'Producer check passed':state==='failed'?'Producer check failed':'Producer check unavailable';
- setSourceText(node,[label,...(state==='failed'?record.failedBarLines??[]:[])].join(' · '));
+ const failedBars=record.failedBarLines;
+ const details=state==='failed'&&failedBars?.length?failedBars
+  :state!=='passed'&&record.check?.line?[record.check.line]:[];
+ setSourceText(node,[label,...details].join(' · '));
 }
 /** #166: `POST /api/rebuild/undo {from}` — the predecessor's build (kept, or re-run and still running), the inspected build, or a refusal. */
 export type UndoView=
@@ -399,6 +402,29 @@ export function retargetStage(job:AnyJobView,modelHash:string):{animation:string
 export function historyRow(history:AppliedHistoryView,index:number):string {
  const r=history.records[index]!,last=index===history.records.length-1;
  return `${index+1}. ${r.kind} (${r.op}) · ${r.what} · model ${r.modelHash.slice(0,12)}…${last?' · on the stage':r.kept?'':' · build evicted, an undo to it re-runs its step'}`;
+}
+export function renderAppliedHistory(list:HTMLElement,history:AppliedHistoryView|null,stageId:string|null):void {
+ const previousLast=(list.lastElementChild as HTMLElement|null)?.dataset.buildId;
+ const {scrollLeft,scrollTop}=list;
+ list.replaceChildren(...(history?.records??[]).map((record,index)=>{
+  const row=list.ownerDocument.createElement('li');
+  const verdict=list.ownerDocument.createElement('span');
+  row.dataset.buildId=record.id;
+  row.classList.toggle('on-stage',index===history!.records.length-1&&stageId===record.id);
+  renderHistoryCheck(verdict,record);
+  row.append(verdict,` · ${historyRow(history!,index)}`);
+  return row;
+ }));
+ if(previousLast===history?.records.at(-1)?.id){
+  list.scrollLeft=scrollLeft;
+  list.scrollTop=scrollTop;
+ }else{
+  // Single review stacks rows vertically. Compare lays them out horizontally.
+  const first=list.firstElementChild?.getBoundingClientRect();
+  const last=list.lastElementChild?.getBoundingClientRect();
+  list.scrollLeft=first&&last?last.left-first.left:0;
+  list.scrollTop=first&&last?last.top-first.top:0;
+ }
 }
 /** #166: the Undo control's label and whether it can run: the depth, and what the stage returns to. */
 export function undoControl(history:AppliedHistoryView|null,stageId:string|null,busy:boolean):{label:string;enabled:boolean;title:string} {
