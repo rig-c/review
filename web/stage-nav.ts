@@ -16,13 +16,13 @@ export function stagePartsSelectionIndex(data:{inspectionSourceHash?:string;item
  if(i<0||data.inspectionSourceHash!==saved.inspectionSourceHash||!m||(['skin','slot','attachment']as const).some(k=>m[k]!==saved.mapping[k]))throw new Error('STAGE_DRAFT_MISMATCH');
  return i;
 }
-export function stageReason(stage:ReviewStage,model:boolean):string|null {
+export function stageReason(stage:ReviewStage,model:boolean,direction=false):string|null {
  if(stage===2)return 'INTERVIEW_UNAVAILABLE: Open a designated create project with rig-review interview.';
- if(stage===4)return 'DIRECTION_UNAVAILABLE: no direction inspection contract is installed.';
+ if(stage===4&&!direction)return 'DIRECTION_UNAVAILABLE: no direction inspection contract is installed.';
  if(stage===3&&!model)return 'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.';
  return null;
 }
-export function bindStageNav(options:{interviewOnly?:boolean;partsOnly?:boolean;model:boolean;side?:()=> 'a'|'b';setup?:()=>void;draftBuild?:()=>string;correction?:(request:{part:string;sourceHash:string;buildId:string;instrument:string})=>Promise<void>}):()=>void {
+export function bindStageNav(options:{interviewOnly?:boolean;partsOnly?:boolean;model:boolean;direction?:(active:boolean)=>void;side?:()=> 'a'|'b';setup?:()=>void;draftBuild?:()=>string;correction?:(request:{part:string;sourceHash:string;buildId:string;instrument:string})=>Promise<void>}):()=>void {
  const host=document.querySelector<HTMLElement>('[data-stage-nav]');if(!host)return ()=>{};
  if(options.interviewOnly){
   const button=document.createElement('button');button.type='button';button.dataset.reviewStage='2';button.setAttribute('aria-current','step');host.append(button);
@@ -42,8 +42,9 @@ export function bindStageNav(options:{interviewOnly?:boolean;partsOnly?:boolean;
  const render=()=>{buttons.forEach((b,i)=>{b.textContent=t(reviewStages[i]!);b.setAttribute('aria-current',current===i+1?'step':'false');});host.setAttribute('aria-label',t('Inspection stages'));if(sourcePicker)sourcePicker.setAttribute('aria-label',t(current===1?'Atlas source build':'Picked build for Setup and Animate'));mesh.textContent=t('Open setup mesh instruments');};
  const place=()=>{panel.style.top=`${(host.closest('header')??host).getBoundingClientRect().bottom}px`;};
  function show(stage:ReviewStage):void {
-  current=stage;document.documentElement.dataset.inspectionStage=String(stage);render();place();const reason=stageReason(stage,options.model);
-  panel.hidden=stage===(options.partsOnly?1:3)&&!reason;
+  current=stage;document.documentElement.dataset.inspectionStage=String(stage);render();place();const reason=stageReason(stage,options.model,!!options.direction);
+  options.direction?.(stage===4);
+  panel.hidden=!reason&&(stage===(options.partsOnly?1:3)||stage===4);
   if(workspace)workspace.inert=!panel.hidden||wasInert;
   status.textContent=reason?t(reason):stage===1&&!options.partsOnly?t(options.correction?'Draft rig · structure evidence only':'Atlas inspection, read only — inspected package. Applied scratch atlas, pre-rig parts, mesh sign-off and draft corrections are unavailable here.'):'';mesh.hidden=stage!==1||!options.model||!!options.partsOnly;
   for(const frame of frames.values())frame.hidden=true;
@@ -60,7 +61,7 @@ export function bindStageNav(options:{interviewOnly?:boolean;partsOnly?:boolean;
  // Legacy bookmark/control restoration writes these canonical attributes even when a mode is unchanged.
  const canonical=new MutationObserver(()=>{if(current!==3&&!options.partsOnly&&!pickingSource)show(3);});
  document.querySelectorAll('[data-inspector]').forEach(button=>canonical.observe(button,{attributes:true,attributeFilter:['aria-selected','aria-pressed']}));
- const language=onLanguageChange(()=>{render();if(!panel.hidden)status.textContent=t(stageReason(current,options.model)??(current===1&&options.correction?'Draft rig · structure evidence only':current===1?'Atlas inspection, read only — inspected package. Applied scratch atlas, pre-rig parts, mesh sign-off and draft corrections are unavailable here.':''));for(const f of frames.values()){f.title=t('Parts and atlas inspection');f.contentWindow?.postMessage({type:'review-stage-language',language:getLanguage()},location.origin);}});
+ const language=onLanguageChange(()=>{render();if(!panel.hidden)status.textContent=t(stageReason(current,options.model,!!options.direction)??(current===1&&options.correction?'Draft rig · structure evidence only':current===1?'Atlas inspection, read only — inspected package. Applied scratch atlas, pre-rig parts, mesh sign-off and draft corrections are unavailable here.':''));for(const f of frames.values()){f.title=t('Parts and atlas inspection');f.contentWindow?.postMessage({type:'review-stage-language',language:getLanguage()},location.origin);}});
  window.addEventListener('resize',place);show(current);
  return ()=>{window.removeEventListener('message',correction);language();canonical.disconnect();sourcePicker?.querySelectorAll('[data-build-side]').forEach(button=>button.removeEventListener('click',sourceChanged));delete document.documentElement.dataset.inspectionStage;if(workspace)workspace.inert=wasInert;panel.remove();window.removeEventListener('resize',place);document.querySelectorAll('[data-mode],[data-inspector]').forEach(b=>b.removeEventListener('click',legacy));};
 }

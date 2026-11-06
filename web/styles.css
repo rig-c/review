@@ -412,3 +412,6 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 :root[data-inspection-stage="1"] #mode-build-picker{display:flex!important}
 :root[data-inspection-stage="1"] #mode-build-picker>.eyebrow{display:none}
 :root[data-inspection-stage="2"] #mode-build-picker,:root[data-inspection-stage="4"] #mode-build-picker{display:none!important}
+#direction-panel{flex:none;max-height:40%;overflow:auto;padding:.5rem .75rem;overflow-wrap:anywhere}
+#direction-panel ul{margin:.4rem 0;padding-inline-start:1.4rem}
+#direction-panel pre{max-height:12rem;overflow:auto}

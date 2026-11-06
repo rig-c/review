@@ -108,7 +108,7 @@ async function openRefusal(error:unknown,inputs:OpenInputs):Promise<unknown>{
 }
 async function verifyOpenLoad(p:OpenPackage,viewOnly:boolean,cwd=process.cwd()):Promise<void>{
  if(p.mode==='single'){
-  try{await verifyCompiledModel(p.p.root,p.p.manifest.model,p.selection?.name);}
+  try{await verifyCompiledModel(p.p.root,p.p.manifest.model,p.selection?.name,p.p.manifest.sets);}
   catch(error){throw new Error(`OPEN_MODEL_UNAVAILABLE: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
   const handoffReason=await verifyHandoffReadiness(p.p,[p.p.root,cwd],viewOnly);
   if(handoffReason)throw new Error(`OPEN_MODEL_UNAVAILABLE: ${handoffReason}`);

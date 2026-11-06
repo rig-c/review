@@ -97,7 +97,7 @@ async function openRig(input:StripRenderInput['rigs'][number],images:Map<string,
   }catch(error){assets.dispose();throw error;}
 }
 /** Verify that a package's compiled model and its page images load and pose in headless `@rig-c/play` (#305). */
-export async function verifyCompiledModel(root:string,modelRelPath:string|undefined,animation?:string):Promise<void>{
+export async function verifyCompiledModel(root:string,modelRelPath:string|undefined,animation?:string,setsPath?:string):Promise<void>{
   if(!modelRelPath)throw new Error('package has no compiled model (manifest.model is absent)');
   const previous=hostQueue;let release=()=>{};hostQueue=new Promise<void>(done=>{release=done;});await previous;
   let restore=()=>{};
@@ -117,11 +117,14 @@ export async function verifyCompiledModel(root:string,modelRelPath:string|undefi
       urls.set(page.name,url);images.set(url,await readFile(path));
     }
     const modelUrl=`https://strip.invalid/open/${encodeURIComponent(modelRelPath)}`;
+    const setsUrl=setsPath?'https://strip.invalid/open/sets.json':null;
+    const setBytes=setsPath?await readFile(await safeFile(root,setsPath)):null;
     const fileFetch=new Proxy(fetch,{apply:(_target,_this,args:Parameters<typeof fetch>)=>{
+      if(setsUrl&&String(args[0])===setsUrl&&setBytes)return Promise.resolve(new Response(new Uint8Array(setBytes)));
       if(String(args[0])!==modelUrl)return Promise.reject(new Error('undeclared model URL'));
       return Promise.resolve(new Response(new Uint8Array(bytes)));
     }});
-    const assets=await loadModel({modelUrl,fetch:fileFetch,setsUrl:null,regions:'none',resolvePage:name=>{const url=urls.get(name);if(!url)throw new Error(`undeclared page ${name}`);return url;}});
+    const assets=await loadModel({modelUrl,fetch:fileFetch,setsUrl,regions:'none',resolvePage:name=>{const url=urls.get(name);if(!url)throw new Error(`undeclared page ${name}`);return url;}});
     try{
       const clip=animation??assets.animations[0]?.name;
       if(clip!==undefined&&!assets.animations.some(a=>a.name===clip))throw new Error(`missing animation ${JSON.stringify(clip)}`);
