@@ -31,7 +31,7 @@ import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
 import {animationAppliedRecord,animationOutcomeLine,retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type AnimationJobView,type AnimationRequestBody,type AnimationSourceOp,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {historyRow,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {appliedCheckState,historyRow,renderHistoryCheck,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -1619,7 +1619,8 @@ function renderAppliedBlocks(restoredJob:AnyJobView|null=null):void {
  const on=appliedPanelOps(appliedOnStage);
  cutsPanel?.applied(on.cuts);clothPanel?.applied(on.cloth);
  physicsPanel?.applied(on.physics);bonesPanel?.applied(on.bones);
- idlePanel?.applied(on.idle);rigFieldsPanel?.applied(on['rig-fields']);
+ idlePanel?.applied(on.idle,appliedCheckState(appliedOnStage&&'check' in appliedOnStage?appliedOnStage.check:null));
+ rigFieldsPanel?.applied(on['rig-fields']);
  const restored=restoredJob?restoredOutcomeForJob(restoredJob):null;
  animationPanel?.reconcileStageApplied(
   appliedOnStage?.schema==='rig-review-applied/5'?appliedOnStage:null,
@@ -1682,7 +1683,18 @@ function renderApplied():void {
  renderAppliedBlocks();
  const section=document.getElementById('applied-records');if(!section)return;
  const h=appliedHistory;section.hidden=!h||h.depth===0;
- const list=el('applied-list');list.replaceChildren(...(h?.records??[]).map((r,i)=>{const li=document.createElement('li');li.textContent=historyRow(h!,i);li.dataset.buildId=r.id;li.classList.toggle('on-stage',i===h!.records.length-1&&appliedOnStage?.buildId===r.id);return li;}));
+ const list=el('applied-list'),last=h?.records.at(-1)?.id;
+ const changed=list.lastElementChild?.getAttribute('data-build-id')!==last;
+ const scrollTop=list.scrollTop;
+ list.replaceChildren(...(h?.records??[]).map((r,i)=>{
+  const li=document.createElement('li'),verdict=document.createElement('span');
+  li.dataset.buildId=r.id;
+  li.classList.toggle('on-stage',i===h!.records.length-1&&appliedOnStage?.buildId===r.id);
+  renderHistoryCheck(verdict,r);
+  li.append(verdict,` · ${historyRow(h!,i)}`);
+  return li;
+ }));
+ list.scrollTop=changed?(list.lastElementChild?.getBoundingClientRect().top??0)-(list.firstElementChild?.getBoundingClientRect().top??0):scrollTop;
  const control=undoControl(h,appliedOnStage?.buildId??null,rebuildBusy||!!readOnly),undo=button('applied-undo');
  undo.textContent=control.label;undo.disabled=!control.enabled;undo.title=control.title;
 }
@@ -2126,7 +2138,6 @@ async function applyIdle(ops:PatchOp[],keys:'ctl'|'direct'|null):Promise<PatchJo
   const result=await applyPatch(patch,world);
   const outcome=patchOutcomeLine(result);idlePanel?.status(outcome.text,outcome.error);
   if('id' in result&&result.status==='built'){
-   idlePanel?.applied(result.request.patch.ops);
    const after={lines:[...result.lines],check:result.check};
    const show=()=>idlePanel?.readout(readoutRows(before,before?null:inspectedCheckView(),after,IDLE_READOUT_BARS));
    show();if(!before)void followInspectedCheck(show);

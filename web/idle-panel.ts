@@ -42,7 +42,7 @@ export interface IdlePanel {
  previewing():{on:boolean;label:string;plan:PreviewPlan|null};
  setPreview(on:boolean):void;
  restore():void;clear():void;
- applied(ops:readonly PatchOp[]|null):void;
+ applied(ops:readonly PatchOp[]|null,check?:'passed'|'failed'|'unavailable'):void;
  status(text:string,error:boolean):void;
  readout(lines:{name:string;before:string;after:string}[]):void;
  busy(value:boolean):void;
@@ -167,13 +167,21 @@ export function bindIdlePanel(deps:IdlePanelDeps):IdlePanel {
   precheckArea.replaceChildren(...lines.map(l=>make('code',{className:'error idle-refusal',textContent:l,title:l})),...previewNotes.map(l=>make('code',{className:'idle-note',textContent:l,title:l})));
   return lines;
  }
+ let appliedCheck:'passed'|'failed'|'unavailable'='unavailable';
  function renderPending(){
   const items=ops();
   pending.replaceChildren(...items.map((op,i)=>{
    const applied=appliedOps.includes(JSON.stringify(op));
    const revert=make('button',{type:'button',textContent:'Revert',disabled:busy});revert.setAttribute('aria-label',`Revert ${op.op} ${op.path}`);
    revert.onclick=()=>tryChange(()=>revertOp(i));
-   return make('li',{className:applied?'applied':''},make('code',{textContent:`${op.op} ${op.path}`}),op.op==='remove'?'':` → ${JSON.stringify(op.value)}`,applied?' · applied':'',revert);
+   const row=make('li',{className:applied&&appliedCheck==='passed'?'applied':''},make('code',{textContent:`${op.op} ${op.path}`}),op.op==='remove'?'':` → ${JSON.stringify(op.value)}`);
+   if(applied){
+    const state=make('span',{textContent:appliedCheck==='failed'?'Check failed':appliedCheck==='unavailable'?'Check unavailable':'applied'});
+    state.dataset.idleOpCheck=appliedCheck;
+    row.append(' · ',state);
+   }
+   row.append(revert);
+   return row;
   }));
   if(!items.length)pending.append(make('li',{className:'hint',textContent:'No pending ops.'}));
   const refused=renderPrecheck().length>0;
@@ -268,7 +276,7 @@ export function bindIdlePanel(deps:IdlePanelDeps):IdlePanel {
   setPreview(on){previewBox.checked=on;previewBox.dispatchEvent(new Event('change'));},
   restore(){if(source){state=idleDraftState(draft.value,source);render();}},
   clear(){stopPreview();if(source){state=initialState(source);save();}render();},
-  applied(list){appliedOps=(list??[]).map(o=>JSON.stringify(o));renderPending();},
+  applied(list,check='unavailable'){appliedOps=(list??[]).map(o=>JSON.stringify(o));appliedCheck=check;renderPending();},
   status:panelStatus,
   readout(lines){readoutArea.replaceChildren(...lines.flatMap(l=>[make('div',{className:'physics-readout-line'},make('span',{className:'eyebrow',textContent:'BEFORE'}),make('code',{textContent:l.before,title:l.before})),make('div',{className:'physics-readout-line'},make('span',{className:'eyebrow',textContent:'AFTER'}),make('code',{textContent:l.after,title:l.after}))]));},
   busy(value){busy=value;render();},

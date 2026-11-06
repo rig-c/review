@@ -640,6 +640,34 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
       await put(label(name + '-scratch'), hashes);
       await put(label(name + '-check'), check);
       await cp(join(revision, 'build'), join(output, label(name + '-compiled')), {recursive:true});
+      const failed = amplitude === 0.75;
+      const breathLine: string | undefined = job.lines.map((line: string) => line.trim())
+        .find((line: string) => line.startsWith('BREATH_VISIBLE: FAIL'));
+      if (failed) {
+        assert(breathLine);
+        assert(breathLine.includes(`torso_heat_mean ${check.BREATH_VISIBLE.torso_heat_mean}; torso_floor ${check.BREATH_VISIBLE.torso_floor};`));
+      }
+      const verdictSelector = `#applied-list li[data-build-id="${record.buildId}"].on-stage [data-check-verdict]`;
+      const opSelector = '#idle-pending-list li [data-idle-op-check]';
+      const readCheckDom = () => evaluate<{verdict:string;op:string;applied:boolean;visible:boolean} | null>(`(()=>{
+        const verdict=document.querySelector(${JSON.stringify(verdictSelector)});
+        const op=document.querySelector(${JSON.stringify(opSelector)});
+        if(!verdict||!op)return null;
+        const list=document.getElementById('applied-list');
+        const bounds=list.getBoundingClientRect(), box=verdict.getBoundingClientRect();
+        const visible=verdict.checkVisibility()&&op.checkVisibility()&&box.width>0&&box.height>0&&
+          box.top>=bounds.top&&box.bottom<=bounds.bottom&&box.left>=bounds.left&&box.right<=bounds.right;
+        return {verdict:verdict.textContent,op:op.textContent,applied:op.closest('li').classList.contains('applied'),visible};
+      })()`);
+      const checkDom = await wait(readCheckDom, Boolean, label(name + '-check-dom'));
+      await put(label(name + '-check-dom'), checkDom);
+      assert.deepEqual(checkDom, {
+        verdict:failed
+          ? `Producer check failed · ${breathLine}`
+          : lang==='ko'?'프로듀서 검사 통과':'Producer check passed',
+        op:failed?'Check failed':lang==='ko'?'적용됨':'applied',
+        applied:!failed, visible:true,
+      });
       await shot(name);
       assert.equal(record.schema, 'rig-review-applied/2');
       assert.equal(job.status, 'built');

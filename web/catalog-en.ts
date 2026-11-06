@@ -1,4 +1,9 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+  "Producer check passed": "Producer check passed",
+  "Producer check failed": "Producer check failed",
+  "Producer check unavailable": "Producer check unavailable",
+  "Check failed": "Check failed",
+  "Check unavailable": "Check unavailable",
   "RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.": "RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.",
   "DIRECTION_VERSION_UNAVAILABLE: this draft has no recorded rig review package.": "DIRECTION_VERSION_UNAVAILABLE: this draft has no recorded rig review package.",
   "PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.": "PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.",

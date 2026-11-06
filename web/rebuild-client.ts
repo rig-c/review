@@ -1,8 +1,9 @@
 /**
  * Apply · Rebuild, page side (#99): the chest editor's rows become the producer's region entries, one typed request
- * goes to `/api/rebuild`, the job's lines stream back by polling, and the applied state is recorded. No DOM here
- * (main.ts owns the elements and the player); the server owns every path and the producer's flags.
+ * goes to `/api/rebuild`, the job's lines stream back by polling, and the applied state is recorded. The client formats
+ * the applied history for the page; the server owns every path and the producer's flags.
  */
+import {setSourceText} from './i18n.ts';
 import {ellipsePolygon,fitChestEllipse,CHEST_ELLIPSE_MIN_POINTS} from '../src/chest-regions.ts';
 import {deriveBust,parseBustSpec,type BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
@@ -359,7 +360,20 @@ export function handoffText(status:Pick<RebuildStatusView,'handoff'|'baseline'|'
 }
 
 /** #166: `GET /api/rebuild/history` — the session's applied records in order; the last is on the stage; `kept`: its build is on disk. */
-export interface AppliedHistoryView {schema:'rig-review-applied-history/1';depth:number;records:{id:string;kind:'regions'|'patch'|'delta'|'retarget'|'animation';op:string;what:string;modelHash:string;kept:boolean}[]}
+export type AppliedHistoryView = import('../src/rebuild.ts').AppliedHistory;
+
+export function appliedCheckState(check:CheckSummary|null|undefined):'passed'|'failed'|'unavailable' {
+ if(check?.pass==null)return 'unavailable';
+ return check.pass&&check.exitCode===0?'passed':'failed';
+}
+
+/** Write English source text so the DOM locale machinery can translate and switch languages in place. */
+export function renderHistoryCheck(node:HTMLElement, record:AppliedHistoryView['records'][number]):void {
+ const state=appliedCheckState(record.check);
+ node.dataset.checkVerdict=state;
+ const label=state==='passed'?'Producer check passed':state==='failed'?'Producer check failed':'Producer check unavailable';
+ setSourceText(node,[label,...(state==='failed'?record.failedBarLines??[]:[])].join(' · '));
+}
 /** #166: `POST /api/rebuild/undo {from}` — the predecessor's build (kept, or re-run and still running), the inspected build, or a refusal. */
 export type UndoView=
  |{status:'inspected';undone:string;history:AppliedHistoryView}

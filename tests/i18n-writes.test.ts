@@ -1,5 +1,6 @@
 import {afterEach,expect,test} from 'bun:test';
 import {bindDomI18n,getLanguagePreference,setLanguagePreference,setSourceAttribute,setSourceText,sourceAttribute,sourceTextContent,tr,unbindDomI18n} from '../web/i18n.ts';
+import {renderHistoryCheck,type AppliedHistoryView} from '../web/rebuild-client.ts';
 import {rigPaneLabel} from '../src/frame-clock.ts';
 
 // #347: Animate writes English source text on every played frame; these keep an unchanged write from reaching the DOM.
@@ -42,7 +43,7 @@ function dom(){
  const text=(value:string,parent:any)=>{const node:any={nodeType:3,parentElement:parent,get nodeValue(){return value;},set nodeValue(v:string){writes++;value=v;records.push({type:'characterData',target:node,addedNodes:[]});}};return node;};
  const element=(id:string,tag='SPAN',initial='')=>{
   const attrs=new Map<string,string>();
-  const el:any={nodeType:1,id,tagName:tag,className:'',parentElement:null,childNodes:[],classList:{contains:()=>false},closest:()=>null,querySelectorAll:()=>[],
+  const el:any={nodeType:1,id,tagName:tag,className:'',dataset:{},parentElement:null,childNodes:[],classList:{contains:()=>false},closest:()=>null,querySelectorAll:()=>[],
    getAttribute:(n:string)=>attrs.get(n)??null,setAttribute:(n:string,v:string)=>{writes++;attrs.set(n,v);records.push({type:'attributes',target:el,attributeName:n,addedNodes:[]});},
    get textContent(){return el.childNodes.map((n:any)=>n.nodeValue).join('');},
    set textContent(v:string){writes++;const n=text(v,el);el.childNodes=[n];records.push({type:'childList',target:el,addedNodes:[n]});}};
@@ -108,4 +109,32 @@ test('#356 a lone text child is updated in place (no childList swap for subtree 
  const d=dom(),el=d.element('time-label','SPAN','—'),node=el.childNodes[0];bindKorean(el);
  setSourceText(el,'1.1667 / 13.0000 s');
  expect(el.childNodes[0]).toBe(node);expect(d.records.some(r=>r.type==='childList')).toBe(false);
+});
+
+
+// #448: the 0.75 control's producer summary and retained torso readings as projected into history.
+test('#448 failed Apply renders its exact Korean verdict and producer readings',()=>{
+ const breathLine="BREATH_VISIBLE: FAIL — halves_measured 1 of 2; torso_status FAIL; torso_parts torso; torso_heat_mean 3.62; torso_floor 3.809; feet_status SKIP; feet_reason no part comes from a See-through \"footwear\" layer, so there are no feet to hold still";
+ const row:AppliedHistoryView['records'][number]={
+  id:'dbe1329f6925ca40d5f8020078c0a1e5990a7fcdb12281b1b699b8766e07656f',
+  kind:'patch',op:'rig',what:'replace /motion/tracks/0/amp',modelHash:'577d3175c391ae4ea158213ec05b021bfa8f138757dd2d3ca91777462a43dc78',kept:true,
+  check:{
+   schema:'rig-review-check-summary/1',pass:false,exitCode:1,
+   line:'check: FAIL — 1 bar(s) not met; 7 of 10 bar(s) measured, 3 skipped (BLINK_NO_HOLE, CHAIN_LAG, TIP_OVER_ROOT)',
+   bars:{BREATH_VISIBLE:'FAIL',BLINK_NO_HOLE:'SKIP',CHAIN_LAG:'SKIP',TIP_OVER_ROOT:'SKIP',STILL_REGIONS_DARK:'PASS',
+    TEXTURE_STRETCH:'PASS',ANIMATIONS_DO_NOT_FOLD:'PASS',RECOMPOSITE_HOLES:'REPORTED',PART_SUPPORT_REPORT:'UNCLASSIFIED'},
+   gate:true,source:'check',
+  },
+  failedBarLines:[breathLine],
+ };
+ const d=dom(),el=d.element('history-verdict');bindKorean(el);
+ renderHistoryCheck(el,row);
+ expect(el.dataset.checkVerdict).toBe('failed');
+ expect(el.textContent).toBe('프로듀서 검사 실패 · '+breathLine);
+ renderHistoryCheck(el,{...row,check:undefined,failedBarLines:undefined});
+ expect(el.dataset.checkVerdict).toBe('unavailable');
+ expect(el.textContent).toBe('프로듀서 검사 결과 없음');
+ renderHistoryCheck(el,{...row,check:{...row.check!,pass:true,exitCode:0,bars:{BREATH_VISIBLE:'PASS'}},failedBarLines:undefined});
+ expect(el.dataset.checkVerdict).toBe('passed');
+ expect(el.textContent).toBe('프로듀서 검사 통과');
 });

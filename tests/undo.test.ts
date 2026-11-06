@@ -23,7 +23,13 @@ const copy=(src,out)=>{fs.mkdirSync(path.join(out,'images'),{recursive:true});fo
 if(a[0]==='rig'){const cfg=JSON.parse(fs.readFileSync(path.resolve(f('--config')),'utf8')),out=f('--out');
  copy(path.join(f('--parts'),'rig'),out);const rig=JSON.parse(fs.readFileSync(path.join(out,'rig.json'),'utf8'));rig.constraints=cfg.constraints;
  fs.writeFileSync(path.join(out,'rig.json'),JSON.stringify(rig)+(process.env.FAKE_PERTURB||''));console.log('rig-parts rig: wrote rig.json under '+out);process.exit(0);}
-if(a[0]==='check'){const out=f('--out');fs.mkdirSync(out,{recursive:true});fs.writeFileSync(path.join(out,'check.json'),JSON.stringify({gate_spine_html_green:true,PASS:true}));console.log('check: PASS; 1 of 1 bar(s) measured');process.exit(0);}
+if(a[0]==='check'){const out=f('--out');fs.mkdirSync(out,{recursive:true});
+ const rig=JSON.parse(fs.readFileSync(path.join(f('--rig'),'rig.json'),'utf8'));
+ if(rig.constraints[0].damping===0.8){
+  fs.writeFileSync(path.join(out,'check.json'),JSON.stringify({gate_spine_html_green:true,PASS:false,STILL_REGIONS_DARK:{status:'FAIL'},TEXTURE_STRETCH:{status:'FAIL'}}));
+  console.log('  STILL_REGIONS_DARK: FAIL — measured 0.24; ceiling 0.1');console.log('check: FAIL');process.exit(1);
+ }
+ fs.writeFileSync(path.join(out,'check.json'),JSON.stringify({gate_spine_html_green:true,PASS:true}));console.log('check: PASS; 1 of 1 bar(s) measured');process.exit(0);}
 process.exit(3);`;
 const fakeRigc=`const fs=require('fs'),path=require('path'),crypto=require('crypto');const a=process.argv.slice(2);const f=n=>a[a.indexOf(n)+1];
 if(process.env.FAKE_LOG)fs.appendFileSync(process.env.FAKE_LOG,'rigc '+a.join(' ')+'\\n');
@@ -81,6 +87,13 @@ test('#166 bar 1 and 3: three Applies, three undos — each undo is the build re
   // The scratch root still holds only the build on the stage; the two earlier records' builds wait beside it.
   expect(await list(scratch)).toEqual([jobs[2]!.id]);expect(await list(kept)).toEqual([jobs[0]!.id,jobs[1]!.id].sort());
   const h=await s.history();expect(h.depth).toBe(3);expect(h.records.map(r=>r.modelHash)).toEqual(hashes);expect(h.records.every(r=>r.kept)).toBe(true);
+  expect(h.records[0]?.check).toMatchObject({pass:false,exitCode:1});
+  expect(h.records[0]?.failedBarLines).toEqual([
+   'STILL_REGIONS_DARK: FAIL — measured 0.24; ceiling 0.1',
+   'TEXTURE_STRETCH: FAIL (status from check.json; check printed no line for it)',
+  ]);
+  expect(h.records[2]?.check).toMatchObject({pass:true,exitCode:0});
+  expect(h.records[2]?.failedBarLines).toBeUndefined();
   expect(historyRow(h,2)).toContain('on the stage');expect(undoControl(h,jobs[2]!.id,false)).toMatchObject({label:'Undo last Apply (3 deep)',enabled:true});
   expect(undoControl(h,null,false).enabled).toBe(false);
   const runs=await calls(log);
