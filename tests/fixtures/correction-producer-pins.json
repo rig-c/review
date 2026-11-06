@@ -1,0 +1,14 @@
+{
+  "legacyStage1": {
+    "version": "1.78.0",
+    "packageSha256": "6e1279d2b2dabd0ff638702186bff3aeed9e1358651980050a2e5d320866ffb4"
+  },
+  "createStage1": {
+    "version": "2.16.0",
+    "packageSha256": "912ad89363d0f5ffd4bf10f3de2490e19cb5672a9808f495ac7e594861892fda"
+  },
+  "reviewRemesh": {
+    "version": "2.18.0",
+    "packageSha256": "e424b98fcaf5a8298ce0abda8532e367e2be689c08ed63264c68dae5d889fd4e"
+  }
+}

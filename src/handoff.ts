@@ -35,7 +35,8 @@ export const MODELING_INPUT_UNAVAILABLE = `MODELING_INPUT_UNAVAILABLE: config.js
 export const BUILD_DISCOVERY_PLACES = ['../config.json (in the build root)', '../../config.json (beside the build root)'] as const;
 export const BUILD_MODELING_INPUT_UNAVAILABLE = `MODELING_INPUT_UNAVAILABLE: config.json — looked at ${[...DISCOVERY_PLACES.slice(0, 2), ...BUILD_DISCOVERY_PLACES].join(', ')}; declare it with ${HANDOFF_DECLARATION}`;
 /** Files the producer reads by the config's own naming, resolved against the config's directory (rig-parts `relativeConfigPaths`). */
-export const CONFIG_NAMED_FILES = [['motion', 'animations_from'], ['generation', 'control', 'skeleton']] as const;
+export const CONFIG_NAMED_FILES = [['requirements'], ['motion', 'animations_from'], ['generation', 'control', 'skeleton']] as const;
+export const CONFIG_SKELETON_NAMES = ['stand_sides', 'stand_clasp'] as const;
 /** What `rig-parts rig` writes into its --out and remesh reads from --rig: the rig spec, its motion, the mesh report and the part images. */
 export const RIG_FILES = ['rig.json', 'motion.json', 'mesh_report.json'] as const;
 const MAX_LISTED = 4096;
@@ -190,10 +191,19 @@ async function record(root: string, base: string, how: HandoffRecord['how'], via
     let value: unknown = parsed;
     for (const k of keys) value = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>)[k] : undefined;
     if (typeof value !== 'string' || !value) continue;
+    if (keys.length === 3 && (CONFIG_SKELETON_NAMES as readonly string[]).includes(value)) continue;
     const field = `config ${keys.join('.')}`, lexical = resolve(dirname(config), value);
     if (!inside(base, lexical)) throw new HandoffError('HANDOFF_PATH_OUTSIDE_ROOT', field, `${value} resolves outside ${base}`);
+    if (keys[0] === 'requirements' && (isAbsolute(value) || /[:\\%?#\x00-\x1f]/.test(value) ||
+        value.split('/').some(part => !part || part === '.' || part === '..'))) {
+      throw new HandoffError('HANDOFF_PATH_INVALID', field, 'expected a literal portable config-relative path');
+    }
     if (!(await exists(lexical))) { missing.push(`${keys.join('.')} ${show(lexical)}`); continue; }
-    await add(await contained(base, lexical, field, 'file', true));
+    const file = await contained(base, lexical, field, 'file', true);
+    if (keys[0] === 'requirements' && file !== lexical) {
+      throw new HandoffError('HANDOFF_PATH_INVALID', field, 'expected a regular file without a symlink alias');
+    }
+    await add(file);
   }
   let parts: string | null = null, rig: string | null = null;
   if (partsPath && (partsDeclared || await exists(partsPath))) {

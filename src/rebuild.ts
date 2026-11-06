@@ -17,7 +17,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts';
 import { compileArgs, firstRefusal, modelingProducerTooOld, REMESH_DELTA_SINCE, remeshArgs, remeshDeltaArgs, resolvePose, resolveProducer, runTool, versionAtLeast, type CompileRequest, type InstalledTool, type ProcessResult } from './producer.ts';
 import { meshEditText } from './mesh-edit.ts';
-import { CONFIG_NAMED_FILES, HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
+import { CONFIG_NAMED_FILES, CONFIG_SKELETON_NAMES, HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
 import { assertWholeRigBaseline, BaselineError, baselineKey, producerDiff, runBaseline, runInspectedCheck, runningInspectedCheck, type BaselineResult, type InspectedCheck } from './baseline.ts';
 import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, parseConfigPatch, PATCH_FLAGS, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
 import { checkSummary, filesDiffText, MAX_ANIMATION_OPS, MAX_RETARGET_LINES, type CheckSummary, type FilesDiff } from './applied-context.ts';
@@ -42,7 +42,7 @@ import { assertStateOutside as assertStateDirOutside } from './state-dir.ts';
 export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
 const MAX_REGIONS = CHEST_REGIONS_MAX, MAX_POINTS = 256, MAX_LINES = 4000, GRID = 256;
 
-export interface ProducerInputs { config: string; parts: string; rig: string; configText: string; configHash: string; handoff: HandoffRecord }
+export interface ProducerInputs { config: string; parts: string; rig: string; configText: string; configHash: string; handoff: HandoffRecord; requirements?: { source: string; sha256: string } }
 const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
 /** Without any handoff, Apply refuses by this name and says which flag declares one. */
@@ -52,7 +52,7 @@ export const VIEW_ONLY_HANDOFF_STATUS = 'view only, no producer handoff';
 /** What remesh needs from the handoff, or the line naming what is missing. */
 export function handoffGap(handoff: Handoff): string | null {
   if (!handoff.parts) return `MODELING_INPUT_UNAVAILABLE: ${handoff.record.missing.join(', ')}`;
-  const missing = handoff.record.missing.filter(m => m.startsWith('parts.json') || m.startsWith('rig '));
+  const missing = handoff.record.missing.filter(m => m.startsWith('parts.json') || m.startsWith('rig ') || m.startsWith('requirements '));
   return handoff.rig && !missing.length ? null : `MODELING_INPUT_UNAVAILABLE: ${missing.join(', ') || 'rig'}`;
 }
 /** The handoff's config, parts and inspected rig, the config read and checked against the bytes the session is bound to. */
@@ -62,7 +62,24 @@ export async function producerInputs(handoff: Handoff | null, reason: string | n
   if (gap) throw new RebuildError('MODELING_INPUT_UNAVAILABLE', gap.slice('MODELING_INPUT_UNAVAILABLE: '.length));
   const configText = await readFile(handoff.config, 'utf8'), configHash = sha256(configText);
   if (configHash !== handoff.record.config.sha256) throw new RebuildError('REBUILD_INPUTS_CHANGED', `${handoff.record.config.path} changed since the review was opened; restart review`);
-  return { config: handoff.config, parts: handoff.parts!, rig: handoff.rig!, configText, configHash, handoff: handoff.record };
+  let config: unknown;
+  try { config = JSON.parse(configText); } catch { /* the producer diagnoses invalid JSON */ }
+  const value = namedFile(config, ['requirements']);
+  let requirements: ProducerInputs['requirements'];
+  if (typeof value === 'string' && value) {
+    const lexical = resolve(dirname(handoff.config), value);
+    const path = relative(handoff.root, lexical).split(sep).join('/');
+    let source: string;
+    try {
+      source = await safeFile(handoff.root, path);
+      if(source!==lexical)throw new Error('source redirected');
+    }
+    catch { throw new RebuildError('REBUILD_REQUIREMENTS_UNAVAILABLE', 'config.requirements is missing or outside the bound handoff'); }
+    const binding = handoff.record.files.find(file => file.path === relative(handoff.root, source).split(sep).join('/'));
+    if (!binding) throw new RebuildError('REBUILD_REQUIREMENTS_UNAVAILABLE', 'config.requirements has no bound handoff hash');
+    requirements = { source, sha256: binding.sha256 };
+  }
+  return { config: handoff.config, parts: handoff.parts!, rig: handoff.rig!, configText, configHash, handoff: handoff.record, ...(requirements ? { requirements } : {}) };
 }
 /**
  * #305: fast producer handoff readiness check for `open` (`handoffGap`, `producerInputs`, `resolveProducer`,
@@ -487,17 +504,40 @@ export function patchId(input: { sourceHash: string; configHash: string; patch: 
 const namedFile = (doc: unknown, keys: readonly string[]): unknown => keys.reduce<unknown>((v, k) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>)[k] : undefined), doc);
 /**
  * The patched config as the producer's own scratch configs are written (rig-parts `scratchConfig`): every path the
- * loader resolves against the config's directory (`motion.animations_from`, `generation.control.skeleton`) made
+ * loader resolves against the config's directory made
  * absolute when it names a file there, so the scratch copy reads the same files as the handoff config.
  */
 export function scratchConfigText(configPath: string, doc: JsonValue): string {
   const configDir = dirname(resolve(configPath)), out = structuredClone(doc) as Record<string, unknown>;
   for (const keys of CONFIG_NAMED_FILES) {
     const holder = namedFile(out, keys.slice(0, -1)) as Record<string, unknown> | undefined, key = keys.at(-1)!, value = holder?.[key];
+    if (keys.length === 3 && (CONFIG_SKELETON_NAMES as readonly unknown[]).includes(value)) continue;
     if (typeof value === 'string' && value && !isAbsolute(value) && existsSync(resolve(configDir, value))) holder![key] = resolve(configDir, value);
   }
   return JSON.stringify(out, null, 2) + '\n';
 }
+const CONFIG_INPUTS = 'config-inputs';
+
+/** Copy the exact bound requirements into this Apply's private scratch config layout. */
+async function stageRequirements(dir: string, requirements: ProducerInputs['requirements'], doc: Record<string, unknown>): Promise<void> {
+  if (!requirements) return;
+  let bytes: Buffer;
+  try {
+    if (await realpath(requirements.source) !== requirements.source) throw new Error('source redirected');
+    bytes = await readFile(requirements.source);
+  } catch { throw new RebuildError('REBUILD_REQUIREMENTS_UNAVAILABLE', 'the bound config.requirements file is no longer readable'); }
+  if (sha256(bytes) !== requirements.sha256) throw new RebuildError('REBUILD_INPUTS_CHANGED', 'config.requirements changed since the review was opened; restart review');
+  const name = `requirements-${requirements.sha256}.json`;
+  await mkdir(join(dir, CONFIG_INPUTS), { mode: 0o700 });
+  await writeFile(join(dir, CONFIG_INPUTS, name), bytes, { mode: 0o600, flag: 'wx' });
+  doc.requirements = `${CONFIG_INPUTS}/${name}`;
+}
+
+/** Scope scratch reuse to the newly bound input without changing legacy config hashes. */
+function rebuildConfigIdentity(inputs: ProducerInputs): string {
+  return inputs.requirements ? sha256(JSON.stringify([inputs.configHash, inputs.requirements.sha256])) : inputs.configHash;
+}
+
 /** A patch may not change which files the config names (they are the handoff's hashed files): `EDIT_PATCH_PATH_HELD`. */
 export function assertNamedFilesHeld(before: unknown, after: unknown): void {
   for (const keys of CONFIG_NAMED_FILES) if (JSON.stringify(namedFile(before, keys)) !== JSON.stringify(namedFile(after, keys))) throw new RebuildError('EDIT_PATCH_PATH_HELD', `${keys.join('.')} names a handoff file; a patch may not change it`);
@@ -634,8 +674,18 @@ async function namedDirDigest(root: string, dir: string, field: string): Promise
 async function stageInputDigest(dir:string,spec:string):Promise<string>{
  const root=await realpath(dir);
  const rows:[string,string][]=[['revision',await namedDirDigest(root,spec,'scratch revision')]];
- for(const name of ['mesh.json','mesh-edit.json','config.json','patch.json','environment.json']){
+ for(const name of ['mesh.json','mesh-edit.json','config.json','patch.json','environment.json','animations.json']){
   if(await exists(join(dir,name))){const path=await safeFile(await realpath(dir),name);rows.push([name,sha256(await readFile(path))]);}
+ }
+ const staged=join(root,CONFIG_INPUTS);
+ if(await exists(staged)){
+  if(await realpath(staged)!==staged)throw new RebuildError('STAGE_DRAFT_CHANGED','scratch config inputs were redirected');
+  const entries=await readdir(staged,{withFileTypes:true});
+  const entry=entries[0], expected=/^requirements-([a-f0-9]{64})\.json$/.exec(entry?.name??'')?.[1];
+  if(entries.length!==1||!entry?.isFile()||!expected)throw new RebuildError('STAGE_DRAFT_CHANGED','scratch requirements file is missing or redirected');
+  const path=`${CONFIG_INPUTS}/${entry.name}`, actual=sha256(await readFile(await safeFile(root,path)));
+  if(actual!==expected)throw new RebuildError('STAGE_DRAFT_CHANGED','scratch requirements bytes changed');
+  rows.push([path,actual]);
  }
  return sha256(JSON.stringify(rows));
 }
@@ -1089,6 +1139,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       const stored = JSON.parse(await readFile(resultFile, 'utf8')) as J;
       if (stored.schema !== REBUILD_SCHEMA || stored.id !== id || stored.status !== 'built' || !stored.build) return null;
       if ((!('kind' in stored) || stored.kind === 'delta'||(stored.kind==='patch'&&stored.op==='remesh')) && (!Object.hasOwn(stored, 'check')||!stored.stageInputHash)) return null;
+      if ('kind' in stored && (stored.kind==='patch'||stored.kind==='animation') && stored.stageInputHash) {
+        const spec=stored.kind==='patch'&&(stored.op==='build'||stored.cloth?.route==='build')?'out/rig':'rig';
+        if(await stageInputDigest(dir,join(dir,spec))!==stored.stageInputHash)return null;
+      }
       const now = await hashBuild(join(dir, 'build'), id, assetPrefix);
       if (JSON.stringify(now.files) !== JSON.stringify(stored.build.files)) return null;
       const job = { ...stored, build: now, reused: true };
@@ -1156,7 +1210,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       // The package and its producer inputs must still be the bytes the request was made against.
       // The handoff files are in the reviewed identity, so this also catches a config, parts or rig change.
       try { await options.unchanged(); } catch { throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild'); }
-      if(!('kind' in job)||job.kind==='delta'||(job.kind==='patch'&&job.op==='remesh'))job.stageInputHash = await stageInputDigest(dir, join(dir, op.spec));
+      if(!('kind' in job)||job.kind==='delta'||(job.kind==='patch'&&job.op==='remesh')||await exists(join(dir,CONFIG_INPUTS))) {
+        job.stageInputHash = await stageInputDigest(dir, join(dir, op.spec));
+      }
       job.build = await hashBuild(join(dir, 'build'), job.id, assetPrefix);
       if (steps.hashed) await steps.hashed();
       // #166: an undo's re-run must reproduce the build its record names, file for file; otherwise it is refused, not guessed.
@@ -1211,6 +1267,11 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const args = job.request.patch.op.args, producer = resolved.producer;
     let counts: RemeshCounts | null = null;
     let built: ProcessResult | null = null;
+    async function writePatchConfig(): Promise<void> {
+      const doc = JSON.parse(scratchConfigText(inputs.config, patched)) as Record<string, unknown>;
+      await stageRequirements(dir, inputs.requirements, doc);
+      await writeFile(join(dir, 'config.json'), JSON.stringify(doc, null, 2) + '\n', { mode: 0o600 });
+    }
     /** #111: a cloth job whose written config declares limbs is built as `build` does; otherwise as `rig --config`. */
     const building = job.op === 'build' || (job.op === 'cloth' && job.cloth?.route === 'build');
     /** #115 (and #111's build route): assemble → rig → check on `config.json`, already written into the scratch directory. */
@@ -1235,6 +1296,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       // handoff's files), so the config propose writes beside it builds from the same files.
       const input = JSON.parse(scratchConfigText(inputs.config, patched)) as Record<string, unknown>;
       absolutizeBuildFiles(input, value => (isAbsolute(value) ? value : resolve(dirname(inputs.config), value)));
+      await stageRequirements(dir, inputs.requirements, input);
       await writeFile(join(dir, 'cloth.json'), JSON.stringify(input, null, 2) + '\n', { mode: 0o600 });
       push(`review: ${producer.package} ${producer.version} propose --parts <handoff parts> --source <handoff source> --keypoints <handoff keypoints> --out propose --cloth cloth.json (the handoff config with ${job.request.patch.ops.length} patch op(s)) --write-config config.json`);
       const proposed = await runTool(producer.bin, ['propose', '--parts', inputs.parts, '--source', plan2.source, '--keypoints', plan2.keypoints, '--out', 'propose', '--cloth', 'cloth.json', '--write-config', 'config.json'], { cwd: dir, onLine: push });
@@ -1267,17 +1329,18 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
           // #115: assemble → rig → check from the painting and the runs, the patched config's assemble-read files absolute.
           const doc = JSON.parse(scratchConfigText(inputs.config, patched)) as Record<string, unknown>;
           absolutizeBuildFiles(doc, value => (isAbsolute(value) ? value : resolve(dirname(inputs.config), value)));
+          await stageRequirements(dir, inputs.requirements, doc);
           await writeFile(join(dir, 'config.json'), JSON.stringify(doc, null, 2) + '\n', { mode: 0o600 });
           return runBuild(push, `the handoff config with ${job.request.patch.ops.length} patch op(s)`);
         }
         if (job.op === 'retune') {
           // retune reads the inspected rig and writes only --out; what it holds it refuses by name (RETUNE_REQUEST_HELD).
-          await writeFile(join(dir, 'config.json'), scratchConfigText(inputs.config, patched), { mode: 0o600 });
+          await writePatchConfig();
           push(`review: ${producer.package} ${producer.version} retune --rig <handoff rig> --config config.json (the handoff config with ${job.request.patch.ops.length} patch op(s)) → scratch rig`);
           return runTool(producer.bin, ['retune', '--rig', inputs.rig, '--config', 'config.json', '--parts', inputs.parts, '--out', 'rig', ...args], { cwd: dir, onLine: push });
         }
         if (part === null) {
-          await writeFile(join(dir, 'config.json'), scratchConfigText(inputs.config, patched), { mode: 0o600 });
+          await writePatchConfig();
           push(`review: ${producer.package} ${producer.version} rig --config config.json (the handoff config with ${job.request.patch.ops.length} patch op(s)) → scratch rig`);
           return runTool(producer.bin, ['rig', '--config', 'config.json', '--parts', inputs.parts, '--out', 'rig', ...args], { cwd: dir, onLine: push });
         }
@@ -1403,7 +1466,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (op === 'rig' || op === 'build' || op === 'cloth') {
       try { assertWholeRigBaseline(await settledBaseline()); } catch (e) { if (e instanceof BaselineError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
     }
-    const id = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}`, op, ...(plan ? { buildInputs: plan.inputsHash } : {}), ...(world ? { environment: world.record.sha256 } : {}), ...(clothPlan ? { cloth: p.handoff!.record.keypoints!.sha256 } : {}) });
+    const id = patchId({ sourceHash: p.sourceHash, configHash: rebuildConfigIdentity(inputs), patch, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}`, op, ...(plan ? { buildInputs: plan.inputsHash } : {}), ...(world ? { environment: world.record.sha256 } : {}), ...(clothPlan ? { cloth: p.handoff!.record.keypoints!.sha256 } : {}) });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
@@ -1455,7 +1518,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const first = patches[0]!;
     if (first.producer.name !== resolved.producer.package || first.producer.version !== resolved.producer.version) throw new RebuildError('EDIT_PRODUCER_MISMATCH', `the patch was made for ${first.producer.name} ${first.producer.version}; the installed producer is ${resolved.producer.package} ${resolved.producer.version}`);
     const producer = `${resolved.producer.package}@${resolved.producer.version}`, compiler = `${resolved.compiler.package}@${resolved.compiler.version}`;
-    const id = stripId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patches, producer, compiler });
+    const id = stripId({ sourceHash: p.sourceHash, configHash: rebuildConfigIdentity(inputs), patches, producer, compiler });
     if (strip?.id === id) return { status: strip.status === 'running' ? 202 : 200, body: stripView() };
     const refusal = busy();
     if (refusal) return { status: 200, body: { status: 'refused', error: refusal, producerLine: null } };
@@ -1466,7 +1529,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       await rm(root, { recursive: true, force: true });
       const concurrency = boundedStripConcurrency(options.stripConcurrency);
       const candidates: StripCandidate[] = planned.map(({ patch }, i) => {
-        const cid = patchId({ sourceHash: p.sourceHash, configHash: inputs.configHash, patch, producer, compiler, op: 'remesh' });
+        const cid = patchId({ sourceHash: p.sourceHash, configHash: rebuildConfigIdentity(inputs), patch, producer, compiler, op: 'remesh' });
         const job: PatchJob = { schema: REBUILD_SCHEMA, kind: 'patch', id: cid, status: 'running', reused: false, op: 'remesh', request: { patch, patchSha256: patchSha256(patch), configHash: inputs.configHash }, producer: tool(resolved.producer), compiler: tool(resolved.compiler), lines: [], producerLine: null, exitCode: null, wallMs: { op: null, compile: null, check: null }, check: null, diff: null, files: null, remesh: null, build: null };
         return { value: shape.values[i]!, id: cid, entry: shape.entries[i]!, dir: join(root, id, cid), job, applied: false };
       });
@@ -1612,7 +1675,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       return { status: 200, body: { status: 'refused', error, producerLine: error } };
     }
     const text = meshEditText(request.delta);
-    const id = deltaId({ sourceHash: p.sourceHash, configHash: inputs.configHash, part: request.part, deltaText: text, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
+    const id = deltaId({ sourceHash: p.sourceHash, configHash: rebuildConfigIdentity(inputs), part: request.part, deltaText: text, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
@@ -1730,7 +1793,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
     const rigJson = await readFile(join(inputs.rig, 'rig.json'));
     const record = retargetRecord(request, { rig: { path: inputs.handoff.rig ?? '', sha256: sha256(rigJson) }, sequence: { path: reference.path, sha256: sha256(sequence) }, producer: { name: resolved.producer.package, version: resolved.producer.version } });
-    const id = retargetId({ sourceHash: p.sourceHash, configHash: inputs.configHash, record, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
+    const id = retargetId({ sourceHash: p.sourceHash, configHash: rebuildConfigIdentity(inputs), record, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
@@ -1755,7 +1818,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       cmd: 'rig', spec: 'rig',
       async run(push) {
         await writeFile(join(dir, 'animations.json'), splicedAnimations, { mode: 0o600 });
-        await writeFile(join(dir, 'config.json'), scratchConfig, { mode: 0o600 });
+        const doc = JSON.parse(scratchConfig) as Record<string, unknown>;
+        await stageRequirements(dir, inputs.requirements, doc);
+        await writeFile(join(dir, 'config.json'), JSON.stringify(doc, null, 2) + '\n', { mode: 0o600 });
         const anims = [...new Set(job.request.ops.map(o => o.animation))];
         push(`review: ${producer.package} ${producer.version} rig --config config.json (${job.request.ops.length} animation op(s) on ${anims.join(', ')}; ${job.request.animationsFrom.path} ${job.request.animationsFrom.beforeSha256.slice(0, 12)}… → ${job.request.animationsFrom.afterSha256.slice(0, 12)}…) → scratch rig`);
         return runTool(producer.bin, ['rig', '--config', 'config.json', '--parts', inputs.parts, '--out', 'rig', ...args], { cwd: dir, onLine: push });
@@ -1838,7 +1903,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const opsText = animationOpsText(effectiveOps), opsSha256 = sha256(opsText), afterSha256 = sha256(splicedAnimText);
     const id = animationId({
       sourceHash: p.sourceHash,
-      configHash: inputs.configHash,
+      configHash: rebuildConfigIdentity(inputs),
       animationsFromHash: baseAnimHash,
       opsText,
       producer: `${resolved.producer.package}@${resolved.producer.version}`,
@@ -1930,7 +1995,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const entry = request.bust ? bustEntryText(inputs.configText, request.part, request.bust) : meshEntryText(inputs.configText, request.part, request.regions);
     const resolved = resolveProducer(options.starts);
     if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
-    const id = designationId({ sourceHash: p.sourceHash, configHash: inputs.configHash, part: request.part, entry, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
+    const id = designationId({ sourceHash: p.sourceHash, configHash: rebuildConfigIdentity(inputs), part: request.part, entry, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };

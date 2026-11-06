@@ -914,3 +914,9 @@ SKIP, WARN, CLEAR, REPORTED and UNCLASSIFIED values and the producer line are
 retained as reported. Missing evidence and failed checks cannot become checked
 claims. A described request and a preserved unsupported operation do not
 assert a result. Selected JSON export is the exact current session file.
+
+When a producer config names a requirements file, Review includes the original
+file's path and byte hash in the handoff. Apply copies those bytes into its
+private scratch directory and points the scratch config at that copy. The
+copied input is checked with the retained result. A missing or redirected
+requirements file refuses the handoff or Apply by name.

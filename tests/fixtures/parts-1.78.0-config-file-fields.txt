@@ -1,0 +1,29 @@
+// Published npm @rig-c/parts@1.78.0; literal source excerpts.
+// package.json sha256 6e1279d2b2dabd0ff638702186bff3aeed9e1358651980050a2e5d320866ffb4
+// src/config.ts sha256 9299bf90af89a121469d80aacae1fc19bc7ddb979f4f20cc4d492799195381e8
+// src/skeleton.ts sha256 6cbf859abc2f03276a72ae5e0f4d9f673d9728b6f5c57df6a1e85a791c1f1ba6
+
+function poseBeside(c: Check, gen: Json, base: string): ControlPose | null {
+  if (!isPlainObject(gen) || !isPlainObject(gen.control)) return null;
+  const skel = gen.control.skeleton;
+  if (typeof skel !== 'string' || skel === '' || isSkeletonName(skel)) return null;
+  const l = gen.latent;
+  const latent = Array.isArray(l) && l.length === 2 && l.every((n) => typeof n === 'number' && Number.isInteger(n) && n > 0) ? ([l[0], l[1]] as [number, number]) : null;
+  return readControlPose(c, resolve(base, skel), latent);
+}
+
+  if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, resolve(base, t.requirements));
+  const from = isPlainObject(t.motion) ? t.motion.animations_from : undefined;
+  const animations = base !== null && typeof from === 'string' && from !== '' ? readAnimationsFrom(c, base, from) : null;
+  if (animations !== null) {
+    checkFaceAnimationBand(c, animations, hasAltFace, t.turn, attached);
+    const baseSlots = new Set<string>([...parts.filter((n) => !(limbs?.consumed.has(n) ?? false)), ...patches, ...cuts, ...(limbs?.parts.keys() ?? [])]);
+    checkAnimationSetKeys(c, animations, t.assemble, new Set<string>([...parts, ...patches, ...cuts, ...(limbs?.parts.keys() ?? []), ...explicitIslandSlotNames(baseSlots, t.meshes)]));
+  }
+  const pose = base === null ? null : poseBeside(c, t.generation, base);
+
+export const SKELETON_NAMES: readonly SkeletonName[] = ['stand_sides', 'stand_clasp'];
+
+export function isSkeletonName(v: unknown): v is SkeletonName {
+  return typeof v === 'string' && (SKELETON_NAMES as readonly string[]).includes(v);
+}
