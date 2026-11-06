@@ -466,3 +466,56 @@ Standalone parts notes and comments use
 For a part note, also pass `--part-note <part>` and supply its correction ID.
 Selected parts JSON keeps the saved verdict and adds the correction selection.
 The inventory names a retained Create-side input. Review does not read that path.
+
+## Four-stage acceptance fixture
+
+The explicit browser runner in the Review checkout walks four independent Create
+checkpoint prefixes using the managed loopback route for every stage and the
+independent replay. The direct-route Save defect is tracked in
+[Review #443](https://github.com/rig-c/review/issues/443).
+Its inputs come from one archive of Create
+[a1a5162](https://github.com/rig-c/create/commit/a1a5162cf4ce7fdef8caba50dc3979cf416467dd)
+with SHA-256
+`68034a42a70765ddda434195b945c9d87da85cf86443c657c31848ee163a8096`.
+The materializer verifies the archive and each checkpoint sidecar before using
+disposable copies. Checkpoint commands identify the declared acts and option
+sets. The runner calls selected public consumers with explicit arguments.
+
+Run `bun tests/four-stage-browser.ts` in a bounded Nova job from the Review
+checkout after installing its frozen lock. Supply the original archive in
+`REVIEW_371_CREATE_ARCHIVE`, the directory with Create's frozen-lock
+`node_modules` in `REVIEW_371_CREATE_BENCH`, a new evidence directory in
+`REVIEW_371_OUTPUT`, and the retained Stage 3 failed Apply JSON in
+`REVIEW_371_FAILED_APPLIED`. The runner checks the failed artifact digest.
+Keep Chromium's child `TMPDIR` short (the runner uses `/tmp` during launch).
+The profile, Review state, input copies and producer scratch belong to the job.
+The runner defaults to English followed by Korean. For a gated run, launch
+`bash tests/four-stage-job.sh en` with the same pinned inputs, then launch
+`bash tests/four-stage-job.sh ko` after accepting the English result. Each job
+has a 600-second command deadline and uses a new evidence directory. The
+`walk-checkpoints.jsonl` file records the last step entered if a run stops.
+
+1. Save and export the pre-rig parts and mesh verdict through the joined Review
+   surface. Create's shared parts-verdict checker verifies the actual saved
+   artifact. The next prefix already has a signature bound to its original
+   synthetic verdict.
+2. Save the explicit bones picks, then register and answer meshes, constraints
+   and motion in the generator's order. Refresh the joined view on identity
+   changes and check each answer and exact note in Create.
+3. Preview and Apply the body idle amplitude change from 0.5 to 2.5. The check
+   must pass with at least 6.12/255 torso breath heat. Export the made correction
+   and read back the Create config-patch record in its pending state. Replay the
+   exported patch in separate Review scratch. The measured 0.75 failed-check
+   control uses the refused UI request for a separate pending capture and
+   checked-claim refusal. It writes no resolved outcome.
+4. Write and check post 2 through Create on its pending prefix, then open rig 1
+   with explicit post 2. Inspect the authored keys and timing, exercise the
+   named camera Apply refusal, and save the described request. Verify the
+   inspected and project-relative model bindings and Create's pending readback.
+   The Create writer checks the explicit model selector and stores the exported
+   context string verbatim.
+
+Both locales have browser captures. The runner checks original inventories
+against each copy after the walk, retains named public record changes separately,
+and records the first consumer verdict for each planted mutation. Inspecting,
+navigating and saving a Review draft produce no Create signoff.
