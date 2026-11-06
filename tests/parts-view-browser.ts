@@ -16,8 +16,6 @@ import { FOOTPRINT_ALPHA } from '../web/parts-render.ts';
 import { BACK_DEFECT, frontHolds, writePartsPackage } from './helpers/parts-package.ts';
 import { launchCdpSession, type CdpSession } from './parts-explorer-browser.ts';
 
-const PARTS_VIEW_CDP_SEND_MS = 10_000;
-
 const arg = (name: string) => { const i = Bun.argv.indexOf(name); return i > 0 ? Bun.argv[i + 1] : undefined; };
 
 async function open(page: CdpSession, input: string, lang: 'en' | 'ko', shotDir: string | undefined, shot: string, before?: string) {
@@ -43,7 +41,7 @@ export async function runPartsViewBrowser(shotDir?: string, partsDir?: string) {
   const profile = await mkdtemp(join(tmpdir(), 'parts-view-profile-'));
   if (shotDir) await mkdir(shotDir, { recursive: true });
   await writePartsPackage(root);
-  const page = await launchCdpSession(profile, {sendDeadlineMs: PARTS_VIEW_CDP_SEND_MS});
+  const page = await launchCdpSession(profile);
   const report: Record<string, unknown> = {};
   try {
     await page.setViewport(1280, 800);
