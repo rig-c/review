@@ -98,15 +98,19 @@ type CdpEventHandler = (event: CdpPageEvent, send: (method: string, params?: Rec
 
 export function cdpRequests(sendMessage: (message: string) => void, timeout?: number, onEvent?: CdpEventHandler) {
   let nextId = 1;
-  let failure: Error | undefined;
+  let failure: ((method: string) => Error) | undefined;
   const pending = new Map<number, {method:string; resolve:(value:any)=>void; reject:(error:Error)=>void}>();
-  function fail(error: unknown) {
-    const first = failure ??= error instanceof Error ? error : new Error(String(error));
-    for (const entry of pending.values()) entry.reject(first);
+  function stop(errorForMethod: (method: string) => Error) {
+    const first = failure ??= errorForMethod;
+    for (const entry of pending.values()) entry.reject(first(entry.method));
     pending.clear();
   }
+  function fail(error: unknown) {
+    const cause = error instanceof Error ? error : new Error(String(error));
+    stop(() => cause);
+  }
   async function send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> {
-    if (failure) throw failure;
+    if (failure) throw failure(method);
     const id = nextId++;
     try {
       const request = () => new Promise((resolve, reject) => {
@@ -137,8 +141,7 @@ export function cdpRequests(sendMessage: (message: string) => void, timeout?: nu
       else entry.resolve(message.result);
     },
     disconnect(detail: string) {
-      for (const entry of pending.values()) entry.reject(new Error(`WebSocket closed during ${entry.method}: ${detail}`));
-      pending.clear();
+      stop(method => new Error(`WebSocket closed during ${method}: ${detail}`));
     }
   };
 }
@@ -151,6 +154,26 @@ export function navigationReadyExpression(url: string, locale?: 'en' | 'ko'): st
     location.pathname === ${JSON.stringify(target.pathname)} &&
     ${JSON.stringify(query)}.every(([key,value]) => new URLSearchParams(location.search).getAll(key).includes(value))` +
     (locale ? ` && document.documentElement?.lang === ${JSON.stringify(locale)}` : '');
+}
+
+export async function navigateCdpPage(
+  send: ReturnType<typeof cdpRequests>['send'],
+  sessionId: string,
+  url: string,
+  locale?: 'en' | 'ko',
+  observe?: (result: {loaderId?: string}) => void,
+): Promise<void> {
+  const navigation = await send('Page.navigate', { url }, sessionId);
+  if (navigation?.errorText) throw new Error('CDP_NAVIGATE_FAILED: ' + navigation.errorText);
+  observe?.({loaderId: navigation?.loaderId});
+  const expression = navigationReadyExpression(url, locale);
+  await Bun.sleep(100);
+  for (let i = 0; i < 100; i++) {
+    const res = await send('Runtime.evaluate', { expression, returnByValue: true }, sessionId);
+    if (res?.result?.value === true) return;
+    await Bun.sleep(50);
+  }
+  throw new Error('CDP_NAVIGATION_NOT_READY');
 }
 
 function findBrowserBinary(): string {
@@ -310,23 +333,7 @@ export async function launchCdpSession(profileDir: string, options: {sendDeadlin
           sessionId,
         );
       },
-      async goto(url, locale, observe) {
-        const navigation = await send('Page.navigate', { url }, sessionId);
-        if (navigation?.errorText) throw new Error('CDP_NAVIGATE_FAILED: ' + navigation.errorText);
-        observe?.({loaderId: navigation?.loaderId});
-        const expression = navigationReadyExpression(url, locale);
-        await Bun.sleep(100);
-        for (let i = 0; i < 100; i++) {
-          const res = await send(
-            'Runtime.evaluate',
-            { expression, returnByValue: true },
-            sessionId,
-          );
-          if (res?.result?.value === true) return;
-          await Bun.sleep(50);
-        }
-        throw new Error('CDP_NAVIGATION_NOT_READY');
-      },
+      goto: (url, locale, observe) => navigateCdpPage(send, sessionId, url, locale, observe),
       async evaluate<T>(expression: string): Promise<T> {
         const res = await send(
           'Runtime.evaluate',
