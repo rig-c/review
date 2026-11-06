@@ -12,6 +12,72 @@ import {sessionFile} from '../src/session.ts';
 import {patchText} from '../src/config-patch.ts';
 import {rebuildDir} from '../src/rebuild.ts';
 import {startServer} from '../src/server.ts';
+import { WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
+
+const CDP_SEND_DEADLINE_MS = 10_000;
+const READINESS_DEADLINE_MS = 10_000;
+const DESCRIBED_DEADLINE_MS = 5_000;
+// One ordinary-pool run, n=2 (EN 7.390 s, KO 7.405 s).
+// Allow 4× the larger hold, rounded up to 30 s.
+const MESH_SETTLE_DEADLINE_MS = 30_000;
+const PARTS_DOCUMENT = "document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument";
+
+type CorrectionPage = Pick<InputCdpSession, 'evaluate'>;
+
+async function pollCorrection<T>(signal: AbortSignal, read: () => Promise<T | undefined>): Promise<T> {
+  for (;;) {
+    signal.throwIfAborted();
+    const result = await read();
+    signal.throwIfAborted();
+    if (result !== undefined) return result;
+    await Bun.sleep(25);
+  }
+}
+
+async function waitForReadiness(page: CorrectionPage, name: string, timeout: number, expression: string) {
+  let detail: string | null | undefined;
+  try {
+    await withDeadline(name, timeout, signal => pollCorrection(signal, async () => {
+      const status = await page.evaluate<{ready: boolean; detail?: string | null}>(expression);
+      detail = status.detail;
+      return status.ready ? true : undefined;
+    }));
+  } catch (error) {
+    if (error instanceof WalkDeadlineError && detail !== undefined) error.message += ' ' + detail;
+    throw error;
+  }
+}
+
+type MeshResult = {status: string; check?: {pass?: boolean}};
+type MeshState =
+  | {state: 'pending'}
+  | {state: 'fulfilled'; job: MeshResult}
+  | {state: 'rejected'; error: string};
+
+export function settleCorrectionMesh(page: CorrectionPage, timeout = MESH_SETTLE_DEADLINE_MS): Promise<MeshResult> {
+  return withDeadline('CORRECTION_HANDOFF_MESH_SETTLE', timeout, async signal => {
+    await Bun.sleep(200);
+    signal.throwIfAborted();
+    // A lost response is ambiguous. This dispatch is never retried.
+    await page.evaluate(`(() => {
+      const m = window.rigReviewEditor.mesh;
+      if (m.part() !== 'torso') throw Error('WRONG_PARAMETER_PART');
+      m.set(['contour','spacing'],18);
+      window.correctionHandoffMesh = {state: 'pending'};
+      Promise.resolve(m.apply()).then(
+        job => { window.correctionHandoffMesh = {state: 'fulfilled', job}; },
+        error => { window.correctionHandoffMesh = {state: 'rejected', error: String(error?.stack || error)}; }
+      );
+    })()`);
+    return pollCorrection(signal, async () => {
+      const status = await page.evaluate<MeshState>('window.correctionHandoffMesh');
+      if (status.state === 'rejected') throw Error('Browser evaluate error: ' + status.error);
+      return status.state === 'fulfilled' ? status.job : undefined;
+    });
+  });
+}
+
+if (import.meta.main) {
 const bench=process.env.RV367_BENCH!;if(!bench)throw Error('Installed producer bench required');
 const root=await mkdtemp(join(tmpdir(),'r.')),pkg=join(root,'pkg'),artifacts=join(process.cwd(),'artifacts/correction-handoff');
 await mkdir(artifacts,{recursive:true});
@@ -44,19 +110,43 @@ try{
  const original=await hashes(pkg),p=await loadReview(pkg);let state=join(root,'state-en');server=await startServer(p,{port:0,stateDir:state,cwd:bench,capability:'a'.repeat(64),graceMs:600000,unopenedTimeoutMs:600000,exitOnClose:false});
  let base=`http://127.0.0.1:${server.port}`;
  let capturedPatch:string|undefined, capturedModel:string|undefined;
- page=await launchCdpSession(join(tmpdir(),'c'));await page.setViewport(1440,1000);
+ page=await launchCdpSession(join(tmpdir(),'c'),{sendDeadlineMs:CDP_SEND_DEADLINE_MS});await page.setViewport(1440,1000);
  for(const lang of ['en','ko']){
   await page.goto(base+'/?lang='+lang+'#cap='+'a'.repeat(64));
-  await page.evaluate(`(async()=>{for(let i=0;i<400;i++){if(window.rigReviewEditor&&document.getElementById('handoff-line')?.textContent&&!/Reading/.test(document.getElementById('handoff-line').textContent))return;await new Promise(r=>setTimeout(r,25));}throw Error('PAGE_NOT_READY')})()`);
-  const before=await page.evaluate(`(async()=>{document.querySelector('[data-review-stage="1"]').click();for(let i=0;i<400;i++){const d=document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument;if(d?.body.dataset.ready==='true'){d.querySelector('[data-pv-item=torso]').click();d.getElementById('zoom-in').click();await new Promise(r=>setTimeout(r,50));return {snapshot:d.defaultView.rigReviewStageParts.snapshot(),text:d.querySelector('#pv-corrections')?.textContent,buttons:[...d.querySelectorAll('#pv-corrections button')].map(b=>b.textContent)}};await new Promise(r=>setTimeout(r,25));}throw Error('PARTS_NOT_READY '+document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument?.body.textContent)})()`);
+  await waitForReadiness(page, 'PAGE_NOT_READY', READINESS_DEADLINE_MS, `(() => {
+    const text = document.getElementById('handoff-line')?.textContent;
+    return {ready: Boolean(window.rigReviewEditor && text && !/Reading/.test(text))};
+  })()`);
+  await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
+  await waitForReadiness(page, 'PARTS_NOT_READY', READINESS_DEADLINE_MS, `(() => {
+    const d = ${PARTS_DOCUMENT};
+    return d?.body.dataset.ready === 'true' ? {ready: true} : {ready: false, detail: d?.body.textContent};
+  })()`);
+  await page.evaluate(`(() => {
+    const d = ${PARTS_DOCUMENT};
+    if (d?.body.dataset.ready !== 'true') throw Error('PARTS_NOT_READY ' + d?.body.textContent);
+    d.querySelector('[data-pv-item=torso]').click();
+    d.getElementById('zoom-in').click();
+  })()`);
+  await Bun.sleep(50);
+  const before = await page.evaluate(`(() => {
+    const d = ${PARTS_DOCUMENT};
+    return {snapshot:d.defaultView.rigReviewStageParts.snapshot(),text:d.querySelector('#pv-corrections')?.textContent,buttons:[...d.querySelectorAll('#pv-corrections button')].map(b=>b.textContent)};
+  })()`);
   await page.evaluate(`document.querySelector('[data-review-stage="3"]').click();document.querySelector('[data-review-stage="1"]').click()`);
   const retained=await page.evaluate<any>(`document.querySelector('.review-stage-panel iframe:not([hidden])').contentWindow.rigReviewStageParts.snapshot()`);
   if(retained.part!=='torso'||JSON.stringify(retained.rig)!==JSON.stringify((before as any).snapshot.rig))throw Error('NON_FIRST_PART_OR_CAMERA_LOST_ON_NAV');
   receipts.push({lang,before,retained});await writeFile(join(artifacts,lang+'-parts.png'),await page.screenshot());
   // Parameter editor: enter from the selected part, change a producer field, run its existing Apply.
   await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
-  await page.evaluate(`(async()=>{for(let i=0;i<400;i++){const d=document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument;if(d?.body.dataset.ready==='true'){d.querySelectorAll('#pv-corrections button')[1].click();return;}await new Promise(r=>setTimeout(r,25));}throw Error('MESH_ROUTE_TIMEOUT')})()`);
-  const meshJob=await page.evaluate<any>(`(async()=>{await new Promise(r=>setTimeout(r,200));const m=window.rigReviewEditor.mesh;if(m.part()!=='torso')throw Error('WRONG_PARAMETER_PART');m.set(['contour','spacing'],18);return await m.apply()})()`);
+  await waitForReadiness(page, 'MESH_ROUTE_TIMEOUT', READINESS_DEADLINE_MS,
+    `({ready: ${PARTS_DOCUMENT}?.body.dataset.ready === 'true'})`);
+  await page.evaluate(`(() => {
+    const d = ${PARTS_DOCUMENT};
+    if (d?.body.dataset.ready !== 'true') throw Error('MESH_ROUTE_TIMEOUT');
+    d.querySelectorAll('#pv-corrections button')[1].click();
+  })()`);
+  const meshJob = await settleCorrectionMesh(page);
   if(meshJob.status!=='built'||meshJob.check?.pass!==true)throw Error('MESH_PARAMETER_APPLY_REFUSED '+JSON.stringify(meshJob));
   if(await page.evaluate(`document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot`)!=='torso')throw Error('MESH_SELECTION_LOST');
   receipts.push({lang,instrument:'mesh',applied:await page.evaluate(`JSON.parse(document.getElementById('rebuild-applied').value)`)});
@@ -84,7 +174,11 @@ try{
     const dt=new DataTransfer(); dt.items.add(new File([${JSON.stringify(exact)}],'request.txt',{type:'text/plain'}));document.getElementById('correction-words').files=dt.files;
     document.getElementById('add-proposal').click();
   })()`);
-  await page.evaluate(`(async()=>{for(let i=0;i<200;i++){if(document.querySelector('.proposal-item'))return;await new Promise(r=>setTimeout(r,25));}throw Error('CORRECTION_DESCRIBED_ADD '+document.getElementById('review-message').textContent)})()`);
+  await waitForReadiness(page, 'CORRECTION_DESCRIBED_ADD', DESCRIBED_DEADLINE_MS, `(() => {
+    return document.querySelector('.proposal-item')
+      ? {ready: true}
+      : {ready: false, detail: document.getElementById('review-message').textContent};
+  })()`);
   await page.evaluate(`(() => {document.getElementById('correction-path').value='made';document.getElementById('feedback-summary').value='Adjust the torso contour spacing';document.getElementById('add-proposal').click();if(document.querySelectorAll('.proposal-item').length!==2)throw Error('CORRECTION_MADE_ADD '+document.getElementById('review-message').textContent);document.getElementById('save').click()})()`);
   const file=sessionFile(p,state);
   let savedBytes:Buffer|undefined;
@@ -122,7 +216,7 @@ try{
     state=join(root,'state-ko');
     server=await startServer(p,{port:0,stateDir:state,cwd:bench,capability:'a'.repeat(64),graceMs:600000,unopenedTimeoutMs:600000,exitOnClose:false});
     base=`http://127.0.0.1:${server.port}`;
-    page=await launchCdpSession(join(tmpdir(),'c-ko'));await page.setViewport(1440,1000);
+    page=await launchCdpSession(join(tmpdir(),'c-ko'),{sendDeadlineMs:CDP_SEND_DEADLINE_MS});await page.setViewport(1440,1000);
   }
  }
  if(JSON.stringify(original)!==JSON.stringify(await hashes(pkg)))throw Error('CORRECTION_SAMPLE_ORIGINALS_CHANGED');
@@ -132,4 +226,5 @@ try{
  await cp(pkg,join(artifacts,'package'),{recursive:true}).catch(error=>{if(error.code!=='ENOENT')throw error;});
  for(const name of ['state-en','state-independent','state-ko'])await cp(join(root,name),join(artifacts,name),{recursive:true}).catch(error=>{if(error.code!=='ENOENT')throw error;});
  await rm(root,{recursive:true,force:true});
+}
 }
