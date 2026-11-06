@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.0](https://github.com/rig-c/review/compare/v1.15.0...v1.16.0) (2026-11-06)
+
+
+### Features
+
+* open pre-rig drafts and save joined parts verdicts ([#440](https://github.com/rig-c/review/issues/440)) ([f64fd14](https://github.com/rig-c/review/commit/f64fd14369f56da30dfe5df00fd7dccd97052ccb))
+
 ## [1.15.0](https://github.com/rig-c/review/compare/v1.14.1...v1.15.0) (2026-11-06)
 
 
