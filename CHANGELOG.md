@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.0](https://github.com/rig-c/review/compare/v1.11.0...v1.12.0) (2026-11-06)
+
+
+### Features
+
+* inspect declared direction capabilities and camera metadata ([#426](https://github.com/rig-c/review/issues/426)) ([3b02cb1](https://github.com/rig-c/review/commit/3b02cb1d99d4d72a5e4b372e2d1be7fedc80fc44))
+
 ## [1.11.0](https://github.com/rig-c/review/compare/v1.10.2...v1.11.0) (2026-11-06)
 
 
