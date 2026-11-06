@@ -56,3 +56,102 @@ test('actual front preserves only the bounded closed stage-data refusal after no
   }
  }finally{front.stop();upstream.stop(true);await rm(control,{recursive:true,force:true});}
 });
+
+test('managed front preserves the measured failed-check Submit refusal within its response boundary', async () => {
+ const control = await mkdtemp(join(tmpdir(), 'session-front-refusal-'));
+ const frontFingerprint = 'f'.repeat(64);
+ const identity = {key:'a'.repeat(64), nonce:crypto.randomUUID(), fingerprint:frontFingerprint, contentHash:'b'.repeat(64)};
+ const capability = 'c'.repeat(64);
+ // Captured from the real worker's PUT with the retained failed-check Apply (#444).
+ const named = 'EDIT_SUBMIT_UNCHECKED: applied build failed check — check: FAIL — 1 bar(s) not met; 7 of 10 bar(s) measured, 3 skipped (BLINK_NO_HOLE, CHAIN_LAG, TIP_OVER_ROOT)';
+ const body = JSON.stringify({error:named});
+ let reply = () => new Response();
+ const upstream = Bun.serve({hostname:'127.0.0.1',port:0,fetch(req) {
+  if (new URL(req.url).pathname === '/api/open-status') {
+   return Response.json({schema:'rig-review-open-status/1', ...identity});
+  }
+  expect(req.headers.get(openNonceHeader)).toBe(identity.nonce);
+  return reply();
+ }});
+ const front = startFront({control,port:freePort(),nonce:crypto.randomUUID(),fingerprint:identity.fingerprint});
+ const base = front.origin + '/instances/' + identity.key;
+ const record = {schema:'rig-review-open-instance/1', ...identity, pid:process.pid,
+  origin:upstream.url.origin, mode:'single', capability};
+ const writeRecord = () => writeFile(join(control,identity.key+'.json'),JSON.stringify(record),{mode:0o600});
+ const request = (method = 'PUT', path = '/api/session') => fetch(base+path, {
+  method, headers:{Origin:front.origin,'Content-Type':'application/json','X-Review-Capability':capability},
+  ...(method === 'GET' ? {} : {body:'{}'}),
+ });
+ const response = (text: BodyInit, status = 400, type = 'application/json', key = identity.key) =>
+  new Response(text, {status, headers:{'Content-Type':type,[openKeyHeader]:key}});
+ const assertReply = async (expectedStatus:number, error:string, method?:string, path?:string) => {
+  const result = await request(method,path);
+  const raw = await result.text();
+  expect({status:result.status,raw}).toEqual({status:expectedStatus,raw:JSON.stringify({error})});
+ };
+ try {
+  await writeRecord();
+  reply = () => response(body);
+  await assertReply(400,named);
+  for (const error of [
+   'EDIT_SUBMIT_UNCHECKED: applied mesh has no successful producer check',
+   'CORRECTION_CHECK_FAILED: the settled Apply requires a passing producer check',
+   'EDIT_SUBMIT_UNCHECKED: applied build failed check — BREATH_VISIBLE: FAIL',
+   'EDIT_SUBMIT_UNCHECKED: applied build failed check — check: FAIL — 1 bar(s) not met; 7 of 9 bar(s) measured, 2 skipped (loop, seam)',
+   'EDIT_SUBMIT_UNCHECKED: applied build failed check — check exited 1',
+   'EDIT_SUBMIT_UNCHECKED: applied build failed check — check: FAIL — 0 bar(s) not met, 1 declared requirement(s) not PASS; 10 of 10 bar(s) measured, 0 skipped; 1 warning(s) (SEAM_OVER_MOTION, not a bar)',
+  ]) {
+   reply = () => response(JSON.stringify({error}));
+   await assertReply(400,error);
+  }
+
+  const generic = 'FRONT_UPSTREAM_REJECTED';
+  reply = () => response(body);
+  await assertReply(400,generic,'GET');
+  await assertReply(400,generic,'POST','/api/rebuild');
+  reply = () => response(body,409);
+  await assertReply(409,'FRONT_UPSTREAM_CONFLICT');
+  reply = () => response(body,400,'text/plain');
+  await assertReply(400,generic);
+  reply = () => response(body,400,'application/json','0'.repeat(64));
+  await assertReply(410,'FRONT_INSTANCE_REPLACED: reopen with rig-review open');
+
+  const padded = (size:number) => body.padEnd(body.length+size-Buffer.byteLength(body),' ');
+  reply = () => response(padded(512));
+  await assertReply(400,named);
+  for (const text of [
+   JSON.stringify({error:'CORRECTION_UNLISTED: /private/worker-file'}),
+   JSON.stringify({error:named+' /private/worker-file'}),
+   JSON.stringify({error:named+'\n'}),
+   JSON.stringify({error:named.replace('BLINK_NO_HOLE','/private/worker-file')}),
+   JSON.stringify({error:named, extra:'private'}),
+   JSON.stringify([named]),
+   'not JSON',
+   padded(513),
+  ]) {
+   reply = () => response(text);
+   await assertReply(400,generic);
+  }
+  reply = () => response(new ReadableStream<Uint8Array>({start(controller) {
+   controller.enqueue(new TextEncoder().encode(padded(512)));
+   controller.enqueue(new TextEncoder().encode(' '));
+   controller.close();
+  }}));
+  await assertReply(400,generic);
+
+  identity.fingerprint = 'd'.repeat(64);
+  record.fingerprint = identity.fingerprint;
+  await writeRecord();
+  reply = () => response(body);
+  await assertReply(400,generic);
+  identity.fingerprint = frontFingerprint;
+  record.fingerprint = frontFingerprint;
+  record.mode = 'compare';
+  await writeRecord();
+  await assertReply(400,generic,'PUT','/api/compare/session');
+ } finally {
+  front.stop();
+  upstream.stop(true);
+  await rm(control,{recursive:true,force:true});
+ }
+});
