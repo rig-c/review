@@ -110,6 +110,11 @@ function unsupportedOperation(schema: string): string {
 
 export function projectSessionCorrection(input: SessionInput) {
   const { session, sessionBytes, selector, source, itemId } = input;
+  const joined = input.direction?.joined;
+  if (selector.kind === 'post' && joined && selector.version !== joined.postVersion)
+    return refuse('CORRECTION_DIRECTION_SOURCE', 'select the joined Create post version');
+  if (selector.kind === 'post' && joined && input.path === 'made')
+    return refuse('CAMERA_APPLY_UNSUPPORTED', 'joined direction supports described requests only');
   const on = selectorArgs(selector);
   if (!hash(source.sourceHash) || !isDeepStrictEqual(sessionSource(session), source)) {
     return refuse('CORRECTION_SOURCE_STALE', 'saved session differs from verified source');
@@ -129,7 +134,8 @@ export function projectSessionCorrection(input: SessionInput) {
     const context = item.context as Record<string, unknown> | undefined;
     const comment = hasStageComment(context?.comment) ? parseStageComment(context?.comment) : null;
     const createSource = JSON.stringify({
-      source, post: selector.version, model, direction,
+      source, post: selector.version, model: joined?.projectModel ?? model, direction,
+      ...(joined ? {binding: joined, rigVersion: input.direction!.rigVersion, inspectedModel: model} : {}),
       animation: comment ? comment.animation : context?.animation,
       time: comment ? comment.time : context?.time,
       sourceTime: context?.sourceTime,
@@ -144,7 +150,8 @@ export function projectSessionCorrection(input: SessionInput) {
     if (Buffer.byteLength(createSource) > 32 * 1024) {
       return refuse('CORRECTION_DIRECTION_CONTEXT_SIZE', 'direction correction source exceeds 32 KiB');
     }
-    return { ...common, kind: 'described' as const, outcome: null, createSource };
+    return { ...common, on: joined ? selectorArgs({...selector, modelFile: joined.projectModel.path}) : on,
+      kind: 'described' as const, outcome: null, createSource };
   }
 
   const value = appliedValue(item);

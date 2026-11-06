@@ -932,6 +932,21 @@ inspection context. To import into Create:
    `on.model` and `on.direction`, and an open description (`outcome: null`).
    Create retains `source` as opaque text. Review runs no Create command.
 
+For a joined Create project, `--project-version` selects the recorded rig
+package and optional `--post-version` selects its authored post. Review checks
+the package inventory and derives the exact project-relative path from the
+inspected package model inside that inventory. The direction document must
+bind this path and its SHA-256. The project's direction stays outside the
+package asset routes. The joined session source binds the project digest,
+package source, rig version, selected post and direction file. Reopen if any
+of these inputs change.
+
+In Review's correction form use the selected post and the inspected
+package-relative model path. In the issue export, `selectorArgs` and
+`createSource.model` use the original Create project-relative model path.
+`createSource.inspectedModel` retains the package-relative binding. Use the
+same joined arguments on the feedback command to retrieve the joined session.
+
 Packages without authored direction continue to use their explicit legacy
 selector. Direction patch Apply is unavailable. Existing supported rig and
 draft Apply records keep their producer and result evidence.

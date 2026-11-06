@@ -5,6 +5,13 @@ export const DIRECTION_MAX_BYTES = 256 * 1024;
 type Binding = { path: string; sha256: string };
 export interface DirectionInspection {
   file: Binding;
+  joined?: {
+    postVersion: number;
+    projectHash: string;
+    packageSourceHash: string;
+    packageRoot: string;
+    projectModel: Binding;
+  };
   rigVersion: number;
   camera: { space: 'rig-world-y-up'; keys: { time: number; easing: string; box: { x: number; y: number; width: number; height: number } }[] };
   take: { duration: number; loop: boolean };

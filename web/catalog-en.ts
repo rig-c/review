@@ -98,6 +98,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "direction.authored": "Authored direction · rig v{0} · {1} · SHA-256 {2}",
   "direction.authoredUnavailable": "DIRECTION_METADATA_UNAVAILABLE · No authored direction bound to this model on stage.",
   "direction.runtimeCameraUnavailable": "CAMERA_PLAYBACK_UNAVAILABLE · Authored camera and timing are read-only here. Pan and zoom adjust the inspection viewport.",
+  "direction.joined": "Create post {0} · project-relative model {1} · recorded package {2} · project SHA-256 {3} · package source SHA-256 {4}",
+  "Choose the joined Create post version.": "Choose the joined Create post version.",
   "direction.cameraApplyUnavailable": "CAMERA_APPLY_UNSUPPORTED · Camera Apply is unavailable.",
   "direction.keys": "Authored camera and timing keys",
   "DIRECTION_UNAVAILABLE: no direction inspection contract is installed.": "DIRECTION_UNAVAILABLE: no direction inspection contract is installed.",

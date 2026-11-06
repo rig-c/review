@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { realpathSync } from 'node:fs';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseOpenInputs } from '../src/cli.ts';
@@ -9,7 +9,7 @@ import { digest } from '../src/interview-project.ts';
 import { loadOpenPackage, openKey } from '../src/open.ts';
 import { producerInputs } from '../src/rebuild.ts';
 import { startServer } from '../src/server.ts';
-import { sessionFile } from '../src/session.ts';
+import { freshSession, sessionFile } from '../src/session.ts';
 
 test('joined open requires an explicit project, version and picks directory together', () => {
   const flags = ['--project','create','--project-version','2','--picks-dir','picks'];
@@ -149,3 +149,129 @@ test('real Create v2 joins existing Stage 1 and 2 without changing the feedback 
     await rm(scratch,{recursive:true,force:true});
   }
 }, 15_000);
+
+test('joined authored post maps the recorded package and isolates feedback and stale inputs', async () => {
+  const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-direction-'));
+  const root = join(scratch, 'project'), stateDir = join(scratch, 'state');
+  const input = join(root, 'derived/review/v1/out');
+  const flags = ['--project', root, '--project-version', '1', '--picks-dir', 'picks', '--post-version', '2'];
+  const inputs = parseOpenInputs([input, ...flags]);
+  const capability = 'a'.repeat(64);
+  let server: Awaited<ReturnType<typeof startServer>> | undefined;
+  try {
+    const archive = await readFile(new URL('./fixtures/create-example-chain/project.tar.gz', import.meta.url));
+    expect(digest(archive)).toBe('88b5a4584b25608fd9409b2e27f0c77dad8f042e82751dc882cbf40bca6b2072');
+    await mkdir(root);
+    const tar = Bun.spawnSync(['tar', '-xzf', '-', '-C', root], {stdin:archive});
+    expect(tar.exitCode, tar.stderr.toString()).toBe(0);
+    await mkdir(join(root, 'picks'));
+    const joined = await loadOpenPackage(inputs);
+    const standalone = await loadOpenPackage({input});
+    if (joined.mode !== 'single' || standalone.mode !== 'single' || !joined.joined || !joined.p.direction?.joined)
+      throw new Error('Expected the selected joined authored direction');
+    const {p} = joined, authored = p.direction!;
+    const projectPath = join(root, 'project.json'), directionPath = join(root, authored.file.path);
+    const projectBytes = await readFile(projectPath), directionBytes = await readFile(directionPath);
+    const doc = JSON.parse(directionBytes.toString());
+    expect(authored.joined).toEqual({postVersion:2, projectHash:digest(projectBytes),
+      packageSourceHash:standalone.contentHash, packageRoot:'derived/review/v1', projectModel:doc.rig.model});
+    expect(authored.rigVersion).toBe(1);
+    expect(authored.camera).toEqual(doc.camera);
+    expect(authored.timing).toEqual(doc.timing.keys);
+    expect(p.reviewedSource.rig).toEqual({path:'build/skeleton.model.json', sha256:doc.rig.model.sha256});
+    expect(standalone.p.direction).toBeUndefined();
+    expect(sessionFile(p,stateDir)).not.toBe(sessionFile(standalone.p,stateDir));
+    expect(openKey(await loadOpenPackage(joined.inputs),'tool')).toBe(openKey(joined,'tool'));
+
+    server = await startServer(p,{port:0,stateDir,capability,joined:joined.joined});
+    const origin = 'http://127.0.0.1:' + server.port;
+    const get = (path: string) => fetch(origin + path);
+    expect((await (await get('/api/review')).json()).direction).toEqual(authored);
+    const parts = await get('/api/stage-parts');
+    expect(parts.status).toBe(200);
+    expect((await parts.json()).inspectionSourceHash).toBe(p.sourceHash);
+    expect((await get('/assets/' + authored.file.path)).status).toBe(404);
+    const session = freshSession(p);
+    const item = {id:'authored-request', frameStart:0, frameEnd:0, target:{kind:'rig',name:p.manifest.id},
+      category:'quality', summary:'  Keep this timing.\r\n프레이밍 유지  \n',
+      context:{correction:{path:'described',selector:{stage:'direction-review',kind:'post',version:2,modelFile:p.reviewedSource.rig!.path}}}};
+    const submit = (source = session) => fetch(origin + '/api/session', {
+      method:'PUT', headers:{origin,'content-type':'application/json','x-review-capability':capability},
+      body:JSON.stringify({...source,feedback:[item]}),
+    });
+    const stale = await submit(freshSession(standalone.p));
+    expect(stale.ok).toBe(false);
+    expect(await stale.text()).toContain('session.sourceHash: does not match loaded package');
+    item.context.correction.selector.version = 1;
+    expect(await (await submit()).text()).toContain('CORRECTION_DIRECTION_SOURCE');
+    item.context.correction.selector.version = 2;
+    item.context.correction.path = 'made';
+    expect(await (await submit()).text()).toContain('CAMERA_APPLY_UNSUPPORTED');
+    item.context.correction.path = 'described';
+    const saved = await submit();
+    expect(saved.status, await saved.text()).toBe(200);
+    const exported = Bun.spawnSync([process.execPath,'src/cli.ts','feedback',input,...flags,
+      '--correction',item.id,'--format','issue'], {env:{...process.env,RIG_REVIEW_STATE_DIR:stateDir}});
+    expect(exported.exitCode,exported.stderr.toString()).toBe(0);
+    const issue = JSON.parse(exported.stdout.toString().split('\n').slice(5,-2).join('\n'));
+    expect(issue.verbatim).toBe(item.summary);
+    expect(issue.selectorArgs).toEqual(['--version','2','--model-file',doc.rig.model.path]);
+    expect(JSON.parse(issue.createSource)).toMatchObject({post:2, rigVersion:1,
+      model:doc.rig.model, direction:authored.file, binding:authored.joined, inspectedModel:p.reviewedSource.rig});
+
+    const refusal = async (path: string, code: string) => {
+      const result = await get(path);
+      expect(result.status).toBe(409);
+      expect(await result.text()).toContain(code);
+    };
+    const modelPath = join(root, doc.rig.model.path);
+    const modelBytes = await readFile(modelPath);
+    for (const [path, bytes, code] of [[directionPath,directionBytes,'DIRECTION_SOURCE_STALE'],
+      [projectPath,projectBytes,'INTERVIEW_OPTIONS_STALE'], [modelPath,modelBytes,'INTERVIEW_OPTIONS_STALE']] as const) {
+      try {
+        await writeFile(path, Buffer.concat([bytes, Buffer.from(' ')]));
+        await refusal('/api/review', code);
+      } finally { await writeFile(path, bytes); }
+    }
+    await expect(loadOpenPackage({...inputs,project:{...inputs.project!,postVersion:1}})).rejects.toThrow('DIRECTION_VERSION');
+    await expect(loadOpenPackage({...inputs,project:{...inputs.project!,version:2}})).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
+
+    const mutateProject = async (edit: (post: any) => void) => {
+      const record = JSON.parse(projectBytes.toString());
+      edit(record.versions.find((entry: {n:number}) => entry.n === 2));
+      await writeFile(projectPath,JSON.stringify(record));
+    };
+    try {
+      await mutateProject(post => {post.rig_version = 2;});
+      await expect(loadOpenPackage(inputs)).rejects.toThrow('DIRECTION_RIG_MISMATCH');
+      await mutateProject(post => {delete post.provenance.direction;});
+      await expect(loadOpenPackage(inputs)).rejects.toThrow('DIRECTION_DOCUMENT_REQUIRED');
+      // This different project path really names another copy of the same model bytes.
+      const wrong = join(root, 'wrong.model.json');
+      await writeFile(wrong, modelBytes);
+      doc.rig.model.path = 'wrong.model.json';
+      const changed = JSON.stringify(doc);
+      await writeFile(directionPath, changed);
+      await mutateProject(post => {
+        const binding = {path:authored.file.path,sha256:digest(changed)};
+        post.outputs = [binding];
+        post.provenance.config = post.provenance.direction = binding;
+      });
+      await expect(loadOpenPackage(inputs)).rejects.toThrow('DIRECTION_MODEL_MISMATCH');
+      await writeFile(projectPath, projectBytes);
+      await rm(directionPath);
+      const outside = join(scratch, 'direction.json');
+      await writeFile(outside, directionBytes);
+      await symlink(outside, directionPath);
+      await expect(loadOpenPackage(inputs)).rejects.toThrow('DIRECTION_SOURCE_MISMATCH');
+    } finally {
+      await rm(directionPath,{force:true});
+      await writeFile(directionPath,directionBytes);
+      await writeFile(projectPath,projectBytes);
+    }
+    expect((await get('/api/review')).status).toBe(200);
+  } finally {
+    server?.stop(true);
+    await rm(scratch,{recursive:true,force:true});
+  }
+}, 15000);

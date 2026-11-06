@@ -9,6 +9,14 @@ import type {HandoffFlags} from './handoff.ts';
 export interface ReferenceBinding {packageSourceHash:string;reference:{id:string;name:string;sha256:string}}
 export interface PinnedReference {path:string;binding:ReferenceBinding}
 const pinned=Symbol('explicit CLI reference');
+const sourceAssertion=Symbol('joined source assertion');
+type BoundPackage=ReviewPackage&{[sourceAssertion]?:()=>Promise<void>};
+
+/** A composed source verifies its original package and the additional pinned inputs together. */
+export function withReviewAssertion(p:ReviewPackage,assertCurrent:()=>Promise<void>):ReviewPackage {
+ const bound:BoundPackage={...p,[sourceAssertion]:assertCurrent};
+ return bound;
+}
 type ReferencedPackage=ReviewPackage&{[pinned]?:PinnedReference};
 export const selectedReference=(p:ReviewPackage):PinnedReference|undefined=>(p as ReferencedPackage)[pinned];
 export const referenceBinding=(p:ReviewPackage):ReferenceBinding|undefined=>selectedReference(p)?.binding;
@@ -29,6 +37,8 @@ export async function loadReferencedReview(input:string,reference?:string,handof
  return {...base,sourceHash,manifest:{...base.manifest,references:[{id,label:video.name+' · selected reference',type:'video',path:'__review_selected_reference__.mp4'},...base.manifest.references]},[pinned]:{path:video.path,binding}} as ReferencedPackage;
 }
 export async function assertReviewUnchanged(p:ReviewPackage):Promise<void>{
+ const assertCurrent=(p as BoundPackage)[sourceAssertion];
+ if(assertCurrent)return assertCurrent();
  try{const current=await loadReferencedReview(p.manifestPath,selectedReference(p)?.path,p.handoffInputs);if(current.sourceHash!==p.sourceHash||!isDeepStrictEqual(current.reviewedSource,p.reviewedSource)||!isDeepStrictEqual(referenceBinding(current),referenceBinding(p)))throw new Error('source binding differs');}
  catch{throw new Error('Package inputs changed or are unavailable. Restart review to bind feedback to current inputs.');}
 }
