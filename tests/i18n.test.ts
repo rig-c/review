@@ -2,6 +2,7 @@ import {expect,test} from 'bun:test';
 import {readdir,readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {feedbackTimingLabel,timeOnlyBasis} from '../src/stage-comment.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {
@@ -542,7 +543,8 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
   setLanguagePreference('ko');
 
   // --- Surface 1: Single-package renderProposals() in web/main.ts ---
-  const runProposalSurface=(fnSource:string)=>{
+  const runProposalSurface=(fnSource:string,timed=false,lang:'en'|'ko'='ko')=>{
+   setLanguagePreference(lang);
    const {doc,root}=makeTestDoc();
    const proposalList=doc.createElement('div');proposalList.id='proposal-list';
    const warnings=doc.createElement('p');warnings.id='feedback-warnings';
@@ -552,10 +554,10 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
     id:'fb-single-1',
     category:'defect',
     target:{kind:'slot',name:catalogTargetName},
-    frameStart:0,
-    frameEnd:12,
+    frameStart:timed?null:0,
+    frameEnd:timed?null:12,
     summary:catalogSummary,
-    context:{note:compoundCatalogSummary},
+    context:{note:compoundCatalogSummary,...(timed?{comment:{frame:null,time:.25,timeBasis:timeOnlyBasis}}:{})},
    };
    const session={feedback:[feedbackEntry],feedbackWarnings:[]};
    const jsSource=new Bun.Transpiler({loader:'ts'}).transformSync(fnSource);
@@ -567,7 +569,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
     session,
     appliedCheckRefusal:()=>null,
     document:doc,
-    feedbackTimingLabel:(f:any)=>`F${f.frameStart}–F${f.frameEnd}`,
+    feedbackTimingLabel,
     submittedBaseline:null,
     markDirty:()=>{},
     updateSavedState:()=>{},
@@ -592,10 +594,21 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
 
   const actualSingle=runProposalSurface(rpSource);
   expect(actualSingle.summaryText).toBe(catalogSummary);
-  expect(actualSingle.headingText).toBe(`defect · slot:${catalogTargetName} · F0–F12`);
+  expect(actualSingle.headingText).toBe(`defect · slot:${catalogTargetName} · F0–12`);
   expect(actualSingle.jsonText).toBe(actualSingle.expectedJson);
   expect(actualSingle.detailsHeadingText).toBe('저장된 피드백 및 점검 컨텍스트');
   expect(actualSingle.deleteBtnText).toBe('삭제');
+
+  const timingText = {
+   en: '0.25 s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)',
+   ko: '0.25초 (초 기준) · 프레임을 사용할 수 없음: 현재 시간에 명시적 프로듀서 프레임 인덱스가 없습니다 (COMMENT_FRAME_UNAVAILABLE)',
+  };
+  for(const lang of ['en','ko'] as const){
+   const row=runProposalSurface(rpSource,true,lang);
+   expect(row.headingText).toBe(`defect · slot:${catalogTargetName} · ${timingText[lang]}`);
+   expect(row.summaryText).toBe(catalogSummary);
+   expect(row.jsonText).toBe(row.expectedJson);
+  }
 
   // Planted old-code control for Surface 1: unclassed <span> and <strong> as before the fix.
   const oldRpSource=rpSource
@@ -604,7 +617,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
   expect(oldRpSource).not.toBe(rpSource);
   const oldSingle=runProposalSurface(oldRpSource);
   expect(oldSingle.summaryText).toBe('현재 포즈에서 그려지지 않음');
-  expect(oldSingle.headingText).toBe('defect · slot:Idle preview 사용 불가 · F0–F12');
+  expect(oldSingle.headingText).toBe('defect · slot:Idle preview 사용 불가 · F0–12');
 
   // --- Surface 2: Compare renderFeedback() in web/compare.ts ---
   const runCompareFeedbackSurface=(fnSource:string)=>{

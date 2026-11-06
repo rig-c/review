@@ -10,6 +10,7 @@ import { freshSession } from '../src/session.ts';
 import { verifyCompiledModel } from '../src/strip-render.ts';
 import { directionRows } from '../web/direction-panel.ts';
 import { t } from '../web/i18n.ts';
+import { formatTurnValue, TurnState } from '../src/turn-pad.ts';
 import { stageReason } from '../web/stage-nav.ts';
 
 const fixture = 'tests/fixtures/direction-inspection';
@@ -54,6 +55,19 @@ test('pinned Create output loads in published Play and reports only its actual d
   expect(freshSession(pkg).status).toBe('pending');
   for (const [path, sha256] of Object.entries(expected))
     expect(createHash('sha256').update(await readFile(join(fixture, path))).digest('hex'), path).toBe(sha256);
+});
+
+test('direction yaw displays a rounded endpoint while enforcing the compiled bound', async () => {
+  const pkg = await loadReview(fixture);
+  const yaw = pkg.feedbackCatalog.turnDials![0]!;
+  const exactMax = 29.999995200000384;
+  const turn = new TurnState([yaw]);
+  expect(yaw.max).toBe(exactMax);
+  expect(formatTurnValue(yaw.max, yaw)).toBe('30');
+  turn.exact('yaw', exactMax);
+  expect(() => turn.exact('yaw', 30)).toThrow('TURN_VALUE_OUT_OF_RANGE');
+  expect(turn.snapshot().values.yaw).toBe(exactMax);
+  expect(turn.targets.yaw).toBe(exactMax);
 });
 
 test('direction metadata is package-contained, model-bound and part of the rechecked source identity', async () => {
