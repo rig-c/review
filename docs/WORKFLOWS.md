@@ -357,3 +357,36 @@ On the view you are inspecting, choose **Comment · C (n)**, drag over the detai
 The four-stage navigator preserves this entry and its explicit save behavior. Compiled sessions reuse the atlas surface read-only; see [Four inspection stages](PANELS.md#four-inspection-stages).
 
 The managed front forwards only the trusted stage-atlas frame query (`stageEmbed=1`, `lang=en|ko`, and a required `side=a|b` for compare; no side for single). Unknown or duplicate keys are refused; the frame carries no filesystem path, command or capability. Stage navigation never changes CLI arguments or package bindings.
+
+## Create choice interview
+
+From a create project with retained choice sets, create a dedicated output
+directory and open the foreground Stage 2 view:
+
+```sh
+mkdir -p scratch/review-picks
+rig-review interview . --picks-dir scratch/review-picks
+```
+
+Open the printed loopback URL. Select a question and inspect its bound parts
+or source image. A direction set that binds only source inputs displays those
+inputs with the no-bound-parts notice. Each recommendation shows the retained
+reason and author/date. Choose an option for every prompt and save explicitly.
+Other records your wording and stays pending until a tailored choice is
+offered and picked. Auto stays pending until create has a covered agent
+decision. Historical choice sets are read-only.
+
+Each saved set has its own `<raw-set-sha256>.json` in the designated directory.
+Reopening restores picks and note for the same retained set. A new set starts
+without selections. The directory must exist inside the project and be
+separate from every bound input. A stale context, forged selection or
+superseded set is refused. Review writes only `rig-review/interview-picks@1`
+files. To ingest a file, run create separately from the project root:
+
+```sh
+rig-create interview-answer <question> . --picks-file scratch/review-picks/<raw-set-sha256>.json
+```
+
+Part assets must be valid images as well as hash-bound. A bound PNG without a
+PNG signature returns `INTERVIEW_IMAGE_INVALID`. The panel displays a named
+refusal when the browser cannot display a bound image.

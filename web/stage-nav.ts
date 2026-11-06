@@ -17,13 +17,19 @@ export function stagePartsSelectionIndex(data:{inspectionSourceHash?:string;item
  return i;
 }
 export function stageReason(stage:ReviewStage,model:boolean):string|null {
- if(stage===2)return 'INTERVIEW_UNAVAILABLE: no interview consumer contract is installed.';
+ if(stage===2)return 'INTERVIEW_UNAVAILABLE: Open a designated create project with rig-review interview.';
  if(stage===4)return 'DIRECTION_UNAVAILABLE: no direction inspection contract is installed.';
  if(stage===3&&!model)return 'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.';
  return null;
 }
-export function bindStageNav(options:{partsOnly?:boolean;model:boolean;side?:()=> 'a'|'b';setup?:()=>void;draftBuild?:()=>string;correction?:(request:{part:string;sourceHash:string;buildId:string;instrument:string})=>Promise<void>}):()=>void {
+export function bindStageNav(options:{interviewOnly?:boolean;partsOnly?:boolean;model:boolean;side?:()=> 'a'|'b';setup?:()=>void;draftBuild?:()=>string;correction?:(request:{part:string;sourceHash:string;buildId:string;instrument:string})=>Promise<void>}):()=>void {
  const host=document.querySelector<HTMLElement>('[data-stage-nav]');if(!host)return ()=>{};
+ if(options.interviewOnly){
+  const button=document.createElement('button');button.type='button';button.dataset.reviewStage='2';button.setAttribute('aria-current','step');host.append(button);
+  const render=()=>{button.textContent=t(reviewStages[1]);host.setAttribute('aria-label',t('Inspection stages'));};
+  document.documentElement.dataset.inspectionStage='2';render();
+  const language=onLanguageChange(render);return ()=>{language();button.remove();};
+ }
  const embedded=new URL(location.href).searchParams.get('stageEmbed')==='1';
  if(embedded){host.hidden=true;return ()=>{};}
  const access=pageInstanceAccess(),panel=document.createElement('section');panel.className='review-stage-panel';panel.hidden=true;panel.setAttribute('aria-live','polite');document.body.append(panel);
