@@ -605,8 +605,12 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       }
       assert.equal(capture?.exchanges.length, 1, 'Expected exactly one actual refused Review PUT');
       const exchange = capture!.exchanges[0]!;
-      assert.equal(typeof exchange.response?.body, 'string', 'Missing actual refused Review response body');
-      assert.match(capture?.message ?? '', /EDIT_SUBMIT_UNCHECKED|CORRECTION_CHECK_FAILED/, 'failed-submit');
+      const response = exchange.response;
+      assert.equal(response?.status, 400, 'Expected HTTP 400 for the refused Review PUT');
+      assert(typeof response.body === 'string', 'Missing actual refused Review response body');
+      const expectedError = 'EDIT_SUBMIT_UNCHECKED: applied build failed check — ' + originalFailed.check.line;
+      assert.deepEqual(JSON.parse(response.body), {error:expectedError}, 'Unexpected refused Review response');
+      assert(capture?.message?.includes(expectedError), 'Review message is missing the exact failed-check error');
       const refused = exchange.request;
       assert(refused, 'Missing actual refused Review request');
       await assert.rejects(readFile(sessionFile(inspected.p, failedState)), {code:'ENOENT'});
