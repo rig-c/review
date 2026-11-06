@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.2](https://github.com/rig-c/review/compare/v1.16.1...v1.16.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* show producer check verdicts after Apply ([#452](https://github.com/rig-c/review/issues/452)) ([204cf9a](https://github.com/rig-c/review/commit/204cf9a3e5a4ffba4674b64f058d5dcf5760c37c))
+
 ## [1.16.1](https://github.com/rig-c/review/compare/v1.16.0...v1.16.1) (2026-11-06)
 
 
