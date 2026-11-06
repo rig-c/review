@@ -90,10 +90,11 @@ test('#139 bar 1: a retune Apply records retune\'s carried check, equal field by
  expect(carried.job.build!.modelHash).toBe(ran.job.build!.modelHash);
  expect(carried.runs).toBe(0);expect(ran.runs).toBe(1);
  const {source,...fields}=carried.job.check!;
- expect(source).toBe('retune');expect(Object.hasOwn(ran.job.check!,'source')).toBe(false);
+ expect(source).toBe('retune');
  // Field by field, bars in check.json's order included.
- expect(fields).toEqual(ran.job.check!);
- expect(JSON.stringify(fields)).toBe(JSON.stringify(ran.job.check));
+ const direct={...fields,source:'check'} as const;
+ expect(ran.job.check).toEqual(direct);
+ expect(JSON.stringify(ran.job.check)).toBe(JSON.stringify(direct));
  expect(fields).toEqual({schema:'rig-review-check-summary/1',pass:false,exitCode:1,line:'check: FAIL — 1 bar(s) not met; 3 of 4 bar(s) measured; 1 warning(s) (CLOTH_SETTLES, not a bar)',bars:{BREATH_VISIBLE:'PASS',CHAIN_LAG:'FAIL',TEXTURE_STRETCH:'SKIP',CLOTH_SETTLES:'WARN',RECOMPOSITE_HOLES:'REPORTED'},gate:true});
  expect(carried.job.wallMs.check).toBeNull();
  expect(carried.job.lines).toContain('review: check not run again — retune.json carries retune\'s check of this revision, bound to it by 4 revision hash row(s): check: FAIL — 1 bar(s) not met; 3 of 4 bar(s) measured; 1 warning(s) (CLOTH_SETTLES, not a bar)');

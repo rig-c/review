@@ -9,7 +9,7 @@ import { loadCompare, type ComparePackage } from '../src/compare.ts';
 import { freshSession, sessionFile, type Feedback, type ReviewSession } from '../src/session.ts';
 import { freshCompareSession, compareSessionFile, type CompareSession } from '../src/compare-session.ts';
 import { readFeedbackSession, readFeedbackCompareSession, type FeedbackHistory } from '../src/session-history.ts';
-import { formatFeedbackIssues, groupFeedbackIssues, feedbackMarkdownText } from '../src/feedback-export.ts';
+import { formatCorrectionIssue, formatFeedbackIssues, groupFeedbackIssues, feedbackMarkdownText } from '../src/feedback-export.ts';
 import { feedbackFormat } from '../src/cli.ts';
 
 const dirs: string[] = [];
@@ -223,4 +223,14 @@ test('actual comparison feedback retrieves an animation named --format with defa
   }
   expect(outputs[0]).toBe(outputs[1]);
   expect({ a: await inventory(f.a.root), b: await inventory(f.b.root), state: await inventory(state), reference: await readFile(f.reference, 'utf8') }).toEqual(before);
+});
+
+test('selected issue preserves correction words as exact JSON and distinguishes unsupported operations', () => {
+  const issue=formatCorrectionIssue({kind:'unsupported',operation:'retarget',stage:'rig-review',on:['--version','1'],
+    source:{revision:'one'},itemId:'item',verbatim:'verbatim ```  \r\n'},{applied:{schema:'rig-review-applied/4'}});
+  expect(issue).toContain('CORRECTION_OPERATION_UNSUPPORTED');
+  const [, , , , open, ...body]=issue.split('\n');
+  expect(open).toBe('````json');
+  expect(JSON.parse(body.slice(0,-1).join('\n')).verbatim).toBe('verbatim ```  \r\n');
+  expect(feedbackFormat(['compare','a','b','--correction','item','--format','issue']).correctionId).toBe('item');
 });

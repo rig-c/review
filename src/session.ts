@@ -1,3 +1,4 @@
+import {parseCorrection} from './correction-handoff.ts';
 import {clockForAnimation,frameAtTime} from './frame-clock.ts';
 import {parseBookmark} from '../web/inspection-persistence.ts';
 import {parseStageComment,projectMark,hasStageComment,isTimeOnlyFeedback,feedbackFrameInterval} from './stage-comment.ts';
@@ -25,7 +26,8 @@ export function parseFeedback(item:unknown,strict=true):Feedback {
   const integer=strict?Number.isSafeInteger:Number.isInteger;
   if(f.frameStart===null||f.frameEnd===null){if(!isTimeOnlyFeedback(f))throw new Error('COMMENT_TIME_ONLY_INVALID: null frames require a validated time-only single comment and null interval');}
   else if(!integer(f.frameStart)||!integer(f.frameEnd)||(f.frameStart as number)<0||(f.frameEnd as number)<(f.frameStart as number))throw new Error('feedback frames: expected inclusive integer 0 <= frameStart <= frameEnd');
-  const summary=string(f.summary,'feedback.summary');if(summary.length>1000||/[\r\n]/.test(summary))throw new Error('feedback.summary: expected one line <= 1000 characters');
+  const correction=parseCorrection((f.context as any)?.correction);
+  const summary=string(f.summary,'feedback.summary');if(summary.length>1000||(!correction&&/[\r\n]/.test(summary)))throw new Error('feedback.summary: expected one line <= 1000 characters');
   return {id:string(f.id,'feedback.id'),frameStart:f.frameStart as number|null,frameEnd:f.frameEnd as number|null,target:{kind:choice(target.kind,['bone','slot','rig'] as const,'feedback.target.kind'),name:string(target.name,'feedback.target.name')},category:choice(f.category,['defect','quality'] as const,'feedback.category'),summary,...(f.context===undefined?{}:{context:f.context as Json})};
 }
 export interface FeedbackWarning {id:string;error:string}
@@ -104,4 +106,4 @@ export function parseSession(input:unknown,p:ReviewPackage,strict=true):ReviewSe
 }
 export function sessionFile(p:ReviewPackage,stateDir=join(homedir(),'.local','state','rig-c-review')):string { const key=createHash('sha256').update(JSON.stringify([p.manifest.id,p.manifest.revision,p.sourceHash,p.reviewedSource])).digest('hex'); return join(stateDir,key+'.json'); }
 export async function readSession(p:ReviewPackage,stateDir?:string):Promise<ReviewSession> {try {const v=JSON.parse(await readFile(sessionFile(p,stateDir),'utf8'));const parsed=parseSession(v,p,false);return {...parsed,updatedAt:v.updatedAt};}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return freshSession(p);throw e;} }
-export async function saveSession(p:ReviewPackage,input:unknown,stateDir?:string):Promise<ReviewSession> {const value=parseSession(input,p);assertSubmittedComments((await readSession(p,stateDir)).feedback,value.feedback);await saveCommentCrops(value.feedback,stateDir);const file=sessionFile(p,stateDir);await mkdir(join(file,'..'),{recursive:true,mode:0o700});const tmp=file+'.'+crypto.randomUUID()+'.tmp';await writeFile(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});await rename(tmp,file);return value;}
+export async function saveSession(p:ReviewPackage,input:unknown,stateDir?:string,validate?:(value:ReviewSession,bytes:Buffer,previous:ReviewSession)=>Promise<void>):Promise<ReviewSession> {const value=parseSession(input,p);const bytes=Buffer.from(JSON.stringify(value,null,2)+'\n');const previous=await readSession(p,stateDir);await validate?.(value,bytes,previous);assertSubmittedComments(previous.feedback,value.feedback);await saveCommentCrops(value.feedback,stateDir);const file=sessionFile(p,stateDir);await mkdir(join(file,'..'),{recursive:true,mode:0o700});const tmp=file+'.'+crypto.randomUUID()+'.tmp';await writeFile(tmp,bytes,{mode:0o600});await rename(tmp,file);return value;}

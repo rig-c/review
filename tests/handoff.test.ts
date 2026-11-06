@@ -7,7 +7,8 @@ import {loadReview} from '../src/manifest.ts';
 import {assertReviewUnchanged} from '../src/reference.ts';
 import {readSession,saveSession,sessionFile,freshSession} from '../src/session.ts';
 import {startServer} from '../src/server.ts';
-import {DISCOVERY_PLACES,MODELING_INPUT_UNAVAILABLE,resolveHandoff,HandoffError} from '../src/handoff.ts';
+import producerPins from './fixtures/correction-producer-pins.json';
+import {CONFIG_NAMED_FILES,CONFIG_SKELETON_NAMES,DISCOVERY_PLACES,MODELING_INPUT_UNAVAILABLE,resolveHandoff,HandoffError} from '../src/handoff.ts';
 import {assertWholeRigBaseline,BaselineError,compareBaseline,firstDifference,rigTree,type BaselineResult} from '../src/baseline.ts';
 import {loadOpenPackage,openKey,openFingerprint} from '../src/open.ts';
 import {handoffText} from '../web/rebuild-client.ts';
@@ -202,4 +203,96 @@ test('resolveHandoff is the one lookup: the same root and inputs give the same r
  const s=await scratch();
  try{const dir=await pkg(s.root,'rig/config.json');const a=await resolveHandoff(dir,undefined,undefined),b=await resolveHandoff(dir,undefined,undefined);expect(a.handoff!.record).toEqual(b.handoff!.record);}
  finally{await s.done();}
+});
+
+const literalStrings=(source:string)=>[...source.matchAll(/'([^']+)'/g)].map(match=>match[1]!);
+function producerLoaderFields(source:string):string[]{
+ const table=/^const CONFIG_FILE_FIELDS = \{([\s\S]*?)^} as const;/m.exec(source)?.[1];
+ if(table)return [...table.matchAll(/path: \[([^\]]+)\]/g)].map(match=>literalStrings(match[1]!).join('.')).sort();
+ // 1.78.0 had the same three file reads inline, before the shared table existed.
+ const req=/checkRequirementsFile\(c, resolve\(base, t\.([a-z_]+)\)\)/.exec(source)?.[1];
+ const anim=/const from = isPlainObject\(t\.\w+\) \? t\.([a-z_.]+) : undefined/.exec(source)?.[1];
+ const generation=/poseBeside\(c, t\.([a-z_]+), base\)/.exec(source)?.[1];
+ const skeleton=/const skel = gen\.([a-z_.]+);/.exec(source)?.[1];
+ if(!req||!anim||!generation||!skeleton||!source.includes('readAnimationsFrom(c, base, from)')||
+    !source.includes('readControlPose(c, resolve(base, skel), latent)'))throw Error('CONFIG_LOADER_FIELDS_STALE: unrecognized pinned loader');
+ return [req,anim,generation+'.'+skeleton].sort();
+}
+function assertLoaderFields(source:string,fields:readonly (readonly string[])[]){
+ if(JSON.stringify(producerLoaderFields(source))!==JSON.stringify(fields.map(field=>field.join('.')).sort())){
+  throw Error('CONFIG_LOADER_FIELDS_STALE: Review fields differ from the pinned producer loader');
+ }
+ const names=/^export const SKELETON_NAMES:.*= \[([^\]]+)\];/m.exec(source)?.[1];
+ if(!names||JSON.stringify(literalStrings(names))!==JSON.stringify(CONFIG_SKELETON_NAMES))throw Error('CONFIG_LOADER_FIELDS_STALE: built-in skeleton names differ');
+}
+function assertLoaderPins(pins:Record<string,{version:string;packageSha256:string}>,legacy:readonly string[],reviewFixes:string|undefined,excerpts:Map<string,string>){
+ const versions=[...new Set(Object.values(pins).map(pin=>pin.version))].sort();
+ if(legacy.some(version=>version!==pins.legacyStage1?.version)||reviewFixes!==pins.reviewRemesh?.version||
+    JSON.stringify(versions)!==JSON.stringify([...excerpts.keys()].sort()))throw Error('CONFIG_LOADER_PIN_STALE: verification pins differ from loader excerpts');
+ for(const {version,packageSha256} of Object.values(pins)){
+  const source=excerpts.get(version);
+  if(!source?.startsWith(`// Published npm @rig-c/parts@${version}; literal source excerpts.\n// package.json sha256 ${packageSha256}\n`)){
+   throw Error('CONFIG_LOADER_PIN_STALE: pinned package metadata differs from excerpt provenance');
+  }
+ }
+}
+
+test('offline loader parity covers each declared correction verification pin',async()=>{
+ const helpers=join(import.meta.dir,'helpers'), fixtures=join(import.meta.dir,'fixtures');
+ const [browser,sample,fixes]=await Promise.all(['stage1-browser-job.sh','stage1-producer-sample.sh','stage1-review-fixes-job.sh'].map(file=>readFile(join(helpers,file),'utf8')));
+ const defaultPin=/RV367_PARTS_VERSION:-([^}]+)}/.exec(browser)?.[1]??'';
+ const samplePin=/"@rig-c\/parts":"([^"]+)"/.exec(sample)?.[1]??'';
+ const fixesPin=/"@rig-c\/parts":"([^"]+)"/.exec(fixes)?.[1];
+ const excerpts=new Map<string,string>();
+ for(const file of await readdir(fixtures)){
+  const version=/^parts-(\d+\.\d+\.\d+)-config-file-fields\.txt$/.exec(file)?.[1];
+  if(version)excerpts.set(version,await readFile(join(fixtures,file),'utf8'));
+ }
+ assertLoaderPins(producerPins,[defaultPin,samplePin],fixesPin,excerpts);
+ for(const source of excerpts.values()){
+  assertLoaderFields(source,CONFIG_NAMED_FILES);
+  expect(()=>assertLoaderFields(source,CONFIG_NAMED_FILES.filter(field=>field[0]!=='requirements'))).toThrow('CONFIG_LOADER_FIELDS_STALE');
+ }
+ expect(()=>assertLoaderPins(producerPins,['1.99.0',samplePin],fixesPin,excerpts)).toThrow('CONFIG_LOADER_PIN_STALE');
+ expect(()=>assertLoaderPins({...producerPins,extra:{...producerPins.createStage1,version:'9.0.0'}},[defaultPin,samplePin],fixesPin,excerpts)).toThrow('CONFIG_LOADER_PIN_STALE');
+ const missing=new Map(excerpts);missing.delete(producerPins.createStage1.version);
+ expect(()=>assertLoaderPins(producerPins,[defaultPin,samplePin],fixesPin,missing)).toThrow('CONFIG_LOADER_PIN_STALE');
+ expect(()=>assertLoaderPins({...producerPins,reviewRemesh:{...producerPins.reviewRemesh,packageSha256:'0'.repeat(64)}},[defaultPin,samplePin],fixesPin,excerpts)).toThrow('CONFIG_LOADER_PIN_STALE');
+});
+
+test('requirements bytes join the handoff without aliasing other named inputs or a built-in skeleton',async()=>{
+ const s=await scratch();
+ try{
+  const dir=await pkg(s.root,'rig/config.json'),configPath=join(dir,'rig/config.json');
+  const declared={...config,requirements:'checks/shared.json',motion:{animations_from:'motion-inputs/shared.json'},generation:{control:{skeleton:'stand_sides'}}};
+  await mkdir(join(dir,'rig/checks'),{recursive:true});
+  const path=join(dir,'rig/checks/shared.json'),bytes='{"spec":"spine-parts-requirements/1"}\n';
+  await writeFile(configPath,JSON.stringify(declared));
+  await writeFile(path,bytes);
+  await mkdir(join(dir,'rig/motion-inputs'));
+  await writeFile(join(dir,'rig/motion-inputs/shared.json'),bytes);
+  const before=await loadReview(dir), configDigest=sha(await readFile(configPath));
+  expect(before.reviewedSource.handoff!.files).toContainEqual({path:'rig/checks/shared.json',sha256:sha(bytes)});
+  expect(before.reviewedSource.handoff!.files).toContainEqual({path:'rig/motion-inputs/shared.json',sha256:sha(bytes)});
+  expect(before.reviewedSource.handoff!.missing.some(value=>value.includes('stand_sides'))).toBe(false);
+  await writeFile(path,bytes+' ');
+  await expect(assertReviewUnchanged(before)).rejects.toThrow('Package inputs changed');
+  const after=await loadReview(dir);
+  expect(sessionFile(after,s.state)).not.toBe(sessionFile(before,s.state));
+  await rm(path);
+  expect((await loadReview(dir)).reviewedSource.handoff!.missing).toContain('requirements rig/checks/shared.json');
+  const outside=join(s.root,'outside-requirements.json');
+  await writeFile(outside,bytes);
+  await symlink(outside,path);
+  await expect(loadReview(dir)).rejects.toThrow('HANDOFF_SYMLINK_ESCAPE config requirements');
+  await rm(path);
+  const alias=join(dir,'rig/checks/alias-target.json');
+  await writeFile(alias,bytes);
+  await symlink(alias,path);
+  await expect(loadReview(dir)).rejects.toThrow('HANDOFF_PATH_INVALID config requirements');
+  await rm(path);await writeFile(path,bytes);
+  await assertReviewUnchanged(before);
+  expect(sha(await readFile(configPath))).toBe(configDigest);
+  expect(sha(await readFile(path))).toBe(sha(bytes));
+ }finally{await s.done();}
 });

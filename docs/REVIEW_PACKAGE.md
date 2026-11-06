@@ -892,3 +892,31 @@ Equal UV/index arrays alone are insufficient when compiled vertex data differs.
 Single Stage-1 controllers retain selection/camera on same-build navigation;
 cross-revision restoration requires the same original package/image/placement
 and exact draft skin/slot/attachment address, with named refusal if absent.
+
+### Correction handoff
+
+The existing feedback context may carry `correction: {path, selector}` on a
+saved single-package item. The path is `described` or `made`. A selector names
+`{stage:"parts-review",kind:"draft",id}`,
+`{stage:"rig-review",kind:"rig",version}` or
+`{stage:"direction-review",kind:"post",version,modelFile}`. The selector is
+explicit handoff data. The package revision and inspector navigation do not
+supply it. The named model path is data for Create and is never opened by
+Review. Only explicitly marked correction rows can carry multiline text.
+
+A supported made item must match the server-owned settled Apply seal and
+retained scratch model and pages when the item is added or changed and on
+selected export. Older unchanged items remain saved as historical evidence
+when a newer Apply or eviction changes the retained scratch builds. A fresh
+selected export still requires its retained result. The check
+must pass with exit zero, a passing gate and at least one PASS bar. Known
+SKIP, WARN, CLEAR, REPORTED and UNCLASSIFIED values and the producer line are
+retained as reported. Missing evidence and failed checks cannot become checked
+claims. A described request and a preserved unsupported operation do not
+assert a result. Selected JSON export is the exact current session file.
+
+When a producer config names a requirements file, Review includes the original
+file's path and byte hash in the handoff. Apply copies those bytes into its
+private scratch directory and points the scratch config at that copy. The
+copied input is checked with the retained result. A missing or redirected
+requirements file refuses the handoff or Apply by name.

@@ -86,9 +86,10 @@ test('#174 bar 1: a remesh Apply records remesh\'s carried check, equal field by
  // Review's own check reads remesh.json's pack flags — the ones remesh checked with.
  expect(ran.runs).toEqual(['--rig rig --out check --page-edges pot --pack-shape rect']);
  const {source,...fields}=carried.job.check!;
- expect(source).toBe('remesh');expect(Object.hasOwn(ran.job.check!,'source')).toBe(false);
- expect(fields).toEqual(ran.job.check!);
- expect(JSON.stringify(fields)).toBe(JSON.stringify(ran.job.check));
+ expect(source).toBe('remesh');
+ const direct={...fields,source:'check'} as const;
+ expect(ran.job.check).toEqual(direct);
+ expect(JSON.stringify(ran.job.check)).toBe(JSON.stringify(direct));
  expect(fields).toEqual({schema:'rig-review-check-summary/1',pass:false,exitCode:1,line:'check: FAIL — 1 bar(s) not met; 3 of 4 bar(s) measured; 1 warning(s) (CLOTH_SETTLES, not a bar)',bars:{BREATH_VISIBLE:'PASS',TEXTURE_STRETCH:'FAIL',CHAIN_LAG:'SKIP',CLOTH_SETTLES:'WARN',RECOMPOSITE_HOLES:'REPORTED'},gate:true});
  expect(carried.job.wallMs.check).toBeNull();
  expect(carried.job.lines).toContain('review: check not run again — remesh.json carries remesh\'s check of this revision, bound to it by 4 revision hash row(s): check: FAIL — 1 bar(s) not met; 3 of 4 bar(s) measured; 1 warning(s) (CLOTH_SETTLES, not a bar)');

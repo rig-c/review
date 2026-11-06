@@ -4,11 +4,12 @@ import {mkdir,mkdtemp,readdir,readFile,realpath,rm,writeFile} from 'node:fs/prom
 import {join,relative} from 'node:path';
 import {tmpdir} from 'node:os';
 import {loadReview} from '../src/manifest.ts';
+import {assertReviewUnchanged} from '../src/reference.ts';
 import {startServer} from '../src/server.ts';
 import {frontRoute} from '../src/front.ts';
 import {compileArgs,firstRefusal,MODELING_PRODUCER_NOT_INSTALLED,remeshArgs,resolveProducer,REMESH_SINCE,versionAtLeast} from '../src/producer.ts';
-import {buildPlan,designationId,meshEntryText,parseRebuildRequest,RebuildError} from '../src/rebuild.ts';
-import {appliedRecord,designatedRegions,outcomeLine,pickPart,runRebuild,seedFields,type RebuildJobView} from '../web/rebuild-client.ts';
+import {buildPlan,createRebuilds,designationId,producerInputs,rebuildDir,meshEntryText,parseRebuildRequest,RebuildError} from '../src/rebuild.ts';
+import {appliedRecord,patchAppliedRecord,type PatchJobView,designatedRegions,outcomeLine,pickPart,runRebuild,seedFields,type RebuildJobView} from '../web/rebuild-client.ts';
 import {chestRowId,type ChestFieldValue} from '../web/chest-regions-tool.ts';
 
 const bust={name:'bust',shape:'circle' as const,cx:414,cy:342,r:50,bone:'chest_jiggle',spacing:13,band:30};
@@ -231,4 +232,90 @@ test('#185: a full/head run an alternate names outside the declared runs is hash
   // The directory's digest is recorded in place of null.
   expect(second.inputs.named[0]!.sha256).toMatch(/^[0-9a-f]{64}$/);
  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('patch producer receives the exact bound scratch requirements and its seal refuses tampering',async()=>{
+ const {root,pkg,state}=await fixture();
+ const configPath=join(pkg,'rig/config.json'), requirementsPath=join(pkg,'rig','requirements.json');
+ const digest=(bytes:string|Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
+ const requirementBytes='{"spec":"spine-parts-requirements/1","fps":12,"requirements":[]}\n';
+ const authored={...config,requirements:'requirements.json',motion:{animations_from:'clips.json'},generation:{control:{skeleton:'stand_sides'}},constraints:[{name:'base'}]};
+ const configBytes=JSON.stringify(authored);
+ let server:Awaited<ReturnType<typeof startServer>>|undefined;
+ try{
+  await install(root,'2.16.0');
+  const bin=join(root,'node_modules/@rig-c/parts/bin/rig-parts.cjs');
+  await writeFile(bin,fakeParts.replace("if(a[0]==='rig'){",`if(a[0]==='check'){
+const failed=fs.existsSync('config.json')&&JSON.parse(fs.readFileSync('config.json','utf8')).constraints[0].name==='check-fails';
+const out=f('--out');fs.mkdirSync(out,{recursive:true});
+const status=failed?'FAIL':'PASS';
+fs.writeFileSync(path.join(out,'check.json'),JSON.stringify({PASS:!failed,gate_spine_html_green:true,
+  BREATH_VISIBLE:{status},BLINK_NO_HOLE:{status:'SKIP'},PART_SUPPORT_REPORT:{status:'UNCLASSIFIED'}}));
+console.log('check: '+status+' — exact producer summary');
+process.exit(failed?1:0);
+}
+if(a[0]==='rig'&&!path.isAbsolute(f('--config'))){
+const configFile=f('--config'),config=JSON.parse(fs.readFileSync(configFile,'utf8'));
+const file=path.resolve(path.dirname(configFile),config.requirements);
+if(!config.requirements.startsWith('config-inputs/')||fs.readFileSync(file,'utf8')!==${JSON.stringify(requirementBytes)})throw Error('FAKE_REQUIREMENTS_RELOCATION');
+if(config.generation.control.skeleton!=='stand_sides'||!path.isAbsolute(config.motion.animations_from))throw Error('FAKE_EXISTING_INPUT_RELOCATION');
+}
+if(a[0]==='rig'){`));
+  await writeFile(join(pkg,'rig/out/rig/rig.json'),JSON.stringify({mesh:{contour:{regions:[]}}}));
+  await writeFile(configPath,configBytes);
+  await writeFile(requirementsPath,requirementBytes);
+  await writeFile(join(pkg,'rig/clips.json'),'{}');
+  const p=await loadReview(pkg),before=await treeHash(pkg);
+  const inputs=await producerInputs(p.handoff,p.handoffReason);
+  expect(inputs.requirements).toEqual({source:requirementsPath,sha256:digest(requirementBytes)});
+  const unbound={...p.handoff!,record:{...p.handoff!.record,files:p.handoff!.record.files.filter(file=>file.path!=='rig/requirements.json')}};
+  await expect(producerInputs(unbound,null)).rejects.toThrow('config.requirements has no bound handoff hash');
+
+  server=await startServer(p,{port:0,stateDir:state,cwd:root});
+  const base='http://127.0.0.1:'+server.port;
+  const patch={schema:'rig-review-config-patch/1',config_sha256:digest(configBytes),ops:[{op:'replace',path:'/constraints/0/name',value:'changed'}],producer:{name:'@rig-c/parts',version:'2.16.0'},op:{cmd:'rig',args:[]}};
+  const response=await post(base,{patch});
+  expect(response.status).toBe(202);
+  const job=await settle(base,await response.json()) as unknown as PatchJobView;
+  expect(job).toMatchObject({status:'built',op:'rig'});
+  const directCheck={schema:'rig-review-check-summary/1',source:'check',pass:true,exitCode:0,gate:true,
+    line:'check: PASS — exact producer summary',bars:{BREATH_VISIBLE:'PASS',BLINK_NO_HOLE:'SKIP',PART_SUPPORT_REPORT:'UNCLASSIFIED'}} as const;
+  expect(job.check).toEqual(directCheck);
+  expect(job.stageInputHash).toMatch(/^[a-f0-9]{64}$/);
+  const dir=rebuildDir(state,p.sourceHash,job.id);
+  const scratchConfig=JSON.parse(await readFile(join(dir,'config.json'),'utf8'));
+  const relativeRequirement='config-inputs/requirements-'+digest(requirementBytes)+'.json';
+  expect(scratchConfig.requirements).toBe(relativeRequirement);
+  const scratchPath=join(dir,relativeRequirement);
+  expect(await readFile(scratchPath,'utf8')).toBe(requirementBytes);
+  const rebuilds=createRebuilds(p,{stateDir:state,starts:[root],unchanged:()=>assertReviewUnchanged(p),bones:p.feedbackCatalog.bones});
+  const record=JSON.parse(JSON.stringify(patchAppliedRecord(job)));
+  const seal=JSON.parse(await readFile(join(state,'applied-evidence',p.sourceHash,job.id+'.json'),'utf8'));
+  expect(seal.body.record).toEqual(record);
+  expect(seal.body.check).toEqual(directCheck);
+  expect(seal.body.inputHash).toBe(record.stageInputHash);
+  expect((await rebuilds.correctionEvidence(record))?.modelSha256).toBe(record.modelHash);
+  await writeFile(scratchPath,requirementBytes+' ');
+  await expect(rebuilds.correctionEvidence(record)).rejects.toThrow('CORRECTION_RESULT_STALE');
+  await writeFile(scratchPath,requirementBytes);
+  expect(digest(await readFile(scratchPath))).toBe(digest(requirementBytes));
+  expect((await rebuilds.correctionEvidence(record))?.modelSha256).toBe(record.modelHash);
+  const failedPatch={...patch,ops:[{...patch.ops[0]!,value:'check-fails'}]};
+  const failedResponse=await post(base,{patch:failedPatch});
+  expect(failedResponse.status).toBe(202);
+  const failed=await settle(base,await failedResponse.json()) as unknown as PatchJobView;
+  const failedCheck={...directCheck,pass:false,exitCode:1,line:'check: FAIL — exact producer summary',
+    bars:{...directCheck.bars,BREATH_VISIBLE:'FAIL'}};
+  expect(failed.status).toBe('built');
+  expect(failed.check).toEqual(failedCheck);
+  const failedSeal=JSON.parse(await readFile(join(state,'applied-evidence',p.sourceHash,failed.id+'.json'),'utf8'));
+  expect(failedSeal.body.check).toEqual(failedCheck);
+  expect(failedSeal.body.record.check).toEqual(failedCheck);
+  expect(JSON.parse(await readFile(join(state,'applied-evidence',p.sourceHash,job.id+'.json'),'utf8'))).toEqual(seal);
+  expect(await treeHash(pkg)).toBe(before);
+  await rm(requirementsPath);
+  await expect(producerInputs(p.handoff,p.handoffReason)).rejects.toThrow('REBUILD_REQUIREMENTS_UNAVAILABLE');
+  await writeFile(requirementsPath,requirementBytes);
+  expect(await treeHash(pkg)).toBe(before);
+ }finally{server?.stop(true);await rm(root,{recursive:true,force:true});}
 });

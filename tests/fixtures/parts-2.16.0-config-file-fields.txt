@@ -1,0 +1,31 @@
+// Published npm @rig-c/parts@2.16.0; literal source excerpts.
+// package.json sha256 912ad89363d0f5ffd4bf10f3de2490e19cb5672a9808f495ac7e594861892fda
+// src/config.ts sha256 c172cefdae3a661c727500f1fe36bd7b909b29fc3e29c440b4ca3062a9bd9eaa
+// src/skeleton.ts sha256 6cbf859abc2f03276a72ae5e0f4d9f673d9728b6f5c57df6a1e85a791c1f1ba6
+
+const CONFIG_FILE_FIELDS = {
+  requirements: { path: ['requirements'], isFile: (_value: string) => true },
+  animations: { path: ['motion', 'animations_from'], isFile: (_value: string) => true },
+  skeleton: { path: ['generation', 'control', 'skeleton'], isFile: (value: string) => !isSkeletonName(value) },
+} as const;
+
+export function configFileReferences(raw: unknown): ConfigFileReference[] {
+  const out: ConfigFileReference[] = [];
+  for (const field of Object.values(CONFIG_FILE_FIELDS)) {
+    let parent = raw;
+    for (const key of field.path.slice(0, -1)) parent = isPlainObject(parent) ? parent[key] : undefined;
+    const key = field.path[field.path.length - 1];
+    if (!isPlainObject(parent)) continue;
+    const value = parent[key];
+    if (typeof value !== 'string' || value === '' || !field.isFile(value)) continue;
+    const target = parent;
+    out.push({ at: field.path.join('.'), value, set: (next) => { target[key] = next; } });
+  }
+  return out;
+}
+
+export const SKELETON_NAMES: readonly SkeletonName[] = ['stand_sides', 'stand_clasp'];
+
+export function isSkeletonName(v: unknown): v is SkeletonName {
+  return typeof v === 'string' && (SKELETON_NAMES as readonly string[]).includes(v);
+}

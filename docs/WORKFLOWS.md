@@ -390,3 +390,33 @@ rig-create interview-answer <question> . --picks-file scratch/review-picks/<raw-
 Part assets must be valid images as well as hash-bound. A bound PNG without a
 PNG signature returns `INTERVIEW_IMAGE_INVALID`. The panel displays a named
 refusal when the browser cannot display a bound image.
+
+## Correction handoff
+
+In **Write review**, choose described or made under **Correction handoff** and
+supply the Create review stage and its draft ID or version. A direction-review
+version also needs its declared post model path. Add the feedback and submit.
+A described request stays unresolved. An optional UTF-8 text file supplies
+exact words, including trailing spaces and CRLF. To use an unsent pointed
+comment, fill the Create identity and select **Use as described correction**
+on its row.
+
+```sh
+rig-review feedback <review-package> --correction <saved-item-id> --format issue
+rig-review feedback <review-package> --correction <saved-item-id> --format json
+```
+
+The issue shows the source selector, exact words and evidence. JSON emits the
+original saved single-package session. Pass that retained session and item ID
+to Create's `correction record --feedback-file … --item …` for supported made
+corrections. For a described request, retain the words as UTF-8 and pass them
+to `correction record --verbatim-file …`. Create owns the record and outcome.
+A missing or stale result refuses a checked handoff. Mesh deltas, retarget
+operations and keyed operations retain their original evidence and report
+`CORRECTION_OPERATION_UNSUPPORTED`. Compare sessions remain ordinary evidence.
+
+Standalone parts notes and comments use
+`rig-review parts <parts> --format issue --correction <id> --parts-file <inventory>`.
+For a part note, also pass `--part-note <part>` and supply its correction ID.
+Selected parts JSON keeps the saved verdict and adds the correction selection.
+The inventory names a retained Create-side input. Review does not read that path.

@@ -2,10 +2,12 @@
 import {requireFeedbackFrames} from './stage-comment.ts';
 import {commentCropPaths} from './comment-crops.ts';
 import {randomBytes} from 'node:crypto';
+import {appliedValue,parseCorrection,projectPartsDescription,projectSessionCorrection} from './correction-handoff.ts';
+import {createRebuilds} from './rebuild.ts';
 import {readFile} from 'node:fs/promises';
 import {parseControlCommand} from './control.ts';
 import { loadReview } from './manifest.ts';
-import { formatFeedbackIssues,feedbackWithCommentGroups } from './feedback-export.ts';
+import { formatFeedbackIssues,feedbackWithCommentGroups,formatCorrectionIssue } from './feedback-export.ts';
 import {loadReferencedReview,selectedReference,assertReviewUnchanged} from './reference.ts';
 import {animationDiagnostic,selectAnimation} from './animation-selection.ts';
 import {shellWord} from './open-shell.ts';
@@ -15,14 +17,14 @@ import { readFeedbackSession, readFeedbackCompareSession } from './session-histo
 import { startServer } from './server.ts';
 import { loadCompare } from './compare.ts';
 import { startCompareServer } from './compare-server.ts';
-import { loadPartsView, readVerdict, exportPartsVerdict, type PartsViewOptions } from './parts-view.ts';
+import { loadPartsView, readVerdict, exportPartsVerdict, exportPartsCorrection, assertPartsUnchanged, type PartsViewOptions } from './parts-view.ts';
 import { startPartsServer } from './parts-server.ts';
-import { readSession, type Feedback } from './session.ts';
+import { readSession, parseSession, sessionFile, type Feedback } from './session.ts';
 import { readCompareSession } from './compare-session.ts';
 import { exportReviewStrip, exportCompareStrip, stripJson, writeStripOutput, validateStripOutput } from './strip-export.ts';
 import type { StripInterval, StripRequest } from './strip.ts';
 const handoffUsage='[--config <path> [--parts <dir>] [--source <png> --full <dir> [--head <dir>]] [--keypoints <file>]]';
-const usage='Usage: rig-review open <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--control] [--direct] [--view-only] '+handoffUsage+'\n       --config declares the producer handoff (wins over the review.json "producer" block and discovery of config.json, rig/config.json, ../config.json beside an opened out/); feedback and control take the same flags; --view-only opens without a producer handoff.\n       open is managed by default: one loopback front at 127.0.0.1:4318 (RIG_REVIEW_FRONT_PORT overrides) serves /instances/<key>/; --direct serves the worker on its own port.\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--format json|issue]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID] [--view-only]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>\n       rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--format json|issue] [--port <n>]\n       rig-review interview <create-root> --picks-dir <project-relative directory> [--port <n>]\n       rig-review --version';
+const usage='Usage: rig-review open <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--control] [--direct] [--view-only] '+handoffUsage+'\n       --config declares the producer handoff (wins over the review.json "producer" block and discovery of config.json, rig/config.json, ../config.json beside an opened out/); feedback and control take the same flags; --view-only opens without a producer handoff.\n       open is managed by default: one loopback front at 127.0.0.1:4318 (RIG_REVIEW_FRONT_PORT overrides) serves /instances/<key>/; --direct serves the worker on its own port.\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--format json|issue] [--correction <item id>]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID] [--view-only]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>\n       rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       rig-review interview <create-root> --picks-dir <project-relative directory> [--port <n>]\n       rig-review --version';
 async function stripCommand(args:string[],options:{stateDir?:string}){
   const compare=args[0]==='compare';if(compare)args.shift();const a=args.shift(),b=compare?args.shift():undefined;if(!a||compare&&!b)throw new Error('strip: expected package input(s)');
   let reference:string|undefined,referenceVideo:string|undefined,animation:string|undefined,basis:'a'|'b'|undefined,range:string|undefined,output:string|undefined,jsonOnly=false,all=false;
@@ -66,12 +68,17 @@ async function controlCommand(args:string[],stateDir?:string){
  const result=await controlReview(inputs,options);console.log(JSON.stringify(result,null,2));if(options.command&&(result as {status?:string}).status!=='applied')process.exitCode=2;
 }
 /** Formatting is CLI-only; session lookup/save contracts remain unchanged. */
-export function feedbackFormat(args:string[]):{args:string[];format:'json'|'issue'} {
+export function feedbackFormat(args:string[]):{args:string[];format:'json'|'issue';correctionId?:string} {
  const remaining:string[]=[];let format:'json'|'issue'='json',seen=false,inputs=-1;
+ let correctionId:string|undefined;
  for(let i=0;i<args.length;i++){
   const token=args[i]!;
   // Compare owns its next two positional inputs, even when they look like flags.
   if(inputs>0){remaining.push(token);inputs--;continue;}
+  if(token==='--correction'&&inputs===0){
+   if(correctionId!==undefined)throw new Error('feedback --correction: duplicate option');
+   correctionId=args[++i];if(!correctionId||correctionId.startsWith('--'))throw new Error('feedback --correction: expected feedback item id');continue;
+  }
   if(token==='--format'){
    if(seen)throw new Error('feedback --format: duplicate option');seen=true;
    const value=args[++i];if(value!=='json'&&value!=='issue')throw new Error('feedback --format: expected json | issue');format=value;continue;
@@ -82,7 +89,7 @@ export function feedbackFormat(args:string[]):{args:string[];format:'json'|'issu
   // in particular, --animation may legitimately own the value "--format".
   const value=args[++i];if(value!==undefined)remaining.push(value);
  }
- return {args:remaining,format};
+ return {args:remaining,format,correctionId};
 }
 /** Help flags are options; positional inputs and known option values remain literal. */
 function commandHelpRequested(args:readonly string[],command:'open'|'review'|'check'|'feedback'):boolean {
@@ -95,16 +102,28 @@ function commandHelpRequested(args:readonly string[],command:'open'|'review'|'ch
  }
  return false;
 }
-const partsUsage='Usage: rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--format json|issue] [--port <n>]\n       A directory holding parts.json (or a build root whose rig/ holds it) opens in parts mode, before rigging; a review package or check/ folder opens its atlas.\n       The sign-off is written to parts-review.json beside parts.json (or the model), or to --verdict.';
+const partsUsage='Usage: rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       A directory holding parts.json (or a build root whose rig/ holds it) opens in parts mode, before rigging; a review package or check/ folder opens its atlas.\n       The sign-off is written to parts-review.json beside parts.json (or the model), or to --verdict.';
 /** `rig-review parts` (#348): the parts and atlas view, served in the foreground; exits when its last tab closes. */
 async function partsCommand(args:string[]){
  const input=args.shift();if(!input||input==='--help'||input==='-h'){console.log(partsUsage);return;}
  const options:PartsViewOptions={};let port=4317,format:'json'|'issue'|null=null;const seen=new Set<string>();
+ let itemId:string|undefined,partNote:string|undefined,inventory:string|undefined;
  while(args.length){const flag=args.shift()!;if(flag==='--help'||flag==='-h'){console.log(partsUsage);return;}if(seen.has(flag))throw new Error(`parts: duplicate option ${flag}`);seen.add(flag);const value=args.shift();if(!value)throw new Error(`Missing value for ${flag}`);
   if(flag==='--format'){if(value!=='json'&&value!=='issue')throw new Error('--format: expected json or issue');format=value;}else if(flag==='--painting')options.painting=value;else if(flag==='--rig')options.rig=value;else if(flag==='--mesh-report')options.meshReport=value;else if(flag==='--check')options.check=value;else if(flag==='--verdict')options.verdict=value;
+  else if(flag==='--correction')itemId=value;else if(flag==='--part-note')partNote=value;else if(flag==='--parts-file')inventory=value;
   else if(flag==='--port'){port=Number(value);if(!Number.isInteger(port)||port<0||port>65535)throw new Error('--port: expected integer 0..65535');}
   else throw new Error(`Unknown option ${flag}\n${partsUsage}`);}
+ if((itemId||partNote||inventory)&&(!format||!itemId||!inventory))throw new Error('CORRECTION_SELECTOR_INVALID: parts correction requires --format, --correction and --parts-file');
  const pkg=await loadPartsView(input,options);
+ if(format&&itemId&&inventory){
+   const saved=await readVerdict(pkg);
+   if(!saved.verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE: save a current verdict first');
+   await assertPartsUnchanged(pkg);
+   const verdict=saved.verdict;
+   const projected=projectPartsDescription({verdict,source:verdict.source,selector:{stage:'parts-review',kind:'parts',inventory},selection:partNote?{kind:'note',itemId,part:partNote}:{kind:'comment',itemId}});
+   process.stdout.write(format==='json'?exportPartsCorrection(verdict,projected):formatCorrectionIssue(projected)+'\n');
+   return;
+ }
  if(format){const saved=await readVerdict(pkg);if(!saved.verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE: save a verdict first');process.stdout.write(exportPartsVerdict(saved.verdict,format));return;}
  const capability=randomBytes(32).toString('hex'),server=await startPartsServer(pkg,{port,capability,exitOnClose:true});
  const stop=(sig:string)=>{server.stop(true);console.log(`review parts: exiting — received ${sig}.`);process.exit(0);};process.once('SIGINT',()=>stop('SIGINT'));process.once('SIGTERM',()=>stop('SIGTERM'));
@@ -120,11 +139,12 @@ export async function main(args:string[],options:{stateDir?:string}={}){
   if(args[0]==='interview')return (await import('./interview-server.ts')).interviewCommand(args.slice(1));
   if(args[0]==='strip'){args.shift();if(args.includes('--help')){console.log(usage+'\nStrip: strip <package> --reference <declared-video-id> --animation <name> (--frames FIRST:LAST | --all-feedback) [--json] [--out path]\n       strip compare <a> <b> --reference <video> --animation <name> --basis a|b (--frames FIRST:LAST | --all-feedback) [--json] [--out path]');return;}return stripCommand(args,options);}let command:'review'|'check'|'feedback'='review';if(args[0]==='check'||args[0]==='feedback'){command=args.shift() as 'check'|'feedback';}
   if(args[0]==='--help'||args[0]==='-h'){console.log(usage);return;}
-  let format:'json'|'issue'='json';if(command==='feedback'){const parsed=feedbackFormat(args);args=parsed.args;format=parsed.format;}
+  let format:'json'|'issue'='json',correctionId:string|undefined;if(command==='feedback'){const parsed=feedbackFormat(args);args=parsed.args;format=parsed.format;correctionId=parsed.correctionId;}
   // Feedback formatting assigns --format/value ownership before the help pass.
   if(commandHelpRequested(args,command)){console.log(usage);return;}
   const printFeedback=(session:Parameters<typeof formatFeedbackIssues>[0])=>{const exported=commentCropPaths(session,options.stateDir);console.log(format==='issue'?formatFeedbackIssues(exported).trimEnd():JSON.stringify(feedbackWithCommentGroups(exported),null,2));};
   if(args[0]==='compare'){
+    if(correctionId)throw new Error('CORRECTION_COMPARE_UNSUPPORTED: select a single reviewed package');
     args.shift();const a=args.shift(),b=args.shift();if(!a||!b)throw new Error(usage);let reference:string|undefined,animation:string|undefined,port=4317;
     while(args.length){const flag=args.shift(),value=args.shift();if(!value)throw new Error(`Missing value for ${flag}`);if(flag==='--reference')reference=value;else if(flag==='--animation')animation=value;else if(flag==='--port'){port=Number(value);if(!Number.isInteger(port)||port<0||port>65535)throw new Error('--port: expected integer 0…65535');}else throw new Error(`Unknown compare option ${flag}`);}
     if(!reference)throw new Error('compare: --reference and --animation are required');
@@ -140,10 +160,26 @@ export async function main(args:string[],options:{stateDir?:string}={}){
   const input=args.shift();if(!input)throw new Error(usage);let port=4317;let checkpoint:string|undefined,reference:string|undefined,compare:string|undefined,animation:string|undefined,viewOnly=false;const handoff:OpenInputs={input};
   while(args.length){const flag=args.shift();if(flag==='--view-only'){if(command!=='review')throw new Error(`Unknown option ${flag}\n${usage}`);viewOnly=true;continue;}const value=args.shift();if(!value)throw new Error(`Missing value for ${flag}`);if(handoffOption(flag!)){handoff[handoffOption(flag!)!]=value;continue;}if(flag==='--port'){port=Number(value);if(!Number.isInteger(port)||port<0||port>65535)throw new Error('--port: expected integer 0…65535');}else if(flag==='--checkpoint')checkpoint=value;else if(flag==='--reference')reference=value;else if(flag==='--compare')compare=value;else if(flag==='--animation')animation=value;else throw new Error(`Unknown option ${flag}\n${usage}`);}
   const handoffProblem=checkHandoffFlags(handoff);if(handoffProblem)throw new Error(handoffProblem);if(compare&&handoffFlags(handoff))throw new Error('--config: compare takes no producer handoff');
-  if(compare){if(command!=='feedback')throw new Error('--compare: use open or feedback');const loaded=await loadOpenPackage({input,compare,reference,animation});if(loaded.mode!=='compare')throw new Error('Expected comparison');printFeedback(await readFeedbackCompareSession(loaded.p,options.stateDir));return;}
+  if(compare){if(correctionId)throw new Error('CORRECTION_COMPARE_UNSUPPORTED: select a single reviewed package');if(command!=='feedback')throw new Error('--compare: use open or feedback');const loaded=await loadOpenPackage({input,compare,reference,animation});if(loaded.mode!=='compare')throw new Error('Expected comparison');printFeedback(await readFeedbackCompareSession(loaded.p,options.stateDir));return;}
   const p=await loadReferencedReview(input,reference,handoffFlags(handoff));if(viewOnly)p.viewOnly=true;// Serving starts on the report's clip when it names one; check and feedback validate only an explicit flag.
   const fromReport=command==='review'&&animation===undefined&&p.report?.animation!==undefined;
-  const selection=animation!==undefined||fromReport?selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],animation,true):null;const initialAnimation=selection?.name;if(command==='feedback'){const saved=await readFeedbackSession(p,options.stateDir);await assertReviewUnchanged(p);printFeedback(saved);return;}if(command==='check'){console.log(`Package valid: ${p.manifest.title}\nRevision: ${p.manifest.revision}\nSource SHA-256: ${p.sourceHash}\nDeclared files: ${p.files.size}\nPlayback: ${p.manifest.model?'compiled model present':'unavailable (no model)'}`);return;}
+  const selection=animation!==undefined||fromReport?selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],animation,true):null;const initialAnimation=selection?.name;if(command==='feedback'&&correctionId){
+    const stateDir=options.stateDir!;
+    const bytes=await readFile(sessionFile(p,stateDir)).catch(error=>{if(error.code==='ENOENT')throw new Error('CORRECTION_ITEM_INVALID: save a correction first');throw error;});
+    const session=parseSession(JSON.parse(bytes.toString('utf8')),p,false);
+    const item=session.feedback.find(row=>row.id===correctionId);
+    const correction=parseCorrection((item?.context as any)?.correction);
+    if(!item||!correction||session.feedbackWarnings.some(warning=>warning.id===item.id))throw new Error('CORRECTION_ITEM_INVALID: expected a valid saved correction');
+    const source={id:p.manifest.id,revision:p.manifest.revision,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource};
+    await assertReviewUnchanged(p);
+    const rebuilds=createRebuilds(p,{stateDir,starts:[p.root,process.cwd()],unchanged:()=>assertReviewUnchanged(p),bones:p.feedbackCatalog.bones});
+    const settled=correction.path==='made'&&correction.selector.kind!=='post'?await rebuilds.correctionEvidence(appliedValue(item)):undefined;
+    const projected=projectSessionCorrection({...correction,session,sessionBytes:bytes,source,itemId:item.id,settled});
+    if(projected.kind==='unsupported')console.error('CORRECTION_OPERATION_UNSUPPORTED: '+projected.operation);
+    process.stdout.write(format==='json'?bytes:formatCorrectionIssue(projected,item.context)+'\n');
+    return;
+  }
+  if(command==='feedback'){const saved=await readFeedbackSession(p,options.stateDir);await assertReviewUnchanged(p);printFeedback(saved);return;}if(command==='check'){console.log(`Package valid: ${p.manifest.title}\nRevision: ${p.manifest.revision}\nSource SHA-256: ${p.sourceHash}\nDeclared files: ${p.files.size}\nPlayback: ${p.manifest.model?'compiled model present':'unavailable (no model)'}`);return;}
   if(checkpoint&&!p.manifest.checkpoints.some(v=>v.id===checkpoint))throw new Error(`Unknown checkpoint ${checkpoint}`);
   // Foreground serving uses the same `#cap=` fragment handoff as open: the printed link alone can submit.
   const capability=randomBytes(32).toString('hex'),server=await startServer(p,{port,stateDir:options.stateDir,initialAnimation,capability,exitOnClose:true,viewOnly});const url=new URL(`http://127.0.0.1:${server.port}/`);if(checkpoint)url.searchParams.set('checkpoint',checkpoint);url.hash='cap='+capability;
