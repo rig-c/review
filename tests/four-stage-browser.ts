@@ -1,5 +1,6 @@
 /** #371 explicit Nova browser walk. Run with the pinned Create archive and producer bench. */
 import assert from 'node:assert/strict';
+import { writeSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -12,14 +13,20 @@ import { patchText } from '../src/config-patch.ts';
 import { enCatalog } from '../web/catalog-en.ts';
 import { koCatalog } from '../web/catalog-ko.ts';
 import { inventory, materializeFourStages } from './helpers/four-stage-fixture.ts';
+import { walkCheckpoint, WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
 import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
 
 const archive = process.env.REVIEW_371_CREATE_ARCHIVE;
 const outputDirectory = process.env.REVIEW_371_OUTPUT;
 const benchDirectory = process.env.REVIEW_371_CREATE_BENCH;
+const language = process.env.REVIEW_371_LANGUAGE;
+assert(language === undefined || language === 'en' || language === 'ko', 'REVIEW_371_LANGUAGE must be en or ko');
+const languages: readonly Language[] = language === undefined ? ['en','ko'] : [language];
 assert(archive && outputDirectory && benchDirectory, 'Set REVIEW_371_CREATE_ARCHIVE, REVIEW_371_OUTPUT and REVIEW_371_CREATE_BENCH');
 const output = resolve(outputDirectory);
 await mkdir(output);
+const checkpoint = walkCheckpoint(join(output, 'walk-checkpoints.jsonl'));
+checkpoint('prepare.fixture');
 const scratch = await mkdtemp(join(tmpdir(), 'review371-'));
 const fixture = await materializeFourStages(archive, join(scratch, 'upstream'));
 const bench = resolve(benchDirectory);
@@ -76,9 +83,31 @@ const actionGuard = `function action(element, selector) {
 
 type Language = 'en' | 'ko';
 
+// An in-process open has no cancellation contract. End the walk before it can start more work.
+// Nova owns descendant cleanup and collects the already flushed evidence.
+function terminalDeadline(key: string, error: WalkDeadlineError): never {
+  try {
+    writeSync(2, error.message + '\n');
+    checkpoint(key + '.deadline');
+  } finally {
+    process.exit(1);
+  }
+}
+
 async function command(name: string, args: string[], refusal?: RegExp) {
+  checkpoint(name + '.command');
   const child = Bun.spawn([process.execPath, ...args], {cwd: bench, stdout: 'pipe', stderr: 'pipe'});
-  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  const [stdout, stderr, exit] = await withDeadline(name + '.command', 30000,
+    () => Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]))
+    .catch(async error => {
+      if (!(error instanceof WalkDeadlineError)) throw error;
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await withDeadline(name + '.reap', 5000, () => child.exited).catch(reapError => {
+        if (reapError instanceof WalkDeadlineError) terminalDeadline(name + '.reap', reapError);
+        throw reapError;
+      });
+      throw error;
+    });
   await put(name + '-command', {args, exit, stderr});
   await write(name + '.stdout', stdout);
   if (refusal) {
@@ -89,16 +118,29 @@ async function command(name: string, args: string[], refusal?: RegExp) {
 }
 const create = (name: string, args: string[], refusal?: RegExp) => command(name, [createCli, ...args], refusal);
 
-async function wait<T>(readValue: () => Promise<T>, ready: (value: T) => boolean, label: string, timeout = 15000) {
-  const deadline = performance.now() + timeout;
-  let value: T;
-  do {
-    value = await readValue();
-    if (ready(value)) return value;
-    await Bun.sleep(100);
-  } while (performance.now() < deadline);
-  await put(label + '-timeout', value);
-  throw new Error('FOUR_STAGE_TIMEOUT: ' + label);
+async function wait<T>(readValue: (signal: AbortSignal) => Promise<T>, ready: (value: T) => boolean, label: string, timeout = 15000) {
+  let value: T | undefined;
+  try {
+    return await withDeadline(label, timeout, async signal => {
+      while (true) {
+        signal.throwIfAborted();
+        value = await readValue(signal);
+        signal.throwIfAborted();
+        if (ready(value)) return value;
+        await Bun.sleep(100);
+      }
+    });
+  } catch (error) {
+    if (error instanceof WalkDeadlineError) await put(label + '-timeout', value ?? null);
+    throw error;
+  }
+}
+
+function fetchBody<T>(key: string, url: URL, readBody: (response: Response) => Promise<T>, init?: RequestInit) {
+  return withDeadline(key, 15000, async signal => {
+    const requestSignal = init?.signal ? AbortSignal.any([signal, init.signal]) : signal;
+    return await readBody(await fetch(url, {...init, signal:requestSignal}));
+  });
 }
 
 async function click(page: InputCdpSession, selector: string, iframe?: string) {
@@ -144,7 +186,10 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
   const state = join(scratch, 'state-' + lang);
   const scratchCopies: {index: number; root: string; changes: Set<string>}[] = [];
   const frontPorts = new Map<string, number>();
-  const open = async (inputs: OpenInputs, stateDir = state) => {
+  const mark = (name: string) => checkpoint(label(name));
+  const open = async (name: string, inputs: OpenInputs, stateDir = state) => {
+    const key = label(name + '.open');
+    checkpoint(key);
     let frontPort = frontPorts.get(stateDir);
     if (frontPort === undefined) {
       const portProbe = Bun.serve({hostname:'127.0.0.1', port:0, fetch:() => new Response()});
@@ -152,15 +197,21 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       portProbe.stop(true);
       frontPorts.set(stateDir, frontPort);
     }
-    const opened = await openReview(inputs, {stateDir, cwd:bench, frontPort, idleMs:180000, graceMs:30000});
+    const opened = await withDeadline(key, 60000,
+      () => openReview(inputs, {stateDir, cwd:bench, frontPort, idleMs:180000, graceMs:30000}))
+      .catch(error => {
+        if (error instanceof WalkDeadlineError) terminalDeadline(key, error);
+        throw error;
+      });
     assert.match(new URL(opened.url).pathname, /^\/instances\/[a-f0-9]{64}\/$/);
     return opened;
   };
-  async function navigate(url: string) {
+  async function navigate(name: string, url: string) {
+    mark(name + '.navigate');
     const destination = new URL(url);
     destination.searchParams.set('lang', lang);
-    await page.goto(destination.href);
-    await until(`document.documentElement.lang===${JSON.stringify(lang)} && !!document.querySelector('[data-review-stage="1"]')`, 'shell');
+    await page.goto(destination.href, lang);
+    await until(`document.documentElement.lang===${JSON.stringify(lang)} && !!document.querySelector('[data-review-stage="1"]')`, name + '.shell');
   }
   async function projectCopy(index: number, suffix = '') {
     const root = join(scratch, lang + '-' + fixture.stages[index]!.name + suffix);
@@ -193,16 +244,18 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
 
   try {
     // Stage 1 starts with an empty designated verdict directory. Its Save is a Review verdict only.
+    mark('stage1.copy');
     const first = await projectCopy(0);
     const verdictDirectory = join(first.root, 'gate-verdicts');
     await mkdir(verdictDirectory);
     const firstInput = draft(first.root, 'gate-verdicts');
-    const firstOpen = await open(firstInput);
-    await navigate(firstOpen.url);
+    const firstOpen = await open('stage1', firstInput);
+    await navigate('stage1', firstOpen.url);
     await until(`${frame}?.contentDocument?.body.dataset.ready==='true'`, 'parts-ready');
     assert.deepEqual(await readdir(verdictDirectory), []);
     const partNote = lang === 'en' ? '  Inspect the torso seam.\nKeep the wording.  ' : '  몸통 이음새 확인.\n문구를 유지해 주세요.  ';
     const meshNote = lang === 'en' ? '  Torso mesh reviewed.  ' : '  몸통 메시를 확인했어요.  ';
+    mark('stage1.edit-back-and-compare');
     await evaluate(`(()=>{
       ${actionGuard}
       const d=action(${frame},'parts iframe').contentDocument;
@@ -235,6 +288,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         if(event.target.id==='pv-save')d.body.dataset.trustedSave=String(event.isTrusted);
       },true);
     })()`);
+    mark('stage1.save');
     await click(page, '#pv-save', frame);
     await until(`${frame}.contentDocument.querySelector('#pv-save-status').dataset.result==='saved'`, 'verdict-save');
     assert.equal(await evaluate(`${frame}.contentDocument.body.dataset.trustedSave`), 'true');
@@ -245,11 +299,13 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     const verdict = JSON.parse(verdictBytes);
     assert.equal(verdict.parts.torso.note, partNote);
     assert.equal(verdict.parts.torso.mesh.note, meshNote);
-    const exportedVerdict = await fetch(new URL('api/stage-parts/export/json', firstOpen.url));
+    mark('stage1.export');
+    const exportedVerdict = await fetchBody(label('stage1.export'), new URL('api/stage-parts/export/json', firstOpen.url),
+      async response => ({status:response.status, body:await response.text()}));
     assert.equal(exportedVerdict.status, 200);
-    assert.equal(await exportedVerdict.text(), verdictBytes);
+    assert.equal(exportedVerdict.body, verdictBytes);
     await write(label('parts-verdict.json'), verdictBytes);
-    await navigate((await open(firstInput)).url);
+    await navigate('stage1.reopen', (await open('stage1.reopen', firstInput)).url);
     await until(`${frame}?.contentDocument?.body.dataset.ready==='true'`, 'parts-reopen');
     await click(page, '[data-pv-item=torso]', frame);
     assert.equal(await evaluate(`${frame}.contentDocument.querySelector('#pv-note').value`), partNote);
@@ -260,6 +316,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.equal(checkVerdict(first.root, verdictPath, verdictBytes, findings), join(first.root, 'derived/drafts/chain/input/parts.json'));
     assert.deepEqual(findings, []);
     if (lang === 'en') {
+      mark('stage1.plant');
       const negative = await projectCopy(0, '-mutant');
       await mkdir(join(negative.root, 'gate-verdicts'));
       const changed = flipHash(verdictBytes, 'sha256', verdict.source.sha256);
@@ -272,6 +329,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     }
 
     // The existing Stage 2 signature continues to name its own declared verdict.
+    mark('stage2.copy');
     const second = await projectCopy(1);
     const prior = await read(join(second.root, 'project.json'));
     const accepted = prior.signoffs.find((row: {stage:string}) => row.stage === 'parts-review');
@@ -286,6 +344,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.deepEqual(sequence.map(item => item.question), ['bones','meshes','constraints','motion']);
     for (const [index, item] of sequence.entries()) {
       if (index > 0) {
+        mark('stage2.' + item.question + '.register');
         const previous = await loadOpenPackage(draft(second.root));
         assert(previous.mode === 'single' && previous.joined);
         const declaredSet = await read(join(chain, item.path));
@@ -297,8 +356,9 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         await assert.rejects(previous.joined.assertCurrent(), /INTERVIEW_OPTIONS_STALE/);
       }
       const secondInput = draft(second.root);
-      const opened = await open(secondInput);
-      await navigate(opened.url);
+      const opened = await open('stage2.' + item.question, secondInput);
+      await navigate('stage2.' + item.question, opened.url);
+      mark('stage2.' + item.question + '.picker');
       await choose(2);
       await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-' + item.question);
       const note = lang === 'en' ? '  Keep these choices.  ' : '  이 선택을 유지해 주세요.  ';
@@ -345,6 +405,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         dom:${interviewDom}, exchanges:${interview}?.contentWindow?.__gatePicksExchanges??[]
       })`);
       try {
+        mark('stage2.' + item.question + '.save');
         await click(page, 'form button[type=submit]', interview);
         const save = await wait(readPicksSave, result => result.exchanges.some(exchange => !!exchange.error ||
           (!!exchange.response && (exchange.response.status >= 400 || result.dom?.status === catalog['interview.saved']))),
@@ -362,7 +423,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       await choose(1);
       await choose(2);
       await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-back-' + item.question);
-      await navigate((await open(secondInput)).url);
+      await navigate('stage2.' + item.question + '.reopen', (await open('stage2.' + item.question + '.reopen', secondInput)).url);
       await choose(2);
       await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-reopen-' + item.question);
       await evaluate(`(()=>{
@@ -381,6 +442,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         return action(field,${interviewNote}).value===${JSON.stringify(note)};
       })()`, 'picks-reopen-' + item.question);
       await shot('stage2-' + item.question);
+      mark('stage2.' + item.question + '.read-picks');
       const bytes = await readFile(join(second.root, picksPath), 'utf8');
       const picks = JSON.parse(bytes);
       assert.deepEqual(picks.set, {path:item.path, sha256:sha});
@@ -388,6 +450,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       assert(picks.picks.length > 0 && picks.picks.every((row: {option_id:string}) => row.option_id === 'keep'));
       await write(label('picks-' + item.question + '.json'), bytes);
       if (lang === 'en' && index === 0) {
+        mark('stage2.bones.plant');
         const negative = await projectCopy(1, '-mutant');
         const changed = flipHash(bytes, 'sha256', sha);
         await writeFile(join(negative.root, picksPath), changed);
@@ -438,6 +501,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     }
 
     // Stage 3 uses the approved, source-derived 2.5 edit. Only the failed control uses 0.75.
+    mark('stage3.identity');
     const third = await projectCopy(2);
     const thirdInput = rig(third.root);
     const inspected = await loadOpenPackage(thirdInput);
@@ -464,6 +528,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         window.__gateRestorePreviewFetch=()=>{window.fetch=original;};
       })()`);
       try {
+        mark('stage3.preview-only');
         await correctionForm('rig-review', 'made', 'Preview-only correction control.');
         const first = await wait(() => evaluate<{
           message: string; error: boolean; proposals: number; requests: {body: string; response: {status: number; body: string} | null}[];
@@ -487,9 +552,10 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     }
 
     async function idleApply(amplitude: number, stateDir: string, name: string) {
-      const opened = await open(thirdInput, stateDir);
-      await navigate(opened.url);
+      const opened = await open(name, thirdInput, stateDir);
+      await navigate(name, opened.url);
       await until('!!window.rigReviewEditor?.idle.source()?.tracks?.length', name + '-idle');
+      mark(name + '.controls');
       await choose(3);
       await click(page, '[data-mode="playback"]');
       await click(page, '#block-tab-idle-tracks');
@@ -503,17 +569,21 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         const preview=action(document.querySelector('[data-idle-preview]'),'[data-idle-preview]');
         if(!preview.checked)preview.click();
       })()`);
+      mark(name + '.preview-ready');
       await until('!document.getElementById("idle-preview-label").hidden', name + '-preview');
       assert.equal(await evaluate('document.getElementById("rebuild-applied").value'), '');
       await assert.rejects(readFile(sessionFile(inspectedPackage, stateDir)), {code:'ENOENT'});
+      mark(name + '.preview-capture');
       await shot(name + '-preview');
       if (lang === 'en' && amplitude === 2.5) await refusePreviewMade(stateDir);
       const started = performance.now();
+      mark(name + '.apply');
       await click(page, '#idle-apply');
-      const applied = await wait(() => evaluate<string>('document.getElementById("rebuild-applied").value'), Boolean, label(name + '-apply'), 120000);
+      const applied = await wait(() => evaluate<string>('document.getElementById("rebuild-applied").value'), Boolean, label(name + '-apply'), 90000);
       const record = JSON.parse(applied);
-      const response = await fetch(new URL('api/rebuild/' + record.buildId, opened.url));
-      const job = await response.json();
+      mark(name + '.settled-evidence');
+      const job = await fetchBody(label(name + '.job'), new URL('api/rebuild/' + record.buildId, opened.url),
+        response => response.json());
       const revision = rebuildDir(stateDir, inspected.contentHash, record.buildId);
       const hashes = await inventory(revision);
       const check = await read(join(revision, 'check/check.json'));
@@ -537,6 +607,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       const failedState = join(scratch, 'failed-check-state');
       const frozen = process.env.REVIEW_371_FAILED_APPLIED;
       assert(frozen, 'Set REVIEW_371_FAILED_APPLIED to the retained 0.75 applied context');
+      mark('stage3.failed-input');
       const frozenBytes = await readFile(frozen);
       assert.equal(digest(frozenBytes), '44c9cf73d6b7149edbab743483d42203b232cef5ab87ab322cc1d975f29c396c');
       const originalFailed = JSON.parse(frozenBytes.toString());
@@ -580,6 +651,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       let capture: FailedSubmitSnapshot | null = null;
       let clickAttempted = false;
       try {
+        mark('stage3.failed-submit');
         await correctionForm('rig-review', 'made', 'Keep the measured failed correction open.');
         await until('document.querySelectorAll(".proposal-item").length===1', 'failed-item');
         clickAttempted = true;
@@ -616,6 +688,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       await assert.rejects(readFile(sessionFile(inspected.p, failedState)), {code:'ENOENT'});
       const item = JSON.parse(refused).feedback[0];
       assert.deepEqual(item.context.applied, originalFailed);
+      mark('stage3.failed-create-copy');
       const negative = await projectCopy(2, '-failed-checked-claim');
       const path = 'evidence/refused-request.json';
       await writeFile(join(negative.root, path), refused);
@@ -630,6 +703,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       await create('failed-check-resolve-first', ['correction','resolve',item.id,negative.root,'--version','1',
         '--by','agent','--reasoning-file',join(negative.root,'evidence/checked-claim.txt')],
       /CORRECTION_APPLIED_INVALID:[\s\S]*claimed checked Apply lacks a passing producer check summary/);
+      mark('stage3.post-resolve-project');
       assert.deepEqual(await readFile(join(negative.root, 'project.json')), beforeResolve);
     }
 
@@ -642,6 +716,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     await choose(3);
     assert.deepEqual(JSON.parse(await evaluate<string>('document.getElementById("rebuild-applied").value')), applied.record);
     const words = lang === 'en' ? '  Adjust body idle amplitude to 2.5.\r\n' : '  몸통 대기 모션 진폭을 2.5로 조정.\r\n';
+    mark('stage3.made-submit');
     await correctionForm('rig-review', 'made', words);
     await until('document.querySelectorAll(".proposal-item").length===1', 'made-item');
     await click(page, '#save');
@@ -652,11 +727,13 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.equal(item.summary, words);
     assert.deepEqual(item.context.applied, applied.record);
     await write(label('made-session.json'), saved);
+    mark('stage3.made-export');
     assert.equal(await feedback(thirdInput, item.id, 'made-json', 'json'), saved);
     const madeIssue = parseIssue(await feedback(thirdInput, item.id, 'made-issue', 'issue'));
     assert.equal(madeIssue.patchBytes, patchText(applied.record.patch));
-    await navigate((await open(thirdInput)).url);
+    await navigate('stage3.reopen', (await open('stage3.reopen', thirdInput)).url);
     assert.equal(await readFile(sessionFile(inspected.p, state), 'utf8'), saved);
+    mark('stage3.made-create-copy');
     const copy = await projectCopy(2, '-made');
     const savedPath = 'evidence/gate-made.json';
     await writeFile(join(copy.root, savedPath), saved);
@@ -677,18 +754,21 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
 
     if (lang === 'en') {
       const replayState = join(scratch, 'replay-state');
-      const opened = await open(thirdInput, replayState);
+      const opened = await open('stage3.replay', thirdInput, replayState);
       const url = new URL(opened.url);
       const capability = new URLSearchParams(url.hash.slice(1)).get('cap');
       assert(capability);
       const headers = {Origin:url.origin, 'Content-Type':'application/json', 'X-Review-Capability':capability};
-      const response = await fetch(new URL('api/rebuild', url), {method:'POST', headers,
-        body:JSON.stringify({patch:JSON.parse(madeIssue.patchBytes)})});
-      const initial = await response.json();
-      await put('replay-initial', {status:response.status, job:initial});
-      assert(response.ok && initial.id);
-      const replay = await wait(async () => (await fetch(new URL('api/rebuild/' + initial.id, url))).json(),
-        job => job.status !== 'running', 'made-replay', 120000);
+      mark('stage3.replay.post');
+      const started = await fetchBody(label('stage3.replay.post'), new URL('api/rebuild', url),
+        async response => ({status:response.status, ok:response.ok, job:await response.json()}),
+        {method:'POST', headers, body:JSON.stringify({patch:JSON.parse(madeIssue.patchBytes)})});
+      const initial = started.job;
+      await put('replay-initial', {status:started.status, job:initial});
+      assert(started.ok && initial.id);
+      mark('stage3.replay.settle');
+      const replay = await wait(signal => fetchBody(label('stage3.replay.read'), new URL('api/rebuild/' + initial.id, url),
+        response => response.json(), {signal}), job => job.status !== 'running', 'made-replay', 90000);
       await put('replay-job', replay);
       const replayRoot = rebuildDir(replayState, inspected.contentHash, replay.id);
       const hashes = await inventory(replayRoot);
@@ -700,14 +780,17 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       assert.deepEqual(replay.check, applied.job.check);
       for (const path of ['config.json','rig/motion.json','check/check.json']) assert.equal(hashes[path], applied.hashes[path]);
       // Independent Create consumer controls. Retain the first verdict and require its named reason.
+      mark('stage3.stale-session');
       const stale = flipHash(saved, 'configHash', applied.record.configHash);
       await writeFile(join(copy.root, savedPath), stale);
       await write('stale-session.json', stale);
       await create('stale-first', ['interview','--check',copy.root,'--json'], /CORRECTION_HASH/);
+      mark('stage3.plant-config');
       const configMutant = await projectCopy(2, '-config-mutant');
       await writeFile(join(configMutant.root, savedPath), stale);
       await write('plant3-session.json', stale);
       await create('plant3-first', madeArgs(configMutant.root), /CORRECTION_APPLIED_INVALID:[\s\S]*patch\/config\/producer mismatch/);
+      mark('stage3.cross-source');
       const cross = await projectCopy(2, '-cross-source');
       const otherModel = await readFile(resolve('tests/fixtures/direction-inspection/derived/review/v1/out/check/build/skeleton.model.json'));
       const otherHash = digest(otherModel);
@@ -720,6 +803,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     }
 
     // Stage 4 begins before post v2. Use the declared authoring input and the public writer.
+    mark('stage4.copy');
     const fourth = await projectCopy(3);
     const fourthBefore = await read(join(fourth.root, 'project.json'));
     assert.deepEqual(fourthBefore.versions.map((row: {n:number}) => row.n), [1]);
@@ -746,10 +830,11 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.equal(digest(authoredOutput), checked.direction.sha256);
     await write(label('direction-output.json'), authoredOutput);
     const fourthInput = {...rig(fourth.root, 2), viewOnly:true};
-    const directionOpen = await open(fourthInput);
+    const directionOpen = await open('stage4', fourthInput);
     const direction = await loadOpenPackage(fourthInput);
     assert(direction.mode === 'single' && direction.p.direction?.joined);
-    await navigate(directionOpen.url);
+    await navigate('stage4', directionOpen.url);
+    mark('stage4.inspect');
     await choose(4);
     const directionWords = lang === 'en' ? '  Ease into the second camera key.\r\n' : '  두 번째 카메라 키까지 부드럽게 이동해 주세요.\r\n';
     const directionReady = '!!document.querySelector("#direction-panel:not([hidden]) ul") && !!document.querySelector("#direction-panel pre")?.textContent';
@@ -771,11 +856,13 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.deepEqual(await evaluate('JSON.parse(document.querySelector("#direction-panel pre").textContent)'), keys.keys);
     const location = sessionFile(direction.p, state);
     await assert.rejects(readFile(location), {code:'ENOENT'});
+    mark('stage4.camera-refusal');
     await correctionForm('direction-review', 'made', directionWords);
     await until('document.getElementById("review-message").textContent.includes("CAMERA_APPLY_UNSUPPORTED")', 'camera-made-refusal');
     await put(label('camera-refusal'), await evaluate('document.getElementById("review-message").textContent'));
     assert.equal(await evaluate('document.querySelectorAll(".proposal-item").length'), 0);
     await click(page, '#review-dialog-close');
+    mark('stage4.described-submit');
     await correctionForm('direction-review', 'described', directionWords);
     await until('document.querySelectorAll(".proposal-item").length===1', 'direction-item');
     await click(page, '#save');
@@ -784,6 +871,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.equal(describedItem.summary, directionWords);
     assert.equal(JSON.parse(directionSession).status, 'pending');
     await write(label('direction-session.json'), directionSession);
+    mark('stage4.described-export');
     const issueBytes = await feedback(fourthInput, describedItem.id, 'direction-issue', 'issue');
     const issue = parseIssue(issueBytes);
     const source = JSON.parse(issue.createSource);
@@ -793,7 +881,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.deepEqual(source.model, checked.document.rig.model);
     assert.deepEqual(source.direction, checked.direction);
     assert.deepEqual(source.inspectedModel, direction.p.reviewedSource.rig);
-    await navigate((await open(fourthInput)).url);
+    await navigate('stage4.reopen', (await open('stage4.reopen', fourthInput)).url);
     await choose(4);
     await until(directionReady, 'direction-reopen-ready');
     assert.equal(await readFile(location, 'utf8'), directionSession);
@@ -803,6 +891,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       '--path','described','--stage','direction-review',...handoff.selectorArgs,'--by','user',
       '--verbatim-file',textFile,'--source',handoff.createSource,'--json'];
     if (lang === 'en') {
+      mark('stage4.plant-selector');
       const changed = mutateOne(issueBytes, '"'+projectModel+'"', '"'+projectModel.replace('/v1/', '/v2/')+'"');
       await write('plant4-direction-issue.md', changed);
       const changedIssue = parseIssue(changed);
@@ -826,6 +915,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.deepEqual(described.on.direction, checked.direction);
     await create(label('direction-consumer-check'), ['interview','--check',fourth.root,'--json']);
   } catch (error) {
+    mark('failure.capture');
     const iframeDiagnostics = await evaluate(`(()=>{
       const frame=${frame};
       const doc=frame?.contentDocument;
@@ -854,6 +944,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     await shot('first-error').catch(() => {});
     throw error;
   } finally {
+    mark('inventory.copies');
     for (const copy of scratchCopies) {
       const before = fixture.stages[copy.index]!.original;
       const after = await inventory(copy.root);
@@ -862,28 +953,35 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         if (!copy.changes.has(path)) assert.equal(after[path], sha, `Source changed: ${path}`);
       }
     }
+    mark('inventory.copies.complete');
   }
 }
 
 for (const stage of fixture.stages) await put(stage.name + '-original', stage.original);
 try {
-  for (const lang of ['en','ko'] as const) {
+  for (const lang of languages) {
     const previousTmp = process.env.TMPDIR;
     let page: InputCdpSession;
     try {
       process.env.TMPDIR = '/tmp'; // Chromium's startup temp must stay short on Nova.
+      checkpoint(lang + '-browser.launch');
       page = await launchCdpSession(join(scratch, 'chromium-' + lang));
     } finally {
       if (previousTmp === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = previousTmp;
     }
     try {
+      checkpoint(lang + '-browser.viewport');
       await page.setViewport(1440, 1080);
       await runLanguage(lang, page);
     } finally {
+      checkpoint(lang + '-browser.close');
       await page.close();
     }
   }
 } finally {
+  checkpoint('inventory.originals');
   for (const stage of fixture.stages) await stage.assertOriginal();
+  checkpoint('inventory.originals.complete');
 }
+checkpoint('walk.complete');

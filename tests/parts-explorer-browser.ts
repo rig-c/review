@@ -17,6 +17,7 @@ import { loadCompare } from '../src/compare.ts';
 import { startCompareServer } from '../src/compare-server.ts';
 import { loadReview } from '../src/manifest.ts';
 import { startServer } from '../src/server.ts';
+import { withDeadline } from './helpers/walk-deadline.ts';
 
 const PROBE_MP4_BASE64 =
   'AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAA3Jtb292AAAAbG12aGQAAAAAAAAAAAAAAAAAAAPoAAAD6AABAAABAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAACnXRyYWsAAABcdGtoZAAAAAMAAAAAAAAAAAAAAAEAAAAAAAAD6AAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAIAAAACAAAAAAACRlZHRzAAAAHGVsc3QAAAAAAAAAAQAAA+gAAAAAAAEAAAAAAhVtZGlhAAAAIG1kaGQAAAAAAAAAAAAAAAAAADAAAAAwAFXEAAAAAAAtaGRscgAAAAAAAAAAdmlkZQAAAAAAAAAAAAAAAFZpZGVvSGFuZGxlcgAAAAHAbWluZgAAABR2bWhkAAAAAQAAAAAAAAAAAAAAJGRpbmYAAAAcZHJlZgAAAAAAAAABAAAADHVybCAAAAABAAABgHN0YmwAAACoc3RzZAAAAAAAAAABAAAAmHZwMDkAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAIAAgAEgAAABIAAAAAAAAAAEXTGF2YzYzLjEuMTAyIGxpYnZweC12cDkAAAAAAAAAAAAY//8AAAAUdnBjQwEAAAAACoICAgIAAAAAAApmaWVsAQAAAAAQcGFzcAAAAAEAAAABAAAAFGJ0cnQAAAAAAAB9AAAAAAAAAAAYc3R0cwAAAAAAAAABAAAAGAAAAgAAAAAUc3RzcwAAAAAAAAABAAAAAQAAABxzdHNjAAAAAAAAAAEAAAABAAAAGAAAAAEAAAB0c3RzegAAAAAAAAAAAAAAGAAAACgAAAAPAAAADwAAAA8AAAAPAAAADwAAAA8AAAAPAAAADwAAAA8AAAAPAAAADwAAAA8AAAAPAAAADwAAAA8AAAAPAAAADwAAAA8AAAAPAAAADgAAAA8AAAAPAAAADwAAABRzdGNvAAAAAAAAAAEAAAOeAAAAYXVkdGEAAABZbWV0YQAAAAAAAAAhaGRscgAAAAAAAAAAbWRpcmFwcGwAAAAAAAAAAAAAAAAsaWxzdAAAACSpdG9vAAAAHGRhdGEAAAABAAAAAExhdmY2My4xLjEwMgAAAAhmcmVlAAABiG1kYXSCSYNCAAHwAfYAOCQcGEIAADBgAAAQ3//81M3/////sUwf////joAAhgBAkpwASUAAAyAAAENAhgBAkpwASsAAAyAAAENAhgBAkpwAScAAAyAAAENAhgBAkpwASKAAAyAAAENAhgBAkpwAR4AAAyAAAENAhgBAkpwARuAAAyAAAENAhgBAkpwARkAAAyAAAENAhgBAkpwARcAAAyAAAENAhgBAkpwARUAAAyAAAENAhgDAkpwAQQAAAyAAAENAhgBAkpwAROAAAyAAAENAhgBAkpwARGAAAyAAAENAhgBAkpwARAAAAyAAAENAhgBAkpwAQ6AAAyAAAENAhgBAkpwAQ0AAAyAAAENAhgBAkpwAQwAAAyAAAENAhgBAkpwAQsAAAyAAAENAhgBAkpwAQoAAAyAAAENAhgBAkpwAQkAAAyAAAENAhgDAkpwAQAAAAgAAQ0CGAECSnABCAAADIAAAQ0CGAECSnABB4AADIAAAQ0CGAECSnABBwAADIAAAQ0A=';
@@ -81,7 +82,7 @@ export interface PanelMeasurement {
 
 export interface CdpSession {
   setViewport(width: number, height: number): Promise<void>;
-  goto(url: string): Promise<void>;
+  goto(url: string, locale?: 'en' | 'ko'): Promise<void>;
   evaluate<T>(expression: string): Promise<T>;
   screenshot(clip?: { x: number; y: number; width: number; height: number }): Promise<Buffer>;
   close(): Promise<void>;
@@ -90,6 +91,44 @@ export interface CdpSession {
 export interface InputCdpSession extends CdpSession {
   mouse(type:'mouseMoved'|'mousePressed'|'mouseReleased'|'mouseWheel',x:number,y:number,deltaY?:number):Promise<void>;
   touch(type:'touchStart'|'touchMove'|'touchEnd',points:{x:number;y:number;id:number}[]):Promise<void>;
+}
+
+export function cdpRequests(sendMessage: (message: string) => void, timeout = 10000) {
+  let nextId = 1;
+  const pending = new Map<number, {method:string; resolve:(value:any)=>void; reject:(error:Error)=>void}>();
+  return {
+    async send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> {
+      const id = nextId++;
+      try {
+        return await withDeadline('CDP.' + method, timeout, () => new Promise((resolve, reject) => {
+          pending.set(id, {method, resolve, reject});
+          sendMessage(JSON.stringify({id, method, params, ...(sessionId ? {sessionId} : {})}));
+        }));
+      } finally {
+        pending.delete(id);
+      }
+    },
+    receive(message: {id?:number; result?:unknown; error?:{message?:string}}) {
+      const entry = typeof message.id === 'number' ? pending.get(message.id) : undefined;
+      if (!entry) return;
+      if (message.error) entry.reject(new Error(`${entry.method}: ${message.error.message || JSON.stringify(message.error)}`));
+      else entry.resolve(message.result);
+    },
+    disconnect(detail: string) {
+      for (const entry of pending.values()) entry.reject(new Error(`WebSocket closed during ${entry.method}: ${detail}`));
+      pending.clear();
+    }
+  };
+}
+
+export function navigationReadyExpression(url: string, locale?: 'en' | 'ko'): string {
+  const target = new URL(url);
+  const query = locale ? [] : [...target.searchParams];
+  return `document.readyState === 'complete' &&
+    location.origin === ${JSON.stringify(target.origin)} &&
+    location.pathname === ${JSON.stringify(target.pathname)} &&
+    ${JSON.stringify(query)}.every(([key,value]) => new URLSearchParams(location.search).getAll(key).includes(value))` +
+    (locale ? ` && document.documentElement.lang === ${JSON.stringify(locale)}` : '');
 }
 
 function findBrowserBinary(): string {
@@ -182,8 +221,36 @@ export async function launchCdpSession(profileDir: string): Promise<InputCdpSess
   const reader = proc.stderr.getReader();
   const decoder = new TextDecoder();
   let stderrTail = '';
-  const wsUrl = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Timed out waiting for DevTools listening URL: ' + stderrTail)), 15000);
+  let ws: WebSocket | undefined;
+  const close = () => {
+    try { ws?.close(); } catch {}
+    try { proc.kill(9); } catch {}
+  };
+  try {
+    const wsUrl = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timed out waiting for DevTools listening URL: ' + stderrTail)), 15000);
+      (async () => {
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            stderrTail += decoder.decode(value, { stream: true });
+            if (stderrTail.length > 4000) stderrTail = stderrTail.slice(-4000);
+            const match = stderrTail.match(/DevTools listening on (ws:\/\/[^\s]+)/);
+            if (match) {
+              clearTimeout(timer);
+              resolve(match[1]!);
+              return;
+            }
+          }
+          clearTimeout(timer);
+          reject(new Error(`Browser exited before printing DevTools URL: ${stderrTail}`));
+        } catch (err) {
+          clearTimeout(timer);
+          reject(err);
+        }
+      })();
+    });
     (async () => {
       try {
         while (true) {
@@ -191,130 +258,86 @@ export async function launchCdpSession(profileDir: string): Promise<InputCdpSess
           if (done) break;
           stderrTail += decoder.decode(value, { stream: true });
           if (stderrTail.length > 4000) stderrTail = stderrTail.slice(-4000);
-          const match = stderrTail.match(/DevTools listening on (ws:\/\/[^\s]+)/);
-          if (match) {
-            clearTimeout(timer);
-            resolve(match[1]!);
-            return;
-          }
         }
-        clearTimeout(timer);
-        reject(new Error(`Browser exited before printing DevTools URL: ${stderrTail}`));
-      } catch (err) {
-        clearTimeout(timer);
-        reject(err);
-      }
+      } catch {}
     })();
-  });
-  (async () => {
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        stderrTail += decoder.decode(value, { stream: true });
-        if (stderrTail.length > 4000) stderrTail = stderrTail.slice(-4000);
-      }
-    } catch {}
-  })();
 
-  const ws = new WebSocket(wsUrl);
-  await new Promise<void>((resolve, reject) => {
-    ws.onopen = () => resolve();
-    ws.onerror = err => reject(err);
-  });
+    const socket = ws = new WebSocket(wsUrl);
+    await withDeadline('CDP.connect', 10000, () => new Promise<void>((resolve, reject) => {
+      socket.onopen = () => resolve();
+      socket.onerror = err => reject(err);
+      socket.onclose = () => reject(new Error('WebSocket closed during CDP.connect'));
+    }));
+    const requests = cdpRequests(message => socket.send(message));
+    socket.onmessage = event => requests.receive(JSON.parse(String(event.data)));
+    socket.onclose = socket.onerror = () => requests.disconnect(`bin=${bin}: ${stderrTail}`);
+    const {send} = requests;
 
-  let nextId = 1;
-  const pending = new Map<number, { method: string; resolve: (val: any) => void; reject: (err: Error) => void }>();
-  ws.onmessage = event => {
-    const msg = JSON.parse(String(event.data));
-    if (typeof msg.id === 'number') {
-      const entry = pending.get(msg.id);
-      if (entry) {
-        pending.delete(msg.id);
-        if (msg.error) entry.reject(new Error(`${entry.method}: ${msg.error.message || JSON.stringify(msg.error)}`));
-        else entry.resolve(msg.result);
-      }
-    }
-  };
-  ws.onclose = () => {
-    for (const entry of pending.values()) {
-      entry.reject(new Error(`WebSocket closed during ${entry.method} (bin=${bin}): ${stderrTail}`));
-    }
-    pending.clear();
-  };
+    const { targetInfos } = await send('Target.getTargets');
+    const pageTarget = targetInfos.find((t: any) => t.type === 'page') ?? (await send('Target.createTarget', { url: 'about:blank' }));
+    const targetId = pageTarget.targetId;
+    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+    await send('Page.enable', {}, sessionId);
+    await send('Runtime.enable', {}, sessionId);
 
-  const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> =>
-    new Promise((resolve, reject) => {
-      const id = nextId++;
-      pending.set(id, { method, resolve, reject });
-      ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
-    });
-
-  const { targetInfos } = await send('Target.getTargets');
-  const pageTarget = targetInfos.find((t: any) => t.type === 'page') ?? (await send('Target.createTarget', { url: 'about:blank' }));
-  const targetId = pageTarget.targetId;
-  const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
-  await send('Page.enable', {}, sessionId);
-  await send('Runtime.enable', {}, sessionId);
-
-  return {
-    async setViewport(width: number, height: number) {
-      await send(
-        'Emulation.setDeviceMetricsOverride',
-        { width, height, deviceScaleFactor: 1, mobile: false },
-        sessionId,
-      );
-    },
-    async goto(url: string) {
-      await send('Page.navigate', { url }, sessionId);
-      await Bun.sleep(100);
-      for (let i = 0; i < 100; i++) {
-        const res = await send(
-          'Runtime.evaluate',
-          { expression: 'document.readyState === "complete" && window.location.href === ' + JSON.stringify(url), returnByValue: true },
+    return {
+      async setViewport(width: number, height: number) {
+        await send(
+          'Emulation.setDeviceMetricsOverride',
+          { width, height, deviceScaleFactor: 1, mobile: false },
           sessionId,
         );
-        if (res?.result?.value === true) break;
-        await Bun.sleep(50);
-      }
-    },
-    async evaluate<T>(expression: string): Promise<T> {
-      const res = await send(
-        'Runtime.evaluate',
-        { expression, awaitPromise: true, returnByValue: true },
-        sessionId,
-      );
-      if (res?.exceptionDetails) {
-        const desc =
-          res.exceptionDetails.exception?.description ||
-          res.exceptionDetails.text ||
-          JSON.stringify(res.exceptionDetails);
-        throw new Error(`Browser evaluate error: ${desc}`);
-      }
-      return res?.result?.value as T;
-    },
-    async mouse(type,x,y,deltaY=0){if(type==='mousePressed')mouseButtons=1;if(type==='mouseReleased')mouseButtons=0;await send('Input.dispatchMouseEvent',{type,x,y,buttons:mouseButtons,...(type==='mouseWheel'?{deltaX:0,deltaY}:type==='mouseMoved'?{}:{button:'left',clickCount:1})},sessionId);},
-    async touch(type,points){await send('Input.dispatchTouchEvent',{type,touchPoints:points},sessionId);},
-    async screenshot(clip?: { x: number; y: number; width: number; height: number }): Promise<Buffer> {
-      const res = await send(
-        'Page.captureScreenshot',
-        {
-          format: 'png',
-          ...(clip ? { clip: { ...clip, scale: 1 } } : {}),
-        },
-        sessionId,
-      );
-      return Buffer.from(res.data, 'base64');
-    },
-    async close() {
-      try {
-        ws.close();
-      } catch {}
-      try {
-        proc.kill(9);
-      } catch {}
-    },
-  };
+      },
+      async goto(url: string, locale?: 'en' | 'ko') {
+        const navigation = await send('Page.navigate', { url }, sessionId);
+        if (navigation?.errorText) throw new Error('CDP_NAVIGATE_FAILED: ' + navigation.errorText);
+        const expression = navigationReadyExpression(url, locale);
+        await Bun.sleep(100);
+        for (let i = 0; i < 100; i++) {
+          const res = await send(
+            'Runtime.evaluate',
+            { expression, returnByValue: true },
+            sessionId,
+          );
+          if (res?.result?.value === true) return;
+          await Bun.sleep(50);
+        }
+        throw new Error('CDP_NAVIGATION_NOT_READY');
+      },
+      async evaluate<T>(expression: string): Promise<T> {
+        const res = await send(
+          'Runtime.evaluate',
+          { expression, awaitPromise: true, returnByValue: true },
+          sessionId,
+        );
+        if (res?.exceptionDetails) {
+          const desc =
+            res.exceptionDetails.exception?.description ||
+            res.exceptionDetails.text ||
+            JSON.stringify(res.exceptionDetails);
+          throw new Error(`Browser evaluate error: ${desc}`);
+        }
+        return res?.result?.value as T;
+      },
+      async mouse(type,x,y,deltaY=0){if(type==='mousePressed')mouseButtons=1;if(type==='mouseReleased')mouseButtons=0;await send('Input.dispatchMouseEvent',{type,x,y,buttons:mouseButtons,...(type==='mouseWheel'?{deltaX:0,deltaY}:type==='mouseMoved'?{}:{button:'left',clickCount:1})},sessionId);},
+      async touch(type,points){await send('Input.dispatchTouchEvent',{type,touchPoints:points},sessionId);},
+      async screenshot(clip?: { x: number; y: number; width: number; height: number }): Promise<Buffer> {
+        const res = await send(
+          'Page.captureScreenshot',
+          {
+            format: 'png',
+            ...(clip ? { clip: { ...clip, scale: 1 } } : {}),
+          },
+          sessionId,
+        );
+        return Buffer.from(res.data, 'base64');
+      },
+      async close() { close(); },
+    };
+  } catch (error) {
+    close();
+    throw error;
+  }
 }
 
 const SELF_CONTAINED_SLOTS = [

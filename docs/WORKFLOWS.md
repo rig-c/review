@@ -489,6 +489,11 @@ checkout after installing its frozen lock. Supply the original archive in
 `REVIEW_371_FAILED_APPLIED`. The runner checks the failed artifact digest.
 Keep Chromium's child `TMPDIR` short (the runner uses `/tmp` during launch).
 The profile, Review state, input copies and producer scratch belong to the job.
+The runner defaults to English followed by Korean. For a gated run, launch
+`bash tests/four-stage-job.sh en` with the same pinned inputs, then launch
+`bash tests/four-stage-job.sh ko` after accepting the English result. Each job
+has a 600-second command deadline and uses a new evidence directory. The
+`walk-checkpoints.jsonl` file records the last step entered if a run stops.
 
 1. Save and export the pre-rig parts and mesh verdict through the joined Review
    surface. Create's shared parts-verdict checker verifies the actual saved
