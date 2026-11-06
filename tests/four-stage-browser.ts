@@ -10,11 +10,11 @@ import { sessionFile } from '../src/session.ts';
 import { resolveProducer } from '../src/producer.ts';
 import { patchId, rebuildDir } from '../src/rebuild.ts';
 import { patchText } from '../src/config-patch.ts';
-import { enCatalog } from '../web/catalog-en.ts';
-import { koCatalog } from '../web/catalog-ko.ts';
+import { t, tr } from '../web/i18n.ts';
 import { inventory, materializeFourStages } from './helpers/four-stage-fixture.ts';
 import { walkCheckpoint, WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
 import { walkDialogs } from './helpers/walk-dialog.ts';
+import { idleAmpSelector } from './helpers/walk-locale.ts';
 import { freshWalkReopen } from './helpers/walk-reopen.ts';
 import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
 
@@ -183,7 +183,9 @@ function flipHash(bytes: string, key: string, hash: string) {
 }
 
 async function runLanguage(lang: Language, page: InputCdpSession, dialogs: ReturnType<typeof walkDialogs>) {
-  const catalog = lang === 'en' ? enCatalog : koCatalog;
+  const picksSaved = t('interview.saved', undefined, lang);
+  const pendingLabel = tr('Pending', lang);
+  const cameraApplyUnavailable = t('direction.cameraApplyUnavailable', undefined, lang);
   const label = (name: string) => lang + '-' + name;
   const shot = async (name: string) => write(label(name) + '.png', await page.screenshot());
   const evaluate = <T>(expression: string) => page.evaluate<T>(expression);
@@ -236,6 +238,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     name + '.submitted');
   const readSavedProposal = (name: string, words: string) => until(
     `document.getElementById("review-status")?.value==="pending" &&
+      document.getElementById("review-status")?.selectedOptions[0]?.textContent===${JSON.stringify(pendingLabel)} &&
       JSON.stringify([...document.querySelectorAll("#proposal-list .feedback-summary")].map(row=>row.textContent))===${JSON.stringify(JSON.stringify([words]))}`,
     name + '.saved-ui');
   const stage4ModalOpen = () => evaluate<boolean>('document.getElementById("review-dialog")?.open===true');
@@ -444,11 +447,11 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
         mark('stage2.' + item.question + '.save');
         await click(page, 'form button[type=submit]', interview);
         const save = await wait(readPicksSave, result => result.exchanges.some(exchange => !!exchange.error ||
-          (!!exchange.response && (exchange.response.status >= 400 || result.dom?.status === catalog['interview.saved']))),
+          (!!exchange.response && (exchange.response.status >= 400 || result.dom?.status === picksSaved))),
         label('picks-' + item.question));
         assert.equal(save.exchanges.length, 1);
         assert.equal(save.exchanges[0]!.response?.status, 200);
-        assert.equal(save.dom?.status, catalog['interview.saved']);
+        assert.equal(save.dom?.status, picksSaved);
         const payload = JSON.parse(save.exchanges[0]!.request);
         assert.equal(payload.note, note);
         assert(payload.picks.every((pick: {option_id:string}) => pick.option_id === 'keep' && !('other_text' in pick)));
@@ -596,11 +599,20 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
       await click(page, '[data-mode="playback"]');
       await click(page, '#block-tab-idle-tracks');
       await click(page, '#idle-track-list button');
-      await evaluate(`(()=>{
+      const ampField = `
         ${actionGuard}
-        const selector='#idle-track-editor input[type=number][aria-label="amp value"]';
-        const field=action(document.querySelector(selector),selector);
-        if(field.value!=='0.5')throw Error('Wrong initial amplitude');
+        const selector=${JSON.stringify(idleAmpSelector(lang))};
+        const fields=document.querySelectorAll(selector);
+        if(fields.length>1)throw Error('FOUR_STAGE_ACTION_TARGET: '+selector+' (ambiguous)');
+        const field=action(fields[0],selector);
+        if(field.value!=='0.5')throw Error('Wrong initial amplitude');`;
+      const ariaLabel = await evaluate<string>(`(()=>{
+        ${ampField}
+        return field.getAttribute('aria-label');
+      })()`);
+      checkpoint(label(name + '.amp-action'), {ariaLabel});
+      await evaluate(`(()=>{
+        ${ampField}
         field.value=${JSON.stringify(String(amplitude))};field.dispatchEvent(new Event('change',{bubbles:true}));
         const preview=action(document.querySelector('[data-idle-preview]'),'[data-idle-preview]');
         if(!preview.checked)preview.click();
@@ -890,6 +902,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     assert.deepEqual(keys.keys, {camera:authored.camera, timing:authored.timing.keys, take:authored.take});
     for (const identity of [projectModel, direction.p.sourceHash, checked.direction.sha256,
       direction.p.direction.joined.projectHash, 'CAMERA_APPLY_UNSUPPORTED']) assert(keys.rows.includes(identity), identity);
+    assert(keys.rows.split('\n').includes(cameraApplyUnavailable), 'Missing localized camera availability row');
     await shot('stage4');
     await choose(3);
     await choose(4);
@@ -899,7 +912,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     await assert.rejects(readFile(location), {code:'ENOENT'});
     mark('stage4.camera-refusal');
     await correctionForm('direction-review', 'made', directionWords);
-    await until('document.getElementById("review-message")?.textContent?.includes("CAMERA_APPLY_UNSUPPORTED")===true', 'camera-made-refusal');
+    await until(`document.getElementById("review-message")?.textContent===${JSON.stringify(cameraApplyUnavailable)}`, 'camera-made-refusal');
     await put(label('camera-refusal'), await evaluate('document.getElementById("review-message")?.textContent??null'));
     assert.equal(await evaluate('document.querySelectorAll(".proposal-item").length'), 0);
     await click(page, '#review-dialog-close');
