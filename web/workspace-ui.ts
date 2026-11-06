@@ -81,7 +81,8 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
   if(disposed||applying)return;applying=true;
   try{
    // Chrome shares the center width. It is not charged against the actual stage minimum.
-   const chrome=[...stack.children].filter(node=>node!==stage&&!((node as HTMLElement).hidden)).reduce((sum,node)=>sum+(node as HTMLElement).getBoundingClientRect().height,0);
+   // Authored JSON can fill the same slot as the rig while Direction metadata stays above it.
+   const chrome=[...stack.children].filter(node=>node!==stage&&node.id!=='direction-authored-body'&&!((node as HTMLElement).hidden)).reduce((sum,node)=>sum+(node as HTMLElement).getBoundingClientRect().height,0);
    available={width:Math.max(0,layout.clientWidth),height:Math.max(0,layout.clientHeight-chrome)};effective=allocateWorkspaceLayout(available,desired,columns);
    const mode=(panel:WorkspacePanel)=>effective[panel==='leftWidth'?'leftMode':panel==='rightWidth'?'rightMode':'inspectorMode'];
    for(const panel of present)dock(panel,mode(panel)==='drawer');

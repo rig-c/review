@@ -936,8 +936,66 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     await choose(4);
     const directionWords = lang === 'en' ? '  Ease into the second camera key.\r\n' : '  두 번째 카메라 키까지 부드럽게 이동해 주세요.\r\n';
     const authoredSummary = '#direction-authored-keys > summary';
-    const directionReady = '!!document.querySelector("#direction-panel:not([hidden]) #direction-authored-keys:not([hidden]) pre")?.textContent';
+    const directionReady = '!!document.querySelector("#direction-panel:not([hidden]) #direction-authored-keys:not([hidden])") && !!document.querySelector("#direction-authored-body")?.textContent';
     const rigVisible = 'document.querySelector("#rig-viewport")?.checkVisibility() && document.querySelector("#rig-viewport")?.clientHeight > 0';
+    const directionState = `(point)=>{
+      const summary=document.querySelector(${JSON.stringify(authoredSummary)});
+      const rect=summary?.getBoundingClientRect();
+      const center=rect && {x:rect.x+rect.width/2,y:rect.y+rect.height/2};
+      const hitAt=({x,y})=>{
+        const hit=document.elementFromPoint(x,y);
+        return {tag:hit?.tagName??null,id:hit?.id??null,inSummary:!!hit&&summary.contains(hit)};
+      };
+      return {
+        open:summary?.parentElement.open??null,rect:rect?.toJSON()??null,center,
+        hit:center?hitAt(center):null,dispatchHit:point?hitAt(point):null,
+        inspector:document.querySelector('#workspace-inspector')?.closest('dialog')?'drawer':'docked',
+        viewport:[innerWidth,innerHeight],rigVisible:Boolean(${rigVisible}),
+      };
+    }`;
+    const recordDirection = async (step: string) => {
+      const state = await evaluate<{inspector:string;viewport:number[]}>(`(${directionState})()`);
+      await put(label('direction-' + step), state);
+      assert.equal(state.inspector, 'docked', step);
+      assert.deepEqual(state.viewport, [1440, 1080], step);
+    };
+    async function clickDirection(step: string) {
+      const before = await evaluate<{center:{x:number;y:number}|null;hit:{inSummary:boolean}|null;inspector:string;viewport:number[]}>(`(()=>{
+        ${actionGuard}
+        const summary=action(document.querySelector(${JSON.stringify(authoredSummary)}),${JSON.stringify(authoredSummary)});
+        summary.scrollIntoView({block:'nearest'});
+        const details=summary.parentElement;
+        const events=[];
+        const controller=new AbortController();
+        for(const type of ['pointerdown','pointerup','click','toggle']){
+          document.addEventListener(type,event=>{
+            events.push({type,trusted:event.isTrusted,tag:event.target?.tagName,id:event.target?.id,
+              inSummary:summary.contains(event.target),onDetails:event.target===details,open:details.open});
+          },{capture:true,signal:controller.signal});
+        }
+        window.directionClickTrace={events,controller};
+        return (${directionState})();
+      })()`);
+      try {
+        assert.equal(before.inspector, 'docked', step);
+        assert.deepEqual(before.viewport, [1440, 1080], step);
+        assert(before.center && before.hit?.inSummary, 'Direction summary midpoint is obscured');
+        const {x,y} = before.center;
+        await page.mouse('mouseMoved', x, y);
+        await page.mouse('mousePressed', x, y);
+        await page.mouse('mouseReleased', x, y);
+      } finally {
+        const after = await evaluate<{state:{inspector:string;viewport:number[]};events:unknown[]}>(`(async()=>{
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+          const trace=window.directionClickTrace;
+          trace.controller.abort();
+          return {state:(${directionState})(${JSON.stringify(before.center)}),events:trace.events};
+        })()`);
+        await put(label('direction-click-' + step), {before, after});
+        assert.equal(after.state.inspector, 'docked', step);
+        assert.deepEqual(after.state.viewport, [1440, 1080], step);
+      }
+    }
     const expectedKeys = {camera:authored.camera, timing:authored.timing.keys, take:authored.take};
     const firstProperties = JSON.stringify(expectedKeys, null, 2).split('\n')
       .filter(line => line.trimStart().startsWith('"')).slice(0, 4);
@@ -945,7 +1003,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     await until(directionReady, 'direction-authored-ready');
     await until(rigVisible, 'direction-collapsed-rig');
     assert.equal(await evaluate('document.querySelector("#direction-authored-keys").open'), false);
-    await click(page, authoredSummary);
+    await clickDirection('initial-expand');
     const readExpandedDirection = () => evaluate<{
       heading:string; headingVisible:boolean; rows:string; keys:unknown;
       properties:{text:string; visible:boolean; geometry:ReturnType<typeof visibilityGeometry>}[];
@@ -955,7 +1013,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
       const geometry=(${visibilityGeometry.toString()});
       const panel=document.getElementById('direction-panel');
       const summary=document.querySelector(${JSON.stringify(authoredSummary)});
-      const pre=summary.parentElement.querySelector('pre');
+      const pre=document.getElementById('direction-authored-body');
       const node=pre.firstChild;
       let offset=0;
       const properties=[];
@@ -986,7 +1044,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
       assert.equal(keys.heading, t('direction.keys', undefined, lang));
       assert.equal(keys.headingVisible, true);
       assert.equal(keys.rigVisible, false);
-      assert.deepEqual(keys.overflow, ['visible', 'visible']);
+      assert.deepEqual(keys.overflow, ['auto', 'auto']);
       assert.deepEqual(keys.properties.filter(row => row.visible).slice(0, 4).map(row => row.text), firstProperties);
       assert.deepEqual(keys.keys, expectedKeys);
     }
@@ -1003,11 +1061,14 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     });
     await choose(3);
     await until(rigVisible, 'direction-stage3-rig');
+    await recordDirection('stage3');
     await choose(4);
     await until(directionReady, 'direction-back-ready');
+    await recordDirection('stage4-back');
     assertExpandedDirection(await readExpandedDirection());
-    await click(page, authoredSummary);
+    await clickDirection('initial-collapse');
     await until(rigVisible, 'direction-restored-rig');
+    await recordDirection('restored');
     const location = sessionFile(direction.p, state);
     await assert.rejects(readFile(location), {code:'ENOENT'});
     mark('stage4.camera-refusal');
@@ -1048,10 +1109,14 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     }
     await until(directionReady, 'direction-reopen-ready');
     await until(rigVisible, 'direction-reopen-rig');
-    await click(page, authoredSummary);
+    await clickDirection('reopen-expand');
     assertExpandedDirection(await readExpandedDirection());
-    await click(page, authoredSummary);
-    await until(rigVisible, 'direction-reopen-restored-rig');
+    await clickDirection('reopen-collapse');
+    try {
+      await until(rigVisible, 'direction-reopen-restored-rig');
+    } finally {
+      await recordDirection('reopen-collapse-verdict');
+    }
     await readSavedProposal('stage4.reopen', directionWords);
     await assertStage4ModalClosed();
     assert.equal(await readFile(location, 'utf8'), directionSession);

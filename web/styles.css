@@ -417,11 +417,11 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 :root[data-inspection-stage="2"] #mode-build-picker,:root[data-inspection-stage="4"] #mode-build-picker{display:none!important}
 #direction-panel{flex:none;max-height:40%;overflow:auto;padding:.5rem .75rem;overflow-wrap:anywhere}
 #direction-panel ul{margin:.4rem 0;padding-inline-start:1.4rem}
-#direction-panel pre{white-space:pre-wrap}
-#direction-panel[open]:not([hidden]):has(#direction-authored-keys[open]:not([hidden])){
-  flex:1;min-height:0;max-height:none
+#direction-authored-body{display:none;flex:1;min-height:0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:.75rem}
+#direction-panel[open]:not([hidden]):has(#direction-authored-keys[open]:not([hidden])) + #direction-authored-body{
+  display:block
 }
-#direction-panel[open]:not([hidden]):has(#direction-authored-keys[open]:not([hidden])) + #stage-layout{
+#direction-panel[open]:not([hidden]):has(#direction-authored-keys[open]:not([hidden])) + #direction-authored-body + #stage-layout{
   display:none
 }
 .review-stage-panel.with-interview {

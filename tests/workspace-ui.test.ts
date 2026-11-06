@@ -37,10 +37,17 @@ class Host extends EventTarget {
  setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);}
 }
 let hostDocument:{activeElement:Host|null};
-function openHost(options:{explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean}={}){
+function openHost(options:{explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean}={}){
  const body=new Host('body'),layout=new Host(),main=new Host('main'),left=new Host('aside'),right=new Host('aside'),stage=new Host(),inspector=new Host(),heading=new Host();layout.className='layout';left.className='left-panel';right.id='parts-explorer';stage.id='stage-layout';inspector.className='inspector';heading.clientHeight=30;
  const tabs=options.tabs??['view','rig','playback','feedback'],panels={} as Record<string,Host>;for(const tab of tabs){const panel=new Host('section'),button=new Host('button');panel.id='inspector-'+tab;panel.dataset.inspectorPanel=tab;panel.hidden=tab!==tabs[0];panel.clientHeight=200;panel.clientWidth=500;button.dataset.inspector=tab;button.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(tab===tabs[0]));panels[tab]=panel;if(options.pressed){button.dataset.mode=tab;body.append(button);inspector.append(panel);}else inspector.append(button,panel);}
- main.append(heading,stage,inspector);if(options.leftHeader){const header=new Host(),strip=new Host('details');header.className='left-header parts-header';strip.id='package-context';left.append(header,strip);}if(options.explorerLeft){left.append(right);layout.append(left,main);}else layout.append(left,main,right);body.append(layout);
+ main.append(heading,stage,inspector);
+ if(options.direction){
+  layout.clientWidth=1440;layout.clientHeight=969;heading.clientHeight=80;
+  const direction=new Host('details'),keys=new Host('details'),body=new Host('pre');
+  direction.id='direction-panel';direction.open=true;direction.clientHeight=246;
+  keys.id='direction-authored-keys';direction.append(keys);body.id='direction-authored-body';stage.before(direction);stage.before(body);body.clientHeight=0;
+ }
+if(options.leftHeader){const header=new Host(),strip=new Host('details');header.className='left-header parts-header';strip.id='package-context';left.append(header,strip);}if(options.explorerLeft){left.append(right);layout.append(left,main);}else layout.append(left,main,right);body.append(layout);
  const values=new Map<string,string>(),events=new EventTarget(),frames=new Map<number,()=>void>();let handle=0;
  const document=Object.assign(new EventTarget(),{body,hidden:false,activeElement:null as Host|null,getElementById:(id:string)=>body.all().find(n=>n.id===id)??null,querySelector:(selector:string)=>body.querySelector(selector),createElement:(tag:string)=>new Host(tag)});hostDocument=document;
  const globals={document,window:events,localStorage:{getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>values.set(key,value)},requestAnimationFrame:(callback:()=>void)=>{frames.set(++handle,callback);return handle;},cancelAnimationFrame:(id:number)=>frames.delete(id),ResizeObserver:class{observe(){}disconnect(){}},MutationObserver:class{constructor(_callback:()=>void){}observe(){}disconnect(){}}};
@@ -255,4 +262,38 @@ test('the footer View region body is a fixed popover above the footer, bounded b
  expect(body).toContain('position:fixed');expect(body).not.toContain('position:absolute');expect(body).toContain('bottom:calc(40px + 6px)');expect(body).toContain('right:8px');
  expect(body).toMatch(/max-height:calc\(100dvh - 40px - \d+px\)/);expect(body).toMatch(/max-width:calc\(100vw - \d+px\)/);expect(body).toContain('overflow:auto');
  expect(ruleBodies(css,'footer').join(';')).toContain('height:40px');
+});
+
+test('authored keys take the stage slot while the Inspector stays docked in at most two layout passes per transition',()=>{
+ const app=openHost({direction:true});
+ try{
+  const direction=app.get('direction-panel'),keys=app.get('direction-authored-keys');
+  const body=app.get('direction-authored-body'),inspector=app.get('workspace-inspector');
+  const main=inspector.parentElement!;
+  // At the captured viewport, use the allocator's largest legal desired height
+  // so the measured chrome clamps the Inspector and leaves the 180px stage minimum.
+  const saved=new WorkspacePreferenceStore({storage:{getItem:key=>app.values.get(key)??null,setItem:(key,value)=>app.values.set(key,value)},events:null,writer:'other'});
+  saved.update({panels:{inspectorHeight:900}});
+  const event=new Event('storage');Object.assign(event,{key:workspacePreferenceKey,newValue:app.values.get(workspacePreferenceKey)});app.events.dispatchEvent(event);
+  app.flush();saved.dispose();
+  const available={width:1440,height:969-80-direction.clientHeight};
+  const desired=app.ui.defaults().panels;
+  expect(desired.inspectorHeight).toBe(900);
+  const base=allocateWorkspaceLayout(available,desired);
+  expect(base).toMatchObject({inspectorMode:'panel',inspectorHeight:459,stageHeight:180});
+  const dockedRows=`minmax(0,1fr) 4px ${base.inspectorHeight}px`;
+  expect(main.style.gridTemplateRows).toBe(dockedRows);
+  for(const open of [true,false]){
+   keys.open=open;
+   const priorPasses=app.changed();
+   for(let pass=0;pass<2;pass++){
+    const [separator,inspectorHeight]=main.style.gridTemplateRows.split(' ').slice(-2).map(parseFloat);
+    body.clientHeight=open?available.height-separator!-inspectorHeight!:0;
+    app.ui.refresh();app.flush();
+    expect(inspector.parentElement).toBe(main);
+    expect(main.style.gridTemplateRows).toBe(dockedRows);
+   }
+   expect(app.changed()-priorPasses).toBe(2);
+  }
+ }finally{app.close();}
 });

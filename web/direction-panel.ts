@@ -48,10 +48,12 @@ export function bindDirectionPanel(before: HTMLElement, read: () => DirectionVie
   details.hidden = true;
   const summary = document.createElement('summary');
   const keys = document.createElement('pre');
-  details.append(summary, keys);
+  keys.id = 'direction-authored-body';
+  summary.setAttribute('aria-controls', keys.id);
+  details.append(summary);
   body.append(metadata, details);
   host.append(title, body);
-  before.before(host);
+  before.before(host, keys);
   function refresh() {
     if (host.hidden) return;
     const view = read();
@@ -93,6 +95,6 @@ export function bindDirectionPanel(before: HTMLElement, read: () => DirectionVie
   return {
     refresh,
     show(active: boolean) { host.hidden = !active; refresh(); },
-    dispose() { language(); host.remove(); },
+    dispose() { language(); host.remove(); keys.remove(); },
   };
 }
