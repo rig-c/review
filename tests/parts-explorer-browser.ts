@@ -93,17 +93,18 @@ export interface InputCdpSession extends CdpSession {
   touch(type:'touchStart'|'touchMove'|'touchEnd',points:{x:number;y:number;id:number}[]):Promise<void>;
 }
 
-export function cdpRequests(sendMessage: (message: string) => void, timeout = 10000) {
+export function cdpRequests(sendMessage: (message: string) => void, timeout?: number) {
   let nextId = 1;
   const pending = new Map<number, {method:string; resolve:(value:any)=>void; reject:(error:Error)=>void}>();
   return {
     async send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> {
       const id = nextId++;
       try {
-        return await withDeadline('CDP.' + method, timeout, () => new Promise((resolve, reject) => {
+        const request = () => new Promise((resolve, reject) => {
           pending.set(id, {method, resolve, reject});
           sendMessage(JSON.stringify({id, method, params, ...(sessionId ? {sessionId} : {})}));
-        }));
+        });
+        return await (timeout === undefined ? request() : withDeadline('CDP.' + method, timeout, request));
       } finally {
         pending.delete(id);
       }
@@ -128,7 +129,7 @@ export function navigationReadyExpression(url: string, locale?: 'en' | 'ko'): st
     location.origin === ${JSON.stringify(target.origin)} &&
     location.pathname === ${JSON.stringify(target.pathname)} &&
     ${JSON.stringify(query)}.every(([key,value]) => new URLSearchParams(location.search).getAll(key).includes(value))` +
-    (locale ? ` && document.documentElement.lang === ${JSON.stringify(locale)}` : '');
+    (locale ? ` && document.documentElement?.lang === ${JSON.stringify(locale)}` : '');
 }
 
 function findBrowserBinary(): string {
@@ -178,7 +179,7 @@ function findBrowserBinary(): string {
   throw new Error('No headless Chromium/Chrome/Edge binary found');
 }
 
-export async function launchCdpSession(profileDir: string): Promise<InputCdpSession> {
+export async function launchCdpSession(profileDir: string, options: {sendDeadlineMs?: number} = {}): Promise<InputCdpSession> {
   const bin = findBrowserBinary();
   const isHeadlessShell = bin.includes('headless');let mouseButtons=0;
   const childEnv: Record<string, string | undefined> = {
@@ -268,7 +269,7 @@ export async function launchCdpSession(profileDir: string): Promise<InputCdpSess
       socket.onerror = err => reject(err);
       socket.onclose = () => reject(new Error('WebSocket closed during CDP.connect'));
     }));
-    const requests = cdpRequests(message => socket.send(message));
+    const requests = cdpRequests(message => socket.send(message), options.sendDeadlineMs);
     socket.onmessage = event => requests.receive(JSON.parse(String(event.data)));
     socket.onclose = socket.onerror = () => requests.disconnect(`bin=${bin}: ${stderrTail}`);
     const {send} = requests;

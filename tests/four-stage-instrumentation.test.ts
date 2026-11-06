@@ -32,7 +32,30 @@ test('checkpoints are readable before the next operation and increase monotonica
   }
 });
 
-test('CDP deadlines discard a late reply and disconnect rejects an outstanding command', async () => {
+test('CDP requests schedule no deadline timer by default', async () => {
+  const original = globalThis.setTimeout;
+  let scheduled = 0;
+  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+    scheduled++;
+    return original(...args);
+  }) as typeof setTimeout;
+  const sent: number[] = [];
+  const requests = cdpRequests(message => sent.push(JSON.parse(message).id));
+  let response: Promise<unknown>;
+  try {
+    response = requests.send('Runtime.evaluate');
+  } finally {
+    globalThis.setTimeout = original;
+  }
+  requests.receive({id:sent[0], result:'legacy'});
+  expect(await response).toBe('legacy');
+  expect(scheduled).toBe(0);
+  const pending = requests.send('Runtime.evaluate');
+  requests.disconnect('probe');
+  await expect(pending).rejects.toThrow('WebSocket closed during Runtime.evaluate');
+});
+
+test('opt-in CDP deadlines discard a late reply and disconnect rejects an outstanding command', async () => {
   const sent: number[] = [];
   const requests = cdpRequests(message => sent.push(JSON.parse(message).id), 30);
   await expect(requests.send('Runtime.evaluate')).rejects.toThrow('WALK_DEADLINE: CDP.Runtime.evaluate (30ms)');

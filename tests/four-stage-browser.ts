@@ -73,6 +73,7 @@ const actionGuard = `function action(element, selector) {
   if (element.matches(':disabled') || element.closest('[aria-disabled=true]')) refuse('disabled');
   if (element.closest('[hidden], [inert]')) refuse('hidden or inert ancestor');
   const view = element.ownerDocument.defaultView;
+  if (!view) refuse('document window missing');
   for (let current=element;current;current=current.parentElement) {
     const style=view.getComputedStyle(current);
     if (style.display==='none'||style.visibility==='hidden'||style.visibility==='collapse') refuse('computed hidden');
@@ -146,9 +147,9 @@ function fetchBody<T>(key: string, url: URL, readBody: (response: Response) => P
 async function click(page: InputCdpSession, selector: string, iframe?: string) {
   const point = await page.evaluate<{x: number; y: number}>(`(()=>{
     ${actionGuard}
-    const f=${iframe ?? 'null'},d=f?f.contentDocument:document;
-    if(f)action(f,${JSON.stringify(iframe ?? 'iframe')});
-    const button=action(d.querySelector(${JSON.stringify(selector)}),${JSON.stringify(selector)});
+    const f=${iframe === undefined ? 'null' : `action(${iframe}, 'click iframe')`};
+    const d=f?f.contentDocument:document;
+    const button=action(d?.querySelector(${JSON.stringify(selector)}),${JSON.stringify(selector)});
     button.scrollIntoView({block:'nearest'});
     const r=button.getBoundingClientRect(),b=f?.getBoundingClientRect();
     const x=r.left+r.width/2,y=r.top+r.height/2;
@@ -211,7 +212,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     const destination = new URL(url);
     destination.searchParams.set('lang', lang);
     await page.goto(destination.href, lang);
-    await until(`document.documentElement.lang===${JSON.stringify(lang)} && !!document.querySelector('[data-review-stage="1"]')`, name + '.shell');
+    await until(`document.documentElement?.lang===${JSON.stringify(lang)} && !!document.querySelector('[data-review-stage="1"]')`, name + '.shell');
   }
   async function projectCopy(index: number, suffix = '') {
     const root = join(scratch, lang + '-' + fixture.stages[index]!.name + suffix);
@@ -251,7 +252,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     const firstInput = draft(first.root, 'gate-verdicts');
     const firstOpen = await open('stage1', firstInput);
     await navigate('stage1', firstOpen.url);
-    await until(`${frame}?.contentDocument?.body.dataset.ready==='true'`, 'parts-ready');
+    await until(`${frame}?.contentDocument?.body?.dataset.ready==='true'`, 'parts-ready');
     assert.deepEqual(await readdir(verdictDirectory), []);
     const partNote = lang === 'en' ? '  Inspect the torso seam.\nKeep the wording.  ' : '  몸통 이음새 확인.\n문구를 유지해 주세요.  ';
     const meshNote = lang === 'en' ? '  Torso mesh reviewed.  ' : '  몸통 메시를 확인했어요.  ';
@@ -259,6 +260,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     await evaluate(`(()=>{
       ${actionGuard}
       const d=action(${frame},'parts iframe').contentDocument;
+      if(!d)throw Error('FOUR_STAGE_ACTION_TARGET: parts iframe document (missing)');
       const field=selector=>action(d.querySelector(selector),selector);
       const partIds=[...d.querySelectorAll('[data-pv-item]')].map(item=>item.dataset.pvItem);
       for(const partId of partIds){
@@ -281,17 +283,18 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     await choose(1);
     await until(`${frame}?.contentDocument?.querySelector('#pv-note')?.value===${JSON.stringify(partNote)}`, 'parts-back');
     assert.deepEqual(await readdir(verdictDirectory), []);
-    assert.match(await evaluate<string>(`${frame}.contentDocument.querySelector('#pv-corrections').textContent`), /torso.*v 30 t 40/);
+    assert.match(await evaluate<string>(`${frame}?.contentDocument?.querySelector('#pv-corrections')?.textContent??''`), /torso.*v 30 t 40/);
     await evaluate(`(()=>{
-      const d=${frame}.contentDocument;
+      const d=${frame}?.contentDocument;
+      if(!d?.body)throw Error('FOUR_STAGE_ACTION_TARGET: parts Save observer document body (missing)');
       d.addEventListener('click',event=>{
-        if(event.target.id==='pv-save')d.body.dataset.trustedSave=String(event.isTrusted);
+        if(event.target?.id==='pv-save'&&d.body)d.body.dataset.trustedSave=String(event.isTrusted);
       },true);
     })()`);
     mark('stage1.save');
     await click(page, '#pv-save', frame);
-    await until(`${frame}.contentDocument.querySelector('#pv-save-status').dataset.result==='saved'`, 'verdict-save');
-    assert.equal(await evaluate(`${frame}.contentDocument.body.dataset.trustedSave`), 'true');
+    await until(`${frame}?.contentDocument?.querySelector('#pv-save-status')?.dataset.result==='saved'`, 'verdict-save');
+    assert.equal(await evaluate(`${frame}?.contentDocument?.body?.dataset.trustedSave`), 'true');
     const files = await readdir(verdictDirectory);
     assert.equal(files.length, 1);
     const verdictPath = 'gate-verdicts/' + files[0];
@@ -306,9 +309,9 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.equal(exportedVerdict.body, verdictBytes);
     await write(label('parts-verdict.json'), verdictBytes);
     await navigate('stage1.reopen', (await open('stage1.reopen', firstInput)).url);
-    await until(`${frame}?.contentDocument?.body.dataset.ready==='true'`, 'parts-reopen');
+    await until(`${frame}?.contentDocument?.body?.dataset.ready==='true'`, 'parts-reopen');
     await click(page, '[data-pv-item=torso]', frame);
-    assert.equal(await evaluate(`${frame}.contentDocument.querySelector('#pv-note').value`), partNote);
+    assert.equal(await evaluate(`${frame}?.contentDocument?.querySelector('#pv-note')?.value`), partNote);
     await shot('stage1');
     const checkVerdict = (root: string, path: string, bytes: string, findings: unknown[]) =>
       parts.checkPartsVerdict(root, {evidence:{kind:parts.PARTS_VERDICT_KIND, path, sha256:digest(bytes)}}, 'review-371', findings);
@@ -365,6 +368,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       await evaluate(`(()=>{
         ${actionGuard}
         const d=action(${interview},'interview iframe').contentDocument;
+        if(!d)throw Error('FOUR_STAGE_ACTION_TARGET: interview iframe document (missing)');
         const s=action(d.querySelector('main select'),'interview set picker');
         const index=[...s.options].findIndex(o=>o.text.includes(${JSON.stringify('chain-' + item.question)}));
         if(index<0||s.options[index].disabled)throw Error('FOUR_STAGE_ACTION_TARGET: interview set option');
@@ -384,7 +388,9 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       const picksPath = 'gate-picks/' + sha + '.json';
       await assert.rejects(readFile(join(second.root, picksPath)), {code:'ENOENT'});
       await evaluate(`(()=>{
-        const child=${interview}.contentWindow, original=child.fetch;
+        const child=${interview}?.contentWindow;
+        if(!child)throw Error('FOUR_STAGE_ACTION_TARGET: interview Save observer window (missing)');
+        const original=child.fetch;
         child.__gatePicksExchanges=[];
         child.fetch=async function(input,init){
           if(init?.method!=='POST'||!new URL(input,child.location.href).pathname.endsWith('/api/interview/picks'))return original.call(child,input,init);
@@ -429,14 +435,14 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       await evaluate(`(()=>{
         ${actionGuard}
         const d=action(${interview},'interview iframe').contentDocument;
-        const select=action(d.querySelector('main select'),'interview set picker');
+        const select=action(d?.querySelector('main select'),'interview set picker');
         const index=[...select.options].findIndex(option=>option.text.includes(${JSON.stringify('chain-' + item.question)}));
         if(index<0||select.options[index].disabled)throw Error('FOUR_STAGE_ACTION_TARGET: interview set option');
         select.selectedIndex=index;
         select.dispatchEvent(new Event('change'));
       })()`);
       await until(`(()=>{
-        const fields=${interview}.contentDocument.querySelectorAll(${interviewNote}), field=fields[0];
+        const fields=${interview}?.contentDocument?.querySelectorAll(${interviewNote})??[], field=fields[0];
         if(fields.length!==1||field.closest('fieldset fieldset'))return false;
         ${actionGuard}
         return action(field,${interviewNote}).value===${JSON.stringify(note)};
@@ -533,8 +539,8 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         const first = await wait(() => evaluate<{
           message: string; error: boolean; proposals: number; requests: {body: string; response: {status: number; body: string} | null}[];
         }>(`({
-          message:document.getElementById('review-message').textContent,
-          error:document.getElementById('review-message').classList.contains('error'),
+          message:document.getElementById('review-message')?.textContent??'',
+          error:document.getElementById('review-message')?.classList.contains('error')??false,
           proposals:document.querySelectorAll('.proposal-item').length,
           requests:window.__gatePreviewRequests
         })`), result => result.error || result.proposals !== 0 || result.requests.some(request => request.response !== null), 'preview-made-first');
@@ -545,16 +551,16 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         assert.deepEqual(first.requests, []);
         await assert.rejects(readFile(sessionFile(inspectedPackage, stateDir)), {code:'ENOENT'});
       } finally {
-        await evaluate('window.__gateRestorePreviewFetch()');
+        await evaluate('window.__gateRestorePreviewFetch?.()');
         await click(page, '#review-dialog-close');
       }
-      await until('!document.getElementById("review-dialog").open', 'preview-modal-closed');
+      await until('document.getElementById("review-dialog")?.open===false', 'preview-modal-closed');
     }
 
     async function idleApply(amplitude: number, stateDir: string, name: string) {
       const opened = await open(name, thirdInput, stateDir);
       await navigate(name, opened.url);
-      await until('!!window.rigReviewEditor?.idle.source()?.tracks?.length', name + '-idle');
+      await until('!!window.rigReviewEditor?.idle?.source?.()?.tracks?.length', name + '-idle');
       mark(name + '.controls');
       await choose(3);
       await click(page, '[data-mode="playback"]');
@@ -570,8 +576,8 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         if(!preview.checked)preview.click();
       })()`);
       mark(name + '.preview-ready');
-      await until('!document.getElementById("idle-preview-label").hidden', name + '-preview');
-      assert.equal(await evaluate('document.getElementById("rebuild-applied").value'), '');
+      await until('document.getElementById("idle-preview-label")?.hidden===false', name + '-preview');
+      assert.equal(await evaluate('document.getElementById("rebuild-applied")?.value'), '');
       await assert.rejects(readFile(sessionFile(inspectedPackage, stateDir)), {code:'ENOENT'});
       mark(name + '.preview-capture');
       await shot(name + '-preview');
@@ -579,7 +585,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       const started = performance.now();
       mark(name + '.apply');
       await click(page, '#idle-apply');
-      const applied = await wait(() => evaluate<string>('document.getElementById("rebuild-applied").value'), Boolean, label(name + '-apply'), 90000);
+      const applied = await wait(() => evaluate<string>('document.getElementById("rebuild-applied")?.value??""'), Boolean, label(name + '-apply'), 90000);
       const record = JSON.parse(applied);
       mark(name + '.settled-evidence');
       const job = await fetchBody(label(name + '.job'), new URL('api/rebuild/' + record.buildId, opened.url),
@@ -714,7 +720,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     assert.equal(applied.record.check.gate, true);
     await choose(4);
     await choose(3);
-    assert.deepEqual(JSON.parse(await evaluate<string>('document.getElementById("rebuild-applied").value')), applied.record);
+    assert.deepEqual(await evaluate('JSON.parse(document.getElementById("rebuild-applied")?.value||"null")'), applied.record);
     const words = lang === 'en' ? '  Adjust body idle amplitude to 2.5.\r\n' : '  몸통 대기 모션 진폭을 2.5로 조정.\r\n';
     mark('stage3.made-submit');
     await correctionForm('rig-review', 'made', words);
@@ -841,9 +847,10 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     await until(directionReady, 'direction-authored-ready');
     const keys = await evaluate<{rows:string; keys:unknown}>(`(()=>{
       ${actionGuard}
-      const panel=document.getElementById('direction-panel'), details=panel.querySelector('div details');
+      const panel=action(document.getElementById('direction-panel'),'#direction-panel');
+      const details=action(panel.querySelector('div details'),'#direction-panel authored keys details');
       if(!details.open)action(details.querySelector('summary'),'#direction-panel authored keys summary').click();
-      return {rows:panel.querySelector('ul').innerText,keys:JSON.parse(panel.querySelector('pre').textContent)};
+      return {rows:panel.querySelector('ul')?.innerText??'',keys:JSON.parse(panel.querySelector('pre')?.textContent||'null')};
     })()`);
     await put(label('direction-visible'), keys);
     assert.deepEqual(keys.keys, {camera:authored.camera, timing:authored.timing.keys, take:authored.take});
@@ -853,13 +860,13 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
     await choose(3);
     await choose(4);
     await until(directionReady, 'direction-back-ready');
-    assert.deepEqual(await evaluate('JSON.parse(document.querySelector("#direction-panel pre").textContent)'), keys.keys);
+    assert.deepEqual(await evaluate('JSON.parse(document.querySelector("#direction-panel pre")?.textContent||"null")'), keys.keys);
     const location = sessionFile(direction.p, state);
     await assert.rejects(readFile(location), {code:'ENOENT'});
     mark('stage4.camera-refusal');
     await correctionForm('direction-review', 'made', directionWords);
-    await until('document.getElementById("review-message").textContent.includes("CAMERA_APPLY_UNSUPPORTED")', 'camera-made-refusal');
-    await put(label('camera-refusal'), await evaluate('document.getElementById("review-message").textContent'));
+    await until('document.getElementById("review-message")?.textContent?.includes("CAMERA_APPLY_UNSUPPORTED")===true', 'camera-made-refusal');
+    await put(label('camera-refusal'), await evaluate('document.getElementById("review-message")?.textContent??null'));
     assert.equal(await evaluate('document.querySelectorAll(".proposal-item").length'), 0);
     await click(page, '#review-dialog-close');
     mark('stage4.described-submit');
@@ -924,7 +931,7 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       return {
         pagePath:location.pathname,
         iframePath:frame?new URL(frame.src).pathname:null,
-        ready:doc?.body.dataset.ready??null,
+        ready:doc?.body?.dataset.ready??null,
         reason:status?.textContent??null,
         reasonResult:status?.dataset.result??null,
         save:save?{disabled:save.disabled,title:save.title,hidden:save.hidden}:null,
@@ -965,7 +972,7 @@ try {
     try {
       process.env.TMPDIR = '/tmp'; // Chromium's startup temp must stay short on Nova.
       checkpoint(lang + '-browser.launch');
-      page = await launchCdpSession(join(scratch, 'chromium-' + lang));
+      page = await launchCdpSession(join(scratch, 'chromium-' + lang), {sendDeadlineMs:10000});
     } finally {
       if (previousTmp === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = previousTmp;
