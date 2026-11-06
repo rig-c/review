@@ -20,6 +20,7 @@ import { meshEditText } from './mesh-edit.ts';
 import { CONFIG_NAMED_FILES, CONFIG_SKELETON_NAMES, HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
 import { assertWholeRigBaseline, BaselineError, baselineKey, producerDiff, runBaseline, runInspectedCheck, runningInspectedCheck, type BaselineResult, type InspectedCheck } from './baseline.ts';
 import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, parseConfigPatch, PATCH_FLAGS, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
+import { barLine } from './physics-tuning.ts';
 import { checkSummary, filesDiffText, MAX_ANIMATION_OPS, MAX_RETARGET_LINES, type CheckSummary, type FilesDiff } from './applied-context.ts';
 import { AnimationOpBuilder, animationOpsText, parseAnimationSourceOp, type AnimationSourceOp } from './animation-ops.ts';
 import { idleKeying, idleSource, type IdleStatus } from './idle-tracks.ts';
@@ -279,7 +280,7 @@ export interface AppliedEntry {
   job: RebuildJob | PatchJob | DeltaJob | RetargetJob | AnimationJob;
 }
 /** `GET /api/rebuild/history`: the applied records in order, the last one on the stage; `kept`: its build is still on disk. */
-export interface AppliedHistory { schema: 'rig-review-applied-history/1'; depth: number; records: { id: string; kind: 'regions' | 'patch' | 'delta' | 'retarget' | 'animation'; op: string; what: string; modelHash: string; kept: boolean }[] }
+export interface AppliedHistory { schema: 'rig-review-applied-history/1'; depth: number; records: { id: string; kind: 'regions' | 'patch' | 'delta' | 'retarget' | 'animation'; op: string; what: string; modelHash: string; kept: boolean; check?: CheckSummary | null; failedBarLines?: string[] }[] }
 
 export type RebuildStatus = 'running' | 'built' | 'refused' | 'failed';
 export interface RebuildBuild { model: string; modelUrl: string; modelHash: string; files: Record<string, string> }
@@ -1079,7 +1080,15 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         : job.kind === 'animation' ? `${job.request.ops.length} op(s) on ${[...new Set(job.request.ops.map(o => o.animation))].join(', ')}`
         : `retarget "${job.request.record.flags.animation}"`;
       const kept = await exists(join(last ? rebuildRoot(options.stateDir, p.sourceHash) : keptRoot(options.stateDir, p.sourceHash), e.id));
-      records.push({ id: e.id, kind, op: 'op' in job ? job.op : 'remesh', what, modelHash: e.modelHash, kept });
+      const check = 'check' in job ? job.check : undefined;
+      const failedBarLines = Object.entries(check?.bars ?? {})
+        .filter(([, status]) => status === 'FAIL')
+        .map(([name]) => barLine(name, job.lines, check ?? null));
+      records.push({
+        id: e.id, kind, op: 'op' in job ? job.op : 'remesh', what, modelHash: e.modelHash, kept,
+        ...(check !== undefined ? {check} : {}),
+        ...(failedBarLines.length ? {failedBarLines} : {}),
+      });
     }
     return { schema: 'rig-review-applied-history/1', depth: stack.length, records };
   }

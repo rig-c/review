@@ -42,7 +42,7 @@ import { bindRequirementsPanel, type RequirementsCatalogView, type RequirementsJ
 import { bindRetargetPanel, type PoseMap, type RetargetPanel } from './retarget-panel.ts';
 import type { RetargetFlags } from '../src/retarget.ts';
 import {
-  historyRow, isPatchJob, recordFor, refusedText, restoredOutcomeForJob, retargetStage, undoControl,
+  appliedCheckState, renderAppliedHistory, isPatchJob, recordFor, refusedText, restoredOutcomeForJob, retargetStage, undoControl,
   animationAppliedRecord, animationOutcomeLine, appliedRecord, deltaAppliedRecord, deltaOutcomeLine, chestSeed, designatedRegions, handoffText,
   landmarksRequest, noContourReason, seedLandmarks, makePatch, outcomeLine, patchAppliedRecord, patchOutcomeLine,
   pickBustPart, pickPart, runRebuild, seedFields, stageModel, retargetAppliedRecord, retargetOutcomeLine, stripPendingAfter,
@@ -837,7 +837,9 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const on = appliedPanelOps(state.appliedOnStage);
     cutsPanel?.applied(on.cuts); clothPanel?.applied(on.cloth);
     physicsPanel?.applied(on.physics); bonesPanel?.applied(on.bones);
-    idlePanel?.applied(on.idle); rigFieldsPanel?.applied(on['rig-fields']);
+    const applied = state.appliedOnStage;
+    idlePanel?.applied(on.idle, appliedCheckState(applied && 'check' in applied ? applied.check : null));
+    rigFieldsPanel?.applied(on['rig-fields']);
     const restored = restoredJob ? restoredOutcomeForJob(restoredJob) : null;
     animationPanel?.reconcileStageApplied(
       state.appliedOnStage?.schema === 'rig-review-applied/5' ? state.appliedOnStage : null,
@@ -905,13 +907,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const state = currentState(), h = state.appliedHistory;
     section.hidden = !h || h.depth === 0;
     const list = el('applied-list');
-    list.replaceChildren(...(h?.records ?? []).map((r, i) => {
-      const li = document.createElement('li');
-      li.textContent = historyRow(h!, i);
-      li.dataset.buildId = r.id;
-      li.classList.toggle('on-stage', i === h!.records.length - 1 && state.appliedOnStage?.buildId === r.id);
-      return li;
-    }));
+    renderAppliedHistory(list, h, state.appliedOnStage?.buildId ?? null);
     const control = undoControl(h, state.appliedOnStage?.buildId ?? null, rebuildBusy || !!host.readOnly());
     const undo = button('applied-undo');
     undo.textContent = control.label; undo.disabled = !control.enabled; undo.title = control.title;
@@ -1582,7 +1578,6 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
       const outcome = patchOutcomeLine(result);
       if (pickedSide === side) idlePanel?.status(outcome.text, outcome.error);
       if ('id' in result && result.status === 'built') {
-        if (pickedSide === side) idlePanel?.applied(result.request.patch.ops);
         const after = { lines: [...result.lines], check: result.check };
         const show = () => { if (pickedSide === side) idlePanel?.readout(readoutRows(before, before ? null : inspectedCheckView(side), after, IDLE_READOUT_BARS)); };
         show(); if (!before) void followInspectedCheck(show, side);

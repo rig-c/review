@@ -1,8 +1,9 @@
 /**
  * Apply · Rebuild, page side (#99): the chest editor's rows become the producer's region entries, one typed request
- * goes to `/api/rebuild`, the job's lines stream back by polling, and the applied state is recorded. No DOM here
- * (main.ts owns the elements and the player); the server owns every path and the producer's flags.
+ * goes to `/api/rebuild`, the job's lines stream back by polling, and the applied state is recorded. The client formats
+ * the applied history for the page; the server owns every path and the producer's flags.
  */
+import {setSourceText} from './i18n.ts';
 import {ellipsePolygon,fitChestEllipse,CHEST_ELLIPSE_MIN_POINTS} from '../src/chest-regions.ts';
 import {deriveBust,parseBustSpec,type BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
@@ -359,7 +360,23 @@ export function handoffText(status:Pick<RebuildStatusView,'handoff'|'baseline'|'
 }
 
 /** #166: `GET /api/rebuild/history` — the session's applied records in order; the last is on the stage; `kept`: its build is on disk. */
-export interface AppliedHistoryView {schema:'rig-review-applied-history/1';depth:number;records:{id:string;kind:'regions'|'patch'|'delta'|'retarget'|'animation';op:string;what:string;modelHash:string;kept:boolean}[]}
+export type AppliedHistoryView = import('../src/rebuild.ts').AppliedHistory;
+
+export function appliedCheckState(check:CheckSummary|null|undefined):'passed'|'failed'|'unavailable' {
+ if(check?.pass==null)return 'unavailable';
+ return check.pass&&check.exitCode===0?'passed':'failed';
+}
+
+/** Write English source text so the DOM locale machinery can translate and switch languages in place. */
+export function renderHistoryCheck(node:HTMLElement, record:AppliedHistoryView['records'][number]):void {
+ const state=appliedCheckState(record.check);
+ node.dataset.checkVerdict=state;
+ const label=state==='passed'?'Producer check passed':state==='failed'?'Producer check failed':'Producer check unavailable';
+ const failedBars=record.failedBarLines;
+ const details=state==='failed'&&failedBars?.length?failedBars
+  :state!=='passed'&&record.check?.line?[record.check.line]:[];
+ setSourceText(node,[label,...details].join(' · '));
+}
 /** #166: `POST /api/rebuild/undo {from}` — the predecessor's build (kept, or re-run and still running), the inspected build, or a refusal. */
 export type UndoView=
  |{status:'inspected';undone:string;history:AppliedHistoryView}
@@ -385,6 +402,29 @@ export function retargetStage(job:AnyJobView,modelHash:string):{animation:string
 export function historyRow(history:AppliedHistoryView,index:number):string {
  const r=history.records[index]!,last=index===history.records.length-1;
  return `${index+1}. ${r.kind} (${r.op}) · ${r.what} · model ${r.modelHash.slice(0,12)}…${last?' · on the stage':r.kept?'':' · build evicted, an undo to it re-runs its step'}`;
+}
+export function renderAppliedHistory(list:HTMLElement,history:AppliedHistoryView|null,stageId:string|null):void {
+ const previousLast=(list.lastElementChild as HTMLElement|null)?.dataset.buildId;
+ const {scrollLeft,scrollTop}=list;
+ list.replaceChildren(...(history?.records??[]).map((record,index)=>{
+  const row=list.ownerDocument.createElement('li');
+  const verdict=list.ownerDocument.createElement('span');
+  row.dataset.buildId=record.id;
+  row.classList.toggle('on-stage',index===history!.records.length-1&&stageId===record.id);
+  renderHistoryCheck(verdict,record);
+  row.append(verdict,` · ${historyRow(history!,index)}`);
+  return row;
+ }));
+ if(previousLast===history?.records.at(-1)?.id){
+  list.scrollLeft=scrollLeft;
+  list.scrollTop=scrollTop;
+ }else{
+  // Single review stacks rows vertically. Compare lays them out horizontally.
+  const first=list.firstElementChild?.getBoundingClientRect();
+  const last=list.lastElementChild?.getBoundingClientRect();
+  list.scrollLeft=first&&last?last.left-first.left:0;
+  list.scrollTop=first&&last?last.top-first.top:0;
+ }
 }
 /** #166: the Undo control's label and whether it can run: the depth, and what the stage returns to. */
 export function undoControl(history:AppliedHistoryView|null,stageId:string|null,busy:boolean):{label:string;enabled:boolean;title:string} {

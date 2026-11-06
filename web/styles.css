@@ -272,12 +272,15 @@ footer.status-bar{flex-wrap:nowrap}
 #stage-comment{white-space:nowrap;flex:none}#stage-comment-refusal{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.stage-comment-refusal-note{display:block;margin-top:4px;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:var(--fg-muted)}
 .inspector-body{display:flex;flex-direction:column;min-height:0;overflow:hidden}
 .inspector-body>[data-inspector-panel]{flex:1 1 0;min-height:0}
-.applied-records:not([hidden]){display:flex;align-items:center;gap:8px;padding:1px 10px;height:20px;min-height:20px;max-height:20px;box-sizing:border-box;overflow:hidden;flex:none}
+.applied-records:not([hidden]){display:flex;align-items:center;gap:8px;padding:1px 10px;min-height:20px;box-sizing:border-box;overflow:hidden;flex:none}
 .applied-records .row{margin:0;flex:none;gap:6px}
 .applied-records button{padding:1px 6px;height:16px;font-size:9.5px;line-height:1}
-.applied-list{margin:0;max-height:18px;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:10px;overflow-x:auto;overflow-y:hidden;flex:1 1 auto;min-width:0}
-.applied-list li{font:9.5px/16px var(--font-mono);white-space:nowrap;flex:none}
-#applied-status{margin:0;flex:0 1 auto;min-width:0;font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.applied-list{margin:0;max-height:64px;display:block;overflow-y:auto;flex:1 1 0;min-width:0}
+.applied-list li{font:11px/16px var(--font-mono)}
+.applied-list [data-check-verdict]{font-weight:600}
+.applied-list [data-check-verdict="failed"],#idle-pending-list [data-idle-op-check="failed"]{color:var(--fail)}
+.applied-list [data-check-verdict="passed"]{color:var(--pass)}
+#applied-status{margin:0;flex:0 1 auto;max-width:30%;min-width:0;font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .inspector #inspector-playback{padding:3px 10px;box-sizing:border-box}
 .inspector #inspector-playback:not([hidden]){display:grid;grid-template-columns:minmax(0,1.55fr) minmax(320px,1fr);gap:10px;flex:1 1 0;min-height:0;overflow:hidden}
 .workspace-layout:has(>.parts-explorer) .inspector #inspector-playback:not([hidden]){grid-template-columns:minmax(0,2.2fr) minmax(220px,.85fr);gap:8px}

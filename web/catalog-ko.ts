@@ -1,4 +1,9 @@
 export const koCatalog: Readonly<Record<string, string>> = {
+  "Producer check passed": "프로듀서 검사 통과",
+  "Producer check failed": "프로듀서 검사 실패",
+  "Producer check unavailable": "프로듀서 검사 결과 없음",
+  "Check failed": "검사 실패",
+  "Check unavailable": "검사 결과 없음",
   "RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.": "RIG_VERSION_UNAVAILABLE: 이 초안에는 기록된 리그 검토 패키지가 없습니다.",
   "DIRECTION_VERSION_UNAVAILABLE: this draft has no recorded rig review package.": "DIRECTION_VERSION_UNAVAILABLE: 이 초안에는 기록된 리그 검토 패키지가 없습니다.",
   "PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.": "PARTS_VERDICT_READ_ONLY: 대기 중인 파츠 검토와 명시적으로 지정한 판정 출력 디렉터리가 필요합니다.",

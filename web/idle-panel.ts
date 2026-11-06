@@ -42,7 +42,7 @@ export interface IdlePanel {
  previewing():{on:boolean;label:string;plan:PreviewPlan|null};
  setPreview(on:boolean):void;
  restore():void;clear():void;
- applied(ops:readonly PatchOp[]|null):void;
+ applied(ops:readonly PatchOp[]|null,check?:IdleOpCheck):void;
  status(text:string,error:boolean):void;
  readout(lines:{name:string;before:string;after:string}[]):void;
  busy(value:boolean):void;
@@ -58,6 +58,24 @@ export const PREVIEW_LABEL='preview — Apply decides';
 /** Degrees of amplitude per pane pixel dragged on a chain handle. */
 const DEG_PER_PX=0.02;
 const THUMB=14;
+
+type IdleOpCheck = 'passed'|'failed'|'unavailable';
+
+export function renderIdlePendingRow(op:PatchOp,check:IdleOpCheck|null,busy:boolean,revertOp:()=>void):HTMLLIElement {
+ const revert=make('button',{type:'button',textContent:'Revert',disabled:busy});
+ revert.setAttribute('aria-label',`Revert ${op.op} ${op.path}`);
+ revert.onclick=revertOp;
+ const row=make('li',{className:check==='passed'?'applied':''},make('code',{textContent:`${op.op} ${op.path}`}),op.op==='remove'?'':` → ${JSON.stringify(op.value)}`);
+ if(check){
+  const label=check==='failed'?'Check failed':'Check unavailable';
+  // Keep the separator with the status so i18n recognizes the existing prose atom.
+  const state=make('span',{textContent:check==='passed'?' · applied':' · '+label});
+  state.dataset.idleOpCheck=check;
+  row.append(state);
+ }
+ row.append(revert);
+ return row;
+}
 
 export function bindIdlePanel(deps:IdlePanelDeps):IdlePanel {
  const stateLine=node('idle-tracks-state'),keysLine=node('idle-keys-line'),list=node('idle-track-list'),editor=node('idle-track-editor'),blinkArea=node('idle-blink'),precheckArea=node('idle-precheck'),pending=node('idle-pending-list');
@@ -167,13 +185,12 @@ export function bindIdlePanel(deps:IdlePanelDeps):IdlePanel {
   precheckArea.replaceChildren(...lines.map(l=>make('code',{className:'error idle-refusal',textContent:l,title:l})),...previewNotes.map(l=>make('code',{className:'idle-note',textContent:l,title:l})));
   return lines;
  }
+ let appliedCheck:IdleOpCheck='unavailable';
  function renderPending(){
   const items=ops();
   pending.replaceChildren(...items.map((op,i)=>{
    const applied=appliedOps.includes(JSON.stringify(op));
-   const revert=make('button',{type:'button',textContent:'Revert',disabled:busy});revert.setAttribute('aria-label',`Revert ${op.op} ${op.path}`);
-   revert.onclick=()=>tryChange(()=>revertOp(i));
-   return make('li',{className:applied?'applied':''},make('code',{textContent:`${op.op} ${op.path}`}),op.op==='remove'?'':` → ${JSON.stringify(op.value)}`,applied?' · applied':'',revert);
+   return renderIdlePendingRow(op,applied?appliedCheck:null,busy,()=>tryChange(()=>revertOp(i)));
   }));
   if(!items.length)pending.append(make('li',{className:'hint',textContent:'No pending ops.'}));
   const refused=renderPrecheck().length>0;
@@ -268,7 +285,7 @@ export function bindIdlePanel(deps:IdlePanelDeps):IdlePanel {
   setPreview(on){previewBox.checked=on;previewBox.dispatchEvent(new Event('change'));},
   restore(){if(source){state=idleDraftState(draft.value,source);render();}},
   clear(){stopPreview();if(source){state=initialState(source);save();}render();},
-  applied(list){appliedOps=(list??[]).map(o=>JSON.stringify(o));renderPending();},
+  applied(list,check='unavailable'){appliedOps=(list??[]).map(o=>JSON.stringify(o));appliedCheck=check;renderPending();},
   status:panelStatus,
   readout(lines){readoutArea.replaceChildren(...lines.flatMap(l=>[make('div',{className:'physics-readout-line'},make('span',{className:'eyebrow',textContent:'BEFORE'}),make('code',{textContent:l.before,title:l.before})),make('div',{className:'physics-readout-line'},make('span',{className:'eyebrow',textContent:'AFTER'}),make('code',{textContent:l.after,title:l.after}))]));},
   busy(value){busy=value;render();},
