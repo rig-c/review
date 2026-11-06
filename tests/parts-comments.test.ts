@@ -82,3 +82,20 @@ test('painting refuses external, symlink escape and non-PNG inputs by name; hash
  const pkg=await loadPartsView(root,{painting:inside});expect(pkg.painting!.sha256).toBe(createHash('sha256').update(png).digest('hex'));expect([pkg.painting!.width,pkg.painting!.height]).toEqual([64,64]);expect(verdictSource(pkg).files.some(f=>f.path==='painting.png')).toBe(true);
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('selected pre-rig comment exports the same part image and exact original evidence',async()=>{
+ const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'parts-correction-'));
+ try{
+  const pkg=await commentFixture(root),comment=await preparePartsComment(pkg,candidate(pkg));
+  await saveVerdict(pkg,{status:'pending',parts:Object.fromEntries(pkg.items.map(item=>[item.name,{outcome:'pending',note:''}])),comments:[comment]});
+  const cli=Bun.spawn([process.execPath,'src/cli.ts','parts',root,'--correction',comment.id,'--parts-file','evidence/parts.json','--format','issue'],{env:{...process.env,RIG_REVIEW_STATE_DIR:process.env.RIG_REVIEW_STATE_DIR!},stdout:'pipe',stderr:'pipe'});
+  const [out,err,exit]=await Promise.all([new Response(cli.stdout).text(),new Response(cli.stderr).text(),cli.exited]);
+  expect({exit,err}).toEqual({exit:0,err:''});
+  expect(out).toContain('Unresolved request');expect(out).toContain(comment.imageHash);expect(out).toContain(comment.summary);expect(out).toContain('--parts-file');expect(out).not.toContain('--version');
+  const json=Bun.spawn([process.execPath,'src/cli.ts','parts',root,'--correction',comment.id,'--parts-file','evidence/parts.json','--format','json'],{env:{...process.env,RIG_REVIEW_STATE_DIR:process.env.RIG_REVIEW_STATE_DIR!},stdout:'pipe',stderr:'pipe'});
+  const [bytes,diagnostic,jsonExit]=await Promise.all([new Response(json.stdout).text(),new Response(json.stderr).text(),json.exited]);
+  expect({jsonExit,diagnostic}).toEqual({jsonExit:0,diagnostic:''});
+  expect(JSON.parse(bytes)).toMatchObject({comments:[comment],correction:{path:'described',itemId:comment.id,part:comment.part,imageHash:comment.imageHash,outcome:null}});
+
+ }finally{await rm(root,{recursive:true,force:true});}
+});

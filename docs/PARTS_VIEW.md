@@ -409,3 +409,8 @@ Named input refusals: `PARTS_DIFFERENCE_PROVENANCE`, `PARTS_DIFFERENCE_PATH`,
 `PARTS_VIEW_SOURCE_CHANGED`. No producer command executes for Difference.
 `tests/parts-difference.test.ts` supplies literal independent numeric controls;
 `tests/parts-difference-browser.ts` exercises bilingual display and saved evidence.
+
+Saved standalone part notes and pointed comments can be selected as described
+corrections. The handoff keeps the part and original image evidence. Its Create
+selector is a retained parts inventory, with no rig version.
+See [Correction handoff](WORKFLOWS.md#correction-handoff).

@@ -608,3 +608,12 @@ export async function partsDifference(pkg:PartsViewPackage,index:number,threshol
  const result=differencePixels(part,item!,painting,fronts,threshold,footprints);
  await assertPartsUnchanged(pkg);return result;
 }
+
+/** Selected JSON keeps the canonical verdict and names the user's handoff selection. */
+export function exportPartsCorrection(verdict:PartsVerdict, correction:ReturnType<typeof import('./correction-handoff.ts').projectPartsDescription>):string {
+  return JSON.stringify({...verdict,correction:{
+    path:'described',stage:correction.stage,itemId:correction.itemId,part:correction.part,
+    verbatim:correction.verbatim,selectorArgs:correction.on,outcome:null,
+    ...('imageHash' in correction?{imageHash:correction.imageHash}:{}),
+  }},null,2)+'\n';
+}

@@ -924,13 +924,35 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if(!value||typeof value!=='object'||!('stageInputHash' in value))return;
     const v=value as Record<string,unknown>;
     if(!['rig-review-applied/1','rig-review-applied/3'].includes(String(v.schema))&&!(v.schema==='rig-review-applied/2'&&v.op==='remesh'))return;
+    await readAppliedSeal(v);
+  }
+  async function readAppliedSeal(v:Record<string,unknown>) {
     if(typeof v.buildId!=='string'||!/^[a-f0-9]{64}$/.test(v.buildId))throw new RebuildError('STAGE_DRAFT_STALE','invalid applied identity');
     try{
-      const file=await safeFile(await realpath(dirname(evidencePath(v.buildId))),v.buildId+'.json');
+      const root=await realpath(options.stateDir);
+      const directory=join(root,'applied-evidence',p.sourceHash);
+      if(await realpath(directory)!==directory)throw new Error('redirected evidence');
+      const file=await safeFile(directory,v.buildId+'.json');
       if((await lstat(file)).size>evidenceLimit)throw new Error('oversized evidence');
       const seal=JSON.parse(await readFile(file,'utf8')),body=seal.body;
-      if(!body||body.schema!=='rig-review-applied-evidence/1'||seal.digest!==sha256(JSON.stringify(body))||!isDeepStrictEqual(body.binding,evidenceBinding)||body.buildId!==v.buildId||body.inputHash!==v.stageInputHash||body.modelHash!==v.modelHash||!isDeepStrictEqual(body.check,v.check)||!isDeepStrictEqual(body.record,v))throw new Error('evidence mismatch');
+      if(!body||body.schema!=='rig-review-applied-evidence/1'||seal.digest!==sha256(JSON.stringify(body))||!isDeepStrictEqual(body.binding,evidenceBinding)||body.buildId!==v.buildId||body.inputHash!==(v.stageInputHash??null)||body.modelHash!==v.modelHash||!isDeepStrictEqual(body.check,v.check)||!isDeepStrictEqual(body.record,v))throw new Error('evidence mismatch');
+      return body;
     }catch{throw new RebuildError('STAGE_DRAFT_STALE','the made claim has no matching sealed applied evidence');}
+  }
+  /** Fresh handoff requires the retained result as well as the historical seal. */
+  async function correctionEvidence(value:unknown) {
+    if(!value||typeof value!=='object'||(value as Record<string,unknown>).schema!=='rig-review-applied/2')return undefined;
+    const applied=value as unknown as import('./applied-context.ts').AppliedPatch;
+    const body=await readAppliedSeal(value as Record<string,unknown>);
+    try{
+      const root=await realpath(options.stateDir);
+      const dir=rebuildDir(root,p.sourceHash,applied.buildId);
+      if(await realpath(dir)!==dir||await realpath(join(dir,'build'))!==join(dir,'build'))throw new Error('redirected scratch');
+      if(applied.stageInputHash&&await stageInputDigest(dir,join(dir,applied.op==='build'||applied.cloth?.route==='build'?'out/rig':'rig'))!==applied.stageInputHash)throw new Error('scratch inputs changed');
+      const actual=await hashBuild(join(dir,'build'),applied.buildId);
+      if(actual.modelHash!==body.modelHash||sha256(JSON.stringify(actual.files))!==body.outputHash)throw new Error('scratch model changed');
+      return {source:evidenceBinding,applied:body.record,operationSha256:patchSha256(applied.patch),modelSha256:actual.modelHash};
+    }catch{throw new RebuildError('CORRECTION_RESULT_STALE','the sealed scratch result is missing or changed');}
   }
   /**
    * #166: the line refusing an undo's re-run whose build is not the one its record names (the first differing file by
@@ -1936,5 +1958,5 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     return safeFile(await realpath(join(rebuildDir(options.stateDir, p.sourceHash, id), 'build')), packagePath(name));
   }
 
-  return { describe, start, read, file, running: () => running, busy: () => busy() !== null, baseline: settledBaseline, inspectedCheck: settledInspectedCheck, latest, stageDraft, validateApplied, undo, history, startStrip, readStrip, stripJob, closeStrip, stripFile };
+  return { describe, start, read, file, running: () => running, busy: () => busy() !== null, baseline: settledBaseline, inspectedCheck: settledInspectedCheck, latest, stageDraft, validateApplied, correctionEvidence, undo, history, startStrip, readStrip, stripJob, closeStrip, stripFile };
 }

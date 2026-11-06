@@ -414,6 +414,7 @@ async function boot(): Promise<void> {
   const data = await res.json() as ViewData & { error?: string };
   if (!res.ok) { const status=$('pv-load');status.textContent=t(data.error??'Load failed.');status.dataset.result='refused';return; }
   state.data = data;if(!data.differenceAvailable)document.querySelector('[data-pv-comparison="difference"]')?.remove();if(stageEmbedded)for(const item of data.items)if(item.mesh)state.meshShown.add(item.name);$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;comments.push(...data.verdict?.comments??[]);setupPartsComments();viewport.bindNavigation(undefined,()=>!commentUi?.active());viewport.observeResize();
+  document.getElementById('parts-correction-hint')!.hidden = data.mode !== 'parts' || stageEmbedded;
   for (const item of data.items) state.verdict.set(item.name, { outcome: 'pending', note: '', ...(item.mesh ? { mesh: { outcome: 'pending' as Outcome, note: '' } } : {}) });
   if (data.verdict) { for (const [name, v] of Object.entries(data.verdict.parts)) if (state.verdict.has(name)) state.verdict.set(name, { outcome: v.outcome, note: v.note ?? '', ...(v.mesh ? { mesh: v.mesh } : {}) }); $<HTMLSelectElement>('pv-overall').value = data.verdict.status; }
   document.title = data.title;
@@ -501,7 +502,7 @@ function renderCorrections():void {
  for(const [instrument,title,operation]of [['chest','Chest regions',t('rig-parts remesh --mesh')],['mesh','Mesh parameters',t('rig-parts remesh --mesh')],['delta','Edit Mesh',t('rig-parts remesh --delta')]]){
   const button=document.createElement('button');button.type='button';button.textContent=t(title!);button.title=`${mapping.part} · ${operation}`;button.onclick=()=>parent.postMessage({type:'review-stage-correction',part:mapping.part,sourceHash:data.sourceHash,buildId:data.draft!.buildId,instrument},location.origin);host.append(button);
  }
- const unavailable=document.createElement('p');unavailable.textContent=t('Correction-record export unavailable: waiting for the shared correction contract.');host.append(unavailable);
+ const guidance=document.createElement('p');guidance.textContent=t('Use Write review, choose Parts review and name the Create draft. Export the saved item with the feedback CLI. Mesh deltas retain evidence as unsupported operations.');host.append(guidance);
 }
 
 function stagePartsSnapshot():StagePartsState|null {

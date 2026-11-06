@@ -32,3 +32,35 @@ test('read-only feedback CLI retrieves saved identity and otherwise reports pend
  const root=await mkdtemp(join(tmpdir(),'review-cli-'));await writeFile(join(root,'motion.json'),'{}');const before=await Bun.file(join(root,'motion.json')).text();
  const proc=Bun.spawn([process.execPath,'src/cli.ts','feedback',root],{stdout:'pipe',stderr:'pipe'});const output=await new Response(proc.stdout).text();expect(await proc.exited).toBe(0);const session=JSON.parse(output);expect(session.status).toBe('pending');expect(session.updatedAt).toBeNull();expect(session.reviewedSource.rig).toBeNull();expect(session.reviewedSource.motion.path).toBe('motion.json');expect(session.reviewedSource.motion.sha256).toMatch(/^[a-f0-9]{64}$/);expect(await Bun.file(join(root,'review.json')).exists()).toBe(false);expect(await Bun.file(join(root,'motion.json')).text()).toBe(before);const p=await loadReview(root);try{await saveSession(p,{...freshSession(p),status:'changes-requested'});const submitted=Bun.spawn([process.execPath,'src/cli.ts','feedback',root],{stdout:'pipe',stderr:'pipe'});const stored=JSON.parse(await new Response(submitted.stdout).text());expect(await submitted.exited).toBe(0);expect(stored.status).toBe('changes-requested');expect(stored.reviewedSource).toEqual(p.reviewedSource);expect(stored.updatedAt).toBeString();}finally{await rm(sessionFile(p),{force:true});await rm(root,{recursive:true,force:true});}
 });
+
+test('selected correction keeps exact session bytes and pending made feedback cannot save', async () => {
+  const root=await mkdtemp(join(tmpdir(),'review-correction-http-'));
+  const stateDir=join(root,'state');
+  let server: Awaited<ReturnType<typeof startServer>> | undefined;
+  try {
+    await writeFile(join(root,'review.json'),JSON.stringify({schema:'rig-review/1',id:'correction',title:'Correction',revision:'one'}));
+    const p=await loadReview(root);
+    server=await startServer(p,{port:0,stateDir,capability:'b'.repeat(64)});
+    const origin='http://127.0.0.1:'+server.port;
+    const session=freshSession(p);
+    const selector={stage:'rig-review',kind:'rig',version:1};
+    const words='Keep these exact words.  \r\n';
+    session.feedback=[{id:'request',summary:words,frameStart:0,frameEnd:0,target:{kind:'rig',name:'correction'},category:'quality',context:{correction:{path:'described',selector}}}];
+    const save=()=>fetch(origin+'/api/session',{method:'PUT',headers:{Origin:origin,'Content-Type':'application/json','X-Review-Capability':'b'.repeat(64)},body:JSON.stringify(session)});
+    const response=await save();
+    expect(response.status).toBe(200);
+    const bytes=await Bun.file(sessionFile(p,stateDir)).text();
+    const child=Bun.spawn([process.execPath,'-e',"import {main} from './src/cli.ts'; await main(process.argv.slice(1),{stateDir:process.env.TEST_STATE});",'--','feedback',root,'--correction','request','--format','json'],{env:{...process.env,TEST_STATE:stateDir},stdout:'pipe',stderr:'pipe'});
+    const [stdout,stderr,exit]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);
+    expect({stdout,stderr,exit}).toEqual({stdout:bytes,stderr:'',exit:0});
+    expect(JSON.parse(stdout).feedback[0].summary).toBe(words);
+    session.feedback[0]!.context={correction:{path:'made',selector}};
+    const refused=await save();
+    expect(refused.status).toBe(400);
+    expect(await refused.text()).toContain('CORRECTION_APPLY_PENDING');
+    expect(await Bun.file(sessionFile(p,stateDir)).text()).toBe(bytes);
+  } finally {
+    server?.stop(true);
+    await rm(root,{recursive:true,force:true});
+  }
+});

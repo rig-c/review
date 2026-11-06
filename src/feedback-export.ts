@@ -244,3 +244,17 @@ export function formatFeedbackIssues(input: ParsedFeedbackSession): string {
   }
   return lines.join('\n') + '\n';
 }
+
+/** Selected handoff uses the existing issue export surface with exact JSON-escaped words and evidence. */
+export function formatCorrectionIssue(
+  correction: {kind:string;itemId:string;stage:string;on:readonly string[];verbatim:string;source:unknown;operation?:string;patchBytes?:string;target?:unknown;part?:string;imageHash?:string;comment?:import('./parts-comment.ts').PartsComment},
+  context?:Json,
+): string {
+  const state=correction.kind==='described'?'Unresolved request':
+    correction.kind==='unsupported'?'CORRECTION_OPERATION_UNSUPPORTED — '+correction.operation:'Checked scratch Apply — create result pending';
+  const comment=correction.comment;
+  const evidence=comment?{...comment,crop:{...comment.crop,png:undefined}}:undefined;
+  return ['## Correction handoff','',state,'',
+    jsonBlock({itemId:correction.itemId,stage:correction.stage,selectorArgs:correction.on,
+      source:correction.source,verbatim:correction.verbatim,target:correction.target,part:correction.part,imageHash:correction.imageHash,comment:evidence,...(correction.patchBytes===undefined?{}:{patchBytes:correction.patchBytes}),context})].join('\n');
+}

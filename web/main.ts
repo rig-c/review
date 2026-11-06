@@ -722,12 +722,51 @@ function renderProposals(): void {
   for (const feedback of session.feedback) {
     const item = document.createElement('div'); item.className = 'proposal-item'; const title = document.createElement('strong'); title.className = 'feedback-heading'; title.textContent = `${feedback.category} · ${feedback.target.kind}:${feedback.target.name} · ${feedbackTimingLabel(feedback)}`; const description = document.createElement('span'); description.className = 'feedback-summary'; description.textContent = feedback.summary;
     item.append(title, description);
+    const context = feedback.context as Record<string, Json> | undefined;
+    const correction = context?.correction as {path?: string;selector?:{kind?:string}} | undefined;
+    if (correction) {
+      const label = document.createElement('p');
+      const schema=(context?.applied as {schema?:string}|undefined)?.schema;
+      const unsupported=correction.selector?.kind==='post'||schema!=='rig-review-applied/2';
+      setSourceText(label, correction.path === 'described' ? 'Unresolved correction request' :
+        unsupported ? 'Unsupported correction operation' : 'Made correction evidence');
+      item.append(label);
+    }
+    if ((context?.comment as {schema?: string} | undefined)?.schema === 'rig-review-comment/1' &&
+        !submittedBaseline?.feedback.some(row => row.id === feedback.id)) {
+      const describe = document.createElement('button');
+      describe.type = 'button';
+      setSourceText(describe, 'Use as described correction');
+      describe.onclick = () => {
+        try { feedback.context = { ...context, correction: correctionSelection('described') }; markDirty(); renderProposals(); }
+        catch (error) { message(errorText(error), true); }
+      };
+      item.append(describe);
+    }
     for (const warning of session.feedbackWarnings.filter(value => value.id === feedback.id)) { const note = document.createElement('p'); note.className = 'hint'; note.textContent = `Validation warning · ${warning.error}`; item.append(note); }
     const details = document.createElement('details'), summary = document.createElement('summary'), source = document.createElement('pre'); summary.textContent = 'Saved feedback and inspection context'; source.className = 'feedback-json'; source.textContent = JSON.stringify(feedback, null, 2); details.append(summary, source);
     const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Delete'; remove.onclick = () => { session.feedback = session.feedback.filter(item => item.id !== feedback.id); session.feedbackWarnings = session.feedbackWarnings.filter(warning => warning.id !== feedback.id); markDirty(); renderProposals(); };
     item.append(details);if((feedback.context as any)?.comment?.schema!=='rig-review-comment/1'||!submittedBaseline?.feedback.some(f=>f.id===feedback.id))item.append(remove); area.append(item);
   }
   updateSavedState();
+}
+
+function syncCorrectionStage(): void {
+  el('correction-post-fields').hidden = select('correction-stage').value !== 'direction-review';
+}
+
+function correctionSelection(path: 'described' | 'made'): Json {
+  const stage = select('correction-stage').value, identity = input('correction-selector').value;
+  if (stage === 'parts-review' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(identity)) {
+    return { path, selector: { stage, kind: 'draft', id: identity } };
+  }
+  const version = Number(identity);
+  if (/^[1-9][0-9]*$/.test(identity) && Number.isSafeInteger(version)) {
+    if (stage === 'rig-review') return { path, selector: { stage, kind: 'rig', version } };
+    const modelFile = input('correction-model').value;
+    if (stage === 'direction-review' && modelFile) return { path, selector: { stage, kind: 'post', version, modelFile } };
+  }
+  throw new Error(tr('Choose the explicit Create source identity.'));
 }
 
 function propose(tool: string): void {
@@ -800,7 +839,7 @@ function bind(): void {
   button('chest-export').onclick = () => { void exportChest(); };
   for (const event of ['input', 'change']) el('chest-regions').addEventListener(event, renderChest);
   // A discarded local draft restores the form after its button's own handler; re-read the tool then.
-  for (const id of ['draft-recovery', 'review-draft-recovery']) el(id).addEventListener('click', () => { renderChest(); restoreEnvironment(); physicsPanel?.restore(); bonesPanel?.restore(); cutsPanel?.restore(); clothPanel?.restore(); idlePanel?.restore(); rigFieldsPanel?.restore(); });
+  for (const id of ['draft-recovery', 'review-draft-recovery']) el(id).addEventListener('click', () => { renderChest(); restoreEnvironment(); physicsPanel?.restore(); bonesPanel?.restore(); cutsPanel?.restore(); clothPanel?.restore(); idlePanel?.restore(); rigFieldsPanel?.restore(); syncCorrectionStage(); });
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')) item.onclick = () => {setView(item.dataset.view as typeof view);const menu=document.getElementById('view-menu') as HTMLDetailsElement|null;if(menu)menu.open=false;};
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
@@ -831,18 +870,34 @@ function bind(): void {
   el<HTMLTextAreaElement>('checkpoint-note').oninput = () => { const entry = checkpointEntry(); if (entry) { entry.note = el<HTMLTextAreaElement>('checkpoint-note').value; markDirty(); } };
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="outcome"]')) radio.onchange = () => { const entry = checkpointEntry(); if (entry) { entry.outcome = radio.value as typeof entry.outcome; markDirty(); renderCheckpoints(); } };
   select('feedback-target-kind').onchange = () => renderFeedbackTargets();
-  button('add-proposal').onclick = () => {
+  button('add-proposal').onclick = async () => {
     const start = input('feedback-start').value.trim(), end = input('feedback-end').value.trim(), frameStart = Number(start), frameEnd = Number(end);
-    const name = input('feedback-target-name').value.trim(), summary = input('feedback-summary').value.trim();
+    const name = input('feedback-target-name').value.trim();
+    const path = select('correction-path').value, capturedApply = appliedOnStage;
+    let summary = input('feedback-summary').value.trim(), correction: ReturnType<typeof correctionSelection> | undefined;
+    if (path === 'described' || path === 'made') {
+      try {
+        correction = correctionSelection(path);
+        summary = input('feedback-summary').value;
+        const file = input('correction-words').files?.[0];
+        if (file) {
+          if (file.size > 4000) throw new Error(tr('Correction text must be valid UTF-8 and at most 1,000 characters.'));
+          summary = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(await file.arrayBuffer());
+        }
+        if (!summary.trim() || summary.length > 1000) throw new Error(tr('Correction text must be valid UTF-8 and at most 1,000 characters.'));
+        if (path === 'made' && (!capturedApply || capturedApply !== appliedOnStage)) throw new Error(tr('CORRECTION_APPLY_PENDING: Apply and check the correction first.'));
+      } catch (error) { message(errorText(error), true); return; }
+    }
     if (!start || !end || !Number.isSafeInteger(frameStart) || !Number.isSafeInteger(frameEnd) || frameStart < 0 || frameEnd < frameStart) { message('Enter nonnegative integer start and end frames, with the end at or after the start.', true); return; }
     if (!['bone', 'slot', 'rig'].includes(select('feedback-target-kind').value) || !['defect', 'quality'].includes(select('feedback-category').value)) { message('Select a target type and defect or quality category.', true); return; }
-    if (!name || !summary || /[\r\n]/.test(summary) || summary.length > 1000) { message('Enter the actual target name and a one-line summary of up to 1,000 characters.', true); return; }
+    if (!name || !summary || (!correction && /[\r\n]/.test(summary)) || summary.length > 1000) { message('Enter the actual target name and a one-line summary of up to 1,000 characters.', true); return; }
     const target: Feedback['target'] = { kind: select('feedback-target-kind').value as Feedback['target']['kind'], name };
     const selectedAnimation = feedbackAnimation();
     try { validateFeedbackSelection(data.feedbackCatalog, { frameStart, frameEnd, target, animation: selectedAnimation }); } catch (error) { message(errorText(error), true); return; }
     const box = assets?.stage ?? player?.bounds();
     const center = viewport.state.cameraCenter ?? (box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null);
     session.feedback.push({ id: crypto.randomUUID(), frameStart, frameEnd, target, category: select('feedback-category').value as Feedback['category'], summary, context: {...(turnPad?{turn:JSON.parse(JSON.stringify(turnPad.snapshot())) as Json}:{}),part:parts?.feedback()??null,
+      ...(correction ? { correction } : {}),
       interval: { frameStart, frameEnd, inclusive: true },
       checkpoint: checkpoint?.id ?? null, animation: selectedAnimation, time, frame: frameAtTime(activeFrameClock(), time),
       reference: select('reference-select').value || null, person: selectedPerson || null,
@@ -861,7 +916,7 @@ function bind(): void {
       requirements: (requirementsPanel?.context() ?? null) as unknown as Json,
       reportEvent: selectedReportEvent ? { id: selectedReportEvent.id, field: selectedReportEvent.field, source: { ...selectedReportEvent.source }, frames: selectedReportEvent.frames ? [...selectedReportEvent.frames] : null, exactTime: eventSeekTime(selectedReportEvent, selectedReportTime), targets: selectedReportEvent.targets.map(target => ({ ...target })) } : null,
     } });
-    input('feedback-summary').value = ''; markDirty(); renderProposals(); message('Added structured feedback. Submit the review to save it.');
+    input('feedback-summary').value = ''; input('correction-words').value = ''; markDirty(); renderProposals(); message('Added structured feedback. Submit the review to save it.');
   };
   button('save').onclick = async () => {
     if(readOnly){message(readOnly,true);return;}
@@ -972,10 +1027,11 @@ async function start(): Promise<void> {
 function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)workspace?.revealInspector();const selector=document.querySelector<HTMLButtonElement>(`[data-inspector="${name}"]`);if(selector&&selector.getAttribute('aria-pressed')!=='true'&&selector.getAttribute('aria-selected')!=='true')selector.click();}
 function bindInspector():void {bindInspectorTabs(()=>{workspace?.afterTab();fitCamera();},()=>workspace?.beforeTab());}
 /** Opening the review pauses playback, as selecting Feedback did. Its inputs stay in the document whether or not it is open, so the draft keeps them. */
-function openReview():void {document.querySelector<HTMLButtonElement>('[data-review-stage="3"]')?.click();const dialog=el<HTMLDialogElement>('review-dialog');for(const drawer of document.querySelectorAll<HTMLDialogElement>('dialog.workspace-drawer[open]'))drawer.close();pause();if(!dialog.open)dialog.showModal();}
+function openReview():void {document.querySelector<HTMLButtonElement>('[data-review-stage="3"]')?.click();const dialog=el<HTMLDialogElement>('review-dialog');for(const drawer of document.querySelectorAll<HTMLDialogElement>('dialog.workspace-drawer[open]'))drawer.close();pause();syncCorrectionStage();if(!dialog.open)dialog.showModal();}
 function bindReviewDialog():void {
  const dialog=el<HTMLDialogElement>('review-dialog');
  button('write-review').onclick=openReview;button('review-dialog-close').onclick=()=>dialog.close();
+ select('correction-stage').onchange=syncCorrectionStage;
  // Escape closes the native modal; every close returns focus to the button that opens it.
  dialog.addEventListener('close',()=>{button('write-review').setAttribute('aria-expanded','false');button('write-review').focus();});
  dialog.addEventListener('toggle',()=>{if(dialog.open)button('write-review').setAttribute('aria-expanded','true');});

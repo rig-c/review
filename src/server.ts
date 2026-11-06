@@ -1,3 +1,4 @@
+import {appliedValue,parseCorrection,projectSessionCorrection} from './correction-handoff.ts';
 import {stagePartsRoutes} from './stage-parts.ts';
 import {createControlServer,type ControlIdentity} from './control-server.ts';
 import { readFile } from 'node:fs/promises';
@@ -75,8 +76,19 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       if(req.method==='PUT'&&url.pathname==='/api/session'){
         if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
         const input=await bodyJson(req);await unchanged();
-        if(input&&typeof input==='object'&&Array.isArray((input as any).feedback))for(const feedback of (input as any).feedback)await rebuilds.validateApplied(feedback?.context?.applied);
-        return json(await saveSession(p,input,options.stateDir));
+        return json(await saveSession(p,input,options.stateDir,async(session,sessionBytes)=>{
+          const source={id:p.manifest.id,revision:p.manifest.revision,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource};
+          for(const feedback of session.feedback){
+            const correction=parseCorrection((feedback.context as any)?.correction);
+            const applied=appliedValue(feedback);
+            await rebuilds.validateApplied(applied);
+            if(correction){
+              const settled=correction.path==='made'&&correction.selector.kind!=='post'?await rebuilds.correctionEvidence(applied):undefined;
+              projectSessionCorrection({...correction,source,session,sessionBytes,itemId:feedback.id,settled});
+            }
+          }
+          await unchanged();
+        }));
       }
     // Apply · Rebuild (#99 regions, #102 {patch}): typed data, never a path; the server runs the installed producer into scratch.
     if(req.method==='POST'&&url.pathname==='/api/rebuild'){
