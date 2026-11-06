@@ -54,6 +54,11 @@ const interviewDom = `(()=>{
   };
 })()`;
 type PicksExchange = {request:string; response?:{status:number; body:string}; error?:string};
+type FailedSubmitExchange = {
+  method:'PUT'; request:string|null; settled:boolean; error?:string;
+  response?:{status:number; body:string|null; readError?:string};
+};
+type FailedSubmitSnapshot = {exchanges:FailedSubmitExchange[]; message:string|null; saveDisabled:boolean|null};
 const actionGuard = `function action(element, selector) {
   const refuse = reason => { throw Error('FOUR_STAGE_ACTION_TARGET: ' + selector + ' (' + reason + ')'); };
   if (!element) refuse('missing');
@@ -545,24 +550,65 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       assert.deepEqual(failed.record, originalFailed);
       assert.equal(failed.record.check.pass, false);
       assert.equal(failed.check.BREATH_VISIBLE.torso_heat_mean, 3.62);
-      // Observe the actual failed UI request without changing its URL, body or response.
-      await evaluate(`(()=>{
-        const real=window.fetch.bind(window);
-        window.fetch=(input,init)=>{
-          if(init?.method==='PUT'&&String(input).includes('/api/session'))window.__gateFailedRequest=init.body;
-          return real(input,init);
+      // Keep the actual PUT and response independently of the named refusal gate.
+      await evaluate(String.raw`(()=>{
+        const real=window.fetch, exchanges=[];
+        window.__gateFailedExchanges=exchanges;
+        window.fetch=function(...args){
+          const [input,init]=args;
+          if(init?.method!=='PUT'||typeof input!=='string'||!/\/api\/session(?:[?#]|$)/.test(input))return real.apply(this,args);
+          const exchange={method:'PUT',request:typeof init.body==='string'?init.body:null,settled:false};
+          exchanges.push(exchange);
+          const fail=error=>{exchange.error=String(error);exchange.settled=true;};
+          let result;
+          try { result=real.apply(this,args); } catch(error) { fail(error);throw error; }
+          void result.then(async response=>{
+            exchange.response={status:response.status,body:null};
+            try { exchange.response.body=await response.clone().text(); }
+            catch(error) { exchange.response.readError=String(error); }
+            finally { exchange.settled=true; }
+          },fail);
+          return result;
         };
+        window.__gateRestoreFailedFetch=()=>{window.fetch=real;};
       })()`);
-      await correctionForm('rig-review', 'made', 'Keep the measured failed correction open.');
-      await until('document.querySelectorAll(".proposal-item").length===1', 'failed-item');
-      await click(page, '#save');
-      const message = await wait(
-        () => evaluate<string>('document.getElementById("review-message").textContent'),
-        value => /EDIT_SUBMIT_UNCHECKED|CORRECTION_CHECK_FAILED/.test(value), 'failed-submit');
-      const refused = await evaluate<string>('window.__gateFailedRequest');
+      const readFailedSubmit = () => evaluate<FailedSubmitSnapshot>(`({
+        exchanges:window.__gateFailedExchanges??[],
+        message:document.getElementById('review-message')?.textContent??null,
+        saveDisabled:document.getElementById('save')?.disabled??null
+      })`);
+      let capture: FailedSubmitSnapshot | null = null;
+      let clickAttempted = false;
+      try {
+        await correctionForm('rig-review', 'made', 'Keep the measured failed correction open.');
+        await until('document.querySelectorAll(".proposal-item").length===1', 'failed-item');
+        clickAttempted = true;
+        await click(page, '#save');
+      } finally {
+        try {
+          if (clickAttempted) await wait(readFailedSubmit, value => value.saveDisabled === false &&
+            value.exchanges.length > 0 && value.exchanges.every(exchange => exchange.settled), 'failed-submit-transport');
+        } finally {
+          try {
+            let diagnostic: string | null = null;
+            try { capture = await readFailedSubmit(); }
+            catch (error) { diagnostic = 'FAILED_SUBMIT_CAPTURE_UNAVAILABLE: ' + String(error); }
+            if (capture?.exchanges.length === 0) diagnostic = 'FAILED_SUBMIT_NO_OBSERVED_PUT';
+            await put('failed-check-submit-wire', {diagnostic, ...capture});
+            const request = capture?.exchanges[0]?.request;
+            if (typeof request === 'string') await write('failed-check-refused-request.json', request);
+            await put('failed-check-submit-message', capture?.message ?? null);
+          } finally {
+            await evaluate('window.__gateRestoreFailedFetch?.()');
+          }
+        }
+      }
+      assert.equal(capture?.exchanges.length, 1, 'Expected exactly one actual refused Review PUT');
+      const exchange = capture!.exchanges[0]!;
+      assert.equal(typeof exchange.response?.body, 'string', 'Missing actual refused Review response body');
+      assert.match(capture?.message ?? '', /EDIT_SUBMIT_UNCHECKED|CORRECTION_CHECK_FAILED/, 'failed-submit');
+      const refused = exchange.request;
       assert(refused, 'Missing actual refused Review request');
-      await write('failed-check-refused-request.json', refused);
-      await put('failed-check-submit-message', message);
       await assert.rejects(readFile(sessionFile(inspected.p, failedState)), {code:'ENOENT'});
       const item = JSON.parse(refused).feedback[0];
       assert.deepEqual(item.context.applied, originalFailed);
