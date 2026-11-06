@@ -4,6 +4,8 @@ import { APPLIED_ANIMATION_SCHEMA, APPLIED_DELTA_SCHEMA, APPLIED_PATCH_SCHEMA, A
 import { patchSha256, patchText } from './config-patch.ts';
 import type { PartsVerdict } from './parts-view.ts';
 import type { Feedback, ReviewSession } from './session.ts';
+import type { DirectionInspection } from './direction-inspection.ts';
+import { hasStageComment, parseStageComment } from './stage-comment.ts';
 
 type Selector =
   | { stage: 'parts-review'; kind: 'parts'; inventory: string }
@@ -34,6 +36,7 @@ type SessionInput = {
   source: SessionSource;
   selector: SessionSelector;
   itemId: string;
+  direction?: DirectionInspection;
 } & ({ path: 'described' } | { path: 'made'; settled?: SettledEvidence });
 
 const hash = (value: string) => /^[a-f0-9]{64}$/.test(value);
@@ -116,7 +119,33 @@ export function projectSessionCorrection(input: SessionInput) {
   if (matches.length !== 1 || !item) return refuse('CORRECTION_ITEM_INVALID', 'expected one saved feedback item');
   const verbatim = itemWords(itemId, item.summary);
   const common = { itemId, verbatim, stage: selector.stage, on, source, target: item.target };
-  if (input.path === 'described') return { ...common, kind: 'described' as const, outcome: null };
+  if (input.path === 'described') {
+    const direction = input.direction?.file;
+    if (selector.kind !== 'post' || !direction) return { ...common, kind: 'described' as const, outcome: null };
+    const model = source.reviewedSource.rig;
+    if (!model || selector.modelFile !== model.path || appliedValue(item) != null) {
+      return refuse('CORRECTION_DIRECTION_SOURCE', 'select the inspected compiled model and its authored direction');
+    }
+    const context = item.context as Record<string, unknown> | undefined;
+    const comment = hasStageComment(context?.comment) ? parseStageComment(context?.comment) : null;
+    const createSource = JSON.stringify({
+      source, post: selector.version, model, direction,
+      animation: comment ? comment.animation : context?.animation,
+      time: comment ? comment.time : context?.time,
+      sourceTime: context?.sourceTime,
+      frame: comment ? comment.frame : context?.frame,
+      interval: comment?.frame === null ? null : { frameStart: item.frameStart, frameEnd: item.frameEnd, inclusive: true },
+      target: item.target,
+      camera: comment ? comment.camera : context?.camera,
+      region: comment ? { viewport: comment.viewport, screen: comment.screen, world: comment.world } : null,
+      reference: comment ? { id: comment.referenceId, sha256: comment.referenceHash } : context?.reference,
+      view: context?.view,
+    });
+    if (Buffer.byteLength(createSource) > 32 * 1024) {
+      return refuse('CORRECTION_DIRECTION_CONTEXT_SIZE', 'direction correction source exceeds 32 KiB');
+    }
+    return { ...common, kind: 'described' as const, outcome: null, createSource };
+  }
 
   const value = appliedValue(item);
   if (value == null) return refuse('CORRECTION_APPLY_PENDING', 'no settled Apply in the saved item');

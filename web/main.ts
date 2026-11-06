@@ -756,7 +756,11 @@ function renderProposals(): void {
       const label = document.createElement('p');
       const schema=(context?.applied as {schema?:string}|undefined)?.schema;
       const unsupported=correction.selector?.kind==='post'||schema!=='rig-review-applied/2';
-      setSourceText(label, correction.path === 'described' ? 'Unresolved correction request' :
+      setSourceText(label, correction.path === 'described'
+        ? correction.selector?.kind === 'post' && data.direction && !context?.applied
+          ? 'Direction request · bound to inspected model and direction'
+          : 'Unresolved correction request'
+        :
         unsupported ? 'Unsupported correction operation' : 'Made correction evidence');
       item.append(label);
     }
@@ -792,7 +796,12 @@ function correctionSelection(path: 'described' | 'made'): Json {
   if (/^[1-9][0-9]*$/.test(identity) && Number.isSafeInteger(version)) {
     if (stage === 'rig-review') return { path, selector: { stage, kind: 'rig', version } };
     const modelFile = input('correction-model').value;
-    if (stage === 'direction-review' && modelFile) return { path, selector: { stage, kind: 'post', version, modelFile } };
+    if (stage === 'direction-review') {
+      if (path === 'described' && data.direction && modelFile !== data.reviewedSource.rig?.path) {
+        throw new Error(tr('Use the inspected compiled model path for an authored direction request.'));
+      }
+      if (modelFile) return { path, selector: { stage, kind: 'post', version, modelFile } };
+    }
   }
   throw new Error(tr('Choose the explicit Create source identity.'));
 }

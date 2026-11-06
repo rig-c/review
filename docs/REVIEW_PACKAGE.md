@@ -904,6 +904,38 @@ explicit handoff data. The package revision and inspector navigation do not
 supply it. The named model path is data for Create and is never opened by
 Review. Only explicitly marked correction rows can carry multiline text.
 
+For a described request on a package with authored direction, use the
+inspected compiled model's relative path as `modelFile` and explicitly select
+the Create post number. Review checks the model path against the package and
+refuses a described direction request captured on a scratch Apply. A promoted
+stage comment keeps its original camera, inspection time and marked screen and
+world regions. For unmarked feedback the export carries the saved inspection
+view and a null marked region.
+
+Use `rig-review feedback <package> --correction <item-id> --format issue`.
+The issue JSON carries the exact human `verbatim`, `selectorArgs` and a
+`createSource` string (JSON, at most 32 KiB) with the post number, inspected
+model and direction path/hash pairs, package revision and source hash, and
+inspection context. To import into Create:
+
+1. With Create at [76a96dc](https://github.com/rig-c/create/commit/76a96dc528e07804a4df5e6c6e99ec5fc66b751c),
+   run `rig-create direction check <post> <project> --json`. Compare its
+   `post`, `direction` and `document.rig.model` to the matching fields in
+   the decoded `createSource`. Stop on any mismatch, including a different
+   post that uses the same compiled model.
+2. Write the decoded `verbatim` to a UTF-8 file without trimming or appending
+   a newline. Run `rig-create correction record <project> --id <item-id>
+   --path described --stage direction-review --version <post>
+   --model-file <model-path> --by <reviewer> --verbatim-file <words>
+   --source <createSource> --json`. Pass the decoded `createSource` string
+   as one argument. The writer returns `rig-create/correction@2` with
+   `on.model` and `on.direction`, and an open description (`outcome: null`).
+   Create retains `source` as opaque text. Review runs no Create command.
+
+Packages without authored direction continue to use their explicit legacy
+selector. Direction patch Apply is unavailable. Existing supported rig and
+draft Apply records keep their producer and result evidence.
+
 A supported made item must match the server-owned settled Apply seal and
 retained scratch model and pages when the item is added or changed and on
 selected export. Older unchanged items remain saved as historical evidence

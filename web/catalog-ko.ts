@@ -3252,6 +3252,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Declared post model path": "선언된 후반 작업 모델 경로",
   "Exact correction text (optional UTF-8 file)": "수정 원문 (UTF-8 파일 선택)",
   "Choose the explicit Create source identity.": "Create의 소스 식별자를 지정해 주세요.",
+  "Direction request · bound to inspected model and direction": "연출 수정 요청 · 검사한 모델과 연출 문서에 연결됨",
+  "Use the inspected compiled model path for an authored direction request.": "작성된 연출에 대한 수정 요청에는 검사한 컴파일 모델 경로를 사용하세요.",
   "Unresolved correction request": "미해결 수정 요청",
   "Made correction evidence": "직접 적용한 수정의 근거",
   "Use as described correction": "이 댓글을 수정 요청으로 사용",

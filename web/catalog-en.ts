@@ -3252,6 +3252,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Declared post model path": "Declared post model path",
   "Exact correction text (optional UTF-8 file)": "Exact correction text (optional UTF-8 file)",
   "Choose the explicit Create source identity.": "Choose the explicit Create source identity.",
+  "Direction request · bound to inspected model and direction": "Direction request · bound to inspected model and direction",
+  "Use the inspected compiled model path for an authored direction request.": "Use the inspected compiled model path for an authored direction request.",
   "Unresolved correction request": "Unresolved correction request",
   "Made correction evidence": "Made correction evidence",
   "Use as described correction": "Use as described correction",
