@@ -417,7 +417,13 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 :root[data-inspection-stage="2"] #mode-build-picker,:root[data-inspection-stage="4"] #mode-build-picker{display:none!important}
 #direction-panel{flex:none;max-height:40%;overflow:auto;padding:.5rem .75rem;overflow-wrap:anywhere}
 #direction-panel ul{margin:.4rem 0;padding-inline-start:1.4rem}
-#direction-panel pre{max-height:12rem;overflow:auto}
+#direction-panel pre{white-space:pre-wrap}
+#direction-panel[open]:not([hidden]):has(#direction-authored-keys[open]:not([hidden])){
+  flex:1;min-height:0;max-height:none
+}
+#direction-panel[open]:not([hidden]):has(#direction-authored-keys[open]:not([hidden])) + #stage-layout{
+  display:none
+}
 .review-stage-panel.with-interview {
   display: grid;
   grid-template: min-content minmax(240px, 1fr) / minmax(0, 1fr) minmax(0, 1fr);
