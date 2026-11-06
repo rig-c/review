@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.4](https://github.com/rig-c/review/compare/v1.16.3...v1.16.4) (2026-11-06)
+
+
+### Bug Fixes
+
+* preserve direct handoff for embedded stages ([#456](https://github.com/rig-c/review/issues/456)) ([2020979](https://github.com/rig-c/review/commit/2020979c6ea72bd99dc1a538a28e253ceeaba18b))
+
 ## [1.16.3](https://github.com/rig-c/review/compare/v1.16.2...v1.16.3) (2026-11-06)
 
 
