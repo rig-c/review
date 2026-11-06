@@ -15,7 +15,7 @@ import { inventory, materializeFourStages } from './helpers/four-stage-fixture.t
 import { walkCheckpoint, WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
 import { walkDialogs } from './helpers/walk-dialog.ts';
 import { idleAmpSelector } from './helpers/walk-locale.ts';
-import { fullyVisible } from './helpers/walk-visibility.ts';
+import { fullyVisible, visibilityGeometry } from './helpers/walk-visibility.ts';
 import { freshWalkReopen } from './helpers/walk-reopen.ts';
 import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
 
@@ -674,7 +674,13 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
       await shot(name);
       if (failed) {
         mark(name + '.pending-op-scroll');
-        await evaluate(`document.querySelector(${JSON.stringify(opSelector)}).scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`);
+        const geometry = await evaluate(`(async()=>{
+          const op=document.querySelector(${JSON.stringify(opSelector)});
+          op.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+          return (${visibilityGeometry.toString()})(document.querySelector(${JSON.stringify(opSelector)}));
+        })()`);
+        await put(label(name + '-pending-op-geometry'), geometry);
         const scrolled = await wait(readCheckDom, value => value?.opVisible === true, label(name + '-pending-op'));
         assert.equal(scrolled?.op, 'Check failed');
         assert.equal(scrolled?.applied, false);
