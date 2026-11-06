@@ -14,6 +14,8 @@ import {CONFIG_PATCH_SCHEMA,type ConfigPatch} from '../src/config-patch.ts';
  * hash and the whole scratch tree after each Apply against the record taken from the runners before the refactor
  * (`tests/fixtures/runner-tail.json`). Wall clocks are the only field normalized (a number becomes "ms").
  * #367 adds checked mesh evidence; it is asserted separately while every historical field/file stays exact.
+ * #369 adds `check.source` to direct checks in the response and stored result. The replay asserts it before
+ * comparing the rest to the historical record.
  * `RUNNER_TAIL_RECORD=1` rewrites the record (not used for evidence-only extensions).
  */
 const RECORD=join(import.meta.dir,'fixtures/runner-tail.json');
@@ -105,8 +107,8 @@ async function replay():Promise<Step[]>{
  }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
 }
 
-const meshCheck={schema:'rig-review-check-summary/1',pass:true,exitCode:0,line:'check: PASS; 1 of 1 bar(s) measured',bars:{TEXTURE_STRETCH:'PASS'},gate:true};
-/** Only explicit #367 additions are projected away after independent assertions; unknown drift still fails the old record. */
+const meshCheck={schema:'rig-review-check-summary/1',pass:true,exitCode:0,line:'check: PASS; 1 of 1 bar(s) measured',bars:{TEXTURE_STRETCH:'PASS'},gate:true,source:'check'};
+/** Only explicit evidence additions are projected away after independent assertions; unknown drift still fails the old record. */
 function historicalResponse(current:unknown,old:unknown,index:number):unknown {
  const value=structuredClone(current) as Record<string,any>,before=old as Record<string,any>;
  const extra=index===0?['check','files','remesh','stageInputHash']:index===2?['stageInputHash']:index===3?['check']:[];
@@ -122,6 +124,10 @@ function historicalResponse(current:unknown,old:unknown,index:number):unknown {
    'review: remesh.json carries no check line or block statuses (@rig-c/parts before 1.49.0), so check runs on the revision',
    'review: @rig-c/parts 1.42.0 check --rig revision --out check --parts <handoff parts>',meshCheck.line]);
   value.lines=before.lines;
+ }
+ if(index===1||index===2){
+  expect(value.check).toEqual({...before.check,source:'check'});
+  delete value.check.source;
  }
  if(index===0||index===2)expect(value.stageInputHash).toMatch(/^[a-f0-9]{64}$/);
  if(index===3)expect(value.check).toBeNull(); // A producer refusal is never given a synthetic PASS.

@@ -117,7 +117,7 @@ test('bar 1 + bar 3: a one-value patch rebuilds the whole rig into scratch, rig.
   expect(patch).toEqual(damping(sha(await readFile(join(pkg,'rig/config.json')))));
   const started=await post(base,{patch});expect(started.status).toBe(202);const job=await settle(base,await started.json());
   expect(job).toMatchObject({kind:'patch',status:'built',reused:false,exitCode:0,producerLine:expect.stringContaining('rig-parts rig: wrote'),request:{patch,patchSha256:patchSha256(patch)},diff:{count:1,paths:['/constraints/0/damping']}});
-  expect(job.check).toEqual({schema:'rig-review-check-summary/1',pass:true,exitCode:0,line:'check: PASS; 1 of 1 bar(s) measured',bars:{TEXTURE_STRETCH:'PASS',CLOTH_SETTLES:'WARN'},gate:true});
+  expect(job.check).toEqual({schema:'rig-review-check-summary/1',pass:true,exitCode:0,line:'check: PASS; 1 of 1 bar(s) measured',bars:{TEXTURE_STRETCH:'PASS',CLOTH_SETTLES:'WARN'},gate:true,source:'check'});
   expect(job.wallMs.op).toBeNumber();expect(job.wallMs.compile).toBeNumber();expect(job.wallMs.check).toBeNumber();
   // The scratch config: the patched value, and the config-relative file made absolute so it resolves from scratch.
   const dir=join(state,'rebuild',p.sourceHash,job.id),scratch=JSON.parse(await readFile(join(dir,'config.json'),'utf8'));
