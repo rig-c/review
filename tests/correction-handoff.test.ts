@@ -4,6 +4,7 @@ import { projectPartsDescription, projectSessionCorrection } from '../src/correc
 import type { AppliedAnimation, AppliedPatch } from '../src/applied-context.ts';
 import type { PartsVerdict } from '../src/parts-view.ts';
 import type { Feedback, ReviewSession } from '../src/session.ts';
+import { loadReview } from '../src/manifest.ts';
 
 const hash = (digit: string) => digit.repeat(64);
 const source = {
@@ -50,6 +51,24 @@ test('projects one exact saved request and keeps its outcome open', () => {
   expect(() => projectSessionCorrection({ ...input, path: 'described', itemId: 'missing' })).toThrow('CORRECTION_ITEM_INVALID');
   expect(() => projectSessionCorrection({ ...input, path: 'described', source: { ...source, revision: 'stale' } })).toThrow('CORRECTION_SOURCE_STALE');
   expect(() => projectSessionCorrection({ ...input, path: 'described', selector: { ...selector, version: 0 } })).toThrow('CORRECTION_SELECTOR_INVALID');
+});
+
+test('an authored direction request refuses feedback captured on a checked scratch Apply', async () => {
+  const pkg = await loadReview('tests/fixtures/direction-inspection');
+  const directionSource = {
+    id: pkg.manifest.id, revision: pkg.manifest.revision, sourceHash: pkg.sourceHash, reviewedSource: pkg.reviewedSource,
+  };
+  const request = (context: typeof applied | null) => {
+    const input = sessionInput(context);
+    const session = { ...input.session, ...directionSource };
+    return projectSessionCorrection({
+      ...input, source: directionSource, session, sessionBytes: Buffer.from(JSON.stringify(session)),
+      selector: { stage: 'direction-review', kind: 'post', version: 2, modelFile: pkg.manifest.model! },
+      direction: pkg.direction!, path: 'described',
+    });
+  };
+  expect(request(null)).toMatchObject({ kind: 'described', outcome: null });
+  expect(() => request(applied)).toThrow('CORRECTION_DIRECTION_SOURCE');
 });
 
 test('pre-rig verdict note retains verbatim CRLF and uses only a parts selector', () => {

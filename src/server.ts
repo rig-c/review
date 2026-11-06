@@ -87,8 +87,9 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
             const applied=appliedValue(feedback);
             await rebuilds.validateApplied(applied);
             if(correction){
+              if(correction.path==='described'&&isDeepStrictEqual(previousRows.get(feedback.id),feedback))continue;
               const settled=correction.path==='made'&&correction.selector.kind!=='post'?await rebuilds.correctionEvidence(applied):undefined;
-              projectSessionCorrection({...correction,source,session,sessionBytes,itemId:feedback.id,settled});
+              projectSessionCorrection({...correction,source,session,sessionBytes,itemId:feedback.id,settled,direction:p.direction});
             }
           }
           await unchanged();

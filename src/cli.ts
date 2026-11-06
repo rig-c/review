@@ -174,7 +174,7 @@ export async function main(args:string[],options:{stateDir?:string}={}){
     await assertReviewUnchanged(p);
     const rebuilds=createRebuilds(p,{stateDir,starts:[p.root,process.cwd()],unchanged:()=>assertReviewUnchanged(p),bones:p.feedbackCatalog.bones});
     const settled=correction.path==='made'&&correction.selector.kind!=='post'?await rebuilds.correctionEvidence(appliedValue(item)):undefined;
-    const projected=projectSessionCorrection({...correction,session,sessionBytes:bytes,source,itemId:item.id,settled});
+    const projected=projectSessionCorrection({...correction,session,sessionBytes:bytes,source,itemId:item.id,settled,direction:p.direction});
     if(projected.kind==='unsupported')console.error('CORRECTION_OPERATION_UNSUPPORTED: '+projected.operation);
     process.stdout.write(format==='json'?bytes:formatCorrectionIssue(projected,item.context)+'\n');
     return;
