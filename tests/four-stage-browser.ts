@@ -1,0 +1,706 @@
+/** #371 explicit Nova browser walk. Run with the pinned Create archive and producer bench. */
+import assert from 'node:assert/strict';
+import { cp, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { digest } from '../src/interview-project.ts';
+import { loadOpenPackage, openReview, type OpenInputs } from '../src/open.ts';
+import { sessionFile } from '../src/session.ts';
+import { resolveProducer } from '../src/producer.ts';
+import { patchId, rebuildDir } from '../src/rebuild.ts';
+import { patchText } from '../src/config-patch.ts';
+import { enCatalog } from '../web/catalog-en.ts';
+import { koCatalog } from '../web/catalog-ko.ts';
+import { inventory, materializeFourStages } from './helpers/four-stage-fixture.ts';
+import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
+
+const archive = process.env.REVIEW_371_CREATE_ARCHIVE;
+const outputDirectory = process.env.REVIEW_371_OUTPUT;
+const benchDirectory = process.env.REVIEW_371_CREATE_BENCH;
+assert(archive && outputDirectory && benchDirectory, 'Set REVIEW_371_CREATE_ARCHIVE, REVIEW_371_OUTPUT and REVIEW_371_CREATE_BENCH');
+const output = resolve(outputDirectory);
+await mkdir(output);
+const scratch = await mkdtemp(join(tmpdir(), 'review371-'));
+const fixture = await materializeFourStages(archive, join(scratch, 'upstream'));
+const bench = resolve(benchDirectory);
+for (const file of ['package.json', 'bun.lock']) {
+  assert.deepEqual(await readFile(join(bench, file)), await readFile(join(fixture.create, file)), 'CREATE_BENCH_LOCK');
+}
+const cli = resolve('src/cli.ts');
+const createCli = join(fixture.create, 'src/cli.ts');
+const {symlink} = await import('node:fs/promises');
+await symlink(join(bench, 'node_modules'), join(fixture.create, 'node_modules'), 'dir');
+const read = async (path: string) => JSON.parse(await readFile(path, 'utf8'));
+const json = (value: unknown) => JSON.stringify(value, null, 2) + '\n';
+const put = (name: string, value: unknown) => writeFile(join(output, name + '.json'), json(value));
+const write = (name: string, value: string | Uint8Array) => writeFile(join(output, name), value);
+const parts = await import(join(fixture.create, 'src/parts-verdict.ts'));
+const choices = await import(join(fixture.create, 'src/choices.ts'));
+const {collectItems} = await import(join(fixture.create, 'src/check.ts'));
+const chain = join(fixture.create, 'templates/example-chain');
+const frame = "document.querySelector('.review-stage-panel iframe:not([hidden]):not(.review-interview-frame)')";
+const interview = "document.querySelector('.review-interview-frame:not([hidden])')";
+type Language = 'en' | 'ko';
+
+async function command(name: string, args: string[], refusal?: RegExp) {
+  const child = Bun.spawn([process.execPath, ...args], {cwd: bench, stdout: 'pipe', stderr: 'pipe'});
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  await put(name + '-command', {args, exit, stderr});
+  await write(name + '.stdout', stdout);
+  if (refusal) {
+    assert.notEqual(exit, 0, name);
+    assert.match(stderr + stdout, refusal, name);
+  } else assert.equal(exit, 0, stderr);
+  return stdout;
+}
+const create = (name: string, args: string[], refusal?: RegExp) => command(name, [createCli, ...args], refusal);
+
+async function wait<T>(readValue: () => Promise<T>, ready: (value: T) => boolean, label: string, timeout = 15000) {
+  const deadline = performance.now() + timeout;
+  let value: T;
+  do {
+    value = await readValue();
+    if (ready(value)) return value;
+    await Bun.sleep(100);
+  } while (performance.now() < deadline);
+  await put(label + '-timeout', value);
+  throw new Error('FOUR_STAGE_TIMEOUT: ' + label);
+}
+
+async function click(page: InputCdpSession, selector: string, iframe?: string) {
+  const point = await page.evaluate<{x: number; y: number}>(`(()=>{
+    const f=${iframe ?? 'null'},d=f?f.contentDocument:document;
+    const button=d.querySelector(${JSON.stringify(selector)});
+    if(!button||button.disabled)throw Error('Missing enabled control: '+${JSON.stringify(selector)});
+    button.scrollIntoView({block:'nearest'});
+    const r=button.getBoundingClientRect(),b=f?.getBoundingClientRect();
+    const x=r.left+r.width/2,y=r.top+r.height/2;
+    if(!r.width||!r.height||!button.contains(d.elementFromPoint(x,y)))throw Error('Control is obscured');
+    return {x:x+(b?b.left+f.clientLeft:0),y:y+(b?b.top+f.clientTop:0)};
+  })()`);
+  await page.mouse('mouseMoved', point.x, point.y);
+  await page.mouse('mousePressed', point.x, point.y);
+  await page.mouse('mouseReleased', point.x, point.y);
+}
+
+function mutateOne(bytes: string, original: string, changed: string) {
+  assert.equal(Buffer.byteLength(original), Buffer.byteLength(changed));
+  const index = bytes.indexOf(original);
+  assert(index >= 0);
+  const after = bytes.slice(0, index) + changed + bytes.slice(index + original.length);
+  const a = Buffer.from(bytes), b = Buffer.from(after);
+  assert.equal(a.length, b.length);
+  assert.equal(a.reduce((count, byte, at) => count + Number(byte !== b[at]), 0), 1);
+  return after;
+}
+function flipHash(bytes: string, key: string, hash: string) {
+  const match = bytes.match(new RegExp('"' + key + '"\\s*:\\s*"' + hash + '"'));
+  assert(match);
+  return mutateOne(bytes, match[0], match[0].replace(hash, (hash.startsWith('0') ? '1' : '0') + hash.slice(1)));
+}
+
+async function runLanguage(lang: Language, page: InputCdpSession) {
+  const catalog = lang === 'en' ? enCatalog : koCatalog;
+  const label = (name: string) => lang + '-' + name;
+  const shot = async (name: string) => write(label(name) + '.png', await page.screenshot());
+  const evaluate = <T>(expression: string) => page.evaluate<T>(expression);
+  const until = (expression: string, name: string) => wait(() => evaluate<boolean>(expression), Boolean, label(name));
+  const choose = (stage: number) => click(page, `[data-review-stage="${stage}"]`);
+  const state = join(scratch, 'state-' + lang);
+  const scratchCopies: {index: number; root: string; changes: Set<string>}[] = [];
+  const open = (inputs: OpenInputs, stateDir = state) =>
+    openReview(inputs, {stateDir, cwd: bench, direct: true, idleMs: 180000, graceMs: 30000});
+  async function navigate(url: string) {
+    const destination = new URL(url);
+    destination.searchParams.set('lang', lang);
+    await page.goto(destination.href);
+    await until(`document.documentElement.lang===${JSON.stringify(lang)} && !!document.querySelector('[data-review-stage="1"]')`, 'shell');
+  }
+  async function projectCopy(index: number, suffix = '') {
+    const root = join(scratch, lang + '-' + fixture.stages[index]!.name + suffix);
+    await fixture.stages[index]!.copy(root);
+    await mkdir(join(root, 'gate-picks'));
+    const changes = new Set<string>();
+    scratchCopies.push({index, root, changes});
+    return {root, changes};
+  }
+  const draft = (root: string, partsVerdictDir?: string): OpenInputs => ({
+    input: join(root, 'derived/drafts/chain/out/check'),
+    project: {root, draftId: 'chain', picksDir: 'gate-picks', ...(partsVerdictDir ? {partsVerdictDir} : {})},
+  });
+  const rig = (root: string, postVersion?: number): OpenInputs => ({
+    input: join(root, 'derived/review/v1/out'),
+    project: {root, version: 1, picksDir: 'gate-picks', ...(postVersion ? {postVersion} : {})},
+  });
+  async function feedback(input: OpenInputs, item: string, name: string, format: 'json' | 'issue') {
+    const project = input.project!;
+    const flags = ['--project', project.root, '--project-version', '1', '--picks-dir', project.picksDir];
+    if (project.postVersion) flags.push('--post-version', String(project.postVersion));
+    const entry = 'import {main} from '+JSON.stringify(cli)+'; await main(process.argv.slice(1),{stateDir:'+JSON.stringify(state)+'});';
+    return command(label(name), ['-e', entry, '--', 'feedback', input.input, ...flags, '--correction', item, '--format', format]);
+  }
+  const parseIssue = (text: string) => {
+    const block = text.match(/^(`{3,})json\n([\s\S]*?)\n\1$/m);
+    assert(block, 'Expected exported issue JSON');
+    return JSON.parse(block[2]!);
+  };
+
+  try {
+    // Stage 1 starts with an empty designated verdict directory. Its Save is a Review verdict only.
+    const first = await projectCopy(0);
+    const verdictDirectory = join(first.root, 'gate-verdicts');
+    await mkdir(verdictDirectory);
+    const firstInput = draft(first.root, 'gate-verdicts');
+    const firstOpen = await open(firstInput);
+    await navigate(firstOpen.url);
+    await until(`${frame}?.contentDocument?.body.dataset.ready==='true'`, 'parts-ready');
+    assert.deepEqual(await readdir(verdictDirectory), []);
+    const partNote = lang === 'en' ? '  Inspect the torso seam.\nKeep the wording.  ' : '  몸통 이음새 확인.\n문구를 유지해 주세요.  ';
+    const meshNote = lang === 'en' ? '  Torso mesh reviewed.  ' : '  몸통 메시를 확인했어요.  ';
+    await evaluate(`(()=>{
+      const d=${frame}.contentDocument;
+      for(const item of d.querySelectorAll('[data-pv-item]')){
+        item.click();d.querySelector('[data-pv-outcome][value=clean]').click();
+        const mesh=d.querySelector('#pv-mesh-panel select');
+        if(mesh){mesh.value='clean';mesh.dispatchEvent(new Event('change'));}
+      }
+      d.querySelector('[data-pv-item=torso]').click();
+      for(const [selector,value] of [['#pv-note',${JSON.stringify(partNote)}],['#pv-mesh-panel textarea',${JSON.stringify(meshNote)}]]){
+        const field=d.querySelector(selector);field.value=value;field.dispatchEvent(new Event('input'));
+      }
+      d.getElementById('pv-overall').value='approved';
+    })()`);
+    await choose(3);
+    await choose(1);
+    await until(`${frame}?.contentDocument?.querySelector('#pv-note')?.value===${JSON.stringify(partNote)}`, 'parts-back');
+    assert.deepEqual(await readdir(verdictDirectory), []);
+    assert.match(await evaluate<string>(`${frame}.contentDocument.querySelector('#pv-corrections').textContent`), /torso.*v 30 t 40/);
+    await evaluate(`(()=>{
+      const d=${frame}.contentDocument;
+      d.addEventListener('click',event=>{
+        if(event.target.id==='pv-save')d.body.dataset.trustedSave=String(event.isTrusted);
+      },true);
+    })()`);
+    await click(page, '#pv-save', frame);
+    await until(`${frame}.contentDocument.querySelector('#pv-save-status').dataset.result==='saved'`, 'verdict-save');
+    assert.equal(await evaluate(`${frame}.contentDocument.body.dataset.trustedSave`), 'true');
+    const files = await readdir(verdictDirectory);
+    assert.equal(files.length, 1);
+    const verdictPath = 'gate-verdicts/' + files[0];
+    const verdictBytes = await readFile(join(first.root, verdictPath), 'utf8');
+    const verdict = JSON.parse(verdictBytes);
+    assert.equal(verdict.parts.torso.note, partNote);
+    assert.equal(verdict.parts.torso.mesh.note, meshNote);
+    const exportedVerdict = await fetch(new URL('/api/stage-parts/export/json', firstOpen.url));
+    assert.equal(exportedVerdict.status, 200);
+    assert.equal(await exportedVerdict.text(), verdictBytes);
+    await write(label('parts-verdict.json'), verdictBytes);
+    await navigate((await open(firstInput)).url);
+    await until(`${frame}?.contentDocument?.body.dataset.ready==='true'`, 'parts-reopen');
+    await evaluate(`${frame}.contentDocument.querySelector('[data-pv-item=torso]').click()`);
+    assert.equal(await evaluate(`${frame}.contentDocument.querySelector('#pv-note').value`), partNote);
+    await shot('stage1');
+    const checkVerdict = (root: string, path: string, bytes: string, findings: unknown[]) =>
+      parts.checkPartsVerdict(root, {evidence:{kind:parts.PARTS_VERDICT_KIND, path, sha256:digest(bytes)}}, 'review-371', findings);
+    const findings: unknown[] = [];
+    assert.equal(checkVerdict(first.root, verdictPath, verdictBytes, findings), join(first.root, 'derived/drafts/chain/input/parts.json'));
+    assert.deepEqual(findings, []);
+    if (lang === 'en') {
+      const negative = await projectCopy(0, '-mutant');
+      await mkdir(join(negative.root, 'gate-verdicts'));
+      const changed = flipHash(verdictBytes, 'sha256', verdict.source.sha256);
+      await writeFile(join(negative.root, verdictPath), changed);
+      await write('plant1-verdict.json', changed);
+      const refusals: {code:string}[] = [];
+      checkVerdict(negative.root, verdictPath, changed, refusals);
+      await put('plant1-first', refusals);
+      assert(refusals.some(row => row.code === 'PARTS_VERDICT_SOURCE_MISMATCH'));
+    }
+
+    // The existing Stage 2 signature continues to name its own declared verdict.
+    const second = await projectCopy(1);
+    const prior = await read(join(second.root, 'project.json'));
+    const accepted = prior.signoffs.find((row: {stage:string}) => row.stage === 'parts-review');
+    const oldFindings: unknown[] = [];
+    assert(parts.checkPartsVerdict(second.root, accepted, 'existing-parts-signoff', oldFindings));
+    assert.deepEqual(oldFindings, []);
+    const declared = fixture.stages[1]!.declared.pending;
+    const sequence = declared.commands.flatMap((command, index) => {
+      const match = /^rig-create interview-answer ([a-z_]+) --set (evidence\/interview\/[a-z_]+\.json) /.exec(command);
+      return match && declared.command_roles[index] === 'human' ? [{question:match[1]!, path:match[2]!}] : [];
+    });
+    assert.deepEqual(sequence.map(item => item.question), ['bones','meshes','constraints','motion']);
+    for (const [index, item] of sequence.entries()) {
+      if (index > 0) {
+        const previous = await loadOpenPackage(draft(second.root));
+        assert(previous.mode === 'single' && previous.joined);
+        const declaredSet = await read(join(chain, item.path));
+        const project = await read(join(second.root, 'project.json'));
+        declaredSet.context = choices.optionContext(project, 'rigging-interview', Date.now());
+        declaredSet.drafted_at = new Date().toISOString();
+        await writeFile(join(second.root, item.path), json(declaredSet));
+        await create(label('register-' + item.question), ['interview-options', item.question, second.root, '--file', item.path]);
+        await assert.rejects(previous.joined.assertCurrent(), /INTERVIEW_OPTIONS_STALE/);
+      }
+      const secondInput = draft(second.root);
+      const opened = await open(secondInput);
+      await navigate(opened.url);
+      await choose(2);
+      await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-' + item.question);
+      const note = lang === 'en' ? '  Keep these choices.  ' : '  이 선택을 유지해 주세요.  ';
+      await evaluate(`(()=>{
+        const d=${interview}.contentDocument,s=d.querySelector('main select');
+        s.selectedIndex=[...s.options].findIndex(o=>o.text.includes(${JSON.stringify('chain-' + item.question)}));
+        s.dispatchEvent(new Event('change'));
+        for(const choice of d.querySelectorAll('form input[value=keep]'))choice.click();
+        const note=d.querySelector('form textarea');note.value=${JSON.stringify(note)};note.dispatchEvent(new Event('input'));
+      })()`);
+      const sha = digest(await readFile(join(second.root, item.path)));
+      const picksPath = 'gate-picks/' + sha + '.json';
+      await assert.rejects(readFile(join(second.root, picksPath)), {code:'ENOENT'});
+      await click(page, 'form button[type=submit]', interview);
+      await until(`${interview}.contentDocument.querySelector('form [role=status]').textContent===${JSON.stringify(catalog['interview.saved'])}`, 'picks-' + item.question);
+      await choose(1);
+      await choose(2);
+      await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-back-' + item.question);
+      await navigate((await open(secondInput)).url);
+      await choose(2);
+      await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-reopen-' + item.question);
+      await evaluate(`(()=>{
+        const select=${interview}.contentDocument.querySelector('main select');
+        select.selectedIndex=[...select.options].findIndex(option=>option.text.includes(${JSON.stringify('chain-' + item.question)}));
+        select.dispatchEvent(new Event('change'));
+      })()`);
+      await until(`${interview}.contentDocument.querySelector('form textarea').value===${JSON.stringify(note)}`, 'picks-reopen-' + item.question);
+      await shot('stage2-' + item.question);
+      const bytes = await readFile(join(second.root, picksPath), 'utf8');
+      const picks = JSON.parse(bytes);
+      assert.deepEqual(picks.set, {path:item.path, sha256:sha});
+      assert.equal(picks.note, note);
+      assert(picks.picks.length > 0 && picks.picks.every((row: {option_id:string}) => row.option_id === 'keep'));
+      await write(label('picks-' + item.question + '.json'), bytes);
+      if (lang === 'en' && index === 0) {
+        const negative = await projectCopy(1, '-mutant');
+        const changed = flipHash(bytes, 'sha256', sha);
+        await writeFile(join(negative.root, picksPath), changed);
+        await write('plant2-picks.json', changed);
+        await create('plant2-first', ['interview-answer', item.question, negative.root, '--picks-file', picksPath,
+          '--set', item.path, '--sha256', sha], /INTERVIEW_OPTIONS_STALE/);
+      }
+      await create(label('answer-' + item.question), ['interview-answer', item.question, second.root,
+        '--picks-file', picksPath, '--set', item.path, '--sha256', sha]);
+      const project = await read(join(second.root, 'project.json'));
+      const answer = collectItems(project, {collection:null}).find((row: {id:string}) => row.id === item.question).raw;
+      assert.deepEqual(answer.choice.set, picks.set);
+      assert.equal(answer.choice.note, note);
+      assert.deepEqual(answer.choice.picks.map((row: {option_id:string}) => row.option_id), picks.picks.map((row: {option_id:string}) => row.option_id));
+      assert.deepEqual(project.signoffs, prior.signoffs);
+      second.changes.add('project.json');
+    }
+    await create(label('stage2-check'), ['interview', '--check', second.root, '--json']);
+
+    async function correctionForm(stage: 'rig-review' | 'direction-review', path: 'made' | 'described', words: string) {
+      await click(page, '#write-review');
+      await evaluate(`(()=>{
+        const el=id=>document.getElementById(id);
+        el('correction-controls').open=true;
+        for(const [id,value] of Object.entries({
+          'feedback-start':'0','feedback-end':'0','feedback-target-kind':'rig','feedback-category':'quality',
+          'correction-stage':${JSON.stringify(stage)},'correction-selector':${stage === 'rig-review' ? '"1"' : '"2"'},
+          'correction-model':'build/skeleton.model.json','correction-path':${JSON.stringify(path)}
+        }))el(id).value=value;
+        el('correction-stage').dispatchEvent(new Event('change',{bubbles:true}));
+        const transfer=new DataTransfer();
+        transfer.items.add(new File([${JSON.stringify(words)}],'request.txt',{type:'text/plain'}));
+        el('correction-words').files=transfer.files;
+      })()`);
+      await click(page, '#add-proposal');
+    }
+    async function savedSession(path: string, name: string) {
+      return wait(async () => {
+        try { return await readFile(path, 'utf8'); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          return '';
+        }
+      }, value => !!value && JSON.parse(value).feedback.length === 1, label(name));
+    }
+
+    // Stage 3 uses the approved, source-derived 2.5 edit. Only the failed control uses 0.75.
+    const third = await projectCopy(2);
+    const thirdInput = rig(third.root);
+    const inspected = await loadOpenPackage(thirdInput);
+    assert(inspected.mode === 'single');
+    const inspectedPackage = inspected.p;
+    const pair = resolveProducer([inspected.p.root, bench]);
+    assert(pair.ok);
+    assert.equal(pair.producer.version, '2.16.0');
+    assert.equal(pair.compiler.version, '3.2.1');
+    await put(label('rig-source'), {sourceHash:inspected.contentHash, source:inspected.p.reviewedSource, pair});
+
+    async function refusePreviewMade(stateDir: string) {
+      await evaluate(`(()=>{
+        const original=window.fetch;
+        window.__gatePreviewRequests=[];
+        window.fetch=async function(input,init){
+          if(init?.method!=='PUT'||!String(input).includes('/api/session'))return original.call(window,input,init);
+          const observed={body:init.body,response:null};
+          window.__gatePreviewRequests.push(observed);
+          const response=await original.call(window,input,init);
+          observed.response={status:response.status,body:await response.clone().text()};
+          return response;
+        };
+        window.__gateRestorePreviewFetch=()=>{window.fetch=original;};
+      })()`);
+      try {
+        await correctionForm('rig-review', 'made', 'Preview-only correction control.');
+        const first = await wait(() => evaluate<{
+          message: string; error: boolean; proposals: number; requests: {body: string; response: {status: number; body: string} | null}[];
+        }>(`({
+          message:document.getElementById('review-message').textContent,
+          error:document.getElementById('review-message').classList.contains('error'),
+          proposals:document.querySelectorAll('.proposal-item').length,
+          requests:window.__gatePreviewRequests
+        })`), result => result.error || result.proposals !== 0 || result.requests.some(request => request.response !== null), 'preview-made-first');
+        await put('preview-made-first', first);
+        await shot('preview-made-refusal');
+        assert.match(first.message, /CORRECTION_APPLY_PENDING/);
+        assert.equal(first.proposals, 0);
+        assert.deepEqual(first.requests, []);
+        await assert.rejects(readFile(sessionFile(inspectedPackage, stateDir)), {code:'ENOENT'});
+      } finally {
+        await evaluate('window.__gateRestorePreviewFetch()');
+        await click(page, '#review-dialog-close');
+      }
+      await until('!document.getElementById("review-dialog").open', 'preview-modal-closed');
+    }
+
+    async function idleApply(amplitude: number, stateDir: string, name: string) {
+      const opened = await open(thirdInput, stateDir);
+      await navigate(opened.url);
+      await until('!!window.rigReviewEditor?.idle.source()?.tracks?.length', name + '-idle');
+      await choose(3);
+      await click(page, '[data-mode="playback"]');
+      await click(page, '#block-tab-idle-tracks');
+      await click(page, '#idle-track-list button');
+      await evaluate(`(()=>{
+        const field=document.querySelector('#idle-track-editor input[aria-label="amp value"]')
+          || document.querySelector('#idle-track-editor input[type=number]');
+        if(field.value!=='0.5')throw Error('Wrong initial amplitude');
+        field.value=${JSON.stringify(String(amplitude))};field.dispatchEvent(new Event('change',{bubbles:true}));
+        const preview=document.querySelector('[data-idle-preview]');if(!preview.checked)preview.click();
+      })()`);
+      await until('!document.getElementById("idle-preview-label").hidden', name + '-preview');
+      assert.equal(await evaluate('document.getElementById("rebuild-applied").value'), '');
+      await assert.rejects(readFile(sessionFile(inspectedPackage, stateDir)), {code:'ENOENT'});
+      await shot(name + '-preview');
+      if (lang === 'en' && amplitude === 2.5) await refusePreviewMade(stateDir);
+      const started = performance.now();
+      await click(page, '#idle-apply');
+      const applied = await wait(() => evaluate<string>('document.getElementById("rebuild-applied").value'), Boolean, label(name + '-apply'), 120000);
+      const record = JSON.parse(applied);
+      const response = await fetch(new URL('/api/rebuild/' + record.buildId, opened.url));
+      const job = await response.json();
+      const revision = rebuildDir(stateDir, inspected.contentHash, record.buildId);
+      const hashes = await inventory(revision);
+      const check = await read(join(revision, 'check/check.json'));
+      await put(label(name + '-applied'), record);
+      await put(label(name + '-job'), {uiElapsedMs:Math.round(performance.now() - started), job});
+      await put(label(name + '-scratch'), hashes);
+      await put(label(name + '-check'), check);
+      await cp(join(revision, 'build'), join(output, label(name + '-compiled')), {recursive:true});
+      await shot(name);
+      assert.equal(record.schema, 'rig-review-applied/2');
+      assert.equal(job.status, 'built');
+      assert.equal(job.reused, false);
+      assert.equal(job.exitCode, 0);
+      assert.deepEqual(record.patch.ops, [{op:'replace', path:'/motion/tracks/0/amp', value:amplitude}]);
+      assert.equal(digest(patchText(record.patch)), record.patchSha256);
+      assert.notEqual(record.modelHash, inspectedPackage.reviewedSource.rig!.sha256);
+      return {record, job, hashes, check, opened};
+    }
+
+    if (lang === 'en') {
+      const failedState = join(scratch, 'failed-check-state');
+      const frozen = process.env.REVIEW_371_FAILED_APPLIED;
+      assert(frozen, 'Set REVIEW_371_FAILED_APPLIED to the retained 0.75 applied context');
+      const frozenBytes = await readFile(frozen);
+      assert.equal(digest(frozenBytes), '44c9cf73d6b7149edbab743483d42203b232cef5ab87ab322cc1d975f29c396c');
+      const originalFailed = JSON.parse(frozenBytes.toString());
+      const sourceHash = '7ee431d9a8de3fde7f06ec9ee720cf243449bd0f0a435261ce6612ae6e1a4d1d';
+      assert.equal(inspected.contentHash, sourceHash);
+      const requirementsHash = digest(await readFile(join(third.root, 'derived/review/v1/interview-requirements.json')));
+      const configIdentity = digest(JSON.stringify([originalFailed.configHash, requirementsHash]));
+      assert.equal(patchId({sourceHash, configHash:configIdentity, patch:originalFailed.patch,
+        producer:'@rig-c/parts@2.16.0', compiler:'@rig-c/core@3.2.1', op:'rig'}), originalFailed.buildId);
+      const failed = await idleApply(0.75, failedState, 'stage3-failed-control');
+      assert.deepEqual(failed.record, originalFailed);
+      assert.equal(failed.record.check.pass, false);
+      assert.equal(failed.check.BREATH_VISIBLE.torso_heat_mean, 3.62);
+      // Observe the actual failed UI request without changing its URL, body or response.
+      await evaluate(`(()=>{
+        const real=window.fetch.bind(window);
+        window.fetch=(input,init)=>{
+          if(init?.method==='PUT'&&String(input).includes('/api/session'))window.__gateFailedRequest=init.body;
+          return real(input,init);
+        };
+      })()`);
+      await correctionForm('rig-review', 'made', 'Keep the measured failed correction open.');
+      await until('document.querySelectorAll(".proposal-item").length===1', 'failed-item');
+      await click(page, '#save');
+      const message = await wait(
+        () => evaluate<string>('document.getElementById("review-message").textContent'),
+        value => /EDIT_SUBMIT_UNCHECKED|CORRECTION_CHECK_FAILED/.test(value), 'failed-submit');
+      const refused = await evaluate<string>('window.__gateFailedRequest');
+      assert(refused, 'Missing actual refused Review request');
+      await write('failed-check-refused-request.json', refused);
+      await put('failed-check-submit-message', message);
+      await assert.rejects(readFile(sessionFile(inspected.p, failedState)), {code:'ENOENT'});
+      const item = JSON.parse(refused).feedback[0];
+      assert.deepEqual(item.context.applied, originalFailed);
+      const negative = await projectCopy(2, '-failed-checked-claim');
+      const path = 'evidence/refused-request.json';
+      await writeFile(join(negative.root, path), refused);
+      await writeFile(join(negative.root, 'evidence/checked-claim.txt'), 'Check whether the retained Apply can claim a checked result.');
+      const pending = JSON.parse(await create('failed-check-pending', ['correction','record',negative.root,'--id',item.id,
+        '--path','made','--stage','rig-review','--version','1','--by','user','--feedback-file',path,'--item',item.id,'--json']));
+      assert.equal(pending.artifact.kind, 'config-patch');
+      assert.equal(pending.artifact.state, 'preview/pending');
+      assert.equal(pending.outcome, null);
+      negative.changes.add('project.json');
+      const beforeResolve = await readFile(join(negative.root, 'project.json'));
+      await create('failed-check-resolve-first', ['correction','resolve',item.id,negative.root,'--version','1',
+        '--by','agent','--reasoning-file',join(negative.root,'evidence/checked-claim.txt')],
+      /CORRECTION_APPLIED_INVALID:[\s\S]*claimed checked Apply lacks a passing producer check summary/);
+      assert.deepEqual(await readFile(join(negative.root, 'project.json')), beforeResolve);
+    }
+
+    const applied = await idleApply(2.5, state, 'stage3');
+    assert(applied.check.BREATH_VISIBLE.torso_heat_mean >= 6.12);
+    assert.equal(applied.record.check.pass, true);
+    assert.equal(applied.record.check.exitCode, 0);
+    assert.equal(applied.record.check.gate, true);
+    await choose(4);
+    await choose(3);
+    assert.deepEqual(JSON.parse(await evaluate<string>('document.getElementById("rebuild-applied").value')), applied.record);
+    const words = lang === 'en' ? '  Adjust body idle amplitude to 2.5.\r\n' : '  몸통 대기 모션 진폭을 2.5로 조정.\r\n';
+    await correctionForm('rig-review', 'made', words);
+    await until('document.querySelectorAll(".proposal-item").length===1', 'made-item');
+    await click(page, '#save');
+    const saved = await savedSession(sessionFile(inspected.p, state), 'made-save');
+    const session = JSON.parse(saved);
+    assert.equal(session.status, 'pending');
+    const item = session.feedback[0];
+    assert.equal(item.summary, words);
+    assert.deepEqual(item.context.applied, applied.record);
+    await write(label('made-session.json'), saved);
+    assert.equal(await feedback(thirdInput, item.id, 'made-json', 'json'), saved);
+    const madeIssue = parseIssue(await feedback(thirdInput, item.id, 'made-issue', 'issue'));
+    assert.equal(madeIssue.patchBytes, patchText(applied.record.patch));
+    await navigate((await open(thirdInput)).url);
+    assert.equal(await readFile(sessionFile(inspected.p, state), 'utf8'), saved);
+    const copy = await projectCopy(2, '-made');
+    const savedPath = 'evidence/gate-made.json';
+    await writeFile(join(copy.root, savedPath), saved);
+    const madeArgs = (root: string) => ['correction','record',root,'--id',item.id,'--path','made',
+      '--stage','rig-review','--version','1','--by','user','--feedback-file',savedPath,'--item',item.id,'--json'];
+    const made = JSON.parse(await create(label('made-record'), madeArgs(copy.root)));
+    copy.changes.add('project.json');
+    const madeProject = await read(join(copy.root, 'project.json'));
+    assert.deepEqual(madeProject.corrections.find((row: {id:string}) => row.id === item.id), made);
+    assert.deepEqual(madeProject.signoffs, (await read(join(third.root, 'project.json'))).signoffs);
+    assert.equal(madeProject.stage, 'rig-review');
+    assert.equal(made.verbatim, words);
+    assert.equal(made.artifact.kind, 'config-patch');
+    assert.equal(made.artifact.feedback.file.sha256, digest(saved));
+    assert.equal(made.artifact.state, 'preview/pending');
+    assert.equal(made.outcome, null);
+    await create(label('made-check'), ['interview','--check',copy.root,'--json']);
+
+    if (lang === 'en') {
+      const replayState = join(scratch, 'replay-state');
+      const opened = await open(thirdInput, replayState);
+      const url = new URL(opened.url);
+      const capability = new URLSearchParams(url.hash.slice(1)).get('cap');
+      assert(capability);
+      const headers = {Origin:url.origin, 'Content-Type':'application/json', 'X-Review-Capability':capability};
+      const response = await fetch(new URL('/api/rebuild', url), {method:'POST', headers,
+        body:JSON.stringify({patch:JSON.parse(madeIssue.patchBytes)})});
+      const initial = await response.json();
+      await put('replay-initial', {status:response.status, job:initial});
+      assert(response.ok && initial.id);
+      const replay = await wait(async () => (await fetch(new URL('/api/rebuild/' + initial.id, url))).json(),
+        job => job.status !== 'running', 'made-replay', 120000);
+      await put('replay-job', replay);
+      const replayRoot = rebuildDir(replayState, inspected.contentHash, replay.id);
+      const hashes = await inventory(replayRoot);
+      await put('replay-scratch', hashes);
+      assert.equal(replay.status, 'built');
+      assert.equal(replay.reused, false);
+      assert.equal(replay.request.patchSha256, applied.record.patchSha256);
+      assert.deepEqual(replay.build.files, applied.job.build.files);
+      assert.deepEqual(replay.check, applied.job.check);
+      for (const path of ['config.json','rig/motion.json','check/check.json']) assert.equal(hashes[path], applied.hashes[path]);
+      // Independent Create consumer controls. Retain the first verdict and require its named reason.
+      const stale = flipHash(saved, 'configHash', applied.record.configHash);
+      await writeFile(join(copy.root, savedPath), stale);
+      await write('stale-session.json', stale);
+      await create('stale-first', ['interview','--check',copy.root,'--json'], /CORRECTION_HASH/);
+      const configMutant = await projectCopy(2, '-config-mutant');
+      await writeFile(join(configMutant.root, savedPath), stale);
+      await write('plant3-session.json', stale);
+      await create('plant3-first', madeArgs(configMutant.root), /CORRECTION_APPLIED_INVALID:[\s\S]*patch\/config\/producer mismatch/);
+      const cross = await projectCopy(2, '-cross-source');
+      const otherModel = await readFile(resolve('tests/fixtures/direction-inspection/derived/review/v1/out/check/build/skeleton.model.json'));
+      const otherHash = digest(otherModel);
+      assert.equal(otherHash, '63190ec6746bafbc73847fa6c6905b5811cc0adb41897dfed923fe802e4dc261');
+      const crossSession = JSON.parse(saved);
+      crossSession.reviewedSource.rig.sha256 = otherHash;
+      await writeFile(join(cross.root, savedPath), json(crossSession));
+      await put('cross-source-session', crossSession);
+      await create('cross-source-first', madeArgs(cross.root), /CORRECTION_APPLIED_INVALID:[\s\S]*feedback reviewed source\/handoff differs/);
+    }
+
+    // Stage 4 begins before post v2. Use the declared authoring input and the public writer.
+    const fourth = await projectCopy(3);
+    const fourthBefore = await read(join(fourth.root, 'project.json'));
+    assert.deepEqual(fourthBefore.versions.map((row: {n:number}) => row.n), [1]);
+    const directionInputPath = 'evidence/direction-input.json';
+    await assert.rejects(readFile(join(fourth.root, directionInputPath)), {code:'ENOENT'});
+    const authored = await read(join(chain, directionInputPath));
+    const projectModel = 'derived/review/v1/out/check/build/skeleton.model.json';
+    assert.equal(authored.rig.version, 1);
+    assert.deepEqual(authored.rig.model, {path:projectModel, sha256:digest(await readFile(join(fourth.root, projectModel)))});
+    for (const [field, guide] of [['camera', 'camera_depth'], ['timing', 'post_timing']] as const) {
+      const answer = collectItems(fourthBefore, {collection:null}).find((row: {id:string}) => row.id === guide).raw;
+      assert.deepEqual(authored.citations[field], {guide, asks:[guide], quote:answer.verbatim});
+    }
+    const authoredBytes = json(authored);
+    await writeFile(join(fourth.root, directionInputPath), authoredBytes);
+    await write(label('direction-input.json'), authoredBytes);
+    await create(label('direction-write'), ['direction','write','2',fourth.root,'--file',directionInputPath,'--rig','1']);
+    fourth.changes.add('project.json');
+    const checked = JSON.parse(await create(label('direction-check'), ['direction','check','2',fourth.root,'--json']));
+    assert.equal(checked.post, 2);
+    assert.deepEqual(checked.document, authored);
+    const authoredOutput = await readFile(join(fourth.root, checked.direction.path), 'utf8');
+    assert.equal(authoredOutput, authoredBytes);
+    assert.equal(digest(authoredOutput), checked.direction.sha256);
+    await write(label('direction-output.json'), authoredOutput);
+    const fourthInput = {...rig(fourth.root, 2), viewOnly:true};
+    const directionOpen = await open(fourthInput);
+    const direction = await loadOpenPackage(fourthInput);
+    assert(direction.mode === 'single' && direction.p.direction?.joined);
+    await navigate(directionOpen.url);
+    await choose(4);
+    const directionWords = lang === 'en' ? '  Ease into the second camera key.\r\n' : '  두 번째 카메라 키까지 부드럽게 이동해 주세요.\r\n';
+    const directionReady = '!!document.querySelector("#direction-panel:not([hidden]) ul") && !!document.querySelector("#direction-panel pre")?.textContent';
+    await until(directionReady, 'direction-authored-ready');
+    const keys = await evaluate<{rows:string; keys:unknown}>(`(()=>{
+      const panel=document.getElementById('direction-panel');
+      panel.querySelector('div details').open=true;
+      return {rows:panel.querySelector('ul').innerText,keys:JSON.parse(panel.querySelector('pre').textContent)};
+    })()`);
+    await put(label('direction-visible'), keys);
+    assert.deepEqual(keys.keys, {camera:authored.camera, timing:authored.timing.keys, take:authored.take});
+    for (const identity of [projectModel, direction.p.sourceHash, checked.direction.sha256,
+      direction.p.direction.joined.projectHash, 'CAMERA_APPLY_UNSUPPORTED']) assert(keys.rows.includes(identity), identity);
+    await shot('stage4');
+    await choose(3);
+    await choose(4);
+    await until(directionReady, 'direction-back-ready');
+    assert.deepEqual(await evaluate('JSON.parse(document.querySelector("#direction-panel pre").textContent)'), keys.keys);
+    const location = sessionFile(direction.p, state);
+    await assert.rejects(readFile(location), {code:'ENOENT'});
+    await correctionForm('direction-review', 'made', directionWords);
+    await until('document.getElementById("review-message").textContent.includes("CAMERA_APPLY_UNSUPPORTED")', 'camera-made-refusal');
+    await put(label('camera-refusal'), await evaluate('document.getElementById("review-message").textContent'));
+    assert.equal(await evaluate('document.querySelectorAll(".proposal-item").length'), 0);
+    await click(page, '#review-dialog-close');
+    await correctionForm('direction-review', 'described', directionWords);
+    await until('document.querySelectorAll(".proposal-item").length===1', 'direction-item');
+    await click(page, '#save');
+    const directionSession = await savedSession(location, 'direction-save');
+    const describedItem = JSON.parse(directionSession).feedback[0];
+    assert.equal(describedItem.summary, directionWords);
+    assert.equal(JSON.parse(directionSession).status, 'pending');
+    await write(label('direction-session.json'), directionSession);
+    const issueBytes = await feedback(fourthInput, describedItem.id, 'direction-issue', 'issue');
+    const issue = parseIssue(issueBytes);
+    const source = JSON.parse(issue.createSource);
+    assert.equal(issue.verbatim, directionWords);
+    assert.deepEqual(issue.selectorArgs, ['--version','2','--model-file',projectModel]);
+    assert.equal(source.post, checked.post);
+    assert.deepEqual(source.model, checked.document.rig.model);
+    assert.deepEqual(source.direction, checked.direction);
+    assert.deepEqual(source.inspectedModel, direction.p.reviewedSource.rig);
+    await navigate((await open(fourthInput)).url);
+    await choose(4);
+    await until(directionReady, 'direction-reopen-ready');
+    assert.equal(await readFile(location, 'utf8'), directionSession);
+    const textFile = join(fourth.root, 'evidence/gate-direction-words.txt');
+    await writeFile(textFile, issue.verbatim);
+    const describedArgs = (handoff: typeof issue) => ['correction','record',fourth.root,'--id',describedItem.id,
+      '--path','described','--stage','direction-review',...handoff.selectorArgs,'--by','user',
+      '--verbatim-file',textFile,'--source',handoff.createSource,'--json'];
+    if (lang === 'en') {
+      const changed = mutateOne(issueBytes, '"'+projectModel+'"', '"'+projectModel.replace('/v1/', '/v2/')+'"');
+      await write('plant4-direction-issue.md', changed);
+      const changedIssue = parseIssue(changed);
+      assert.equal(changedIssue.selectorArgs[3], projectModel.replace('/v1/', '/v2/'));
+      assert.equal(changedIssue.createSource, issue.createSource);
+      const beforeRecord = await readFile(join(fourth.root, 'project.json'));
+      await create('plant4-first', describedArgs(changedIssue), /CORRECTION_SOURCE:[\s\S]*must name the direction source compiled model/);
+      assert.deepEqual(await readFile(join(fourth.root, 'project.json')), beforeRecord);
+    }
+    const described = JSON.parse(await create(label('direction-record'), describedArgs(issue)));
+    const fourthAfter = await read(join(fourth.root, 'project.json'));
+    assert.deepEqual(fourthAfter.corrections.find((row: {id:string}) => row.id === describedItem.id), described);
+    assert.deepEqual(fourthAfter.signoffs, fourthBefore.signoffs);
+    assert.deepEqual(fourthAfter.reopens, fourthBefore.reopens);
+    assert.equal(fourthAfter.stage, fourthBefore.stage);
+    assert.equal(described.schema, 'rig-create/correction@2');
+    assert.equal(described.verbatim, directionWords);
+    assert.equal(described.source, issue.createSource);
+    assert.equal(described.outcome, null);
+    assert.deepEqual(described.on.model, checked.document.rig.model);
+    assert.deepEqual(described.on.direction, checked.direction);
+    await create(label('direction-consumer-check'), ['interview','--check',fourth.root,'--json']);
+  } catch (error) {
+    await put(label('first-error'), String(error));
+    await shot('first-error').catch(() => {});
+    throw error;
+  } finally {
+    for (const copy of scratchCopies) {
+      const before = fixture.stages[copy.index]!.original;
+      const after = await inventory(copy.root);
+      await put(label(copy.root.split('/').at(-1)! + '-inventory'), {before, after, mutable:[...copy.changes]});
+      for (const [path, sha] of Object.entries(before)) {
+        if (!copy.changes.has(path)) assert.equal(after[path], sha, `Source changed: ${path}`);
+      }
+    }
+  }
+}
+
+for (const stage of fixture.stages) await put(stage.name + '-original', stage.original);
+try {
+  for (const lang of ['en','ko'] as const) {
+    const previousTmp = process.env.TMPDIR;
+    let page: InputCdpSession;
+    try {
+      process.env.TMPDIR = '/tmp'; // Chromium's startup temp must stay short on Nova.
+      page = await launchCdpSession(join(scratch, 'chromium-' + lang));
+    } finally {
+      if (previousTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previousTmp;
+    }
+    try {
+      await page.setViewport(1440, 1080);
+      await runLanguage(lang, page);
+    } finally {
+      await page.close();
+    }
+  }
+} finally {
+  for (const stage of fixture.stages) await stage.assertOriginal();
+}
