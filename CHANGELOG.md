@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.11.0](https://github.com/rig-c/review/compare/v1.10.2...v1.11.0) (2026-11-06)
+
+
+### Features
+
+* export explicit source-bound correction handoffs ([#422](https://github.com/rig-c/review/issues/422)) ([1ad9141](https://github.com/rig-c/review/commit/1ad914134f49ed33f78129c7fac0c6da1e9a6b7b))
+* inspect create choices with bound parts and explicit picks ([#420](https://github.com/rig-c/review/issues/420)) ([328836d](https://github.com/rig-c/review/commit/328836d25d6cdf18d64d35b02aec2c7282a532ae))
+
 ## [1.10.2](https://github.com/rig-c/review/compare/v1.10.1...v1.10.2) (2026-11-06)
 
 
