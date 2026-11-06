@@ -15,6 +15,7 @@ import { koCatalog } from '../web/catalog-ko.ts';
 import { inventory, materializeFourStages } from './helpers/four-stage-fixture.ts';
 import { walkCheckpoint, WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
 import { walkDialogs } from './helpers/walk-dialog.ts';
+import { freshWalkReopen } from './helpers/walk-reopen.ts';
 import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
 
 const archive = process.env.REVIEW_371_CREATE_ARCHIVE;
@@ -192,6 +193,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
   const scratchCopies: {index: number; root: string; changes: Set<string>}[] = [];
   const frontPorts = new Map<string, number>();
   const mark = (name: string) => dialogs.enter(label(name));
+  let reopenSequence = 0;
   const open = async (name: string, inputs: OpenInputs, stateDir = state) => {
     const key = label(name + '.open');
     dialogs.enter(key);
@@ -211,14 +213,36 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     assert.match(new URL(opened.url).pathname, /^\/instances\/[a-f0-9]{64}\/$/);
     return opened;
   };
-  async function navigate(name: string, url: string, failedSubmitSource?: string) {
-    mark(name + '.navigate');
+  function localizedUrl(url: string) {
     const destination = new URL(url);
     destination.searchParams.set('lang', lang);
-    const go = () => page.goto(destination.href, lang);
+    return destination.href;
+  }
+  const shellReady = (name: string) => until(
+    `document.documentElement?.lang===${JSON.stringify(lang)} && !!document.querySelector('[data-review-stage="1"]')`, name + '.shell');
+  async function navigate(name: string, url: string, failedSubmitSource?: string) {
+    mark(name + '.navigate');
+    const go = () => page.goto(localizedUrl(url), lang);
     if (failedSubmitSource) await dialogs.departFailedSubmit(failedSubmitSource, go);
     else await go();
-    await until(`document.documentElement?.lang===${JSON.stringify(lang)} && !!document.querySelector('[data-review-stage="1"]')`, name + '.shell');
+    await shellReady(name);
+  }
+  async function reopen(name: string, url: string) {
+    await freshWalkReopen(page, localizedUrl(url), lang, label(name), ++reopenSequence, dialogs.enter, checkpoint);
+    await shellReady(name);
+  }
+  const submitted = (name: string) => until(
+    'document.getElementById("save")?.disabled===false && document.getElementById("dirty")?.classList.contains("dirty")===false',
+    name + '.submitted');
+  const readSavedProposal = (name: string, words: string) => until(
+    `document.getElementById("review-status")?.value==="pending" &&
+      JSON.stringify([...document.querySelectorAll("#proposal-list .feedback-summary")].map(row=>row.textContent))===${JSON.stringify(JSON.stringify([words]))}`,
+    name + '.saved-ui');
+  const stage4ModalOpen = () => evaluate<boolean>('document.getElementById("review-dialog")?.open===true');
+  async function assertStage4ModalClosed() {
+    if (await stage4ModalOpen()) {
+      throw new Error('PRODUCTSTOP: STAGE4_REOPEN_REVIEW_DIALOG_OPEN');
+    }
   }
   async function projectCopy(index: number, suffix = '') {
     const root = join(scratch, lang + '-' + fixture.stages[index]!.name + suffix);
@@ -314,7 +338,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     assert.equal(exportedVerdict.status, 200);
     assert.equal(exportedVerdict.body, verdictBytes);
     await write(label('parts-verdict.json'), verdictBytes);
-    await navigate('stage1.reopen', (await open('stage1.reopen', firstInput)).url);
+    await reopen('stage1.reopen', (await open('stage1.reopen', firstInput)).url);
     await until(`${frame}?.contentDocument?.body?.dataset.ready==='true'`, 'parts-reopen');
     await click(page, '[data-pv-item=torso]', frame);
     assert.equal(await evaluate(`${frame}?.contentDocument?.querySelector('#pv-note')?.value`), partNote);
@@ -435,7 +459,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
       await choose(1);
       await choose(2);
       await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-back-' + item.question);
-      await navigate('stage2.' + item.question + '.reopen', (await open('stage2.' + item.question + '.reopen', secondInput)).url);
+      await reopen('stage2.' + item.question + '.reopen', (await open('stage2.' + item.question + '.reopen', secondInput)).url);
       await choose(2);
       await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-reopen-' + item.question);
       await evaluate(`(()=>{
@@ -735,6 +759,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     await until('document.querySelectorAll(".proposal-item").length===1', 'made-item');
     await click(page, '#save');
     const saved = await savedSession(sessionFile(inspected.p, state), 'made-save');
+    await submitted('stage3.made');
     const session = JSON.parse(saved);
     assert.equal(session.status, 'pending');
     const item = session.feedback[0];
@@ -745,7 +770,8 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     assert.equal(await feedback(thirdInput, item.id, 'made-json', 'json'), saved);
     const madeIssue = parseIssue(await feedback(thirdInput, item.id, 'made-issue', 'issue'));
     assert.equal(madeIssue.patchBytes, patchText(applied.record.patch));
-    await navigate('stage3.reopen', (await open('stage3.reopen', thirdInput)).url);
+    await reopen('stage3.reopen', (await open('stage3.reopen', thirdInput)).url);
+    await readSavedProposal('stage3.reopen', words);
     assert.equal(await readFile(sessionFile(inspected.p, state), 'utf8'), saved);
     mark('stage3.made-create-copy');
     const copy = await projectCopy(2, '-made');
@@ -882,6 +908,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     await until('document.querySelectorAll(".proposal-item").length===1', 'direction-item');
     await click(page, '#save');
     const directionSession = await savedSession(location, 'direction-save');
+    await submitted('stage4.described');
     const describedItem = JSON.parse(directionSession).feedback[0];
     assert.equal(describedItem.summary, directionWords);
     assert.equal(JSON.parse(directionSession).status, 'pending');
@@ -896,9 +923,19 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     assert.deepEqual(source.model, checked.document.rig.model);
     assert.deepEqual(source.direction, checked.direction);
     assert.deepEqual(source.inspectedModel, direction.p.reviewedSource.rig);
-    await navigate('stage4.reopen', (await open('stage4.reopen', fourthInput)).url);
-    await choose(4);
+    await reopen('stage4.reopen', (await open('stage4.reopen', fourthInput)).url);
+    await assertStage4ModalClosed();
+    try {
+      await choose(4);
+    } catch (error) {
+      if (await stage4ModalOpen().catch(() => false)) {
+        throw new Error('PRODUCTSTOP: STAGE4_REOPEN_REVIEW_DIALOG_OPEN', {cause:error});
+      }
+      throw error;
+    }
     await until(directionReady, 'direction-reopen-ready');
+    await readSavedProposal('stage4.reopen', directionWords);
+    await assertStage4ModalClosed();
     assert.equal(await readFile(location, 'utf8'), directionSession);
     const textFile = join(fourth.root, 'evidence/gate-direction-words.txt');
     await writeFile(textFile, issue.verbatim);

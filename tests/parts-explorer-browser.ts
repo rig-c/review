@@ -82,7 +82,7 @@ export interface PanelMeasurement {
 
 export interface CdpSession {
   setViewport(width: number, height: number): Promise<void>;
-  goto(url: string, locale?: 'en' | 'ko'): Promise<void>;
+  goto(url: string, locale?: 'en' | 'ko', observe?: (result: {loaderId?: string}) => void): Promise<void>;
   evaluate<T>(expression: string): Promise<T>;
   screenshot(clip?: { x: number; y: number; width: number; height: number }): Promise<Buffer>;
   close(): Promise<void>;
@@ -310,9 +310,10 @@ export async function launchCdpSession(profileDir: string, options: {sendDeadlin
           sessionId,
         );
       },
-      async goto(url: string, locale?: 'en' | 'ko') {
+      async goto(url, locale, observe) {
         const navigation = await send('Page.navigate', { url }, sessionId);
         if (navigation?.errorText) throw new Error('CDP_NAVIGATE_FAILED: ' + navigation.errorText);
+        observe?.({loaderId: navigation?.loaderId});
         const expression = navigationReadyExpression(url, locale);
         await Bun.sleep(100);
         for (let i = 0; i < 100; i++) {

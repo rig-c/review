@@ -23,7 +23,7 @@ export async function withDeadline<T>(key: string, ms: number, op: (signal: Abor
   }
 }
 
-export function walkCheckpoint(path: string): (key: string, detail?: {step?: string; pathname?: string | null}) => void {
+export function walkCheckpoint(path: string): (key: string, detail?: {step?: string; pathname?: string | null; loaderId?: string | null}) => void {
   let seq = 0;
   const start = performance.now();
   return (key, detail) => {
