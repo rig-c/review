@@ -31,7 +31,6 @@ const applied: AppliedPatch = {
 };
 const settled = {
   source, applied, operationSha256: applied.patchSha256, modelSha256: applied.modelHash,
-  outcome: { ...selector, version: 2 },
 };
 
 function sessionInput(value: unknown = applied) {
@@ -64,10 +63,10 @@ test('pre-rig verdict note retains verbatim CRLF and uses only a parts selector'
   expect(result).toMatchObject({ verbatim: 'Keep these words.  \r\n', part: 'torso', on: ['--parts-file', 'evidence/parts.json'], outcome: null });
 });
 
-test('checked patch keeps the exact session and patch, bound to a distinct scratch result', () => {
+test('checked patch keeps the exact session and patch, bound to a scratch result with the create outcome open', () => {
   const input = sessionInput();
   const result = projectSessionCorrection({ ...input, path: 'made', settled });
-  expect(result).toMatchObject({ kind: 'checked-patch', applied, patchBytes: patchText(patch), outcome: ['--version', '2'] });
+  expect(result).toMatchObject({ kind: 'checked-patch', applied, patchBytes: patchText(patch), outcome: null });
   if (result.kind !== 'checked-patch') throw Error('expected checked patch');
   expect(result.sessionBytes).toBe(input.sessionBytes);
   expect(() => projectSessionCorrection({ ...input, path: 'made' })).toThrow('CORRECTION_APPLY_PENDING');

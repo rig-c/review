@@ -13,7 +13,6 @@ type Selector =
 
 type SessionSource = Pick<ReviewSession, 'id' | 'revision' | 'sourceHash' | 'reviewedSource'>;
 type SessionSelector = Exclude<Selector, { kind: 'parts' }>;
-type CheckedSelector = Extract<Selector, { kind: 'draft' | 'rig' }>;
 
 /**
  * The caller must obtain this from the verified server-side settled Apply and
@@ -25,7 +24,6 @@ interface SettledEvidence {
   applied: unknown;
   operationSha256: string;
   modelSha256: string;
-  outcome?: CheckedSelector;
 }
 
 type SessionInput = {
@@ -156,14 +154,10 @@ export function projectSessionCorrection(input: SessionInput) {
       patchSha256(patch) !== applied.patchSha256 || settled.operationSha256 !== applied.patchSha256) {
     return refuse('CORRECTION_ARTIFACT_MISMATCH', 'producer or canonical patch binding differs');
   }
-  const outcome = settled.outcome;
-  if (settled.modelSha256 !== applied.modelHash || (selector.kind === 'rig' && rig.sha256 === applied.modelHash) ||
-      (outcome && (outcome.kind !== selector.kind ||
-      (selector.kind === 'draft' && outcome.kind === 'draft' && outcome.id === selector.id) ||
-      (selector.kind === 'rig' && outcome.kind === 'rig' && outcome.version <= selector.version)))) {
-    return refuse('CORRECTION_OUTCOME_MISMATCH', 'expected the distinct bound scratch result');
+  if (settled.modelSha256 !== applied.modelHash || (selector.kind === 'rig' && rig.sha256 === applied.modelHash)) {
+    return refuse('CORRECTION_OUTCOME_MISMATCH', 'expected the bound scratch result');
   }
-  return { ...common, kind: 'checked-patch' as const, applied, sessionBytes, patchBytes: patchText(patch), outcome: outcome ? selectorArgs(outcome) : null };
+  return { ...common, kind: 'checked-patch' as const, applied, sessionBytes, patchBytes: patchText(patch), outcome: null };
 }
 
 /** Standalone parts notes and pointed comments keep their original parts identity. */

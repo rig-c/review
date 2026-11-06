@@ -1,9 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { keptRoot, rebuildDir } from '../src/rebuild.ts';
+import { patchSha256, type ConfigPatch } from '../src/config-patch.ts';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadReview } from '../src/manifest.ts';
-import { freshSession, readSession, saveSession, sessionFile } from '../src/session.ts';
+import { freshSession, readSession, saveSession, sessionFile, type Feedback } from '../src/session.ts';
 import { startServer } from '../src/server.ts';
 test('loopback API rejects cross-origin mutation, bounds bodies, serves ranges and binds delayed save to current bytes',async()=>{
  const root=await mkdtemp(join(tmpdir(),'review-http-'));const input=join(root,'review.json');await writeFile(input,JSON.stringify({schema:'rig-review/1',id:'http',title:'HTTP',revision:'1',references:[{id:'video',label:'Reference bytes',type:'video',path:'clip.mp4'}],authoring:[{label:'HTML source',path:'page.html'},{label:'JS source',path:'payload.js'}]}));await writeFile(join(root,'clip.mp4'),'0123456789');await writeFile(join(root,'page.html'),"<script src='/assets/payload.js'></script>");await writeFile(join(root,'payload.js'),"fetch('/api/session')");const p=await loadReview(input);const stateDir=join(root,'state');const server=await startServer(p,{port:0,stateDir});const base=`http://127.0.0.1:${server.port}`;
@@ -59,6 +62,109 @@ test('selected correction keeps exact session bytes and pending made feedback ca
     expect(refused.status).toBe(400);
     expect(await refused.text()).toContain('CORRECTION_APPLY_PENDING');
     expect(await Bun.file(sessionFile(p,stateDir)).text()).toBe(bytes);
+  } finally {
+    server?.stop(true);
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
+test('made correction uses a retained build and only revalidates new or edited saved items', async () => {
+  // Hand-built seals exercise storage and transport, with no producer invocation.
+  const root=await mkdtemp(join(tmpdir(),'review-correction-retention-'));
+  const stateDir=join(root,'state');
+  const sha=(text:string)=>createHash('sha256').update(text).digest('hex');
+  const model=(name:string)=>JSON.stringify({spec:'rigc-compiled/3',name,pages:[{name:'page.png'}]});
+  let server: Awaited<ReturnType<typeof startServer>> | undefined;
+  try {
+    await writeFile(join(root,'review.json'),JSON.stringify({schema:'rig-review/1',id:'retained',title:'Retained',revision:'one',model:'skeleton.model.json',producer:{config:'config.json'}}));
+    await writeFile(join(root,'skeleton.model.json'),model('source'));
+    await writeFile(join(root,'page.png'),'source page');
+    await writeFile(join(root,'config.json'),'{"note":"source"}\n');
+    await mkdir(join(root,'out','rig'),{recursive:true});
+    await writeFile(join(root,'out','parts.json'),'{}');
+    for(const name of ['rig.json','motion.json','mesh_report.json'])await writeFile(join(root,'out','rig',name),'{}');
+    const p=await loadReview(root);
+    const {reviewedSource,sourceHash}=p;
+    const binding={id:p.manifest.id,revision:p.manifest.revision,sourceHash,reviewedSource};
+    const selector={stage:'rig-review',kind:'rig',version:1};
+    const item=(id:string):Feedback=>({id,summary:id,frameStart:0,frameEnd:0,target:{kind:'rig',name:'retained'},category:'quality'});
+    async function seal(name:string) {
+      const buildId=sha(name), dir=rebuildDir(stateDir,sourceHash,buildId), build=join(dir,'build');
+      await mkdir(build,{recursive:true});
+      await writeFile(join(build,'skeleton.model.json'),model(name));
+      await writeFile(join(build,'page.png'),name);
+      const modelHash=sha(model(name));
+      const patch:ConfigPatch={schema:'rig-review-config-patch/1',config_sha256:reviewedSource.handoff!.config.sha256,
+        ops:[{op:'replace',path:'/note',value:name}],producer:{name:'@rig-c/parts',version:'2.18.0'},op:{cmd:'rig',args:[]}};
+      const check={schema:'rig-review-check-summary/1',pass:true,exitCode:0,line:'check: PASS',bars:{GATE:'PASS'},gate:true,source:'check'};
+      const record={schema:'rig-review-applied/2',buildId,patch,patchSha256:patchSha256(patch),configHash:patch.config_sha256,modelHash,
+        producer:{package:patch.producer.name,version:patch.producer.version},compiler:{package:'@rig-c/core',version:'3.2.1'},
+        line:'producer result',check,diff:{count:1,paths:['/note']},op:'rig'};
+      const body={schema:'rig-review-applied-evidence/1',binding,buildId,operation:'rig',inputHash:null,
+        outputHash:sha(JSON.stringify({'skeleton.model.json':modelHash,'page.png':sha(name)})),modelHash,check,record};
+      const seals=join(stateDir,'applied-evidence',sourceHash);
+      await mkdir(seals,{recursive:true});
+      await writeFile(join(seals,buildId+'.json'),JSON.stringify({body,digest:sha(JSON.stringify(body))}));
+      return {dir,build,buildId,record,row:JSON.parse(JSON.stringify({...item(name),context:{correction:{path:'made',selector},applied:record}})) as Feedback};
+    }
+    const a=await seal('apply-a');
+    const session=freshSession(p);
+    const connect=()=>startServer(p,{port:0,stateDir,capability:'b'.repeat(64)});
+    server=await connect();
+    const save=()=>{
+      const origin='http://127.0.0.1:'+server!.port;
+      return fetch(origin+'/api/session',{method:'PUT',headers:{Origin:origin,'Content-Type':'application/json','X-Review-Capability':'b'.repeat(64)},body:JSON.stringify(session)});
+    };
+    const selected=async(id:string)=>{
+      const code="import {main} from './src/cli.ts'; await main(process.argv.slice(1),{stateDir:process.env.TEST_STATE});";
+      const child=Bun.spawn([process.execPath,'-e',code,'--','feedback',root,'--correction',id,'--format','json'],{env:{...process.env,TEST_STATE:stateDir},stdout:'pipe',stderr:'pipe'});
+      const [stdout,stderr,exit]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);
+      return {stdout,stderr,exit};
+    };
+    const refuse=async(code:string)=>{
+      const before=await Bun.file(sessionFile(p,stateDir)).text(), response=await save();
+      expect(response.status).toBe(400);expect(await response.text()).toContain(code);
+      expect(await Bun.file(sessionFile(p,stateDir)).text()).toBe(before);
+    };
+
+    session.feedback=[a.row];
+    expect((await save()).status).toBe(200);
+    const kept=keptRoot(stateDir,sourceHash);
+    await mkdir(kept,{recursive:true});
+    await rename(a.dir,join(kept,a.buildId));
+    const b=await seal('apply-b');
+    session.feedback=[a.row,b.row];
+
+    await writeFile(join(b.build,'skeleton.model.json'),model('tampered'));
+    await refuse('CORRECTION_RESULT_STALE');
+    await writeFile(join(b.build,'skeleton.model.json'),model('apply-b'));
+    await writeFile(join(b.build,'page.png'),'tampered page');
+    await refuse('CORRECTION_RESULT_STALE');
+    await writeFile(join(b.build,'page.png'),'apply-b');
+    const redirected=join(root,'redirected');
+    await rename(b.build,redirected);
+    await symlink(redirected,b.build);
+    await refuse('CORRECTION_RESULT_STALE');
+    await rm(b.build);
+    await rename(redirected,b.build);
+
+    expect((await save()).status).toBe(200);
+    expect(await selected(a.row.id)).toEqual({stdout:await Bun.file(sessionFile(p,stateDir)).text(),stderr:'',exit:0});
+    const forged=JSON.parse(JSON.stringify({...b.row,context:{correction:{path:'made',selector},applied:{...b.record,line:'forged'}}})) as Feedback;
+    session.feedback=[a.row,b.row,{...forged,id:'forged-new'}];
+    await refuse('STAGE_DRAFT_STALE');
+    // Edited saved evidence must not inherit the old row's trust.
+    session.feedback=[a.row,forged];
+    await refuse('STAGE_DRAFT_STALE');
+
+    await rm(join(kept,a.buildId),{recursive:true});
+    server.stop(true);server=await connect();
+    session.feedback=[a.row,b.row,item('ordinary-after-restart')];
+    expect((await save()).status).toBe(200);
+    const evicted=await selected(a.row.id);
+    expect(evicted.exit).toBe(1);expect(evicted.stderr).toContain('CORRECTION_RESULT_STALE');
+    session.feedback[0]={...a.row,summary:'Edited history requires evidence'};
+    await refuse('CORRECTION_RESULT_STALE');
   } finally {
     server?.stop(true);
     await rm(root,{recursive:true,force:true});

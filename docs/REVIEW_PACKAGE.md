@@ -905,7 +905,10 @@ supply it. The named model path is data for Create and is never opened by
 Review. Only explicitly marked correction rows can carry multiline text.
 
 A supported made item must match the server-owned settled Apply seal and
-retained scratch model and pages on save and on selected export. The check
+retained scratch model and pages when the item is added or changed and on
+selected export. Older unchanged items remain saved as historical evidence
+when a newer Apply or eviction changes the retained scratch builds. A fresh
+selected export still requires its retained result. The check
 must pass with exit zero, a passing gate and at least one PASS bar. Known
 SKIP, WARN, CLEAR, REPORTED and UNCLASSIFIED values and the producer line are
 retained as reported. Missing evidence and failed checks cannot become checked

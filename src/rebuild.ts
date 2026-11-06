@@ -946,7 +946,13 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const body=await readAppliedSeal(value as Record<string,unknown>);
     try{
       const root=await realpath(options.stateDir);
-      const dir=rebuildDir(root,p.sourceHash,applied.buildId);
+      const active=rebuildDir(root,p.sourceHash,applied.buildId);
+      const kept=join(keptRoot(root,p.sourceHash),applied.buildId);
+      let dir=active;
+      try{await lstat(active);}catch(error){
+        if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+        dir=kept;
+      }
       if(await realpath(dir)!==dir||await realpath(join(dir,'build'))!==join(dir,'build'))throw new Error('redirected scratch');
       if(applied.stageInputHash&&await stageInputDigest(dir,join(dir,applied.op==='build'||applied.cloth?.route==='build'?'out/rig':'rig'))!==applied.stageInputHash)throw new Error('scratch inputs changed');
       const actual=await hashBuild(join(dir,'build'),applied.buildId);

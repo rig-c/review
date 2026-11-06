@@ -1,3 +1,4 @@
+import {isDeepStrictEqual} from 'node:util';
 import {appliedValue,parseCorrection,projectSessionCorrection} from './correction-handoff.ts';
 import {stagePartsRoutes} from './stage-parts.ts';
 import {createControlServer,type ControlIdentity} from './control-server.ts';
@@ -76,10 +77,13 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       if(req.method==='PUT'&&url.pathname==='/api/session'){
         if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
         const input=await bodyJson(req);await unchanged();
-        return json(await saveSession(p,input,options.stateDir,async(session,sessionBytes)=>{
+        return json(await saveSession(p,input,options.stateDir,async(session,sessionBytes,previous)=>{
           const source={id:p.manifest.id,revision:p.manifest.revision,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource};
+          const previousRows=new Map(previous.feedback.map(row=>[row.id,row]));
           for(const feedback of session.feedback){
             const correction=parseCorrection((feedback.context as any)?.correction);
+            // An unchanged submitted row is historical, even after its scratch build is evicted.
+            if(correction?.path==='made'&&isDeepStrictEqual(previousRows.get(feedback.id),feedback))continue;
             const applied=appliedValue(feedback);
             await rebuilds.validateApplied(applied);
             if(correction){
