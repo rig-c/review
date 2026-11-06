@@ -1,6 +1,9 @@
 import {afterEach,expect,test} from 'bun:test';
 import {mkdtemp,mkdir,cp,readFile,writeFile,rm,realpath,readdir} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {connect} from 'node:net';
-import {openFingerprint,openReview,running} from '../src/open.ts';
+import {digest} from '../src/interview-project.ts';
+import {startFront} from '../src/front.ts';
+import {startServer} from '../src/server.ts';
+import {loadOpenPackage,openFingerprint,openReview,running,type RecordFile} from '../src/open.ts';
 import {instanceAccess,readOnlyReason} from '../web/instance-access.ts';
 const roots:string[]=[],owned:{pid:number;origin:string;nonce:string;status:string}[]=[];
 // Stop only processes whose private nonce still answers, then prove they are gone.
@@ -12,6 +15,44 @@ function freePort(){const server=Bun.serve({hostname:'127.0.0.1',port:0,fetch:()
 function rawHost(port:number,host:string,path:string):Promise<string>{return new Promise((resolve,reject)=>{const socket=connect(port,'127.0.0.1');let out='';socket.on('data',chunk=>{out+=chunk;});socket.on('end',()=>resolve(out));socket.on('error',reject);socket.write(`GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);});}
 const cap=(url:string)=>new URL(url).hash.slice(5);
 async function cli(args:string[],state:string,env:Record<string,string>={}){const child=Bun.spawn([process.execPath,'src/cli.ts',...args],{env:{...process.env,RIG_REVIEW_STATE_DIR:state,...env},stdout:'pipe',stderr:'pipe'});const [stdout,stderr,exit]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);return {stdout,stderr,exit};}
+
+test('managed front relays the named stale interview picks refusal', async () => {
+ const root = await realpath(await mkdtemp(join(tmpdir(),'review-front-')));
+ roots.push(root);
+ const project = join(root,'project'), control = join(root,'open');
+ await mkdir(project);
+ await mkdir(control);
+ const archive = await readFile(new URL('./fixtures/create-reopened-v2/project.tar.gz',import.meta.url));
+ expect(digest(archive)).toBe('35fb7799f48336e10c7999dbeeacdfa87b2e6e015b59a76c6a37d33966f311ff');
+ const extracted = Bun.spawnSync(['tar','-xzf','-','-C',project],{stdin:archive});
+ if(extracted.exitCode!==0)throw new Error(extracted.stderr.toString());
+ await mkdir(join(project,'reviewer-picks'));
+ const input = join(project,'derived/review/v2/out');
+ const loaded = await loadOpenPackage({input,project:{root:project,version:2,picksDir:'reviewer-picks'}});
+ if(loaded.mode!=='single'||!loaded.joined)throw new Error('Expected a joined inspection');
+ const identity = {key:'a'.repeat(64),nonce:crypto.randomUUID(),fingerprint:await openFingerprint(),contentHash:loaded.contentHash};
+ const capability = 'b'.repeat(64);
+ const worker = await startServer(loaded.p,{port:0,stateDir:join(root,'state'),open:identity,joined:loaded.joined,capability});
+ try{
+  const record:RecordFile = {schema:'rig-review-open-instance/1',...identity,pid:process.pid,origin:`http://127.0.0.1:${worker.port}`,mode:'single',capability};
+  await writeFile(join(control,identity.key+'.json'),JSON.stringify(record),{mode:0o600});
+  const front = startFront({control,port:freePort(),nonce:crypto.randomUUID(),fingerprint:identity.fingerprint});
+  try{
+   const base = `${front.origin}/instances/${identity.key}`;
+   const healthy = await fetch(base+'/api/interview',{signal:AbortSignal.timeout(5000)});
+   expect(healthy.status).toBe(200);
+   await healthy.body?.cancel();
+   const image = join(input,'parts/torso.png');
+   await writeFile(image,Buffer.concat([await readFile(image),Buffer.from([0])]));
+   const response = await fetch(base+'/api/interview/picks',{
+    method:'POST',headers:{Origin:front.origin,'Content-Type':'application/json','X-Review-Capability':capability},
+    body:'{}',signal:AbortSignal.timeout(5000),
+   });
+   expect(response.status).toBe(409);
+   expect(await response.json()).toEqual({error:'INTERVIEW_OPTIONS_STALE'});
+  }finally{front.stop();}
+ }finally{worker.stop(true);}
+});
 
 test('managed front routes by key, refuses unlisted/oversized/foreign-host requests and never serves a capability',async()=>{
  const f=await fixture(),other=join(f.root,'other');await cp(f.producer,other,{recursive:true});await writeFile(join(other,'report.json'),JSON.stringify({spec:'rig-pose-report/1',animation:'inspect',frameTimes:[0,.5,1]}));const port=freePort();
@@ -120,7 +161,7 @@ test('front stays up while control directory has a live record and exits within 
  const frontSrc=await readFile(new URL('../src/front.ts',import.meta.url),'utf8');
  const plantedFrontSrc=frontSrc.replace(/async function liveInstances\(control:string\):Promise<boolean>\{[^\n]*\}/,'async function liveInstances(control:string):Promise<boolean>{for(const name of await readdir(control)){if(/^[a-f0-9]{64}\\.claim$/.test(name))return true;}return false;}');
  const plantedDir=join(f.root,'planted-src');await mkdir(plantedDir,{recursive:true});
- for(const name of ['open.ts','open-protocol.ts','live-lifecycle.ts','control.ts','reference.ts','manifest.ts','compare.ts','server.ts','compare-server.ts','animation-selection.ts','versions.ts','handoff.ts','state-dir.ts','stage-parts.ts']){
+ for(const name of ['open.ts','open-protocol.ts','live-lifecycle.ts','control.ts','reference.ts','manifest.ts','compare.ts','server.ts','compare-server.ts','animation-selection.ts','versions.ts','handoff.ts','state-dir.ts','stage-parts.ts','interview-routes.ts','interview-picks.ts','joined-project.ts']){
   await writeFile(join(plantedDir,name),`export * from ${JSON.stringify(join(import.meta.dir,'../src',name))};\n`);
  }
  await writeFile(join(plantedDir,'front.ts'),plantedFrontSrc);

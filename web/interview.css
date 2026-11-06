@@ -24,3 +24,5 @@ code { overflow-wrap: anywhere; }
 
 details { margin-block: 1rem; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.interview-binding { overflow-wrap: anywhere; }

@@ -360,6 +360,24 @@ The managed front forwards only the trusted stage-atlas frame query (`stageEmbed
 
 ## Create choice interview
 
+Open the interview beside its separated parts in the standard inspection host.
+Use the materialized Create review package and designate the exact project and
+rig version. The picks directory must already exist inside the project and be
+separate from its inputs.
+
+```sh
+rig-review open /path/to/project/derived/review/v2/out \
+  --project /path/to/project --project-version 2 --picks-dir scratch/review-picks
+```
+
+Select **2 Interview**. The host checks the recorded version's package
+inventory and pins the project digest and inspected source. A different
+project or version returns `INTERVIEW_SOURCE_MISMATCH`. A changed input
+requires reopening and a project without interview content reports
+`INTERVIEW_UNAVAILABLE`. Navigation retains the open form and part selection.
+Use **Save explicit picks** to persist pending choices. Historical answers
+remain read-only and opening or saving picks does not sign off any stage.
+
 From a create project with retained choice sets, create a dedicated output
 directory and open the foreground Stage 2 view:
 
