@@ -668,7 +668,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
       assert.equal(checkDom.verdict, failed
         ? `Producer check failed · ${breathLine}`
         : lang==='ko'?'프로듀서 검사 통과':'Producer check passed');
-      assert.equal(checkDom.op, failed?'Check failed':lang==='ko'?'적용됨':'applied');
+      assert.equal(checkDom.op, failed?' · Check failed':lang==='ko'?' · 적용됨':' · applied');
       assert.equal(checkDom.applied, !failed);
       assert.equal(checkDom.verdictVisible, true);
       await shot(name);
@@ -682,7 +682,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
         })()`);
         await put(label(name + '-pending-op-geometry'), geometry);
         const scrolled = await wait(readCheckDom, value => value?.opVisible === true, label(name + '-pending-op'));
-        assert.equal(scrolled?.op, 'Check failed');
+        assert.equal(scrolled?.op, ' · Check failed');
         assert.equal(scrolled?.applied, false);
         await put(label(name + '-pending-op-dom'), scrolled);
         await shot(name + '-pending-op');

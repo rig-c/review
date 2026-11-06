@@ -1,3 +1,4 @@
+import {renderIdlePendingRow} from '../web/idle-panel.ts';
 import {afterEach,expect,test} from 'bun:test';
 import {bindDomI18n,getLanguagePreference,setLanguagePreference,setSourceAttribute,setSourceText,sourceAttribute,sourceTextContent,tr,unbindDomI18n} from '../web/i18n.ts';
 import {renderHistoryCheck,type AppliedHistoryView} from '../web/rebuild-client.ts';
@@ -41,11 +42,28 @@ type Rec={type:string;target:any;attributeName?:string;addedNodes:any[]};
 function dom(){
  const records:Rec[]=[];let writes=0;
  const text=(value:string,parent:any)=>{const node:any={nodeType:3,parentElement:parent,get nodeValue(){return value;},set nodeValue(v:string){writes++;value=v;records.push({type:'characterData',target:node,addedNodes:[]});}};return node;};
+ const doc={
+  createTreeWalker(root:Element){
+   function* texts(node:Node):Generator<Node>{
+    if(node.nodeType===3)yield node;
+    else for(const child of node.childNodes)yield* texts(child);
+   }
+   const nodes=texts(root);
+   return {nextNode:()=>nodes.next().value??null};
+  },
+ };
  const element=(id:string,tag='SPAN',initial='')=>{
   const attrs=new Map<string,string>();
-  const el:any={nodeType:1,id,tagName:tag,className:'',dataset:{},parentElement:null,childNodes:[],classList:{contains:()=>false},closest:()=>null,querySelectorAll:()=>[],
+  const el:any={nodeType:1,id,tagName:tag,className:'',dataset:{},ownerDocument:doc,parentElement:null,childNodes:[],classList:{contains:()=>false},closest:()=>null,querySelectorAll:()=>[],
    getAttribute:(n:string)=>attrs.get(n)??null,setAttribute:(n:string,v:string)=>{writes++;attrs.set(n,v);records.push({type:'attributes',target:el,attributeName:n,addedNodes:[]});},
-   get textContent(){return el.childNodes.map((n:any)=>n.nodeValue).join('');},
+   append(...children:any[]){
+    for(const child of children){
+     const node=typeof child==='string'?text(child,el):child;
+     node.parentElement=el;
+     el.childNodes.push(node);
+    }
+   },
+   get textContent(){return el.childNodes.map((n:any)=>n.nodeType===3?n.nodeValue:n.textContent).join('');},
    set textContent(v:string){writes++;const n=text(v,el);el.childNodes=[n];records.push({type:'childList',target:el,addedNodes:[n]});}};
   if(initial)el.childNodes=[text(initial,el)];
   return el;
@@ -137,4 +155,34 @@ test('#448 failed Apply renders its exact Korean verdict and producer readings',
  renderHistoryCheck(el,{...row,check:{...row.check!,pass:true,exitCode:0,bars:{BREATH_VISIBLE:'PASS'}},failedBarLines:undefined});
  expect(el.dataset.checkVerdict).toBe('passed');
  expect(el.textContent).toBe('프로듀서 검사 통과');
+});
+
+
+test('#448 the real pending row renders passed, failed and unavailable states in Korean',()=>{
+ const d=dom();
+ const original=Object.getOwnPropertyDescriptor(globalThis,'document');
+ try {
+  Object.defineProperty(globalThis,'document',{configurable:true,value:{
+   createElement:(tag:string)=>d.element('',tag.toUpperCase()),
+  }});
+  for(const [check,expected,english] of [
+   ['passed',' · 적용됨',' · applied'],
+   ['failed',' · 검사 실패',' · Check failed'],
+   ['unavailable',' · 검사 결과 없음',' · Check unavailable'],
+  ] as const){
+   const row=renderIdlePendingRow({op:'replace',path:'/motion/tracks/0/amp',value:0.75},check,false,()=>{});
+   bindKorean(row);
+   const status=Array.from(row.childNodes).find((node):node is HTMLElement=>
+    node.nodeType===1 && 'idleOpCheck' in (node as HTMLElement).dataset);
+   expect(status?.dataset.idleOpCheck).toBe(check);
+   expect(status?.textContent).toBe(expected);
+   expect(row.className).toBe(check==='passed'?'applied':'');
+   setLanguagePreference('en');
+   expect(status?.textContent).toBe(english);
+   unbindDomI18n();
+  }
+ }finally{
+  if(original)Object.defineProperty(globalThis,'document',original);
+  else Reflect.deleteProperty(globalThis,'document');
+ }
 });
