@@ -26,6 +26,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "interview.recommended": "AI 추천",
   "interview.note": "메모 (선택 사항)",
   "interview.save": "선택 기록 저장",
+  "interview.unsaved": "저장하지 않은 변경 사항이 있습니다.",
   "interview.saved": "선택 기록을 저장했습니다.",
   "interview.choose": "각 질문에서 하나씩 직접 선택한 뒤 저장하세요.",
   "interview.readOnly": "읽기 전용입니다. 선택 기록을 저장하려면 실행 시 표시된 URL을 여세요.",

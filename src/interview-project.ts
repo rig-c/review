@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { isDeepStrictEqual as equal } from 'node:util';
 
@@ -200,10 +200,16 @@ function inspectContext(root: string, project: RecordData, raw: RecordData, set:
 }
 
 export function readProject(root: string, now = Date.now()) {
-  root = resolve(root);
-  if (root !== checkedPath('/', root.slice(1), true)) return invalid('Invalid project root');
-  const bytes = readRegular(checkedPath(root, 'project.json'), 8 * 1024 * 1024);
-  const project = jsonObject(bytes);
+  try {
+    root = realpathSync(resolve(root));
+    if (!lstatSync(root).isDirectory()) return invalid('Project root must be a directory');
+  } catch {return invalid('Project root must be a readable directory');}
+  let bytes: Buffer;
+  let project: RecordData;
+  try {
+    bytes = readRegular(checkedPath(root, 'project.json'), 8 * 1024 * 1024);
+    project = jsonObject(bytes);
+  } catch {return invalid('project.json must be a readable regular JSON file');}
   if (project.schema !== 'rig-create/project@0') return invalid('Unsupported create project');
   const interview = object(project.interview);
   const questions: InterviewQuestion[] = [];

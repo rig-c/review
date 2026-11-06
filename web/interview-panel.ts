@@ -38,12 +38,15 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
     onLanguageChange(render); render(); return;
   }
   const {questions, historical:legacy} = data;
-  const drafts = questions.map(question => ({
-    picks:new Map(question.saved?.picks.map(pick => [pick.ask, pick])),
-    note:question.saved?.note,
-    image:0,
-    status:question.saved ? 'interview.saved' : '',
-  }));
+  const drafts = questions.map(question => {
+    const saved = question.editable ? question.saved : null;
+    return {
+      picks:new Map(saved?.picks.map(pick => [pick.ask, pick])),
+      note:saved?.note,
+      image:0,
+      status:saved ? 'interview.saved' : '',
+    };
+  });
   let selected = 0;
   let busy = false;
   const render = () => {
@@ -102,6 +105,10 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
     form.append(provenance, binding);
     const historical = question.answer?.choice as {picks?:Picks['picks'];note?:string} | undefined;
     const status = element('p'); status.setAttribute('role','status');
+    const markUnsaved = () => {
+      state.status = 'interview.unsaved';
+      status.textContent = t(state.status);
+    };
     for (const ask of question.set.asks) {
       const group = element('fieldset');
       group.append(element('legend', ask.prompt));
@@ -112,7 +119,7 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
       other.hidden = pick?.other_text === undefined && !ask.options.some(option => option.id === pick?.option_id && option.kind === 'other');
       other.oninput = () => {
         const previous = state.picks.get(ask.id);
-        if (previous) state.picks.set(ask.id, {...previous, other_text:other.value});
+        if (previous) {state.picks.set(ask.id, {...previous, other_text:other.value}); markUnsaved();}
       };
       for (const option of ask.options) {
         const label = element('label'); label.className = 'interview-option';
@@ -121,6 +128,7 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
         radio.onchange = () => {
           const next = {ask:ask.id, option_id:option.id};
           state.picks.set(ask.id, option.kind === 'other' ? {...next, other_text:other.value} : next);
+          markUnsaved();
           other.hidden = option.kind !== 'other';
           other.required = option.kind === 'other';
           pending.hidden = option.kind === 'value';
@@ -142,7 +150,7 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
     const noteLabel = element('label', t('interview.note'));
     const note = element('textarea');
     note.value = state.note ?? historical?.note ?? '';
-    note.oninput = () => {state.note = note.value;};
+    note.oninput = () => {state.note = note.value; markUnsaved();};
     noteLabel.append(note);
     fields.append(noteLabel);
     if (question.editable) {

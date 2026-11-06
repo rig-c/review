@@ -33,3 +33,25 @@ test('interview routes bind image indices and refuse forged, oversized and stale
     expect(readdirSync(join(fixture.root,'picks'))).toEqual(before);
   } finally {fixture.dispose();}
 });
+
+test('a consumed set ignores stale review output and preserves the historical answer', async () => {
+  const fixture = projectFixture();
+  try {
+    const choice = {spec:'rig-create/interview-choice@1',set:fixture.set,
+      picks:[{ask:'reference',option_id:'a'}],note:'Historical note'};
+    const answer = {at:'2020-01-03T00:00:00Z',choice};
+    const project = {...fixture.project,interview:{...fixture.project.interview,framing:[{id:'reference',answer}]}};
+    writeFileSync(join(fixture.root,'project.json'),JSON.stringify(project));
+    writeFileSync(join(fixture.root,'picks',fixture.set.sha256+'.json'),JSON.stringify({
+      schema:'rig-review/interview-picks@1',set:fixture.set,picks:[{ask:'reference',option_id:'b'}],note:'Stale note',
+      by:'user',at:answer.at,
+    }));
+    const origin = 'http://127.0.0.1:4321';
+    const route = interviewRoutes(fixture.root,'picks','a'.repeat(64));
+    const response = await route(new Request(origin+'/api/interview'),origin);
+    const {questions:[question]} = await response!.json();
+    expect(question.editable).toBe(false);
+    expect(question.saved).toBeNull();
+    expect(question.answer).toEqual(answer);
+  } finally {fixture.dispose();}
+});

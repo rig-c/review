@@ -66,3 +66,52 @@ test('legacy free-text is readable without manufacturing a set or pick', () => {
     expect(opened.historical).toEqual([{question:'reference', ...answer}]);
   } finally {fixture.dispose();}
 });
+
+test('designated root aliases are canonicalized while project.json aliases and missing inputs are refused by name', () => {
+  const fixture = projectFixture();
+  try {
+    const alias = join(fixture.root,'root-link');
+    symlinkSync(fixture.root,alias);
+    expect(readProject(alias)).toEqual(readProject(fixture.root));
+    expect(() => readProject(join(fixture.root,'missing'))).toThrow('INTERVIEW_CHOICE_INVALID: Project root');
+    const path = join(fixture.root,'project.json');
+    rmSync(path);
+    expect(() => readProject(fixture.root)).toThrow('INTERVIEW_CHOICE_INVALID: project.json');
+    symlinkSync(join(fixture.root,fixture.input.path),path);
+    expect(() => readProject(fixture.root)).toThrow('INTERVIEW_CHOICE_INVALID: project.json');
+  } finally {fixture.dispose();}
+});
+
+test('rigging context retains both same-hash part identities and refuses missing bound PNG', () => {
+  const fixture = projectFixture();
+  try {
+    const put = (path:string, bytes:string|Buffer) => {
+      writeFileSync(join(fixture.root,path),bytes);
+      return {path,sha256:digest(bytes)};
+    };
+    const signoffAt = '2019-12-31T00:00:00Z';
+    const evidence = put('evidence/parts-review.json','{}');
+    const structure = put('evidence/structure.json','{}');
+    const path = 'parts-input';
+    mkdirSync(join(fixture.root,path,'parts'),{recursive:true});
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXn8AAAAASUVORK5CYII=', 'base64');
+    const manifest = put(path+'/parts.json',JSON.stringify({parts:[{name:'eye_l'},{name:'eye_r'}]}));
+    const left = put(path+'/parts/eye_l.png',png);
+    const right = put(path+'/parts/eye_r.png',png);
+    const parts = {path,files:[manifest,left,right]};
+    const option = {...fixture.option,question:'bones',stage:'rigging-interview',context:{
+      kind:'parts',accepted_parts:{signoff_at:signoffAt,evidence},structure,draft_id:'draft',parts,
+    }};
+    const set = put(fixture.set.path,JSON.stringify(option));
+    put('project.json',JSON.stringify({...fixture.project,
+      signoffs:[{stage:'parts-review',checkpoint:null,by:'user',at:signoffAt,draft_id:'draft',evidence,structure}],
+      drafts:[{id:'draft',at:signoffAt,parts}],
+      interview:{order:fixture.project.interview.order,waypoints:[{id:'bones',pending_options:set}]},
+    }));
+    const question = readProject(fixture.root).questions[0]!;
+    expect(left.sha256).toBe(right.sha256);
+    expect(question.images.map(({name,ref})=>({name,ref}))).toEqual([{name:'eye_l',ref:left},{name:'eye_r',ref:right}]);
+    rmSync(join(fixture.root,right.path));
+    expect(() => readProject(fixture.root)).toThrow('INTERVIEW_OPTIONS_STALE');
+  } finally {fixture.dispose();}
+});

@@ -26,6 +26,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "interview.recommended": "AI recommendation",
   "interview.note": "Note (optional)",
   "interview.save": "Save explicit picks",
+  "interview.unsaved": "Unsaved changes.",
   "interview.saved": "Picks saved.",
   "interview.choose": "Choose one option per prompt, then save.",
   "interview.readOnly": "Read-only view. Open the launch URL to save picks.",

@@ -30,8 +30,10 @@ const until = async (expression: string) => {
   }
   throw Error('Interview browser condition unavailable: ' + expression);
 };
+let navigation = 0;
 const navigate = async (launch: string, lang: string, setId: string) => {
   const url = new URL(launch); url.searchParams.set('lang',lang);
+  url.searchParams.set('visit',String(++navigation));
   await browser.goto(url.href);
   await until('!!document.querySelector("main select")');
   await browser.evaluate(`(()=>{const s=document.querySelector('main select');s.selectedIndex=[...s.options].findIndex(o=>o.text.includes(${JSON.stringify(' · ' + setId)}));s.dispatchEvent(new Event('change'));})()`);
@@ -60,12 +62,24 @@ const verifyOptions = async (root: string, id: string) => {
 };
 const results: unknown[] = [];
 try {
+  const {snapshot:historySet,sha256:historySha} = await readSet(historyRoot,'example-bones');
+  const project = JSON.parse(await readFile(join(historyRoot,'project.json'),'utf8'));
+  const historical = project.interview.waypoints.find((item:{id:string})=>item.id==='bones').guide.choice;
+  const stale = {schema:'rig-review/interview-picks@1',set:historical.set,
+    picks:historySet.asks.map((ask:{id:string})=>({ask:ask.id,option_id:'alternative'})),
+    note:'Stale review output must not appear',by:'user',at:capturedAt};
+  await writeFile(join(historyRoot,out,historySha+'.json'),JSON.stringify(stale),{flag:'wx'});
   const history = await startInterviewServer(historyRoot,out,0);
   const live = await startInterviewServer(liveRoot,out,0);
   servers.push(history,live);
   await browser.setViewport(1360,950);
   for (const lang of ['en','ko']) {
     await navigate(history.url,lang,'example-bones');
+    assert.deepEqual(await browser.evaluate('[...document.querySelectorAll("input:checked")].map(radio=>radio.value)'),
+      historical.picks.map((pick:{option_id:string})=>pick.option_id));
+    assert.equal(await browser.evaluate('document.querySelector("form > fieldset > label > textarea").value'),historical.note??'');
+    assert.equal(await browser.evaluate('document.querySelector("form [role=status]").textContent'),
+      lang==='en'?'Historical answer':'이전 답변');
     const options = await verifyOptions(historyRoot,'example-bones');
     const names = await browser.evaluate<string[]>('[...document.querySelectorAll("aside button")].map(button=>button.textContent)');
     const {snapshot} = await readSet(historyRoot,'example-bones');
@@ -131,7 +145,37 @@ try {
     assert.equal(await browser.evaluate('document.querySelector("form > fieldset > label > textarea").value'),note);
     await selectTorso();
     await writeFile(join(artifacts,'live-'+kind+'-'+lang+'.png'),await browser.screenshot());
-    results.push({id,kind,lang,filename,saved});
+    const status = 'document.querySelector("form [role=status]").textContent';
+    const savedLabel = lang==='en'?'Picks saved.':'선택 기록을 저장했습니다.';
+    const unsavedLabel = lang==='en'?'Unsaved changes.':'저장하지 않은 변경 사항이 있습니다.';
+    const edit = (selector:string,value:string) => browser.evaluate(`(()=>{const field=document.querySelector(${JSON.stringify(selector)});field.value=${JSON.stringify(value)};field.dispatchEvent(new Event('input'));})()`);
+    const noteField = 'form > fieldset > label > textarea';
+    assert.equal(await browser.evaluate(status),savedLabel);
+    await browser.evaluate(`document.querySelector('fieldset fieldset input[value="alternative"]').click()`);
+    assert.equal(await browser.evaluate(status),unsavedLabel);
+    if (kind==='other') {
+      await navigate(live.url,lang,id);
+      assert.equal(await browser.evaluate(status),savedLabel);
+      await edit('fieldset fieldset textarea',words+' edited');
+      assert.equal(await browser.evaluate(status),unsavedLabel);
+      await browser.evaluate('document.querySelector("form [role=status]").scrollIntoView({block:"center"})');
+      await writeFile(join(artifacts,'unsaved-other-en.png'),await browser.screenshot());
+    }
+    await navigate(live.url,lang,id);
+    assert.equal(await browser.evaluate(status),savedLabel);
+    await edit(noteField,note+' edited');
+    assert.equal(await browser.evaluate(status),unsavedLabel);
+    await selectTorso();
+    await browser.evaluate(`(()=>{const field=document.querySelector('header select');field.value=${JSON.stringify(lang==='en'?'ko':'en')};field.dispatchEvent(new Event('change'));})()`);
+    assert.equal(await browser.evaluate(status),lang==='en'?'저장하지 않은 변경 사항이 있습니다.':'Unsaved changes.');
+    await browser.evaluate(`(()=>{const field=document.querySelector('main select');const previous=field.selectedIndex;field.selectedIndex=0;field.dispatchEvent(new Event('change'));const restored=document.querySelector('main select');restored.selectedIndex=previous;restored.dispatchEvent(new Event('change'));})()`);
+    assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(noteField)}).value`),note+' edited');
+    assert.equal(await browser.evaluate(status),lang==='en'?'저장하지 않은 변경 사항이 있습니다.':'Unsaved changes.');
+    await browser.evaluate(`(()=>{const field=document.querySelector('header select');field.value=${JSON.stringify(lang)};field.dispatchEvent(new Event('change'));})()`);
+    await browser.evaluate('document.querySelector("form [role=status]").scrollIntoView({block:"center"})');
+    await writeFile(join(artifacts,'unsaved-note-'+lang+'.png'),await browser.screenshot());
+    assert.deepEqual(JSON.parse(await readFile(join(liveRoot,out,filename),'utf8')),saved);
+    results.push({id,kind,lang,filename,saved,unsavedEditsVerified:true});
   }
   assert.deepEqual(await seal(historyRoot),histories);
   assert.deepEqual(await seal(liveRoot),liveInputs);

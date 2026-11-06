@@ -55,7 +55,7 @@ export function interviewRoutes(root: string, output: string, capability: string
         current();
         const dir = destination();
         return json({historical:opened.historical, questions:opened.questions.map(question => ({
-          ...question, saved:readPicks(dir, question),
+          ...question, saved:question.editable ? readPicks(dir, question) : null,
           images:question.images.map(({name}, index) => ({name, url:'/api/interview/image/' + question.ref.sha256 + '/' + index})),
         }))});
       }

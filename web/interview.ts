@@ -1,4 +1,4 @@
-import { getLanguage, setLanguagePreference, t } from './i18n.ts';
+import { getLanguage, setLinkLanguage, setLanguagePreference, t } from './i18n.ts';
 import { pageInstanceAccess } from './instance-access.ts';
 import { mountInterview } from './interview-panel.ts';
 import { connectLiveWindow } from './live-connection.ts';
@@ -15,6 +15,7 @@ function localize() {
 }
 languages.value = getLanguage();
 languages.onchange = () => {
+  setLinkLanguage(null);
   setLanguagePreference(languages.value === 'ko' ? 'ko' : 'en');
   localize();
 };
