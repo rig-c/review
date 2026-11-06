@@ -42,8 +42,18 @@ export function bindDirectionPanel(before: HTMLElement, read: () => DirectionVie
   host.hidden = true;
   const title = document.createElement('summary');
   const body = document.createElement('div');
+  const metadata = document.createElement('div');
+  const details = document.createElement('details');
+  details.id = 'direction-authored-keys';
+  details.hidden = true;
+  const summary = document.createElement('summary');
+  const keys = document.createElement('pre');
+  keys.id = 'direction-authored-body';
+  summary.setAttribute('aria-controls', keys.id);
+  details.append(summary);
+  body.append(metadata, details);
   host.append(title, body);
-  before.before(host);
+  before.before(host, keys);
   function refresh() {
     if (host.hidden) return;
     const view = read();
@@ -55,7 +65,7 @@ export function bindDirectionPanel(before: HTMLElement, read: () => DirectionVie
     });
     const list = document.createElement('ul');
     list.append(...rows);
-    body.replaceChildren(list);
+    metadata.replaceChildren(list);
     if (view.sets.length) {
       const label = document.createElement('label');
       label.textContent = t('direction.chooseSet');
@@ -69,23 +79,22 @@ export function bindDirectionPanel(before: HTMLElement, read: () => DirectionVie
       picker.value = view.activeSet ?? '';
       picker.onchange = () => set(picker.value);
       label.append(picker);
-      body.append(label);
+      metadata.append(label);
     }
     if (view.model?.inspected && view.authored) {
       const { camera, timing, take } = view.authored;
-      const details = document.createElement('details');
-      const summary = document.createElement('summary');
       summary.textContent = t('direction.keys');
-      const keys = document.createElement('pre');
       keys.textContent = JSON.stringify({ camera, timing, take }, null, 2);
-      details.append(summary, keys);
-      body.append(details);
+      details.hidden = false;
+    } else {
+      details.hidden = true;
+      keys.textContent = '';
     }
   }
   const language = onLanguageChange(refresh);
   return {
     refresh,
     show(active: boolean) { host.hidden = !active; refresh(); },
-    dispose() { language(); host.remove(); },
+    dispose() { language(); host.remove(); keys.remove(); },
   };
 }
