@@ -57,6 +57,7 @@ type PicksExchange = {request:string; response?:{status:number; body:string}; er
 const actionGuard = `function action(element, selector) {
   const refuse = reason => { throw Error('FOUR_STAGE_ACTION_TARGET: ' + selector + ' (' + reason + ')'); };
   if (!element) refuse('missing');
+  if (!element.isConnected) refuse('detached');
   if (element.matches(':disabled') || element.closest('[aria-disabled=true]')) refuse('disabled');
   if (element.closest('[hidden], [inert]')) refuse('hidden or inert ancestor');
   const view = element.ownerDocument.defaultView;
@@ -201,8 +202,10 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
       ${actionGuard}
       const d=action(${frame},'parts iframe').contentDocument;
       const field=selector=>action(d.querySelector(selector),selector);
-      for(const item of d.querySelectorAll('[data-pv-item]')){
-        action(item,'[data-pv-item='+item.dataset.pvItem+']').click();
+      const partIds=[...d.querySelectorAll('[data-pv-item]')].map(item=>item.dataset.pvItem);
+      for(const partId of partIds){
+        // Selecting a part and changing its verdict each replace the list buttons.
+        field('[data-pv-item="'+CSS.escape(partId)+'"]').click();
         field('[data-pv-outcome][value=clean]').click();
         const mesh=d.querySelector('#pv-mesh-panel select');
         if(mesh){
@@ -302,7 +305,12 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         if(index<0||s.options[index].disabled)throw Error('FOUR_STAGE_ACTION_TARGET: interview set option');
         s.selectedIndex=index;
         s.dispatchEvent(new Event('change'));
-        for(const choice of d.querySelectorAll('form input[value=keep]'))action(choice,'keep option for '+choice.name).click();
+        const keep='form input[type=radio][value=keep]';
+        const asks=[...d.querySelectorAll(keep)].map(choice=>choice.name);
+        for(const ask of asks){
+          const selector=keep+'[name="'+CSS.escape(ask)+'"]';
+          action(d.querySelector(selector),selector).click();
+        }
         const notes=d.querySelectorAll(${interviewNote}), note=action(notes[0],${interviewNote});
         if(notes.length!==1||note.closest('fieldset fieldset'))throw Error('FOUR_STAGE_ACTION_TARGET: expected exactly one form-level interview note');
         note.value=${JSON.stringify(note)};note.dispatchEvent(new Event('input'));
@@ -779,7 +787,17 @@ async function runLanguage(lang: Language, page: InputCdpSession) {
         ready:doc?.body.dataset.ready??null,
         reason:status?.textContent??null,
         reasonResult:status?.dataset.result??null,
-        save:save?{disabled:save.disabled,title:save.title,hidden:save.hidden}:null
+        save:save?{disabled:save.disabled,title:save.title,hidden:save.hidden}:null,
+        parts:doc?[...doc.querySelectorAll('[data-pv-item]')].map(item=>({
+          id:item.dataset.pvItem,current:item.getAttribute('aria-current'),connected:item.isConnected,
+          visible:[...item.getClientRects()].some(rect=>rect.width>0&&rect.height>0),
+          disabled:item.matches(':disabled'),outcome:item.querySelector('[data-outcome]')?.dataset.outcome??null
+        })):[],
+        partOutcome:doc?.querySelector('[data-pv-outcome]:checked')?.value??null,
+        partNote:doc?.querySelector('#pv-note')?.value??null,
+        meshOutcome:doc?.querySelector('#pv-mesh-panel select')?.value??null,
+        meshNote:doc?.querySelector('#pv-mesh-panel textarea')?.value??null,
+        overall:doc?.querySelector('#pv-overall')?.value??null
       };
     })()`).catch(() => null);
     await put(label('first-error'), {error:String(error), iframeDiagnostics, interviewDiagnostics:await evaluate(interviewDom).catch(() => null)});
