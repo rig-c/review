@@ -7,6 +7,19 @@ const root = join(import.meta.dir, '..');
 const { scripts } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const declaration = JSON.parse(readFileSync(join(root, 'scripts/tree-verdict.json'), 'utf8'));
 
+test('the collector uploads its receipt only when the producer created it', () => {
+  const workflow = Bun.YAML.parse(readFileSync(join(root, declaration.workflow), 'utf8')) as {
+    jobs: Record<string, { steps: { id?: string; uses?: string; if?: string }[] }>;
+  };
+  const { steps } = workflow.jobs[declaration.producer.job];
+  const upload = steps.filter(step => step.uses?.startsWith('actions/upload-artifact@'));
+  expect(upload).toHaveLength(1);
+  expect(upload[0]?.if).toBe("${{ steps.receipt.outputs.receipt-created == 'true' }}");
+  const producerIndex = steps.findIndex(step => step.id === 'receipt');
+  expect(producerIndex).toBeGreaterThanOrEqual(0);
+  expect(steps.findIndex(step => step === upload[0])).toBeGreaterThan(producerIndex);
+});
+
 test('the publish hook declares the entire original gate in order', () => {
   expect(scripts.prepublishOnly).toBe('node scripts/prepublish.cjs');
   expect(scripts.test).toBe('bun test');
