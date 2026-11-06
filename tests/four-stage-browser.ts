@@ -15,6 +15,7 @@ import { inventory, materializeFourStages } from './helpers/four-stage-fixture.t
 import { walkCheckpoint, WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
 import { walkDialogs } from './helpers/walk-dialog.ts';
 import { idleAmpSelector } from './helpers/walk-locale.ts';
+import { fullyVisible } from './helpers/walk-visibility.ts';
 import { freshWalkReopen } from './helpers/walk-reopen.ts';
 import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
 
@@ -649,26 +650,37 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
       }
       const verdictSelector = `#applied-list li[data-build-id="${record.buildId}"].on-stage [data-check-verdict]`;
       const opSelector = '#idle-pending-list li [data-idle-op-check]';
-      const readCheckDom = () => evaluate<{verdict:string;op:string;applied:boolean;visible:boolean} | null>(`(()=>{
+      const readCheckDom = () => evaluate<{
+        verdict:string;op:string;applied:boolean;verdictVisible:boolean;opVisible:boolean;
+      } | null>(`(()=>{
+        const visible=(${fullyVisible.toString()});
         const verdict=document.querySelector(${JSON.stringify(verdictSelector)});
         const op=document.querySelector(${JSON.stringify(opSelector)});
         if(!verdict||!op)return null;
-        const list=document.getElementById('applied-list');
-        const bounds=list.getBoundingClientRect(), box=verdict.getBoundingClientRect();
-        const visible=verdict.checkVisibility()&&op.checkVisibility()&&box.width>0&&box.height>0&&
-          box.top>=bounds.top&&box.bottom<=bounds.bottom&&box.left>=bounds.left&&box.right<=bounds.right;
-        return {verdict:verdict.textContent,op:op.textContent,applied:op.closest('li').classList.contains('applied'),visible};
+        return {
+          verdict:verdict.textContent,op:op.textContent,applied:op.closest('li').classList.contains('applied'),
+          verdictVisible:visible(verdict),opVisible:visible(op),
+        };
       })()`);
       const checkDom = await wait(readCheckDom, Boolean, label(name + '-check-dom'));
+      assert(checkDom);
       await put(label(name + '-check-dom'), checkDom);
-      assert.deepEqual(checkDom, {
-        verdict:failed
-          ? `Producer check failed · ${breathLine}`
-          : lang==='ko'?'프로듀서 검사 통과':'Producer check passed',
-        op:failed?'Check failed':lang==='ko'?'적용됨':'applied',
-        applied:!failed, visible:true,
-      });
+      assert.equal(checkDom.verdict, failed
+        ? `Producer check failed · ${breathLine}`
+        : lang==='ko'?'프로듀서 검사 통과':'Producer check passed');
+      assert.equal(checkDom.op, failed?'Check failed':lang==='ko'?'적용됨':'applied');
+      assert.equal(checkDom.applied, !failed);
+      assert.equal(checkDom.verdictVisible, true);
       await shot(name);
+      if (failed) {
+        mark(name + '.pending-op-scroll');
+        await evaluate(`document.querySelector(${JSON.stringify(opSelector)}).scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`);
+        const scrolled = await wait(readCheckDom, value => value?.opVisible === true, label(name + '-pending-op'));
+        assert.equal(scrolled?.op, 'Check failed');
+        assert.equal(scrolled?.applied, false);
+        await put(label(name + '-pending-op-dom'), scrolled);
+        await shot(name + '-pending-op');
+      }
       assert.equal(record.schema, 'rig-review-applied/2');
       assert.equal(job.status, 'built');
       assert.equal(job.reused, false);
