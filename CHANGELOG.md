@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.7](https://github.com/rig-c/review/compare/v1.16.6...v1.16.7) (2026-11-07)
+
+
+### Bug Fixes
+
+* resolve directory aliases consistently across output paths ([83c29f4](https://github.com/rig-c/review/commit/83c29f42019ce3244b065548162a03f88b44aaeb))
+
 ## [1.16.6](https://github.com/rig-c/review/compare/v1.16.5...v1.16.6) (2026-11-07)
 
 
