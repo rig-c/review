@@ -117,3 +117,27 @@ test('foreground multi refuses unsupported options, invalid ports and indexed ov
     expect(() => parseForegroundTargets(['a', 'b', ...args])).toThrow('OPEN_OPTION_INVALID --animation-for');
   }
 });
+
+
+test('foreground classification leaves unknown options to the legacy validator before help', async () => {
+  for (const args of [
+    ['synthetic-missing-help-input', '--unknown', 'value', '--help'],
+    ['synthetic-missing-help-input', '--unknown', '--help'],
+  ]) expect(parseForegroundTargets(args)).toBeNull();
+  const child = Bun.spawn([process.execPath, 'src/entry.ts', 'synthetic-missing-help-input', '--unknown', 'value', '--help'],
+    {stdout: 'pipe', stderr: 'pipe'});
+  const [stdout, stderr, exit] = await Promise.all([
+    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+  ]);
+  expect(exit).toBe(1);
+  expect(stdout).toBe('');
+  expect(stderr.split('\n')[0]).toBe('Unknown option --unknown');
+});
+
+test('foreground multi help preserves common and indexed literal help values', () => {
+  expect(parseForegroundTargets(['a', 'b', '--animation', '--help'])?.targets.map(target => target.animation))
+    .toEqual(['--help', '--help']);
+  expect(parseForegroundTargets(['a', 'b', '--animation', '--help', '--help'])?.help).toBe(true);
+  expect(parseForegroundTargets(['a', 'b', '--animation-for', '2', '--help'])?.targets[1]?.animation).toBe('--help');
+  expect(parseForegroundTargets(['a', 'b', '--animation-for', '2', '--help', '--help'])?.help).toBe(true);
+});

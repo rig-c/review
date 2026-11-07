@@ -136,7 +136,8 @@ export function parseForegroundTargets(args: readonly string[]): {targets: OpenI
    forwarded.push(flag); if (args[index + 1] !== undefined) forwarded.push(args[++index]!);
   } else if (booleans.includes(flag)) forwarded.push(flag);
   else if (!flag.startsWith('-')) {operands.push(flag); forwarded.push(flag);}
-  else forwarded.push(flag);
+  // Preserve the legacy validator's unknown-option and help precedence.
+  else return null;
  }
  if (operands.length < 2) return null;
  if (help) return {targets: [], port, help};
