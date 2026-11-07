@@ -3,6 +3,7 @@ import type { JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobPen
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
 import {t} from './i18n.ts';
+import {JOB_HUB_READY, jobHubMessageMatches, type JobHubBinding} from './job-hub.ts';
 
 /** Imported runtimes may throw arbitrary prose. Only registered refusal copy reaches the window. */
 export function jobWindowRefusal(error: unknown, fallback = 'JOB_WINDOW_FAILED'): string {
@@ -440,6 +441,61 @@ export async function* jobWindowEvents(access: JobWindowAccess, after: string | 
         reader.releaseLock();
     }
 }
+/** One reader per window. Hub members bootstrap before visibility can suspend transport. */
+export function startJobWindowEvents(options: {
+    access: JobWindowAccess;
+    signal: AbortSignal;
+    member: boolean;
+    event(value: JobEvent): void;
+    refused(error: unknown): void;
+    fetcher?: typeof fetch;
+}) {
+    let bootstrap = options.member;
+    let visible = !options.member;
+    let cursor: string | null = null;
+    let reader: AbortController | null = null;
+    let wake: (() => void) | null = null;
+    const enabled = () => bootstrap || visible;
+    function changed() {
+        if (!enabled()) reader?.abort();
+        wake?.();
+    }
+    const stopped = () => { reader?.abort(); wake?.(); };
+    options.signal.addEventListener('abort', stopped, {once: true});
+    function wait(milliseconds?: number): Promise<void> {
+        return new Promise(resolve => {
+            const timer = milliseconds === undefined ? undefined : setTimeout(finish, milliseconds);
+            function finish() { clearTimeout(timer); wake = null; resolve(); }
+            wake = finish;
+            if (options.signal.aborted) finish();
+        });
+    }
+    const done = (async () => {
+        try {
+            while (!options.signal.aborted) {
+                if (!enabled()) { await wait(); continue; }
+                const current = new AbortController();
+                reader = current;
+                try {
+                    for await (const event of jobWindowEvents(options.access, cursor, current.signal, options.fetcher)) {
+                        // Only complete, delivered events advance replay, including a final event racing hide.
+                        options.event(event);
+                        cursor = event.cursor;
+                        if (event.type === 'closed') return;
+                    }
+                } catch (error) {
+                    if (!current.signal.aborted && !options.signal.aborted) options.refused(error);
+                } finally { reader = null; }
+                if (!options.signal.aborted && enabled() && !current.signal.aborted) await wait(500);
+            }
+        } finally { options.signal.removeEventListener('abort', stopped); }
+    })();
+    return {
+        done,
+        visibility(value: boolean) { if (options.member) { bootstrap = false; visible = value; changed(); } },
+        displayed() { if (options.member) { bootstrap = false; changed(); } },
+    };
+}
 import type { ModelAssets, RigPlayer } from '@rig-c/play';
 import type { PartInspection } from './part-selection.ts';
 import type { Checkpoint, ReviewManifest, ReviewedSource } from '../src/manifest.ts';
@@ -849,6 +905,9 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     }
     catch { /* Capability stays in memory. */ }
     const access = jobWindowAccess(location.href, storage, href => history.replaceState(history.state, '', href));
+    const hubIncarnation = new URL(location.href).searchParams.get('hub');
+    let hubVisible = !hubIncarnation;
+    let events: ReturnType<typeof startJobWindowEvents> | undefined;
     const pageId = crypto.randomUUID();
     const transport = createJobWindowTransport(access);
     const abort = new AbortController();
@@ -1410,6 +1469,19 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         }
         viewport.fitCamera();
     }
+    function hubBinding(): JobHubBinding {
+        return {incarnation: hubIncarnation!, jobId: access.jobId,
+            publicationId: current?.display.publication.publicationId ?? null,
+            sourceHash: current?.display.publication.source.sourceHash ?? null};
+    }
+    function pauseHiddenHubFrame(): void {
+        if (hubVisible) return;
+        current?.player?.pause();
+        for (const video of workspace.querySelectorAll('video')) video.pause();
+    }
+    function announceHubFrame(): void {
+        if (hubIncarnation) globalThis.parent.postMessage({...hubBinding(), schema: JOB_HUB_READY}, location.origin);
+    }
     const window = createJobWindow({ jobId: access.jobId, pageId, transport, adapter: {
             async prepare(display, signal): Promise<PreparedWindow> {
                 const inspection = await prepareJobInspection(display, signal);
@@ -1571,6 +1643,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     catch { /* In-memory retained evidence remains available. */ }
                     history.textContent = [...retained.values()].map(draft => t('job.retained', [draft.label]) + '\n' + draft.sourceHash + '\n' + JSON.stringify(draft.value, null, 2)).join('\n');
                 }
+                pauseHiddenHubFrame(); announceHubFrame();
+                if (state.receipt && !state.preparing) events?.displayed();
             },
         } });
     const localize = i18n.onLanguageChange(() => {
@@ -1581,26 +1655,24 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             viewport.renderCameraControls();
         window.refresh();
     });
-    let cursor: string | null = null;
-    void (async () => {
-        while (!abort.signal.aborted) {
-            try {
-                for await (const event of jobWindowEvents(access, cursor, abort.signal)) {
-                    cursor = event.cursor;
-                    window.event(event);
-                    if (event.type === 'closed')
-                        return;
-                }
-            }
-            catch (error) {
-                if (abort.signal.aborted)
-                    return;
-                notice.textContent = jobWindowRefusal(error, 'JOB_STREAM_FAILED');
-            }
-            await new Promise<void>(resolve => setTimeout(resolve, 500));
+    const hubVisibility = (event: MessageEvent) => {
+        if (!hubIncarnation || !jobHubMessageMatches(event, location.origin, globalThis.parent, hubBinding(), 'visibility')) return;
+        hubVisible = event.data.visible;
+        host.dataset.hubVisible = String(hubVisible);
+        events?.visibility(hubVisible);
+        if (event.data.language !== i18n.getLanguage()) {
+            i18n.setLinkLanguage(null); i18n.setLanguagePreference(event.data.language);
         }
-    })();
+        pauseHiddenHubFrame();
+        if (hubVisible) current?.player?.draw();
+    };
+    if (hubIncarnation) {globalThis.addEventListener('message', hubVisibility); announceHubFrame();}
+    events = startJobWindowEvents({access, signal: abort.signal, member: !!hubIncarnation,
+        event: event => window.event(event),
+        refused: error => {notice.textContent = jobWindowRefusal(error, 'JOB_STREAM_FAILED');},
+    });
     const stop = () => {
+        globalThis.removeEventListener('message', hubVisibility);
         saveDraft();
         referenceSelection.cancel();
         abort.abort();

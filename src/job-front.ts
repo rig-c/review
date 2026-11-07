@@ -40,6 +40,7 @@ function result<Value>(value: JobResult<Value>): Response {
 export function createJobFront(options: {
     origin: string;
     ports: JobHostPorts;
+    hubIncarnation?: string;
     resource: (name: 'index.html' | 'job.js' | 'styles.css') => Promise<BodyInit>;
     publication?: (jobId: string, publicationId: string, instanceKey: string, path: string, request: Request) => Promise<Response>;
 }) {
@@ -124,8 +125,16 @@ export function createJobFront(options: {
             });
             return new Response(body, { headers: { ...headers, 'Content-Type': 'application/x-ndjson' } });
         }
-        if (url.search && !(route === '' && ['?lang=en', '?lang=ko'].includes(url.search)))
+        const embedded = route === '' && url.searchParams.has('hub');
+        if (embedded) {
+            if (!options.hubIncarnation || url.searchParams.get('hub') !== options.hubIncarnation ||
+                [...url.searchParams.keys()].some(key => !['hub', 'lang'].includes(key) || url.searchParams.getAll(key).length !== 1) ||
+                url.searchParams.has('lang') && !['en', 'ko'].includes(url.searchParams.get('lang')!)) {
+                return failure('JOB_REQUEST_INVALID', 400);
+            }
+        } else if (url.search && !(route === '' && ['?lang=en', '?lang=ko'].includes(url.search))) {
             return failure('JOB_REQUEST_INVALID', 400);
+        }
         const instance = /^publications\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/instances\/([a-f0-9]{64})\/(.*)$/.exec(route);
         if (instance && options.publication) {
             return options.publication(jobId, instance[1]!, instance[2]!, instance[3]!, request);
@@ -138,7 +147,9 @@ export function createJobFront(options: {
             return failure('JOB_REQUEST_INVALID', 404);
         const type = name === 'index.html' ? 'text/html; charset=utf-8' : name === 'job.js' ? 'text/javascript' : 'text/css';
         return new Response(request.method === 'HEAD' ? null : await options.resource(name), {
-            headers: { ...headers, 'Content-Type': type },
+            headers: { ...headers, 'Content-Type': type, ...(embedded ? {
+                'Content-Security-Policy': headers['Content-Security-Policy'].replace("frame-ancestors 'none'", "frame-ancestors 'self'"),
+            } : {}) },
         });
     }
     return {
@@ -274,7 +285,7 @@ function retainedPublicationRoutes(session: JobSession) {
     };
 }
 
-interface JobHostRecord {
+export interface JobHostRecord {
     schema: 'rig-review-job-host/1';
     apiSchema: typeof JOB_API_SCHEMA;
     actSchema: typeof JOB_ACT_SCHEMA;
@@ -330,37 +341,75 @@ export interface JobOwnerHost {
     stop(): void;
 }
 
-/** Full standing owner host. #489 can publish this seam after its own contract review. */
-export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHost> {
-    const startup = {...options};
+export function jobHostIdentity(startup: JobHostOptions) {
     const readerId = declaredHostId('readPublished', startup.readPublished, startup.readerId);
     const bindingId = declaredHostId('installWriterBinding', startup.installWriterBinding, startup.bindingId);
     const partsEnumeratorId = declaredHostId('partsEnumerator', startup.partsEnumerator?.enumerate, startup.partsEnumeratorId);
     const partsEnumeratorVersion = startup.partsEnumerator?.version ?? null;
-    const session = new JobSession(startup);
-    async function installBinding(origin: string): Promise<void> {
-        try {await startup.installWriterBinding?.({...session.writerGrant(), origin});}
-        catch {throw new JobError('JOB_AUTHORITY_REFUSED', 'Writer binding installation failed');}
+    return {readerId, bindingId, partsEnumeratorId, partsEnumeratorVersion};
+}
+
+export async function installJobWriterBinding(session: JobSession, startup: JobHostOptions, origin: string): Promise<void> {
+    try {await startup.installWriterBinding?.({...session.writerGrant(), origin});}
+    catch {throw new JobError('JOB_AUTHORITY_REFUSED', 'Writer binding installation failed');}
+}
+
+export function assertJobHostCompatible(record: JobHostRecord, identity: ReturnType<typeof jobHostIdentity>): void {
+    for (const [option, actual, requested] of [
+        ['readPublished', record.readerId, identity.readerId],
+        ['installWriterBinding', record.bindingId, identity.bindingId],
+        ['partsEnumerator', record.partsEnumeratorId, identity.partsEnumeratorId],
+        ['partsEnumeratorVersion', record.partsEnumeratorVersion, identity.partsEnumeratorVersion],
+        ['apiSchema', record.apiSchema, JOB_API_SCHEMA],
+        ['actSchema', record.actSchema, JOB_ACT_SCHEMA],
+    ] as const) {
+        if (actual !== requested) {
+            throw new JobHostOptionError('JOB_HOST_REUSE_MISMATCH', option, actual, requested);
+        }
     }
+}
+
+/** One live job request context. Its caller owns the listener and session lifetime. */
+export function createJobRequestContext(session: JobSession, startup: JobHostOptions, origin: string,
+    identity: ReturnType<typeof jobHostIdentity>, resource = jobWindowResources(), hubIncarnation?: string) {
+    const ports = createJobHostPorts(session, origin);
+    const record: JobHostRecord = {schema: 'rig-review-job-host/1', apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA,
+        ...identity, jobId: session.jobId, origin, fingerprint: startup.fingerprint, pid: process.pid};
+    const front = createJobFront({origin, ports, resource, hubIncarnation, publication: retainedPublicationRoutes(session)});
+    let requests = 0;
+    return {
+        ports, record,
+        get busy() {return requests > 0 || session.busy;},
+        async fetch(request: Request): Promise<Response> {
+            requests++;
+            try {
+                const url = new URL(request.url);
+                if (url.pathname === `/jobs/${session.jobId}/host`) {
+                    if (url.origin !== origin || request.method !== 'GET' || url.search ||
+                        request.headers.get('sec-fetch-site') === 'cross-site' ||
+                        request.headers.get('origin') !== null && request.headers.get('origin') !== origin) return failure('JOB_REQUEST_INVALID', 403);
+                    try {session.authorize('ui', request.headers.get('X-Review-Capability'));}
+                    catch {return failure('JOB_CAPABILITY_REQUIRED', 403);}
+                    return Response.json(record, {headers});
+                }
+                return await front.fetch(request) ?? failure('JOB_REQUEST_INVALID', 404);
+            } finally {requests--;}
+        },
+        stop() {front.stop();},
+    };
+}
+
+/** Full standing owner host. #489 can publish this seam after its own contract review. */
+export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHost> {
+    const startup = {...options};
+    const identity = jobHostIdentity(startup);
+    const session = new JobSession(startup);
+    const installBinding = (origin: string) => installJobWriterBinding(session, startup, origin);
     const credentials = session.hostCredentials();
     const control = join(canonicalStatePath(startup.stateDir), 'job-ui');
     await mkdir(control, {recursive: true, mode: 0o700}).catch(error => {session.dispose(); throw error;});
     const recordPath = join(control, session.jobId + '.json');
     let previousPort = 0;
-    function compatible(record: JobHostRecord): void {
-        for (const [option, actual, requested] of [
-            ['readPublished', record.readerId, readerId],
-            ['installWriterBinding', record.bindingId, bindingId],
-            ['partsEnumerator', record.partsEnumeratorId, partsEnumeratorId],
-            ['partsEnumeratorVersion', record.partsEnumeratorVersion, partsEnumeratorVersion],
-            ['apiSchema', record.apiSchema, JOB_API_SCHEMA],
-            ['actSchema', record.actSchema, JOB_ACT_SCHEMA],
-        ] as const) {
-            if (actual !== requested) {
-                throw new JobHostOptionError('JOB_HOST_REUSE_MISMATCH', option, actual, requested);
-            }
-        }
-    }
     const reuse = async (): Promise<JobHostRecord | null> => {
         try {
             const info = await lstat(recordPath);
@@ -378,8 +427,8 @@ export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHos
             if (!response?.ok) {void response?.body?.cancel(); return null;}
             const value = await response.json() as JobHostRecord;
             if (value.schema !== row.schema || value.jobId !== row.jobId || value.fingerprint !== row.fingerprint) return null;
-            compatible(row);
-            compatible(value);
+            assertJobHostCompatible(row, identity);
+            assertJobHostCompatible(value, identity);
             return row;
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
@@ -401,37 +450,21 @@ export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHos
                 reused: true, stop: () => session.dispose()};
         }
         claim = acquired.claim;
-        let front: ReturnType<typeof createJobFront>;
-        let ports: JobHostPorts;
+        let context: ReturnType<typeof createJobRequestContext>;
         const preferredPort = startup.port ?? previousPort;
         const server = Bun.serve({hostname: '127.0.0.1', port: preferredPort, idleTimeout: 0,
-            async fetch(request) {
-                const url = new URL(request.url);
-                if (url.pathname === `/jobs/${session.jobId}/host`) {
-                    if (url.origin !== origin || request.method !== 'GET' || url.search ||
-                        request.headers.get('sec-fetch-site') === 'cross-site' ||
-                        request.headers.get('origin') !== null && request.headers.get('origin') !== origin) return failure('JOB_REQUEST_INVALID', 403);
-                    try {session.authorize('ui', request.headers.get('X-Review-Capability'));}
-                    catch {return failure('JOB_CAPABILITY_REQUIRED', 403);}
-                    return Response.json(record, {headers});
-                }
-                return await front.fetch(request) ?? failure('JOB_REQUEST_INVALID', 404);
-            },
+            fetch(request) {return context.fetch(request);},
         });
         const origin = `http://127.0.0.1:${server.port}`;
-        const record: JobHostRecord = {schema: 'rig-review-job-host/1', apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA,
-            partsEnumeratorId, partsEnumeratorVersion, jobId: session.jobId, origin,
-            fingerprint: startup.fingerprint, pid: process.pid, readerId, bindingId};
-        ports = createJobHostPorts(session, origin);
-        front = createJobFront({origin, ports, resource: jobWindowResources(),
-            publication: retainedPublicationRoutes(session)});
+        context = createJobRequestContext(session, startup, origin, identity);
+        const {ports, record} = context;
         const closed = new AbortController();
         let stopped = false;
         stop = () => {
             if (stopped) return;
             stopped = true;
             closed.abort();
-            front.stop();
+            context.stop();
             server.stop(true);
             session.dispose();
         };

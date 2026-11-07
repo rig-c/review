@@ -1021,6 +1021,43 @@ In the standing live-job contract ([Review #484](https://github.com/rig-c/review
 
 `src/job-contract.ts` defines the frozen semantic contract boundary for [Review #484](https://github.com/rig-c/review/issues/484), [Create #182](https://github.com/rig-c/create/issues/182), [Create #184](https://github.com/rig-c/create/issues/184), [Parts #1159](https://github.com/rig-c/parts/issues/1159) and [Parts #1163](https://github.com/rig-c/parts/issues/1163) under `JOB_API_SCHEMA` (`rig-review/job-api@2`) and `JOB_ACT_SCHEMA` (`rig-review/act@2`), implemented across the backend session/store (`src/job-store.ts`, `src/job-session.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-api.ts`, `src/job-worker.ts`), standing loopback job front and browser window runtime (`src/job-front.ts`, `web/job-session.ts`), and `rig-review session` CLI (`src/entry.ts`, `src/job-cli.ts`). The public installed managed-host entry is `@rig-c/review/job-host` with frozen exports in [Public API stability](STABILITY.md#managed-owner-host), and Create's production publication reader and writer-owned sibling `fetch-act` readback remain pending [Create #184](https://github.com/rig-c/create/issues/184) (publishing a Create root containing `project.json` without a host `readPublished` callback refuses `JOB_SOURCE_UNRETAINABLE` with `CREATE_PUBLICATION_CONTRACT_UNAVAILABLE`). One-shot file-handoff workflows documented elsewhere in this reference remain preserved as legacy/history compatibility for existing callers.
 
+### Embedded N-job owner
+
+`startJobHub` and `hub.openJob` from `@rig-c/review/job-host` add one
+process-local embedded owner for N semantic jobs. One PID/listener serves one
+human owner URL and job list, with a common bootstrap-declared reviewer.
+The existing job-api@2/act@2 schemas apply independently to each job's identity,
+source binding, generation, idempotency, grants, pending asks, finalized acts,
+display acknowledgment and replay cursor. Hub-selected frames use the current
+`?hub=<incarnation>` query with optional literal `lang=en` or `lang=ko`. The
+normal cycle remains `publish`,
+`ask`, `next`, direct writer `fetch-act`, and explicit `close`.
+
+Trusted `readPublished`, `partsEnumerator` and `installWriterBinding` hooks are
+registered in the owning process with the existing declared IDs. Owner-list
+access requires the private hub capability. Each job separately authenticates
+agent, UI and read-only writer requests. The reviewer binding records trusted
+bootstrap provenance. Supplied sources stay immutable, and agents never create
+internal Review state, act files or writer binding files.
+
+Closing one job revokes its writer grant while other jobs and the shared owner
+continue. `await hub.stop()` stops transport and disposes sessions while
+preserving active durable jobs and their grants. Restart re-registers the
+required callbacks and refreshes writer origins. Active job identity and grants
+persist, while the hub capability and `workspace` incarnation query rotate.
+Closed retained entries count toward the current hub's 32-entry application
+bound. The bound provides no hardware performance guarantee.
+
+Compatible same-job legacy `startJobHost` attachment remains supported. Hub
+registration refuses an active external standalone owner with
+`JOB_HUB_EXTERNAL_HOST` and a live unresponsive owner with
+`JOB_HUB_HOST_UNRESPONSIVE`. General cross-process callback registration remains
+deferred. External consumer-owned adoption remains pending in
+[Review #512](https://github.com/rig-c/review/issues/512). Public signatures and
+the host-owned integration example are in
+[Public API stability](STABILITY.md#embedded-semantic-job-hub) and
+[Embedded semantic jobs](WORKFLOWS.md#embedded-semantic-jobs).
+
 ### Vocabulary, authority, CLI and host ports
 
 - **Human UI vs agent verbs.** People submit decisions exclusively through the Review browser UI (`actor` set to `'human'`, `channel` set to `'review-ui'`). Agents drive the standing job through four semantic verbs (`publish`, `ask`, `next`, `close` in `JobAgentRequest`). Consumer writers use the separate read-only transport verb `fetch-act` (`JobFetchActRequest`), which is never a human-act writer.
@@ -1032,7 +1069,7 @@ In the standing live-job contract ([Review #484](https://github.com/rig-c/review
   - `rig-review session close <job-url> --generation <n> --key <id> --reason <words> [--request-id <id>]`
   Agent verbs authenticate with `RIG_REVIEW_JOB_AGENT_CAPABILITY` (`Authorization: Bearer …`) against `http://127.0.0.1:<port>/jobs/<jobId>` and refuse `fetch-act` (`JOB_AUTHORITY_REFUSED`). See [Standing live job workflow](WORKFLOWS.md#standing-live-job-workflow) for an ordinary-package launch, bootstrap and explicit close example.
 - **Bootstrap-declared reviewer.** `JobReviewerBinding` (`id` and `role` as `'owner'` or `'delegate'` inside `JobHumanAuthority`) is declared by trusted host bootstrap when opening the window. The browser UI cannot type, edit or override this binding. It records bootstrap-declared provenance rather than keyboard-user authentication. Create maps `role` to its existing `by` authority and preserves the declared reviewer identity.
-- **Trusted host ports and public managed-host startup seam.** `JobHostPorts` separates `handleJobApi` (which accepts agent verbs and consumer `fetch-act` only) from closed same-origin UI routes (`readPublication`, `commitUIAct`, `ackDisplayed`, `jobLiveness`, `subscribeJob`, mounted by `createJobFront` under `/jobs/<jobId>/…` with sealed retained publication routes; the owner HTML root accepts the default or literal `?lang=en` or `?lang=ko` only) that remain unavailable to agent tokens. Raw `Request` objects preserve real `Origin`, capability, body size and abort context. A TypeScript value is never authentication evidence. In the public managed-host startup seam (`startJobHost(options: JobHostOptions): Promise<JobOwnerHost>` from `@rig-c/review/job-host`, where `JobHostOptions extends JobWorkerOptions` adds `readerId?: string`, `bindingId?: string` and `partsEnumeratorId?: string`, frozen in [Public API stability](STABILITY.md#managed-owner-host)), each present hook (`readPublished`, `installWriterBinding`, `partsEnumerator`) requires a nonempty declared ID and a missing hook requires its ID to be absent (`JOB_HOST_OPTION_ID_INVALID`). Equal declared IDs, API/act schemas and actual enumerator versions permit authenticated active-listener reuse across processes and newly allocated function objects via `/jobs/<jobId>/host` (`schema: 'rig-review-job-host/1'`); differing IDs, hook-presence differences and unrecorded older listener IDs fail by name (`JOB_HOST_REUSE_MISMATCH`) with the option name and both IDs while preserving the existing listener. No function hashes are used. `installWriterBinding` receives `{jobId, origin, fetchCapability}` after reuse validation and runs on a matching new or reused host.
+- **Trusted host ports and public managed-host startup seam.** `JobHostPorts` separates `handleJobApi` (which accepts agent verbs and consumer `fetch-act` only) from closed same-origin UI routes (`readPublication`, `commitUIAct`, `ackDisplayed`, `jobLiveness`, `subscribeJob`, mounted by `createJobFront` under `/jobs/<jobId>/…` with sealed retained publication routes; the standalone owner HTML root accepts the default or literal `?lang=en` or `?lang=ko` only) that remain unavailable to agent tokens. Raw `Request` objects preserve real `Origin`, capability, body size and abort context. A TypeScript value is never authentication evidence. In the public managed-host startup seam (`startJobHost(options: JobHostOptions): Promise<JobOwnerHost>` from `@rig-c/review/job-host`, where `JobHostOptions extends JobWorkerOptions` adds `readerId?: string`, `bindingId?: string` and `partsEnumeratorId?: string`, frozen in [Public API stability](STABILITY.md#managed-owner-host)), each present hook (`readPublished`, `installWriterBinding`, `partsEnumerator`) requires a nonempty declared ID and a missing hook requires its ID to be absent (`JOB_HOST_OPTION_ID_INVALID`). Equal declared IDs, API/act schemas and actual enumerator versions permit authenticated active-listener reuse across processes and newly allocated function objects via `/jobs/<jobId>/host` (`schema: 'rig-review-job-host/1'`); differing IDs, hook-presence differences and unrecorded older listener IDs fail by name (`JOB_HOST_REUSE_MISMATCH`) with the option name and both IDs while preserving the existing listener. No function hashes are used. `installWriterBinding` receives `{jobId, origin, fetchCapability}` after reuse validation and runs on a matching new or reused host.
 - **Standing window and visual gate.** Every owner visual, question, choice, correction and verdict goes through one standing Review window/link plus one what-to-look-at line (a job survives zero open owner tabs and reuses the same active job/link on later `session open` until explicit `close`). Internal agent and HQ media stay internal. Each `JobPublication` reports `visual` with `status` set to `'available'` or `'unavailable'` with a named `code`. A missing required visual is an immediate stop plus a Create-filed on-path Review card, never a chat fallback.
 
 ### Publication, producer-held freeze and generation CAS

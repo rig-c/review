@@ -156,12 +156,96 @@ The runtime entry starts the full owner host with retained publication routes
 and shipped HTML, JavaScript and CSS. Raw Requests and the existing A/B ports
 preserve capability, origin, size, cancellation and replay checks.
 
+## Embedded semantic-job hub
+
+`startJobHub` adds an embedded N-job owner to the same public
+`@rig-c/review/job-host` facade. One host process owns one loopback listener and
+one human owner list at `ownerUrl`. Each `openJob` registers its trusted hooks
+in that process and returns the existing session and semantic ports. The jobs
+use `rig-review/job-api@2` and `rig-review/act@2`.
+
+```ts
+import {startJobHub} from '@rig-c/review/job-host';
+import type {
+  JobHubOptions, JobHubJobOptions, JobHubJob, JobOwnerHub,
+} from '@rig-c/review/job-host';
+
+function startJobHub(options: JobHubOptions): Promise<JobOwnerHub>;
+
+interface JobHubOptions {
+  readonly stateDir: string;
+  readonly reviewer: JobReviewerBinding;
+  readonly port?: number;
+}
+
+type JobHubJobOptions = Omit<JobHostOptions, 'stateDir' | 'port' | 'reviewer'>;
+
+interface JobHubJob {
+  readonly session: JobSession;
+  readonly ports: JobHostPorts;
+  readonly origin: string;
+  readonly jobUrl: string;
+  readonly reused: boolean;
+}
+
+interface JobOwnerHub {
+  readonly origin: string;
+  readonly ownerUrl: string;
+  openJob(options: JobHubJobOptions): Promise<JobHubJob>;
+  stop(): Promise<void>;
+}
+```
+
+`stateDir` stays outside every registered work root. `port` accepts 0..65535 and
+defaults to an available port. The bootstrap `reviewer` is common to every job,
+with the same trusted provenance and role checks as `startJobHost`. A retained
+active job with a different reviewer refuses `JOB_AUTHORITY_REFUSED`.
+`ownerUrl` has the form `/hub/?workspace=<incarnation>#cap=<private-capability>`.
+`jobUrl` is the per-job owner URL, including its private UI capability.
+The human receives the hub owner URL once. Agents receive their own per-job
+bootstrap credentials privately and address `/jobs/<jobId>/api`.
+
+Each job keeps its own identity, source bindings, generation CAS, idempotency
+keys, cursors, asks, acts, display receipts and agent/UI/writer grants. Hook IDs
+follow the existing `JobHostOptions` rules. Reopening an active root and
+fingerprint with compatible hook identities returns the same session with
+`reused` true and invokes the writer-binding callback again. General
+cross-process callback registration is deferred. The hub refuses an active
+standalone owner with `JOB_HUB_EXTERNAL_HOST`, and a live unresponsive owner
+with `JOB_HUB_HOST_UNRESPONSIVE`, preserving that owner. A second live hub for
+the state directory refuses `JOB_HUB_ALREADY_RUNNING`. Existing `startJobHost`
+callers can still attach to a compatible hub-owned job by authenticated reuse.
+Such attachment keeps the registered process-local hooks under hub ownership.
+
+Semantic `close` ends only the addressed job and revokes its writer grant.
+Closed entries remain in the current hub list. `await hub.stop()` drains work,
+stops the shared transport and disposes local sessions. Active jobs retain their
+durable identity, grants, publications, asks, acts and replay history across
+that transport stop. Restart requires `startJobHub` and `openJob` for each
+required job, registering callbacks again and refreshing the writer adapter's
+origin. The hub capability and incarnation rotate, including the nonsecret
+`workspace` query that forces a fresh owner document. Obtain the new owner URL
+from the new handle. The retained active job's grants keep their identity until
+semantic close. A later new job receives new grants.
+
+Admission is an application bound of 32 registered entries, including closed
+entries retained in that hub incarnation. `JOB_HUB_LIMIT` refuses a new entry
+at the bound. Compatible reuse of an active entry still succeeds. Selected
+frames are retained lazily under this bound. Hidden hub members suspend their event subscription after bootstrap and resume from the last delivered cursor when selected. Hardware performance requires its
+own measurement.
+
+Consumer-owned adoption remains external and pending in
+[Review #512](https://github.com/rig-c/review/issues/512). See the
+[embedded consumer example](WORKFLOWS.md#embedded-semantic-jobs) for trusted-hook
+ownership and the ordinary semantic cycle.
+
 ## Named export inventory
 
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 
 - `startJobHost`
+- `startJobHub`
 - `JOB_API_SCHEMA`
 - `JOB_ACT_SCHEMA`
 - `JOB_PARTS_ENUMERATOR_RANGE`
@@ -173,9 +257,13 @@ values from the frozen semantic contract.
 
 The exact type-only exports follow. Their existing definitions in
 `src/job-contract.ts`, `src/job-source.ts`, `src/job-session.ts`,
-`src/job-worker.ts` and `src/job-front.ts` are reexported
+`src/job-worker.ts`, `src/job-front.ts` and `src/job-hub.ts` are reexported
 without aliases or copied wire shapes.
 
+- `JobHubOptions`
+- `JobHubJobOptions`
+- `JobHubJob`
+- `JobOwnerHub`
 - `JobHostOptions`
 - `JobOwnerHost`
 - `JobSessionOptions`
