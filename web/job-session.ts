@@ -500,6 +500,7 @@ import type { ModelAssets, RigPlayer } from '@rig-c/play';
 import type { PartInspection } from './part-selection.ts';
 import type { Checkpoint, ReviewManifest, ReviewedSource } from '../src/manifest.ts';
 import type { DirectionInspection } from '../src/direction-inspection.ts';
+import type { FeedbackCatalog } from '../src/feedback-validation.ts';
 import type { InterviewQuestion } from '../src/interview-project.ts';
 export interface JobInspectionMetadata {
     manifest: ReviewManifest;
@@ -520,9 +521,7 @@ export interface JobInspectionMetadata {
         preRig?: boolean;
         playback: boolean;
     };
-    feedbackCatalog: {
-        slots: string[];
-    };
+    feedbackCatalog: Pick<FeedbackCatalog, 'slots'>;
 }
 type JobInterview = {
     questions: (Omit<InterviewQuestion, 'images'> & {
@@ -879,7 +878,7 @@ export async function prepareJobInspection(display: JobDisplayPublication, signa
                 resolvePage: (name, url) => routes.assertAsset(new URL(name, url).href) });
             const loadedAssets = assets;
             const parts = await import('./part-selection.ts');
-            const catalog = await parts.loadPartModel(modelUrl, modelHash, metadata.feedbackCatalog.slots, checkedFetch);
+            const catalog = await parts.loadPartModel(modelUrl, modelHash, metadata.feedbackCatalog.slots ?? [], checkedFetch);
             resetToSetup = () => {
                 player?.dispose();
                 player = new runtime.RigPlayer(rigRoot, loadedAssets);
@@ -1318,10 +1317,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         sidebar.append(binding);
         const parts = node('select');
         parts.id = 'job-part';
+        parts.disabled = !prepared.metadata.manifest.model || prepared.metadata.feedbackCatalog.slots === null;
         const whole = node('option', 'job.wholeRig');
         whole.value = '';
         parts.append(whole);
-        for (const slot of prepared.metadata.feedbackCatalog.slots) {
+        for (const slot of prepared.metadata.feedbackCatalog.slots ?? []) {
             const option = node('option');
             option.value = slot;
             option.textContent = slot;
@@ -1605,7 +1605,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     time = 0;
                     compatibilityNotice = true;
                 }
-                if (selectedPart && !prepared.metadata.feedbackCatalog.slots.includes(selectedPart)) {
+                if (selectedPart && !(prepared.metadata.feedbackCatalog.slots ?? []).includes(selectedPart)) {
                     selectedPart = '';
                     compatibilityNotice = true;
                 }

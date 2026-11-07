@@ -17,6 +17,7 @@ import {koCatalog} from '../web/catalog-ko.ts';
 
 const argument = (key: string) => {const index = Bun.argv.indexOf(key); return index < 0 ? undefined : Bun.argv[index + 1];};
 const language = argument('--lang') ?? 'en';
+const diagnoseCaught = Bun.argv.includes('--diagnose-caught');
 assert.ok(language === 'en' || language === 'ko');
 const catalog = language === 'ko' ? koCatalog : enCatalog;
 const output = argument('--out') ?? 'evidence/job-image-set-' + language;
@@ -31,6 +32,10 @@ const acknowledgments: {publicationId: string; body: unknown; visual: any; scree
 const uiSubmissions: {jobId: string; body: any; atMs: number}[] = [];
 const secrets = new Set<string>();
 const imageRequests = new Map<string, Set<number>>();
+const caughtPauses: Record<string, unknown>[] = [];
+const executionContexts = new Map<number, unknown>();
+const scripts = new Map<string, {url: string; executionContextId: number}>();
+const maxCaughtPauses = 32;
 const colors = [[220, 36, 36, 255], [36, 80, 220, 255], [36, 180, 70, 255]];
 const names = ['원본 Source', 'Candidate 후보', 'Reference 참조', 'Twin 후보'];
 const words = '  Overall EN 검토\n  ';
@@ -242,11 +247,46 @@ try {
   }
   const first = await publish(0, 'out', 'out-record.json'), imageAsk = await ask(0, first);
   const model = await publish(1), modelAsk = await ask(1, model);
-  await record('setup', {language, jobs: jobs.map(job => job.session.jobId), colors, names, modelSource: model.source,
+  await record('setup', {language, diagnosticOnly: diagnoseCaught, maxCaughtPauses, jobs: jobs.map(job => job.session.jobId), colors, names, modelSource: model.source,
     contractOldSha256: '03992407a81719c782905855c7d4c6b1795e86103f597f70ee4aeb9218fe65b5',
     contractNewSha256: hash(await readFile(new URL('../src/job-contract.ts', import.meta.url)))});
   page = await launchCdpSession(profile, {sendDeadlineMs: 20000, async onEvent(event, send) {
     if (event.sessionId) control = send;
+    if (diagnoseCaught && event.method === 'Runtime.executionContextCreated') {
+      const context = event.params!.context as {id: number};
+      executionContexts.set(context.id, context);
+    }
+    if (diagnoseCaught && event.method === 'Debugger.scriptParsed') {
+      const script = event.params as {scriptId: string; url: string; executionContextId: number};
+      scripts.set(script.scriptId, {url: script.url, executionContextId: script.executionContextId});
+    }
+    if (diagnoseCaught && event.method === 'Debugger.paused') {
+      const params = event.params!;
+      const data = params.data as {description?: string; value?: unknown; className?: string} | undefined;
+      const frames = params.callFrames as {functionName: string; url: string; location: {scriptId: string; lineNumber: number; columnNumber: number}}[];
+      const pause: Record<string, unknown> = {number: caughtPauses.length + 1, atMs: performance.now() - started,
+        reason: params.reason, description: data?.description ?? data?.value, exceptionClass: data?.className,
+        exception: params.data, asyncStackTrace: params.asyncStackTrace,
+        callFrames: frames.map(frame => {
+          const script = scripts.get(frame.location.scriptId);
+          return {functionName: frame.functionName, url: frame.url || script?.url, location: frame.location,
+            executionContextId: script?.executionContextId,
+            context: script && executionContexts.get(script.executionContextId)};
+        })};
+      caughtPauses.push(pause);
+      try {
+        // Node-side writes only. Never await a browser evaluation while its JavaScript is paused.
+        await writeFile(join(output, 'caught-exceptions.json'), safe({diagnosticOnly: true, maxCaughtPauses, caughtPauses}));
+        await record('caught-pause-' + caughtPauses.length, pause);
+      } finally {
+        await send('Debugger.resume');
+        pause.resumed = true;
+        if (caughtPauses.length >= maxCaughtPauses)
+          await send('Debugger.setPauseOnExceptions', {state: 'none'});
+        await writeFile(join(output, 'caught-exceptions.json'), safe({diagnosticOnly: true, maxCaughtPauses, caughtPauses}));
+      }
+      return;
+    }
     if (event.method === 'Runtime.exceptionThrown') exceptions.push(event.params);
     if (event.method !== 'Fetch.requestPaused') return;
     const requestId = event.params!.requestId, request = event.params!.request as {url: string; postData?: string};
@@ -292,6 +332,10 @@ try {
   }});
   await page.setViewport(1920, 1080);
   await until(() => !!control, 'cdp-control');
+  if (diagnoseCaught) {
+    await control!('Debugger.enable');
+    await control!('Debugger.setPauseOnExceptions', {state: 'all'});
+  }
   await control!('Network.enable');
   await control!('Fetch.enable', {patterns: [
     {urlPattern: hub.origin + '/jobs/*/publications/*/instances/*/api/image-set/*'},
@@ -378,6 +422,7 @@ try {
   if (page) await writeFile(join(output, 'failure.png'), await page.screenshot()).catch(() => {});
   await record('failure', {error: error instanceof Error ? error.stack : String(error), exceptions, observerErrors});
 } finally {
+  if (diagnoseCaught) await writeFile(join(output, 'caught-exceptions.json'), safe({diagnosticOnly: true, maxCaughtPauses, caughtPauses}));
   if (before) {
     const after = await Promise.all(inputs.map(input => jobInputHashes(input.root)));
     await record('input-immutability', {before, after, unchanged: JSON.stringify(before) === JSON.stringify(after)});
@@ -401,7 +446,7 @@ try {
   if (remaining.length || !descriptorRemoved) failure ??= new Error('OWNED_CLEANUP_FAILED');
   for (const input of inputs) await input.close();
   await rm(scratch, {recursive: true, force: true});
-  await record('verdict', {status: failure ? 'RED' : 'PASS', language, elapsedMs: performance.now() - started,
+  await record('verdict', {status: failure ? 'RED' : diagnoseCaught ? 'DIAGNOSTIC' : 'PASS', language, diagnosticOnly: diagnoseCaught, caughtPauses: caughtPauses.length, elapsedMs: performance.now() - started,
     uiActs: uiSubmissions.length, jobs: jobs.length, boundary: 'synthetic normal hub UI with direct writer fetch; installed-candidate runtime remains CP5'});
 }
 if (failure) throw failure;

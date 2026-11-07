@@ -1,10 +1,13 @@
 /** Decode and lifecycle controls use fake image decoders, without launching a browser. */
 import {afterEach, expect, test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
+import ts from 'typescript';
+import {mountViewportPair} from '../web/viewport-pair.ts';
+import {enCatalog} from '../web/catalog-en.ts';
 import {jobHash} from '../src/job-api.ts';
 import {prepareJobImageSet} from '../src/job-image-set.ts';
 import {parseManifest} from '../src/manifest.ts';
-import {createJobWindow, prepareJobInspection, type JobInspectionMetadata} from '../web/job-session.ts';
+import {createJobWindow, prepareJobInspection, type JobInspectionMetadata, type JobPreparedInspection} from '../web/job-session.ts';
 import {fixturePublication} from './helpers/job-window-fixture.ts';
 import type {JobImageSourceBinding} from '../src/job-contract.ts';
 
@@ -38,7 +41,7 @@ function setup() {
     manifest: parseManifest({schema: 'rig-review/1', ...source.package, title: 'Synthetic image comparison'}),
     sourceHash: source.sourceHash,
     reviewedSource: {packageRevision: source.package.revision, viewerVersion: 'synthetic', runtimeVersion: 'synthetic', rig: null, motion: null},
-    capabilities: {playback: false}, feedbackCatalog: {slots: []},
+    capabilities: {playback: false}, feedbackCatalog: {slots: null},
   };
   const images: FakeImage[] = [];
   class FakeImage {
@@ -128,4 +131,145 @@ test('522 the frozen old parser body matches its recorded original-function prov
   expect(jobHash(body)).toBe(provenance.originalFunctionSha256);
   expect(provenance.originalFunctionSha256).toBe(provenance.fixtureFunctionSha256);
   expect(provenance.byteIdentical).toBe(true);
+});
+
+/** DOM double for the production build body and its real shared viewport-pair mount. */
+class MountElement {
+  id = '';
+  className = '';
+  hidden = false;
+  disabled = false;
+  value = '';
+  type = '';
+  style: Record<string, string> = {};
+  dataset: Record<string, string> = {};
+  children: MountElement[] = [];
+  parentElement: MountElement | null = null;
+  private text = '';
+  constructor(readonly tagName: string) {}
+  get textContent(): string {return this.text + this.children.map(child => child.textContent).join('');}
+  set textContent(value: string) {this.text = value; this.children = [];}
+  append(...nodes: MountElement[]) {
+    for (const node of nodes) {node.parentElement = this; this.children.push(node);}
+  }
+  prepend(...nodes: MountElement[]) {
+    for (const node of nodes) node.parentElement = this;
+    this.children.unshift(...nodes);
+  }
+  remove() {
+    if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(child => child !== this);
+    this.parentElement = null;
+  }
+  replaceWith(node: MountElement) {
+    const parent = this.parentElement;
+    if (!parent) throw new Error('Missing mount parent');
+    parent.children.splice(parent.children.indexOf(this), 1, node);
+    node.parentElement = parent; this.parentElement = null;
+  }
+  setAttribute(name: string, value: string) {
+    if (name === 'id') this.id = value;
+    if (name === 'class') this.className = value;
+  }
+  querySelector(selector: string): MountElement | null {
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
+  querySelectorAll(selector: string): MountElement[] {
+    const result: MountElement[] = [];
+    for (const child of this.children) {
+      if (selector.startsWith('#') ? child.id === selector.slice(1) :
+          selector.startsWith('.') ? child.className.split(' ').includes(selector.slice(1)) : child.tagName === selector) result.push(child);
+      result.push(...child.querySelectorAll(selector));
+    }
+    return result;
+  }
+  set innerHTML(markup: string) {
+    this.children = []; this.text = '';
+    const stack: MountElement[] = [this];
+    for (const token of markup.matchAll(/<\/?([a-z][a-z0-9]*)([^>]*)>|([^<]+)/g)) {
+      if (token[3]) {const text = new MountElement('#text'); text.textContent = token[3]; stack.at(-1)!.append(text);}
+      else if (token[0].startsWith('</')) stack.pop();
+      else {
+        const node = new MountElement(token[1]!);
+        for (const attribute of token[2]!.matchAll(/([a-z-]+)="([^"]*)"/g)) node.setAttribute(attribute[1]!, attribute[2]!);
+        node.hidden = /\bhidden\b/.test(token[2]!);
+        stack.at(-1)!.append(node); stack.push(node);
+      }
+    }
+  }
+}
+
+async function actualBuildBody() {
+  const source = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+  const parsed = ts.createSourceFile('job-session.ts', source, ts.ScriptTarget.Latest, true);
+  let body: string | undefined;
+  function visit(node: ts.Node) {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === 'build') body = node.getText(parsed);
+    ts.forEachChild(node, visit);
+  }
+  visit(parsed);
+  if (!body) throw new Error('Production build body missing');
+  return body;
+}
+
+function mountActualBuild(body: string, prepared: JobPreparedInspection): MountElement {
+  const translate = (key: string) => enCatalog[key] ?? key;
+  const node = (tag: string, key?: string) => {
+    const element = new MountElement(tag);
+    if (key) {element.dataset.jobText = key; element.textContent = translate(key);}
+    return element;
+  };
+  const inputLabel = (key: string, input: MountElement) => {const label = node('label'); label.append(node('span', key), input); return label;};
+  const selectValues = (values: string[], keys: string[]) => {
+    const select = node('select');
+    for (const [index, value] of values.entries()) {const option = node('option', keys[index]); option.value = value; select.append(option);}
+    return select;
+  };
+  replaceGlobal('HTMLElement', MountElement);
+  replaceGlobal('document', {createTextNode: (text: string) => {const node = new MountElement('#text'); node.textContent = text; return node;}});
+  // Execute the actual nested production build body, without adding a product test seam.
+  const javascript = new Bun.Transpiler({loader: 'ts'}).transformSync(body);
+  const build = new Function('node', 'inputLabel', 'selectValues', 'mountViewportPair', 't', javascript + '\nreturn build;')(
+    node, inputLabel, selectValues, mountViewportPair, translate) as (prepared: JobPreparedInspection) => MountElement;
+  const host = node('main'); host.append(build(prepared));
+  return host;
+}
+
+function buildFixture(f: ReturnType<typeof setup>): JobPreparedInspection {
+  const rigRoot = new MountElement('div'); rigRoot.id = 'rig-root';
+  return {display: f.display, metadata: f.metadata, interview: null, parts: null,
+    partImages: new Map(), interviewImages: new Map(), references: [], assets: null, player: null,
+    rigRoot: rigRoot as unknown as HTMLElement,
+    imageSetImages: f.source.imageSet.images.map(() => new MountElement('img') as unknown as HTMLImageElement),
+    inspection: null, setupPose() {}, dispose() {}};
+}
+
+test('522 production build mounts a real-null image catalog and its viewport pair; the original unguarded loop fails', async () => {
+  const f = setup(), body = await actualBuildBody();
+  expect(f.metadata.feedbackCatalog.slots).toBe(null);
+  const prepared = buildFixture(f), mounted = mountActualBuild(body, prepared);
+  expect(mounted.querySelector('.job-inspection')).not.toBe(null);
+  expect(mounted.querySelector('#reference-pane')).not.toBe(null);
+  expect(mounted.querySelector('#rig-root')).not.toBe(null);
+  expect(mounted.querySelector('#stage-layout')?.hidden).toBe(true);
+  expect(mounted.querySelector('#job-part')?.disabled).toBe(true);
+  expect(mounted.querySelectorAll('figure').map(figure => figure.dataset.imageName)).toEqual(['Source', 'Candidate']);
+  expect(mounted.querySelector('#job-part')?.children.map(option => option.value)).toEqual(['']);
+  const guarded = 'for (const slot of prepared.metadata.feedbackCatalog.slots ?? [])';
+  expect(body).toContain(guarded);
+  const originalLoop = body.replace(guarded, 'for (const slot of prepared.metadata.feedbackCatalog.slots)');
+  expect(() => mountActualBuild(originalLoop, buildFixture(f))).toThrow(TypeError);
+});
+
+test('522 production build preserves populated and known-empty model slot arrays', async () => {
+  const f = setup(), body = await actualBuildBody();
+  for (const slots of [['body', 'arm'], []]) {
+    const prepared = buildFixture(f);
+    prepared.display = fixturePublication();
+    prepared.metadata = {...f.metadata, manifest: {...f.metadata.manifest, model: 'skeleton.model.json'}, feedbackCatalog: {slots}};
+    const mounted = mountActualBuild(body, prepared), parts = mounted.querySelector('#job-part');
+    expect(parts?.disabled).toBe(false);
+    expect(parts?.children.map(option => option.value)).toEqual(['', ...slots]);
+    expect(mounted.querySelectorAll('figure')).toHaveLength(0);
+    expect(mounted.querySelector('#stage-layout')?.hidden).toBe(false);
+  }
 });
