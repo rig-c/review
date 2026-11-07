@@ -1,6 +1,6 @@
 {
   "name": "@rig-c/review",
-  "version": "1.18.0",
+  "version": "2.0.0",
   "type": "module",
   "description": "Local human rig inspection and structured feedback export",
   "license": "MIT",
