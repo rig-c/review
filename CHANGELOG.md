@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.6](https://github.com/rig-c/review/compare/v1.16.5...v1.16.6) (2026-11-07)
+
+
+### Bug Fixes
+
+* canonicalize Parts paths across directory aliases ([aa37f34](https://github.com/rig-c/review/commit/aa37f34a720eb138fc89ad8eae81db86f9a39c77))
+
 ## [1.16.5](https://github.com/rig-c/review/compare/v1.16.4...v1.16.5) (2026-11-07)
 
 
