@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.17.0](https://github.com/rig-c/review/compare/v1.16.7...v1.17.0) (2026-11-07)
+
+
+### Features
+
+* add a persistent live job inspection window ([#505](https://github.com/rig-c/review/issues/505)) ([ca0c0cc](https://github.com/rig-c/review/commit/ca0c0cc6bf3df3309d15feae813b93aa16fa52f8))
+* add semantic live review backend ([#493](https://github.com/rig-c/review/issues/493)) ([d1eda8c](https://github.com/rig-c/review/commit/d1eda8c5b8f8d64b31cddfde1b64d307489b1630))
+* prepare internal scene plate rendering ([#485](https://github.com/rig-c/review/issues/485)) ([6894e44](https://github.com/rig-c/review/commit/6894e442c15ec30ad37c1ed88a217d60913fa967)), closes [#482](https://github.com/rig-c/review/issues/482)
+
+
+### Bug Fixes
+
+* gate rig modes on refused inspection stages ([#495](https://github.com/rig-c/review/issues/495)) ([0997ce8](https://github.com/rig-c/review/commit/0997ce889a7793f404bbf9c788320bf8c6382a9c))
+* refuse parts camera changes after paint failure ([#500](https://github.com/rig-c/review/issues/500)) ([c0cd20d](https://github.com/rig-c/review/commit/c0cd20dc276b8ce7ab5b00ee16f0d64141966403))
+
 ## [1.16.7](https://github.com/rig-c/review/compare/v1.16.6...v1.16.7) (2026-11-07)
 
 
