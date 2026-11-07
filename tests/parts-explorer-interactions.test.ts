@@ -133,3 +133,35 @@ test.each([
   expect(actionClicks).toBe(omitAction ? 0 : 1);
   expect(samples).toBe(omitAction || changeWideCount ? 0 : 1);
 });
+
+test('Check requires the direct Parts Explorer runner before uploading its measurements', () => {
+  const workflow = Bun.YAML.parse(readFileSync(new URL('../.github/workflows/check.yml', import.meta.url), 'utf8')) as {
+    jobs: Record<string, { steps: Array<{
+      name?: string;
+      run?: string;
+      uses?: string;
+      if?: string;
+      'continue-on-error'?: boolean;
+      with?: Record<string, string>;
+    }> }>;
+  };
+  const { steps } = workflow.jobs.check;
+  const runnerIndex = steps.findIndex(step => step.name === 'Verify Parts Explorer in Chrome');
+  const installIndex = steps.findIndex(step => step.run === 'bun install --frozen-lockfile');
+  const uploadIndex = steps.findIndex(step => step.name === 'Upload Parts Explorer measurements');
+  expect(installIndex).toBeGreaterThanOrEqual(0);
+  expect(runnerIndex).toBeGreaterThan(installIndex);
+  expect(uploadIndex).toBeGreaterThan(runnerIndex);
+  expect(steps[runnerIndex]?.if).toBeUndefined();
+  expect(steps[runnerIndex]?.['continue-on-error']).toBeUndefined();
+  expect(steps[runnerIndex]?.run?.trim().split('\n')).toEqual([
+    'chrome_bin="$(command -v google-chrome)"',
+    'printf \'Chrome path: %s\\n\' "$chrome_bin"',
+    '"$chrome_bin" --version',
+    'unset NO_ASSERT SCREENSHOT_DIR SCREENSHOT_BASE64',
+    'time CHROME_BIN="$chrome_bin" OUT_JSON="$RUNNER_TEMP/parts-explorer.json" bun tests/parts-explorer-browser.ts',
+  ]);
+  expect(steps[uploadIndex]?.uses).toBe('actions/upload-artifact@v4');
+  expect(steps[uploadIndex]?.with?.path).toBe('${{ runner.temp }}/parts-explorer.json');
+  expect(steps[uploadIndex]?.with?.['if-no-files-found']).toBe('error');
+});

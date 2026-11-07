@@ -49,6 +49,20 @@ jobs:
       - run: bun run test
       - run: bun run build
       - run: bun run check:demo
+      - name: Verify Parts Explorer in Chrome
+        shell: bash
+        run: |
+          chrome_bin="$(command -v google-chrome)"
+          printf 'Chrome path: %s\n' "$chrome_bin"
+          "$chrome_bin" --version
+          unset NO_ASSERT SCREENSHOT_DIR SCREENSHOT_BASE64
+          time CHROME_BIN="$chrome_bin" OUT_JSON="$RUNNER_TEMP/parts-explorer.json" bun tests/parts-explorer-browser.ts
+      - name: Upload Parts Explorer measurements
+        uses: actions/upload-artifact@v4
+        with:
+          name: parts-explorer-measurements
+          path: ${{ runner.temp }}/parts-explorer.json
+          if-no-files-found: error
   install-smoke:
     needs: tree-verdict
     if: ${{ !cancelled() && needs.tree-verdict.outputs.reused != 'true' }}
