@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { realpath, stat, lstat, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
-import { basename, dirname, isAbsolute, relative, resolve, parse, sep, type posix } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, parse, sep, type posix } from 'node:path';
+import { destinationDirectory } from './destination-directory.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { safeFile, type ReviewPackage } from './manifest.ts';
 import {assertReviewUnchanged,selectedReference,safeSelectedReference,packageSourceHash} from './reference.ts';
@@ -55,10 +56,11 @@ export function stripParentPaths(target:string,paths:Pick<typeof posix,'relative
   const base=paths.parse(target).root,parts=paths.relative(base,paths.dirname(target)).split(paths.sep).filter(Boolean),parents:string[]=[];let cursor=base;
   for(const part of parts){cursor=paths.resolve(cursor,part);parents.push(cursor);}return parents;
 }
-/** No symlink parent or package-contained path can become a derived output target. */
+/** Resolve the parent, preserving the output filename for the existence check and exclusive write. */
 export async function validateStripOutput(output:string,roots:string[]):Promise<string>{
-  const target=resolve(output);
-  for(const parent of stripParentPaths(target)){const info=await lstat(parent);if(info.isSymbolicLink()||!info.isDirectory())throw new Error('strip.output: parent must be an existing directory without symlinks');}
+  const absolute=resolve(output);
+  const parent=destinationDirectory(dirname(absolute),'strip.output: parent must be an existing directory',false);
+  const target=join(parent,basename(absolute));
   for(const root of roots)if(stripPathIsInside(await realpath(root),target))throw new Error('strip.output: derived files must be outside every source package');
   try{await lstat(target);throw new Error('strip.output: destination already exists');}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
   return target;

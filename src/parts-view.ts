@@ -25,6 +25,7 @@ import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { PNG } from 'pngjs';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
+import { destinationDirectory } from './destination-directory.ts';
 
 export const PARTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/2';
 export const PARTS_VERDICT_FILE = 'parts-review.json';
@@ -130,17 +131,10 @@ function relativeTo(dir: string, abs: string): string {
 
 /** Match canonical input paths, resolving only the destination's parent. Missing
  * directories retain their suffix; the output leaf is never followed through a symlink. */
-async function verdictDestination(path: string): Promise<string> {
-  const abs = resolve(path), suffix = [basename(abs)];
-  let parent = dirname(abs);
-  for (;;) {
-    try { return join(await realpath(parent), ...suffix); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(parent) === parent) throw error;
-      suffix.unshift(basename(parent));
-      parent = dirname(parent);
-    }
-  }
+function verdictDestination(path: string): string {
+  const absolute = resolve(path);
+  const parent = destinationDirectory(dirname(absolute), 'PARTS_VERDICT_DESTINATION_INVALID: expected a verdict parent directory path without symlink loops');
+  return join(parent, basename(absolute));
 }
 
 /** Faint islands (rig-parts #326) from `mesh_report.json` rows, on the parts the view holds. */
@@ -378,7 +372,7 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
   const protectedPaths = [join(root, 'rig.json'), join(root, 'config.json'), join(root, 'review.json'), join(root, 'report.json')];
   if (basename(root) === 'rig') protectedPaths.push(...['parts.json', 'config.json', 'review.json', 'report.json'].map(name => join(dirname(root), name)));
   if (options.rig !== undefined) protectedPaths.push(resolve(options.rig));
-  const verdictPath = options.verdict ? await verdictDestination(options.verdict) : join(root, PARTS_VERDICT_FILE);
+  const verdictPath = options.verdict ? verdictDestination(options.verdict) : join(root, PARTS_VERDICT_FILE);
   await assertVerdictDestination({ files, flagFiles, protectedPaths, verdictPath });
   const rigPath = options.rig !== undefined ? await realpath(resolve(options.rig)) : existsSync(join(root, 'rig.json')) ? await insideRoot(root, join(root, 'rig.json'), 'PARTS_MESH_OUTSIDE', 'rig.json') : null;
   if (rigPath) {
@@ -435,7 +429,7 @@ export async function loadPartsAtlas(p: ReviewPackage, options: PartsViewOptions
   protectedPaths.push(...['rig.json', 'config.json', 'report.json', 'review.json'].map(name => join(p.root, name)));
   if (p.handoff) protectedPaths.push(...p.handoff.record.files.map(file => resolve(p.root, file.path)));
   if (buildRoot) protectedPaths.push(...['parts.json', 'config.json', 'rig/rig.json', 'rig/parts.json'].map(name => join(buildRoot, name)));
-  return { mode: 'atlas', root: p.root, title: p.manifest.title, rigSize: null, items, pages, flags, readings, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath: options.verdict ? await verdictDestination(options.verdict) : join(dirname(modelAbs), PARTS_VERDICT_FILE), imagePaths: [], pagePaths };
+  return { mode: 'atlas', root: p.root, title: p.manifest.title, rigSize: null, items, pages, flags, readings, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath: options.verdict ? verdictDestination(options.verdict) : join(dirname(modelAbs), PARTS_VERDICT_FILE), imagePaths: [], pagePaths };
 }
 
 /**

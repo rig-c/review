@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {link,mkdtemp,readFile,readdir,realpath,rm,writeFile} from 'node:fs/promises';
+import {link,mkdtemp,readFile,readdir,realpath,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {parseOpenInputs} from '../src/cli.ts';
@@ -152,6 +152,25 @@ test('draft source identity includes the project hash independently of the packa
     }finally{await writeFile(file,bytes);}
     await f.assertFixture();
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('joined draft binds the same inventory through project and package aliases', async () => {
+  const scratch = await mkdtemp(join(await realpath(tmpdir()), 'review-draft-alias-'));
+  try {
+    const f = await joinedVerdictFixture(join(scratch, 'project'));
+    const projectAlias = join(scratch, 'project-alias'), packageAlias = join(scratch, 'package-alias');
+    await symlink(f.project.root, projectAlias, 'dir');
+    await symlink(f.input, packageAlias, 'dir');
+    const opened = await loadOpenPackage({ input: packageAlias, project: { ...f.project, root: projectAlias } });
+    if (opened.mode !== 'single' || !opened.joined?.draft) throw new Error('Expected joined draft through both aliases');
+    expect(opened.joined.draft).toEqual(f.draft);
+    expect(opened.contentHash).toBe(f.p.sourceHash);
+    await opened.joined.assertCurrent();
+    await f.assertFixture();
+    expect(await readdir(f.output)).toEqual([]);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
 });
 
 test('draft source identity includes the package hash independently of the project',async()=>{

@@ -5,23 +5,17 @@
  * inside the rig-parts build root the check package belongs to (opening `out` redirects the package to `out/check`;
  * the build is still the supplied folder), the package root, or the producer handoff's root.
  */
-import { realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, relative, sep } from 'node:path';
+import { destinationDirectory } from './destination-directory.ts';
 
 export type StateRootKind = 'build root' | 'package' | 'handoff root';
 export interface StateRoot { kind: StateRootKind; path: string }
 /** The fields of a loaded package that name supplied folders. */
 export interface StateRootsSource { root: string; buildRoot?: string; handoff?: { root: string } | null }
 
-const missing = (e: unknown) => ['ENOENT', 'ENOTDIR'].includes((e as NodeJS.ErrnoException).code ?? '');
-
-/** The canonical location of `path`: realpath of the longest existing prefix joined with the remainder. */
+/** Resolve the existing directory prefix and keep any missing suffix. */
 export function canonicalStatePath(path: string): string {
-  const absolute = resolve(path), rest: string[] = [];
-  for (let current = absolute; ; current = dirname(current)) {
-    try { const real = realpathSync(current); return rest.length ? join(real, ...rest.reverse()) : real; }
-    catch (e) { if (!missing(e) || dirname(current) === current) throw e; rest.push(basename(current)); }
-  }
+  return destinationDirectory(path, 'STATE_DIRECTORY_INVALID: expected a directory path without symlink loops');
 }
 
 /** The supplied folders of one package, innermost first (a refusal names the first that holds the state). */

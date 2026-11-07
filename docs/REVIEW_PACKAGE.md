@@ -400,11 +400,11 @@ PNG responses are `image/png` attachment downloads; JSON responses are `applicat
 
 Only selected-basis report `frameTimes` supplies strip times. A matching report animation is required. Uniform metadata remains supported by inspection transport but does not become a strip sampling substitute. A clockless JSON group keeps its inclusive frames and `time:null`; clockless PNG refuses with `Report has no frameTimes — regenerate with pose 0.30.0 or later`. A compare A without a clock remains renderable from B's explicit times and has no inferred A frame label. Each actual reference PTS is selected nearest to the request (ties earlier), and all rig rows use that same PTS. Requested/decoded times outside the common clip/video domain refuse, without a per-source clamp.
 
-Each interval has its own source-row grid; overlapping groups preserve their feedback ids and repeated frames. Source packages and reference are checked before and after export, including exact model/page/motion bytes through existing package hashes. The PNG footer includes full rig/motion hashes (null stays absent), revisions, viewer/runtime and actual renderer versions. Exports are derived evidence, never a new source or approval. CLI destinations and `.json` sidecars must be new files outside both source roots; parent symlinks and existing targets are refused. Downloads have no arbitrary filesystem destination parameter.
+Each interval has its own source-row grid; overlapping groups preserve their feedback ids and repeated frames. Source packages and reference are checked before and after export, including exact model/page/motion bytes through existing package hashes. The PNG footer includes full rig/motion hashes (null stays absent), revisions, viewer/runtime and actual renderer versions. Exports are derived evidence, never a new source or approval. CLI destinations and `.json` sidecars must be new files. An existing output parent may be reached through a symlink, including macOS `/var`, if the physical destination is outside every source root. An existing destination entry, including a dangling symlink, is refused. Downloads have no arbitrary filesystem destination parameter.
 
 The pure layout reserves a maximum `footerHeight` budget for complete provenance. The native renderer wraps the actual footer text before allocation and uses only that measured height; `rendering.width/height` records the actual PNG extent. Unsupported RGB/dark tint refuses by name (`STRIP_UNSUPPORTED_TINT`) rather than claiming Canvas2D pixel parity for features its published renderer omits. Labels and footer use concrete font-family lists, never a generic family (Node Canvas resolves those to the machine's first family); when no family of the mono or sans list is installed, rendering refuses `STRIP_FONT`, naming both lists, before any reference probe or drawing.
 
-A strip plan with one clock basis reports `plan.basis:"single"|"a"|"b"`. A comparison batch containing both sides reports `plan.basis:"mixed"`; each group still carries its own `basis` and its own report-derived sample times. Consumers must use the group basis for a mixed plan rather than treating the first group as a batch-wide clock. The selected basis row labels requested producer frames/times; actual PTS and independently calculated actual frames remain separate rendering metadata. Output containment and every parent-directory check use native platform separators, including Windows drive and UNC paths.
+A strip plan with one clock basis reports `plan.basis:"single"|"a"|"b"`. A comparison batch containing both sides reports `plan.basis:"mixed"`; each group still carries its own `basis` and its own report-derived sample times. Consumers must use the group basis for a mixed plan rather than treating the first group as a batch-wide clock. The selected basis row labels requested producer frames/times; actual PTS and independently calculated actual frames remain separate rendering metadata. Output containment uses native platform separators, including Windows drive and UNC paths.
 
 ## Open-managed handoff and explicit single reference
 
@@ -498,6 +498,21 @@ writes state (rebuild, strip, bones check, readings, requirements, environment c
 applies the same canonical check and refuses with its own `*_STATE_INSIDE_PACKAGE`
 code naming the folder. No package manifest, source video, motion or compiled
 model is written by open. There is no browser launch or new LAN exposure.
+
+Review resolves the existing directory prefix of a state path or explicit
+parts verdict parent. An `ENOENT` suffix can be created when the command needs
+it. A regular file in the directory path (`ENOTDIR`) or a symlink loop
+(`ELOOP`) stops resolution. Parts verdict resolution preserves the original
+output filename, and protected input collisions still refuse by name.
+
+| Input | Previous behavior | Current behavior |
+| --- | --- | --- |
+| Strip destination under a symlink to an existing directory outside the source roots | `strip.output` refused the symlink | Writes to the physical directory with the original filename |
+| `open` state path through a regular file or loop | Raw `ENOTDIR` or `ELOOP` | `OPEN_STATE_INVALID` |
+| `control` state path through a regular file or loop | Raw `ENOTDIR` or `ELOOP` | `CONTROL_STATE` |
+| State guard sees a regular file inside the package with a requested suffix | `*_STATE_INSIDE_PACKAGE` | `STATE_DIRECTORY_INVALID` |
+| State guard sees a symlink loop | Raw `ELOOP` | `STATE_DIRECTORY_INVALID` |
+| Parts or atlas verdict parent through a regular file or loop | Raw `ENOTDIR` or `ELOOP` | `PARTS_VERDICT_DESTINATION_INVALID` |
 
 The printed feedback retrieval command uses POSIX shell quoting for literal path
 arguments. It is not a PowerShell or cmd.exe command string.

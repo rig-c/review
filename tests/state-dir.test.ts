@@ -1,5 +1,5 @@
 import {afterEach,expect,test} from 'bun:test';
-import {cp,mkdir,mkdtemp,readdir,realpath,rm,symlink,writeFile} from 'node:fs/promises';
+import {cp,mkdir,mkdtemp,readFile,readdir,realpath,rm,symlink,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {loadReview} from '../src/manifest.ts';
@@ -33,6 +33,26 @@ async function built(root:string,withConfig:boolean){
 }
 const caught=async(run:()=>Promise<unknown>)=>run().then(()=>null,(e:unknown)=>e as Error&{code?:string});
 const runnerOptions=(stateDir:string,root:string)=>({stateDir,starts:[root],unchanged:async()=>{},latest:()=>null});
+
+test('requirements distinguish an invalid state prefix from a missing directory', async () => {
+  const root = await scratch(), pkg = await handoffPackage(root), p = await loadReview(pkg);
+  const inside = join(root, 'inside'), outside = join(root, 'outside'), external = join(root, 'external');
+  await mkdir(external);
+  await symlink(pkg, inside, 'dir');
+  await symlink(external, outside, 'dir');
+  await symlink('loop', join(external, 'loop'), 'dir');
+  const request = {fps:12,build:'inspected',requirements:[{name:'ROOT_RANGE',kind:'range',animation:'idle',bone:'root',lo_degrees:-1,hi_degrees:1}]};
+  const start = (stateDir: string) => createRequirementsCheck(p, {
+    ...runnerOptions(stateDir, root),
+    unchanged: async () => { throw new Error('passed state guard'); },
+  }).start(request);
+  for (const invalid of [join(inside, 'motion.json', 'missing'), join(outside, 'loop', 'missing')]) {
+    await expect(start(invalid)).rejects.toThrow('STATE_DIRECTORY_INVALID:');
+  }
+  await expect(start(join(outside, 'missing', 'state'))).rejects.toThrow('passed state guard');
+  expect(await readdir(external)).toEqual(['loop']);
+  expect(await readFile(join(pkg, 'motion.json'), 'utf8')).toBe('{}');
+});
 
 test('#187 bar 1: a state directory that is a symlink into the package is refused by name before anything is written',async()=>{
  const root=await scratch(),pkg=await handoffPackage(root),p=await loadReview(pkg);

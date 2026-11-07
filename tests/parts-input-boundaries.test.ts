@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { copyFile, link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadPartsView, saveVerdict } from '../src/parts-view.ts';
@@ -45,6 +45,34 @@ test('#372: ordinary verdict replacement remains supported', async () => {
   await saveVerdict(pkg, { ...input, status: 'pending' });
   expect(JSON.parse(await readFile(pkg.verdictPath, 'utf8')).status).toBe('pending');
 });
+
+for (const mode of ['parts', 'atlas'] as const) {
+  test(`${mode} verdict preserves the leaf under a physical parent and names invalid parents`, async () => {
+    const root = await realpath(await fixture());
+    const pkg = mode === 'parts' ? root : join(root, 'atlas');
+    if (mode === 'atlas') {
+      await mkdir(pkg);
+      await writeFile(join(pkg, 'skeleton.model.json'), '{"spec":"rigc-compiled/3","pages":[]}');
+    }
+    const physical = join(root, 'verdict-output'), alias = join(root, 'verdict-alias');
+    await mkdir(physical);
+    await symlink(physical, alias, 'dir');
+    await writeFile(join(physical, 'file'), 'sentinel');
+    await symlink('loop', join(physical, 'loop'), 'dir');
+    for (const prefix of ['file', 'loop']) {
+      await expect(loadPartsView(pkg, { verdict: join(alias, prefix, 'missing', 'verdict.json') }))
+        .rejects.toThrow('PARTS_VERDICT_DESTINATION_INVALID:');
+    }
+    expect((await readdir(physical)).sort()).toEqual(['file', 'loop']);
+    const output = join(alias, 'missing', 'verdict.json');
+    const view = await loadPartsView(pkg, { verdict: output });
+    expect(view.mode).toBe(mode);
+    expect(view.verdictPath).toBe(join(physical, 'missing', 'verdict.json'));
+    const saved = await saveVerdict(view, mode === 'parts' ? input : { status: 'pending', parts: {} });
+    expect(JSON.parse(await readFile(output, 'utf8')).source).toEqual(saved.source);
+    expect(await readFile(join(physical, 'file'), 'utf8')).toBe('sentinel');
+  });
+}
 
 test('#372: multibyte JSON is bounded by UTF-8 bytes', async () => {
   const pkg = await loadPartsView(await fixture());
