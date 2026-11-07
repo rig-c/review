@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
-import type { JobDisplayPublication, JobDisplayReceipt, JobResult } from '../src/job-contract.ts';
+import type { JobDisplayPublication, JobDisplayReceipt, JobResult, JobModelSourceBinding } from '../src/job-contract.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
 import {t} from '../web/i18n.ts';
 import {jobHubMessageMatches, JOB_HUB_VISIBILITY, type JobHubBinding} from '../web/job-hub.ts';
@@ -572,7 +572,9 @@ test('a cleanup failure after acknowledgment cannot roll the screen back under t
 });
 test('the new displayed source accepts a new verdict while the old draft keeps its full binding', async () => {
     const h = harness();
-    const first = fixtureAct('review-verdict').source;
+    const fixtureSource = fixtureAct('review-verdict').source;
+    if (fixtureSource.subject === 'image-set') throw new Error('Expected model fixture source');
+    const first: JobModelSourceBinding = fixtureSource;
     await h.publish(1, first);
     h.live()!.draft.words = '  original words\n';
     const second = { ...first, sourceHash: '6'.repeat(64), package: { ...first.package, revision: '2' },

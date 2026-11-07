@@ -7,6 +7,7 @@ export type {JobSessionOptions, JobSession} from './job-session.ts';
 export type {JobWorkerOptions} from './job-worker.ts';
 export type {JobPublicationReader, JobPublishedContext} from './job-source.ts';
 export {
+  JOB_CAPABILITIES,
   JOB_API_SCHEMA,
   JOB_ACT_SCHEMA,
   JOB_PARTS_ENUMERATOR_RANGE,
@@ -70,3 +71,6 @@ export type {
   JobHostPorts,
   JobConsumerGrant,
 } from './job-contract.ts';
+
+export {assertJobImageSetCapability} from './job-image-set.ts';
+export type {JobCapabilities, JobImageSetInput, JobImageSet, JobImageSourceBinding, JobModelSourceBinding, JobModelReviewValue, JobImageReviewValue} from './job-contract.ts';

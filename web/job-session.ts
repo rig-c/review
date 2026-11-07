@@ -605,6 +605,7 @@ export interface JobPreparedInspection {
     parts: JobPartsInventory | null;
     partImages: Map<string, HTMLImageElement>;
     interviewImages: Map<string, HTMLImageElement>;
+    imageSetImages?: readonly HTMLImageElement[];
     references: JobReferenceView[];
     assets: ModelAssets | null;
     player: RigPlayer | null;
@@ -729,6 +730,22 @@ export async function prepareJobInspection(display: JobDisplayPublication, signa
         const partImages = new Map<string, HTMLImageElement>();
         const interviewImages = new Map<string, HTMLImageElement>();
         const preload: Promise<void>[] = [];
+        const imageSetImages: HTMLImageElement[] = [];
+        const source = display.publication.source;
+        if (source.subject === 'image-set') {
+            if (metadata.sourceHash !== source.sourceHash || metadata.manifest.model)
+                throw new Error('JOB_DISPLAY_MISMATCH');
+            const canonical = source.imageSet.images.map(({role, name, sha256}) => ({role, name, sha256}));
+            if (source.imageSet.images.length < 2 || source.imageSet.images.length > 8 ||
+                await jobDigest(new TextEncoder().encode(JSON.stringify(canonical))) !== source.imageSetDigest)
+                throw new Error('JOB_SOURCE_MISMATCH');
+            for (const [index, entry] of source.imageSet.images.entries()) {
+                preload.push(image(routes.api('image-set/' + index), entry.sha256).then(element => {
+                    element.alt = entry.name;
+                    imageSetImages[index] = element;
+                }));
+            }
+        }
         for (const reference of metadata.manifest.references) {
             preload.push((async () => {
                 if (reference.type === 'image') {
@@ -873,7 +890,7 @@ export async function prepareJobInspection(display: JobDisplayPublication, signa
             };
             resetToSetup();
         }
-        if (!player && !references.length && !partImages.size)
+        if (!player && !references.length && !partImages.size && !imageSetImages.length)
             throw new Error('JOB_VISUAL_UNAVAILABLE');
         if (signal.aborted)
             throw new Error('JOB_PRELOAD_CANCELLED');
@@ -881,7 +898,7 @@ export async function prepareJobInspection(display: JobDisplayPublication, signa
         const order = [metadata.sourcePainting?.id, ...metadata.manifest.references.map(reference => reference.id)];
         references.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
         return {
-            display, metadata, interview, parts, partImages, interviewImages, references, assets, rigRoot,
+            display, metadata, interview, parts, partImages, interviewImages, imageSetImages, references, assets, rigRoot,
             get player() { return player; },
             get inspection() { return inspection; },
             setupPose: () => resetToSetup(),
@@ -1171,7 +1188,27 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             const verdict = selectValues(['pending', 'approved', 'changes-requested'], ['Pending', 'Approved', 'Changes requested']);
             verdict.name = 'verdict';
             fields.append(verdict);
-            read = () => ({ stage: subject.stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: note.value });
+            const stage = subject.stage;
+            if (stage === 'image-review') {
+                const source = ask.source;
+                if (source.subject !== 'image-set') throw new Error('JOB_ACT_SOURCE_STALE');
+                const imageNotes = source.imageSet.images.map((image, index) => {
+                    const group = node('fieldset');
+                    const name = node('legend');
+                    name.textContent = image.name;
+                    group.append(name);
+                    fields.append(group);
+                    return {name: image.name, input: textArea(group, 'job.imageNote', 'image-note-' + index)};
+                });
+                read = () => {
+                    const notes = imageNotes.filter(note => note.input.value !== '')
+                        .map(note => ({name: note.name, words: note.input.value}));
+                    return {stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: note.value,
+                        ...(notes.length ? {imageNotes: notes} : {})};
+                };
+            } else {
+                read = () => ({ stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: note.value });
+            }
         }
         else if (subject.kind === 'signoff') {
             const stage = node('p');
@@ -1398,6 +1435,57 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         coordinates.id = 'coordinates';
         coordinates.hidden = true;
         stage.append(controls, pair, transport, numeric, coordinates);
+        const source = prepared.display.publication.source;
+        if (source.subject === 'image-set') {
+            const heading = node('h2', 'job.imageSetTitle');
+            const digest = node('p');
+            digest.className = 'job-source';
+            digest.style.overflowWrap = 'anywhere';
+            const digestLabel = node('span', 'job.imageSetDigest');
+            const digestValue = node('code');
+            digestValue.textContent = source.imageSetDigest;
+            digest.append(digestLabel, document.createTextNode(' '), digestValue);
+            const gallery = node('section');
+            gallery.dataset.jobImageSet = '';
+            gallery.style.display = 'grid';
+            gallery.style.gridAutoFlow = 'column';
+            gallery.style.gridAutoColumns = 'minmax(180px, 1fr)';
+            gallery.style.gap = '16px';
+            gallery.style.overflow = 'auto';
+            gallery.style.minHeight = '0';
+            gallery.style.flex = '1';
+            for (const [index, image] of source.imageSet.images.entries()) {
+                const element = prepared.imageSetImages?.[index];
+                if (!element) throw new Error('JOB_VISUAL_UNAVAILABLE');
+                const figure = node('figure');
+                figure.style.margin = '0';
+                figure.style.minWidth = '0';
+                figure.dataset.imageName = image.name;
+                const name = node('h3');
+                name.textContent = image.name;
+                name.style.overflowWrap = 'anywhere';
+                const role = node('p', 'job.imageRole.' + image.role);
+                const hash = node('code');
+                hash.className = 'job-source';
+                hash.style.display = 'block';
+                hash.style.overflowWrap = 'anywhere';
+                hash.textContent = image.sha256;
+                element.style.width = '100%';
+                element.style.height = 'auto';
+                element.style.maxHeight = '70vh';
+                element.style.objectFit = 'contain';
+                figure.append(name, role, element, hash);
+                if (source.duplicateHashes.some(group => group.names.includes(image.name)))
+                    figure.append(node('p', 'job.identicalImages'));
+                gallery.append(figure);
+            }
+            stage.prepend(heading, digest, gallery);
+            controls.hidden = pair.hidden = transport.hidden = true;
+            controls.style.display = pair.style.display = transport.style.display = 'none';
+            for (const child of sidebar.children) {
+                if (child instanceof HTMLElement && child !== identity && child !== binding) child.hidden = true;
+            }
+        }
         const formsHost = node('section');
         formsHost.className = 'job-forms';
         formsHost.dataset.jobForms = '';
@@ -1433,7 +1521,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             direction.hidden = panel !== '4';
         for (const [askId, entry] of forms) {
             const ask = window.state().pending.find(item => item.askId === askId);
-            entry.form.hidden = panel === '2' && ask?.subject.kind !== 'interview-picks';
+            entry.form.hidden = current?.display.publication.source.subject !== 'image-set' &&
+                panel === '2' && ask?.subject.kind !== 'interview-picks';
         }
     }
     function pose(seekReference = true): void {
@@ -1595,6 +1684,10 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 }
             },
             async painted(prepared, signal) {
+                for (const image of prepared.imageSetImages ?? []) {
+                    if (!image.isConnected || !image.complete || !image.naturalWidth || !image.naturalHeight)
+                        throw new Error('JOB_VISUAL_UNAVAILABLE');
+                }
                 await reference()?.seek(time, signal);
                 if (prepared.player) {
                     prepared.player.draw();

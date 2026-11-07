@@ -1,5 +1,5 @@
 /**
- * Review #484 contract freeze candidate for Lane B, Create #182 and Parts #1159.
+ * Review #484 contract for Lane B, Create #182 and Parts #1159, with the HQ-approved #522 image branch.
  * People submit through the UI. Agents use publish, ask, next and close.
  * Public values contain semantic data and original source provenance. Private
  * session, picks, verdict, applied-record and snapshot formats stay behind ports.
@@ -121,11 +121,16 @@ export type JobSelector =
   | { readonly kind: 'rig'; readonly version: number }
   | { readonly kind: 'post'; readonly version: number; readonly rigVersion: number };
 
-/** Nulls are required explicit values. The daemon derives the binding from
+/** The original model branch keeps required explicit nulls. The image branch
+ * omits model and selector entirely. The daemon derives the binding from
  * validated retained bytes and the actual displayed publication. Clients never
  * provide trusted source hashes or transfer old approval onto a new binding.
  */
-export interface JobSourceBinding {
+export interface JobModelSourceBinding {
+  readonly subject?: never;
+  readonly imageSet?: never;
+  readonly imageSetDigest?: never;
+  readonly duplicateHashes?: never;
   readonly sourceHash: JobSha256;
   readonly projectHash: JobSha256 | null;
   readonly package: { readonly id: string; readonly revision: string };
@@ -136,6 +141,48 @@ export interface JobSourceBinding {
   readonly appliedResult: { readonly id: string; readonly modelHash: JobSha256 } | null;
   readonly plan: JobPlanIdentity | null;
   readonly parts: JobPartsIdentity | null;
+}
+
+/** Trusted-reader input. Hashes are optional claims, checked against retained bytes. */
+export interface JobImageSetInput {
+  readonly purpose: 'plate-adoption';
+  readonly images: readonly {
+    readonly role: 'source' | 'candidate' | 'reference';
+    readonly name: string;
+    readonly path: string;
+    readonly sha256?: JobSha256;
+  }[];
+}
+
+export interface JobImageSet {
+  readonly purpose: 'plate-adoption';
+  readonly images: readonly (Omit<JobImageSetInput['images'][number], 'sha256'> & {readonly sha256: JobSha256})[];
+}
+
+export interface JobImageSourceBinding extends Omit<JobModelSourceBinding,
+  'subject' | 'model' | 'selector' | 'imageSet' | 'imageSetDigest' | 'duplicateHashes'> {
+  readonly subject: 'image-set';
+  readonly model?: never;
+  readonly selector?: never;
+  readonly imageSet: JobImageSet;
+  readonly imageSetDigest: JobSha256;
+  readonly duplicateHashes: readonly {readonly names: readonly string[]; readonly sha256: JobSha256}[];
+}
+
+export type JobSourceBinding = JobModelSourceBinding | JobImageSourceBinding;
+export interface JobCapabilities { readonly imageSetVerdict: true }
+export const JOB_CAPABILITIES: JobCapabilities = Object.freeze({imageSetVerdict: true});
+
+export interface JobModelReviewValue {
+  readonly stage: 'rig-review' | 'direction-review';
+  readonly verdict: JobVerdict;
+  readonly words: string;
+}
+export interface JobImageReviewValue {
+  readonly stage: 'image-review';
+  readonly verdict: JobVerdict;
+  readonly words: string;
+  readonly imageNotes?: readonly {readonly name: string; readonly words: string}[];
 }
 
 /** Trusted host bootstrap declares who the window was opened for. The UI cannot
@@ -155,7 +202,7 @@ export interface JobHumanAuthority {
 
 export type JobVerdict = 'pending' | 'approved' | 'changes-requested';
 export type JobPartOutcome = 'pending' | 'clean' | 'flagged';
-export type JobReviewStage = 'rig-review' | 'direction-review';
+export type JobReviewStage = 'rig-review' | 'direction-review' | 'image-review';
 
 export interface JobActValues {
   readonly 'interview-picks': {
@@ -189,11 +236,7 @@ export interface JobActValues {
     }[];
     readonly words: string;
   };
-  readonly 'review-verdict': {
-    readonly stage: JobReviewStage;
-    readonly verdict: JobVerdict;
-    readonly words: string;
-  };
+  readonly 'review-verdict': JobModelReviewValue | JobImageReviewValue;
   readonly signoff: {
     /** An explicitly declared Create stage. Validation belongs to its writer. */
     readonly stage: string;
@@ -218,20 +261,20 @@ export type JobUIActValues = Omit<JobActValues, 'checkpoint'> & {
 };
 
 export interface JobActSources {
-  readonly 'interview-picks': JobSourceBinding & {
+  readonly 'interview-picks': JobModelSourceBinding & {
     readonly optionSet: NonNullable<JobSourceBinding['optionSet']>;
   };
-  readonly checkpoint: JobSourceBinding & { readonly plan: JobPlanIdentity };
-  readonly 'parts-verdict': JobSourceBinding & {
+  readonly checkpoint: JobModelSourceBinding & { readonly plan: JobPlanIdentity };
+  readonly 'parts-verdict': JobModelSourceBinding & {
     readonly projectHash: JobSha256;
     readonly selector: Extract<JobSelector, { kind: 'draft' }>;
     readonly parts: JobPartsIdentity;
   };
-  readonly 'review-verdict': JobSourceBinding & {
+  readonly 'review-verdict': JobImageSourceBinding | (JobModelSourceBinding & {
     readonly selector: Extract<JobSelector, { kind: 'rig' | 'post' }>;
     readonly model: JobFileIdentity;
-  };
-  readonly signoff: JobSourceBinding;
+  });
+  readonly signoff: JobModelSourceBinding;
 }
 
 /** Immutable, finalized explicit UI submissions only. All human text and ordered
@@ -251,9 +294,10 @@ export type JobAct = {
     readonly kind: Kind;
     readonly authority: JobHumanAuthority;
     readonly at: string;
-    readonly source: JobActSources[Kind];
-    readonly value: JobActValues[Kind];
-  };
+  } & (Kind extends 'review-verdict' ? (
+    | {readonly source: Exclude<JobActSources['review-verdict'], JobImageSourceBinding>; readonly value: JobModelReviewValue}
+    | {readonly source: JobImageSourceBinding; readonly value: JobImageReviewValue}
+  ) : {readonly source: JobActSources[Kind]; readonly value: JobActValues[Kind]});
 }[JobEnabledActKind];
 
 export type JobSubject =
@@ -377,6 +421,12 @@ export const JOB_ERROR_CODES = [
   'JOB_SOURCE_UNRETAINABLE',
   'JOB_ROOT_REPLACED',
   'JOB_PUBLICATION_UNKNOWN',
+  'JOB_IMAGE_SET_UNSUPPORTED',
+  'JOB_IMAGE_SET_INVALID',
+  'JOB_IMAGE_SET_DUPLICATE_NAME',
+  'JOB_IMAGE_SET_DUPLICATE_PATH',
+  'JOB_IMAGE_SET_ROLE_INVALID',
+  'JOB_IMAGE_SET_PATH_REFUSED',
   'JOB_ASK_INVALID',
   'JOB_ASK_SUPERSEDED',
   'JOB_ACT_UNKNOWN',
@@ -413,6 +463,7 @@ export type JobEvent = {
 );
 
 export interface JobNextValue {
+  readonly capabilities?: JobCapabilities;
   readonly events: readonly JobEvent[];
   readonly cursor: JobCursor | null;
   readonly status: 'events' | 'timeout' | 'closed';

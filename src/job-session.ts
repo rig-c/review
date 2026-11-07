@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { isAbsolute, relative, sep } from 'node:path';
 import {
-  JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
+  JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_CAPABILITIES, JOB_ENABLED_ACT_KINDS, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
   type JobDisplayPublication, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest,
   type JobNextValue, type JobPendingAsk, type JobPublication, type JobReviewerBinding, type JobStatus,
 } from './job-contract.ts';
@@ -329,7 +329,7 @@ export class JobSession {
       size += bytes;
       batch.push(event);
     }
-    return { events: batch, cursor: batch.at(-1)?.cursor ?? after,
+    return { capabilities: JOB_CAPABILITIES, events: batch, cursor: batch.at(-1)?.cursor ?? after,
       status: batch.length ? 'events' : current.active ? 'timeout' : 'closed' };
   }
 

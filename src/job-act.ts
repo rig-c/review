@@ -8,6 +8,8 @@ import { jobId, jobInteger, jobObject, requestDigest } from './job-api.ts';
 import { validatePicks } from './interview-picks.ts';
 import type { JobRetainedSource } from './job-source.ts';
 import { JobError } from './job-store.ts';
+import { checkedPath, readRegular } from './interview-project.ts';
+import { prepareJobImageSet } from './job-image-set.ts';
 
 function words(value: unknown): string {
   if (typeof value !== 'string' || value.length > 10_000) throw new JobError('JOB_ACT_INVALID');
@@ -25,6 +27,16 @@ function requirePlan(source: JobSourceBinding): void {
 
 export function bindJobAsk(subject: JobSubject, retained: JobRetainedSource): JobSourceBinding {
   const source = structuredClone(retained.source);
+  if (source.subject === 'image-set') {
+    if (subject.kind !== 'review-verdict' || subject.stage !== 'image-review') throw new JobError('JOB_ASK_INVALID');
+    const identity = prepareJobImageSet(source.imageSet,
+      path => readRegular(checkedPath(retained.root.path, path), 64 * 1024 * 1024));
+    if (requestDigest(identity) !== requestDigest({imageSet: source.imageSet,
+      imageSetDigest: source.imageSetDigest, duplicateHashes: source.duplicateHashes})) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+    return {...source, ...identity};
+  }
   const declared = retained.subjects.some(candidate => requestDigest(candidate) === requestDigest(subject));
   switch (subject.kind) {
     case 'interview-picks': {
@@ -43,7 +55,7 @@ export function bindJobAsk(subject: JobSubject, retained: JobRetainedSource): Jo
           source.selector.id !== subject.draftId || !retained.partIds.length) throw new JobError('JOB_ASK_INVALID');
       return source;
     case 'review-verdict':
-      if (!source.model || (subject.stage === 'rig-review' ? source.selector?.kind !== 'rig' :
+      if (subject.stage === 'image-review' || !source.model || (subject.stage === 'rig-review' ? source.selector?.kind !== 'rig' :
         source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ASK_INVALID');
       return source;
     case 'signoff':
@@ -87,6 +99,29 @@ export function finalizeJobAct(options: {
     authority: { actor: 'human' as const, channel: 'review-ui' as const, reviewer: structuredClone(reviewer) },
     at,
   };
+  if (source.subject === 'image-set') {
+    if (submission.kind !== 'review-verdict' || ask.subject.kind !== 'review-verdict' ||
+        ask.subject.stage !== 'image-review') throw new JobError('JOB_ACT_INVALID');
+    const value = jobObject(submission.value, ['stage', 'verdict', 'words', 'imageNotes']);
+    if (value.stage !== 'image-review') throw new JobError('JOB_ACT_INVALID');
+    let imageNotes: {name: string; words: string}[] | undefined;
+    if (value.imageNotes !== undefined) {
+      if (!Array.isArray(value.imageNotes) || value.imageNotes.length > source.imageSet.images.length) {
+        throw new JobError('JOB_ACT_INVALID');
+      }
+      const names = new Set<string>();
+      imageNotes = value.imageNotes.map(raw => {
+        const note = jobObject(raw, ['name', 'words']);
+        if (typeof note.name !== 'string' || names.has(note.name) ||
+            !source.imageSet.images.some(image => image.name === note.name)) throw new JobError('JOB_ACT_INVALID');
+        names.add(note.name);
+        return {name: note.name, words: words(note.words)};
+      });
+    }
+    return {...envelope, kind: 'review-verdict', source, value: {stage: 'image-review',
+      verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const), words: words(value.words),
+      ...(imageNotes === undefined ? {} : {imageNotes})}};
+  }
   switch (submission.kind) {
     case 'interview-picks': {
       const value = jobObject(submission.value, ['questionId', 'selections', 'note']);
@@ -146,7 +181,7 @@ export function finalizeJobAct(options: {
     }
     case 'review-verdict': {
       const value = jobObject(submission.value, ['stage', 'verdict', 'words']);
-      if (ask.subject.kind !== 'review-verdict' || value.stage !== ask.subject.stage) throw new JobError('JOB_ACT_INVALID');
+      if (ask.subject.kind !== 'review-verdict' || ask.subject.stage === 'image-review' || value.stage !== ask.subject.stage) throw new JobError('JOB_ACT_INVALID');
       return { ...envelope, kind: 'review-verdict', source: { ...source, model: source.model!,
         selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, { kind: 'rig' | 'post' }> }, value: {
         stage: ask.subject.stage, verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const), words: words(value.words),
