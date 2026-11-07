@@ -11,6 +11,7 @@ import {freshSession} from '../src/session.ts';
 import {rebuildDir} from '../src/rebuild.ts';
 import {startServer} from '../src/server.ts';
 import { WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
+import { assertNamedDeltaOps, dragStage1Delta } from './helpers/stage1-delta-target.ts';
 
 const CDP_SEND_DEADLINE_MS = 10_000;
 // Preserve the original Apply allowance of 1,200 × 25 ms.
@@ -244,10 +245,12 @@ try{
   await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
   await waitForStage1Readiness(page, 'DELTA_ROUTE_TIMEOUT');
   await page.evaluate(`${PARTS_DOCUMENT}.querySelectorAll('#pv-corrections button')[2].click()`);
-  const selected=await page.evaluate<any>(`(async()=>{for(let i=0;i<200;i++){const edit=window.rigReviewEditor.meshEdit();if(edit)return edit;await new Promise(r=>setTimeout(r,25));}throw Error('DELTA_EDITOR_NOT_OPEN')})()`);
-  const vertex=selected.drawn[selected.hull+1];if(!vertex)throw Error('NO_INTERIOR_VERTEX');
-  await page.mouse('mouseMoved',vertex.x,vertex.y);await page.mouse('mousePressed',vertex.x,vertex.y);await page.mouse('mouseMoved',vertex.x+2,vertex.y+1);await page.mouse('mouseReleased',vertex.x+2,vertex.y+1);
+  const namedId=await dragStage1Delta(page,async diagnostic=>{
+   await writeFile(join(artifacts,lang+'-delta-target.json'),JSON.stringify(diagnostic,null,2)+'\n');
+  });
   const delta=await settleStage1Apply<any>(page, 'MESH_DELTA_APPLY_SETTLE', 0);
+  await writeFile(join(artifacts,lang+'-delta-applied.json'),JSON.stringify(delta,null,2)+'\n');
+  assertNamedDeltaOps(delta.delta.ops,namedId);
   if(await page.evaluate(`document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot`)!=='torso')throw Error('DELTA_SELECTION_LOST');
   if(delta.check?.pass!==true)throw Error('DELTA_UNCHECKED');receipts.push({lang,instrument:'delta',applied:delta});
   await writeFile(join(artifacts,lang+'-delta.png'),await page.screenshot());
