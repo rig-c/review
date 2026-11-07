@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.1](https://github.com/rig-c/review/compare/v2.3.0...v2.3.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* include drawn rig geometry in stable stage framing ([#523](https://github.com/rig-c/review/issues/523)) ([cef554d](https://github.com/rig-c/review/commit/cef554d3c27edf4c27bf6598e7a8de2fbaeaff5e))
+
 ## [2.3.0](https://github.com/rig-c/review/compare/v2.2.0...v2.3.0) (2026-11-07)
 
 
