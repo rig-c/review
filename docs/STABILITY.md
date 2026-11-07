@@ -231,7 +231,7 @@ semantic close. A later new job receives new grants.
 Admission is an application bound of 32 registered entries, including closed
 entries retained in that hub incarnation. `JOB_HUB_LIMIT` refuses a new entry
 at the bound. Compatible reuse of an active entry still succeeds. Selected
-frames are retained lazily under this bound. Hardware performance requires its
+frames are retained lazily under this bound. Hidden hub members suspend their event subscription after bootstrap and resume from the last delivered cursor when selected. Hardware performance requires its
 own measurement.
 
 Consumer-owned adoption remains external and pending in
