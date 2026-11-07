@@ -99,7 +99,7 @@ const refuse = (code: string, message: string): never => { throw new Error(`${co
 export async function insideRoot(root: string, path: string, code: string, what: string): Promise<string> {
   const realRoot = await realpath(root), real = await realpath(path);
   const rel = relative(realRoot, real);
-  if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) refuse(code, `${what} resolves outside ${basename(realRoot)}/ (symlinks may not escape the package)`);
+  if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) refuse(code, `${what} resolves outside ${basename(realRoot)}/`);
   return real;
 }
 
