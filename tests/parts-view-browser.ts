@@ -10,17 +10,48 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadPartsView } from '../src/parts-view.ts';
+import { assertPartsUnchanged, loadPartsView, verdictSource, type PartsViewPackage } from '../src/parts-view.ts';
 import { startPartsServer } from '../src/parts-server.ts';
 import { FOOTPRINT_ALPHA } from '../web/parts-render.ts';
 import { BACK_DEFECT, frontHolds, writePartsPackage } from './helpers/parts-package.ts';
 import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
-import { measurePartsViewShot, preparePartsViewShot, selectPartsViewPage, type PartsViewShotTarget } from './helpers/parts-view-shots.ts';
+import {
+  centerPartsViewShot,
+  measurePartsViewShot,
+  preparePartsViewShot,
+  selectPartsViewPage,
+  type PartsViewShotState,
+  type PartsViewShotTarget,
+  type PartsViewSourceBinding,
+} from './helpers/parts-view-shots.ts';
 
 const arg = (name: string) => { const i = Bun.argv.indexOf(name); return i > 0 ? Bun.argv[i + 1] : undefined; };
 
-async function open(page: InputCdpSession, input: string, lang: 'en' | 'ko', shotDir: string | undefined, shot: string, target?: PartsViewShotTarget) {
-  const pkg = await loadPartsView(input), capability = 'd'.repeat(64);
+function bindPackageSource(pkg: PartsViewPackage, beforeSha256: string, afterSha256: string): PartsViewSourceBinding {
+  const current = verdictSource(pkg);
+  const page = pkg.pages[0];
+  return {
+    sourceHash: beforeSha256,
+    beforeSourceHash: beforeSha256,
+    afterSourceHash: afterSha256,
+    files: current.files,
+    ...(page ? {
+      page: { name: page.name, width: page.width, height: page.height },
+      regions: pkg.items.filter(i => i.page === page.name).map(i => ({ name: i.name, x: i.x, y: i.y, w: i.w, h: i.h })),
+    } : {}),
+  };
+}
+
+async function open(
+  page: InputCdpSession,
+  input: string,
+  lang: 'en' | 'ko',
+  shotDir: string | undefined,
+  shot: string,
+  target?: PartsViewShotTarget,
+  onRawShot?: (raw: { name: string } & PartsViewShotState) => void | Promise<void>,
+) {
+  const pkg = await loadPartsView(input), beforeSource = verdictSource(pkg), capability = 'd'.repeat(64);
   const server = await startPartsServer(pkg, { port: 0, capability });
   try {
     const url = `http://127.0.0.1:${server.port}/?lang=${lang}#cap=${capability}`;
@@ -29,9 +60,35 @@ async function open(page: InputCdpSession, input: string, lang: 'en' | 'ko', sho
     if (!(await page.evaluate<boolean>('document.body.dataset.ready === "true"'))) throw new Error('PARTS_VIEW_NOT_READY: page did not finish booting');
     if (target) await preparePartsViewShot(page, target);
     await Bun.sleep(250);
-    const state = target ? await measurePartsViewShot(page, target) : undefined;
+    let state: PartsViewShotState | undefined;
+    if (target) {
+      await assertPartsUnchanged(pkg);
+      const afterSource = verdictSource(await loadPartsView(input));
+      const boundTarget: PartsViewShotTarget = {
+        ...target,
+        source: bindPackageSource(pkg, beforeSource.sha256, afterSource.sha256),
+      };
+      if (target.mode === 'atlas' && target.view === 'page' && target.zoom === 4) {
+        const pan = await centerPartsViewShot(page, boundTarget, async (raw, stage) => {
+          await onRawShot?.({ name: `${shot}-${stage}`, ...raw });
+          if (shotDir) {
+            await writeFile(join(shotDir, `${shot}-${lang}.${stage}.geometry.json`), JSON.stringify(raw, null, 2) + '\n');
+          }
+        });
+        if (shotDir) await writeFile(join(shotDir, `${shot}-${lang}.pan.json`), JSON.stringify(pan, null, 2) + '\n');
+        await assertPartsUnchanged(pkg);
+        const afterPanSource = verdictSource(await loadPartsView(input));
+        boundTarget.source = bindPackageSource(pkg, beforeSource.sha256, afterPanSource.sha256);
+      }
+      state = await measurePartsViewShot(page, boundTarget, async raw => {
+        await onRawShot?.({ name: shot, ...raw });
+        if (shotDir) {
+          await writeFile(join(shotDir, `${shot}-${lang}.geometry.json`), JSON.stringify(raw, null, 2) + '\n');
+        }
+      });
+    }
     if (shotDir) await writeFile(join(shotDir, `${shot}-${lang}.png`), await page.screenshot());
-    return { pkg, server, state };
+    return { pkg, server, state, beforeSource };
   } catch (e) { server.stop(true); throw e; }
 }
 
@@ -45,7 +102,12 @@ export async function runPartsViewBrowser(shotDir?: string, partsDir?: string) {
   if (shotDir) await mkdir(shotDir, { recursive: true });
   await writePartsPackage(root);
   const page = await launchCdpSession(profile);
-  const report: Record<string, unknown> = {};
+  const rawShots: ({ name: string } & PartsViewShotState)[] = [];
+  const report: Record<string, unknown> = { rawShots };
+  const persistRaw = async (entry: { name: string } & PartsViewShotState) => {
+    rawShots.push(entry);
+    if (shotDir) await writeFile(join(shotDir, 'raw-report.json'), JSON.stringify(report, null, 2) + '\n');
+  };
   try {
     await page.setViewport(1280, 800);
     // Bar 1 and Bar 2 on the planted package.
@@ -65,9 +127,17 @@ export async function runPartsViewBrowser(shotDir?: string, partsDir?: string) {
     }
     // Atlas bar on the public demo.
     {
-      const { server } = await open(page, 'examples/demo', 'en', undefined, 'atlas');
+      const { pkg, server, beforeSource } = await open(page, 'examples/demo', 'en', undefined, 'atlas');
       await selectPartsViewPage(page);
-      const state = await measurePartsViewShot(page, { mode: 'atlas', view: 'page', zoom: 1, language: 'en' });
+      await assertPartsUnchanged(pkg);
+      const afterSource = verdictSource(await loadPartsView('examples/demo'));
+      const state = await measurePartsViewShot(page, {
+        mode: 'atlas',
+        view: 'page',
+        zoom: 1,
+        language: 'en',
+        source: bindPackageSource(pkg, beforeSource.sha256, afterSource.sha256),
+      });
       const boxes = await page.evaluate<string[][]>(`[...document.querySelectorAll('.pv-box[data-region]')].map(b=>[b.dataset.region,b.dataset.x,b.dataset.y,b.dataset.w,b.dataset.h])`);
       const model = JSON.parse(await readFile('examples/demo/skeleton.model.json', 'utf8')) as { pages: { regions: { name: string; x: number; y: number; width: number; height: number }[] }[] };
       const expected = model.pages.flatMap(p => p.regions.map(r => [r.name, String(r.x), String(r.y), String(r.width), String(r.height)]));
@@ -78,14 +148,19 @@ export async function runPartsViewBrowser(shotDir?: string, partsDir?: string) {
     const shots = [];
     if (shotDir) for (const lang of ['en', 'ko'] as const) {
       const parts = partsDir ?? root;
-      const a = await open(page, parts, lang, shotDir, 'parts-mode', { mode: 'parts', view: 'item', zoom: 2, language: lang });
+      const a = await open(page, parts, lang, shotDir, 'parts-mode', { mode: 'parts', view: 'item', zoom: 2, language: lang }, persistRaw);
       a.server.stop(true);
       shots.push({ name: 'parts-mode', ...a.state });
-      const b = await open(page, 'examples/demo', lang, shotDir, 'atlas-mode', { mode: 'atlas', view: 'page', zoom: 4, language: lang });
+      const b = await open(page, 'examples/demo', lang, shotDir, 'atlas-mode', { mode: 'atlas', view: 'page', zoom: 4, language: lang }, persistRaw);
       b.server.stop(true);
       shots.push({ name: 'atlas-mode', ...b.state });
     }
     report.shots = shots;
+    if (shotDir) await writeFile(join(shotDir, 'raw-report.json'), JSON.stringify(report, null, 2) + '\n');
+  } catch (error) {
+    if (shotDir) await writeFile(join(shotDir, 'raw-report.json'), JSON.stringify(report, null, 2) + '\n').catch(() => {});
+    console.error(JSON.stringify(report, null, 1));
+    throw error;
   } finally {
     await page.close();
     await rm(root, { recursive: true, force: true });
