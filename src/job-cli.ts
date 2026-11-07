@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { JOB_API_SCHEMA, type JobAgentRequest } from './job-contract.ts';
-import { jobFailure, parseJobRequest } from './job-api.ts';
+import { assertJobApiSchema, jobFailure, parseJobRequest } from './job-api.ts';
 import { JobError } from './job-store.ts';
 
 export interface JobCLIOptions {
@@ -108,6 +108,7 @@ export async function jobCommand(args: readonly string[], options: JobCLIOptions
   let value: unknown;
   try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
   catch { throw new JobError('JOB_REQUEST_INVALID'); }
+  assertJobApiSchema(value !== null && typeof value === 'object' ? (value as { schema?: unknown }).schema : undefined);
   write(JSON.stringify(value));
   if (!response.ok) process.exitCode = 1;
 }

@@ -7,6 +7,7 @@ export type {JobPublicationReader, JobPublishedContext} from './job-source.ts';
 export {
   JOB_API_SCHEMA,
   JOB_ACT_SCHEMA,
+  JOB_PARTS_ENUMERATOR_RANGE,
   JOB_ENABLED_ACT_KINDS,
   JOB_RESERVED_ACT_KINDS,
   JOB_PLAN_BOUND_SIGNOFF_STAGES,
@@ -29,6 +30,9 @@ export type {
   JobPartsManifestPath,
   JobPartImagePath,
   JobPartsIdentity,
+  JobPartsRole,
+  JobPartsFileReference,
+  JobPartsEnumerator,
   JobSelector,
   JobSourceBinding,
   JobReviewerBinding,

@@ -11,8 +11,9 @@
  * Only explicit close ends an active job. Direction carriage is metadata-only.
  */
 
-export const JOB_API_SCHEMA = 'rig-review/job-api@1' as const;
-export const JOB_ACT_SCHEMA = 'rig-review/act@1' as const;
+export const JOB_API_SCHEMA = 'rig-review/job-api@2' as const;
+export const JOB_ACT_SCHEMA = 'rig-review/act@2' as const;
+export const JOB_PARTS_ENUMERATOR_RANGE = '>=2.25.0 <3.0.0' as const;
 
 export const JOB_ENABLED_ACT_KINDS = [
   'interview-picks',
@@ -76,30 +77,41 @@ export interface JobPlanIdentity {
   readonly steps: readonly JobPlanStepIdentity[];
 }
 
-export type JobPartsManifestPath = 'parts.json' | `${string}/parts.json`;
-export type JobPartImagePath =
-  | `parts/${string}.png`
-  | `${string}/parts/${string}.png`
-  | 'painting_in_rig.png'
-  | `${string}/painting_in_rig.png`;
+/** Literal work-root-relative manifest path, validated at runtime. */
+export type JobPartsManifestPath = string;
+/** Literal path relative to the bound manifest directory. */
+export type JobPartImagePath = string;
+/** Bounded string only. Parts owns role membership, order and duplicate rules. */
+export type JobPartsRole = string;
 
-/** Exact parts.json and EVERY manifest-referenced PNG, across part, alternate,
- * depth and painting roles. Create #184 publishes the authoritative set using
- * Parts' public reference enumerator, pending Parts #1163. Its export name and
- * reader resolution rules belong to Parts. Review verifies the published paths
- * and bytes without duplicating those field rules. Paths use original project
- * provenance. Images are unique and lexically ordered in this public projection.
- * Missing or changed referenced bytes invalidate the binding. Unreferenced stale
- * extras are excluded and do not cause refusal. The manifest and complete
- * referenced set enter sourceHash. No new parts filename or migration is added.
+export interface JobPartsFileReference {
+  readonly path: JobPartImagePath;
+  readonly role: JobPartsRole;
+}
+
+/** Trusted host wires the official partsFileReferences export from its actual
+ * installed @rig-c/parts/src/parts.ts and checks that installation's version.
+ * A version claim alone does not authenticate a substituted callback.
+ */
+export interface JobPartsEnumerator {
+  readonly version: string;
+  readonly enumerate: (dir: string) => readonly JobPartsFileReference[];
+}
+
+/** Exact official enumeration, preserved positionally with roles and raw-byte
+ * hashes. Manifest provenance is work-root-relative. Image paths are relative
+ * to its directory. enumeratorVersion is the actual installed Parts version
+ * within JOB_PARTS_ENUMERATOR_RANGE. Unreferenced extras are outside identity.
  */
 export interface JobPartsIdentity {
+  readonly enumeratorVersion: string;
   readonly manifest: {
     readonly path: JobPartsManifestPath;
     readonly sha256: JobSha256;
   };
   readonly images: readonly {
     readonly path: JobPartImagePath;
+    readonly role: JobPartsRole;
     readonly sha256: JobSha256;
   }[];
 }

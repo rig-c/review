@@ -10,10 +10,9 @@ The named exports and signatures below are the supported import contract.
 Changes to them require an explicit public-contract review. The facade reexports
 the existing implementation and semantic types directly. The semantic schemas
 and behavior are defined in [Live job contract](REVIEW_PACKAGE.md#live-job-contract).
-The current C3 parts binding and the separately queued C4 work remain governed
-by that reference.
+The C4 parts binding and schema compatibility are defined by that reference.
 
-At C4 ([Review #501](https://github.com/rig-c/review/issues/501)), `JobPartsManifestPath`, `JobPartImagePath` and `JobPartsIdentity` will change, together with their embedding public types `JobHostOptions`, `JobOwnerHost`, `JobSessionOptions`, `JobSession`, `JobWorkerOptions`, `JobPublicationReader`, `JobPublishedContext`, `JobSourceBinding`, `JobActSources`, `JobAct`, `JobPendingAsk`, `JobPublication`, `JobStatus`, `JobEvent`, `JobNextValue`, `JobResponseValues`, `JobApiResponse`, `JobDisplayPublication` and `JobHostPorts`. This is a declared contract revision that must bump `JOB_API_SCHEMA` and receive HQ sign-off. Current-schema consumers must named-refuse a schema mismatch and must never silently interpret an incompatible payload. The installed smoke control `SMOKE_PUBLIC_HOST_SCHEMA_MISMATCH_REFUSED` sends an unsupported schema through the public host, verifies HTTP 400 with `JOB_REQUEST_INVALID` and the current response schema, and checks that generation remains unchanged, exercising the existing `parseJobRequest` schema guard. [Installed control](https://github.com/rig-c/review/blob/main/scripts/install-smoke.ts#L152), [schema guard](https://github.com/rig-c/review/blob/main/src/job-api.ts#L131).
+C4 changes `JobPartsManifestPath`, `JobPartImagePath`, `JobPartsIdentity` and their embedding public host, publication, source and act types under `JOB_API_SCHEMA` (`rig-review/job-api@2`) and `JOB_ACT_SCHEMA` (`rig-review/act@2`). API@1 and unsupported requests receive HTTP 400 with `JOB_REQUEST_INVALID`, detail `JOB_API_SCHEMA_MISMATCH`, the current response schema and unchanged generation. The CLI validates response schema before consuming values. Consumer writers must check API and act schemas. The C4 candidate requires HQ exact-head sign-off and a parent-owned final contract hash. Create #184 production integration remains pending. [C4](https://github.com/rig-c/review/issues/501), [installed control](https://github.com/rig-c/review/blob/main/scripts/install-smoke.ts).
 
 ```ts
 import {startJobHost} from '@rig-c/review/job-host';
@@ -31,6 +30,7 @@ interface JobSessionOptions {
   readonly fingerprint: string;
   readonly reviewer: JobReviewerBinding;
   readonly readPublished?: JobPublicationReader;
+  readonly partsEnumerator?: JobPartsEnumerator;
   readonly afterSnapshot?: () => void | Promise<void>;
   readonly afterDirectorySync?: (path: string) => void;
 }
@@ -47,6 +47,7 @@ interface JobWorkerOptions extends JobSessionOptions {
 interface JobHostOptions extends JobWorkerOptions {
   readonly readerId?: string;
   readonly bindingId?: string;
+  readonly partsEnumeratorId?: string;
 }
 
 type JobPublicationReader = (input: {
@@ -62,6 +63,26 @@ interface JobPublishedContext {
   readonly subjects: readonly JobSubject[];
   readonly partIds: readonly string[];
   readonly files: readonly JobFileIdentity[];
+}
+
+type JobPartsManifestPath = string; // Work-root-relative, runtime validated.
+type JobPartImagePath = string; // Manifest-directory-relative, runtime validated.
+type JobPartsRole = string; // Bounded string. Membership belongs to Parts.
+
+interface JobPartsFileReference {
+  readonly path: JobPartImagePath;
+  readonly role: JobPartsRole;
+}
+
+interface JobPartsEnumerator {
+  readonly version: string;
+  readonly enumerate: (dir: string) => readonly JobPartsFileReference[];
+}
+
+interface JobPartsIdentity {
+  readonly enumeratorVersion: string;
+  readonly manifest: {readonly path: JobPartsManifestPath; readonly sha256: JobSha256};
+  readonly images: readonly {readonly path: JobPartImagePath; readonly role: JobPartsRole; readonly sha256: JobSha256}[];
 }
 
 interface JobOwnerHost {
@@ -97,12 +118,25 @@ available port. `ownerUrl` opens the shipped standing owner page with its privat
 UI capability fragment. `origin` and the returned `ports` belong to that host.
 
 A present `readPublished` callback requires a nonempty `readerId`. A present
-`installWriterBinding` callback requires a nonempty `bindingId`. Each ID must be
+`installWriterBinding` callback requires a nonempty `bindingId`. A present
+`partsEnumerator` requires a nonempty `partsEnumeratorId`. Each ID must be
 absent when its callback is absent. Violations reject startup with
 `JOB_HOST_OPTION_ID_INVALID`. Equal declared IDs permit active-listener reuse
-across processes and newly allocated function objects. Changed or unrecorded IDs
+across processes and newly allocated function objects after an authenticated host probe.
+API/act schemas and the actual enumerator version must match too. Changed or unrecorded IDs
 reject with `JOB_HOST_REUSE_MISMATCH`, including the option name, listener ID and
 requested ID. The caller owns the semantic meaning of those IDs.
+After `stop()`, an explicit new startup may change valid hook IDs or enumerator
+version while keeping the same active job. Before allocating for any fingerprint,
+startup checks active rows for that canonical root inside the same store transaction.
+An old or missing stored API/act marker refuses `JOB_STORED_SCHEMA_MISMATCH`, naming
+the canonical root, stored/current schemas and the instruction to close the old job
+with its matching older installation. Old documents remain byte-identical. Current
+schemas retain the existing different-fingerprint partition, and closed old-schema
+rows do not block a new job. Subsequent reads also guard stored schemas before replay. Active listener
+descriptors and authenticated responses with old/missing markers refuse reuse.
+Retained identities and acts keep their original bytes and schemas. They are
+never migrated, relabelled or rebound to new approvals.
 
 `readPublished` supplies the producer's published semantic context for the exact
 frozen record. `installWriterBinding` receives the private finalized-act fetch
@@ -130,6 +164,7 @@ values from the frozen semantic contract.
 - `startJobHost`
 - `JOB_API_SCHEMA`
 - `JOB_ACT_SCHEMA`
+- `JOB_PARTS_ENUMERATOR_RANGE`
 - `JOB_ENABLED_ACT_KINDS`
 - `JOB_RESERVED_ACT_KINDS`
 - `JOB_PLAN_BOUND_SIGNOFF_STAGES`
@@ -163,6 +198,9 @@ without aliases or copied wire shapes.
 - `JobPartsManifestPath`
 - `JobPartImagePath`
 - `JobPartsIdentity`
+- `JobPartsRole`
+- `JobPartsFileReference`
+- `JobPartsEnumerator`
 - `JobSelector`
 - `JobSourceBinding`
 - `JobReviewerBinding`
@@ -198,13 +236,23 @@ without aliases or copied wire shapes.
 - `JobHostPorts`
 - `JobConsumerGrant`
 
+## Parts enumeration boundary
+
+C4 binds the exact public `partsFileReferences(dir)` array from `@rig-c/parts/src/parts.ts`, whose contract is frozen at Parts 2.25.0. The trusted host resolves an installed version in `JOB_PARTS_ENUMERATOR_RANGE` (`>=2.25.0 <3.0.0`), supplies its actual version and official callback through `partsEnumerator`, and declares `partsEnumeratorId`. `JobPartsIdentity.enumeratorVersion` carries that actual version. Manifest paths are work-root-relative and image paths are relative to the manifest directory. Each image carries `path`, bounded-string `role` and raw-byte `sha256`. Review compares the claimed array positionally with the official array, preserving its role/order/duplicate semantics. Upstream roles include `part`, `alternate`, `depth`, `painting` and `figure_mask`. Review bounds shape and paths, refuses traversal/symlinks, decodes PNGs and hashes retained bytes. Missing references refuse with row, role and path, including a missing sibling figure mask when a render copy exists. Unreferenced extras stay outside this parts identity. Composite source hashes use `rig-review-job-source/2`. Create #184 production reader/projection and official-hook wiring remain pending.
+
+The directory passed to the public callback holds the retained `parts.json` bytes. The original paths resolve from the directory holding the bound manifest. The host owns the official import and same-installation version check. A supplied version string alone does not authenticate a replaced callback. Review has no Parts runtime dependency and never installs the producer. Its dev-only 2.25.1 fixture is synthetic reference evidence. Missing or out-of-range versions name the required range and received value through `PARTS_ENUMERATOR_VERSION_MISMATCH`. A claimed version differing from the host installation also refuses.
+
+Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 4096. Individual raw files and decoded RGBA allocations are bounded at 64 MiB, and unique retained bytes at 256 MiB. Same-path multi-role references retain all rows and seal the physical bytes once. Parts' named manifest refusals are preserved through `PARTS_ENUMERATION_REFUSED`. Consumer refusals include `PARTS_REFERENCE_SET_MISMATCH`, `PARTS_REFERENCE_PATH_REFUSED`, `PARTS_REFERENCE_MISSING`, `PARTS_REFERENCE_PNG_INVALID`, `PARTS_REFERENCE_HASH_MISMATCH` and `PARTS_REFERENCE_LIMIT`. Details carry bounded row/role/path context where applicable. Failed publication preserves the committed head, source, generation and replay state.
+
 ## Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
 A consumer imports the runtime and every listed type through
 `@rig-c/review/job-host`. TypeScript checks the installed consumer and the runtime
 checks the full owner resources, retained publication, semantic ports, declared
-hooks, reuse and explicit-close grant lifetime using synthetic host data.
+hooks, enumerator version/row carriage, reuse and explicit-close grant lifetime using synthetic host data.
+This installed control uses an explicitly synthetic injected enumerator. Production
+Create integration and official-import evidence have their separate acceptance gates.
 
 The declared export-removal control deletes only `./job-host` from the disposable
 installed manifest and requires the public import to fail for that missing

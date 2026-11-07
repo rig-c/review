@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import type { JobErrorCode } from './job-contract.ts';
+import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode } from './job-contract.ts';
 
 export class JobError extends Error {
   constructor(readonly code: JobErrorCode, message: string = code) {
@@ -100,7 +100,9 @@ export class JobStore<Data> {
         active INTEGER NOT NULL CHECK(active IN (0,1)),
         document TEXT NOT NULL
       );
-      CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_root ON jobs(root_key) WHERE active=1;`);
+      CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_root ON jobs(root_key) WHERE active=1;
+      CREATE INDEX IF NOT EXISTS jobs_active_canonical_root
+        ON jobs(json_extract(document, '$.root.path')) WHERE active=1;`);
     } catch {
       throw new JobError('JOB_STORAGE_FAILED', 'Private job storage could not be opened');
     }
@@ -123,8 +125,24 @@ export class JobStore<Data> {
     return decode<Data>(row);
   }
 
-  open(rootKey: string, initialize: (jobId: string) => Data): StoredJob<Data> {
+  open(rootKey: string, initialize: (jobId: string) => Data, canonicalRoot?: string): StoredJob<Data> {
     return this.transaction(() => {
+      if (canonicalRoot !== undefined) {
+        // Inspect only bounded scalar details. The guard and allocation share
+        // this IMMEDIATE transaction, including across different fingerprints.
+        const incompatible = this.db.query<{api_schema: string; act_schema: string}, [string, string, string]>(`
+          SELECT substr(json_quote(json_extract(document, '$.apiSchema')), 1, 160) AS api_schema,
+                 substr(json_quote(json_extract(document, '$.actSchema')), 1, 160) AS act_schema
+          FROM jobs
+          WHERE active=1 AND json_extract(document, '$.root.path')=?
+            AND (json_extract(document, '$.apiSchema') IS NOT ? OR json_extract(document, '$.actSchema') IS NOT ?)
+          LIMIT 1
+        `).get(canonicalRoot, JOB_API_SCHEMA, JOB_ACT_SCHEMA);
+        if (incompatible) {
+          throw new JobError('JOB_SOURCE_UNRETAINABLE',
+            `JOB_STORED_SCHEMA_MISMATCH root=${JSON.stringify(canonicalRoot)} storedApi=${incompatible.api_schema} storedAct=${incompatible.act_schema} currentApi=${JSON.stringify(JOB_API_SCHEMA)} currentAct=${JSON.stringify(JOB_ACT_SCHEMA)}. Close the old job with the matching older installation.`);
+        }
+      }
       const current = this.db.query<JobRow, [string]>(
         'SELECT * FROM jobs WHERE root_key=? AND active=1',
       ).get(rootKey);

@@ -1,0 +1,111 @@
+{
+  "rig_size": [
+    1,
+    1
+  ],
+  "scale_rig_per_source": 1,
+  "ghost_px": {},
+  "parts": [
+    {
+      "name": "body",
+      "from": "painting:body",
+      "x": 0,
+      "y": 0,
+      "w": 1,
+      "h": 1,
+      "opaque_px": 0,
+      "projected_core_px": 0,
+      "source_px_taken": 0,
+      "refused_drift_px": 0,
+      "merged_px": 0,
+      "seam_override_px": 0,
+      "depth": {
+        "image": "body.png",
+        "near": "black",
+        "zScale": 1,
+        "sources": [
+          {
+            "from": "full:author:synthetic",
+            "image": "historical-depth.png",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "crop": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "reading": {
+              "orderingMedian": null,
+              "sheetMedian": null,
+              "relation": "indeterminate"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "",
+      "from": "painting:",
+      "x": 0,
+      "y": 0,
+      "w": 1,
+      "h": 1,
+      "opaque_px": 0,
+      "projected_core_px": 0,
+      "source_px_taken": 0,
+      "refused_drift_px": 0,
+      "merged_px": 0,
+      "seam_override_px": 0
+    },
+    {
+      "name": "𐀀",
+      "from": "painting:𐀀",
+      "x": 0,
+      "y": 0,
+      "w": 1,
+      "h": 1,
+      "opaque_px": 0,
+      "projected_core_px": 0,
+      "source_px_taken": 0,
+      "refused_drift_px": 0,
+      "merged_px": 0,
+      "seam_override_px": 0
+    }
+  ],
+  "painting_in_rig": {
+    "path": "painting_in_rig.png",
+    "sha256": "ae23847ba8cd901398cd2b9d5e0e3786871016235ac1ef2dd8e4bcb9ef655415",
+    "resample": "lanczos3-rgb-opaque"
+  },
+  "alternates": [
+    {
+      "name": "alt",
+      "records": [
+        {
+          "name": "髪",
+          "from": "painting:髪",
+          "x": 0,
+          "y": 0,
+          "w": 1,
+          "h": 1,
+          "opaque_px": 0,
+          "projected_core_px": 0,
+          "source_px_taken": 0,
+          "refused_drift_px": 0,
+          "merged_px": 0,
+          "seam_override_px": 0
+        }
+      ],
+      "scene": {
+        "figure_mask": "figure_rig.png"
+      }
+    },
+    {
+      "name": "empty",
+      "records": [],
+      "scene": {
+        "figure_mask": "figure_rig.png"
+      }
+    }
+  ]
+}

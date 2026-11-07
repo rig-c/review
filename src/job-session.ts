@@ -2,12 +2,12 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { isAbsolute, relative, sep } from 'node:path';
 import {
-  JOB_ENABLED_ACT_KINDS, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
+  JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
   type JobDisplayPublication, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest,
   type JobNextValue, type JobPendingAsk, type JobPublication, type JobReviewerBinding, type JobStatus,
 } from './job-contract.ts';
 import { bindJobAsk, finalizeJobAct, parseUISubmission } from './job-act.ts';
-import { jobHash, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
+import { jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
   assertJobRoot, assertJobSourceCurrent, captureJobRoot, prepareJobSource,
   type JobPublicationReader, type JobRetainedSource, type JobRootIdentity,
@@ -26,6 +26,8 @@ interface Replay {
 }
 
 interface JobData {
+  apiSchema: typeof JOB_API_SCHEMA;
+  actSchema: typeof JOB_ACT_SCHEMA;
   root: JobRootIdentity;
   fingerprint: string;
   reviewer: JobReviewerBinding;
@@ -50,9 +52,16 @@ export interface JobSessionOptions {
   readonly fingerprint: string;
   readonly reviewer: JobReviewerBinding;
   readonly readPublished?: JobPublicationReader;
+  readonly partsEnumerator?: JobPartsEnumerator;
   /** Deterministic boundary hook for disposable concurrency controls only. */
   readonly afterSnapshot?: () => void | Promise<void>;
   readonly afterDirectorySync?: (path: string) => void;
+}
+
+function assertStoredSchemas(data: JobData): void {
+  if (data.apiSchema !== JOB_API_SCHEMA || data.actSchema !== JOB_ACT_SCHEMA) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', 'JOB_STORED_SCHEMA_MISMATCH');
+  }
 }
 
 function within(root: string, path: string): boolean {
@@ -74,24 +83,35 @@ export class JobSession {
     const root = captureJobRoot(options.root), state = canonicalStatePath(options.stateDir);
     if (within(root.path, state)) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Job state must be outside the designated work root');
     if (!options.reviewer.id || !['owner', 'delegate'].includes(options.reviewer.role)) throw new JobError('JOB_AUTHORITY_REFUSED');
+    if (options.partsEnumerator) jobPartsEnumeratorVersion(options.partsEnumerator.version);
     this.store = new JobStore(state);
-    const row = this.store.open(jobHash(JSON.stringify([root.path, options.fingerprint])), () => ({
-      root, fingerprint: options.fingerprint, reviewer: structuredClone(options.reviewer),
-      agentCapability: randomBytes(32).toString('hex'), uiCapability: randomBytes(32).toString('hex'),
-      fetchCapability: randomBytes(32).toString('hex'), generation: 0, head: null,
-      publications: {}, asks: {}, acts: {}, events: [], replays: {}, pages: {},
-    }));
-    this.jobId = row.jobId;
-    assertJobRoot(row.data.root);
-    if (requestDigest(row.data.reviewer) !== requestDigest(options.reviewer)) {
+    try {
+      const row = this.store.open(jobHash(JSON.stringify([root.path, options.fingerprint])), () => ({
+        apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA,
+        root, fingerprint: options.fingerprint, reviewer: structuredClone(options.reviewer),
+        agentCapability: randomBytes(32).toString('hex'), uiCapability: randomBytes(32).toString('hex'),
+        fetchCapability: randomBytes(32).toString('hex'), generation: 0, head: null,
+        publications: {}, asks: {}, acts: {}, events: [], replays: {}, pages: {},
+      }), root.path);
+      this.jobId = row.jobId;
+      assertStoredSchemas(row.data);
+      assertJobRoot(row.data.root);
+      if (requestDigest(row.data.reviewer) !== requestDigest(options.reviewer)) {
+        throw new JobError('JOB_AUTHORITY_REFUSED', 'Active window reviewer binding differs');
+      }
+    } catch (error) {
       this.store.close();
-      throw new JobError('JOB_AUTHORITY_REFUSED', 'Active window reviewer binding differs');
+      throw error;
     }
   }
 
   get busy(): boolean { return this.operations > 0; }
 
-  private current(): StoredJob<JobData> { return this.store.get(this.jobId); }
+  private current(): StoredJob<JobData> {
+    const row = this.store.get(this.jobId);
+    assertStoredSchemas(row.data);
+    return row;
+  }
 
   /** Bootstrap delivery is private host work. Agent and owner credentials go to
    * their separate launch channels. The fetch grant is installed by Create's
@@ -188,7 +208,7 @@ export class JobSession {
       if (input.verb === 'publish') {
         candidate = await prepareJobSource({ root: current.data.root, stateRoot: this.store.root,
           fingerprint: current.data.fingerprint, request: input,
-          readPublished: this.options.readPublished, afterSnapshot: this.options.afterSnapshot,
+          readPublished: this.options.readPublished, partsEnumerator: this.options.partsEnumerator, afterSnapshot: this.options.afterSnapshot,
           afterDirectorySync: this.options.afterDirectorySync });
       }
       if (signal.aborted) throw new JobError('JOB_REQUEST_INVALID', 'Request cancelled');

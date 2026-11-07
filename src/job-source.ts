@@ -1,16 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
-import { mkdir, open, rm } from 'node:fs/promises';
+import { mkdir, open, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
+import { PNG } from 'pngjs';
+import { JOB_PARTS_ENUMERATOR_RANGE } from './job-contract.ts';
 import type {
-  JobFileIdentity, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
+  JobFileIdentity, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
   JobSelector, JobSourceBinding, JobSubject,
 } from './job-contract.ts';
 import { checkedPath, readProject, readRegular, type InterviewQuestion } from './interview-project.ts';
 import { loadReview } from './manifest.ts';
 import { openKey } from './open.ts';
 import { assertReviewUnchanged } from './reference.ts';
-import { jobHash, jobId, jobPath, jobSha, requestDigest } from './job-api.ts';
+import { jobHash, jobId, jobPartsEnumeratorVersion, jobObject, jobPath, jobSha, jobText, requestDigest } from './job-api.ts';
 import { JobError } from './job-store.ts';
 
 export interface JobRootIdentity {
@@ -119,21 +121,130 @@ function publishedIdentities(context: JobPublishedContext): JobFileIdentity[] {
     ids.add(step.id);
     jobSha(step.hash);
   }
-  if (context.parts) {
-    if (!/(^|\/)parts\.json$/.test(context.parts.manifest.path)) throw new JobError('JOB_SOURCE_MISMATCH');
-    const painting = posix.join(posix.dirname(context.parts.manifest.path), 'painting_in_rig.png');
-    if (context.parts.images.some(file =>
-      !/(^|\/)parts\/[^/]+\.png$/.test(file.path) && file.path !== painting)) {
-      throw new JobError('JOB_SOURCE_MISMATCH');
-    }
-    files.push(context.parts.manifest, ...context.parts.images);
-    const paths = context.parts.images.map(file => file.path);
-    if (new Set(paths).size !== paths.length || paths.some((path, i) => i > 0 && path < paths[i - 1])) {
-      throw new JobError('JOB_SOURCE_MISMATCH');
-    }
-  }
   for (const file of files) { jobPath(file.path); jobSha(file.sha256); }
   return files;
+}
+
+function referenceRow(raw: unknown, row: number, hashed: boolean): JobPartsFileReference & { sha256?: string } {
+  let item: Record<string, unknown>;
+  let role: string;
+  try {
+    item = jobObject(raw, hashed ? ['path', 'role', 'sha256'] : ['path', 'role']);
+    role = jobText(item.role, 128);
+    if (hashed) jobSha(item.sha256);
+  } catch { throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_SET_MISMATCH row=${row}`); }
+  let path: string;
+  try { path = jobPath(item.path); }
+  catch { throw new JobError('JOB_SOURCE_UNRETAINABLE', `PARTS_REFERENCE_PATH_REFUSED row=${row}`); }
+  return {path, role, ...(hashed ? {sha256: item.sha256 as string} : {})};
+}
+
+/** Membership, order and duplicate semantics belong solely to the trusted public
+ * enumerator. Review compares its exact array and validates byte boundaries.
+ */
+async function prepareParts(root: string, snapshotRoot: string, claimed: JobPartsIdentity | null,
+  enumerator?: JobPartsEnumerator): Promise<{identity: JobPartsIdentity | null; bytes: Map<string, Buffer>}> {
+  const bytes = new Map<string, Buffer>();
+  if (claimed === null) return {identity: null, bytes};
+  if (!enumerator) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_ENUMERATOR_UNAVAILABLE');
+  jobObject(claimed, ['enumeratorVersion', 'manifest', 'images']);
+  const version = jobPartsEnumeratorVersion(claimed.enumeratorVersion);
+  if (version !== jobPartsEnumeratorVersion(enumerator.version)) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE',
+      `PARTS_ENUMERATOR_VERSION_MISMATCH range="${JOB_PARTS_ENUMERATOR_RANGE}" received="${version}" installed="${enumerator.version}"`);
+  }
+  let manifestPath: string;
+  try {
+    jobObject(claimed.manifest, ['path', 'sha256']);
+    manifestPath = jobPath(claimed.manifest.path);
+    if (posix.basename(manifestPath) !== 'parts.json') throw new Error('Manifest directory API');
+    jobSha(claimed.manifest.sha256);
+  } catch { throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_PATH_REFUSED manifest'); }
+  if (!Array.isArray(claimed.images) || claimed.images.length > maxSourceFiles) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_LIMIT');
+  }
+  let manifestBytes: Buffer;
+  try { manifestBytes = sourceBytes(root, manifestPath); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new JobError('JOB_SOURCE_MISMATCH', 'PARTS_ENUMERATION_REFUSED rule=PARTS_FILE_PRESENT');
+    }
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_PATH_REFUSED manifest');
+  }
+  if (jobHash(manifestBytes) !== claimed.manifest.sha256) {
+    throw new JobError('JOB_SOURCE_MISMATCH', 'PARTS_REFERENCE_HASH_MISMATCH manifest');
+  }
+  bytes.set(manifestPath, manifestBytes);
+  const enumerationRoot = join(snapshotRoot, 'enumeration-' + randomUUID());
+  let references: readonly JobPartsFileReference[];
+  try {
+    await mkdir(enumerationRoot, {mode: 0o700});
+    await writeFile(join(enumerationRoot, 'parts.json'), manifestBytes, {flag: 'wx', mode: 0o600});
+    try { references = enumerator.enumerate(enumerationRoot); }
+    catch (error) {
+      const code = (error as {problems?: {code?: unknown}[]}).problems?.[0]?.code;
+      const rule = typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,127}$/.test(code) ? ` rule=${code}` : '';
+      throw new JobError('JOB_SOURCE_MISMATCH', 'PARTS_ENUMERATION_REFUSED' + rule);
+    }
+  } finally { await rm(enumerationRoot, {recursive: true, force: true}); }
+  if (!Array.isArray(references) || references.length > maxSourceFiles) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_LIMIT');
+  }
+  const official = references.map((raw, row) => referenceRow(raw, row, false));
+  const supplied = claimed.images.map((raw, row) => referenceRow(raw, row, true));
+  const difference = official.findIndex((row, i) => row.path !== supplied[i]?.path || row.role !== supplied[i]?.role);
+  if (difference !== -1 || official.length !== supplied.length) {
+    throw new JobError('JOB_SOURCE_MISMATCH',
+      `PARTS_REFERENCE_SET_MISMATCH row=${difference !== -1 ? difference : official.length}`);
+  }
+  let total = manifestBytes.length;
+  const decoded = new Set<string>();
+  const images: JobPartsIdentity['images'][number][] = [];
+  for (const [row, reference] of official.entries()) {
+    const detail = `row=${row} role=${reference.role} path=${JSON.stringify(reference.path)}`;
+    const path = posix.join(posix.dirname(manifestPath), reference.path);
+    let data = bytes.get(path);
+    if (!data) {
+      try {
+        if (lstatSync(checkedPath(root, path)).size > maxFileBytes) {
+          throw new JobError('JOB_SOURCE_UNRETAINABLE', `PARTS_REFERENCE_LIMIT ${detail}`);
+        }
+        data = sourceBytes(root, path);
+      }
+      catch (error) {
+        if (error instanceof JobError && error.message.startsWith('PARTS_REFERENCE_LIMIT ')) throw error;
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_MISSING ${detail}`);
+        }
+        throw new JobError('JOB_SOURCE_UNRETAINABLE', `PARTS_REFERENCE_PATH_REFUSED ${detail}`);
+      }
+      total += data.length;
+      if (bytes.size >= maxSourceFiles || total > maxSourceBytes) {
+        throw new JobError('JOB_SOURCE_UNRETAINABLE', `PARTS_REFERENCE_LIMIT ${detail}`);
+      }
+    }
+    if (!decoded.has(path)) {
+      if (data.length < 33 || !data.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) ||
+        data.readUInt32BE(8) !== 13 || data.toString('ascii', 12, 16) !== 'IHDR') {
+        throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_PNG_INVALID ${detail}`);
+      }
+      const width = data.readUInt32BE(16), height = data.readUInt32BE(20);
+      if (!width || !height) throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_PNG_INVALID ${detail}`);
+      if (width > Math.floor(maxFileBytes / 4 / height)) {
+        throw new JobError('JOB_SOURCE_UNRETAINABLE', `PARTS_REFERENCE_LIMIT ${detail}`);
+      }
+      try { PNG.sync.read(data); }
+      catch { throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_PNG_INVALID ${detail}`); }
+      bytes.set(path, data);
+      decoded.add(path);
+    }
+    const sha256 = jobHash(data);
+    if (sha256 !== supplied[row].sha256) {
+      throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_HASH_MISMATCH ${detail}`);
+    }
+    images.push({path: reference.path, role: reference.role, sha256});
+  }
+  return {identity: {enumeratorVersion: version, manifest: {path: manifestPath, sha256: jobHash(manifestBytes)}, images}, bytes};
 }
 
 function collectQuestionFiles(root: string, questions: readonly InterviewQuestion[]): JobFileIdentity[] {
@@ -160,6 +271,7 @@ export async function prepareJobSource(options: {
   readonly fingerprint: string;
   readonly request: JobPublishRequest;
   readonly readPublished?: JobPublicationReader;
+  readonly partsEnumerator?: JobPartsEnumerator;
   readonly afterSnapshot?: () => void | Promise<void>;
   readonly afterDirectorySync?: (path: string) => void;
 }): Promise<JobRetainedSource> {
@@ -218,10 +330,13 @@ export async function prepareJobSource(options: {
   const seals: JobFileIdentity[] = [];
   try {
     await mkdir(snapshotRoot, { recursive: true, mode: 0o700 });
+    const parts = await prepareParts(root.path, snapshotRoot, context.parts, options.partsEnumerator);
+    for (const [path, bytes] of parts.bytes) add(path, jobHash(bytes));
+    if (wanted.size > maxSourceFiles) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_LIMIT');
     let size = 0;
     const directories = new Set([snapshotRoot, dirname(snapshotRoot), options.stateRoot]);
     for (const [path, expected] of [...wanted].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
-      const bytes = sourceBytes(root.path, path), sha256 = jobHash(bytes);
+      const bytes = parts.bytes.get(path) ?? sourceBytes(root.path, path), sha256 = jobHash(bytes);
       size += bytes.length;
       if (size > maxSourceBytes) throw new JobError('JOB_SOURCE_UNRETAINABLE');
       if (expected && sha256 !== expected) throw new JobError(path === record?.path ? 'JOB_RECORD_MOVED' : 'JOB_SOURCE_MISMATCH');
@@ -253,15 +368,15 @@ export async function prepareJobSource(options: {
     });
     const source: JobSourceBinding = {
       sourceHash: project || context.plan || context.parts ? jobHash(JSON.stringify({
-        schema: 'rig-review-job-source/1', packageSourceHash: review.sourceHash,
-        record, selector: context.selector, plan: context.plan, parts: context.parts, files: seals,
+        schema: 'rig-review-job-source/2', packageSourceHash: review.sourceHash,
+        record, selector: context.selector, plan: context.plan, parts: parts.identity, files: seals,
       })) : review.sourceHash,
       projectHash: project?.hash ?? null,
       package: { id: review.manifest.id, revision: review.manifest.revision },
       selector: context.selector,
       model: originalIdentity(review.reviewedSource.rig),
       direction: originalIdentity(review.direction?.file ?? null),
-      optionSet: null, appliedResult: null, plan: context.plan, parts: context.parts,
+      optionSet: null, appliedResult: null, plan: context.plan, parts: parts.identity,
     };
     const boundReview = { ...review, sourceHash: source.sourceHash };
     const prepared: JobRetainedSource = {

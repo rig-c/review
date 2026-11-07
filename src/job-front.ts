@@ -1,5 +1,5 @@
 /** Disjoint live-job routes. The backend receives the original authenticated Request. */
-import type { JobErrorCode, JobHostPorts, JobResult } from './job-contract.ts';
+import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobResult } from './job-contract.ts';
 import { createJobHostPorts } from './job-api.ts';
 import { JobSession } from './job-session.ts';
 import type { JobWorkerOptions } from './job-worker.ts';
@@ -276,6 +276,10 @@ function retainedPublicationRoutes(session: JobSession) {
 
 interface JobHostRecord {
     schema: 'rig-review-job-host/1';
+    apiSchema: typeof JOB_API_SCHEMA;
+    actSchema: typeof JOB_ACT_SCHEMA;
+    partsEnumeratorId: string | null;
+    partsEnumeratorVersion: string | null;
     jobId: string;
     origin: string;
     fingerprint: string;
@@ -289,9 +293,11 @@ interface JobHostRecord {
 export interface JobHostOptions extends JobWorkerOptions {
     readonly readerId?: string;
     readonly bindingId?: string;
+    readonly partsEnumeratorId?: string;
 }
 
-type JobHostOptionName = 'readPublished' | 'installWriterBinding';
+type JobHostOptionName = 'readPublished' | 'installWriterBinding' | 'partsEnumerator' |
+    'partsEnumeratorVersion' | 'apiSchema' | 'actSchema';
 
 class JobHostOptionError extends Error {
     constructor(
@@ -329,6 +335,8 @@ export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHos
     const startup = {...options};
     const readerId = declaredHostId('readPublished', startup.readPublished, startup.readerId);
     const bindingId = declaredHostId('installWriterBinding', startup.installWriterBinding, startup.bindingId);
+    const partsEnumeratorId = declaredHostId('partsEnumerator', startup.partsEnumerator?.enumerate, startup.partsEnumeratorId);
+    const partsEnumeratorVersion = startup.partsEnumerator?.version ?? null;
     const session = new JobSession(startup);
     async function installBinding(origin: string): Promise<void> {
         try {await startup.installWriterBinding?.({...session.writerGrant(), origin});}
@@ -339,6 +347,20 @@ export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHos
     await mkdir(control, {recursive: true, mode: 0o700}).catch(error => {session.dispose(); throw error;});
     const recordPath = join(control, session.jobId + '.json');
     let previousPort = 0;
+    function compatible(record: JobHostRecord): void {
+        for (const [option, actual, requested] of [
+            ['readPublished', record.readerId, readerId],
+            ['installWriterBinding', record.bindingId, bindingId],
+            ['partsEnumerator', record.partsEnumeratorId, partsEnumeratorId],
+            ['partsEnumeratorVersion', record.partsEnumeratorVersion, partsEnumeratorVersion],
+            ['apiSchema', record.apiSchema, JOB_API_SCHEMA],
+            ['actSchema', record.actSchema, JOB_ACT_SCHEMA],
+        ] as const) {
+            if (actual !== requested) {
+                throw new JobHostOptionError('JOB_HOST_REUSE_MISMATCH', option, actual, requested);
+            }
+        }
+    }
     const reuse = async (): Promise<JobHostRecord | null> => {
         try {
             const info = await lstat(recordPath);
@@ -356,14 +378,8 @@ export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHos
             if (!response?.ok) {void response?.body?.cancel(); return null;}
             const value = await response.json() as JobHostRecord;
             if (value.schema !== row.schema || value.jobId !== row.jobId || value.fingerprint !== row.fingerprint) return null;
-            for (const [option, actual, requested] of [
-                ['readPublished', value.readerId, readerId],
-                ['installWriterBinding', value.bindingId, bindingId],
-            ] as const) {
-                if (actual !== requested) {
-                    throw new JobHostOptionError('JOB_HOST_REUSE_MISMATCH', option, actual, requested);
-                }
-            }
+            compatible(row);
+            compatible(value);
             return row;
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
@@ -403,7 +419,8 @@ export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHos
             },
         });
         const origin = `http://127.0.0.1:${server.port}`;
-        const record: JobHostRecord = {schema: 'rig-review-job-host/1', jobId: session.jobId, origin,
+        const record: JobHostRecord = {schema: 'rig-review-job-host/1', apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA,
+            partsEnumeratorId, partsEnumeratorVersion, jobId: session.jobId, origin,
             fingerprint: startup.fingerprint, pid: process.pid, readerId, bindingId};
         ports = createJobHostPorts(session, origin);
         front = createJobFront({origin, ports, resource: jobWindowResources(),

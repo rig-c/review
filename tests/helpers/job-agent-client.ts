@@ -84,7 +84,7 @@ if (mode === 'sqlite-crash') {
     const response = await fetch(input.origin + '/jobs/' + input.jobId + '/api', {
       method: 'POST', redirect: 'error', headers: {
         'Content-Type': 'application/json', Authorization: 'Bearer ' + input.agentCapability,
-      }, body: JSON.stringify({ schema: 'rig-review/job-api@1', jobId: input.jobId, requestId: 'agent-' + (++request), ...value }),
+      }, body: JSON.stringify({ schema: 'rig-review/job-api@2', jobId: input.jobId, requestId: 'agent-' + (++request), ...value }),
     });
     const result = await response.json();
     writeSync(1, JSON.stringify({ flow: { verb: value.verb, ok: result.ok, generation: result.generation } }) + '\n');

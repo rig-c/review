@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import {
-  JOB_API_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS,
+  JOB_API_SCHEMA, JOB_PARTS_ENUMERATOR_RANGE, JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS,
   type JobAgentRequest, type JobDisplayAcknowledgment, type JobFetchActRequest,
   type JobHostPorts, type JobResult, type JobSelector, type JobSubject,
 } from './job-contract.ts';
@@ -123,12 +123,30 @@ export function parseJobSubject(value: unknown): JobSubject {
   throw new JobError('JOB_ASK_INVALID');
 }
 
+/** Preserve the installed version while enforcing the jointly accepted range. */
+export function jobPartsEnumeratorVersion(value: unknown): string {
+  const bounded = typeof value === 'string' && value.length > 0 && value.length <= 128 &&
+    !/[\x00-\x20\x7f]/.test(value);
+  if (!bounded || !Bun.semver.satisfies(value, JOB_PARTS_ENUMERATOR_RANGE)) {
+    const received = bounded ? JSON.stringify(value) : '<missing-or-invalid>';
+    throw new JobError('JOB_SOURCE_UNRETAINABLE',
+      `PARTS_ENUMERATOR_VERSION_MISMATCH range="${JOB_PARTS_ENUMERATOR_RANGE}" received=${received}`);
+  }
+  return value;
+}
+
+export function assertJobApiSchema(value: unknown): void {
+  if (value !== JOB_API_SCHEMA) {
+    throw new JobError('JOB_REQUEST_INVALID', 'JOB_API_SCHEMA_MISMATCH');
+  }
+}
+
 export function parseJobRequest(value: unknown): JobAgentRequest | JobFetchActRequest {
   const item = jobObject(value, [
     'schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey',
     'result', 'freeze', 'publicationId', 'subject', 'after', 'waitMs', 'reason', 'actId',
   ]);
-  if (item.schema !== JOB_API_SCHEMA) throw new JobError('JOB_REQUEST_INVALID');
+  assertJobApiSchema(item.schema);
   const base = { schema: JOB_API_SCHEMA, jobId: jobId(item.jobId), requestId: jobId(item.requestId) };
   if (item.verb === 'next') {
     jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'after', 'waitMs']);
