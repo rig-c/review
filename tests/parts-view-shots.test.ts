@@ -58,7 +58,7 @@ describe('parts screenshot exact state guard', () => {
 });
 
 // Disposable DOM/CDP test double. It creates no owner act or persisted Review state.
-function pageFixture(target: PartsViewShotTarget) {
+function pageFixture(target: PartsViewShotTarget, pinchScale = 1) {
   let zoom = 1;
   let view = 'item';
   let footprints = false;
@@ -133,7 +133,7 @@ function pageFixture(target: PartsViewShotTarget) {
       touches.push(points);
       if (type === 'touchMove') {
         const start = touches[0]!;
-        zoom *= (points[1]!.x - points[0]!.x) / (start[1]!.x - start[0]!.x);
+        zoom *= ((points[1]!.x - points[0]!.x) / (start[1]!.x - start[0]!.x)) * pinchScale;
       }
     },
     async setViewport() {},
@@ -158,6 +158,13 @@ describe('parts screenshot normal controls', () => {
       expect(fixture.touches[1]![1]!.x - fixture.touches[1]![0]!.x).toBe(32 * target.zoom);
     });
   }
+  test('measurePartsViewShot refuses a wrong-pinch fixture with PARTS_SHOT_ZOOM_MISMATCH', async () => {
+    for (const target of targets) {
+      const fixture = pageFixture(target, 0.75);
+      await preparePartsViewShot(fixture.page, target);
+      await expect(measurePartsViewShot(fixture.page, target)).rejects.toThrow('PARTS_SHOT_ZOOM_MISMATCH');
+    }
+  });
   test('missing and disabled controls refuse before input', async () => {
     const fixture = pageFixture(parts);
     await expect(clickPartsViewControl(fixture.page, '#absent')).rejects.toThrow('PARTS_SHOT_CONTROL_MISSING');
