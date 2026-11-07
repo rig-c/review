@@ -34,10 +34,11 @@ test.each([
   let liveClicks = 0;
   const savedSecond = row('a', 'old-second', () => { staleClicks++; });
   const first = row('a', 'first', () => {
-    first.pressed = true;
     first.isConnected = false;
     savedSecond.isConnected = false;
-    rows = [row('a', 'old-second'), liveSecond];
+    const selected = row('a', 'first');
+    selected.pressed = true;
+    rows = [row('a', 'old-second'), liveSecond, selected];
   });
   const liveSecond = row('a', 'new-second', () => {
     liveClicks++;
@@ -75,23 +76,26 @@ const establishCompare = runnerBlock('    const compareButton =', '    // If in 
 const checkCompare = runnerBlock('    const buttons = [...list.querySelectorAll', '    const listScrollTopBefore');
 
 test.each([
-  { width: 460, omitAction: false, changeWideCount: false },
-  { width: 460, omitAction: true, changeWideCount: false },
-  { width: 1440, omitAction: false, changeWideCount: false },
-  { width: 1440, omitAction: false, changeWideCount: true },
-])('Compare mode before sampling (%j)', ({ width, omitAction, changeWideCount }) => {
+  { width: 460, press: 'restore' },
+  { width: 460, press: 'omit' },
+  { width: 460, press: 'leave A only' },
+  { width: 1440, press: 'restore' },
+  { width: 1440, press: 'add row' },
+])('Compare mode at press and before sampling ($width, $press)', ({ width, press }) => {
   const wide = width === 1440;
   const stage = { dataset: { workspaceMode: wide ? 'compare' : 'setup' } };
   const a = row('a', 'first');
   const b = row('b', 'first');
   let rows = wide ? [a, b] : [a];
   let actionClicks = 0;
+  let samplingLookups = 0;
   let samples = 0;
   const compare = row('', '', () => {
     actionClicks++;
     compare.pressed = true;
     stage.dataset.workspaceMode = 'compare';
-    rows = changeWideCount ? [a, b, row('a', 'added')] : [a, b];
+    if (press === 'add row') rows = [a, b, row('a', 'added')];
+    else if (press !== 'leave A only') rows = [a, b];
   });
   compare.pressed = wide;
   const document = {
@@ -111,18 +115,23 @@ test.each([
   const list = {
     querySelectorAll(selector: string) {
       expect(selector).toBe(rowSelector);
-      return rows;
+      samplingLookups++;
+      // Even if layout restored B before sampling, it was missing at press.
+      return press === 'leave A only' ? [a, b] : rows;
     },
   };
   expect(establishCompare).toContain('compareButton?.click();');
-  const action = omitAction ? establishCompare.replace('compareButton?.click();', '') : establishCompare;
+  const action = press === 'omit' ? establishCompare.replace('compareButton?.click();', '') : establishCompare;
   const run = new Function('caseId', 'pageKind', 'document', 'list', 'collectToolsSnapshot',
     action + checkCompare + '\nreturn compareModeTransition;');
   const measure = () => run('self-compare-' + width + 'x900', 'compare', document, list, () => { samples++; });
-  if (omitAction) {
+  if (press === 'omit') {
     expect(measure).toThrow('self-compare-460x900: PARTS_EXPLORER_COMPARE_PRECONDITION: ' +
       'mode=setup, comparePressed=false, visibleSides=["a"]; side B rows/images/drawn=0/0/0');
-  } else if (changeWideCount) {
+  } else if (press === 'leave A only') {
+    expect(measure).toThrow('self-compare-460x900: PARTS_EXPLORER_COMPARE_PRECONDITION: ' +
+      'mode=compare, comparePressed=true, visibleSides=["a"]; side B rows/images/drawn=0/0/0');
+  } else if (press === 'add row') {
     expect(measure).toThrow('self-compare-1440x900: PARTS_EXPLORER_COMPARE_PRESS_CHANGED_WIDE');
   } else {
     const after = { mode: 'compare', comparePressed: 'true', visibleSides: ['a', 'b'], rows: 2, sideARows: 1, sideBRows: 1 };
@@ -130,8 +139,9 @@ test.each([
       { mode: 'setup', comparePressed: 'false', visibleSides: ['a'], rows: 1, sideARows: 1, sideBRows: 0 };
     expect(measure()).toEqual({ before, after });
   }
-  expect(actionClicks).toBe(omitAction ? 0 : 1);
-  expect(samples).toBe(omitAction || changeWideCount ? 0 : 1);
+  expect(actionClicks).toBe(press === 'omit' ? 0 : 1);
+  expect(samplingLookups).toBe(press === 'restore' ? 1 : 0);
+  expect(samples).toBe(press === 'restore' ? 1 : 0);
 });
 
 test('Check requires the direct Parts Explorer runner before uploading its measurements', () => {

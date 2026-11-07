@@ -500,6 +500,14 @@ async function evaluatePanelInBrowser(
       sideARows: buttons.filter(btn => btn.dataset.side === 'a').length,
       sideBRows: buttons.filter(btn => btn.dataset.side === 'b').length,
     });
+    const assertCompareState = ({ mode, comparePressed, visibleSides, sideBRows }) => {
+      if (mode !== 'compare' || comparePressed !== 'true' ||
+          visibleSides.length !== 2 || visibleSides[0] !== 'a' || visibleSides[1] !== 'b') {
+        const missingB = sideBRows === 0 ? '; side B rows/images/drawn=0/0/0' : '';
+        throw new Error(caseId + ': PARTS_EXPLORER_COMPARE_PRECONDITION: mode=' + mode +
+          ', comparePressed=' + comparePressed + ', visibleSides=' + JSON.stringify(visibleSides) + missingB);
+      }
+    };
     let compareModeTransition;
     if (pageKind === 'compare') {
       const liveRows = () => [...document.querySelectorAll('#parts-explorer [data-part-list] li > button[data-slot]')];
@@ -510,6 +518,7 @@ async function evaluatePanelInBrowser(
       if (caseId === 'self-compare-1440x900' && JSON.stringify(before) !== JSON.stringify(after)) {
         throw new Error(caseId + ': PARTS_EXPLORER_COMPARE_PRESS_CHANGED_WIDE: ' + JSON.stringify(compareModeTransition));
       }
+      assertCompareState(after);
     }
 
     // If in compact drawer mode (<= 850px on compare), open the Parts drawer so #parts-explorer is visible
@@ -575,13 +584,7 @@ async function evaluatePanelInBrowser(
 
     const buttons = [...list.querySelectorAll('li > button[data-slot]')];
     if (pageKind === 'compare') {
-      const { mode, comparePressed, visibleSides, sideBRows } = readCompareState(buttons);
-      if (mode !== 'compare' || comparePressed !== 'true' ||
-          visibleSides.length !== 2 || visibleSides[0] !== 'a' || visibleSides[1] !== 'b') {
-        const missingB = sideBRows === 0 ? '; side B rows/images/drawn=0/0/0' : '';
-        throw new Error(caseId + ': PARTS_EXPLORER_COMPARE_PRECONDITION: mode=' + mode +
-          ', comparePressed=' + comparePressed + ', visibleSides=' + JSON.stringify(visibleSides) + missingB);
-      }
+      assertCompareState(readCompareState(buttons));
     }
 
     const toolsBefore = collectToolsSnapshot();
@@ -720,9 +723,14 @@ async function evaluatePanelInBrowser(
     let searchFilterOk = false;
     let wholeRigResetOk = false;
 
+    const isLiveSelection = ({ side, slot }) =>
+      [...list.querySelectorAll('li > button[data-slot][aria-pressed="true"]')]
+        .some(btn => btn.dataset.side === side && btn.dataset.slot === slot);
+
     if (buttons.length >= 2) {
+      const { side: firstSide, slot: firstSlot } = buttons[0].dataset;
       buttons[0].click();
-      selectionOk = buttons[0].getAttribute('aria-pressed') === 'true';
+      selectionOk = isLiveSelection({ side: firstSide, slot: firstSlot });
 
       // Selection can replace or reorder rows. Use the second row in the current list.
       const secondButton = list.querySelectorAll('li > button[data-slot]')[1];
@@ -731,8 +739,7 @@ async function evaluatePanelInBrowser(
       }
       const { side, slot } = secondButton.dataset;
       secondButton.click();
-      secondRowClickOk = [...list.querySelectorAll('li > button[data-slot][aria-pressed="true"]')]
-        .some(btn => btn.dataset.side === side && btn.dataset.slot === slot);
+      secondRowClickOk = isLiveSelection({ side, slot });
 
       const soloInput = explorer.querySelector('[data-part-solo]');
       if (soloInput) {
