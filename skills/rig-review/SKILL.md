@@ -10,7 +10,55 @@ compatibility: Requires Bun 1.3.0 or later on PATH. The canonical npm package is
 Use this to hand separated parts, a rig or a post to a person for inspection,
 or to read back their submitted review.
 
+## Active cycle standing live-job contract
+
+For the active Create and Parts cycle, the authoritative contract is `src/job-contract.ts` (`JOB_API_SCHEMA` set to `rig-review/job-api@1`, `JOB_ACT_SCHEMA` set to `rig-review/act@1`, [Review #484](https://github.com/rig-c/review/issues/484)), backed by the implemented backend session/store (`src/job-session.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-api.ts`), standing loopback job front and browser window runtime (`src/job-front.ts`, `web/job-session.ts`), and `rig-review session` CLI (`src/entry.ts`, `src/job-cli.ts`). Public package exports remain `./package.json` only until the public installed managed-host export lands in [Review #489](https://github.com/rig-c/review/issues/489), and Create's production publication reader and writer-owned sibling `fetch-act` readback remain pending [Create #184](https://github.com/rig-c/create/issues/184) (publishing a Create root containing `project.json` without a host `readPublished` callback refuses `JOB_SOURCE_UNRETAINABLE` with `CREATE_PUBLICATION_CONTRACT_UNAVAILABLE`). Do not invent public export names, producer scene fields or unimplemented flags, and never expose capabilities in reports or logs. See [Live job contract](https://github.com/rig-c/review/blob/main/docs/REVIEW_PACKAGE.md#live-job-contract) and [Standing live job workflow](https://github.com/rig-c/review/blob/main/docs/WORKFLOWS.md#standing-live-job-workflow).
+
+Exact CLI namespace (`src/entry.ts`, `src/job-cli.ts`; `publish`, `ask`, `next`, `close` also accept optional `--request-id <id>`):
+
+```text
+Usage: rig-review session open <root>
+       rig-review session publish <job-url> --generation <n> --key <id> --result <relative-path> --freeze-hold <id> [--selector <JSON>] [--record <path> --record-hash <sha256>]
+       rig-review session ask <job-url> --generation <n> --key <id> --publication <id> --subject <JSON>
+       rig-review session next <job-url> [--after <cursor>] [--wait-ms <n>]
+       rig-review session close <job-url> --generation <n> --key <id> --reason <words>
+```
+
+`rig-review session open <root>` requires `RIG_REVIEW_JOB_REVIEWER_ID` and `RIG_REVIEW_JOB_REVIEWER_ROLE` (`owner` or `delegate`), accepts optional `RIG_REVIEW_JOB_PORT` (`0..65535`), and optionally writes one private `{jobId, origin, agentCapability}` JSON line to descriptor `RIG_REVIEW_JOB_AGENT_FD` (`>= 3`) before printing the owner URL on stdout. A new listener stays in the foreground until `SIGINT`/`SIGTERM` or explicit `close`; run follow-up agent verbs in a second terminal with `RIG_REVIEW_JOB_AGENT_CAPABILITY` (`Authorization: Bearer …`). Ordinary non-Create package launch, bootstrap and explicit close example:
+
+```sh
+# Terminal 1 — create a private bootstrap directory (umask 077) and keep session open in the foreground:
+boot=$(umask 077 && mktemp -d)
+RIG_REVIEW_JOB_REVIEWER_ID=owner-1 \
+  RIG_REVIEW_JOB_REVIEWER_ROLE=owner \
+  RIG_REVIEW_JOB_AGENT_FD=3 \
+  rig-review session open /absolute/path/to/work-root 3>"$boot/bootstrap.json"
+
+# Terminal 2 — with RIG_REVIEW_JOB_AGENT_CAPABILITY set privately from $boot/bootstrap.json:
+rig-review session publish http://127.0.0.1:<port>/jobs/<job-id> \
+  --generation 0 --key pub-1 --result package --freeze-hold hold-1 \
+  --selector '{"kind":"rig","version":1}'
+rig-review session ask http://127.0.0.1:<port>/jobs/<job-id> \
+  --generation 1 --key ask-1 --publication <publication-id> \
+  --subject '{"kind":"review-verdict","stage":"rig-review"}'
+rig-review session next http://127.0.0.1:<port>/jobs/<job-id> --wait-ms 5000
+# Pass the current generation returned by next (human UI acts advance generation):
+rig-review session close http://127.0.0.1:<port>/jobs/<job-id> \
+  --generation <current-generation> --key close-1 --reason "inspection complete"
+```
+
+- **One standing Review window and visual gate.** Every owner visual, question, choice, correction and verdict goes through one standing Review window/link plus one what-to-look-at line. Internal agent and HQ media stay internal. A missing required visual (`visual.status` set to `'unavailable'`) is an immediate stop plus a Create-filed on-path Review card, never a chat fallback.
+- **Human UI vs agent verbs.** People submit through the Review UI (`actor` set to `'human'`, `channel` set to `'review-ui'`). Trusted host bootstrap declares `reviewer` (`id` and `role` as `'owner'` or `'delegate'`), which the browser UI cannot type or override (declared provenance, not keyboard authentication, mapped by Create to its `by` authority). Agents use only `publish`, `ask`, `next` and `close` with `expectedGeneration` CAS and `idempotencyKey` on mutations.
+- **Explicit producer-held freeze and explicit close.** Every `publish` carries an explicit producer-held freeze (`freeze.kind` set to `'producer-held'`, `holdId`, `record` as `JobFileIdentity` or `null` for a declared non-Create root) held until acknowledgment as a caller obligation. Review validates retained bytes, detects a moved record and commits local generation CAS. No watched-root or automatic-close guarantee exists, and only explicit `close` ends an active job.
+- **Exact displayed source, cursor replay and draft retention.** `next` (`after` cursor and bounded abortable `waitMs` that never consumes an act) replays complete durable `JobEvent` items (`published`, `pending`, `act`, `closed`). The daemon derives `JobSourceBinding` from validated retained bytes and the page-scoped `displayedNonce` receipt rather than browser-supplied hashes. When a new publication replaces or updates the displayed source, old local drafts remain retained for their original source binding and are flagged without rebinding onto the new publication.
+- **Five enabled act kinds and two reserved disabled kinds.** Enabled kinds are `interview-picks`, `checkpoint`, `parts-verdict`, `review-verdict` and `signoff`. Reserved kinds `described-correction` (awaiting the joint [Create #182](https://github.com/rig-c/create/issues/182) context allowlist) and `mesh-edit` (awaiting the joint [Parts #1159](https://github.com/rig-c/parts/issues/1159) freeze) stay disabled (`JOB_ACT_KIND_DISABLED`) and cannot be asked or submitted.
+- **Checkpoints, signoffs, plan steps and parts PNGs.** Finalized `checkpoint` acts carry `outcome` `'pass'` or `'fail'` only (`'pending'` stays in the UI draft), require `words` as a string preserved verbatim including empty or whitespace-only text, copy `planStepId` from the validated ask on the daemon while the browser sends `checkpointId`, `outcome` and `words` only, and leave stage derivation to Create (only `'pass'` is eligible for Create's checkpoint sign-off writer). Finalized `signoff` acts carry `decision` `'approved'` only with required `words` preserved verbatim including empty or whitespace-only text, remain separate from verdicts and Create stage transitions, and require `source.plan` with exact displayed step IDs and hashes published by [Create #184](https://github.com/rig-c/create/issues/184) (without Review recomputing `stepHash`) on `plan-approved`, `rigging-interview` and `post-interview`. In the current C3 runtime, `JobPartsIdentity` is limited to its declared four roles (`part`, `alternate`, `depth`, `painting`) and path restriction — normal `parts/*.png` images plus exact `painting_in_rig.png` beside `parts.json` (root or project prefix only) — so `figure_mask` is missing and C3 is not yet a complete manifest-referenced parts PNG inventory. C4 ([Review #501](https://github.com/rig-c/review/issues/501)) is queued to bind the `@rig-c/parts` `2.25.0` `partsFileReferences` result per Parts `STABILITY` at `62208d6` ([Parts #1163](https://github.com/rig-c/parts/issues/1163)) together with [Create #184](https://github.com/rig-c/create/issues/184), which owns the roles without a Review field parser. Within the current C3 set, changed or missing referenced bytes (including a referenced `painting_in_rig.png`) invalidate the binding while unreferenced stale extras are excluded.
+- **No agent file carriage, writer-owned sibling fetch and internal host seam.** Agents never build, parse, reshape or carry Review session, picks, verdict or applied-record storage files. [Create #182](https://github.com/rig-c/create/issues/182) and [Create #184](https://github.com/rig-c/create/issues/184) own direct writer publication and `fetch-act` reads using a private writer-owned sibling binding outside `project.json` (`writer-owned-sibling-fetch-capability`, pending Create #184 production reader/writer integration) that is never tracked in version control or unstaged project output, dies at explicit `close` and receives a new grant on each job incarnation. In the internal managed-host startup seam (`startJobHost` in `src/job-front.ts`, kept internal until [Review #489](https://github.com/rig-c/review/issues/489)), hook-bearing host callers declare `readerId` and `bindingId`; equality governs listener reuse and missing or mismatched IDs refuse by name (`JOB_HOST_OPTION_ID_INVALID`, `JOB_HOST_REUSE_MISMATCH`) with no function hashes. Future mesh acts will be fetched by Create and passed in process to Parts' public exported API owned by [Parts #1159](https://github.com/rig-c/parts/issues/1159) without Parts reading Review or Create storage, while standalone `--delta` remains legacy outside this cycle.
+- **Direction metadata vs playback.** Direction carriage in `#484` is metadata-only (`source.direction` and `direction-review`) and is distinct from [Review #482](https://github.com/rig-c/review/issues/482) preview and [Review #483](https://github.com/rig-c/review/issues/483) actual plated take playback, while [Review #373](https://github.com/rig-c/review/issues/373) stays parked.
+
 ## What an agent drives vs. what the person drives
+
+The one-shot CLI file-handoff instructions in this section and in Correction readback below (`--picks-dir`, `--picks-file`, `--parts-verdict-dir`, `--verdict`, `--correction`, reshaped feedback JSON and `--verbatim-file`) are preserved as legacy/history compatibility for standalone and historical runs. Using those file handoffs in the active standing live-job cycle is a bypass finding ([Create #182](https://github.com/rig-c/create/issues/182), [Create #184](https://github.com/rig-c/create/issues/184)).
 
 Use the installed CLI. For compiled packages, run `rig-review check <package>`
 before handoff to validate the package and read its source SHA-256. Use managed
@@ -76,6 +124,8 @@ and [version targets](https://github.com/rig-c/create/blob/main/docs/PROJECT.md#
 Opening, navigating and saving Review records confer no Create authority.
 
 ## Correction readback
+
+In the active standing live-job cycle ([Active cycle standing live-job contract](#active-cycle-standing-live-job-contract), [Create #182](https://github.com/rig-c/create/issues/182), [Create #184](https://github.com/rig-c/create/issues/184), [Parts #1159](https://github.com/rig-c/parts/issues/1159)), `described-correction` and `mesh-edit` remain reserved disabled act kinds (`JOB_ACT_KIND_DISABLED`), and agents never build, parse, reshape or carry Review session, feedback, applied-record or verbatim files. The `--correction`, `--verdict`, reshaped feedback JSON and `--verbatim-file` flow below is preserved as legacy/history compatibility and is a bypass finding if used in the active cycle.
 
 In **Write review**, the person marks the feedback as described or made under
 **Correction handoff**, supplies the Create selector, and submits. Look for an
