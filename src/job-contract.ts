@@ -27,6 +27,12 @@ export type JobEnabledActKind = typeof JOB_ENABLED_ACT_KINDS[number];
 export type JobReservedActKind = typeof JOB_RESERVED_ACT_KINDS[number];
 export type JobActKind = JobEnabledActKind | JobReservedActKind;
 
+export const JOB_PLAN_BOUND_SIGNOFF_STAGES = [
+  'plan-approved',
+  'rigging-interview',
+  'post-interview',
+] as const;
+
 /** Reserved kinds have no accepted value shape and cannot be asked or submitted.
  * Described correction awaits the joint Create #182 context allowlist.
  * Mesh edit awaits the joint Parts #1159 freeze. Proposal 6ff03ec9 discusses
@@ -37,7 +43,7 @@ export type JobActKind = JobEnabledActKind | JobReservedActKind;
  * A future submitted mesh act must carry human UI authority, time, exact rig
  * revision/source and recomputable provenance. Drafts are never consumer acts.
  */
-export const JOB_CONSUMER_AUTH_STATUS = 'pending-joint-freeze' as const;
+export const JOB_CONSUMER_AUTH_MODE = 'writer-owned-sibling-fetch-capability' as const;
 
 /** Hex digests, opaque IDs/cursors and timestamps require runtime validation.
  * SHA-256 is 64 lowercase hex digits. Generations are nonnegative safe integers.
@@ -54,6 +60,44 @@ export type JobCursor = string;
 export interface JobFileIdentity {
   readonly path: string;
   readonly sha256: JobSha256;
+}
+
+/** IDs and existing step hashes published by Create #184 for the displayed plan.
+ * Review retains these values without importing or computing Create's internal
+ * stepHash. Create validates them with its existing writer. No plan revision
+ * hash or additional revision gate exists in this contract.
+ */
+export interface JobPlanStepIdentity {
+  readonly id: string;
+  readonly hash: JobSha256;
+}
+
+export interface JobPlanIdentity {
+  readonly steps: readonly JobPlanStepIdentity[];
+}
+
+export type JobPartsManifestPath = 'parts.json' | `${string}/parts.json`;
+export type JobPartImagePath = `parts/${string}.png` | `${string}/parts/${string}.png`;
+
+/** Exact parts.json and EVERY manifest-referenced PNG, across base, alternate,
+ * attachment and depth roles. Create #184 publishes the authoritative set using
+ * Parts' public reference enumerator, pending Parts #1163. Its export name and
+ * reader resolution rules belong to Parts. Review verifies the published paths
+ * and bytes without duplicating those field rules. Paths use original project
+ * provenance. Images are unique and lexically ordered in this public projection.
+ * Missing or changed referenced bytes invalidate the binding. Unreferenced stale
+ * extras are excluded and do not cause refusal. The manifest and complete
+ * referenced set enter sourceHash. No new parts filename or migration is added.
+ */
+export interface JobPartsIdentity {
+  readonly manifest: {
+    readonly path: JobPartsManifestPath;
+    readonly sha256: JobSha256;
+  };
+  readonly images: readonly {
+    readonly path: JobPartImagePath;
+    readonly sha256: JobSha256;
+  }[];
 }
 
 export type JobSelector =
@@ -74,11 +118,23 @@ export interface JobSourceBinding {
   readonly direction: JobFileIdentity | null;
   readonly optionSet: { readonly id: string; readonly sha256: JobSha256 } | null;
   readonly appliedResult: { readonly id: string; readonly modelHash: JobSha256 } | null;
+  readonly plan: JobPlanIdentity | null;
+  readonly parts: JobPartsIdentity | null;
+}
+
+/** Trusted host bootstrap declares who the window was opened for. The UI cannot
+ * type or override this binding. It is not keyboard-user authentication. Create
+ * maps role to its existing by authority and preserves the declared identity.
+ */
+export interface JobReviewerBinding {
+  readonly id: string;
+  readonly role: 'owner' | 'delegate';
 }
 
 export interface JobHumanAuthority {
   readonly actor: 'human';
   readonly channel: 'review-ui';
+  readonly reviewer: JobReviewerBinding;
 }
 
 export type JobVerdict = 'pending' | 'approved' | 'changes-requested';
@@ -97,8 +153,16 @@ export interface JobActValues {
   };
   readonly checkpoint: {
     readonly checkpointId: string;
-    readonly outcome: 'pending' | 'pass' | 'fail';
-    readonly note: string;
+    readonly planStepId: string;
+    /** Pending stays in the UI draft and never produces a finalized act.
+     * Only pass is eligible for Create's checkpoint sign-off writer. Fail is
+     * feedback or a named consumer refusal and never an approval write.
+     */
+    readonly outcome: 'pass' | 'fail';
+    /** Required string, preserved verbatim including empty or whitespace-only
+     * words, matching Create's existing writer. This adds no UI action.
+     */
+    readonly words: string;
   };
   readonly 'parts-verdict': {
     readonly verdict: JobVerdict;
@@ -117,19 +181,35 @@ export interface JobActValues {
   readonly signoff: {
     /** An explicitly declared Create stage. Validation belongs to its writer. */
     readonly stage: string;
-    readonly decision: 'approved' | 'changes-requested';
+    /** Changes requested are a verdict. These three approval stages require
+     * source.plan with exact displayed IDs/hashes at runtime, plan-approved,
+     * rigging-interview and post-interview. Other stages keep plan nullable
+     * where appropriate. Create validates through its existing steps/step_hashes
+     * logic. No new owner approval or revision-hash gate is introduced.
+     */
+    readonly decision: 'approved';
+    /** Required string. Empty and whitespace-only words remain valid verbatim. */
     readonly words: string;
   };
 }
+
+/** The daemon copies checkpoint planStepId from the validated ask. The browser
+ * supplies checkpoint ID, outcome and words only. Create derives execution
+ * stage from its authoritative step phase/order. Review never stamps a stage.
+ */
+export type JobUIActValues = Omit<JobActValues, 'checkpoint'> & {
+  readonly checkpoint: Omit<JobActValues['checkpoint'], 'planStepId'>;
+};
 
 export interface JobActSources {
   readonly 'interview-picks': JobSourceBinding & {
     readonly optionSet: NonNullable<JobSourceBinding['optionSet']>;
   };
-  readonly checkpoint: JobSourceBinding;
+  readonly checkpoint: JobSourceBinding & { readonly plan: JobPlanIdentity };
   readonly 'parts-verdict': JobSourceBinding & {
     readonly projectHash: JobSha256;
     readonly selector: Extract<JobSelector, { kind: 'draft' }>;
+    readonly parts: JobPartsIdentity;
   };
   readonly 'review-verdict': JobSourceBinding & {
     readonly selector: Extract<JobSelector, { kind: 'rig' | 'post' }>;
@@ -142,6 +222,8 @@ export interface JobActSources {
  * selections are preserved verbatim. A verdict, a signoff and a Create stage
  * transition are separate writes. This union grants no transition authority.
  * Review-verdict stage/selector/direction consistency is checked at runtime.
+ * Checkpoint stage is derived by Create. Plan-bound signoff requirements apply
+ * to every stage in JOB_PLAN_BOUND_SIGNOFF_STAGES before act creation.
  */
 export type JobAct = {
   [Kind in JobEnabledActKind]: {
@@ -160,7 +242,16 @@ export type JobAct = {
 
 export type JobSubject =
   | { readonly kind: 'interview-picks'; readonly questionId: string; readonly setId: string }
-  | { readonly kind: 'checkpoint'; readonly checkpointId: string }
+  | {
+    readonly kind: 'checkpoint';
+    /** The Create plan step ID by default. */
+    readonly checkpointId: string;
+    /** Required when the displayed Review checkpoint ID differs. The mapping
+     * must match Create #184's published binding. Never infer an alias or trust
+     * a browser-supplied mapping. Finalized acts always name the resolved ID.
+     */
+    readonly planStepId?: string;
+  }
   | { readonly kind: 'parts-verdict'; readonly draftId: string }
   | { readonly kind: 'review-verdict'; readonly stage: JobReviewStage }
   | { readonly kind: 'signoff'; readonly stage: string };
@@ -259,7 +350,6 @@ export const JOB_ERROR_CODES = [
   'JOB_SAME_ORIGIN_REQUIRED',
   'JOB_CAPABILITY_REQUIRED',
   'JOB_AUTHORITY_REFUSED',
-  'JOB_CONSUMER_AUTH_UNAGREED',
   'JOB_UNKNOWN',
   'JOB_CLOSED',
   'JOB_GENERATION_STALE',
@@ -343,7 +433,7 @@ export type JobUISubmission = {
     readonly expectedGeneration: number;
     readonly submissionId: string;
     readonly kind: Kind;
-    readonly value: JobActValues[Kind];
+    readonly value: JobUIActValues[Kind];
   };
 }[JobEnabledActKind];
 
@@ -392,24 +482,36 @@ export interface JobHostPorts {
   }>>;
 }
 
-/** Consumer authentication PROPOSAL, disabled pending HQ-coordinated agreement.
- * The trusted owner/bootstrap channel provisions separate random bearer tokens
- * directly to each writer process. No agent-readable state file or next result
- * carries them. Tokens bind one job, one audience and an enabled-kind allowlist.
- * A create token cannot fetch a parts-only grant and vice versa. Tokens grant
- * immutable act fetch only. Agent and UI capabilities cannot act as consumers.
- * Requests use exact loopback routes and Authorization. Human authority fields
- * alone never authenticate a request. No self-service token-grant API is defined.
- * Until Create #182 and Parts #1159 agree provisioning, scope and revocation,
- * consumer requests fail JOB_CONSUMER_AUTH_UNAGREED. No token is activated here.
- * Writers deduplicate actId before current-source checks, then validate each new
- * source and atomically commit writer result plus replay identity. Replay returns
- * the existing record. A new stale act refuses before any record mutation.
+/** HQ-approved honest-agent-shortcut model. Create #184 owns creation and path
+ * of a private writer-owned sibling binding outside project.json. Its versioned
+ * record carries only the semantic job locator. The binding is never tracked,
+ * present in unstaged project output, or shipped in templates/public examples/
+ * fixtures. The writer reads its own binding. Agents never construct or carry it.
+ * Actual separate-UID isolation remains required for Review's distinct state
+ * unreadability test. No same-user forger-resistance claim is made here.
+ *
+ * The binding's random per-job bearer capability grants finalized act fetch
+ * only, via exact loopback routes and Authorization. No next/status response
+ * returns it. Human metadata alone never authenticates a fetch. The capability
+ * dies at explicit close. Old project history cannot restore it. A new job
+ * incarnation has a new grant. Invalid grants refuse by capability/authority
+ * name and closed-job fetch refuses JOB_CLOSED. No self-service grant API exists.
+ *
+ * Create fetches a future mesh act, then passes its typed value IN PROCESS to
+ * Parts' public exported API owned by Parts #1159. Parts reads neither Review
+ * nor Create storage and takes no Create-project argument for that API. No active
+ * rig-parts grant/audience is introduced. Standalone --delta remains legacy
+ * outside this cycle. Mesh-edit stays reserved until its separate joint freeze.
+ *
+ * Consumer writers deduplicate actId before current-source checks, then validate
+ * each new source and atomically commit writer result plus replay identity.
+ * Replay returns the existing record. A new stale act refuses before mutation.
+ * Verdict, sign-off and stage transition remain three separate consumer writes.
  */
-export interface JobConsumerGrantProposal {
-  readonly status: typeof JOB_CONSUMER_AUTH_STATUS;
+export interface JobConsumerGrant {
+  readonly mode: typeof JOB_CONSUMER_AUTH_MODE;
   readonly jobId: JobId;
-  readonly audience: 'rig-create' | 'rig-parts';
-  readonly operations: readonly ['fetch-act'];
+  readonly operation: 'fetch-act';
   readonly actKinds: readonly JobEnabledActKind[];
+  readonly lifetime: 'until-explicit-close';
 }
