@@ -58,7 +58,7 @@ async function proveWorkspaceLaunch(mode: 'batch' | 'sequential') {
       ? await run(['open', ...inputs, '--animation', 'inspect', '--animation-for', '9', 'alternate', '--view-only'])
       : await run(['open', inputs[0]!, '--animation', 'synthetic-animation-1', '--view-only']);
     record = parseWorkspaceRecord(await readPrivate(join(stateDir, 'owner-workspace/host.json')));
-    expect(first).toBe(record.origin + '/#cap=' + record.ownerCapability);
+    expect(first).toBe(record.origin + '/?workspace=' + record.incarnation + '#cap=' + record.ownerCapability);
     if (mode === 'batch') {
       expect(await run(['open', inputs[8]!, '--animation', 'alternate', '--view-only'])).toBe(first);
       const repeated = await Promise.all(inputs.slice(0, 3).map(input => run(['open', input, '--animation', 'inspect', '--view-only'])));

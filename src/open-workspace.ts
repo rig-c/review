@@ -186,7 +186,19 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
       return live.upgrade(request, server, securityHeaders);
     }
     if (['/', '/workspace.js', '/workspace.css', '/styles.css'].includes(url.pathname)) {
-      if (!['GET', 'HEAD'].includes(request.method) || url.search && !['?lang=en', '?lang=ko'].includes(url.search)) return refused('WORKSPACE_REQUEST_INVALID', 400);
+      if (!['GET', 'HEAD'].includes(request.method)) return refused('WORKSPACE_REQUEST_INVALID', 400);
+      if (url.pathname === '/') {
+        const keys = [...url.searchParams.keys()];
+        if (new Set(keys).size !== keys.length || keys.some(key => !['workspace', 'lang'].includes(key)) ||
+            url.searchParams.has('lang') && !['en', 'ko'].includes(url.searchParams.get('lang')!)) {
+          return refused('WORKSPACE_REQUEST_INVALID', 400);
+        }
+        if (url.searchParams.has('workspace') && url.searchParams.get('workspace') !== incarnation) {
+          return refused('WORKSPACE_HOST_MISMATCH', 409);
+        }
+      } else if (url.search && !['?lang=en', '?lang=ko'].includes(url.search)) {
+        return refused('WORKSPACE_REQUEST_INVALID', 400);
+      }
       const body = url.pathname === '/workspace.js' ? await (ownerScript ??= ownerBundle())
         : await readFile(appRoot + (url.pathname === '/' ? 'web/owner-workspace.html' : url.pathname === '/styles.css' ? 'web/styles.css' : 'web/owner-workspace.css'));
       return new Response(request.method === 'HEAD' ? null : body, {headers: {...securityHeaders,

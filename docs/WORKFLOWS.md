@@ -98,7 +98,7 @@ The footer fits its measured text while retaining full hashes. Text is drawn in 
 loopback owner workspace, prints its owner URL, and exits. **N rigs → one
 invocation, one owner link.** Targets share one listener-owning process and port.
 The default port is `127.0.0.1:4318`; `RIG_REVIEW_FRONT_PORT` selects an explicit
-port. The URL has the form `http://127.0.0.1:4318/#cap=…`; keep its capability
+port. The URL has the form `http://127.0.0.1:4318/?workspace=<incarnation>#cap=…`; keep its capability
 private and give the person one link plus one what-to-look-at line.
 
 ```sh
@@ -227,7 +227,11 @@ PID refuses with `WORKSPACE_HOST_UNRESPONSIVE`; a timeout leaves its ownership
 intact. Concurrent launchers coordinate registration through the private store.
 
 Restart creates a new host incarnation and rotates owner, launcher and target
-secrets. Run `open` again and give the person the new owner link. Persisted input
+secrets. The nonsecret `workspace` query changes with the incarnation, so opening
+the new link in an existing tab loads a new document. Repeated opens within one
+incarnation retain the same URL. Run `open` again and give the person the new
+owner link. A supplied `workspace` query must match the current host; root links
+without it remain accepted. Persisted input
 designations are revalidated. Changed sources appear unavailable with
 `WORKSPACE_SOURCE_CHANGED`; saved feedback and drafts retain their original
 source binding. Registering another valid target remains possible when an

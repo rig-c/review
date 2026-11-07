@@ -49,7 +49,7 @@ The CLI and `@rig-c/review/job-host` managed owner host are supported surfaces. 
 Example stdout from `open` (private capability omitted):
 
 ```text
-http://127.0.0.1:4318/#cap=…
+http://127.0.0.1:4318/?workspace=<incarnation>#cap=…
 ```
 
 ## What you can do

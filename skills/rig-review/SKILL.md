@@ -47,7 +47,9 @@ The workspace admits 32 targets and lazily retains selected frames under that
 same application bound. Target 33 refuses atomically with
 `WORKSPACE_TARGET_LIMIT`. The limit supplies no hardware performance guarantee.
 Reuse requires matching UID, installation, runtime and fingerprint. Restart
-rotates host and target secrets, so run `open` again for a new owner link.
+rotates host and target secrets, so run `open` again for a new owner link. Its
+nonsecret `?workspace=<incarnation>` query forces a new document in an existing
+tab; same-host repeated opens retain the identical URL.
 Changed sources become unavailable without rebinding their feedback.
 
 The workspace defaults to port 4318, overridden by `RIG_REVIEW_FRONT_PORT`.

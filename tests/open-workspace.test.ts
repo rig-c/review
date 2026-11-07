@@ -101,12 +101,44 @@ test('workspace restart keeps designations and source identities while rotating 
     expect(second.record.origin).toBe(first.record.origin);
     expect(second.record.incarnation).not.toBe(first.record.incarnation);
     expect(second.record.ownerCapability).not.toBe(first.record.ownerCapability);
+    const staleLanding = await fetch(second.record.origin + '/?workspace=' + first.record.incarnation);
+    expect(staleLanding.status).toBe(409); expect(await staleLanding.json()).toEqual({error: 'WORKSPACE_HOST_MISMATCH'});
+    const freshLanding = await fetch(second.record.origin + '/?workspace=' + second.record.incarnation);
+    expect(freshLanding.status).toBe(200); await freshLanding.body?.cancel();
     expect((await ownerList(second)).targets[0]!.key).toBe(a.key);
     expect((await fetch(second.record.origin + '/workspace/api/targets', {
       headers: {'X-Review-Capability': first.record.ownerCapability},
     })).status).toBe(403);
     expect((await probeWorkspace(join(f.stateDir, 'owner-workspace'), f.fingerprint))?.pid).toBe(process.pid);
   } finally {await first.stop(); await second?.stop(); await f.close();}
+});
+
+test('owner landing accepts compatible roots and only the current unique incarnation query', async () => {
+  const f = await fixture();
+  const host = await startOpenWorkspace({stateDir: f.stateDir, fingerprint: f.fingerprint, port: 0});
+  try {
+    const identity = host.record.incarnation;
+    for (const query of ['', '?lang=en', '?lang=ko', '?workspace=' + identity,
+      '?workspace=' + identity + '&lang=en', '?lang=ko&workspace=' + identity]) {
+      const response = await fetch(host.record.origin + '/' + query);
+      expect(response.status).toBe(200); await response.body?.cancel();
+    }
+    for (const query of ['?workspace=' + identity + '&workspace=' + identity, '?lang=en&lang=en',
+      '?workspace=' + identity + '&extra=1', '?workspace=' + identity + '&lang=fr']) {
+      const response = await fetch(host.record.origin + '/' + query);
+      expect(response.status).toBe(400); expect(await response.json()).toEqual({error: 'WORKSPACE_REQUEST_INVALID'});
+    }
+    const stale = await fetch(host.record.origin + '/?workspace=00000000-0000-0000-0000-000000000000');
+    expect(stale.status).toBe(409); expect(await stale.json()).toEqual({error: 'WORKSPACE_HOST_MISMATCH'});
+    for (const path of ['/workspace.js', '/workspace.css', '/styles.css', '/workspace/api/targets']) {
+      const response = await fetch(host.record.origin + path + '?workspace=' + identity, {
+        headers: {'X-Review-Capability': host.record.ownerCapability},
+      });
+      expect(response.status).toBe(path === '/workspace/api/targets' ? 403 : 400);
+      await response.body?.cancel();
+    }
+    expect((await fetch(host.record.origin + '/workspace/api/targets')).status).toBe(403);
+  } finally {await host.stop(); await f.close();}
 });
 
 test('changed unrelated targets become unavailable without blocking new registrations or rebinding saved feedback', async () => {

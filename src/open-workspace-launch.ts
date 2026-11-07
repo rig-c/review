@@ -75,7 +75,7 @@ export async function openWorkspace(inputs: readonly OpenInputs[], options: Open
     }
     await register(record, designations);
     handedOff = true;
-    return {url: record.origin + '/#cap=' + record.ownerCapability, reused, prepared};
+    return {url: record.origin + '/?workspace=' + record.incarnation + '#cap=' + record.ownerCapability, reused, prepared};
   } finally {
     if (child && !handedOff && child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
     if ('claim' in acquired) await releaseClaim(acquired.claim, nonce);
