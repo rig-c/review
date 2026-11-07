@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { jobBodyLimit, parseJobRequest } from '../src/job-api.ts';
+import { JOB_API_SCHEMA } from '../src/job-contract.ts';
 import { parseJobCLI, jobCommand } from '../src/job-cli.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
 import { Database } from 'bun:sqlite';
@@ -73,6 +74,101 @@ test('CLI constructs semantic vocabulary without a storage file and exposes no h
   });
   expect(JSON.parse(output[0]).value.status).toBe('timeout');
   expect(output[0]).not.toContain(f.state);
+});
+
+test('CLI streams response bytes up to 1 MiB, cancels on overflow and preserves decode/schema/exit priorities', async () => {
+  const locator = 'http://127.0.0.1:4100/jobs/job-1';
+  const args = ['next', locator, '--wait-ms', '0'] as const;
+  const run = (response: Response, out: string[] = []) => jobCommand(args, {
+    agentCapability: 'cap-agent',
+    write: line => out.push(line),
+    fetch: (async () => response) as unknown as typeof fetch,
+  });
+
+  let pulls = 0;
+  let cancelled = false;
+  const chunkSize = 300 * 1024;
+  const overflowStream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls += 1;
+      if (pulls > 5) throw new Error('continued reading after overflow');
+      const chunk = new Uint8Array(chunkSize);
+      if (pulls === 1) chunk[0] = 0xff;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      cancelled = true;
+      return new Promise<void>(() => {});
+    },
+  });
+  await expect(run(new Response(overflowStream, { headers: { 'Content-Length': '2' } }))).rejects.toThrow('JOB_BODY_LIMIT');
+  expect(cancelled).toBe(true);
+  expect(pulls).toBeLessThanOrEqual(5);
+
+  const rejectCancelStream = new ReadableStream<Uint8Array>({
+    pull(controller) { controller.enqueue(new Uint8Array(1024 * 1024 + 1)); },
+    cancel() { return Promise.reject(new Error('cancel boom')); },
+  });
+  await expect(run(new Response(rejectCancelStream))).rejects.toThrow('JOB_BODY_LIMIT');
+
+  const prefix = `{"schema":${JSON.stringify(JOB_API_SCHEMA)},"pad":"`;
+  const suffix = '"}';
+  const exactBytes = new TextEncoder().encode(prefix + 'a'.repeat(1024 * 1024 - prefix.length - suffix.length) + suffix);
+  expect(exactBytes.byteLength).toBe(1024 * 1024);
+  const exactOut: string[] = [];
+  await run(new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(exactBytes.subarray(0, 512 * 1024));
+      controller.enqueue(exactBytes.subarray(512 * 1024));
+      controller.close();
+    },
+  })), exactOut);
+  expect(exactOut).toHaveLength(1);
+  expect(Buffer.byteLength(exactOut[0])).toBe(1024 * 1024);
+
+  const boundaryPlusOneOut: string[] = [];
+  await expect(run(new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(exactBytes);
+      controller.enqueue(new Uint8Array([0x20]));
+      controller.close();
+    },
+  }), { headers: { 'Content-Length': '10' } }), boundaryPlusOneOut)).rejects.toThrow('JOB_BODY_LIMIT');
+  expect(boundaryPlusOneOut).toHaveLength(0);
+
+  const utf8Json = new TextEncoder().encode(JSON.stringify({ schema: JOB_API_SCHEMA, note: '한글🙂' }));
+  const splitIndex = utf8Json.indexOf(0xed) + 1;
+  const utf8Out: string[] = [];
+  await run(new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(utf8Json.subarray(0, splitIndex));
+      controller.enqueue(utf8Json.subarray(splitIndex));
+      controller.close();
+    },
+  })), utf8Out);
+  expect(JSON.parse(utf8Out[0])).toEqual({ schema: JOB_API_SCHEMA, note: '한글🙂' });
+
+  await expect(run(new Response(new Uint8Array([0x7b, 0x22, 0xff, 0x22, 0x7d])))).rejects.toThrow('JOB_REQUEST_INVALID');
+  await expect(run(new Response('{invalid-json'))).rejects.toThrow('JOB_REQUEST_INVALID');
+  await expect(run(new Response(null))).rejects.toThrow('JOB_REQUEST_INVALID');
+  await expect(run(new Response(''))).rejects.toThrow('JOB_REQUEST_INVALID');
+  await expect(run(Response.json({ schema: 'wrong-schema' }))).rejects.toMatchObject({ code: 'JOB_REQUEST_INVALID', message: 'JOB_API_SCHEMA_MISMATCH' });
+
+  const prevExitCode = process.exitCode;
+  try {
+    process.exitCode = 0;
+    const errorOut: string[] = [];
+    await run(Response.json({ schema: JOB_API_SCHEMA, ok: false, error: { code: 'JOB_UNKNOWN', message: 'no job' } }, { status: 409 }), errorOut);
+    expect(JSON.parse(errorOut[0]).ok).toBe(false);
+    expect(process.exitCode).toBe(1);
+  } finally {
+    process.exitCode = prevExitCode ?? 0;
+  }
+
+  const readFailure = new Error('stream aborted');
+  await expect(run(new Response(new ReadableStream<Uint8Array>({
+    pull() { throw readFailure; },
+  })))).rejects.toThrow('stream aborted');
 });
 
 test('public next and consumer act reads are independent of a renamed private page-storage field', async () => {

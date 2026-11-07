@@ -103,10 +103,26 @@ export async function jobCommand(args: readonly string[], options: JobCLIOptions
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + capability },
     body: JSON.stringify(input.request),
   });
-  const bytes = await response.arrayBuffer();
-  if (bytes.byteLength > 1024 * 1024) throw new JobError('JOB_BODY_LIMIT');
+  const reader = response.body?.getReader();
+  if (!reader) throw new JobError('JOB_REQUEST_INVALID');
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 1024 * 1024) {
+        try { void reader.cancel().catch(() => {}); } catch {}
+        throw new JobError('JOB_BODY_LIMIT');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
   let value: unknown;
-  try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+  try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, size))); }
   catch { throw new JobError('JOB_REQUEST_INVALID'); }
   assertJobApiSchema(value !== null && typeof value === 'object' ? (value as { schema?: unknown }).schema : undefined);
   write(JSON.stringify(value));
