@@ -21,7 +21,6 @@ const require = (condition: unknown, name: string) => {
   if (!condition) throw Error(name);
 };
 const save = () => writeFile(join(out, 'measurements.json'), JSON.stringify(report, null, 2) + '\n');
-const near = (a: number, b: number) => Math.abs(a - b) <= 1e-9;
 
 async function wait(page: InputCdpSession, predicate: string, name: string) {
   const end = performance.now() + 10_000;
@@ -46,13 +45,18 @@ async function click(page: InputCdpSession, selector: string) {
   await page.mouse('mouseReleased', p.x, p.y);
 }
 
+interface Camera {x:number;y:number;zoom:number}
+interface RootStyle {left:string;top:string;transform:string}
 interface Sample {
   dimensions: [number, number];
   pixel: number[];
   viewport: {width: number; height: number};
-  root: {left: number; top: number; transform: string};
-  center: {x: number; y: number};
+  root: RootStyle;
+  inverseCenter: {x: number; y: number};
   zoom: number;
+  expected: {camera:Camera;root:RootStyle;zoom:number} | null;
+  plants: {centre:RootStyle;unit:number;zoom:number} | null;
+  wheelInput: {x:number;y:number;deltaY:number;trusted:boolean} | null;
   selected: string | null;
   lang: string;
   caption: string;
@@ -61,20 +65,54 @@ interface Sample {
   gate: unknown;
 }
 
-function sample(page: InputCdpSession, target: 'rig' | 'reference' = 'rig') {
+function sample(page: InputCdpSession, expected:Camera|null=null, target: 'rig' | 'reference' = 'rig',
+    options:{wheel?:boolean;plants?:boolean}={}) {
   const isRig = target === 'rig';
   return page.evaluate<Sample>(`(() => {
     const canvas = document.getElementById(${JSON.stringify(isRig ? 'pv-canvas' : 'pv-reference')});
     const view = document.getElementById(${JSON.stringify(target + '-viewport')});
     const root = document.getElementById(${JSON.stringify(isRig ? 'rig-root' : 'reference-content')});
-    const zoom = new DOMMatrix(root.style.transform).a;
-    const left = parseFloat(root.style.left), top = parseFloat(root.style.top);
+    const viewport = {width:view.clientWidth,height:view.clientHeight};
+    const css = style => ({left:style.left,top:style.top,transform:style.transform});
+    const serialized = css(root.style);
+    const zoom = new DOMMatrix(serialized.transform).a;
+    const expectedCamera = ${JSON.stringify(expected)};
+    const {wheel,plants:plantControls} = ${JSON.stringify(options)};
+    const wheelInput = wheel ? window.__parts464Wheel ?? null : null;
+    const detached = document.createElement('div').style;
+    const project = camera => {
+      detached.left = (viewport.width/2-camera.x*camera.zoom)+'px';
+      detached.top = (viewport.height/2-camera.y*camera.zoom)+'px';
+      detached.transform = 'scale('+camera.zoom+')';
+      return css(detached);
+    };
+    if (wheelInput && expectedCamera) {
+      const oldZoom = expectedCamera.zoom;
+      expectedCamera.zoom *= 1.1;
+      const anchorFactor = 1/oldZoom-1/expectedCamera.zoom;
+      expectedCamera.x += (wheelInput.x-viewport.width/2)*anchorFactor;
+      expectedCamera.y += (wheelInput.y-viewport.height/2)*anchorFactor;
+    }
+    const expectedRoot = expectedCamera ? project(expectedCamera) : null;
+    let plants = null;
+    if (plantControls && expectedRoot) {
+      // Move the expected projection by one unit of its serialized decimal place.
+      const unit = 10 ** -(expectedRoot.top.match(/\\.(\\d+)px$/)?.[1].length ?? 0);
+      const wrongTop = parseFloat(expectedRoot.top)+unit;
+      const wrongY = (viewport.height/2-wrongTop)/expectedCamera.zoom;
+      const centre = project({...expectedCamera,y:wrongY});
+      const wrongZoom = project({...expectedCamera,zoom:expectedCamera.zoom*1.25});
+      plants = {centre,unit,zoom:new DOMMatrix(wrongZoom.transform).a};
+    }
     return {
       dimensions:[canvas.width, canvas.height],
       pixel:canvas.width && canvas.height ? Array.from(canvas.getContext('2d').getImageData(3,3,1,1).data) : [],
-      viewport:{width:view.clientWidth,height:view.clientHeight},
-      root:{left,top,transform:root.style.transform},
-      center:{x:(view.clientWidth/2-left)/zoom,y:(view.clientHeight/2-top)/zoom},
+      viewport,
+      root:serialized,
+      inverseCenter:{x:(viewport.width/2-parseFloat(serialized.left))/zoom,y:(viewport.height/2-parseFloat(serialized.top))/zoom},
+      expected:expectedRoot ? {camera:expectedCamera,root:expectedRoot,zoom:new DOMMatrix(expectedRoot.transform).a} : null,
+      plants,
+      wheelInput,
       zoom, selected:document.querySelector('[data-pv-item][aria-current=true]')?.dataset.pvItem ?? null,
       lang:document.documentElement.lang,
       caption:document.getElementById('pv-caption').textContent,
@@ -127,6 +165,15 @@ const INSTALL_GATE = `(() => {
 })()`;
 
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const midpoint = (dimensions:readonly [number,number], zoom=1.25):Camera =>
+  ({x:dimensions[0]/2,y:dimensions[1]/2,zoom});
+const matchesZoom = (row:Sample,zoom:number) => row.zoom===zoom;
+const matchesCamera = (row:Sample) => row.expected!==null &&
+  matchesZoom(row,row.expected.zoom) && equal(row.root,row.expected.root);
+async function record(rows:Record<string,unknown>,key:string,value:unknown) {
+  rows[key]=value;
+  await save();
+}
 const pixelAt3 = (png: {width: number; data: Uint8Array}) => {
   const i = (3 * png.width + 3) * 4;
   return Array.from(png.data.subarray(i, i + 4));
@@ -147,33 +194,48 @@ async function afterPaint(page: InputCdpSession, action: string, canvas = 'pv-ca
   await wait(page, 'window.__parts464Painted', 'PARTS_CONTROL_PAINT_TIMEOUT ' + action);
 }
 
-async function controls(page: InputCdpSession, url: string) {
-  const painted = await sample(page);
-  const at = await page.evaluate<{x: number; y: number; localX: number; localY: number}>(`(() => {
-    const box = document.getElementById('rig-viewport').getBoundingClientRect();
-    return {x:box.left+80,y:box.top+80,localX:80,localY:80};
+async function controls(page: InputCdpSession, url: string, rows:Record<string,unknown>) {
+  const painted = await sample(page,EXPECTED);
+  await record(rows,'painted',painted);
+  requireMidpoint(painted,[8,10],'painted-control-start');
+  const at = await page.evaluate<{x:number;y:number}>(`(() => {
+    const view = document.getElementById('rig-viewport');
+    const box = view.getBoundingClientRect();
+    view.addEventListener('wheel',event=>{
+      const rect = view.getBoundingClientRect();
+      window.__parts464Wheel = {x:event.clientX-rect.left,y:event.clientY-rect.top,
+        deltaY:event.deltaY,trusted:event.isTrusted};
+    },{capture:true,once:true});
+    return {x:box.left+80,y:box.top+80};
   })()`);
   await page.mouse('mouseMoved', at.x, at.y);
   await page.mouse('mousePressed', at.x, at.y);
   await page.mouse('mouseMoved', at.x + 10, at.y - 5);
   await page.mouse('mouseReleased', at.x + 10, at.y - 5);
-  const panned = await sample(page);
-  require(equal(panned.center, {x:painted.center.x - 8, y:painted.center.y + 4}), 'PARTS_PAINTED_PAN');
+  const pan = {x:EXPECTED.x-10/EXPECTED.zoom,y:EXPECTED.y+5/EXPECTED.zoom,zoom:EXPECTED.zoom};
+  const panned = await sample(page,pan);
+  await record(rows,'panned',panned);
+  require(matchesCamera(panned), 'PARTS_PAINTED_PAN');
   await click(page, '#zoom-in');
-  const button = await sample(page);
-  require(equal(button.center, panned.center) && button.zoom === 1.5625, 'PARTS_PAINTED_BUTTON_ZOOM');
+  const buttonCamera = {...pan,zoom:pan.zoom*1.25};
+  const button = await sample(page,buttonCamera,'rig',{plants:true});
+  await record(rows,'button',button);
+  require(matchesCamera(button), 'PARTS_PAINTED_BUTTON_ZOOM');
+  const plants = button.plants!;
+  require(plants.centre.left===button.root.left &&
+    plants.centre.transform===button.root.transform &&
+    !matchesCamera({...button,expected:{...button.expected!,root:plants.centre}}) &&
+    !matchesZoom(button,plants.zoom),
+  'PARTS_CSS_ORACLE_PLANT_NOT_REJECTED');
   await page.mouse('mouseWheel', at.x, at.y, -100);
-  const wheel = await sample(page);
-  const anchor = (row: Sample) => ({
-    x: row.center.x + (at.localX - row.viewport.width/2)/row.zoom,
-    y: row.center.y + (at.localY - row.viewport.height/2)/row.zoom,
-  });
-  const beforeAnchor = anchor(button), afterAnchor = anchor(wheel);
-  require(near(wheel.zoom, button.zoom * 1.1) && near(beforeAnchor.x, afterAnchor.x) &&
-    near(beforeAnchor.y, afterAnchor.y), 'PARTS_PAINTED_CURSOR_ZOOM');
+  const wheel = await sample(page,buttonCamera,'rig',{wheel:true});
+  await record(rows,'wheel',wheel);
+  require(wheel.wheelInput?.trusted && wheel.wheelInput.deltaY===-100 && matchesCamera(wheel),
+    'PARTS_PAINTED_CURSOR_ZOOM');
   await afterPaint(page, '[data-pv-item="front"]');
-  const repainted = await sample(page);
-  require(equal(repainted.center, wheel.center) && repainted.zoom === wheel.zoom, 'PARTS_SAME_SELECTION_CAMERA_LOST');
+  const repainted = await sample(page,wheel.expected!.camera);
+  await record(rows,'repainted',repainted);
+  require(matchesCamera(repainted) && equal(repainted.root,wheel.root), 'PARTS_SAME_SELECTION_CAMERA_LOST');
 
   await page.goto(url, 'en');
   await wait(page, `document.body.dataset.ready === 'true' && document.getElementById('pv-canvas').width === 20`, 'PARTS_STALE_CONTROL_BOOT');
@@ -183,24 +245,25 @@ async function controls(page: InputCdpSession, url: string) {
   await click(page, '#zoom-in');
   await afterPaint(page, '[data-pv-item="body"]');
   await click(page, '#zoom-in');
-  const beforeLate = await sample(page);
+  const bodyCamera=midpoint([20,16]);
+  const beforeLate = await sample(page,bodyCamera);
+  await record(rows,'beforeLate',beforeLate);
   await page.evaluate('window.__parts464Gate.release()');
   await wait(page, `window.__parts464Gate.report().events.some(event => event.phase === 'loaded')`, 'PARTS_STALE_CONTROL_RELEASE');
-  const afterLate = await sample(page);
-  require(equal(beforeLate.dimensions, [20,16]) && equal(beforeLate.center, {x:10,y:8}) &&
-    beforeLate.zoom === 1.25 && equal(afterLate.dimensions, beforeLate.dimensions) &&
-    equal(afterLate.pixel, beforeLate.pixel) && equal(afterLate.center, beforeLate.center) &&
-    afterLate.zoom === beforeLate.zoom && afterLate.selected === 'body', 'PARTS_STALE_RASTER_MOVED_CAMERA');
-  return {painted,panned,button,wheel,repainted,beforeLate,afterLate};
+  const afterLate = await sample(page,bodyCamera);
+  await record(rows,'afterLate',afterLate);
+  require(equal(beforeLate.dimensions, [20,16]) && matchesCamera(beforeLate) &&
+    equal(afterLate.dimensions, beforeLate.dimensions) && equal(afterLate.pixel, beforeLate.pixel) &&
+    matchesCamera(afterLate) && equal(afterLate.root,beforeLate.root) &&
+    afterLate.selected === 'body', 'PARTS_STALE_RASTER_MOVED_CAMERA');
 }
 
-function requireMidpoint(row: Sample, dimensions: [number, number], name: string) {
-  require(equal(row.dimensions, dimensions) &&
-    equal(row.center, {x:dimensions[0]/2,y:dimensions[1]/2}) && row.zoom === 1.25,
+function requireMidpoint(row: Sample, dimensions: readonly [number, number], name: string) {
+  require(equal(row.dimensions, dimensions) && matchesCamera(row),
   'PARTS_FRAME_PAINT_MISMATCH ' + name + ' ' + JSON.stringify(row));
 }
 
-async function comparisonFrames(page: InputCdpSession, dir: string) {
+async function comparisonFrames(page: InputCdpSession, dir: string, rows:Record<string,unknown>) {
   await mkdir(dir);
   await writeDifferencePackage(dir);
   const pkg = await loadPartsView(dir, {painting:join(dir,'painting.png')});
@@ -208,7 +271,6 @@ async function comparisonFrames(page: InputCdpSession, dir: string) {
   try {
     await page.goto(`http://127.0.0.1:${server.port}/?lang=en`, 'en');
     await wait(page, `document.body.dataset.ready === 'true' && document.getElementById('pv-reference').width === 20`, 'PARTS_REFERENCE_FRAME_BOOT');
-    const results = [];
     for (const [action, dims, target] of [
       ['[data-pv-item="body"]', [20,16], 'pv-reference'],
       ['[data-pv-item="front"]', [8,10], 'pv-reference'],
@@ -219,16 +281,16 @@ async function comparisonFrames(page: InputCdpSession, dir: string) {
       await afterPaint(page, action, target);
       await click(page, '#native-one');
       await click(page, '#zoom-in');
-      const rig = await sample(page), reference = await sample(page,'reference');
-      requireMidpoint(rig,[...dims],action);
-      requireMidpoint(reference,[...dims],action + ':reference');
-      results.push({action,rig,reference});
+      const camera = midpoint(dims);
+      const rig = await sample(page,camera), reference = await sample(page,camera,'reference');
+      await record(rows,action,{rig,reference});
+      requireMidpoint(rig,dims,action);
+      requireMidpoint(reference,dims,action + ':reference');
     }
-    return results;
   } finally { server.stop(true); }
 }
 
-async function legacyAtlasFrames(page: InputCdpSession, dir: string) {
+async function legacyAtlasFrames(page: InputCdpSession, dir: string, rows:Record<string,unknown>) {
   await cp('examples/demo', dir, {recursive:true});
   const modelPath = join(dir,'skeleton.model.json');
   const model = JSON.parse(await readFile(modelPath,'utf8'));
@@ -245,18 +307,21 @@ async function legacyAtlasFrames(page: InputCdpSession, dir: string) {
     await page.goto(`http://127.0.0.1:${server.port}/?lang=en`,'en');
     await wait(page,`document.body.dataset.ready === 'true' && document.getElementById('pv-canvas').width === 13`,'PARTS_ATLAS_FRAME_BOOT');
     await click(page,'#zoom-in');
-    const fractional = await sample(page);
+    const fractional = await sample(page,midpoint([13,11]));
+    await record(rows,'fractional',fractional);
     requireMidpoint(fractional,[13,11],'fractional-region');
     await afterPaint(page,'[data-pv-item="degenerate"]');
     await click(page,'#zoom-in');
     const degenerate = await sample(page);
+    await record(rows,'degenerate',degenerate);
     // A zero-width crop still paints as zero-width and cannot accept a zoom.
     require(degenerate.dimensions[0] === 0 && degenerate.label === '1:1','PARTS_DEGENERATE_FRAME_ACCEPTED_ZOOM');
     await afterPaint(page,'[data-pv-view="page"]');
     await click(page,'#zoom-in');
-    const fullPage = await sample(page);
-    requireMidpoint(fullPage,[atlas.width,atlas.height],'full-page');
-    return {fractional,degenerate,fullPage};
+    const dimensions:[number,number] = [atlas.width,atlas.height];
+    const fullPage = await sample(page,midpoint(dimensions));
+    await record(rows,'fullPage',fullPage);
+    requireMidpoint(fullPage,dimensions,'full-page');
   } finally { server.stop(true); }
 }
 
@@ -304,7 +369,7 @@ try {
 
     report.phase = lang + ':zoomed-while-held';
     await click(page, '#zoom-in');
-    const zoomed = await sample(page);
+    const zoomed = await sample(page,EXPECTED);
     progress.zoomed = zoomed;
     await save();
     require(equal(zoomed.dimensions, [20,16]) && equal(zoomed.pixel, initial.pixel), 'PARTS_ZOOM_GATE_LOST');
@@ -319,7 +384,7 @@ try {
       return c.width === 8 && c.height === 10 &&
         window.__parts464Gate.report().events.some(e => e.phase === 'loaded');
     })()`, 'PARTS_FRONT_PAINT_TIMEOUT');
-    const final = await sample(page);
+    const final = await sample(page,EXPECTED);
     progress.settled = final;
     await save();
     require(final.selected === 'front' && final.lang === lang && final.status === '', 'PARTS_SETTLED_IDENTITY');
@@ -333,30 +398,31 @@ try {
       inputs:[{control:'front',trusted:true},{control:'zoom-in',trusted:true}],
       errors:[], pending:false,
     }), 'PARTS_GATE_EVIDENCE');
-    require(near(final.zoom, EXPECTED.zoom), 'PARTS_PENDING_ZOOM_SCALE');
+    require(matchesZoom(final,EXPECTED.zoom), 'PARTS_PENDING_ZOOM_SCALE');
     settled.push(final);
     await writeFile(join(out, lang + '-settled.png'), await page.screenshot());
     progress.screenshot = lang + '-settled.png';
     await save();
   }
   report.phase = 'aggregate';
-  require(settled.every(row => near(row.center.x, EXPECTED.x) && near(row.center.y, EXPECTED.y)),
-    'PARTS_PENDING_ZOOM_CENTER ' + JSON.stringify(settled.map(({lang, center, zoom}) => ({lang, center, zoom}))));
+  require(settled.every(matchesCamera),
+    'PARTS_PENDING_ZOOM_CENTER ' + JSON.stringify(settled.map(({lang, root, expected}) => ({lang, root, expected}))));
   for (const {lang,progress} of report.observations) {
     const zoomed = progress.zoomed as Sample, final = progress.settled as Sample;
     requireMidpoint(final,[8,10],lang);
-    require(equal(zoomed.center,final.center) && zoomed.zoom === final.zoom,
+    require(matchesCamera(zoomed) && equal(zoomed.root,final.root),
       'PARTS_FRAME_PAINT_MISMATCH ' + lang + ':held-to-settled');
   }
-  report.controls = {};
+  const camera={},comparison={},atlas={};
+  report.controls = {camera,comparison,atlas};
   report.phase = 'painted-and-stale-controls';
-  report.controls.camera = await controls(page,`http://127.0.0.1:${server.port}/?lang=en`);
+  await controls(page,`http://127.0.0.1:${server.port}/?lang=en`,camera);
   await save();
   report.phase = 'comparison-frames';
-  report.controls.comparison = await comparisonFrames(page,join(root,'comparison'));
+  await comparisonFrames(page,join(root,'comparison'),comparison);
   await save();
   report.phase = 'legacy-atlas-frames';
-  report.controls.atlas = await legacyAtlasFrames(page,join(root,'atlas'));
+  await legacyAtlasFrames(page,join(root,'atlas'),atlas);
   report.status = 'passed';
   await save();
 } catch (error) {
