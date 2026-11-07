@@ -63,7 +63,7 @@ function geometry(snapshot: DeltaSnapshot): string {
 
 export function assertNamedDeltaOps(ops: readonly MeshOp[], namedId: number): void {
   const movedIds = [...new Set(ops.flatMap(op => op.op === 'move' ? [op.v] : []))].sort((a,b) => a-b);
-  if (JSON.stringify(movedIds) !== JSON.stringify([namedId]) || ops.some(op => op.op !== 'move')) {
+  if (ops.length !== 1 || JSON.stringify(movedIds) !== JSON.stringify([namedId]) || ops.some(op => op.op !== 'move')) {
     throw Error(`DELTA_MOVED_IDS_MISMATCH expected=${JSON.stringify([namedId])} actual=${JSON.stringify(movedIds)} ops=${JSON.stringify(ops)}`);
   }
   for (const op of ops) {
