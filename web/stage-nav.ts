@@ -46,13 +46,33 @@ export function bindStageNav(options:{preRig?:boolean;interviewOnly?:boolean;int
  const status=document.createElement('p');status.setAttribute('role','status');panel.append(status);
  let interview:HTMLIFrameElement|undefined,interviewError:string|null=null,entry=0;
  const sourcePicker=document.getElementById('mode-build-picker');
+ const attr=(el:Element,name:string)=>typeof el.getAttribute==='function'?el.getAttribute(name):null;
+ const setOrRemove=(el:Element,name:string,value:string|null)=>{if(value===null)el.removeAttribute?.(name);else el.setAttribute(name,value);};
+ const modeSwitches=[...document.querySelectorAll<HTMLElement>('.mode-switch')].map(el=>({el,hidden:Boolean(el.hidden)}));
+ const modeControls=[...document.querySelectorAll<HTMLButtonElement>('[data-mode],[data-inspector]')].map(button=>({
+  button,disabled:Boolean(button.disabled),title:attr(button,'title'),pressed:attr(button,'aria-pressed'),selected:attr(button,'aria-selected'),
+ }));
+ const pickerState=sourcePicker?{hidden:Boolean(sourcePicker.hidden),label:attr(sourcePicker,'aria-label')}:null;
  const frames=new Map<string,HTMLIFrameElement>();let lastFrame:HTMLIFrameElement|null=null;let current:ReviewStage=(options.partsOnly||options.preRig)?1:3;
  const workspace=document.querySelector<HTMLElement>(options.partsOnly?'.pv-layout':'.layout');const wasInert=workspace?.inert??false;
- const buttons=reviewStages.map((label,index)=>{const button=document.createElement('button');button.type='button';button.dataset.reviewStage=String(index+1);button.onclick=()=>show(index+1 as ReviewStage);host.append(button);return button;});
- const mesh=document.createElement('button');mesh.type='button';mesh.onclick=()=>{show(3);options.setup?.();};panel.append(mesh);
- const render=()=>{buttons.forEach((b,i)=>{b.textContent=t(reviewStages[i]!);b.setAttribute('aria-current',current===i+1?'step':'false');});host.setAttribute('aria-label',t('Inspection stages'));if(sourcePicker)sourcePicker.setAttribute('aria-label',t(current===1?'Atlas source build':'Picked build for Setup and Animate'));mesh.textContent=t('Open setup mesh instruments');};
- const place=()=>{panel.style.top=`${(host.closest('header')??host).getBoundingClientRect().bottom}px`;};
  const reasonFor=(stage:ReviewStage)=>stageReason(stage,options.model,!!options.direction,!!options.interview,options.preRig);
+ const buttons=reviewStages.map((label,index)=>{const button=document.createElement('button');button.type='button';button.dataset.reviewStage=String(index+1);button.onclick=()=>show(index+1 as ReviewStage);host.append(button);return button;});
+ const mesh=document.createElement('button');mesh.type='button';mesh.onclick=()=>{if(reasonFor(3))return;show(3);options.setup?.();};panel.append(mesh);
+ const syncRigControls=()=>{
+  const rigReason=reasonFor(3),refused=Boolean(reasonFor(current));
+  if(refused)document.documentElement.dataset.stageRefused='true';else delete document.documentElement.dataset.stageRefused;
+  for(const item of modeSwitches)item.el.hidden=current!==3||Boolean(rigReason)?true:item.hidden;
+  if(sourcePicker&&pickerState&&rigReason&&current===3)sourcePicker.hidden=true;
+  if(!rigReason)return;
+  const reasonText=t(rigReason);
+  for(const item of modeControls){
+   item.button.disabled=true;item.button.title=reasonText;item.button.setAttribute('title',reasonText);
+   if(item.pressed!==null&&attr(item.button,'aria-pressed')!=='false')item.button.setAttribute('aria-pressed','false');
+   if(item.selected!==null&&attr(item.button,'aria-selected')!=='false')item.button.setAttribute('aria-selected','false');
+  }
+ };
+ const render=()=>{buttons.forEach((b,i)=>{b.textContent=t(reviewStages[i]!);b.setAttribute('aria-current',current===i+1?'step':'false');});host.setAttribute('aria-label',t('Inspection stages'));if(sourcePicker)sourcePicker.setAttribute('aria-label',t(current===1?'Atlas source build':'Picked build for Setup and Animate'));mesh.textContent=t('Open setup mesh instruments');syncRigControls();};
+ const place=()=>{panel.style.top=`${(host.closest('header')??host).getBoundingClientRect().bottom}px`;};
  const setFrameLanguage=(frame:HTMLIFrameElement)=>frame.contentWindow?.postMessage({type:'review-stage-language',language:getLanguage()},location.origin);
  async function showInterview(revision:number) {
   try {
@@ -80,7 +100,7 @@ export function bindStageNav(options:{preRig?:boolean;interviewOnly?:boolean;int
   options.direction?.(stage===4);
   panel.hidden=!reason&&(stage===(options.partsOnly?1:3)||stage===4)&&!options.preRig;
   if(workspace)workspace.inert=!panel.hidden||wasInert;
-  status.textContent=reason?t(reason):stage===1&&!options.partsOnly?t(options.correction||options.preRig?'Draft rig · structure evidence only':'Atlas inspection, read only — inspected package. Applied scratch atlas, pre-rig parts, mesh sign-off and draft corrections are unavailable here.'):'';mesh.hidden=stage!==1||!options.model||!!options.partsOnly;
+  status.textContent=reason?t(reason):stage===1&&!options.partsOnly?t(options.correction||options.preRig?'Draft rig · structure evidence only':'Atlas inspection, read only — inspected package. Applied scratch atlas, pre-rig parts, mesh sign-off and draft corrections are unavailable here.'):'';mesh.hidden=stage!==1||Boolean(reasonFor(3))||!!options.partsOnly;
   for(const frame of frames.values())frame.hidden=true;
   if(interview)interview.hidden=true;
   panel.classList.remove('with-interview');
@@ -93,15 +113,16 @@ export function bindStageNav(options:{preRig?:boolean;interviewOnly?:boolean;int
  const correction=async(event:MessageEvent)=>{if(event.origin!==location.origin||![...frames.values()].some(f=>f.contentWindow===event.source)||event.data?.type!=='review-stage-correction'||!options.correction)return;const r=event.data;if(typeof r.part!=='string'||typeof r.sourceHash!=='string'||typeof r.buildId!=='string'||!['chest','mesh','delta'].includes(r.instrument))return;try{await options.correction(r);show(3);}catch(error){status.textContent=error instanceof Error?error.message:String(error);}};
  window.addEventListener('message',correction);
  // Legacy Setup/Animate/Compare selectors keep their IDs, payloads and behavior.
- const legacy=()=>show(3);document.querySelectorAll('[data-mode],[data-inspector]').forEach(b=>b.addEventListener('click',legacy));
+ const legacy=(event?:Event)=>{if(reasonFor(3)){event?.preventDefault?.();event?.stopImmediatePropagation?.();syncRigControls();return;}show(3);};
+ modeControls.forEach(({button})=>button.addEventListener('click',legacy,true));
  // A side choice reuses the canonical closed A/B picker, then reveals that side's retained atlas.
  let pickingSource=false;
  const sourceChanged=()=>{if(current!==1)return;pickingSource=true;show(1);queueMicrotask(()=>{pickingSource=false;});};
  sourcePicker?.querySelectorAll('[data-build-side]').forEach(button=>button.addEventListener('click',sourceChanged));
  // Legacy bookmark/control restoration writes these canonical attributes even when a mode is unchanged.
- const canonical=new MutationObserver(()=>{if(current!==3&&!options.partsOnly&&!options.preRig&&!pickingSource)show(3);});
+ const canonical=new MutationObserver(()=>{if(reasonFor(3)){syncRigControls();return;}if(current!==3&&!options.partsOnly&&!options.preRig&&!pickingSource)show(3);});
  document.querySelectorAll('[data-inspector]').forEach(button=>canonical.observe(button,{attributes:true,attributeFilter:['aria-selected','aria-pressed']}));
  const language=onLanguageChange(()=>{render();if(!panel.hidden)status.textContent=t(reasonFor(current)??(current===2?(interviewError??(interview&&!interview.hidden?'':'interview.loading')):current===1&&(options.correction||options.preRig)?'Draft rig · structure evidence only':current===1?'Atlas inspection, read only — inspected package. Applied scratch atlas, pre-rig parts, mesh sign-off and draft corrections are unavailable here.':''));for(const f of frames.values()){f.title=t('Parts and atlas inspection');setFrameLanguage(f);}if(interview){interview.title=t('interview.title');setFrameLanguage(interview);}});
  window.addEventListener('resize',place);show(current);
- return ()=>{entry++;window.removeEventListener('message',correction);language();canonical.disconnect();sourcePicker?.querySelectorAll('[data-build-side]').forEach(button=>button.removeEventListener('click',sourceChanged));delete document.documentElement.dataset.inspectionStage;if(workspace)workspace.inert=wasInert;panel.remove();window.removeEventListener('resize',place);document.querySelectorAll('[data-mode],[data-inspector]').forEach(b=>b.removeEventListener('click',legacy));};
+ return ()=>{entry++;window.removeEventListener('message',correction);language();canonical.disconnect();sourcePicker?.querySelectorAll('[data-build-side]').forEach(button=>button.removeEventListener('click',sourceChanged));delete document.documentElement.dataset.inspectionStage;delete document.documentElement.dataset.stageRefused;for(const item of modeSwitches)item.el.hidden=item.hidden;if(sourcePicker&&pickerState){sourcePicker.hidden=pickerState.hidden;setOrRemove(sourcePicker,'aria-label',pickerState.label);}if(reasonFor(3))for(const item of modeControls){item.button.disabled=item.disabled;item.button.title=item.title??'';setOrRemove(item.button,'title',item.title);setOrRemove(item.button,'aria-pressed',item.pressed);setOrRemove(item.button,'aria-selected',item.selected);}if(workspace)workspace.inert=wasInert;buttons.forEach(b=>b.remove());panel.remove();window.removeEventListener('resize',place);modeControls.forEach(({button})=>button.removeEventListener('click',legacy,true));};
 }
