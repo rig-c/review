@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test';
-import {main, parseOpenInputs, parseOpenTargets} from '../src/cli.ts';
+import {main, parseOpenInputs, parseOpenTargets, parseForegroundTargets} from '../src/cli.ts';
 
 test('single-target open retains existing options and literal option values', () => {
   const cases = [
@@ -87,5 +87,33 @@ test('entry-point help scanning respects batch operands and indexed animation va
       expect(stdout).toBe('');
       expect(stderr).toContain('OPEN_');
     }
+  }
+});
+
+
+test('foreground multi consumes option values and preserves single dispatch', () => {
+  for (const args of [['a', '--port', '0'], ['a', '--reference', 'second-folder'],
+    ['a', '--animation', '--help'], ['a', '--checkpoint', 'intro']]) expect(parseForegroundTargets(args)).toBeNull();
+  const parsed = parseForegroundTargets(['a', '--reference', 'video', 'b', '--animation', 'idle',
+    '--animation-for', '2', 'walk', '--view-only', '--control', '--port', '4321']);
+  expect(parsed).toEqual({help: false, port: 4321, targets: [
+    {input: 'a', reference: 'video', animation: 'idle', viewOnly: true, control: true},
+    {input: 'b', reference: 'video', animation: 'walk', viewOnly: true, control: true},
+  ]});
+  expect(parseForegroundTargets(['a', 'b', '--animation-for', '2', '--help', '--help'])?.help).toBe(true);
+  expect(parseForegroundTargets(['a', 'b', '--animation-for', '2', '--help'])?.targets[1]?.animation).toBe('--help');
+});
+
+test('foreground multi refuses unsupported options, invalid ports and indexed overrides', () => {
+  for (const flag of ['--checkpoint', '--compare', '--direct', '--project', '--project-version', '--picks-dir']) {
+    expect(() => parseForegroundTargets(['a', 'b', flag, 'value'])).toThrow('OPEN_OPTION_INVALID');
+  }
+  for (const port of ['0', '-1', '65536', 'no', '1.5']) {
+    expect(() => parseForegroundTargets(['a', 'b', '--port', port])).toThrow('OPEN_OPTION_INVALID --port');
+  }
+  expect(() => parseForegroundTargets(['a', 'b', '--port', '4321', '--port', '4321'])).toThrow('OPEN_OPTION_INVALID --port');
+  for (const args of [['--animation-for', '3', 'idle'], ['--animation-for', '0', 'idle'],
+    ['--animation-for', '1', 'idle', '--animation-for', '1', 'walk']]) {
+    expect(() => parseForegroundTargets(['a', 'b', ...args])).toThrow('OPEN_OPTION_INVALID --animation-for');
   }
 });

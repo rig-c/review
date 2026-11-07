@@ -23,7 +23,7 @@ async function register(record: WorkspaceRecord, targets: WorkspaceDesignation[]
 }
 
 /** Launchers exchange designated package data, never callbacks or human acts. */
-export async function openWorkspace(inputs: readonly OpenInputs[], options: OpenOptions = {}) {
+export async function openWorkspace(inputs: readonly OpenInputs[], options: OpenOptions & {foreground?: boolean} = {}) {
   const fingerprint = await openFingerprint();
   const prepared = [];
   for (const input of inputs) prepared.push(await prepareOpenTarget(input, options, fingerprint));
@@ -40,11 +40,20 @@ export async function openWorkspace(inputs: readonly OpenInputs[], options: Open
   const acquired = ready ? {row: ready} : await acquireClaim(directory, 'host', nonce, reuse,
     performance.now() + 20_000, 'WORKSPACE_START_BUSY');
   let child: ReturnType<typeof spawn> | undefined, handedOff = false, request: string | undefined;
+  let owner: Awaited<ReturnType<typeof import('./open-workspace.ts').startOpenWorkspace>> | undefined;
+  let interrupted = false;
+  const stopOwner = () => {interrupted = true; void owner!.stop().catch(() => {});};
+  const detach = () => {process.removeListener('SIGINT', stopOwner); process.removeListener('SIGTERM', stopOwner);};
   try {
     let record: WorkspaceRecord;
     const reused = 'row' in acquired;
     if ('row' in acquired) record = acquired.row;
-    else {
+    else if (options.foreground) {
+      const {startOpenWorkspace} = await import('./open-workspace.ts');
+      owner = await startOpenWorkspace({stateDir, fingerprint, port, idleMs: options.idleMs, graceMs: options.graceMs});
+      process.once('SIGINT', stopOwner); process.once('SIGTERM', stopOwner);
+      record = owner.record;
+    } else {
       request = join(directory, nonce + '.request.json');
       await writePrivate(request, {schema: WORKSPACE_SCHEMA, stateDir, fingerprint, port,
         ...(options.idleMs !== undefined ? {idleMs: options.idleMs} : {}),
@@ -73,9 +82,18 @@ export async function openWorkspace(inputs: readonly OpenInputs[], options: Open
         await Bun.sleep(30);
       }
     }
-    await register(record, designations);
+    try {await register(record, designations);}
+    catch (error) {if (!interrupted) throw error;}
     handedOff = true;
-    return {url: record.origin + '/?workspace=' + record.incarnation + '#cap=' + record.ownerCapability, reused, prepared};
+    const waitForExit = owner ? async () => {
+      try {await owner!.live.exited; await owner!.stop();}
+      finally {detach();}
+    } : undefined;
+    return {url: record.origin + '/?workspace=' + record.incarnation + '#cap=' + record.ownerCapability,
+      reused, prepared, interrupted, waitForExit};
+  } catch (error) {
+    if (owner) {detach(); await owner.stop().catch(() => {});}
+    throw error;
   } finally {
     if (child && !handedOff && child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
     if ('claim' in acquired) await releaseClaim(acquired.claim, nonce);

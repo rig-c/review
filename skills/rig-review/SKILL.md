@@ -38,6 +38,11 @@ Both launchers exit 0 with the same root owner URL and capability within one
 host incarnation, adding no listener or per-rig worker. A consumer opened N rigs
 with N sequential `open` calls. Prefer one batch when the targets are known.
 Give the person the private owner link and one what-to-look-at line.
+For terminal-owned multi review, use `rig-review dirA dirB --animation idle
+--animation-for 2 walk --view-only`. A new owner stays foreground on managed
+port 4318; compatible reuse prints the same URL and exits 0. `--port` overrides
+the port and accepts 1..65535. Single foreground keeps 4317 and port 0 support.
+Multi checkpoint, compare, direct and project/joined flags refuse by name.
 View-only entries are labelled **Inspection only**, without semantic acts or
 pending approvals. Existing feedback semantics apply per target. Retain each
 target's original feedback lookup arguments, inspection state, source-bound
