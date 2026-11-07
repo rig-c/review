@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/rig-c/review/compare/v2.0.0...v2.1.0) (2026-11-07)
+
+
+### Features
+
+* share one owner workspace across legacy open targets ([8f1b3d8](https://github.com/rig-c/review/commit/8f1b3d8e9c55811d0d2d6800f59f5ae4742f72f4))
+
 ## [2.0.0](https://github.com/rig-c/review/compare/v1.18.0...v2.0.0) (2026-11-07)
 
 
