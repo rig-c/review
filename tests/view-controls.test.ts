@@ -365,6 +365,83 @@ test('#496 one framing box encloses declared stage and initial drawn bounds in r
  expect(h.boundsReads()).toBe(1);
 });
 
+async function singleControlReadbackHarness(h:ReturnType<typeof rigFramingHarness>) {
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+ const start=source.indexOf('function controlState()'),end=source.indexOf('async function inspectControlTime(',start);
+ expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
+ const script=`function open(viewport,source){
+  const {player,assets}=source,{paneFrame,updateCamera,fitActiveCamera,fitCamera,setCameraSync,numericView}=viewport;
+  const parts=null,appearance=null,referenceSize=null,animation='idle',time=.25,duration=1,playing=false,video=null,persistence=null;
+  const layers={images:true,mesh:false,bones:false},data={},saving=false,stripBusy=false;
+  let seekingControl=false;
+  const el=()=>({dataset:{orientation:'horizontal'}}),canRepeatIdle=()=>false,localDraft=()=>false;
+  const layoutEligibility=()=>null,controlComparison=()=>({});
+  ${source.slice(start,end)}
+  return {observe:controlState,apply:command=>applyControl(command,new AbortController().signal)};
+ }`;
+ const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script);
+ return new Function('viewport','source',code+';return open(viewport,source);')(h.controller,h.source()) as {
+  observe():import('../src/control.ts').ControlInspection;
+  apply(command:import('../src/control.ts').ControlCommand):Promise<void>;
+ };
+}
+
+test('#496 actual single control readback reports zero fitted pan and replays expanded-frame cameras without drift',async()=>{
+ const h=rigFramingHarness({x:0,y:0,width:80,height:80},{x:-11,y:-11,width:22,height:22});
+ const app=await singleControlReadbackHarness(h);
+ h.controller.fitActiveCamera('rig');
+ expect(h.state.cameraCenter).toEqual({x:34.5,y:34.5});
+ expect(app.observe().cameras.rig!.pan).toEqual({x:0,y:0});
+ for(const camera of [{zoom:1,pan:{x:0,y:0}},{zoom:1.75,pan:{x:47,y:-23}},{zoom:.8,pan:{x:-35,y:14}}]){
+  await app.apply({type:'camera',target:'rig',...camera});
+  const expected=h.controller.numericView().cameras.rig!;
+  for(let replay=0;replay<3;replay++){
+   const readback=app.observe();
+   expect(readback.cameras.rig!.zoom).toBe(camera.zoom);
+   expect(readback.cameras.rig!.pan.x).toBeCloseTo(camera.pan.x,10);
+   expect(readback.cameras.rig!.pan.y).toBeCloseTo(camera.pan.y,10);
+   expect(readback.animation).toBe('idle');expect(readback.time).toBe(.25);
+   await app.apply({type:'camera',target:'rig',...readback.cameras.rig!});
+   const actual=h.controller.numericView().cameras.rig!;
+   expect(actual.center.x).toBeCloseTo(expected.center.x,10);
+   expect(actual.center.y).toBeCloseTo(expected.center.y,10);
+   expect(actual.zoom).toBe(expected.zoom);
+   expect(actual.visible.width).toBeCloseTo(expected.visible.width,10);
+   expect(actual.visible.height).toBeCloseTo(expected.visible.height,10);
+  }
+ }
+});
+
+test('#496 actual single control readback keeps no-stage live pose/filter and missing-player fallbacks',async()=>{
+ const h=rigFramingHarness(null,{x:-20,y:-12,width:28,height:30}),app=await singleControlReadbackHarness(h);
+ for(const bounds of [{x:-20,y:-12,width:28,height:30},{x:12,y:-40,width:40,height:60}]){
+  h.pose(bounds);h.controller.fitActiveCamera('rig');
+  expect(app.observe().cameras.rig!.pan).toEqual({x:0,y:0});
+  h.filter({x:bounds.x+1,y:bounds.y+2,width:10,height:12});
+  h.controller.fitCamera();
+  const center={x:bounds.x+6,y:bounds.y+8},before=h.controller.numericView().cameras.rig!;
+  const readback=app.observe().cameras.rig!;
+  expect(readback.pan.x).toBeCloseTo((center.x-h.state.cameraCenter!.x)*h.state.rigScale,10);
+  expect(readback.pan.y).toBeCloseTo((h.state.cameraCenter!.y-center.y)*h.state.rigScale,10);
+  await app.apply({type:'camera',target:'rig',...readback});
+  const after=h.controller.numericView().cameras.rig!;
+  expect(after.center.x).toBeCloseTo(before.center.x,10);
+  expect(after.center.y).toBeCloseTo(before.center.y,10);
+  expect(after.visible.width).toBeCloseTo(before.visible.width,10);
+  expect(after.visible.height).toBeCloseTo(before.visible.height,10);
+  h.whole();
+ }
+ for(const stage of [null,{x:0,y:0,width:80,height:80}]){
+  const absent=rigFramingHarness(stage,null);
+  absent.use({...absent.source(),player:null});
+  absent.state.cameraCenter={x:31,y:29};absent.state.zoom=2;absent.state.rigScale=2;
+  const missing=await singleControlReadbackHarness(absent),observed=missing.observe();
+  expect(observed.cameras.rig).toEqual({zoom:1,pan:stage?{x:18,y:-22}:{x:0,y:0}});
+  expect(observed.view!.cameras.rig).toBeNull();expect(observed.capabilities.camera).toBe(false);
+  await expect(missing.apply({type:'camera',target:'rig',zoom:1,pan:{x:0,y:0}})).rejects.toThrow('CONTROL_CAMERA_UNAVAILABLE');
+ }
+});
+
 test('#496 absent stage preserves live pose/filter bounds, layout and camera fallback',()=>{
  const actual={x:-12,y:-15,width:24,height:30},h=rigFramingHarness(null,actual);
  expect(h.provider.geometry('rig')?.box).toBe(actual);
