@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test';
 import {bounds, containment, displayReady, settled, assertPositiveFrame, assertPreRigRefusal, positiveFrameNames,
-  probeLanguage, type FramingSample, type PreRigReadout} from './stage3-framing-browser.ts';
+  probeLanguage, assertRestoredDisplay, restorationRectToleranceCssPx, atomicRestorationPlant, restorationRectDisplacement,
+  type FramingSample, type PreRigReadout} from './stage3-framing-browser.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
@@ -88,12 +89,84 @@ test('EN and KO positive containment reject clipping while retaining the existin
     }
     const below = structuredClone(value); below.projected.push({x: 200, y: 510});
     expect(() => assertPositiveFrame(below, language)).toThrow('STAGE3_POST_FIX_CONTAINMENT');
+    const tinyOverflow = structuredClone(value); tinyOverflow.projected.push({x: 200, y: 500.0001});
+    expect(() => assertPositiveFrame(tinyOverflow, language)).toThrow('STAGE3_POST_FIX_ZERO_OVERFLOW');
     expect(() => assertPositiveFrame(value, language === 'en' ? 'ko' : 'en')).toThrow('STAGE3_DISPLAYED_LANGUAGE');
     const failed = structuredClone(value); failed.renderer = catalog['Rendering failed'];
     expect(displayReady(failed)).toBe(false);
     const pending = structuredClone(value); pending.renderer = catalog['Not rendered'];
     expect(displayReady(pending)).toBe(false);
     expect(settled([value, structuredClone(value), structuredClone(value)])).toBe(true);
+  }
+});
+
+test('restoration permits only declared client-rectangle rounding and detects a planted shift above tolerance', () => {
+  const expected = sample(), rounded = structuredClone(expected);
+  rounded.drawables[0]!.rect.left += .00006103515625;
+  rounded.drawables[0]!.rect.top += .000030517578125;
+  expect(restorationRectToleranceCssPx).toBe(.001);
+  expect(() => assertRestoredDisplay(rounded, expected)).not.toThrow();
+  const shifted = structuredClone(expected); shifted.drawables[0]!.rect.left += .002;
+  expect(() => assertRestoredDisplay(shifted, expected)).toThrow('STAGE3_RESTORATION_RECT');
+  const nonfinite = structuredClone(expected); nonfinite.drawables[0]!.rect.left = NaN;
+  expect(() => assertRestoredDisplay(nonfinite, expected)).toThrow('STAGE3_RESTORATION_RECT');
+});
+
+test('restoration keeps root style, camera, posed geometry, source and drawable identity exact', () => {
+  const expected = sample();
+  const root = structuredClone(expected); root.root.style = 'transform:scale(1.000000000001)';
+  expect(() => assertRestoredDisplay(root, expected)).toThrow('STAGE3_RESTORATION_EXACT_ROOT');
+  const camera = structuredClone(expected); camera.camera!.center.x += 1e-12;
+  expect(() => assertRestoredDisplay(camera, expected)).toThrow('STAGE3_RESTORATION_EXACT_STATE');
+  const pose = structuredClone(expected); pose.posed[0]!.corners![0]! += 1e-12;
+  expect(() => assertRestoredDisplay(pose, expected)).toThrow('STAGE3_RESTORATION_EXACT_STATE');
+  const source = structuredClone(expected); source.held.modelHash = 'b'.repeat(64);
+  expect(() => assertRestoredDisplay(source, expected)).toThrow('STAGE3_RESTORATION_EXACT_STATE');
+  const drawable = structuredClone(expected); drawable.drawables[0]!.transform = 'matrix(1,0,0,1,1,0)';
+  expect(() => assertRestoredDisplay(drawable, expected)).toThrow('STAGE3_RESTORATION_EXACT_DRAWABLE');
+});
+
+test('atomic restoration plant measures translate or computed-position fallback and restores exact original style', () => {
+  const globals = ['document', 'CSS', 'getComputedStyle'] as const;
+  const saved = globals.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+  try {
+    for (const supported of [true, false]) {
+      const style: Record<string, string> = {left: '0px', transform: 'matrix(1,0,0,1,0,0)'};
+      const drawable = {style, getAttribute: (): string | null => JSON.stringify(style),
+        setAttribute: (_name: string, value: string) => {for (const name of Object.keys(style)) delete style[name]; Object.assign(style, JSON.parse(value));},
+        removeAttribute: () => {for (const name of Object.keys(style)) delete style[name];},
+      };
+      Object.defineProperty(globalThis, 'document', {configurable: true, value: {querySelector: () => drawable}});
+      Object.defineProperty(globalThis, 'CSS', {configurable: true, value: {supports: () => supported}});
+      Object.defineProperty(globalThis, 'getComputedStyle', {configurable: true, value: () => ({
+        translate: style.translate ?? 'none', transform: style.transform, left: style.left, top: '0px', position: 'absolute',
+      })});
+      const measured: number[] = [];
+      const read = () => {
+        const value = sample(), shift = (style.translate === '1px 0' ? 1 : Number.parseFloat(style.left ?? '0')) * 4;
+        value.drawables[0]!.rect.left += shift; value.drawables[0]!.rect.right += shift;
+        measured.push(shift); return value;
+      };
+      const plant = atomicRestorationPlant(['body'], read);
+      expect(measured).toEqual([0, 4, 0]);
+      expect(plant.mode).toBe(supported ? 'translate' : 'computed-position');
+      expect(plant.restoredStyle).toBe(plant.originalStyle);
+      expect(plant.computedAfter.transform).toBe(plant.computedBefore.transform);
+      expect(restorationRectDisplacement(plant.expected, plant.actual).maximumCssPx).toBe(4);
+      expect(() => assertRestoredDisplay(plant.actual, plant.expected)).toThrow('STAGE3_RESTORATION_RECT');
+      expect(() => assertRestoredDisplay(plant.restored, plant.expected)).not.toThrow();
+      let reads = 0;
+      expect(() => atomicRestorationPlant(['body'], () => {
+        if (++reads === 2) throw new Error('PLANTED_MEASUREMENT_ERROR');
+        return sample();
+      })).toThrow('PLANTED_MEASUREMENT_ERROR');
+      expect(drawable.getAttribute()).toBe(plant.originalStyle);
+    }
+  } finally {
+    for (const [name, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else Reflect.deleteProperty(globalThis, name);
+    }
   }
 });
 

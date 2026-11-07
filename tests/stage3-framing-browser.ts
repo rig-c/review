@@ -11,6 +11,7 @@ import {koCatalog} from '../web/catalog-ko.ts';
 export type ProbeLanguage = 'en' | 'ko';
 export const positiveFrameNames = ['setup-display-ready', 'animate-display-ready', 'roundtrip-display-ready',
   'roundtrip-later-250', 'roundtrip-later-1000'] as const;
+export const restorationRectToleranceCssPx = .001;
 
 export function probeLanguage(value: string | undefined): ProbeLanguage {
   const language = value ?? 'en';
@@ -78,6 +79,79 @@ export function assertPositiveFrame(sample: FramingSample, language: ProbeLangua
   assert.equal(sample.language, language, 'STAGE3_DISPLAYED_LANGUAGE');
   assert(displayReady(sample), 'STAGE3_DISPLAY_NOT_READY');
   assert.equal(containment(sample).status, 'STAGE3_FULL_RIG_CONTAINED', 'STAGE3_POST_FIX_CONTAINMENT');
+  assert.deepEqual(containment(sample).overflow, {left: 0, top: 0, right: 0, bottom: 0}, 'STAGE3_POST_FIX_ZERO_OVERFLOW');
+}
+
+/** Only browser client rectangles have layout tolerance. Source and camera state stay exact. */
+export function assertRestoredDisplay(actual: FramingSample, expected: FramingSample): void {
+  const {pane: actualPane, clip: actualClip, root: actualRoot, drawables: actualDrawables, ...actualState} = actual;
+  const {pane: expectedPane, clip: expectedClip, root: expectedRoot, drawables: expectedDrawables, ...expectedState} = expected;
+  assert.deepEqual(actualState, expectedState, 'STAGE3_RESTORATION_EXACT_STATE');
+  const {origin: actualOrigin, ...actualRootState} = actualRoot;
+  const {origin: expectedOrigin, ...expectedRootState} = expectedRoot;
+  assert.deepEqual(actualRootState, expectedRootState, 'STAGE3_RESTORATION_EXACT_ROOT');
+  assert.equal(actualDrawables.length, expectedDrawables.length, 'STAGE3_RESTORATION_DRAWABLE_COUNT');
+  const rectangles = [{actual: actualPane, expected: expectedPane, name: 'pane'}, {actual: actualClip, expected: expectedClip, name: 'clip'}];
+  for (const [index, drawable] of actualDrawables.entries()) {
+    const {rect: actualRect, ...actualDrawable} = drawable;
+    const {rect: expectedRect, ...expectedDrawable} = expectedDrawables[index]!;
+    assert.deepEqual(actualDrawable, expectedDrawable, 'STAGE3_RESTORATION_EXACT_DRAWABLE');
+    rectangles.push({actual: actualRect, expected: expectedRect, name: `drawables[${index}]`});
+  }
+  const coordinate = (actual: number, expected: number, name: string) => {
+    assert(Number.isFinite(actual) && Number.isFinite(expected) && Math.abs(actual - expected) <= restorationRectToleranceCssPx,
+      'STAGE3_RESTORATION_RECT ' + name);
+  };
+  for (const rectangle of rectangles) for (const edge of ['left', 'top', 'right', 'bottom'] as const) {
+    coordinate(rectangle.actual[edge], rectangle.expected[edge], rectangle.name + '.' + edge);
+  }
+  coordinate(actualOrigin.x, expectedOrigin.x, 'root.origin.x');
+  coordinate(actualOrigin.y, expectedOrigin.y, 'root.origin.y');
+}
+
+interface AtomicRestorationPlant {
+  expected: FramingSample; actual: FramingSample; restored: FramingSample;
+  mode: 'translate' | 'computed-position'; translateSupported: boolean;
+  originalStyle: string | null; appliedStyle: string | null; restoredStyle: string | null;
+  computedBefore: {translate: string; transform: string; left: string; top: string; position: string};
+  computedAfter: AtomicRestorationPlant['computedBefore'];
+}
+
+/** Serialized into one browser evaluation. Restoration runs even if the measurement throws. */
+export function atomicRestorationPlant(slotNames: string[], read: (slots: string[]) => FramingSample): AtomicRestorationPlant {
+  const drawable = document.querySelector<HTMLElement>('#rig-root img,#rig-root canvas')!;
+  const styles = () => {
+    const css = getComputedStyle(drawable);
+    return {translate: css.translate, transform: css.transform, left: css.left, top: css.top, position: css.position};
+  };
+  const originalStyle = drawable.getAttribute('style'), expected = read(slotNames), computedBefore = styles();
+  const translateSupported = CSS.supports('translate', '1px 0');
+  const mode = translateSupported ? 'translate' : 'computed-position';
+  let actual!: FramingSample, appliedStyle: string | null = null, computedAfter!: AtomicRestorationPlant['computedBefore'];
+  try {
+    if (translateSupported) drawable.style.translate = '1px 0';
+    else {
+      const left = Number.parseFloat(computedBefore.left);
+      if (!Number.isFinite(left)) throw new Error('MUTANT_RESTORATION_POSITION_UNAVAILABLE');
+      drawable.style.left = `${left + 1}px`;
+    }
+    actual = read(slotNames);
+    appliedStyle = drawable.getAttribute('style');
+    computedAfter = styles();
+  } finally {
+    if (originalStyle === null) drawable.removeAttribute('style');
+    else drawable.setAttribute('style', originalStyle);
+  }
+  return {expected, actual, restored: read(slotNames), mode, translateSupported, originalStyle, appliedStyle,
+    restoredStyle: drawable.getAttribute('style'), computedBefore, computedAfter};
+}
+
+export function restorationRectDisplacement(expected: FramingSample, actual: FramingSample) {
+  const deltas = actual.drawables.map((drawable, index) => {
+    const before = expected.drawables[index]!.rect, after = drawable.rect;
+    return {left: after.left - before.left, top: after.top - before.top, right: after.right - before.right, bottom: after.bottom - before.bottom};
+  });
+  return {deltas, maximumCssPx: Math.max(0, ...deltas.flatMap(delta => Object.values(delta)).map(Math.abs))};
 }
 
 export interface PreRigReadout {
@@ -233,12 +307,21 @@ export async function runPostFixProbe(language: ProbeLanguage): Promise<void> {
   const report: Record<string, unknown> = {
     language, purpose: 'POST_FIX_POSITIVE', status: 'PENDING',
     declaredPositive: 'STAGE3_FULL_RIG_CONTAINMENT_POST_FIX', expectedFrameNames: positiveFrameNames,
-    declaredMutants: ['MUTANT_CAMERA_Y_BELOW_PANE', 'MUTANT_OVERSIZED_ZOOM', 'MUTANT_UNSETTLED_VIEWPORT'],
+    declaredMutants: ['MUTANT_CAMERA_Y_BELOW_PANE', 'MUTANT_OVERSIZED_ZOOM', 'MUTANT_UNSETTLED_VIEWPORT', 'MUTANT_RESTORATION_RECT_SHIFT'],
+    restorationPolicy: {rectToleranceCssPx: restorationRectToleranceCssPx, positiveOverflowToleranceCssPx: 0,
+      exact: ['root style attribute and transform', 'camera', 'pose and source binding', 'non-client-rectangle state'],
+      priorRed: {runId: '20261107T213104Z-4a9048e7e2e14e4eb9704e89cd442bda', status: 'UNEXPECTED_RED',
+        resultSha256: 'b78ce4e11e7e6b6475510e3095f9ab555f3d2180f61ededf40f205a92588a568',
+        observedMaximumClientRectDeltaCssPx: .00006103515625},
+      priorPlantRed: {runId: '20261107T213621Z-5f7faefa8fb94c809fd6e7aa667e42e7', status: 'UNEXPECTED_RED',
+        resultSha256: 'b80625b3183cfc7cd29e423aad0961039547c99628f4ef76d915293bad0c20c2',
+        intendedLocalCssPx: .01, observedClientRectShiftCssPx: 0}},
     declaredReady: 'complete document, comments bound after initial persistence restoration, body not inert, successful renderer, numeric camera, paused held pose, positive clipped pane, three identical consecutive animation-frame observations',
     laterObservationDelaysMs: [250, 1000],
   };
   const observations: {name: string; sampledAtMs: number; sample: FramingSample; containment: ReturnType<typeof containment>; screenshot: {path: string; sha256: string}}[] = [];
   report.observations = observations;
+  const saveReport = () => writeFile(join(out, 'report.json'), JSON.stringify(report, null, 2) + '\n');
   let unexpected: unknown;
   try {
     const originalHashes = await fileHashes('examples/demo');
@@ -313,7 +396,7 @@ export async function runPostFixProbe(language: ProbeLanguage): Promise<void> {
       await writeFile(join(out, path), bytes);
       const row = {name, sampledAtMs: performance.now() - started, sample: current, containment: containment(current), screenshot: {path, sha256: sha256(bytes)}};
       observations.push(row);
-      await writeFile(join(out, 'report.json'), JSON.stringify(report, null, 2) + '\n');
+      await saveReport();
       assertPositiveFrame(current, language);
     };
     const setup = await stable();
@@ -352,27 +435,51 @@ export async function runPostFixProbe(language: ProbeLanguage): Promise<void> {
     const screenCenter = {x: (original.clip.left + original.clip.right) / 2, y: (original.clip.top + original.clip.bottom) / 2};
     const scratchCamera = async (scale: number, down: number) => browser.evaluate(`(()=>{const root=document.getElementById('rig-root'),pane=document.getElementById('rig-viewport').getBoundingClientRect();root.style.left=(${screenCenter.x}-pane.left-${worldCenter.x}*${scale})+'px';root.style.top=(${screenCenter.y}-pane.top+${worldCenter.y}*${scale}+${down})+'px';root.style.transform='scale(${scale})';})()`);
     const controls: Record<string, unknown> = {};
+    report.controls = controls;
+    let restored: FramingSample | undefined;
     try {
       await scratchCamera(positiveScale, 0);
       const positive = await sample();
+      controls.positiveScratchOnly = {...containment(positive), sample: positive};
+      await saveReport();
       assert.equal(containment(positive).status, 'STAGE3_FULL_RIG_CONTAINED', 'STAGE3_POSITIVE_CONTROL');
-      controls.positiveScratchOnly = containment(positive);
       await scratchCamera(positiveScale, original.clip.bottom - original.clip.top);
       const below = await sample();
+      controls.MUTANT_CAMERA_Y_BELOW_PANE = {...containment(below), sample: below};
+      await saveReport();
       assert(containment(below).overflow.bottom > 0, 'MUTANT_CAMERA_Y_NOT_DETECTED');
-      controls.MUTANT_CAMERA_Y_BELOW_PANE = containment(below);
       await scratchCamera(positiveScale * 4, 0);
       const zoom = await sample();
+      controls.MUTANT_OVERSIZED_ZOOM = {...containment(zoom), sample: zoom};
+      await saveReport();
       assert.equal(containment(zoom).status, 'STAGE3_FULL_RIG_OUTSIDE_PANE', 'MUTANT_ZOOM_NOT_DETECTED');
-      controls.MUTANT_OVERSIZED_ZOOM = containment(zoom);
+      controls.MUTANT_UNSETTLED_VIEWPORT = {status: 'STAGE3_DISPLAY_UNSETTLED', samples: [positive, below, zoom]};
+      await saveReport();
       assert.equal(settled([positive, below, zoom]), false, 'MUTANT_UNSETTLED_NOT_DETECTED');
-      controls.MUTANT_UNSETTLED_VIEWPORT = 'STAGE3_DISPLAY_UNSETTLED';
     } finally {
       await browser.evaluate(`(()=>{const root=document.getElementById('rig-root');const style=${JSON.stringify(savedStyle)};if(style===null)root.removeAttribute('style');else root.setAttribute('style',style);})()`);
+      restored = await sample();
+      report.restoration = {expected: original, actual: restored, rectToleranceCssPx: restorationRectToleranceCssPx};
+      await saveReport();
     }
-    assert.deepEqual(await sample(), original, 'STAGE3_DOM_CONTROL_NOT_RESTORED');
-    report.controls = controls;
+    assertRestoredDisplay(restored!, original);
     report.domRestored = true;
+    await saveReport();
+
+    // Apply, measure and restore atomically, before a renderer task can rewrite the drawable.
+    const plant = await browser.evaluate<AtomicRestorationPlant>(`(${atomicRestorationPlant.toString()})(${JSON.stringify(slots)},${readDisplay.toString()})`);
+    const shiftControl = {...plant, localShiftCssPx: 1, rectToleranceCssPx: restorationRectToleranceCssPx};
+    controls.MUTANT_RESTORATION_RECT_SHIFT = shiftControl;
+    report.restorationAfterShift = {expected: plant.expected, actual: plant.restored, rectToleranceCssPx: restorationRectToleranceCssPx};
+    await saveReport();
+    const displacement = restorationRectDisplacement(plant.expected, plant.actual);
+    Object.assign(shiftControl, displacement);
+    await saveReport();
+    assert(displacement.maximumCssPx > restorationRectToleranceCssPx, 'MUTANT_RESTORATION_SHIFT_NOT_APPLIED');
+    assert.throws(() => assertRestoredDisplay(plant.actual, plant.expected), /STAGE3_RESTORATION_RECT/, 'MUTANT_RESTORATION_SHIFT_NOT_DETECTED');
+    assert.equal(plant.restoredStyle, plant.originalStyle, 'MUTANT_RESTORATION_STYLE_NOT_RESTORED');
+    assertRestoredDisplay(plant.restored, plant.expected);
+    report.restorationShiftDetected = true;
 
     // The pre-rig refusal remains a normal navigation check with no submission.
     const fixtureRoot = join(root, 'pre-rig');
@@ -440,7 +547,7 @@ export async function runPostFixProbe(language: ProbeLanguage): Promise<void> {
       report.cleanupError = String(error); report.status = 'UNEXPECTED_RED'; process.exitCode = 2;
     }
     report.elapsedMs = performance.now() - started;
-    await writeFile(join(out, 'report.json'), JSON.stringify(report, null, 2) + '\n');
+    await saveReport();
     console.log(JSON.stringify({status: report.status, elapsedMs: report.elapsedMs, artifacts: out}));
     if (unexpected) console.error(unexpected);
   }
