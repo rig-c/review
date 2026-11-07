@@ -7,7 +7,7 @@
  *   with single-line ellipsis on .part-label and full text preserved in title and aria-label.
  * - Compare page registers PartThumbnails for both sides (a and b) from each side's build (model + loaded.pageImages),
  *   drawing canvas thumbnails and keeping the type glyph + tooltip reason note when no thumbnail can be cut.
- * - Selection, search, solo, and keyboard navigation remain intact.
+ * - First and second row clicks, search, Solo, and Whole rig reset remain intact.
  */
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
@@ -30,10 +30,20 @@ interface RectSnapshot {
   bottom: number;
 }
 
+interface CompareState {
+  mode: string | null;
+  comparePressed: string | null;
+  visibleSides: string[];
+  rows: number;
+  sideARows: number;
+  sideBRows: number;
+}
+
 export interface PanelMeasurement {
   caseId: string;
   pageKind: 'compare' | 'single';
   viewport: { width: number; height: number };
+  compareModeTransition?: { before: CompareState; after: CompareState };
   explorerOverflowY: string;
   explorerClientHeight: number;
   explorerScrollHeight: number;
@@ -73,7 +83,7 @@ export interface PanelMeasurement {
   };
   interactionsOk: {
     selection: boolean;
-    keyboardArrowDown: boolean;
+    secondRowClick: boolean;
     soloToggle: boolean;
     searchFilter: boolean;
     wholeRigReset: boolean;
@@ -481,6 +491,27 @@ async function evaluatePanelInBrowser(
       await new Promise(r => setTimeout(r, 25));
     }
 
+    const compareButton = pageKind === 'compare' ? document.querySelector('.mode-switch [data-mode="compare"]') : null;
+    const readCompareState = buttons => ({
+      mode: document.getElementById('stage-layout')?.dataset.workspaceMode ?? null,
+      comparePressed: compareButton?.getAttribute('aria-pressed') ?? null,
+      visibleSides: [...new Set(buttons.map(btn => btn.dataset.side ?? ''))].sort(),
+      rows: buttons.length,
+      sideARows: buttons.filter(btn => btn.dataset.side === 'a').length,
+      sideBRows: buttons.filter(btn => btn.dataset.side === 'b').length,
+    });
+    let compareModeTransition;
+    if (pageKind === 'compare') {
+      const liveRows = () => [...document.querySelectorAll('#parts-explorer [data-part-list] li > button[data-slot]')];
+      const before = readCompareState(liveRows());
+      compareButton?.click();
+      const after = readCompareState(liveRows());
+      compareModeTransition = { before, after };
+      if (caseId === 'self-compare-1440x900' && JSON.stringify(before) !== JSON.stringify(after)) {
+        throw new Error(caseId + ': PARTS_EXPLORER_COMPARE_PRESS_CHANGED_WIDE: ' + JSON.stringify(compareModeTransition));
+      }
+    }
+
     // If in compact drawer mode (<= 850px on compare), open the Parts drawer so #parts-explorer is visible
     const drawerTab = document.querySelector('[data-drawer-panel="parts"]');
     if (drawerTab && getComputedStyle(drawerTab).display !== 'none') {
@@ -542,11 +573,21 @@ async function evaluatePanelInBrowser(
       return false;
     };
 
+    const buttons = [...list.querySelectorAll('li > button[data-slot]')];
+    if (pageKind === 'compare') {
+      const { mode, comparePressed, visibleSides, sideBRows } = readCompareState(buttons);
+      if (mode !== 'compare' || comparePressed !== 'true' ||
+          visibleSides.length !== 2 || visibleSides[0] !== 'a' || visibleSides[1] !== 'b') {
+        const missingB = sideBRows === 0 ? '; side B rows/images/drawn=0/0/0' : '';
+        throw new Error(caseId + ': PARTS_EXPLORER_COMPARE_PRECONDITION: mode=' + mode +
+          ', comparePressed=' + comparePressed + ', visibleSides=' + JSON.stringify(visibleSides) + missingB);
+      }
+    }
+
     const toolsBefore = collectToolsSnapshot();
     const listScrollTopBefore = r2(list.scrollTop);
 
     // Count drawn canvases at top of scroll + scroll through to let IntersectionObserver / scroll listener paint all rows
-    const buttons = [...list.querySelectorAll('li > button[data-slot]')];
     const rowHeightsSet = new Set();
     let longestSlotRowHeight = null;
     let allNowrap = true;
@@ -672,9 +713,9 @@ async function evaluatePanelInBrowser(
       }
     }
 
-    // Verify interactions: selection, keyboard ArrowDown, solo toggle, search filter, and Whole rig reset
+    // Verify interactions: first and second row clicks, Solo, search, and Whole rig reset
     let selectionOk = false;
-    let keyboardArrowDownOk = false;
+    let secondRowClickOk = false;
     let soloToggleOk = false;
     let searchFilterOk = false;
     let wholeRigResetOk = false;
@@ -683,9 +724,15 @@ async function evaluatePanelInBrowser(
       buttons[0].click();
       selectionOk = buttons[0].getAttribute('aria-pressed') === 'true';
 
-      // Keyboard navigation in workspace-ui or native focus
-      buttons[1].click();
-      keyboardArrowDownOk = buttons[1].getAttribute('aria-pressed') === 'true';
+      // Selection can replace or reorder rows. Use the second row in the current list.
+      const secondButton = list.querySelectorAll('li > button[data-slot]')[1];
+      if (!secondButton?.isConnected) {
+        throw new Error(caseId + ': PARTS_EXPLORER_SECOND_ROW_DISCONNECTED');
+      }
+      const { side, slot } = secondButton.dataset;
+      secondButton.click();
+      secondRowClickOk = [...list.querySelectorAll('li > button[data-slot][aria-pressed="true"]')]
+        .some(btn => btn.dataset.side === side && btn.dataset.slot === slot);
 
       const soloInput = explorer.querySelector('[data-part-solo]');
       if (soloInput) {
@@ -722,6 +769,7 @@ async function evaluatePanelInBrowser(
       caseId,
       pageKind,
       viewport,
+      ...(compareModeTransition ? { compareModeTransition } : {}),
       explorerOverflowY: getComputedStyle(explorer).overflowY,
       explorerClientHeight: explorer.clientHeight,
       explorerScrollHeight: explorer.scrollHeight,
@@ -761,7 +809,7 @@ async function evaluatePanelInBrowser(
       },
       interactionsOk: {
         selection: selectionOk,
-        keyboardArrowDown: keyboardArrowDownOk,
+        secondRowClick: secondRowClickOk,
         soloToggle: soloToggleOk,
         searchFilter: searchFilterOk,
         wholeRigReset: wholeRigResetOk,
@@ -960,7 +1008,7 @@ export async function runPartsExplorerVerification(options?: {
     }
     if (
       !m.interactionsOk.selection ||
-      !m.interactionsOk.keyboardArrowDown ||
+      !m.interactionsOk.secondRowClick ||
       !m.interactionsOk.soloToggle ||
       !m.interactionsOk.searchFilter ||
       !m.interactionsOk.wholeRigReset
