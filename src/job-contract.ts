@@ -77,10 +77,14 @@ export interface JobPlanIdentity {
 }
 
 export type JobPartsManifestPath = 'parts.json' | `${string}/parts.json`;
-export type JobPartImagePath = `parts/${string}.png` | `${string}/parts/${string}.png`;
+export type JobPartImagePath =
+  | `parts/${string}.png`
+  | `${string}/parts/${string}.png`
+  | 'painting_in_rig.png'
+  | `${string}/painting_in_rig.png`;
 
-/** Exact parts.json and EVERY manifest-referenced PNG, across base, alternate,
- * attachment and depth roles. Create #184 publishes the authoritative set using
+/** Exact parts.json and EVERY manifest-referenced PNG, across part, alternate,
+ * depth and painting roles. Create #184 publishes the authoritative set using
  * Parts' public reference enumerator, pending Parts #1163. Its export name and
  * reader resolution rules belong to Parts. Review verifies the published paths
  * and bytes without duplicating those field rules. Paths use original project
