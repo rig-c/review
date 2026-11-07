@@ -474,12 +474,21 @@ export const PARTS_EXPLORER_READINESS = {
     const playBtn = document.getElementById('play');
     const aReady = document.querySelector('#a-root canvas, #a-root img');
     const bReady = document.querySelector('#b-root canvas, #b-root img');
-    return Boolean(playBtn && !playBtn.disabled && aReady && bReady && rows.length > 0);
+    const failed = [];
+    if (!playBtn) failed.push('missing Play');
+    if (playBtn?.disabled) failed.push('disabled Play');
+    if (!aReady) failed.push('missing A render');
+    if (!bReady) failed.push('missing B render');
+    if (!rows.length) failed.push('no part rows');
+    return { ready: failed.length === 0, failed };
   })()`,
   single: `(() => {
     const rows = document.querySelectorAll('[data-part-list] li button[data-slot]');
     const rigReady = document.querySelector('#rig-root canvas, #rig-root img');
-    return Boolean(rigReady && rows.length > 0);
+    const failed = [];
+    if (!rigReady) failed.push('missing rig render');
+    if (!rows.length) failed.push('no part rows');
+    return { ready: failed.length === 0, failed };
   })()`,
 } as const;
 
@@ -497,19 +506,28 @@ export async function waitForPartsExplorerReady(
 ): Promise<void> {
   const name = 'PARTS_EXPLORER_READY';
   const expires = performance.now() + ms;
-  await withDeadline(name, ms, async signal => {
-    const check = () => {
-      signal.throwIfAborted();
-      if (performance.now() >= expires) throw new WalkDeadlineError(name, ms);
-    };
-    for (;;) {
-      check();
-      const ready = await session.evaluate<boolean>(PARTS_EXPLORER_READINESS[pageKind]);
-      check();
-      if (ready === true) return;
-      await Bun.sleep(Math.min(25, Math.max(0, expires - performance.now())));
+  let lastFailed: string[] = [];
+  try {
+    await withDeadline(name, ms, async signal => {
+      const check = () => {
+        signal.throwIfAborted();
+        if (performance.now() >= expires) throw new WalkDeadlineError(name, ms);
+      };
+      for (;;) {
+        check();
+        const { ready, failed } = await session.evaluate<{ ready: boolean; failed: string[] }>(PARTS_EXPLORER_READINESS[pageKind]);
+        lastFailed = failed;
+        check();
+        if (ready === true) return;
+        await Bun.sleep(Math.min(25, Math.max(0, expires - performance.now())));
+      }
+    });
+  } catch (error) {
+    if (error instanceof WalkDeadlineError && lastFailed.length) {
+      error.message += '; last readiness failures: ' + lastFailed.join(', ');
     }
-  });
+    throw error;
+  }
 }
 
 export async function evaluatePanelInBrowser(

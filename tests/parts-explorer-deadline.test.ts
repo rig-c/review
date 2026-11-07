@@ -50,8 +50,8 @@ const negatives: [PanelMeasurement['pageKind'], string, Parameters<typeof fixtur
 for (const [kind, label, options] of negatives) {
   test(`${kind} readiness rejects ${label} with all other clauses satisfied`, () => {
     const ready = PARTS_EXPLORER_READINESS[kind];
-    expect(runInNewContext(ready, { document: fixture() })).toBe(true);
-    expect(runInNewContext(ready, { document: fixture(options) })).toBe(false);
+    expect(runInNewContext(ready, { document: fixture() })).toEqual({ ready: true, failed: [] });
+    expect(runInNewContext(ready, { document: fixture(options) })).toEqual({ ready: false, failed: [label] });
   });
 }
 
@@ -60,6 +60,7 @@ async function expireDefault(
   expectedMs: number,
   name: string,
   start: () => Promise<unknown>,
+  diagnostic = '',
 ) {
   const timers: { callback: () => void; ms: number | undefined }[] = [];
   const schedule = (callback: () => void, ms?: number) => {
@@ -71,25 +72,26 @@ async function expireDefault(
     const pending = start();
     void pending.catch(() => {});
     await Promise.resolve();
+    await Promise.resolve();
     for (const timer of timers) timer.callback();
     expect(timers.map(timer => timer.ms)).toEqual([expectedMs]);
-    await expect(pending).rejects.toThrow(`WALK_DEADLINE: ${name} (${expectedMs}ms)`);
+    await expect(pending).rejects.toThrow(`WALK_DEADLINE: ${name} (${expectedMs}ms)${diagnostic}`);
   } finally {
     set.mockRestore();
   }
 }
 
 test('actual readiness call without an override expires at 15000 ms and ignores a late CDP reply', async () => {
-  let complete!: (ready: boolean) => void;
+  let complete!: (result: { ready: boolean; failed: string[] }) => void;
   const expressions: string[] = [];
   const page = {
     evaluate<T>(expression: string) {
       expressions.push(expression);
-      return new Promise<boolean>(resolve => { complete = resolve; }) as Promise<T>;
+      return new Promise<{ ready: boolean; failed: string[] }>(resolve => { complete = resolve; }) as Promise<T>;
     },
   };
   await expireDefault(15_000, 'PARTS_EXPLORER_READY', () => waitForPartsExplorerReady(page, 'compare'));
-  complete(false);
+  complete({ ready: false, failed: ['missing B render'] });
   await Bun.sleep(30);
   expect(expressions).toEqual([PARTS_EXPLORER_READINESS.compare]);
 });
@@ -105,6 +107,54 @@ test('actual measurement call without an override expires at 4000 ms after one d
   await expireDefault(4_000, 'PARTS_EXPLORER_MEASURE',
     () => measurePartsExplorerPanel(page, caseId, 'compare', viewport, longestSlot));
   expect(calls).toBe(1);
+});
+
+test('readiness rejects a late true reply by monotonic clock before the timer fires', async () => {
+  const clock = spyOn(performance, 'now').mockReturnValue(0);
+  try {
+    const page = {
+      async evaluate<T>(): Promise<T> {
+        clock.mockReturnValue(15_001);
+        return { ready: true, failed: [] } as T;
+      },
+    };
+    await expect(waitForPartsExplorerReady(page, 'compare'))
+      .rejects.toThrow('WALK_DEADLINE: PARTS_EXPLORER_READY (15000ms)');
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test('readiness retains the latest failed clauses on a reply past the monotonic limit', async () => {
+  const clock = spyOn(performance, 'now').mockReturnValue(0);
+  try {
+    const page = {
+      async evaluate<T>(expression: string): Promise<T> {
+        clock.mockReturnValue(15_001);
+        return runInNewContext(expression, { document: fixture({ a: false, rows: false }) }) as T;
+      },
+    };
+    await expect(waitForPartsExplorerReady(page, 'compare'))
+      .rejects.toThrow('WALK_DEADLINE: PARTS_EXPLORER_READY (15000ms); last readiness failures: missing A render, no part rows');
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test('measurement rejects a late reply by monotonic clock before the timer fires', async () => {
+  const clock = spyOn(performance, 'now').mockReturnValue(0);
+  try {
+    const page = {
+      async evaluate<T>(): Promise<T> {
+        clock.mockReturnValue(4_001);
+        return { caseId } as T;
+      },
+    };
+    await expect(measurePartsExplorerPanel(page, caseId, 'compare', viewport, longestSlot))
+      .rejects.toThrow('WALK_DEADLINE: PARTS_EXPLORER_MEASURE (4000ms)');
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 function panelSession(evaluate: CdpSession['evaluate'], actions: string[]): CdpSession {
@@ -152,7 +202,7 @@ test('unready normal panel expires before measurement or an extra page query', a
   // The viewport await happens before the waiter schedules its timer.
   await expireDefault(15_000, 'PARTS_EXPLORER_READY', async () => {
     return evaluatePanelInBrowser(page, caseId, 'single', viewport, longestSlot);
-  });
+  }, '; last readiness failures: missing rig render');
   expect(actions).toEqual(['viewport 1440×900', 'ready']);
 });
 
