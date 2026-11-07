@@ -17,7 +17,7 @@ import { loadCompare } from '../src/compare.ts';
 import { startCompareServer } from '../src/compare-server.ts';
 import { loadReview } from '../src/manifest.ts';
 import { startServer } from '../src/server.ts';
-import { withDeadline } from './helpers/walk-deadline.ts';
+import { WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
 
 const PROBE_MP4_BASE64 =
   'AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAA3Jtb292AAAAbG12aGQAAAAAAAAAAAAAAAAAAAPoAAAD6AABAAABAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAACnXRyYWsAAABcdGtoZAAAAAMAAAAAAAAAAAAAAAEAAAAAAAAD6AAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAIAAAACAAAAAAACRlZHRzAAAAHGVsc3QAAAAAAAAAAQAAA+gAAAAAAAEAAAAAAhVtZGlhAAAAIG1kaGQAAAAAAAAAAAAAAAAAADAAAAAwAFXEAAAAAAAtaGRscgAAAAAAAAAAdmlkZQAAAAAAAAAAAAAAAFZpZGVvSGFuZGxlcgAAAAHAbWluZgAAABR2bWhkAAAAAQAAAAAAAAAAAAAAJGRpbmYAAAAcZHJlZgAAAAAAAAABAAAADHVybCAAAAABAAABgHN0YmwAAACoc3RzZAAAAAAAAAABAAAAmHZwMDkAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAIAAgAEgAAABIAAAAAAAAAAEXTGF2YzYzLjEuMTAyIGxpYnZweC12cDkAAAAAAAAAAAAY//8AAAAUdnBjQwEAAAAACoICAgIAAAAAAApmaWVsAQAAAAAQcGFzcAAAAAEAAAABAAAAFGJ0cnQAAAAAAAB9AAAAAAAAAAAYc3R0cwAAAAAAAAABAAAAGAAAAgAAAAAUc3RzcwAAAAAAAAABAAAAAQAAABxzdHNjAAAAAAAAAAEAAAABAAAAGAAAAAEAAAB0c3RzegAAAAAAAAAAAAAAGAAAACgAAAAPAAAADwAAAA8AAAAPAAAADwAAAA8AAAAPAAAADwAAAA8AAAAPAAAADwAAAA8AAAAPAAAADwAAAA8AAAAPAAAADwAAAA8AAAAPAAAADgAAAA8AAAAPAAAADwAAABRzdGNvAAAAAAAAAAEAAAOeAAAAYXVkdGEAAABZbWV0YQAAAAAAAAAhaGRscgAAAAAAAAAAbWRpcmFwcGwAAAAAAAAAAAAAAAAsaWxzdAAAACSpdG9vAAAAHGRhdGEAAAABAAAAAExhdmY2My4xLjEwMgAAAAhmcmVlAAABiG1kYXSCSYNCAAHwAfYAOCQcGEIAADBgAAAQ3//81M3/////sUwf////joAAhgBAkpwASUAAAyAAAENAhgBAkpwASsAAAyAAAENAhgBAkpwAScAAAyAAAENAhgBAkpwASKAAAyAAAENAhgBAkpwAR4AAAyAAAENAhgBAkpwARuAAAyAAAENAhgBAkpwARkAAAyAAAENAhgBAkpwARcAAAyAAAENAhgBAkpwARUAAAyAAAENAhgDAkpwAQQAAAyAAAENAhgBAkpwAROAAAyAAAENAhgBAkpwARGAAAyAAAENAhgBAkpwARAAAAyAAAENAhgBAkpwAQ6AAAyAAAENAhgBAkpwAQ0AAAyAAAENAhgBAkpwAQwAAAyAAAENAhgBAkpwAQsAAAyAAAENAhgBAkpwAQoAAAyAAAENAhgBAkpwAQkAAAyAAAENAhgDAkpwAQAAAAgAAQ0CGAECSnABCAAADIAAAQ0CGAECSnABB4AADIAAAQ0CGAECSnABBwAADIAAAQ0A=';
@@ -462,34 +462,90 @@ async function buildTwentySlotModel(variant: 'a' | 'b' = 'a'): Promise<string> {
   return JSON.stringify(raw, null, variant === 'a' ? 2 : 0);
 }
 
-async function evaluatePanelInBrowser(
+export const PARTS_EXPLORER_DEADLINES = {
+  PARTS_EXPLORER_READY: 15_000,
+  // Four times the longest combined post-#469 baseline envelope, rounded up to a second.
+  PARTS_EXPLORER_MEASURE: 4_000,
+} as const;
+
+export const PARTS_EXPLORER_READINESS = {
+  compare: `(() => {
+    const rows = document.querySelectorAll('[data-part-list] li button[data-slot]');
+    const playBtn = document.getElementById('play');
+    const aReady = document.querySelector('#a-root canvas, #a-root img');
+    const bReady = document.querySelector('#b-root canvas, #b-root img');
+    return Boolean(playBtn && !playBtn.disabled && aReady && bReady && rows.length > 0);
+  })()`,
+  single: `(() => {
+    const rows = document.querySelectorAll('[data-part-list] li button[data-slot]');
+    const rigReady = document.querySelector('#rig-root canvas, #rig-root img');
+    return Boolean(rigReady && rows.length > 0);
+  })()`,
+} as const;
+
+interface PanelEnvelope {
+  caseId: string;
+  readinessMs: number;
+  measureMs: number;
+  combinedMs: number;
+}
+
+export async function waitForPartsExplorerReady(
+  session: Pick<CdpSession, 'evaluate'>,
+  pageKind: PanelMeasurement['pageKind'],
+  ms: number = PARTS_EXPLORER_DEADLINES.PARTS_EXPLORER_READY,
+): Promise<void> {
+  const name = 'PARTS_EXPLORER_READY';
+  const expires = performance.now() + ms;
+  await withDeadline(name, ms, async signal => {
+    const check = () => {
+      signal.throwIfAborted();
+      if (performance.now() >= expires) throw new WalkDeadlineError(name, ms);
+    };
+    for (;;) {
+      check();
+      const ready = await session.evaluate<boolean>(PARTS_EXPLORER_READINESS[pageKind]);
+      check();
+      if (ready === true) return;
+      await Bun.sleep(Math.min(25, Math.max(0, expires - performance.now())));
+    }
+  });
+}
+
+export async function evaluatePanelInBrowser(
   session: CdpSession,
   caseId: string,
   pageKind: 'compare' | 'single',
   viewport: { width: number; height: number },
   longestSlotName: string,
+  envelopes?: PanelEnvelope[],
 ): Promise<PanelMeasurement> {
   await session.setViewport(viewport.width, viewport.height);
-  return session.evaluate<PanelMeasurement>(`(async () => {
+  const start = performance.now();
+  await waitForPartsExplorerReady(session, pageKind);
+  const ready = performance.now();
+  const measurement = await measurePartsExplorerPanel(session, caseId, pageKind, viewport, longestSlotName);
+  const measured = performance.now();
+  envelopes?.push({ caseId, readinessMs: ready - start, measureMs: measured - ready, combinedMs: measured - start });
+  return measurement;
+}
+
+export function measurePartsExplorerPanel(
+  session: Pick<CdpSession, 'evaluate'>,
+  caseId: string,
+  pageKind: PanelMeasurement['pageKind'],
+  viewport: PanelMeasurement['viewport'],
+  longestSlotName: string,
+  ms: number = PARTS_EXPLORER_DEADLINES.PARTS_EXPLORER_MEASURE,
+): Promise<PanelMeasurement> {
+  const name = 'PARTS_EXPLORER_MEASURE';
+  const expires = performance.now() + ms;
+  return withDeadline(name, ms, async () => {
+    const measurement = await session.evaluate<PanelMeasurement>(`(async () => {
     const caseId = ${JSON.stringify(caseId)};
     const pageKind = ${JSON.stringify(pageKind)};
     const viewport = ${JSON.stringify(viewport)};
     const longestSlotName = ${JSON.stringify(longestSlotName)};
-
-    // Wait for page readiness and part rows to render
-    for (let i = 0; i < 600; i++) {
-      const rows = document.querySelectorAll('[data-part-list] li button[data-slot]');
-      if (pageKind === 'compare') {
-        const playBtn = document.getElementById('play');
-        const aReady = document.querySelector('#a-root canvas, #a-root img');
-        const bReady = document.querySelector('#b-root canvas, #b-root img');
-        if (playBtn && !playBtn.disabled && aReady && bReady && rows.length > 0) break;
-      } else {
-        const rigReady = document.querySelector('#rig-root canvas, #rig-root img');
-        if (rigReady && rows.length > 0) break;
-      }
-      await new Promise(r => setTimeout(r, 25));
-    }
 
     const compareButton = pageKind === 'compare' ? document.querySelector('.mode-switch [data-mode="compare"]') : null;
     const readCompareState = buttons => ({
@@ -823,11 +879,15 @@ async function evaluatePanelInBrowser(
       },
     };
   })()`);
+    if (performance.now() >= expires) throw new WalkDeadlineError(name, ms);
+    return measurement;
+  });
 }
 
 export async function runPartsExplorerVerification(options?: {
   screenshotDir?: string;
   assertBars?: boolean;
+  envelopes?: PanelEnvelope[];
 }): Promise<{
   measurements: PanelMeasurement[];
   failures: string[];
@@ -918,6 +978,7 @@ export async function runPartsExplorerVerification(options?: {
         'compare',
         { width: 1440, height: 900 },
         'hem_ownership_lower_back_drape_panel',
+        options?.envelopes,
       ),
     );
     if (options?.screenshotDir) {
@@ -940,6 +1001,7 @@ export async function runPartsExplorerVerification(options?: {
         'compare',
         { width: 460, height: 900 },
         'hem_ownership_lower_back_drape_panel',
+        options?.envelopes,
       ),
     );
 
@@ -952,6 +1014,7 @@ export async function runPartsExplorerVerification(options?: {
         'single',
         { width: 1440, height: 900 },
         'hem_ownership_lower_back_drape_panel',
+        options?.envelopes,
       ),
     );
   } finally {
@@ -1036,7 +1099,8 @@ if (import.meta.main) {
   const emitBase64 = process.env.SCREENSHOT_BASE64 === '1';
   const screenshotDir = process.env.SCREENSHOT_DIR || (emitBase64 ? await mkdtemp(join(tmpdir(), 'review-233-shots-')) : undefined);
   const outJson = process.env.OUT_JSON || undefined;
-  const result = await runPartsExplorerVerification({ screenshotDir, assertBars });
+  const envelopes = outJson ? [] as PanelEnvelope[] : undefined;
+  const result = await runPartsExplorerVerification({ screenshotDir, assertBars, envelopes });
   const screenshotBase64: Record<string, string> = {};
   if (emitBase64 && screenshotDir) {
     for (const p of result.screenshots) {
@@ -1048,7 +1112,7 @@ if (import.meta.main) {
     }
   }
   if (outJson) {
-    await writeFile(outJson, JSON.stringify(result, null, 2));
+    await writeFile(outJson, JSON.stringify({ ...result, envelopes }, null, 2));
   }
   console.log(JSON.stringify({
     failures: result.failures,
