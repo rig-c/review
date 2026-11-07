@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/rig-c/review/compare/v2.1.0...v2.2.0) (2026-11-07)
+
+
+### Features
+
+* share the owner workspace through foreground multi-target CLI ([fd9a157](https://github.com/rig-c/review/commit/fd9a157e38b242cc1fb344edcdcf130bab0df08d))
+
 ## [2.1.0](https://github.com/rig-c/review/compare/v2.0.0...v2.1.0) (2026-11-07)
 
 
