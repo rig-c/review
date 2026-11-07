@@ -33,9 +33,14 @@ export async function jobFixture(options: {
     ],
     partIds: [], files: [],
   };
+  const partsEnumerator = {
+    version: '2.25.1',
+    enumerate: () => (context.parts?.images ?? []).map(({path, role}) => ({path, role})),
+  };
   const session = new JobSession({
     root, stateDir: state, fingerprint: 'f'.repeat(64), reviewer: { id: 'declared-owner', role: 'owner' },
     ...(options.plain ? {} : { readPublished: async () => structuredClone(context) }),
+    partsEnumerator,
     afterSnapshot: () => options.afterSnapshot?.(root),
     afterDirectorySync: options.afterDirectorySync,
   });
@@ -86,7 +91,7 @@ export async function jobFixture(options: {
     });
   }
   return {
-    scratch, root, state, session, ports, origin, credentials, base, call, publishRequest, publish, ask, display, uiRequest,
+    scratch, root, state, session, ports, origin, credentials, partsEnumerator, base, call, publishRequest, publish, ask, display, uiRequest,
     setContext(value: JobPublishedContext) { context = value; },
     setRecordPath(value: string) { recordPath = value; },
     getContext() { return structuredClone(context); },
@@ -110,8 +115,11 @@ export async function syntheticJobParts(f: Awaited<ReturnType<typeof jobFixture>
   const manifestPath = 'out/parts.json';
   await writeFile(join(f.root, manifestPath), '{"syntheticFixture":"opaque parts source"}\n');
   const parts = {
+    enumeratorVersion: f.partsEnumerator.version,
     manifest: { path: manifestPath as 'out/parts.json', sha256: jobHash(await readFile(join(f.root, manifestPath))) },
-    images: paths.map(path => ({ path: path as import('../../src/job-contract.ts').JobPartImagePath, sha256: jobHash(bytes) })),
+    images: paths.map(path => ({ path: path.slice('out/'.length),
+      role: path.includes('alternate') ? 'alternate' : path.includes('depth') ? 'depth' :
+        path.endsWith('painting_in_rig.png') ? 'painting' : 'part', sha256: jobHash(bytes) })),
   };
   const context = f.getContext();
   if (options.project) {

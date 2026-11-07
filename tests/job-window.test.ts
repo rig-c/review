@@ -509,7 +509,7 @@ describe('C2 semantic fixture coverage', () => {
             expect(act.source.plan).toEqual({ steps: [{ id: 'inspect-body', hash: 'b'.repeat(64) }] });
             expect(act.source.plan).not.toHaveProperty('revision');
             expect(act.source.parts!.images.map(image => image.path)).toEqual([
-                'draft/parts/alternate.png', 'draft/parts/attachment.png', 'draft/parts/base.png', 'draft/parts/depth.png',
+                'parts/alternate.png', 'parts/attachment.png', 'parts/base.png', 'parts/depth.png',
             ]);
         });
     }

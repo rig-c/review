@@ -62,12 +62,12 @@ test('root directory replacement refuses a later operation without altering the 
   expect(f.session.status().publication).toEqual(publication);
 });
 
-test('C3 accepts only the declared parts PNG shape or the exact painting sibling, including root and prefixed manifests', async () => {
+test('checkpoint 1 preserves legacy PNG restrictions through manifest-relative path plumbing', async () => {
   const f = await fixture(), parts = await syntheticJobParts(f, { painting: true });
   const valid = await f.publish();
   expect(valid.source.parts).toEqual(parts);
-  for (const path of ['out/rigid.png', 'wrong/painting_in_rig.png', 'out/parts/nested/image.png', 'out/parts/image.PNG']) {
-    f.setContext({ ...f.getContext(), parts: { ...parts, images: [{ path: path as typeof parts.images[number]['path'], sha256: parts.images[0].sha256 }] } });
+  for (const path of ['rigid.png', 'wrong/painting_in_rig.png', 'parts/nested/image.png', 'parts/image.PNG']) {
+    f.setContext({ ...f.getContext(), parts: { ...parts, images: [{ role: parts.images[0].role, path: path as typeof parts.images[number]['path'], sha256: parts.images[0].sha256 }] } });
     const response = await (await f.call(await f.publishRequest())).json();
     expect(response.error.code).toBe('JOB_SOURCE_MISMATCH');
     expect(f.session.status().publication).toEqual(valid);
@@ -75,8 +75,9 @@ test('C3 accepts only the declared parts PNG shape or the exact painting sibling
   await writeFile(join(f.root, 'parts.json'), await readFile(join(f.root, parts.manifest.path)));
   await writeFile(join(f.root, 'painting_in_rig.png'), await readFile(join(f.root, 'out/painting_in_rig.png')));
   f.setContext({ ...f.getContext(), parts: {
+    enumeratorVersion: parts.enumeratorVersion,
     manifest: { path: 'parts.json', sha256: parts.manifest.sha256 },
-    images: [{ path: 'painting_in_rig.png', sha256: parts.images.find(image => image.path.endsWith('/painting_in_rig.png'))!.sha256 }],
+    images: [{ path: 'painting_in_rig.png', role: 'painting', sha256: parts.images.find(image => image.path === 'painting_in_rig.png')!.sha256 }],
   } });
   expect((await f.publish()).source.parts?.images[0].path).toBe('painting_in_rig.png');
 });

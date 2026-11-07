@@ -1,4 +1,5 @@
 /** Lane B's frozen-port fake. This proves window behavior, never backend authority. */
+import { JOB_ACT_SCHEMA, JOB_API_SCHEMA } from '../../src/job-contract.ts';
 import type { JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobHostPorts, JobPendingAsk, JobPublication, JobResult, JobSourceBinding, JobEnabledActKind, JobActValues, } from '../../src/job-contract.ts';
 export function fixturePublication(index = 1): JobDisplayPublication {
     const hash = String(index).padStart(64, '0');
@@ -132,12 +133,13 @@ export function fixtureAct(kind: JobEnabledActKind, words = ''): JobAct {
         projectHash: 'a'.repeat(64),
         plan: { steps: [{ id: 'inspect-body', hash: 'b'.repeat(64) }] },
         parts: {
+            enumeratorVersion: '2.25.1',
             manifest: { path: 'draft/parts.json' as const, sha256: 'c'.repeat(64) },
             images: [
-                { path: 'draft/parts/alternate.png' as const, sha256: 'd'.repeat(64) },
-                { path: 'draft/parts/attachment.png' as const, sha256: 'e'.repeat(64) },
-                { path: 'draft/parts/base.png' as const, sha256: 'f'.repeat(64) },
-                { path: 'draft/parts/depth.png' as const, sha256: '9'.repeat(64) },
+                { path: 'parts/alternate.png' as const, role: 'alternate', sha256: 'd'.repeat(64) },
+                { path: 'parts/attachment.png' as const, role: 'part', sha256: 'e'.repeat(64) },
+                { path: 'parts/base.png' as const, role: 'part', sha256: 'f'.repeat(64) },
+                { path: 'parts/depth.png' as const, role: 'depth', sha256: '9'.repeat(64) },
             ],
         },
         optionSet: { id: 'choices-one', sha256: '8'.repeat(64) },
@@ -154,7 +156,7 @@ export function fixtureAct(kind: JobEnabledActKind, words = ''): JobAct {
         signoff: { stage: 'plan-approved', decision: 'approved', words },
     };
     return {
-        schema: 'rig-review/act@1', actId: 'act-' + kind, jobId: 'window-fixture', askId: 'ask-' + kind,
+        schema: JOB_ACT_SCHEMA, actId: 'act-' + kind, jobId: 'window-fixture', askId: 'ask-' + kind,
         publicationId: 'publication-1', kind, at: '2026-11-07T10:00:00.000Z',
         authority: { actor: 'human', channel: 'review-ui', reviewer: { id: 'fixture-owner', role: 'owner' } },
         source: { ...source, selector: kind === 'parts-verdict' ? { kind: 'draft', id: 'draft-one' } : { kind: 'rig', version: 1 } },
@@ -173,6 +175,7 @@ export async function realJobWindowFixture(options: {
     const input = await jobFixture();
     const hostOptions = {root: input.root, stateDir: input.state, fingerprint: 'f'.repeat(64),
         reviewer: {id: 'declared-owner', role: 'owner' as const},
+        partsEnumerator: input.partsEnumerator, partsEnumeratorId: 'synthetic-job-window-parts/1',
         installWriterBinding: options.installWriterBinding,
         ...(options.installWriterBinding ? {bindingId: 'job-window-fixture-binding/1'} : {}),
         ...(options.reader === false ? {} : {readPublished: async () => input.getContext(), readerId: 'job-window-fixture-reader/1'})};
@@ -238,8 +241,8 @@ export async function scriptedJobWindowFixture() {
     await writeFile(join(packageRoot, 'parts.json'), JSON.stringify({rig_size: [80, 64], scale_rig_per_source: 1,
         parts: [{name: 'mesh', from: 'full:mesh', x: 0, y: 0, w: pixels.width, h: pixels.height}]}));
     const context = {...f.input.getContext(),
-        parts: {manifest: {path: 'out/parts.json' as const, sha256: jobHash(await readFile(join(packageRoot, 'parts.json')))},
-            images: [{path: 'out/parts/mesh.png' as const, sha256: jobHash(partBytes)}]},
+        parts: {enumeratorVersion: f.input.partsEnumerator.version, manifest: {path: 'out/parts.json' as const, sha256: jobHash(await readFile(join(packageRoot, 'parts.json')))},
+            images: [{path: 'parts/mesh.png' as const, role: 'part', sha256: jobHash(partBytes)}]},
         partIds: ['mesh'],
         subjects: [...f.input.getContext().subjects, {kind: 'parts-verdict' as const, draftId: 'synthetic-parts'}],
     };
@@ -247,7 +250,7 @@ export async function scriptedJobWindowFixture() {
     let sequence = 0;
     async function agent(verb: 'publish' | 'ask' | 'next' | 'close', value: Record<string, unknown>) {
         const mutation = verb === 'next' ? {} : {expectedGeneration: generation, idempotencyKey: 'window-' + ++sequence};
-        const response = await f.call({schema: 'rig-review/job-api@1', jobId: f.host.session.jobId,
+        const response = await f.call({schema: JOB_API_SCHEMA, jobId: f.host.session.jobId,
             requestId: randomUUID(), verb, ...mutation, ...value});
         const result = await response.json();
         generation = result.generation;

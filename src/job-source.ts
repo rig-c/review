@@ -2,15 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
+import { JOB_PARTS_ENUMERATOR_RANGE } from './job-contract.ts';
 import type {
-  JobFileIdentity, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
+  JobFileIdentity, JobPartsEnumerator, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
   JobSelector, JobSourceBinding, JobSubject,
 } from './job-contract.ts';
 import { checkedPath, readProject, readRegular, type InterviewQuestion } from './interview-project.ts';
 import { loadReview } from './manifest.ts';
 import { openKey } from './open.ts';
 import { assertReviewUnchanged } from './reference.ts';
-import { jobHash, jobId, jobPath, jobSha, requestDigest } from './job-api.ts';
+import { jobHash, jobId, jobPartsEnumeratorVersion, jobPath, jobSha, requestDigest } from './job-api.ts';
 import { JobError } from './job-store.ts';
 
 export interface JobRootIdentity {
@@ -111,7 +112,7 @@ export function assertJobSourceCurrent(source: JobRetainedSource): void {
   assertRecord(source.root, source.record);
 }
 
-function publishedIdentities(context: JobPublishedContext): JobFileIdentity[] {
+function publishedIdentities(context: JobPublishedContext, enumerator?: JobPartsEnumerator): JobFileIdentity[] {
   const files = [...context.files];
   const ids = new Set<string>();
   for (const step of context.plan?.steps ?? []) {
@@ -120,14 +121,24 @@ function publishedIdentities(context: JobPublishedContext): JobFileIdentity[] {
     jobSha(step.hash);
   }
   if (context.parts) {
+    if (!enumerator) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_ENUMERATOR_UNAVAILABLE');
+    const version = jobPartsEnumeratorVersion(context.parts.enumeratorVersion);
+    if (version !== jobPartsEnumeratorVersion(enumerator.version)) {
+      throw new JobError('JOB_SOURCE_UNRETAINABLE',
+        `PARTS_ENUMERATOR_VERSION_MISMATCH range="${JOB_PARTS_ENUMERATOR_RANGE}" received="${version}" installed="${enumerator.version}"`);
+    }
+    // CP1 path-base plumbing. Official-array comparison and PNG retention are CP2.
+    const images = context.parts.images.map(file => ({ ...file,
+      path: posix.join(posix.dirname(context.parts!.manifest.path), jobPath(file.path)),
+    }));
     if (!/(^|\/)parts\.json$/.test(context.parts.manifest.path)) throw new JobError('JOB_SOURCE_MISMATCH');
     const painting = posix.join(posix.dirname(context.parts.manifest.path), 'painting_in_rig.png');
-    if (context.parts.images.some(file =>
+    if (images.some(file =>
       !/(^|\/)parts\/[^/]+\.png$/.test(file.path) && file.path !== painting)) {
       throw new JobError('JOB_SOURCE_MISMATCH');
     }
-    files.push(context.parts.manifest, ...context.parts.images);
-    const paths = context.parts.images.map(file => file.path);
+    files.push(context.parts.manifest, ...images);
+    const paths = images.map(file => file.path);
     if (new Set(paths).size !== paths.length || paths.some((path, i) => i > 0 && path < paths[i - 1])) {
       throw new JobError('JOB_SOURCE_MISMATCH');
     }
@@ -160,6 +171,7 @@ export async function prepareJobSource(options: {
   readonly fingerprint: string;
   readonly request: JobPublishRequest;
   readonly readPublished?: JobPublicationReader;
+  readonly partsEnumerator?: JobPartsEnumerator;
   readonly afterSnapshot?: () => void | Promise<void>;
   readonly afterDirectorySync?: (path: string) => void;
 }): Promise<JobRetainedSource> {
@@ -193,7 +205,7 @@ export async function prepareJobSource(options: {
     throw new JobError('JOB_SOURCE_UNRETAINABLE', 'CREATE_PUBLICATION_CONTRACT_UNAVAILABLE');
   }
   if (requestDigest(context.selector) !== requestDigest(request.result.selector)) throw new JobError('JOB_SOURCE_MISMATCH');
-  const declared = publishedIdentities(context);
+  const declared = publishedIdentities(context, options.partsEnumerator);
   let review: Awaited<ReturnType<typeof loadReview>>;
   try {
     const target = checkedPath(root.path, request.result.path, lstatSync(join(root.path, request.result.path)).isDirectory());
