@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from 'bun:test';
-import { mkdtemp, readFile, rm, unlink, writeFile, symlink } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, unlink, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
@@ -109,7 +109,7 @@ test('16-bit raster comparison refuses a one-sample difference hidden by 8-bit d
 });
 
 test('rig snapshot race: bind parsed A; reject B at approval, and planted late-hash mutant approves unseen B', async () => {
-  const root = await fixture(), rigPath = join(root, 'rig.json'), a = await readFile(rigPath);
+  const root = await fixture(), rigPath = join(await realpath(root), 'rig.json'), a = await readFile(rigPath);
   const b = JSON.parse(a.toString('utf8')); b.skins.default.gap.gap.uvs[0] = .125;
   const bytesB = Buffer.from(JSON.stringify(b));
   const sourcePath = new URL('../src/parts-view.ts', import.meta.url).pathname;

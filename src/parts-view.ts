@@ -99,7 +99,7 @@ const refuse = (code: string, message: string): never => { throw new Error(`${co
 export async function insideRoot(root: string, path: string, code: string, what: string): Promise<string> {
   const realRoot = await realpath(root), real = await realpath(path);
   const rel = relative(realRoot, real);
-  if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) refuse(code, `${what} resolves outside ${basename(realRoot)}/ (symlinks may not escape the package)`);
+  if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) refuse(code, `${what} resolves outside ${basename(realRoot)}/`);
   return real;
 }
 
@@ -126,6 +126,21 @@ export function sourceSha256(files: readonly Pick<HashedFile, 'path' | 'sha256'>
 function relativeTo(dir: string, abs: string): string {
   const rel = relative(dir, abs);
   return sep === '/' ? rel : rel.split(sep).join('/');
+}
+
+/** Match canonical input paths, resolving only the destination's parent. Missing
+ * directories retain their suffix; the output leaf is never followed through a symlink. */
+async function verdictDestination(path: string): Promise<string> {
+  const abs = resolve(path), suffix = [basename(abs)];
+  let parent = dirname(abs);
+  for (;;) {
+    try { return join(await realpath(parent), ...suffix); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(parent) === parent) throw error;
+      suffix.unshift(basename(parent));
+      parent = dirname(parent);
+    }
+  }
 }
 
 /** Faint islands (rig-parts #326) from `mesh_report.json` rows, on the parts the view holds. */
@@ -234,7 +249,7 @@ async function producerFlags(rigDir: string | null, buildRoot: string | null, na
   const flags: ProducerFlag[] = [], readings: ProducerFlag[] = [], files: LocalFile[] = [], notes: string[] = [];
   // A discovered file must resolve inside the directory it was discovered in; a path given on the command line is the user's own choice.
   const pick = async (explicit: string | undefined, candidates: ([string, string] | null)[], what: string): Promise<string | null> => {
-    if (explicit !== undefined) return resolve(explicit);
+    if (explicit !== undefined) return realpath(resolve(explicit));
     const found = candidates.find((c): c is [string, string] => !!c && existsSync(c[1]));
     return found ? insideRoot(found[0], found[1], 'PARTS_FLAGS_OUTSIDE', what) : null;
   };
@@ -352,8 +367,9 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     paintingInRig={abs,declaredPath,bytes:bytes.length,sha256,width:png!.width,height:png!.height};files.push(paintingInRig);
   }
   let painting:PartsViewPackage['painting'];if(options.painting){
-    const candidate=resolve(options.painting),rel=relative(resolve(root),candidate);if(!rel||rel==='..'||rel.startsWith('..'+sep)||isAbsolute(rel))refuse('PARTS_PAINTING_OUTSIDE','painting must be inside the parts package');
-    let abs:string,bytes:Buffer;try{abs=await insideRoot(root,candidate,'PARTS_PAINTING_OUTSIDE','painting');packagePath(relative(root,abs).split(sep).join('/'),'painting');bytes=await readFile(abs);}catch(error){if(error instanceof Error&&error.message.startsWith('PARTS_PAINTING_OUTSIDE:'))throw error;refuse('PARTS_PAINTING_UNAVAILABLE','painting must be a readable portable package PNG');}
+    // Both paths are physical: a user-designated alias to an inside file is valid,
+    // while a link reaching outside is refused before any painting bytes are read.
+    let abs:string,bytes:Buffer;try{abs=await insideRoot(root,resolve(options.painting),'PARTS_PAINTING_OUTSIDE','painting');packagePath(relative(root,abs).split(sep).join('/'),'painting');bytes=await readFile(abs);}catch(error){if(error instanceof Error&&error.message.startsWith('PARTS_PAINTING_OUTSIDE:'))throw error;refuse('PARTS_PAINTING_UNAVAILABLE','painting must be a readable portable package PNG');}
     let png:PNG;try{png=PNG.sync.read(bytes!);}catch{refuse('PARTS_PAINTING_PNG','painting must be a valid PNG');}
     assertOriginalPaintingSize(png!.width,png!.height,rigSize,doc.scale_rig_per_source);
     const file={abs:abs!,bytes:bytes!.length,sha256:createHash('sha256').update(bytes!).digest('hex')};painting={...file,width:png!.width,height:png!.height};files.push(file);
@@ -362,9 +378,9 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
   const protectedPaths = [join(root, 'rig.json'), join(root, 'config.json'), join(root, 'review.json'), join(root, 'report.json')];
   if (basename(root) === 'rig') protectedPaths.push(...['parts.json', 'config.json', 'review.json', 'report.json'].map(name => join(dirname(root), name)));
   if (options.rig !== undefined) protectedPaths.push(resolve(options.rig));
-  const verdictPath = options.verdict ? resolve(options.verdict) : join(root, PARTS_VERDICT_FILE);
+  const verdictPath = options.verdict ? await verdictDestination(options.verdict) : join(root, PARTS_VERDICT_FILE);
   await assertVerdictDestination({ files, flagFiles, protectedPaths, verdictPath });
-  const rigPath = options.rig !== undefined ? resolve(options.rig) : existsSync(join(root, 'rig.json')) ? await insideRoot(root, join(root, 'rig.json'), 'PARTS_MESH_OUTSIDE', 'rig.json') : null;
+  const rigPath = options.rig !== undefined ? await realpath(resolve(options.rig)) : existsSync(join(root, 'rig.json')) ? await insideRoot(root, join(root, 'rig.json'), 'PARTS_MESH_OUTSIDE', 'rig.json') : null;
   if (rigPath) {
     const report = notes.includes('mesh_report.json') ? undefined : flagFiles[0];
     const rigBytes = await readFile(rigPath);
@@ -419,7 +435,7 @@ export async function loadPartsAtlas(p: ReviewPackage, options: PartsViewOptions
   protectedPaths.push(...['rig.json', 'config.json', 'report.json', 'review.json'].map(name => join(p.root, name)));
   if (p.handoff) protectedPaths.push(...p.handoff.record.files.map(file => resolve(p.root, file.path)));
   if (buildRoot) protectedPaths.push(...['parts.json', 'config.json', 'rig/rig.json', 'rig/parts.json'].map(name => join(buildRoot, name)));
-  return { mode: 'atlas', root: p.root, title: p.manifest.title, rigSize: null, items, pages, flags, readings, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath: options.verdict ? resolve(options.verdict) : join(dirname(modelAbs), PARTS_VERDICT_FILE), imagePaths: [], pagePaths };
+  return { mode: 'atlas', root: p.root, title: p.manifest.title, rigSize: null, items, pages, flags, readings, files, flagFiles, flagNotes: notes, protectedPaths, verdictPath: options.verdict ? await verdictDestination(options.verdict) : join(dirname(modelAbs), PARTS_VERDICT_FILE), imagePaths: [], pagePaths };
 }
 
 /**
