@@ -14,21 +14,24 @@ import { loadPartsView } from '../src/parts-view.ts';
 import { startPartsServer } from '../src/parts-server.ts';
 import { FOOTPRINT_ALPHA } from '../web/parts-render.ts';
 import { BACK_DEFECT, frontHolds, writePartsPackage } from './helpers/parts-package.ts';
-import { launchCdpSession, type CdpSession } from './parts-explorer-browser.ts';
+import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
+import { measurePartsViewShot, preparePartsViewShot, selectPartsViewPage, type PartsViewShotTarget } from './helpers/parts-view-shots.ts';
 
 const arg = (name: string) => { const i = Bun.argv.indexOf(name); return i > 0 ? Bun.argv[i + 1] : undefined; };
 
-async function open(page: CdpSession, input: string, lang: 'en' | 'ko', shotDir: string | undefined, shot: string, before?: string) {
+async function open(page: InputCdpSession, input: string, lang: 'en' | 'ko', shotDir: string | undefined, shot: string, target?: PartsViewShotTarget) {
   const pkg = await loadPartsView(input), capability = 'd'.repeat(64);
   const server = await startPartsServer(pkg, { port: 0, capability });
   try {
     const url = `http://127.0.0.1:${server.port}/?lang=${lang}#cap=${capability}`;
     await page.goto(url);
     for (let i = 0; i < 200 && !(await page.evaluate<boolean>('document.body.dataset.ready === "true"')); i++) await Bun.sleep(25);
-    if (before) await page.evaluate(before);
+    if (!(await page.evaluate<boolean>('document.body.dataset.ready === "true"'))) throw new Error('PARTS_VIEW_NOT_READY: page did not finish booting');
+    if (target) await preparePartsViewShot(page, target);
     await Bun.sleep(250);
+    const state = target ? await measurePartsViewShot(page, target) : undefined;
     if (shotDir) await writeFile(join(shotDir, `${shot}-${lang}.png`), await page.screenshot());
-    return { pkg, server };
+    return { pkg, server, state };
   } catch (e) { server.stop(true); throw e; }
 }
 
@@ -63,19 +66,26 @@ export async function runPartsViewBrowser(shotDir?: string, partsDir?: string) {
     // Atlas bar on the public demo.
     {
       const { server } = await open(page, 'examples/demo', 'en', undefined, 'atlas');
-      await page.evaluate(`document.querySelector('[data-pv-view="page"]').click()`); await Bun.sleep(300);
+      await selectPartsViewPage(page);
+      const state = await measurePartsViewShot(page, { mode: 'atlas', view: 'page', zoom: 1, language: 'en' });
       const boxes = await page.evaluate<string[][]>(`[...document.querySelectorAll('.pv-box[data-region]')].map(b=>[b.dataset.region,b.dataset.x,b.dataset.y,b.dataset.w,b.dataset.h])`);
       const model = JSON.parse(await readFile('examples/demo/skeleton.model.json', 'utf8')) as { pages: { regions: { name: string; x: number; y: number; width: number; height: number }[] }[] };
       const expected = model.pages.flatMap(p => p.regions.map(r => [r.name, String(r.x), String(r.y), String(r.width), String(r.height)]));
-      report.atlas = { boxes, expected, equal: JSON.stringify(boxes) === JSON.stringify(expected) };
+      report.atlas = { boxes, expected, equal: JSON.stringify(boxes) === JSON.stringify(expected), state };
       server.stop(true);
     }
     // Screenshots, en and ko.
+    const shots = [];
     if (shotDir) for (const lang of ['en', 'ko'] as const) {
       const parts = partsDir ?? root;
-      const a = await open(page, parts, lang, shotDir, 'parts-mode', `${toggle('pv-footprints')};document.querySelector('[data-pv-zoom="2"]').click()`); a.server.stop(true);
-      const b = await open(page, 'examples/demo', lang, shotDir, 'atlas-mode', `document.querySelector('[data-pv-zoom="4"]').click();document.querySelector('[data-pv-view="page"]').click()`); b.server.stop(true);
+      const a = await open(page, parts, lang, shotDir, 'parts-mode', { mode: 'parts', view: 'item', zoom: 2, language: lang });
+      a.server.stop(true);
+      shots.push({ name: 'parts-mode', ...a.state });
+      const b = await open(page, 'examples/demo', lang, shotDir, 'atlas-mode', { mode: 'atlas', view: 'page', zoom: 4, language: lang });
+      b.server.stop(true);
+      shots.push({ name: 'atlas-mode', ...b.state });
     }
+    report.shots = shots;
   } finally {
     await page.close();
     await rm(root, { recursive: true, force: true });
