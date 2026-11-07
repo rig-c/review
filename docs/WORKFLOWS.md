@@ -252,9 +252,34 @@ and APIs and never construct internal Review state or human acts.
 
 ### Subsequent CLI and semantic paths
 
-Plain foreground multi-target invocation and its compatible workspace joining
-remain pending. The current delivery is the `open` CLI workspace. Core's
-`rigc review` passes arguments through unchanged; Review owns the CLI grammar.
+Plain multi-target review starts a workspace in the foreground CLI process:
+
+```sh
+rig-review dirA dirB --animation idle --animation-for 2 walk --view-only
+```
+
+A new owner prints `Review ready: <owner URL>` and stays in that terminal. Its
+SIGINT/SIGTERM handlers await shutdown of the one listener and its contexts.
+The same aggregate last-window and unopened timers described above apply.
+A compatible active workspace receives the batch instead; that launcher prints
+only the identical owner URL and exits 0 without acquiring stop ownership.
+`open` and foreground multi can join each other's owner. Registration retains
+its atomic validation, source identities and bounded target list.
+
+Multi uses managed port 4318, or `RIG_REVIEW_FRONT_PORT`, with explicit `--port`
+precedence. Its port range is 1..65535; `--port 0` refuses with
+`OPEN_OPTION_INVALID`. Existing single foreground remains on 4317 and accepts
+`--port 0`; existing `compare` behavior is unchanged.
+
+`--animation` is common to all operands and 1-based `--animation-for INDEX NAME`
+overrides one operand. Each target uses its explicit selection, report animation,
+or unique actual clip; ambiguity refuses by name. Static/source-only inspections
+retain their existing support. Multi accepts common reference/handoff flags,
+`--view-only` and `--control`. Its exact inputs work with the existing feedback
+and control commands. Multi checkpoint, batch compare, direct and project/joined
+options refuse with `OPEN_OPTION_INVALID`; existing single options retain their
+behavior. Flags and their literal values are consumed before counting operands.
+Core's `rigc review` continues forwarding to `open`; Review owns this grammar.
 
 The embedded semantic-job hub also remains pending. Its same-process host will
 own trusted `readPublished`, `partsEnumerator` and `installWriterBinding`

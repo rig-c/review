@@ -10,6 +10,7 @@ export async function installedWorkspaceSmoke(options: {
   log(line: string): void;
   evidence?: string;
   core?: boolean;
+  foreground?: boolean;
 }) {
   const root = await mkdtemp(join(options.work, 'installed-workspace-'));
   const inputs: string[] = [], coreInputs: string[] = [], children: Bun.Subprocess[] = [];
@@ -46,15 +47,18 @@ export async function installedWorkspaceSmoke(options: {
     const allInputs = [...inputs, ...coreInputs];
     const before = await Promise.all(allInputs.map(jobInputHashes));
     inputHashes = {before}; await evidence();
-    for (const mode of ['batch', 'sequential'] as const) {
+    const modes = options.foreground ? ['batch', 'sequential', 'foreground'] as const : ['batch', 'sequential'] as const;
+    for (const mode of modes) {
       const stateDir = join(root, mode + '-state');
       const allocation = Bun.serve({hostname: '127.0.0.1', port: 0, fetch: () => new Response('')});
       const port = allocation.port!; await allocation.stop(true);
       let owner: URL | undefined;
       let host: {pid: number; origin: string} | undefined;
       const exits: number[] = [];
-      async function launch(args: string[], core = false) {
-        const command = [core ? coreBin : reviewBin, ...(core ? ['review'] : ['open']), ...args];
+      let creator: Bun.Subprocess<'ignore', 'pipe', 'pipe'> | undefined;
+      let creatorDrain: Promise<{output: string; error?: unknown}> | undefined;
+      async function launch(args: string[], core = false, bare = false) {
+        const command = [core ? coreBin : reviewBin, ...(core ? ['review'] : bare ? [] : ['open']), ...args];
         const child = Bun.spawn(command, {cwd: options.app, stdout: 'pipe', stderr: 'pipe', env: {
           ...process.env, RIG_REVIEW_STATE_DIR: stateDir, RIG_REVIEW_FRONT_PORT: String(port),
         }});
@@ -75,6 +79,41 @@ export async function installedWorkspaceSmoke(options: {
           return url;
         } finally {clearTimeout(timer);}
       }
+      async function startForeground(args: string[]) {
+        const command = [reviewBin, ...args];
+        const child = Bun.spawn(command, {cwd: options.app, stdout: 'pipe', stderr: 'pipe', env: {
+          ...process.env, RIG_REVIEW_STATE_DIR: stateDir, RIG_REVIEW_FRONT_PORT: String(port),
+        }});
+        children.push(child); creator = child;
+        const reader = child.stdout.getReader(), decoder = new TextDecoder();
+        let stdout = '';
+        const errors = new Response(child.stderr).text().then(text => ({text, error: undefined as unknown}), error => ({text: '', error}));
+        const timer = setTimeout(() => child.kill('SIGTERM'), 20000);
+        try {
+          while (!/Review ready: (\S+)/.test(stdout)) {
+            const {value, done} = await reader.read();
+            if (done) throw new Error('INSTALLED_FOREGROUND_START: ' + redactCapability((await errors).text));
+            stdout += decoder.decode(value, {stream: true});
+          }
+          owner = new URL(/Review ready: (\S+)/.exec(stdout)![1]!);
+          assert.equal(owner.origin, 'http://127.0.0.1:' + port);
+          creatorDrain = (async () => {
+            try {
+              while (true) {
+                const {value, done} = await reader.read();
+                if (done) break;
+                stdout += decoder.decode(value, {stream: true});
+              }
+              stdout += decoder.decode();
+              const stderr = await errors;
+              receipts.push({command, stdout, stderr: stderr.text, exit: await child.exited});
+              await evidence();
+              return {output: stdout, error: stderr.error};
+            } catch (error) {return {output: stdout, error};}
+            finally {reader.releaseLock();}
+          })();
+        } finally {clearTimeout(timer);}
+      }
       const single = (index: number) => [inputs[index]!, '--animation', 'synthetic-animation-' + (index + 1), '--view-only'];
       const batch = [...inputs, '--animation', 'synthetic-animation-1', '--view-only'];
       for (let index = 1; index < inputs.length; index++) batch.push('--animation-for', String(index + 1), 'synthetic-animation-' + (index + 1));
@@ -85,11 +124,13 @@ export async function installedWorkspaceSmoke(options: {
         assert.equal(response.status, 200); return response.json();
       }
       try {
-        if (mode === 'batch') await launch(batch);
+        if (mode === 'foreground') await startForeground(batch);
+        else if (mode === 'batch') await launch(batch);
         else for (let index = 0; index < inputs.length; index++) await launch(single(index));
         host = JSON.parse(await readFile(join(stateDir, 'owner-workspace/host.json'), 'utf8'));
         assert.ok(Number.isSafeInteger(host!.pid) && host!.pid > 0);
         assert.equal(host!.origin, owner!.origin);
+        if (creator) {assert.equal(host!.pid, creator.pid); assert.equal(creator.exitCode, null);}
         const list = await currentList();
         assert.equal(list.targets.length, 9);
         assert.deepEqual(list.targets.map((target: any) => target.animation), inputs.map((_, index) => 'synthetic-animation-' + (index + 1)));
@@ -100,13 +141,18 @@ export async function installedWorkspaceSmoke(options: {
           const data = await response.json(); assert.equal(data.initialAnimation, target.animation);
         }
         await launch(single(0));
+        if (creator) {
+          await launch([...inputs.slice(0, 2), '--animation', 'synthetic-animation-1',
+            '--animation-for', '2', 'synthetic-animation-2', '--view-only'], false, true);
+          assert.equal(creator.exitCode, null);
+        }
         await Promise.all([1, 2, 3].map(index => launch(single(index))));
         const descriptors = (await Bun.file(join(stateDir, 'owner-workspace/host.json')).json());
         assert.equal(descriptors.pid, host!.pid);
         const processList = Bun.spawnSync(['ps', '-axo', 'pid,ppid,command']); assert.equal(processList.exitCode, 0);
-        const residents = processList.stdout.toString().split('\n').filter(line => line.includes(reviewRoot));
+        const residents = processList.stdout.toString().split('\n').filter(line => line.includes(reviewRoot) || line.includes(reviewBin));
         assert.equal(residents.length, 1, 'all resident backend process count');
-        assert.ok(residents[0]!.includes(join(reviewRoot, 'src/open-workspace-worker.ts')));
+        assert.ok(residents[0]!.includes(creator ? reviewBin : join(reviewRoot, 'src/open-workspace-worker.ts')));
         const sockets = Bun.spawnSync([Bun.which('lsof') ?? '/usr/sbin/lsof', '-nP', '-a', '-p', String(host!.pid), '-iTCP', '-sTCP:LISTEN', '-F', 'pn']);
         assert.equal(sockets.exitCode, 0);
         const listeners = sockets.stdout.toString().split('\n').filter(line => line.startsWith('n')).map(line => line.slice(1));
@@ -118,7 +164,7 @@ export async function installedWorkspaceSmoke(options: {
         const proof = {kind: 'installed-nine-' + mode, installedVersion: installed.version, targets: 9,
           distinctAnimations: 9, launcherExits: [...exits], uniqueOwnerURLs: 1, backendPid: host!.pid,
           residentBackendProcesses: residents.length, listeners, ownerURLWithoutCapability: publicURL.href,
-          viewOnly: true, actOrPendingMetadata: false, semanticRouteStatus: 404, inputHashesUnchanged: true};
+          foregroundCreatorAlive: creator ? creator.exitCode === null : undefined, viewOnly: true, actOrPendingMetadata: false, semanticRouteStatus: 404, inputHashesUnchanged: true};
         proofs.push(proof); options.log(JSON.stringify(proof)); await evidence();
         if (options.core && mode === 'batch') {
           const coreBatch = [...coreInputs, '--animation', 'core-animation-1', '--view-only'];
@@ -135,7 +181,7 @@ export async function installedWorkspaceSmoke(options: {
             assert.equal(data.initialAnimation, target.animation);
           }
           const afterCore = Bun.spawnSync(['ps', '-axo', 'pid,ppid,command']); assert.equal(afterCore.exitCode, 0);
-          const coreResidents = afterCore.stdout.toString().split('\n').filter(line => line.includes(reviewRoot));
+          const coreResidents = afterCore.stdout.toString().split('\n').filter(line => line.includes(reviewRoot) || line.includes(reviewBin));
           assert.equal(coreResidents.length, 1); assert.ok(coreResidents[0]!.includes(String(host!.pid)));
           const coreSockets = Bun.spawnSync([Bun.which('lsof') ?? '/usr/sbin/lsof', '-nP', '-a', '-p', String(host!.pid), '-iTCP', '-sTCP:LISTEN', '-F', 'pn']);
           assert.equal(coreSockets.exitCode, 0);
@@ -146,6 +192,12 @@ export async function installedWorkspaceSmoke(options: {
             residentBackendProcesses: coreResidents.length, listeners, launcherExit: 0, usesRealInstalledCoreBin: true};
           proofs.push(coreProof); options.log(JSON.stringify(coreProof)); await evidence();
         }
+        if (creator) {
+          creator.kill('SIGINT');
+          assert.equal(await creator.exited, 0);
+          assert.equal((await creatorDrain!).error, undefined);
+          proofs.push({kind: 'installed-foreground-SIGINT', exit: 0}); await evidence();
+        }
       } catch (error) {
         firstFailure ??= {error};
         throw error;
@@ -155,6 +207,7 @@ export async function installedWorkspaceSmoke(options: {
           catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;}
         }
         for (const child of children) if (child.exitCode === null) {child.kill('SIGTERM'); await child.exited;}
+        if (creatorDrain) assert.equal((await creatorDrain).error, undefined);
         if (host) {
           try {process.kill(host.pid, 'SIGTERM');}
           catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;}

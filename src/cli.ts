@@ -25,7 +25,7 @@ import { readCompareSession } from './compare-session.ts';
 import { exportReviewStrip, exportCompareStrip, stripJson, writeStripOutput, validateStripOutput } from './strip-export.ts';
 import type { StripInterval, StripRequest } from './strip.ts';
 const handoffUsage='[--config <path> [--parts <dir>] [--source <png> --full <dir> [--head <dir>]] [--keypoints <file>]]';
-const usage='Usage: rig-review open <dir> [<dir> ...] [--animation-for <index> <name>] [--reference <video>] [--compare <dir>] [--animation <name>] [--control] [--direct] [--view-only] [--project <create-root> (--project-version <rig> [--post-version <post>] | --project-draft <id> [--parts-verdict-dir <dir>]) --picks-dir <dir>] '+handoffUsage+'\n       --config declares the producer handoff (wins over the review.json "producer" block and discovery of config.json, rig/config.json, ../config.json beside an opened out/); feedback and control take the same flags; --view-only opens without a producer handoff.\n       open is managed by default: one owner workspace at 127.0.0.1:4318 (RIG_REVIEW_FRONT_PORT overrides) hosts targets in one process; --animation applies to all targets, --animation-for overrides one 1-based target, and --direct keeps a separate single-target worker.\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--project <create-root> --project-version <rig> --picks-dir <dir> [--post-version <post>]] [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--project <create-root> --project-version <rig> --picks-dir <dir> [--post-version <post>]] [--format json|issue] [--correction <item id>]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID] [--view-only]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>\n       rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       rig-review interview <create-root> --picks-dir <project-relative directory> [--port <n>]\n       rig-review --version';
+const usage='Usage: rig-review open <dir> [<dir> ...] [--animation-for <index> <name>] [--reference <video>] [--compare <dir>] [--animation <name>] [--control] [--direct] [--view-only] [--project <create-root> (--project-version <rig> [--post-version <post>] | --project-draft <id> [--parts-verdict-dir <dir>]) --picks-dir <dir>] '+handoffUsage+'\n       --config declares the producer handoff (wins over the review.json "producer" block and discovery of config.json, rig/config.json, ../config.json beside an opened out/); feedback and control take the same flags; --view-only opens without a producer handoff.\n       open is managed by default: one owner workspace at 127.0.0.1:4318 (RIG_REVIEW_FRONT_PORT overrides) hosts targets in one process; --animation applies to all targets, --animation-for overrides one 1-based target, and --direct keeps a separate single-target worker.\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--project <create-root> --project-version <rig> --picks-dir <dir> [--post-version <post>]] [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--project <create-root> --project-version <rig> --picks-dir <dir> [--post-version <post>]] [--format json|issue] [--correction <item id>]\n       rig-review <dir> <dir> ... [--animation <name>] [--animation-for <index> <name>] [--port 4318] [--reference <video>] [--view-only] [--control] '+handoffUsage+'\n       Foreground multi owns a new workspace in this CLI process; a compatible existing owner is joined and the launcher exits. Multi --port accepts 1..65535; single foreground keeps 4317 and --port 0.\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID] [--view-only]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>\n       rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       rig-review interview <create-root> --picks-dir <project-relative directory> [--port <n>]\n       rig-review --version';
 async function stripCommand(args:string[],options:{stateDir?:string}){
   const compare=args[0]==='compare';if(compare)args.shift();const a=args.shift(),b=compare?args.shift():undefined;if(!a||compare&&!b)throw new Error('strip: expected package input(s)');
   let reference:string|undefined,referenceVideo:string|undefined,animation:string|undefined,basis:'a'|'b'|undefined,range:string|undefined,output:string|undefined,jsonOnly=false,all=false;
@@ -114,6 +114,40 @@ export function parseOpenTargets(args: readonly string[]): OpenInputs[] {
  for (const [index, animation] of animations) targets[index - 1]!.animation = animation;
  return targets;
 }
+/** Multi detection consumes known option values before counting folder operands. */
+export function parseForegroundTargets(args: readonly string[]): {targets: OpenInputs[]; port?: number; help: boolean} | null {
+ const values = ['--port', '--checkpoint', '--reference', '--compare', '--animation', ...projectFlags,
+  ...HANDOFF_FLAGS.map(flag => '--' + flag)];
+ const booleans = ['--view-only', '--control', '--direct'];
+ const operands: string[] = [], forwarded: string[] = [];
+ const unsupported = new Set(['--checkpoint', '--compare', '--direct', ...projectFlags]);
+ const refused: string[] = [];
+ let port: number | undefined, help = false, duplicatePort = false;
+ for (let index = 0; index < args.length; index++) {
+  const flag = args[index]!;
+  if (flag === '--help' || flag === '-h') {help = true; continue;}
+  if (unsupported.has(flag)) refused.push(flag);
+  if (flag === '--animation-for') {
+   forwarded.push(flag, ...args.slice(index + 1, index + 3)); index += 2;
+  } else if (flag === '--port') {
+   duplicatePort = port !== undefined;
+   port = Number(args[++index]);
+  } else if (values.includes(flag)) {
+   forwarded.push(flag); if (args[index + 1] !== undefined) forwarded.push(args[++index]!);
+  } else if (booleans.includes(flag)) forwarded.push(flag);
+  else if (!flag.startsWith('-')) {operands.push(flag); forwarded.push(flag);}
+  // Preserve the legacy validator's unknown-option and help precedence.
+  else return null;
+ }
+ if (operands.length < 2) return null;
+ if (help) return {targets: [], port, help};
+ if (refused.length) throw new Error('OPEN_OPTION_INVALID ' + refused[0] + ': unsupported for foreground multi-target review');
+ if (duplicatePort || port !== undefined && (!Number.isSafeInteger(port) || port < 1 || port > 65535)) {
+  throw new Error('OPEN_OPTION_INVALID --port: foreground multi-target review expects integer 1..65535');
+ }
+ return {targets: parseOpenTargets(forwarded), port, help};
+}
+
 async function controlCommand(args:string[],stateDir?:string){
  const input=args.shift();if(!input||input==='--help'||input==='-h'){console.log(usage);return;}
  const inputs:OpenInputs={input},options:Parameters<typeof controlReview>[1]={stateDir},seen=new Set<string>(),projectOptions:string[]=[];
@@ -213,6 +247,22 @@ export async function main(args:string[],options:{stateDir?:string}={}){
   if(args[0]==='interview')return (await import('./interview-server.ts')).interviewCommand(args.slice(1));
   if(args[0]==='strip'){args.shift();if(args.includes('--help')){console.log(usage+'\nStrip: strip <package> --reference <declared-video-id> --animation <name> (--frames FIRST:LAST | --all-feedback) [--json] [--out path]\n       strip compare <a> <b> --reference <video> --animation <name> --basis a|b (--frames FIRST:LAST | --all-feedback) [--json] [--out path]');return;}return stripCommand(args,options);}let command:'review'|'check'|'feedback'='review';if(args[0]==='check'||args[0]==='feedback'){command=args.shift() as 'check'|'feedback';}
   if(args[0]==='--help'||args[0]==='-h'){console.log(usage);return;}
+  const foreground = command === 'review' && args[0] !== 'compare' ? parseForegroundTargets(args) : null;
+  if (foreground) {
+    if (foreground.help) {console.log(usage); return;}
+    const {openWorkspace} = await import('./open-workspace-launch.ts');
+    const result = await openWorkspace(foreground.targets, {...options, frontPort: foreground.port, foreground: true});
+    if (!result.interrupted) {
+      for (const target of result.prepared) {
+        if (target.build) console.error(buildOpenDiagnostic(target.build));
+        if (target.package.selection) console.error(animationDiagnostic(target.package.selection));
+      }
+      if (result.waitForExit) console.log(`Review ready: ${result.url}\nTargets: ${foreground.targets.length}\nPress Ctrl+C to stop.`);
+      else console.log(result.url);
+    }
+    await result.waitForExit?.();
+    return;
+  }
   let format:'json'|'issue'='json',correctionId:string|undefined;if(command==='feedback'){const parsed=feedbackFormat(args);args=parsed.args;format=parsed.format;correctionId=parsed.correctionId;}
   // Feedback formatting assigns --format/value ownership before the help pass.
   if(commandHelpRequested(args,command)){console.log(usage);return;}

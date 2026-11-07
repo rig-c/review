@@ -58,7 +58,7 @@ http://127.0.0.1:4318/?workspace=<incarnation>#cap=…
 | --- | --- | --- |
 | **Hand off and compare** | | |
 | <a id="one-command-owner-handoff"></a>Open an inspection workspace | `open` | [Owner handoff — WORKFLOWS](docs/WORKFLOWS.md#one-command-owner-handoff) |
-| <a id="existing-output-handoff"></a>Inspect an existing folder | `check`, `review` | [Existing output handoff — WORKFLOWS](docs/WORKFLOWS.md#existing-output-handoff) |
+| <a id="existing-output-handoff"></a>Inspect existing folders | `check`, `review DIR...` | [Existing output handoff — WORKFLOWS](docs/WORKFLOWS.md#existing-output-handoff) |
 | <a id="compare-two-outputs"></a>Compare two builds against a video | `compare` | [Compare two outputs — WORKFLOWS](docs/WORKFLOWS.md#compare-two-outputs) |
 | <a id="feedback-ownership"></a>Retrieve submitted feedback | `feedback` | [Feedback ownership — WORKFLOWS](docs/WORKFLOWS.md#feedback-ownership) |
 | <a id="frame-strip-export"></a>Export feedback intervals as strips | `strip` | [Frame strip export — WORKFLOWS](docs/WORKFLOWS.md#frame-strip-export) |

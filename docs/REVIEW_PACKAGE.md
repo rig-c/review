@@ -483,8 +483,10 @@ A private bounded `/api/open-status` handshake requires its instance capability,
 returns matching identity, and verifies current input hashes. The state registry
 never makes a PID/port alone authoritative. Changed input, reference, mode,
 canonical input location or actual tool source/static fingerprint gets a distinct
-instance identity. Existing foreground servers do not gain an open registration
-or browser filesystem API.
+instance identity. Existing single foreground servers retain their direct lifecycle.
+Plain multi-target foreground review uses the shared owner workspace registration
+and capabilities described in [WORKFLOWS](WORKFLOWS.md#subsequent-cli-and-semantic-paths).
+Neither path supplies a browser filesystem API.
 
 Registry/request/log/claim files are private tool-state files; a per-binding claim
 serializes startup, stale records are not reused, and no unrelated process is

@@ -12,6 +12,9 @@ import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {PROBE_MP4_BASE64} from './compare-mode-browser.ts';
 import {parseWorkspaceRecord, readPrivate} from '../src/open-workspace-state.ts';
 
+const foreground = Bun.argv.includes('--foreground');
+const foregroundDrains: Promise<{output: string; error?: unknown}>[] = [];
+let foregroundOwner: Bun.Subprocess<'ignore', 'pipe', 'pipe'> | undefined;
 const language = Bun.argv[Bun.argv.indexOf('--lang') + 1];
 assert.ok(language === 'en' || language === 'ko');
 const catalog = language === 'ko' ? koCatalog : enCatalog;
@@ -115,11 +118,61 @@ async function cli(args: string[], expected = 0) {
     return {stdout, stderr, exit};
   } finally {clearTimeout(timeout);}
 }
+async function startForeground(args: string[]) {
+  const child = Bun.spawn([process.execPath, 'src/entry.ts', ...args], {stdout: 'pipe', stderr: 'pipe',
+    env: {...process.env, RIG_REVIEW_STATE_DIR: stateDir, RIG_REVIEW_FRONT_PORT: String(port)}});
+  children.push(child); foregroundOwner = child;
+  const reader = child.stdout.getReader(), decoder = new TextDecoder();
+  let stdout = '';
+  const stderr = new Response(child.stderr).text().then(text => ({text, error: undefined as unknown}), error => ({text: '', error}));
+  const timer = setTimeout(() => child.kill('SIGTERM'), 15000);
+  try {
+    while (!/Review ready: (\S+)/.test(stdout)) {
+      const {value, done} = await reader.read();
+      if (done) throw new Error('FOREGROUND_START: ' + (await stderr).text);
+      stdout += decoder.decode(value, {stream: true});
+    }
+    const url = new URL(/Review ready: (\S+)/.exec(stdout)![1]!);
+    const drained = (async () => {
+      try {
+        while (true) {
+          const {value, done} = await reader.read();
+          if (done) break;
+          stdout += decoder.decode(value, {stream: true});
+        }
+        stdout += decoder.decode();
+        const errors = await stderr;
+        await writeFile(join(output, 'foreground-cli.json'), JSON.stringify({args, stdout, stderr: errors.text, exit: await child.exited}));
+        return {output: stdout, error: errors.error};
+      } catch (error) {return {output: stdout, error};}
+      finally {reader.releaseLock();}
+    })();
+    foregroundDrains.push(drained);
+    return url;
+  } finally {clearTimeout(timer);}
+}
+async function foregroundInventory() {
+  const value = await readPrivate(join(stateDir, 'owner-workspace/host.json'));
+  assert.ok(value);
+  const host = parseWorkspaceRecord(value);
+  assert.equal(host.pid, foregroundOwner!.pid);
+  assert.equal(foregroundOwner!.exitCode, null);
+  const processes = Bun.spawnSync(['ps', '-axo', 'pid,ppid,command']);
+  assert.equal(processes.exitCode, 0);
+  const residents = processes.stdout.toString().split('\n').filter(line => line.includes(root) && /src\/(?:entry|open-workspace-worker)\.ts/.test(line));
+  assert.equal(residents.length, 1);
+  const sockets = Bun.spawnSync(['lsof', '-nP', '-a', '-p', String(host.pid), '-iTCP', '-sTCP:LISTEN', '-F', 'pn']);
+  assert.equal(sockets.exitCode, 0);
+  const listeners = sockets.stdout.toString().split('\n').filter(line => line.startsWith('n'));
+  assert.deepEqual(listeners, ['n127.0.0.1:' + port]);
+  return {creatorPid: host.pid, residentBackendProcesses: residents.length, listeners: 1};
+}
 async function open(indices: number[]) {
   const args = ['open', ...indices.map(index => inputs[index]!), '--animation', 'inspect', '--view-only', '--control'];
   for (const [position, index] of indices.entries()) args.push('--animation-for', String(position + 1), 'synthetic-animation-' + (index + 1));
-  const result = await cli(args);
-  const url = new URL(result.stdout.trim());
+  const url = foreground && !ownerURL && indices.length === 9
+    ? await startForeground(args.slice(1))
+    : new URL((await cli(args)).stdout.trim());
   assert.equal(url.pathname, '/');
   if (ownerURL) assert.equal(url.href, ownerURL);
   else ownerURL = url.href;
@@ -211,6 +264,11 @@ async function stopOwner() {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline && await readPrivate(join(stateDir, 'owner-workspace/host.json'))) await Bun.sleep(25);
   assert.equal(await readPrivate(join(stateDir, 'owner-workspace/host.json')), null);
+  if (foregroundOwner?.pid === host.pid) {
+    assert.equal(await foregroundOwner.exited, 0);
+    const drained = await foregroundDrains.at(-1)!;
+    assert.equal(drained.error, undefined);
+  }
   const reachable = await fetch(host.origin, {signal: AbortSignal.timeout(500)}).then(async response => {await response.body?.cancel(); return true;}, () => false);
   assert.equal(reachable, false);
   await record('cleanup-' + host.pid, {descriptorRemoved: true, listenerReachable: false});
@@ -237,6 +295,14 @@ try {
   const allocation = Bun.serve({hostname: '127.0.0.1', port: 0, fetch: () => new Response('')});
   port = allocation.port!; await allocation.stop(true);
   await open(Array.from({length: 9}, (_, index) => index));
+  if (foreground) {
+    const initial = await foregroundInventory();
+    await open([0]);
+    const joined = await cli([inputs[0]!, inputs[1]!, '--animation', 'synthetic-animation-1',
+      '--animation-for', '2', 'synthetic-animation-2', '--view-only', '--control']);
+    assert.equal(joined.stdout.trim(), ownerURL);
+    await record('foreground-entry', {...initial, afterJoin: await foregroundInventory(), sameOwnerURL: true, joinerExits: [0, joined.exit]});
+  }
   page = await launchCdpSession(join(root, 'browser'), {onEvent(event) {
     if (event.method === 'Runtime.exceptionThrown') events.push(event);
   }});
@@ -449,5 +515,6 @@ try {
   await page?.close();
   for (const child of children) if (child.exitCode === null) {child.kill('SIGTERM'); await child.exited;}
   await stopOwner();
+  for (const drained of foregroundDrains) assert.equal((await drained).error, undefined);
   await rm(root, {recursive: true, force: true});
 }
