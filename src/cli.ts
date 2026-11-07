@@ -70,6 +70,50 @@ export function parseOpenInputs(args:string[]):OpenInputs {
  if(result.compare!==undefined&&handoffFlags(result))throw new Error('OPEN_OPTION_INVALID --config: compare takes no producer handoff; open one package with --config');
  return result;
 }
+
+/** Common open options apply to every operand; indexed animation values override the common default. */
+export function parseOpenTargets(args: readonly string[]): OpenInputs[] {
+ const inputs: string[] = [];
+ const common: string[] = [];
+ const animations = new Map<number, string>();
+ const booleanFlags = ['--control', '--direct', '--view-only'];
+ const valueFlags = ['--reference', '--compare', '--animation', ...projectFlags, ...HANDOFF_FLAGS.map(flag => '--' + flag)];
+ for (let index = 0; index < args.length; index++) {
+  const flag = args[index]!;
+  if (flag === '--animation-for') {
+   const target = args[++index], animation = args[++index];
+   if (target === undefined || !/^[1-9]\d*$/.test(target) || !Number.isSafeInteger(Number(target)) || animation === undefined || animation === '') {
+    throw new Error('OPEN_OPTION_INVALID --animation-for: expected a positive target index and animation name');
+   }
+   const targetIndex = Number(target);
+   if (animations.has(targetIndex)) throw new Error(`OPEN_OPTION_INVALID --animation-for: duplicate target index ${target}`);
+   animations.set(targetIndex, animation);
+  } else if (booleanFlags.includes(flag)) {
+   common.push(flag);
+  } else if (valueFlags.includes(flag)) {
+   const value = args[++index];
+   if (value === undefined || value === '') throw new Error(`OPEN_OPTION_INVALID ${flag}: Missing value for ${flag}`);
+   common.push(flag, value);
+  } else if (flag.startsWith('--')) {
+   throw new Error(`OPEN_OPTION_INVALID ${flag}: Unknown open option ${flag}`);
+  } else {
+   inputs.push(flag);
+  }
+ }
+ if (inputs.length === 0) throw new Error(usage);
+ for (const target of animations.keys()) {
+  if (target > inputs.length) throw new Error(`OPEN_OPTION_INVALID --animation-for: target index ${target} exceeds ${inputs.length} input(s)`);
+ }
+ const targets = inputs.map(input => parseOpenInputs([input, ...common]));
+ if (targets.length > 1 && targets.some(target => target.compare !== undefined)) {
+  throw new Error('OPEN_OPTION_INVALID --compare: multi-target open requires exactly one primary input for comparison');
+ }
+ if (targets.length > 1 && targets.some(target => target.direct)) {
+  throw new Error('OPEN_OPTION_INVALID --direct: multi-target open requires the managed owner workspace');
+ }
+ for (const [index, animation] of animations) targets[index - 1]!.animation = animation;
+ return targets;
+}
 async function controlCommand(args:string[],stateDir?:string){
  const input=args.shift();if(!input||input==='--help'||input==='-h'){console.log(usage);return;}
  const inputs:OpenInputs={input},options:Parameters<typeof controlReview>[1]={stateDir},seen=new Set<string>(),projectOptions:string[]=[];
@@ -117,6 +161,8 @@ function commandHelpRequested(args:readonly string[],command:'open'|'review'|'ch
  const handoff=HANDOFF_FLAGS.map(f=>'--'+f),flags=command==='open'?['--reference','--compare','--animation',...projectFlags,...handoff]:compare?['--reference','--animation','--port']:['--port','--checkpoint','--reference','--compare','--animation',...handoff,...(command==='feedback'?projectFlags:[])];
  for(let i=compare?3:1;i<args.length;){
   const flag=args[i];if(flag==='--help'||flag==='-h')return true;
+  if(command==='open'&&flag==='--animation-for'){i+=3;continue;}
+  if(command==='open'&&!flag?.startsWith('--')){i++;continue;}
   if((command==='open'&&(flag==='--control'||flag==='--direct'||flag==='--view-only'))||(command==='review'&&flag==='--view-only')){i++;continue;}if(!flags.includes(flag!))return false;i+=2;
  }
  return false;
@@ -152,7 +198,7 @@ export async function main(args:string[],options:{stateDir?:string}={}){
   options={stateDir:options.stateDir??defaultStateDir()};if(args[0]==='--')args.shift();
   if(args[0]==='--version'||args[0]==='-v'){console.log((JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')) as {version:string}).version);return;}
   if(args[0]==='control')return controlCommand(args.slice(1),options.stateDir);
-  if(args[0]==='open'){const openArgs=args.slice(1);if(commandHelpRequested(openArgs,'open')){console.log(usage);return;}const inputs=parseOpenInputs(openArgs);const result=await openReview(inputs,options);// Launcher contract (README): stdout is the URL line alone; stderr is diagnostic, control notice, retrieval, in that order.
+  if(args[0]==='open'){const openArgs=args.slice(1);if(commandHelpRequested(openArgs,'open')){console.log(usage);return;}const targets=parseOpenTargets(openArgs);if(targets.length!==1)throw new Error('OPEN_WORKSPACE_UNAVAILABLE: multi-target launch requires the managed owner workspace');const inputs=targets[0]!;const result=await openReview(inputs,options);// Launcher contract (README): stdout is the URL line alone; stderr is diagnostic, control notice, retrieval, in that order.
     console.log(result.url);if(result.build)console.error(buildOpenDiagnostic(result.build));if(result.selection)console.error(animationDiagnostic(result.selection));if(inputs.control)console.error('Inspection control enabled; query the current connected page with rig-review control and the same inputs.');console.error(`Review ${result.reused?'reused':'started'}; feedback: rig-review feedback ${[result.inputs.input,...(result.inputs.compare?['--compare',result.inputs.compare]:[]),...(result.inputs.reference?['--reference',result.inputs.reference]:[]),...(result.inputs.animation?['--animation',result.inputs.animation]:[]),...handoffWords(result.inputs),...projectWords(result.inputs)].map(shellWord).join(' ')}`);return;}
   if(args[0]==='parts')return partsCommand(args.slice(1));
   if(args[0]==='interview')return (await import('./interview-server.ts')).interviewCommand(args.slice(1));
