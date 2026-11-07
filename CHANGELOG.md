@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.0](https://github.com/rig-c/review/compare/v2.3.1...v2.4.0) (2026-11-07)
+
+
+### Features
+
+* review image sets without a model through the semantic hub ([#526](https://github.com/rig-c/review/issues/526)) ([9b9deeb](https://github.com/rig-c/review/commit/9b9deeb5ed930e21cdcf38a955525b5ec409d144))
+
 ## [2.3.1](https://github.com/rig-c/review/compare/v2.3.0...v2.3.1) (2026-11-07)
 
 
