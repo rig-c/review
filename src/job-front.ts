@@ -40,6 +40,7 @@ function result<Value>(value: JobResult<Value>): Response {
 export function createJobFront(options: {
     origin: string;
     ports: JobHostPorts;
+    hubIncarnation?: string;
     resource: (name: 'index.html' | 'job.js' | 'styles.css') => Promise<BodyInit>;
     publication?: (jobId: string, publicationId: string, instanceKey: string, path: string, request: Request) => Promise<Response>;
 }) {
@@ -124,8 +125,16 @@ export function createJobFront(options: {
             });
             return new Response(body, { headers: { ...headers, 'Content-Type': 'application/x-ndjson' } });
         }
-        if (url.search && !(route === '' && ['?lang=en', '?lang=ko'].includes(url.search)))
+        const embedded = route === '' && url.searchParams.has('hub');
+        if (embedded) {
+            if (!options.hubIncarnation || url.searchParams.get('hub') !== options.hubIncarnation ||
+                [...url.searchParams.keys()].some(key => !['hub', 'lang'].includes(key) || url.searchParams.getAll(key).length !== 1) ||
+                url.searchParams.has('lang') && !['en', 'ko'].includes(url.searchParams.get('lang')!)) {
+                return failure('JOB_REQUEST_INVALID', 400);
+            }
+        } else if (url.search && !(route === '' && ['?lang=en', '?lang=ko'].includes(url.search))) {
             return failure('JOB_REQUEST_INVALID', 400);
+        }
         const instance = /^publications\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/instances\/([a-f0-9]{64})\/(.*)$/.exec(route);
         if (instance && options.publication) {
             return options.publication(jobId, instance[1]!, instance[2]!, instance[3]!, request);
@@ -138,7 +147,9 @@ export function createJobFront(options: {
             return failure('JOB_REQUEST_INVALID', 404);
         const type = name === 'index.html' ? 'text/html; charset=utf-8' : name === 'job.js' ? 'text/javascript' : 'text/css';
         return new Response(request.method === 'HEAD' ? null : await options.resource(name), {
-            headers: { ...headers, 'Content-Type': type },
+            headers: { ...headers, 'Content-Type': type, ...(embedded ? {
+                'Content-Security-Policy': headers['Content-Security-Policy'].replace("frame-ancestors 'none'", "frame-ancestors 'self'"),
+            } : {}) },
         });
     }
     return {
@@ -360,11 +371,11 @@ export function assertJobHostCompatible(record: JobHostRecord, identity: ReturnT
 
 /** One live job request context. Its caller owns the listener and session lifetime. */
 export function createJobRequestContext(session: JobSession, startup: JobHostOptions, origin: string,
-    identity: ReturnType<typeof jobHostIdentity>, resource = jobWindowResources()) {
+    identity: ReturnType<typeof jobHostIdentity>, resource = jobWindowResources(), hubIncarnation?: string) {
     const ports = createJobHostPorts(session, origin);
     const record: JobHostRecord = {schema: 'rig-review-job-host/1', apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA,
         ...identity, jobId: session.jobId, origin, fingerprint: startup.fingerprint, pid: process.pid};
-    const front = createJobFront({origin, ports, resource, publication: retainedPublicationRoutes(session)});
+    const front = createJobFront({origin, ports, resource, hubIncarnation, publication: retainedPublicationRoutes(session)});
     let requests = 0;
     return {
         ports, record,

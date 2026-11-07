@@ -2,7 +2,8 @@
 import {randomBytes, randomUUID} from 'node:crypto';
 import {mkdir, unlink} from 'node:fs/promises';
 import {join} from 'node:path';
-import {sameCapability} from './job-api.ts';
+import {buildWeb} from './build.ts';
+import {jobBody, jobObject, sameCapability} from './job-api.ts';
 import {JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobHostPorts, type JobReviewerBinding} from './job-contract.ts';
 import {assertJobHostCompatible, createJobRequestContext, installJobWriterBinding, jobHostIdentity,
   jobWindowResources, type JobHostOptions, type JobHostRecord} from './job-front.ts';
@@ -28,10 +29,23 @@ export interface JobHubJob {
 }
 export interface JobOwnerHub {
   readonly origin: string;
-  /** Owner HTML is a separate delivery step. CP1 serves authenticated backend metadata only. */
   readonly ownerUrl: string;
   openJob(options: JobHubJobOptions): Promise<JobHubJob>;
   stop(): Promise<void>;
+}
+
+export interface JobHubRow {
+  jobId: string;
+  generation: number;
+  status: 'active' | 'closed';
+  publication: {publicationId: string; instanceKey: string; sourceHash: string; label: string} | null;
+  pendingCount: number;
+}
+export interface JobHubList {
+  schema: 'rig-review-job-hub/1';
+  incarnation: string;
+  limit: number;
+  jobs: JobHubRow[];
 }
 
 const schema = 'rig-review-job-hub/1';
@@ -105,6 +119,7 @@ export async function startJobHub(options: JobHubOptions): Promise<JobOwnerHub> 
   let queue = Promise.resolve(), closing = false, requests = 0;
   let stopping: Promise<void> | undefined;
   const resources = jobWindowResources();
+  let hubBundle: Promise<Blob> | undefined;
   async function removeOwned(path: string) {
     const value = await readPrivate(path) as {incarnation?: string; hubIncarnation?: string} | null;
     if (value?.incarnation === incarnation || value?.hubIncarnation === incarnation) {
@@ -137,8 +152,29 @@ export async function startJobHub(options: JobHubOptions): Promise<JobOwnerHub> 
         try {
           const url = new URL(request.url);
           if (url.origin !== origin) return refused('JOB_LOOPBACK_REQUIRED', 403);
-          if (url.pathname === '/hub/host' || url.pathname === '/hub/api/jobs') {
-            if (request.method !== 'GET' || url.search) return refused('JOB_REQUEST_INVALID', 400);
+          const resource = url.pathname === '/hub/' ? 'job-hub.html' : url.pathname === '/hub/job-hub.js' ? 'job-hub.js'
+            : url.pathname === '/hub/job-hub.css' ? 'job-hub.css' : url.pathname === '/hub/styles.css' ? 'styles.css' : null;
+          if (resource) {
+            if (!['GET', 'HEAD'].includes(request.method)) return refused('JOB_REQUEST_INVALID', 405);
+            if (request.headers.get('sec-fetch-site') === 'cross-site' ||
+                request.headers.get('origin') !== null && request.headers.get('origin') !== origin) return refused('JOB_SAME_ORIGIN_REQUIRED', 403);
+            if (resource === 'job-hub.html') {
+              if (url.searchParams.get('workspace') !== incarnation ||
+                  [...url.searchParams.keys()].some(key => !['workspace', 'lang'].includes(key) || url.searchParams.getAll(key).length !== 1) ||
+                  url.searchParams.has('lang') && !['en', 'ko'].includes(url.searchParams.get('lang')!)) return refused('JOB_REQUEST_INVALID', 400);
+            } else if (url.search) return refused('JOB_REQUEST_INVALID', 400);
+            let body: BodyInit | null = null;
+            if (request.method !== 'HEAD') {
+              if (resource === 'job-hub.js') body = await (hubBundle ??= buildWeb('job-hub'));
+              else body = Bun.file(new URL('../web/' + resource, import.meta.url));
+            }
+            return new Response(body, {headers: {...responseHeaders,
+              'Content-Type': resource.endsWith('.html') ? 'text/html; charset=utf-8' : resource.endsWith('.js') ? 'text/javascript' : 'text/css',
+              'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; frame-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"}});
+          }
+          const selected = /^\/hub\/api\/jobs\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/open$/.exec(url.pathname);
+          if (url.pathname === '/hub/host' || url.pathname === '/hub/api/jobs' || selected) {
+            if (request.method !== (selected ? 'POST' : 'GET') || url.search) return refused('JOB_REQUEST_INVALID', 400);
             if (request.headers.get('sec-fetch-site') === 'cross-site' ||
                 request.headers.get('origin') !== null && request.headers.get('origin') !== origin) {
               return refused('JOB_SAME_ORIGIN_REQUIRED', 403);
@@ -146,9 +182,22 @@ export async function startJobHub(options: JobHubOptions): Promise<JobOwnerHub> 
             if (!sameCapability(request.headers.get('X-Review-Capability'), capability)) {
               return refused('JOB_CAPABILITY_REQUIRED', 403);
             }
+            if (selected) {
+              if (request.headers.get('origin') !== origin) return refused('JOB_SAME_ORIGIN_REQUIRED', 403);
+              try {
+                const input = jobObject(await jobBody(request), ['schema', 'incarnation']);
+                if (input.schema !== schema || input.incarnation !== incarnation) return refused('JOB_REQUEST_INVALID', 400);
+              } catch (error) {return refused(error instanceof JobError ? error.code : 'JOB_REQUEST_INVALID',
+                error instanceof JobError && error.code === 'JOB_BODY_LIMIT' ? 413 : 400);}
+              const member = members.get(selected[1]!);
+              if (!member?.ready) return refused('JOB_UNKNOWN', 404);
+              if (member.session.status().status === 'closed') return refused('JOB_CLOSED', 409);
+              return Response.json({schema, incarnation, jobId: selected[1],
+                entry: `/jobs/${selected[1]}/?hub=${incarnation}`, capability: member.session.hostCredentials().ui}, {headers: responseHeaders});
+            }
             if (url.pathname === '/hub/host') return Response.json({schema, incarnation, pid: process.pid,
               origin, apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA}, {headers: responseHeaders});
-            return Response.json({schema, incarnation, jobs: [...members.values()].filter(member => member.ready).map(member => {
+            return Response.json({schema, incarnation, limit: maximumJobs, jobs: [...members.values()].filter(member => member.ready).map(member => {
               const status = member.session.status();
               return {jobId: status.jobId, generation: status.generation, status: status.status,
                 publication: status.publication && {publicationId: status.publication.publicationId,
@@ -215,7 +264,7 @@ export async function startJobHub(options: JobHubOptions): Promise<JobOwnerHub> 
         if (!('claim' in acquiredJob)) throw new HubError('JOB_HUB_EXTERNAL_HOST');
         claim = acquiredJob.claim;
         await refuseExternal();
-        const context = createJobRequestContext(session, startup, origin, identity, resources);
+        const context = createJobRequestContext(session, startup, origin, identity, resources, incarnation);
         Object.assign(context.record, {hubIncarnation: incarnation});
         member = {root, fingerprint: startup.fingerprint, session, context, recordPath: path, ready: false};
         members.set(session.jobId, member);

@@ -3,6 +3,7 @@ import type { JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobPen
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
 import {t} from './i18n.ts';
+import {JOB_HUB_READY, jobHubMessageMatches, type JobHubBinding} from './job-hub.ts';
 
 /** Imported runtimes may throw arbitrary prose. Only registered refusal copy reaches the window. */
 export function jobWindowRefusal(error: unknown, fallback = 'JOB_WINDOW_FAILED'): string {
@@ -849,6 +850,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     }
     catch { /* Capability stays in memory. */ }
     const access = jobWindowAccess(location.href, storage, href => history.replaceState(history.state, '', href));
+    const hubIncarnation = new URL(location.href).searchParams.get('hub');
+    let hubVisible = !hubIncarnation;
     const pageId = crypto.randomUUID();
     const transport = createJobWindowTransport(access);
     const abort = new AbortController();
@@ -1410,6 +1413,19 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         }
         viewport.fitCamera();
     }
+    function hubBinding(): JobHubBinding {
+        return {incarnation: hubIncarnation!, jobId: access.jobId,
+            publicationId: current?.display.publication.publicationId ?? null,
+            sourceHash: current?.display.publication.source.sourceHash ?? null};
+    }
+    function pauseHiddenHubFrame(): void {
+        if (hubVisible) return;
+        current?.player?.pause();
+        for (const video of workspace.querySelectorAll('video')) video.pause();
+    }
+    function announceHubFrame(): void {
+        if (hubIncarnation) globalThis.parent.postMessage({...hubBinding(), schema: JOB_HUB_READY}, location.origin);
+    }
     const window = createJobWindow({ jobId: access.jobId, pageId, transport, adapter: {
             async prepare(display, signal): Promise<PreparedWindow> {
                 const inspection = await prepareJobInspection(display, signal);
@@ -1571,6 +1587,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     catch { /* In-memory retained evidence remains available. */ }
                     history.textContent = [...retained.values()].map(draft => t('job.retained', [draft.label]) + '\n' + draft.sourceHash + '\n' + JSON.stringify(draft.value, null, 2)).join('\n');
                 }
+                pauseHiddenHubFrame(); announceHubFrame();
             },
         } });
     const localize = i18n.onLanguageChange(() => {
@@ -1581,6 +1598,17 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             viewport.renderCameraControls();
         window.refresh();
     });
+    const hubVisibility = (event: MessageEvent) => {
+        if (!hubIncarnation || !jobHubMessageMatches(event, location.origin, globalThis.parent, hubBinding(), 'visibility')) return;
+        hubVisible = event.data.visible;
+        host.dataset.hubVisible = String(hubVisible);
+        if (event.data.language !== i18n.getLanguage()) {
+            i18n.setLinkLanguage(null); i18n.setLanguagePreference(event.data.language);
+        }
+        pauseHiddenHubFrame();
+        if (hubVisible) current?.player?.draw();
+    };
+    if (hubIncarnation) {globalThis.addEventListener('message', hubVisibility); announceHubFrame();}
     let cursor: string | null = null;
     void (async () => {
         while (!abort.signal.aborted) {
@@ -1601,6 +1629,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         }
     })();
     const stop = () => {
+        globalThis.removeEventListener('message', hubVisibility);
         saveDraft();
         referenceSelection.cancel();
         abort.abort();

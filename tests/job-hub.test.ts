@@ -123,7 +123,8 @@ test('writer binding failure hides the candidate and retries/concurrent matching
   await expect(h.openJob({...options, readerId: 'changed-reader'})).rejects.toMatchObject({code: 'JOB_HOST_REUSE_MISMATCH'});
   expect(installs).toBe(3); expect((await list(h)).jobs).toHaveLength(1);
   const response = await fetch(h.origin + '/hub/api/jobs'); expect(response.status).toBe(403);
-  expect((await fetch(h.ownerUrl)).status).toBe(404);
+  const ownerPage = await fetch(h.ownerUrl);
+  expect(ownerPage.status).toBe(200); expect(await ownerPage.text()).toContain('data-job-hub');
   const headers = {'X-Review-Capability': new URL(h.ownerUrl).hash.slice(5)};
   expect((await fetch(h.origin + '/hub/api/jobs?unknown=1', {headers})).status).toBe(400);
   expect((await fetch(h.origin + '/hub/api/jobs', {headers: {...headers, Origin: 'http://127.0.0.1:1'}})).status).toBe(403);
