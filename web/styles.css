@@ -437,3 +437,27 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
   .review-stage-panel.with-interview { grid-template: min-content repeat(2, minmax(420px, 1fr)) / minmax(0, 1fr); }
   .review-stage-panel.with-interview > .review-interview-frame { grid-area: 3 / 1; }
 }
+
+/* Persistent job inspection uses the canonical pair and camera controls. */
+body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:100dvh;overflow:hidden}
+.job-window .job-header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--rv-bar);border-bottom:1px solid var(--border)}
+.job-window .job-header h1{font-size:16px;margin:0;flex:1;min-width:0;overflow-wrap:anywhere}
+.job-window .job-notice{padding:8px 16px;margin:0;color:var(--fg-soft);background:var(--rv-panel);border-bottom:1px solid var(--border)}
+.job-window .job-notice[data-failed=true]{color:var(--fail)}
+.job-window .job-inspection{display:grid;grid-template-columns:230px minmax(0,1fr);grid-template-rows:minmax(250px,1fr) minmax(100px,30dvh);min-height:0;overflow:hidden}
+.job-window .job-sidebar{grid-row:1/-1;overflow:auto;padding:12px;border-right:1px solid var(--border);background:var(--rv-panel);min-width:0}
+.job-window .job-sidebar select,.job-window .job-sidebar img{max-width:100%}
+.job-window .job-stage{display:flex;flex-direction:column;min-height:0;min-width:0}
+.job-window .job-stage #stage-layout{height:auto;flex:1;min-height:180px}
+.job-window .job-stage .viewbar,.job-window .job-transport{flex:none;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px}
+.job-window .job-forms{overflow:auto;border-top:1px solid var(--border);padding:12px;background:var(--rv-panel)}
+.job-window .job-forms form{margin:0 0 12px;padding:12px;border:1px solid var(--border);border-radius:var(--radius)}
+.job-window .job-forms fieldset{border:0;padding:0;min-width:0}
+.job-window .job-forms label{display:block;margin:6px 0}
+.job-window .job-forms textarea{display:block;width:100%;min-height:64px;box-sizing:border-box}
+.job-window .job-forms .job-source,.job-window .job-history{overflow-wrap:anywhere;font-family:var(--font-mono);font-size:11px;color:var(--fg-muted)}
+.job-window .job-history{white-space:pre-wrap;color:var(--warn)}
+.job-window .job-direction{white-space:pre-wrap;overflow-wrap:anywhere}
+.job-window .job-part-images{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.job-window .job-part-images img{width:100%;height:auto;background:var(--rv-media-bg)}
+@media(max-width:780px){.job-window .job-inspection{grid-template-columns:160px minmax(0,1fr)}.job-window .job-stage #stage-layout{grid-template-columns:minmax(0,1fr);grid-template-rows:repeat(2,minmax(0,1fr))}}
