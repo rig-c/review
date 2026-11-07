@@ -95,6 +95,7 @@ async function runFlow(ownUid: boolean) {
       expect(saved.ok).toBe(true);
     }
     const [exit, stdout, stderr] = await Promise.all([child.exited, output, errors]);
+    console.log(JSON.stringify({ ownUid, exitCode: exit }));
     console.log(stdout);
     if (stderr) console.error(stderr);
     const messages = stdout.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
@@ -131,7 +132,7 @@ test.skipIf(agentUid === undefined && !requiredInCI)(
   }, 30_000,
 );
 
-test.skipIf(!requiredInCI)('CI own-UID negative fails the same semantic client by JOB_AGENT_ISOLATION_HOLE', async () => {
+test.skipIf(daemonUid === undefined && !requiredInCI)('POSIX own-UID negative fails the same semantic client by JOB_AGENT_ISOLATION_HOLE', async () => {
   if (daemonUid === undefined) isolationHole('POSIX identity is unavailable for the required negative');
   const result = await runFlow(true);
   expect(result.exit).not.toBe(0);
