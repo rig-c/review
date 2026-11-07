@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
-  JOB_ACT_SCHEMA, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
+  JOB_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
   type JobAct, type JobActValues, type JobPendingAsk, type JobReviewerBinding,
   type JobSourceBinding, type JobSubject, type JobUISubmission,
 } from './job-contract.ts';
@@ -70,7 +70,7 @@ export function parseUISubmission(value: unknown): JobUISubmission {
   if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(item.kind)) throw new JobError('JOB_ACT_KIND_DISABLED');
   jobId(item.publicationId); jobId(item.askId); jobId(item.pageId); jobId(item.displayedNonce); jobId(item.submissionId);
   jobInteger(item.expectedGeneration);
-  if (!['interview-picks', 'checkpoint', 'parts-verdict', 'review-verdict', 'signoff'].includes(String(item.kind))) {
+  if (!(JOB_ENABLED_ACT_KINDS as readonly string[]).includes(String(item.kind))) {
     throw new JobError('JOB_ACT_INVALID');
   }
   return item as unknown as JobUISubmission;

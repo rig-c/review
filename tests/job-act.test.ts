@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
-import { finalizeJobAct } from '../src/job-act.ts';
-import type { JobPendingAsk, JobUISubmission } from '../src/job-contract.ts';
+import { finalizeJobAct, parseUISubmission } from '../src/job-act.ts';
+import { JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS, type JobPendingAsk, type JobUISubmission } from '../src/job-contract.ts';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { jobFixture, syntheticJobParts } from './helpers/job-api-fixture.ts';
@@ -189,4 +189,34 @@ test('parts-verdict UI save covers every declared part and mesh, preserves words
     submissionId: 'stale-parts', expectedGeneration: f.session.status().generation }));
   expect(stale.ok).toBe(false);
   if (!stale.ok) expect(stale.error.code).toBe('JOB_SOURCE_MISMATCH');
+});
+
+test('parseUISubmission accepts all 5 enabled act kinds, preserves String(kind) conversion, refuses reserved kinds first and rejects invalid kinds', async () => {
+  const base = { publicationId: 'publication-one', askId: 'ask-one', pageId: 'page-one', displayedNonce: 'nonce-one',
+    expectedGeneration: 0, submissionId: 'submit-one', value: {} };
+  expect(JOB_ENABLED_ACT_KINDS).toEqual(['interview-picks', 'checkpoint', 'parts-verdict', 'review-verdict', 'signoff']);
+  for (const kind of JOB_ENABLED_ACT_KINDS) {
+    const input = { ...base, kind };
+    expect(parseUISubmission(input)).toEqual(input as unknown as JobUISubmission);
+  }
+  const stringified = { ...base, kind: ['checkpoint'] };
+  expect(parseUISubmission(stringified)).toEqual(stringified as unknown as JobUISubmission);
+  for (const kind of JOB_RESERVED_ACT_KINDS) {
+    expect(() => parseUISubmission({ ...base, kind })).toThrow('JOB_ACT_KIND_DISABLED');
+    expect(() => parseUISubmission({ ...base, publicationId: '', expectedGeneration: -1, kind })).toThrow('JOB_ACT_KIND_DISABLED');
+  }
+  for (const kind of ['unknown-kind', '', null, undefined, 42, ['unknown-kind']]) {
+    expect(() => parseUISubmission({ ...base, kind })).toThrow('JOB_ACT_INVALID');
+  }
+  const f = await fixture(), publication = await f.publish(), page = await f.display(publication);
+  for (const kind of JOB_RESERVED_ACT_KINDS) {
+    const reserved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: 'ask-one',
+      expectedGeneration: f.session.status().generation, submissionId: 'reserved-' + kind, kind, value: {} }));
+    expect(reserved).toEqual({ ok: false, error: { code: 'JOB_ACT_KIND_DISABLED', message: 'JOB_ACT_KIND_DISABLED' } });
+  }
+  for (const kind of ['unknown-kind', '']) {
+    const invalid = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: 'ask-one',
+      expectedGeneration: f.session.status().generation, submissionId: 'invalid-' + kind, kind, value: {} }));
+    expect(invalid).toEqual({ ok: false, error: { code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID' } });
+  }
 });
