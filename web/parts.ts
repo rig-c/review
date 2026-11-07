@@ -107,13 +107,34 @@ function sourceAlpha(item:Item,img:HTMLImageElement):Uint8ClampedArray {
  const rgba=ctx.getImageData(0,0,item.w,item.h).data,alpha=new Uint8ClampedArray(item.w*item.h);for(let i=0;i<alpha.length;i++)alpha[i]=rgba[i*4+3]!;assemblyAlpha.set(item.name,alpha);return alpha;
 }
 
+function partFrame(data:ViewData,item:Item) {
+  if(state.view==='assembled'&&data.rigSize) {
+    return {x:0,y:0,w:data.rigSize[0],h:data.rigSize[1]};
+  }
+  return item;
+}
+
+function rasterFrame(data:ViewData,item:Item) {
+  if(data.mode==='parts')return partFrame(data,item);
+  if(state.view==='page') {
+    const page=data.pages[state.page]!;
+    return {x:0,y:0,w:page.width,h:page.height};
+  }
+  const page=data.pages.find(p=>p.name===item.page)!;
+  const x=Math.max(0,item.x-REGION_MARGIN),y=Math.max(0,item.y-REGION_MARGIN);
+  const right=Math.min(page.width,item.x+item.w+REGION_MARGIN);
+  const bottom=Math.min(page.height,item.y+item.h+REGION_MARGIN);
+  return {x,y,w:right-x,h:bottom-y};
+}
+
 async function paintRaster(token:number): Promise<void> {
   const data = state.data;
   if (!data || !data.items.length) return;
   const canvas = $<HTMLCanvasElement>('pv-canvas'), overlay = $('pv-overlay'), caption = $('pv-caption');
   const item = data.items[state.selected]!;
+  const {x,y,w,h}=rasterFrame(data,item);
   if(state.view==='assembled'&&data.mode==='parts'&&data.rigSize){
-    const [w,h]=data.rigSize,shown=data.items.filter(i=>!state.hidden.has(i.name));
+    const shown=data.items.filter(i=>!state.hidden.has(i.name));
     const layers=await Promise.all(shown.map(async box=>({box,image:await itemImage(box)})));
     const original=state.comparison.mode==='overlay'&&data.painting?await load('/api/parts/painting'):null;
     if(token!==paintToken)return;
@@ -131,7 +152,7 @@ async function paintRaster(token:number): Promise<void> {
   if (data.mode === 'atlas' && state.view === 'page') {
     const page = data.pages[state.page]!, img = await pageImage(page.name);
     if (token !== paintToken) return;
-    const ctx = setCanvas(canvas, page.width, page.height);
+    const ctx = setCanvas(canvas, w, h);
     if (state.alpha) paintAlphaOnly(ctx, img, 0, 0, page.width, page.height);
     else { paintBackground(ctx, page.width, page.height, state.bg); ctx.drawImage(img, 0, 0); }
     overlay.replaceChildren(...data.items.filter(r => r.page === page.name).map(r => {
@@ -153,12 +174,10 @@ async function paintRaster(token:number): Promise<void> {
   if (data.mode === 'atlas') {
     const page = data.pages.find(p => p.name === item.page)!, img = await pageImage(item.page!);
     if (token !== paintToken) return;
-    const x0 = Math.max(0, item.x - REGION_MARGIN), y0 = Math.max(0, item.y - REGION_MARGIN);
-    const x1 = Math.min(page.width, item.x + item.w + REGION_MARGIN), y1 = Math.min(page.height, item.y + item.h + REGION_MARGIN);
-    const ctx = setCanvas(canvas, x1 - x0, y1 - y0);
-    if (state.alpha) paintAlphaOnly(ctx, img, x0, y0, x1 - x0, y1 - y0);
-    else { paintBackground(ctx, x1 - x0, y1 - y0, state.bg); ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0, 0, 0, x1 - x0, y1 - y0); }
-    const edge = overlayBox(item.x - x0, item.y - y0, item.w, item.h);
+    const ctx = setCanvas(canvas, w, h);
+    if (state.alpha) paintAlphaOnly(ctx, img, x, y, w, h);
+    else { paintBackground(ctx, w, h, state.bg); ctx.drawImage(img, x, y, w, h, 0, 0, w, h); }
+    const edge = overlayBox(item.x - x, item.y - y, item.w, item.h);
     edge.className = 'pv-region-edge';
     overlay.replaceChildren(edge);
     caption.textContent = t('Region {name} on {page} at {x},{y}, {width}×{height} px, with {margin} px of the page around it (dashed: the region box).', { name: item.name, page: item.page!, x: item.x, y: item.y, width: item.w, height: item.h, margin: REGION_MARGIN }) + (item.degrees ? ' ' + t('Packed at {degrees}°.', { degrees: item.degrees }) : '');
@@ -168,7 +187,7 @@ async function paintRaster(token:number): Promise<void> {
     const response=await fetch(access.route(`${partsApi}/difference/${item.index}?threshold=${state.comparison.threshold}&footprints=${state.footprints}`),{headers:stageHeaders()});
     if(!response.ok){const out=await response.json() as {error:string};throw new Error(out.error);}
     const image=await createImageBitmap(await response.blob());
-    try{if(token!==paintToken)return;const ctx=setCanvas(canvas,item.w,item.h);paintBackground(ctx,item.w,item.h,state.bg);ctx.drawImage(image,0,0);overlay.replaceChildren();
+    try{if(token!==paintToken)return;const ctx=setCanvas(canvas,w,h);paintBackground(ctx,w,h,state.bg);ctx.drawImage(image,0,0);overlay.replaceChildren();
       caption.textContent=t('Difference: {count} pixels above threshold · {covered} covered pixels excluded · visual comparison, no automatic verdict.',{count:response.headers.get('X-Difference-Count')??'',covered:response.headers.get('X-Difference-Covered')??''});
     }finally{image.close();}return;
   }
@@ -176,7 +195,7 @@ async function paintRaster(token:number): Promise<void> {
   const fronts = await Promise.all(front.map(async o => ({ o, img: await itemImage(o) })));
   const original=state.comparison.mode==='overlay'&&data.painting?await load('/api/parts/painting'):null;
   if (token !== paintToken) return;
-  const ctx = setCanvas(canvas, item.w, item.h);
+  const ctx = setCanvas(canvas, w, h);
   const makeCanvas=(w:number,h:number)=>Object.assign(document.createElement('canvas'),{width:w,height:h});
   if(original){paintOverlay(ctx,item,img,original,paintingRectangle(item,data.rigSize!,data.painting!),state.comparison.opacity,state.bg);paintFootprints(ctx,item,fronts.map(f=>({box:f.o,image:f.img})),makeCanvas);}
   else paintPart(ctx, item, img, { bg: state.bg, alpha: state.alpha, fronts: fronts.map(f => ({ box: f.o, image: f.img })), makeCanvas: (w, h) => Object.assign(document.createElement('canvas'), { width: w, height: h }) });
@@ -190,7 +209,7 @@ async function paintRaster(token:number): Promise<void> {
     + (state.footprints ? ' ' + (front.length === 1 ? t('Tinted: the footprint of the part drawn in front ({names}).', { names: front[0]!.name }) : front.length ? t('Tinted: the footprints of {count} parts drawn in front ({names}).', { count: front.length, names: front.map(o => o.name).join(', ') }) : t('No part is drawn in front of it.')) : '');
 }
 
-async function paintReference(token:number):Promise<void>{const data=state.data,item=data?.items[state.selected];if(!data?.painting||!item)return;const img=await load('/api/parts/painting');if(token!==paintToken||data!==state.data||item!==state.data?.items[state.selected])return;const box=state.view==='assembled'?{x:0,y:0,w:data.rigSize![0],h:data.rigSize![1]}:item;const canvas=$<HTMLCanvasElement>('pv-reference');canvas.width=box.w;canvas.height=box.h;const ctx=canvas.getContext('2d')!;paintPaintingCrop(ctx,img,paintingRectangle(box,data.rigSize!,data.painting),box.w,box.h,state.bg);}
+async function paintReference(token:number):Promise<void>{const data=state.data,item=data?.items[state.selected];if(!data?.painting||!item)return;const img=await load('/api/parts/painting');if(token!==paintToken||data!==state.data||item!==state.data?.items[state.selected])return;const box=partFrame(data,item);const canvas=$<HTMLCanvasElement>('pv-reference');canvas.width=box.w;canvas.height=box.h;const ctx=canvas.getContext('2d')!;paintPaintingCrop(ctx,img,paintingRectangle(box,data.rigSize!,data.painting),box.w,box.h,state.bg);}
 
 function renderComparison():void {
  const active=state.data?.mode==='parts'&&(!!state.data.painting||!!state.data.differenceAvailable),overlay=active&&state.comparison.mode==='overlay',difference=state.comparison.mode==='difference';
@@ -405,7 +424,13 @@ async function save(): Promise<void> {
 
 async function boot(): Promise<void> {
   const box=$('pv-canvas-box'),layout=$('stage-layout');mountViewportPair(layout);$('rig-root').append(box);const reference=document.createElement('canvas');reference.id='pv-reference';$('reference-content').append(reference);$('rig-empty').hidden=true;$('rig-overlay').hidden=true;$('rig-label').textContent=t('Selected part');$('rig-viewport').tabIndex=0;
-  viewport=createPartsViewport({el:$,canvas:$<HTMLCanvasElement>('pv-canvas'),message:(msg)=>{$('pv-save-status').textContent=t(msg);},reference:()=>state.data?.painting?$<HTMLCanvasElement>('pv-reference'):null});viewport.bindControls();
+  viewport=createPartsViewport({el:$,canvas:$<HTMLCanvasElement>('pv-canvas'),message:(msg)=>{$('pv-save-status').textContent=t(msg);},reference:()=>state.data?.painting?$<HTMLCanvasElement>('pv-reference'):null,
+    frameSize:target=>{
+      const data=state.data,item=data?.items[state.selected];
+      if(!data||!item)return null;
+      return target==='rig'?rasterFrame(data,item):data.painting?partFrame(data,item):null;
+    },
+  });viewport.bindControls();
   $('native-one').onclick=()=>viewport!.cameraAction(()=>viewport!.updateCamera(viewport!.availableCamera()??'rig',{zoom:1,pan:{x:0,y:0}}));
   bindDomI18n(document);
   bindStageNav({partsOnly:true,model:false});
