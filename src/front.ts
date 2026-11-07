@@ -90,7 +90,7 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  if(/^\/api\/environment-check\/[a-f0-9]{64}$/.test(toolPath))return read?get:null;
  return null;
 }
-async function boundedBody(req:Request,limit:number,timeoutMs=10000):Promise<ArrayBuffer>{
+export async function boundedBody(req:Request,limit:number,timeoutMs=10000):Promise<ArrayBuffer>{
  if(!/^application\/json(?:\s*;|$)/i.test(req.headers.get('content-type')??''))throw new Error('FRONT_JSON_REQUIRED');
  const declared=req.headers.get('content-length');if(declared!==null&&(!/^\d+$/.test(declared)||Number(declared)>limit))throw new Error('FRONT_BODY_LIMIT');
  if(!req.body)throw new Error('FRONT_JSON_REQUIRED');const reader=req.body.getReader();let timer:ReturnType<typeof setTimeout>|undefined;

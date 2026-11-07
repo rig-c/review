@@ -125,22 +125,29 @@ async function verifyOpenLoad(p:OpenPackage,viewOnly:boolean,cwd=process.cwd()):
 }
 /** Managed is the default: the printed URL goes through the one loopback front (127.0.0.1:4318, or
  * RIG_REVIEW_FRONT_PORT) so browser storage keeps one origin across reopens. `direct` keeps the worker's own port. */
-export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idleMs?:number;graceMs?:number;direct?:boolean;viewOnly?:boolean;cwd?:string;frontPort?:number;frontIdleMs?:number}={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs;selection:AnimationSelection|null;direct:boolean;build:BuildOpen|null}>{
- const direct=options.direct??inputs.direct??false,viewOnly=options.viewOnly??inputs.viewOnly??false,port=direct?0:frontPort(options.frontPort);
+export interface OpenOptions {stateDir?:string;idleMs?:number;graceMs?:number;direct?:boolean;viewOnly?:boolean;cwd?:string;frontPort?:number;frontIdleMs?:number}
+export async function prepareOpenTarget(inputs: OpenInputs, options: OpenOptions = {}, fingerprint?: string) {
+ const viewOnly=options.viewOnly??inputs.viewOnly??false;
  for(const path of [inputs.input,...(inputs.compare!==undefined?[inputs.compare]:[])])await assertOpenInput(path);
  if(inputs.compare!==undefined&&!inputs.reference)throw new Error('OPEN_REFERENCE_REQUIRED: compare: explicit --reference required');
  let p:OpenPackage;try{p=await loadOpenPackage(inputs);}catch(error){throw await openRefusal(error,inputs);}
- const fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
+ fingerprint??=await openFingerprint();const key=openKey(p,fingerprint);
  // #187: canonical (symlinks and ancestors resolved) and outside every supplied folder: the package, the build root a check package belongs to, the handoff root.
  const stateDir=destinationDirectory(options.stateDir??defaultStateDir(),'OPEN_STATE_INVALID: the state directory path has a non-directory component or a symlink loop'),roots=p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
  if(p.mode==='single'&&p.joined&&stateDirInside(stateDir,[{kind:'package',path:p.joined.opened.root}]))throw new Error('OPEN_STATE_INSIDE_PACKAGE: review state must be outside the joined project');
  const inside=stateDirInside(stateDir,roots);if(inside)throw new Error(`OPEN_STATE_INSIDE_PACKAGE ${inside.kind}: the review state directory must be outside input packages; it is inside the ${inside.kind}; set RIG_REVIEW_STATE_DIR outside it`);
  await verifyOpenLoad(p,viewOnly,options.cwd);
+ const build=p.mode==='single'&&basename(p.p.root)==='check'&&await isBuildRoot(dirname(p.p.root))?{package:p.p.root,handoff:p.p.reviewedSource.handoff??null,reason:p.p.handoffReason}:null;
+ return {package:p,key,fingerprint,stateDir,viewOnly,cwd:resolve(options.cwd??process.cwd()),build};
+}
+export async function openReview(inputs:OpenInputs,options:OpenOptions={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs;selection:AnimationSelection|null;direct:boolean;build:BuildOpen|null}>{
+ const direct=options.direct??inputs.direct??false,port=direct?0:frontPort(options.frontPort);
+ const prepared=await prepareOpenTarget(inputs,options);
+ const {package:p,key,fingerprint,stateDir,viewOnly,build}=prepared;
  const control=join(stateDir,'open');await mkdir(control,{recursive:true,mode:0o700});const canonicalControl=await realpath(control);if((await lstat(control)).isSymbolicLink())throw new Error('open.state: control directory cannot be a symlink');
  const worker=await ensureWorker(p,key,fingerprint,stateDir,canonicalControl,options.idleMs??DEFAULT_UNOPENED_TIMEOUT_MS,options.graceMs,viewOnly,options.cwd);
  const url=direct?openUrl(worker.row):openUrl(worker.row,await ensureFront({control:canonicalControl,port,fingerprint,idleMs:options.frontIdleMs}));
  // #149: the check package of a rig-parts build root says which package it opened and which config the handoff took.
- const build=p.mode==='single'&&basename(p.p.root)==='check'&&await isBuildRoot(dirname(p.p.root))?{package:p.p.root,handoff:p.p.reviewedSource.handoff??null,reason:p.p.handoffReason}:null;
  return {url,reused:worker.reused,nonce:worker.row.nonce,inputs:p.inputs,selection:p.selection,direct,build};
 }
 async function ensureWorker(p:OpenPackage,key:string,fingerprint:string,stateDir:string,canonicalControl:string,idleMs:number,graceMs?:number,viewOnly=false,cwd=process.cwd()):Promise<{row:RecordFile;reused:boolean}>{
@@ -179,13 +186,19 @@ export async function controlReview(inputs:OpenInputs,commandOptions:{pageId?:st
  const wait=commandOptions.waitMs??10000;if(!Number.isSafeInteger(wait)||wait<0||wait>30000)throw new Error('CONTROL_WAIT: expected integer 0..30000');
  const p=await loadOpenPackage({...inputs,control:true}),fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
  const stateDir=destinationDirectory(commandOptions.stateDir??defaultStateDir(),'CONTROL_STATE: the state directory path has a non-directory component or a symlink loop');
+ const workspace=await (await import('./open-workspace-launch.ts')).workspaceControlLocator(stateDir,key);
+ let record:{origin:string;controlToken:string;capability:string},prefix='';
+ if(workspace){record=workspace;prefix=workspace.prefix;}
+ else {
  const controlDir=join(stateDir,'open');
  try{if((await lstat(controlDir)).isSymbolicLink())throw new Error('CONTROL_STATE: control directory cannot be a symlink');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Error('CONTROL_INSTANCE_UNAVAILABLE: open the exact inputs once with --control');throw error;}
  const file=join(controlDir,key+'.json');try{const info=await lstat(file);if(!info.isFile()||(info.mode&0o077)!==0)throw new Error('CONTROL_STATE: owner-only regular capability record required');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Error('CONTROL_INSTANCE_UNAVAILABLE: open the exact inputs once with --control');throw error;}
- const record=await readRecord(file,key);
- if(!record||!record.controlToken||!await alive(record))throw new Error('CONTROL_INSTANCE_UNAVAILABLE: open the exact inputs once with --control');
+ const legacy=await readRecord(file,key);
+ if(!legacy||!legacy.controlToken||!await alive(legacy))throw new Error('CONTROL_INSTANCE_UNAVAILABLE: open the exact inputs once with --control');
+ record={origin:legacy.origin,controlToken:legacy.controlToken,capability:legacy.capability};
+ }
  const headers={Authorization:'Bearer '+record.controlToken,Origin:record.origin,'Content-Type':'application/json',[capabilityHeader]:record.capability};
- const get=async(path:string,body?:unknown)=>{const response=await fetch(record.origin+path,{method:body===undefined?'GET':'POST',headers,...(body===undefined?{}:{body:JSON.stringify(body)}),redirect:'error',signal:AbortSignal.timeout(5000)});const value=await readOpenStatus(response,5000);if(!response.ok)throw new Error((value as {error?:string}).error??'CONTROL_REQUEST_FAILED');return value;};
+ const get=async(path:string,body?:unknown)=>{const response=await fetch(record.origin+prefix+path,{method:body===undefined?'GET':'POST',headers,...(body===undefined?{}:{body:JSON.stringify(body)}),redirect:'error',signal:AbortSignal.timeout(5000)});const value=await readOpenStatus(response,5000);if(!response.ok)throw new Error((value as {error?:string}).error??'CONTROL_REQUEST_FAILED');return value;};
  const state=await get('/api/control') as {sourceHash:string;instanceKey:string;pages:{pageId:string;revision:number}[]};
  if(state.sourceHash!==p.contentHash||state.instanceKey!==key)throw new Error('CONTROL_STALE_BINDING');
  if(!commandOptions.command)return state;

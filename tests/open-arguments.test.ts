@@ -64,9 +64,9 @@ test('existing duplicate, unknown and missing-value option refusals remain named
   }
 });
 
-test('CLI batch admission is refused before any workspace or per-target server is started', async () => {
-  await expect(main(['open', 'a', 'b', '--animation', 'idle', '--view-only']))
-    .rejects.toThrow('OPEN_WORKSPACE_UNAVAILABLE');
+test('CLI validates every designated input before starting a workspace', async () => {
+  await expect(main(['open', 'synthetic-missing-cp2-a', 'synthetic-missing-cp2-b', '--animation', 'idle', '--view-only']))
+    .rejects.toThrow('OPEN_INPUT_MISSING');
 });
 
 test('entry-point help scanning respects batch operands and indexed animation value ownership', async () => {
