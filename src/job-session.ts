@@ -270,7 +270,11 @@ export class JobSession {
     if (previous) return previous.value as JobAct;
     let act: JobAct;
     this.store.update(this.jobId, current.revision, fresh => {
-      this.active(fresh, input.expectedGeneration);
+      // UI captures an observed generation. Unrelated asks may advance it while
+      // this same ask/source/publication/nonce stays valid. Agent mutation CAS
+      // remains global. Future UI generations cannot describe a displayed state.
+      this.active(fresh, fresh.data.generation);
+      if (input.expectedGeneration > fresh.data.generation) throw new JobError('JOB_GENERATION_STALE');
       const page = fresh.data.pages[input.pageId];
       if (!page || page.publicationId !== input.publicationId || !sameCapability(input.displayedNonce, page.displayedNonce)) {
         throw new JobError('JOB_DISPLAY_MISMATCH');
@@ -330,7 +334,12 @@ export class JobSession {
     if (input.jobId !== this.jobId) throw new JobError('JOB_UNKNOWN');
     let after = input.after;
     while (!input.signal.aborted) {
-      const value = await this.next(after, jobWaitLimitMs, input.signal);
+      let value: JobNextValue;
+      try { value = await this.next(after, jobWaitLimitMs, input.signal); }
+      catch (error) {
+        if (input.signal.aborted && error instanceof JobError && error.code === 'JOB_REQUEST_INVALID') return;
+        throw error;
+      }
       for (const event of value.events) { after = event.cursor; yield event; }
       if (value.status === 'closed') return;
     }

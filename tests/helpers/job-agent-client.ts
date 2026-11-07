@@ -26,6 +26,45 @@ if (mode === 'sqlite-crash') {
   const act = await session.commitUIAct(input.submission);
   writeSync(1, JSON.stringify({ committedActId: act.actId }) + '\n');
   process.kill(process.pid, 'SIGKILL');
+} else if (mode === 'subscription-server') {
+  const { JobSession } = await import('../../src/job-session.ts');
+  const input = JSON.parse(await Bun.stdin.text());
+  const session = new JobSession(input.options);
+  let cancellations = 0, completions = 0;
+  const encoder = new TextEncoder();
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/events') {
+      const abort = new AbortController();
+      const cancel = () => { if (!abort.signal.aborted) { cancellations++; abort.abort(); } };
+      request.signal.addEventListener('abort', cancel, { once: true });
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          // Deliberately unhandled if the iterator wrongly rejects ordinary
+          // disconnect. The parent must observe actual process survival.
+          void (async () => {
+            for await (const event of session.subscribe({ jobId: session.jobId,
+              after: session.status().cursor, signal: abort.signal })) {
+              controller.enqueue(encoder.encode('data: ' + JSON.stringify(event) + '\n\n'));
+            }
+            completions++;
+            writeSync(1, 'SUBSCRIPTION_COMPLETED\n');
+            if (!abort.signal.aborted) controller.close();
+          })();
+          controller.enqueue(encoder.encode(': connected\n\n'));
+        },
+        cancel,
+      });
+      return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } });
+    }
+    if (path === '/health') return Response.json({ alive: true, cancellations, completions });
+    if (path === '/shutdown') {
+      setTimeout(() => { server.stop(true); session.dispose(); }, 10);
+      return Response.json({ stopping: true });
+    }
+    return new Response(null, { status: 404 });
+  } });
+  writeSync(1, JSON.stringify({ origin: `http://127.0.0.1:${server.port}` }) + '\n');
 } else if (mode === 'agent') {
   const input = JSON.parse(await Bun.stdin.text());
   const denied = async (operation: () => Promise<unknown>) => {
