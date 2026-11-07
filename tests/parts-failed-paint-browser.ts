@@ -46,13 +46,14 @@ async function dragViewport(p: Page) {
 
 async function sample(p: Page) {
   return p.evaluate<{
-    canvas: { w: number; h: number; cleared: boolean };
-    reference: { w: number; h: number; cleared: boolean };
+    canvas: { w: number; h: number; cleared: boolean; pixel: number[] };
+    reference: { w: number; h: number; cleared: boolean; pixel: number[] };
     zoomLabel: string;
     scale: number;
     left: string;
     top: string;
     transform: string;
+    nativeRoot: { left: string; top: string; transform: string };
     center: { x: number; y: number };
     status: string;
     caption: string;
@@ -69,14 +70,20 @@ async function sample(p: Page) {
     const scale = new DOMMatrix(root.style.transform).a;
     const leftNum = parseFloat(root.style.left || '0');
     const topNum = parseFloat(root.style.top || '0');
+    const nativeStyle = document.createElement('div').style;
+    nativeStyle.left = (vp.clientWidth / 2 - c.width / 2) + 'px';
+    nativeStyle.top = (vp.clientHeight / 2 - c.height / 2) + 'px';
+    nativeStyle.transform = 'scale(1)';
+    const pixel = canvas => Array.from(canvas.getContext('2d').getImageData(3, 3, 1, 1).data);
     return {
-      canvas: { w: c.width, h: c.height, cleared: cCleared },
-      reference: { w: ref.width, h: ref.height, cleared: refCleared },
+      canvas: { w: c.width, h: c.height, cleared: cCleared, pixel: pixel(c) },
+      reference: { w: ref.width, h: ref.height, cleared: refCleared, pixel: pixel(ref) },
       zoomLabel: document.getElementById('zoom-value').textContent || '',
       scale,
       left: root.style.left,
       top: root.style.top,
       transform: root.style.transform,
+      nativeRoot: { left: nativeStyle.left, top: nativeStyle.top, transform: nativeStyle.transform },
       center: {
         x: Number(((vp.clientWidth / 2 - leftNum) / scale).toFixed(4)),
         y: Number(((vp.clientHeight / 2 - topNum) / scale).toFixed(4)),
@@ -105,7 +112,10 @@ async function main() {
   const report: Record<string, unknown> = {};
 
   try {
-    await writeComparisonPackage(root);
+    const fixture = await writeComparisonPackage(root);
+    const pixelAt = (image: { width: number; data: Uint8Array }, x: number, y: number) =>
+      Array.from(image.data.subarray((y * image.width + x) * 4, (y * image.width + x) * 4 + 4));
+    const samePixel = (actual: number[], expected: number[]) => JSON.stringify(actual) === JSON.stringify(expected);
     const pkg = await loadPartsView(root, { painting: join(root, 'painting.png') });
     const beforeHashes = await Promise.all(pkg.files.map(async f => hash(await readFile(f.abs))));
     const cap = 'f'.repeat(64);
@@ -143,8 +153,15 @@ async function main() {
 
       await wait(page, `!document.getElementById('stage-comment-refusal').textContent`);
       const initial = await sample(page);
+      const progress: Record<string, unknown> = { initial };
+      report[lang] = progress;
       assert(initial.canvas.w === 20 && initial.canvas.h === 16 && !initial.canvas.cleared, `${lang}: initial A 20x16 painted`);
       assert(initial.center.x === 10 && initial.center.y === 8 && initial.scale === 1, `${lang}: initial A centered at (10,8) 1:1`);
+
+      assert(initial.reference.w === 20 && initial.reference.h === 16 && !initial.reference.cleared,
+        `${lang}: reference buffer painted before planted failure`);
+      assert(samePixel(initial.reference.pixel, pixelAt(fixture.painting, fixture.body.x + 3, fixture.body.y + 3)),
+        `${lang}: initial reference pixel matches original painting crop`);
 
       // Switch to B (8x10) with planted image failure
       await page.evaluate(`window.__failB = true`);
@@ -152,6 +169,7 @@ async function main() {
       await wait(page, `document.getElementById('stage-comment-refusal').textContent.includes('PARTS_PAINT_FAILED')`);
 
       const failed = await sample(page);
+      progress.failed = failed;
       assert(failed.canvas.w === 20 && failed.canvas.h === 16 && failed.canvas.cleared, `${lang}: failed B cleared 20x16 canvas`);
       assert(failed.reference.w === 20 && failed.reference.h === 16 && failed.reference.cleared, `${lang}: failed B cleared 20x16 reference`);
       assert(failed.status.includes(expectedRefusalSubstr), `${lang}: expected refusal in status`);
@@ -165,6 +183,7 @@ async function main() {
       await click(page, '#native-one');
       await dragViewport(page);
       const afterRefusedInputs = await sample(page);
+      progress.afterRefusedInputs = afterRefusedInputs;
       assert(
         afterRefusedInputs.scale === 1 &&
           afterRefusedInputs.zoomLabel === '1:1' &&
@@ -177,10 +196,26 @@ async function main() {
 
       await writeFile(join(outDir, `failed-paint-${lang}.png`), await page.screenshot());
 
-      // Recover by retrying B with failure cleared, then zoom in to 125%
+      // Verify recovered framing before a zoom action could repair it.
       await page.evaluate(`window.__failB = false`);
       await click(page, '[data-pv-item="front"]');
       await wait(page, `!document.getElementById('stage-comment-refusal').textContent`);
+      const beforeZoom = await sample(page);
+      progress.beforeZoom = beforeZoom;
+      assert(beforeZoom.canvas.w === 8 && beforeZoom.canvas.h === 10 && !beforeZoom.canvas.cleared &&
+        beforeZoom.reference.w === 8 && beforeZoom.reference.h === 10 && !beforeZoom.reference.cleared,
+        `${lang}: both recovered B buffers painted before zoom`);
+      assert(beforeZoom.scale === 1 && beforeZoom.zoomLabel === '1:1' &&
+        beforeZoom.center.x === 4 && beforeZoom.center.y === 5,
+        `${lang}: RECOVERY_BEFORE_ZOOM_CENTER`);
+      assert(beforeZoom.left === beforeZoom.nativeRoot.left && beforeZoom.top === beforeZoom.nativeRoot.top &&
+        beforeZoom.transform === beforeZoom.nativeRoot.transform,
+        `${lang}: RECOVERY_BEFORE_ZOOM_ROOT`);
+      assert(samePixel(beforeZoom.canvas.pixel, pixelAt(fixture.cover, 3, 3)),
+        `${lang}: recovered B pixel matches original part`);
+      assert(samePixel(beforeZoom.reference.pixel, pixelAt(fixture.painting, fixture.front.x + 3, fixture.front.y + 3)),
+        `${lang}: recovered reference pixel matches original painting crop`);
+      await writeFile(join(outDir, `recovered-before-zoom-${lang}.png`), await page.screenshot());
       await click(page, '#zoom-in');
       const recovered = await sample(page);
       assert(
@@ -194,7 +229,7 @@ async function main() {
       );
       await writeFile(join(outDir, `recovered-paint-${lang}.png`), await page.screenshot());
 
-      report[lang] = { initial, failed, afterRefusedInputs, recovered };
+      progress.recovered = recovered;
     }
 
     const afterHashes = await Promise.all(pkg.files.map(async f => hash(await readFile(f.abs))));
@@ -203,6 +238,10 @@ async function main() {
     report.status = 'passed';
     await writeFile(join(outDir, 'report.json'), JSON.stringify(report, null, 2) + '\n');
     console.log('PARTS_FAILED_PAINT_BROWSER ' + JSON.stringify(report));
+  } catch (error) {
+    await writeFile(join(outDir, 'failure.json'), JSON.stringify({ error: String(error), report }, null, 2) + '\n');
+    if (page) await writeFile(join(outDir, 'failure.png'), await page.screenshot());
+    throw error;
   } finally {
     await page?.close();
     server?.stop(true);
