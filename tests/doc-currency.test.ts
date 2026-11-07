@@ -7,7 +7,10 @@ const manifest = JSON.parse(read('package.json'));
 
 test('#221: published package guidance distinguishes canonical, convenience and compiler names', () => {
   const readme = read('README.md'), contract = read('docs/REVIEW_PACKAGE.md'), panels = read('docs/PANELS.md');
-  expect(readme).toContain('The package is 0.x:');
+  expect(readme).toContain('The CLI and `@rig-c/review/job-host` managed owner host are supported surfaces.');
+  expect(readme).toContain('[Public API stability](docs/STABILITY.md)');
+  expect(manifest.exports['./job-host']).toBe('./src/job-host.ts');
+  expect(manifest.files).toContain('docs/STABILITY.md');
   expect(readme).toContain('npm i -D rig-review');
   for (const name of ['@rig-c/pixi', '@rig-c/phaser', '@rig-c/three']) expect(readme).toContain(name);
   expect(readme).not.toContain('unreleased adapter API');

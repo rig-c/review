@@ -13,7 +13,7 @@ import type {Readable} from 'node:stream';
 import {leaksCapability,redactCapability} from './redact.ts';
 import {createHash} from 'node:crypto';
 const root=new URL('..',import.meta.url).pathname,work=await mkdtemp(join(tmpdir(),'rig-review-smoke-')),app=join(work,'app');
-const manifest=JSON.parse(await readFile(join(root,'package.json'),'utf8')) as {name:string;bin:Record<string,string>};
+const manifest=JSON.parse(await readFile(join(root,'package.json'),'utf8')) as {name:string;bin:Record<string,string>;devDependencies:{typescript:string;'@types/bun':string}};
 let failed=false;const printed:string[]=[];let servedCapability='';
 /** The one writer of this script's stdout. */
 function log(line:string){const safe=redactCapability(line);printed.push(safe);console.log(safe);}
@@ -142,6 +142,14 @@ try {
   }));
   return response.json();
  }
+ const schemaMismatch = await ports.handleJobApi(new Request(host.origin + owner.pathname + 'api', {
+  method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + session.hostCredentials().agent},
+  body: JSON.stringify({...base, schema: 'rig-review/job-api@unsupported', verb: 'next',
+   requestId: 'public-schema-mismatch', after: null, waitMs: 0}),
+ }));
+ const schemaFailure: JobApiResponse = await schemaMismatch.json();
+ assert(schemaMismatch.status === 400 && !schemaFailure.ok && schemaFailure.error.code === 'JOB_REQUEST_INVALID' &&
+  schemaFailure.schema === JOB_API_SCHEMA && session.status().generation === 0, 'SCHEMA_MISMATCH_REFUSED');
  const published = await call({...base, verb: 'publish', requestId: 'public-publish', expectedGeneration: 0,
   idempotencyKey: 'public-publish', result: {path: 'review.json', selector: null},
   freeze: {kind: 'producer-held', holdId: 'public-smoke-held', record}});
@@ -166,12 +174,17 @@ try {
 `;
 
 async function publicHostSmoke(): Promise<void> {
+ // The consumer declares its own toolchain using this package's existing devDependency ranges.
+ const toolchain = ['typescript@' + manifest.devDependencies.typescript, '@types/bun@' + manifest.devDependencies['@types/bun']];
+ const prepared = await run(['npm', 'i', '-D', '--dry-run=false', '--no-audit', '--no-fund', ...toolchain], app);
+ if (!step('empty consumer installs its declared TypeScript and Bun types', prepared.exit === 0,
+  toolchain.join(' · ') + (prepared.stderr.trim() ? ' · ' + prepared.stderr.trim() : '')))
+  throw new Error('SMOKE_PUBLIC_HOST_TOOLCHAIN');
  const consumer = join(app, 'public-host.ts');
  await writeFile(consumer, publicHostConsumer);
- const typed = await run([process.execPath, join(root, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict',
+ const typed = await run([process.execPath, join(app, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict',
   '--skipLibCheck', '--target', 'ES2022', '--module', 'ESNext', '--moduleResolution', 'Bundler',
-  '--lib', 'ES2022,DOM,DOM.Iterable', '--allowImportingTsExtensions', '--types', 'bun',
-  '--typeRoots', join(root, 'node_modules/@types'), consumer], app);
+  '--lib', 'ES2022,DOM,DOM.Iterable', '--allowImportingTsExtensions', '--types', 'bun', consumer], app);
  if (!step('installed public job-host type surface', typed.exit === 0, typed.stdout.trim() || typed.stderr.trim()))
   throw new Error('SMOKE_PUBLIC_HOST_TYPES');
  const runtime = await run([process.execPath, consumer], app);

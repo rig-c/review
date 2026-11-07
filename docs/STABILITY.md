@@ -13,6 +13,8 @@ and behavior are defined in [Live job contract](REVIEW_PACKAGE.md#live-job-contr
 The current C3 parts binding and the separately queued C4 work remain governed
 by that reference.
 
+At C4 ([Review #501](https://github.com/rig-c/review/issues/501)), `JobPartsManifestPath`, `JobPartImagePath` and `JobPartsIdentity` will change, together with their embedding public types `JobHostOptions`, `JobOwnerHost`, `JobSessionOptions`, `JobSession`, `JobWorkerOptions`, `JobPublicationReader`, `JobPublishedContext`, `JobSourceBinding`, `JobActSources`, `JobAct`, `JobPendingAsk`, `JobPublication`, `JobStatus`, `JobEvent`, `JobNextValue`, `JobResponseValues`, `JobApiResponse`, `JobDisplayPublication` and `JobHostPorts`. This is a declared contract revision that must bump `JOB_API_SCHEMA` and receive HQ sign-off. Current-schema consumers must named-refuse a schema mismatch and must never silently interpret an incompatible payload. The installed smoke control `SMOKE_PUBLIC_HOST_SCHEMA_MISMATCH_REFUSED` sends an unsupported schema through the public host, verifies HTTP 400 with `JOB_REQUEST_INVALID` and the current response schema, and checks that generation remains unchanged, exercising the existing `parseJobRequest` schema guard. [Installed control](https://github.com/rig-c/review/blob/main/scripts/install-smoke.ts#L152), [schema guard](https://github.com/rig-c/review/blob/main/src/job-api.ts#L131).
+
 ```ts
 import {startJobHost} from '@rig-c/review/job-host';
 import type {
