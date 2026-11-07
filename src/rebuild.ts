@@ -772,7 +772,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
 
   /** The state directory may not sit inside the package or the handoff's root (the parent of an opened out/). */
   function assertStateOutside(): void {
-    assertStateDirOutside(options.stateDir, p, message => new RebuildError('REBUILD_STATE_INSIDE_PACKAGE', message));
+    assertStateDirOutside(options.stateDir, p, (message, code) => new RebuildError(code ?? 'REBUILD_STATE_INSIDE_PACKAGE', message));
   }
   /** Once per session: the first time the handoff and the producer both resolve, the baseline starts (or is reused). */
   let baseline: BaselineResult | null = null, baselineRun: Promise<BaselineResult> | null = null;

@@ -19,6 +19,7 @@ import {ensureFront,frontPort} from './front.ts';
 import {playPackagePath} from './versions.ts';
 import {HandoffError,HANDOFF_FLAGS,isBuildRoot,type HandoffFlags,type HandoffRecord} from './handoff.ts';
 import {stateDirInside,stateRoots} from './state-dir.ts';
+import {destinationDirectory} from './destination-directory.ts';
 import {DEFAULT_UNOPENED_TIMEOUT_MS} from './live-lifecycle.ts';
 import {verifyCompiledModel} from './strip-render.ts';
 import {verifyHandoffReadiness} from './rebuild.ts';
@@ -82,7 +83,6 @@ async function claimOwner(claim:string):Promise<{file:string;pid:number;nonce:st
 }
 async function removeClaimFile(claim:string,owner:{file:string;nonce:string}){try{const current=await smallJson(owner.file) as {nonce?:string};if(current.nonce!==owner.nonce)return;await unlink(owner.file);await rmdir(claim);}catch(e){if(!['ENOENT','ENOTEMPTY','EEXIST'].includes((e as NodeJS.ErrnoException).code??''))throw e;}}
 export async function releaseClaim(claim:string,nonce:string){await removeClaimFile(claim,{file:join(claim,`owner.${nonce}.json`),nonce});}
-async function canonicalDestination(path:string):Promise<string>{try{return await realpath(path);}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;const parent=dirname(path);if(parent===path)throw e;return join(await canonicalDestination(parent),basename(path));}}
 /** Single-owner startup: publish a populated claim directory atomically (no live owner ever exposes an empty
  * claim; unique owner filenames make stale cleanup safe after replacement). A ready reuse wins while waiting. */
 export async function acquireClaim<T>(control:string,name:string,nonce:string,reuse:()=>Promise<T|null>,deadline:number,busy:string):Promise<{row:T}|{claim:string}>{
@@ -132,7 +132,7 @@ export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idl
  let p:OpenPackage;try{p=await loadOpenPackage(inputs);}catch(error){throw await openRefusal(error,inputs);}
  const fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
  // #187: canonical (symlinks and ancestors resolved) and outside every supplied folder: the package, the build root a check package belongs to, the handoff root.
- const stateDir=await canonicalDestination(resolve(options.stateDir??defaultStateDir())),roots=p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
+ const stateDir=destinationDirectory(options.stateDir??defaultStateDir(),'OPEN_STATE_INVALID: the state directory path has a non-directory component or a symlink loop'),roots=p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
  if(p.mode==='single'&&p.joined&&stateDirInside(stateDir,[{kind:'package',path:p.joined.opened.root}]))throw new Error('OPEN_STATE_INSIDE_PACKAGE: review state must be outside the joined project');
  const inside=stateDirInside(stateDir,roots);if(inside)throw new Error(`OPEN_STATE_INSIDE_PACKAGE ${inside.kind}: the review state directory must be outside input packages; it is inside the ${inside.kind}; set RIG_REVIEW_STATE_DIR outside it`);
  await verifyOpenLoad(p,viewOnly,options.cwd);
@@ -177,7 +177,8 @@ export async function runOpenWorker(requestPath:string):Promise<void>{
 /** Read/control an already running, explicitly opted-in exact binding. Never starts a worker. */
 export async function controlReview(inputs:OpenInputs,commandOptions:{pageId?:string;expectedRevision?:number;requestId?:string;command?:ControlCommand;waitMs?:number;stateDir?:string}={}):Promise<unknown>{
  const wait=commandOptions.waitMs??10000;if(!Number.isSafeInteger(wait)||wait<0||wait>30000)throw new Error('CONTROL_WAIT: expected integer 0..30000');
- const p=await loadOpenPackage({...inputs,control:true}),fingerprint=await openFingerprint(),key=openKey(p,fingerprint),stateDir=await canonicalDestination(resolve(commandOptions.stateDir??defaultStateDir()));
+ const p=await loadOpenPackage({...inputs,control:true}),fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
+ const stateDir=destinationDirectory(commandOptions.stateDir??defaultStateDir(),'CONTROL_STATE: the state directory path has a non-directory component or a symlink loop');
  const controlDir=join(stateDir,'open');
  try{if((await lstat(controlDir)).isSymbolicLink())throw new Error('CONTROL_STATE: control directory cannot be a symlink');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Error('CONTROL_INSTANCE_UNAVAILABLE: open the exact inputs once with --control');throw error;}
  const file=join(controlDir,key+'.json');try{const info=await lstat(file);if(!info.isFile()||(info.mode&0o077)!==0)throw new Error('CONTROL_STATE: owner-only regular capability record required');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Error('CONTROL_INSTANCE_UNAVAILABLE: open the exact inputs once with --control');throw error;}

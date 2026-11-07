@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, mkdir, readFile, writeFile, rm, symlink, realpath, readdir, truncate } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, writeFile, rm, symlink, realpath, readdir, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -18,7 +18,11 @@ test('JSON binds exact reference/artifact bytes and never changes package invent
 test('clockless JSON preserves frames, PNG refusal emits no output or native capability request',async()=>{const {root,p}=await fixture(false);expect((await exportReviewStrip(p,request(p.sourceHash))).plan.groups[0].samples).toEqual([{requestedFrame:1,time:null},{requestedFrame:2,time:null}]);await expect(exportReviewStrip(p,request(p.sourceHash,{format:'png'}))).rejects.toThrow(stripNoClock);expect((await readdir(root)).sort()).toEqual(['motion.json','report.json','review.json','skeleton.model.json','source.mp4']);});
 test('changed model, motion, report or reference refuses the frozen source binding',async()=>{for(const file of ['skeleton.model.json','motion.json','report.json','source.mp4']){const {root,p}=await fixture();await writeFile(join(root,file),(await readFile(join(root,file),'utf8'))+' ');await expect(exportReviewStrip(p,request(p.sourceHash))).rejects.toThrow('inputs changed');}});
 test('reference selection is declared video only and no arbitrary filesystem fields',async()=>{const {p}=await fixture();for(const referenceId of [undefined,'../source.mp4','missing'])await expect(exportReviewStrip(p,request(p.sourceHash,{referenceId}))).rejects.toThrow('referenceId');await expect(exportReviewStrip(p,request(p.sourceHash,{output:'/tmp/secret'}))).rejects.toThrow('unsupported field');});
-test('output refuses both roots, existing files and symlink parent; derived JSON goes outside',async()=>{const a=await fixture(),b=await fixture(),parent=await realpath(await mkdtemp(join(tmpdir(),'strip-output-')));dirs.push(parent);for(const path of [join(a.root,'strip.png'),join(b.root,'nested.png'),a.root])await expect(validateStripOutput(path,[a.root,b.root])).rejects.toThrow('outside');await symlink(a.root,join(parent,'alias'));await expect(validateStripOutput(join(parent,'alias','strip.png'),[a.root,b.root])).rejects.toThrow('without symlinks');const result=await exportReviewStrip(a.p,request(a.p.sourceHash));const output=join(parent,'strip.json');await writeStripOutput(result,output,[a.root,b.root]);expect(JSON.parse(await readFile(output,'utf8')).plan.binding.sourceHash).toBe(a.p.sourceHash);await expect(writeStripOutput(result,output,[a.root,b.root])).rejects.toThrow('already exists');});
+test('output refuses both roots, existing files and an alias into a source; derived JSON goes outside',async()=>{const a=await fixture(),b=await fixture(),parent=await realpath(await mkdtemp(join(tmpdir(),'strip-output-')));dirs.push(parent);for(const path of [join(a.root,'strip.png'),join(b.root,'nested.png'),a.root])await expect(validateStripOutput(path,[a.root,b.root])).rejects.toThrow('outside');for (const [index, source] of [a,b].entries()) {
+ const alias=join(parent,'alias-'+index);await symlink(source.root,alias,'dir');
+ await expect(validateStripOutput(join(alias,'strip.png'),[a.root,b.root])).rejects.toThrow('outside');
+ expect(await Bun.file(join(source.root,'strip.png')).exists()).toBe(false);
+}const result=await exportReviewStrip(a.p,request(a.p.sourceHash));const output=join(parent,'strip.json');await writeStripOutput(result,output,[a.root,b.root]);expect(JSON.parse(await readFile(output,'utf8')).plan.binding.sourceHash).toBe(a.p.sourceHash);await expect(writeStripOutput(result,output,[a.root,b.root])).rejects.toThrow('already exists');});
 test('compare JSON preserves ordered binding and per-feedback basis; either side/reference changed refuses',async()=>{const a=await fixture(false),b=await fixture();const p=await loadCompare({a:a.root,b:b.root,reference:join(a.root,'source.mp4'),animation:'dance'});const input=request(p.response.sourceHash,{referenceId:undefined,intervals:[{id:'a-feedback',feedbackId:'one',basis:'a',frameStart:0,frameEnd:1},{id:'b-feedback',feedbackId:'two',basis:'b',frameStart:1,frameEnd:2}]});const r=await exportCompareStrip(p,input);expect(r.plan.binding.compare).toEqual(p.response.binding);expect(r.plan.basis).toBe('mixed');expect(r.plan.groups.map(g=>g.samples.map(v=>v.time))).toEqual([[null,null],[.1,.9]]);await expect(exportCompareStrip(p,{...input,referenceId:'arbitrary'})).rejects.toThrow('fixed reference');await expect(exportCompareStrip(p,{...input,animation:'other'})).rejects.toThrow('fixed comparison');await writeFile(join(b.root,'motion.json'),'changed');await expect(exportCompareStrip(p,input)).rejects.toThrow('inputs changed');});
 test('HTTP export requires same-origin bounded JSON and returns download; no filesystem API',async()=>{const {root,p}=await fixture(false);const server=await startServer(p,{port:0,stateDir:join(root,'state')});const base=`http://127.0.0.1:${server.port}`,body=JSON.stringify(request(p.sourceHash));try{expect((await fetch(base+'/api/strip',{method:'POST',headers:{'Content-Type':'application/json'},body})).status).toBe(403);const headers={Origin:base,'Content-Type':'application/json'};const response=await fetch(base+'/api/strip',{method:'POST',headers,body});expect(response.status).toBe(200);expect(response.headers.get('content-disposition')).toContain('review-strip.json');expect((await response.json()).plan.groups[0].samples[0].time).toBeNull();expect((await fetch(base+'/api/strip',{method:'POST',headers,body:JSON.stringify(request(p.sourceHash,{format:'png'}))})).status).toBe(400);expect((await fetch(base+'/api/strip',{method:'POST',headers,body:JSON.stringify({...request(p.sourceHash),out:'/etc/passwd'})})).status).toBe(400);expect((await fetch(base+'/api/strip',{method:'POST',headers:{...headers,'Content-Type':'text/plain'},body})).status).toBe(400);expect((await fetch(base+'/api/strip',{method:'POST',headers,body:JSON.stringify({padding:'x'.repeat(1024*1024)})})).status).toBe(400);await writeFile(join(root,'motion.json'),'changed');expect((await fetch(base+'/api/strip',{method:'POST',headers,body})).status).toBe(409);}finally{await server.stop(true);}});
 test('compare HTTP download uses fixed reference and combined source identity',async()=>{const a=await fixture(false),b=await fixture(),p=await loadCompare({a:a.root,b:b.root,reference:join(a.root,'source.mp4'),animation:'dance'}),server=await startCompareServer(p,{port:0});const base=`http://127.0.0.1:${server.port}`,input=request(p.response.sourceHash,{referenceId:undefined,intervals:[{id:'one',basis:'b',frameStart:0,frameEnd:1}]});try{const response=await fetch(base+'/api/compare/strip',{method:'POST',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify(input)});expect(response.status).toBe(200);expect((await response.json()).plan.binding.compare).toEqual(p.response.binding);expect((await fetch(base+'/api/compare/strip',{method:'POST',headers:{Origin:'http://evil.test','Content-Type':'application/json'},body:JSON.stringify(input)})).status).toBe(403);}finally{await server.stop(true);}});
@@ -37,4 +41,48 @@ test('portable output containment accepts external paths and refuses package roo
  expect(stripParentPaths('C:\\users\\person\\exports\\strip.png',win32)).toEqual(['C:\\users','C:\\users\\person','C:\\users\\person\\exports']);
  expect(stripParentPaths('\\\\server\\share\\exports\\nested\\strip.png',win32)).toEqual(['\\\\server\\share\\exports','\\\\server\\share\\exports\\nested']);
 });
-test('output checks every parent even when a symlink is above the final directory',async()=>{const {root,p}=await fixture();const parent=await realpath(await mkdtemp(join(tmpdir(),'strip-parent-')));dirs.push(parent);const outside=join(parent,'outside');await mkdir(outside);await mkdir(join(outside,'nested'));await symlink(outside,join(parent,'alias'));const target=join(parent,'alias','nested','strip.json');await expect(validateStripOutput(target,[root])).rejects.toThrow('without symlinks');const result=await exportReviewStrip(p,request(p.sourceHash));await expect(writeStripOutput(result,target,[root])).rejects.toThrow('without symlinks');expect(await Bun.file(join(outside,'nested','strip.json')).exists()).toBe(false);});
+test('CLI exports through a symlink above the final directory using the physical parent', async () => {
+  const { root, p } = await fixture();
+  const parent = await realpath(await mkdtemp(join(tmpdir(), 'strip-parent-')));
+  dirs.push(parent);
+  const outside = join(parent, 'outside'), alias = join(parent, 'alias');
+  await mkdir(join(outside, 'nested'), { recursive: true });
+  await symlink(outside, alias, 'dir');
+  const physical = join(outside, 'nested', 'strip.json'), target = join(alias, 'nested', 'strip.json');
+  expect(await validateStripOutput(target, [root])).toBe(physical);
+  await main(['strip', root, '--reference', 'reference', '--animation', 'dance', '--frames', '1:2', '--json', '--out', target]);
+  expect(JSON.parse(await readFile(physical, 'utf8')).plan.binding.sourceHash).toBe(p.sourceHash);
+  expect(await readFile(join(root, 'motion.json'), 'utf8')).toBe('original motion');
+
+  const dangling = join(outside, 'nested', 'dangling.png'), absent = join(outside, 'missing');
+  await symlink(absent, dangling, 'file');
+  await expect(validateStripOutput(join(alias, 'nested', 'dangling.png'), [root])).rejects.toThrow('destination already exists');
+  expect((await lstat(dangling)).isSymbolicLink()).toBe(true);
+  await expect(validateStripOutput(join(alias, 'missing', 'strip.json'), [root])).rejects.toThrow('parent must be an existing directory');
+
+  const image = join(alias, 'nested', 'strip.png'), physicalImage = join(outside, 'nested', 'strip.png');
+  const sidecar = physicalImage + '.json';
+  await writeFile(sidecar, 'sentinel');
+  const plan = await exportReviewStrip(p, request(p.sourceHash));
+  const png = Uint8Array.of(1, 2, 3); // Test the writer without invoking the renderer.
+  await expect(writeStripOutput({ ...plan, png }, image, [root])).rejects.toThrow('destination already exists');
+  expect(await Bun.file(physicalImage).exists()).toBe(false);
+  expect(await readFile(sidecar, 'utf8')).toBe('sentinel');
+  await rm(sidecar);
+  await writeStripOutput({ ...plan, png }, image, [root]);
+  expect(await readFile(physicalImage)).toEqual(Buffer.from(png));
+  expect(JSON.parse(await readFile(sidecar, 'utf8')).plan.binding.sourceHash).toBe(p.sourceHash);
+});
+
+test.skipIf(process.platform !== 'darwin')('CLI exports under the macOS /var alias', async () => {
+  const { root, p } = await fixture();
+  const nativeTemp = await realpath(tmpdir());
+  const varTemp = nativeTemp.startsWith('/private/var/') ? nativeTemp.slice('/private'.length) : '/var/tmp';
+  const directory = await mkdtemp(join(varTemp, 'review-strip-var-'));
+  dirs.push(directory);
+  expect((await lstat('/var')).isSymbolicLink()).toBe(true);
+  const physical = await realpath(directory);
+  expect(physical).toBe('/private' + directory);
+  await main(['strip', root, '--reference', 'reference', '--animation', 'dance', '--frames', '1:2', '--json', '--out', join(directory, 'strip.json')]);
+  expect(JSON.parse(await readFile(join(physical, 'strip.json'), 'utf8')).plan.binding.sourceHash).toBe(p.sourceHash);
+});

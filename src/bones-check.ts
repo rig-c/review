@@ -61,7 +61,7 @@ export function createBonesCheck(p: ReviewPackage, options: { stateDir: string; 
   let running = false;
   async function run(input: unknown): Promise<BonesCheckResult> {
     const { ops, configHash } = parseBonesCheck(input);
-    assertStateDirOutside(options.stateDir, p, message => new RebuildError('REBUILD_STATE_INSIDE_PACKAGE', message));
+    assertStateDirOutside(options.stateDir, p, (message, code) => new RebuildError(code ?? 'REBUILD_STATE_INSIDE_PACKAGE', message));
     await options.unchanged();
     const inputs = await producerInputs(p.handoff, p.handoffReason);
     const original = JSON.parse(inputs.configText) as JsonValue;

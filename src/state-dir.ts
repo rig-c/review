@@ -5,23 +5,20 @@
  * inside the rig-parts build root the check package belongs to (opening `out` redirects the package to `out/check`;
  * the build is still the supplied folder), the package root, or the producer handoff's root.
  */
-import { realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, relative, sep } from 'node:path';
+import { destinationDirectory, DestinationDirectoryError } from './destination-directory.ts';
 
 export type StateRootKind = 'build root' | 'package' | 'handoff root';
 export interface StateRoot { kind: StateRootKind; path: string }
 /** The fields of a loaded package that name supplied folders. */
 export interface StateRootsSource { root: string; buildRoot?: string; handoff?: { root: string } | null }
 
-const missing = (e: unknown) => ['ENOENT', 'ENOTDIR'].includes((e as NodeJS.ErrnoException).code ?? '');
+const invalidCode = 'STATE_DIRECTORY_INVALID';
+const invalidMessage = 'the state directory path has a non-directory component or a symlink loop';
 
-/** The canonical location of `path`: realpath of the longest existing prefix joined with the remainder. */
+/** Resolve the existing directory prefix and keep any missing suffix. */
 export function canonicalStatePath(path: string): string {
-  const absolute = resolve(path), rest: string[] = [];
-  for (let current = absolute; ; current = dirname(current)) {
-    try { const real = realpathSync(current); return rest.length ? join(real, ...rest.reverse()) : real; }
-    catch (e) { if (!missing(e) || dirname(current) === current) throw e; rest.push(basename(current)); }
-  }
+  return destinationDirectory(path, `${invalidCode}: ${invalidMessage}`);
 }
 
 /** The supplied folders of one package, innermost first (a refusal names the first that holds the state). */
@@ -41,8 +38,14 @@ export function stateDirInside(stateDir: string, roots: readonly StateRoot[]): S
 /** The refusal text after the code: which supplied folder holds the state directory. */
 export const stateInsideMessage = (root: StateRoot) => `the review state directory is inside the inspected ${root.kind}; set RIG_REVIEW_STATE_DIR outside it`;
 
-/** Throws `make(code-less message)` when the state directory sits inside one of the package's supplied folders. */
-export function assertStateOutside(stateDir: string, p: StateRootsSource, make: (message: string, root: StateRoot) => Error): void {
-  const root = stateDirInside(stateDir, stateRoots(p));
-  if (root) throw make(stateInsideMessage(root), root);
+/** Use the caller's refusal type for invalid state paths and paths inside supplied folders. */
+export function assertStateOutside(stateDir: string, p: StateRootsSource, make: (message: string, code?: typeof invalidCode) => Error): void {
+  let root: StateRoot | null;
+  try {
+    root = stateDirInside(stateDir, stateRoots(p));
+  } catch (error) {
+    if (error instanceof DestinationDirectoryError) throw make(invalidMessage, invalidCode);
+    throw error;
+  }
+  if (root) throw make(stateInsideMessage(root));
 }

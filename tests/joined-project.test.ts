@@ -176,6 +176,15 @@ test('joined authored post maps the recorded package and isolates feedback and s
     const doc = JSON.parse(directionBytes.toString());
     expect(authored.joined).toEqual({postVersion:2, projectHash:digest(projectBytes),
       packageSourceHash:standalone.contentHash, packageRoot:'derived/review/v1', projectModel:doc.rig.model});
+    const projectAlias = join(scratch, 'project-alias'), packageAlias = join(scratch, 'package-alias');
+    await symlink(root, projectAlias, 'dir');
+    await symlink(input, packageAlias, 'dir');
+    const aliased = await loadOpenPackage(parseOpenInputs([packageAlias, ...flags.map(flag => flag === root ? projectAlias : flag)]));
+    if (aliased.mode !== 'single' || !aliased.joined) throw new Error('Expected joined post through both aliases');
+    expect(aliased.inputs).toEqual(joined.inputs);
+    expect(aliased.contentHash).toBe(joined.contentHash);
+    expect(aliased.p.direction?.joined).toEqual(authored.joined);
+    await aliased.joined.assertCurrent();
     // Isolate the package identity: the selected video contributes to the package hash
     // while the Create project, its rig package and direction document stay identical.
     const video=join(scratch,'explicit.mp4');
