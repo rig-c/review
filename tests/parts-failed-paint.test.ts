@@ -1,17 +1,75 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import ts from 'typescript';
 import { createPartsViewport } from '../web/parts-viewport-provider.ts';
 import { t } from '../web/i18n.ts';
+import { defaultPartsComparison } from '../src/parts-comparison.ts';
+import type { StagePartsState } from '../web/stage-nav.ts';
+
+const productSource = readFileSync(new URL('../web/parts.ts', import.meta.url), 'utf8');
+const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
+const mutants = {
+  RECOVERY_FIT_BEFORE_CLEAR: [
+    'paintFailure=null;viewport?.fitCamera();commentUi?.refresh();',
+    'viewport?.fitCamera();paintFailure=null;commentUi?.refresh();',
+  ],
+  COMMENT_RESTORE_WITHOUT_GUARD: [
+    'await paint();if(!paintFailure){viewport!.writeCamera',
+    'await paint();if(true){viewport!.writeCamera',
+  ],
+  STAGE_RESTORE_WITHOUT_GUARD: [
+    'select(index);await paint();if(!paintFailure){viewport.writeCamera',
+    'select(index);await paint();if(true){viewport.writeCamera',
+  ],
+  NAVIGATION_WITHOUT_FAILURE_GUARD: [
+    '()=>!commentUi?.active()&&!paintFailure',
+    '()=>!commentUi?.active()',
+  ],
+  REFERENCE_CLEAR_OMITTED: [
+    "ref.getContext('2d')?.clearRect(0,0,ref.width,ref.height);",
+    'void ref;',
+  ],
+} as const;
+
+// Opt-in negative controls change only the source string compiled by this harness.
+const mutant = process.env.REVIEW502_FAILED_PAINT_MUTANT;
+let harnessSource = productSource;
+if (mutant) {
+  if (!Object.hasOwn(mutants, mutant)) throw new Error('Unknown failed-paint mutant ' + mutant);
+  const [before, after] = mutants[mutant as keyof typeof mutants];
+  expect(productSource.split(before).length - 1).toBe(1);
+  harnessSource = productSource.replace(before, after);
+  const unchanged = productSource.replace(before, '<single-mutation>');
+  expect(harnessSource.replace(after, '<single-mutation>')).toBe(unchanged);
+  console.log('FAILED_PAINT_MUTANT ' + JSON.stringify({
+    name: mutant, replacements: 1, originalSha256: sha256(productSource),
+    mutatedSha256: sha256(harnessSource), unchangedSha256: sha256(unchanged),
+  }));
+}
+
+function productNode(source: string, matches: (node: ts.Node) => boolean): string {
+  const tree = ts.createSourceFile('parts.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const found: ts.Node[] = [];
+  const visit = (node: ts.Node) => {
+    if (matches(node)) found.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  expect(found.length).toBe(1);
+  return found[0]!.getText(tree);
+}
+
 
 interface BoxRecord {
   clearRects: [number, number, number, number][];
   fillRects: [number, number, number, number][];
   drawImages: number;
+  painted: boolean;
 }
 
 function makeCanvas(initialWidth = 20, initialHeight = 16): HTMLCanvasElement & { record: BoxRecord } {
-  const record: BoxRecord = { clearRects: [], fillRects: [], drawImages: 0 };
+  const record: BoxRecord = { clearRects: [], fillRects: [], drawImages: 0, painted: false };
   const ctx = {
     imageSmoothingEnabled: true,
     fillStyle: '',
@@ -22,9 +80,11 @@ function makeCanvas(initialWidth = 20, initialHeight = 16): HTMLCanvasElement & 
     setLineDash() {},
     clearRect(x: number, y: number, w: number, h: number) {
       record.clearRects.push([x, y, w, h]);
+      record.painted = false;
     },
     fillRect(x: number, y: number, w: number, h: number) {
       record.fillRects.push([x, y, w, h]);
+      record.painted = true;
     },
     strokeRect() {},
     beginPath() {},
@@ -33,6 +93,7 @@ function makeCanvas(initialWidth = 20, initialHeight = 16): HTMLCanvasElement & 
     stroke() {},
     drawImage() {
       record.drawImages++;
+      record.painted = true;
     },
     getImageData(_x: number, _y: number, w: number, h: number) {
       return { data: new Uint8ClampedArray(Math.max(1, w * h * 4)) };
@@ -49,7 +110,16 @@ function makeCanvas(initialWidth = 20, initialHeight = 16): HTMLCanvasElement & 
 }
 
 function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' }) {
-  const src = readFileSync(new URL('../web/parts.ts', import.meta.url), 'utf8');
+  const src = harnessSource;
+  const navigationCall = productNode(src, node => ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) && node.expression.getText() === 'viewport.bindNavigation');
+  const restoreProperty = productNode(src, node => ts.isPropertyAssignment(node) &&
+    node.name.getText() === 'restore' && ts.isArrowFunction(node.initializer));
+  const restoreCallback = restoreProperty.slice(restoreProperty.indexOf(':') + 1);
+  const stageRestore = productNode(src, node => ts.isFunctionDeclaration(node) && node.name?.text === 'restoreStageParts');
+  const selectionSource = readFileSync(new URL('../web/stage-nav.ts', import.meta.url), 'utf8');
+  const selection = productNode(selectionSource, node => ts.isFunctionDeclaration(node) &&
+    node.name?.text === 'stagePartsSelectionIndex').replace('export function', 'function');
   const paintSlice = src.slice(src.indexOf('const itemImage ='), src.indexOf('\nfunction renderComparison('));
   const selectSlice = src.slice(src.indexOf('function select(index: number): void {'), src.indexOf('\nfunction updateEntry('));
   const bootStart = src.indexOf('frameSize:target=>{');
@@ -95,6 +165,11 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
     'camera-sync': cameraSyncInput,
     fit: fitButton,
     'rig-label': rigLabel,
+    'pv-assemble': { setAttribute() {} },
+    'pv-bg': { value: '' },
+    'pv-alpha': { checked: false },
+    'pv-footprints': { checked: false },
+    'pv-load': { hidden: true, dataset: {}, textContent: '' },
   };
   const $ = <T = HTMLElement>(id: string): T => nodes[id] as T;
 
@@ -104,6 +179,8 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
       mode: options?.mode ?? ('parts' as const),
       title: 'fixture',
       sourceHash: '0'.repeat(64),
+      inspectionSourceHash: 'b'.repeat(64),
+      draft: { mappings: [{ part: 'part-b', skin: 'default', slot: 'slot-b', attachment: 'part-b' }] },
       verdictFile: 'parts-review.json',
       rigSize: [64, 64] as [number, number],
       painting: options?.painting ? { sha256: 'a'.repeat(64), width: 64, height: 64 } : null,
@@ -116,7 +193,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
         { index: 0, name: 'part-a', x: 0, y: 0, w: 20, h: 16, trimmed: false, flags: [], page: 'page0.png' },
         { index: 1, name: 'part-b', x: 4, y: 6, w: 8, h: 10, trimmed: false, flags: [], page: 'page1.png' },
         { index: 2, name: 'part-c', x: 2, y: 2, w: 12, h: 14, trimmed: false, flags: [], page: 'page0.png' },
-      ],
+      ].map(item => ({ ...item, imageHash: String(item.index).repeat(64) })),
       flags: [],
       verdict: null,
       verdictStale: null,
@@ -147,10 +224,11 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
   const documentStub = {
     createElement: () => ({ className: '', style: {}, dataset: {}, setAttribute() {}, append() {} }),
     querySelectorAll: () => [],
+    querySelector: () => ({ hidden: false }),
   };
 
   const code = ts.transpileModule(
-    `const REGION_MARGIN = 4;\nlet painting = false;\n${paintSlice}\n${selectSlice}\nconst hostConfig = { ${frameSizeSlice} };\nconst navEnabled = () => !commentUi?.active() && !paintFailure;\nreturn { partFrame, rasterFrame, pageImage, paint, paintRaster, paintReference, select: (idx: number) => { select(idx); }, setView, hostConfig, navEnabled, getState: () => ({ paintToken, painting, paintFailure, paintReset }) };`,
+    `const REGION_MARGIN = 4;\nlet painting = false;\n${paintSlice}\n${selectSlice}\nconst hostConfig = { ${frameSizeSlice} };\nlet navEnabled: () => boolean;\nconst navigationHost = { bindNavigation: (_carry: unknown, enabled: () => boolean) => { navEnabled = enabled; } };\n${navigationCall.replace('viewport.bindNavigation', 'navigationHost.bindNavigation')};\nconst restoreComment = ${restoreCallback};\n${selection}\n${stageRestore}\nreturn { partFrame, rasterFrame, pageImage, paint, paintRaster, paintReference, select: (idx: number) => { select(idx); }, setView, hostConfig, navEnabled, restoreComment, restoreStageParts, getState: () => ({ paintToken, painting, paintFailure, paintReset }) };`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } },
   ).outputText;
 
@@ -182,7 +260,8 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
     'paintAssembly',
     'paintAssemblyOutline',
     'paintMesh',
-    `const viewport = new Proxy({}, { get(_t, prop) { const v = getViewport(); return v ? v[prop] : undefined; }, set(_t, prop, val) { const v = getViewport(); if (v) v[prop] = val; return true; } });\n${code}`,
+    'restoreDependencies',
+    `const { fetch, access, stageHeaders, defaultPartsComparison } = restoreDependencies;\nconst viewport = new Proxy({}, { get(_t, prop) { const v = getViewport(); return v ? v[prop] : undefined; }, set(_t, prop, val) { const v = getViewport(); if (v) v[prop] = val; return true; } });\n${code}`,
   )(
     state,
     $,
@@ -222,6 +301,12 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
     () => {},
     () => {},
     () => {},
+    {
+      fetch: async () => ({ ok: true, json: async () => state.data }),
+      access: { route: (route: string) => route },
+      stageHeaders: () => ({}),
+      defaultPartsComparison,
+    },
   );
 
   viewport = createPartsViewport({
@@ -396,6 +481,8 @@ describe('parts failed paint camera and frame safety (#474)', () => {
     await h.api.paint();
     expect(h.api.getState().paintFailure).toBeNull();
     expect(h.saveStatus.textContent).toBe('');
+    expect(h.viewport.state.displayedCenter, 'RECOVERY_BEFORE_ZOOM_CENTER').toEqual({ x: 4, y: 5 });
+    expect(h.rigRoot.style, 'RECOVERY_BEFORE_ZOOM_ROOT').toEqual({ left: '106px', top: '75px', transform: 'scale(1)' });
 
     h.viewport.zoomCamera(1.25);
     expect(h.viewport.paneCamera('rig')).toEqual({ zoom: 1.25, center: { x: 4, y: 5 } });
@@ -483,5 +570,116 @@ describe('parts failed paint camera and frame safety (#474)', () => {
 
     h.viewport.zoomCamera(1.25);
     expect(h.viewport.paneCamera('rig')).toEqual({ zoom: 1.25, center: { x: 6, y: 7 } });
+  });
+});
+
+
+describe('failed paint follow-up controls (#502)', () => {
+  test('navigation uses the product predicate across comment capture, failure and recovery', async () => {
+    const h = makeHarness();
+    h.loaders.set('/api/parts/image/0', async () => ({ width: 20, height: 16 } as HTMLImageElement));
+    h.loaders.set('/api/parts/image/1', async () => { throw new Error('planted image failure'); });
+    await h.api.paint();
+    expect(h.api.navEnabled()).toBe(true);
+    h.setCommentActive(true);
+    expect(h.api.navEnabled()).toBe(false);
+    h.setCommentActive(false);
+    expect(h.api.navEnabled()).toBe(true);
+    h.state.selected = 1;
+    await h.api.paint();
+    expect(h.api.navEnabled(), 'FAILED_PAINT_NAVIGATION_DISABLED').toBe(false);
+    h.loaders.set('/api/parts/image/1', async () => ({ width: 8, height: 10 } as HTMLImageElement));
+    await h.api.paint();
+    expect(h.api.navEnabled()).toBe(true);
+  });
+
+  test('raster recovery centers the newly painted frame before any zoom can repair it', async () => {
+    const h = makeHarness({ painting: true });
+    h.loaders.set('/api/parts/image/0', async () => ({ width: 20, height: 16 } as HTMLImageElement));
+    h.loaders.set('/api/parts/painting', async () => ({ width: 64, height: 64 } as HTMLImageElement));
+    h.loaders.set('/api/parts/image/1', async () => { throw new Error('planted image failure'); });
+    await h.api.paint();
+    expect(h.reference.record.painted, 'REFERENCE_PAINTED_BEFORE_FAILURE').toBe(true);
+    h.state.selected = 1;
+    await h.api.paint();
+    expect(h.reference.record.painted, 'REFERENCE_CLEARED_AFTER_FAILURE').toBe(false);
+    expect(h.reference.record.clearRects.at(-1)).toEqual([0, 0, 20, 16]);
+    h.loaders.set('/api/parts/image/1', async () => ({ width: 8, height: 10 } as HTMLImageElement));
+    await h.api.paint();
+    expect(h.api.getState().paintFailure).toBeNull();
+    expect(h.reference.record.painted).toBe(true);
+    expect(h.viewport.paneCamera('rig').zoom).toBe(1);
+    expect(h.viewport.state.displayedCenter, 'RECOVERY_BEFORE_ZOOM_CENTER').toEqual({ x: 4, y: 5 });
+    expect(h.rigRoot.style, 'RECOVERY_BEFORE_ZOOM_ROOT').toEqual({ left: '106px', top: '75px', transform: 'scale(1)' });
+    h.viewport.zoomCamera(1.25);
+    expect(h.viewport.state.displayedCenter).toEqual({ x: 4, y: 5 });
+    expect(h.viewport.paneCamera('rig').zoom).toBe(1.25);
+  });
+
+  for (const kind of ['comment', 'stage'] as const) {
+    test(`${kind} restore writes both saved cameras only after successful paint`, async () => {
+      const h = makeHarness({ painting: true });
+      let fail = false;
+      h.loaders.set('/api/parts/image/0', async () => ({ width: 20, height: 16 } as HTMLImageElement));
+      h.loaders.set('/api/parts/image/1', async () => {
+        if (fail) throw new Error('planted restore image failure');
+        return { width: 8, height: 10 } as HTMLImageElement;
+      });
+      h.loaders.set('/api/parts/painting', async () => ({ width: 64, height: 64 } as HTMLImageElement));
+      await h.api.paint();
+      const item = h.state.data.items[1]!;
+      const saved: StagePartsState = {
+        inspectionSourceHash: h.state.data.inspectionSourceHash,
+        part: item.name, imageHash: item.imageHash,
+        box: { x: item.x, y: item.y, w: item.w, h: item.h },
+        mapping: { skin: 'default', slot: 'slot-b', attachment: item.name },
+        rig: { zoom: 2, center: { x: 3, y: 4 } },
+        reference: { zoom: 3, center: { x: 6, y: 7 } },
+        cameraSync: false, bg: 'checker', alpha: false, footprints: false, view: 'item', mesh: false,
+      };
+      const writes: { target: string; zoom: number; center: { x: number; y: number } | null }[] = [];
+      const writeCamera = h.viewport.writeCamera;
+      h.viewport.writeCamera = (target, value) => {
+        writes.push({ target, zoom: value.zoom, center: value.center ? { ...value.center } : null });
+        writeCamera(target, value);
+      };
+      const restore = () => kind === 'stage' ? h.api.restoreStageParts(saved) : h.api.restoreComment({
+        part: saved.part, imageHash: saved.imageHash, sourceHash: h.state.data.sourceHash,
+        view: {
+          camera: saved.rig, referenceCamera: saved.reference, cameraSync: saved.cameraSync,
+          background: saved.bg, alpha: saved.alpha, footprints: saved.footprints, mesh: saved.mesh,
+          comparison: defaultPartsComparison(),
+        },
+      });
+      await restore();
+      expect(h.api.getState().paintFailure).toBeNull();
+      expect(h.viewport.paneCamera('rig')).toEqual(saved.rig);
+      expect(h.viewport.paneCamera('reference')).toEqual(saved.reference);
+      expect(writes).toContainEqual({ target: 'rig', ...saved.rig });
+      expect(writes).toContainEqual({ target: 'reference', ...saved.reference });
+      expect(h.viewport.state.cameraSync).toBe(false);
+      expect(h.viewport.state.cameraRestoring).toBe(false);
+
+      h.state.selected = 0;
+      await h.api.paint();
+      h.viewport.state.cameraSync = true;
+      writes.length = 0;
+      fail = true;
+      await restore();
+      expect(h.api.getState().paintFailure).toContain('PARTS_PAINT_FAILED');
+      expect(writes.length).toBeGreaterThan(0);
+      expect(writes.every(write => write.zoom === 1 && write.center === null),
+        `${kind.toUpperCase()}_FAILED_RESTORE_NO_SAVED_CAMERA_WRITE`).toBe(true);
+      expect(h.viewport.paneCamera('rig')).toEqual({ zoom: 1, center: null });
+      expect(h.viewport.paneCamera('reference')).toEqual({ zoom: 1, center: null });
+      expect(h.viewport.state.displayedCenter).toEqual({ x: 10, y: 8 });
+      expect(h.rigRoot.style).toEqual({ left: '100px', top: '72px', transform: 'scale(1)' });
+      expect(h.viewport.state.cameraSync).toBe(true);
+      expect(h.viewport.state.cameraRestoring).toBe(false);
+    });
+  }
+
+  test('product source remains byte-identical after harness and in-memory controls', () => {
+    expect(readFileSync(new URL('../web/parts.ts', import.meta.url), 'utf8')).toBe(productSource);
   });
 });
