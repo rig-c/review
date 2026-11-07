@@ -1,0 +1,9 @@
+{
+  "source": "src/job-api.ts",
+  "baseCommit": "4dffe227e87206bac3e236cf7833890972d97b04",
+  "sourceFileSha256": "8b6f17111e6683272d592b23452cac63d318230808573c8fd3fc6ed91b66e850",
+  "originalFunctionSha256": "8800df697d579e52804ce0f8caf8deae705b05dae0256afba037d1f01870afd0",
+  "fixtureFunctionSha256": "8800df697d579e52804ce0f8caf8deae705b05dae0256afba037d1f01870afd0",
+  "functionBytes": 1418,
+  "byteIdentical": true
+}
