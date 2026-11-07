@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/rig-c/review/compare/v2.2.0...v2.3.0) (2026-11-07)
+
+
+### Features
+
+* inspect independent semantic jobs in one owner hub ([#518](https://github.com/rig-c/review/issues/518)) ([fbc0181](https://github.com/rig-c/review/commit/fbc0181d05ba713da10540efbb4320aebaca6eb5))
+
 ## [2.2.0](https://github.com/rig-c/review/compare/v2.1.0...v2.2.0) (2026-11-07)
 
 
