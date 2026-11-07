@@ -206,6 +206,7 @@ import {PNG} from 'pngjs';
 import {jobHash} from '../../src/job-api.ts';
 import {readProject} from '../../src/interview-project.ts';
 import {joinedVerdictFixture} from './joined-verdict-fixture.ts';
+import {PROBE_MP4_BASE64} from '../compare-mode-browser.ts';
 
 /** Declared synthetic visual/producer context over a real retained Create question.
  * It proves window transport, not Create #184 or Parts' enumerator/writer acceptance.
@@ -218,6 +219,18 @@ export async function scriptedJobWindowFixture() {
     const packageRoot = join(f.input.root, 'out');
     const originalModel = JSON.parse(await readFile(join(packageRoot, 'skeleton.model.json'), 'utf8'));
     const originalManifest = JSON.parse(await readFile(join(packageRoot, 'review.json'), 'utf8'));
+    await writeFile(join(packageRoot, 'timed-reference.mp4'), Buffer.from(PROBE_MP4_BASE64, 'base64'));
+    await writeFile(join(packageRoot, 'timed-reference.pose.json'), JSON.stringify({
+        spec: 'rig-pose-sequence/1', space: {units: 'picture-px', origin: 'top-left', y: 'down'},
+        width: 64, height: 64, source: 'synthetic-job-window-timing',
+        frames: [{t: 0, at: [12, 16]}, {t: 0.5, at: [48, 48]}].map(frame => ({
+            t: frame.t, people: [{id: 'probe', joints: {point: {state: 'observed', at: frame.at, score: 1}}}],
+        })),
+    }));
+    originalManifest.references.push(
+        {id: 'timed-pose', type: 'pose', label: 'Synthetic timed pose', path: 'timed-reference.pose.json'},
+        {id: 'timed-video', type: 'video', label: 'Existing timed video probe', path: 'timed-reference.mp4'},
+    );
     const partBytes = await readFile(join(packageRoot, 'mesh.png'));
     const pixels = PNG.sync.read(partBytes);
     await mkdir(join(packageRoot, 'parts'));

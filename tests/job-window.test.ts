@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createJobWindow, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
+import { createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
 import type { JobDisplayPublication, JobDisplayReceipt, JobResult } from '../src/job-contract.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
 import {t} from '../web/i18n.ts';
@@ -16,6 +16,110 @@ function deferred<Value>() {
     const promise = new Promise<Value>(done => { resolve = done; });
     return { promise, resolve };
 }
+describe('reference selection at the inspection time', () => {
+    type Reference = {id: string; frameTime: number; seek(time: number, signal: AbortSignal): Promise<void>};
+    function selection() {
+        const state = {owner: {} as object | null, time: 0.75};
+        let visible = {id: 'previous', frameTime: 0.75};
+        const presented: string[] = [];
+        const failures: unknown[] = [];
+        const controls = createJobReferenceSelection<Reference>({current: () => state,
+            present(value) {visible = {id: value.id, frameTime: value.frameTime}; presented.push(value.id);},
+            refused(error) {failures.push(error);}});
+        return {state, controls, presented, failures, visible: () => visible};
+    }
+
+    test('a delayed video is sought before replacing the previous coherent frame', async () => {
+        const h = selection();
+        const ready = deferred<void>();
+        const times: number[] = [];
+        const video: Reference = {id: 'video', frameTime: 0, async seek(time) {
+            times.push(time); await ready.promise; this.frameTime = time;
+        }};
+        const selected = h.controls.select(video);
+        expect(times).toEqual([0.75]);
+        expect(h.visible()).toEqual({id: 'previous', frameTime: 0.75});
+        ready.resolve();
+        await selected;
+        expect(h.visible()).toEqual({id: 'video', frameTime: 0.75});
+    });
+
+    test('a pose draws the current inspection time before presentation', async () => {
+        const h = selection();
+        const pose: Reference = {id: 'pose', frameTime: 0, async seek(time) {this.frameTime = time;}};
+        await h.controls.select(pose);
+        expect(h.visible()).toEqual({id: 'pose', frameTime: 0.75});
+        expect(h.failures).toEqual([]);
+    });
+
+    test('an out-of-domain seek names the refusal and retains the previous reference', async () => {
+        const h = selection();
+        const previous = h.visible();
+        const short: Reference = {id: 'short', frameTime: 0, async seek() {throw new Error('REFERENCE_OUT_OF_DOMAIN');}};
+        await h.controls.select(short);
+        expect(h.visible()).toEqual(previous);
+        expect(h.presented).toEqual([]);
+        expect(h.failures).toHaveLength(1);
+        expect(jobWindowRefusal(h.failures[0])).toBe(t('REFERENCE_OUT_OF_DOMAIN'));
+    });
+
+    test('rapid selection suppresses an older successful seek and its late failure', async () => {
+        const h = selection();
+        const ready = deferred<void>();
+        const observed: {signal?: AbortSignal} = {};
+        const old: Reference = {id: 'old-video', frameTime: 0, async seek(time, signal) {
+            observed.signal = signal; await ready.promise; this.frameTime = time;
+        }};
+        const oldRequest = h.controls.select(old);
+        const latest: Reference = {id: 'latest-pose', frameTime: 0, async seek(time) {this.frameTime = time;}};
+        await h.controls.select(latest);
+        ready.resolve();
+        await oldRequest;
+        expect(observed.signal?.aborted).toBe(true);
+        expect(h.presented).toEqual(['latest-pose']);
+        expect(h.visible()).toEqual({id: 'latest-pose', frameTime: 0.75});
+        const rejected = deferred<void>();
+        const failing: Reference = {id: 'stale-failure', frameTime: 0, async seek() {
+            await rejected.promise; throw new Error('REFERENCE_OUT_OF_DOMAIN');
+        }};
+        const failure = h.controls.select(failing);
+        await h.controls.select(latest);
+        rejected.resolve();
+        await failure;
+        expect(h.failures).toEqual([]);
+    });
+
+    test('a time change during seek is resolved at the latest time before presentation', async () => {
+        const h = selection();
+        const ready = deferred<void>();
+        const times: number[] = [];
+        const video: Reference = {id: 'video', frameTime: 0, async seek(time) {
+            times.push(time); if (times.length === 1) await ready.promise; this.frameTime = time;
+        }};
+        const request = h.controls.select(video);
+        h.state.time = 0.9;
+        ready.resolve();
+        await request;
+        expect(times).toEqual([0.75, 0.9]);
+        expect(h.visible()).toEqual({id: 'video', frameTime: 0.9});
+    });
+
+    test('publication replacement and explicit cancellation prevent late presentation', async () => {
+        for (const replaceOwner of [true, false]) {
+            const h = selection();
+            const ready = deferred<void>();
+            const video: Reference = {id: 'video', frameTime: 0, async seek(time) {
+                await ready.promise; this.frameTime = time;
+            }};
+            const request = h.controls.select(video);
+            if (replaceOwner) h.state.owner = {}; else h.controls.cancel();
+            ready.resolve();
+            await request;
+            expect(h.presented).toEqual([]);
+            expect(h.failures).toEqual([]);
+        }
+    });
+});
 function harness() {
     const fixture = createJobWindowFixture();
     const notices: JobWindowState[] = [];

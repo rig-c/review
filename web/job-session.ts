@@ -500,6 +500,48 @@ interface JobReferenceView {
     height: number;
     seek(time: number, signal: AbortSignal): Promise<void>;
 }
+
+/** A reference stays off-stage until its seek matches the latest inspection time. */
+export function createJobReferenceSelection<Reference extends Pick<JobReferenceView, 'seek'>>(options: {
+    current(): {owner: object | null; time: number};
+    present(reference: Reference): void;
+    refused(error: unknown): void;
+}) {
+    let intent = 0;
+    let controller: AbortController | null = null;
+    function cancel(): void {
+        intent++;
+        controller?.abort();
+        controller = null;
+    }
+    async function select(reference: Reference): Promise<void> {
+        cancel();
+        const revision = intent;
+        const owner = options.current().owner;
+        if (!owner) return;
+        const abort = new AbortController();
+        controller = abort;
+        let time = options.current().time;
+        try {
+            for (;;) {
+                await reference.seek(time, abort.signal);
+                const latest = options.current();
+                if (abort.signal.aborted || revision !== intent || latest.owner !== owner) return;
+                if (latest.time !== time) {
+                    time = latest.time;
+                    continue;
+                }
+                options.present(reference);
+                return;
+            }
+        } catch (error) {
+            if (!abort.signal.aborted && revision === intent && options.current().owner === owner)
+                options.refused(error);
+        }
+    }
+    return {select, cancel};
+}
+
 export interface JobPreparedInspection {
     display: JobDisplayPublication;
     metadata: JobInspectionMetadata;
@@ -656,11 +698,12 @@ export async function prepareJobInspection(display: JobDisplayPublication, signa
                         async seek(time, abort) {
                             if (!Number.isFinite(time) || time < 0 || time > element.duration)
                                 throw new Error('REFERENCE_OUT_OF_DOMAIN');
-                            if (element.currentTime === time && element.readyState >= 2)
+                            if (element.currentTime === time && element.readyState >= 2 && !element.seeking)
                                 return;
                             const ready = mediaReady(element, 'seeked', abort);
                             element.currentTime = time;
                             await ready;
+                            while (element.seeking) await mediaReady(element, 'seeked', abort);
                         } });
                 }
                 else {
@@ -885,6 +928,30 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         fit.textContent = t(fit.textContent ?? 'Fit');
     };
     const viewport = createViewportController(provider, viewportState);
+    const referenceSelection = createJobReferenceSelection<JobReferenceView>({
+        current: () => ({owner: current, time}),
+        present(value) {
+            const previous = selectedReference;
+            const camera = structuredClone(viewportState);
+            selectedReference = value.id;
+            try {
+                showReference();
+                el<HTMLSelectElement>('job-reference').value = value.id;
+                viewport.fitCamera();
+            } catch (error) {
+                selectedReference = previous;
+                Object.assign(viewportState, camera);
+                showReference();
+                el<HTMLSelectElement>('job-reference').value = previous;
+                viewport.fitCamera();
+                throw error;
+            }
+        },
+        refused(error) {
+            el<HTMLSelectElement>('job-reference').value = selectedReference;
+            notice.textContent = jobWindowRefusal(error, 'JOB_VISUAL_UNAVAILABLE');
+        },
+    });
     let unbindNavigation: (() => void) | null = null;
     let resize: ResizeObserver | null = null;
     function localDraftKey(display: JobDisplayPublication): string {
@@ -1183,7 +1250,10 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             option.textContent = reference.label;
             referenceSelect.append(option);
         }
-        referenceSelect.onchange = () => { selectedReference = referenceSelect.value; showReference(); viewport.fitCamera(); };
+        referenceSelect.onchange = () => {
+            const next = prepared.references.find(item => item.id === referenceSelect.value);
+            if (current === prepared && next) void referenceSelection.select(next);
+        };
         sidebar.append(inputLabel('Reference', referenceSelect));
         const images = node('div');
         images.className = 'job-part-images';
@@ -1329,8 +1399,15 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             current.inspection?.select(selectedPart ? { side: 'single', slot: selectedPart, mode: partMode } : null);
             setText('job-part-observation', selectedPart ? JSON.stringify(current.inspection?.observation(), null, 2) : '');
         }
-        if (seekReference)
-            void reference()?.seek(time, abort.signal).catch(error => { notice.textContent = jobWindowRefusal(error, 'JOB_VISUAL_UNAVAILABLE'); });
+        if (seekReference) {
+            const value = reference();
+            const owner = current;
+            const at = time;
+            void value?.seek(at, abort.signal).catch(error => {
+                if (current === owner && reference() === value && time === at)
+                    notice.textContent = jobWindowRefusal(error, 'JOB_VISUAL_UNAVAILABLE');
+            });
+        }
         viewport.fitCamera();
     }
     const window = createJobWindow({ jobId: access.jobId, pageId, transport, adapter: {
@@ -1355,6 +1432,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 const formHost = root.querySelector<HTMLElement>('[data-job-forms]');
                 if (!formHost) throw new Error('JOB_WINDOW_ELEMENT_MISSING');
                 for (const entry of nextForms.values()) formHost.append(entry.form);
+                referenceSelection.cancel();
                 const previous = current;
                 const previousElement = currentElement;
                 const previousForms = new Map(forms);
@@ -1390,8 +1468,10 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                         forms.set(id, item);
                     workspace.replaceChildren(...(previousElement ? [previousElement] : []));
                     Object.assign(viewportState, navigation.camera);
-                    if (current)
+                    if (current) {
+                        el<HTMLSelectElement>('job-reference').value = selectedReference;
                         viewport.fitCamera();
+                    }
                 };
                 try {
                     current = prepared;
@@ -1522,6 +1602,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     })();
     const stop = () => {
         saveDraft();
+        referenceSelection.cancel();
         abort.abort();
         window.stop();
         localize();

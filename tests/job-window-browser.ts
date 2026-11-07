@@ -50,6 +50,55 @@ async function edit(selector: string, value: string) {
 async function snapshot() {
     return page!.evaluate<{cameras: {rig: {center: unknown; zoom: number}; reference: {center: unknown; zoom: number}}; sync: boolean; time: string; part: string; panel: string}>(`(()=>{const view=JSON.parse(document.getElementById('view-coordinates').textContent);return {cameras:{rig:{center:view.cameras.rig.center,zoom:view.cameras.rig.zoom},reference:{center:view.cameras.reference.center,zoom:view.cameras.reference.zoom}},sync:view.cameraSync,time:document.getElementById('job-time').value,part:document.getElementById('job-part').value,panel:document.getElementById('job-panel').value}})()`);
 }
+async function verifyTimedReferences() {
+    await edit('#job-animation', 'inspect');
+    await edit('#job-time', '0.5');
+    await edit('#job-reference', 'timed-pose');
+    await wait(`document.querySelector('#reference-content > canvas') && document.getElementById('job-reference').value==='timed-pose'`, 'timed pose mounted');
+    const pose = await page!.evaluate<{time: number; firstFrameAlpha: number; selectedFrameAlpha: number}>(`(()=>{
+        const context=document.querySelector('#reference-content > canvas').getContext('2d');
+        return {time:Number(document.getElementById('job-time').value),
+            firstFrameAlpha:context.getImageData(12,16,1,1).data[3],selectedFrameAlpha:context.getImageData(48,48,1,1).data[3]};})()`);
+    assert.equal(pose.time, 0.5);
+    assert.equal(pose.firstFrameAlpha, 0);
+    assert.ok(pose.selectedFrameAlpha > 0, 'the selected pose draws its nonzero-time frame');
+    await checkpoints('timed-pose-selection', pose);
+
+    await edit('#job-reference', 'timed-video');
+    await wait(`(()=>{const video=document.querySelector('#reference-content > video');return video && !video.seeking && video.readyState>=2 && video.currentTime===0.5})()`, 'timed video mounted');
+    const video = await page!.evaluate<{time: number; currentTime: number; duration: number; seeking: boolean; readyState: number; reference: string}>(`(()=>{
+        const video=document.querySelector('#reference-content > video');
+        return {time:Number(document.getElementById('job-time').value),currentTime:video.currentTime,
+            duration:video.duration,seeking:video.seeking,readyState:video.readyState,reference:document.getElementById('job-reference').value};})()`);
+    assert.equal(video.currentTime, video.time);
+    assert.equal(video.currentTime, 0.5);
+    assert.equal(video.reference, 'timed-video');
+    assert.ok(video.duration >= 0.5 && Number.isFinite(video.duration));
+    assert.equal(video.seeking, false);
+    assert.ok(video.readyState >= 2);
+    await checkpoints('timed-video-selection', video);
+
+    for (const probe of [
+        {id: 'timed-pose', animation: 'inspect', time: 0.75},
+        {id: 'timed-video', animation: '', time: video.duration + 0.25},
+    ]) {
+        await edit('#job-reference', 'raster');
+        await wait(`!!document.querySelector('#reference-content > img')`, 'prior image restored');
+        await edit('#job-animation', probe.animation);
+        await edit('#job-time', String(probe.time));
+        const before = await snapshot();
+        await page!.evaluate(`globalThis.__jobWindowPriorReference=document.querySelector('#reference-content').firstElementChild`);
+        await edit('#job-reference', probe.id);
+        await wait(`document.getElementById('job-reference').value==='raster' && document.querySelector('.job-notice').textContent.includes('REFERENCE_OUT_OF_DOMAIN')`, 'out-of-domain ' + probe.id);
+        assert.ok(await page!.evaluate<boolean>(`document.querySelector('#reference-content').firstElementChild===globalThis.__jobWindowPriorReference`));
+        const after = await snapshot();
+        assert.deepEqual(after, before);
+        const refusal = await page!.evaluate<string>(`document.querySelector('.job-notice').textContent`);
+        await checkpoints(probe.id + '-out-of-domain', {before, after, refusal, priorReference: 'raster'});
+    }
+    await edit('#job-animation', 'inspect');
+    await edit('#job-time', '0.5');
+}
 async function submit(askId: string) {
     const selector = 'form[data-job-ask=' + JSON.stringify(askId) + ']';
     await wait(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled`, 'enabled form');
@@ -190,6 +239,7 @@ try {
     const sentinel = await page.evaluate<string>('globalThis.__jobWindowDocument = crypto.randomUUID()');
     const first = await fixture.publish('parts');
     await show(first);
+    await verifyTimedReferences();
     const approvedParts = await fixture.ask(first, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
     await wait(`!!document.querySelector('form[data-job-ask="${approvedParts.askId}"]')`, 'parts coverage form');
     await edit(`form[data-job-ask="${approvedParts.askId}"] select[name=verdict]`, 'approved');
