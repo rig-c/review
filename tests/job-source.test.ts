@@ -2,7 +2,9 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdir, readFile, rename, symlink, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { JobSession } from '../src/job-session.ts';
-import { jobFixture, syntheticJobParts } from './helpers/job-api-fixture.ts';
+import { jobFixture, jobInputHashes, syntheticJobParts } from './helpers/job-api-fixture.ts';
+import { joinedVerdictFixture } from './helpers/joined-verdict-fixture.ts';
+import { readProject } from '../src/interview-project.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
@@ -119,4 +121,43 @@ test('ordinary canonical Review work-root publishing needs no Create adapter', a
   expect(publication.source.plan).toBeNull();
   expect(publication.source.parts).toBeNull();
   expect(publication.source.projectHash).toBeNull();
+});
+
+test('actual readProject pending questions publish, ask and save an act while optional answer absence stays persistable', async () => {
+  const f = await fixture();
+  await joinedVerdictFixture(f.root, '2-rigging-answers');
+  const opened = readProject(f.root), pending = opened.questions.find(question => question.editable)!;
+  expect(pending).toBeDefined();
+  expect(Object.hasOwn(pending, 'answer')).toBe(true);
+  expect(pending.answer).toBeUndefined();
+  const historical = opened.questions.find(question => question.answer !== undefined)!;
+  expect(historical).toBeDefined();
+  f.setRecordPath('project.json');
+  // The pending sets are real reader output. Only the producer publication
+  // adapter is synthetic, selecting the ordinary compiled fixture beside them.
+  f.setContext({ ...f.getContext(), plan: null, subjects: [{ kind: 'interview-picks',
+    questionId: pending.set.question, setId: pending.set.id }] });
+  const before = await jobInputHashes(f.root);
+  const published = await (await f.call(await f.publishRequest('real-pending'))).json();
+  expect(published.error?.code ?? null).toBeNull();
+  expect(published.ok).toBe(true);
+  const retained = f.session.retainedSource(published.value.publicationId);
+  const savedPending = retained.questions.find(question => question.set.id === pending.set.id)!;
+  expect(Object.hasOwn(savedPending, 'answer')).toBe(false);
+  expect(retained.questions.find(question => question.set.id === historical.set.id)?.answer).toEqual(historical.answer);
+  const ask = await f.ask(published.value, { kind: 'interview-picks', questionId: pending.set.question, setId: pending.set.id });
+  const page = await f.display(published.value);
+  const selections = pending.set.asks.map(item => ({ itemId: item.id,
+    optionId: item.options.find(option => option.kind === 'value' && option.recommended)!.id, otherText: null }));
+  const note = '실제 pending 원문\nunchanged';
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: ask.askId,
+    expectedGeneration: f.session.status().generation, submissionId: 'real-pending-save',
+    kind: 'interview-picks', value: { questionId: pending.set.question, selections, note } }));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  expect(saved.value.kind).toBe('interview-picks');
+  expect(saved.value.value).toEqual({ questionId: pending.set.question, selections, note });
+  expect(saved.value.source.optionSet).toEqual({ id: pending.set.id, sha256: pending.ref.sha256 });
+  expect(saved.value.source.projectHash).toBe(opened.hash);
+  expect(await jobInputHashes(f.root)).toEqual(before);
 });

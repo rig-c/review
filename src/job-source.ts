@@ -274,7 +274,10 @@ export async function prepareJobSource(options: {
       visual: review.manifest.model || review.manifest.references.length ? { status: 'available' } :
         { status: 'unavailable', code: 'MODEL_UNAVAILABLE' },
       subjects: context.subjects,
-      questions: project?.questions ?? [],
+      questions: (project?.questions ?? []).map(question => {
+        const { answer, ...fields } = question;
+        return answer === undefined ? fields : question;
+      }),
       partIds: context.partIds,
     };
     await options.afterSnapshot?.();
