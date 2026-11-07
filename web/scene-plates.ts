@@ -39,6 +39,10 @@ function validatePlate(plate: Plate | null, name: string): asserts plate is Plat
  * Internal drawing inputs. The caller owns source binding and supplies decoded images.
  * Clip and plate rectangles use target-canvas pixels, independent of its current transform.
  * The explicit matrix maps the synchronous rig callback's coordinates to those pixels.
+ * A runtime drawing exception can leave a cleared or partially drawn frame.
+ * The caller MUST render offscreen and commit only the completed frame to the live canvas.
+ * drawRig must be synchronous and balance its own save/restore calls.
+ * The callback owns its current-path changes. Canvas save/restore does not restore that path.
  */
 export function renderScenePlates(ctx: CanvasRenderingContext2D, frame: Frame): void {
   const { background, foreground, clip, rigTransform, drawRig } = frame;
