@@ -85,15 +85,15 @@ export class JobSession {
     if (!options.reviewer.id || !['owner', 'delegate'].includes(options.reviewer.role)) throw new JobError('JOB_AUTHORITY_REFUSED');
     if (options.partsEnumerator) jobPartsEnumeratorVersion(options.partsEnumerator.version);
     this.store = new JobStore(state);
-    const row = this.store.open(jobHash(JSON.stringify([root.path, options.fingerprint])), () => ({
-      apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA,
-      root, fingerprint: options.fingerprint, reviewer: structuredClone(options.reviewer),
-      agentCapability: randomBytes(32).toString('hex'), uiCapability: randomBytes(32).toString('hex'),
-      fetchCapability: randomBytes(32).toString('hex'), generation: 0, head: null,
-      publications: {}, asks: {}, acts: {}, events: [], replays: {}, pages: {},
-    }));
-    this.jobId = row.jobId;
     try {
+      const row = this.store.open(jobHash(JSON.stringify([root.path, options.fingerprint])), () => ({
+        apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA,
+        root, fingerprint: options.fingerprint, reviewer: structuredClone(options.reviewer),
+        agentCapability: randomBytes(32).toString('hex'), uiCapability: randomBytes(32).toString('hex'),
+        fetchCapability: randomBytes(32).toString('hex'), generation: 0, head: null,
+        publications: {}, asks: {}, acts: {}, events: [], replays: {}, pages: {},
+      }), root.path);
+      this.jobId = row.jobId;
       assertStoredSchemas(row.data);
       assertJobRoot(row.data.root);
       if (requestDigest(row.data.reviewer) !== requestDigest(options.reviewer)) {

@@ -44,18 +44,21 @@ function firstLine(stream: Readable): Promise<string> {
 
 /** Compiled and executed from the empty installed project through the public specifier. */
 const publicHostConsumer = `
-import {cp, readFile, writeFile} from 'node:fs/promises';
+import {cp, mkdir, readFile, writeFile} from 'node:fs/promises';
+import {readFileSync} from 'node:fs';
+import {PNG} from 'pngjs';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {
- startJobHost, JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS,
+ startJobHost, JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_ENUMERATOR_RANGE, JOB_ENABLED_ACT_KINDS,
  JOB_RESERVED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_CONSUMER_AUTH_MODE, JOB_ERROR_CODES,
  type JobHostOptions, type JobOwnerHost, type JobSessionOptions, type JobSession, type JobWorkerOptions,
  type JobPublicationReader, type JobPublishedContext,
  type JobEnabledActKind, type JobReservedActKind, type JobActKind, type JobSha256,
  type JobId, type JobPublicationId, type JobAskId, type JobActId, type JobCursor,
  type JobFileIdentity, type JobPlanStepIdentity, type JobPlanIdentity,
- type JobPartsManifestPath, type JobPartImagePath, type JobPartsIdentity, type JobSelector,
+ type JobPartsManifestPath, type JobPartImagePath, type JobPartsIdentity,
+ type JobPartsRole, type JobPartsFileReference, type JobPartsEnumerator, type JobSelector,
  type JobSourceBinding, type JobReviewerBinding, type JobHumanAuthority, type JobVerdict,
  type JobPartOutcome, type JobReviewStage, type JobActValues, type JobUIActValues,
  type JobActSources, type JobAct, type JobSubject, type JobPendingAsk, type JobPublication,
@@ -72,7 +75,7 @@ export type PublicTypes = [
  JobPublicationReader, JobPublishedContext,
  JobEnabledActKind, JobReservedActKind, JobActKind, JobSha256, JobId, JobPublicationId,
  JobAskId, JobActId, JobCursor, JobFileIdentity, JobPlanStepIdentity, JobPlanIdentity,
- JobPartsManifestPath, JobPartImagePath, JobPartsIdentity, JobSelector, JobSourceBinding,
+ JobPartsManifestPath, JobPartImagePath, JobPartsIdentity, JobPartsRole, JobPartsFileReference, JobPartsEnumerator, JobSelector, JobSourceBinding,
  JobReviewerBinding, JobHumanAuthority, JobVerdict, JobPartOutcome, JobReviewStage,
  JobActValues, JobUIActValues, JobActSources, JobAct, JobSubject, JobPendingAsk,
  JobPublication, JobStatus, JobPublishRequest, JobAskRequest, JobNextRequest,
@@ -84,11 +87,12 @@ export type PublicTypes = [
 function assert(ok: unknown, name: string): asserts ok {
  if (!ok) throw new Error('SMOKE_PUBLIC_HOST_' + name);
 }
-const expectedExports = ['startJobHost', 'JOB_API_SCHEMA', 'JOB_ACT_SCHEMA',
+const expectedExports = ['startJobHost', 'JOB_API_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_PARTS_ENUMERATOR_RANGE',
  'JOB_ENABLED_ACT_KINDS', 'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES',
  'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES'];
 assert(JSON.stringify(Object.keys(publicHost).sort()) === JSON.stringify(expectedExports.sort()), 'EXPORTS');
-assert(JOB_API_SCHEMA === 'rig-review/job-api@1' && JOB_ACT_SCHEMA === 'rig-review/act@1', 'SCHEMAS');
+assert(JOB_API_SCHEMA === 'rig-review/job-api@2' && JOB_ACT_SCHEMA === 'rig-review/act@2' &&
+ JOB_PARTS_ENUMERATOR_RANGE === '>=2.25.0 <3.0.0', 'SCHEMAS');
 assert(JOB_ENABLED_ACT_KINDS.length === 5 && JOB_RESERVED_ACT_KINDS.length === 2 &&
  JOB_PLAN_BOUND_SIGNOFF_STAGES.length === 3 && JOB_CONSUMER_AUTH_MODE === 'writer-owned-sibling-fetch-capability' &&
  JOB_ERROR_CODES.includes('JOB_CLOSED'), 'CONTRACT');
@@ -97,8 +101,30 @@ await cp('node_modules/@rig-c/review/examples/demo', input, {recursive: true});
 const bytes = '{"syntheticPublication":1}\\n';
 await writeFile(join(input, 'record.json'), bytes);
 const record: JobFileIdentity = {path: 'record.json', sha256: createHash('sha256').update(bytes).digest('hex')};
+// Explicit synthetic injected enumeration for the installed host seam.
+const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+const image = new PNG({width: 1, height: 1});
+image.data.fill(255);
+const imageBytes = PNG.sync.write(image);
+await mkdir(join(input, 'parts'));
+await writeFile(join(input, 'parts/smoke.png'), imageBytes);
+const manifestBytes = Buffer.from(JSON.stringify({rig_size: [1, 1], scale_rig_per_source: 1,
+ parts: [{name: 'smoke', from: 'painting:smoke', x: 0, y: 0, w: 1, h: 1}]}));
+await writeFile(join(input, 'parts.json'), manifestBytes);
+const role: JobPartsRole = 'part';
+const references: readonly JobPartsFileReference[] = [{path: 'parts/smoke.png', role}];
+const parts: JobPartsIdentity = {enumeratorVersion: '2.25.1',
+ manifest: {path: 'parts.json', sha256: sha256(manifestBytes)},
+ images: references.map(row => ({...row, sha256: sha256(imageBytes)}))};
+let enumeratorReads = 0;
+const partsEnumerator: JobPartsEnumerator = {version: parts.enumeratorVersion, enumerate: dir => {
+ assert(dir !== input && sha256(readFileSync(join(dir, 'parts.json'))) === parts.manifest.sha256,
+  'ENUMERATOR_RETAINED_MANIFEST');
+ enumeratorReads++;
+ return references;
+}};
 const context: JobPublishedContext = {selector: null, plan: {steps: [{id: 'public-step', hash: '1'.repeat(64)}]},
- parts: null, subjects: [{kind: 'checkpoint', checkpointId: 'public-step'}], partIds: [], files: []};
+ parts, subjects: [{kind: 'checkpoint', checkpointId: 'public-step'}], partIds: ['smoke'], files: []};
 let reads = 0;
 const readPublished: JobPublicationReader = async value => {
  assert(value.root === input && value.record.path === record.path && value.record.sha256 === record.sha256 &&
@@ -108,11 +134,12 @@ const readPublished: JobPublicationReader = async value => {
 };
 let binding: Parameters<NonNullable<JobHostOptions['installWriterBinding']>>[0] | undefined;
 const sessionOptions: JobSessionOptions = {root: input, stateDir: join(process.cwd(), 'public-host-state'),
- fingerprint: 'f'.repeat(64), reviewer: {id: 'installed-public-owner', role: 'owner'}, readPublished};
+ fingerprint: 'f'.repeat(64), reviewer: {id: 'installed-public-owner', role: 'owner'}, readPublished, partsEnumerator};
 const workerOptions: JobWorkerOptions = {...sessionOptions, port: 0,
  installWriterBinding: value => {binding = value;}};
 const options: JobHostOptions = {...workerOptions,
- readerId: 'installed-public-reader/1', bindingId: 'installed-public-binding/1'};
+ readerId: 'installed-public-reader/1', bindingId: 'installed-public-binding/1',
+ partsEnumeratorId: 'installed-synthetic-enumerator/1'};
 const start: (options: JobHostOptions) => Promise<JobOwnerHost> = startJobHost;
 const host: JobOwnerHost = await start(options);
 try {
@@ -129,7 +156,7 @@ try {
   assert(response.ok && response.headers.get('content-type')?.includes(type!) && body.length > 0, 'OWNER_RESOURCE');
   if (!path) assert(body.includes('data-job-window'), 'FULL_OWNER_WINDOW');
  }
- const reused = await start({...options, readPublished: async value => readPublished(value),
+ const reused = await start({...options, partsEnumerator: {...partsEnumerator, enumerate: dir => partsEnumerator.enumerate(dir)}, readPublished: async value => readPublished(value),
   installWriterBinding: value => {binding = value;}});
  try {assert(reused.reused && reused.ownerUrl === host.ownerUrl, 'REUSE');}
  finally {reused.stop();}
@@ -142,18 +169,22 @@ try {
   }));
   return response.json();
  }
- const schemaMismatch = await ports.handleJobApi(new Request(host.origin + owner.pathname + 'api', {
-  method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + session.hostCredentials().agent},
-  body: JSON.stringify({...base, schema: 'rig-review/job-api@unsupported', verb: 'next',
-   requestId: 'public-schema-mismatch', after: null, waitMs: 0}),
- }));
- const schemaFailure: JobApiResponse = await schemaMismatch.json();
- assert(schemaMismatch.status === 400 && !schemaFailure.ok && schemaFailure.error.code === 'JOB_REQUEST_INVALID' &&
-  schemaFailure.schema === JOB_API_SCHEMA && session.status().generation === 0, 'SCHEMA_MISMATCH_REFUSED');
+ for (const schema of ['rig-review/job-api@1', 'rig-review/job-api@unsupported']) {
+  const schemaMismatch = await ports.handleJobApi(new Request(host.origin + owner.pathname + 'api', {
+   method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + session.hostCredentials().agent},
+   body: JSON.stringify({...base, schema, verb: 'next', requestId: 'public-schema-mismatch', after: null, waitMs: 0}),
+  }));
+  const schemaFailure: JobApiResponse = await schemaMismatch.json();
+  assert(schemaMismatch.status === 400 && !schemaFailure.ok && schemaFailure.error.code === 'JOB_REQUEST_INVALID' &&
+   schemaFailure.error.message === 'JOB_API_SCHEMA_MISMATCH' && schemaFailure.schema === JOB_API_SCHEMA &&
+   session.status().generation === 0, 'SCHEMA_MISMATCH_REFUSED');
+ }
  const published = await call({...base, verb: 'publish', requestId: 'public-publish', expectedGeneration: 0,
   idempotencyKey: 'public-publish', result: {path: 'review.json', selector: null},
   freeze: {kind: 'producer-held', holdId: 'public-smoke-held', record}});
  assert(published.ok && published.verb === 'publish' && reads === 1 && published.value.visual.status === 'available', 'PUBLISH');
+ assert(enumeratorReads === 1 && JSON.stringify(published.value.source.parts) === JSON.stringify(parts),
+  'ENUMERATOR_VERSION_ROLE_CARRIAGE');
  const display = await ports.readPublication(base.jobId, published.value.publicationId);
  assert(display.ok && display.value.publication.source.sourceHash === published.value.source.sourceHash, 'DISPLAY');
  const metadata = await fetch(host.origin + display.value.routes.apiBase + 'review');
