@@ -90,7 +90,7 @@ export function createRequirementsCheck(p: ReviewPackage, options: RequirementsO
   let running: string | null = null;
   const snapshot = (job: RequirementsJob): RequirementsJob => JSON.parse(JSON.stringify(job)) as RequirementsJob;
   function assertStateOutside(): void {
-    assertStateDirOutside(options.stateDir, p, message => new RequirementsError('REQUIREMENTS_STATE_INSIDE_PACKAGE', message));
+    assertStateDirOutside(options.stateDir, p, (message, code) => new RequirementsError(code ?? 'REQUIREMENTS_STATE_INSIDE_PACKAGE', message));
   }
   const asRequirements = (e: unknown): never => { if (e instanceof RebuildError) throw new RequirementsError(e.code, e.message.slice(e.code.length + 2)); throw e; };
 

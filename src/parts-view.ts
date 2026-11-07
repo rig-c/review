@@ -133,7 +133,7 @@ function relativeTo(dir: string, abs: string): string {
  * directories retain their suffix; the output leaf is never followed through a symlink. */
 function verdictDestination(path: string): string {
   const absolute = resolve(path);
-  const parent = destinationDirectory(dirname(absolute), 'PARTS_VERDICT_DESTINATION_INVALID: expected a verdict parent directory path without symlink loops');
+  const parent = destinationDirectory(dirname(absolute), 'PARTS_VERDICT_DESTINATION_INVALID: the verdict parent path has a non-directory component or a symlink loop');
   return join(parent, basename(absolute));
 }
 

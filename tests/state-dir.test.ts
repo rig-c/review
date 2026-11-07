@@ -6,6 +6,7 @@ import {loadReview} from '../src/manifest.ts';
 import {openReview} from '../src/open.ts';
 import {createRequirementsCheck} from '../src/requirements-run.ts';
 import {createReadings} from '../src/readings-run.ts';
+import {startServer} from '../src/server.ts';
 import {canonicalStatePath,stateDirInside,stateRoots} from '../src/state-dir.ts';
 
 const roots:string[]=[];
@@ -47,7 +48,24 @@ test('requirements distinguish an invalid state prefix from a missing directory'
     unchanged: async () => { throw new Error('passed state guard'); },
   }).start(request);
   for (const invalid of [join(inside, 'motion.json', 'missing'), join(outside, 'loop', 'missing')]) {
-    await expect(start(invalid)).rejects.toThrow('STATE_DIRECTORY_INVALID:');
+    await expect(start(invalid)).rejects.toHaveProperty('code', 'STATE_DIRECTORY_INVALID');
+    const capability = 'a'.repeat(64);
+    const server = await startServer(p, {port: 0, stateDir: invalid, capability});
+    try {
+      const origin = `http://127.0.0.1:${server.port}`;
+      const response = await fetch(origin + '/api/requirements', {
+        method: 'POST',
+        headers: {Origin: origin, 'Content-Type': 'application/json', 'X-Review-Capability': capability},
+        body: JSON.stringify(request),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        status: 'refused',
+        error: 'STATE_DIRECTORY_INVALID: the state directory path has a non-directory component or a symlink loop',
+      });
+    } finally {
+      server.stop(true);
+    }
   }
   await expect(start(join(outside, 'missing', 'state'))).rejects.toThrow('passed state guard');
   expect(await readdir(external)).toEqual(['loop']);

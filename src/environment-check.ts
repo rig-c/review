@@ -79,7 +79,7 @@ export function createEnvironmentCheck(p: ReviewPackage, options: EnvironmentChe
   let running: string | null = null;
   const snapshot = (job: EnvironmentCheckJob): EnvironmentCheckJob => JSON.parse(JSON.stringify(job)) as EnvironmentCheckJob;
   function assertStateOutside(): void {
-    assertStateDirOutside(options.stateDir, p, message => new EnvironmentCheckError('ENVIRONMENT_CHECK_STATE_INSIDE_PACKAGE', message));
+    assertStateDirOutside(options.stateDir, p, (message, code) => new EnvironmentCheckError(code ?? 'ENVIRONMENT_CHECK_STATE_INSIDE_PACKAGE', message));
   }
 
   async function execute(job: EnvironmentCheckJob, dir: string, bin: string, rig: string, parts: string, text: string): Promise<void> {

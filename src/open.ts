@@ -132,7 +132,7 @@ export async function openReview(inputs:OpenInputs,options:{stateDir?:string;idl
  let p:OpenPackage;try{p=await loadOpenPackage(inputs);}catch(error){throw await openRefusal(error,inputs);}
  const fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
  // #187: canonical (symlinks and ancestors resolved) and outside every supplied folder: the package, the build root a check package belongs to, the handoff root.
- const stateDir=destinationDirectory(options.stateDir??defaultStateDir(),'OPEN_STATE_INVALID: expected a state directory path without symlink loops'),roots=p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
+ const stateDir=destinationDirectory(options.stateDir??defaultStateDir(),'OPEN_STATE_INVALID: the state directory path has a non-directory component or a symlink loop'),roots=p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
  if(p.mode==='single'&&p.joined&&stateDirInside(stateDir,[{kind:'package',path:p.joined.opened.root}]))throw new Error('OPEN_STATE_INSIDE_PACKAGE: review state must be outside the joined project');
  const inside=stateDirInside(stateDir,roots);if(inside)throw new Error(`OPEN_STATE_INSIDE_PACKAGE ${inside.kind}: the review state directory must be outside input packages; it is inside the ${inside.kind}; set RIG_REVIEW_STATE_DIR outside it`);
  await verifyOpenLoad(p,viewOnly,options.cwd);
@@ -178,7 +178,7 @@ export async function runOpenWorker(requestPath:string):Promise<void>{
 export async function controlReview(inputs:OpenInputs,commandOptions:{pageId?:string;expectedRevision?:number;requestId?:string;command?:ControlCommand;waitMs?:number;stateDir?:string}={}):Promise<unknown>{
  const wait=commandOptions.waitMs??10000;if(!Number.isSafeInteger(wait)||wait<0||wait>30000)throw new Error('CONTROL_WAIT: expected integer 0..30000');
  const p=await loadOpenPackage({...inputs,control:true}),fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
- const stateDir=destinationDirectory(commandOptions.stateDir??defaultStateDir(),'CONTROL_STATE: expected a state directory path without symlink loops');
+ const stateDir=destinationDirectory(commandOptions.stateDir??defaultStateDir(),'CONTROL_STATE: the state directory path has a non-directory component or a symlink loop');
  const controlDir=join(stateDir,'open');
  try{if((await lstat(controlDir)).isSymbolicLink())throw new Error('CONTROL_STATE: control directory cannot be a symlink');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Error('CONTROL_INSTANCE_UNAVAILABLE: open the exact inputs once with --control');throw error;}
  const file=join(controlDir,key+'.json');try{const info=await lstat(file);if(!info.isFile()||(info.mode&0o077)!==0)throw new Error('CONTROL_STATE: owner-only regular capability record required');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Error('CONTROL_INSTANCE_UNAVAILABLE: open the exact inputs once with --control');throw error;}

@@ -68,7 +68,7 @@ export function createReadings(p: ReviewPackage, options: ReadingsOptions) {
   let running: string | null = null;
   const snapshot = (job: ReadingsJob): ReadingsJob => JSON.parse(JSON.stringify(job)) as ReadingsJob;
   function assertStateOutside(): void {
-    assertStateDirOutside(options.stateDir, p, message => new ReadingsError('READINGS_STATE_INSIDE_PACKAGE', message));
+    assertStateDirOutside(options.stateDir, p, (message, code) => new ReadingsError(code ?? 'READINGS_STATE_INSIDE_PACKAGE', message));
   }
   /** Whether this rigc's `render --help` lists `--environment`, asked once per compiler. */
   async function environmentFlag(compiler: InstalledTool): Promise<boolean> {
