@@ -10,6 +10,60 @@ compatibility: Requires Bun 1.3.0 or later on PATH. The canonical npm package is
 Use this to hand separated parts, a rig or a post to a person for inspection,
 or to read back their submitted review.
 
+## Open one owner workspace
+
+For folder inspections, use **N rigs → one invocation, one owner link**.
+`open` hosts designated targets in one loopback listener-owning process.
+`--animation` supplies the default clip; `--animation-for <index> <name>` overrides
+one 1-based target position. This opens nine rigs with `walk` for `dirB` and
+`idle` for the others.
+
+```sh
+rig-review open dirA dirB dirC dirD dirE dirF dirG dirH dirI \
+  --animation idle --animation-for 2 walk --view-only
+```
+
+Invalid/out-of-range indices and duplicate overrides refuse with
+`OPEN_OPTION_INVALID`. Common typed options retain their per-target validation.
+Single-primary-target `--compare` requires `--reference`; batch compare is refused.
+Compatible repeated calls also register into the same owner list.
+
+```sh
+rig-review open dirA --animation idle --view-only
+rig-review open dirB --animation walk --view-only
+rig-review feedback dirA --animation idle --format json
+```
+
+Both launchers exit 0 with the same root owner URL and capability within one
+host incarnation, adding no listener or per-rig worker. A consumer opened N rigs
+with N sequential `open` calls. Prefer one batch when the targets are known.
+Give the person the private owner link and one what-to-look-at line.
+View-only entries are labelled **Inspection only**, without semantic acts or
+pending approvals. Existing feedback semantics apply per target. Retain each
+target's original feedback lookup arguments, inspection state, source-bound
+draft and verbatim reviewer words.
+
+The workspace admits 32 targets and lazily retains selected frames under that
+same application bound. Target 33 refuses atomically with
+`WORKSPACE_TARGET_LIMIT`. The limit supplies no hardware performance guarantee.
+Reuse requires matching UID, installation, runtime and fingerprint. Restart
+rotates host and target secrets, so run `open` again for a new owner link.
+Changed sources become unavailable without rebinding their feedback.
+
+The workspace defaults to port 4318, overridden by `RIG_REVIEW_FRONT_PORT`.
+An occupied port refuses `FRONT_PORT_BUSY`; choose an explicit port or use the
+single-target separate-server path
+`rig-review open dirA --direct --animation idle --view-only`.
+Leave existing workers under their owner's control. Follow
+[workspace lifecycle and restart](https://github.com/rig-c/review/blob/main/docs/WORKFLOWS.md#workspace-lifecycle-and-restart)
+for host reuse, live unresponsive PID refusal and aggregate shutdown behavior.
+
+Plain foreground multi-target invocation and the embedded semantic-job hub remain
+pending. Core's `rigc review` passes arguments through unchanged. Follow the
+current active-cycle contract below for semantic jobs and trusted callbacks.
+Keep imagery, questions and approvals in the Review UI, using supported commands
+and APIs. Agents never construct internal Review state or human acts.
+
 ## Active cycle standing live-job contract
 
 For the active Create and Parts cycle, the authoritative contract is `src/job-contract.ts` (`JOB_API_SCHEMA` set to `rig-review/job-api@2`, `JOB_ACT_SCHEMA` set to `rig-review/act@2`, [Review #484](https://github.com/rig-c/review/issues/484)), backed by the implemented backend session/store (`src/job-session.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-api.ts`), standing loopback job front and browser window runtime (`src/job-front.ts`, `web/job-session.ts`), and `rig-review session` CLI (`src/entry.ts`, `src/job-cli.ts`). The public installed managed-host entry is `@rig-c/review/job-host` with frozen exports in [Public API stability](https://github.com/rig-c/review/blob/main/docs/STABILITY.md#managed-owner-host), and Create's production publication reader and writer-owned sibling `fetch-act` readback remain pending [Create #184](https://github.com/rig-c/create/issues/184) (publishing a Create root containing `project.json` without a host `readPublished` callback refuses `JOB_SOURCE_UNRETAINABLE` with `CREATE_PUBLICATION_CONTRACT_UNAVAILABLE`). Do not invent public export names, producer scene fields or unimplemented flags, and never expose capabilities in reports or logs. See [Live job contract](https://github.com/rig-c/review/blob/main/docs/REVIEW_PACKAGE.md#live-job-contract) and [Standing live job workflow](https://github.com/rig-c/review/blob/main/docs/WORKFLOWS.md#standing-live-job-workflow).
@@ -63,7 +117,8 @@ The one-shot CLI file-handoff instructions in this section and in Correction rea
 Use the installed CLI. For compiled packages, run `rig-review check <package>`
 before handoff to validate the package and read its source SHA-256. Use managed
 `rig-review open` for joined inspection and embedded saves. Give the reviewer
-its URL from stdout privately and keep the exact feedback command from stderr.
+its URL from stdout privately and keep the original per-target feedback lookup
+arguments. The direct-server path also prints a copyable feedback command on stderr.
 The stage buttons navigate within that source binding.
 
 1. **Parts + mesh.** Open the recorded Create draft's compiled check directory.

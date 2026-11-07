@@ -94,10 +94,12 @@ The footer fits its measured text while retaining full hashes. Text is drawn in 
 
 ## One-command owner handoff
 
-`open` validates and hashes an existing folder, starts a background loopback
-instance or reuses the exact matching one, prints its hash-bound URL, and exits.
-By default the URL goes through the managed front at `127.0.0.1:4318`; `--direct`
-prints the instance's own port instead (see [Managed front and write capability](#managed-front-and-write-capability)):
+`open` validates and hashes designated folders, starts or reuses one background
+loopback owner workspace, prints its owner URL, and exits. **N rigs → one
+invocation, one owner link.** Targets share one listener-owning process and port.
+The default port is `127.0.0.1:4318`; `RIG_REVIEW_FRONT_PORT` selects an explicit
+port. The URL has the form `http://127.0.0.1:4318/#cap=…`; keep its capability
+private and give the person one link plus one what-to-look-at line.
 
 ```sh
 bun run open -- /absolute/output --reference /absolute/original.mp4
@@ -142,8 +144,9 @@ checkpoints do not apply another clip's time or axis. Static/source-only package
 remain inspectable without claiming clip selection; explicit unvalidatable clips
 refuse. Single review sessions remain package-wide; animation selection does not
 create an animation-specific approval identity. Opening never
-approves a review. The command prints the matching feedback retrieval command on
-stderr; stdout contains the URL alone. A selected external video takes precedence
+approves a review. Retrieve submitted feedback with the original per-target input and handoff
+arguments; stdout contains the owner URL alone. The workspace summary on stderr
+does not print a per-target feedback command. A selected external video takes precedence
 at automatic startup; an explicit checkpoint link or manual checkpoint selection
 still chooses that checkpoint's reference.
 
@@ -162,28 +165,101 @@ binding. Headless equivalent (the original declared-reference form stays valid):
 rig-review strip /absolute/output --reference-video /absolute/original.mp4 --animation dance --frames 176:184 --out /absolute/external/strip.png
 ```
 
-Only tool-owned instances with matching content, canonical input locations, tool
-fingerprint and a private capability handshake are reused. The URL hash is
-checked before serving the app; a stale link never selects another instance's
-package. Input hashes are freshly computed, not trusted from mtime caches. In both
-`open` and foreground `review` / `review compare`, each open window holds a live
-WebSocket connection (`/api/live`); once the last window closes and stays at zero connections
-for the 3-second grace period, or if no window ever connects within 30 minutes
-(reusing a windowless worker via `open` gives it a fresh 30-minute unopened window),
-the server finishes any in-flight request or Apply, flushes state, prints one line
-stating why it exited, and exits `0`. A browser that unloads a background tab to
-save memory looks the same as a closed tab, so the server stops; saved feedback
-survives and `open` brings it back. Their
-private registry, requests and logs live beside feedback under
-`~/.local/state/rig-c-review/open/`; nothing is written into supplied folders. `RIG_REVIEW_STATE_DIR` selects another state root
-outside all input packages, judged by its canonical location (symlinks in the path
-and its existing ancestors resolved). Existing foreground review commands still work.
+### Multiple targets and repeated open
 
-No browser is opened, no LAN listener is added, and no misleading phone/QR URL is
-printed: every current instance binds only `127.0.0.1`.
+`--animation` supplies the default clip for every target. Repeat
+`--animation-for <index> <name>` to override distinct 1-based target positions.
+This opens nine rigs, selecting `walk` for `dirB` and `idle` for the others.
 
-The printed feedback retrieval command uses POSIX shell quoting for literal path
-arguments. It is not a PowerShell or cmd.exe command string.
+```sh
+rig-review open dirA dirB dirC dirD dirE dirF dirG dirH dirI \
+  --animation idle --animation-for 2 walk --view-only
+```
+
+Indices outside the target list, invalid indices and duplicate overrides refuse
+with `OPEN_OPTION_INVALID`. Common typed options apply to each target and retain
+their existing validation. Each animation is validated against its own model.
+A single primary target can use `--compare <other-dir>` with an explicit
+`--reference <video>`; a multi-target batch with `--compare` is refused.
+`--direct` accepts one primary target only.
+
+Compatible repeated opens add to the same owner list and print the same root
+owner URL, including its owner capability within that host incarnation. They exit
+0 and add no listener or resident per-rig worker.
+
+```sh
+rig-review open dirA --animation idle --view-only
+rig-review open dirB --animation walk --view-only
+rig-review feedback dirA --animation idle --format json
+```
+
+A consumer opened N rigs with N sequential `open` calls. Use the batch form when
+all targets are known together. Duplicate compatible registrations reuse the
+entry; conflicting options refuse with `WORKSPACE_TARGET_OPTIONS_MISMATCH`.
+The owner selects targets from the list. `--view-only` entries are labelled
+**Inspection only** and have no semantic act or pending approval. Existing
+feedback semantics still apply within each inspection. Retrieve submitted
+feedback using each target's exact original inputs, references and handoff
+arguments. A shared owner URL supplies no feedback identity or approval.
+
+Inspection frames load on selection and remain retained for their target's
+camera, time, selected part/panel and source-bound draft. Switching pauses hidden
+playback. Reviewer-authored words remain verbatim. Admission and retained frames
+share a 32-target application limit. Adding target 33 refuses atomically with
+`WORKSPACE_TARGET_LIMIT`, preserving the existing registrations. This bound is
+an application limit, not a hardware memory or performance guarantee.
+
+### Workspace lifecycle and restart
+
+The workspace owns one aggregate live lifecycle, shared by the owner page and
+its target contexts. Target contexts have no independent server shutdown timers.
+After all live connections close, the workspace waits the 3-second grace period
+and for registrations, active response streams and target work to finish before
+stopping. A workspace with no connected page has a 30-minute unopened window;
+a successful registration re-arms that window when no page is connected.
+These timers apply to the whole workspace. The separate per-instance behavior is
+preserved under [Direct server and legacy lifecycle](#direct-server-and-legacy-lifecycle).
+
+Reuse requires the same UID, installation, runtime and fingerprint, the designated
+port and an authenticated live-host response. Mismatches refuse with
+`WORKSPACE_OWNER_MISMATCH` or `WORKSPACE_HOST_MISMATCH`. A live but unresponsive
+PID refuses with `WORKSPACE_HOST_UNRESPONSIVE`; a timeout leaves its ownership
+intact. Concurrent launchers coordinate registration through the private store.
+
+Restart creates a new host incarnation and rotates owner, launcher and target
+secrets. Run `open` again and give the person the new owner link. Persisted input
+designations are revalidated. Changed sources appear unavailable with
+`WORKSPACE_SOURCE_CHANGED`; saved feedback and drafts retain their original
+source binding. Registering another valid target remains possible when an
+unrelated target's source has changed.
+
+If a legacy front or another listener occupies the chosen port, launch refuses
+with `FRONT_PORT_BUSY` and the instruction `use --direct` or set
+`RIG_REVIEW_FRONT_PORT` explicitly. For example, choose another workspace port
+with `RIG_REVIEW_FRONT_PORT=4320 rig-review open dirA --view-only`.
+Leave existing workers and listeners under their current owner's control.
+
+Workspace descriptors, designations, startup requests and logs live under
+`<state>/owner-workspace/`, with private owner/launcher credentials and distinct
+target capabilities. State stays outside every input package. Loopback-only,
+same-origin bounded JSON mutations and contained package paths remain required.
+Registration carries designated package inputs. Agents use supported commands
+and APIs and never construct internal Review state or human acts.
+
+### Subsequent CLI and semantic paths
+
+Plain foreground multi-target invocation and its compatible workspace joining
+remain pending. The current delivery is the `open` CLI workspace. Core's
+`rigc review` passes arguments through unchanged; Review owns the CLI grammar.
+
+The embedded semantic-job hub also remains pending. Its same-process host will
+own trusted `readPublished`, `partsEnumerator` and `installWriterBinding`
+callbacks. General cross-process callback transport is deferred. Each job retains
+independent source, reviewer, capabilities, generation CAS, cursor, displayed
+acknowledgment and writer grant under job-api@2/act@2. Registration-handle detach,
+host stop and semantic close remain separate lifecycle concerns. Follow the
+current [standing live-job workflow](#standing-live-job-workflow) and
+[public host contract](STABILITY.md#managed-owner-host) for semantic jobs.
 
 ### Launcher contract
 
@@ -192,7 +268,10 @@ stderr and exit code alone:
 
 1. On success stdout is exactly one line, the URL. `open` never writes anything
    else to stdout.
-2. On success stderr carries the human lines in this fixed order: for the `check/`
+2. Managed workspace success writes per-target package/handoff and animation
+   diagnostics in target order, then `Review workspace started|reused; N target(s).
+   Retrieve feedback using the original input designation.` The direct-server
+   path retains the following stderr order. For the `check/`
    package of a `rig-parts build` output, `Package: rig-parts build check package <path>`
    and the handoff line (`Handoff <how>: <config path> sha256 <hash> · parts <dir>`, or
    `Handoff: <refusal>`); the animation diagnostic (when a clip is selected), the control notice (with `--control`),
@@ -205,20 +284,58 @@ stderr and exit code alone:
    - `OPEN_ANIMATION_UNKNOWN <name>`: the explicit or report-named clip (JSON-quoted) is not in the compiled model.
    - `OPEN_ANIMATION_AMBIGUOUS`: no flag or report selects one clip, or the A/B reports conflict.
    - `OPEN_ANIMATION_UNVALIDATABLE`: a clip was requested but no compiled model can validate it.
-   - `OPEN_OPTION_INVALID <flag>`: an unknown, duplicate, empty or value-less option, a handoff flag without `--config`, `--source` without `--full` (or the reverse), or a handoff flag with `--compare`.
+   - `OPEN_OPTION_INVALID <flag>`: an unknown, duplicate, empty or value-less option, an invalid/out-of-range/duplicate `--animation-for` index, multi-target `--compare` or `--direct`, a handoff flag without `--config`, `--source` without `--full` (or the reverse), or a handoff flag with `--compare`.
    - `OPEN_STATE_INSIDE_PACKAGE <package | build root | handoff root>`: the state directory (`RIG_REVIEW_STATE_DIR` or the default), resolved through symlinks, lies inside an input package, the `rig-parts build` root a check package belongs to, or the producer handoff's root.
    - `OPEN_HANDOFF_INVALID <flag or path>`: a declared or discovered producer handoff path is refused — `HANDOFF_PATH_OUTSIDE_ROOT`, `HANDOFF_SYMLINK_ESCAPE`, `HANDOFF_INPUT_MISSING`, `HANDOFF_INPUT_INVALID` or `HANDOFF_PATH_INVALID`, named after the colon.
 4. Exit codes: 0 applied, 1 refused. (`control` keeps its own exit 2 for an
    unapplied command.)
 
-Package validation and worker startup refusals keep their existing messages; the
-named refusals above are decided before any state is written.
+Input validation precedes workspace registration. Workspace startup and
+registration refusals retain their named codes and exit 1. A refused batch
+registration leaves existing registrations intact. Direct-worker refusals keep
+their existing messages.
+
+### Direct server and legacy lifecycle
+
+Use `rig-review open dirA --direct --animation idle --view-only` for a separate
+single-target server. It prints the worker's own URL and retains the per-instance
+lifecycle and hash-bound handoff described here. Foreground `review` and
+`review compare` retain their existing separate-server behavior.
+
+Only tool-owned instances with matching content, canonical input locations, tool
+fingerprint and a private capability handshake are reused. The URL hash is
+checked before serving the app; a stale link never selects another instance's
+package. Input hashes are freshly computed, not trusted from mtime caches. In both
+`open --direct` and foreground `review` / `review compare`, each open window holds a live
+WebSocket connection (`/api/live`); once the last window closes and stays at zero connections
+for the 3-second grace period, or if no window ever connects within 30 minutes
+(reusing a windowless worker via `open --direct` gives it a fresh 30-minute unopened window),
+the server finishes any in-flight request or Apply, flushes state, prints one line
+stating why it exited, and exits `0`. A browser that unloads a background tab to
+save memory looks the same as a closed tab, so the server stops; saved feedback
+survives and `open --direct` brings it back. Their
+private registry, requests and logs live beside feedback under
+`~/.local/state/rig-c-review/open/`; nothing is written into supplied folders. `RIG_REVIEW_STATE_DIR` selects another state root
+outside all input packages, judged by its canonical location (symlinks in the path
+and its existing ancestors resolved). Existing foreground review commands still work.
+
+No browser is opened, no LAN listener is added, and no misleading phone/QR URL is
+printed: every current instance binds only `127.0.0.1`.
+
+The printed feedback retrieval command uses POSIX shell quoting for literal path
+arguments. It is not a PowerShell or cmd.exe command string.
 
 ### Managed front and write capability
 
-`open` is **managed by default**. It ensures one detached loopback front at
+This heading preserves the legacy per-instance managed-front reference. Current
+default `open` uses the [owner workspace](#one-command-owner-handoff).
+`open --direct` serves its worker directly.
+
+#### Legacy per-instance proxy
+
+The earlier managed launcher ensured one detached loopback front at
 `127.0.0.1:4318` (`RIG_REVIEW_FRONT_PORT` overrides) for the state directory and
-prints `http://127.0.0.1:4318/instances/<key>/?input=…&handoff=…#cap=…`. Every
+printed `http://127.0.0.1:4318/instances/<key>/?input=…&handoff=…#cap=…`. Every
 inspection therefore shares one stable browser origin, so Settings, panel sizes and
 source-bound drafts survive a reopen. The front only routes: it takes the worker
 address from that key's private open record, allows a closed per-method route
@@ -235,10 +352,12 @@ If another listener holds the front port, `open` fails with
 does not fall back silently. `open --direct` keeps the per-instance port and
 prints that worker's own URL.
 
+#### Direct and legacy write capability
+
 One origin cannot isolate scripts that run on it, so writes are bound to a
 per-instance capability rather than to the page's origin or the key in its path.
 Each worker mints a 256-bit capability kept only in its private 0600 open record.
-`open` (managed or direct) and the foreground `review`/`review compare` commands
+The legacy managed launcher, `open --direct` and the foreground `review`/`review compare` commands
 print it in the `#cap=` fragment, which browsers never send to a server. That
 printed link goes only to the terminal of the command that started the instance.
 Output meant for a log does not carry it: the install smoke (`bun run smoke`, whose output CI publishes) prints the same
@@ -249,7 +368,8 @@ checks it before forwarding and the worker compares it again in constant time
 before its existing same-origin check. No endpoint returns it, so a page opened
 for one instance cannot submit to another. A copied view link (without the
 fragment) opens read-only and says *Read-only view: reopen with rig-review open to
-edit*; run `open` again for a writable link.
+edit*; run `open --direct` again for a writable per-instance link. Current workspace
+owner links use the separate incarnation-bound capability described above.
 
 ## Control the current inspection page
 
@@ -273,7 +393,7 @@ rig-review control /absolute/output --reference /absolute/original.mp4 --page '<
 
 Use the same reference/compare/animation inputs as the controlled `open`. Multiple
 pages require an explicit `--page`. The URL and source binding stay unchanged;
-existing ordinary servers do not become controllable. Starting the opt-in worker
+existing ordinary servers do not become controllable. Registering the opted-in target
 is a one-time handoff, not a new link for each parameter change.
 
 Commands cover appearance, automatic layout, synchronized or independent pane
