@@ -90,7 +90,7 @@ test('new publication preserves old retained bytes and makes old displayed submi
   expect(await readFile(join(f.session.retainedSource(first.publicationId).snapshotRoot, 'out/review.json'), 'utf8')).toBe(original);
   const stale = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(captured));
   expect(stale.ok).toBe(false);
-  if (!stale.ok) expect(stale.error.code).toBe('JOB_GENERATION_STALE');
+  if (!stale.ok) expect(stale.error.code).toBe('JOB_ACT_SOURCE_STALE');
   expect(f.session.status().pending).toHaveLength(0);
 });
 
@@ -109,6 +109,85 @@ test('next is bounded, cursor-validated, replayable and abortable without consum
   const cancelled = await (await waiting).json();
   expect(cancelled.error.code).toBe('JOB_REQUEST_INVALID');
   expect(f.session.status().generation).toBe(1);
+});
+
+test('P1 SSE cancellation leaves the actual daemon child alive for further requests', async () => {
+  const f = await fixture();
+  await f.publish();
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, 'helpers/job-agent-client.ts'), 'subscription-server'], {
+    stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
+  });
+  child.stdin.write(JSON.stringify({ options: { root: f.root, stateDir: f.state, fingerprint: 'f'.repeat(64),
+    reviewer: { id: 'declared-owner', role: 'owner' } } }));
+  child.stdin.end();
+  const reader = child.stdout.getReader(), decoder = new TextDecoder();
+  const errors = new Response(child.stderr).text();
+  let output = '';
+  let drained: Promise<string> | undefined;
+  try {
+    while (!output.includes('\n')) {
+      const next = await reader.read();
+      if (next.done) throw new Error('Subscription child did not start');
+      output += decoder.decode(next.value);
+    }
+    const origin = JSON.parse(output.split('\n')[0]).origin;
+    drained = (async () => {
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) return output;
+        output += decoder.decode(next.value);
+      }
+    })();
+    for (const mode of ['stream-cancel', 'request-abort']) {
+      const abort = new AbortController();
+      const response = await fetch(origin + '/events', { signal: abort.signal });
+      const events = response.body!.getReader();
+      expect(new TextDecoder().decode((await events.read()).value)).toContain(': connected');
+      if (mode === 'stream-cancel') await events.cancel();
+      else { abort.abort(); await events.cancel().catch(() => {}); }
+      const expected = mode === 'stream-cancel' ? 1 : 2;
+      let completed = 0;
+      const deadline = performance.now() + 2_000;
+      while (completed < expected && child.exitCode === null && performance.now() < deadline) {
+        try {
+          const health = await (await fetch(origin + '/health', { signal: AbortSignal.timeout(500) })).json();
+          completed = health.completions;
+        } catch { if (child.exitCode !== null) break; }
+        if (completed < expected) await Bun.sleep(10);
+      }
+      if (child.exitCode !== null) console.log(JSON.stringify({ childExitCode: child.exitCode, stdout: await drained, stderr: await errors }));
+      expect(child.exitCode).toBeNull();
+      expect(completed).toBe(expected);
+    }
+    expect((await (await fetch(origin + '/health')).json()).alive).toBe(true);
+    await (await fetch(origin + '/shutdown')).json();
+    const exit = await child.exited;
+    expect(exit).toBe(0);
+    expect(await errors).toBe('');
+    expect((await drained).match(/SUBSCRIPTION_COMPLETED/g)).toHaveLength(2);
+    console.log(JSON.stringify({ sseCancellation: { childPid: child.pid, afterStreamCancelAlive: true,
+      afterRequestAbortAlive: true, normalCompletions: 2, childExitCode: exit } }));
+  } finally {
+    if (child.exitCode === null) { child.kill(); await child.exited; }
+    if (drained) await drained;
+    else reader.releaseLock();
+    await errors;
+  }
+}, 10_000);
+
+test('subscription preserves non-cancellation errors and an already cancelled subscription ends normally', async () => {
+  const f = await fixture();
+  await f.publish();
+  const invalid = f.ports.subscribeJob({ jobId: f.session.jobId, after: 'invalid-cursor',
+    signal: new AbortController().signal })[Symbol.asyncIterator]();
+  await expect(invalid.next()).rejects.toMatchObject({ code: 'JOB_CURSOR_INVALID' });
+  const wrongJob = f.ports.subscribeJob({ jobId: 'different-job', after: null,
+    signal: new AbortController().signal })[Symbol.asyncIterator]();
+  await expect(wrongJob.next()).rejects.toMatchObject({ code: 'JOB_UNKNOWN' });
+  const abort = new AbortController();
+  abort.abort();
+  const cancelled = f.ports.subscribeJob({ jobId: f.session.jobId, after: null, signal: abort.signal })[Symbol.asyncIterator]();
+  expect(await cancelled.next()).toEqual({ done: true, value: undefined });
 });
 
 test('explicit close revokes fetch immediately, close replay is stable and reopening creates a fresh incarnation/grant', async () => {

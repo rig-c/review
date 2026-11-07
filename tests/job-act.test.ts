@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import { finalizeJobAct } from '../src/job-act.ts';
 import type { JobPendingAsk, JobUISubmission } from '../src/job-contract.ts';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { jobFixture, syntheticJobParts } from './helpers/job-api-fixture.ts';
 
@@ -76,6 +76,60 @@ test('review verdict remains separate from sign-off and is bound to the displaye
     expect(result.value.kind).toBe('review-verdict');
   }
   expect(f.session.status().pending).toHaveLength(0);
+});
+
+test('P1 unrelated agent ask does not stale a captured pending UI act and future generations still refuse', async () => {
+  const f = await fixture(), publication = await f.publish();
+  const ask = await f.ask(publication, { kind: 'checkpoint', checkpointId: 'step-one' }), page = await f.display(publication);
+  const input = { ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
+    submissionId: 'captured-ui', kind: 'checkpoint', value: { checkpointId: 'step-one', outcome: 'pass', words: '' } };
+  const unrelated = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
+  const future = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input,
+    submissionId: 'future-ui', expectedGeneration: f.session.status().generation + 1 }));
+  expect(future.ok).toBe(false);
+  if (!future.ok) expect(future.error.code).toBe('JOB_GENERATION_STALE');
+  const agentGeneration = f.session.status().generation;
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  if (!saved.ok) console.log(JSON.stringify({ pendingUIRefusal: saved.error }));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  expect(saved.value.askId).toBe(ask.askId);
+  expect(f.session.status().pending.map(item => item.askId)).toContain(unrelated.askId);
+  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual(saved);
+  const duplicate = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input,
+    submissionId: 'duplicate-ui', expectedGeneration: f.session.status().generation }));
+  expect(duplicate.ok).toBe(false);
+  if (!duplicate.ok) expect(duplicate.error.code).toBe('JOB_ASK_SUPERSEDED');
+  const staleAgent = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: agentGeneration,
+    idempotencyKey: 'stale-agent-cas', publicationId: publication.publicationId,
+    subject: { kind: 'review-verdict', stage: 'rig-review' } })).json();
+  expect(staleAgent.error.code).toBe('JOB_GENERATION_STALE');
+});
+
+test('pending UI act still refuses a rotated nonce, changed source and superseded publication', async () => {
+  const f = await fixture(), publication = await f.publish();
+  const ask = await f.ask(publication, { kind: 'checkpoint', checkpointId: 'step-one' }), page = await f.display(publication);
+  const input = { ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
+    submissionId: 'pending-bindings', kind: 'checkpoint' as const, value: { checkpointId: 'step-one', outcome: 'pass' as const, words: '' } };
+  const freshPage = await f.display(publication);
+  await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
+  const wrongNonce = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  expect(wrongNonce.ok).toBe(false);
+  if (!wrongNonce.ok) expect(wrongNonce.error.code).toBe('JOB_DISPLAY_MISMATCH');
+  const retained = f.session.retainedSource(publication.publicationId);
+  expect(() => finalizeJobAct({ jobId: f.session.jobId, submission: { ...input, ...freshPage },
+    ask: { ...ask, status: 'superseded' }, retained, reviewer: { id: 'declared-owner', role: 'owner' } })).toThrow('JOB_ASK_SUPERSEDED');
+  const manifestPath = join(f.root, 'out/review.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  await writeFile(manifestPath, JSON.stringify({ ...manifest, revision: 'changed-source' }));
+  const changed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, ...freshPage }));
+  expect(changed.ok).toBe(false);
+  if (!changed.ok) expect(changed.error.code).toBe('JOB_SOURCE_MISMATCH');
+  const newer = await f.publish();
+  expect(newer.publicationId).not.toBe(publication.publicationId);
+  const oldPublication = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, ...freshPage }));
+  expect(oldPublication.ok).toBe(false);
+  if (!oldPublication.ok) expect(oldPublication.error.code).toBe('JOB_ACT_SOURCE_STALE');
 });
 
 test('synthetic private adapters validate ordered interview picks without exposing storage formats', async () => {
