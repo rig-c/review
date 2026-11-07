@@ -106,7 +106,7 @@ test('#348: the verdict records parts.json and every PNG relative to the verdict
 test('#348: the sign-off is saved beside parts.json, reloads while the files hold, and is not offered once a part changes', async () => {
   const root = await planted(), pkg = await loadPartsView(root), names = ['back_defect', 'back_control', 'front'];
   // A build root opens on its rig/ (assemble's output); the sign-off lands beside parts.json there.
-  expect(pkg.verdictPath).toBe(join(root, 'rig', 'parts-review.json'));
+  expect(pkg.verdictPath).toBe(join(await realpath(root), 'rig', 'parts-review.json'));
   expect((await loadPartsView(join(root, 'rig'))).verdictPath).toBe(pkg.verdictPath);
   const saved = await saveVerdict(pkg, { status: 'changes-requested', parts: { ...clean(names), back_defect: { outcome: 'flagged', note: 'no material under front' } } });
   const disk = JSON.parse(await readFile(join(root, 'rig', 'parts-review.json'), 'utf8'));

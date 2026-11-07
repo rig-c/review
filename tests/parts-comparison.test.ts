@@ -18,6 +18,7 @@ test('#384 overlay opacity endpoints equal original painting crop / ordinary sou
  const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'overlay-'));try{const f=await writeComparisonPackage(root),part=await loadImage(await readFile(join(root,'parts/body.png'))),painting=await loadImage(await readFile(join(root,'painting.png')));
  const render=(opacity:number)=>{const canvas=createCanvas(20,16),ctx=canvas.getContext('2d');paintOverlay(ctx as never,{...f.body,index:0},part as never,painting as never,paintingRectangle(f.body,[32,24],f.painting),opacity,'green');return ctx.getImageData(0,0,20,16).data;};
  const zero=render(0),one=render(1),half=render(.5),p=(4*20+10)*4;
+ console.log('#472 overlay midpoint channels',JSON.stringify({platform:process.platform,zero:[...zero.subarray(p,p+4)],one:[...one.subarray(p,p+4)],half:[...half.subarray(p,p+4)],signedDeviations:[0,1,2].map(c=>half[p+c]!-(zero[p+c]!+one[p+c]!)/2),absoluteDeviations:[0,1,2].map(c=>Math.abs(half[p+c]!-(zero[p+c]!+one[p+c]!)/2))}));
  expect([...zero.subarray(p,p+4)]).toEqual([225,70,40,255]);expect([...one.subarray(p,p+4)]).toEqual([...f.part.data.subarray(p,p+4)]);
  for(let c=0;c<3;c++)expect(Math.abs(half[p+c]!-(zero[p+c]!+one[p+c]!)/2)).toBeLessThanOrEqual(1);
  }finally{await rm(root,{recursive:true,force:true});}
