@@ -603,7 +603,7 @@ origin, and obtain the new hub owner URL. The hub capability and `workspace`
 incarnation query rotate. Each retained active job keeps its identity and grants
 until explicit close. The current hub admits at most 32 entries, including
 closed retained entries, and lazily retains selected frames. This application
-bound has no hardware performance guarantee.
+bound has no hardware performance guarantee. Hidden hub members suspend their event subscription after bootstrap and resume from the last delivered cursor when selected.
 
 ## Standing live job workflow
 

@@ -261,7 +261,10 @@ Without a painting the comparison controls are absent and the reference pane nam
 actual displayed pixels, camera preservation, mode/opacity save/reload/restore and both exports in EN/KO.
 Its native crop remains the original part RGBA, while the viewport crop shows the displayed comparison.
 A current image/painting render failure clears the part pixels and refuses comment creation/editing
-as `PARTS_PAINT_FAILED` until a successful repaint. Older failed generations cannot invalidate a
+as `PARTS_PAINT_FAILED` until a successful repaint. Both buffers clear and both cameras reset to
+1:1 centred on the actual canvas. Zoom, pan, Fit and saved comment/stage camera restoration stay
+locked until rendering succeeds; retrying the part restores its painted frame before navigation resumes.
+Older failed generations cannot invalidate a
 newer successful view (`tests/parts-async-navigation.test.ts`; focused browser evidence in
 `tests/parts-paint-failure-browser.ts`).
 
@@ -279,7 +282,8 @@ assemble in a separate fixture directory. It is an evidence script, never an app
 [the waiting consumer #390](https://github.com/rig-c/review/issues/390). Review adds no producer resampler.
 Neither visual comparison nor opening a package supplies an approval.
 
-Parts native zoom ranges from `min(fit, 1)` to 16; exact native 1 is always reachable. **Fit** is
+Parts native zoom ranges from `min(fit, 1)` to 16. Exact native 1 is always reachable for a valid,
+successfully rendered frame. **Fit** is
 a separate action, and **1:1** is shown only at exactly 1. Out-of-range requests refuse as
 `PARTS_CAMERA_RANGE`; the compiled rig's Fit-relative 0.25–8 policy stays unchanged.
 
