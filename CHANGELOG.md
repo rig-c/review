@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.5](https://github.com/rig-c/review/compare/v1.16.4...v1.16.5) (2026-11-07)
+
+
+### Bug Fixes
+
+* resolve Parts zoom against the selected frame before paint ([8402a68](https://github.com/rig-c/review/commit/8402a688bbec7074e9781506acdf7661aea17275))
+
 ## [1.16.4](https://github.com/rig-c/review/compare/v1.16.3...v1.16.4) (2026-11-06)
 
 
