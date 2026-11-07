@@ -67,7 +67,7 @@ function load(src: string): Promise<HTMLImageElement> {
   });
 }
 const itemImage = (item: Item) => load(`${partsApi}/image/${item.index}`);
-const pageImage = (name: string) => { const page = state.data!.pages.find(p => p.name === name)!; return load(`${partsApi}/page/${page.index}`); };
+const pageImage = (name: string) => { const page = state.data?.pages.find(p => p.name === name); return page ? load(`${partsApi}/page/${page.index}`) : Promise.reject(new Error('PARTS_PAINT_FAILED')); };
 
 function setCanvas(canvas: HTMLCanvasElement, w: number, h: number): CanvasRenderingContext2D {
   canvas.width = w; canvas.height = h;
@@ -86,18 +86,23 @@ function overlayBox(x: number, y: number, w: number, h: number): HTMLDivElement 
 }
 
 let paintToken = 0;
-let paintFailure:string|null=null;
+let paintFailure:string|null=null,paintReset=false;
 async function paint():Promise<void>{
  const token=++paintToken;painting=true;
  try{
   await paintRaster(token);if(token!==paintToken)return;
   await paintReference(token);if(token!==paintToken)return;
-  viewport?.fitCamera();if(paintFailure)$('pv-save-status').textContent='';paintFailure=null;commentUi?.refresh();
+  if(paintFailure)$('pv-save-status').textContent='';paintFailure=null;viewport?.fitCamera();commentUi?.refresh();
  }catch(error){
   if(token!==paintToken)return;
-  paintFailure=error instanceof Error&&error.message.startsWith('PARTS_DIFFERENCE_')?error.message:'PARTS_PAINT_FAILED: view could not be rendered; select the part to retry';
-  const canvas=$<HTMLCanvasElement>('pv-canvas');canvas.getContext('2d')?.clearRect(0,0,canvas.width,canvas.height);$('pv-overlay').replaceChildren();
-  $('pv-caption').textContent=t(paintFailure);$('pv-save-status').textContent=t(paintFailure);commentUi?.refresh();
+  const failure=error instanceof Error&&error.message.startsWith('PARTS_DIFFERENCE_')?error.message:'PARTS_PAINT_FAILED: view could not be rendered; select the part to retry';
+  const canvas=$<HTMLCanvasElement>('pv-canvas');canvas.getContext('2d')?.clearRect(0,0,canvas.width,canvas.height);
+  const ref=$<HTMLCanvasElement>('pv-reference') as HTMLCanvasElement|null;if(ref){if(canvas.width>0&&canvas.height>0){ref.width=canvas.width;ref.height=canvas.height;}ref.getContext('2d')?.clearRect(0,0,ref.width,ref.height);}
+  $('pv-overlay').replaceChildren();$('pv-caption').textContent=t(failure);$('pv-save-status').textContent=t(failure);
+  painting=false;paintFailure=null;paintReset=true;
+  try{viewport?.writeCamera?.('rig',{zoom:1,center:null});viewport?.writeCamera?.('reference',{zoom:1,center:null});viewport?.fitCamera();}
+  finally{paintReset=false;paintFailure=failure;}
+  commentUi?.refresh();
  }finally{if(token===paintToken)painting=false;}
 }
 const assemblyAlpha=new Map<string,Uint8ClampedArray>();
@@ -114,13 +119,14 @@ function partFrame(data:ViewData,item:Item) {
   return item;
 }
 
-function rasterFrame(data:ViewData,item:Item) {
+function rasterFrame(data:ViewData,item:Item):{x:number;y:number;w:number;h:number}|null {
   if(data.mode==='parts')return partFrame(data,item);
   if(state.view==='page') {
-    const page=data.pages[state.page]!;
-    return {x:0,y:0,w:page.width,h:page.height};
+    const page=data.pages[state.page];
+    return page?{x:0,y:0,w:page.width,h:page.height}:null;
   }
-  const page=data.pages.find(p=>p.name===item.page)!;
+  const page=data.pages.find(p=>p.name===item.page);
+  if(!page)return null;
   const x=Math.max(0,item.x-REGION_MARGIN),y=Math.max(0,item.y-REGION_MARGIN);
   const right=Math.min(page.width,item.x+item.w+REGION_MARGIN);
   const bottom=Math.min(page.height,item.y+item.h+REGION_MARGIN);
@@ -132,7 +138,9 @@ async function paintRaster(token:number): Promise<void> {
   if (!data || !data.items.length) return;
   const canvas = $<HTMLCanvasElement>('pv-canvas'), overlay = $('pv-overlay'), caption = $('pv-caption');
   const item = data.items[state.selected]!;
-  const {x,y,w,h}=rasterFrame(data,item);
+  const frame=rasterFrame(data,item);
+  if(!frame)throw new Error('PARTS_PAINT_FAILED');
+  const {x,y,w,h}=frame;
   if(state.view==='assembled'&&data.mode==='parts'&&data.rigSize){
     const shown=data.items.filter(i=>!state.hidden.has(i.name));
     const layers=await Promise.all(shown.map(async box=>({box,image:await itemImage(box)})));
@@ -357,16 +365,16 @@ function renderMesh(): void {
 function select(index: number): void {
   queueMicrotask(renderCorrections);
   const data = state.data!;
-  const changed=state.selected!==index;state.selected = index;if(changed&&viewport&&state.view!=='assembled'){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
-  commentUi?.refresh();
   const item = data.items[index]!;
   if (item.page !== undefined) state.page = data.pages.findIndex(p => p.name === item.page);
+  const changed=state.selected!==index;state.selected = index;if((changed||paintFailure)&&viewport&&state.view!=='assembled'){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
+  commentUi?.refresh();
   renderList(); renderFlags(); renderVerdict(); renderMesh(); renderComparison(); void paint();
 }
 
 function setView(view: 'item' | 'page' | 'assembled'): void {
   if(view==='assembled'&&(state.data?.mode!=='parts'||!state.data.rigSize))return;
-  if(state.view!==view&&viewport){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
+  if((state.view!==view||paintFailure)&&viewport){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
   if(view!=='item'&&state.comparison.mode==='difference')state.comparison={mode:'part',opacity:state.comparison.opacity};
   state.view = view;renderMesh();renderComparison();$('rig-label').textContent=t(view==='assembled'?'Assembled':'Selected part');commentUi?.refresh();
   for (const b of document.querySelectorAll<HTMLButtonElement>('[data-pv-view]')) b.setAttribute('aria-pressed', String(b.dataset.pvView === view));
@@ -427,8 +435,9 @@ async function boot(): Promise<void> {
   viewport=createPartsViewport({el:$,canvas:$<HTMLCanvasElement>('pv-canvas'),message:(msg)=>{$('pv-save-status').textContent=t(msg);},reference:()=>state.data?.painting?$<HTMLCanvasElement>('pv-reference'):null,
     frameSize:target=>{
       const data=state.data,item=data?.items[state.selected];
-      if(!data||!item)return null;
-      return target==='rig'?rasterFrame(data,item):data.painting?partFrame(data,item):null;
+      if(!data||!item||paintReset)return null;
+      if(paintFailure)return {w:0,h:0};
+      return target==='rig'?rasterFrame(data,item)??{w:0,h:0}:data.painting?partFrame(data,item):null;
     },
   });viewport.bindControls();
   $('native-one').onclick=()=>viewport!.cameraAction(()=>viewport!.updateCamera(viewport!.availableCamera()??'rig',{zoom:1,pan:{x:0,y:0}}));
@@ -448,7 +457,7 @@ async function boot(): Promise<void> {
   const res = await fetch(access.route(partsApi), { headers: stageHeaders() });
   const data = await res.json() as ViewData & { error?: string };
   if (!res.ok) { const status=$('pv-load');status.textContent=t(data.error??'Load failed.');status.dataset.result='refused';return; }
-  state.data = data;if(!data.differenceAvailable)document.querySelector('[data-pv-comparison="difference"]')?.remove();if(stageEmbedded)for(const item of data.items)if(item.mesh)state.meshShown.add(item.name);$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;comments.push(...data.verdict?.comments??[]);setupPartsComments();viewport.bindNavigation(undefined,()=>!commentUi?.active());viewport.observeResize();
+  state.data = data;if(!data.differenceAvailable)document.querySelector('[data-pv-comparison="difference"]')?.remove();if(stageEmbedded)for(const item of data.items)if(item.mesh)state.meshShown.add(item.name);$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;comments.push(...data.verdict?.comments??[]);setupPartsComments();viewport.bindNavigation(undefined,()=>!commentUi?.active()&&!paintFailure);viewport.observeResize();
   if(stageEmbedded&&data.joinedVerdictBinding){
     document.querySelector<HTMLElement>('.pv-verdict')!.hidden=false;
     $('pv-approve-all').hidden=true;
@@ -530,7 +539,7 @@ function setupPartsComments():void {
  };
  const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||state.view!=='item')return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshShown.has(item.name),comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
  commentUi=bindStageComments({toolbar:document.querySelector<HTMLElement>('.pv-toolbar')!,viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
- restore:async(raw)=>{const res=await fetch(access.route(partsApi),{headers:stageHeaders()});const current=await res.json() as ViewData&{error?:string};if(!res.ok||current.sourceHash!==state.data?.sourceHash)throw new Error(current.error??'PARTS_COMMENT_STALE_SOURCE');const b=raw as {part:string;imageHash:string;sourceHash:string;view:PartsComment['view']},item=state.data!.items.find(i=>i.name===b.part);if(!item||item.imageHash!==b.imageHash||state.data!.sourceHash!==b.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');setView('item');$('pv-assemble').setAttribute('aria-pressed','false');select(item.index);state.bg=b.view.background;state.alpha=b.view.alpha;state.footprints=b.view.footprints;state.comparison={...(b.view.comparison??defaultPartsComparison())};if(state.comparison.mode==='difference')state.differenceThreshold=state.comparison.threshold;renderComparison();if(b.view.mesh)state.meshShown.add(item.name);else state.meshShown.delete(item.name);$<HTMLSelectElement>('pv-bg').value=state.bg;$<HTMLInputElement>('pv-alpha').checked=state.alpha;$<HTMLInputElement>('pv-footprints').checked=state.footprints;renderMesh();viewport!.state.cameraRestoring=true;try{await paint();viewport!.writeCamera('rig',{zoom:b.view.camera.zoom,center:{...b.view.camera.center}});if(b.view.referenceCamera)viewport!.writeCamera('reference',{zoom:b.view.referenceCamera.zoom,center:{...b.view.referenceCamera.center}});viewport!.state.cameraSync=b.view.cameraSync;viewport!.fitCamera();}finally{viewport!.state.cameraRestoring=false;}},
+ restore:async(raw)=>{const res=await fetch(access.route(partsApi),{headers:stageHeaders()});const current=await res.json() as ViewData&{error?:string};if(!res.ok||current.sourceHash!==state.data?.sourceHash)throw new Error(current.error??'PARTS_COMMENT_STALE_SOURCE');const b=raw as {part:string;imageHash:string;sourceHash:string;view:PartsComment['view']},item=state.data!.items.find(i=>i.name===b.part);if(!item||item.imageHash!==b.imageHash||state.data!.sourceHash!==b.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');setView('item');$('pv-assemble').setAttribute('aria-pressed','false');select(item.index);state.bg=b.view.background;state.alpha=b.view.alpha;state.footprints=b.view.footprints;state.comparison={...(b.view.comparison??defaultPartsComparison())};if(state.comparison.mode==='difference')state.differenceThreshold=state.comparison.threshold;renderComparison();if(b.view.mesh)state.meshShown.add(item.name);else state.meshShown.delete(item.name);$<HTMLSelectElement>('pv-bg').value=state.bg;$<HTMLInputElement>('pv-alpha').checked=state.alpha;$<HTMLInputElement>('pv-footprints').checked=state.footprints;renderMesh();viewport!.state.cameraRestoring=true;try{await paint();if(!paintFailure){viewport!.writeCamera('rig',{zoom:b.view.camera.zoom,center:{...b.view.camera.center}});if(b.view.referenceCamera)viewport!.writeCamera('reference',{zoom:b.view.referenceCamera.zoom,center:{...b.view.referenceCamera.center}});viewport!.state.cameraSync=b.view.cameraSync;viewport!.fitCamera();}}finally{viewport!.state.cameraRestoring=false;}},
  feedback:()=>comments,locked:()=>false,add:c=>comments.push(c),changed:()=>renderVerdict(),error:m=>{$('pv-save-status').textContent=t(m);},blocked:()=>painting,refusal:()=>paintFailure??(state.view==='assembled'?'PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment':null)??(state.data?.mode!=='parts'||stageEmbedded?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
 }
 
@@ -560,7 +569,7 @@ async function restoreStageParts(saved:StagePartsState):Promise<void>{
   const index=stagePartsSelectionIndex(state.data,saved);
   viewport.state.cameraRestoring=true;state.bg=saved.bg;state.alpha=saved.alpha;state.footprints=saved.footprints;state.view=saved.view;
   if(saved.mesh)state.meshShown.add(saved.part);else state.meshShown.delete(saved.part);
-  select(index);await paint();viewport.writeCamera('rig',saved.rig);if(state.data.painting)viewport.writeCamera('reference',saved.reference);viewport.state.cameraSync=saved.cameraSync;viewport.fitCamera();
+  select(index);await paint();if(!paintFailure){viewport.writeCamera('rig',saved.rig);if(state.data.painting)viewport.writeCamera('reference',saved.reference);viewport.state.cameraSync=saved.cameraSync;viewport.fitCamera();}
  }catch{const status=$('pv-load');status.hidden=false;status.dataset.result='refused';status.textContent=t('STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.');document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;}
  finally{viewport.state.cameraRestoring=false;}
 }
