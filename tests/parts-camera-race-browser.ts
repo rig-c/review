@@ -260,7 +260,7 @@ async function controls(page: InputCdpSession, url: string, rows:Record<string,u
 
 function requireMidpoint(row: Sample, dimensions: readonly [number, number], name: string) {
   require(equal(row.dimensions, dimensions) && matchesCamera(row),
-  'PARTS_FRAME_PAINT_MISMATCH ' + name + ' ' + JSON.stringify(row));
+  'PARTS_PAINTED_VIEW_MISMATCH ' + name + ' ' + JSON.stringify(row));
 }
 
 async function comparisonFrames(page: InputCdpSession, dir: string, rows:Record<string,unknown>) {
@@ -411,7 +411,7 @@ try {
     const zoomed = progress.zoomed as Sample, final = progress.settled as Sample;
     requireMidpoint(final,[8,10],lang);
     require(matchesCamera(zoomed) && equal(zoomed.root,final.root),
-      'PARTS_FRAME_PAINT_MISMATCH ' + lang + ':held-to-settled');
+      'PARTS_HELD_CAMERA_MISMATCH ' + lang + ':held-to-settled');
   }
   const camera={},comparison={},atlas={};
   report.controls = {camera,comparison,atlas};

@@ -63,6 +63,21 @@ jobs:
           name: parts-explorer-measurements
           path: ${{ runner.temp }}/parts-explorer.json
           if-no-files-found: error
+      - name: Verify Parts camera in Chrome
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          chrome_bin="$(command -v google-chrome)"
+          printf 'Chrome path: %s\n' "$chrome_bin"
+          "$chrome_bin" --version
+          time CHROME_BIN="$chrome_bin" REVIEW464_CAMERA_ARTIFACTS="$RUNNER_TEMP/parts-camera-race" bun tests/parts-camera-race-browser.ts
+      - name: Upload Parts camera evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: parts-camera-race
+          path: ${{ runner.temp }}/parts-camera-race/
+          if-no-files-found: error
   install-smoke:
     needs: tree-verdict
     if: ${{ !cancelled() && needs.tree-verdict.outputs.reused != 'true' }}
