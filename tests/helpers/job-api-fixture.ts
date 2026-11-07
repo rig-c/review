@@ -2,7 +2,7 @@ import { cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/pr
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { JOB_API_SCHEMA, type JobAgentRequest, type JobPublication, type JobSubject } from '../../src/job-contract.ts';
+import { JOB_API_SCHEMA, type JobAgentRequest, type JobPartsEnumerator, type JobPartsFileReference, type JobPublication, type JobSubject } from '../../src/job-contract.ts';
 import { createJobHostPorts, jobHash } from '../../src/job-api.ts';
 import { JobSession } from '../../src/job-session.ts';
 import type { JobPublishedContext } from '../../src/job-source.ts';
@@ -15,6 +15,7 @@ export async function jobFixture(options: {
   afterSnapshot?: (root: string) => void | Promise<void>;
   afterDirectorySync?: (path: string) => void;
   plain?: boolean;
+  partsEnumerator?: JobPartsEnumerator;
 } = {}) {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-job-'));
   const root = join(scratch, 'input'), state = join(scratch, 'state');
@@ -33,9 +34,9 @@ export async function jobFixture(options: {
     ],
     partIds: [], files: [],
   };
-  const partsEnumerator = {
-    version: '2.25.1',
-    enumerate: () => (context.parts?.images ?? []).map(({path, role}) => ({path, role})),
+  let references: readonly JobPartsFileReference[] = [];
+  const partsEnumerator = options.partsEnumerator ?? {
+    version: '2.25.1', enumerate: () => structuredClone(references),
   };
   const session = new JobSession({
     root, stateDir: state, fingerprint: 'f'.repeat(64), reviewer: { id: 'declared-owner', role: 'owner' },
@@ -92,6 +93,7 @@ export async function jobFixture(options: {
   }
   return {
     scratch, root, state, session, ports, origin, credentials, partsEnumerator, base, call, publishRequest, publish, ask, display, uiRequest,
+    setPartsReferences(value: readonly JobPartsFileReference[]) { references = structuredClone(value); },
     setContext(value: JobPublishedContext) { context = value; },
     setRecordPath(value: string) { recordPath = value; },
     getContext() { return structuredClone(context); },
@@ -121,6 +123,7 @@ export async function syntheticJobParts(f: Awaited<ReturnType<typeof jobFixture>
       role: path.includes('alternate') ? 'alternate' : path.includes('depth') ? 'depth' :
         path.endsWith('painting_in_rig.png') ? 'painting' : 'part', sha256: jobHash(bytes) })),
   };
+  f.setPartsReferences(parts.images.map(({path, role}) => ({path, role})));
   const context = f.getContext();
   if (options.project) {
     await writeFile(join(f.root, 'project.json'), '{"schema":"rig-create/project@0","interview":{}}\n');

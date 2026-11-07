@@ -246,6 +246,7 @@ export async function scriptedJobWindowFixture() {
         partIds: ['mesh'],
         subjects: [...f.input.getContext().subjects, {kind: 'parts-verdict' as const, draftId: 'synthetic-parts'}],
     };
+    f.input.setPartsReferences(context.parts.images.map(({path, role}) => ({path, role})));
     let generation = 0;
     let sequence = 0;
     async function agent(verb: 'publish' | 'ask' | 'next' | 'close', value: Record<string, unknown>) {
