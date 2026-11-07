@@ -45,9 +45,32 @@ test('#382 common two-pointer gesture anchors source point at moving pinch centr
 test('#384 delayed original reference size realigns the canonical pair before any camera gesture',()=>{
  const nodes=new Map<string,any>();const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:450,clientHeight:842,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
  const canvas={width:590,height:457},reference={width:300,height:150};
- const c=createPartsViewport({el,canvas:canvas as HTMLCanvasElement,reference:()=>reference as HTMLCanvasElement,message:()=>{}});c.state.cameraSync=true;c.fitCamera();
+ const c=createPartsViewport({el,canvas:canvas as HTMLCanvasElement,reference:()=>reference as HTMLCanvasElement,frameSize:()=>null,message:()=>{}});c.state.cameraSync=true;c.fitCamera();
  expect(c.numericView().cameras.reference!.center).toEqual({x:150,y:75});
  reference.width=590;reference.height=457;c.fitCamera();
  expect(c.numericView().cameras.reference!.center).toEqual(c.numericView().cameras.rig!.center);
  expect(c.numericView().cameras.reference!.center).toEqual({x:295,y:228.5});
+});
+
+test('#464 pending parts zoom uses the selected frame and preserves explicit painted camera state',()=>{
+ const nodes=new Map<string,any>();
+ const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:450,clientHeight:800,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ const canvas={width:20,height:16},reference={width:20,height:16};
+ let selected={w:20,h:16};
+ const c=createPartsViewport({el,canvas:canvas as HTMLCanvasElement,reference:()=>reference as HTMLCanvasElement,frameSize:()=>selected,message:()=>{}});
+ c.state.cameraSync=true;c.fitCamera();
+ selected={w:8,h:10};
+ c.writeCamera('rig',{zoom:1,center:null});c.writeCamera('reference',{zoom:1,center:null});
+ c.zoomCamera(1.25);
+ const expected={zoom:1.25,center:{x:4,y:5}};
+ expect(c.paneCamera('rig')).toEqual(expected);
+ expect(c.paneCamera('reference')).toEqual(expected);
+ expect(canvas).toEqual({width:20,height:16});
+ Object.assign(canvas,{width:8,height:10});Object.assign(reference,canvas);c.fitCamera();
+ expect(c.paneCamera('rig')).toEqual(expected);
+ c.panCamera('rig',5,-5);
+ c.zoomCamera(1.25);
+ expect(c.paneCamera('rig')).toEqual({zoom:1.5625,center:{x:0,y:9}});
+ c.fitCamera();
+ expect(c.paneCamera('rig')).toEqual({zoom:1.5625,center:{x:0,y:9}});
 });

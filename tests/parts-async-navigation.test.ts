@@ -6,7 +6,7 @@ import {readFile} from 'node:fs/promises';
 
 /** Run the actual reference painter, with only image completion and canvas calls controlled. */
 async function referenceDriver(){
- const source=await readFile('web/parts.ts','utf8'),start=source.indexOf('async function paintReference('),end=source.indexOf('\nfunction renderFlags(',start),code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(start,end));
+ const source=await readFile('web/parts.ts','utf8'),start=source.indexOf('function partFrame('),end=source.indexOf('\nfunction renderFlags(',start),code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(start,end));
  const pending:((image:unknown)=>void)[]=[],draws:number[]=[];const ctx={imageSmoothingEnabled:true,drawImage:(_image:unknown,x:number)=>draws.push(x)},canvas={width:0,height:0,getContext:()=>ctx};
  const scope={paintToken:1,state:{data:{rigSize:[200,200],painting:{sha256:'a'.repeat(64),width:200,height:200},items:[{x:10,y:5,w:8,h:9},{x:100,y:50,w:18,h:19}]},selected:0,bg:'green'},load:()=>new Promise(resolve=>pending.push(resolve)),$:()=>canvas,paintingRectangle,paintPaintingCrop:(_ctx:unknown,img:unknown,r:{x:number})=>ctx.drawImage(img,r.x)};
  const paint=new Function('scope',`with(scope){${code};return paintReference;}`)(scope) as (token?:number)=>Promise<void>;
