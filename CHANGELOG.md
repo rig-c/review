@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/rig-c/review/compare/v1.18.0...v2.0.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* live jobs use rig-review/job-api@2 and rig-review/act@2. Parts identity now carries enumeratorVersion and manifest-relative image paths with roles. Close incompatible active jobs using their matching older installation.
+
+### Features
+
+* bind C4 jobs to the versioned public Parts enumeration ([#509](https://github.com/rig-c/review/issues/509)) ([6656149](https://github.com/rig-c/review/commit/66561493c0a62888554d04326b081761ed0b348a))
+
 ## [1.18.0](https://github.com/rig-c/review/compare/v1.17.0...v1.18.0) (2026-11-07)
 
 
