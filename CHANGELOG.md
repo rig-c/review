@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.0](https://github.com/rig-c/review/compare/v1.17.0...v1.18.0) (2026-11-07)
+
+
+### Features
+
+* expose the public managed job host ([#506](https://github.com/rig-c/review/issues/506)) ([cb74f06](https://github.com/rig-c/review/commit/cb74f06b1588f3fde5c6b908dc98d2a0ba974387))
+
 ## [1.17.0](https://github.com/rig-c/review/compare/v1.16.7...v1.17.0) (2026-11-07)
 
 
