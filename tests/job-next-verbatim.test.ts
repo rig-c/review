@@ -307,7 +307,7 @@ test('real semantic next preserves verbatim reviewer words across checkpoint, si
   }
 });
 
-test('real semantic next preserves verbatim nested human notes in parts-verdict, interview-picks and image-set review-verdict and rejects named in-memory mutations', async () => {
+test('real semantic next preserves verbatim nested human notes in parts-verdict and rejects named in-memory mutations', async () => {
   // Part A: parts-verdict with part note, mesh note, whitespace-only clean note, and summary words
   const partsFixture = await fixture();
   const partsIdentity = await syntheticJobParts(partsFixture, { project: true, painting: true });
@@ -388,7 +388,9 @@ test('real semantic next preserves verbatim nested human notes in parts-verdict,
       (event.act.value.parts[0]!.mesh as { note: string }).note = bodyMeshNote.trim();
     },
   });
+});
 
+test('real semantic next preserves verbatim nested human notes in interview-picks and rejects named in-memory mutations', async () => {
   // Part B: interview-picks on real joined project fixture with `otherText` and `note`
   const interviewFixture = await fixture();
   await joinedVerdictFixture(interviewFixture.root, '2-rigging-answers');
@@ -493,7 +495,9 @@ test('real semantic next preserves verbatim nested human notes in parts-verdict,
       },
     },
   );
+});
 
+test('real semantic next preserves verbatim nested human notes in image-set review-verdict and rejects named in-memory mutations', async () => {
   // Part C: image-set review-verdict with per-image `imageNotes` and top-level `words`
   const imageFixture = await fixture();
   const pngBytes = await readFile(join(imageFixture.root, 'out/rigid.png'));
