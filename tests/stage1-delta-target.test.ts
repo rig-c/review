@@ -4,7 +4,7 @@ import { assertNamedDeltaOps, dragStage1Delta, type DeltaDiagnostic } from './he
 import type { MeshOp } from '../src/mesh-edit.ts';
 
 // VM-only geometry and event fixtures. These are no owner review or approval acts.
-function fixture(options: {edge?: boolean; changeAtPress?: boolean; neverSettles?: boolean; lostPress?: boolean; unchangedPixels?: boolean} = {}) {
+function fixture(options: {edge?: boolean; changeAtPress?: boolean; neverSettles?: boolean; lostPress?: boolean; unchangedPixels?: boolean; unmovedState?: boolean} = {}) {
   const events: {type: string; x: number; y: number}[] = [];
   const diagnostics: DeltaDiagnostic[] = [];
   let frame = 0;
@@ -33,7 +33,7 @@ function fixture(options: {edge?: boolean; changeAtPress?: boolean; neverSettles
         drawn:initialVertices.map(([x,y],id) => {
           const op = ops.find(op => op.op === 'move' && op.v === id);
           const [dx,dy] = op?.op === 'move' && !options.unchangedPixels ? op.to : [x,y];
-          return {x:100+offset+dx*2,y:70-dy*2,state:op ? 'moved' : 'source'};
+          return {x:100+offset+dx*2,y:70-dy*2,state:op && !options.unmovedState ? 'moved' : 'source'};
         }),
       }),
     },
@@ -129,6 +129,14 @@ test('a named move op and moved marker cannot pass without changed screen geomet
   expect(f.diagnostics[0]!.after!.edit.ops).toHaveLength(1);
 });
 
+test('a named move op and changed screen geometry cannot pass without a moved drawn state', async () => {
+  const f = fixture({unmovedState:true});
+  await expect(dragStage1Delta(f.page,f.persist)).rejects.toThrow('DELTA_DRAWN_IDS_MISMATCH expected=[2] actual=[]');
+  expect(f.events).toHaveLength(4);
+  expect(f.diagnostics[0]!.after!.edit.ops).toEqual([{op:'move',v:2,from:[10,10],to:[11,10.5]}]);
+  expect(f.diagnostics[0]!.after!.edit.drawn[2]).toEqual({x:152,y:49,state:'source'});
+});
+
 test('operation oracle rejects extra moves, other edit kinds, empty and no-op deltas', () => {
   const moved: MeshOp = {op:'move',v:29,from:[1,2],to:[2,3]};
   assertNamedDeltaOps([moved],29);
@@ -141,4 +149,12 @@ test('operation oracle rejects extra moves, other edit kinds, empty and no-op de
       `DELTA_MOVED_IDS_MISMATCH expected=[29] actual=${JSON.stringify(ids)}`,
     );
   }
+});
+
+test('operation oracle refuses a double committed delta on the same vertex 29', () => {
+  const moved: MeshOp = {op:'move',v:29,from:[1,2],to:[2,3]};
+  const second: MeshOp = {op:'move',v:29,from:[2,3],to:[3,4]};
+  expect(() => assertNamedDeltaOps([moved,second],29)).toThrow(
+    'DELTA_MOVED_IDS_MISMATCH expected=[29] actual=[29]',
+  );
 });
