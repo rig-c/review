@@ -504,7 +504,7 @@ test('event decoding retains a multibyte character split across network chunks',
             controller.enqueue(bytes.slice(split));
             controller.close();
         },
-    }))) as typeof fetch;
+    }))) as unknown as typeof fetch;
     const received = [];
     for await (const event of jobWindowEvents(access, null, new AbortController().signal, fetcher)) received.push(event);
     expect(received[0]).toMatchObject({ publication: { label: '한😀' } });
