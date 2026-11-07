@@ -1,4 +1,5 @@
 import {bindStageNav} from './stage-nav.ts';
+import {bindWorkspaceVisibility} from './workspace-visibility.ts';
 import {requireFeedbackFrames} from '../src/stage-comment.ts';
 import {bindStageComments,type CommentPose} from './stage-comments.ts';
 import {sharedTurnDials,type TurnDial} from '../src/turn-pad.ts';
@@ -463,6 +464,7 @@ async function start(): Promise<void> {
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;
     await seekTo(0);configureTurnPad();workspace?.refresh();activeCamera='a';if(cameraSync)alignCameras();fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();setupComments();await pickedTools?.loadInitialSideStatuses();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
     if(!readOnly&&controlServed)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
+    bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause:()=>{idleHeld=true;stop();}});
   } catch (error) { failPair(error); for (const side of ['a', 'b'] as const) if (!players[side]) text(`${side}-empty`, `${side.toUpperCase()} Could not open comparison rig.`); text('reference-empty', 'Check the reference video and comparison inputs.'); }
 }
 function sharedBox():PoseBounds|null {const a=assets.a?.stage??players.a?.bounds(),b=assets.b?.stage??players.b?.bounds();return a&&b?unionBounds(a,b):a??b??null;}

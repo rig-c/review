@@ -25,7 +25,7 @@ import { readCompareSession } from './compare-session.ts';
 import { exportReviewStrip, exportCompareStrip, stripJson, writeStripOutput, validateStripOutput } from './strip-export.ts';
 import type { StripInterval, StripRequest } from './strip.ts';
 const handoffUsage='[--config <path> [--parts <dir>] [--source <png> --full <dir> [--head <dir>]] [--keypoints <file>]]';
-const usage='Usage: rig-review open <dir> [--reference <video>] [--compare <dir>] [--animation <name>] [--control] [--direct] [--view-only] [--project <create-root> (--project-version <rig> [--post-version <post>] | --project-draft <id> [--parts-verdict-dir <dir>]) --picks-dir <dir>] '+handoffUsage+'\n       --config declares the producer handoff (wins over the review.json "producer" block and discovery of config.json, rig/config.json, ../config.json beside an opened out/); feedback and control take the same flags; --view-only opens without a producer handoff.\n       open is managed by default: one loopback front at 127.0.0.1:4318 (RIG_REVIEW_FRONT_PORT overrides) serves /instances/<key>/; --direct serves the worker on its own port.\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--project <create-root> --project-version <rig> --picks-dir <dir> [--post-version <post>]] [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--project <create-root> --project-version <rig> --picks-dir <dir> [--post-version <post>]] [--format json|issue] [--correction <item id>]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID] [--view-only]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>\n       rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       rig-review interview <create-root> --picks-dir <project-relative directory> [--port <n>]\n       rig-review --version';
+const usage='Usage: rig-review open <dir> [<dir> ...] [--animation-for <index> <name>] [--reference <video>] [--compare <dir>] [--animation <name>] [--control] [--direct] [--view-only] [--project <create-root> (--project-version <rig> [--post-version <post>] | --project-draft <id> [--parts-verdict-dir <dir>]) --picks-dir <dir>] '+handoffUsage+'\n       --config declares the producer handoff (wins over the review.json "producer" block and discovery of config.json, rig/config.json, ../config.json beside an opened out/); feedback and control take the same flags; --view-only opens without a producer handoff.\n       open is managed by default: one owner workspace at 127.0.0.1:4318 (RIG_REVIEW_FRONT_PORT overrides) hosts targets in one process; --animation applies to all targets, --animation-for overrides one 1-based target, and --direct keeps a separate single-target worker.\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--project <create-root> --project-version <rig> --picks-dir <dir> [--post-version <post>]] [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--project <create-root> --project-version <rig> --picks-dir <dir> [--post-version <post>]] [--format json|issue] [--correction <item id>]\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID] [--view-only]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>\n       rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       rig-review interview <create-root> --picks-dir <project-relative directory> [--port <n>]\n       rig-review --version';
 async function stripCommand(args:string[],options:{stateDir?:string}){
   const compare=args[0]==='compare';if(compare)args.shift();const a=args.shift(),b=compare?args.shift():undefined;if(!a||compare&&!b)throw new Error('strip: expected package input(s)');
   let reference:string|undefined,referenceVideo:string|undefined,animation:string|undefined,basis:'a'|'b'|undefined,range:string|undefined,output:string|undefined,jsonOnly=false,all=false;
@@ -69,6 +69,50 @@ export function parseOpenInputs(args:string[]):OpenInputs {
  const problem=checkHandoffFlags(result);if(problem)throw new Error(`OPEN_OPTION_INVALID ${problem.split(':')[0]}: ${problem.slice(problem.indexOf(':')+2)}`);
  if(result.compare!==undefined&&handoffFlags(result))throw new Error('OPEN_OPTION_INVALID --config: compare takes no producer handoff; open one package with --config');
  return result;
+}
+
+/** Common open options apply to every operand; indexed animation values override the common default. */
+export function parseOpenTargets(args: readonly string[]): OpenInputs[] {
+ const inputs: string[] = [];
+ const common: string[] = [];
+ const animations = new Map<number, string>();
+ const booleanFlags = ['--control', '--direct', '--view-only'];
+ const valueFlags = ['--reference', '--compare', '--animation', ...projectFlags, ...HANDOFF_FLAGS.map(flag => '--' + flag)];
+ for (let index = 0; index < args.length; index++) {
+  const flag = args[index]!;
+  if (flag === '--animation-for') {
+   const target = args[++index], animation = args[++index];
+   if (target === undefined || !/^[1-9]\d*$/.test(target) || !Number.isSafeInteger(Number(target)) || animation === undefined || animation === '') {
+    throw new Error('OPEN_OPTION_INVALID --animation-for: expected a positive target index and animation name');
+   }
+   const targetIndex = Number(target);
+   if (animations.has(targetIndex)) throw new Error(`OPEN_OPTION_INVALID --animation-for: duplicate target index ${target}`);
+   animations.set(targetIndex, animation);
+  } else if (booleanFlags.includes(flag)) {
+   common.push(flag);
+  } else if (valueFlags.includes(flag)) {
+   const value = args[++index];
+   if (value === undefined || value === '') throw new Error(`OPEN_OPTION_INVALID ${flag}: Missing value for ${flag}`);
+   common.push(flag, value);
+  } else if (flag.startsWith('--')) {
+   throw new Error(`OPEN_OPTION_INVALID ${flag}: Unknown open option ${flag}`);
+  } else {
+   inputs.push(flag);
+  }
+ }
+ if (inputs.length === 0) throw new Error(usage);
+ for (const target of animations.keys()) {
+  if (target > inputs.length) throw new Error(`OPEN_OPTION_INVALID --animation-for: target index ${target} exceeds ${inputs.length} input(s)`);
+ }
+ const targets = inputs.map(input => parseOpenInputs([input, ...common]));
+ if (targets.length > 1 && targets.some(target => target.compare !== undefined)) {
+  throw new Error('OPEN_OPTION_INVALID --compare: multi-target open requires exactly one primary input for comparison');
+ }
+ if (targets.length > 1 && targets.some(target => target.direct)) {
+  throw new Error('OPEN_OPTION_INVALID --direct: multi-target open requires the managed owner workspace');
+ }
+ for (const [index, animation] of animations) targets[index - 1]!.animation = animation;
+ return targets;
 }
 async function controlCommand(args:string[],stateDir?:string){
  const input=args.shift();if(!input||input==='--help'||input==='-h'){console.log(usage);return;}
@@ -117,6 +161,8 @@ function commandHelpRequested(args:readonly string[],command:'open'|'review'|'ch
  const handoff=HANDOFF_FLAGS.map(f=>'--'+f),flags=command==='open'?['--reference','--compare','--animation',...projectFlags,...handoff]:compare?['--reference','--animation','--port']:['--port','--checkpoint','--reference','--compare','--animation',...handoff,...(command==='feedback'?projectFlags:[])];
  for(let i=compare?3:1;i<args.length;){
   const flag=args[i];if(flag==='--help'||flag==='-h')return true;
+  if(command==='open'&&flag==='--animation-for'){i+=3;continue;}
+  if(command==='open'&&!flag?.startsWith('--')){i++;continue;}
   if((command==='open'&&(flag==='--control'||flag==='--direct'||flag==='--view-only'))||(command==='review'&&flag==='--view-only')){i++;continue;}if(!flags.includes(flag!))return false;i+=2;
  }
  return false;
@@ -152,7 +198,16 @@ export async function main(args:string[],options:{stateDir?:string}={}){
   options={stateDir:options.stateDir??defaultStateDir()};if(args[0]==='--')args.shift();
   if(args[0]==='--version'||args[0]==='-v'){console.log((JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')) as {version:string}).version);return;}
   if(args[0]==='control')return controlCommand(args.slice(1),options.stateDir);
-  if(args[0]==='open'){const openArgs=args.slice(1);if(commandHelpRequested(openArgs,'open')){console.log(usage);return;}const inputs=parseOpenInputs(openArgs);const result=await openReview(inputs,options);// Launcher contract (README): stdout is the URL line alone; stderr is diagnostic, control notice, retrieval, in that order.
+  if(args[0]==='open'){const openArgs=args.slice(1);if(commandHelpRequested(openArgs,'open')){console.log(usage);return;}const targets=parseOpenTargets(openArgs);
+    if(!targets[0]?.direct){
+      const {openWorkspace}=await import('./open-workspace-launch.ts');
+      const result=await openWorkspace(targets,options);
+      console.log(result.url);
+      for(const target of result.prepared){if(target.build)console.error(buildOpenDiagnostic(target.build));if(target.package.selection)console.error(animationDiagnostic(target.package.selection));}
+      console.error(`Review workspace ${result.reused?'reused':'started'}; ${targets.length} target(s). Retrieve feedback using the original input designation.`);
+      return;
+    }
+    const inputs=targets[0]!;const result=await openReview(inputs,options);// Launcher contract (README): stdout is the URL line alone; stderr is diagnostic, control notice, retrieval, in that order.
     console.log(result.url);if(result.build)console.error(buildOpenDiagnostic(result.build));if(result.selection)console.error(animationDiagnostic(result.selection));if(inputs.control)console.error('Inspection control enabled; query the current connected page with rig-review control and the same inputs.');console.error(`Review ${result.reused?'reused':'started'}; feedback: rig-review feedback ${[result.inputs.input,...(result.inputs.compare?['--compare',result.inputs.compare]:[]),...(result.inputs.reference?['--reference',result.inputs.reference]:[]),...(result.inputs.animation?['--animation',result.inputs.animation]:[]),...handoffWords(result.inputs),...projectWords(result.inputs)].map(shellWord).join(' ')}`);return;}
   if(args[0]==='parts')return partsCommand(args.slice(1));
   if(args[0]==='interview')return (await import('./interview-server.ts')).interviewCommand(args.slice(1));

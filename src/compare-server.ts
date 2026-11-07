@@ -20,7 +20,7 @@ import { createRequirementsCheck } from './requirements-run.ts';
 import { REQUIREMENTS_LIMIT, RequirementsError } from './requirements.ts';
 import { createEnvironmentCheck, ENVIRONMENT_CHECK_LIMIT, EnvironmentCheckError } from './environment-check.ts';
 import { renderCompareHtml } from './compare-html.ts';
-import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
+import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type LiveLifecycle, type UpgradableServer } from './live-lifecycle.ts';
 
 const headers={'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; frame-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
 const MALFORMED=new Set(['REBUILD_REQUEST_INVALID','DENSITY_STRIP_REQUEST_INVALID','DENSITY_STRIP_FIELD','MESH_PATCH_SCOPE','EDIT_PATCH_INVALID','EDIT_PATCH_OP_UNKNOWN','EDIT_PATCH_POINTER_INVALID','EDIT_PATCH_CMD_UNKNOWN','EDIT_PATCH_ARG_UNKNOWN','BONES_OP_OUT_OF_SCOPE','RETARGET_REQUEST_INVALID']);
@@ -43,9 +43,32 @@ function serveAsset(req:Request,path:string):Response{
   return new Response(req.method==='HEAD'?null:file,{headers:{...assetHeaders,'Content-Length':String(size)}});
 }
 /** `capability` (open workers and foreground CLI serving) gates every non-GET request; tests may omit it. */
-export async function startCompareServer(p:ComparePackage,options:{port?:number;stateDir?:string;open?:OpenIdentity;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string;stripConcurrency?:number;graceMs?:number;unopenedTimeoutMs?:number;exitOnClose?:boolean;onClose?:(info:LiveExitInfo)=>void|Promise<void>;log?:(line:string)=>void}={}){
+export interface CompareServerOptions {
+  port?: number;
+  stateDir?: string;
+  open?: OpenIdentity;
+  activity?: () => void;
+  control?: ControlIdentity;
+  capability?: string;
+  cwd?: string;
+  stripConcurrency?: number;
+  graceMs?: number;
+  unopenedTimeoutMs?: number;
+  exitOnClose?: boolean;
+  onClose?: (info: LiveExitInfo) => void | Promise<void>;
+  log?: (line: string) => void;
+}
+
+export interface CompareRequestContextOptions extends CompareServerOptions {
+  lifecycle?: LiveLifecycle;
+  bundle?: Blob;
+  stopServer?: () => void | Promise<void>;
+}
+
+/** Comparison-scoped routes without a listener. An injected lifecycle belongs to its caller. */
+export async function createCompareRequestContext(p: ComparePackage, options: CompareRequestContextOptions = {}) {
   const stageParts=stagePartsRoutes({a:p.a,b:p.b});
-  const bundle=await buildWeb('compare');
+  const bundle=options.bundle??await buildWeb('compare');
   const frames=referenceFrameIndex(p.referencePath,p.response.binding.reference.sha256,p.response.sourceHash);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review');
   const makeSideTools=(side:'a'|'b',pkg:ReviewPackage)=>{
@@ -59,16 +82,17 @@ export async function startCompareServer(p:ComparePackage,options:{port?:number;
   };
   const sideTools={a:makeSideTools('a',p.a),b:makeSideTools('b',p.b)};
   const control=options.control?createControlServer({identity:options.control,sourceHash:p.response.sourceHash,mode:'compare',unchanged:()=>assertCompareUnchanged(p),activity:options.activity}):null;
-  let rawStop:((closeActiveConnections?:boolean)=>void)|null=null;
-  const live=createLiveLifecycle({
+  const busy=()=>sideTools.a.busy()||sideTools.b.busy();
+  const ownsLifecycle=options.lifecycle===undefined;
+  const live=options.lifecycle??createLiveLifecycle({
     label:'review compare',
     graceMs:options.graceMs,
     unopenedTimeoutMs:options.unopenedTimeoutMs,
     exitOnClose:options.exitOnClose,
     onClose:options.onClose,
     log:options.log,
-    busy:()=>sideTools.a.busy()||sideTools.b.busy(),
-    stopServer:()=>{rawStop?.(true);},
+    busy,
+    stopServer:options.stopServer,
   });
   const handle=async(req:Request,port:number|undefined,srv:UpgradableServer):Promise<Response|undefined>=>{try{
     const url=new URL(req.url),origin=`http://127.0.0.1:${port}`;
@@ -174,8 +198,22 @@ export async function startCompareServer(p:ComparePackage,options:{port?:number;
     return json({error:'Not found'},404);
     } finally { live.onRequestEnd(url.pathname); }
   }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message.includes('inputs changed')?409:400);}};
-  const server=Bun.serve({hostname:'127.0.0.1',port:options.port??4317,websocket:live.websocket,async fetch(req,srv){const res=await handle(req,srv.port,srv);if(!res)return undefined as unknown as Response;return stampOpen(req,res,options.open);}});
+  return {
+    live,
+    busy,
+    async handle(req: Request, port: number | undefined, srv: UpgradableServer): Promise<Response | undefined> {
+      const response=await handle(req,port,srv);
+      return response?stampOpen(req,response,options.open):undefined;
+    },
+    stop() { if(ownsLifecycle)live.stop(); },
+  };
+}
+
+export async function startCompareServer(p: ComparePackage, options: CompareServerOptions = {}) {
+  let rawStop:((closeActiveConnections?:boolean)=>void)|null=null;
+  const context=await createCompareRequestContext(p,{...options,stopServer:()=>{rawStop?.(true);}});
+  const server=Bun.serve({hostname:'127.0.0.1',port:options.port??4317,websocket:context.live.websocket,async fetch(req,srv){return await context.handle(req,srv.port,srv) as Response;}});
   rawStop=server.stop.bind(server);
-  server.stop=((closeActiveConnections?:boolean)=>{live.stop();return rawStop!(closeActiveConnections);}) as typeof server.stop;
-  return Object.assign(server,{live});
+  server.stop=((closeActiveConnections?:boolean)=>{context.stop();return rawStop!(closeActiveConnections);}) as typeof server.stop;
+  return Object.assign(server,{live:context.live});
 }

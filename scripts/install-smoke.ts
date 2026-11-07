@@ -12,6 +12,7 @@ import {spawn} from 'node:child_process';
 import type {Readable} from 'node:stream';
 import {leaksCapability,redactCapability} from './redact.ts';
 import {createHash} from 'node:crypto';
+import {installedWorkspaceSmoke} from './installed-workspace-smoke.ts';
 const root=new URL('..',import.meta.url).pathname,work=await mkdtemp(join(tmpdir(),'rig-review-smoke-')),app=join(work,'app');
 const manifest=JSON.parse(await readFile(join(root,'package.json'),'utf8')) as {name:string;bin:Record<string,string>;devDependencies:{typescript:string;'@types/bun':string}};
 let failed=false;const printed:string[]=[];let servedCapability='';
@@ -259,6 +260,7 @@ try{
  const installed=await run(['npm','i','-D','--dry-run=false','--no-audit','--no-fund',join(work,info!.filename)],app);
  if(!step('npm i -D <tarball> into an empty project',installed.exit===0,installed.stderr.trim().split('\n').at(-1)))throw new Error('install');
  await writeFile(join(app,'node_modules/.metadata_never_index'),'');
+ await installedWorkspaceSmoke({app, work, fixtureRoot:join(root,'tests/fixtures/strip-probe'), log});
  await publicHostSmoke();
  const help=await run(['npx','--no-install','rig-review','--help'],app);step('npx rig-review --help',help.exit===0&&help.stdout.includes('Usage'));
  const development=await run([process.execPath,'src/entry.ts','--help'],root);

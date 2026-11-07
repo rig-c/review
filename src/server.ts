@@ -19,7 +19,7 @@ import { BONES_CHECK_LIMIT, createBonesCheck } from './bones-check.ts';
 import { createRequirementsCheck } from './requirements-run.ts';
 import { REQUIREMENTS_LIMIT, RequirementsError } from './requirements.ts';
 import { createEnvironmentCheck, ENVIRONMENT_CHECK_LIMIT, EnvironmentCheckError } from './environment-check.ts';
-import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
+import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type LiveLifecycle, type UpgradableServer } from './live-lifecycle.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 const headers={ 'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; frame-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
@@ -35,13 +35,39 @@ async function bodyJson(req:Request,limit=1024*1024,what='Session payload exceed
 }
 /** `capability` (open workers and foreground CLI serving) gates every non-GET request; tests may omit it.
  * `cwd` is where the producer is looked for after the package's own directories (review's working directory by default). */
-export async function startServer(p:ReviewPackage,options:{port?:number;stateDir?:string;joined?:JoinedProject;open?:OpenIdentity;initialAnimation?:string;activity?:()=>void;control?:ControlIdentity;capability?:string;cwd?:string;stripConcurrency?:number;graceMs?:number;unopenedTimeoutMs?:number;exitOnClose?:boolean;onClose?:(info:LiveExitInfo)=>void|Promise<void>;log?:(line:string)=>void;viewOnly?:boolean}={}){
+export interface ReviewServerOptions {
+  port?: number;
+  stateDir?: string;
+  joined?: JoinedProject;
+  open?: OpenIdentity;
+  initialAnimation?: string;
+  activity?: () => void;
+  control?: ControlIdentity;
+  capability?: string;
+  cwd?: string;
+  stripConcurrency?: number;
+  graceMs?: number;
+  unopenedTimeoutMs?: number;
+  exitOnClose?: boolean;
+  onClose?: (info: LiveExitInfo) => void | Promise<void>;
+  log?: (line: string) => void;
+  viewOnly?: boolean;
+}
+
+export interface ReviewRequestContextOptions extends ReviewServerOptions {
+  lifecycle?: LiveLifecycle;
+  bundle?: Blob;
+  stopServer?: () => void | Promise<void>;
+}
+
+/** Package-scoped routes without a listener. An injected lifecycle belongs to its caller. */
+export async function createReviewRequestContext(p: ReviewPackage, options: ReviewRequestContextOptions = {}) {
   const joined = options.joined;
   if (joined && !options.capability) throw new Error('Joined interview requires an instance capability');
   const interview = joined && interviewRoutes(joined.opened.root, joined.designation.picksDir, options.capability!,
     {...joined, sourceHash:p.sourceHash, version:joined.designation.version,draftId:joined.designation.draftId});
   let interviewBundle: Promise<Blob> | undefined;
-  const bundle=await buildWeb();
+  const bundle=options.bundle??await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
   const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones,...(options.stripConcurrency?{stripConcurrency:options.stripConcurrency}:{}),...(options.viewOnly??p.viewOnly?{viewOnly:true}:{})});
@@ -60,16 +86,17 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
   // Check under this world (#112): the exported schedule written into scratch; the installed producer's check --environment reads it.
   const environmentCheck=createEnvironmentCheck(p,{stateDir,starts,unchanged,latest:rebuilds.latest});
   const control=options.control?createControlServer({identity:options.control,sourceHash:p.sourceHash,mode:'single',unchanged,activity:options.activity}):null;
-  let rawStop:((closeActiveConnections?:boolean)=>void)|null=null;
-  const live=createLiveLifecycle({
+  const busy=()=>Boolean(rebuilds.busy()||readings.running()||requirements.running()||environmentCheck.running()||bonesCheck.running());
+  const ownsLifecycle=options.lifecycle===undefined;
+  const live=options.lifecycle??createLiveLifecycle({
     label:'review',
     graceMs:options.graceMs,
     unopenedTimeoutMs:options.unopenedTimeoutMs,
     exitOnClose:options.exitOnClose,
     onClose:options.onClose,
     log:options.log,
-    busy:()=>Boolean(rebuilds.busy()||readings.running()||requirements.running()||environmentCheck.running()||bonesCheck.running()),
-    stopServer:()=>{rawStop?.(true);},
+    busy,
+    stopServer:options.stopServer,
   });
   const handle=async(req:Request,port:number|undefined,srv:UpgradableServer):Promise<Response|undefined>=>{try {
       const url=new URL(req.url);const origin=`http://127.0.0.1:${port}`;
@@ -225,8 +252,22 @@ export async function startServer(p:ReviewPackage,options:{port?:number;stateDir
       return json({error:'Not found'},404);
       } finally { live.onRequestEnd(url.pathname); }
     }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message===directionStale || message.startsWith(interviewStale) || message.includes('inputs changed')?409:400);}};
-  const server=Bun.serve({hostname:'127.0.0.1',port:options.port??4317,websocket:live.websocket,async fetch(req,srv){const res=await handle(req,srv.port,srv);if(!res)return undefined as unknown as Response;return stampOpen(req,res,options.open);}});
+  return {
+    live,
+    busy,
+    async handle(req: Request, port: number | undefined, srv: UpgradableServer): Promise<Response | undefined> {
+      const response=await handle(req,port,srv);
+      return response?stampOpen(req,response,options.open):undefined;
+    },
+    stop() { if(ownsLifecycle)live.stop(); },
+  };
+}
+
+export async function startServer(p: ReviewPackage, options: ReviewServerOptions = {}) {
+  let rawStop:((closeActiveConnections?:boolean)=>void)|null=null;
+  const context=await createReviewRequestContext(p,{...options,stopServer:()=>{rawStop?.(true);}});
+  const server=Bun.serve({hostname:'127.0.0.1',port:options.port??4317,websocket:context.live.websocket,async fetch(req,srv){return await context.handle(req,srv.port,srv) as Response;}});
   rawStop=server.stop.bind(server);
-  server.stop=((closeActiveConnections?:boolean)=>{live.stop();return rawStop!(closeActiveConnections);}) as typeof server.stop;
-  return Object.assign(server,{live});
+  server.stop=((closeActiveConnections?:boolean)=>{context.stop();return rawStop!(closeActiveConnections);}) as typeof server.stop;
+  return Object.assign(server,{live:context.live});
 }

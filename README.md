@@ -46,10 +46,10 @@ the same CLI. `@rig-c/review` remains the canonical package.
 
 The CLI and `@rig-c/review/job-host` managed owner host are supported surfaces. See [Public API stability](docs/STABILITY.md) for the frozen exports and signatures.
 
-Example stdout from `open` (instance values vary):
+Example stdout from `open` (private capability omitted):
 
 ```text
-http://127.0.0.1:4318/instances/<key>/?input=…&handoff=…#cap=…
+http://127.0.0.1:4318/?workspace=<incarnation>#cap=…
 ```
 
 ## What you can do
@@ -57,7 +57,7 @@ http://127.0.0.1:4318/instances/<key>/?input=…&handoff=…#cap=…
 | Task | Command or panel | Destination |
 | --- | --- | --- |
 | **Hand off and compare** | | |
-| <a id="one-command-owner-handoff"></a>Open an inspection | `open` | [Owner handoff — WORKFLOWS](docs/WORKFLOWS.md#one-command-owner-handoff) |
+| <a id="one-command-owner-handoff"></a>Open an inspection workspace | `open` | [Owner handoff — WORKFLOWS](docs/WORKFLOWS.md#one-command-owner-handoff) |
 | <a id="existing-output-handoff"></a>Inspect an existing folder | `check`, `review` | [Existing output handoff — WORKFLOWS](docs/WORKFLOWS.md#existing-output-handoff) |
 | <a id="compare-two-outputs"></a>Compare two builds against a video | `compare` | [Compare two outputs — WORKFLOWS](docs/WORKFLOWS.md#compare-two-outputs) |
 | <a id="feedback-ownership"></a>Retrieve submitted feedback | `feedback` | [Feedback ownership — WORKFLOWS](docs/WORKFLOWS.md#feedback-ownership) |
