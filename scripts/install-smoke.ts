@@ -52,10 +52,11 @@ import {PNG} from 'pngjs';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {
- startJobHost, JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_ENUMERATOR_RANGE, JOB_ENABLED_ACT_KINDS,
+ startJobHost, assertJobImageSetCapability, JOB_CAPABILITIES, JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_ENUMERATOR_RANGE, JOB_ENABLED_ACT_KINDS,
  JOB_RESERVED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_CONSUMER_AUTH_MODE, JOB_ERROR_CODES,
  type JobHostOptions, type JobOwnerHost, type JobSessionOptions, type JobSession, type JobWorkerOptions,
- type JobPublicationReader, type JobPublishedContext,
+ type JobPublicationReader, type JobPublishedContext, type JobCapabilities, type JobImageSetInput,
+ type JobImageSet, type JobImageSourceBinding, type JobModelSourceBinding, type JobModelReviewValue, type JobImageReviewValue,
  type JobEnabledActKind, type JobReservedActKind, type JobActKind, type JobSha256,
  type JobId, type JobPublicationId, type JobAskId, type JobActId, type JobCursor,
  type JobFileIdentity, type JobPlanStepIdentity, type JobPlanIdentity,
@@ -74,7 +75,8 @@ import * as publicHost from '@rig-c/review/job-host';
 
 export type PublicTypes = [
  JobHostOptions, JobOwnerHost, JobSessionOptions, JobSession, JobWorkerOptions,
- JobPublicationReader, JobPublishedContext,
+ JobPublicationReader, JobPublishedContext, JobCapabilities, JobImageSetInput, JobImageSet,
+ JobImageSourceBinding, JobModelSourceBinding, JobModelReviewValue, JobImageReviewValue,
  JobEnabledActKind, JobReservedActKind, JobActKind, JobSha256, JobId, JobPublicationId,
  JobAskId, JobActId, JobCursor, JobFileIdentity, JobPlanStepIdentity, JobPlanIdentity,
  JobPartsManifestPath, JobPartImagePath, JobPartsIdentity, JobPartsRole, JobPartsFileReference, JobPartsEnumerator, JobSelector, JobSourceBinding,
@@ -89,7 +91,7 @@ export type PublicTypes = [
 function assert(ok: unknown, name: string): asserts ok {
  if (!ok) throw new Error('SMOKE_PUBLIC_HOST_' + name);
 }
-const expectedExports = ['startJobHost', 'startJobHub', 'JOB_API_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_PARTS_ENUMERATOR_RANGE',
+const expectedExports = ['assertJobImageSetCapability', 'JOB_CAPABILITIES', 'startJobHost', 'startJobHub', 'JOB_API_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_PARTS_ENUMERATOR_RANGE',
  'JOB_ENABLED_ACT_KINDS', 'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES',
  'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES'];
 assert(JSON.stringify(Object.keys(publicHost).sort()) === JSON.stringify(expectedExports.sort()), 'EXPORTS');
@@ -125,7 +127,7 @@ const partsEnumerator: JobPartsEnumerator = {version: parts.enumeratorVersion, e
  enumeratorReads++;
  return references;
 }};
-const context: JobPublishedContext = {selector: null, plan: {steps: [{id: 'public-step', hash: '1'.repeat(64)}]},
+let context: JobPublishedContext = {selector: null, plan: {steps: [{id: 'public-step', hash: '1'.repeat(64)}]},
  parts, subjects: [{kind: 'checkpoint', checkpointId: 'public-step'}], partIds: ['smoke'], files: []};
 let reads = 0;
 const readPublished: JobPublicationReader = async value => {
@@ -196,9 +198,56 @@ try {
  assert(model.ok && (await model.text()).length > 0, 'RETAINED_MODEL');
  const next = await call({...base, verb: 'next', requestId: 'public-next', after: null, waitMs: 0});
  assert(next.ok && next.verb === 'next' && next.value.events[0]?.type === 'published', 'NEXT');
+ assertJobImageSetCapability(next.value.capabilities);
+ assert(JOB_CAPABILITIES.imageSetVerdict === true, 'IMAGE_CAPABILITY');
  const fetched = await call({...base, verb: 'fetch-act', requestId: 'public-fetch', actId: 'absent'}, true);
  assert(!fetched.ok && fetched.error.code === 'JOB_ACT_UNKNOWN', 'CONSUMER_AUTH');
- const closed = await call({...base, verb: 'close', requestId: 'public-close', expectedGeneration: published.generation,
+ await writeFile(join(input, 'plate.png'), imageBytes);
+ await writeFile(join(input, 'review.json'), JSON.stringify({schema: 'rig-review/1', id: 'installed-image-set',
+  title: 'Synthetic installed image comparison', revision: 'one', references: []}));
+ const imageInput: JobImageSetInput = {purpose: 'plate-adoption', images: [
+  {role: 'source', name: 'Source painting', path: 'parts/smoke.png', sha256: sha256(imageBytes)},
+  {role: 'candidate', name: 'Generated plate', path: 'plate.png'}]};
+ context = {selector: null, plan: null, parts: null, subjects: [], partIds: [], files: [], imageSet: imageInput};
+ const imagePublished = await call({...base, verb: 'publish', requestId: 'image-publish',
+  expectedGeneration: session.status().generation, idempotencyKey: 'image-publish',
+  result: {path: 'review.json', selector: null}, freeze: {kind: 'producer-held', holdId: 'image-held', record}});
+ assert(imagePublished.ok && imagePublished.verb === 'publish' && imagePublished.value.source.subject === 'image-set', 'IMAGE_PUBLISH');
+ const imageSource: JobImageSourceBinding = imagePublished.value.source;
+ assert(!Object.hasOwn(imageSource, 'model') && !Object.hasOwn(imageSource, 'selector'), 'IMAGE_ABSENT_MODEL_SELECTOR');
+ assert(imageSource.imageSetDigest === sha256(Buffer.from(JSON.stringify(imageSource.imageSet.images.map(
+  ({role, name, sha256}) => ({role, name, sha256}))))), 'IMAGE_DIGEST');
+ assert(JSON.stringify(imageSource.duplicateHashes) === JSON.stringify([
+  {names: ['Source painting', 'Generated plate'], sha256: sha256(imageBytes)}]), 'IMAGE_DUPLICATES');
+ const imageAsk = await call({...base, verb: 'ask', requestId: 'image-ask', expectedGeneration: session.status().generation,
+  idempotencyKey: 'image-ask', publicationId: imagePublished.value.publicationId,
+  subject: {kind: 'review-verdict', stage: 'image-review'}});
+ assert(imageAsk.ok && imageAsk.verb === 'ask', 'IMAGE_ASK');
+ const imageDisplay = await ports.readPublication(base.jobId, imagePublished.value.publicationId);
+ assert(imageDisplay.ok, 'IMAGE_DISPLAY');
+ for (let index = 0; index < imageSource.imageSet.images.length; index++) {
+  const response = await fetch(host.origin + imageDisplay.value.routes.apiBase + 'image-set/' + index);
+  assert(response.ok && sha256(new Uint8Array(await response.arrayBuffer())) === imageSource.imageSet.images[index]!.sha256,
+   'IMAGE_RETAINED_BYTES');
+ }
+ const uiHeaders = {'Content-Type': 'application/json', Origin: host.origin,
+  'X-Review-Capability': session.hostCredentials().ui};
+ const displayed = await ports.ackDisplayed(base.jobId, new Request(host.origin + owner.pathname + 'ui/displayed', {
+  method: 'POST', headers: uiHeaders, body: JSON.stringify({publicationId: imagePublished.value.publicationId,
+   pageId: 'installed-image-page', sourceHash: imageSource.sourceHash})}));
+ assert(displayed.ok, 'IMAGE_UI_RECEIPT');
+ const imageValue: JobImageReviewValue = {stage: 'image-review', verdict: 'approved', words: '  exact words  ',
+  imageNotes: [{name: 'Generated plate', words: '  exact image note  '}]};
+ const imageAct = await ports.commitUIAct(base.jobId, new Request(host.origin + owner.pathname + 'ui/acts', {
+  method: 'POST', headers: uiHeaders, body: JSON.stringify({...displayed.value, askId: imageAsk.value.askId,
+   expectedGeneration: session.status().generation, submissionId: 'installed-image-submit', kind: 'review-verdict', value: imageValue})}));
+ assert(imageAct.ok && imageAct.value.kind === 'review-verdict', 'IMAGE_UI_ACT');
+ assert(JSON.stringify(imageAct.value.source) === JSON.stringify(imageSource) &&
+  JSON.stringify(imageAct.value.value) === JSON.stringify(imageValue), 'IMAGE_SOURCE_WORDS_EXACT');
+ const imageFetched = await call({...base, verb: 'fetch-act', requestId: 'image-fetch', actId: imageAct.value.actId}, true);
+ assert(imageFetched.ok && imageFetched.verb === 'fetch-act' &&
+  JSON.stringify(imageFetched.value) === JSON.stringify(imageAct.value), 'IMAGE_CONSUMER_FETCH');
+ const closed = await call({...base, verb: 'close', requestId: 'public-close', expectedGeneration: session.status().generation,
   idempotencyKey: 'public-close', reason: 'installed public host smoke complete'});
  assert(closed.ok && closed.verb === 'close' && closed.value.status === 'closed', 'CLOSE');
  const afterClose = await call({...base, verb: 'fetch-act', requestId: 'public-fetch-closed', actId: 'absent'}, true);
@@ -255,7 +304,7 @@ try{
  const packed=await run(['npm','pack','--json','--ignore-scripts','--dry-run=false','--pack-destination',work],root);
  if(!step('npm pack',packed.exit===0,packed.stderr.trim().split('\n').at(-1)))throw new Error('pack');
  const info=packResult(JSON.parse(packed.stdout),manifest.name);const files=info.files.map(f=>f.path);
- step('tarball carries the bin, public host, stability reference, web, demo and licence',['src/entry.ts','src/cli.ts','src/job-host.ts','src/job-front.ts','src/job-session.ts','src/job-contract.ts','src/job-hub.ts','web/job-hub.ts','web/job-hub.html','web/job-hub.css','docs/STABILITY.md','web/job-session.ts','web/main.ts','web/index.html','examples/demo/review.json','LICENSE'].every(f=>files.includes(f)),`${files.length} files`);
+ step('tarball carries the bin, public host, stability reference, web, demo and licence',['src/entry.ts','src/cli.ts','src/job-host.ts','src/job-front.ts','src/job-session.ts','src/job-contract.ts','src/job-image-set.ts','src/job-hub.ts','web/job-hub.ts','web/job-hub.html','web/job-hub.css','docs/STABILITY.md','web/job-session.ts','web/main.ts','web/index.html','examples/demo/review.json','LICENSE'].every(f=>files.includes(f)),`${files.length} files`);
  step('tarball carries no tests or fixtures',!files.some(f=>f.startsWith('tests/')||f.startsWith('node_modules/')));
  await Bun.$`mkdir -p ${app}`;await writeFile(join(app,'package.json'),JSON.stringify({name:'rig-review-smoke',private:true})+'\n');
  const installed=await run(['npm','i','-D','--dry-run=false','--no-audit','--no-fund',join(work,info!.filename)],app);

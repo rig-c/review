@@ -114,7 +114,7 @@ export function parseJobSubject(value: unknown): JobSubject {
       return { kind: item.kind, draftId: jobId(item.draftId) };
     case 'review-verdict':
       jobObject(item, ['kind', 'stage']);
-      if (item.stage !== 'rig-review' && item.stage !== 'direction-review') throw new JobError('JOB_ASK_INVALID');
+      if (item.stage !== 'rig-review' && item.stage !== 'direction-review' && item.stage !== 'image-review') throw new JobError('JOB_ASK_INVALID');
       return { kind: item.kind, stage: item.stage };
     case 'signoff':
       jobObject(item, ['kind', 'stage']);

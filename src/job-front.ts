@@ -259,6 +259,12 @@ function retainedPublicationRoutes(session: JobSession) {
                 if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
                 return await sealedFile(image.ref.path);
             }
+            const imageSetImage = /^api\/image-set\/(0|[1-9]\d*)$/.exec(path);
+            if (imageSetImage && retained.source.subject === 'image-set') {
+                const image = retained.source.imageSet.images[Number(imageSetImage[1])];
+                if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
+                return await sealedFile(image.path);
+            }
             if (path === 'api/stage-parts') {
                 if (!parts) return failure('JOB_SOURCE_UNRETAINABLE', 409);
                 return json({...partsViewJson(parts, {verdict: null, stale: null}), sourceHash: retained.source.sourceHash,

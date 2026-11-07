@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:p
 import { PNG } from 'pngjs';
 import { JOB_PARTS_ENUMERATOR_RANGE } from './job-contract.ts';
 import type {
-  JobFileIdentity, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
+  JobFileIdentity, JobImageSetInput, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
   JobSelector, JobSourceBinding, JobSubject,
 } from './job-contract.ts';
 import { checkedPath, readProject, readRegular, type InterviewQuestion } from './interview-project.ts';
@@ -14,6 +14,7 @@ import { openKey } from './open.ts';
 import { assertReviewUnchanged } from './reference.ts';
 import { jobHash, jobId, jobPartsEnumeratorVersion, jobObject, jobPath, jobSha, jobText, requestDigest } from './job-api.ts';
 import { JobError } from './job-store.ts';
+import { prepareJobImageSet } from './job-image-set.ts';
 
 export interface JobRootIdentity {
   readonly path: string;
@@ -27,6 +28,7 @@ export interface JobRootIdentity {
  * referenced-image enumeration belongs to the public Parts #1163 surface.
  */
 export interface JobPublishedContext {
+  readonly imageSet?: JobImageSetInput;
   readonly selector: JobSelector | null;
   readonly plan: JobPlanIdentity | null;
   readonly parts: JobPartsIdentity | null;
@@ -330,6 +332,9 @@ export async function prepareJobSource(options: {
   const seals: JobFileIdentity[] = [];
   try {
     await mkdir(snapshotRoot, { recursive: true, mode: 0o700 });
+    const imageSet = context.imageSet === undefined ? null : prepareJobImageSet(context.imageSet,
+      path => sourceBytes(root.path, path));
+    for (const image of imageSet?.imageSet.images ?? []) add(image.path, image.sha256);
     const parts = await prepareParts(root.path, snapshotRoot, context.parts, options.partsEnumerator);
     for (const [path, bytes] of parts.bytes) add(path, jobHash(bytes));
     if (wanted.size > maxSourceFiles) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_LIMIT');
@@ -366,7 +371,7 @@ export async function prepareJobSource(options: {
     const originalIdentity = (file: { path: string; sha256: string } | null): JobFileIdentity | null => file && ({
       path: rootRelative(root.path, resolve(review.root, file.path)), sha256: file.sha256,
     });
-    const source: JobSourceBinding = {
+    const modelSource: JobModelSourceBinding = {
       sourceHash: project || context.plan || context.parts ? jobHash(JSON.stringify({
         schema: 'rig-review-job-source/2', packageSourceHash: review.sourceHash,
         record, selector: context.selector, plan: context.plan, parts: parts.identity, files: seals,
@@ -378,6 +383,14 @@ export async function prepareJobSource(options: {
       direction: originalIdentity(review.direction?.file ?? null),
       optionSet: null, appliedResult: null, plan: context.plan, parts: parts.identity,
     };
+    let source: JobSourceBinding = modelSource;
+    if (imageSet) {
+      if (modelSource.model || modelSource.selector) throw new JobError('JOB_IMAGE_SET_INVALID');
+      const {model, selector, ...common} = modelSource;
+      source = {...common, subject: 'image-set', ...imageSet,
+        sourceHash: jobHash(JSON.stringify({schema: 'rig-review-job-image-set/1',
+          packageSourceHash: modelSource.sourceHash, record, imageSet: imageSet.imageSet}))};
+    }
     const boundReview = { ...review, sourceHash: source.sourceHash };
     const prepared: JobRetainedSource = {
       root, record, seals, snapshotRoot,
@@ -386,7 +399,7 @@ export async function prepareJobSource(options: {
       instanceKey: openKey({ mode: 'single', p: boundReview, inputs: { input: review.manifestPath },
         contentHash: source.sourceHash, selection: null }, options.fingerprint),
       label: review.manifest.title,
-      visual: review.manifest.model || review.manifest.references.length ? { status: 'available' } :
+      visual: imageSet || review.manifest.model || review.manifest.references.length ? { status: 'available' } :
         { status: 'unavailable', code: 'MODEL_UNAVAILABLE' },
       subjects: context.subjects,
       questions: (project?.questions ?? []).map(question => {

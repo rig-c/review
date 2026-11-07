@@ -4,7 +4,7 @@ import {mkdir, unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {buildWeb} from './build.ts';
 import {jobBody, jobObject, sameCapability} from './job-api.ts';
-import {JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobHostPorts, type JobReviewerBinding} from './job-contract.ts';
+import {JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_CAPABILITIES, type JobCapabilities, type JobHostPorts, type JobReviewerBinding} from './job-contract.ts';
 import {assertJobHostCompatible, createJobRequestContext, installJobWriterBinding, jobHostIdentity,
   jobWindowResources, type JobHostOptions, type JobHostRecord} from './job-front.ts';
 import {JobSession} from './job-session.ts';
@@ -43,6 +43,7 @@ export interface JobHubRow {
 }
 export interface JobHubList {
   schema: 'rig-review-job-hub/1';
+  capabilities?: JobCapabilities;
   incarnation: string;
   limit: number;
   jobs: JobHubRow[];
@@ -196,8 +197,8 @@ export async function startJobHub(options: JobHubOptions): Promise<JobOwnerHub> 
                 entry: `/jobs/${selected[1]}/?hub=${incarnation}`, capability: member.session.hostCredentials().ui}, {headers: responseHeaders});
             }
             if (url.pathname === '/hub/host') return Response.json({schema, incarnation, pid: process.pid,
-              origin, apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA}, {headers: responseHeaders});
-            return Response.json({schema, incarnation, limit: maximumJobs, jobs: [...members.values()].filter(member => member.ready).map(member => {
+              origin, apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA, capabilities: JOB_CAPABILITIES}, {headers: responseHeaders});
+            return Response.json({schema, incarnation, capabilities: JOB_CAPABILITIES, limit: maximumJobs, jobs: [...members.values()].filter(member => member.ready).map(member => {
               const status = member.session.status();
               return {jobId: status.jobId, generation: status.generation, status: status.status,
                 publication: status.publication && {publicationId: status.publication.publicationId,
