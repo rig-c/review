@@ -11,13 +11,20 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assertPartsUnchanged, loadPartsView, verdictSource, type PartsViewPackage } from '../src/parts-view.ts';
+import { loadReview } from '../src/manifest.ts';
 import { startPartsServer } from '../src/parts-server.ts';
+import { startServer } from '../src/server.ts';
+import { stageDraftRefusals } from '../src/stage-parts.ts';
+import { enCatalog } from '../web/catalog-en.ts';
+import { koCatalog } from '../web/catalog-ko.ts';
 import { FOOTPRINT_ALPHA } from '../web/parts-render.ts';
 import { BACK_DEFECT, frontHolds, writePartsPackage } from './helpers/parts-package.ts';
 import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
 import {
+  assertPartsViewShotState,
   centerPartsViewShot,
   measurePartsViewShot,
+  partsViewShotStateExpression,
   preparePartsViewShot,
   selectPartsViewPage,
   type PartsViewShotState,
@@ -144,18 +151,160 @@ export async function runPartsViewBrowser(shotDir?: string, partsDir?: string) {
       report.atlas = { boxes, expected, equal: JSON.stringify(boxes) === JSON.stringify(expected), state };
       server.stop(true);
     }
-    // Screenshots, en and ko.
-    const shots = [];
-    if (shotDir) for (const lang of ['en', 'ko'] as const) {
-      const parts = partsDir ?? root;
-      const a = await open(page, parts, lang, shotDir, 'parts-mode', { mode: 'parts', view: 'item', zoom: 2, language: lang }, persistRaw);
-      a.server.stop(true);
-      shots.push({ name: 'parts-mode', ...a.state });
-      const b = await open(page, 'examples/demo', lang, shotDir, 'atlas-mode', { mode: 'atlas', view: 'page', zoom: 4, language: lang }, persistRaw);
-      b.server.stop(true);
-      shots.push({ name: 'atlas-mode', ...b.state });
-    }
+    // Screenshots and #562(i) standalone vs joined controls, en and ko.
+    const shots: unknown[] = [];
+    const standalone562: Record<string, unknown> = {};
+    const joined562: Record<string, unknown> = {};
     report.shots = shots;
+    report.issue562 = { standalone: standalone562, joinedUnavailable: joined562, pass: false };
+    for (const lang of ['en', 'ko'] as const) {
+      const catalog = lang === 'ko' ? koCatalog : enCatalog;
+      const parts = partsDir ?? root;
+      const a = await open(
+        page,
+        parts,
+        lang,
+        shotDir,
+        'parts-mode',
+        shotDir ? { mode: 'parts', view: 'item', zoom: 2, language: lang } : undefined,
+        shotDir ? persistRaw : undefined,
+      );
+      const standalone = await page.evaluate<{
+        lang: string;
+        hasCorrectionsHost: boolean;
+        hasDraftUnavailableText: boolean;
+        verdictVisible: boolean;
+        outcomes: number;
+        saveText: string | null;
+        saveEnabled: boolean;
+        approveAllText: string | null;
+        approveAllEnabled: boolean;
+        positivePixels: number;
+      }>(`(() => {
+        const verdict = document.querySelector('.pv-verdict');
+        const vr = verdict?.getBoundingClientRect();
+        const save = document.getElementById('pv-save');
+        const approveAll = document.getElementById('pv-approve-all');
+        const canvas = document.getElementById('pv-canvas');
+        const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        let positivePixels = 0;
+        for (let i = 3; i < data.length; i += 4) if (data[i] > 0) positivePixels++;
+        return {
+          lang: document.documentElement.lang,
+          hasCorrectionsHost: document.getElementById('pv-corrections') !== null,
+          hasDraftUnavailableText: document.body.innerText.includes('STAGE_DRAFT_UNAVAILABLE'),
+          verdictVisible: Boolean(verdict && !verdict.hidden && vr && vr.width > 0 && vr.height > 0),
+          outcomes: document.querySelectorAll('input[data-pv-outcome]').length,
+          saveText: save?.textContent ?? null,
+          saveEnabled: Boolean(save && !save.hidden && !save.disabled),
+          approveAllText: approveAll?.textContent ?? null,
+          approveAllEnabled: Boolean(approveAll && !approveAll.hidden && !approveAll.disabled),
+          positivePixels,
+        };
+      })()`);
+      a.server.stop(true);
+      const standaloneOk =
+        standalone.lang === lang &&
+        !standalone.hasCorrectionsHost &&
+        !standalone.hasDraftUnavailableText &&
+        standalone.verdictVisible &&
+        standalone.outcomes === 3 &&
+        standalone.saveEnabled &&
+        standalone.saveText === catalog['Save sign-off'] &&
+        standalone.approveAllEnabled &&
+        standalone.approveAllText === catalog['Approve all'] &&
+        standalone.positivePixels > 0;
+      standalone562[lang] = { ...standalone, pass: standaloneOk };
+      if (shotDir) await writeFile(join(shotDir, 'raw-report.json'), JSON.stringify(report, null, 2) + '\n');
+      if (!standaloneOk) throw new Error(`PARTS_562_STANDALONE_FAILED (${lang}): ${JSON.stringify(standalone562[lang])}`);
+      if (shotDir) {
+        shots.push({ name: 'parts-mode', ...a.state });
+        const b = await open(page, 'examples/demo', lang, shotDir, 'atlas-mode', { mode: 'atlas', view: 'page', zoom: 4, language: lang }, persistRaw);
+        b.server.stop(true);
+        shots.push({ name: 'atlas-mode', ...b.state });
+      }
+    }
+    const joinedPackage = await loadPartsView('examples/demo');
+    const joinedSourceBefore = verdictSource(joinedPackage);
+    const joinedCapability = 'e'.repeat(64);
+    const joinedServer = await startServer(await loadReview('examples/demo/review.json'), {
+      port: 0,
+      capability: joinedCapability,
+      exitOnClose: false,
+    });
+    try {
+      for (const lang of ['en', 'ko'] as const) {
+        const catalog = lang === 'ko' ? koCatalog : enCatalog;
+        await page.goto(`http://127.0.0.1:${joinedServer.port}/?lang=${lang}#cap=${joinedCapability}`);
+        for (let i = 0; i < 200 && !(await page.evaluate<boolean>(`document.documentElement.lang === ${JSON.stringify(lang)} && !!document.querySelector('[data-review-stage="1"]')`)); i++) await Bun.sleep(25);
+        await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
+        for (let i = 0; i < 200 && !(await page.evaluate<boolean>(`document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument?.body?.dataset.ready === 'true'`)); i++) await Bun.sleep(25);
+        let joined!: {
+          lang: string | null;
+          hasCorrectionsHost: boolean;
+          correctionsText: string | null;
+          verdictHidden: boolean;
+          positivePixels: number;
+          regionEdge: boolean;
+          captionText: string;
+        };
+        for (let attempt = 0; attempt < 200; attempt++) {
+          joined = await page.evaluate<typeof joined>(`(() => {
+            const d = document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument;
+            const host = d?.getElementById('pv-corrections');
+            const verdict = d?.querySelector('.pv-verdict');
+            const canvas = d?.getElementById('pv-canvas');
+            const data = canvas ? canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data : [];
+            let positivePixels = 0;
+            for (let i = 3; i < data.length; i += 4) if (data[i] > 0) positivePixels++;
+            return {
+              lang: d?.documentElement.lang ?? null,
+              hasCorrectionsHost: Boolean(host && !host.hidden),
+              correctionsText: host?.textContent ?? null,
+              verdictHidden: Boolean(verdict?.hidden),
+              positivePixels,
+              regionEdge: Boolean(d?.querySelector('#pv-overlay .pv-region-edge')),
+              captionText: d?.getElementById('pv-caption')?.textContent ?? '',
+            };
+          })()`);
+          if (joined.regionEdge && joined.captionText && joined.positivePixels > 0) break;
+          await Bun.sleep(25);
+        }
+        if (shotDir) await writeFile(join(shotDir, `joined-stage1-unavailable-${lang}.png`), await page.screenshot());
+        const expectedRefusal = catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!];
+        const joinedOk =
+          joined.lang === lang &&
+          joined.hasCorrectionsHost &&
+          joined.correctionsText === expectedRefusal &&
+          joined.verdictHidden &&
+          joined.regionEdge &&
+          Boolean(joined.captionText) &&
+          joined.positivePixels > 0;
+        joined562[lang] = { ...joined, expectedRefusal, pass: joinedOk };
+        if (shotDir) await writeFile(join(shotDir, 'raw-report.json'), JSON.stringify(report, null, 2) + '\n');
+        if (!joinedOk) throw new Error(`PARTS_562_JOINED_FAILED (${lang}): ${JSON.stringify(joined562[lang])}`);
+        const geometry = await page.evaluate<PartsViewShotState>(`(() => {
+          const frame = window.document.querySelector('.review-stage-panel iframe:not([hidden])');
+          const document = frame.contentDocument;
+          const getComputedStyle = frame.contentWindow.getComputedStyle.bind(frame.contentWindow);
+          const DOMMatrix = frame.contentWindow.DOMMatrix;
+          return ${partsViewShotStateExpression};
+        })()`);
+        await assertPartsUnchanged(joinedPackage);
+        const joinedSourceAfter = verdictSource(await loadPartsView('examples/demo'));
+        const source = bindPackageSource(joinedPackage, joinedSourceBefore.sha256, joinedSourceAfter.sha256);
+        if (geometry.atlasFrame) geometry.atlasFrame.source = source;
+        assertPartsViewShotState(geometry, { mode: 'atlas', view: 'item', zoom: 1, language: lang, source });
+        joined562[lang] = { ...joined, expectedRefusal, pass: joinedOk, geometry };
+        if (shotDir) {
+          await writeFile(join(shotDir, `joined-stage1-unavailable-${lang}.geometry.json`), JSON.stringify(geometry, null, 2) + '\n');
+          await writeFile(join(shotDir, 'raw-report.json'), JSON.stringify(report, null, 2) + '\n');
+        }
+      }
+    } finally {
+      joinedServer.stop(true);
+    }
+    report.issue562 = { standalone: standalone562, joinedUnavailable: joined562, pass: true };
     if (shotDir) await writeFile(join(shotDir, 'raw-report.json'), JSON.stringify(report, null, 2) + '\n');
   } catch (error) {
     if (shotDir) await writeFile(join(shotDir, 'raw-report.json'), JSON.stringify(report, null, 2) + '\n').catch(() => {});
@@ -172,8 +321,8 @@ export async function runPartsViewBrowser(shotDir?: string, partsDir?: string) {
 if (import.meta.main) {
   const report = await runPartsViewBrowser(arg('--shots'), arg('--parts'));
   console.log(JSON.stringify(report, null, 1));
-  const r = report as { bar1: { coincide: boolean; controlTintPx: number; tintPx: number }; bar2: { backDefectFlags: string[] }; atlas: { equal: boolean } };
-  const ok = r.bar1.coincide && r.bar1.tintPx > 0 && r.bar1.controlTintPx === 0 && r.bar2.backDefectFlags.includes('faint:0') && r.atlas.equal;
+  const r = report as { bar1: { coincide: boolean; controlTintPx: number; tintPx: number }; bar2: { backDefectFlags: string[] }; atlas: { equal: boolean }; issue562: { pass: boolean } };
+  const ok = r.bar1.coincide && r.bar1.tintPx > 0 && r.bar1.controlTintPx === 0 && r.bar2.backDefectFlags.includes('faint:0') && r.atlas.equal && r.issue562.pass;
   console.log(ok ? 'PARTS VIEW BROWSER: PASS' : 'PARTS VIEW BROWSER: FAIL');
   process.exit(ok ? 0 : 1);
 }
