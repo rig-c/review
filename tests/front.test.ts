@@ -242,3 +242,55 @@ test('front stays up while control directory has a live record and exits within 
   await plantedProc.exited.catch(()=>{});
  }
 },30000);
+
+
+test('managed front preserves the normal open scene refusal as a closed named error', async () => {
+ const root = await realpath(await mkdtemp(join(tmpdir(), 'review-front-scene-')));
+ roots.push(root);
+ const projectRoot = join(root, 'project');
+ const control = join(root, 'open');
+ await mkdir(projectRoot);
+ await mkdir(control);
+ const archive = await readFile(new URL('./fixtures/create-reopened-v2/project.tar.gz', import.meta.url));
+ expect(digest(archive)).toBe('35fb7799f48336e10c7999dbeeacdfa87b2e6e015b59a76c6a37d33966f311ff');
+ const extracted = Bun.spawnSync(['tar', '-xzf', '-', '-C', projectRoot], {stdin: archive});
+ expect(extracted.exitCode).toBe(0);
+ const optionPath = 'evidence/interview/example-post-composition.json';
+ const option = JSON.parse(await readFile(join(projectRoot, optionPath), 'utf8'));
+ option.context = {kind: 'scene', scene: {n: 1, path: 'evidence/unsupported-scene.json', sha256: digest('{}')}};
+ const optionBytes = JSON.stringify(option);
+ await writeFile(join(projectRoot, optionPath), optionBytes);
+ const project = JSON.parse(await readFile(join(projectRoot, 'project.json'), 'utf8'));
+ project.interview = {post: {items: [{id: 'post_composition', pending_options: {path: optionPath, sha256: digest(optionBytes)}}]}};
+ await writeFile(join(projectRoot, 'project.json'), JSON.stringify(project));
+ const error = await openReview({input: join(projectRoot, 'derived/review/v2/out'),
+  project: {root: projectRoot, version: 2, picksDir: 'reviewer-picks'}}, {stateDir: join(root, 'state')})
+  .then(() => null, error => error as Error);
+ expect(error?.message).toBe('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: scene');
+ const code = error!.message.split(':')[0]!;
+ const identity = {key: 'd'.repeat(64), nonce: crypto.randomUUID(), fingerprint: 'e'.repeat(64), contentHash: digest(optionBytes)};
+ const capability = 'f'.repeat(64);
+ // The real opener refuses before starting a worker. Exercise the front's closed
+ // error transport separately with that opener's exact named failure.
+ let body: unknown = {error: code};
+ const worker = Bun.serve({hostname: '127.0.0.1', port: 0, fetch: () =>
+  Response.json(body, {status: 400, headers: {'X-Review-Open-Key': identity.key}})});
+ try {
+  const record: RecordFile = {schema: 'rig-review-open-instance/1', ...identity,
+   pid: process.pid, origin: `http://127.0.0.1:${worker.port}`, mode: 'single', capability};
+  await writeFile(join(control, identity.key + '.json'), JSON.stringify(record), {mode: 0o600});
+  const front = startFront({control, port: freePort(), nonce: crypto.randomUUID(), fingerprint: identity.fingerprint});
+  try {
+   const get = () => fetch(`${front.origin}/instances/${identity.key}/api/interview`, {signal: AbortSignal.timeout(5000)});
+   const named = await get();
+   expect(named.status).toBe(400);
+   expect(await named.json()).toEqual({error: code});
+   for (const rejected of [{error: code + ': scene'}, {error: code, path: '/private/scene'}]) {
+    body = rejected;
+    const response = await get();
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({error: 'FRONT_UPSTREAM_REJECTED'});
+   }
+  } finally {front.stop();}
+ } finally {worker.stop(true);}
+});

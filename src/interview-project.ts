@@ -245,8 +245,10 @@ export function readProject(root: string, now = Date.now()) {
         const expectedStage = allowed.length === 1 ? allowed[0]! :
           ['rig_type','reference','seethrough','assemble'].includes(String(item.id)) ? 'interview' : 'rigging-interview';
         const set = validateSet(raw, item.id, [expectedStage]);
+        if (object(raw.context).kind === 'scene') throw new Error('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: scene');
         const editable = entry.answer === undefined;
-        if (editable && (object(interview.order).spec !== 'rig-create/stage-order@2' || !Number.isFinite(date(object(interview.order).choices_adopted_at)))) {
+        if (editable && (set.stage === 'interview' || set.stage === 'rigging-interview') &&
+            (object(interview.order).spec !== 'rig-create/stage-order@2' || !Number.isFinite(date(object(interview.order).choices_adopted_at)))) {
           throw new Error('INTERVIEW_CHOICE_REQUIRED: Adopt create choices before selecting');
         }
         if (editable && approval(project, set.stage === 'interview' ? 'plan-approved' : set.stage, now)) return invalid('Question approval is still live');

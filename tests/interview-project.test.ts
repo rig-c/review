@@ -115,3 +115,168 @@ test('rigging context retains both same-hash part identities and refuses missing
     expect(() => readProject(fixture.root)).toThrow('INTERVIEW_OPTIONS_STALE');
   } finally {fixture.dispose();}
 });
+
+
+const postQuestions = ['camera_depth', 'post_timing', 'post_composition'] as const;
+const postNow = Date.parse('2020-01-10T00:00:00Z');
+type RigState = 'current' | 'older' | 'rejected' | 'reopened';
+
+function postProjectFixture(question: string, adopted: boolean, rigState: RigState = 'current', answered = false) {
+  const fixture = projectFixture();
+  const put = (path: string, bytes: string | Buffer) => {
+    writeFileSync(join(fixture.root, path), bytes);
+    return {path, sha256: digest(bytes)};
+  };
+  const partsAt = '2019-12-26T00:00:00Z';
+  const rigSignoffAt = '2019-12-29T00:00:00Z';
+  const evidence = put('evidence/parts-review.json', '{}');
+  const structure = put('evidence/structure.json', '{}');
+  const path = 'parts-input';
+  mkdirSync(join(fixture.root, path, 'parts'), {recursive: true});
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXn8AAAAASUVORK5CYII=', 'base64');
+  const manifest = put(path + '/parts.json', JSON.stringify({parts: [{name: 'body'}]}));
+  const image = put(path + '/parts/body.png', png);
+  const parts = {path, files: [manifest, image]};
+  const oldConfig = put('evidence/rig-1.json', '{"fixtureRig":1}');
+  const config = put('evidence/rig-2.json', '{"fixtureRig":2}');
+  const context = {kind: 'rig', rig_version: rigState === 'older' ? 1 : 2,
+    signoff_at: rigSignoffAt, config: rigState === 'older' ? oldConfig : config, parts};
+  const option = {...fixture.option, question, stage: 'post-interview', context};
+  const set = put(fixture.set.path, JSON.stringify(option));
+  const answer = {by: 'user', at: '2020-01-02T00:00:00Z', verbatim: 'Keep the authored framing',
+    choice: {spec: 'rig-create/interview-choice@1', set}};
+  const item = answered ? {id: question, guide: answer} : {id: question, pending_options: set};
+  const project = {...fixture.project,
+    signoffs: [
+      {stage: 'plan-approved', checkpoint: null, by: 'user', at: '2019-12-25T00:00:00Z'},
+      {stage: 'parts-review', checkpoint: null, by: 'user', at: partsAt, draft_id: 'draft', evidence, structure},
+      {stage: 'rig-review', checkpoint: null, by: 'user', at: rigSignoffAt},
+    ],
+    drafts: [{id: 'draft', at: partsAt, parts}],
+    versions: [
+      {kind: 'rig', n: 1, at: '2019-12-27T00:00:00Z', provenance: {config: oldConfig},
+        verdicts: [{review: 'rig-review', by: 'user', at: '2019-12-27T01:00:00Z', verdict: 'accepted'}]},
+      {kind: 'rig', n: 2, at: '2019-12-28T00:00:00Z', provenance: {config},
+        verdicts: [
+          {review: 'rig-review', by: 'user', at: rigSignoffAt, verdict: 'accepted'},
+          ...(rigState === 'rejected' ? [{review: 'rig-review', by: 'user', at: '2020-01-03T00:00:00Z', verdict: 'rejected'}] : []),
+        ]},
+    ],
+    reopens: rigState === 'reopened' ? [{stage: 'rig-review', at: '2020-01-03T00:00:00Z'}] : [],
+    interview: {...(adopted ? {order: fixture.project.interview.order} : {}), post: {items: [item]}},
+  };
+  put('project.json', JSON.stringify(project));
+  return {...fixture, project, option, set, image, put};
+}
+
+for (const questionId of postQuestions) {
+  test(`legacy ${questionId} opens editable on the accepted rig without adoption`, () => {
+    const fixture = postProjectFixture(questionId, false);
+    try {
+      const opened = readProject(fixture.root, postNow);
+      expect(opened.questions).toHaveLength(1);
+      const question = opened.questions[0]!;
+      expect(question.ref).toEqual(fixture.set);
+      expect(question.set).toEqual(fixture.option);
+      expect(question.editable).toBe(true);
+      expect(question.images.map(image => image.ref)).toEqual([fixture.image]);
+      expect(question.hasParts).toBe(true);
+      expect(fixture.project.interview).not.toHaveProperty('order');
+    } finally {fixture.dispose();}
+  });
+
+  test(`expectedStage admits adopted ${questionId} as post-interview`, () => {
+    const fixture = postProjectFixture(questionId, true);
+    try {
+      const opened = readProject(fixture.root, postNow);
+      expect(opened.questions).toHaveLength(1);
+      const question = opened.questions[0]!;
+      expect(question.set.stage).toBe('post-interview');
+      expect(question.set.question).toBe(questionId);
+      expect(question.ref).toEqual(fixture.set);
+      expect(question.editable).toBe(true);
+      expect(question.images.map(image => image.ref)).toEqual([fixture.image]);
+      expect(question.hasParts).toBe(true);
+    } finally {fixture.dispose();}
+  });
+
+  test(`expectedStage admits answered legacy ${questionId} without adoption`, () => {
+    const fixture = postProjectFixture(questionId, false, 'current', true);
+    try {
+      const opened = readProject(fixture.root, postNow);
+      expect(opened.questions).toHaveLength(1);
+      const question = opened.questions[0]!;
+      expect(question.set.stage).toBe('post-interview');
+      expect(question.set.question).toBe(questionId);
+      expect(question.ref).toEqual(fixture.set);
+      expect(question.editable).toBe(false);
+      expect(question.answer?.verbatim).toBe('Keep the authored framing');
+    } finally {fixture.dispose();}
+  });
+
+  test(`expectedStage refuses post in place of post-interview for ${questionId}`, () => {
+    const fixture = postProjectFixture(questionId, true);
+    try {
+      const set = fixture.put(fixture.set.path, JSON.stringify({...fixture.option, stage: 'post'}));
+      fixture.put('project.json', JSON.stringify({...fixture.project,
+        interview: {order: fixture.project.interview.order, post: {items: [{id: questionId, pending_options: set}]}},
+      }));
+      expect(() => readProject(fixture.root, postNow)).toThrow('INTERVIEW_OPTIONS_INVALID: Invalid option set');
+    } finally {fixture.dispose();}
+  });
+}
+
+for (const rigState of ['older', 'rejected', 'reopened'] as const) {
+  test(`legacy post on ${rigState} rig refuses by the stale code`, () => {
+    const fixture = postProjectFixture('camera_depth', false, rigState);
+    try {
+      expect(() => readProject(fixture.root, postNow)).toThrow('INTERVIEW_OPTIONS_STALE: set-a');
+    } finally {fixture.dispose();}
+  });
+
+  test(`adopted post on ${rigState} rig retains the stale refusal`, () => {
+    const fixture = postProjectFixture('camera_depth', true, rigState);
+    try {
+      expect(() => readProject(fixture.root, postNow)).toThrow('INTERVIEW_OPTIONS_STALE: set-a');
+    } finally {fixture.dispose();}
+  });
+}
+
+for (const stage of ['interview', 'rigging-interview']) {
+  for (const order of [undefined,
+    {spec: 'rig-create/stage-order@1', choices_adopted_at: '2020-01-01T00:00:00Z'},
+    {spec: 'rig-create/stage-order@2'},
+    {spec: 'rig-create/stage-order@2', choices_adopted_at: 'invalid'},
+  ]) {
+    test(`${stage} requires adoption for ${JSON.stringify(order)}`, () => {
+      const fixture = projectFixture();
+      try {
+        const question = stage === 'interview' ? 'reference' : 'bones';
+        const bytes = JSON.stringify({...fixture.option, question, stage});
+        writeFileSync(join(fixture.root, fixture.set.path), bytes);
+        const item = {id: question, pending_options: {path: fixture.set.path, sha256: digest(bytes)}};
+        const items = stage === 'interview' ? {framing: [item]} : {waypoints: [item]};
+        writeFileSync(join(fixture.root, 'project.json'), JSON.stringify({...fixture.project,
+          interview: {...(order === undefined ? {} : {order}), ...items},
+        }));
+        expect(() => readProject(fixture.root, postNow)).toThrow('INTERVIEW_CHOICE_REQUIRED: Adopt create choices before selecting');
+      } finally {fixture.dispose();}
+    });
+  }
+}
+
+for (const adopted of [false, true]) {
+  for (const questionId of postQuestions) {
+    test(`unsupported scene context names its kind before adoption for ${adopted ? 'adopted' : 'legacy'} ${questionId}`, () => {
+      const fixture = postProjectFixture(questionId, adopted);
+      try {
+        const context = {kind: 'scene', scene: {n: 1, path: 'evidence/unsupported-scene.json', sha256: digest('{}')}};
+        const set = fixture.put(fixture.set.path, JSON.stringify({...fixture.option, context}));
+        fixture.put('project.json', JSON.stringify({...fixture.project,
+          interview: {...fixture.project.interview, post: {items: [{id: questionId, pending_options: set}]}},
+        }));
+        expect(() => readProject(fixture.root, postNow)).toThrow('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: scene');
+      } finally {fixture.dispose();}
+    });
+  }
+}
