@@ -244,7 +244,7 @@ test('front stays up while control directory has a live record and exits within 
 },30000);
 
 
-test('managed front preserves the normal open scene refusal as a closed named error', async () => {
+test('managed front preserves the malformed scene stale refusal as a closed named error', async () => {
  const root = await realpath(await mkdtemp(join(tmpdir(), 'review-front-scene-')));
  roots.push(root);
  const projectRoot = join(root, 'project');
@@ -266,7 +266,7 @@ test('managed front preserves the normal open scene refusal as a closed named er
  const error = await openReview({input: join(projectRoot, 'derived/review/v2/out'),
   project: {root: projectRoot, version: 2, picksDir: 'reviewer-picks'}}, {stateDir: join(root, 'state')})
   .then(() => null, error => error as Error);
- expect(error?.message).toBe('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: scene');
+  expect(error?.message).toBe('INTERVIEW_OPTIONS_STALE: example-post-composition');
  const code = error!.message.split(':')[0]!;
  const identity = {key: 'd'.repeat(64), nonce: crypto.randomUUID(), fingerprint: 'e'.repeat(64), contentHash: digest(optionBytes)};
  const capability = 'f'.repeat(64);

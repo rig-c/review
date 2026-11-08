@@ -56,7 +56,9 @@ export function interviewRoutes(root: string, output: string, capability: string
   };
   const current = async () => {
     await joined?.assertCurrent();
-    if (readProject(opened.root).hash !== opened.hash) throw new Error('INTERVIEW_OPTIONS_STALE: Project changed; reopen the interview');
+    const validated = readProject(opened.root);
+    if (validated.hash !== opened.hash) throw new Error('INTERVIEW_OPTIONS_STALE: Project changed; reopen the interview');
+    return validated;
   };
   return async (req: Request, origin: string): Promise<Response | undefined> => {
     const url = new URL(req.url);
@@ -66,18 +68,24 @@ export function interviewRoutes(root: string, output: string, capability: string
     try {
       if (joined && interviewRequest(url.pathname) && !joined.available) return json({error:'INTERVIEW_UNAVAILABLE'}, 404);
       if (req.method === 'GET' && url.pathname === '/api/interview') {
-        await current();
+        const validated = await current();
         const dir = destination();
-        return json({...(joined ? {binding:{projectHash:opened.hash, sourceHash:joined.sourceHash,  ...(joined.draftId===undefined?{version:joined.version}:{draftId:joined.draftId})}} : {}), historical:opened.historical, diagnostics:opened.diagnostics, questions:opened.questions.map(question => ({
+        return json({...(joined ? {binding:{projectHash:opened.hash, sourceHash:joined.sourceHash,  ...(joined.draftId===undefined?{version:joined.version}:{draftId:joined.draftId})}} : {}), historical:validated.historical, diagnostics:validated.diagnostics, questions:validated.questions.map(question => ({
           ...question, saved:question.editable ? readPicks(dir, question) : null,
           images:question.images.map(({name}, index) => ({name, url:'/api/interview/image/' + question.ref.sha256 + '/' + index})),
         }))});
       }
       const image = /^\/api\/interview\/image\/([a-f0-9]{64})\/(0|[1-9]\d*)$/.exec(url.pathname);
       if (image && req.method === 'GET') {
-        await current();
-        const asset = opened.questions.find(question => question.ref.sha256 === image[1])?.images[Number(image[2])];
-        if (!asset) return json({error:'Not found'}, 404);
+        const validated = await current();
+        const index = Number(image[2]);
+        const asset = validated.questions.find(question => question.ref.sha256 === image[1] && question.images[index])?.images[index];
+        if (!asset) {
+          if (validated.diagnostics.some(diagnostic => diagnostic.ref.sha256 === image[1] && diagnostic.code === 'INTERVIEW_OPTIONS_STALE')) {
+            throw new Error('INTERVIEW_OPTIONS_STALE: Image evidence changed');
+          }
+          return json({error:'Not found'}, 404);
+        }
         let bytes: Buffer;
         try {bytes = boundBytes(opened.root, asset.ref);}
         catch {throw new Error('INTERVIEW_OPTIONS_STALE: Image bytes changed');}
