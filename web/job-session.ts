@@ -1148,6 +1148,15 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         const handle = requestAnimationFrame(now => stepPlayback(handle, expectedOwner, expectedPlayer, now));
         rafHandle = handle;
     }
+    function playbackTimeLabel(duration: number, trackTime: number): string {
+        // A one-second 1/60 replay leaves six epsilons after modulo. Limit display snapping
+        // to eight duration-scaled epsilons. The public time and captured frame stay raw.
+        if (trackTime < duration) return String(time);
+        const residue = 8 * Number.EPSILON * duration;
+        if (time <= residue) return '0';
+        if (duration - time <= residue) return String(duration);
+        return String(time);
+    }
     function stepPlayback(handle: number, expectedOwner: JobPreparedInspection, expectedPlayer: RigPlayer, now: number): void {
         if (current !== expectedOwner || current?.player !== expectedPlayer) {
             expectedPlayer.pause();
@@ -1182,7 +1191,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             time = activeEntry.animationTime;
         }
         const clock = workspace.querySelector<HTMLInputElement>('#job-time');
-        if (clock) clock.value = String(time);
+        if (clock) clock.value = playbackTimeLabel(clip.duration, activeEntry.trackTime);
         syncTransportControls();
         presentCurrentFrame(expectedOwner);
         if (playing && current === expectedOwner && current.player === expectedPlayer && hubVisible) {
@@ -1646,7 +1655,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             playbackCarry = 0;
             lastFrameTime = 0;
             const clockInput = workspace.querySelector<HTMLInputElement>('#job-time');
-            if (clockInput) clockInput.value = String(time);
+            if (clockInput) clockInput.value = playbackTimeLabel(clip.duration, current.player.time);
             syncTransportControls();
             presentCurrentFrame(current);
             if (hubVisible) armPlayback(current, current.player);
@@ -1673,7 +1682,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 }
                 time = activeEntry.animationTime;
                 const clockInput = workspace.querySelector<HTMLInputElement>('#job-time');
-                if (clockInput) clockInput.value = String(time);
+                if (clockInput) clockInput.value = playbackTimeLabel(clip.duration, activeEntry.trackTime);
                 if (!playing) current.player.pause();
                 syncTransportControls();
                 presentCurrentFrame(current);
@@ -1827,6 +1836,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             if (animation && (current.player.current !== animation || current.player.entry(0)?.loop !== loop))
                 current.player.play(animation, { loop });
             if (animation) {
+                const seekAtLoopEnd = loop && time === clip?.duration;
                 current.player.seek(time);
                 const activeEntry = current.player.entry(0);
                 if (!activeEntry || activeEntry.animation !== animation || activeEntry.loop !== loop ||
@@ -1837,7 +1847,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     return;
                 }
                 time = activeEntry.animationTime;
-                clock.value = String(time);
+                clock.value = seekAtLoopEnd ? '0' : String(time);
             }
             current.player.pause();
             drawInspection(current);

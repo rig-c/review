@@ -1636,7 +1636,11 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             seek(target: number) {
                 if (composed || !current) throw new Error('SEEK_UNSUPPORTED');
                 seekCalls++;
-                trackTime = target;
+                trackTime = 0;
+                const steps = Math.floor(target / (1 / 60));
+                for (let i = 0; i < steps; i++) trackTime += 1 / 60;
+                const rest = target - trackTime;
+                if (rest > 0) trackTime += rest;
                 generation++;
                 physicsEpoch++; // seek replays from 0 in seekStep increments, resetting physics history to deterministic target state
                 history.push(`seek:${Number(target.toFixed(6))}`);
@@ -1644,7 +1648,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             advance(dt: number) {
                 advanceCalls++;
                 if (paused || !current || !(dt > 0)) return;
-                trackTime = Number((trackTime + dt).toFixed(9));
+                trackTime += dt;
                 generation++;
                 history.push(`advance:${Number(dt.toFixed(6))}->${Number(trackTime.toFixed(6))}`);
             },
@@ -1660,7 +1664,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 }
                 const duration = durationOf(current);
                 const animationTime = duration > 0
-                    ? (loop ? Number((trackTime % duration).toFixed(9)) : Math.min(trackTime, duration))
+                    ? (loop ? trackTime % duration : Math.min(trackTime, duration))
                     : 0;
                 return {animation: current, loop, trackTime, animationTime, duration, alpha: 1, additive: false};
             },
@@ -2096,6 +2100,112 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(s.outgoingSubmits[0]!.body.capture.playing).toBe(false);
             expect(s.outgoingSubmits[0]!.body.capture.animation).toBe('inspect');
             expect(s.outgoingSubmits[0]!.body.capture.frame).toBe(0);
+        } finally {
+            s.cleanup();
+        }
+    });
+
+    test('#559 raw floating boundary time formats only the readout and preserves paused canonical capture and manual precision', async () => {
+        const s = await mountRuntimeSession({clips: [{name: 'inspect', duration: 1}]});
+        try {
+            const act = fixtureAct('review-verdict', 'raw boundary capture');
+            if (act.schema !== 'rig-review/act@2' || act.kind !== 'review-verdict' || act.value.stage !== 'rig-review') {
+                throw new Error('Expected review-verdict fixture act');
+            }
+            const display = await s.publishRig(1);
+            const source = display.publication.source;
+            if (source.subject === 'image-set' || source.selector?.kind !== 'rig' || !source.model) {
+                throw new Error('Expected rig model source');
+            }
+            const ask = {askId: act.askId, publicationId: display.publication.publicationId,
+                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const}, source, status: 'pending' as const};
+            s.fixture.pending(ask, 2);
+            s.window.event(s.fixture.events.at(-1)!);
+            s.fixture.returnAct({...act, publicationId: display.publication.publicationId,
+                source: {...source, selector: source.selector, model: source.model}, value: act.value});
+            const animationSelect = s.workspace.querySelector('#job-animation')!;
+            const clock = s.workspace.querySelector('#job-time')!;
+            const play = s.workspace.querySelector('#job-play')!;
+            const repeat = s.workspace.querySelector('#job-loop')!;
+            animationSelect.value = 'inspect';
+            animationSelect.dispatchEvent({type: 'change'});
+            const player = s.activePlayer();
+            const residue = 1.3322676295501878e-15;
+            const countsBefore = player.counts();
+            play.click();
+            s.stepRaf(0);
+            for (let i = 0; i < 10; i++) s.stepRaf(100);
+            expect(player.time).toBe(1 + residue);
+            expect(player.entry(0)!.animationTime).toBe(residue);
+            expect(player.counts().seekCalls).toBe(countsBefore.seekCalls);
+            expect(player.physicsEpoch).toBe(countsBefore.physicsEpoch);
+            expect(clock.value).toBe('0');
+            play.click();
+            const rawPaused = player.entry(0)!.animationTime;
+            s.stepRaf(100);
+            s.stepRaf(100);
+            expect(player.entry(0)!.animationTime).toBe(rawPaused);
+            expect(clock.value).toBe('0');
+            expect(play.getAttribute('aria-pressed')).toBe('false');
+            expect(play.dataset.jobText).toBe('Play');
+            expect(player.paused).toBe(true);
+            expect(s.rafCount()).toBe(0);
+
+            // Re-enabling Repeat after a natural one-shot end replays the same public seek accumulation.
+            repeat.checked = false;
+            repeat.dispatchEvent({type: 'change'});
+            play.click();
+            s.stepRaf(0);
+            for (let i = 0; i < 11; i++) s.stepRaf(100);
+            expect(clock.value).toBe('1');
+            repeat.checked = true;
+            repeat.dispatchEvent({type: 'change'});
+            expect(player.time).toBe(1 + residue);
+            expect(player.entry(0)!.animationTime).toBe(residue);
+            expect(clock.value).toBe('0');
+            s.stepRaf(100);
+            s.stepRaf(100);
+            expect(clock.value).toBe('0');
+            expect(player.entry(0)!.animationTime).toBe(residue);
+            expect(player.paused).toBe(true);
+            expect(play.getAttribute('aria-pressed')).toBe('false');
+            expect(play.dataset.jobText).toBe('Play');
+            const form = s.workspace.querySelector(`form[data-job-ask="${ask.askId}"]`)!;
+            form.querySelector('select[name="verdict"]')!.value = 'approved';
+            form.querySelector('textarea[name="note"]')!.value = 'raw boundary capture';
+            form.dispatchEvent({type: 'input'});
+            await form.onsubmit?.({preventDefault() {}});
+            expect(s.outgoingSubmits).toHaveLength(1);
+            expect(s.outgoingSubmits[0]!.body.capture.frame).toBe(residue);
+            expect(s.outgoingSubmits[0]!.body.capture.playing).toBe(false);
+            expect(player.entry(0)!.animationTime).toBe(residue);
+
+            clock.value = '1';
+            clock.dispatchEvent({type: 'change'});
+            expect(clock.value).toBe('0');
+            expect(player.entry(0)!.animationTime).toBe(residue);
+            expect(player.time).toBe(1 + residue);
+
+            for (const value of ['0.123456789012345', String(residue), '0.999999999999999']) {
+                clock.value = value;
+                clock.dispatchEvent({type: 'change'});
+                expect(clock.value).toBe(value);
+                expect(Number(clock.value)).toBe(player.entry(0)!.animationTime);
+                play.click();
+                expect(clock.value).toBe(value);
+                play.click();
+                repeat.checked = false;
+                repeat.dispatchEvent({type: 'change'});
+                expect(clock.value).toBe(value);
+                repeat.checked = true;
+                repeat.dispatchEvent({type: 'change'});
+                expect(clock.value).toBe(value);
+            }
+            animationSelect.value = '';
+            animationSelect.dispatchEvent({type: 'change'});
+            clock.value = String(residue);
+            clock.dispatchEvent({type: 'change'});
+            expect(clock.value).toBe(String(residue));
         } finally {
             s.cleanup();
         }
