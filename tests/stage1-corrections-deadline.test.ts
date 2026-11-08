@@ -61,6 +61,28 @@ test('the actual readiness waiter accepts complete state', async () => {
   }
 });
 
+test('the actual readiness expression and waiter tolerate null iframe body during replacement', async () => {
+  for (const name of partsNames) {
+    const frame: { contentDocument: { body: null | { dataset: { ready?: string }; textContent: string } } } = {
+      contentDocument: { body: null },
+    };
+    const page = pageWith({
+      document: {
+        querySelector: (selector: string) => (selector.includes(visibleFrame) ? frame : undefined),
+      },
+    });
+    expect(await page.evaluate(STAGE1_READINESS[name].expression)).toEqual({
+      ready: false,
+      detail: undefined,
+    });
+    setTimeout(() => {
+      frame.contentDocument.body = { dataset: { ready: 'true' }, textContent: 'fixture' };
+    }, 30);
+    await waitForStage1Readiness(page, name, 200);
+    expect(page.reads.length).toBeGreaterThan(1);
+  }
+});
+
 function applyPage() {
   const actions: unknown[] = [];
   const state = {record: '', chestDisabled: false, deltaDisabled: false, chestError: false, selected: 'torso', ops: [1]};

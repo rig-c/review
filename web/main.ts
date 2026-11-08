@@ -1302,7 +1302,16 @@ function chestMarkers():OverlayMarker[]{
 function populateChestBones():void {
  const bones=activeSetupBones();
  const list=document.getElementById('lm-bones');if(list){list.replaceChildren();for(const name of bones??[])list.append(option(name,name));}
- for(const row of chestRegionRows){const node=select(chestRowId(row,'bone'));node.replaceChildren(option('',bones?'Select bone':'No model bones'));for(const name of bones??[])node.append(option(name,name));node.disabled=!bones;}
+ const part=stageCorrectionPart??chestFormPart,seeded=rebuildStatus&&part?chestSeed(chestStatusForPart(rebuildStatus,part)):null;
+ for(const row of chestRegionRows){
+  const id=chestRowId(row,'bone'),nameId=chestRowId(row,'name'),node=select(id),current=node.value,seededRow=seeded?.rows.find(r=>r.row===row);
+  const rowName=input(nameId).value.trim(),seededName=(seededRow?.fields[nameId]??'').trim();
+  const keep=current||(node.disabled&&rowName&&rowName===seededName?(seededRow?.fields[id]??'').trim():'');
+  node.replaceChildren(option('',bones?'Select bone':'No model bones'));
+  for(const name of bones??[])node.append(option(name,name));
+  if(bones&&keep&&bones.includes(keep))node.value=keep;
+  node.disabled=!bones;
+ }
 }
 function updateChestMapping():void {
  const root=activeSetupBones()?.[0];let at:{x:number;y:number}|null=null;

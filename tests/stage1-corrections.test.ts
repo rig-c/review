@@ -410,7 +410,8 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
  const {rendererStatus}=await import('../web/renderer-status.ts');
  const {selectedInspector}=await import('../web/workspace-ui.ts');
  const {modelBoneNames,readSetupPose}=await import('../web/setup-pose.ts');
- const {chestRegionRows,chestRowId,evaluateChestForm}=await import('../web/chest-regions-tool.ts');
+ const {chestInputIds,chestRegionRows,chestRowId,evaluateChestForm}=await import('../web/chest-regions-tool.ts');
+ const {LANDMARKS}=await import('../web/chest-editor.ts');
  const {cropWorldMapping}=await import('../src/chest-regions.ts');
  const {meshEditSource}=await import('../web/mesh-editor.ts');
  const {
@@ -426,6 +427,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   chestStatusForPart,
   designatedRegions,
   chestSeed,
+  noContourReason,
   pickPart,
  }=await import('../web/rebuild-client.ts');
 
@@ -592,7 +594,12 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   tagName:string;
   id:string;
   selector='';
-  value='';
+  private _value='';
+  get value():string{return this._value;}
+  set value(v:string){
+   const next=String(v??'');
+   this._value=this.tag==='select'?(this.options.some(o=>o.value===next)?next:''):next;
+  }
   defaultValue='';
   checked=false;
   defaultChecked=false;
@@ -634,7 +641,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    for(const c of this.children)c.parentElement=null;
    this.children=[];
    this.childNodes=[];
-   if(this.tag==='select')this.options=[];
+   if(this.tag==='select'){this.options=[];this._value='';}
    this.content=String(v??'');
   }
   setAttribute(k:string,v:string){
@@ -696,7 +703,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    this.children=[];
    this.content='';
    this.append(...items);
-   if(this.tag==='select')this.options=this.children;
+   if(this.tag==='select'){this.options=this.children;this._value=this.options[0]?.value??'';}
   }
   remove(){
    if(this.parentElement){
@@ -907,7 +914,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    sliceBetween('function chestField(','const environmentInputs='),
    sliceBetween('function boneSetup(','async function exportMesh('),
    sliceBetween('async function undoApply(','(window as unknown as {rigReviewEditor:unknown}).rigReviewEditor='),
-   sliceBetween('async function applyRetarget(','let chestFormPart:'),
+   sliceBetween('async function applyRetarget(','/** The handoff line (#101):'),
    sliceBetween('async function resetRebuild(','async function swapRig('),
    mainSource.slice(mainSource.indexOf('interface StageDraftModelTarget')),
    sliceBetween('parts=new PartExplorer(','animationPanel=new AnimationInspectionPanel('),
@@ -956,6 +963,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   let idleModelHook:(()=>void)|null=null;
   const refreshedBuilds:string[]=[];
   const messages:{text:string;error:boolean}[]=[];
+  const chestNotices:{text:string|null;error:boolean}[]=[];
 
   const makeBuiltJob=(id:string,hash:string)=>({
    id,
@@ -976,9 +984,22 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   });
   let activeRebuildJob=makeBuiltJob(scratchId,scratchHash);
 
+  const rebuildStatusPayload={
+   available:true,
+   draft:draftStatus.draft,
+   inputs:{config:'derived/drafts/chain/config.json',parts:'derived/drafts/chain/input',rig:'derived/drafts/chain/out',configHash:draftStatus.draft.config.sha256},
+   parts:[{name:'torso',regions:[{name:'bust_r',shape:'circle',cx:20,cy:20,r:6,bone:'torso_bone',spacing:4,band:10}]}],
+   contour:{torso:{contour:{regions:[{name:'bust_r',shape:'circle',cx:20,cy:20,r:6,bone:'torso_bone',spacing:4,band:10}]}}},
+   producer:draftStatus.producer,
+   compiler:draftStatus.compiler,
+   reason:null,
+  };
+
   const mainScope:any={
    refreshedBuilds,
    HTMLInputElement:FakeHTMLInputElement,
+   HTMLSelectElement:FakeHTMLElement,
+   HTMLTextAreaElement:FakeHTMLElement,
    HTMLElement:FakeHTMLElement,
    RigPlayer:TrackedRigPlayer,
    loadModel:wrappedLoadModel,
@@ -998,8 +1019,10 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    readSetupPose,
    cropWorldMapping,
    evaluateChestForm,
+   chestInputIds,
    chestRegionRows,
    chestRowId,
+   LANDMARKS,
    meshEditSource,
    appliedRecord,
    patchAppliedRecord,
@@ -1009,9 +1032,13 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    patchOutcomeLine,
    deltaOutcomeLine,
    stageModel,
+   chestPartFields,
    chestStatusForPart,
    designatedRegions,
    chestSeed,
+   seedFields,
+   seedLandmarks,
+   noContourReason,
    pickPart,
    posedChestMapping:(m:any)=>m,
    chestPoseOffset:()=>({x:0,y:0}),
@@ -1040,16 +1067,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
     feedbackCatalog:{bones:null,slots:null,animations:[]},
     sourceHash:'hash-inspected',
    },
-   rebuildStatus:{
-    available:true,
-    draft:draftStatus.draft,
-    inputs:{config:'derived/drafts/chain/config.json',parts:'derived/drafts/chain/input',rig:'derived/drafts/chain/out',configHash:draftStatus.draft.config.sha256},
-    parts:[{name:'torso',regions:[{name:'bust_r',shape:'circle',cx:20,cy:20,r:6,bone:'torso_bone',spacing:4,band:10}]}],
-    contour:{torso:{contour:{regions:[{name:'bust_r',shape:'circle',cx:20,cy:20,r:6,bone:'torso_bone',spacing:4,band:10}]}}},
-    producer:draftStatus.producer,
-    compiler:draftStatus.compiler,
-    reason:null,
-   },
+   rebuildStatus:null,
    stageCheck:null,
    stripPending:null,
    appliedHistory:{depth:0,records:[]},
@@ -1060,16 +1078,18 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    requirementsPanel:{selectionChanged:()=>{}},
    renderFeedbackTargets:()=>{},
    openReview:()=>{},
-   meshPanel:{select:()=>{},part:()=>'torso',status:()=>{},counts:()=>{},readout:()=>{}},
+   retargetPanel:{load:()=>{}},
+   rigFieldsPanel:{load:()=>{}},
+   meshPanel:{load:()=>{},select:()=>{},part:()=>'torso',status:()=>{},counts:()=>{},readout:()=>{}},
    meshEditor:{selectionChanged:()=>{},sync:()=>{},setStatusNote:()=>{},statusNote:()=>''},
-   chestEditor:{notify:()=>{},rebuildState:()=>{},sync:()=>{},active:()=>false,mode:()=>'circles',flashing:()=>false},
+   chestEditor:{notify:(text:string|null,error=false)=>{chestNotices.push({text,error});},rebind:()=>{},unavailable:()=>{},rebuildState:()=>{},sync:()=>{},active:()=>false,mode:()=>'circles',flashing:()=>false},
    weightsView:{refresh:()=>{},sync:()=>{}},
-   bonesPanel:{sync:()=>{}},
-   cutsPanel:{shown:()=>{},sync:()=>{}},
-   clothPanel:{shown:()=>{},sync:()=>{}},
+   bonesPanel:{load:()=>{},sync:()=>{}},
+   cutsPanel:{load:()=>{},shown:()=>{},sync:()=>{}},
+   clothPanel:{load:()=>{},shown:()=>{},sync:()=>{}},
    physicsPanel:{clearPreview:()=>{clearPreviewCalls++;}},
    idlePanel:{model:()=>idleModelHook?.()},
-   animationPanel:{capture:()=>{},fromParts:()=>{},reconcileStageApplied:()=>{}},
+   animationPanel:{loadSource:()=>{},capture:()=>{},fromParts:()=>{},reconcileStageApplied:()=>{}},
    directionPanel:{refresh:()=>{}},
    inspectorBlocks:{select:()=>{}},
    access:{route:(p:string)=>p},
@@ -1091,10 +1111,12 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    renderCues:()=>{},
    renderIdle:()=>{},
    renderDropNotices:()=>{},
+   renderHandoff:()=>{},
+   refreshPhysics:()=>{},
+   refreshApplied:async()=>{},
+   canManageApplied:()=>true,
    configureTurnPad:()=>{},
    refreshAnimationInspection:()=>{},
-   rebindChestPart:()=>{},
-   loadRebuildStatus:async()=>mainScope.rebuildStatus,
    useWorld:()=>false,
    checkAnimation:()=>'idle',
    worldFor:()=>null,
@@ -1121,6 +1143,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    redrawOverlay:()=>{},
    message:(text:string,error=false)=>{messages.push({text,error});},
    api:async(path:string,init?:any)=>{
+    if(path==='/api/rebuild')return structuredClone(rebuildStatusPayload);
     if(path==='/api/stage-parts'){
      const b=init?.headers?.['X-Review-Stage-Build']??'inspected';
      stagePartsCallCount++;
@@ -1139,7 +1162,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
 
   const fns=new Function(
    'scope',
-   `with(scope){${mainCode};refreshStageParts=()=>{refreshedBuilds.push(appliedOnStage?.buildId??'inspected');};return {openStageCorrection,prepareStageDraftBuild,draftInspectedTarget,draftScratchTarget,resolveStageDraftTarget,applyPatch,applyMeshDelta,applyRebuild,undoApply,resetRebuild,meshSource,activeSetupBones,hasStageModel,setView,renderLayout,fitCamera,getParts:()=>parts,setPlaying:(v)=>{playing=v;},setRebuildBusy:(v)=>{rebuildBusy=v;},setStageDraftTarget:(v)=>{if(typeof stageDraftTarget!=='undefined')stageDraftTarget=v;},getState:()=>({player,assets,partModel,stageModelBones,inspectedModel,appliedOnStage,stageModelHash,stageCorrectionPart,stageDraftSelection,chestMapping,rebuildBusy,view,effectiveView,rigInput,viewportState:viewport.state,feedbackCatalog:data.feedbackCatalog,stageDraftTarget:typeof stageDraftTarget!=='undefined'?stageDraftTarget:undefined,stageDraftTargets:typeof stageDraftTargets!=='undefined'?stageDraftTargets:undefined})};}`,
+   `with(scope){${mainCode};refreshStageParts=()=>{refreshedBuilds.push(appliedOnStage?.buildId??'inspected');};return {openStageCorrection,prepareStageDraftBuild,draftInspectedTarget,draftScratchTarget,resolveStageDraftTarget,populateChestBones,loadRebuildStatus,rebindChestPart,applyPatch,applyMeshDelta,applyRebuild,undoApply,resetRebuild,meshSource,activeSetupBones,hasStageModel,setView,renderLayout,fitCamera,getParts:()=>parts,setPlaying:(v)=>{playing=v;},setRebuildBusy:(v)=>{rebuildBusy=v;},setStageModelBones:(v)=>{stageModelBones=v;},setStageDraftTarget:(v)=>{if(typeof stageDraftTarget!=='undefined')stageDraftTarget=v;},getState:()=>({player,assets,partModel,stageModelBones,inspectedModel,appliedOnStage,stageModelHash,stageCorrectionPart,stageDraftSelection,chestFormPart,chestMapping,rebuildBusy,view,effectiveView,rigInput,viewportState:viewport.state,feedbackCatalog:data.feedbackCatalog,stageDraftTarget:typeof stageDraftTarget!=='undefined'?stageDraftTarget:undefined,stageDraftTargets:typeof stageDraftTargets!=='undefined'?stageDraftTargets:undefined})};}`,
   )(mainScope) as any;
 
   const partsExplorer=fns.getParts() as InstanceType<typeof PartExplorer>;
@@ -1153,12 +1176,20 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   };
   fns.getState().viewportState.activeCamera='reference';
   fns.renderLayout();
+  fns.populateChestBones();
+  await fns.loadRebuildStatus();
 
   // 0. Normal Pre-Rig entry before opening correction: no compiled model drawn yet, feedbackCatalog.bones/slots stay null, view is reference, clipPath is baseline 'inset(2px)'.
   expect(fns.getState().player).toBeNull();
   expect(fns.getState().partModel).toBeNull();
   expect(fns.getState().stageModelBones).toBeNull();
   expect(fns.hasStageModel()).toBe(false);
+  expect(ensureEl(chestRowId(0,'bone'),'select').disabled).toBe(true);
+  expect(ensureEl(chestRowId(0,'bone'),'select').options.map((o:any)=>o.value)).toEqual(['']);
+  expect(ensureEl(chestRowId(0,'bone'),'select').value).toBe('');
+  expect(ensureEl(chestRowId(0,'name'),'input').value).toBe('bust_r');
+  expect(ensureEl(chestRowId(0,'cx'),'input').value).toBe('20');
+  expect(fns.getState().chestFormPart).toBe('torso');
   expect(fns.getState().view).toBe('reference');
   expect(fns.getState().effectiveView).toBe('reference');
   expect(fns.getState().viewportState.activeCamera).toBe('reference');
@@ -1248,7 +1279,10 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   expect(afterOpen.view).toBe('rig');
   expect(selectedInspector(fakeDocument)).toBe('rig');
   expect(ensureEl('mesh-edit','button').getAttribute('aria-pressed')).toBe('true');
+  expect(ensureEl(chestRowId(0,'bone'),'select').disabled).toBe(false);
   expect(ensureEl(chestRowId(0,'bone'),'select').options.map((o:any)=>o.value)).toEqual(['','root','torso_bone']);
+  expect(ensureEl(chestRowId(0,'bone'),'select').value).toBe('torso_bone');
+  expect(ensureEl(chestRowId(1,'bone'),'select').value).toBe('');
   const openMesh=fns.meshSource();
   expect(openMesh.ok).toBe(true);
   expect(openMesh.source.vertices).toHaveLength(5);
@@ -1521,20 +1555,73 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   expect(fns.meshSource().source.triangles.length/3).toBe(4);
   expect(refreshedBuilds.at(-1)).toBe('inspected');
 
-  // Seed chest fields and verify `applyRebuild` (Chest regions Apply · Rebuild) also transitions cleanly to `scratchId`.
-  ensureEl(chestRowId(0,'name'),'input').value='bust_r';
-  ensureEl(chestRowId(0,'bone'),'select').value='torso_bone';
-  for(const [f,v] of [['cx','22'],['cy','20'],['ax','6'],['ay','6'],['band','10'],['spacing','4']] as const){
-   ensureEl(chestRowId(0,f),'input').value=v;
-  }
+  // Verify `applyRebuild` (Chest regions Apply · Rebuild) transitions cleanly without manual bone injection and preserves valid choices across Apply / Undo / Reset.
+  expect(ensureEl(chestRowId(0,'bone'),'select').value).toBe('torso_bone');
+  ensureEl(chestRowId(0,'cx'),'input').value='22';
   await fns.applyRebuild();
   expect(fns.getState().appliedOnStage?.buildId).toBe(scratchId);
   expect(fns.getState().stageModelBones).toEqual(['root','torso_bone','scratch_rib']);
+  expect(ensureEl(chestRowId(0,'bone'),'select').value).toBe('torso_bone');
   expect(rigRoot.style.clipPath).toBe(scratchClipCss);
+  await fns.undoApply();
+  expect(fns.getState().appliedOnStage).toBeNull();
+  expect(ensureEl(chestRowId(0,'bone'),'select').value).toBe('torso_bone');
+  await fns.applyRebuild();
+  expect(fns.getState().appliedOnStage?.buildId).toBe(scratchId);
+  expect(ensureEl(chestRowId(0,'bone'),'select').value).toBe('torso_bone');
   await fns.resetRebuild();
   expect(fns.getState().appliedOnStage).toBeNull();
   expect(fns.getState().stageModelBones).toEqual(['root','torso_bone']);
+  expect(ensureEl(chestRowId(0,'bone'),'select').value).toBe('torso_bone');
   expect(rigRoot.style.clipPath).toBe(inspectedClipCss);
+
+  // Preserve an explicit non-default valid bone on rebuild, then clear to blank with named refusal when that bone vanishes on Reset.
+  await fns.applyRebuild();
+  ensureEl(chestRowId(0,'bone'),'select').value='scratch_rib';
+  await fns.applyRebuild();
+  expect(ensureEl(chestRowId(0,'bone'),'select').value).toBe('scratch_rib');
+  await fns.resetRebuild();
+  expect(fns.getState().stageModelBones).toEqual(['root','torso_bone']);
+  expect(ensureEl(chestRowId(0,'bone'),'select').value).toBe('');
+  chestNotices.length=0;
+  await fns.applyRebuild();
+  expect(fns.getState().appliedOnStage).toBeNull();
+  expect(chestNotices.at(-1)).toEqual({text:'REBUILD_REGION_INCOMPLETE: bust_r bone',error:true});
+
+  // Do not overwrite a deliberate empty choice once the catalog is usable.
+  ensureEl(chestRowId(0,'bone'),'select').value='torso_bone';
+  await fns.applyRebuild();
+  expect(ensureEl(chestRowId(0,'bone'),'select').value).toBe('torso_bone');
+  ensureEl(chestRowId(0,'bone'),'select').value='';
+  await fns.resetRebuild();
+  expect(ensureEl(chestRowId(0,'bone'),'select').value).toBe('');
+  chestNotices.length=0;
+  await fns.applyRebuild();
+  expect(fns.getState().appliedOnStage).toBeNull();
+  expect(chestNotices.at(-1)).toEqual({text:'REBUILD_REGION_INCOMPLETE: bust_r bone',error:true});
+
+  // When transitioning from a disabled pre-rig catalog, honor row-name mismatch and missing source-row with blank named refusals.
+  fns.setStageModelBones(null);
+  fns.populateChestBones();
+  expect(ensureEl(chestRowId(0,'bone'),'select').disabled).toBe(true);
+  ensureEl(chestRowId(0,'name'),'input').value='renamed_r';
+  ensureEl(chestRowId(1,'name'),'input').value='bust_l';
+  for(const [f,v] of [['cx','40'],['cy','20'],['ax','6'],['ay','6'],['band','10'],['spacing','4']] as const){
+   ensureEl(chestRowId(1,f),'input').value=v;
+  }
+  await fns.openStageCorrection({part:'torso',sourceHash:'hash-inspected',buildId:'inspected',instrument:'chest'});
+  expect(ensureEl(chestRowId(0,'bone'),'select').disabled).toBe(false);
+  expect(ensureEl(chestRowId(0,'bone'),'select').value).toBe('');
+  expect(ensureEl(chestRowId(1,'bone'),'select').value).toBe('');
+  chestNotices.length=0;
+  await fns.applyRebuild();
+  expect(fns.getState().appliedOnStage).toBeNull();
+  expect(chestNotices.at(-1)).toEqual({text:'REBUILD_REGION_INCOMPLETE: renamed_r bone',error:true});
+  ensureEl(chestRowId(0,'bone'),'select').value='torso_bone';
+  chestNotices.length=0;
+  await fns.applyRebuild();
+  expect(fns.getState().appliedOnStage).toBeNull();
+  expect(chestNotices.at(-1)).toEqual({text:'REBUILD_REGION_INCOMPLETE: bust_l bone',error:true});
 
   fns.getState().player?.dispose();
   fns.getState().assets?.dispose();
