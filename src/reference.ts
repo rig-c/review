@@ -50,7 +50,7 @@ export async function safeSelectedReference(p:ReviewPackage):Promise<string>{
 /** Hash and serve the same opened file, bounded to 64 KiB buffers; never reopen a checked path. */
 export async function serveReference(req:Request,path:string,sha256:string,base:Record<string,string>):Promise<Response>{
  const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW).catch(()=>{throw new Error('Reference inputs changed or unavailable. Restart review to bind current video bytes.');});
- let closed=false;const close=async()=>{if(!closed){closed=true;await file.close();}};
+ let closing:Promise<void>|undefined;const close=()=>closing??=file.close();
  try{
   const before=await file.stat();if(!before.isFile())throw new Error('Reference inputs changed: expected regular video');
   const hash=createHash('sha256'),buffer=Buffer.alloc(65536);let position=0;
