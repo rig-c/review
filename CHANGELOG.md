@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.3](https://github.com/rig-c/review/compare/v2.4.2...v2.4.3) (2026-11-08)
+
+
+### Bug Fixes
+
+* **direction:** accept Create direction v2 inspection ([3fba7ef](https://github.com/rig-c/review/commit/3fba7ef6c432d96cbd59c23f9714b3dad35f6b7b)), closes [#541](https://github.com/rig-c/review/issues/541)
+* **direction:** accept Create direction v2 inspection ([#542](https://github.com/rig-c/review/issues/542)) ([3fba7ef](https://github.com/rig-c/review/commit/3fba7ef6c432d96cbd59c23f9714b3dad35f6b7b))
+* **job:** resolve durable racing replay before revision CAS ([b3473fa](https://github.com/rig-c/review/commit/b3473fa6be3e5be88d4917f317985145a460d788)), closes [#540](https://github.com/rig-c/review/issues/540)
+* **job:** resolve durable racing replay before revision CAS ([#543](https://github.com/rig-c/review/issues/543)) ([b3473fa](https://github.com/rig-c/review/commit/b3473fa6be3e5be88d4917f317985145a460d788))
+
 ## [2.4.2](https://github.com/rig-c/review/compare/v2.4.1...v2.4.2) (2026-11-08)
 
 
