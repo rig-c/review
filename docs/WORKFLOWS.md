@@ -609,13 +609,14 @@ bound has no hardware performance guarantee. Hidden hub members suspend their ev
 
 The active Create and Parts inspection cycle uses the semantic job contract in `src/job-contract.ts` (`JOB_API_SCHEMA` set to `rig-review/job-api@2`, `JOB_ACT_SCHEMA` set to `rig-review/act@2`, [Review #484](https://github.com/rig-c/review/issues/484)) together with the implemented backend session/store (`src/job-session.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-api.ts`), loopback job front and browser window runtime (`src/job-front.ts`, `web/job-session.ts`), and `rig-review session` CLI (`src/entry.ts`, `src/job-cli.ts`). The public installed managed-host entry is `@rig-c/review/job-host` with frozen exports in [Public API stability](STABILITY.md#managed-owner-host), and Create's production publication reader and writer-owned sibling `fetch-act` readback remain pending [Create #184](https://github.com/rig-c/create/issues/184) (publishing a Create root containing `project.json` without a host `readPublished` callback refuses `JOB_SOURCE_UNRETAINABLE` with `CREATE_PUBLICATION_CONTRACT_UNAVAILABLE`). See [Live job contract](REVIEW_PACKAGE.md#live-job-contract) for the full schema and host seam reference.
 
-Exact CLI usage from `src/entry.ts` and `src/job-cli.ts` (`publish`, `ask`, `next` and `close` also accept optional `--request-id <id>`):
+CLI usage (`publish`, `ask`, `next` and `close` also accept optional `--request-id <id>`).
 
 ```text
 Usage: rig-review session open <root>
        rig-review session publish <job-url> --generation <n> --key <id> --result <relative-path> --freeze-hold <id> [--selector <JSON>] [--record <path> --record-hash <sha256>]
        rig-review session ask <job-url> --generation <n> --key <id> --publication <id> --subject <JSON>
        rig-review session next <job-url> [--after <cursor>] [--wait-ms <n>]
+       rig-review session next <job-url> [--after <cursor>] --until act --wait-ms <n>
        rig-review session close <job-url> --generation <n> --key <id> --reason <words>
 ```
 
@@ -641,6 +642,37 @@ rig-review session next http://127.0.0.1:<port>/jobs/<job-id> --wait-ms 5000
 rig-review session close http://127.0.0.1:<port>/jobs/<job-id> \
   --generation <current-generation> --key close-1 --reason "inspection complete"
 ```
+
+To wait for a finalized act from another authenticated CLI process, use one call with an explicit
+integer overall wait of 1 through 600000 ms.
+
+```text
+rig-review session next <job-url> --after <accepted-cursor> --until act --wait-ms 600000
+```
+
+`--until` accepts `act` only. Missing, zero, fractional or out-of-range opt-in waits refuse
+`JOB_REQUEST_INVALID` with exit 1 before HTTP. One monotonic deadline covers requests, response-body
+reads, decoding and validation. Existing server waits remain bounded to 30000 ms each and are chained
+inside this call, advancing through unrelated publication and ask events. Only complete responses
+validated within the deadline are accepted. Calls without `--until act` retain their existing wait,
+response and exit behavior, including immediate reads and successful timeout envelopes.
+
+Success exits 0 with the whole validated `JobApiResponse` batch containing an act. Process every row
+in `value.events`, including additional acts, before persisting `value.cursor`. Act rows expose
+`act.actId` and `act.kind`. Reads replay events without consuming them. For future acts, pass the last
+accepted cursor. An omitted `--after` starts historical replay. Resume from the last accepted cursor
+and deduplicate by `actId` after retries.
+
+On overall expiry, stderr reports CLI-local `JOB_NEXT_TIMEOUT` and exit 3. Stdout contains the last
+accepted complete response envelope, preserving its cursor and status, or stays empty if none was
+accepted. Closure before an act returns the closed response with `JOB_CLOSED` and exit 1. Authentication,
+cursor, storage and caller-cancellation failures retain exit 1.
+
+The acceptance bar includes one CLI wait spanning a real finalized UI act submitted after more than
+30 seconds. Implementation validation and that acceptance run remain pending. Standalone legacy
+file-only Save has the separate [save-notification contract](PARTS_VIEW.md#durable-save-notifications).
+Waking this act wait requires a real finalized job act. Consumers use writer-owned `fetch-act` for
+the source-bound result and deduplicate by `actId`.
 
 - **One standing window and visual gate.** Every owner visual, question, choice, correction and verdict goes through one standing Review window/link plus one what-to-look-at line. Internal agent and HQ media stay internal and are never substituted for the owner handoff. When a required visual is missing (`visual.status` set to `'unavailable'` with a named `code`), the agent stops immediately and files a Create on-path Review card rather than falling back to chat text or images.
 - **Human UI vs agent verbs.** People submit through the Review browser UI (`actor` set to `'human'`, `channel` set to `'review-ui'`). Trusted host bootstrap declares `reviewer` (`id` and `role` as `'owner'` or `'delegate'`), which the browser UI cannot type or override. This binding records bootstrap-declared provenance rather than keyboard-user authentication, and Create maps `role` to its existing `by` authority. Agents use only `publish`, `ask`, `next` and `close` (`JobAgentRequest`), with `expectedGeneration` compare-and-swap (CAS) and `idempotencyKey` on mutations.

@@ -11,7 +11,7 @@ npx rig-review parts <out>/check      # a built rig's atlas (any review package 
 ```
 
 Options: `--rig <file>` (mesh geometry), `--mesh-report <file>`, `--check <file>` (producer flags; see below), `--verdict <file>` (where the sign-off
-is written), `--painting <png>` (the original painting), `--format json|issue` (export the saved verdict), `--port <n>`. Like `review`, it serves in the foreground and exits 3 s after its last tab closes.
+is written), `--painting <png>` (the original painting), `--by <name>` (launch-only reviewer declaration), `--format json|issue` (export the saved verdict), `--port <n>`. Like `review`, it serves in the foreground and exits 3 s after its last tab closes.
 
 ## Inputs
 
@@ -94,10 +94,14 @@ The occlusion-coverage report (rig-c/parts#998) is not read yet; the footprint t
 
 ## The sign-off
 
+Standalone sign-off uses saved files. The active Create and Parts cycle uses finalized acts through the
+[standing live job workflow](WORKFLOWS.md#standing-live-job-workflow).
+
 **Approve all** marks every pending part and available mesh clean, then saves an explicit approved sign-off. It preserves notes and existing clean outcomes; any flagged part or mesh refuses with `PARTS_APPROVE_ALL_FLAGGED` before changes are made. Individual approval remains available. `tests/parts-approve-all.test.ts` exercises the page action and unchanged verdict guard; `tests/parts-approve-all-browser.ts` checks the real save and refusal flows.
 
 Each item is **pending**, **clean** or **flagged** with a note (a note is optional on clean). **Save sign-off**
-writes `parts-review.json` beside `parts.json` (atlas mode: beside the model), or to `--verdict`:
+writes `parts-review.json` beside `parts.json` (atlas mode: beside the model), or to `--verdict`.
+An unnamed save has the following `/2` shape.
 
 ```json
 {
@@ -120,7 +124,7 @@ writes `parts-review.json` beside `parts.json` (atlas mode: beside the model), o
 - `source.files` is `parts.json` and every part PNG (atlas mode: the model and every page), each path **relative to the
   verdict file's directory**, POSIX separators. A part added, removed or repainted after sign-off changes the hash.
 - `source.sha256` is the SHA-256 of the UTF-8 lines `<path>\t<sha256>\n`, one per `source.files` entry, sorted by path
-  bytewise. Consumers recompute it from the files on disk.
+  bytewise. Review revalidates inspected inputs when reading a saved verdict.
 - `source.flags` lists the producer files the flags were read from; `parts.<name>.flags` the historical producer-attribution IDs defined above, not the classified sidebar count.
 - `status`: `approved` only when every part is clean; `changes-requested` only with at least one part flagged;
   otherwise `pending`.
@@ -147,6 +151,79 @@ as `PARTS_IMAGE_OUTSIDE` / `PARTS_FILE_OUTSIDE`, and a discovered `mesh_report.j
 (`--mesh-report`, `--check`) is read where it is.
 
 Editing parts is out of scope: repairs go through the producer's source ladder, never the browser.
+
+### Reviewer name and saved-result read
+
+HQ supplies `--by` when launching owner-facing standalone parts windows.
+
+```sh
+npx rig-review parts /absolute/path/to/out/rig --by "Reviewer name"
+npx rig-review parts /absolute/path/to/out/rig --format json
+```
+
+`--by` requires a nonblank name and stores the argument verbatim, including Unicode and surrounding
+whitespace, on each explicit Save. Empty, whitespace-only, duplicate or export/correction-mode use fails
+with exit 1. The name comes from the launch declaration. Browser fields and a reader's identity provide
+no attribution authority. Opening and reading preserve the saved bytes.
+
+| Saved revision | Attribution on default CLI JSON read |
+| --- | --- |
+| Legacy `rig-review-parts-verdict/1` or `/2` | `by: null`, including an ignored historical `by` extension |
+| Named `rig-review-parts-verdict/3` | Required nonblank `by`, preserved verbatim |
+| Explicit resave from an unnamed launch | New ordinary `/2` save with `by: null` on read, clearing the earlier name |
+
+Named `/3` keeps the existing verdict fields and adds required `by`. A missing, null, non-string or
+whitespace-only `/3` name refuses `PARTS_VERDICT_INVALID`. Older executables accepting only `/1` and `/2`
+reject named `/3` with that refusal. This opt-in saved-format compatibility cost is part of the contract.
+
+Ordinary `parts <input> --format json` returns normalized `schema: "rig-review-parts-verdict/2"` with
+every existing field, including `mode`, `tool`, `source`, `status`, all per-part outcomes, notes and flags,
+available mesh outcomes and notes, `comments` and `updatedAt`. It adds root `by: string | null` and
+`savedFileSha256`, a 64-character lowercase hexadecimal SHA-256 of the exact saved bytes, including any
+final LF. Legacy reads retain their original byte digest and `/1` normalizes to empty comments.
+
+The core, recorded name and digest derive from one validated saved-file snapshot, with current source
+and producer-flag checks. `source.sha256`, `source.files` and `source.flags` retain the inspected-input
+binding. Exported comment crops retain resolved paths and hashes. Missing or stale saves refuse
+`PARTS_VERDICT_UNAVAILABLE` with exit 1 and no successful JSON result. Read, date, JSON and evidence
+failures retain their named refusals.
+
+Agents retrieve the result through this CLI using the same input options and designated `--verdict`
+when supplied. Storage layout stays internal. `savedFileSha256` identifies raw saved bytes. Create's
+separate receipt hashes the exact CLI stdout, whose normalized JSON and metadata have their own byte
+identity. The recorded reviewer name is bootstrap-declared provenance. Issue and correction exports
+retain their existing forms.
+
+### Durable save notifications
+
+Each successful standalone Save emits one UTF-8 stdout record after file and parent-directory fsync.
+The illustrative path and digest below show the framing.
+
+```text
+RIG_REVIEW_PARTS_SAVED {"verdictPath":"/absolute/path/to/parts-review.json","sha256":"0000000000000000000000000000000000000000000000000000000000000000","status":"approved","saveCount":1}
+```
+
+Match the literal `RIG_REVIEW_PARTS_SAVED ` prefix, including its ASCII space, then parse the compact
+JSON with keys `verdictPath`, `sha256`, `status`, `saveCount` in that order and one terminating LF.
+Control characters and U+2028/U+2029 are escaped within the JSON. Accept complete LF-terminated records.
+Existing startup output shares stdout. The writer awaits output completion and backpressure before
+reporting ordinary save success.
+
+`sha256` hashes the exact committed save buffer and uses 64 lowercase hex characters. `status` is
+`pending`, `approved` or `changes-requested`. Saves are serialized within one foreground process.
+`saveCount` starts at 1 and advances through 2, 3 and onward for every durable save, including identical
+saves, then restarts with a new process. The positive safe-integer counter is process-scoped.
+`verdictPath` is informational. Agents query the CLI above for the validated result. A later save can
+give that read a different digest.
+
+A failed durable write emits zero save events and leaves the counter unadvanced, with named
+`PARTS_VERDICT_WRITE_FAILED` or the existing validation refusal. Pre-replacement failure preserves the
+previous file. Post-replacement durability failure can leave visible bytes requiring CLI readback.
+Stdout failure after commit, including EPIPE, reports `PARTS_VERDICT_NOTIFY_FAILED` and exit 1 while
+preserving the committed file and allocated count. Recovery uses CLI readback. Automatic save or
+notification replay is disabled. A crash between commit and delivery can lose the event. The guarantee
+covers an emission attempt after each durable commit while the process and stream remain available.
+Crash-proof exactly-once delivery requires an additional acknowledgment/replay protocol.
 
 ## Mesh geometry
 
