@@ -1135,3 +1135,71 @@ test('scene interview warnings and historical issues render in EN/KO while origi
   else delete (globalThis as {document?: Document}).document;
  }
 });
+
+test('parts save provenance and notification refusals translate in EN/KO while preserving dynamic filesystem operation/code details and reviewer words', () => {
+ const preference = getLanguagePreference();
+ try {
+  const staticMessages = [
+   'PARTS_VERDICT_INVALID: reviewer name must be nonblank',
+   'PARTS_VERDICT_INVALID: saved reviewer name must be nonblank',
+   'PARTS_VERDICT_WRITE_FAILED: server is closing',
+   'PARTS_VERDICT_WRITE_FAILED: save count exhausted',
+   'PARTS_VERDICT_NOTIFY_FAILED: durable save notification failed',
+   'PARTS_VERDICT_NOTIFY_FAILED: stdout failed',
+   '--by: expected a nonblank reviewer name',
+   '--by: launch only; incompatible with export or correction options',
+  ] as const;
+
+  for (const enMessage of staticMessages) {
+   expect(enCatalog[enMessage]).toBe(enMessage);
+   const koMessage = koCatalog[enMessage];
+   expect(typeof koMessage).toBe('string');
+   expect(koMessage).not.toBe(enMessage);
+   expect(koMessage).toMatch(/[가-힣]/);
+   const prefix = enMessage.split(':')[0]! + ': ';
+   expect(koMessage!.startsWith(prefix)).toBe(true);
+   expect(tr(enMessage, 'ko')).toBe(koMessage!);
+   expect(tr(koMessage!, 'en')).toBe(enMessage);
+  }
+
+  const operations = ['mkdir', 'write/fsync', 'rename', 'directory fsync', 'temporary cleanup'] as const;
+  const codes = ['ENOSPC', 'EACCES', 'EPERM', 'IO'] as const;
+  for (const operation of operations) {
+   for (const code of codes) {
+    const enDynamic = `PARTS_VERDICT_WRITE_FAILED: ${operation} (${code})`;
+    const koDynamic = tr(enDynamic, 'ko');
+    expect(koDynamic).toStartWith('PARTS_VERDICT_WRITE_FAILED: ');
+    expect(koDynamic).toMatch(/[가-힣]/);
+    expect(koDynamic).toContain(`${operation} (${code})`);
+    expect(tr(koDynamic, 'en')).toBe(enDynamic);
+   }
+  }
+
+  const {doc, root} = makeTestDoc();
+  const statusEl = doc.createElement('span');
+  statusEl.id = 'pv-save-status';
+  statusEl.textContent = 'PARTS_VERDICT_WRITE_FAILED: directory fsync (ENOSPC)';
+  const reviewerNoteInput = doc.createElement('textarea');
+  reviewerNoteInput.id = 'pv-note';
+  reviewerNoteInput.value = 'Alice Kim: keep 2 px bleed around hair_front';
+  root.append(statusEl, reviewerNoteInput);
+
+  setLanguagePreference('ko');
+  const plantedCheck = checkKoreanDomI18n(doc as unknown as Document);
+  expect(plantedCheck.ok).toBe(false);
+  expect(plantedCheck.violations.some((v: {text: string}) => v.text.includes('PARTS_VERDICT_WRITE_FAILED: directory fsync (ENOSPC)'))).toBe(true);
+
+  applyDomI18n(doc as unknown as Document);
+  expect(statusEl.textContent).toBe(tr('PARTS_VERDICT_WRITE_FAILED: directory fsync (ENOSPC)', 'ko'));
+  expect(statusEl.textContent).toContain('directory fsync (ENOSPC)');
+  expect(reviewerNoteInput.value).toBe('Alice Kim: keep 2 px bleed around hair_front');
+  expect(checkKoreanDomI18n(doc as unknown as Document)).toEqual({ok: true, violations: []});
+
+  setLanguagePreference('en');
+  applyDomI18n(doc as unknown as Document);
+  expect(statusEl.textContent).toBe('PARTS_VERDICT_WRITE_FAILED: directory fsync (ENOSPC)');
+  expect(reviewerNoteInput.value).toBe('Alice Kim: keep 2 px bleed around hair_front');
+ } finally {
+  setLanguagePreference(preference);
+ }
+});

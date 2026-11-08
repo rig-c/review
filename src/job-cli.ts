@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeSync} from 'node:fs';
 import {join} from 'node:path';
-import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, jobRawActMediaType, jobStillByteLimit,
-  type JobAct, type JobAgentRequest } from './job-contract.ts';
-import { assertJobApiSchema, jobFailure, jobHash, jobId, jobObject, parseJobRequest } from './job-api.ts';
+import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, jobRawActMediaType, jobStillByteLimit,
+  type JobAct, type JobAgentRequest, type JobNextRequest, type JobNextValue } from './job-contract.ts';
+import { assertJobApiSchema, jobFailure, jobHash, jobId, jobInteger, jobObject, jobWaitLimitMs, parseJobRequest } from './job-api.ts';
 import { JobError } from './job-store.ts';
 import {validatePngBytes} from './comment-crops.ts';
 import {destinationDirectory} from './destination-directory.ts';
@@ -29,7 +29,7 @@ const commonFlags = ['generation', 'key', 'request-id'];
 const verbFlags: Record<string, readonly string[]> = {
   publish: [...commonFlags, 'result', 'selector', 'freeze-hold', 'record', 'record-hash'],
   ask: [...commonFlags, 'publication', 'subject'],
-  next: ['after', 'wait-ms', 'request-id'],
+  next: ['after', 'wait-ms', 'request-id', 'until'],
   close: [...commonFlags, 'reason'],
 };
 
@@ -59,15 +59,24 @@ function semanticJSON(value: string): unknown {
 /** Public semantic request construction only. There is no act-writing or
  * consumer-fetch verb, no internal JSON input file and no Review state access.
  */
-export function parseJobCLI(args: readonly string[]): { readonly endpoint: string; readonly request: JobAgentRequest } {
+export function parseJobCLI(args: readonly string[]): { readonly endpoint: string; readonly request: JobAgentRequest; readonly waitUntilActMs?: number } {
   const [verb, locator, ...rest] = args;
   if (!verbFlags[verb]) throw new JobError('JOB_REQUEST_INVALID');
   const {url, job} = jobLocator(locator);
   const values = flags(rest, verbFlags[verb]);
   const base = { schema: JOB_API_SCHEMA, verb, jobId: job, requestId: values.get('request-id') ?? randomUUID() };
   let payload: unknown;
+  let waitUntilActMs: number | undefined;
   if (verb === 'next') {
-    payload = { ...base, after: values.get('after') ?? null, waitMs: Number(values.get('wait-ms') ?? '0') };
+    let waitMs = Number(values.get('wait-ms') ?? '0');
+    if (values.has('until')) {
+      if (values.get('until') !== 'act' || !Number.isSafeInteger(waitMs) || waitMs < 1 || waitMs > 600_000) {
+        throw new JobError('JOB_REQUEST_INVALID');
+      }
+      waitUntilActMs = waitMs;
+      waitMs = Math.min(waitMs, jobWaitLimitMs);
+    }
+    payload = { ...base, after: values.get('after') ?? null, waitMs };
   } else {
     const mutation = { ...base, expectedGeneration: Number(required(values, 'generation')), idempotencyKey: required(values, 'key') };
     switch (verb) {
@@ -89,7 +98,7 @@ export function parseJobCLI(args: readonly string[]): { readonly endpoint: strin
   }
   const request = parseJobRequest(payload);
   if (request.verb === 'fetch-act') throw new JobError('JOB_AUTHORITY_REFUSED');
-  return { endpoint: `${url.origin}/jobs/${job}/api`, request };
+  return { endpoint: `${url.origin}/jobs/${job}/api`, request, ...(waitUntilActMs === undefined ? {} : {waitUntilActMs}) };
 }
 
 function jobLocator(locator: string): {url: URL; job: string} {
@@ -308,6 +317,157 @@ async function fetchActCommand(args: readonly string[], options: JobCLIOptions):
   outputConsumerAct(bytes, png, act, destination, options);
 }
 
+async function readJobResponse(response: Response, interrupted?: Promise<never>): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new JobError('JOB_REQUEST_INVALID');
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await (interrupted ? Promise.race([reader.read(), interrupted]) : reader.read());
+      if (done) break;
+      size += value.byteLength;
+      if (size > 1024 * 1024) {
+        try { void reader.cancel().catch(() => {}); } catch {}
+        throw new JobError('JOB_BODY_LIMIT');
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (interrupted) {
+      try { void reader.cancel().catch(() => {}); } catch {}
+    }
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  let value: unknown;
+  try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, size))); }
+  catch { throw new JobError('JOB_REQUEST_INVALID'); }
+  assertJobApiSchema(value !== null && typeof value === 'object' ? (value as { schema?: unknown }).schema : undefined);
+  return value;
+}
+
+/** Check the complete existing next batch before accepting its read cursor. */
+function nextValue(value: unknown, request: JobNextRequest): JobNextValue {
+  const result = jobObject(value, ['schema', 'verb', 'jobId', 'requestId', 'generation', 'ok', 'value']);
+  if (result.ok !== true || result.verb !== 'next' || result.jobId !== request.jobId) throw new JobError('JOB_REQUEST_INVALID');
+  jobInteger(result.generation);
+  const batch = jobObject(result.value, ['capabilities', 'events', 'cursor', 'status']);
+  if (!Array.isArray(batch.events) || !['events', 'timeout', 'closed'].includes(batch.status as string)) throw new JobError('JOB_REQUEST_INVALID');
+  if (batch.cursor !== null) jobId(batch.cursor);
+  for (const raw of batch.events) {
+    const event = jobObject(raw, ['cursor', 'jobId', 'generation', 'type', 'publication', 'ask', 'act', 'reason']);
+    jobId(event.cursor);
+    jobInteger(event.generation);
+    if (event.jobId !== request.jobId) throw new JobError('JOB_REQUEST_INVALID');
+    switch (event.type) {
+      case 'act': {
+        const actId = jobId((event.act as {actId?: unknown} | null)?.actId);
+        const act = parseConsumerAct(Buffer.from(JSON.stringify(event.act)), request.jobId, actId);
+        if (!(JOB_ENABLED_ACT_KINDS as readonly string[]).includes(act.kind)) throw new JobError('JOB_ACT_INVALID');
+        break;
+      }
+      case 'published':
+      case 'pending': {
+        const payload = event.type === 'published' ? event.publication : event.ask;
+        if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) throw new JobError('JOB_REQUEST_INVALID');
+        break;
+      }
+      case 'closed':
+        if (typeof event.reason !== 'string') throw new JobError('JOB_REQUEST_INVALID');
+        break;
+      default: throw new JobError('JOB_REQUEST_INVALID');
+    }
+  }
+  const last = batch.events.at(-1);
+  if (batch.cursor !== (last?.cursor ?? request.after) || (batch.status === 'events') !== (batch.events.length > 0)) {
+    throw new JobError('JOB_REQUEST_INVALID');
+  }
+  return batch as unknown as JobNextValue;
+}
+
+async function waitForAct(endpoint: string, initial: JobNextRequest, waitMs: number, capability: string,
+  write: (text: string) => void, options: JobCLIOptions): Promise<void> {
+  const controller = new AbortController();
+  const timeout = new Error('JOB_NEXT_TIMEOUT');
+  const cancel = () => controller.abort(options.signal?.reason);
+  options.signal?.addEventListener('abort', cancel, {once: true});
+  if (options.signal?.aborted) cancel();
+  const deadline = performance.now() + waitMs;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expire = () => {
+    if (controller.signal.aborted) return;
+    const budget = deadline - performance.now();
+    if (budget <= 0) controller.abort(timeout);
+    else timer = setTimeout(expire, Math.ceil(budget));
+  };
+  timer = setTimeout(expire, waitMs);
+  const interrupted = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener('abort', () => reject(controller.signal.reason), {once: true});
+    if (controller.signal.aborted) reject(controller.signal.reason);
+  });
+  // Pre-cancellation can reject before the first network race is installed.
+  void interrupted.catch(() => {});
+  function remaining(): number {
+    const budget = deadline - performance.now();
+    if (!controller.signal.aborted && budget <= 0) controller.abort(timeout);
+    controller.signal.throwIfAborted();
+    return budget;
+  }
+  let after = initial.after;
+  let lastResponse: unknown;
+  try {
+    for (;;) {
+      const budget = remaining();
+      const request = {...initial, after, waitMs: Math.max(0, Math.floor(Math.min(budget, jobWaitLimitMs)))};
+      // A delayed transport must also dispose its body if cancellation won the race.
+      const pending = (options.fetch ?? fetch)(endpoint, {
+        method: 'POST', redirect: 'error', signal: controller.signal,
+        headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + capability},
+        body: JSON.stringify(request),
+      }).then(response => {
+        if (controller.signal.aborted) {
+          try { void response.body?.cancel().catch(() => {}); } catch {}
+          controller.signal.throwIfAborted();
+        }
+        return response;
+      });
+      const response = await Promise.race([pending, interrupted]);
+      const value = await readJobResponse(response, interrupted);
+      remaining();
+      if (!response.ok || (value as {ok?: unknown}).ok === false) {
+        write(JSON.stringify(value));
+        process.exitCode = 1;
+        return;
+      }
+      const batch = nextValue(value, request);
+      remaining();
+      if (batch.events.some(event => event.type === 'act')) {
+        write(JSON.stringify(value));
+        return;
+      }
+      if (batch.status === 'closed' || batch.events.some(event => event.type === 'closed')) {
+        write(JSON.stringify(value));
+        console.error('JOB_CLOSED');
+        process.exitCode = 1;
+        return;
+      }
+      lastResponse = value;
+      after = batch.cursor;
+    }
+  } catch (error) {
+    if (!controller.signal.aborted && performance.now() >= deadline) controller.abort(timeout);
+    if (controller.signal.reason !== timeout) throw error;
+    if (lastResponse !== undefined) write(JSON.stringify(lastResponse));
+    console.error('JOB_NEXT_TIMEOUT');
+    process.exitCode = 3;
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', cancel);
+  }
+}
+
 export async function jobCommand(args: readonly string[], options: JobCLIOptions = {}): Promise<void> {
   if (args[0] === 'fetch-act') return fetchActCommand(args, options);
   const write = options.write ?? (text => console.log(text));
@@ -319,33 +479,15 @@ export async function jobCommand(args: readonly string[], options: JobCLIOptions
   const input = parseJobCLI(args);
   const capability = options.agentCapability ?? process.env.RIG_REVIEW_JOB_AGENT_CAPABILITY;
   if (!capability) throw new JobError('JOB_CAPABILITY_REQUIRED');
+  if (input.waitUntilActMs !== undefined && input.request.verb === 'next') {
+    return waitForAct(input.endpoint, input.request, input.waitUntilActMs, capability, write, options);
+  }
   const response = await (options.fetch ?? fetch)(input.endpoint, {
     method: 'POST', redirect: 'error', signal: options.signal,
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + capability },
     body: JSON.stringify(input.request),
   });
-  const reader = response.body?.getReader();
-  if (!reader) throw new JobError('JOB_REQUEST_INVALID');
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > 1024 * 1024) {
-        try { void reader.cancel().catch(() => {}); } catch {}
-        throw new JobError('JOB_BODY_LIMIT');
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  let value: unknown;
-  try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, size))); }
-  catch { throw new JobError('JOB_REQUEST_INVALID'); }
-  assertJobApiSchema(value !== null && typeof value === 'object' ? (value as { schema?: unknown }).schema : undefined);
+  const value = await readJobResponse(response);
   write(JSON.stringify(value));
   if (!response.ok) process.exitCode = 1;
 }

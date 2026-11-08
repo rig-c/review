@@ -6,7 +6,7 @@ import { accessGate } from './open-protocol.ts';
 import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
 import {serveReference} from './reference.ts';
-import { partsDifference, partsViewJson, exportPartsVerdict, assertPartsUnchanged, readVerdict, saveVerdict, servedImage, type PartsViewPackage } from './parts-view.ts';
+import { partsDifference, partsViewJson, exportPartsVerdict, assertPartsUnchanged, readVerdict, saveVerdictWithReceipt, servedImage, type PartsViewPackage, type PartsSaveReceipt } from './parts-view.ts';
 
 const headers = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers });
@@ -36,13 +36,47 @@ async function bodyJson(req: Request): Promise<unknown> {
   return JSON.parse(new TextDecoder().decode(body));
 }
 
-export interface PartsServerOptions { port?: number; capability?: string; exitOnClose?: boolean; graceMs?: number; unopenedTimeoutMs?: number; onClose?: (info: LiveExitInfo) => void | Promise<void>; log?: (line: string) => void }
+export interface PartsSavedEvent extends PartsSaveReceipt { saveCount: number }
+export interface PartsServerOptions {
+  port?: number; capability?: string; exitOnClose?: boolean; graceMs?: number; unopenedTimeoutMs?: number;
+  onClose?: (info: LiveExitInfo) => void | Promise<void>; log?: (line: string) => void;
+  by?: string;
+  onSaved?: (event: PartsSavedEvent) => Promise<void>;
+  onNotifyFailure?: (error: Error) => void;
+  onWriteFailure?: (error: Error) => void;
+}
 
 export async function startPartsServer(pkg: PartsViewPackage, options: PartsServerOptions = {}) {
+  const by = options.by;
+  if (by !== undefined && (typeof by !== 'string' || !by.trim())) throw new Error('PARTS_VERDICT_INVALID: reviewer name must be nonblank');
   const bundle = await buildWeb('parts');
   let rawStop: ((closeActiveConnections?: boolean) => void) | null = null;
-  let saving = false;
-  const live = createLiveLifecycle({ label: 'review parts', graceMs: options.graceMs, unopenedTimeoutMs: options.unopenedTimeoutMs, exitOnClose: options.exitOnClose, onClose: options.onClose, log: options.log, busy: () => saving, stopServer: () => { rawStop?.(true); } });
+  let pendingSaves = 0, saveCount = 0;
+  let saveQueue: Promise<void> = Promise.resolve();
+  let closing = false;
+  let notifyFailure: Error | null = null;
+  const live = createLiveLifecycle({ label: 'review parts', graceMs: options.graceMs, unopenedTimeoutMs: options.unopenedTimeoutMs, exitOnClose: options.exitOnClose, onClose: options.onClose, log: options.log, busy: () => pendingSaves > 0, stopServer: () => { rawStop?.(true); } });
+  const save = (req: Request) => {
+    if (closing) throw new Error('PARTS_VERDICT_WRITE_FAILED: server is closing');
+    pendingSaves++;
+    const result = saveQueue.then(async () => {
+      if (notifyFailure) throw notifyFailure;
+      if (saveCount === Number.MAX_SAFE_INTEGER) throw new Error('PARTS_VERDICT_WRITE_FAILED: save count exhausted');
+      const {verdict, receipt} = await saveVerdictWithReceipt(pkg, await bodyJson(req), undefined, by);
+      const event = {...receipt, saveCount: ++saveCount};
+      try { await options.onSaved?.(event); }
+      catch (error) {
+        notifyFailure = new Error('PARTS_VERDICT_NOTIFY_FAILED: durable save notification failed', {cause: error});
+        options.onNotifyFailure?.(notifyFailure);
+        throw notifyFailure;
+      }
+      return verdict;
+    });
+    saveQueue = result.then(() => {}, error => {
+      if (error instanceof Error && error.message.startsWith('PARTS_VERDICT_WRITE_FAILED:')) options.onWriteFailure?.(error);
+    }).finally(() => { pendingSaves--; });
+    return result;
+  };
   const handle = async (req: Request, port: number | undefined, srv: UpgradableServer): Promise<Response | undefined> => {
     try {
       const url = new URL(req.url), origin = `http://127.0.0.1:${port}`;
@@ -60,8 +94,7 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
         if(url.pathname==='/api/parts/export'&&req.method==='GET'){await assertPartsUnchanged(pkg);const saved=await readVerdict(pkg);if(!saved.verdict)return json({error:'PARTS_VERDICT_UNAVAILABLE: save a verdict first'},409);return new Response(exportPartsVerdict(saved.verdict,url.searchParams.get('format')==='issue'?'issue':'json'),{headers:{...headers,'Content-Type':url.searchParams.get('format')==='issue'?'text/markdown':'application/json'}});}
         if (url.pathname === '/api/parts/verdict' && req.method === 'POST') {
           if (req.headers.get('origin') !== origin) return json({ error: 'Same-origin Origin required' }, 403);
-          saving = true;
-          try { return json({ verdict: await saveVerdict(pkg, await bodyJson(req)) }); } finally { saving = false; }
+          return json({ verdict: await save(req) });
         }
         if(url.pathname==='/api/parts/painting'&&req.method==='GET'){if(!pkg.painting)return json({error:'PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting'},404);return serveReference(req,pkg.painting.abs,pkg.painting.sha256,headers);}
         const difference=/^\/api\/parts\/difference\/(\d+)$/.exec(url.pathname);
@@ -92,5 +125,11 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
   const server = Bun.serve({ hostname: '127.0.0.1', port: options.port ?? 4317, websocket: live.websocket, async fetch(req, srv) { const res = await handle(req, srv.port, srv); return res as Response; } });
   rawStop = server.stop.bind(server);
   server.stop = ((closeActiveConnections?: boolean) => { live.stop(); return rawStop!(closeActiveConnections); }) as typeof server.stop;
-  return Object.assign(server, { live });
+  const shutdown = async () => {
+    closing = true;
+    await saveQueue;
+    live.stop();
+    await server.stop(false);
+  };
+  return Object.assign(server, { live, shutdown });
 }
