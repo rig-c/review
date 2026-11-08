@@ -39,11 +39,12 @@ import { candidateRow, DENSITY_STRIP_SCHEMA, DensityStripError, stripLabels, str
 import { samplesClock } from './frame-clock.ts';
 import { cleanArgs, mapText, motionSummary, parseRetargetRequest, retargetArgs, retargetLines, retargetRecord, retargetRecordText, RetargetError, type MotionSummary, type RetargetLine, type RetargetRecord } from './retarget.ts';
 import { assertStateOutside as assertStateDirOutside } from './state-dir.ts';
+import type { JoinedProject } from './joined-project.ts';
 
 export const REBUILD_SCHEMA = 'rig-review-rebuild/1';
 const MAX_REGIONS = CHEST_REGIONS_MAX, MAX_POINTS = 256, MAX_LINES = 4000, GRID = 256;
 
-export interface ProducerInputs { config: string; parts: string; rig: string; configText: string; configHash: string; handoff: HandoffRecord; requirements?: { source: string; sha256: string } }
+export interface ProducerInputs { config: string; parts: string; rig: string; configText: string; configHash: string; handoff: HandoffRecord | null; requirements?: { source: string; sha256: string } }
 const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
 /** Without any handoff, Apply refuses by this name and says which flag declares one. */
@@ -83,6 +84,135 @@ export async function producerInputs(handoff: Handoff | null, reason: string | n
     requirements = { source, sha256: binding.sha256 };
   }
   return { config: handoff.config, parts: handoff.parts!, rig: handoff.rig!, configText, configHash, handoff: handoff.record, ...(requirements ? { requirements } : {}) };
+}
+
+export interface DraftRebuildOption {
+  root: string;
+  draftId?: string;
+  source: NonNullable<JoinedProject['draft']>;
+  assertCurrent?: () => Promise<void>;
+}
+
+export function draftRebuildOption(joined?: JoinedProject): DraftRebuildOption | undefined {
+  if (!joined?.draft) return undefined;
+  return { root: joined.opened.root, draftId: joined.designation.draftId, source: joined.draft, assertCurrent: joined.assertCurrent };
+}
+
+async function checkDraftRef(root: string, entry: { path: string; sha256: string }): Promise<{ abs: string; bytes: Buffer }> {
+  if (!entry || typeof entry.path !== 'string' || !entry.path || isAbsolute(entry.path) || entry.path.split('/').some(seg => !seg || seg === '.' || seg === '..') || typeof entry.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.sha256)) {
+    throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', `${String(entry?.path ?? '')} is not a canonical project-relative SetRef`);
+  }
+  const lexical = resolve(root, entry.path);
+  let st: import('node:fs').Stats;
+  try {
+    st = await lstat(lexical);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new RebuildError('REBUILD_INPUTS_CHANGED', `${entry.path} is missing since the review was opened; restart review`);
+    }
+    throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', `${entry.path} is not readable`);
+  }
+  if (!st.isFile()) throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', `${entry.path} is not a regular file`);
+  let real: string;
+  try {
+    real = await safeFile(root, entry.path);
+  } catch {
+    throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', `${entry.path} escapes the project root`);
+  }
+  if (real !== lexical) throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', `${entry.path} resolves through a symlink`);
+  const bytes = await readFile(real);
+  if (sha256(bytes) !== entry.sha256) {
+    throw new RebuildError('REBUILD_INPUTS_CHANGED', `${entry.path} changed since the review was opened; restart review`);
+  }
+  return { abs: real, bytes };
+}
+
+/**
+ * #562C: recorded Create Stage 1 draft adapter (`project.json` `drafts[]`). Validates in CP1 order (`config` ->
+ * `config_inputs` -> `parts.files` -> `files`) with project-root containment and separate `parts` vs `rig` directories.
+ */
+export async function draftProducerInputs(draft: DraftRebuildOption, requireEditable = true): Promise<ProducerInputs> {
+  if (requireEditable && !draft.source.editable) {
+    throw new RebuildError('PARTS_VERDICT_READ_ONLY', 'Stage 1 draft is inspection-only');
+  }
+  const record = draft.source.record;
+  if (draft.draftId !== undefined && draft.draftId !== record.id) {
+    throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', `draft id ${draft.draftId} does not match ${record.id}`);
+  }
+  let root: string;
+  try {
+    root = await realpath(draft.root);
+    if (root !== resolve(draft.root)) throw new Error('redirected');
+  } catch {
+    throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', 'project root is missing or redirected');
+  }
+  const cfg = await checkDraftRef(root, record.config);
+  const configText = cfg.bytes.toString('utf8'), configHash = record.config.sha256;
+  let configDoc: unknown;
+  try { configDoc = JSON.parse(configText); } catch { /* the producer diagnoses invalid JSON */ }
+  const configInputs = record.config_inputs ?? [];
+  let requirements: ProducerInputs['requirements'];
+  for (const keys of CONFIG_NAMED_FILES) {
+    const value = namedFile(configDoc, keys);
+    if (keys.length === 3 && (CONFIG_SKELETON_NAMES as readonly unknown[]).includes(value)) continue;
+    if (typeof value !== 'string' || !value) continue;
+    const isReq = keys.length === 1 && keys[0] === 'requirements';
+    if (isAbsolute(value)) {
+      throw new RebuildError(isReq ? 'REBUILD_REQUIREMENTS_UNAVAILABLE' : 'INTERVIEW_SOURCE_MISMATCH', `config.${keys.join('.')} must be relative to the config directory`);
+    }
+    const lexical = resolve(dirname(cfg.abs), value);
+    const rel = relative(root, lexical).split(sep).join('/');
+    let source: string;
+    try {
+      const st = await lstat(lexical);
+      if (!st.isFile()) throw new Error('not a regular file');
+      source = await safeFile(root, rel);
+      if (source !== lexical) throw new Error('redirected');
+    } catch {
+      throw new RebuildError(isReq ? 'REBUILD_REQUIREMENTS_UNAVAILABLE' : 'INTERVIEW_SOURCE_MISMATCH', `config.${keys.join('.')} is missing or outside the bound project`);
+    }
+    const binding = configInputs.find(file => file.path === rel);
+    if (!binding) {
+      throw new RebuildError(isReq ? 'REBUILD_REQUIREMENTS_UNAVAILABLE' : 'INTERVIEW_SOURCE_MISMATCH', `config.${keys.join('.')} has no bound draft config_inputs hash`);
+    }
+    if (isReq) requirements = { source, sha256: binding.sha256 };
+  }
+  for (const entry of configInputs) await checkDraftRef(root, entry);
+  for (const entry of record.parts.files) await checkDraftRef(root, entry);
+  for (const entry of record.files) await checkDraftRef(root, entry);
+  const rigDir = dirname(draft.source.rig);
+  try {
+    const realParts = await realpath(draft.source.parts);
+    const realRig = await realpath(rigDir);
+    if (realParts !== resolve(draft.source.parts) || realRig !== resolve(rigDir)) throw new Error('redirected');
+    const relParts = relative(root, realParts).split(sep).join('/');
+    const relRig = relative(root, realRig).split(sep).join('/');
+    if (!relParts || relParts.startsWith('..') || isAbsolute(relParts) || !relRig || relRig.startsWith('..') || isAbsolute(relRig)) {
+      throw new Error('outside root');
+    }
+  } catch {
+    throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', 'draft parts or rig directory is missing or outside the project root');
+  }
+  if (draft.assertCurrent) {
+    try {
+      await draft.assertCurrent();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith('INTERVIEW_OPTIONS_STALE:')) {
+        throw new RebuildError('REBUILD_INPUTS_CHANGED', msg.slice('INTERVIEW_OPTIONS_STALE: '.length));
+      }
+      throw e;
+    }
+  }
+  return {
+    config: cfg.abs,
+    parts: draft.source.parts,
+    rig: rigDir,
+    configText,
+    configHash,
+    handoff: null,
+    ...(requirements ? { requirements } : {}),
+  };
 }
 /**
  * #305: fast producer handoff readiness check for `open` (`handoffGap`, `producerInputs`, `resolveProducer`,
@@ -556,6 +686,8 @@ export interface RebuildOptions {
   stripPrefix?: string;
   /** #305: viewer-only mode (`--view-only`); when there is no handoff, reports neutral view-only status instead of `MODELING_*`. */
   viewOnly?: boolean;
+  /** #562C: recorded Create Stage 1 draft (`project.json` `drafts[]`). */
+  draft?: DraftRebuildOption;
 }
 /** #173: a density strip's scratch — one folder per package, holding at most the one strip on screen. */
 export const stripRoot = (stateDir: string, sourceHash: string) => join(stateDir, 'density-strip', sourceHash);
@@ -770,16 +902,40 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   let restoring: { id: string; files: Record<string, string> } | null = null;
   const snapshot = <J extends RebuildJob | PatchJob | DeltaJob | RetargetJob | AnimationJob>(job: J): J => ({ ...job, lines: [...job.lines] });
 
-  /** The state directory may not sit inside the package or the handoff's root (the parent of an opened out/). */
+  /** The state directory may not sit inside the package, the handoff's root, or a designated Create project root. */
   function assertStateOutside(): void {
-    assertStateDirOutside(options.stateDir, p, (message, code) => new RebuildError(code ?? 'REBUILD_STATE_INSIDE_PACKAGE', message));
+    const make = (message: string, code?: 'STATE_DIRECTORY_INVALID') => new RebuildError(code ?? 'REBUILD_STATE_INSIDE_PACKAGE', message);
+    assertStateDirOutside(options.stateDir, p, make);
+    if (options.draft) {
+      assertStateDirOutside(options.stateDir, { root: options.draft.root }, make);
+    }
+  }
+  async function activeProducerInputs(requireEditable = true): Promise<ProducerInputs> {
+    if (options.draft) {
+      if (requireEditable && (options.viewOnly ?? p.viewOnly)) {
+        throw new RebuildError('PARTS_VERDICT_READ_ONLY', 'Stage 1 draft is inspection-only');
+      }
+      const inputs = await draftProducerInputs(options.draft, requireEditable);
+      try {
+        await options.unchanged();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.startsWith('INTERVIEW_OPTIONS_STALE:')) {
+          throw new RebuildError('REBUILD_INPUTS_CHANGED', msg.slice('INTERVIEW_OPTIONS_STALE: '.length));
+        }
+        throw e;
+      }
+      return inputs;
+    }
+    await options.unchanged();
+    return producerInputs(p.handoff, p.handoffReason);
   }
   /** Once per session: the first time the handoff and the producer both resolve, the baseline starts (or is reused). */
   let baseline: BaselineResult | null = null, baselineRun: Promise<BaselineResult> | null = null;
   /** #108 (HQ): the inspected build's check, started once the baseline reproduces; stored beside the baseline record. */
   let inspectedCheck: InspectedCheck | null = null, inspectedCheckRun: Promise<InspectedCheck> | null = null;
   function ensureBaseline(resolved: ReturnType<typeof resolveProducer>): BaselineResult | null {
-    if (baselineRun || !p.handoff || !resolved.ok) return baseline;
+    if (options.draft || baselineRun || !p.handoff || !resolved.ok) return baseline;
     try { assertStateOutside(); } catch { return null; }
     const handoff = p.handoff, key = baselineKey(p.sourceHash, handoff, resolved.producer, resolved.compiler), rig = handoff.rig ?? p.root;
     const show = (rel: string) => relative(p.root, join(rig, rel)).split(sep).join('/');
@@ -804,6 +960,74 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
 
   /** `GET /api/rebuild`: whether Apply can run here, the handoff and its baseline, and what the config holds (so the editor can start from it). */
   async function describe() {
+    if (options.draft) {
+      const d = options.draft.source, rec = d.record;
+      const viewOnly = Boolean(options.viewOnly ?? p.viewOnly);
+      const editable = d.editable && !viewOnly;
+      const inputs = await activeProducerInputs(false);
+      const resolved = resolveProducer(options.starts);
+      const parts = contourParts(inputs.configText).map(({ name, regions }) => ({ name, regions }));
+      const contour = Object.fromEntries(contourParts(inputs.configText).map(({ name, entry }) => [name, entry]));
+      const rigRel = relative(options.draft.root, dirname(d.rig)).split(sep).join('/');
+      const reason = !editable
+        ? 'PARTS_VERDICT_READ_ONLY: Stage 1 draft is inspection-only'
+        : !resolved.ok
+          ? resolved.error
+          : parts.length
+            ? null
+            : 'REBUILD_INPUTS_UNAVAILABLE: the config states no contour mesh';
+      return {
+        schema: 'rig-review-rebuild-status/1',
+        available: editable && resolved.ok && parts.length > 0,
+        ...(viewOnly ? { viewOnly: true } : {}),
+        handoff: null,
+        draft: {
+          id: rec.id,
+          kind: rec.kind,
+          at: rec.at,
+          producer: { name: rec.producer.name, version: rec.producer.version },
+          editable,
+          config: rec.config,
+          ...(rec.config_inputs ? { config_inputs: rec.config_inputs } : {}),
+          parts: rec.parts,
+          files: rec.files,
+        },
+        inputs: { config: rec.config.path, parts: rec.parts.path, rig: rigRel, configHash: inputs.configHash },
+        baseline: null,
+        inspectedCheck: null,
+        parts,
+        contour,
+        meshes: configMeshes(inputs.configText),
+        constraints: null,
+        bones: configBonesList(inputs.configText),
+        fields: null,
+        cuts: null,
+        idle: null,
+        cloth: null,
+        producer: resolved.ok ? tool(resolved.producer) : null,
+        compiler: resolved.ok ? tool(resolved.compiler) : null,
+        retarget: {
+          available: false,
+          reason: 'STAGE_DRAFT_OPERATION: only applied mesh corrections belong to this inspection',
+          producer: null,
+          compiler: null,
+          rig: rigRel,
+          sequences: [],
+          bones: [],
+          animations: [],
+        },
+        animations: {
+          available: false,
+          reason: 'STAGE_DRAFT_OPERATION: only applied mesh corrections belong to this inspection',
+          path: null,
+          sha256: null,
+          text: null,
+          easings: null,
+        },
+        reason,
+        running,
+      };
+    }
     await options.unchanged();
     const handoff = p.handoff, gap = handoff ? handoffGap(handoff) : null;
     const viewOnly = Boolean((options.viewOnly ?? p.viewOnly) && !handoff);
@@ -890,7 +1114,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       };
     }
     const showFrom = relative(await realpath(p.root), absFrom).split(sep).join('/') || '.';
-    const handoffFile = inputs.handoff.files.find(f => f.path === showFrom);
+    const handoffFile = inputs.handoff!.files.find(f => f.path === showFrom);
     if (!handoffFile) {
       return {
         available: false,
@@ -939,19 +1163,43 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   }
   /** Stage 1 can read only the revision explicitly drawn by the page, never a pending candidate. */
   async function stageDraft(id: string) {
-    await options.unchanged();
-    const current = latest();
-    if (!current || current.id !== id || busy()) throw new RebuildError('STAGE_DRAFT_STALE', 'the requested scratch build is not the settled applied revision');
+    const assertSource = async () => {
+      await options.unchanged();
+      if (options.draft) {
+        if (options.viewOnly ?? p.viewOnly) throw new RebuildError('STAGE_DRAFT_UNAVAILABLE', 'Stage 1 draft is inspection-only');
+        await draftProducerInputs(options.draft, true);
+      }
+    };
+    const assertCurrentSelection = () => {
+      const active = latest();
+      if (!active || active.id !== id || busy()) throw new RebuildError('STAGE_DRAFT_STALE', 'the requested scratch build is not the settled applied revision');
+      return active;
+    };
+    await assertSource();
+    const current = assertCurrentSelection();
     const job = jobs.get(id)!;
-    if (!job.stageInputHash || await stageInputDigest(rebuildDir(options.stateDir,p.sourceHash,id),current.spec) !== job.stageInputHash) throw new RebuildError('STAGE_DRAFT_CHANGED', 'scratch revision bytes differ from Apply');
-    const now = await hashBuild(current.build, id, assetPrefix);
-    if (JSON.stringify(now.files) !== JSON.stringify(job.build!.files)) throw new RebuildError('STAGE_DRAFT_CHANGED', 'scratch build bytes differ from the applied record');
-    if (!('check' in job) || !job.check || job.check.pass !== true || job.check.exitCode !== 0) throw new RebuildError('STAGE_DRAFT_UNCHECKED', 'this revision has no successful recorded producer check');
-    if (!('kind' in job) || job.kind === 'delta' || (job.kind === 'patch' && job.op === 'remesh')) {
-      const carried = await opCarried('remesh', current.spec, null, () => {});
-      if (carried && 'refused' in carried) throw new RebuildError('STAGE_DRAFT_CHANGED', carried.refused);
-    } else throw new RebuildError('STAGE_DRAFT_OPERATION', 'only applied mesh corrections belong to this inspection');
-    return {id, spec: current.spec, model: join(current.build, 'skeleton.model.json'), evidence: snapshot(job)};
+    let now: RebuildBuild;
+    try {
+      if (!job.stageInputHash || await stageInputDigest(rebuildDir(options.stateDir,p.sourceHash,id),current.spec) !== job.stageInputHash) throw new RebuildError('STAGE_DRAFT_CHANGED', 'scratch revision bytes differ from Apply');
+      now = await hashBuild(current.build, id, assetPrefix);
+      if (JSON.stringify(now.files) !== JSON.stringify(job.build!.files)) throw new RebuildError('STAGE_DRAFT_CHANGED', 'scratch build bytes differ from the applied record');
+      if (!('check' in job) || !job.check || job.check.pass !== true || job.check.exitCode !== 0) throw new RebuildError('STAGE_DRAFT_UNCHECKED', 'this revision has no successful recorded producer check');
+      if (!('kind' in job) || job.kind === 'delta' || (job.kind === 'patch' && job.op === 'remesh')) {
+        const carried = await opCarried('remesh', current.spec, null, () => {});
+        if (carried && 'refused' in carried) throw new RebuildError('STAGE_DRAFT_CHANGED', carried.refused);
+      } else throw new RebuildError('STAGE_DRAFT_OPERATION', 'only applied mesh corrections belong to this inspection');
+    } catch (error) {
+      assertCurrentSelection();
+      if (error instanceof RebuildError) throw error;
+      throw new RebuildError('STAGE_DRAFT_CHANGED', 'scratch revision bytes differ from Apply');
+    }
+    await assertSource();
+    const settled = assertCurrentSelection();
+    const settledJob = jobs.get(id)!;
+    if (settled.spec !== current.spec || settled.build !== current.build || settled.modelHash !== current.modelHash || settledJob !== job || JSON.stringify(now.files) !== JSON.stringify(settledJob.build?.files)) {
+      throw new RebuildError('STAGE_DRAFT_STALE', 'the requested scratch build is not the settled applied revision');
+    }
+    return {id, spec: settled.spec, model: join(settled.build, 'skeleton.model.json'), evidence: snapshot(settledJob)};
   }
   /** Historical evidence is independent of the disposable Undo cache; current-stage reads still use stageDraft. */
   const evidenceBinding={id:p.manifest.id,revision:p.manifest.revision,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource};
@@ -1126,6 +1374,11 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       let now = 'unreadable';
       try { now = sha256(await readFile(handoff.config)); } catch { /* named below */ }
       if (now !== pred.configHash) throw new RebuildError(UNDO_PREDECESSOR_CHANGED, `${handoff.record.config.path} sha256 ${pred.configHash.slice(0, 12)}… → ${now === 'unreadable' ? now : `${now.slice(0, 12)}…`}; the evicted build was made from the config as it was`);
+    } else if (options.draft) {
+      const cfgRef = options.draft.source.record.config;
+      let now = 'unreadable';
+      try { now = sha256(await readFile(await safeFile(await realpath(options.draft.root), cfgRef.path))); } catch { /* named below */ }
+      if (now !== pred.configHash) throw new RebuildError(UNDO_PREDECESSOR_CHANGED, `${cfgRef.path} sha256 ${pred.configHash.slice(0, 12)}… → ${now === 'unreadable' ? now : `${now.slice(0, 12)}…`}; the evicted build was made from the config as it was`);
     }
     const retargeting = 'kind' in pred.job && pred.job.kind === 'retarget';
     const resolved = retargeting ? resolvePose(options.starts) : resolveProducer(options.starts);
@@ -1220,7 +1473,12 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       }
       // The package and its producer inputs must still be the bytes the request was made against.
       // The handoff files are in the reviewed identity, so this also catches a config, parts or rig change.
-      try { await options.unchanged(); } catch { throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild'); }
+      try {
+        await options.unchanged();
+        if (options.draft) await draftProducerInputs(options.draft, true);
+      } catch {
+        throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild');
+      }
       if(!('kind' in job)||job.kind==='delta'||(job.kind==='patch'&&job.op==='remesh')||await exists(join(dir,CONFIG_INPUTS))) {
         job.stageInputHash = await stageInputDigest(dir, join(dir, op.spec));
       }
@@ -1429,8 +1687,10 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     let patch: ConfigPatch;
     try { patch = parseConfigPatch(input); } catch (e) { if (e instanceof ConfigPatchError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
     assertStateOutside();
-    await options.unchanged();
-    const inputs = await producerInputs(p.handoff, p.handoffReason);
+    const inputs = await activeProducerInputs();
+    if (options.draft && (patch.op.cmd !== 'remesh' || world !== null)) {
+      throw new RebuildError('STAGE_DRAFT_OPERATION', 'only applied mesh corrections belong to this inspection');
+    }
     let patched: JsonValue, part: string | null = null;
     const original = JSON.parse(inputs.configText) as JsonValue;
     try {
@@ -1513,8 +1773,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     let shape: ReturnType<typeof stripShape>;
     try { shape = stripShape(patches); } catch (e) { if (e instanceof DensityStripError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
     assertStateOutside();
-    await options.unchanged();
-    const inputs = await producerInputs(p.handoff, p.handoffReason);
+    const inputs = await activeProducerInputs();
     const original = JSON.parse(inputs.configText) as JsonValue;
     const planned: { patch: ConfigPatch; patched: JsonValue }[] = [];
     for (const patch of patches) {
@@ -1676,8 +1935,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
   async function startDelta(input: unknown): Promise<{ status: number; body: unknown }> {
     const request = parseDeltaRequest(input);
     assertStateOutside();
-    await options.unchanged();
-    const inputs = await producerInputs(p.handoff, p.handoffReason);
+    const inputs = await activeProducerInputs();
     if (inputs.configHash !== request.configHash) throw new RebuildError('REBUILD_CONFIG_STALE', 'the producer config changed since the editor read it; reload');
     const resolved = resolveProducer(options.starts);
     if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
@@ -1788,9 +2046,13 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * map's resolution against the rig, the flags' combinations and the pose are the producer's to judge, verbatim.
    */
   async function startRetarget(input: unknown, body: unknown = { retarget: input }): Promise<{ status: number; body: unknown }> {
+    assertStateOutside();
+    if (options.draft) {
+      await activeProducerInputs();
+      throw new RebuildError('STAGE_DRAFT_OPERATION', 'only applied mesh corrections belong to this inspection');
+    }
     let request: ReturnType<typeof parseRetargetRequest>;
     try { request = parseRetargetRequest(input); } catch (e) { if (e instanceof RetargetError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
-    assertStateOutside();
     await options.unchanged();
     const inputs = await producerInputs(p.handoff, p.handoffReason);
     if (inputs.configHash !== request.configHash) throw new RebuildError('REBUILD_CONFIG_STALE', 'the producer config changed since the editor read it; reload');
@@ -1803,7 +2065,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const resolved = resolvePose(options.starts);
     if (!resolved.ok) return { status: 200, body: { status: 'refused', error: resolved.error, producerLine: resolved.error } };
     const rigJson = await readFile(join(inputs.rig, 'rig.json'));
-    const record = retargetRecord(request, { rig: { path: inputs.handoff.rig ?? '', sha256: sha256(rigJson) }, sequence: { path: reference.path, sha256: sha256(sequence) }, producer: { name: resolved.producer.package, version: resolved.producer.version } });
+    const record = retargetRecord(request, { rig: { path: inputs.handoff?.rig ?? '', sha256: sha256(rigJson) }, sequence: { path: reference.path, sha256: sha256(sequence) }, producer: { name: resolved.producer.package, version: resolved.producer.version } });
     const id = retargetId({ sourceHash: p.sourceHash, configHash: rebuildConfigIdentity(inputs), record, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}` });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
@@ -1855,8 +2117,12 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
    * the handoff text) are refused before anything is written or run; producer refusals return by name with nothing landed.
    */
   async function startAnimation(input: unknown, world: ApplyWorld | null = null, rawEnvironment?: unknown): Promise<{ status: number; body: unknown }> {
-    const request = parseAnimationRequest(input);
     assertStateOutside();
+    if (options.draft) {
+      await activeProducerInputs();
+      throw new RebuildError('STAGE_DRAFT_OPERATION', 'only applied mesh corrections belong to this inspection');
+    }
+    const request = parseAnimationRequest(input);
     await options.unchanged();
     const inputs = await producerInputs(p.handoff, p.handoffReason);
     if (inputs.configHash !== request.configHash) throw new RebuildError('REBUILD_CONFIG_STALE', 'the producer config changed since the editor read it; reload');
@@ -1869,7 +2135,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     try { absFrom = await realpath(resolve(dirname(inputs.config), relFrom)); }
     catch { throw new RebuildError('ANIMATION_SOURCE_MISSING', `config motion.animations_from (${relFrom}) does not exist`); }
     const showFrom = relative(await realpath(p.root), absFrom).split(sep).join('/') || '.';
-    const handoffFile = inputs.handoff.files.find(f => f.path === showFrom);
+    const handoffFile = inputs.handoff!.files.find(f => f.path === showFrom);
     if (!handoffFile) throw new RebuildError('ANIMATION_SOURCE_MISSING', `config motion.animations_from (${showFrom}) is missing from the handoff`);
     const baseAnimText = await readFile(absFrom, 'utf8'), baseAnimHash = sha256(baseAnimText);
     if (baseAnimHash !== handoffFile.sha256) throw new RebuildError('REBUILD_INPUTS_CHANGED', `${showFrom} changed since the review was opened; restart review`);
@@ -2000,8 +2266,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     }
     const request = parseRebuildRequest(input, options.bones);
     assertStateOutside();
-    await options.unchanged();
-    const inputs = await producerInputs(p.handoff, p.handoffReason);
+    const inputs = await activeProducerInputs();
     if (inputs.configHash !== request.configHash) throw new RebuildError('REBUILD_CONFIG_STALE', 'the producer config changed since the editor read it; reload');
     const entry = request.bust ? bustEntryText(inputs.configText, request.part, request.bust) : meshEntryText(inputs.configText, request.part, request.regions);
     const resolved = resolveProducer(options.starts);

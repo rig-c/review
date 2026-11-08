@@ -22,7 +22,7 @@ interface JoinedVerdictOptions {
 }
 
 export function stagePartsRoutes(packages:{single:ReviewPackage}|{a:ReviewPackage;b:ReviewPackage},loadAtlas:typeof loadPartsAtlas=loadPartsAtlas,draft?:DraftReader,verdictOptions?:JoinedVerdictOptions) {
- const corrections=new Map<string,Promise<{pkg:PartsViewPackage;metadata:unknown}>>();
+ const corrections=new Map<string,Promise<{pkg:PartsViewPackage;modelPath:string;modelSha256:string;metadata:Record<string,unknown>|null}>>();
  const loaded=new Map<string,ReturnType<typeof loadPartsAtlas>>();let bundle:Promise<Blob>|undefined;
  const headers={'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"};
  return async(req:Request):Promise<Response|null>=>{
@@ -47,34 +47,66 @@ export function stagePartsRoutes(packages:{single:ReviewPackage}|{a:ReviewPackag
    // Single-package Stage 1 uses the declared handoff's real separated parts, not the atlas names.
    const recorded=verdictOptions?.joined.draft;
    if ('single' in packages && (recorded||p.handoff?.parts&&p.handoff.rig)) {
+    await verdictOptions?.joined.assertCurrent();
     await assertReviewUnchanged(p);
     const build=req.headers.get('X-Review-Stage-Build')??'inspected';
     if(build!=='inspected'&&!/^[a-f0-9]{64}$/.test(build))throw new Error('STAGE_DRAFT_STALE');
+    if(build!=='inspected'&&recorded&&(!recorded.editable||verdictOptions?.viewOnly))throw new Error('STAGE_DRAFT_UNAVAILABLE');
     const applied=build==='inspected'?null:await draft?.(build);
     if(build!=='inspected'&&!applied)throw new Error('STAGE_DRAFT_UNAVAILABLE');
-    const model=recorded?.model??applied?.model??(p.manifest.model?join(p.root,p.manifest.model):null);
+    const model=applied?.model??recorded?.model??(p.manifest.model?join(p.root,p.manifest.model):null);
     if(!model)throw new Error('STAGE_DRAFT_UNAVAILABLE');
     let promise=corrections.get(build);
     if(!promise){
-     promise=(async()=>{
-      const rig=recorded?.rig??join(applied?.spec??p.handoff!.rig!,'rig.json');
-      const meshReport=recorded?.meshReport??join(applied?.spec??p.handoff!.rig!,'mesh_report.json');
+     const loading=(async()=>{
+      const rig=applied?join(applied.spec,'rig.json'):(recorded?.rig??join(p.handoff!.rig!,'rig.json'));
+      const meshReport=applied?join(applied.spec,'mesh_report.json'):(recorded?.meshReport??join(p.handoff!.rig!,'mesh_report.json'));
       const pkg=await loadPartsView(recorded?.parts??p.handoff!.parts!,{rig,meshReport});
-      if(recorded&&[...pkg.files,...pkg.flagFiles].some(file=>recorded.files.get(file.abs)!==file.sha256))
-       throw new Error('PARTS_VERDICT_SOURCE_MISMATCH');
-      const mappings=await draftMappings(model,rig,pkg,recorded?.files);
+      if(recorded){
+       const partsPrefix=recorded.parts.replace(/\/+$/,'')+'/';
+       const pinned=applied?pkg.files.filter(file=>file.abs.startsWith(partsPrefix)):[...pkg.files,...pkg.flagFiles];
+       if(pinned.some(file=>recorded.files.get(file.abs)!==file.sha256))
+        throw new Error(applied?'STAGE_DRAFT_CHANGED':'PARTS_VERDICT_SOURCE_MISMATCH');
+      }
+      const mappings=await draftMappings(model,rig,pkg,applied?undefined:recorded?.files);
+      const modelSha256=digest(await readFile(model));
+      await verdictOptions?.joined.assertCurrent();
       await assertReviewUnchanged(p);await assertPartsUnchanged(pkg);
-      return {pkg,metadata:mappings.length?{label:'Draft rig · structure evidence only',buildId:build,inspectionSourceHash:p.sourceHash,mappings,evidence:applied?.evidence??null,...(recorded?{inspectionOnly:true}:{})}:null};
-     })();corrections.set(build,promise);
+      const inspectionOnly=Boolean(recorded&&(!recorded.editable||verdictOptions?.viewOnly));
+      return {pkg,modelPath:model,modelSha256,metadata:mappings.length?{label:'Draft rig · structure evidence only',buildId:build,inspectionSourceHash:p.sourceHash,mappings,evidence:applied?.evidence??null,...(inspectionOnly?{inspectionOnly:true}:{})}:null};
+     })();
+     promise=loading.catch(error=>{if(corrections.get(build)===promise)corrections.delete(build);throw error;});
+     corrections.set(build,promise);
     }
-    const {pkg,metadata}=await promise;
-    // Every image is served against the same full pinned draft, including geometry and flags.
-    await assertReviewUnchanged(p);await assertPartsUnchanged(pkg);
-    if(kind){const file=servedImage(pkg,kind,Number(index));if(!file)return Response.json({error:'PARTS_IMAGE_UNAVAILABLE'},{status:404,headers});const pinned=pkg.files.find(f=>f.abs===file)!;return serveReference(req,file,pinned.sha256,headers);}
+    const {pkg,modelPath,modelSha256,metadata}=await promise;
+    // Every response and image is served against the revalidated source, active scratch build and model/parts pins.
+    let latestApplied:DraftSnapshot|null=null;
+    let imageResponse:Response|null=null;
+    try{
+     await verdictOptions?.joined.assertCurrent();
+     await assertReviewUnchanged(p);await assertPartsUnchanged(pkg);
+     const currentModelSha256=digest(await readFile(modelPath).catch(()=>{throw new Error('STAGE_DRAFT_CHANGED');}));
+     if(currentModelSha256!==modelSha256)throw new Error('STAGE_DRAFT_CHANGED');
+     if(kind){
+      const file=servedImage(pkg,kind,Number(index));
+      if(!file)return Response.json({error:'PARTS_IMAGE_UNAVAILABLE'},{status:404,headers});
+      const pinned=pkg.files.find(f=>f.abs===file)!;
+      imageResponse=await serveReference(req,file,pinned.sha256,headers);
+     }
+     await verdictOptions?.joined.assertCurrent();
+     await assertReviewUnchanged(p);
+     latestApplied=build==='inspected'?null:(await draft?.(build))??null;
+     if(build!=='inspected'&&(!latestApplied||latestApplied.model!==modelPath))throw new Error('STAGE_DRAFT_STALE');
+    }catch(error){
+     if(build!=='inspected')corrections.delete(build);
+     throw error;
+    }
+    if(imageResponse)return imageResponse;
     const writable=build==='inspected'&&verdictOptions?.joined.verdictDirectory&&!verdictOptions.viewOnly;
     const saved=writable?await joinedVerdict(req,p,pkg,verdictOptions,save,format,headers):null;
     if(saved instanceof Response)return saved;
-    return Response.json({...partsViewJson(pkg,saved??{verdict:null,stale:null}),differenceAvailable:false,readOnly:!writable,...(recorded&&!writable?{verdictReadOnlyReason:'PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.'}:{}),inspectionSourceHash:p.sourceHash,...(saved?{joinedVerdictBinding:saved.binding,verdictFile:saved.filename}:{}),...(metadata?{draft:metadata}:{draftUnavailable:stageDraftRefusals.STAGE_DRAFT_NO_MESH})},{headers});
+    const activeMetadata=metadata&&latestApplied?{...metadata,evidence:latestApplied.evidence}:metadata;
+    return Response.json({...partsViewJson(pkg,saved??{verdict:null,stale:null}),differenceAvailable:false,readOnly:!writable,...(recorded&&!writable?{verdictReadOnlyReason:'PARTS_VERDICT_READ_ONLY: a pending parts review and an explicit verdict output directory are required.'}:{}),inspectionSourceHash:p.sourceHash,...(saved?{joinedVerdictBinding:saved.binding,verdictFile:saved.filename}:{}),...(activeMetadata?{draft:activeMetadata}:{draftUnavailable:stageDraftRefusals.STAGE_DRAFT_NO_MESH})},{headers});
    }
    let promise=loaded.get(key);
    const initializing=!promise;

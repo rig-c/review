@@ -240,3 +240,160 @@ test('#562(i) standalone partsViewJson omits STAGE_DRAFT_UNAVAILABLE and removes
   }
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('#562B joined stage 1 routes original vs scratch builds, enforces eligibility/cache/stale checks, and Reset restores original geometry',async()=>{
+ const {joinedVerdictFixture}=await import('./helpers/joined-verdict-fixture.ts');
+ const {loadOpenPackage}=await import('../src/open.ts');
+ const root=await mkdtemp(join(tmpdir(),'stage1-562b-'));
+ try{
+  // Retained zero-version mesh fixture and four-version no-mesh fixture as separate controls (not five-version acceptance).
+  const f=await joinedVerdictFixture(root,'1-parts-verdict');
+  const scratch=join(root,'scratch-spec');
+  await cp(join(root,'derived/drafts/chain/out'),scratch,{recursive:true});
+  const rawRig=JSON.parse(await readFile(f.draft.rig,'utf8'));
+  rawRig.skins.default.torso.torso.triangles.splice(-6);
+  await writeFile(join(scratch,'rig.json'),JSON.stringify(rawRig));
+  const reports=JSON.parse(await readFile(f.draft.meshReport,'utf8'));
+  for(const row of Array.isArray(reports)?reports:[])if(row?.part==='torso')row.triangles=38;
+  await writeFile(join(scratch,'mesh_report.json'),JSON.stringify(reports));
+  const rawModel=JSON.parse(await readFile(f.draft.model,'utf8'));
+  rawModel.skins[0].attachments.torso.torso.triangles=[...rawRig.skins.default.torso.torso.triangles];
+  const scratchModelPath=join(scratch,'skeleton.model.json');
+  await writeFile(scratchModelPath,JSON.stringify(rawModel));
+
+  const buildId='a'.repeat(64);
+  let activeBuild:string|null=buildId;
+  let busyState=false;
+  let flipSelectionOnAssertCall=0;
+  let assertCallCount=0;
+  const draftReader=async(id:string)=>{
+   if(busyState||id!==activeBuild)throw new Error('STAGE_DRAFT_STALE');
+   return {id,spec:scratch,model:scratchModelPath,evidence:{id,check:{pass:true,exitCode:0}}};
+  };
+  const joinedWithBarrier:typeof f.joined={
+   ...f.joined,
+   assertCurrent:async()=>{
+    await f.joined.assertCurrent();
+    assertCallCount++;
+    if(flipSelectionOnAssertCall>0&&assertCallCount===flipSelectionOnAssertCall){
+     activeBuild=null;
+    }
+   },
+  };
+  const route=stagePartsRoutes({single:f.p},undefined,draftReader,{
+   joined:joinedWithBarrier,
+   readInput:async req=>req.json(),
+   viewOnly:false,
+  });
+  const req=(build='inspected',pathname='/api/stage-parts',init?:RequestInit)=>
+   new Request('http://127.0.0.1'+pathname,{...init,headers:{...(init?.headers as Record<string,string>|undefined),'X-Review-Stage-Build':build}});
+
+  // 1. Editable joined draft: `inspected` selects recorded original and omits inspectionOnly.
+  const origRes=await route(req('inspected'));
+  expect(origRes!.status).toBe(200);
+  const origData=await origRes!.json();
+  expect(origData.draft.buildId).toBe('inspected');
+  expect(origData.draft.inspectionOnly).toBeUndefined();
+  expect(origData.draft.mappings).toEqual([{part:'torso',skin:'default',slot:'torso',attachment:'torso',vertices:30,triangles:40}]);
+  expect(origData.items.find((i:any)=>i.name==='torso').mesh.triangles.length/3).toBe(40);
+
+  // 2. Scratch build ID selects settled applied rig, mesh report and model while keeping original rasters pinned.
+  const scratchRes=await route(req(buildId));
+  expect(scratchRes!.status).toBe(200);
+  const scratchData=await scratchRes!.json();
+  expect(scratchData.draft.buildId).toBe(buildId);
+  expect(scratchData.draft.inspectionOnly).toBeUndefined();
+  expect(scratchData.draft.evidence).toEqual({id:buildId,check:{pass:true,exitCode:0}});
+  expect(scratchData.draft.mappings).toEqual([{part:'torso',skin:'default',slot:'torso',attachment:'torso',vertices:30,triangles:38}]);
+  expect(scratchData.items.find((i:any)=>i.name==='torso').mesh.triangles.length/3).toBe(38);
+  expect(scratchData.readOnly).toBe(true);
+  const imgRes=await route(req(buildId,'/api/stage-parts/image/0'));
+  expect(imgRes!.status).toBe(200);
+
+  // 3. Verdict save/export on a scratch build is refused with PARTS_VERDICT_READ_ONLY.
+  const verdictOnScratch=await route(req(buildId,'/api/stage-parts/verdict',{method:'POST',headers:{Origin:'http://127.0.0.1'},body:'{}'}));
+  expect(verdictOnScratch!.status).toBe(409);
+  expect(await verdictOnScratch!.json()).toEqual({error:'PARTS_VERDICT_READ_ONLY'});
+
+  // 4. Reset to `inspected` restores the exact recorded original from its separate cache entry.
+  const resetRes=await route(req('inspected'));
+  expect(resetRes!.status).toBe(200);
+  const resetData=await resetRes!.json();
+  expect(resetData.draft.buildId).toBe('inspected');
+  expect(resetData.draft.mappings[0].triangles).toBe(40);
+  expect(resetData.items.find((i:any)=>i.name==='torso').mesh.triangles.length/3).toBe(40);
+
+  // 5. Cache-hit revalidation catches busy state and Undo/superseding Apply (STAGE_DRAFT_STALE).
+  busyState=true;
+  const busyRes=await route(req(buildId));
+  expect(busyRes!.status).toBe(409);
+  expect((await busyRes!.json()).error).toBe(stageDraftRefusals.STAGE_DRAFT_STALE);
+  busyState=false;
+  // Re-populate cache then simulate Undo (activeBuild = null).
+  expect((await route(req(buildId)))!.status).toBe(200);
+  activeBuild=null;
+  const undoneRes=await route(req(buildId));
+  expect(undoneRes!.status).toBe(409);
+  expect((await undoneRes!.json()).error).toBe(stageDraftRefusals.STAGE_DRAFT_STALE);
+  activeBuild=buildId;
+
+  // 5b. Cached Stage 1 late-read selection change control (selection flips after entry draft check, during post-cache prepared read / image read, and in the final trailing source-check await).
+  for(const targetCall of [2,3]){
+   expect((await route(req(buildId)))!.status).toBe(200);
+   assertCallCount=0;flipSelectionOnAssertCall=targetCall;
+   const lateJsonRes=await route(req(buildId));
+   flipSelectionOnAssertCall=0;activeBuild=buildId;
+   expect(lateJsonRes!.status).toBe(409);
+   expect((await lateJsonRes!.json()).error).toBe(stageDraftRefusals.STAGE_DRAFT_STALE);
+
+   expect((await route(req(buildId)))!.status).toBe(200);
+   assertCallCount=0;flipSelectionOnAssertCall=targetCall;
+   const lateImgRes=await route(req(buildId,'/api/stage-parts/image/0'));
+   flipSelectionOnAssertCall=0;activeBuild=buildId;
+   expect(lateImgRes!.status).toBe(409);
+   expect((await lateImgRes!.json()).error).toBe(stageDraftRefusals.STAGE_DRAFT_STALE);
+  }
+
+  // 6. Cache-hit revalidation catches mutated scratch model bytes while keeping `inspected` intact.
+  expect((await route(req(buildId)))!.status).toBe(200);
+  await writeFile(scratchModelPath,JSON.stringify({...rawModel,tampered:true}));
+  const tamperedModelRes=await route(req(buildId));
+  expect(tamperedModelRes!.status).toBe(409);
+  expect((await tamperedModelRes!.json()).error).toBe(stageDraftRefusals.STAGE_DRAFT_CHANGED);
+  expect((await route(req('inspected')))!.status).toBe(200);
+  await writeFile(scratchModelPath,JSON.stringify(rawModel));
+
+  // 7. Raw project.json whitespace mutation invalidates cached `inspected` and scratch reads (INTERVIEW_OPTIONS_STALE).
+  const projectPath=join(root,'project.json'),projectBytes=await readFile(projectPath);
+  try{
+   await writeFile(projectPath,Buffer.concat([projectBytes,Buffer.from('\n')]));
+   for(const target of ['inspected',buildId]){
+    const staleRes=await route(req(target));
+    expect(staleRes!.status).toBe(409);
+    expect(await staleRes!.json()).toEqual({error:'INTERVIEW_OPTIONS_STALE'});
+   }
+  }finally{await writeFile(projectPath,projectBytes);}
+
+  // 8. View-only and locked-stage (rig-review-only reopen / later approval) set inspectionOnly: true and refuse scratch builds.
+  const viewOnlyRoute=stagePartsRoutes({single:f.p},undefined,draftReader,{joined:f.joined,readInput:async r=>r.json(),viewOnly:true});
+  expect((await (await viewOnlyRoute(req('inspected')))!.json()).draft.inspectionOnly).toBe(true);
+  expect((await (await viewOnlyRoute(req(buildId)))!.json()).error).toBe(stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE);
+
+  try{
+   const lockedProject=JSON.parse(projectBytes.toString());
+   lockedProject.stage='rig-review';
+   lockedProject.signoffs=[{stage:'parts-review',by:'reviewer',at:'2026-04-01T00:00:00.000Z'}];
+   lockedProject.reopens=[{stage:'rig-review',by:'reviewer',at:'2026-04-02T00:00:00.000Z'}];
+   await writeFile(projectPath,JSON.stringify(lockedProject));
+   const lockedOpen=await loadOpenPackage({input:f.input,project:{root,draftId:f.project.draftId,picksDir:f.project.picksDir}});
+   if(lockedOpen.mode!=='single'||!lockedOpen.joined?.draft)throw new Error('Expected locked joined draft');
+   expect(lockedOpen.joined.draft.editable).toBe(false);
+   const lockedRoute=stagePartsRoutes({single:lockedOpen.p},undefined,draftReader,{joined:lockedOpen.joined,readInput:async r=>r.json(),viewOnly:false});
+   expect((await (await lockedRoute(req('inspected')))!.json()).draft.inspectionOnly).toBe(true);
+   expect((await (await lockedRoute(req(buildId)))!.json()).error).toBe(stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE);
+  }finally{await writeFile(projectPath,projectBytes);}
+
+  await rm(scratch,{recursive:true,force:true});
+  await f.assertFixture();
+ }finally{await rm(root,{recursive:true,force:true});}
+});
