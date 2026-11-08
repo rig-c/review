@@ -153,6 +153,25 @@ credentials through their respective channels. Only explicit semantic `close`
 ends a job and revokes its writer grant. `stop()` disposes this host handle and
 stops its owned listener. A reused handle disposes its local session.
 
+All publications, pending asks, pages and trusted publication handles pin their
+snapshots while the job is open. Explicit close invalidates pending asks, pages
+and trusted handles. Subsequent trusted publication reads, UI operations and
+consumer fetches refuse `JOB_CLOSED`. Finalized acts permanently preserve their
+bound source bytes, hashes and retained reproduction evidence. Consumer fetch
+adds no separate retention protocol.
+
+After close, unfinalized snapshots can be reclaimed only after explicitly counted
+file reads finish or cancel. Counts cover asynchronous preparation and complete
+response streams across host sessions. Time never releases a count. Historical
+events, replay receipts and previous-publication links preserve identities without
+pinning those bytes. Reclamation leaves an immutable private tombstone containing
+publication ID, snapshot hash, reclamation time and reason. A reference reaching
+the reclaimed-snapshot gate refuses `JOB_SNAPSHOT_RECLAIMED`. Close and grant
+revocation commit outside the bounded historical document, including at its exact
+16 MiB limit. The original document and replay values remain intact. Legacy
+snapshots without recorded creation ownership and interrupted readers remain
+preserved until ownership or explicit completion can be proved.
+
 The runtime entry starts the full owner host with retained publication routes
 and shipped HTML, JavaScript and CSS. Raw Requests and the existing A/B ports
 preserve capability, origin, size, cancellation and replay checks.

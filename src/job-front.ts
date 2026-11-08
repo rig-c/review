@@ -195,96 +195,97 @@ function retainedPublicationRoutes(session: JobSession) {
     return async (jobId: string, publicationId: string, key: string, path: string, request: Request): Promise<Response> => {
         if (jobId !== session.jobId) return failure('JOB_UNKNOWN', 404);
         try {
-            const display = session.displayPublication(publicationId);
-            if (key !== display.publication.instanceKey) return failure('JOB_DISPLAY_MISMATCH', 409);
-            const retained = session.retainedSource(publicationId);
-            let pending = views.get(publicationId);
-            if (!pending) {
-                pending = (async () => {
-                    const review = await loadReview(retained.manifestPath);
-                    const parts = retained.source.parts
-                        ? await loadPartsView(dirname(join(retained.snapshotRoot, retained.source.parts.manifest.path)))
-                        : null;
-                    if (parts) {
-                        if (parts.items.length !== retained.partIds.length || parts.items.some(item => !retained.partIds.includes(item.name))) {
-                            throw new JobError('JOB_SOURCE_MISMATCH');
-                        }
-                        for (const file of [...parts.files, ...parts.flagFiles]) {
-                            const path = relative(retained.snapshotRoot, file.abs).split('\\').join('/');
-                            if (!retained.seals.some(seal => seal.path === path && seal.sha256 === file.sha256)) {
-                                throw new JobError('JOB_SOURCE_UNRETAINABLE');
+            return await session.readPublicationResponse(publicationId, async retained => {
+                const display = session.displayPublication(publicationId);
+                if (key !== display.publication.instanceKey) return failure('JOB_DISPLAY_MISMATCH', 409);
+                let pending = views.get(publicationId);
+                if (!pending) {
+                    pending = (async () => {
+                        const review = await loadReview(retained.manifestPath);
+                        const parts = retained.source.parts
+                            ? await loadPartsView(dirname(join(retained.snapshotRoot, retained.source.parts.manifest.path)))
+                            : null;
+                        if (parts) {
+                            if (parts.items.length !== retained.partIds.length || parts.items.some(item => !retained.partIds.includes(item.name))) {
+                                throw new JobError('JOB_SOURCE_MISMATCH');
+                            }
+                            for (const file of [...parts.files, ...parts.flagFiles]) {
+                                const path = relative(retained.snapshotRoot, file.abs).split('\\').join('/');
+                                if (!retained.seals.some(seal => seal.path === path && seal.sha256 === file.sha256)) {
+                                    throw new JobError('JOB_SOURCE_UNRETAINABLE');
+                                }
                             }
                         }
-                    }
-                    return {review, parts};
-                })();
-                views.set(publicationId, pending);
-            }
-            const {review, parts} = await pending;
-            await assertReviewUnchanged(review);
-            const json = (value: unknown) => new Response(request.method === 'HEAD' ? null : JSON.stringify(value), {
-                headers: {...headers, 'Content-Type': 'application/json'},
-            });
-            const sealedFile = async (relativePath: string) => {
-                const seal = retained.seals.find(file => file.path === relativePath);
-                if (!seal) return failure('JOB_SOURCE_UNRETAINABLE', 404);
-                const file = await safeFile(retained.snapshotRoot, relativePath);
-                return serveReference(request, file, seal.sha256, headers);
-            };
-            if (path === 'api/review') {
-                return json({
-                    manifest: review.manifest,
-                    sourceHash: retained.source.sourceHash,
-                    reviewedSource: review.reviewedSource,
-                    initialAnimation: null,
-                    setsHash: review.setsHash,
-                    direction: review.direction,
-                    referenceHashes: review.referenceHashes,
-                    sourcePainting: review.sourcePainting && {...review.sourcePainting, url: '/review-painting'},
-                    feedbackCatalog: review.feedbackCatalog,
-                    assetsBase: display.routes.assetsBase,
-                    capabilities: {playback: !!review.manifest.model, interview: retained.questions.length > 0,
-                        preRig: retained.source.selector?.kind === 'draft', modeling: false, motion: false, feedback: true, audio: false},
+                        return {review, parts};
+                    })();
+                    views.set(publicationId, pending);
+                }
+                const {review, parts} = await pending;
+                await assertReviewUnchanged(review);
+                const json = (value: unknown) => new Response(request.method === 'HEAD' ? null : JSON.stringify(value), {
+                    headers: {...headers, 'Content-Type': 'application/json'},
                 });
-            }
-            if (path === 'api/interview') {
-                return json({questions: retained.questions.map(question => ({...question,
-                    images: question.images.map((image, index) => ({name: image.name,
-                        url: `/api/interview/image/${question.ref.sha256}/${index}`})),
-                }))});
-            }
-            const interview = /^api\/interview\/image\/([a-f0-9]{64})\/(0|[1-9]\d*)$/.exec(path);
-            if (interview) {
-                const image = retained.questions.find(question => question.ref.sha256 === interview[1])?.images[Number(interview[2])];
-                if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
-                return await sealedFile(image.ref.path);
-            }
-            const imageSetImage = /^api\/image-set\/(0|[1-9]\d*)$/.exec(path);
-            if (imageSetImage && retained.source.subject === 'image-set') {
-                const image = retained.source.imageSet.images[Number(imageSetImage[1])];
-                if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
-                return await sealedFile(image.path);
-            }
-            if (path === 'api/stage-parts') {
-                if (!parts) return failure('JOB_SOURCE_UNRETAINABLE', 409);
-                return json({...partsViewJson(parts, {verdict: null, stale: null}), sourceHash: retained.source.sourceHash,
-                    inspectionSourceHash: retained.source.sourceHash, readOnly: true});
-            }
-            const part = /^api\/stage-parts\/(image|page)\/(0|[1-9]\d*)$/.exec(path);
-            if (part && parts) {
-                const file = servedImage(parts, part[1] as 'image' | 'page', Number(part[2]));
-                if (!file) return failure('JOB_SOURCE_UNRETAINABLE', 404);
-                return await sealedFile(relative(retained.snapshotRoot, file).split('\\').join('/'));
-            }
-            if (path === 'review-painting' && review.sourcePainting && review.handoff?.source) {
-                return await sealedFile(relative(retained.snapshotRoot, review.handoff.source).split('\\').join('/'));
-            }
-            if (path.startsWith('assets/')) {
-                const asset = packagePath(decodeURIComponent(path.slice('assets/'.length)));
-                if (!review.files.has(asset)) return failure('JOB_SOURCE_UNRETAINABLE', 404);
-                return await sealedFile(relative(retained.snapshotRoot, join(review.root, asset)).split('\\').join('/'));
-            }
-            return failure('JOB_REQUEST_INVALID', 404);
+                const sealedFile = async (relativePath: string) => {
+                    const seal = retained.seals.find(file => file.path === relativePath);
+                    if (!seal) return failure('JOB_SOURCE_UNRETAINABLE', 404);
+                    const file = await safeFile(retained.snapshotRoot, relativePath);
+                    return serveReference(request, file, seal.sha256, headers);
+                };
+                if (path === 'api/review') {
+                    return json({
+                        manifest: review.manifest,
+                        sourceHash: retained.source.sourceHash,
+                        reviewedSource: review.reviewedSource,
+                        initialAnimation: null,
+                        setsHash: review.setsHash,
+                        direction: review.direction,
+                        referenceHashes: review.referenceHashes,
+                        sourcePainting: review.sourcePainting && {...review.sourcePainting, url: '/review-painting'},
+                        feedbackCatalog: review.feedbackCatalog,
+                        assetsBase: display.routes.assetsBase,
+                        capabilities: {playback: !!review.manifest.model, interview: retained.questions.length > 0,
+                            preRig: retained.source.selector?.kind === 'draft', modeling: false, motion: false, feedback: true, audio: false},
+                    });
+                }
+                if (path === 'api/interview') {
+                    return json({questions: retained.questions.map(question => ({...question,
+                        images: question.images.map((image, index) => ({name: image.name,
+                            url: `/api/interview/image/${question.ref.sha256}/${index}`})),
+                    }))});
+                }
+                const interview = /^api\/interview\/image\/([a-f0-9]{64})\/(0|[1-9]\d*)$/.exec(path);
+                if (interview) {
+                    const image = retained.questions.find(question => question.ref.sha256 === interview[1])?.images[Number(interview[2])];
+                    if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
+                    return await sealedFile(image.ref.path);
+                }
+                const imageSetImage = /^api\/image-set\/(0|[1-9]\d*)$/.exec(path);
+                if (imageSetImage && retained.source.subject === 'image-set') {
+                    const image = retained.source.imageSet.images[Number(imageSetImage[1])];
+                    if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
+                    return await sealedFile(image.path);
+                }
+                if (path === 'api/stage-parts') {
+                    if (!parts) return failure('JOB_SOURCE_UNRETAINABLE', 409);
+                    return json({...partsViewJson(parts, {verdict: null, stale: null}), sourceHash: retained.source.sourceHash,
+                        inspectionSourceHash: retained.source.sourceHash, readOnly: true});
+                }
+                const part = /^api\/stage-parts\/(image|page)\/(0|[1-9]\d*)$/.exec(path);
+                if (part && parts) {
+                    const file = servedImage(parts, part[1] as 'image' | 'page', Number(part[2]));
+                    if (!file) return failure('JOB_SOURCE_UNRETAINABLE', 404);
+                    return await sealedFile(relative(retained.snapshotRoot, file).split('\\').join('/'));
+                }
+                if (path === 'review-painting' && review.sourcePainting && review.handoff?.source) {
+                    return await sealedFile(relative(retained.snapshotRoot, review.handoff.source).split('\\').join('/'));
+                }
+                if (path.startsWith('assets/')) {
+                    const asset = packagePath(decodeURIComponent(path.slice('assets/'.length)));
+                    if (!review.files.has(asset)) return failure('JOB_SOURCE_UNRETAINABLE', 404);
+                    return await sealedFile(relative(retained.snapshotRoot, join(review.root, asset)).split('\\').join('/'));
+                }
+                return failure('JOB_REQUEST_INVALID', 404);
+            });
         } catch (error) {
             return failure(error instanceof JobError ? error.code : 'JOB_SOURCE_MISMATCH', 409);
         }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { lstatSync, realpathSync } from 'node:fs';
+import { lstatSync, realpathSync, type Stats } from 'node:fs';
 import { mkdir, open, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { PNG } from 'pngjs';
@@ -13,7 +13,7 @@ import { loadReview } from './manifest.ts';
 import { openKey } from './open.ts';
 import { assertReviewUnchanged } from './reference.ts';
 import { jobHash, jobId, jobPartsEnumeratorVersion, jobObject, jobPath, jobSha, jobText, requestDigest } from './job-api.ts';
-import { JobError } from './job-store.ts';
+import { JobError, type JobSnapshotOwner } from './job-store.ts';
 import { prepareJobImageSet } from './job-image-set.ts';
 
 export interface JobRootIdentity {
@@ -48,6 +48,7 @@ export interface JobRetainedSource {
   readonly record: JobFileIdentity | null;
   readonly seals: readonly JobFileIdentity[];
   readonly snapshotRoot: string;
+  readonly snapshotIdentity?: { readonly dev: number; readonly ino: number };
   readonly manifestPath: string;
   readonly source: JobSourceBinding;
   readonly instanceKey: string;
@@ -61,6 +62,37 @@ export interface JobRetainedSource {
 const maxSourceBytes = 256 * 1024 * 1024;
 const maxSourceFiles = 4096;
 const maxFileBytes = 64 * 1024 * 1024;
+
+/** Private preservation identity. Keep the supplied seal order and fixed keys. */
+export function jobSnapshotHash(seals: readonly JobFileIdentity[]): string {
+  return jobHash(JSON.stringify(seals.map(({path, sha256}) => ({path, sha256}))));
+}
+
+export async function removeOwnedJobSnapshot(stateRoot: string,
+  snapshot: Pick<JobSnapshotOwner, 'snapshotRoot' | 'dev' | 'ino'>): Promise<void> {
+  const parent = join(stateRoot, 'snapshots'), path = snapshot.snapshotRoot;
+  if (dirname(path) !== parent || !/^[a-f0-9-]{36}$/.test(posix.basename(path))) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Snapshot ownership path differs');
+  }
+  let info: Stats;
+  try { info = lstatSync(path); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+  if (!info.isDirectory() || info.dev !== snapshot.dev || info.ino !== snapshot.ino || (info.mode & 0o077) !== 0 ||
+      typeof process.getuid === 'function' && info.uid !== process.getuid()) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Snapshot ownership differs');
+  }
+  if (realpathSync(parent) !== parent) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Snapshot ownership differs');
+  try {
+    if (realpathSync(path) !== path) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Snapshot ownership differs');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    // A dangling replacement still exists and must refuse. Only absence drains.
+    try { lstatSync(path); }
+    catch (missing) {if ((missing as NodeJS.ErrnoException).code === 'ENOENT') return; throw missing;}
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Snapshot ownership differs');
+  }
+  await rm(path, {recursive: true, force: true});
+}
 
 export function captureJobRoot(path: string): JobRootIdentity {
   try {
@@ -330,8 +362,12 @@ export async function prepareJobSource(options: {
   if (wanted.size > maxSourceFiles) throw new JobError('JOB_SOURCE_UNRETAINABLE');
   const snapshotRoot = join(options.stateRoot, 'snapshots', randomUUID());
   const seals: JobFileIdentity[] = [];
+  let snapshotIdentity: {dev: number; ino: number} | null = null;
   try {
-    await mkdir(snapshotRoot, { recursive: true, mode: 0o700 });
+    await mkdir(dirname(snapshotRoot), {recursive: true, mode: 0o700});
+    await mkdir(snapshotRoot, {mode: 0o700});
+    const info = lstatSync(snapshotRoot);
+    snapshotIdentity = {dev: info.dev, ino: info.ino};
     const imageSet = context.imageSet === undefined ? null : prepareJobImageSet(context.imageSet,
       path => sourceBytes(root.path, path));
     for (const image of imageSet?.imageSet.images ?? []) add(image.path, image.sha256);
@@ -393,7 +429,7 @@ export async function prepareJobSource(options: {
     }
     const boundReview = { ...review, sourceHash: source.sourceHash };
     const prepared: JobRetainedSource = {
-      root, record, seals, snapshotRoot,
+      root, record, seals, snapshotRoot, snapshotIdentity,
       manifestPath: retained.manifestPath,
       source,
       instanceKey: openKey({ mode: 'single', p: boundReview, inputs: { input: review.manifestPath },
@@ -412,7 +448,7 @@ export async function prepareJobSource(options: {
     assertJobSourceCurrent(prepared);
     return prepared;
   } catch (error) {
-    await rm(snapshotRoot, { recursive: true, force: true });
+    if (snapshotIdentity) await removeOwnedJobSnapshot(options.stateRoot, {snapshotRoot, ...snapshotIdentity});
     if (error instanceof JobError) throw error;
     throw new JobError('JOB_SOURCE_MISMATCH');
   }

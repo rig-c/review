@@ -42,3 +42,72 @@ test('verified reference streams the same descriptor and closes HEAD, 416, compl
  await writeFile(f.reference+'.next',Buffer.alloc(bytes.length,99));await rename(f.reference+'.next',f.reference);
  let failed=false,wrongBytes=false;try{while(true){const part=await reader.read();if(part.done)break;if(![...part.value].every(value=>value===37))wrongBytes=true;}}catch{failed=true;}expect(wrongBytes).toBe(false);expect(failed).toBe(true);expect(await descriptors()).toEqual(baseline);
 });
+
+test('stage2 P1 reference pull cleanup joins the actual pending file close', async () => {
+ const f = await referenceFixture();
+ await writeFile(f.reference, Buffer.alloc(256 * 1024, 37));
+ const script = `
+  import {mock} from 'bun:test';
+  import * as fs from 'node:fs/promises';
+  import {createHash} from 'node:crypto';
+  const original = {...fs};
+  const input = JSON.parse(await Bun.stdin.text());
+  const bytes = await original.readFile(input.path);
+  const deferred = () => {let resolve; const promise = new Promise(yes => {resolve=yes;}); return {promise,resolve};};
+  const reading=deferred(), readGate=deferred(), closing=deferred(), closeGate=deferred(), enqueue=deferred();
+  let closeCalls=0, actualFileClosed=false, pullSettled=false, pullPromise;
+  mock.module('node:fs/promises', () => ({...original, async open(...args) {
+   const file = await original.open(...args);
+   if (args[0] === input.path) {
+    const read=file.read.bind(file), close=file.close.bind(file);
+    let reads=0;
+    file.read=async (...values) => {
+     if (++reads > Math.ceil(bytes.length/65536)) {reading.resolve(); await readGate.promise;}
+     return read(...values);
+    };
+    file.close=async () => {closeCalls++; closing.resolve(); await closeGate.promise; await close(); actualFileClosed=true;};
+   }
+   return file;
+  }}));
+  const NativeStream=globalThis.ReadableStream;
+  globalThis.ReadableStream=class extends NativeStream {
+   constructor(source, strategy) {
+    super({...source, pull(controller) {
+     const wrapped=new Proxy(controller,{get(target,key) {
+      if (key==='enqueue') return value => {enqueue.resolve(); return target.enqueue(value);};
+      const value=Reflect.get(target,key); return typeof value==='function' ? value.bind(target) : value;
+     }});
+     pullPromise=Promise.resolve(source.pull(wrapped)).finally(() => {pullSettled=true;});
+     return pullPromise;
+    }}, strategy);
+   }
+  };
+  const {serveReference}=await import(input.module);
+  const response=await serveReference(new Request('http://localhost/reference'),input.path,
+   createHash('sha256').update(bytes).digest('hex'),{});
+  const reader=response.body.getReader(), pending=reader.read();
+  await reading.promise;
+  const cancellation=reader.cancel();
+  await closing.promise;
+  await pending;
+  readGate.resolve();
+  await enqueue.promise;
+  for(let index=0;index<8;index++) await Promise.resolve();
+  const earlyPullSettled=pullSettled;
+  closeGate.resolve();
+  await cancellation;
+  await pullPromise;
+  console.log(JSON.stringify({control:'STAGE2_REFERENCE_CLOSE',earlyPullSettled,actualFileClosed,closeCalls}));
+ `;
+ const child=Bun.spawn([process.execPath,'-e',script],{stdin:'pipe',stdout:'pipe',stderr:'pipe'});
+ child.stdin.write(JSON.stringify({path:f.reference,module:new URL('../src/reference.ts',import.meta.url).href}));
+ child.stdin.end();
+ const [exit,stdout,stderr]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);
+ expect(exit).toBe(0);
+ expect(stderr).toBe('');
+ const result=JSON.parse(stdout);
+ console.log(JSON.stringify(result));
+ expect(result.actualFileClosed).toBe(true);
+ expect(result.closeCalls).toBe(1);
+ expect(result.earlyPullSettled).toBe(false);
+});

@@ -1,5 +1,4 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { rm } from 'node:fs/promises';
 import { isAbsolute, relative, sep } from 'node:path';
 import {
   JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_CAPABILITIES, JOB_ENABLED_ACT_KINDS, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
@@ -9,10 +8,10 @@ import {
 import { bindJobAsk, finalizeJobAct, parseUISubmission } from './job-act.ts';
 import { jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
-  assertJobRoot, assertJobSourceCurrent, captureJobRoot, prepareJobSource,
+  assertJobRoot, assertJobSourceCurrent, captureJobRoot, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot,
   type JobPublicationReader, type JobRetainedSource, type JobRootIdentity,
 } from './job-source.ts';
-import { JobError, JobStore, type StoredJob } from './job-store.ts';
+import { JobError, JobStore, type JobSnapshotOwner, type StoredJob } from './job-store.ts';
 import { canonicalStatePath } from './state-dir.ts';
 
 interface StoredPublication {
@@ -78,6 +77,7 @@ export class JobSession {
   private readonly store: JobStore<JobData>;
   private readonly listeners = new Set<() => void>();
   private operations = 0;
+  private disposed = false;
 
   constructor(private readonly options: JobSessionOptions) {
     const root = captureJobRoot(options.root), state = canonicalStatePath(options.stateDir);
@@ -110,6 +110,18 @@ export class JobSession {
   private current(): StoredJob<JobData> {
     const row = this.store.get(this.jobId);
     assertStoredSchemas(row.data);
+    if (!row.active) {
+      row.data.fetchCapability = null;
+      row.data.pages = {};
+      for (const ask of Object.values(row.data.asks)) {
+        if (ask.status === 'pending') row.data.asks[ask.askId] = {...ask, status: 'superseded'};
+      }
+    }
+    if (row.closure) {
+      row.data.generation = row.closure.generation;
+      row.data.events.push(row.closure.event);
+      row.data.replays[row.closure.replayKey] = row.closure.replay;
+    }
     return row;
   }
 
@@ -150,16 +162,100 @@ export class JobSession {
   }
 
   retainedSource(publicationId: string): JobRetainedSource {
-    const stored = this.current().data.publications[publicationId];
+    const current = this.current();
+    if (!current.active) throw new JobError('JOB_CLOSED');
+    const stored = current.data.publications[publicationId];
     if (!stored) throw new JobError('JOB_PUBLICATION_UNKNOWN');
     return stored.retained;
   }
 
   displayPublication(publicationId: string): JobDisplayPublication {
-    const stored = this.current().data.publications[publicationId];
+    const current = this.current();
+    if (!current.active) throw new JobError('JOB_CLOSED');
+    const stored = current.data.publications[publicationId];
     if (!stored) throw new JobError('JOB_PUBLICATION_UNKNOWN');
     const base = `/jobs/${this.jobId}/publications/${publicationId}/instances/${stored.publication.instanceKey}/`;
     return { publication: stored.publication, routes: { entry: base, apiBase: base + 'api/', assetsBase: base + 'assets/' } };
+  }
+
+  /** Internal front seam. A count covers preparation and the entire file stream. */
+  async readPublicationResponse(publicationId: string,
+    read: (retained: JobRetainedSource) => Promise<Response>): Promise<Response> {
+    const retained = this.retainedSource(publicationId);
+    const readId = this.store.beginSnapshotRead(this.jobId, publicationId,
+      jobSnapshotHash(retained.seals), retained.snapshotRoot);
+    this.operations++;
+    let operationEnded = false;
+    const endOperation = () => {
+      if (operationEnded) return;
+      operationEnded = true;
+      this.finishOperation();
+    };
+    let finishing: Promise<void> | undefined;
+    const finish = () => finishing ??= (async () => {
+      try {
+        this.store.endSnapshotRead(readId);
+        await this.reclaimClosedSnapshots(publicationId);
+      } finally { endOperation(); }
+    })();
+    try {
+      const response = await read(retained);
+      if (!response.body) { await finish(); return response; }
+      const reader = response.body.getReader();
+      let cancellation: Promise<void> | undefined;
+      const cancel = (reason?: unknown) => cancellation ??= Promise.resolve()
+        .then(() => reader.cancel(reason))
+        .catch(error => {endOperation(); throw error;});
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const next = await reader.read();
+            if (next.done) { await cancellation; await finish(); controller.close(); }
+            else controller.enqueue(next.value);
+          } catch (error) {
+            try { await cancel(error); await finish(); }
+            catch (cleanupError) {controller.error(cleanupError); return;}
+            controller.error(error);
+          }
+        },
+        async cancel(reason) {
+          await cancel(reason);
+          await finish();
+        },
+      }, {highWaterMark: 0});
+      return new Response(body, {status: response.status, statusText: response.statusText, headers: response.headers});
+    } catch (error) {
+      // Failed preparation or rejected cancellation cannot prove file closure.
+      endOperation();
+      throw error;
+    }
+  }
+
+  /** Internal maintenance, never an agent or consumer operation. */
+  async reclaimSnapshot(publicationId: string, snapshotHash: string): Promise<void> {
+    const owner = this.store.markSnapshotReclaimed(this.jobId, publicationId, snapshotHash,
+      data => Object.values(data.acts).some(act => act.publicationId === publicationId));
+    if (!owner) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'JOB_SNAPSHOT_PINNED');
+    await removeOwnedJobSnapshot(this.store.root, owner);
+  }
+
+  private async reclaimClosedSnapshots(onlyPublicationId?: string): Promise<void> {
+    const current = this.current();
+    if (current.active) return;
+    const publications = onlyPublicationId === undefined ? Object.keys(current.data.publications) : [onlyPublicationId];
+    for (const publicationId of publications) {
+      // Legacy snapshots without an explicit creation identity stay preserved.
+      const owner = this.store.snapshotOwner(this.jobId, publicationId);
+      if (!owner) continue;
+      const reclaimed = this.store.markSnapshotReclaimed(this.jobId, publicationId, owner.snapshotHash,
+        data => Object.values(data.acts).some(act => act.publicationId === publicationId));
+      if (reclaimed) await removeOwnedJobSnapshot(this.store.root, reclaimed);
+    }
+  }
+
+  private finishOperation(): void {
+    this.operations--;
+    if (this.disposed && !this.busy) this.store.close();
   }
 
   private replay(data: JobData, key: string, digest: string): Replay | null {
@@ -198,11 +294,39 @@ export class JobSession {
     const digest = requestDigest(semantic), key = 'agent:' + input.idempotencyKey;
     let current = this.current();
     const previous = this.replay(current.data, key, digest);
-    if (previous) return previous.value;
+    if (previous) {
+      this.operations++;
+      try {
+        if (input.verb === 'close') await this.reclaimClosedSnapshots();
+        return previous.value;
+      } finally { this.finishOperation(); }
+    }
     this.active(current, input.expectedGeneration);
     if (signal.aborted) throw new JobError('JOB_REQUEST_INVALID', 'Request cancelled');
+    if (input.verb === 'close') {
+      this.operations++;
+      try {
+        const closure = this.store.sealClose(this.jobId, current.revision, fresh => {
+          if (fresh.closure?.replayKey === key) {
+            if (fresh.closure.replay.digest !== digest) throw new JobError('JOB_IDEMPOTENCY_CONFLICT');
+            return fresh.closure;
+          }
+          const previous = this.replay(fresh.data, key, digest);
+          return previous ? {replay: previous} : null;
+        }, fresh => {
+          this.active(fresh, input.expectedGeneration);
+          fresh.data.generation++;
+          this.event(fresh.data, {type: 'closed', reason: input.reason} as Omit<JobEvent, 'cursor' | 'jobId' | 'generation'>);
+          const event = fresh.data.events.at(-1)!;
+          const value = {status: 'closed', cursor: event.cursor};
+          return {generation: fresh.data.generation, event, replayKey: key, replay: {digest, value}};
+        });
+        this.notify();
+        await this.reclaimClosedSnapshots();
+        return closure.replay.value;
+      } finally { this.finishOperation(); }
+    }
     let candidate: JobRetainedSource | null = null;
-    let committed = false;
     this.operations++;
     try {
       if (input.verb === 'publish') {
@@ -219,6 +343,7 @@ export class JobSession {
         if (raced) { result = raced.value; return { data: fresh.data }; }
         this.active(fresh, input.expectedGeneration);
         const data = fresh.data;
+        let snapshot: JobSnapshotOwner | undefined;
         data.generation++;
         switch (input.verb) {
           case 'publish': {
@@ -231,6 +356,8 @@ export class JobSession {
               if (ask.status === 'pending') data.asks[ask.askId] = { ...ask, status: 'superseded' };
             }
             data.publications[publication.publicationId] = { publication, retained: candidate! };
+            snapshot = {publicationId: publication.publicationId, snapshotHash: jobSnapshotHash(candidate!.seals),
+              snapshotRoot: candidate!.snapshotRoot, ...candidate!.snapshotIdentity!};
             data.head = publication.publicationId;
             this.event(data, { type: 'published', publication } as Omit<JobEvent, 'cursor' | 'jobId' | 'generation'>);
             result = publication;
@@ -247,23 +374,18 @@ export class JobSession {
             result = ask;
             break;
           }
-          case 'close':
-            data.fetchCapability = null;
-            data.pages = {};
-            this.event(data, { type: 'closed', reason: input.reason } as Omit<JobEvent, 'cursor' | 'jobId' | 'generation'>);
-            result = { status: 'closed', cursor: data.events.at(-1)!.cursor };
-            break;
         }
         data.replays[key] = { digest, value: result };
-        return { data, active: input.verb !== 'close' };
+        return { data, ...(snapshot ? {snapshot} : {}) };
       });
-      committed = candidate === null || Object.values(this.current().data.publications)
-        .some(stored => stored.retained.snapshotRoot === candidate!.snapshotRoot);
       this.notify();
       return result;
     } finally {
-      this.operations--;
-      if (candidate && !committed) await rm(candidate.snapshotRoot, { recursive: true, force: true });
+      try {
+        if (candidate?.snapshotIdentity && !this.store.snapshotReferenced(candidate.snapshotRoot)) {
+          await removeOwnedJobSnapshot(this.store.root, {snapshotRoot: candidate.snapshotRoot, ...candidate.snapshotIdentity});
+        }
+      } finally { this.finishOperation(); }
     }
   }
 
@@ -366,7 +488,9 @@ export class JobSession {
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.notify();
-    this.store.close();
+    this.disposed = true;
+    if (!this.busy) this.store.close();
   }
 }
