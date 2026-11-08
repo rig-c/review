@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.6](https://github.com/rig-c/review/compare/v2.4.5...v2.4.6) (2026-11-08)
+
+
+### Bug Fixes
+
+* read scene-anchored interview contexts and history ([23fa109](https://github.com/rig-c/review/commit/23fa1094fd59b98014daf45e7c083f4c22bfc4d6))
+
 ## [2.4.5](https://github.com/rig-c/review/compare/v2.4.4...v2.4.5) (2026-11-08)
 
 
