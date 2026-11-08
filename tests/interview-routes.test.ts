@@ -3,6 +3,7 @@ import { readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { interviewRoutes } from '../src/interview-routes.ts';
 import { projectFixture } from './interview-project.test.ts';
+import { digest } from '../src/interview-project.ts';
 
 test('interview routes bind image indices and refuse forged, oversized and stale writes', async () => {
   const fixture = projectFixture();
@@ -55,3 +56,31 @@ test('a consumed set ignores stale review output and preserves the historical an
     expect(question.answer).toEqual(answer);
   } finally {fixture.dispose();}
 });
+
+
+for (const adopted of [false, true]) {
+ test(`interview routes preserve the unsupported scene code for ${adopted ? 'adopted' : 'legacy'} post contexts`, async () => {
+  const fixture = projectFixture();
+  const origin = 'http://127.0.0.1:4321';
+  const capability = 'a'.repeat(64);
+  try {
+   const route = interviewRoutes(fixture.root, 'picks', capability);
+   const option = {...fixture.option, question: 'post_composition', stage: 'post-interview',
+    context: {kind: 'scene', scene: {n: 1, path: 'evidence/unsupported-scene.json', sha256: digest('{}')}}};
+   const bytes = JSON.stringify(option);
+   writeFileSync(join(fixture.root, fixture.set.path), bytes);
+   const set = {path: fixture.set.path, sha256: digest(bytes)};
+   writeFileSync(join(fixture.root, 'project.json'), JSON.stringify({...fixture.project,
+    interview: {...(adopted ? {order: fixture.project.interview.order} : {}),
+     post: {items: [{id: 'post_composition', pending_options: set}]}},
+   }));
+   for (const request of [new Request(origin + '/api/interview'), new Request(origin + '/api/interview/picks', {
+    method: 'POST', headers: {origin, 'X-Review-Capability': capability, 'Content-Type': 'application/json'}, body: '{}',
+   })]) {
+    const response = await route(request, origin);
+    expect(response?.status).toBe(400);
+    expect(await response?.json()).toEqual({error: 'INTERVIEW_CONTEXT_KIND_UNSUPPORTED'});
+   }
+  } finally {fixture.dispose();}
+ });
+}

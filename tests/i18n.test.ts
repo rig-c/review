@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {feedbackTimingLabel,timeOnlyBasis} from '../src/stage-comment.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
+import {interviewErrors} from '../web/interview-panel.ts';
 import {
  WEB_STRING_EXEMPTIONS,
  applyDomI18n,
@@ -19,6 +20,7 @@ import {
  setLanguagePreference,
  setLinkLanguage,
  sourceTextContent,
+ t,
  tr,
 } from '../web/i18n.ts';
 import {loadReferencedReview} from '../src/reference.ts';
@@ -1061,4 +1063,19 @@ test('#299: a link forces en or ko over the stored choice and the browser, and s
  setLinkLanguage(null);
  expect(setLanguagePreference('system',korean)).toBe('ko');
  setLanguagePreference('system',{languages:['en-US'],language:'en-US'});
+});
+
+
+test('unsupported scene interview copy retains its named code and meaning in English and Korean', () => {
+ const code = 'INTERVIEW_CONTEXT_KIND_UNSUPPORTED';
+ const key = interviewErrors[code];
+ expect(key).toBe(code);
+ expect(enCatalog[code]).toBe('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: The scene option context is unsupported.');
+ expect(koCatalog[code]).toBe('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: scene 선택지 문맥은 지원하지 않습니다.');
+ for (const language of ['en', 'ko'] as const) {
+  const message = t(key!, undefined, language);
+  expect(message).toStartWith(code + ': ');
+  expect(message).toContain('scene');
+  expect(message).toBe(language === 'en' ? enCatalog[code]! : koCatalog[code]!);
+ }
 });

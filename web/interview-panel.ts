@@ -10,6 +10,7 @@ export const interviewErrors: Readonly<Record<string,string>> = {
   INTERVIEW_CHOICE_INVALID:'interview.invalid',
   INTERVIEW_CHOICE_CONSTRAINT:'interview.constraint',
   INTERVIEW_CHOICE_REQUIRED:'interview.required',
+  INTERVIEW_CONTEXT_KIND_UNSUPPORTED:'INTERVIEW_CONTEXT_KIND_UNSUPPORTED',
   INTERVIEW_OPTIONS_INVALID:'interview.invalidOptions',
   INTERVIEW_OPTIONS_FILE:'interview.file',
   INTERVIEW_OPTIONS_STALE:'interview.stale',
