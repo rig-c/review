@@ -18,14 +18,14 @@ import { readFeedbackSession, readFeedbackCompareSession } from './session-histo
 import { startServer } from './server.ts';
 import { loadCompare } from './compare.ts';
 import { startCompareServer } from './compare-server.ts';
-import { loadPartsView, readVerdict, exportPartsVerdict, exportPartsCorrection, assertPartsUnchanged, type PartsViewOptions } from './parts-view.ts';
+import { loadPartsView, readVerdict, readPartsVerdictJson, exportPartsVerdict, exportPartsCorrection, assertPartsUnchanged, type PartsViewOptions } from './parts-view.ts';
 import { startPartsServer } from './parts-server.ts';
 import { readSession, parseSession, sessionFile, type Feedback } from './session.ts';
 import { readCompareSession } from './compare-session.ts';
 import { exportReviewStrip, exportCompareStrip, stripJson, writeStripOutput, validateStripOutput } from './strip-export.ts';
 import type { StripInterval, StripRequest } from './strip.ts';
 const handoffUsage='[--config <path> [--parts <dir>] [--source <png> --full <dir> [--head <dir>]] [--keypoints <file>]]';
-const usage='Usage: rig-review open <dir> [<dir> ...] [--animation-for <index> <name>] [--reference <video>] [--compare <dir>] [--animation <name>] [--control] [--direct] [--view-only] [--project <create-root> (--project-version <rig> [--post-version <post>] | --project-draft <id> [--parts-verdict-dir <dir>]) --picks-dir <dir>] '+handoffUsage+'\n       --config declares the producer handoff (wins over the review.json "producer" block and discovery of config.json, rig/config.json, ../config.json beside an opened out/); feedback and control take the same flags; --view-only opens without a producer handoff.\n       open is managed by default: one owner workspace at 127.0.0.1:4318 (RIG_REVIEW_FRONT_PORT overrides) hosts targets in one process; --animation applies to all targets, --animation-for overrides one 1-based target, and --direct keeps a separate single-target worker.\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--project <create-root> --project-version <rig> --picks-dir <dir> [--post-version <post>]] [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--project <create-root> --project-version <rig> --picks-dir <dir> [--post-version <post>]] [--format json|issue] [--correction <item id>]\n       rig-review <dir> <dir> ... [--animation <name>] [--animation-for <index> <name>] [--port 4318] [--reference <video>] [--view-only] [--control] '+handoffUsage+'\n       Foreground multi owns a new workspace in this CLI process; a compatible existing owner is joined and the launcher exits. Multi --port accepts 1..65535; single foreground keeps 4317 and --port 0.\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID] [--view-only]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>\n       rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       rig-review interview <create-root> --picks-dir <project-relative directory> [--port <n>]\n       rig-review --version';
+const usage='Usage: rig-review open <dir> [<dir> ...] [--animation-for <index> <name>] [--reference <video>] [--compare <dir>] [--animation <name>] [--control] [--direct] [--view-only] [--project <create-root> (--project-version <rig> [--post-version <post>] | --project-draft <id> [--parts-verdict-dir <dir>]) --picks-dir <dir>] '+handoffUsage+'\n       --config declares the producer handoff (wins over the review.json "producer" block and discovery of config.json, rig/config.json, ../config.json beside an opened out/); feedback and control take the same flags; --view-only opens without a producer handoff.\n       open is managed by default: one owner workspace at 127.0.0.1:4318 (RIG_REVIEW_FRONT_PORT overrides) hosts targets in one process; --animation applies to all targets, --animation-for overrides one 1-based target, and --direct keeps a separate single-target worker.\n       rig-review control <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--project <create-root> --project-version <rig> --picks-dir <dir> [--post-version <post>]] [--page <id> --expected-revision <n> --command <JSON> --wait-ms <n>]\n       rig-review feedback <dir> [--reference <video>] [--compare <dir>] [--animation <name>] '+handoffUsage+' [--project <create-root> --project-version <rig> --picks-dir <dir> [--post-version <post>]] [--format json|issue] [--correction <item id>]\n       rig-review <dir> <dir> ... [--animation <name>] [--animation-for <index> <name>] [--port 4318] [--reference <video>] [--view-only] [--control] '+handoffUsage+'\n       Foreground multi owns a new workspace in this CLI process; a compatible existing owner is joined and the launcher exits. Multi --port accepts 1..65535; single foreground keeps 4317 and --port 0.\n       Usage: bun run review -- <review.json|output-directory> [--port 4317] [--checkpoint ID] [--view-only]\n       bun run check -- <review.json|output-directory>\n       bun run feedback -- <review.json|output-directory>\n       bun run review -- compare <a> <b> --reference <video> --animation <name> [--port 4317]\n       bun run check -- compare <a> <b> --reference <video> --animation <name>\n       bun run feedback -- compare <a> <b> --reference <video> --animation <name>\n       rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--by <name>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       rig-review interview <create-root> --picks-dir <project-relative directory> [--port <n>]\n       rig-review --version';
 async function stripCommand(args:string[],options:{stateDir?:string}){
   const compare=args[0]==='compare';if(compare)args.shift();const a=args.shift(),b=compare?args.shift():undefined;if(!a||compare&&!b)throw new Error('strip: expected package input(s)');
   let reference:string|undefined,referenceVideo:string|undefined,animation:string|undefined,basis:'a'|'b'|undefined,range:string|undefined,output:string|undefined,jsonOnly=false,all=false;
@@ -201,17 +201,19 @@ function commandHelpRequested(args:readonly string[],command:'open'|'review'|'ch
  }
  return false;
 }
-const partsUsage='Usage: rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       A directory holding parts.json (or a build root whose rig/ holds it) opens in parts mode, before rigging; a review package or check/ folder opens its atlas.\n       The sign-off is written to parts-review.json beside parts.json (or the model), or to --verdict.';
+const partsUsage='Usage: rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--by <name>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       A directory holding parts.json (or a build root whose rig/ holds it) opens in parts mode, before rigging; a review package or check/ folder opens its atlas.\n       The sign-off is written to parts-review.json beside parts.json (or the model), or to --verdict.';
 /** `rig-review parts` (#348): the parts and atlas view, served in the foreground; exits when its last tab closes. */
 async function partsCommand(args:string[]){
  const input=args.shift();if(!input||input==='--help'||input==='-h'){console.log(partsUsage);return;}
  const options:PartsViewOptions={};let port=4317,format:'json'|'issue'|null=null;const seen=new Set<string>();
- let itemId:string|undefined,partNote:string|undefined,inventory:string|undefined;
+ let itemId:string|undefined,partNote:string|undefined,inventory:string|undefined,by:string|undefined;
  while(args.length){const flag=args.shift()!;if(flag==='--help'||flag==='-h'){console.log(partsUsage);return;}if(seen.has(flag))throw new Error(`parts: duplicate option ${flag}`);seen.add(flag);const value=args.shift();if(!value)throw new Error(`Missing value for ${flag}`);
   if(flag==='--format'){if(value!=='json'&&value!=='issue')throw new Error('--format: expected json or issue');format=value;}else if(flag==='--painting')options.painting=value;else if(flag==='--rig')options.rig=value;else if(flag==='--mesh-report')options.meshReport=value;else if(flag==='--check')options.check=value;else if(flag==='--verdict')options.verdict=value;
+  else if(flag==='--by'){if(!value.trim())throw new Error('--by: expected a nonblank reviewer name');by=value;}
   else if(flag==='--correction')itemId=value;else if(flag==='--part-note')partNote=value;else if(flag==='--parts-file')inventory=value;
   else if(flag==='--port'){port=Number(value);if(!Number.isInteger(port)||port<0||port>65535)throw new Error('--port: expected integer 0..65535');}
   else throw new Error(`Unknown option ${flag}\n${partsUsage}`);}
+ if(by!==undefined&&(format||itemId||partNote||inventory))throw new Error('--by: launch only; incompatible with export or correction options');
  if((itemId||partNote||inventory)&&(!format||!itemId||!inventory))throw new Error('CORRECTION_SELECTOR_INVALID: parts correction requires --format, --correction and --parts-file');
  const pkg=await loadPartsView(input,options);
  if(format&&itemId&&inventory){
@@ -223,10 +225,53 @@ async function partsCommand(args:string[]){
    process.stdout.write(format==='json'?exportPartsCorrection(verdict,projected):formatCorrectionIssue(projected)+'\n');
    return;
  }
+ if(format==='json'){process.stdout.write(await readPartsVerdictJson(pkg));return;}
  if(format){const saved=await readVerdict(pkg);if(!saved.verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE: save a verdict first');process.stdout.write(exportPartsVerdict(saved.verdict,format));return;}
- const capability=randomBytes(32).toString('hex'),server=await startPartsServer(pkg,{port,capability,exitOnClose:true});
- const stop=(sig:string)=>{server.stop(true);console.log(`review parts: exiting — received ${sig}.`);process.exit(0);};process.once('SIGINT',()=>stop('SIGINT'));process.once('SIGTERM',()=>stop('SIGTERM'));
- console.log(`Parts view ready: http://127.0.0.1:${server.port}/#cap=${capability}\nMode: ${pkg.mode} · ${pkg.items.length} ${pkg.mode==='parts'?'parts':'regions'} · ${pkg.flags.length} producer flags\nSign-off: ${pkg.verdictPath}\nPress Ctrl+C to stop.`);
+ const capability=randomBytes(32).toString('hex');
+ let outputFailure: Error | null = null;
+ let rejectWrite: ((error: Error) => void) | undefined;
+ let server: Awaited<ReturnType<typeof startPartsServer>> | undefined;
+ let stopping: Promise<void> | undefined;
+ const shutdown = () => stopping ??= server!.shutdown();
+ const failOutput = (cause: unknown) => {
+   if (outputFailure) return;
+   outputFailure = new Error('PARTS_VERDICT_NOTIFY_FAILED: stdout failed', {cause});
+   process.exitCode = 1;
+   console.error(outputFailure.message);
+   rejectWrite?.(outputFailure);
+   if (server) void shutdown();
+ };
+ const outputClosed = () => failOutput(new Error('stdout closed'));
+ process.stdout.on('error', failOutput);
+ process.stdout.on('close', outputClosed);
+ const stop = (signal: string) => {
+   if (!outputFailure) console.log(`review parts: exiting — received ${signal}.`);
+   void shutdown();
+ };
+ const interrupt = () => stop('SIGINT'), terminate = () => stop('SIGTERM');
+ try {
+   server = await startPartsServer(pkg, {port, capability, by, onNotifyFailure: failOutput,
+     onWriteFailure: error => console.error(error.message),
+     onSaved: async event => {
+       if (outputFailure) throw outputFailure;
+       const line = 'RIG_REVIEW_PARTS_SAVED ' + JSON.stringify(event).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029') + '\n';
+       // The callback settles after the complete write, including when write() reports backpressure.
+       await new Promise<void>((resolve, reject) => {
+         rejectWrite = reject;
+         try { process.stdout.write(line, error => error ? failOutput(error) : resolve()); }
+         catch (error) { failOutput(error); }
+       }).finally(() => { rejectWrite = undefined; });
+     },
+   });
+   process.once('SIGINT', interrupt);process.once('SIGTERM', terminate);
+   console.log(`Parts view ready: http://127.0.0.1:${server.port}/#cap=${capability}\nMode: ${pkg.mode} · ${pkg.items.length} ${pkg.mode==='parts'?'parts':'regions'} · ${pkg.flags.length} producer flags\nSign-off: ${pkg.verdictPath}\nPress Ctrl+C to stop.`);
+   if (outputFailure) await shutdown();
+   await server.live.exited;
+   if (stopping) await stopping;
+ } finally {
+   process.removeListener('SIGINT', interrupt);process.removeListener('SIGTERM', terminate);
+   process.stdout.removeListener('error', failOutput);process.stdout.removeListener('close', outputClosed);
+ }
 }
 export async function main(args:string[],options:{stateDir?:string}={}){
   options={stateDir:options.stateDir??defaultStateDir()};if(args[0]==='--')args.shift();
