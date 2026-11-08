@@ -21,6 +21,7 @@ import {
   type PublishRequestV3,
   type RecordAct,
   type RecordOptionResult,
+  type RecordPartsIdentity,
   type RecordPlanResult,
   type SourceV3,
 } from '../src/job-contract.ts';
@@ -86,6 +87,12 @@ const closureFiles = [
   inputFileA,
   recordIdentity,
 ] as const;
+
+const sealedParts: RecordPartsIdentity = {
+  name: '@rig-c/parts',
+  version: '2.25.1',
+  integrity: 'sha512-contract-parts-integrity',
+};
 
 test('CP1 schema constants and capabilities preserve API@2 defaults alongside opt-in API@3 / act@4', () => {
   expect(JOB_API_SCHEMA).toBe('rig-review/job-api@2');
@@ -313,18 +320,23 @@ test('CP1 parseRecordSubject enforces canonical step-ID checkpoint wire shape an
   expect(() => parseRecordSubject({ kind: 'described-correction' })).toThrow('JOB_ACT_KIND_DISABLED');
 });
 
-test('CP1 parseRecordPublishedContext requires exact five keys, removes CP0 kind, and enforces closure/subject invariants', () => {
+test('CP1 parseRecordPublishedContext requires exact six keys (including A1 parts), removes CP0 kind, and enforces closure/subject invariants', () => {
   const validOptionContext: OptionContext = {
     label: '프로젝트 인터뷰 — 한글🙂',
+    parts: sealedParts,
     inputs: [inputFileA, inputFileB],
     files: closureFiles,
     plan: null,
     subjects: [{ kind: 'interview-picks', questionId: optionSelection.questionId, setId: optionSelection.setId }],
   };
-  expect(parseRecordPublishedContext(validOptionContext, optionSelection, recordIdentity)).toEqual(validOptionContext);
+  const parsedOptionContext = parseRecordPublishedContext(validOptionContext, optionSelection, recordIdentity);
+  expect(parsedOptionContext).toEqual(validOptionContext);
+  expect(Object.keys(parsedOptionContext)).toEqual(['label', 'parts', 'inputs', 'files', 'plan', 'subjects']);
+  expect(Object.keys(parsedOptionContext.parts)).toEqual(['name', 'version', 'integrity']);
 
   const validPlanContext: PlanContext = {
     label: '프로젝트 플랜 — 한글🙂',
+    parts: sealedParts,
     inputs: [inputFileA, inputFileB],
     files: [inputFileB, inputFileA, recordIdentity],
     plan: {
@@ -339,6 +351,26 @@ test('CP1 parseRecordPublishedContext requires exact five keys, removes CP0 kind
     ],
   };
   expect(parseRecordPublishedContext(validPlanContext, planSelection, recordIdentity)).toEqual(validPlanContext);
+
+  // Former five-key context without parts or malformed parts refuses JOB_SOURCE_MISMATCH
+  const { parts: _omittedParts, ...fiveKeyOptionContext } = validOptionContext;
+  expect(() =>
+    parseRecordPublishedContext(fiveKeyOptionContext, optionSelection, recordIdentity),
+  ).toThrow('JOB_SOURCE_MISMATCH');
+  expect(() =>
+    parseRecordPublishedContext(
+      { ...validOptionContext, parts: { ...sealedParts, extra: '1' } },
+      optionSelection,
+      recordIdentity,
+    ),
+  ).toThrow('JOB_SOURCE_MISMATCH');
+  expect(() =>
+    parseRecordPublishedContext(
+      { ...validOptionContext, parts: { ...sealedParts, integrity: '' } },
+      optionSelection,
+      recordIdentity,
+    ),
+  ).toThrow('JOB_SOURCE_MISMATCH');
 
   // Inspection-only plan with empty subjects is allowed
   const inspectOnlyPlan: PlanContext = {
@@ -356,6 +388,18 @@ test('CP1 parseRecordPublishedContext requires exact five keys, removes CP0 kind
   ).not.toThrow();
   expect(() =>
     assertEqualRecordContexts(validPlanContext, { ...validPlanContext, label: 'Changed' }),
+  ).toThrow('JOB_SOURCE_MISMATCH');
+  expect(() =>
+    assertEqualRecordContexts(validPlanContext, {
+      ...validPlanContext,
+      parts: { ...sealedParts, version: '2.25.2' },
+    }),
+  ).toThrow('JOB_SOURCE_MISMATCH');
+  expect(() =>
+    assertEqualRecordContexts(validPlanContext, {
+      ...validPlanContext,
+      parts: { ...sealedParts, integrity: 'sha512-different-integrity' },
+    }),
   ).toThrow('JOB_SOURCE_MISMATCH');
 
   // Old CP0 kind field on context is rejected
@@ -462,6 +506,7 @@ test('CP1 parseRecordPublishedContext requires exact five keys, removes CP0 kind
 test('CP1 public digest, instance key and RecordSource enforce exact key order, Unicode preservation, and hash/closure matching', () => {
   const optionContext: OptionContext = {
     label: '옵션 세트 e\u0301 vs \u00e9',
+    parts: sealedParts,
     inputs: [inputFileA, inputFileB],
     files: closureFiles,
     plan: null,
@@ -517,6 +562,7 @@ test('CP1 public digest, instance key and RecordSource enforce exact key order, 
 
   const planContext: PlanContext = {
     label: '플랜 컨텍스트',
+    parts: sealedParts,
     inputs: [inputFileA, inputFileB],
     files: [inputFileB, inputFileA, recordIdentity],
     plan: {
@@ -663,6 +709,7 @@ test('CP1 RecordAct (rig-review/act@4) validates interview-picks, checkpoint and
     selection: optionSelection,
     context: {
       label: 'Interview',
+      parts: sealedParts,
       inputs: [inputFileA],
       files: [optionFile, inputFileA, recordIdentity],
       plan: null,
@@ -676,6 +723,7 @@ test('CP1 RecordAct (rig-review/act@4) validates interview-picks, checkpoint and
     selection: planSelection,
     context: {
       label: 'Plan',
+      parts: sealedParts,
       inputs: [inputFileA],
       files: [inputFileA, recordIdentity],
       plan: { steps: [{ id: 'step-1', hash: sha('1') }] },

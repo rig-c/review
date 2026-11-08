@@ -733,8 +733,15 @@ export interface RecordSignoffSubject {
 export type RecordPlanSubject = RecordCheckpointSubject | RecordSignoffSubject;
 export type RecordSubject = RecordPicksSubject | RecordPlanSubject;
 
+export interface RecordPartsIdentity {
+  readonly name: string;
+  readonly version: string;
+  readonly integrity: string;
+}
+
 export interface RecordContextBase {
   readonly label: string;
+  readonly parts: RecordPartsIdentity;
   readonly inputs: readonly JobFileIdentity[];
   readonly files: readonly JobFileIdentity[];
 }
@@ -756,6 +763,7 @@ export interface RecordReaderInput<Result extends RecordResult = RecordResult> {
   readonly record: ProjectRecord;
   readonly result: Result;
   readonly phase: 'inventory' | 'retained';
+  readonly parts?: RecordPartsIdentity;
 }
 
 export type ReaderValue<Value> = Value | Promise<Value>;
@@ -906,6 +914,7 @@ export type JobRecordSignoffStage = RecordSignoffStage;
 export type JobRecordSignoffSubject = RecordSignoffSubject;
 export type JobRecordPlanSubject = RecordPlanSubject;
 export type JobRecordSubject = RecordSubject;
+export type JobRecordPartsIdentity = RecordPartsIdentity;
 export type JobRecordContextBase = RecordContextBase;
 export type JobOptionContext = OptionContext;
 export type JobPlanContext = PlanContext;

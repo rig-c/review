@@ -9,7 +9,7 @@ import {
   type JobPublishRequest, type JobResult, type JobSelector, type JobSha256, type JobSubject,
   type OptionContext, type OptionSource, type PlanContext, type PlanSource, type ProjectRecord,
   type PublishRequestV3, type PublishResultV3, type RecordAct, type RecordFreeze,
-  type RecordOptionResult, type RecordPicksSubject, type RecordPlanResult, type RecordPlanSubject,
+  type RecordOptionResult, type RecordPartsIdentity, type RecordPicksSubject, type RecordPlanResult, type RecordPlanSubject,
   type RecordResult, type RecordSignoffStage, type RecordSource, type RecordSubject,
   jobCaptureBodyLimit, jobRawActMediaType,
 } from './job-contract.ts';
@@ -478,6 +478,54 @@ function parseOptionSubjects(
   return [{ kind: 'interview-picks', questionId: parsed.questionId, setId: parsed.setId }];
 }
 
+export function parseRecordPartsIdentity(
+  value: unknown,
+  code: JobErrorCode = 'JOB_SOURCE_MISMATCH',
+): RecordPartsIdentity {
+  const raw = exactObject(value, ['name', 'version', 'integrity'], code);
+  return {
+    name: asCode(() => jobText(raw.name), code),
+    version: asCode(() => jobText(raw.version), code),
+    integrity: asCode(() => jobText(raw.integrity), code),
+  };
+}
+
+type ParsedRecordPayload =
+  | {
+      readonly kind: 'option-set';
+      readonly inputs: readonly JobFileIdentity[];
+      readonly files: readonly JobFileIdentity[];
+      readonly plan: null;
+      readonly subjects: readonly [RecordPicksSubject];
+    }
+  | {
+      readonly kind: 'plan';
+      readonly inputs: readonly JobFileIdentity[];
+      readonly files: readonly JobFileIdentity[];
+      readonly plan: JobPlanIdentity;
+      readonly subjects: readonly RecordPlanSubject[];
+    };
+
+function parseRecordClosureAndSubjects(
+  rawInputs: unknown,
+  rawFiles: unknown,
+  rawPlan: unknown,
+  rawSubjects: unknown,
+  selection: RecordResult,
+  checkedRecord?: ProjectRecord,
+): ParsedRecordPayload {
+  const { inputs, files } = parseFileClosure(rawInputs, rawFiles, checkedRecord, 'JOB_SOURCE_MISMATCH');
+  if (selection.kind === 'option-set') {
+    if (rawPlan !== null) throw new JobError('JOB_SOURCE_MISMATCH');
+    const subjects = parseOptionSubjects(rawSubjects, selection, 'JOB_SOURCE_MISMATCH');
+    return { kind: 'option-set', inputs, files, plan: null, subjects };
+  }
+  if (rawPlan === null) throw new JobError('JOB_SOURCE_MISMATCH');
+  const { plan, stepIds } = parsePlanIdentity(rawPlan, 'JOB_SOURCE_MISMATCH');
+  const subjects = parsePlanSubjects(rawSubjects, stepIds, 'JOB_SOURCE_MISMATCH');
+  return { kind: 'plan', inputs, files, plan, subjects };
+}
+
 export function parseRecordPublishedContext(
   value: unknown,
   result: RecordOptionResult,
@@ -500,18 +548,21 @@ export function parseRecordPublishedContext(
 ): OptionContext | PlanContext {
   const selection = parseRecordResult(result);
   const checkedRecord = record === undefined ? undefined : parseProjectRecord(record, 'JOB_SOURCE_MISMATCH');
-  const item = exactObject(value, ['label', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH');
+  const item = exactObject(value, ['label', 'parts', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH');
   const label = asCode(() => jobText(item.label), 'JOB_SOURCE_MISMATCH');
-  const { inputs, files } = parseFileClosure(item.inputs, item.files, checkedRecord, 'JOB_SOURCE_MISMATCH');
-  if (selection.kind === 'option-set') {
-    if (item.plan !== null) throw new JobError('JOB_SOURCE_MISMATCH');
-    const subjects = parseOptionSubjects(item.subjects, selection, 'JOB_SOURCE_MISMATCH');
-    return { label, inputs, files, plan: null, subjects };
+  const parts = parseRecordPartsIdentity(item.parts, 'JOB_SOURCE_MISMATCH');
+  const body = parseRecordClosureAndSubjects(
+    item.inputs,
+    item.files,
+    item.plan,
+    item.subjects,
+    selection,
+    checkedRecord,
+  );
+  if (body.kind === 'option-set') {
+    return { label, parts, inputs: body.inputs, files: body.files, plan: null, subjects: body.subjects };
   }
-  if (item.plan === null) throw new JobError('JOB_SOURCE_MISMATCH');
-  const { plan, stepIds } = parsePlanIdentity(item.plan, 'JOB_SOURCE_MISMATCH');
-  const subjects = parsePlanSubjects(item.subjects, stepIds, 'JOB_SOURCE_MISMATCH');
-  return { label, inputs, files, plan, subjects };
+  return { label, parts, inputs: body.inputs, files: body.files, plan: body.plan, subjects: body.subjects };
 }
 
 export function assertEqualRecordContexts(
@@ -651,6 +702,68 @@ export function recordInstanceKey(fingerprint: unknown, sourceHash: unknown): Jo
   );
 }
 
+function assembleRecordSource(
+  record: ProjectRecord,
+  selection: RecordResult,
+  body: ParsedRecordPayload,
+  rawOptionSetFile?: unknown,
+): OptionSource | PlanSource {
+  if (selection.kind === 'option-set') {
+    if (body.kind !== 'option-set' || !rawOptionSetFile) throw new JobError('JOB_SOURCE_MISMATCH');
+    const optionSetFile = parseFileRow(rawOptionSetFile, 'JOB_SOURCE_MISMATCH');
+    const optionSet = { id: selection.setId, sha256: optionSetFile.sha256 };
+    const sourceHash = recordSourceDigest({
+      record,
+      selection,
+      inputs: body.inputs,
+      optionSet,
+      optionSetFile,
+      plan: null,
+      subjects: body.subjects,
+      files: body.files,
+    });
+    return {
+      sourceHash,
+      projectHash: record.sha256,
+      record,
+      inputs: body.inputs,
+      files: body.files,
+      subject: 'option-set',
+      selection: { kind: 'option-set', questionId: selection.questionId, setId: selection.setId },
+      optionSet,
+      optionSetFile,
+      plan: null,
+      subjects: body.subjects,
+    };
+  }
+  if (body.kind !== 'plan' || (rawOptionSetFile !== undefined && rawOptionSetFile !== null)) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  const sourceHash = recordSourceDigest({
+    record,
+    selection,
+    inputs: body.inputs,
+    optionSet: null,
+    optionSetFile: null,
+    plan: body.plan,
+    subjects: body.subjects,
+    files: body.files,
+  });
+  return {
+    sourceHash,
+    projectHash: record.sha256,
+    record,
+    inputs: body.inputs,
+    files: body.files,
+    subject: 'plan',
+    selection: { kind: 'plan' },
+    optionSet: null,
+    optionSetFile: null,
+    plan: body.plan,
+    subjects: body.subjects,
+  };
+}
+
 export function buildRecordSource(input: {
   readonly record: ProjectRecord;
   readonly selection: RecordOptionResult;
@@ -672,62 +785,23 @@ export function buildRecordSource(input: {
   const record = parseProjectRecord(input.record, 'JOB_SOURCE_MISMATCH');
   const selection = asCode(() => parseRecordResult(input.selection), 'JOB_SOURCE_MISMATCH');
   const context = parseRecordPublishedContext(input.context, selection, record);
-  if (selection.kind === 'option-set') {
-    if (!input.optionSetFile) throw new JobError('JOB_SOURCE_MISMATCH');
-    const optionSetFile = parseFileRow(input.optionSetFile, 'JOB_SOURCE_MISMATCH');
-    const optionSet = { id: selection.setId, sha256: optionSetFile.sha256 };
-    const optionContext = context as OptionContext;
-    const sourceHash = recordSourceDigest({
-      record,
-      selection,
-      inputs: optionContext.inputs,
-      optionSet,
-      optionSetFile,
-      plan: null,
-      subjects: optionContext.subjects,
-      files: optionContext.files,
-    });
-    return {
-      sourceHash,
-      projectHash: record.sha256,
-      record,
-      inputs: optionContext.inputs,
-      files: optionContext.files,
-      subject: 'option-set',
-      selection: { kind: 'option-set', questionId: selection.questionId, setId: selection.setId },
-      optionSet,
-      optionSetFile,
-      plan: null,
-      subjects: optionContext.subjects,
-    };
-  }
-  if (input.optionSetFile !== undefined && input.optionSetFile !== null) {
-    throw new JobError('JOB_SOURCE_MISMATCH');
-  }
-  const planContext = context as PlanContext;
-  const sourceHash = recordSourceDigest({
-    record,
-    selection,
-    inputs: planContext.inputs,
-    optionSet: null,
-    optionSetFile: null,
-    plan: planContext.plan,
-    subjects: planContext.subjects,
-    files: planContext.files,
-  });
-  return {
-    sourceHash,
-    projectHash: record.sha256,
-    record,
-    inputs: planContext.inputs,
-    files: planContext.files,
-    subject: 'plan',
-    selection: { kind: 'plan' },
-    optionSet: null,
-    optionSetFile: null,
-    plan: planContext.plan,
-    subjects: planContext.subjects,
-  };
+  const body: ParsedRecordPayload =
+    context.plan === null
+      ? {
+          kind: 'option-set',
+          inputs: context.inputs,
+          files: context.files,
+          plan: null,
+          subjects: context.subjects,
+        }
+      : {
+          kind: 'plan',
+          inputs: context.inputs,
+          files: context.files,
+          plan: context.plan,
+          subjects: context.subjects,
+        };
+  return assembleRecordSource(record, selection, body, input.optionSetFile);
 }
 
 export function parseRecordSource(value: unknown): RecordSource {
@@ -754,25 +828,17 @@ export function parseRecordSource(value: unknown): RecordSource {
   if (projectHash !== record.sha256) throw new JobError('JOB_SOURCE_MISMATCH');
   const selection = asCode(() => parseRecordResult(item.selection), 'JOB_SOURCE_MISMATCH');
   if (item.subject !== selection.kind) throw new JobError('JOB_SOURCE_MISMATCH');
-  const context = parseRecordPublishedContext(
-    {
-      label: 'record-source',
-      inputs: item.inputs,
-      files: item.files,
-      plan: item.plan,
-      subjects: item.subjects,
-    },
+  const body = parseRecordClosureAndSubjects(
+    item.inputs,
+    item.files,
+    item.plan,
+    item.subjects,
     selection,
     record,
   );
   if (selection.kind === 'option-set') {
     const rawOptionSet = exactObject(item.optionSet, ['id', 'sha256'], 'JOB_SOURCE_MISMATCH');
-    const built = buildRecordSource({
-      record,
-      selection,
-      context: context as OptionContext,
-      optionSetFile: parseFileRow(item.optionSetFile, 'JOB_SOURCE_MISMATCH'),
-    });
+    const built = assembleRecordSource(record, selection, body, item.optionSetFile) as OptionSource;
     if (rawOptionSet.id !== built.optionSet.id ||
         rawOptionSet.sha256 !== built.optionSet.sha256 ||
         sourceHash !== built.sourceHash) {
@@ -783,12 +849,7 @@ export function parseRecordSource(value: unknown): RecordSource {
   if (item.optionSet !== null || item.optionSetFile !== null) {
     throw new JobError('JOB_SOURCE_MISMATCH');
   }
-  const built = buildRecordSource({
-    record,
-    selection,
-    context: context as PlanContext,
-    optionSetFile: null,
-  });
+  const built = assembleRecordSource(record, selection, body, null) as PlanSource;
   if (sourceHash !== built.sourceHash) throw new JobError('JOB_SOURCE_MISMATCH');
   return built;
 }

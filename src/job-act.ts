@@ -1,12 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import {
-  JOB_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
-  type JobAct, type JobActValues, type JobPendingAsk, type JobReviewerBinding,
+  JOB_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
+  type ActV3, type JobAct, type JobActValues, type JobPendingAsk, type JobReviewerBinding,
   type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
+  type PendingAskV3, type RecordAct, type RecordSource, type RecordSubject, type SourceV3,
 } from './job-contract.ts';
-import { jobHash, jobId, jobInteger, jobObject, requestDigest } from './job-api.ts';
+import {
+  isRecordSource, jobHash, jobId, jobInteger, jobObject,
+  parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
+} from './job-api.ts';
 import { validatePicks } from './interview-picks.ts';
-import type { JobRetainedSource } from './job-source.ts';
+import {
+  isRetainedRecordSource,
+  type JobRetainedRecordSource,
+  type JobRetainedSource,
+  type JobRetainedSourceV3,
+} from './job-source.ts';
 import { JobError } from './job-store.ts';
 import { checkedPath, readRegular } from './interview-project.ts';
 import { prepareJobImageSet } from './job-image-set.ts';
@@ -26,7 +35,56 @@ function requirePlan(source: JobSourceBinding): void {
   if (!source.plan?.steps.length) throw new JobError('JOB_ASK_INVALID', 'Published plan step identities are required');
 }
 
-export function bindJobAsk(subject: JobSubject, retained: JobRetainedSource): JobSourceBinding {
+export function bindJobRecordAsk(subject: unknown, retained: JobRetainedRecordSource): RecordSource {
+  const source = structuredClone(parseRecordSource(retained.source));
+  const parsedSubject = validateRecordAskSubject(subject, source);
+  if (
+    requestDigest(retained.subjects) !== requestDigest(source.subjects) ||
+    !retained.subjects.some(candidate => requestDigest(candidate) === requestDigest(parsedSubject))
+  ) {
+    throw new JobError('JOB_ASK_INVALID');
+  }
+  switch (parsedSubject.kind) {
+    case 'interview-picks': {
+      if (source.subject !== 'option-set') throw new JobError('JOB_ASK_INVALID');
+      const question = retained.questions.find(
+        item => item.editable && item.set.question === parsedSubject.questionId && item.set.id === parsedSubject.setId,
+      );
+      if (
+        !question ||
+        question.ref.path !== source.optionSetFile.path ||
+        question.ref.sha256 !== source.optionSet.sha256
+      ) {
+        throw new JobError('JOB_ASK_INVALID');
+      }
+      return source;
+    }
+    case 'checkpoint': {
+      if (
+        source.subject !== 'plan' ||
+        !source.plan.steps.length ||
+        !source.plan.steps.some(step => step.id === parsedSubject.checkpointId)
+      ) {
+        throw new JobError('JOB_ASK_INVALID');
+      }
+      return source;
+    }
+    case 'signoff': {
+      if (source.subject !== 'plan' || !source.plan.steps.length) {
+        throw new JobError('JOB_ASK_INVALID');
+      }
+      return source;
+    }
+  }
+}
+
+export function bindJobAsk(subject: JobSubject, retained: JobRetainedSource): JobSourceBinding;
+export function bindJobAsk(subject: RecordSubject | JobSubject, retained: JobRetainedRecordSource): RecordSource;
+export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRetainedSourceV3): SourceV3;
+export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRetainedSourceV3): SourceV3 {
+  if (isRetainedRecordSource(retained)) {
+    return bindJobRecordAsk(subject, retained);
+  }
   const source = structuredClone(retained.source);
   if (source.subject === 'image-set') {
     if (subject.kind !== 'review-verdict' || subject.stage !== 'image-review') throw new JobError('JOB_ASK_INVALID');
@@ -47,7 +105,7 @@ export function bindJobAsk(subject: JobSubject, retained: JobRetainedSource): Jo
     }
     case 'checkpoint': {
       requirePlan(source);
-      const stepId = subject.planStepId ?? subject.checkpointId;
+      const stepId = ('planStepId' in subject ? subject.planStepId : undefined) ?? subject.checkpointId;
       if (!declared || !source.plan!.steps.some(step => step.id === stepId)) throw new JobError('JOB_ASK_INVALID');
       return source;
     }
@@ -123,6 +181,207 @@ export function prepareJobStill(input: JobUISubmission, ask: JobPendingAsk, reta
   return {still, bytes, binding: binding as unknown as JobRigCapture['binding']};
 }
 
+function actObject<Key extends string>(value: unknown, allowed: readonly Key[]): Record<Key, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new JobError('JOB_ACT_INVALID');
+  }
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key as Key)) throw new JobError('JOB_ACT_INVALID');
+  }
+  return value as Record<Key, unknown>;
+}
+
+function actIdField(value: unknown): string {
+  try {
+    return jobId(value);
+  } catch {
+    throw new JobError('JOB_ACT_INVALID');
+  }
+}
+
+export function prepareJobRecordAct(options: {
+  readonly jobId: string;
+  readonly submission: JobUISubmission;
+  readonly ask: PendingAskV3;
+  readonly retained: JobRetainedRecordSource;
+  readonly reviewer: JobReviewerBinding;
+  readonly still?: unknown;
+  readonly actId?: string;
+  readonly at?: string;
+}): RecordAct {
+  const { submission, ask, retained, reviewer } = options;
+  if (!submission || typeof submission !== 'object' || Array.isArray(submission)) {
+    throw new JobError('JOB_REQUEST_INVALID');
+  }
+  const rawSubmission = submission as unknown as Record<string, unknown>;
+  if (
+    options.still !== undefined ||
+    rawSubmission.capture !== undefined ||
+    'authority' in rawSubmission ||
+    'source' in rawSubmission
+  ) {
+    throw new JobError('JOB_REQUEST_INVALID');
+  }
+  if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(rawSubmission.kind)) {
+    throw new JobError('JOB_ACT_KIND_DISABLED');
+  }
+  if (ask.status !== 'pending') throw new JobError('JOB_ASK_SUPERSEDED');
+  if (!isRecordSource(ask.source)) throw new JobError('JOB_ACT_SOURCE_STALE');
+  let askSubject: RecordSubject;
+  try {
+    askSubject = validateRecordAskSubject(ask.subject, ask.source);
+  } catch {
+    throw new JobError('JOB_ACT_SOURCE_STALE');
+  }
+  if (submission.kind !== askSubject.kind || submission.publicationId !== ask.publicationId) {
+    throw new JobError('JOB_ACT_SOURCE_STALE');
+  }
+  let boundSource: RecordSource;
+  try {
+    boundSource = bindJobRecordAsk(askSubject, retained);
+  } catch {
+    throw new JobError('JOB_ACT_SOURCE_STALE');
+  }
+  if (
+    boundSource.sourceHash !== ask.source.sourceHash ||
+    requestDigest(boundSource) !== requestDigest(ask.source)
+  ) {
+    throw new JobError('JOB_ACT_SOURCE_STALE');
+  }
+  if (
+    !reviewer ||
+    typeof reviewer !== 'object' ||
+    Array.isArray(reviewer) ||
+    Object.keys(reviewer).some(key => key !== 'id' && key !== 'role') ||
+    typeof reviewer.id !== 'string' ||
+    !reviewer.id ||
+    (reviewer.role !== 'owner' && reviewer.role !== 'delegate')
+  ) {
+    throw new JobError('JOB_AUTHORITY_REFUSED');
+  }
+  const at = options.at ?? new Date().toISOString();
+  const actId = options.actId ?? randomUUID();
+  const envelope = {
+    schema: JOB_RECORD_ACT_SCHEMA,
+    actId: actIdField(actId),
+    jobId: actIdField(options.jobId),
+    askId: actIdField(ask.askId),
+    publicationId: actIdField(ask.publicationId),
+    authority: {
+      actor: 'human' as const,
+      channel: 'review-ui' as const,
+      reviewer: { id: reviewer.id, role: reviewer.role },
+    },
+    at,
+  };
+
+  switch (askSubject.kind) {
+    case 'interview-picks': {
+      if (boundSource.subject !== 'option-set') throw new JobError('JOB_ACT_SOURCE_STALE');
+      const value = actObject(submission.value, ['questionId', 'selections', 'note']);
+      if (
+        !('questionId' in value) ||
+        !('selections' in value) ||
+        !('note' in value) ||
+        value.questionId !== askSubject.questionId ||
+        !Array.isArray(value.selections)
+      ) {
+        throw new JobError('JOB_ACT_INVALID');
+      }
+      const question = retained.questions.find(
+        item => item.editable && item.set.id === askSubject.setId && item.set.question === askSubject.questionId,
+      );
+      if (!question) throw new JobError('JOB_ACT_SOURCE_STALE');
+      const selections = value.selections.map(raw => {
+        const item = actObject(raw, ['itemId', 'optionId', 'otherText']);
+        if (!('itemId' in item) || !('optionId' in item) || !('otherText' in item)) {
+          throw new JobError('JOB_ACT_INVALID');
+        }
+        if (item.otherText !== null && typeof item.otherText !== 'string') {
+          throw new JobError('JOB_ACT_INVALID');
+        }
+        return {
+          itemId: actIdField(item.itemId),
+          optionId: actIdField(item.optionId),
+          otherText: item.otherText === null ? null : words(item.otherText),
+        };
+      });
+      const note = words(value.note);
+      try {
+        validatePicks(
+          {
+            schema: 'rig-review/interview-picks@1',
+            set: question.ref,
+            by: 'user',
+            at,
+            picks: selections.map(item => ({
+              ask: item.itemId,
+              option_id: item.optionId,
+              ...(item.otherText === null ? {} : { other_text: item.otherText }),
+            })),
+            note,
+          },
+          question,
+        );
+      } catch {
+        throw new JobError('JOB_ACT_INVALID');
+      }
+      return parseRecordAct({
+        ...envelope,
+        kind: 'interview-picks',
+        source: boundSource,
+        value: { questionId: askSubject.questionId, selections, note },
+      });
+    }
+    case 'checkpoint': {
+      if (boundSource.subject !== 'plan') throw new JobError('JOB_ACT_SOURCE_STALE');
+      const value = actObject(submission.value, ['checkpointId', 'outcome', 'words']);
+      if (
+        !('checkpointId' in value) ||
+        !('outcome' in value) ||
+        !('words' in value) ||
+        value.checkpointId !== askSubject.checkpointId
+      ) {
+        throw new JobError('JOB_ACT_INVALID');
+      }
+      return parseRecordAct({
+        ...envelope,
+        kind: 'checkpoint',
+        source: boundSource,
+        value: {
+          checkpointId: askSubject.checkpointId,
+          planStepId: askSubject.checkpointId,
+          outcome: choice(value.outcome, ['pass', 'fail'] as const),
+          words: words(value.words),
+        },
+      });
+    }
+    case 'signoff': {
+      if (boundSource.subject !== 'plan') throw new JobError('JOB_ACT_SOURCE_STALE');
+      const value = actObject(submission.value, ['stage', 'decision', 'words']);
+      if (
+        !('stage' in value) ||
+        !('decision' in value) ||
+        !('words' in value) ||
+        value.stage !== askSubject.stage ||
+        value.decision !== 'approved'
+      ) {
+        throw new JobError('JOB_ACT_INVALID');
+      }
+      return parseRecordAct({
+        ...envelope,
+        kind: 'signoff',
+        source: boundSource,
+        value: {
+          stage: askSubject.stage,
+          decision: 'approved',
+          words: words(value.words),
+        },
+      });
+    }
+  }
+}
+
 /** Only the authenticated UI host invokes this adapter. All source and authority
  * fields are daemon-owned. Empty/whitespace strings remain exact human words.
  */
@@ -133,8 +392,57 @@ export function finalizeJobAct(options: {
   readonly retained: JobRetainedSource;
   readonly reviewer: JobReviewerBinding;
   readonly still?: JobRigStill;
-}): JobAct {
-  const { submission, ask, retained, reviewer } = options;
+}): JobAct;
+export function finalizeJobAct(options: {
+  readonly jobId: string;
+  readonly submission: JobUISubmission;
+  readonly ask: PendingAskV3;
+  readonly retained: JobRetainedRecordSource;
+  readonly reviewer: JobReviewerBinding;
+  readonly still?: undefined;
+  readonly actId?: string;
+  readonly at?: string;
+}): RecordAct;
+export function finalizeJobAct(options: {
+  readonly jobId: string;
+  readonly submission: JobUISubmission;
+  readonly ask: JobPendingAsk | PendingAskV3;
+  readonly retained: JobRetainedSourceV3;
+  readonly reviewer: JobReviewerBinding;
+  readonly still?: JobRigStill;
+  readonly actId?: string;
+  readonly at?: string;
+}): ActV3;
+export function finalizeJobAct(options: {
+  readonly jobId: string;
+  readonly submission: JobUISubmission;
+  readonly ask: JobPendingAsk | PendingAskV3;
+  readonly retained: JobRetainedSourceV3;
+  readonly reviewer: JobReviewerBinding;
+  readonly still?: JobRigStill;
+  readonly actId?: string;
+  readonly at?: string;
+}): ActV3 {
+  if (isRetainedRecordSource(options.retained)) {
+    return prepareJobRecordAct({
+      jobId: options.jobId,
+      submission: options.submission,
+      ask: options.ask,
+      retained: options.retained,
+      reviewer: options.reviewer,
+      still: options.still,
+      actId: options.actId,
+      at: options.at,
+    });
+  }
+  const { submission, ask, retained, reviewer } = options as {
+    readonly jobId: string;
+    readonly submission: JobUISubmission;
+    readonly ask: JobPendingAsk;
+    readonly retained: JobRetainedSource;
+    readonly reviewer: JobReviewerBinding;
+    readonly still?: JobRigStill;
+  };
   if (ask.status !== 'pending') throw new JobError('JOB_ASK_SUPERSEDED');
   if (submission.kind !== ask.subject.kind || submission.publicationId !== ask.publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
   const source = bindJobAsk(ask.subject, retained);
