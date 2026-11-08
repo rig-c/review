@@ -81,8 +81,11 @@ export class JobSession {
 
   constructor(private readonly options: JobSessionOptions) {
     const root = captureJobRoot(options.root), state = canonicalStatePath(options.stateDir);
-    if (within(root.path, state) || within(state, root.path)) {
-      throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Job state and the designated work root must be disjoint');
+    if (within(root.path, state)) {
+      throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Job state must be outside the designated work root');
+    }
+    if (within(state, root.path)) {
+      throw new JobError('JOB_SOURCE_UNRETAINABLE', 'The designated work root must be outside job state');
     }
     if (!options.reviewer.id || !['owner', 'delegate'].includes(options.reviewer.role)) throw new JobError('JOB_AUTHORITY_REFUSED');
     if (options.partsEnumerator) jobPartsEnumeratorVersion(options.partsEnumerator.version);
