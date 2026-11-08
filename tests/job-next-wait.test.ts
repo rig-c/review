@@ -232,6 +232,15 @@ function cli(url: string, token: string, args: string[]) {
   return {child, result};
 }
 
+async function waitForMonotonicTarget(monotonicStarted: number, targetMs: number,
+  onTimer: (handle: ReturnType<typeof setTimeout>) => void): Promise<void> {
+  for (;;) {
+    const remainingMs = targetMs - (performance.now() - monotonicStarted);
+    if (remainingMs <= 0) return;
+    await new Promise<void>(resolve => {onTimer(setTimeout(resolve, Math.ceil(remainingMs)));});
+  }
+}
+
 test('normal CLI invocation waits across the genuine 30-second server boundary for a synthetic UI act after 31 seconds', async () => {
   const {f, publication, ask} = await prepared();
   const host = await live(f);
@@ -244,7 +253,7 @@ test('normal CLI invocation waits across the genuine 30-second server boundary f
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await host.ready;
-    await new Promise<void>(resolve => {timer = setTimeout(resolve, Math.max(0, 31000 - (performance.now() - monotonicStarted)));});
+    await waitForMonotonicTarget(monotonicStarted, 31000, handle => {timer = handle;});
     const committedMs = performance.now() - monotonicStarted;
     const value = {checkpointId: 'step-one', outcome: 'pass', words: ' \nsynthetic UI fixture 원문🙂\t '};
     const committed = await (await host.ui('acts', {...displayed.value, askId: ask.askId,
@@ -447,4 +456,106 @@ test('a late fetch response is cancelled after the deadline and transport errors
     await expect(jobCommand(waitArgs, options(async () => {throw new Error('synthetic connection failure');}))).rejects.toThrow('synthetic connection failure');
     expect(process.exitCode).toBe(0);
   } finally {stderr.mockRestore();}
+});
+
+test('early timer callback wakes re-arm jobCommand until the monotonic deadline and expire only at the deadline', async () => {
+  const {f, input} = await prepared();
+  expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).ok).toBe(true);
+  const batch = await (await f.call({...f.base(), verb: 'next', after: null, waitMs: 0})).json();
+  let currentNow = 1000;
+  let nextId = 1;
+  const scheduled: {id: number; delay: number; callback: () => void; cleared: boolean}[] = [];
+  const now = spyOn(performance, 'now').mockImplementation(() => currentNow);
+  const setTimer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+    const id = nextId++;
+    scheduled.push({id, delay: Number(delay ?? 0), callback: () => callback(...args), cleared: false});
+    return id as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout);
+  const clearTimer = spyOn(globalThis, 'clearTimeout').mockImplementation(((id?: ReturnType<typeof setTimeout>) => {
+    const entry = scheduled.find(item => item.id === Number(id));
+    if (entry) entry.cleared = true;
+  }) as typeof clearTimeout);
+  const stderr = spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    const out: string[] = [];
+    let earlyWakeAborted = false;
+    await jobCommand(['next', f.origin + '/jobs/' + f.session.jobId, '--until', 'act', '--wait-ms', '100'], options(async (_url, init) => {
+      return new Promise<Response>((resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {once: true});
+        currentNow = 1099.75;
+        scheduled[0]?.callback();
+        earlyWakeAborted = Boolean(init?.signal?.aborted);
+        if (!earlyWakeAborted) {
+          currentNow = 1099.875;
+          resolve(Response.json(batch));
+        }
+      });
+    }, out));
+    expect(earlyWakeAborted).toBe(false);
+    expect(process.exitCode ?? 0).toBe(0);
+    expect(stderr.mock.calls).toEqual([]);
+    expect(out).toEqual([JSON.stringify(batch)]);
+    expect(scheduled.map(({id, delay, cleared}) => ({id, delay, cleared}))).toEqual([
+      {id: 1, delay: 100, cleared: false},
+      {id: 2, delay: 1, cleared: true},
+    ]);
+
+    scheduled.length = 0;
+    nextId = 1;
+    currentNow = 2000;
+    const timeoutOut: string[] = [];
+    let abortedBeforeDeadline = false;
+    await jobCommand(['next', f.origin + '/jobs/' + f.session.jobId, '--until', 'act', '--wait-ms', '100'], options(async (_url, init) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {once: true});
+        currentNow = 2099.75;
+        scheduled[0]?.callback();
+        abortedBeforeDeadline = Boolean(init?.signal?.aborted);
+        currentNow = 2100;
+        scheduled[1]?.callback();
+      });
+    }, timeoutOut));
+    expect(abortedBeforeDeadline).toBe(false);
+    expect(process.exitCode).toBe(3);
+    expect(stderr.mock.calls).toEqual([['JOB_NEXT_TIMEOUT']]);
+    expect(timeoutOut).toEqual([]);
+    expect(scheduled.map(({id, delay, cleared}) => ({id, delay, cleared}))).toEqual([
+      {id: 1, delay: 100, cleared: false},
+      {id: 2, delay: 1, cleared: true},
+    ]);
+  } finally {
+    now.mockRestore();
+    setTimer.mockRestore();
+    clearTimer.mockRestore();
+    stderr.mockRestore();
+    process.exitCode = 0;
+  }
+});
+
+test('early timer callback wakes re-arm the 31-second fixture wait helper until the monotonic target', async () => {
+  // Only committedMs = 30999.746691 is measured from CI (#575); 57.253309 and 31000.125 are synthetic clock samples.
+  const samples = [0, 57.253309, 30999.746691, 30999.746691, 31000.125, 31000.125];
+  let sampleIndex = 0;
+  let nextId = 1;
+  const delays: number[] = [];
+  let latestHandle: ReturnType<typeof setTimeout> | undefined;
+  const now = spyOn(performance, 'now').mockImplementation(() => samples[Math.min(sampleIndex++, samples.length - 1)]);
+  const setTimer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+    const id = nextId++;
+    delays.push(Number(delay ?? 0));
+    callback(...args);
+    return id as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout);
+  try {
+    const monotonicStarted = performance.now();
+    await waitForMonotonicTarget(monotonicStarted, 31000, handle => {latestHandle = handle;});
+    const committedMs = performance.now() - monotonicStarted;
+    expect(committedMs).toBeGreaterThanOrEqual(31000);
+    expect(committedMs).toBe(31000.125);
+    expect(delays).toEqual([30943, 1, 1]);
+    expect(Number(latestHandle)).toBe(3);
+  } finally {
+    now.mockRestore();
+    setTimer.mockRestore();
+  }
 });

@@ -395,7 +395,14 @@ async function waitForAct(endpoint: string, initial: JobNextRequest, waitMs: num
   options.signal?.addEventListener('abort', cancel, {once: true});
   if (options.signal?.aborted) cancel();
   const deadline = performance.now() + waitMs;
-  const timer = setTimeout(() => controller.abort(timeout), waitMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expire = () => {
+    if (controller.signal.aborted) return;
+    const budget = deadline - performance.now();
+    if (budget <= 0) controller.abort(timeout);
+    else timer = setTimeout(expire, Math.ceil(budget));
+  };
+  timer = setTimeout(expire, waitMs);
   const interrupted = new Promise<never>((_resolve, reject) => {
     controller.signal.addEventListener('abort', () => reject(controller.signal.reason), {once: true});
     if (controller.signal.aborted) reject(controller.signal.reason);
