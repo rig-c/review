@@ -5,6 +5,7 @@ import {startJobHub, startJobHost, JOB_API_SCHEMA, JOB_ACT_SCHEMA,
   type JobHubJob, type JobHubJobOptions, type JobOwnerHub, type JobPublication} from '../src/job-host.ts';
 import {jobFixture, jobInputHashes} from './helpers/job-api-fixture.ts';
 import {redactCapability} from '../scripts/redact.ts';
+import {rigStillCapture} from './helpers/job-rig-still.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 const hubs: JobOwnerHub[] = [];
@@ -46,6 +47,39 @@ async function ui(job: JobHubJob, route: string, body: unknown, token = job.sess
   return fetch(job.origin + '/jobs/' + job.session.jobId + '/ui/' + route, {method: 'POST',
     headers: {'Content-Type': 'application/json', Origin: job.origin, 'X-Review-Capability': token}, body: JSON.stringify(body)});
 }
+
+test('#557 backend real hub HTTP keeps capture, raw act and PNG bound to its job and consumer grant', async () => {
+  const f = await fixture();
+  const h = await hub(join(f.scratch, 'hub-still'));
+  const job = await h.openJob(designation(f));
+  const publication = await publish(f, job);
+  const asked = await api(job, {verb: 'ask', expectedGeneration: job.session.status().generation,
+    idempotencyKey: '557-hub-rig', publicationId: publication.publicationId,
+    subject: {kind: 'review-verdict', stage: 'rig-review'}});
+  const askValue = await asked.json();
+  expect(askValue.ok).toBe(true);
+  const displayed = await ui(job, 'displayed', {publicationId: publication.publicationId,
+    pageId: 'hub-page', sourceHash: publication.source.sourceHash});
+  const receipt = await displayed.json();
+  expect(receipt.ok).toBe(true);
+  const {capture, bytes} = rigStillCapture(publication, askValue.value, receipt.value);
+  const submitted = await ui(job, 'acts', {...receipt.value, askId: askValue.value.askId,
+    expectedGeneration: job.session.status().generation, submissionId: '557-hub-submit', kind: 'review-verdict',
+    value: {stage: 'rig-review', verdict: 'approved', words: 'hub exact words'}, capture});
+  expect(submitted.status).toBe(200);
+  const saved = await submitted.json();
+  expect(saved.ok).toBe(true);
+  expect(saved.value.schema).toBe('rig-review/act@3');
+  for (const accept of ['application/vnd.rig-review.act+json', 'image/png']) {
+    const response = await fetch(job.origin + `/jobs/${job.session.jobId}/api`, {method: 'POST',
+      headers: {'Content-Type': 'application/json', Accept: accept,
+        Authorization: 'Bearer ' + job.session.writerGrant().fetchCapability},
+      body: JSON.stringify({schema: JOB_API_SCHEMA, jobId: job.session.jobId, requestId: '557-hub-fetch',
+        verb: 'fetch-act', actId: saved.value.actId})});
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer()).equals(accept === 'image/png' ? bytes : Buffer.from(JSON.stringify(saved.value)))).toBe(true);
+  }
+});
 
 test('one embedded listener owns nine independent jobs, asks, generations and finalized acts', async () => {
   const inputs = await Promise.all(Array.from({length: 9}, () => fixture()));

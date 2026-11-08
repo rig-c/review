@@ -353,6 +353,8 @@ model binding nor a valid image-set binding uses `JOB_ASK_INVALID`.
 
 ## Named export inventory
 
+The backend rig-still extension retains the twelve runtime exports and `JOB_ACT_SCHEMA` at act@2. `JobAct` additionally includes `JobRigReviewAct` at act@3 with top-level `JobRigStill`. The facade adds type-only `JobLegacyAct`, `JobRigReviewAct`, `JobRigStill` and `JobRigCapture` exports. Existing API/store/reuse markers and ordinary/historical acts retain @2. The rig revision constant and transport limits remain internal to `src/job-contract.ts`. Consumer checks distinguish these act revisions as described in [Rig verdict still backend](REVIEW_PACKAGE.md#rig-verdict-still-backend).
+
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
-import type { JobDisplayPublication, JobDisplayReceipt, JobResult, JobModelSourceBinding } from '../src/job-contract.ts';
+import type { JobDisplayPublication, JobDisplayReceipt, JobResult, JobModelSourceBinding, JobRigCapture } from '../src/job-contract.ts';
+import {createJobRigSubmission} from '../web/job-rig-capture.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
 import {t} from '../web/i18n.ts';
 import {jobHubMessageMatches, JOB_HUB_VISIBILITY, type JobHubBinding} from '../web/job-hub.ts';
@@ -184,6 +185,51 @@ function harness() {
         },
     };
 }
+
+test('#557 window replays its exact attempted Rig request after an act event and refuses cloned or stale requests', async () => {
+    const h = harness(), act = fixtureAct('review-verdict', 'original words');
+    const display = await h.publish(1, act.source);
+    const ask = {askId: act.askId, publicationId: display.publication.publicationId,
+        subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const}, source: act.source, status: 'pending' as const};
+    h.fixture.pending(ask, 2);
+    h.window.event(h.fixture.events.at(-1)!);
+    h.fixture.returnAct(act);
+    const page = h.window.state().receipt!;
+    const capture: JobRigCapture = {png: 'data:image/png;base64,Zmlyc3Q=', width: 2, height: 2,
+        camera: 'fixed', framing: 'default', view: 'whole-rig', frame: 'setup', playing: false,
+        binding: {publicationId: page.publicationId, instanceKey: display.publication.instanceKey,
+            sourceHash: display.publication.source.sourceHash, pageId: page.pageId, askId: ask.askId,
+            drawGeneration: 1, playerGeneration: 1}};
+    const input = await createJobRigSubmission().prepare({...page, askId: ask.askId, expectedGeneration: 2,
+        submissionId: 'rig-attempt', kind: 'review-verdict',
+        value: {stage: 'rig-review', verdict: 'approved', words: 'original words'}}, () => ({encode: async () => capture}));
+    expect((await h.window.submit(input)).ok).toBe(true);
+    h.window.event({type: 'act', jobId: h.fixture.jobId, cursor: 'rig-answered', generation: 3, act});
+    expect((await h.window.submit(input)).ok).toBe(true);
+    expect(h.fixture.submissions).toHaveLength(2);
+    expect(h.fixture.submissions[0].body).toEqual(h.fixture.submissions[1].body);
+    expect((await h.window.submit(structuredClone(input))).ok).toBe(false);
+    await h.publish(2);
+    expect((await h.window.submit(input)).ok).toBe(false);
+    expect(h.fixture.submissions).toHaveLength(2);
+});
+
+test('#557 window rejects a source change during encoding before transport receives the frozen old capture', async () => {
+    const h = harness(), act = fixtureAct('review-verdict');
+    const display = await h.publish(1, act.source), page = h.window.state().receipt!;
+    const ready = deferred<JobRigCapture>();
+    const pending = createJobRigSubmission().prepare({...page, askId: act.askId, expectedGeneration: 1,
+        submissionId: 'delayed-rig', kind: 'review-verdict', value: {stage: 'rig-review', verdict: 'approved', words: 'old source'}},
+        () => ({encode: () => ready.promise}));
+    await h.publish(2);
+    ready.resolve({png: 'data:image/png;base64,Zmlyc3Q=', width: 2, height: 2,
+        camera: 'fixed', framing: 'default', view: 'whole-rig', frame: 'setup', playing: false,
+        binding: {publicationId: page.publicationId, instanceKey: display.publication.instanceKey,
+            sourceHash: display.publication.source.sourceHash, pageId: page.pageId, askId: act.askId,
+            drawGeneration: 1, playerGeneration: 1}});
+    expect((await h.window.submit(await pending)).ok).toBe(false);
+    expect(h.fixture.submissions).toHaveLength(0);
+});
 describe('job window on the frozen host ports', () => {
     test('the fake implements replay and abort through subscribeJob', async () => {
         const f = createJobWindowFixture();

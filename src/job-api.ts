@@ -3,6 +3,7 @@ import {
   JOB_API_SCHEMA, JOB_PARTS_ENUMERATOR_RANGE, JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS,
   type JobAgentRequest, type JobDisplayAcknowledgment, type JobFetchActRequest,
   type JobHostPorts, type JobResult, type JobSelector, type JobSubject,
+  jobCaptureBodyLimit, jobRawActMediaType,
 } from './job-contract.ts';
 import { JobError } from './job-store.ts';
 import type { JobSession } from './job-session.ts';
@@ -183,7 +184,7 @@ export function parseJobRequest(value: unknown): JobAgentRequest | JobFetchActRe
   throw new JobError('JOB_REQUEST_INVALID');
 }
 
-export async function jobBody(request: Request): Promise<unknown> {
+export async function jobBody(request: Request, maximum = jobBodyLimit): Promise<unknown> {
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') ?? '')) {
     throw new JobError('JOB_REQUEST_INVALID');
   }
@@ -204,10 +205,14 @@ export async function jobBody(request: Request): Promise<unknown> {
       const { done, value } = await Promise.race([reader.read(), interrupted]);
       if (done) break;
       size += value.length;
-      if (size > jobBodyLimit) throw new JobError('JOB_BODY_LIMIT');
+      if (size > maximum) throw new JobError('JOB_BODY_LIMIT');
       chunks.push(value);
     }
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+    const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+    if (size > jobBodyLimit && (value?.kind !== 'review-verdict' || value?.value?.stage !== 'rig-review' || !value.capture)) {
+      throw new JobError('JOB_BODY_LIMIT');
+    }
+    return value;
   } catch (error) {
     void reader.cancel().catch(() => {});
     if (error instanceof JobError) throw error;
@@ -241,12 +246,12 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
     if (request.headers.get('sec-fetch-site') === 'cross-site' ||
         (ui ? sent !== origin : sent !== null && sent !== origin)) throw new JobError('JOB_SAME_ORIGIN_REQUIRED');
   }
-  async function uiCall<Value>(job: string, request: Request, path: string, action: (body: unknown) => Promise<Value>): Promise<JobResult<Value>> {
+  async function uiCall<Value>(job: string, request: Request, path: string, action: (body: unknown) => Promise<Value>, maximum = jobBodyLimit): Promise<JobResult<Value>> {
     try {
       if (job !== session.jobId) throw new JobError('JOB_UNKNOWN');
       gate(request, path, true);
       session.authorize('ui', request.headers.get('X-Review-Capability'));
-      return { ok: true, value: await action(await jobBody(request)) };
+      return { ok: true, value: await action(await jobBody(request, maximum)) };
     } catch (error) { return jobFailure(error); }
   }
   return {
@@ -257,6 +262,16 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
         input = parseJobRequest(await jobBody(request));
         if (input.jobId !== session.jobId) throw new JobError('JOB_UNKNOWN');
         session.authorize(input.verb === 'fetch-act' ? 'consumer' : 'agent', request.headers.get('authorization'));
+        if (input.verb === 'fetch-act') {
+          const accept = request.headers.get('accept');
+          if (accept === jobRawActMediaType || accept === 'image/png') {
+            if (request.signal.aborted) throw new JobError('JOB_REQUEST_INVALID');
+            const bytes = session.readActExport(input.actId, accept === 'image/png');
+            return new Response(new Uint8Array(bytes), {headers: {...responseHeaders,
+              'Content-Type': accept, 'Content-Length': String(bytes.byteLength)}});
+          }
+          if (accept && accept !== '*/*' && accept !== 'application/json') throw new JobError('JOB_REQUEST_INVALID');
+        }
         const value = await session.execute(input, request.signal);
         return Response.json({ schema: JOB_API_SCHEMA, verb: input.verb, jobId: input.jobId, requestId: input.requestId,
           generation: session.status().generation, ok: true, value }, { headers: responseHeaders });
@@ -275,7 +290,7 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
         return { ok: true, value: session.displayPublication(publication) };
       } catch (error) { return jobFailure(error); }
     },
-    commitUIAct: (job, request) => uiCall(job, request, base + '/ui/acts', body => session.commitUIAct(body)),
+    commitUIAct: (job, request) => uiCall(job, request, base + '/ui/acts', body => session.commitUIAct(body), jobCaptureBodyLimit),
     ackDisplayed: (job, request) => uiCall(job, request, base + '/ui/displayed', async body => {
       const item = jobObject(body, ['publicationId', 'pageId', 'sourceHash']);
       const ack: JobDisplayAcknowledgment = {

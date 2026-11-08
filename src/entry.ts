@@ -12,6 +12,7 @@ const sessionUsage = `Usage: rig-review session open <root>
        rig-review session ask <job-url> --generation <n> --key <id> --publication <id> --subject <JSON>
        rig-review session next <job-url> [--after <cursor>] [--wait-ms <n>]
        rig-review session close <job-url> --generation <n> --key <id> --reason <words>
+        rig-review session fetch-act <job-url> --act <actId> --consumer-capability-stdin [--still-out <existing-directory>]
 Open requires RIG_REVIEW_JOB_REVIEWER_ID and RIG_REVIEW_JOB_REVIEWER_ROLE (owner or delegate).
 RIG_REVIEW_JOB_AGENT_FD optionally delivers the private agent bootstrap on an inherited writable descriptor >= 3.
 Agent verbs use RIG_REVIEW_JOB_AGENT_CAPABILITY. Create's writer binding is installed by its trusted host callback.`;

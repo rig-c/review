@@ -258,12 +258,12 @@ export async function scriptedJobWindowFixture() {
         return result;
     }
     return {...f, question, packageRoot,
-        async publish(stage: 'parts' | 'rig' | 'direction') {
+        async publish(stage: 'parts' | 'rig' | 'direction', revision: string = stage) {
             await agent('next', {after: null, waitMs: 0});
             const model = structuredClone(originalModel);
             if (stage !== 'parts') model.bones.find((bone: {name: string}) => bone.name === 'mesh').x = 19;
             await writeFile(join(packageRoot, 'skeleton.model.json'), JSON.stringify(model));
-            const manifest = {...originalManifest, title: 'Synthetic ' + stage, revision: stage};
+            const manifest = {...originalManifest, title: 'Synthetic ' + stage, revision};
             const selector = stage === 'parts' ? {kind: 'draft' as const, id: 'synthetic-parts'} :
                 stage === 'rig' ? {kind: 'rig' as const, version: 2} : {kind: 'post' as const, version: 3, rigVersion: 2};
             if (stage === 'direction') {

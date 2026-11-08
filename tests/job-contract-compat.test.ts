@@ -8,6 +8,7 @@ import {jobCommand} from '../src/job-cli.ts';
 import {startJobHost, type JobHostOptions} from '../src/job-front.ts';
 import {JobSession} from '../src/job-session.ts';
 import {jobFixture, syntheticJobParts} from './helpers/job-api-fixture.ts';
+import * as publicHost from '../src/job-host.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => {for (const fixture of fixtures.splice(0)) await fixture.close();});
@@ -16,6 +17,16 @@ async function fixture() {
   fixtures.push(value);
   return value;
 }
+
+test('#557 control public job-host retains exactly its twelve runtime exports and legacy markers', () => {
+  expect(Object.keys(publicHost).sort()).toEqual([
+    'assertJobImageSetCapability', 'JOB_CAPABILITIES', 'startJobHost', 'startJobHub',
+    'JOB_API_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_PARTS_ENUMERATOR_RANGE', 'JOB_ENABLED_ACT_KINDS',
+    'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES', 'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES',
+  ].sort());
+  expect(publicHost.JOB_API_SCHEMA).toBe('rig-review/job-api@2');
+  expect(publicHost.JOB_ACT_SCHEMA).toBe('rig-review/act@2');
+});
 
 // Planned incompatible-schema and version controls operate only on disposable state.
 test('C4 schemas and enumerator range retain the actual installed version', () => {

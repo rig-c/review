@@ -1,11 +1,11 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isAbsolute, relative, sep } from 'node:path';
 import {
-  JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_CAPABILITIES, JOB_ENABLED_ACT_KINDS, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
+  JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, jobStillByteLimit, JOB_CAPABILITIES, JOB_ENABLED_ACT_KINDS, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
   type JobDisplayPublication, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest,
   type JobNextValue, type JobPendingAsk, type JobPublication, type JobReviewerBinding, type JobStatus,
 } from './job-contract.ts';
-import { bindJobAsk, finalizeJobAct, parseUISubmission } from './job-act.ts';
+import { bindJobAsk, finalizeJobAct, parseUISubmission, prepareJobStill } from './job-act.ts';
 import { jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
   assertJobRoot, assertJobSourceCurrent, captureJobRoot, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot,
@@ -397,6 +397,26 @@ export class JobSession {
     }
   }
 
+  /** Bounded immutable bytes selected only through the authenticated consumer port. */
+  readActExport(actId: string, png: boolean): Buffer {
+    const current = this.current();
+    if (!current.active) throw new JobError('JOB_CLOSED');
+    const act = current.data.acts[actId];
+    if (!act) throw new JobError('JOB_ACT_UNKNOWN');
+    if (act.schema !== JOB_RIG_REVIEW_ACT_SCHEMA) {
+      if (png) throw new JobError('JOB_STILL_UNAVAILABLE');
+      return Buffer.from(JSON.stringify(act));
+    }
+    const stored = this.store.readStill(this.jobId, actId);
+    if (!stored || stored.png.byteLength > jobStillByteLimit || stored.actBytes.byteLength > maximumEventBytes ||
+        stored.sha256 !== act.still.sha256 || jobHash(stored.png) !== act.still.sha256 ||
+        act.still.path !== act.still.sha256 + '.png' ||
+        !Buffer.from(stored.actBytes).equals(Buffer.from(JSON.stringify(act)))) {
+      throw new JobError('JOB_STILL_CAPTURE_FAILED');
+    }
+    return Buffer.from(png ? stored.png : stored.actBytes);
+  }
+
   ackDisplayed(input: JobDisplayAcknowledgment): JobDisplayReceipt {
     const current = this.current();
     let receipt: JobDisplayReceipt;
@@ -434,13 +454,20 @@ export class JobSession {
       if (!ask) throw new JobError('JOB_ASK_INVALID');
       const retained = fresh.data.publications[input.publicationId].retained;
       assertJobSourceCurrent(retained);
-      act = finalizeJobAct({ jobId: this.jobId, submission: input, ask, retained, reviewer: fresh.data.reviewer });
+      const captured = ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ?
+        prepareJobStill(input, ask, retained) : undefined;
+      act = finalizeJobAct({ jobId: this.jobId, submission: input, ask, retained, reviewer: fresh.data.reviewer,
+        still: captured?.still });
       fresh.data.generation++;
       fresh.data.acts[act.actId] = act;
       fresh.data.asks[ask.askId] = { ...ask, status: 'answered' };
       fresh.data.replays[key] = { digest, value: act };
       this.event(fresh.data, { type: 'act', act } as Omit<JobEvent, 'cursor' | 'jobId' | 'generation'>);
-      return { data: fresh.data };
+      return { data: fresh.data, ...(captured ? {still: {
+        actId: act.actId, pageId: input.pageId, submissionId: input.submissionId,
+        sha256: captured.still.sha256, binding: JSON.stringify(captured.binding),
+        png: captured.bytes, actBytes: Buffer.from(JSON.stringify(act)),
+      }} : {}) };
     }, fresh => {
       const raced = this.replay(fresh.data, key, digest);
       if (!raced) return false;

@@ -42,6 +42,16 @@ export interface JobSnapshotTombstone {
   readonly reason: 'closed' | 'superseded';
 }
 
+export interface JobStoredStill {
+  readonly actId: string;
+  readonly pageId: string;
+  readonly submissionId: string;
+  readonly sha256: string;
+  readonly binding: string;
+  readonly png: Uint8Array;
+  readonly actBytes: Uint8Array;
+}
+
 interface JobRow {
   job_id: string;
   root_key: string;
@@ -143,6 +153,11 @@ export class JobStore<Data> {
         job_id TEXT NOT NULL, publication_id TEXT NOT NULL, snapshot_hash TEXT NOT NULL,
         reclaimed_at TEXT NOT NULL, reason TEXT NOT NULL CHECK(reason IN ('closed','superseded')),
         PRIMARY KEY(job_id, publication_id)
+      );
+      CREATE TABLE IF NOT EXISTS job_act_stills (
+        job_id TEXT NOT NULL, act_id TEXT NOT NULL, page_id TEXT NOT NULL, submission_id TEXT NOT NULL,
+        sha256 TEXT NOT NULL, binding TEXT NOT NULL, png BLOB NOT NULL, act_bytes BLOB NOT NULL,
+        PRIMARY KEY(job_id, act_id), UNIQUE(job_id, page_id, submission_id)
       );`);
     } catch {
       throw new JobError('JOB_STORAGE_FAILED', 'Private job storage could not be opened');
@@ -207,6 +222,7 @@ export class JobStore<Data> {
     readonly data: Data;
     readonly active?: boolean;
     readonly snapshot?: JobSnapshotOwner;
+    readonly still?: JobStoredStill;
   }, replay?: (current: StoredJob<Data>) => boolean): StoredJob<Data> {
     return this.transaction(() => {
       const current = this.get(jobId);
@@ -221,10 +237,22 @@ export class JobStore<Data> {
           (job_id,publication_id,snapshot_hash,snapshot_root,dev,ino) VALUES(?,?,?,?,?,?)`)
           .run(jobId, snapshot.publicationId, snapshot.snapshotHash, snapshot.snapshotRoot, snapshot.dev, snapshot.ino);
       }
+      if (next.still) {
+        const still = next.still;
+        this.db.query(`INSERT INTO job_act_stills
+          (job_id,act_id,page_id,submission_id,sha256,binding,png,act_bytes) VALUES(?,?,?,?,?,?,?,?)`)
+          .run(jobId, still.actId, still.pageId, still.submissionId, still.sha256, still.binding, still.png, still.actBytes);
+      }
       this.db.query('UPDATE jobs SET revision=?,active=?,document=? WHERE job_id=?')
         .run(current.revision + 1, active ? 1 : 0, document, jobId);
       return this.get(jobId);
     });
+  }
+
+  readStill(jobId: string, actId: string): Pick<JobStoredStill, 'sha256' | 'png' | 'actBytes'> | null {
+    return this.db.query<{sha256: string; png: Uint8Array; actBytes: Uint8Array}, [string, string]>(
+      'SELECT sha256,png,act_bytes AS actBytes FROM job_act_stills WHERE job_id=? AND act_id=?',
+    ).get(jobId, actId);
   }
 
   /** Close never grows or rewrites the bounded historical document. */
