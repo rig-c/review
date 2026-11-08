@@ -1,7 +1,7 @@
 /**
  * Stage 1 pre-rig draft precision correction browser proof (#562).
  *
- * Supports two separately labelled phases:
+ * Browser phases (discovery-only controls never launch Chrome):
  * 1. `--mode synthetic` (default): reseals a disposable contour-enabled copy of the Create pre-rig draft in a temporary
  *    directory (keeping the sealed 209-file fixture untouched and verifying the resealed project's 209-file inventory
  *    before and after) with deterministic stand-in `@rig-c/parts@2.31.0` and `@rig-c/core@3.6.0` executables outside
@@ -9,9 +9,8 @@
  *    `Mesh parameters`, `Edit Mesh`) with real two-frame-settled CDP stage pointer drags, visible Apply buttons,
  *    visible `#applied-undo` step-back restoration, visible `#mesh-panel-reset` restoration, direct Stage 3
  *    `RIG_VERSION_UNAVAILABLE` refusal, and the read-only `2-rigging-answers` Stage 1 control across `en` and `ko`.
- * 2. `--mode fixture-830fc98`: opens the sealed 209-file `create-830fc98/templates/example-remesh` fixture read-only in
- *    place (`picksDir: 'inputs/references'`) with real `@rig-c/parts@2.31.0` and `@rig-c/core@3.6.0` installed in an
- *    external toolchain directory discovered via normal `resolveProducer` (`cwd`), records and verifies preservation of
+ * 2. `--mode fixture-830fc98`: opens a byte-verified external copy of the sealed 209-file Create fixture. The real
+ *    `@rig-c/parts@2.31.0` and `@rig-c/core@3.6.0` are discovered through the external toolchain cwd. It verifies
  *    the preceding view and source binding when `Chest regions` refuses (`REBUILD_PART_NOT_CONTOUR: torso`), and runs
  *    live `Mesh parameters` (`remesh --mesh` via real CDP pointer drag on the visible `grid` range control) and
  *    `Edit Mesh` (`remesh --delta` via `dragStage1Delta` + visible `#mesh-apply` CDP click), visible `#applied-undo`,
@@ -26,6 +25,8 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { MESH_EDIT_CODES, type MeshOp } from '../src/mesh-edit.ts';
 import { alive, loadOpenPackage, openReview, readRecord, running, smallJson, type RecordFile } from '../src/open.ts';
+import { resolveProducer } from '../src/producer.ts';
+import { observerEnv, type ObserverScope } from '../.review-562-sol-input/observe-tool-stderr.ts';
 import { readStoredSetupMesh, type WeightInfluence } from '../src/setup-mesh.ts';
 import { enCatalog } from '../web/catalog-en.ts';
 import { koCatalog } from '../web/catalog-ko.ts';
@@ -39,7 +40,7 @@ process.env.UV_THREADPOOL_SIZE ||= '4';
 process.env.BUN_JSC_forceRAMSize ||= '6442450944';
 process.env.NODE_OPTIONS ||= '--max-old-space-size=6144';
 
-type PhaseMode = 'synthetic' | 'fixture-830fc98';
+type DiscoveryMode = 'fixture-830fc98' | 'discovery-external' | 'discovery-under-review';
 type Locale = 'en' | 'ko';
 
 interface InventoryEntry {
@@ -194,7 +195,7 @@ async function waitFor<T>(
   throw new Error(`Timed out waiting for ${label}${errorSuffix}${readoutSuffix}`);
 }
 
-async function collectFileHashes(rootDir: string): Promise<Map<string, string>> {
+async function collectFileHashes(rootDir: string, rejectNonFiles = false): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const walk = async (dir: string): Promise<void> => {
     const entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
@@ -204,6 +205,8 @@ async function collectFileHashes(rootDir: string): Promise<Map<string, string>> 
       else if (entry.isFile()) {
         const rel = relative(rootDir, full).split(sep).join('/');
         out.set(rel, sha256Hex(await readFile(full)));
+      } else if (rejectNonFiles) {
+        throw new Error(`TEST_FIXTURE_NON_FILE: ${full}`);
       }
     }
   };
@@ -220,7 +223,7 @@ function mapToInventoryEntries(map: Map<string, string>): InventoryEntry[] {
 async function verifyFixtureInventory(fixtureRoot: string, inventoryPath: string): Promise<number> {
   const doc = JSON.parse(await readFile(inventoryPath, 'utf8')) as InventoryDocument;
   assertCondition(Array.isArray(doc.files) && doc.files.length === 209, `Expected 209 inventory entries in ${inventoryPath}`);
-  const actual = await collectFileHashes(fixtureRoot);
+  const actual = await collectFileHashes(fixtureRoot, true);
   assertCondition(actual.size === doc.files.length, `Fixture file count mismatch: expected ${doc.files.length}, got ${actual.size}`);
   for (const entry of doc.files) {
     const digest = actual.get(entry.path);
@@ -1791,16 +1794,9 @@ async function prepareResealedContourProject(
   return { configSha };
 }
 
-async function ensureActualToolchain(toolchainRoot: string): Promise<void> {
+async function ensureActualToolchain(toolchainRoot: string, artifactsDir: string): Promise<void> {
   const partsManifest = join(toolchainRoot, 'node_modules/@rig-c/parts/package.json');
   const coreManifest = join(toolchainRoot, 'node_modules/@rig-c/core/package.json');
-  try {
-    const partsPkg = JSON.parse(await readFile(partsManifest, 'utf8')) as { version?: string };
-    const corePkg = JSON.parse(await readFile(coreManifest, 'utf8')) as { version?: string };
-    if (partsPkg.version === '2.31.0' && corePkg.version === '3.6.0') return;
-  } catch {
-    // Install exact pinned toolchain below.
-  }
   await mkdir(toolchainRoot, { recursive: true });
   await writeFile(
     join(toolchainRoot, 'package.json'),
@@ -1817,7 +1813,8 @@ async function ensureActualToolchain(toolchainRoot: string): Promise<void> {
       2,
     ) + '\n',
   );
-  const res = Bun.spawnSync(['bun', 'install', '--no-save'], {
+  const command = ['bun', 'install', '--no-save'];
+  const res = Bun.spawnSync(command, {
     cwd: toolchainRoot,
     timeout: 60_000,
     env: {
@@ -1829,6 +1826,11 @@ async function ensureActualToolchain(toolchainRoot: string): Promise<void> {
     stdout: 'pipe',
     stderr: 'pipe',
   });
+  await writeFile(join(artifactsDir, 'toolchain-install.stdout'), res.stdout, { flag: 'wx' });
+  await writeFile(join(artifactsDir, 'toolchain-install.stderr'), res.stderr, { flag: 'wx' });
+  await writeFile(join(artifactsDir, 'toolchain-install.json'), JSON.stringify({
+    command, cwd: toolchainRoot, exitCode: res.exitCode, signalCode: res.signalCode,
+  }, null, 2) + '\n', { flag: 'wx' });
   if (res.exitCode !== 0) {
     throw new Error(`Failed to install @rig-c/parts@2.31.0 and @rig-c/core@3.6.0 in ${toolchainRoot}: ${res.stderr.toString()}`);
   }
@@ -2795,16 +2797,153 @@ async function runSyntheticPhase(
   });
 }
 
+/** Browser-observed HTTP responses. job.lines is the server's merged log, separate from producer-stderr. */
+function observeRebuildHttp(openUrl: string, dir: string) {
+  const responseLimit = 512;
+  const bodyByteLimit = 256 * 1024;
+  const endpoint = new URL('api/rebuild', openUrl);
+  const requests = new Map<string, { sequence: number; method: string; pathname: string; status?: number }>();
+  const pending = new Set<Promise<void>>();
+  const errors: string[] = [];
+  let sequence = 0;
+  let countLimitExceeded = false;
+
+  function onEvent(event: CdpPageEvent, send: (method: string, params?: Record<string, unknown>) => Promise<unknown>) {
+    const params = event.params;
+    const id = params?.requestId;
+    if (typeof id !== 'string' || !params) return;
+
+    if (event.method === 'Network.requestWillBeSent') {
+      const request = params.request as { url: string; method: string };
+      const url = new URL(request.url);
+      if (url.origin !== endpoint.origin) return;
+      const suffix = url.pathname.slice(endpoint.pathname.length);
+      if (!url.pathname.startsWith(endpoint.pathname) ||
+        !(request.method === 'POST' && (suffix === '' || suffix === '/undo') ||
+          request.method === 'GET' && /^\/[a-f0-9]{64}$/.test(suffix))) return;
+      if (sequence === responseLimit) {
+        if (!countLimitExceeded) errors.push(`TEST_REBUILD_HTTP_RESPONSE_LIMIT: maximum ${responseLimit} responses`);
+        countLimitExceeded = true;
+        return;
+      }
+      requests.set(id, { sequence: ++sequence, method: request.method, pathname: url.pathname });
+      return;
+    }
+
+    const request = requests.get(id);
+    if (!request) return;
+    if (event.method === 'Network.responseReceived') {
+      request.status = (params.response as { status: number }).status;
+    } else if (event.method === 'Network.loadingFinished' || event.method === 'Network.loadingFailed') {
+      requests.delete(id);
+      const path = join(dir, `response-${request.sequence}.json`);
+      const capture = (async () => {
+        let payload: object;
+        if (event.method === 'Network.loadingFailed') {
+          payload = { loadingFailed: params.errorText };
+        } else {
+          const limitError = `TEST_REBUILD_HTTP_BODY_LIMIT: response ${request.sequence} exceeds ${bodyByteLimit} bytes`;
+          if (typeof params.encodedDataLength === 'number' && params.encodedDataLength > bodyByteLimit) {
+            throw new Error(limitError);
+          }
+          const body = await send('Network.getResponseBody', { requestId: id }).catch(error => {
+            if (/evicted from inspector cache/i.test(String(error))) {
+              throw new Error(`TEST_REBUILD_HTTP_BUFFER_LIMIT: response ${request.sequence} evicted by bounded CDP buffers`);
+            }
+            throw error;
+          }) as { body: string; base64Encoded: boolean };
+          if (Buffer.byteLength(body.body, body.base64Encoded ? 'base64' : 'utf8') > bodyByteLimit) {
+            throw new Error(limitError);
+          }
+          payload = body;
+        }
+        await writeFile(path, JSON.stringify({ ...request, payload }, null, 2) + '\n', { flag: 'wx' });
+      })().catch(error => { errors.push(`${path}: ${String(error)}`); });
+      pending.add(capture);
+      void capture.finally(() => pending.delete(capture));
+    }
+  }
+
+  return {
+    onEvent,
+    networkOptions: { maxResourceBufferSize: bodyByteLimit, maxTotalBufferSize: 8 * 1024 * 1024 },
+    async settle() {
+      await Promise.all(pending);
+      return { errors, unfinished: [...requests.values()], requestsObserved: sequence };
+    },
+  };
+}
+
+async function verifyActualProducerDiscovery(openUrl: string, artifactsDir: string): Promise<void> {
+  const url = new URL('api/rebuild', openUrl);
+  const response = await fetch(url, { signal: AbortSignal.timeout(10_000), redirect: 'error' });
+  const body = await response.text();
+  await writeFile(join(artifactsDir, 'producer-discovery.json'), body, { flag: 'wx' });
+  assertCondition(response.ok, `TEST_PRODUCER_DISCOVERY_HTTP: GET ${url} returned ${response.status}`);
+  const status = JSON.parse(body);
+  assertCondition(
+    status?.schema === 'rig-review-rebuild-status/1' && status.draft?.id === 'remesh' && status.baseline === null,
+    'TEST_PRODUCER_DISCOVERY_CONTEXT: expected joined remesh draft without baseline',
+  );
+  assertCondition(
+    status.producer?.package === '@rig-c/parts' && status.producer.version === '2.31.0' &&
+    status.compiler?.package === '@rig-c/core' && status.compiler.version === '3.6.0',
+    `TEST_PRODUCER_DISCOVERY_MISMATCH: expected @rig-c/parts@2.31.0 and @rig-c/core@3.6.0; received ${JSON.stringify({ producer: status.producer, compiler: status.compiler })}`,
+  );
+}
+
+async function openObservedFixture(
+  inputs: Parameters<typeof openReview>[0],
+  options: Parameters<typeof openReview>[1] & { stateDir: string; cwd: string },
+  projectRoot: string,
+  receiptDir: string,
+): Promise<Awaited<ReturnType<typeof openReview>>> {
+  const installed = resolveProducer([options.cwd]);
+  assertCondition(installed.ok, 'TEST_STDERR_OBSERVER_TOOLCHAIN: pinned toolchain did not resolve');
+  const tools = [installed.producer, installed.compiler];
+  const canonicalBins = await Promise.all(tools.map(tool => realpath(tool.bin)));
+  for (const [i, tool] of tools.entries()) {
+    const packageRoot = join(options.cwd, 'node_modules', tool.package);
+    assertCondition(tool.root === packageRoot && canonicalBins[i]!.startsWith((await realpath(packageRoot)) + sep),
+      `TEST_STDERR_OBSERVER_TOOLCHAIN: unexpected executable for ${tool.package}`);
+  }
+  await mkdir(receiptDir);
+  const preload = resolve(import.meta.dir, '../.review-562-sol-input/observe-tool-stderr.ts');
+  assertCondition(!/\s/.test(preload) && process.env[observerEnv] === undefined, 'TEST_STDERR_OBSERVER_SCOPE: invalid preload environment');
+  const originalBunOptions = process.env.BUN_OPTIONS;
+  const scope: ObserverScope = {
+    worker: resolve(import.meta.dir, '../src/open-worker.ts'),
+    stateDir: options.stateDir,
+    toolchainRoot: options.cwd,
+    projectRoot,
+    input: inputs.input,
+    receiptDir,
+    bins: [...new Set([...tools.map(tool => tool.bin), ...canonicalBins])],
+    originalBunOptions,
+  };
+  process.env[observerEnv] = JSON.stringify(scope);
+  process.env.BUN_OPTIONS = [originalBunOptions, `--preload=${preload}`].filter(Boolean).join(' ');
+  try {
+    return await openReview(inputs, options);
+  } finally {
+    delete process.env[observerEnv];
+    if (originalBunOptions === undefined) delete process.env.BUN_OPTIONS;
+    else process.env.BUN_OPTIONS = originalBunOptions;
+  }
+}
+
 async function runActualFixturePhase(
   sealedFixtureRoot: string,
   inventoryPath: string,
   artifactsDir: string,
-  suppliedToolchainDir?: string,
+  mode: DiscoveryMode,
 ): Promise<Record<string, unknown>> {
   return await withDeadline('STAGE1_FIXTURE_830FC98_PHASE', 480_000, async () => {
-    await mkdir(artifactsDir, { recursive: true });
+    await mkdir(dirname(artifactsDir), { recursive: true });
+    await mkdir(artifactsDir);
     const root = await realpath(await mkdtemp(join(tmpdir(), 'review-562-actual-830fc98-')));
-    const toolchainRoot = suppliedToolchainDir ? resolve(suppliedToolchainDir) : join(root, 'toolchain');
+    const projectRoot = mode === 'discovery-under-review' ? sealedFixtureRoot : join(root, 'project');
+    const toolchainRoot = join(root, 'toolchain');
     const stateDir = join(root, 'state');
     const controlDir = join(stateDir, 'open');
     const frontPort = allocateUnusedLoopbackPort();
@@ -2813,7 +2952,9 @@ async function runActualFixturePhase(
     const ownedWorkers: RecordFile[] = [];
     const frontPids = new Set<number>();
     const checkpoints: CheckpointEntry[] = [];
+    const expectedRemeshes = new Map<string, '--mesh' | '--delta'>();
     const errorCollector = createCdpErrorCollector();
+    let rebuildHttp: ReturnType<typeof observeRebuildHttp> | undefined;
 
     const recordCheckpoint = async (step: string, detail?: Record<string, unknown>) => {
       checkpoints.push({ at: new Date().toISOString(), step, ...(detail ? { detail } : {}) });
@@ -2823,16 +2964,24 @@ async function runActualFixturePhase(
     try {
       const entryCountBefore = await verifyFixtureInventory(sealedFixtureRoot, inventoryPath);
       await recordCheckpoint('verified-830fc98-inventory-before', { entryCountBefore });
-      await ensureActualToolchain(toolchainRoot);
+      if (mode !== 'discovery-under-review') {
+        const reviewRoot = await realpath(import.meta.dir + '/..');
+        const fromReview = relative(reviewRoot, root);
+        assertCondition(fromReview.startsWith('..' + sep), 'TEST_FIXTURE_NOT_EXTERNAL: temporary root is inside Review');
+        await cp(sealedFixtureRoot, projectRoot, { recursive: true, errorOnExist: true, force: false });
+        const copiedCount = await verifyFixtureInventory(projectRoot, inventoryPath);
+        await recordCheckpoint('verified-830fc98-external-copy', { projectRoot, copiedCount });
+      }
+      await ensureActualToolchain(toolchainRoot, artifactsDir);
       await recordCheckpoint('ensured-actual-toolchain', { toolchainRoot });
 
-      const inspectedModelPath = join(sealedFixtureRoot, 'derived/drafts/remesh/out/check/build/skeleton.model.json');
+      const inspectedModelPath = join(projectRoot, 'derived/drafts/remesh/out/check/build/skeleton.model.json');
       const diskInspected = await readDiskCompiledGeometry(inspectedModelPath);
       assertCondition(diskInspected.vertexCount === 30 && diskInspected.triangleCount === 40, 'Expected 30v / 40t in 830fc98 inspected model');
 
       const openInputs = {
-        input: join(sealedFixtureRoot, 'derived/drafts/remesh/out/check'),
-        project: { root: sealedFixtureRoot, draftId: 'remesh', picksDir: 'inputs/references' } as const,
+        input: join(projectRoot, 'derived/drafts/remesh/out/check'),
+        project: { root: projectRoot, draftId: 'remesh', picksDir: 'inputs/references' } as const,
       };
       const loadedPkg = await loadOpenPackage(openInputs);
       assertCondition(loadedPkg.mode === 'single' && loadedPkg.joined?.draft, 'Expected joined pre-rig draft on 830fc98 fixture');
@@ -2846,14 +2995,36 @@ async function runActualFixturePhase(
         graceMs: 400,
         idleMs: 5_000,
       };
-      const opened = await openReview(openInputs, launchOptions);
+      const producerReceipts = join(artifactsDir, 'producer-stderr');
+      const opened = mode === 'discovery-under-review'
+        ? await openReview(openInputs, launchOptions)
+        : await openObservedFixture(openInputs, launchOptions, projectRoot, producerReceipts);
       const claimed = await claimOwnedWorker(opened, controlDir, frontPort, ownedWorkers);
       frontPids.add(claimed.frontPid);
+      await verifyActualProducerDiscovery(opened.url, artifactsDir);
+      await recordCheckpoint('verified-actual-producer-discovery');
+      if (mode === 'discovery-under-review') throw new Error('TEST_PRODUCER_DISCOVERY_CONTROL_DID_NOT_REFUSE');
+      const observer = JSON.parse(await readFile(join(producerReceipts, 'worker.json'), 'utf8'));
+      assertCondition(observer.pid === ownedWorkers[0]?.pid && (await readdir(producerReceipts)).length === 1,
+        'TEST_STDERR_OBSERVER_SCOPE: expected only the owned worker marker before any Apply');
+      if (mode === 'discovery-external') {
+        const workerExitEvidence = await verifyOwnedWorkersExited(controlDir, ownedWorkers, [...frontPids]);
+        const sourceFilesVerified = await verifyFixtureInventory(sealedFixtureRoot, inventoryPath);
+        const copyFilesVerified = await verifyFixtureInventory(projectRoot, inventoryPath);
+        return { phase: mode, sourceFilesVerified, copyFilesVerified, workerExitEvidence };
+      }
 
+      const httpDir = join(artifactsDir, 'rebuild-http');
+      await mkdir(httpDir);
+      rebuildHttp = observeRebuildHttp(opened.url, httpDir);
       page = await launchCdpSession(join(root, 'browser-profile'), {
         sendDeadlineMs: 10_000,
-        onEvent: errorCollector.onEvent,
+        onEvent(event, send) {
+          errorCollector.onEvent(event, send);
+          rebuildHttp?.onEvent(event, send);
+        },
       });
+      await errorCollector.send('Network.enable', rebuildHttp.networkOptions);
       await page.setViewport(1440, 1000);
       const localeReceipts: Record<Locale, unknown> = {} as Record<Locale, unknown>;
 
@@ -3067,6 +3238,7 @@ async function runActualFixturePhase(
           `830fc98 Mesh panel Apply refused (${locale}): ${meshApplied.meshStatus || 'missing applied build'} | state=${JSON.stringify(meshApplied)}`,
         );
         const meshBuildId = meshApplied.applied!.buildId;
+        expectedRemeshes.set(meshBuildId, '--mesh');
         const meshScratchDir = join(stateDir, 'rebuild', loadedPkg.p.sourceHash, meshBuildId);
         const diskMesh = await readDiskCompiledGeometry(join(meshScratchDir, 'build/skeleton.model.json'));
         assertCondition(diskMesh.triangleCount !== 40, `Expected rebuilt triangle count != 40, got ${diskMesh.triangleCount}`);
@@ -3136,6 +3308,7 @@ async function runActualFixturePhase(
         assertNamedDeltaOps(deltaRecord.delta.ops, namedId);
 
         const deltaBuildId = deltaRecord.buildId;
+        expectedRemeshes.set(deltaBuildId, '--delta');
         const deltaScratchDir = join(stateDir, 'rebuild', loadedPkg.p.sourceHash, deltaBuildId);
         const diskDelta = await readDiskCompiledGeometry(join(deltaScratchDir, 'build/skeleton.model.json'));
         const deltaSetupSnapshot = await verifySetupModelAndGeometryAgainstDisk(
@@ -3203,6 +3376,9 @@ async function runActualFixturePhase(
           postResetAppliedRaw === preResetAppliedRaw,
           `Expected #rebuild-applied textarea string unchanged after 830fc98 visible Reset (${locale})`,
         );
+        await writeFile(join(artifactsDir, `${locale}-reset-draft.json`), JSON.stringify({
+          before: preResetAppliedRaw, after: postResetAppliedRaw,
+        }, null, 2) + '\n', { flag: 'wx' });
         await writeFile(join(artifactsDir, `${locale}-setup-after-reset.png`), await page.screenshot());
 
         await clickVisibleButton(page, '[data-review-stage="1"]', `Stage 1 after 830fc98 Reset (${locale})`);
@@ -3249,6 +3425,10 @@ async function runActualFixturePhase(
       }
 
       await page.goto('about:blank');
+      const httpEvidence = await rebuildHttp.settle();
+      await writeFile(join(httpDir, 'summary.json'), JSON.stringify(httpEvidence, null, 2) + '\n', { flag: 'wx' });
+      assertCondition(httpEvidence.requestsObserved > 0 && httpEvidence.errors.length === 0 && httpEvidence.unfinished.length === 0,
+        `TEST_REBUILD_HTTP_EVIDENCE: incomplete passive rebuild capture; ${httpEvidence.errors[0] ?? 'see summary.json'}`);
       await page.close();
       page = undefined;
       const workerExitEvidence = await verifyOwnedWorkersExited(controlDir, ownedWorkers, [...frontPids]);
@@ -3256,8 +3436,27 @@ async function runActualFixturePhase(
       const entryCountAfter = await verifyFixtureInventory(sealedFixtureRoot, inventoryPath);
       assertCondition(entryCountBefore === 209 && entryCountAfter === 209, 'Expected 209 invariant files before and after 830fc98 phase');
 
+      const copyFilesVerified = await verifyFixtureInventory(projectRoot, inventoryPath);
+      const processDirs = (await readdir(producerReceipts)).filter(name => /^process-[1-9]\d*$/.test(name));
+      const producerAttempts = await Promise.all(processDirs.map(async name => {
+        const processDir = join(producerReceipts, name);
+        const result = JSON.parse(await readFile(join(processDir, 'result.json'), 'utf8'));
+        const stderr = await lstat(join(processDir, 'stderr.bin'));
+        assertCondition(stderr.isFile() && result.stderr === 'stderr.bin' && Number.isInteger(result.exitCode),
+          `TEST_STDERR_OBSERVER_INCOMPLETE: ${name}`);
+        return { receipt: name, cwd: result.cwd as string, argv: result.argv as string[], exitCode: result.exitCode as number };
+      }));
+      for (const [buildId, flag] of expectedRemeshes) {
+        const scratch = join(stateDir, 'rebuild', loadedPkg.p.sourceHash, buildId);
+        assertCondition(producerAttempts.some(run => run.cwd === scratch &&
+          run.argv[2] === 'remesh' && run.argv.includes(flag) && run.exitCode === 0),
+        `TEST_STDERR_OBSERVER_MISSING_REBUILD: ${buildId} ${flag}`);
+      }
       const summary = {
         phase: 'fixture-830fc98',
+        copyFilesVerified,
+        httpEvidence,
+        producerAttempts,
         fixtureFilesVerified: entryCountAfter,
         locales: localeReceipts,
         runtimeExceptions: errorCollector.runtimeExceptions,
@@ -3267,6 +3466,15 @@ async function runActualFixturePhase(
       await writeFile(join(artifactsDir, 'summary.json'), JSON.stringify(summary, null, 2) + '\n');
       return summary;
     } catch (error) {
+      if (rebuildHttp) {
+        const evidence = await rebuildHttp.settle();
+        await writeFile(join(artifactsDir, 'rebuild-http', 'failure-summary.json'), JSON.stringify(evidence, null, 2) + '\n', { flag: 'wx' });
+      }
+      const readInventory = (path: string) => verifyFixtureInventory(path, inventoryPath)
+        .then(files => ({ files }), error => ({ error: String(error) }));
+      const source = await readInventory(sealedFixtureRoot);
+      const copy = projectRoot === sealedFixtureRoot ? null : await readInventory(projectRoot);
+      await writeFile(join(artifactsDir, 'failure-fixture-inventory.json'), JSON.stringify({ source, copy }, null, 2) + '\n', { flag: 'wx' });
       await captureFailureArtifacts(
         artifactsDir,
         page,
@@ -3307,7 +3515,6 @@ if (import.meta.main) {
       mode: { type: 'string' },
       'fixture-root': { type: 'string' },
       inventory: { type: 'string' },
-      'toolchain-dir': { type: 'string' },
       'artifacts-dir': { type: 'string' },
     },
     strict: true,
@@ -3317,15 +3524,13 @@ if (import.meta.main) {
     values['fixture-root'] ?? '.review-562-browser-input/create-830fc98/templates/example-remesh',
   );
   const inventoryPath = resolve(values.inventory ?? '.review-562-browser-input/parent-fixture-inventory.json');
-  const mode: PhaseMode =
-    values.mode === 'fixture-830fc98' || (values.mode === undefined && values['fixture-root'] !== undefined)
-      ? 'fixture-830fc98'
-      : 'synthetic';
+  const mode = values.mode ?? (values['fixture-root'] === undefined ? 'synthetic' : 'fixture-830fc98');
+  assertCondition(mode === 'synthetic' || mode === 'fixture-830fc98' || mode === 'discovery-external' || mode === 'discovery-under-review', `Unknown phase: ${mode}`);
   const artifactsDir = resolve(values['artifacts-dir'] ?? join('.review-562-browser-result/artifacts', mode));
 
   const summary =
-    mode === 'fixture-830fc98'
-      ? await runActualFixturePhase(fixtureRoot, inventoryPath, artifactsDir, values['toolchain-dir'])
-      : await runSyntheticPhase(fixtureRoot, inventoryPath, artifactsDir);
+    mode === 'synthetic'
+      ? await runSyntheticPhase(fixtureRoot, inventoryPath, artifactsDir)
+      : await runActualFixturePhase(fixtureRoot, inventoryPath, artifactsDir, mode);
   console.log(JSON.stringify({ ok: true, ...summary }, null, 2));
 }
