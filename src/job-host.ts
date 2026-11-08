@@ -2,7 +2,15 @@
 export {startJobHost} from './job-front.ts';
 export {startJobHub} from './job-hub.ts';
 export type {JobHubOptions, JobHubJobOptions, JobHubJob, JobOwnerHub} from './job-hub.ts';
-export type {JobHostOptions, JobOwnerHost} from './job-front.ts';
+export type {
+  JobHostOptions,
+  JobOwnerHost,
+  JobHostListenerIncarnation,
+  JobHostReuseBinding,
+  JobHostReuseExpectation,
+  JobHostAttachField,
+  JobHostAttachFailure,
+} from './job-front.ts';
 export type {JobSessionOptions, JobSession} from './job-session.ts';
 export type {JobWorkerOptions} from './job-worker.ts';
 export type {JobPublicationReader, JobPublishedContext} from './job-source.ts';
