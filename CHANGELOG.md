@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.5.0](https://github.com/rig-c/review/compare/v2.4.6...v2.5.0) (2026-11-08)
+
+
+### Features
+
+* **session:** bind rig verdicts to displayed stills ([#565](https://github.com/rig-c/review/issues/565)) ([a78173d](https://github.com/rig-c/review/commit/a78173df68ce824b4a3cd470664108e2d2df6190)), closes [#557](https://github.com/rig-c/review/issues/557)
+
+
+### Bug Fixes
+
+* **parts:** omit an unrequested draft refusal ([#564](https://github.com/rig-c/review/issues/564)) ([ae281fa](https://github.com/rig-c/review/commit/ae281facc0dd4c874d0853d96220ee625a543b4b))
+
 ## [2.4.6](https://github.com/rig-c/review/compare/v2.4.5...v2.4.6) (2026-11-08)
 
 
