@@ -6,6 +6,7 @@ import {t} from './i18n.ts';
 import {JOB_HUB_READY, jobHubMessageMatches, type JobHubBinding} from './job-hub.ts';
 import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
     type JobRigDraw, type JobRigDrawState} from './job-rig-capture.ts';
+import {advancePlayback} from './playback-clock.ts';
 import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
 import {CanvasRenderer} from '@rig-c/play';
 
@@ -987,6 +988,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     let currentElement: HTMLElement | null = null;
     let animation = '';
     let time = 0;
+    let playing = false;
+    let loop = true;
+    let playbackCarry = 0;
+    let rafHandle = 0;
+    let lastFrameTime = 0;
     let selectedPart = '';
     let partMode: 'context' | 'solo' = 'context';
     let selectedReference = '';
@@ -1070,7 +1076,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             ]),
             defaultCamera: plain && camera.zoom === 1 && camera.center.x === frame.center.x && camera.center.y === frame.center.y,
             wholeRig: !selectedPart && !owner.inspection?.value() && player.slots === null,
-            playing: false};
+            playing};
     }
     function rememberDraw(): void {
         const owner = current;
@@ -1102,6 +1108,95 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         owner.rigPresentation = undefined;
         owner.player?.draw();
         owner.inspection?.present('single');
+    }
+    function syncTransportControls(): void {
+        const playBtn = workspace.querySelector<HTMLButtonElement>('#job-play');
+        if (playBtn) {
+            const clip = current?.assets?.animations.find(item => item.name === animation);
+            playBtn.disabled = !animation || !clip || !(clip.duration > 0) || !current?.player;
+            const key = playing ? 'Pause' : 'Play';
+            playBtn.dataset.jobText = key;
+            playBtn.textContent = t(key);
+            playBtn.setAttribute('aria-pressed', String(playing));
+        }
+        const loopInput = workspace.querySelector<HTMLInputElement>('#job-loop');
+        if (loopInput) loopInput.checked = loop;
+    }
+    function stopPlayback(targetPlayer = current?.player): void {
+        if (rafHandle) {
+            cancelAnimationFrame(rafHandle);
+            rafHandle = 0;
+        }
+        playing = false;
+        playbackCarry = 0;
+        lastFrameTime = 0;
+        targetPlayer?.pause();
+        syncTransportControls();
+    }
+    function presentCurrentFrame(owner: JobPreparedInspection): void {
+        if (!owner.player) return;
+        drawInspection(owner);
+        owner.inspection?.select(selectedPart ? { side: 'single', slot: selectedPart, mode: partMode } : null);
+        setText('job-part-observation', selectedPart ? JSON.stringify(owner.inspection?.observation(), null, 2) : '');
+        viewport.fitCamera();
+    }
+    function armPlayback(expectedOwner: JobPreparedInspection, expectedPlayer: RigPlayer): void {
+        if (rafHandle) {
+            cancelAnimationFrame(rafHandle);
+            rafHandle = 0;
+        }
+        const handle = requestAnimationFrame(now => stepPlayback(handle, expectedOwner, expectedPlayer, now));
+        rafHandle = handle;
+    }
+    function playbackTimeLabel(duration: number, trackTime: number): string {
+        // A one-second 1/60 replay leaves six epsilons after modulo. Limit display snapping
+        // to eight duration-scaled epsilons. The public time and captured frame stay raw.
+        if (trackTime < duration) return String(time);
+        const residue = 8 * Number.EPSILON * duration;
+        if (time <= residue) return '0';
+        if (duration - time <= residue) return String(duration);
+        return String(time);
+    }
+    function stepPlayback(handle: number, expectedOwner: JobPreparedInspection, expectedPlayer: RigPlayer, now: number): void {
+        if (current !== expectedOwner || current?.player !== expectedPlayer) {
+            expectedPlayer.pause();
+            return;
+        }
+        if (handle !== rafHandle) return;
+        rafHandle = 0;
+        const clip = expectedOwner.assets?.animations.find(item => item.name === animation);
+        if (!playing || !hubVisible || !animation || !clip || !(clip.duration > 0)) {
+            stopPlayback(expectedPlayer);
+            return;
+        }
+        const dt = lastFrameTime > 0 ? Math.min(Math.max(0, (now - lastFrameTime) / 1000), 0.1) : 0;
+        lastFrameTime = now;
+        const next = advancePlayback({ time, duration: clip.duration, carry: playbackCarry, elapsed: dt, repeat: loop });
+        for (const step of next.steps) expectedPlayer.advance(step);
+        const activeEntry = expectedPlayer.entry(0);
+        if (!activeEntry || activeEntry.animation !== animation || activeEntry.loop !== loop ||
+            !Number.isFinite(activeEntry.animationTime) || activeEntry.animationTime < 0 ||
+            activeEntry.animationTime > activeEntry.duration) {
+            stopPlayback(expectedPlayer);
+            return;
+        }
+        playbackCarry = next.carry;
+        if (next.ended) {
+            playing = false;
+            playbackCarry = 0;
+            lastFrameTime = 0;
+            expectedPlayer.pause();
+            time = clip.duration;
+        } else {
+            time = activeEntry.animationTime;
+        }
+        const clock = workspace.querySelector<HTMLInputElement>('#job-time');
+        if (clock) clock.value = playbackTimeLabel(clip.duration, activeEntry.trackTime);
+        syncTransportControls();
+        presentCurrentFrame(expectedOwner);
+        if (playing && current === expectedOwner && current.player === expectedPlayer && hubVisible) {
+            armPlayback(expectedOwner, expectedPlayer);
+        }
     }
     function copyRigVerdict(ask: JobPendingAsk, owner: JobPreparedInspection) {
         if (owner !== current || ask.publicationId !== owner.display.publication.publicationId) {
@@ -1529,12 +1624,83 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             option.textContent = clip.name;
             clips.append(option);
         }
-        clips.onchange = () => { animation = clips.value; time = 0; pose(); };
+        clips.onchange = () => { stopPlayback(); animation = clips.value; time = 0; pose(); };
+        const playButton = node('button', 'Play');
+        playButton.id = 'job-play';
+        playButton.type = 'button';
+        playButton.setAttribute('aria-pressed', 'false');
+        playButton.disabled = true;
+        playButton.onclick = () => {
+            const clip = current?.assets?.animations.find(item => item.name === animation);
+            if (!current?.player || !animation || !clip || !(clip.duration > 0)) {
+                stopPlayback();
+                return;
+            }
+            if (playing) {
+                stopPlayback();
+                presentCurrentFrame(current);
+                return;
+            }
+            if (current.player.composed) current.setupPose(false);
+            if (!loop && time >= clip.duration) {
+                time = 0;
+                current.player.play(animation, { loop });
+            } else if (current.player.current !== animation) {
+                current.player.play(animation, { loop });
+                if (time > 0) current.player.seek(time);
+            } else {
+                current.player.resume();
+            }
+            playing = true;
+            playbackCarry = 0;
+            lastFrameTime = 0;
+            const clockInput = workspace.querySelector<HTMLInputElement>('#job-time');
+            if (clockInput) clockInput.value = playbackTimeLabel(clip.duration, current.player.time);
+            syncTransportControls();
+            presentCurrentFrame(current);
+            if (hubVisible) armPlayback(current, current.player);
+        };
+        const loopInput = node('input');
+        loopInput.id = 'job-loop';
+        loopInput.type = 'checkbox';
+        loopInput.checked = loop;
+        loopInput.onchange = () => {
+            loop = loopInput.checked;
+            playbackCarry = 0;
+            lastFrameTime = 0;
+            const clip = current?.assets?.animations.find(item => item.name === animation);
+            if (current?.player && animation && clip) {
+                if (current.player.composed) current.setupPose(false);
+                current.player.play(animation, { loop });
+                if (time > 0) current.player.seek(time);
+                const activeEntry = current.player.entry(0);
+                if (!activeEntry || activeEntry.animation !== animation || activeEntry.loop !== loop ||
+                    !Number.isFinite(activeEntry.animationTime) || activeEntry.animationTime < 0 ||
+                    activeEntry.animationTime > activeEntry.duration) {
+                    stopPlayback(current.player);
+                    return;
+                }
+                time = activeEntry.animationTime;
+                const clockInput = workspace.querySelector<HTMLInputElement>('#job-time');
+                if (clockInput) clockInput.value = playbackTimeLabel(clip.duration, activeEntry.trackTime);
+                if (!playing) current.player.pause();
+                syncTransportControls();
+                presentCurrentFrame(current);
+                if (playing && hubVisible) armPlayback(current, current.player);
+            } else {
+                syncTransportControls();
+            }
+        };
         const clock = node('input');
         clock.id = 'job-time';
         clock.type = 'number';
         clock.min = '0';
         clock.step = '0.001';
+        clock.oninput = () => {
+            if (!playing) return;
+            stopPlayback();
+            if (current) presentCurrentFrame(current);
+        };
         clock.onchange = () => {
             const value = Number(clock.value);
             const duration = current?.assets?.animations.find(clip => clip.name === animation)?.duration;
@@ -1543,13 +1709,14 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 notice.textContent = t('KEY_TIME_OUT_OF_DOMAIN');
                 return;
             }
+            stopPlayback();
             time = value;
             pose();
         };
         const panels = selectValues(['1', '2', '3', '4'], ['1 Parts + mesh', '2 Interview', '3 Rig + animation', '4 Direction']);
         panels.id = 'job-panel';
         panels.onchange = () => { panel = panels.value; showPanel(); };
-        transport.append(clips, inputLabel('job.time', clock), panels);
+        transport.append(clips, playButton, inputLabel('Repeat', loopInput), inputLabel('job.time', clock), panels);
         const numeric = node('pre');
         numeric.id = 'view-coordinates';
         numeric.hidden = true;
@@ -1666,15 +1833,28 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         if (current.player) {
             drawn.delete(current);
             current.rigPresentation = undefined;
-            if (animation && current.player.current !== animation)
-                current.player.play(animation, { loop: true });
-            if (animation)
+            if (animation && (current.player.current !== animation || current.player.entry(0)?.loop !== loop))
+                current.player.play(animation, { loop });
+            if (animation) {
+                const seekAtLoopEnd = loop && time === clip?.duration;
                 current.player.seek(time);
+                const activeEntry = current.player.entry(0);
+                if (!activeEntry || activeEntry.animation !== animation || activeEntry.loop !== loop ||
+                    !Number.isFinite(activeEntry.animationTime) || activeEntry.animationTime < 0 ||
+                    activeEntry.animationTime > activeEntry.duration) {
+                    current.player.pause();
+                    notice.textContent = t('JOB_VISUAL_UNAVAILABLE');
+                    return;
+                }
+                time = activeEntry.animationTime;
+                clock.value = seekAtLoopEnd ? '0' : String(time);
+            }
             current.player.pause();
             drawInspection(current);
             current.inspection?.select(selectedPart ? { side: 'single', slot: selectedPart, mode: partMode } : null);
             setText('job-part-observation', selectedPart ? JSON.stringify(current.inspection?.observation(), null, 2) : '');
         }
+        syncTransportControls();
         if (seekReference) {
             const value = reference();
             const owner = current;
@@ -1693,7 +1873,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     }
     function pauseHiddenHubFrame(): void {
         if (hubVisible) return;
-        current?.player?.pause();
+        stopPlayback();
         for (const video of workspace.querySelectorAll('video')) video.pause();
     }
     function announceHubFrame(): void {
@@ -1723,6 +1903,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 for (const entry of nextForms.values()) formHost.append(entry.form);
                 referenceSelection.cancel();
                 const previous = current;
+                stopPlayback(previous?.player);
                 const previousElement = currentElement;
                 const previousForms = new Map(forms);
                 const navigation = { animation, time, selectedPart, partMode, selectedReference, panel,
@@ -1742,6 +1923,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 let nextUnbind: (() => void) | null = null;
                 let nextResize: ResizeObserver | null = null;
                 const rollback = () => {
+                    stopPlayback(prepared.player);
                     nextUnbind?.();
                     nextResize?.disconnect();
                     current = previous;
@@ -1759,6 +1941,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     Object.assign(viewportState, navigation.camera);
                     if (current) {
                         el<HTMLSelectElement>('job-reference').value = selectedReference;
+                        syncTransportControls();
                         viewport.fitCamera();
                     }
                 };
@@ -1840,6 +2023,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                         ? t('job.updated', [state.previousLabel, state.displayed.publication.label]) : state.displayed.publication.label;
                 if (compatibilityNotice)
                     notice.textContent += ' · ' + t('job.incompatible');
+                if (state.closed) {
+                    const wasPlaying = playing;
+                    stopPlayback();
+                    if (wasPlaying && current) presentCurrentFrame(current);
+                }
                 updateForms(state);
                 if (current)
                     showPanel();
@@ -1909,6 +2097,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     };
     resolutionChanged();
     const stop = () => {
+        stopPlayback();
         resolution?.removeEventListener('change', resolutionChanged);
         globalThis.removeEventListener('message', hubVisibility);
         saveDraft();

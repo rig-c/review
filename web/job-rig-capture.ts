@@ -4,7 +4,7 @@ import type {JobRigPresentation} from './viewport-capture.ts';
 
 type DrawSource = Pick<JobRigCapture['binding'], 'publicationId' | 'instanceKey' | 'sourceHash' | 'pageId'>;
 export interface JobRigDrawState {
-  player: Pick<RigPlayer, 'generation' | 'current' | 'time' | 'slots'> & {readonly renderer: object};
+  player: Pick<RigPlayer, 'generation' | 'current' | 'time' | 'slots' | 'entry'> & {readonly renderer: object};
   frameGeneration: number | undefined;
   presentation: JobRigPresentation | undefined;
   source: DrawSource;
@@ -21,6 +21,8 @@ export interface JobRigDraw {
   readonly drawGeneration: number;
   readonly animation: string | null;
   readonly time: number;
+  readonly trackTime: number;
+  readonly loop: boolean;
   readonly playing: boolean;
   readonly source: DrawSource;
   readonly layout: string;
@@ -55,20 +57,63 @@ export function jobRigPixelPlacement(pane: Pick<DOMRect, 'left' | 'top'>,
   };
 }
 
+function readPlayerTiming(state: JobRigDrawState): {animation: string | null; time: number; trackTime: number; loop: boolean} {
+  if (!Number.isFinite(state.player.time) || state.player.time < 0 || typeof state.playing !== 'boolean' ||
+      typeof state.player.entry !== 'function') {
+    throw new Error('JOB_STILL_CAPTURE_FAILED');
+  }
+  const entry = state.player.entry(0);
+  if (state.player.current === null) {
+    if (state.playing || state.player.time !== 0 ||
+        (entry !== null && (entry.animation !== null || entry.trackTime !== 0 || entry.animationTime !== 0))) {
+      throw new Error('JOB_STILL_CAPTURE_FAILED');
+    }
+    return {animation: null, time: 0, trackTime: 0, loop: false};
+  }
+  if (typeof state.player.current !== 'string' || !state.player.current || !entry ||
+      typeof entry.animation !== 'string' || entry.animation !== state.player.current ||
+      typeof entry.loop !== 'boolean' || !Number.isFinite(entry.trackTime) || entry.trackTime < 0 ||
+      entry.trackTime !== state.player.time || !Number.isFinite(entry.duration) || entry.duration < 0 ||
+      !Number.isFinite(entry.animationTime) || entry.animationTime < 0 || entry.animationTime > entry.duration) {
+    throw new Error('JOB_STILL_CAPTURE_FAILED');
+  }
+  return {animation: entry.animation, time: entry.animationTime, trackTime: entry.trackTime, loop: entry.loop};
+}
+
+function matchesDrawState(draw: JobRigDraw, state: JobRigDrawState): boolean {
+  if (draw.presentation !== state.presentation || draw.player !== state.player || draw.renderer !== state.player.renderer ||
+      draw.playerGeneration !== state.player.generation || state.frameGeneration !== draw.playerGeneration ||
+      draw.animation !== state.player.current || draw.trackTime !== state.player.time ||
+      draw.playing !== state.playing || draw.layout !== state.layout || sourceKey(draw.source) !== sourceKey(state.source)) {
+    return false;
+  }
+  const entry = state.player.entry(0);
+  if (draw.animation === null) {
+    return !draw.playing && !state.playing && draw.time === 0 && draw.trackTime === 0 && draw.loop === false && state.player.time === 0 &&
+      (entry === null || (entry.animation === null && entry.trackTime === 0 && entry.animationTime === 0));
+  }
+  return entry !== null && entry.animation === draw.animation && entry.loop === draw.loop &&
+    entry.trackTime === draw.trackTime && entry.animationTime === draw.time &&
+    Number.isFinite(entry.duration) && entry.duration >= 0 && draw.time >= 0 && draw.time <= entry.duration;
+}
+
 /** Called after the public draw/present and viewport-render boundaries succeed. */
 export function recordJobRigDraw(state: JobRigDrawState, drawGeneration: number): JobRigDraw {
   if (!state.presentation || state.frameGeneration !== state.player.generation || !Number.isSafeInteger(drawGeneration) || drawGeneration < 1 ||
-      !Number.isSafeInteger(state.player.generation) || state.player.generation < 0 || !Number.isFinite(state.player.time) || state.player.time < 0) {
+      !Number.isSafeInteger(state.player.generation) || state.player.generation < 0) {
     throw new Error('JOB_STILL_CAPTURE_FAILED');
   }
+  const timing = readPlayerTiming(state);
   return Object.freeze({
     player: state.player,
     renderer: state.player.renderer,
     presentation: state.presentation,
     playerGeneration: state.player.generation,
     drawGeneration,
-    animation: state.player.current,
-    time: state.player.time,
+    animation: timing.animation,
+    time: timing.time,
+    trackTime: timing.trackTime,
+    loop: timing.loop,
     playing: state.playing,
     source: Object.freeze({...state.source}),
     layout: state.layout,
@@ -80,16 +125,13 @@ export function freezeJobRigCapture(draw: JobRigDraw | undefined, state: JobRigD
   copy: () => JobRigPixels): FrozenJobRigCapture {
   if (!state.defaultCamera) throw new Error('JOB_STILL_CAMERA_NOT_FIXED');
   if (!state.wholeRig || state.player.slots !== null) throw new Error('JOB_STILL_VIEW_UNSUPPORTED');
-  if (!draw) throw new Error('JOB_STILL_CAPTURE_FAILED');
-  if (draw.presentation !== state.presentation || draw.player !== state.player || draw.renderer !== state.player.renderer || draw.playerGeneration !== state.player.generation ||
-      state.frameGeneration !== draw.playerGeneration || draw.animation !== state.player.current ||
-      draw.time !== state.player.time || draw.layout !== state.layout || sourceKey(draw.source) !== sourceKey(state.source)) {
+  if (!draw || typeof state.player.entry !== 'function') throw new Error('JOB_STILL_CAPTURE_FAILED');
+  if (draw.animation !== null && !draw.animation) throw new Error('JOB_STILL_CAPTURE_FAILED');
+  if (!matchesDrawState(draw, state)) {
     throw new Error('JOB_STILL_BINDING_MISMATCH');
   }
-  if (draw.animation !== null && !draw.animation) throw new Error('JOB_STILL_CAPTURE_FAILED');
   const pixels = copy();
-  if (state.presentation !== draw.presentation || state.player.renderer !== draw.renderer || state.player.generation !== draw.playerGeneration || state.player.current !== draw.animation ||
-      state.player.time !== draw.time || draw.layout !== state.layout || sourceKey(draw.source) !== sourceKey(state.source)) {
+  if (!matchesDrawState(draw, state)) {
     throw new Error('JOB_STILL_BINDING_MISMATCH');
   }
   if (!Number.isSafeInteger(pixels.width) || !Number.isSafeInteger(pixels.height) || pixels.width < 1 || pixels.height < 1 ||
