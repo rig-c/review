@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.7.0](https://github.com/rig-c/review/compare/v2.6.0...v2.7.0) (2026-11-08)
+
+
+### Features
+
+* **job:** attest strict reuse-only owner host attachments ([741ba09](https://github.com/rig-c/review/commit/741ba090e615e25a4c595951747d854917d2da49))
+* **job:** prepare sealed model-free record publication contracts ([#577](https://github.com/rig-c/review/issues/577)) ([1f79da7](https://github.com/rig-c/review/commit/1f79da7f4af794ee9826453d395bfe59793c6ebb))
+
 ## [2.6.0](https://github.com/rig-c/review/compare/v2.5.0...v2.6.0) (2026-11-08)
 
 
