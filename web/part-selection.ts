@@ -75,6 +75,7 @@ export class PartInspection {
  register(side:ControlPart['side'],entries:PartEntry[],player:PartPlayer){this.refused.delete(side);this.sides.set(side,{entries,player,frame:null,identity:null});}
  /** The catalog for this side failed to load or hash: the rig still draws, the side offers no parts. */
  refuseCatalog(side:ControlPart['side'],error:unknown):void {this.sides.delete(side);this.refused.set(side,partRefusal(error,true));}
+ clear(side:ControlPart['side']):void {this.sides.delete(side);this.refused.delete(side);if(this.selected?.side===side)this.selected=null;}
  refusal(side:ControlPart['side']):PartRefusal|null {return this.refused.get(side)??null;}
  /** A selection on a refused side is retained for recovery but never exposed, drawn Solo or targeted. */
  protected live():ControlPart|null {const part=this.selected;return part&&!this.refused.has(part.side)?part:null;}
@@ -114,6 +115,7 @@ export class PartExplorer extends PartInspection {
  private get search(){return this.host.querySelector<HTMLInputElement>('[data-part-search]')!;}private get list(){return this.host.querySelector<HTMLElement>('[data-part-list]')!;}private get solo(){return this.host.querySelector<HTMLInputElement>('[data-part-solo]')!;}private get whole(){return this.host.querySelector<HTMLButtonElement>('[data-part-whole]')!;}
  register(side:ControlPart['side'],entries:PartEntry[],player:PartPlayer,thumbnails?:PartThumbnailSource){super.register(side,entries,player);if(thumbnails)this.thumbnails.set(side,thumbnails);else this.thumbnails.delete(side);this.renderList();}
  refuseCatalog(side:ControlPart['side'],error:unknown):void {super.refuseCatalog(side,error);this.renderList();this.renderDetail();}
+ clear(side:ControlPart['side']):void {super.clear(side);this.thumbnails.delete(side);this.renderList();this.renderDetail();}
  select(value:ControlPart|null):void {const previous=this.value();super.select(value);this.renderSelection();this.renderDetail();this.changed(previous);}
  setVisibleSide(side:ControlPart['side']|null):void {if(this.visibleSide===side)return;this.visibleSide=side;this.renderList();this.renderDetail();}
  setStatusHint(text:string|null):void {if(this.statusHint===text)return;this.statusHint=text;this.detailKey='';this.renderDetail();}

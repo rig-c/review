@@ -3454,4 +3454,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "KEY_TIME_OUT_OF_DOMAIN": "KEY_TIME_OUT_OF_DOMAIN",
   "MODEL_UNAVAILABLE": "MODEL_UNAVAILABLE",
   "REFERENCE_OUT_OF_DOMAIN": "REFERENCE_OUT_OF_DOMAIN",
+  " · installed {0} {1} · {2} {3}": " · installed {0} {1} · {2} {3}",
+  "Draft {0} ({1} {2}): {3} sha256 {4}… · parts {5}{6}": "Draft {0} ({1} {2}): {3} sha256 {4}… · parts {5}{6}",
+  "PARTS_VERDICT_READ_ONLY: Stage 1 draft is inspection-only": "PARTS_VERDICT_READ_ONLY: Stage 1 draft is inspection-only",
+  "STAGE_DRAFT_OPERATION: only applied mesh corrections belong to this inspection": "STAGE_DRAFT_OPERATION: only applied mesh corrections belong to this inspection",
 };

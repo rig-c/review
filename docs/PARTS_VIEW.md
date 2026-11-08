@@ -444,6 +444,8 @@ Correction-record export is unfinished, blocked on review#369/create#91. Existin
 comments and feedback preserve reviewer wording, but are not a substitute for
 that shared export or for create-owned structure decisions.
 
+When `--project` and `--project-draft` select a recorded Create draft that declares its `config`, `parts`, `rig` and `check` directories, Stage 1 also enables the mesh correction instruments before a rig version exists. The status bar reports the recorded draft producer version alongside the installed producer and compiler versions, and refuses Apply with `DRAFT_PRODUCER_MISMATCH` when the installed producer differs from the recorded draft producer. Opening an instrument switches to the Setup inspector for that mesh correction, while direct Stage 3 navigation stays refused with `RIG_VERSION_UNAVAILABLE`. When `--parts-verdict-dir` is omitted or `review.parts` is already approved, Stage 1 remains inspection-only and hides the correction instruments.
+
 ### Declared-grid Difference
 
 **Difference** in an individual part view reads the optional producer declaration

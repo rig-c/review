@@ -975,6 +975,8 @@ Packages without authored direction continue to use their explicit legacy
 selector. Direction patch Apply is unavailable. Existing supported rig and
 draft Apply records keep their producer and result evidence.
 
+When `--project` and `--project-draft` select a recorded draft whose project entry declares `config`, `parts`, `rig` and `check` directories, `/api/rebuild` exposes `draft` metadata with the recorded draft id, producer identity and input paths without synthesizing a package `reviewedSource.handoff`. Rebuild status compares the recorded draft producer with the installed producer and refuses Apply with `DRAFT_PRODUCER_MISMATCH` on version differences. While the joined parts verdict is writable, `/api/rebuild` accepts region rebuilds, `remesh` config patches and mesh deltas in scratch, and refuses whole-rig, retarget and animation operations with `STAGE_DRAFT_OPERATION`. When `--parts-verdict-dir` is omitted or `review.parts` is already approved, `/api/rebuild` and `/api/stage-parts` report the draft as inspection-only and refuse rebuild mutations.
+
 A supported made item must match the server-owned settled Apply seal and
 retained scratch model and pages when the item is added or changed and on
 selected export. Older unchanged items remain saved as historical evidence

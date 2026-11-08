@@ -166,3 +166,116 @@ test('interview launch guidance and chrome have matching English and Korean keys
   for(const k of keys){expect(enCatalog[k],k).toBeTruthy();expect(koCatalog[k],k).toBeTruthy();}
  }
 });
+
+test('#562(ii) preRig stage-nav keeps direct Stage 3 refused, opens Setup only on verified Stage 1 correction, and re-syncs Stage 1 draft build on return or refresh',async()=>{
+ const {bindStageNav}=await import('../web/stage-nav.ts');
+ class NodeStub {
+  tagName:string;id='';className='';textContent='';title='';hidden=false;disabled=false;inert=false;
+  dataset:Record<string,string>={};style:Record<string,string>={};children:NodeStub[]=[];
+  contentWindow:any=null;src='';
+  private attrs=new Map<string,string>();
+  private listeners=new Map<string,Set<(e:any)=>void>>();
+  constructor(tag:string){this.tagName=tag.toUpperCase();if(this.tagName==='IFRAME')this.contentWindow={postMessage:(msg:unknown)=>{this.posted.push(msg);}};}
+  posted:unknown[]=[];
+  append(...nodes:NodeStub[]){this.children.push(...nodes);}
+  remove(){if(body.children.includes(this))body.children=body.children.filter(c=>c!==this);}
+  setAttribute(k:string,v:string){this.attrs.set(k,v);}
+  getAttribute(k:string){return this.attrs.get(k)??null;}
+  removeAttribute(k:string){this.attrs.delete(k);}
+  addEventListener(type:string,fn:(e:any)=>void){if(!this.listeners.has(type))this.listeners.set(type,new Set());this.listeners.get(type)!.add(fn);}
+  removeEventListener(type:string,fn:(e:any)=>void){this.listeners.get(type)?.delete(fn);}
+  dispatch(type:string,event:any={}){for(const fn of [...(this.listeners.get(type)??[])])fn(event);}
+  click(){const ev={preventDefault(){},stopImmediatePropagation(){}};this.dispatch('click',ev);this.onclick?.();}
+  onclick?:()=>void;
+  closest(){return null;}
+  getBoundingClientRect(){return {bottom:40};}
+  classList={add:()=>{},remove:()=>{},toggle:()=>{}};
+  querySelectorAll(){return [];}
+ }
+ const host=new NodeStub('nav'),workspace=new NodeStub('div'),inspectorRig=new NodeStub('button'),body=new NodeStub('body'),docEl=new NodeStub('html');
+ inspectorRig.setAttribute('data-inspector','rig');inspectorRig.setAttribute('aria-selected','false');
+ const winListeners=new Map<string,Set<(e:any)=>void>>();
+ const prevDoc=(globalThis as any).document,prevWin=(globalThis as any).window,prevLoc=(globalThis as any).location,prevObs=(globalThis as any).MutationObserver;
+ (globalThis as any).location={href:'http://127.0.0.1:4173/',origin:'http://127.0.0.1:4173',search:'',hash:''};
+ (globalThis as any).MutationObserver=class{observe(){}disconnect(){}};
+ (globalThis as any).window={
+  location:(globalThis as any).location,
+  addEventListener:(t:string,fn:(e:any)=>void)=>{if(!winListeners.has(t))winListeners.set(t,new Set());winListeners.get(t)!.add(fn);},
+  removeEventListener:(t:string,fn:(e:any)=>void)=>{winListeners.get(t)?.delete(fn);},
+ };
+ (globalThis as any).document={
+  documentElement:docEl,
+  body,
+  getElementById:()=>null,
+  createElement:(tag:string)=>new NodeStub(tag),
+  querySelector:(sel:string)=>sel==='[data-stage-nav]'?host:sel==='.layout'?workspace:sel==='[data-inspector="rig"]'?inspectorRig:null,
+  querySelectorAll:(sel:string)=>sel.includes('[data-inspector]')?[inspectorRig]:[],
+ };
+ try{
+  let currentBuild='inspected';
+  let allowCorrection=true;
+  let refreshFn:(()=>void)|undefined;
+  const calls:string[]=[];
+  const dispose=bindStageNav({
+   preRig:true,
+   model:false,
+   draftBuild:()=>currentBuild,
+   refresh:(fn:()=>void)=>{refreshFn=fn;},
+   correction:async(req:{part:string;sourceHash:string;buildId:string;instrument:string})=>{
+    calls.push(`${req.part}:${req.buildId}:${req.instrument}`);
+    if(!allowCorrection)throw new Error('STAGE_DRAFT_MISMATCH');
+    inspectorRig.click();
+   },
+  } as any);
+  const panel=body.children.find(c=>c.className==='review-stage-panel')!;
+  const status=panel.children[0]!;
+  const stageButtons=host.children;
+  expect(docEl.dataset.inspectionStage).toBe('1');
+  expect(panel.hidden).toBe(false);
+  expect(workspace.inert).toBe(true);
+  expect(inspectorRig.disabled).toBe(true);
+
+  // Direct click on Stage 3 in preRig remains refused (`RIG_VERSION_UNAVAILABLE`).
+  stageButtons[2]!.click();
+  expect(docEl.dataset.inspectionStage).toBe('3');
+  expect(panel.hidden).toBe(false);
+  expect(status.textContent).toContain('RIG_VERSION_UNAVAILABLE');
+
+  // Return to Stage 1 and trigger a failed correction: stays on Stage 1 with error status and workspace inert.
+  stageButtons[0]!.click();
+  const frame1=panel.children.find(c=>c.tagName==='IFRAME')!;
+  allowCorrection=false;
+  for(const fn of winListeners.get('message')??[])await fn({origin:'http://127.0.0.1:4173',source:frame1.contentWindow,data:{type:'review-stage-correction',part:'torso',sourceHash:'h1',buildId:'inspected',instrument:'mesh'}});
+  expect(docEl.dataset.inspectionStage).toBe('1');
+  expect(panel.hidden).toBe(false);
+  expect(workspace.inert).toBe(true);
+  expect(status.textContent).toBe('STAGE_DRAFT_MISMATCH');
+
+  // Verified Stage 1 correction enables inspector controls and reveals the Setup workspace (`panel.hidden === true`, `workspace.inert === false`).
+  allowCorrection=true;
+  for(const fn of winListeners.get('message')??[])await fn({origin:'http://127.0.0.1:4173',source:frame1.contentWindow,data:{type:'review-stage-correction',part:'torso',sourceHash:'h1',buildId:'inspected',instrument:'mesh'}});
+  expect(docEl.dataset.inspectionStage).toBe('3');
+  expect(panel.hidden).toBe(true);
+  expect(workspace.inert).toBe(false);
+  expect(inspectorRig.disabled).toBe(false);
+
+  // After a scratch Apply changes `draftBuild()`, returning to Stage 1 mounts the scratch build frame; `refresh()` updates Stage 1 in place.
+  currentBuild='b'.repeat(64);
+  stageButtons[0]!.click();
+  expect(docEl.dataset.inspectionStage).toBe('1');
+  expect(panel.hidden).toBe(false);
+  expect(workspace.inert).toBe(true);
+  const frame2=panel.children.filter(c=>c.tagName==='IFRAME').at(-1)!;
+  frame2.dispatch('load');
+  expect(frame2.posted).toContainEqual({type:'review-stage-source',buildId:currentBuild,state:null});
+
+  currentBuild='inspected';
+  refreshFn?.();
+  const frame3=panel.children.filter(c=>c.tagName==='IFRAME').at(-1)!;
+  frame3.dispatch('load');
+  expect(frame3.posted).toContainEqual({type:'review-stage-source',buildId:'inspected',state:null});
+  dispose();
+ }finally{
+  (globalThis as any).document=prevDoc;(globalThis as any).window=prevWin;(globalThis as any).location=prevLoc;(globalThis as any).MutationObserver=prevObs;
+ }
+});

@@ -269,3 +269,32 @@ test('the explorer puts a row thumbnail or the type icon beside unchanged row te
  expect(row('other').title).toContain('type icon: THUMBNAIL_NO_PAGE_REGION');expect(row('other').textContent).toBe('◇other · drawn · default / sprite');
  expect(row('clip').title).toContain('type icon: no active attachment (no-attachment)');expect(host.querySelector('[data-part-status]')!.textContent).toBe('3 declared slots · 3 results');
 });
+test('clear removes only the named side catalog, refusal, thumbnail source and selection while preserving other sides',async()=>{
+ const {host,detail,Explorer}=await explorerHarness(),a=fake(),b=fake(),explorer=new Explorer(host as unknown as HTMLElement,detail as unknown as HTMLElement,()=>{},()=>{});
+ const list=host.querySelector('[data-part-list]')!,status=host.querySelector('[data-part-status]')!,solo=host.querySelector('[data-part-solo]')!,whole=host.querySelector('[data-part-whole]')!;
+ let thumbCalls=0;
+ const source={show:(icon:HTMLElement,_entry:PartEntry,_identity:ControlPartIdentity|null,glyph:string)=>{thumbCalls++;icon.textContent=glyph;return 'thumbnail: custom-source';}};
+ explorer.register('single',entries,a.player,source);explorer.present('single');explorer.select({side:'single',slot:'s',mode:'solo'});
+ expect(explorer.value()).toMatchObject({side:'single',slot:'s',mode:'solo'});expect(list.querySelectorAll('button')).toHaveLength(3);expect(thumbCalls).toBeGreaterThan(0);
+ explorer.clear('single');
+ expect(explorer.value()).toBeNull();expect(explorer.refusal('single')).toBeNull();expect(explorer.frame('single')).toBeUndefined();
+ expect(list.querySelectorAll('button')).toHaveLength(0);expect(status.textContent).toBe('No compiled rig catalog available');expect(host.dataset.parts).toBeUndefined();
+ expect(whole.attributes.get('aria-pressed')).toBe('true');expect(solo.disabled).toBe(true);expect(solo.checked).toBe(false);
+ expect(detail.textContent).toContain('Whole rig');expect(detail.textContent).toContain('Select an actual slot in the parts explorer.');expect(detail.textContent).not.toContain('Parts unavailable');
+ // Re-registering without a thumbnail source proves the old side thumbnail source was cleared.
+ thumbCalls=0;explorer.register('single',entries,a.player);explorer.present('single');expect(thumbCalls).toBe(0);
+ explorer.refuseCatalog('single',new Error('PART_SOURCE_CHANGED: mismatch'));
+ expect(explorer.refusal('single')).toMatchObject({code:'PART_SOURCE_CHANGED',catalog:true});expect(host.dataset.parts).toBe('unavailable');
+ explorer.clear('single');
+ expect(explorer.refusal('single')).toBeNull();expect(host.dataset.parts).toBeUndefined();expect(status.textContent).toBe('No compiled rig catalog available');expect(detail.textContent).not.toContain('Parts unavailable');
+ // Multi-side: clearing side 'a' preserves side 'b' catalog, selection, and refusal state.
+ explorer.register('a',entries,a.player);explorer.register('b',entries,b.player);explorer.present('a');explorer.present('b');
+ explorer.select({side:'b',slot:'other',mode:'context'});
+ explorer.clear('a');
+ expect(explorer.value()).toMatchObject({side:'b',slot:'other',mode:'context',identity:{attachment:'sprite',skin:'default'}});
+ expect(list.querySelectorAll('button').map(r=>r.dataset.side)).toEqual(['b','b','b']);
+ explorer.register('a',entries,a.player);explorer.present('a');explorer.refuseCatalog('b',new Error('PART_CATALOG_UNAVAILABLE: missing'));
+ explorer.select({side:'a',slot:'s',mode:'context'});expect(explorer.value()).toMatchObject({side:'a',slot:'s'});
+ explorer.clear('a');
+ expect(explorer.value()).toBeNull();expect(explorer.refusal('a')).toBeNull();expect(explorer.refusal('b')).toMatchObject({code:'PART_CATALOG_UNAVAILABLE',catalog:true});
+});

@@ -407,10 +407,22 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));
   const draftOpt=draftRebuildOption(f.joined)!;
   const parsedDraftInputs=await draftProducerInputs(draftOpt);
   expect(parsedDraftInputs.handoff).toBeNull();
+  let stageDraftUnchangedCount=0;
+  let onSecondStageDraftUnchanged:(()=>Promise<void>)|null=null;
   const rebuilds=createRebuilds(f.p,{
    stateDir:state,
    starts:[root],
-   unchanged:()=>assertReviewUnchanged(f.p),
+   unchanged:async()=>{
+    await assertReviewUnchanged(f.p);
+    if(onSecondStageDraftUnchanged){
+     stageDraftUnchangedCount++;
+     if(stageDraftUnchangedCount===2){
+      const hook=onSecondStageDraftUnchanged;
+      onSecondStageDraftUnchanged=null;
+      await hook();
+     }
+    }
+   },
    bones:null,
    draft:draftOpt,
   });
@@ -524,42 +536,44 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));
   expect((await rebuilds.stageDraft(patchJob.id)).id).toBe(patchJob.id);
   await expect(rebuilds.stageDraft(deltaJob.id)).rejects.toThrow('STAGE_DRAFT_STALE');
 
-  const origJsonParse=JSON.parse;
-  const midState:{apply:Promise<{status:number;body:unknown}>|null;undo:Promise<{status:number;body:unknown}>|null}={apply:null,undo:null};
-  const parseSpyApply=spyOn(JSON,'parse').mockImplementation(((text:string,reviver?:any)=>{
-   const parsed=origJsonParse(text,reviver);
-   if(!midState.apply&&typeof text==='string'&&text.includes('"rig-parts-remesh/1"')){
-    midState.apply=rebuilds.start(deltaReq);
-   }
-   return parsed;
-  }) as typeof JSON.parse);
+  let busyStarted:{status:number;body:unknown}|null=null;
+  stageDraftUnchangedCount=0;
+  onSecondStageDraftUnchanged=async()=>{
+   busyStarted=await rebuilds.start(deltaReq);
+   expect(busyStarted.status).toBe(202);
+   expect((busyStarted.body as {status:string}).status).toBe('running');
+   expect(rebuilds.busy()).toBe(true);
+   expect(rebuilds.running()).toBe(deltaJob.id);
+   expect(rebuilds.latest()?.id).toBe(patchJob.id);
+  };
   try{
    await expect(rebuilds.stageDraft(patchJob.id)).rejects.toThrow('STAGE_DRAFT_STALE');
   }finally{
-   parseSpyApply.mockRestore();
-   if(midState.apply){
-    const res=await midState.apply;
-    await waitJob(rebuilds,(res.body as {id:string}).id);
+   onSecondStageDraftUnchanged=null;
+   const started=busyStarted as {status:number;body:{id:string}}|null;
+   if(started){
+    const rebuiltDelta=await waitJob(rebuilds,started.body.id);
+    expect(rebuiltDelta.status).toBe('built');
    }
   }
   await rebuilds.undo({from:deltaJob.id});
   expect((await rebuilds.stageDraft(patchJob.id)).id).toBe(patchJob.id);
 
-  const parseSpyUndo=spyOn(JSON,'parse').mockImplementation(((text:string,reviver?:any)=>{
-   const parsed=origJsonParse(text,reviver);
-   if(!midState.undo&&typeof text==='string'&&text.includes('"rig-parts-remesh/1"')){
-    midState.undo=rebuilds.undo({from:patchJob.id});
-   }
-   return parsed;
-  }) as typeof JSON.parse);
   let undone2:{status:number;body:unknown}|null=null;
+  stageDraftUnchangedCount=0;
+  onSecondStageDraftUnchanged=async()=>{
+   undone2=await rebuilds.undo({from:patchJob.id});
+   expect((undone2.body as {status:string}).status).toBe('inspected');
+   expect(rebuilds.latest()).toBeNull();
+   expect(rebuilds.busy()).toBe(false);
+  };
   try{
    await expect(rebuilds.stageDraft(patchJob.id)).rejects.toThrow('STAGE_DRAFT_STALE');
   }finally{
-   parseSpyUndo.mockRestore();
-   if(midState.undo)undone2=await midState.undo;
+   onSecondStageDraftUnchanged=null;
   }
-  expect((undone2!.body as {status:string}).status).toBe('inspected');
+  const undoneResult=undone2 as {status:number;body:{status:string}}|null;
+  expect(undoneResult?.body.status).toBe('inspected');
   await expect(rebuilds.stageDraft(patchJob.id)).rejects.toThrow('STAGE_DRAFT_STALE');
 
   // 5. Scratch check gate: a build with a failing check (`pass: false`) is refused by `stageDraft` with `STAGE_DRAFT_UNCHECKED`.

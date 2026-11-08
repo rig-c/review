@@ -739,6 +739,8 @@ offers the registered pending sets and displays historical answers read-only.
 **3 Rig + animation** and **4 Direction** report that the recorded rig review
 package is unavailable. Reopen with a rig version once Create records one.
 
+When the recorded draft entry includes `config`, `parts`, `rig` and `check` directories and `--parts-verdict-dir` keeps the parts verdict writable, **1 Parts + mesh** also offers the Chest regions, Mesh parameters and Edit Mesh instruments for mesh-bearing parts. Selecting an instrument opens the Setup inspector for that part while direct selection of **3 Rig + animation** remains refused with `RIG_VERSION_UNAVAILABLE`. Apply runs the installed producer in scratch when its version matches the recorded draft producer, and returning to **1 Parts + mesh** or running Undo or Reset updates the displayed mesh and report readings from the active build.
+
 From a create project with retained choice sets, create a dedicated output
 directory and open the foreground Stage 2 view:
 
