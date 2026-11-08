@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.5](https://github.com/rig-c/review/compare/v2.4.4...v2.4.5) (2026-11-08)
+
+
+### Bug Fixes
+
+* admit legacy post choices without split-order adoption ([e09a88c](https://github.com/rig-c/review/commit/e09a88cc4a4b05bb01f0f1df13268f4fb1711bf9))
+
 ## [2.4.4](https://github.com/rig-c/review/compare/v2.4.3...v2.4.4) (2026-11-08)
 
 
