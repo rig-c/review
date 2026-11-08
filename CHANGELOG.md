@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.6.0](https://github.com/rig-c/review/compare/v2.5.0...v2.6.0) (2026-11-08)
+
+
+### Features
+
+* keep owner playback continuous through still capture ([49e09c3](https://github.com/rig-c/review/commit/49e09c3742a6d2d852ba835ff00235d798263ec7))
+* report durable parts saves and wait for finalized acts ([1d988d0](https://github.com/rig-c/review/commit/1d988d00c3ad312e6dc047d3283280c3214b2da5))
+
+
+### Bug Fixes
+
+* durably install consumer still output before stdout ([a385efc](https://github.com/rig-c/review/commit/a385efc92b3de73a6d7977008315a36fdf373252))
+* **job:** recheck monotonic wait deadlines ([#576](https://github.com/rig-c/review/issues/576)) ([7227f3b](https://github.com/rig-c/review/commit/7227f3bb57701e77d86d1cd84a9b23c49f4b957c))
+
 ## [2.5.0](https://github.com/rig-c/review/compare/v2.4.6...v2.5.0) (2026-11-08)
 
 
