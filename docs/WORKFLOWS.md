@@ -669,7 +669,11 @@ accepted. Closure before an act returns the closed response with `JOB_CLOSED` an
 cursor, storage and caller-cancellation failures retain exit 1.
 
 The acceptance bar includes one CLI wait spanning a real finalized UI act submitted after more than
-30 seconds. Implementation validation and that acceptance run remain pending. Standalone legacy
+30 seconds. Focused validation covers a synthetic normal-CLI wait (`tests/job-next-wait.test.ts`)
+where one `rig-review session next ... --until act --wait-ms 40000` call chains two 30000 ms-bounded
+`next` API requests across ~31 seconds and returns a finalized synthetic UI act committed after 31
+seconds, alongside fast multi-slice and boundary tests; full browser and PR CI acceptance runs
+separately. Standalone legacy
 file-only Save has the separate [save-notification contract](PARTS_VIEW.md#durable-save-notifications).
 Waking this act wait requires a real finalized job act. Consumers use writer-owned `fetch-act` for
 the source-bound result and deduplicate by `actId`.

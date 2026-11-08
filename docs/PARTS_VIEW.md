@@ -209,7 +209,9 @@ Control characters and U+2028/U+2029 are escaped within the JSON. Accept complet
 Existing startup output shares stdout. The writer awaits output completion and backpressure before
 reporting ordinary save success.
 
-`sha256` hashes the exact committed save buffer and uses 64 lowercase hex characters. `status` is
+`sha256` hashes the exact committed save buffer (matching `savedFileSha256` when that commit is read via
+`--format json`, and distinct from the normalized CLI stdout receipt bytes) and uses 64 lowercase hex
+characters. `status` is
 `pending`, `approved` or `changes-requested`. Saves are serialized within one foreground process.
 `saveCount` starts at 1 and advances through 2, 3 and onward for every durable save, including identical
 saves, then restarts with a new process. The positive safe-integer counter is process-scoped.
