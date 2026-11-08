@@ -228,8 +228,8 @@ function mountActualBuild(body: string, prepared: JobPreparedInspection): MountE
   replaceGlobal('document', {createTextNode: (text: string) => {const node = new MountElement('#text'); node.textContent = text; return node;}});
   // Execute the actual nested production build body, without adding a product test seam.
   const javascript = new Bun.Transpiler({loader: 'ts'}).transformSync(body);
-  const build = new Function('node', 'inputLabel', 'selectValues', 'mountViewportPair', 't', javascript + '\nreturn build;')(
-    node, inputLabel, selectValues, mountViewportPair, translate) as (prepared: JobPreparedInspection) => MountElement;
+  const build = new Function('node', 'inputLabel', 'selectValues', 'mountViewportPair', 't', 'loop', javascript + '\nreturn build;')(
+    node, inputLabel, selectValues, mountViewportPair, translate, true) as (prepared: JobPreparedInspection) => MountElement;
   const host = node('main'); host.append(build(prepared));
   return host;
 }

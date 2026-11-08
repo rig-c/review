@@ -76,7 +76,7 @@ export async function admitStillOracle(page: InputCdpSession): Promise<unknown> 
                             geometry:box(canvas),png:canvas.toDataURL('image/png')})),
                         canonicalPng:canonical?.toDataURL('image/png'),copiedPng:this.toDataURL('image/png')};
                 }
-                return original.apply(this,args);
+                return state.original.apply(this,args);
             };
             globalThis.__jobStillObservation=state;
         }

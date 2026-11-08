@@ -21,13 +21,14 @@ import {preparePartsComment,validateStoredPartsComment} from './parts-comment-cr
 import {resolvedCropPath} from './comment-crops.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { PNG } from 'pngjs';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
 import { destinationDirectory } from './destination-directory.ts';
 
 export const PARTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/2';
+const NAMED_VERDICT_SCHEMA = 'rig-review-parts-verdict/3';
 export const PARTS_VERDICT_FILE = 'parts-review.json';
 export const PARTS_NOTE_LIMIT = 10000;
 export type PartsViewMode = 'parts' | 'atlas';
@@ -553,8 +554,20 @@ async function packageVersion(): Promise<string> {
   return (JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 }
 
-/** Writes the verdict atomically at its designated destination. */
-export async function saveVerdict(pkg: PartsViewPackage, input: unknown, assertCurrent?: () => Promise<void>): Promise<PartsVerdict> {
+async function verdictWrite<T>(operation: string, action: () => Promise<T>): Promise<T> {
+  try { return await action(); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? 'IO';
+    throw new Error(`PARTS_VERDICT_WRITE_FAILED: ${operation} (${code})`, {cause: error});
+  }
+}
+
+export interface PartsSaveReceipt { verdictPath: string; sha256: string; status: VerdictStatus }
+
+/** One durable buffer, shared by standalone and joined saves. Attribution is launch configuration only. */
+export async function saveVerdictWithReceipt(pkg: PartsViewPackage, input: unknown,
+  assertCurrent?: () => Promise<void>, by?: string): Promise<{verdict: PartsVerdict; receipt: PartsSaveReceipt}> {
+  if (by !== undefined && (typeof by !== 'string' || !by.trim())) refuse('PARTS_VERDICT_INVALID', 'reviewer name must be nonblank');
   await assertCurrent?.();
   await assertVerdictDestination(pkg);
   await assertPartsUnchanged(pkg);
@@ -562,14 +575,37 @@ export async function saveVerdict(pkg: PartsViewPackage, input: unknown, assertC
   const verdict = buildVerdict(pkg, input, await packageVersion());
   for(const comment of verdict.comments)await preparePartsComment(pkg,comment,true);
   await assertPartsUnchanged(pkg);
-  await mkdir(dirname(pkg.verdictPath), { recursive: true });
+  const stored = by === undefined ? verdict : {...verdict, schema: NAMED_VERDICT_SCHEMA, by};
+  const bytes = Buffer.from(JSON.stringify(stored, null, 2) + '\n');
+  const parent = dirname(pkg.verdictPath);
+  const firstCreated = await verdictWrite('mkdir', () => mkdir(parent, { recursive: true }));
   const tmp = `${pkg.verdictPath}.${crypto.randomUUID()}.tmp`;
   try {
-    await writeFile(tmp, JSON.stringify(verdict, null, 2) + '\n', { flag: 'wx' });
+    await verdictWrite('write/fsync', async () => {
+      const file = await open(tmp, 'wx');
+      try { await file.writeFile(bytes); await file.sync(); }
+      finally { await file.close(); }
+    });
     await assertVerdictDestination(pkg);
     await assertCurrent?.();
-    await rename(tmp, pkg.verdictPath);
-  } finally { await rm(tmp, { force: true }); }
+    await assertPartsUnchanged(pkg);
+    await verdictWrite('rename', () => rename(tmp, pkg.verdictPath));
+    // Flush the file's entry and every newly created directory's entry in its parent.
+    const last = firstCreated ? dirname(firstCreated) : parent;
+    for (let directory = parent; ; directory = dirname(directory)) {
+      await verdictWrite('directory fsync', async () => {
+        const handle = await open(directory, 'r');
+        try { await handle.sync(); } finally { await handle.close(); }
+      });
+      if (directory === last) break;
+    }
+  } finally { await verdictWrite('temporary cleanup', () => rm(tmp, { force: true })); }
+  return {verdict, receipt: {verdictPath: pkg.verdictPath, sha256: createHash('sha256').update(bytes).digest('hex'), status: verdict.status}};
+}
+
+/** Shared callers retain the ordinary normalized verdict and produce no save notification. */
+export async function saveVerdict(pkg: PartsViewPackage, input: unknown, assertCurrent?: () => Promise<void>): Promise<PartsVerdict> {
+  const {verdict} = await saveVerdictWithReceipt(pkg, input, assertCurrent);
   return verdict;
 }
 
@@ -581,16 +617,42 @@ export type VerdictStale = 'files' | 'flags' | null;
  * `source.sha256` alone; the page also requires `source.flags`, so a reviewer never sees a sign-off over flags they
  * were not shown.
  */
-export async function readVerdict(pkg: PartsViewPackage): Promise<{ verdict: PartsVerdict | null; stale: VerdictStale }> {
+async function readVerdictSnapshot(pkg: PartsViewPackage): Promise<{
+  verdict: PartsVerdict | null; stale: VerdictStale; by: string | null; savedFileSha256: string | null;
+}> {
   let raw: unknown;
-  let text:string;try{text=await readFile(pkg.verdictPath,'utf8');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {verdict:null,stale:null};throw new Error('PARTS_VERDICT_READ: saved verdict cannot be read');}
-  try{raw=JSON.parse(text);}catch{throw new Error('PARTS_VERDICT_INVALID: saved verdict is not valid JSON');}
+  const unavailable = {verdict: null, by: null, savedFileSha256: null};
+  let bytes: Buffer;
+  try { bytes = await readFile(pkg.verdictPath); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {...unavailable, stale: null}; throw new Error('PARTS_VERDICT_READ: saved verdict cannot be read'); }
+  try{raw=JSON.parse(bytes.toString('utf8'));}catch{throw new Error('PARTS_VERDICT_INVALID: saved verdict is not valid JSON');}
   const v = record(raw), source = record(v?.source), now = verdictSource(pkg);
-  if(!v||![PARTS_VERDICT_SCHEMA,'rig-review-parts-verdict/1'].includes(String(v.schema))||typeof source?.sha256!=='string')throw new Error('PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid');
-  if(v.mode!==pkg.mode||source.sha256!==now.sha256)return {verdict:null,stale:'files'};
-  if (JSON.stringify(source.flags) !== JSON.stringify(now.flags)) return { verdict: null, stale: 'flags' };
+  if(!v||![PARTS_VERDICT_SCHEMA,'rig-review-parts-verdict/1',NAMED_VERDICT_SCHEMA].includes(String(v.schema))||typeof source?.sha256!=='string')throw new Error('PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid');
+  let by: string | null = null;
+  if (v.schema === NAMED_VERDICT_SCHEMA) {
+    if (typeof v.by !== 'string' || !v.by.trim()) refuse('PARTS_VERDICT_INVALID', 'saved reviewer name must be nonblank');
+    by = v.by as string;
+  }
+  if(v.mode!==pkg.mode||source.sha256!==now.sha256)return {...unavailable,stale:'files'};
+  if (JSON.stringify(source.flags) !== JSON.stringify(now.flags)) return { ...unavailable, stale: 'flags' };
   const date=new Date(String(v.updatedAt));if(!Number.isFinite(date.getTime()))throw new Error('PARTS_VERDICT_INVALID: saved verdict date is invalid');
-  const normalized=buildVerdict(pkg,{...v,comments:v.schema==='rig-review-parts-verdict/1'?[]:v.comments},String(record(v.tool)?.version??''),date);for(const c of normalized.comments)await validateStoredPartsComment(pkg,c);return {verdict:normalized,stale:null};
+  const normalized=buildVerdict(pkg,{...v,comments:v.schema==='rig-review-parts-verdict/1'?[]:v.comments},String(record(v.tool)?.version??''),date);
+  for(const c of normalized.comments)await validateStoredPartsComment(pkg,c);
+  return {verdict:normalized,stale:null,by,savedFileSha256:createHash('sha256').update(bytes).digest('hex')};
+}
+
+/** Explicitly project the shared response so retrieval metadata cannot escape through joined wrappers. */
+export async function readVerdict(pkg: PartsViewPackage): Promise<{verdict: PartsVerdict | null; stale: VerdictStale}> {
+  const {verdict, stale} = await readVerdictSnapshot(pkg);
+  return {verdict, stale};
+}
+
+/** Standalone CLI retrieval metadata and content come from one validated saved-file buffer. */
+export async function readPartsVerdictJson(pkg: PartsViewPackage): Promise<string> {
+  const saved = await readVerdictSnapshot(pkg);
+  if (!saved.verdict) refuse('PARTS_VERDICT_UNAVAILABLE', 'save a verdict first');
+  await assertPartsUnchanged(pkg);
+  return JSON.stringify({...JSON.parse(exportPartsVerdict(saved.verdict!, 'json')), by: saved.by, savedFileSha256: saved.savedFileSha256}, null, 2) + '\n';
 }
 
 /** What the page reads: no absolute path leaves the server but the verdict file's name. */
