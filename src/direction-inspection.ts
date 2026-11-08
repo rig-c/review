@@ -18,10 +18,15 @@ export interface DirectionInspection {
   timing: { time: number; source_time: number; easing: string }[];
 }
 
-/** Read the inspection subset of Create's direction@1. Create validates project history and citations. */
+/**
+ * Read the inspection subset of Create's rig-create/direction@1 or rig-create/direction@2.
+ * A direction@2 scene reference is accepted but not inspected.
+ * Create validates scene, project history and citations.
+ */
 export function readDirectionInspection(value: unknown, file: Binding, model: Binding | null): DirectionInspection {
   const doc = object(value, 'direction');
-  if (doc.schema !== 'rig-create/direction@1') throw new Error('DIRECTION_SCHEMA: expected rig-create/direction@1');
+  if (doc.schema !== 'rig-create/direction@1' && doc.schema !== 'rig-create/direction@2')
+    throw new Error('DIRECTION_SCHEMA: expected rig-create/direction@1 or rig-create/direction@2');
   const rig = object(doc.rig, 'direction.rig');
   const binding = object(rig.model, 'direction.rig.model');
   const path = packagePath(binding.path, 'direction.rig.model.path');
