@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   JOB_ACT_SCHEMA,
+  JOB_RIG_REVIEW_ACT_SCHEMA,
   JOB_API_SCHEMA,
   type JobAct,
   type JobActSources,
@@ -14,12 +15,15 @@ import {
   type JobImageReviewValue,
   type JobImageSetInput,
   type JobNextValue,
+  type JobRigStill,
+  type JobRigReviewAct,
 } from '../src/job-contract.ts';
 import { jobHash } from '../src/job-api.ts';
 import { jobCommand } from '../src/job-cli.ts';
 import { readProject } from '../src/interview-project.ts';
 import { jobFixture, jobInputHashes, syntheticJobParts } from './helpers/job-api-fixture.ts';
 import { joinedVerdictFixture } from './helpers/joined-verdict-fixture.ts';
+import {rigStillCapture} from './helpers/job-rig-still.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => {
@@ -47,6 +51,7 @@ interface ExpectedActOracleInput<Kind extends JobEnabledActKind = JobEnabledActK
   readonly authority: JobHumanAuthority;
   readonly source: JobActSources[Kind];
   readonly value: JobActValues[Kind];
+  readonly still?: JobRigStill;
 }
 
 type NextSuccessEnvelope = Extract<JobApiResponse, { verb: 'next' }> & {
@@ -86,7 +91,10 @@ function assertNextVerbatimOracle(
     expect(event.cursor.length).toBeGreaterThan(0);
 
     const act: JobAct = event.act;
-    expect(act.schema).toBe(JOB_ACT_SCHEMA);
+    const rig = expected.kind === 'review-verdict' &&
+      (expected.value as {stage?: string}).stage === 'rig-review';
+    expect(act.schema).toBe(rig ? JOB_RIG_REVIEW_ACT_SCHEMA : JOB_ACT_SCHEMA);
+    if (rig) expect((act as JobRigReviewAct).still).toEqual(expected.still);
     expect(act.actId).toBe(expected.actId);
     expect(act.jobId).toBe(expected.jobId);
     expect(act.askId).toBe(expected.askId);
@@ -160,6 +168,8 @@ test('real semantic next preserves verbatim reviewer words across checkpoint, si
   const verdictAsk = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
   const page = await f.display(publication);
 
+  const rigCapture = rigStillCapture(publication, verdictAsk, page);
+
   const committedCheckpoint = await f.ports.commitUIAct(
     f.session.jobId,
     f.uiRequest({
@@ -197,6 +207,7 @@ test('real semantic next preserves verbatim reviewer words across checkpoint, si
       submissionId: 'verbatim-rig-verdict',
       kind: 'review-verdict',
       value: { stage: 'rig-review', verdict: 'changes-requested', words: rigVerdictWords },
+      capture: rigCapture.capture,
     }),
   );
   expect(committedVerdict.ok).toBe(true);
@@ -236,6 +247,7 @@ test('real semantic next preserves verbatim reviewer words across checkpoint, si
         selector: { kind: 'rig', version: 1 },
       },
       value: { stage: 'rig-review', verdict: 'changes-requested', words: rigVerdictWords },
+      still: {path: rigCapture.sha256 + '.png', sha256: rigCapture.sha256, camera: 'fixed', frame: 'setup'},
     },
   ];
 

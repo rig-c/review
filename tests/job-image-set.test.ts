@@ -5,6 +5,7 @@ import {assertJobImageSetCapability, type JobImageSetInput, type JobImageReviewV
 import {jobHash} from '../src/job-api.ts';
 import {prepareJobImageSet} from '../src/job-image-set.ts';
 import {jobFixture} from './helpers/job-api-fixture.ts';
+import {rigStillCapture} from './helpers/job-rig-still.ts';
 import {parseJobSubject as oldParseJobSubject} from './fixtures/job-image-set/old-subject-parser.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
@@ -172,7 +173,8 @@ test('522 original model publication, ask, act source and value serialize byte-i
   const page = await f.display(publication);
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
     expectedGeneration: f.session.status().generation, submissionId: 'model-byte-control', kind: 'review-verdict',
-    value: {stage: 'rig-review', verdict: 'approved', words: 'exact verdict'}}));
+    value: {stage: 'rig-review', verdict: 'approved', words: 'exact verdict'},
+    capture: rigStillCapture(publication, ask, page).capture}));
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error(saved.error.code);
   const actual = JSON.stringify({publicationSource: publication.source, askSource: ask.source,

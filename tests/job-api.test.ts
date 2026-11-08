@@ -1,14 +1,41 @@
 import { afterEach, expect, test } from 'bun:test';
-import { jobBodyLimit, parseJobRequest } from '../src/job-api.ts';
+import { createJobHostPorts, jobBodyLimit, parseJobRequest } from '../src/job-api.ts';
 import { JOB_API_SCHEMA } from '../src/job-contract.ts';
 import { parseJobCLI, jobCommand } from '../src/job-cli.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
 import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
+import {readFile, readdir, mkdir, writeFile, symlink} from 'node:fs/promises';
+import {rigStillInput} from './helpers/job-rig-still.ts';
+import {createJobFront} from '../src/job-front.ts';
+import {jobHash} from '../src/job-api.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
 async function fixture() { const f = await jobFixture(); fixtures.push(f); return f; }
+
+async function consumerCLI(locator: string, actId: string, grant: string, destination?: string) {
+  const args = [process.execPath, join(import.meta.dir, '../src/entry.ts'), 'session', 'fetch-act',
+    locator, '--act', actId, '--consumer-capability-stdin'];
+  if (destination !== undefined) args.push('--still-out', destination);
+  const env = {...process.env};
+  delete env.RIG_REVIEW_JOB_AGENT_CAPABILITY;
+  const child = Bun.spawn(args, {stdin: 'pipe', stdout: 'pipe', stderr: 'pipe', env});
+  const timeout = setTimeout(() => child.kill(), 4000);
+  try {
+    child.stdin.write(grant + '\n');
+    child.stdin.end();
+    const [stdout, stderr, exit] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    console.error(JSON.stringify({probe: '#557 consumer CLI', argv: args, exit, stdout, stderr}));
+    return {stdout, stderr, exit};
+  } finally {
+    clearTimeout(timeout);
+    if (child.exitCode === null) child.kill();
+    await child.exited;
+  }
+}
 
 test('semantic requests are closed, require explicit null fields and reserve disabled act kinds', async () => {
   const f = await fixture(), request = await f.publishRequest();
@@ -197,4 +224,310 @@ test('public next and consumer act reads are independent of a renamed private pa
     database.query('UPDATE jobs SET document=? WHERE job_id=?').run(row.document, f.session.jobId);
     database.close();
   }
+});
+
+test('#557 control default checkpoint fetch keeps the API envelope and exact reviewer value', async () => {
+  const f = await fixture();
+  const publication = await f.publish();
+  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+  const page = await f.display(publication);
+  const value = {checkpointId: 'step-one', outcome: 'pass' as const, words: ' \n원문 그대로\t '};
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
+    expectedGeneration: f.session.status().generation, submissionId: '557-default', kind: 'checkpoint', value}));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  const request = {...f.base(), verb: 'fetch-act', actId: saved.value.actId};
+  const response = await f.call(request, f.session.writerGrant().fetchCapability);
+  expect(await response.text()).toBe(JSON.stringify({schema: JOB_API_SCHEMA, verb: 'fetch-act',
+    jobId: f.session.jobId, requestId: request.requestId, generation: f.session.status().generation,
+    ok: true, value: saved.value}));
+  expect(saved.value.schema).toBe('rig-review/act@2');
+  expect(saved.value).not.toHaveProperty('still');
+  expect(saved.value.value).toEqual({...value, planStepId: 'step-one'});
+});
+
+test('#557 R08 raw negotiation returns the act bytes while the default envelope remains separate', async () => {
+  const f = await fixture();
+  const publication = await f.publish();
+  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+  const page = await f.display(publication);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
+    expectedGeneration: f.session.status().generation, submissionId: '557-raw', kind: 'checkpoint',
+    value: {checkpointId: 'step-one', outcome: 'pass', words: ' \n원문\t '}}));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  const response = await f.ports.handleJobApi(new Request(f.origin + `/jobs/${f.session.jobId}/api`, {
+    method: 'POST', headers: {'Content-Type': 'application/json', Accept: 'application/vnd.rig-review.act+json',
+      Authorization: 'Bearer ' + f.session.writerGrant().fetchCapability},
+    body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: saved.value.actId}),
+  }));
+  expect(response.status).toBe(200);
+  expect(await response.text()).toBe(JSON.stringify(saved.value));
+});
+
+test('#557 control unauthorized capture refuses before reading a larger request stream', async () => {
+  const f = await fixture();
+  let pulls = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls++;
+      controller.enqueue(new Uint8Array(jobBodyLimit + 1));
+      controller.close();
+    },
+  }, {highWaterMark: 0});
+  const response = await f.ports.commitUIAct(f.session.jobId, new Request(f.origin + `/jobs/${f.session.jobId}/ui/acts`, {
+    method: 'POST', headers: {'Content-Type': 'application/json', Origin: f.origin,
+      'X-Review-Capability': f.credentials.agent}, body,
+  }));
+  expect(response.ok).toBe(false);
+  if (!response.ok) expect(response.error.code).toBe('JOB_CAPABILITY_REQUIRED');
+  expect(pulls).toBe(0);
+});
+
+test('#557 control an agent bearer cannot negotiate raw act or PNG consumer reads', async () => {
+  const f = await fixture();
+  for (const accept of ['application/vnd.rig-review.act+json', 'image/png']) {
+    const response = await f.ports.handleJobApi(new Request(f.origin + `/jobs/${f.session.jobId}/api`, {
+      method: 'POST', headers: {'Content-Type': 'application/json', Accept: accept,
+        Authorization: 'Bearer ' + f.credentials.agent},
+      body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: 'missing'}),
+    }));
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.code).toBe('JOB_CAPABILITY_REQUIRED');
+  }
+});
+
+test('#557 R09 production CLI consumes its existing grant on stdin and writes only raw act bytes', async () => {
+  const f = await fixture();
+  const publication = await f.publish();
+  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+  const page = await f.display(publication);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
+    expectedGeneration: f.session.status().generation, submissionId: '557-cli', kind: 'checkpoint',
+    value: {checkpointId: 'step-one', outcome: 'pass', words: ' \n원문\t '}}));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  const server = Bun.serve({hostname: '127.0.0.1', port: 0,
+    fetch: request => f.ports.handleJobApi(new Request(f.origin + new URL(request.url).pathname, request))});
+  try {
+    const grant = f.session.writerGrant().fetchCapability;
+    const output = await consumerCLI(server.url.origin + `/jobs/${f.session.jobId}`, saved.value.actId, grant);
+    expect(output.exit).toBe(0);
+    expect(output.stdout).toBe(JSON.stringify(saved.value));
+    expect(output.stderr).toBe('');
+    expect(output.stdout + output.stderr).not.toContain(grant);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('#557 control oversized stdin grant fails before any request or stdout', async () => {
+  let requests = 0;
+  const server = Bun.serve({hostname: '127.0.0.1', port: 0, fetch: () => {
+    requests++;
+    return new Response('unexpected request', {status: 500});
+  }});
+  try {
+    const output = await consumerCLI(server.url.origin + '/jobs/oversized-input', 'absent', 'x'.repeat(4097));
+    expect(output.exit).not.toBe(0);
+    expect(output.stdout).toBe('');
+    expect(output.stderr).toContain('JOB_');
+    expect(requests).toBe(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('#557 R10 one production CLI call writes the PNG before emitting exact act bytes', async () => {
+  const f = await fixture();
+  const {input, bytes, sha256} = await rigStillInput(f);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  const destination = join(f.scratch, 'consumer-output');
+  await mkdir(destination);
+  await writeFile(join(destination, 'consumer-owned.txt'), 'preserve');
+  const server = Bun.serve({hostname: '127.0.0.1', port: 0,
+    fetch: request => f.ports.handleJobApi(new Request(f.origin + new URL(request.url).pathname, request))});
+  try {
+    const output = await consumerCLI(server.url.origin + `/jobs/${f.session.jobId}`, saved.value.actId,
+      f.session.writerGrant().fetchCapability, destination);
+    expect(output.exit).toBe(0);
+    expect(output.stdout).toBe(JSON.stringify(saved.value));
+    expect(output.stderr).toBe('');
+    expect((await readFile(join(destination, sha256 + '.png'))).equals(bytes)).toBe(true);
+    expect((await readdir(destination)).sort()).toEqual([sha256 + '.png', 'consumer-owned.txt'].sort());
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('#557 R11 failed PNG read emits empty stdout and preserves consumer-owned files', async () => {
+  const f = await fixture();
+  const {input} = await rigStillInput(f);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  const destination = join(f.scratch, 'consumer-output');
+  await mkdir(destination);
+  await writeFile(join(destination, 'act.json'), 'consumer-owned-before-command');
+  const server = Bun.serve({hostname: '127.0.0.1', port: 0, fetch: request => {
+    if (request.headers.get('accept') === 'image/png') {
+      return Response.json({schema: JOB_API_SCHEMA, ok: false,
+        error: {code: 'JOB_STILL_CAPTURE_FAILED', message: 'JOB_STILL_CAPTURE_FAILED'}}, {status: 409});
+    }
+    return f.ports.handleJobApi(new Request(f.origin + new URL(request.url).pathname, request));
+  }});
+  try {
+    const output = await consumerCLI(server.url.origin + `/jobs/${f.session.jobId}`, saved.value.actId,
+      f.session.writerGrant().fetchCapability, destination);
+    expect(output.exit).not.toBe(0);
+    expect(output.stdout).toBe('');
+    expect(output.stderr).toContain('JOB_STILL_CAPTURE_FAILED');
+    expect(await readdir(destination)).toEqual(['act.json']);
+    expect(await readFile(join(destination, 'act.json'), 'utf8')).toBe('consumer-owned-before-command');
+  } finally {
+    await server.stop(true);
+  }
+});
+
+function padSyntheticPng(bytes: Buffer, length: number): Buffer {
+  const chunk = Buffer.alloc(length - bytes.length, 120);
+  chunk.writeUInt32BE(chunk.length - 12, 0);
+  chunk.write('tEXt', 4);
+  chunk.write('pad\0', 8);
+  let crc = 0xffffffff;
+  for (const byte of chunk.subarray(4, -4)) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  }
+  chunk.writeUInt32BE((crc ^ 0xffffffff) >>> 0, chunk.length - 4);
+  return Buffer.concat([bytes.subarray(0, -12), chunk, bytes.subarray(-12)]);
+}
+
+test('#557 backend actual HTTP front forwards an authenticated 8 MiB PNG and both consumer representations', async () => {
+  const f = await fixture();
+  const {input, bytes} = await rigStillInput(f);
+  const png = padSyntheticPng(bytes, 8 * 1024 * 1024);
+  const capture = {...input.capture, png: 'data:image/png;base64,' + png.toString('base64')};
+  let front: ReturnType<typeof createJobFront>;
+  const server = Bun.serve({hostname: '127.0.0.1', port: 0,
+    fetch: async request => await front.fetch(request) ?? new Response(null, {status: 404})});
+  const origin = server.url.origin;
+  front = createJobFront({origin, ports: createJobHostPorts(f.session, origin), resource: async () => ''});
+  try {
+    const response = await fetch(origin + `/jobs/${f.session.jobId}/ui/acts`, {method: 'POST',
+      headers: {'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': f.credentials.ui},
+      body: JSON.stringify({...input, capture})});
+    expect(response.status).toBe(200);
+    const saved = await response.json();
+    expect(saved.ok).toBe(true);
+    expect(saved.value.still.sha256).toBe(jobHash(png));
+    const grant = f.session.writerGrant().fetchCapability;
+    for (const accept of ['application/vnd.rig-review.act+json', 'image/png']) {
+      const fetched = await fetch(origin + `/jobs/${f.session.jobId}/api`, {method: 'POST',
+        headers: {'Content-Type': 'application/json', Accept: accept, Authorization: 'Bearer ' + grant},
+        body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: saved.value.actId})});
+      expect(fetched.status).toBe(200);
+      expect(fetched.headers.get('content-type')).toBe(accept);
+      expect(Buffer.from(await fetched.arrayBuffer()).equals(accept === 'image/png' ? png : Buffer.from(JSON.stringify(saved.value)))).toBe(true);
+    }
+    const nonRig = await fetch(origin + `/jobs/${f.session.jobId}/ui/acts`, {method: 'POST',
+      headers: {'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': f.credentials.ui},
+      body: JSON.stringify({...input, kind: 'checkpoint', value: {words: 'x'.repeat(jobBodyLimit)}})});
+    expect(nonRig.status).toBe(413);
+    expect((await nonRig.json()).error.code).toBe('JOB_BODY_LIMIT');
+  } finally {
+    front.stop();
+    await server.stop(true);
+  }
+}, 15000);
+
+for (const ending of ['zero-write', 'midwrite', 'partial-success', 'existing-zero-write'] as const) {
+  test(`#557 backend consumer ${ending} obeys PNG ownership and exact stdout ordering`, async () => {
+    const f = await fixture();
+    const {input, bytes, sha256} = await rigStillInput(f);
+    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) throw new Error(saved.error.code);
+    const directory = join(f.scratch, 'consumer');
+    await mkdir(directory);
+    if (ending === 'existing-zero-write') await writeFile(join(directory, sha256 + '.png'), bytes);
+    const chunks: Buffer[] = [];
+    let writes = 0;
+    const pending = jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+      '--still-out', directory], {consumerCapability: f.session.writerGrant().fetchCapability,
+      fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+      writeBytes(chunk) {
+        writes++;
+        if (ending === 'zero-write' || ending === 'existing-zero-write' || ending === 'midwrite' && writes > 1) {
+          throw Object.assign(new Error('planted stdout EPIPE'), {code: 'EPIPE'});
+        }
+        const count = Math.min(17, chunk.byteLength);
+        chunks.push(Buffer.from(chunk.subarray(0, count)));
+        return count;
+      }});
+    if (ending === 'partial-success') {
+      await pending;
+      expect(Buffer.concat(chunks)).toEqual(Buffer.from(JSON.stringify(saved.value)));
+    } else await expect(pending).rejects.toThrow('JOB_STILL_OUTPUT_FAILED');
+    const names = await readdir(directory);
+    if (ending === 'zero-write') expect(names).toEqual([]);
+    else {
+      expect(names).toEqual([sha256 + '.png']);
+      expect((await readFile(join(directory, sha256 + '.png'))).equals(bytes)).toBe(true);
+    }
+    if (ending === 'midwrite') expect(Buffer.concat(chunks)).toHaveLength(17);
+    if (ending === 'zero-write' || ending === 'existing-zero-write') expect(Buffer.concat(chunks)).toHaveLength(0);
+  });
+}
+
+for (const target of ['symlink', 'different-bytes', 'other-writer-lock'] as const) {
+  test(`#557 backend ${target} output refuses without changing another writer's bytes`, async () => {
+    const f = await fixture();
+    const {input, sha256} = await rigStillInput(f);
+    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) throw new Error(saved.error.code);
+    const directory = join(f.scratch, 'consumer');
+    await mkdir(directory);
+    const sentinel = join(f.scratch, 'other-writer');
+    await writeFile(sentinel, 'preserve other writer');
+    if (target === 'symlink') await symlink(sentinel, join(directory, sha256 + '.png'));
+    if (target === 'different-bytes') await writeFile(join(directory, sha256 + '.png'), 'different bytes');
+    if (target === 'other-writer-lock') await writeFile(join(directory, '.rig-review-still.lock'), 'other owner');
+    let stdout = '';
+    await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+      '--still-out', directory], {consumerCapability: f.session.writerGrant().fetchCapability,
+      fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+      write: text => {stdout += text;}})).rejects.toThrow('JOB_STILL_OUTPUT_FAILED');
+    expect(stdout).toBe('');
+    expect(await readFile(sentinel, 'utf8')).toBe('preserve other writer');
+    if (target === 'different-bytes') expect(await readFile(join(directory, sha256 + '.png'), 'utf8')).toBe('different bytes');
+    if (target === 'other-writer-lock') expect(await readFile(join(directory, '.rig-review-still.lock'), 'utf8')).toBe('other owner');
+    expect((await readdir(directory)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+}
+
+test('#557 backend consumer bounds stdin and raw streams before filesystem or stdout mutation', async () => {
+  const f = await fixture();
+  let requests = 0, cancelled = false, stdout = '';
+  const input = new ReadableStream<Uint8Array>({
+    pull(controller) {controller.enqueue(new Uint8Array(4097));},
+    cancel() {cancelled = true;},
+  }, {highWaterMark: 0});
+  await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', 'absent',
+    '--consumer-capability-stdin'], {consumerInput: input,
+    fetch: Object.assign(async () => {requests++; throw new Error('must not request');}, {preconnect: fetch.preconnect}),
+    write: text => {stdout += text;}})).rejects.toThrow('JOB_BODY_LIMIT');
+  expect(requests).toBe(0);
+  expect(cancelled).toBe(true);
+  const overflow = new ReadableStream<Uint8Array>({
+    pull(controller) {controller.enqueue(new Uint8Array(512 * 1024 + 1));},
+  }, {highWaterMark: 0});
+  await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', 'absent'], {
+    consumerCapability: f.session.writerGrant().fetchCapability, write: text => {stdout += text;},
+    fetch: Object.assign(async () => new Response(overflow, {headers: {'Content-Length': '1'}}), {preconnect: fetch.preconnect}),
+  })).rejects.toThrow('JOB_BODY_LIMIT');
+  expect(stdout).toBe('');
 });

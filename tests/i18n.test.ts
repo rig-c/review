@@ -30,6 +30,19 @@ import {commentCropPaths} from '../src/comment-crops.ts';
 import {feedbackWithCommentGroups,formatFeedbackIssues} from '../src/feedback-export.ts';
 import {bindStageComments} from '../web/stage-comments.ts';
 
+test('#557 six Rig still refusals have paired visible EN/KO messages without exemptions',()=>{
+ for(const code of ['JOB_STILL_CAPTURE_FAILED','JOB_STILL_CAMERA_NOT_FIXED','JOB_STILL_VIEW_UNSUPPORTED',
+  'JOB_STILL_BINDING_MISMATCH','JOB_STILL_UNAVAILABLE','JOB_STILL_OUTPUT_FAILED']) {
+  expect(enCatalog[code]).toBeDefined();expect(koCatalog[code]).toBeDefined();
+  expect(enCatalog[code]!.startsWith(code+' · ')).toBe(true);
+  expect(koCatalog[code]!.startsWith(code+' · ')).toBe(true);
+  expect(t(code,undefined,'en')).toBe(enCatalog[code]);
+  expect(t(code,undefined,'ko')).toBe(koCatalog[code]);
+  expect(koCatalog[code]).toMatch(/[가-힣]/);
+ }
+ expect(WEB_STRING_EXEMPTIONS.some(row=>row.file==='web/job-rig-capture.ts')).toBe(false);
+});
+
 test('Bar 1: English and Korean catalogues hold the exact same key and placeholder set, and a planted missing key fails it',()=>{
  expect(()=>assertCatalogParity(enCatalog,koCatalog)).not.toThrow();
  expect(Object.keys(enCatalog).length).toBe(Object.keys(koCatalog).length);

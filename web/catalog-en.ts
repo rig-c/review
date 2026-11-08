@@ -1,4 +1,10 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+  "JOB_STILL_CAPTURE_FAILED": "JOB_STILL_CAPTURE_FAILED · The displayed Rig frame could not be captured. Wait for a successful draw and try again.",
+  "JOB_STILL_CAMERA_NOT_FIXED": "JOB_STILL_CAMERA_NOT_FIXED · Restore the default Rig framing before submitting this verdict.",
+  "JOB_STILL_VIEW_UNSUPPORTED": "JOB_STILL_VIEW_UNSUPPORTED · Show the whole Rig without solo, highlight or comparison layers before submitting.",
+  "JOB_STILL_BINDING_MISMATCH": "JOB_STILL_BINDING_MISMATCH · The displayed source, page or drawn frame changed. Start a new verdict attempt.",
+  "JOB_STILL_UNAVAILABLE": "JOB_STILL_UNAVAILABLE · This historical or non-rig act has no retained Rig PNG.",
+  "JOB_STILL_OUTPUT_FAILED": "JOB_STILL_OUTPUT_FAILED · The consumer could not finish writing the Rig PNG or act output.",
   "WORKSPACE_BODY_TIMEOUT": "WORKSPACE_BODY_TIMEOUT",
   "rig-review-target/1": "rig-review-target/1",
   "Review workspace": "Review workspace",

@@ -8,13 +8,19 @@ import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {assertPartsViewportOracle, inspectPartsViewportPng} from './helpers/job-window-paint.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
+import {rigStillBrowserProbe} from './helpers/job-rig-still-browser.ts';
 
 const argument = (key: string) => {const index = Bun.argv.indexOf(key); return index < 0 ? undefined : Bun.argv[index + 1];};
 const language = argument('--lang') ?? 'en';
 assert.ok(language === 'en' || language === 'ko');
+const observeStill = Bun.argv.includes('--rig-still-observe');
+const onlyStill = Bun.argv.includes('--rig-still-only');
+assert.ok(!(observeStill && onlyStill));
+assert.ok(!observeStill || language === 'en', 'the diagnostic observation mode is EN only');
 const output = argument('--out') ?? 'evidence/job-window-' + language;
 await mkdir(output, {recursive: true});
 const fixture = await scriptedJobWindowFixture();
+const stillProbe = onlyStill || observeStill ? rigStillBrowserProbe(fixture, output, language, observeStill) : null;
 const profile = await mkdtemp(join(tmpdir(), 'review-job-window-'));
 const observations: Record<string, unknown> = {};
 const navigation: {url: string; loaderId?: string}[] = [];
@@ -211,6 +217,7 @@ try {
         }
         if (event.method === 'Network.loadingFinished') completedResources.add(event.params!.requestId as string);
         if (event.method === 'Fetch.requestPaused') {
+            if (await stillProbe?.intercept(event, send)) return;
             const requestId = event.params!.requestId;
             const request = event.params!.request as {url: string};
             const failure = plantedFailure;
@@ -237,14 +244,23 @@ try {
     }});
     await page.setViewport(1440, 960);
     assert.ok(control);
-    await control('Network.enable');
+    await control('Network.enable', stillProbe ? {maxPostDataSize: 12 * 1024 * 1024} : {});
     await control('Fetch.enable', {patterns: [
         {urlPattern: fixture.host.origin + '/jobs/*/publications/*/instances/*/api/review'},
         {urlPattern: fixture.host.origin + '/jobs/*/ui/displayed'},
+        ...(stillProbe ? [
+            {urlPattern: fixture.host.origin + '/jobs/*/ui/acts', requestStage: 'Request'},
+            {urlPattern: fixture.host.origin + '/jobs/*/ui/acts', requestStage: 'Response'},
+        ] : []),
     ]});
     const owner = new URL(fixture.host.ownerUrl); owner.searchParams.set('lang', language);
     await page.goto(owner.href);
     const sentinel = await page.evaluate<string>('globalThis.__jobWindowDocument = crypto.randomUUID()');
+    if (stillProbe) {
+        await stillProbe.run(page, {wait, show, edit});
+        assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
+        assert.equal(navigation.length, 1);
+    } else {
     const first = await fixture.publish('parts');
     await show(first);
     await verifyTimedReferences();
@@ -298,6 +314,10 @@ try {
     assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
     assert.equal(navigation.length, 1);
     await wait(`document.querySelector('[data-job-history]')?.textContent.includes('old-source draft')`, 'retained old draft');
+    // The restoration above remains covered. A new Rig verdict requires whole/default framing.
+    await edit('#job-part', '');
+    await page.evaluate(`(()=>{document.getElementById('rig-viewport').dispatchEvent(new Event('focusin',{bubbles:true}));document.getElementById('fit').click()})()`);
+    const verdictView = await snapshot();
     const review = await fixture.ask(rig, {kind: 'review-verdict', stage: 'rig-review'});
     await wait(`!!document.querySelector('form[data-job-ask="${review.askId}"]')`, 'new verdict');
     await edit(`form[data-job-ask="${review.askId}"] select[name=verdict]`, 'approved');
@@ -307,6 +327,12 @@ try {
     let events = await fixture.next();
     const verdict = events.events.find(event => event.type === 'act' && event.act.kind === 'review-verdict');
     assert.ok(verdict?.type === 'act');
+    assert.equal(verdict.act.schema, 'rig-review/act@3');
+    assert.ok(verdict.act.schema === 'rig-review/act@3');
+    assert.equal(verdict.act.still.camera, 'fixed');
+    assert.equal(verdict.act.still.frame, 0.5);
+    assert.equal(verdict.act.still.animation, 'inspect');
+    assert.equal(verdict.act.still.path, verdict.act.still.sha256 + '.png');
     assert.equal(verdict.act.source.sourceHash, rig.source.sourceHash);
     assert.equal((verdict.act.value as {words: string}).words, '  new-source verdict\n');
     assert.deepEqual(await jobInputHashes(fixture.input.root), immutable);
@@ -341,7 +367,7 @@ try {
 
     const direction = await fixture.publish('direction');
     await show(direction);
-    assert.deepEqual(await snapshot(), before);
+    assert.deepEqual(await snapshot(), verdictView);
     assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
     assert.equal(navigation.length, 1);
     await edit('#job-panel', '4');
@@ -359,11 +385,13 @@ try {
     await fixture.finish();
     await wait(`document.querySelector('.job-notice').textContent.includes(${JSON.stringify(language === 'ko' ? '명시적으로 종료' : 'explicitly closed')})`, 'explicit close');
     await checkpoints('complete', {language, metadataOnly: true, createWriterReadback: 'PENDING_CREATE_182_184', separateUID: 'PARENT_A_GATE'});
+    }
 } catch (error) {
     try {await captureFailure(error);}
     catch (captureError) {console.error('JOB_WINDOW_DIAGNOSTIC_FAILED', String(captureError));}
     throw error;
 } finally {
+    stillProbe?.dispose();
     await writeFile(join(output, 'browser-events.json'), JSON.stringify(browserEvents).replace(/#cap=[a-f0-9]{64}/g, '#cap=REDACTED'));
     if (page) await page.close();
     await fixture.close();

@@ -4,6 +4,10 @@ import { JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS, type JobPendingAsk, type
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { jobFixture, syntheticJobParts } from './helpers/job-api-fixture.ts';
+import {rigStillInput, rigStillCapture} from './helpers/job-rig-still.ts';
+import {JobSession} from '../src/job-session.ts';
+import {Database} from 'bun:sqlite';
+import {jobSnapshotHash} from '../src/job-source.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
@@ -68,7 +72,8 @@ test('review verdict remains separate from sign-off and is bound to the displaye
   const ask = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' }), page = await f.display(publication);
   const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: ask.askId,
     expectedGeneration: f.session.status().generation, submissionId: 'review', kind: 'review-verdict',
-    value: { stage: 'rig-review', verdict: 'approved', words: 'exact verdict' } }));
+    value: { stage: 'rig-review', verdict: 'approved', words: 'exact verdict' },
+    capture: rigStillCapture(publication, ask, page).capture }));
   expect(result.ok).toBe(true);
   if (result.ok) {
     expect(result.value.source.model).toEqual(publication.source.model);
@@ -220,3 +225,219 @@ test('parseUISubmission accepts all 5 enabled act kinds, preserves String(kind) 
     expect(invalid).toEqual({ ok: false, error: { code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID' } });
   }
 });
+
+test('#557 R01 setup UI submission finalizes act@3 with a daemon-hashed top-level PNG still', async () => {
+  const f = await fixture();
+  const {input, bytes, sha256} = await rigStillInput(f);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  expect(saved.value).toMatchObject({schema: 'rig-review/act@3', value: input.value,
+    still: {path: sha256 + '.png', sha256, camera: 'fixed', frame: 'setup'}});
+  expect(saved.value).not.toHaveProperty('sha256');
+  expect(saved.value).not.toHaveProperty('manifest');
+  const response = await f.ports.handleJobApi(new Request(f.origin + `/jobs/${f.session.jobId}/api`, {
+    method: 'POST', headers: {'Content-Type': 'application/json', Accept: 'image/png',
+      Authorization: 'Bearer ' + f.session.writerGrant().fetchCapability},
+    body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: saved.value.actId}),
+  }));
+  expect(response.status).toBe(200);
+  expect(response.headers.get('content-type')).toBe('image/png');
+  expect(Buffer.from(await response.arrayBuffer()).equals(bytes)).toBe(true);
+});
+
+for (const [frame, animation] of [[0, 'still'], [0.375, 'inspect']] as const) {
+  test(`#557 R02 playing ${animation} at ${frame} seconds retains exact named motion time`, async () => {
+    const f = await fixture();
+    const {input, sha256} = await rigStillInput(f, frame, animation);
+    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) throw new Error(saved.error.code);
+    expect(saved.value).toMatchObject({schema: 'rig-review/act@3',
+      still: {path: sha256 + '.png', sha256, camera: 'fixed', frame, animation}});
+  });
+}
+
+test('#557 R02 numeric motion capture without an animation refuses by name', async () => {
+  const f = await fixture();
+  const {input} = await rigStillInput(f, 0.375);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  expect(saved.ok).toBe(false);
+  if (!saved.ok) expect(saved.error.code).toBe('JOB_STILL_CAPTURE_FAILED');
+  expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
+});
+
+test('#557 R03 missing capture refuses by name before answering the rig ask', async () => {
+  const f = await fixture();
+  const {input} = await rigStillInput(f);
+  const {capture: _capture, ...withoutCapture} = input;
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(withoutCapture));
+  expect(saved.ok).toBe(false);
+  if (!saved.ok) expect(saved.error.code).toBe('JOB_STILL_CAPTURE_FAILED');
+  expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
+});
+
+for (const camera of ['panned', 'zoomed']) {
+  test(`#557 R04 ${camera} capture refuses the nondefault camera by name`, async () => {
+    const f = await fixture();
+    const {input} = await rigStillInput(f);
+    const saved = await f.ports.commitUIAct(f.session.jobId,
+      f.uiRequest({...input, capture: {...input.capture, camera}}));
+    expect(saved.ok).toBe(false);
+    if (!saved.ok) expect(saved.error.code).toBe('JOB_STILL_CAMERA_NOT_FIXED');
+    expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
+  });
+}
+
+for (const view of ['solo', 'highlight', 'comparison']) {
+  test(`#557 R05 ${view} capture refuses the partial or comparison view by name`, async () => {
+    const f = await fixture();
+    const {input} = await rigStillInput(f);
+    const saved = await f.ports.commitUIAct(f.session.jobId,
+      f.uiRequest({...input, capture: {...input.capture, view}}));
+    expect(saved.ok).toBe(false);
+    if (!saved.ok) expect(saved.error.code).toBe('JOB_STILL_VIEW_UNSUPPORTED');
+    expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
+  });
+}
+
+test('#557 R06 mismatched capture page refuses before a durable act is created', async () => {
+  const f = await fixture();
+  const {input} = await rigStillInput(f);
+  const capture = {...input.capture, binding: {...input.capture.binding, pageId: 'other-page'}};
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, capture}));
+  expect(saved.ok).toBe(false);
+  if (!saved.ok) expect(saved.error.code).toBe('JOB_STILL_BINDING_MISMATCH');
+  expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
+});
+
+test('#557 R07 concurrent retry returns the first capture and restart preserves the act bytes', async () => {
+  const f = await fixture();
+  const {input} = await rigStillInput(f);
+  const [first, replay] = await Promise.all([
+    f.ports.commitUIAct(f.session.jobId, f.uiRequest(input)),
+    f.ports.commitUIAct(f.session.jobId, f.uiRequest(input)),
+  ]);
+  expect(first.ok).toBe(true);
+  if (!first.ok) throw new Error(first.error.code);
+  expect(replay).toEqual(first);
+  const changed = {...input, capture: {...input.capture, frame: 0.5, animation: 'inspect'}};
+  const conflict = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(changed));
+  expect(conflict.ok).toBe(false);
+  if (!conflict.ok) expect(conflict.error.code).toBe('JOB_IDEMPOTENCY_CONFLICT');
+  const reopened = new JobSession({root: f.root, stateDir: f.state, fingerprint: 'f'.repeat(64),
+    reviewer: {id: 'declared-owner', role: 'owner'}});
+  try {
+    const request = {...f.base(), verb: 'fetch-act' as const, actId: first.value.actId};
+    expect(await reopened.execute(request, new AbortController().signal)).toEqual(first.value);
+  } finally {
+    reopened.dispose();
+  }
+});
+
+for (const boundary of ['attachment-insert', 'job-update']) {
+  test(`#557 backend ${boundary} failure rolls back PNG, act, replay and event together`, async () => {
+    const f = await fixture();
+    const {input} = await rigStillInput(f);
+    const db = new Database(join(f.state, 'jobs.sqlite'));
+    try {
+      const before = db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(f.session.jobId)!.document;
+      const target = boundary === 'attachment-insert' ? 'INSERT ON job_act_stills' : 'UPDATE ON jobs';
+      db.exec(`CREATE TRIGGER fail_still_commit BEFORE ${target} BEGIN SELECT RAISE(ABORT,'557 planted storage fault'); END`);
+      const rejected = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) expect(rejected.error.code).toBe('JOB_STORAGE_FAILED');
+      expect(db.query('SELECT * FROM job_act_stills').all()).toHaveLength(0);
+      expect(db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(f.session.jobId)!.document).toBe(before);
+      db.exec('DROP TRIGGER fail_still_commit');
+      const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+      expect(saved.ok).toBe(true);
+      if (!saved.ok) throw new Error(saved.error.code);
+      const rows = db.query<{png: Uint8Array; act_bytes: Uint8Array}, []>('SELECT png,act_bytes FROM job_act_stills').all();
+      expect(rows).toHaveLength(1);
+      expect(Buffer.from(rows[0].act_bytes)).toEqual(Buffer.from(JSON.stringify(saved.value)));
+      expect(f.session.readActExport(saved.value.actId, false)).toEqual(Buffer.from(rows[0].act_bytes));
+    } finally { db.close(); }
+  });
+}
+
+test('#557 backend finalized PNG survives close and reclaim while both consumer representations revoke', async () => {
+  const f = await fixture();
+  const {input, publication, bytes} = await rigStillInput(f);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  const retained = f.session.retainedSource(publication.publicationId);
+  const grant = f.session.writerGrant().fetchCapability;
+  const snapshotHash = jobSnapshotHash(retained.seals);
+  await f.session.execute({...f.base(), verb: 'close', expectedGeneration: f.session.status().generation,
+    idempotencyKey: '557-close', reason: 'synthetic close'}, new AbortController().signal);
+  for (const accept of ['image/png', 'application/vnd.rig-review.act+json']) {
+    const response = await f.ports.handleJobApi(new Request(f.origin + `/jobs/${f.session.jobId}/api`, {
+      method: 'POST', headers: {'Content-Type': 'application/json', Accept: accept, Authorization: 'Bearer ' + grant},
+      body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: saved.value.actId}),
+    }));
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe('JOB_CLOSED');
+  }
+  await expect(f.session.reclaimSnapshot(publication.publicationId, snapshotHash)).rejects.toThrow('JOB_SNAPSHOT_PINNED');
+  const db = new Database(join(f.state, 'jobs.sqlite'), {readonly: true});
+  try {
+    const row = db.query<{png: Uint8Array; act_bytes: Uint8Array}, []>('SELECT png,act_bytes FROM job_act_stills').get()!;
+    expect(Buffer.from(row.png).equals(bytes)).toBe(true);
+    expect(Buffer.from(row.act_bytes).toString('utf8')).toBe(JSON.stringify(saved.value));
+  } finally { db.close(); }
+});
+
+test('#557 backend exact @2 historical rig act remains readable without a PNG backfill', async () => {
+  const f = await fixture();
+  const {input} = await rigStillInput(f);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  const db = new Database(join(f.state, 'jobs.sqlite'));
+  try {
+    const original = db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(f.session.jobId)!;
+    const data = JSON.parse(original.document);
+    const legacy = {...data.acts[saved.value.actId], schema: 'rig-review/act@2'};
+    delete legacy.still;
+    data.acts[saved.value.actId] = legacy;
+    const legacyDocument = JSON.stringify(data);
+    db.query('UPDATE jobs SET document=? WHERE job_id=?').run(legacyDocument, f.session.jobId);
+    const fetched = await (await f.call({...f.base(), verb: 'fetch-act', actId: saved.value.actId}, f.session.writerGrant().fetchCapability)).json();
+    expect(JSON.stringify(fetched.value)).toBe(JSON.stringify(legacy));
+    expect(f.session.readActExport(saved.value.actId, false).toString('utf8')).toBe(JSON.stringify(legacy));
+    expect(() => f.session.readActExport(saved.value.actId, true)).toThrow('JOB_STILL_UNAVAILABLE');
+    expect(db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(f.session.jobId)!.document).toBe(legacyDocument);
+  } finally { db.close(); }
+});
+
+test('#557 backend malformed PNG and forged hash fields cannot create an attachment or answer the ask', async () => {
+  const f = await fixture();
+  const {input} = await rigStillInput(f);
+  for (const capture of [
+    {...input.capture, png: 'data:image/png;base64,YmFk'},
+    {...input.capture, width: 16385},
+    {...input.capture, sha256: '0'.repeat(64)},
+  ]) {
+    const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, capture}));
+    expect(result.ok).toBe(false);
+    expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
+  }
+  const db = new Database(join(f.state, 'jobs.sqlite'), {readonly: true});
+  try { expect(db.query('SELECT * FROM job_act_stills').all()).toHaveLength(0); }
+  finally { db.close(); }
+});
+
+for (const [field, value] of [['sourceHash', 'wrong-source'], ['askId', 'other-ask'], ['instanceKey', 'other-instance'],
+  ['drawGeneration', 0], ['playerGeneration', -1]] as const) {
+  test(`#557 backend capture ${field} mismatch refuses before commit`, async () => {
+    const f = await fixture();
+    const {input} = await rigStillInput(f);
+    const capture = {...input.capture, binding: {...input.capture.binding, [field]: value}};
+    const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, capture}));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('JOB_STILL_BINDING_MISMATCH');
+    expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
+  });
+}

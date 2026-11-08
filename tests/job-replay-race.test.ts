@@ -5,6 +5,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { jobFixture, jobInputHashes } from './helpers/job-api-fixture.ts';
 import type { ReplayRaceInput, ReplayRaceMessage } from './helpers/job-replay-race-worker.ts';
+import {rigStillInput} from './helpers/job-rig-still.ts';
 
 function stored(f: Awaited<ReturnType<typeof jobFixture>>) {
   const database = new Database(join(f.state, 'jobs.sqlite'), { readonly: true });
@@ -142,6 +143,36 @@ function changed(input: ReplayRaceInput, scenario: 'conflict' | 'different-key')
   return input.request.verb === 'publish'
     ? { ...input, request: { ...input.request, freeze: { ...input.request.freeze, holdId: 'changed-hold' } } }
     : { ...input, request: { ...input.request, subject: { kind: 'signoff', stage: 'plan-approved' } } };
+}
+
+for (const scenario of ['same-capture', 'changed-capture'] as const) {
+  test(`#557 backend independent-daemon ${scenario} preserves the first committed BLOB and act bytes`, async () => {
+    const f = await jobFixture();
+    try {
+      const prepared = await rigStillInput(f);
+      const input: ReplayRaceInput = {
+        options: {root: f.root, stateDir: f.state, fingerprint: 'f'.repeat(64), reviewer: {id: 'declared-owner', role: 'owner'}},
+        context: f.getContext(), gated: true, kind: 'ui', request: prepared.input,
+      };
+      const contender: ReplayRaceInput = scenario === 'same-capture' ? input : {...input,
+        request: {...prepared.input, capture: {...prepared.input.capture, frame: 0.5, animation: 'inspect'}}};
+      let committed!: Awaited<ReturnType<typeof commit>>;
+      const result = await race(f, contender, 'REVIEW557_' + scenario, async () => {
+        committed = await commit(input);
+        return committed;
+      });
+      expect(result.after).toEqual(result.sealed);
+      if (scenario === 'same-capture') expect(result.caller.result.outcome).toEqual(committed.result.outcome);
+      else expect(result.caller.result.outcome).toEqual({code: 'JOB_IDEMPOTENCY_CONFLICT'});
+      const database = new Database(join(f.state, 'jobs.sqlite'), {readonly: true});
+      try {
+        const rows = database.query<{png: Uint8Array; act_bytes: Uint8Array}, []>('SELECT png,act_bytes FROM job_act_stills').all();
+        expect(rows).toHaveLength(1);
+        expect(Buffer.from(rows[0].png).equals(prepared.bytes)).toBe(true);
+        expect(Buffer.from(rows[0].act_bytes).toString('utf8')).toBe(JSON.stringify(committed.result.outcome!.value));
+      } finally { database.close(); }
+    } finally { await f.close(); }
+  });
 }
 
 for (const operation of ['publish', 'ask', 'ui'] as const) {

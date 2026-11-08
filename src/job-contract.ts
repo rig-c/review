@@ -13,6 +13,11 @@
 
 export const JOB_API_SCHEMA = 'rig-review/job-api@2' as const;
 export const JOB_ACT_SCHEMA = 'rig-review/act@2' as const;
+/** New rig verdicts only. Store/reuse markers and all other acts retain @2. */
+export const JOB_RIG_REVIEW_ACT_SCHEMA = 'rig-review/act@3' as const;
+export const jobStillByteLimit = 8 * 1024 * 1024;
+export const jobCaptureBodyLimit = 12 * 1024 * 1024;
+export const jobRawActMediaType = 'application/vnd.rig-review.act+json';
 export const JOB_PARTS_ENUMERATOR_RANGE = '>=2.25.0 <3.0.0' as const;
 
 export const JOB_ENABLED_ACT_KINDS = [
@@ -284,7 +289,7 @@ export interface JobActSources {
  * Checkpoint stage is derived by Create. Plan-bound signoff requirements apply
  * to every stage in JOB_PLAN_BOUND_SIGNOFF_STAGES before act creation.
  */
-export type JobAct = {
+export type JobLegacyAct = {
   [Kind in JobEnabledActKind]: {
     readonly schema: typeof JOB_ACT_SCHEMA;
     readonly actId: JobActId;
@@ -299,6 +304,50 @@ export type JobAct = {
     | {readonly source: JobImageSourceBinding; readonly value: JobImageReviewValue}
   ) : {readonly source: JobActSources[Kind]; readonly value: JobActValues[Kind]});
 }[JobEnabledActKind];
+
+export type JobRigStill = {
+  readonly path: string;
+  readonly sha256: JobSha256;
+  readonly camera: 'fixed';
+} & (
+  | {readonly frame: 'setup'; readonly animation?: never}
+  | {readonly frame: number; readonly animation: string}
+);
+
+export type JobRigReviewAct = Omit<Extract<JobLegacyAct, {kind: 'review-verdict'}>, 'schema' | 'source' | 'value'> & {
+  readonly schema: typeof JOB_RIG_REVIEW_ACT_SCHEMA;
+  readonly source: JobModelSourceBinding & {
+    readonly selector: Extract<JobSelector, {kind: 'rig'}>;
+    readonly model: JobFileIdentity;
+  };
+  readonly value: JobModelReviewValue & {readonly stage: 'rig-review'};
+  readonly still: JobRigStill;
+};
+
+/** Historical @2 rig acts remain readable without being backfilled or relabelled. */
+export type JobAct = JobLegacyAct | JobRigReviewAct;
+
+/** Authenticated browser provenance. The daemon validates identity and hashes PNG bytes. */
+export interface JobRigCapture {
+  readonly png: string;
+  readonly width: number;
+  readonly height: number;
+  readonly camera: 'fixed';
+  readonly framing: 'default';
+  readonly view: 'whole-rig';
+  readonly frame: 'setup' | number;
+  readonly animation?: string;
+  readonly playing: boolean;
+  readonly binding: {
+    readonly publicationId: JobPublicationId;
+    readonly instanceKey: string;
+    readonly sourceHash: JobSha256;
+    readonly pageId: string;
+    readonly askId: JobAskId;
+    readonly drawGeneration: number;
+    readonly playerGeneration: number;
+  };
+}
 
 export type JobSubject =
   | { readonly kind: 'interview-picks'; readonly questionId: string; readonly setId: string }
@@ -435,6 +484,12 @@ export const JOB_ERROR_CODES = [
   'JOB_ACT_KIND_DISABLED',
   'JOB_ACT_SOURCE_STALE',
   'JOB_DISPLAY_MISMATCH',
+  'JOB_STILL_CAPTURE_FAILED',
+  'JOB_STILL_CAMERA_NOT_FIXED',
+  'JOB_STILL_VIEW_UNSUPPORTED',
+  'JOB_STILL_BINDING_MISMATCH',
+  'JOB_STILL_UNAVAILABLE',
+  'JOB_STILL_OUTPUT_FAILED',
   'JOB_CURSOR_INVALID',
   'JOB_STORAGE_FAILED',
   'JOB_AGENT_ISOLATION_HOLE',
@@ -502,6 +557,7 @@ export type JobUISubmission = {
     readonly submissionId: string;
     readonly kind: Kind;
     readonly value: JobUIActValues[Kind];
+    readonly capture?: Kind extends 'review-verdict' ? JobRigCapture : never;
   };
 }[JobEnabledActKind];
 

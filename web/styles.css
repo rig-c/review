@@ -462,3 +462,17 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .job-window .job-part-images{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
 .job-window .job-part-images img{width:100%;height:auto;background:var(--rv-media-bg)}
 @media(max-width:780px){.job-window .job-inspection{grid-template-columns:160px minmax(0,1fr)}.job-window .job-stage #stage-layout{grid-template-columns:minmax(0,1fr);grid-template-rows:repeat(2,minmax(0,1fr))}}
+
+
+.job-window #rig-viewport[data-job-rig-canonical] > #rig-root {
+  visibility: hidden;
+}
+.job-window #rig-viewport > .job-rig-presentation {
+  position: absolute;
+  z-index: 0;
+  visibility: visible;
+  pointer-events: none;
+  user-select: none;
+  transform: none;
+  opacity: 1;
+}

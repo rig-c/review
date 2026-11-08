@@ -1,15 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import {
-  JOB_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
+  JOB_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
   type JobAct, type JobActValues, type JobPendingAsk, type JobReviewerBinding,
-  type JobSourceBinding, type JobSubject, type JobUISubmission,
+  type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
 } from './job-contract.ts';
-import { jobId, jobInteger, jobObject, requestDigest } from './job-api.ts';
+import { jobHash, jobId, jobInteger, jobObject, requestDigest } from './job-api.ts';
 import { validatePicks } from './interview-picks.ts';
 import type { JobRetainedSource } from './job-source.ts';
 import { JobError } from './job-store.ts';
 import { checkedPath, readRegular } from './interview-project.ts';
 import { prepareJobImageSet } from './job-image-set.ts';
+import {validatePngBytes} from './comment-crops.ts';
 
 function words(value: unknown): string {
   if (typeof value !== 'string' || value.length > 10_000) throw new JobError('JOB_ACT_INVALID');
@@ -66,14 +67,60 @@ export function bindJobAsk(subject: JobSubject, retained: JobRetainedSource): Jo
 }
 
 export function parseUISubmission(value: unknown): JobUISubmission {
-  const item = jobObject(value, ['publicationId', 'askId', 'pageId', 'displayedNonce', 'expectedGeneration', 'submissionId', 'kind', 'value']);
+  const item = jobObject(value, ['publicationId', 'askId', 'pageId', 'displayedNonce', 'expectedGeneration', 'submissionId', 'kind', 'value', 'capture']);
   if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(item.kind)) throw new JobError('JOB_ACT_KIND_DISABLED');
   jobId(item.publicationId); jobId(item.askId); jobId(item.pageId); jobId(item.displayedNonce); jobId(item.submissionId);
   jobInteger(item.expectedGeneration);
   if (!(JOB_ENABLED_ACT_KINDS as readonly string[]).includes(String(item.kind))) {
     throw new JobError('JOB_ACT_INVALID');
   }
+  if (item.capture !== undefined && (item.kind !== 'review-verdict' ||
+    (item.value as {stage?: unknown} | null)?.stage !== 'rig-review')) throw new JobError('JOB_REQUEST_INVALID');
   return item as unknown as JobUISubmission;
+}
+
+/** The browser supplies pixels and draw provenance, never a trusted hash or path. */
+export function prepareJobStill(input: JobUISubmission, ask: JobPendingAsk, retained: JobRetainedSource): {
+  readonly still: JobRigStill;
+  readonly bytes: Buffer;
+  readonly binding: JobRigCapture['binding'];
+} {
+  if (input.kind !== 'review-verdict' || !input.capture) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+  const capture = jobObject(input.capture, ['png', 'width', 'height', 'camera', 'framing', 'view', 'frame', 'animation', 'playing', 'binding']);
+  if (capture.camera !== 'fixed' || capture.framing !== 'default') throw new JobError('JOB_STILL_CAMERA_NOT_FIXED');
+  if (capture.view !== 'whole-rig') throw new JobError('JOB_STILL_VIEW_UNSUPPORTED');
+  const binding = jobObject(capture.binding, ['publicationId', 'instanceKey', 'sourceHash', 'pageId', 'askId', 'drawGeneration', 'playerGeneration']);
+  if (binding.publicationId !== input.publicationId || binding.publicationId !== ask.publicationId ||
+      binding.instanceKey !== retained.instanceKey || binding.sourceHash !== retained.source.sourceHash ||
+      binding.pageId !== input.pageId || binding.askId !== ask.askId ||
+      !Number.isSafeInteger(binding.drawGeneration) || (binding.drawGeneration as number) < 1 ||
+      !Number.isSafeInteger(binding.playerGeneration) || (binding.playerGeneration as number) < 0) {
+    throw new JobError('JOB_STILL_BINDING_MISMATCH');
+  }
+  if (typeof capture.playing !== 'boolean') throw new JobError('JOB_STILL_CAPTURE_FAILED');
+  const frame = capture.frame;
+  if (frame === 'setup') {
+    if (capture.animation !== undefined) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+  } else {
+    if (typeof frame !== 'number' || !Number.isFinite(frame) || frame < 0 ||
+        typeof capture.animation !== 'string' || !capture.animation || capture.animation.length > 512 ||
+        retained.source.subject === 'image-set' || !retained.source.model) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+    const model = JSON.parse(readRegular(checkedPath(retained.snapshotRoot, retained.source.model.path), 64 * 1024 * 1024).toString('utf8'));
+    const clip = model.animations?.find((item: {name: string; duration: number}) => item.name === capture.animation);
+    if (!clip || !Number.isFinite(clip.duration) || frame > clip.duration) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+  }
+  const prefix = 'data:image/png;base64,';
+  if (typeof capture.png !== 'string' || capture.png.length > prefix.length + Math.ceil(jobStillByteLimit / 3) * 4 ||
+      !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(capture.png)) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+  const bytes = Buffer.from(capture.png.slice(prefix.length), 'base64');
+  if (bytes.length > jobStillByteLimit || prefix + bytes.toString('base64') !== capture.png) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+  try { validatePngBytes(bytes, capture.width as number, capture.height as number); }
+  catch { throw new JobError('JOB_STILL_CAPTURE_FAILED'); }
+  const sha256 = jobHash(bytes);
+  const common = {path: sha256 + '.png', sha256, camera: 'fixed' as const};
+  const still: JobRigStill = frame === 'setup' ? {...common, frame} :
+    {...common, frame: frame as number, animation: capture.animation as string};
+  return {still, bytes, binding: binding as unknown as JobRigCapture['binding']};
 }
 
 /** Only the authenticated UI host invokes this adapter. All source and authority
@@ -85,6 +132,7 @@ export function finalizeJobAct(options: {
   readonly ask: JobPendingAsk;
   readonly retained: JobRetainedSource;
   readonly reviewer: JobReviewerBinding;
+  readonly still?: JobRigStill;
 }): JobAct {
   const { submission, ask, retained, reviewer } = options;
   if (ask.status !== 'pending') throw new JobError('JOB_ASK_SUPERSEDED');
@@ -182,6 +230,13 @@ export function finalizeJobAct(options: {
     case 'review-verdict': {
       const value = jobObject(submission.value, ['stage', 'verdict', 'words']);
       if (ask.subject.kind !== 'review-verdict' || ask.subject.stage === 'image-review' || value.stage !== ask.subject.stage) throw new JobError('JOB_ACT_INVALID');
+      if (ask.subject.stage === 'rig-review') {
+        if (!options.still) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+        return {...envelope, schema: JOB_RIG_REVIEW_ACT_SCHEMA, kind: 'review-verdict',
+          source: {...source, model: source.model!, selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, {kind: 'rig'}>},
+          value: {stage: 'rig-review', verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const), words: words(value.words)},
+          still: options.still};
+      }
       return { ...envelope, kind: 'review-verdict', source: { ...source, model: source.model!,
         selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, { kind: 'rig' | 'post' }> }, value: {
         stage: ask.subject.stage, verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const), words: words(value.words),

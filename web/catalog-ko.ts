@@ -1,4 +1,10 @@
 export const koCatalog: Readonly<Record<string, string>> = {
+  "JOB_STILL_CAPTURE_FAILED": "JOB_STILL_CAPTURE_FAILED · 표시된 리그 프레임을 캡처하지 못했습니다. 정상적으로 그려진 뒤 다시 시도하세요.",
+  "JOB_STILL_CAMERA_NOT_FIXED": "JOB_STILL_CAMERA_NOT_FIXED · 판정을 제출하기 전에 리그를 기본 화면 구도로 되돌리세요.",
+  "JOB_STILL_VIEW_UNSUPPORTED": "JOB_STILL_VIEW_UNSUPPORTED · 단독 표시·강조·비교 레이어를 해제하고 전체 리그를 표시한 뒤 제출하세요.",
+  "JOB_STILL_BINDING_MISMATCH": "JOB_STILL_BINDING_MISMATCH · 표시된 소스·페이지·그려진 프레임이 바뀌었습니다. 새 판정 시도를 시작하세요.",
+  "JOB_STILL_UNAVAILABLE": "JOB_STILL_UNAVAILABLE · 이 과거 기록 또는 리그 외 판정에는 보관된 리그 PNG가 없습니다.",
+  "JOB_STILL_OUTPUT_FAILED": "JOB_STILL_OUTPUT_FAILED · 소비자가 리그 PNG 또는 판정 출력을 끝까지 기록하지 못했습니다.",
   "WORKSPACE_BODY_TIMEOUT": "WORKSPACE_BODY_TIMEOUT",
   "rig-review-target/1": "rig-review-target/1",
   "Review workspace": "검토 작업 공간",
