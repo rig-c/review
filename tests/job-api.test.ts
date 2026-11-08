@@ -1,11 +1,13 @@
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, spyOn, test } from 'bun:test';
 import { createJobHostPorts, jobBodyLimit, parseJobRequest } from '../src/job-api.ts';
 import { JOB_API_SCHEMA } from '../src/job-contract.ts';
 import { parseJobCLI, jobCommand } from '../src/job-cli.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
 import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
-import {readFile, readdir, mkdir, writeFile, symlink} from 'node:fs/promises';
+import * as fs from 'node:fs';
+import {existsSync, fstatSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync} from 'node:fs';
+import {readFile, readdir, mkdir, writeFile, symlink, rm} from 'node:fs/promises';
 import {rigStillInput} from './helpers/job-rig-still.ts';
 import {createJobFront} from '../src/job-front.ts';
 import {jobHash} from '../src/job-api.ts';
@@ -530,4 +532,343 @@ test('#557 backend consumer bounds stdin and raw streams before filesystem or st
     fetch: Object.assign(async () => new Response(overflow, {headers: {'Content-Length': '1'}}), {preconnect: fetch.preconnect}),
   })).rejects.toThrow('JOB_BODY_LIMIT');
   expect(stdout).toBe('');
+});
+
+test('#567 consumer still output fsyncs destination directory after verified PNG rename and before first stdout byte, and reuses existing verified PNG', async () => {
+  const f = await fixture();
+  const {input, bytes, sha256} = await rigStillInput(f);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  const directory = join(f.scratch, 'consumer-dirsync');
+  await mkdir(directory);
+  const dirStat = statSync(directory);
+  const realFsync = fs.fsyncSync;
+  const fsyncEvents: Array<{isDirectory: boolean; isFile: boolean; dev: number; ino: number;
+    pngPresent: boolean; pngVerified: boolean; tmpCount: number; stdoutBytes: number; writeCalls: number}> = [];
+  const chunks: Buffer[] = [];
+  let writes = 0;
+  let fsyncCountAtFirstWrite = -1;
+  let dirFsyncBeforeFirstWrite = false;
+  const spy = spyOn(fs, 'fsyncSync').mockImplementation((fd: number) => {
+    const info = fstatSync(fd);
+    const pngPath = join(directory, sha256 + '.png');
+    const pngPresent = existsSync(pngPath);
+    fsyncEvents.push({
+      isDirectory: info.isDirectory(),
+      isFile: info.isFile(),
+      dev: info.dev,
+      ino: info.ino,
+      pngPresent,
+      pngVerified: pngPresent && readFileSync(pngPath).equals(bytes),
+      tmpCount: readdirSync(directory).filter(name => name.endsWith('.tmp')).length,
+      stdoutBytes: Buffer.concat(chunks).byteLength,
+      writeCalls: writes,
+    });
+    return realFsync(fd);
+  });
+  try {
+    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+      '--still-out', directory], {
+      consumerCapability: f.session.writerGrant().fetchCapability,
+      fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+      writeBytes(chunk) {
+        if (writes === 0) {
+          fsyncCountAtFirstWrite = fsyncEvents.length;
+          dirFsyncBeforeFirstWrite = fsyncEvents.some(event => event.isDirectory);
+        }
+        writes++;
+        const count = Math.min(23, chunk.byteLength);
+        chunks.push(Buffer.from(chunk.subarray(0, count)));
+        return count;
+      },
+    });
+    expect(fsyncEvents).toEqual([
+      expect.objectContaining({
+        isFile: true, isDirectory: false, pngPresent: false, pngVerified: false,
+        tmpCount: 1, stdoutBytes: 0, writeCalls: 0,
+      }),
+      {
+        isFile: false, isDirectory: true, dev: dirStat.dev, ino: dirStat.ino,
+        pngPresent: true, pngVerified: true, tmpCount: 0, stdoutBytes: 0, writeCalls: 0,
+      },
+    ]);
+    expect(fsyncCountAtFirstWrite).toBe(2);
+    expect(dirFsyncBeforeFirstWrite).toBe(true);
+    expect(Buffer.concat(chunks)).toEqual(Buffer.from(JSON.stringify(saved.value)));
+    expect(await readdir(directory)).toEqual([sha256 + '.png']);
+
+    const installedIno = statSync(join(directory, sha256 + '.png')).ino;
+    fsyncEvents.length = 0;
+    chunks.length = 0;
+    writes = 0;
+    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+      '--still-out', directory], {
+      consumerCapability: f.session.writerGrant().fetchCapability,
+      fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+      writeBytes(chunk) {
+        writes++;
+        chunks.push(Buffer.from(chunk));
+        return chunk.byteLength;
+      },
+    });
+    expect(statSync(join(directory, sha256 + '.png')).ino).toBe(installedIno);
+    expect(fsyncEvents).toEqual([{
+      isFile: false, isDirectory: true, dev: dirStat.dev, ino: dirStat.ino,
+      pngPresent: true, pngVerified: true, tmpCount: 0, stdoutBytes: 0, writeCalls: 0,
+    }]);
+    expect(Buffer.concat(chunks)).toEqual(Buffer.from(JSON.stringify(saved.value)));
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+for (const fault of ['ebadf', 'eio', 'einval'] as const) {
+  test(`#567 directory fsync ${fault} failure emits zero stdout bytes, cleans up own install and lock, and preserves preexisting verified PNG`, async () => {
+    const f = await fixture();
+    const {input, bytes, sha256} = await rigStillInput(f);
+    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) throw new Error(saved.error.code);
+    const directory = join(f.scratch, 'consumer-dirsync-' + fault);
+    await mkdir(directory);
+    const realFsync = fs.fsyncSync;
+    const spy = spyOn(fs, 'fsyncSync').mockImplementation((fd: number) => {
+      if (fstatSync(fd).isDirectory()) {
+        if (fault === 'ebadf') return realFsync(-1);
+        const code = fault === 'eio' ? 'EIO' : 'EINVAL';
+        throw Object.assign(new Error(`directory fsync ${code}`), {code});
+      }
+      return realFsync(fd);
+    });
+    try {
+      let writes = 0;
+      const chunks: Buffer[] = [];
+      await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+        '--still-out', directory], {
+        consumerCapability: f.session.writerGrant().fetchCapability,
+        fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+        writeBytes(chunk) {
+          writes++;
+          chunks.push(Buffer.from(chunk));
+          return chunk.byteLength;
+        },
+      })).rejects.toThrow('JOB_STILL_OUTPUT_FAILED');
+      expect(writes).toBe(0);
+      expect(Buffer.concat(chunks)).toHaveLength(0);
+      expect(await readdir(directory)).toEqual([]);
+
+      await writeFile(join(directory, sha256 + '.png'), bytes);
+      const preexistingIno = statSync(join(directory, sha256 + '.png')).ino;
+      await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+        '--still-out', directory], {
+        consumerCapability: f.session.writerGrant().fetchCapability,
+        fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+        writeBytes(chunk) {
+          writes++;
+          chunks.push(Buffer.from(chunk));
+          return chunk.byteLength;
+        },
+      })).rejects.toThrow('JOB_STILL_OUTPUT_FAILED');
+      expect(writes).toBe(0);
+      expect(Buffer.concat(chunks)).toHaveLength(0);
+      expect(await readdir(directory)).toEqual([sha256 + '.png']);
+      expect(statSync(join(directory, sha256 + '.png')).ino).toBe(preexistingIno);
+      expect((await readFile(join(directory, sha256 + '.png'))).equals(bytes)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+}
+
+for (const ending of ['success', 'zero-write', 'midwrite', 'legacy-write'] as const) {
+  test(`#567 newly installed PNG descriptor pins its unlinked inode through ${ending} output and closes once`, async () => {
+    const f = await fixture();
+    const {input, sha256} = await rigStillInput(f);
+    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+    if (!saved.ok) throw new Error(saved.error.code);
+    const directory = join(f.scratch, 'consumer-pinned-' + ending);
+    await mkdir(directory);
+    const target = join(directory, sha256 + '.png');
+    const realFsync = fs.fsyncSync, realClose = fs.closeSync, realUnlink = fs.unlinkSync;
+    let pngDescriptor: number | undefined;
+    let original: fs.Stats | undefined;
+    let beforeUnlink: fs.Stats | undefined;
+    let afterUnlink: fs.Stats | undefined;
+    let liveDuringLockCleanup = false;
+    let closeCalls = 0, writeCalls = 0;
+    const syncSpy = spyOn(fs, 'fsyncSync').mockImplementation((fd: number) => {
+      const info = fstatSync(fd);
+      if (info.isFile()) { pngDescriptor = fd; original = info; }
+      return realFsync(fd);
+    });
+    const closeSpy = spyOn(fs, 'closeSync').mockImplementation((fd: number) => {
+      if (fd === pngDescriptor) closeCalls++;
+      return realClose(fd);
+    });
+    const unlinkSpy = spyOn(fs, 'unlinkSync').mockImplementation((path: fs.PathLike) => {
+      if (path === join(directory, '.rig-review-still.lock')) {
+        try { liveDuringLockCleanup = fstatSync(pngDescriptor!).nlink === 0; } catch {}
+      }
+      return realUnlink(path);
+    });
+    const writeBytes = (chunk: Uint8Array): number => {
+      writeCalls++;
+      if (writeCalls === 1) {
+        try { beforeUnlink = fstatSync(pngDescriptor!); } catch {}
+        unlinkSync(target);
+        try { afterUnlink = fstatSync(pngDescriptor!); } catch {}
+        writeFileSync(target, 'other-writer-replacement-png');
+      }
+      if (ending === 'zero-write' || ending === 'legacy-write' || ending === 'midwrite' && writeCalls > 1) {
+        throw Object.assign(new Error('stdout EPIPE'), {code: 'EPIPE'});
+      }
+      return ending === 'midwrite' ? Math.min(17, chunk.byteLength) : chunk.byteLength;
+    };
+    try {
+      const pending = jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+        '--still-out', directory], {
+        consumerCapability: f.session.writerGrant().fetchCapability,
+        fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+        ...(ending === 'legacy-write' ? {write: (text: string) => { writeBytes(Buffer.from(text)); }} : {writeBytes}),
+      });
+      if (ending === 'success') await pending;
+      else await expect(pending).rejects.toThrow('JOB_STILL_OUTPUT_FAILED');
+      console.error(JSON.stringify({probe: '#567 pinned PNG descriptor', ending, pngDescriptor,
+        liveAtOutput: beforeUnlink !== undefined, liveAfterUnlink: afterUnlink !== undefined,
+        liveDuringLockCleanup, closeCalls}));
+      expect(pngDescriptor).toBeDefined();
+      expect(beforeUnlink).toMatchObject({dev: original!.dev, ino: original!.ino, nlink: 1});
+      expect(afterUnlink).toMatchObject({dev: original!.dev, ino: original!.ino, nlink: 0});
+      expect(liveDuringLockCleanup).toBe(true);
+      expect(statSync(target).ino).not.toBe(original!.ino);
+      expect(readFileSync(target, 'utf8')).toBe('other-writer-replacement-png');
+      expect(closeCalls).toBe(1);
+      expect(() => fstatSync(pngDescriptor!)).toThrow();
+      expect(readdirSync(directory)).toEqual([sha256 + '.png']);
+    } finally {
+      unlinkSpy.mockRestore();
+      closeSpy.mockRestore();
+      syncSpy.mockRestore();
+    }
+  });
+}
+
+for (const fault of ['file-fsync', 'directory-fsync', 'rename'] as const) {
+  test(`#567 newly created PNG descriptor closes once after ${fault} failure`, async () => {
+    const f = await fixture();
+    const {input} = await rigStillInput(f);
+    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+    if (!saved.ok) throw new Error(saved.error.code);
+    const directory = join(f.scratch, 'consumer-close-' + fault);
+    await mkdir(directory);
+    const realFsync = fs.fsyncSync, realClose = fs.closeSync;
+    let pngDescriptor: number | undefined;
+    let closeCalls = 0, writeCalls = 0;
+    const syncSpy = spyOn(fs, 'fsyncSync').mockImplementation((fd: number) => {
+      const info = fstatSync(fd);
+      if (info.isFile()) pngDescriptor = fd;
+      if (fault === 'file-fsync' && info.isFile() || fault === 'directory-fsync' && info.isDirectory()) {
+        throw Object.assign(new Error('planted fsync EIO'), {code: 'EIO'});
+      }
+      return realFsync(fd);
+    });
+    const closeSpy = spyOn(fs, 'closeSync').mockImplementation((fd: number) => {
+      if (fd === pngDescriptor) closeCalls++;
+      return realClose(fd);
+    });
+    const renameSpy = fault === 'rename' ? spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw Object.assign(new Error('planted rename EIO'), {code: 'EIO'});
+    }) : undefined;
+    try {
+      await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+        '--still-out', directory], {
+        consumerCapability: f.session.writerGrant().fetchCapability,
+        fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+        writeBytes(chunk) { writeCalls++; return chunk.byteLength; },
+      })).rejects.toThrow('JOB_STILL_OUTPUT_FAILED');
+      expect(pngDescriptor).toBeDefined();
+      expect(writeCalls).toBe(0);
+      expect(closeCalls).toBe(1);
+      expect(() => fstatSync(pngDescriptor!)).toThrow();
+      expect(readdirSync(directory)).toEqual([]);
+    } finally {
+      renameSpy?.mockRestore();
+      closeSpy.mockRestore();
+      syncSpy.mockRestore();
+    }
+  });
+}
+
+test('#567 retained .rig-review-still.lock produces named actionable refusal with exact local path, preserves lock bytes and owner serialization, and retries after removal', async () => {
+  const f = await fixture();
+  const {input, bytes, sha256} = await rigStillInput(f);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  const directory = join(f.scratch, 'consumer-lock');
+  const alias = join(f.scratch, 'consumer-lock-alias');
+  await mkdir(directory);
+  await symlink(directory, alias);
+  const lockPath = join(realpathSync(directory), '.rig-review-still.lock');
+  await writeFile(lockPath, 'retained-by-killed-writer');
+
+  let inProcessStdout = '';
+  let caught: unknown;
+  try {
+    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+      '--still-out', alias], {
+      consumerCapability: f.session.writerGrant().fetchCapability,
+      fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+      write: text => {inProcessStdout += text;},
+    });
+  } catch (error) {
+    caught = error;
+  }
+  expect(inProcessStdout).toBe('');
+  expect(caught).toMatchObject({code: 'JOB_STILL_OUTPUT_FAILED'});
+  expect((caught as Error).message).toContain('JOB_STILL_OUTPUT_FAILED');
+  expect((caught as Error).message).toContain(lockPath);
+  expect(await readFile(lockPath, 'utf8')).toBe('retained-by-killed-writer');
+  expect(await readdir(directory)).toEqual(['.rig-review-still.lock']);
+
+  const server = Bun.serve({hostname: '127.0.0.1', port: 0,
+    fetch: request => f.ports.handleJobApi(new Request(f.origin + new URL(request.url).pathname, request))});
+  try {
+    const grant = f.session.writerGrant().fetchCapability;
+    const locator = server.url.origin + `/jobs/${f.session.jobId}`;
+    const refused = await consumerCLI(locator, saved.value.actId, grant, alias);
+    expect(refused.exit).not.toBe(0);
+    expect(refused.stdout).toBe('');
+    expect(refused.stderr).toContain('JOB_STILL_OUTPUT_FAILED');
+    expect(refused.stderr).toContain(lockPath);
+    expect(await readFile(lockPath, 'utf8')).toBe('retained-by-killed-writer');
+    expect(await readdir(directory)).toEqual(['.rig-review-still.lock']);
+
+    await rm(lockPath);
+    const recovered = await consumerCLI(locator, saved.value.actId, grant, alias);
+    expect(recovered.exit).toBe(0);
+    expect(recovered.stdout).toBe(JSON.stringify(saved.value));
+    expect(recovered.stderr).toBe('');
+    expect((await readFile(join(directory, sha256 + '.png'))).equals(bytes)).toBe(true);
+    expect(await readdir(directory)).toEqual([sha256 + '.png']);
+
+    await rm(join(directory, sha256 + '.png'));
+    await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+      '--still-out', directory], {
+      consumerCapability: grant,
+      fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+      writeBytes() {
+        unlinkSync(lockPath);
+        writeFileSync(lockPath, 'other-writer-replacement-lock');
+        unlinkSync(join(directory, sha256 + '.png'));
+        writeFileSync(join(directory, sha256 + '.png'), 'other-writer-replacement-png');
+        throw Object.assign(new Error('stdout EPIPE'), {code: 'EPIPE'});
+      },
+    })).rejects.toThrow('JOB_STILL_OUTPUT_FAILED');
+    expect(await readFile(lockPath, 'utf8')).toBe('other-writer-replacement-lock');
+    expect(await readFile(join(directory, sha256 + '.png'), 'utf8')).toBe('other-writer-replacement-png');
+  } finally {
+    await server.stop(true);
+  }
 });
