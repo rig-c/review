@@ -1,13 +1,147 @@
 /** Bounded Nova harness. Inputs come from pinned create's generator and public writers. */
 import { strict as assert } from 'node:assert';
 import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { setSystemTime } from 'bun:test';
-import { digest } from '../src/interview-project.ts';
+import { digest, readProject } from '../src/interview-project.ts';
 import { startInterviewServer } from '../src/interview-server.ts';
 import { launchCdpSession } from './parts-explorer-browser.ts';
 
+/** One sequential CDP worker over disposable writer-archive copies. */
+async function sceneContextMode(destination: string | undefined) {
+  if (!destination) throw new Error('Supply --scene-context <fresh evidence directory>');
+  const evidence = resolve(destination), fixtureDirectory = join(import.meta.dir, 'fixtures/scene-interview-551');
+  await mkdir(evidence);
+  const testClock = '2026-11-15T11:03:00.000Z';
+  const provenance = JSON.parse(await readFile(join(fixtureDirectory, 'provenance.json'), 'utf8'));
+  const archiveHashes: Record<string, string> = {};
+  const receipt = {clock: {kind: 'labelled-test-clock', at: testClock, scope: 'Bun server currentness'},
+    browserWorkers: 1, cases: [] as unknown[], children: [] as unknown[], screenshots: [] as unknown[], archiveHashes, error: ''};
+  const profile = join(evidence, 'browser-profile');
+  let browser: Awaited<ReturnType<typeof launchCdpSession>> | undefined;
+  const hashes = async (root: string) => {
+    const entries = await readdir(root, {recursive: true, withFileTypes: true});
+    const files = entries.filter(entry => entry.isFile()).map(entry => join(entry.parentPath, entry.name)).sort();
+    return Object.fromEntries(await Promise.all(files.map(async file => [file.slice(root.length + 1), digest(await readFile(file))])));
+  };
+  const waitFor = async (expression: string) => {
+    for (let attempt = 0; attempt < 180; attempt++) {
+      if (await browser!.evaluate(expression)) return;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    throw new Error('Scene browser condition unavailable: ' + expression);
+  };
+  try {
+    setSystemTime(new Date(testClock));
+    browser = await launchCdpSession(profile);
+    await browser.setViewport(1360, 950);
+    const {t} = await import('../web/i18n.ts');
+    for (const [name, archive] of [['current', 'writer-current'], ['history', 'writer-history'],
+      ['legacy', 'writer-current'], ['issue', 'writer-history']]) {
+      const archivePath = join(fixtureDirectory, archive + '.tar.gz');
+      archiveHashes[archive] = digest(await readFile(archivePath));
+      assert.equal(archiveHashes[archive], provenance.archives[archive + '.tar.gz']);
+      const root = join(evidence, name); await mkdir(root);
+      const extracted = spawnSync('tar', ['-xzf', archivePath, '-C', root], {encoding: 'utf8'});
+      receipt.children.push({command: ['tar', '-xzf', archivePath, '-C', root], exit: extracted.status,
+        signal: extracted.signal, stdout: extracted.stdout, stderr: extracted.stderr, error: extracted.error?.message});
+      assert.equal(extracted.status, 0, extracted.stderr);
+      const pristine = await hashes(root), originals = new Map<string, Buffer>();
+      const replace = async (path: string, bytes: Buffer | string) => {
+        if (!originals.has(path)) originals.set(path, await readFile(join(root, path)));
+        await writeFile(join(root, path), bytes);
+      };
+      let server: Awaited<ReturnType<typeof startInterviewServer>> | undefined, frozen = pristine;
+      try {
+        const project = JSON.parse(await readFile(join(root, 'project.json'), 'utf8'));
+        const item = project.interview.post.items.find((entry: {id: string}) => entry.id === 'post_composition');
+        if (name === 'legacy') {
+          // SYNTHETIC UNIT CONTROL, matching legacy() in scene-interview-551.test.ts.
+          const since = Date.parse('2026-11-08T00:00:00Z'), at = since - 5000;
+          project.reopens[0].at = new Date(since - 10000).toISOString();
+          const version = {...structuredClone(project.versions[0]), n: 3, at: new Date(at).toISOString(),
+            verdicts: [{review: 'rig-review', by: 'synthetic-control', at: new Date(at + 1).toISOString(), verdict: 'accepted'}]};
+          project.versions.push(version);
+          const signature = structuredClone(project.signoffs.find((entry: {stage: string}) => entry.stage === 'rig-review'));
+          signature.at = new Date(at + 2).toISOString();
+          signature.target = {...signature.target, version: 3, verdict: `versions[${project.versions.length - 1}].verdicts[0]`,
+            review_package: {...signature.target.review_package, path: `versions[${project.versions.length - 1}].review_package`}};
+          project.signoffs.push(signature);
+          const path = item.pending_options.path, set = JSON.parse(await readFile(join(root, path), 'utf8'));
+          set.drafted_at = new Date(since - 1).toISOString();
+          const bytes = JSON.stringify(set, null, 2) + '\n';
+          await replace(path, bytes); item.pending_options = {path, sha256: digest(bytes)};
+          await replace('project.json', JSON.stringify(project, null, 2) + '\n');
+        }
+        if (name === 'issue') {
+          // SYNTHETIC UNIT CONTROL, matching historicalOnly + malformed-scene unit case.
+          delete item.pending_options;
+          item.history = item.history.filter((answer: {choice?: {set?: {path?: string}}}) => answer.choice?.set?.path === 'evidence/interview/review551-scene-current.json');
+          item.guide = {by: 'synthetic-control', at: testClock, verbatim: 'Original replacement text\n한글'};
+          await replace('project.json', JSON.stringify(project, null, 2) + '\n');
+          await replace('evidence/scene/s1.json', '{}');
+        }
+        const opened = readProject(root);
+        const question = opened.questions.find(entry => entry.set.id === 'review551-scene-current')!;
+        assert(question); assert.equal(question.editable, name === 'current' || name === 'legacy');
+        if (name === 'legacy') assert(opened.diagnostics.some(entry => entry.code === 'INTERVIEW_OPTIONS_SCENE_LEGACY'));
+        if (name === 'issue') assert(opened.diagnostics.some(entry => entry.code === 'INTERVIEW_OPTIONS_STALE' && entry.record.includes('.history[')));
+        await mkdir(join(root, 'scratch/review-picks'), {recursive: true});
+        frozen = await hashes(root);
+        server = await startInterviewServer(root, 'scratch/review-picks', 0);
+        for (const language of ['en', 'ko'] as const) {
+          const url = new URL(server.url); url.searchParams.set('lang', language);
+          await browser.goto(url.href);
+          await waitFor('!!document.querySelector("main select")');
+          const selected: number = await browser.evaluate<number>(`(()=>{const picker=document.querySelector('main select');picker.selectedIndex=[...picker.options].findIndex(option=>option.text.includes(' · review551-scene-current'));picker.dispatchEvent(new Event('change'));return picker.selectedIndex;})()`);
+          assert(selected >= 0);
+          assert.equal(await browser.evaluate('document.documentElement.lang'), language);
+          assert.equal(await browser.evaluate('document.querySelector("form > fieldset").disabled'), !question.editable);
+          assert((await browser.evaluate<string>('document.querySelector("form code").textContent')).includes(question.ref.sha256));
+          if (question.answer) {
+            assert(await browser.evaluate(`[...document.querySelectorAll('form pre')].some(node=>node.textContent===${JSON.stringify(question.answer.verbatim)})`));
+            assert((await browser.evaluate<string>('document.querySelector("form").textContent')).includes(String(question.answer.at)));
+          }
+          if (name === 'legacy' || name === 'issue') {
+            const key = name === 'legacy' ? 'INTERVIEW_OPTIONS_SCENE_LEGACY' : 'interview.historicalIssue';
+            assert((await browser.evaluate<string>('document.querySelector(".interview-diagnostics").textContent')).includes(t(key, undefined, language)));
+          }
+          if (name === 'current') assert(question.images.length > 0);
+          for (const image of question.images) {
+            await browser.evaluate(`[...document.querySelectorAll('aside button')].find(button=>button.textContent===${JSON.stringify(image.name)}).click()`);
+            await waitFor('document.querySelector("aside img")?.naturalWidth > 0');
+            const source: string = await browser.evaluate<string>('document.querySelector("aside img").src');
+            assert.equal(digest(Buffer.from(await (await fetch(source)).arrayBuffer())), image.ref.sha256);
+          }
+          const screenshot = `scene-${name}-${language}.png`, bytes = await browser.screenshot();
+          await writeFile(join(evidence, screenshot), bytes);
+          receipt.screenshots.push({name, language, path: screenshot, sha256: digest(bytes)});
+        }
+      } finally {
+        server?.stop();
+        const after = await hashes(root);
+        for (const [path, bytes] of originals) await writeFile(join(root, path), bytes);
+        const restored = await hashes(root);
+        receipt.cases.push({name, synthetic: name === 'legacy' || name === 'issue', pristine, frozen, after, restored});
+        assert.deepEqual(after, frozen); assert.deepEqual(restored, pristine);
+      }
+      assert.equal(digest(await readFile(archivePath)), archiveHashes[archive]);
+    }
+  } catch (error) {receipt.error = String(error); throw error;}
+  finally {
+    try {await browser?.close();}
+    finally {
+      setSystemTime(); await rm(profile, {recursive: true, force: true});
+      await writeFile(join(evidence, 'scene-context-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
+    }
+  }
+}
+
+if (process.argv[2] === '--scene-context') {
+  await sceneContextMode(process.argv[3]);
+} else {
 const [historyRoot, liveRoot, artifacts] = process.argv.slice(2);
 if (!historyRoot || !liveRoot || !artifacts) throw Error('Supply generated history, registered live project and evidence directory');
 const out = 'scratch/review-picks';
@@ -186,4 +320,6 @@ try {
   for (const server of servers) server.stop();
   setSystemTime();
   await rm(profile,{recursive:true,force:true});
+}
+
 }

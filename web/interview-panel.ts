@@ -1,4 +1,4 @@
-import type { HistoricalInterview, InterviewQuestion } from '../src/interview-project.ts';
+import type { HistoricalInterview, InterviewQuestion, InterviewDiagnostic } from '../src/interview-project.ts';
 import type { Picks } from '../src/interview-picks.ts';
 import { onLanguageChange, t } from './i18n.ts';
 import type { InstanceAccess } from './instance-access.ts';
@@ -34,11 +34,11 @@ async function request(access: InstanceAccess, path: string, body?: Picks) {
 }
 
 export async function mountInterview(host: HTMLElement, access: InstanceAccess) {
-  let data: {questions:Question[];historical:HistoricalInterview[]; binding?:{projectHash:string;sourceHash:string;version?:number;draftId?:string}};
+  let data: {questions:Question[];historical:HistoricalInterview[]; diagnostics?:InterviewDiagnostic[]; binding?:{projectHash:string;sourceHash:string;version?:number;draftId?:string}};
   try {data = await request(access, '/api/interview');}
   catch (error) {
     const render = () => {host.textContent = t(errorKey(error));};
-    onLanguageChange(render); render(); return;
+    const unmount = onLanguageChange(render); render(); return unmount;
   }
   const {questions, historical:legacy} = data;
   const drafts = questions.map(question => {
@@ -56,17 +56,28 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
     const joined = data.binding;
     const source = joined ? element('p', t(joined.draftId===undefined?'interview.joined':'interview.joinedDraft', [joined.draftId??String(joined.version), joined.projectHash, joined.sourceHash])) : null;
     if (source) source.className = 'interview-binding';
+    const diagnostics = element('section');
+    diagnostics.className = 'interview-diagnostics';
+    diagnostics.setAttribute('role', 'status');
+    for (const diagnostic of data.diagnostics ?? []) {
+      const message = diagnostic.code === 'INTERVIEW_OPTIONS_STALE' ? 'interview.historicalIssue' : diagnostic.code;
+      diagnostics.append(element('p', t(message)),
+        element('code', [diagnostic.question, diagnostic.record, diagnostic.at, diagnostic.ref.path, diagnostic.ref.sha256].filter(Boolean).join(' · ')));
+    }
     const archive = element('details');
     archive.append(element('summary', t('interview.legacy')));
     for (const answer of legacy) {
       const item = element('section');
       item.append(element('h3', answer.question), element('p', [answer.by,answer.at].filter(Boolean).join(' · ')),
         element('pre', answer.verbatim));
+      if (answer.ref) item.append(element('code', answer.ref.path + ' · ' + answer.ref.sha256));
+      if (answer.answer) item.append(element('pre', [answer.answer.by, answer.answer.at, answer.answer.source].filter(value => typeof value === 'string').join(' · ')));
       archive.append(item);
     }
     if (!questions.length) {
       host.replaceChildren(element('p', t('interview.empty')));
       if (source) host.prepend(source);
+      host.append(diagnostics);
       if (legacy.length) {archive.open = true; host.append(archive);}
       return;
     }
@@ -110,6 +121,10 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
     const provenance = element('p', t('interview.provenance', [question.set.drafted_by, question.set.drafted_at]));
     const binding = element('code', question.ref.path + ' · ' + question.ref.sha256);
     form.append(provenance, binding);
+    if (question.answer) {
+      form.append(element('pre', [question.answer.by, question.answer.at, question.answer.source].filter(value => typeof value === 'string').join(' · ')),
+        element('pre', typeof question.answer.verbatim === 'string' ? question.answer.verbatim : ''));
+    }
     const historical = question.answer?.choice as {picks?:Picks['picks'];note?:string} | undefined;
     const status = element('p'); status.setAttribute('role','status');
     const markUnsaved = () => {
@@ -182,7 +197,8 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
     };
     grid.append(art, form); host.replaceChildren(picker, grid);
     if (source) host.prepend(source);
+    host.append(diagnostics);
     if (legacy.length) host.append(archive);
   };
-  onLanguageChange(render); render();
+  const unmount = onLanguageChange(render); render(); return unmount;
 }

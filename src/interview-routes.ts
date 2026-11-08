@@ -68,7 +68,7 @@ export function interviewRoutes(root: string, output: string, capability: string
       if (req.method === 'GET' && url.pathname === '/api/interview') {
         await current();
         const dir = destination();
-        return json({...(joined ? {binding:{projectHash:opened.hash, sourceHash:joined.sourceHash,  ...(joined.draftId===undefined?{version:joined.version}:{draftId:joined.draftId})}} : {}), historical:opened.historical, questions:opened.questions.map(question => ({
+        return json({...(joined ? {binding:{projectHash:opened.hash, sourceHash:joined.sourceHash,  ...(joined.draftId===undefined?{version:joined.version}:{draftId:joined.draftId})}} : {}), historical:opened.historical, diagnostics:opened.diagnostics, questions:opened.questions.map(question => ({
           ...question, saved:question.editable ? readPicks(dir, question) : null,
           images:question.images.map(({name}, index) => ({name, url:'/api/interview/image/' + question.ref.sha256 + '/' + index})),
         }))});

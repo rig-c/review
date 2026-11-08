@@ -267,7 +267,7 @@ for (const stage of ['interview', 'rigging-interview']) {
 
 for (const adopted of [false, true]) {
   for (const questionId of postQuestions) {
-    test(`unsupported scene context names its kind before adoption for ${adopted ? 'adopted' : 'legacy'} ${questionId}`, () => {
+    test(`missing scene context is stale before adoption for ${adopted ? 'adopted' : 'legacy'} ${questionId}`, () => {
       const fixture = postProjectFixture(questionId, adopted);
       try {
         const context = {kind: 'scene', scene: {n: 1, path: 'evidence/unsupported-scene.json', sha256: digest('{}')}};
@@ -275,7 +275,7 @@ for (const adopted of [false, true]) {
         fixture.put('project.json', JSON.stringify({...fixture.project,
           interview: {...fixture.project.interview, post: {items: [{id: questionId, pending_options: set}]}},
         }));
-        expect(() => readProject(fixture.root, postNow)).toThrow('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: scene');
+        expect(() => readProject(fixture.root, postNow)).toThrow('INTERVIEW_OPTIONS_STALE');
       } finally {fixture.dispose();}
     });
   }
