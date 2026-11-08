@@ -153,3 +153,103 @@ test('rig snapshot race: bind parsed A; reject B at approval, and planted late-h
     console.log(`RIG_RACE ${mutant ? 'PLANTED_LATE_HASH_UNSEEN_B_APPROVED' : 'PARSED_A_BOUND_REPLACED_B_REFUSED'}`);
   }
 });
+
+async function runMeshReportSwapProbe(
+  label: string,
+  root: string,
+  meshReportPath: string,
+  triggerPath: string,
+  bytesA: Buffer,
+  bytesB: Buffer,
+) {
+  const timeoutMs = 4000;
+  const hashA = new Bun.CryptoHasher('sha256').update(bytesA).digest('hex');
+  const sourcePath = new URL('../src/parts-view.ts', import.meta.url).pathname;
+  console.log(`FIXTURE_MUTATION_BEGIN ${label} ${meshReportPath} sha256=${hashA}`);
+  let child: ReturnType<typeof Bun.spawn> | null = null;
+  let stdoutPromise: Promise<string> | null = null;
+  let stderrPromise: Promise<string> | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let timedOut = false;
+  try {
+    const script = `
+      import { mock } from 'bun:test';
+      import * as fs from 'node:fs/promises';
+      const originalRead = fs.readFile, originalWrite = fs.writeFile;
+      const meshPath = ${JSON.stringify(meshReportPath)}, trigger = ${JSON.stringify(triggerPath)};
+      const replacement = Buffer.from(${JSON.stringify(bytesB.toString('base64'))}, 'base64');
+      let swapped = false, reads = 0, meshReadsAfterSwap = 0;
+      mock.module('node:fs/promises', () => ({ ...fs, readFile: async (file, ...args) => {
+        const data = await originalRead(file, ...args);
+        if (String(file) === meshPath) { reads++; if (swapped) meshReadsAfterSwap++; }
+        if (String(file) === trigger && !swapped) { swapped = true; await originalWrite(meshPath, replacement); }
+        return data;
+      }}));
+      const { loadPartsView, saveVerdict } = await import(${JSON.stringify(sourcePath)});
+      const pkg = await loadPartsView(${JSON.stringify(root)});
+      const loadReads = reads, loadMeshReadsAfterSwap = meshReadsAfterSwap;
+      const flagEntry = pkg.flagFiles.find(f => f.abs === meshPath);
+      const fileEntry = pkg.files.find(f => f.abs === meshPath);
+      const faintCount = pkg.flags.filter(f => f.kind === 'faint').length;
+      const gapFigures = pkg.items.find(i => i.name === 'gap')?.mesh?.figures ?? null;
+      let refused = false;
+      try { await saveVerdict(pkg, { status: 'approved', parts: { gap: { outcome: 'clean', mesh: { outcome: 'clean' } }, covered: { outcome: 'clean', mesh: { outcome: 'clean' } } } }); }
+      catch (e) { if (!String(e).includes('PARTS_VIEW_SOURCE_CHANGED')) throw e; refused = true; }
+      console.log(JSON.stringify({
+        swapped, reads: loadReads, meshReadsAfterSwap: loadMeshReadsAfterSwap, faintCount,
+        gapTriangles: gapFigures?.triangles ?? null,
+        flagHash: flagEntry?.sha256 ?? null,
+        fileHash: fileEntry?.sha256 ?? null,
+        refused,
+      }));
+    `;
+    const spawned = Bun.spawn([process.execPath, '-e', script], { stdout: 'pipe', stderr: 'pipe' });
+    child = spawned;
+    timer = setTimeout(() => {
+      timedOut = true;
+      spawned.kill('SIGKILL');
+    }, timeoutMs);
+    stdoutPromise = new Response(spawned.stdout).text();
+    stderrPromise = new Response(spawned.stderr).text();
+    const [stdout, stderr, exit] = await Promise.all([stdoutPromise, stderrPromise, spawned.exited]);
+    if (timedOut) throw new Error(`SWAP_PROBE_TIMEOUT: ${label} exceeded ${timeoutMs}ms`);
+    expect({ exit, stderr }).toEqual({ exit: 0, stderr: '' });
+    return { hashA, out: JSON.parse(stdout.trim()) };
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (child) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await Promise.allSettled([stdoutPromise, stderrPromise, child.exited]);
+    }
+    const childExited = child !== null && (child.exitCode !== null || child.signalCode !== null);
+    await writeFile(meshReportPath, bytesA);
+    const restoredHash = new Bun.CryptoHasher('sha256').update(await readFile(meshReportPath)).digest('hex');
+    console.log(`FIXTURE_RESTORED ${label} ${meshReportPath} childExited=${childExited} sha256=${restoredHash}`);
+    expect(childExited).toBe(true);
+    expect(restoredHash).toBe(hashA);
+  }
+}
+
+test('#546: mesh_report.json is read once across producerFlags and readPartMeshes', async () => {
+  const root = await fixture(), realRoot = await realpath(root), meshReportPath = join(realRoot, 'mesh_report.json');
+  const bytesA = await readFile(meshReportPath);
+  const reportB = JSON.parse(bytesA.toString('utf8'));
+  reportB[0] = { ...reportB[0], triangles: 88, art_coverage: 0.5, contour: { bridges: { faint: [{ art: 44, maxAlpha: 55, box: [1, 1, 2, 2] }] } } };
+  const bytesB = Buffer.from(JSON.stringify(reportB));
+  const { hashA, out } = await runMeshReportSwapProbe('mesh_report-first-read', root, meshReportPath, meshReportPath, bytesA, bytesB);
+  expect(out).toEqual({
+    swapped: true, reads: 1, meshReadsAfterSwap: 0, faintCount: 0, gapTriangles: 30, flagHash: hashA, fileHash: hashA, refused: true,
+  });
+});
+
+test('#546: readPartMeshes reuses the producerFlags mesh_report buffer instead of re-reading after rig.json', async () => {
+  const root = await fixture(), realRoot = await realpath(root), meshReportPath = join(realRoot, 'mesh_report.json'), rigPath = join(realRoot, 'rig.json');
+  const bytesA = await readFile(meshReportPath);
+  const reportB = JSON.parse(bytesA.toString('utf8'));
+  reportB[0] = { ...reportB[0], triangles: 88, art_coverage: 0.5, contour: { bridges: { faint: [{ art: 44, maxAlpha: 55, box: [1, 1, 2, 2] }] } } };
+  const bytesB = Buffer.from(JSON.stringify(reportB));
+  const { hashA, out } = await runMeshReportSwapProbe('mesh_report-after-rig-read', root, meshReportPath, rigPath, bytesA, bytesB);
+  expect(out).toEqual({
+    swapped: true, reads: 1, meshReadsAfterSwap: 0, faintCount: 0, gapTriangles: 30, flagHash: hashA, fileHash: hashA, refused: true,
+  });
+});

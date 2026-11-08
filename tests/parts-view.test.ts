@@ -3,7 +3,7 @@ import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildVerdict, checkFlags, loadPartsView, meshReportFlags, partsViewJson, readVerdict, saveVerdict, sourceSha256, verdictSource } from '../src/parts-view.ts';
+import { buildVerdict, checkFlags, loadPartsAtlas, loadPartsView, meshReportFlags, partsViewJson, readVerdict, saveVerdict, sourceSha256, verdictSource } from '../src/parts-view.ts';
 import { startPartsServer } from '../src/parts-server.ts';
 import { FOOTPRINT_ALPHA, frontParts, paintPart } from '../web/parts-render.ts';
 import { BACK_CONTROL, BACK_DEFECT, FAINT, FRONT, frontHolds, writePartsPackage } from './helpers/parts-package.ts';
@@ -199,4 +199,170 @@ test('#348 P1: a saved sign-off is not restored when only the producer flags cha
   // A part file change reads as other files.
   await writeFile(join(root, 'rig', 'parts', 'front.png'), Buffer.from('changed'));
   expect((await readVerdict(await loadPartsView(root))).stale).toBe('files');
+});
+
+async function runPartsSwapProbe(
+  label: string,
+  root: string,
+  targetPath: string,
+  bytesA: Buffer,
+  bytesB: Buffer,
+  mode: 'parts' | 'atlas' = 'parts',
+) {
+  const timeoutMs = 4000;
+  const hashA = new Bun.CryptoHasher('sha256').update(bytesA).digest('hex');
+  const sourcePath = new URL('../src/parts-view.ts', import.meta.url).pathname;
+  const manifestPath = new URL('../src/manifest.ts', import.meta.url).pathname;
+  console.log(`FIXTURE_MUTATION_BEGIN ${label} ${targetPath} sha256=${hashA}`);
+  let child: ReturnType<typeof Bun.spawn> | null = null;
+  let stdoutPromise: Promise<string> | null = null;
+  let stderrPromise: Promise<string> | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let timedOut = false;
+  try {
+    const script = `
+      import { mock } from 'bun:test';
+      import * as fs from 'node:fs/promises';
+      const originalRead = fs.readFile, originalWrite = fs.writeFile;
+      const path = ${JSON.stringify(targetPath)}, replacement = Buffer.from(${JSON.stringify(bytesB.toString('base64'))}, 'base64');
+      let armed = ${mode === 'parts'}, swapped = false, reads = 0;
+      mock.module('node:fs/promises', () => ({ ...fs, readFile: async (file, ...args) => {
+        const data = await originalRead(file, ...args);
+        if (armed && String(file) === path) {
+          reads++;
+          if (!swapped) {
+            swapped = true;
+            await originalWrite(path, replacement);
+          }
+        }
+        return data;
+      }}));
+      const { loadReview } = await import(${JSON.stringify(manifestPath)});
+      const { loadPartsAtlas, loadPartsView, saveVerdict } = await import(${JSON.stringify(sourcePath)});
+      const pkg = ${mode === 'atlas'} ? (await (async () => { const rev = await loadReview(${JSON.stringify(root)}); armed = true; return loadPartsAtlas(rev); })()) : await loadPartsView(${JSON.stringify(root)});
+      const loadReads = reads;
+      const entry = pkg.files.find(f => f.abs === path) ?? pkg.flagFiles.find(f => f.abs === path);
+      const faint = pkg.flags.find(f => f.kind === 'faint');
+      const checkFlag = pkg.flags.find(f => f.kind === 'check');
+      const checkReading = pkg.readings?.find(f => f.kind === 'check');
+      const parts = Object.fromEntries(pkg.items.map(i => [i.name, { outcome: 'clean' }]));
+      let refused = false;
+      try { await saveVerdict(pkg, { status: 'approved', parts }); }
+      catch (e) { if (!String(e).includes('PARTS_VIEW_SOURCE_CHANGED')) throw e; refused = true; }
+      console.log(JSON.stringify({
+        swapped, reads: loadReads,
+        rigWidth: pkg.rigSize?.[0] ?? null,
+        regionX: pkg.items[0]?.x ?? null,
+        faintArt: faint?.kind === 'faint' ? faint.art : null,
+        flagPxOver40: checkFlag?.kind === 'check' ? checkFlag.entry.px_over_40 : null,
+        readingPxOver40: checkReading?.kind === 'check' ? checkReading.entry.px_over_40 : null,
+        hash: entry?.sha256 ?? null,
+        bytes: entry?.bytes ?? null,
+        refused,
+      }));
+    `;
+    const spawned = Bun.spawn([process.execPath, '-e', script], { stdout: 'pipe', stderr: 'pipe' });
+    child = spawned;
+    timer = setTimeout(() => {
+      timedOut = true;
+      spawned.kill('SIGKILL');
+    }, timeoutMs);
+    stdoutPromise = new Response(spawned.stdout).text();
+    stderrPromise = new Response(spawned.stderr).text();
+    const [stdout, stderr, exit] = await Promise.all([stdoutPromise, stderrPromise, spawned.exited]);
+    if (timedOut) throw new Error(`SWAP_PROBE_TIMEOUT: ${label} exceeded ${timeoutMs}ms`);
+    expect({ exit, stderr }).toEqual({ exit: 0, stderr: '' });
+    return { hashA, out: JSON.parse(stdout.trim()) };
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (child) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await Promise.allSettled([stdoutPromise, stderrPromise, child.exited]);
+    }
+    const childExited = child !== null && (child.exitCode !== null || child.signalCode !== null);
+    await writeFile(targetPath, bytesA);
+    const restoredHash = new Bun.CryptoHasher('sha256').update(await readFile(targetPath)).digest('hex');
+    console.log(`FIXTURE_RESTORED ${label} ${targetPath} childExited=${childExited} sha256=${restoredHash}`);
+    expect(childExited).toBe(true);
+    expect(restoredHash).toBe(hashA);
+  }
+}
+
+test('#546: parts.json parse and recorded hash bind to one buffer, and replaced B is refused at sign-off', async () => {
+  const root = await planted(), partsPath = join(await realpath(root), 'rig', 'parts.json');
+  const bytesA = await readFile(partsPath);
+  const docB = JSON.parse(bytesA.toString('utf8')); docB.rig_size = [96, 64];
+  const bytesB = Buffer.from(JSON.stringify(docB));
+  const { hashA, out } = await runPartsSwapProbe('parts.json', root, partsPath, bytesA, bytesB);
+  expect({ swapped: out.swapped, reads: out.reads, rigWidth: out.rigWidth, hash: out.hash, bytes: out.bytes, refused: out.refused }).toEqual({
+    swapped: true, reads: 1, rigWidth: 64, hash: hashA, bytes: bytesA.length, refused: true,
+  });
+});
+
+test('#546: mesh_report.json recorded hash and faint flags bind to one buffer', async () => {
+  const root = await planted(), meshReportPath = join(await realpath(root), 'rig', 'mesh_report.json');
+  const bytesA = await readFile(meshReportPath);
+  const docB = JSON.parse(bytesA.toString('utf8')); docB[0].contour.bridges.faint[0].art = 99;
+  const bytesB = Buffer.from(JSON.stringify(docB) + '\n');
+  const { hashA, out } = await runPartsSwapProbe('mesh_report.json', root, meshReportPath, bytesA, bytesB);
+  expect({ swapped: out.swapped, reads: out.reads, faintArt: out.faintArt, hash: out.hash, bytes: out.bytes, refused: out.refused }).toEqual({
+    swapped: true, reads: 1, faintArt: FAINT.art, hash: hashA, bytes: bytesA.length, refused: true,
+  });
+});
+
+test('#546: check.json recorded hash, flags and readings bind to one buffer', async () => {
+  const root = await planted(), checkPath = join(await realpath(root), 'check', 'check.json');
+  const bytesA = await readFile(checkPath);
+  const docB = JSON.parse(bytesA.toString('utf8')); docB.seam_pairs[0].px_over_40 = 77;
+  const bytesB = Buffer.from(JSON.stringify(docB) + '\n');
+  const { hashA, out } = await runPartsSwapProbe('check.json', root, checkPath, bytesA, bytesB);
+  expect({ swapped: out.swapped, reads: out.reads, flagPxOver40: out.flagPxOver40, readingPxOver40: out.readingPxOver40, hash: out.hash, bytes: out.bytes, refused: out.refused }).toEqual({
+    swapped: true, reads: 1, flagPxOver40: 3, readingPxOver40: 3, hash: hashA, bytes: bytesA.length, refused: true,
+  });
+});
+
+test('#546: loadPartsAtlas binds model regions and recorded hash to one buffer after loadReview', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'parts-atlas-'));
+  roots.push(root);
+  await writeFile(join(root, 'skeleton.model.json'), await readFile('examples/demo/skeleton.model.json'));
+  await writeFile(join(root, 'lantern.png'), await readFile('examples/demo/lantern.png'));
+  const modelPath = join(await realpath(root), 'skeleton.model.json');
+  const bytesA = await readFile(modelPath);
+  const docB = JSON.parse(bytesA.toString('utf8')); docB.pages[0].regions[0].x = 7;
+  const bytesB = Buffer.from(JSON.stringify(docB));
+  const { hashA, out } = await runPartsSwapProbe('skeleton.model.json', root, modelPath, bytesA, bytesB, 'atlas');
+  expect({ swapped: out.swapped, reads: out.reads, regionX: out.regionX, hash: out.hash, bytes: out.bytes, refused: out.refused }).toEqual({
+    swapped: true, reads: 1, regionX: 0, hash: hashA, bytes: bytesA.length, refused: true,
+  });
+});
+
+test('#546: error mapping, explicit external flag paths and acquisition order parity', async () => {
+  const root = await planted(), ext = await mkdtemp(join(tmpdir(), 'parts-ext-'));
+  roots.push(ext);
+  await writeFile(join(ext, 'mesh.json'), await readFile(join(root, 'rig', 'mesh_report.json')));
+  await writeFile(join(ext, 'check.json'), await readFile(join(root, 'check', 'check.json')));
+  const explicit = await loadPartsView(root, { meshReport: join(ext, 'mesh.json'), check: join(ext, 'check.json') });
+  expect(explicit.flagFiles.map(f => f.abs)).toEqual([join(await realpath(ext), 'mesh.json'), join(await realpath(ext), 'check.json')]);
+  // Producer flag raw read errors escape outside parseJson. Malformed JSON maps to PARTS_FLAGS_MALFORMED.
+  await expect(loadPartsView(root, { meshReport: ext })).rejects.not.toThrow('PARTS_FLAGS_MALFORMED');
+  await writeFile(join(root, 'rig', 'mesh_report.json'), '{');
+  await expect(loadPartsView(root)).rejects.toThrow('PARTS_FLAGS_MALFORMED: mesh_report.json:');
+  const second = await planted();
+  await writeFile(join(second, 'check', 'check.json'), '{');
+  await expect(loadPartsView(second)).rejects.toThrow('PARTS_FLAGS_MALFORMED: check.json:');
+  await writeFile(join(second, 'rig', 'parts.json'), '{}');
+  await expect(loadPartsView(second)).rejects.toThrow('PARTS_JSON_MALFORMED: parts.json has no parts[] array');
+  await writeFile(join(second, 'rig', 'parts.json'), '{');
+  await expect(loadPartsView(second)).rejects.toThrow('PARTS_FLAGS_MALFORMED: parts.json:');
+  // loadPartsAtlas escapes raw JSON parse errors and rejects missing pages with PARTS_VIEW_NO_ATLAS.
+  const atlas = await mkdtemp(join(tmpdir(), 'parts-atlas-err-'));
+  roots.push(atlas);
+  await writeFile(join(atlas, 'skeleton.model.json'), await readFile('examples/demo/skeleton.model.json'));
+  await writeFile(join(atlas, 'lantern.png'), await readFile('examples/demo/lantern.png'));
+  const { loadReview } = await import('../src/manifest.ts');
+  const rev = await loadReview(atlas);
+  await writeFile(join(atlas, 'skeleton.model.json'), '{}');
+  await expect(loadPartsAtlas(rev)).rejects.toThrow('PARTS_VIEW_NO_ATLAS');
+  await writeFile(join(atlas, 'skeleton.model.json'), '{');
+  await expect(loadPartsAtlas(rev)).rejects.toThrow(SyntaxError);
 });
