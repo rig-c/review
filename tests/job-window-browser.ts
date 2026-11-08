@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {PNG} from 'pngjs';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
+import {assertPartsViewportOracle, inspectPartsViewportPng} from './helpers/job-window-paint.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 
 const argument = (key: string) => {const index = Bun.argv.indexOf(key); return index < 0 ? undefined : Bun.argv[index + 1];};
@@ -152,7 +153,14 @@ async function capturePaint(name: string) {
     }
     assert.ok(changedPixels > 0, 'the actual Play canvas contributes visible pixels');
     await checkpoints(name + '-paint', {rectangle, changedPixels, width: shown.width, height: shown.height});
-    await writeFile(join(output, name + '.png'), await page!.screenshot());
+    const fullScreenshot = await page!.screenshot();
+    await writeFile(join(output, name + '.png'), fullScreenshot);
+    if (name === 'parts') {
+        const fullViewport = inspectPartsViewportPng(fullScreenshot);
+        observations[name + '-paint'] = {rectangle, changedPixels, width: shown.width, height: shown.height, fullViewport};
+        await checkpoints('parts-viewport-paint', fullViewport);
+        assertPartsViewportOracle(fullViewport);
+    }
 }
 async function captureFailure(error: unknown) {
     const captureErrors: string[] = [];
