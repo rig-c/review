@@ -344,8 +344,6 @@ export class JobSession {
       current = this.current();
       let result: unknown;
       this.store.update(this.jobId, current.revision, fresh => {
-        const raced = this.replay(fresh.data, key, digest);
-        if (raced) { result = raced.value; return { data: fresh.data }; }
         this.active(fresh, input.expectedGeneration);
         const data = fresh.data;
         let snapshot: JobSnapshotOwner | undefined;
@@ -382,6 +380,11 @@ export class JobSession {
         }
         data.replays[key] = { digest, value: result };
         return { data, ...(snapshot ? {snapshot} : {}) };
+      }, fresh => {
+        const raced = this.replay(fresh.data, key, digest);
+        if (!raced) return false;
+        result = raced.value;
+        return true;
       });
       this.notify();
       return result;
@@ -416,7 +419,7 @@ export class JobSession {
     const previous = this.replay(current.data, key, digest);
     if (previous) return previous.value as JobAct;
     let act: JobAct;
-    this.store.update(this.jobId, current.revision, fresh => {
+    this.store.update(this.jobId, null, fresh => {
       // UI captures an observed generation. Unrelated asks may advance it while
       // this same ask/source/publication/nonce stays valid. Agent mutation CAS
       // remains global. Future UI generations cannot describe a displayed state.
@@ -438,6 +441,11 @@ export class JobSession {
       fresh.data.replays[key] = { digest, value: act };
       this.event(fresh.data, { type: 'act', act } as Omit<JobEvent, 'cursor' | 'jobId' | 'generation'>);
       return { data: fresh.data };
+    }, fresh => {
+      const raced = this.replay(fresh.data, key, digest);
+      if (!raced) return false;
+      act = raced.value as JobAct;
+      return true;
     });
     this.notify();
     return act!;

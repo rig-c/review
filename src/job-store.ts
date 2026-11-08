@@ -199,16 +199,19 @@ export class JobStore<Data> {
 
   /** Re-read under the write transaction. A callback failure rolls everything
    * back. A successful callback publishes its complete data and replay receipt
-   * together. Closing releases the active-root slot in the same commit.
+   * together. A durable replay returns before CAS without rewriting the row.
+   * A null revision delegates freshness to the UI's in-transaction predicates.
+   * Closing releases the active-root slot in the same commit.
    */
-  update(jobId: string, expectedRevision: number, operation: (current: StoredJob<Data>) => {
+  update(jobId: string, expectedRevision: number | null, operation: (current: StoredJob<Data>) => {
     readonly data: Data;
     readonly active?: boolean;
     readonly snapshot?: JobSnapshotOwner;
-  }): StoredJob<Data> {
+  }, replay?: (current: StoredJob<Data>) => boolean): StoredJob<Data> {
     return this.transaction(() => {
       const current = this.get(jobId);
-      if (current.revision !== expectedRevision) throw new JobError('JOB_GENERATION_STALE');
+      if (replay?.(current)) return current;
+      if (expectedRevision !== null && current.revision !== expectedRevision) throw new JobError('JOB_GENERATION_STALE');
       const next = operation(current);
       const active = next.active ?? current.active;
       const document = encode(next.data);
