@@ -11,7 +11,10 @@ function restoration(stubborn = false) {
         style: {get cssText() {return cssText;}, set cssText(value: string) {cssText = value; attribute = value;}},
         getAttribute() {return attribute;},
         setAttribute(_name: string, value: string) {attribute = value; cssText = value;},
-        removeAttribute() {attribute = stubborn ? '' : null;},
+        removeAttribute() {
+            attribute = stubborn ? '' : null;
+            cssText = '';
+        },
     };
     const original = () => {};
     const snapshot = {tag: 'DIV', id: 'rig-empty', hidden: true,
