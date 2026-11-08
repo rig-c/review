@@ -1,7 +1,7 @@
 import {afterEach, expect, spyOn, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
 import {createHash, randomUUID} from 'node:crypto';
-import {mkdir, readFile, rename, rm, utimes, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, rename, rm, symlink, utimes, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {JobError, JobStore} from '../src/job-store.ts';
 import type {JobCloseRequest} from '../src/job-contract.ts';
@@ -29,6 +29,68 @@ function stored(f: Awaited<ReturnType<typeof fixture>>) {
     return database.query<{document: string; active: number; revision: number}, [string]>(
       'SELECT document,active,revision FROM jobs WHERE job_id=?').get(f.session.jobId)!;
   } finally { database.close(); }
+}
+
+for (const scenario of ['exact', 'nested', 'ancestor', 'source-alias', 'state-alias', 'direct-symlink']) {
+  test(`stage4 managed state ${scenario} refuses before job admission`, async () => {
+    const f = await fixture(), nested = join(f.state, 'private-source'), alias = join(f.scratch, 'state-alias');
+    await mkdir(nested);
+    await symlink(f.state, alias, 'dir');
+    const roots: Record<string, string> = {
+      exact: f.state, nested, ancestor: f.scratch,
+      'source-alias': join(alias, 'private-source'), 'state-alias': nested, 'direct-symlink': alias,
+    };
+    const admission = spyOn(JobStore.prototype, 'open');
+    let session: JobSession | undefined, code: string | undefined;
+    try {
+      try {
+        session = new JobSession({root: roots[scenario], stateDir: scenario === 'state-alias' ? alias : f.state,
+          fingerprint: 'stage4-' + scenario, reviewer: {id: 'declared-owner', role: 'owner'}});
+      } catch (error) {code = (error as JobError).code;}
+      const admissions = admission.mock.calls.length;
+      console.log(JSON.stringify({control: 'STAGE4_BOUNDARY', scenario, code: code ?? null, admissions}));
+      expect(code).toBe(scenario === 'direct-symlink' ? 'JOB_ROOT_REPLACED' : 'JOB_SOURCE_UNRETAINABLE');
+      expect(admissions).toBe(0);
+      expect(stored(f).active).toBe(1);
+    } finally {session?.dispose(); admission.mockRestore();}
+  });
+}
+
+test('stage4 managed state sibling source is admitted with literal path boundaries', async () => {
+  const f = await fixture(), root = f.state + '-sibling';
+  await mkdir(root);
+  const session = new JobSession({root, stateDir: f.state, fingerprint: 'stage4-sibling',
+    reviewer: {id: 'declared-owner', role: 'owner'}});
+  try {
+    expect(session.jobId).not.toBe(f.session.jobId);
+    expect(session.status().status).toBe('active');
+    expect(f.session.status().status).toBe('active');
+  } finally {session.dispose();}
+});
+
+for (const scenario of ['exact', 'nested']) {
+  test(`stage4 snapshot ${scenario} source refuses B admission before A closes`, async () => {
+    const f = await fixture(), publication = await f.publish();
+    const retained = f.session.retainedSource(publication.publicationId);
+    const bytes = await readFile(retained.manifestPath);
+    const root = scenario === 'exact' ? retained.snapshotRoot : join(retained.snapshotRoot, 'out');
+    const admission = spyOn(JobStore.prototype, 'open');
+    let session: JobSession | undefined, code: string | undefined;
+    try {
+      try {
+        session = new JobSession({root, stateDir: f.state, fingerprint: 'stage4-snapshot-' + scenario,
+          reviewer: {id: 'declared-owner', role: 'owner'}});
+      } catch (error) {code = (error as JobError).code;}
+      const admissions = admission.mock.calls.length;
+      console.log(JSON.stringify({control: 'STAGE4_BOUNDARY', scenario: 'snapshot-' + scenario,
+        code: code ?? null, admissions}));
+      expect(code).toBe('JOB_SOURCE_UNRETAINABLE');
+      expect(admissions).toBe(0);
+      expect(await readFile(retained.manifestPath)).toEqual(bytes);
+      expect((await (await f.call(closeRequest(f))).json()).ok).toBe(true);
+      await expect(readFile(retained.manifestPath)).rejects.toMatchObject({code: 'ENOENT'});
+    } finally {session?.dispose(); admission.mockRestore();}
+  });
 }
 
 function deferred<Value>() {

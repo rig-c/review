@@ -153,6 +153,14 @@ credentials through their respective channels. Only explicit semantic `close`
 ends a job and revokes its writer grant. `stop()` disposes this host handle and
 stops its owned listener. A reused handle disposes its local session.
 
+Managed state is private storage accessed through the host ports. The canonical
+work root and configured managed-state directory must be disjoint. Before job
+admission, a root equal to, inside or containing that state directory refuses
+`JOB_SOURCE_UNRETAINABLE`. Directory aliases resolve before this comparison.
+Existing root identity failures, including a directly symlinked source root,
+retain `JOB_ROOT_REPLACED`. Trusted publication handles follow the origin job's
+lifetime, and publishing callers must maintain their producer-held freeze.
+
 All publications, pending asks, pages and trusted publication handles pin their
 snapshots while the job is open. Explicit close invalidates pending asks, pages
 and trusted handles. Subsequent trusted publication reads, UI operations and
