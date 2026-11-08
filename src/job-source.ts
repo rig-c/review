@@ -828,12 +828,12 @@ export async function prepareJobRecordSource(options: {
     await mkdir(snapshotRoot, { mode: 0o700 });
     const info = lstatSync(snapshotRoot);
     snapshotIdentity = { dev: info.dev, ino: info.ino };
-    let size = 0;
+    let retainedBytes = 0;
     const directories = new Set([snapshotRoot, dirname(snapshotRoot), options.stateRoot]);
     for (const file of inventory.files) {
       const bytes = readClosureFileBytes(root.path, file);
-      size += bytes.length;
-      if (size > maxSourceBytes) throw new JobError('JOB_SOURCE_UNRETAINABLE');
+      retainedBytes += bytes.length;
+      if (retainedBytes > maxSourceBytes) throw new JobError('JOB_SOURCE_UNRETAINABLE');
       const destination = join(snapshotRoot, file.path);
       await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
       const handle = await open(destination, 'wx', 0o600);
