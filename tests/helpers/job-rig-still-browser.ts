@@ -15,6 +15,13 @@ import {admitStillOracle, armStillObservation, persistStillObservation, restoreS
 
 type Fixture = Awaited<ReturnType<typeof scriptedJobWindowFixture>>;
 type Send = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+type PanSnapshot = {
+    point: {x: number; y: number}; destination: {x: number; y: number};
+    camera: {center: {x: number; y: number}; zoom: number};
+    rect: {x: number; y: number; width: number; height: number};
+    visible: boolean; hitInPane: boolean; destinationInPane: boolean; blocked: boolean;
+    panning: boolean; captured: boolean; rootStyle: string | null; pressed: string | null;
+};
 type Submission = Extract<JobUISubmission, {kind: 'review-verdict'}>;
 const hash = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
 const entry = fileURLToPath(new URL('../../src/entry.ts', import.meta.url));
@@ -98,6 +105,94 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
             }
             async function rigPoint() {
                 return page.evaluate<{x: number; y: number}>(`(()=>{const r=document.getElementById('rig-viewport').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+            }
+            async function panRig(): Promise<PanSnapshot> {
+                // Observe trusted input and the existing numeric camera readout, without replacing handlers.
+                await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+                await page.evaluate(`(()=>{
+                    if(Object.hasOwn(globalThis,'__jobStillPanProbe'))throw new Error('JOB_STILL_PAN_PROBE_ALREADY_ACTIVE');
+                    const pane=document.getElementById('rig-viewport'),r=pane.getBoundingClientRect();
+                    const point={x:r.x+r.width/2,y:r.y+r.height/2},destination={x:point.x+18,y:point.y+11};
+                    const describe=n=>n instanceof Element?{tag:n.tagName,id:n.id,className:n.getAttribute('class')}:null;
+                    const events=[];let pointerId=null;
+                    const snapshot=()=>{
+                        const r=pane.getBoundingClientRect(),style=getComputedStyle(pane);
+                        const hit=document.elementFromPoint(point.x,point.y),end=document.elementFromPoint(destination.x,destination.y);
+                        return {point,destination,camera:JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig,
+                            rect:r.toJSON(),window:{width:innerWidth,height:innerHeight,visibility:document.visibilityState},
+                            visible:pane.isConnected&&document.visibilityState==='visible'&&style.display!=='none'&&style.visibility==='visible'&&
+                                r.width>0&&r.height>0&&point.x>=0&&point.y>=0&&destination.x<innerWidth&&destination.y<innerHeight,
+                            hit:describe(hit),destinationHit:describe(end),hitInPane:!!hit&&pane.contains(hit),destinationInPane:!!end&&pane.contains(end),
+                            blocked:!!hit?.closest('button,input,select,textarea,a,[data-viewport-action],video[controls]'),
+                            panning:pane.dataset.panning==='true',captured:pointerId!==null&&pane.hasPointerCapture(pointerId),
+                            rootStyle:document.getElementById('rig-root').getAttribute('style'),
+                            pressed:document.getElementById('job-play').getAttribute('aria-pressed')};
+                    };
+                    const trace=phase=>event=>{
+                        if(event.type==='pointerdown')pointerId=event.pointerId;
+                        events.push({type:event.type,phase,timestamp:performance.now(),isTrusted:event.isTrusted,
+                            pointerId:event.pointerId,pointerType:event.pointerType,isPrimary:event.isPrimary,
+                            button:event.button,buttons:event.buttons,x:event.clientX,y:event.clientY,defaultPrevented:event.defaultPrevented,
+                            target:describe(event.target),path:event.composedPath().map(describe).filter(Boolean),
+                            targetInPane:event.target instanceof Node&&pane.contains(event.target),state:snapshot()});
+                    };
+                    const capture=trace('capture'),bubble=trace('bubble');
+                    const types=['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture'];
+                    for(const type of types){document.addEventListener(type,capture,true);document.addEventListener(type,bubble);}
+                    globalThis.__jobStillPanProbe={snapshot,events,dispose(){
+                        for(const type of types){document.removeEventListener(type,capture,true);document.removeEventListener(type,bubble);}
+                        try{return {events,state:snapshot()};}finally{delete globalThis.__jobStillPanProbe;}
+                    }};
+                })()`);
+                const sample = () => page.evaluate<PanSnapshot>(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(globalThis.__jobStillPanProbe.snapshot()))))`);
+                let held = false;
+                let before: PanSnapshot | undefined;
+                try {
+                    before = await sample();
+                    await record('pan-input-before', before);
+                    await screenshot('pan-input-before');
+                    assert.ok(before.visible && before.hitInPane && before.destinationInPane && !before.blocked,
+                        new Error('JOB_STILL_PAN_TARGET_NOT_VISIBLE_OR_HITTABLE'));
+                    assert.equal(before.camera.zoom, 1);
+                    assert.equal(before.pressed, 'false', 'paused pan refusal precondition');
+                    held = true;
+                    await page.mouse('mousePressed', before.point.x, before.point.y);
+                    const down = await sample();
+                    await record('pan-input-down', down);
+                    assert.ok(down.panning && down.captured, new Error('JOB_STILL_PAN_POINTER_NOT_CAPTURED'));
+                    assert.deepEqual(down.rect, before.rect, 'pan target geometry stays fixed after pointerdown');
+                    await page.mouse('mouseMoved', before.destination.x, before.destination.y);
+                    const moved = await sample();
+                    await record('pan-input-moved', moved);
+                    assert.deepEqual(moved.rect, before.rect, 'pan target geometry stays fixed after pointermove');
+                    assert.ok(moved.camera.center.x < before.camera.center.x && moved.camera.center.y > before.camera.center.y,
+                        new Error('JOB_STILL_PAN_CAMERA_DID_NOT_MOVE'));
+                    assert.equal(moved.camera.zoom, before.camera.zoom, 'pan preserves zoom');
+                    assert.notEqual(moved.rootStyle, before.rootStyle, 'pan reaches the rendered Rig transform');
+                    await page.mouse('mouseReleased', before.destination.x, before.destination.y);
+                    held = false;
+                    const released = await sample();
+                    await record('pan-input-released', released);
+                    await screenshot('pan-input-released');
+                    assert.equal(released.panning, false);
+                    assert.equal(released.captured, false);
+                    assert.deepEqual(released.camera, moved.camera, 'pan survives release and two animation frames');
+                    const trace = await page.evaluate<{type: string; phase: string; isTrusted: boolean; targetInPane: boolean; buttons: number}[]>(
+                        'globalThis.__jobStillPanProbe.events');
+                    for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
+                        assert.ok(trace.some(event => event.type === type && event.phase === 'bubble' && event.isTrusted && event.targetInPane &&
+                            (type !== 'pointermove' || event.buttons === 1)), new Error('JOB_STILL_PAN_TRUSTED_EVENT_MISSING ' + type));
+                    }
+                    return released;
+                } finally {
+                    try {
+                        if (held && before) await page.mouse('mouseReleased', before.destination.x, before.destination.y);
+                    } finally {
+                        const final = await page.evaluate(`globalThis.__jobStillPanProbe.dispose()`);
+                        await record('pan-input-trace', final);
+                        assert.equal(await page.evaluate(`Object.hasOwn(globalThis,'__jobStillPanProbe')`), false, 'pan listeners and probe state disposed');
+                    }
+                }
             }
             async function defaultView() {
                 await edit('#job-part', '');
@@ -351,22 +446,41 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
             for (const kind of ['pan', 'zoom', 'highlight', 'solo'] as const) {
                 await defaultView();
                 const pending = await ask(publication, 'refused ' + kind);
-                const point = await rigPoint();
-                await page.mouse('mousePressed', point.x, point.y);
-                if (kind === 'pan') await page.mouse('mouseMoved', point.x + 18, point.y + 11);
-                await page.mouse('mouseReleased', point.x + (kind === 'pan' ? 18 : 0), point.y + (kind === 'pan' ? 11 : 0));
+                const beforeGesture = requests.length;
+                let panned: PanSnapshot | undefined;
+                if (kind === 'pan') panned = await panRig();
+                else {
+                    const point = await rigPoint();
+                    await page.mouse('mousePressed', point.x, point.y);
+                    await page.mouse('mouseReleased', point.x, point.y);
+                }
+                if (panned) {
+                    const camera = await page.evaluate(`JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig`);
+                    await record('pan-before-submit', {camera,expectedCamera:panned.camera,sentRequests:requests.length-beforeGesture});
+                    assert.deepEqual(camera, panned.camera, 'established pan persists immediately before submission');
+                    assert.equal(requests.length, beforeGesture, 'pan gesture sends no submission');
+                }
                 if (kind === 'zoom') await page.evaluate(`document.getElementById('zoom-in').click()`);
                 if (kind === 'highlight' || kind === 'solo') {
                     await edit('#job-part', 'mesh');
                     if (kind === 'solo') await page.evaluate(`(()=>{const n=document.getElementById('job-solo');n.checked=true;n.dispatchEvent(new Event('change'))})()`);
                 }
                 const before = requests.length;
-                await click(pending.askId);
                 const code = kind === 'pan' || kind === 'zoom' ? 'JOB_STILL_CAMERA_NOT_FIXED' : 'JOB_STILL_VIEW_UNSUPPORTED';
-                await wait(`${status(pending.askId)}.dataset.jobText===${JSON.stringify(code)}`, 'named ' + kind + ' refusal');
-                assert.equal(await page.evaluate(`${status(pending.askId)}.textContent`), catalog[code]);
-                assert.equal(requests.length, before);
-                assert.ok(!(await fixture.next()).events.some(event => event.type === 'act' && event.act.askId === pending.askId));
+                try {
+                    await click(pending.askId);
+                    await wait(`${status(pending.askId)}.dataset.jobText===${JSON.stringify(code)}`, 'named ' + kind + ' refusal');
+                    assert.equal(await page.evaluate(`${status(pending.askId)}.textContent`), catalog[code]);
+                    assert.equal(requests.length, before);
+                    assert.ok(!(await fixture.next()).events.some(event => event.type === 'act' && event.act.askId === pending.askId));
+                } finally {
+                    if (kind === 'pan') {
+                        const outcome = await page.evaluate(`(()=>{const status=${status(pending.askId)};return {
+                            code:status.dataset.jobText,text:status.textContent,
+                            camera:JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig}})()`);
+                        await record('pan-submit-outcome', {askId:pending.askId,expectedCode:code,sentRequests:requests.length-before,outcome});
+                    }
+                }
                 await screenshot('refused-' + kind);
                 await record('refused-' + kind, {code, visibleMessage: catalog[code], sentRequests: 0});
             }
