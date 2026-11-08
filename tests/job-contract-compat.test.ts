@@ -252,3 +252,27 @@ test('C4 authenticated active listener with old semantic schemas still refuses r
     expect(server.port).toBe(Number(new URL(origin).port));
   } finally {server.stop(true);}
 });
+
+test('#563 public job-host re-exports strict reuse-only types while preserving the twelve runtime exports', async () => {
+  const f = await fixture();
+  const options: publicHost.JobHostOptions = {
+    root: f.root,
+    stateDir: f.state,
+    fingerprint: 'f'.repeat(64),
+    reviewer: {id: 'declared-owner', role: 'owner'},
+  };
+  const owner = await publicHost.startJobHost(options);
+  try {
+    const expected: publicHost.JobHostReuseExpectation | null = owner.attachment;
+    expect(expected).not.toBeNull();
+    const attached = await publicHost.startJobHost({
+      ...options,
+      reuseOnly: {expected: expected!},
+    });
+    expect(attached.reused).toBe(true);
+    expect(attached.attachment).toEqual(expected);
+    attached.stop();
+  } finally {
+    owner.stop();
+  }
+});

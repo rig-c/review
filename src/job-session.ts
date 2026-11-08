@@ -78,8 +78,16 @@ export class JobSession {
   private readonly listeners = new Set<() => void>();
   private operations = 0;
   private disposed = false;
+  private observedGeneration: number;
 
-  constructor(private readonly options: JobSessionOptions) {
+  /** Last durable generation successfully read by this session. Requires no I/O. */
+  get lastObservedGeneration(): number { return this.observedGeneration; }
+
+  static openReadOnly(options: JobSessionOptions, jobId: string): JobSession {
+    return new JobSession(options, { jobId });
+  }
+
+  constructor(private readonly options: JobSessionOptions, readonlyTarget?: { readonly jobId: string }) {
     const root = captureJobRoot(options.root), state = canonicalStatePath(options.stateDir);
     if (within(root.path, state)) {
       throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Job state must be outside the designated work root');
@@ -89,21 +97,41 @@ export class JobSession {
     }
     if (!options.reviewer.id || !['owner', 'delegate'].includes(options.reviewer.role)) throw new JobError('JOB_AUTHORITY_REFUSED');
     if (options.partsEnumerator) jobPartsEnumeratorVersion(options.partsEnumerator.version);
-    this.store = new JobStore(state);
+    const rootKey = jobHash(JSON.stringify([root.path, options.fingerprint]));
+    this.store = new JobStore(state, readonlyTarget ? { readonly: true } : {});
     try {
-      const row = this.store.open(jobHash(JSON.stringify([root.path, options.fingerprint])), () => ({
-        apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA,
-        root, fingerprint: options.fingerprint, reviewer: structuredClone(options.reviewer),
-        agentCapability: randomBytes(32).toString('hex'), uiCapability: randomBytes(32).toString('hex'),
-        fetchCapability: randomBytes(32).toString('hex'), generation: 0, head: null,
-        publications: {}, asks: {}, acts: {}, events: [], replays: {}, pages: {},
-      }), root.path);
+      const row = readonlyTarget
+        ? this.store.get(readonlyTarget.jobId)
+        : this.store.open(rootKey, () => ({
+          apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA,
+          root, fingerprint: options.fingerprint, reviewer: structuredClone(options.reviewer),
+          agentCapability: randomBytes(32).toString('hex'), uiCapability: randomBytes(32).toString('hex'),
+          fetchCapability: randomBytes(32).toString('hex'), generation: 0, head: null,
+          publications: {}, asks: {}, acts: {}, events: [], replays: {}, pages: {},
+        }), root.path);
       this.jobId = row.jobId;
       assertStoredSchemas(row.data);
+      this.observedGeneration = row.closure?.generation ?? row.data.generation;
       assertJobRoot(row.data.root);
+      if (row.rootKey !== rootKey || row.data.root.path !== root.path || row.data.fingerprint !== options.fingerprint) {
+        throw new JobError('JOB_SOURCE_MISMATCH');
+      }
       if (requestDigest(row.data.reviewer) !== requestDigest(options.reviewer)) {
         throw new JobError('JOB_AUTHORITY_REFUSED', 'Active window reviewer binding differs');
       }
+      if (readonlyTarget && !row.active) throw new JobError('JOB_CLOSED');
+      if (readonlyTarget) {
+        const identity = (item: StoredJob<JobData>) => JSON.stringify([item.jobId, item.rootKey,
+          item.data.root, item.data.fingerprint, item.data.reviewer, item.data.apiSchema,
+          item.data.actSchema, item.data.agentCapability, item.data.uiCapability]);
+        const captured = identity(row);
+        this.store.allowExistingWrites(() => {
+          const current = this.store.get(this.jobId);
+          if (identity(current) !== captured) throw new JobError('JOB_STORAGE_FAILED');
+          assertJobRoot(current.data.root);
+        });
+      }
+
     } catch (error) {
       this.store.close();
       throw error;
@@ -127,6 +155,7 @@ export class JobSession {
       row.data.events.push(row.closure.event);
       row.data.replays[row.closure.replayKey] = row.closure.replay;
     }
+    this.observedGeneration = row.data.generation;
     return row;
   }
 
@@ -163,6 +192,36 @@ export class JobSession {
       pending: Object.values(data.asks).filter(ask => ask.status === 'pending'),
       cursor: data.events.at(-1)?.cursor ?? null,
       enabledActKinds: JOB_ENABLED_ACT_KINDS,
+    };
+  }
+
+  /** Internal synchronous owner acceptance snapshot. No external hooks run here. */
+  inspectAttach<Value>(inspect: () => Value): Value {
+    return this.store.inspect(() => { this.store.assertStorage(); return inspect(); });
+  }
+
+  attestation(): {
+    readonly jobId: string;
+    readonly status: 'active' | 'closed';
+    readonly revision: number;
+    readonly root: JobRootIdentity;
+    readonly stateDir: string;
+    readonly fingerprint: string;
+    readonly reviewer: JobReviewerBinding;
+    readonly apiSchema: typeof JOB_API_SCHEMA;
+    readonly actSchema: typeof JOB_ACT_SCHEMA;
+  } {
+    const current = this.current();
+    return {
+      jobId: this.jobId,
+      status: current.active ? 'active' : 'closed',
+      revision: current.revision,
+      root: structuredClone(current.data.root),
+      stateDir: this.store.root,
+      fingerprint: current.data.fingerprint,
+      reviewer: structuredClone(current.data.reviewer),
+      apiSchema: current.data.apiSchema,
+      actSchema: current.data.actSchema,
     };
   }
 

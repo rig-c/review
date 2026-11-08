@@ -175,3 +175,67 @@ test('Check requires the direct Parts Explorer runner before uploading its measu
   expect(steps[uploadIndex]?.with?.path).toBe('${{ runner.temp }}/parts-explorer.json');
   expect(steps[uploadIndex]?.with?.['if-no-files-found']).toBe('error');
 });
+
+const mouseDispatch = runnerBlock('      async mouse(', '      async touch(');
+
+test('launchCdpSession.mouse preserves button left during held mouseMoved while keeping hover, press, release, and wheel payloads exact', async () => {
+  const dispatched: Array<{ method: string; params: Record<string, unknown>; sessionId: string }> = [];
+  const send = async (method: string, params: Record<string, unknown>, sessionId: string) => {
+    dispatched.push({ method, params, sessionId });
+  };
+  const session = new Function(
+    'send',
+    'sessionId',
+    'let mouseButtons = 0;\nreturn {\n' + mouseDispatch + '\n};',
+  )(send, 'session-1') as {
+    mouse(
+      type: 'mouseMoved' | 'mousePressed' | 'mouseReleased' | 'mouseWheel',
+      x: number,
+      y: number,
+      deltaY?: number,
+    ): Promise<void>;
+  };
+
+  await session.mouse('mouseMoved', 1120, 215);
+  await session.mouse('mousePressed', 1135.25, 226);
+  await session.mouse('mouseMoved', 1153.25, 237);
+  await session.mouse('mouseReleased', 1153.25, 237);
+  await session.mouse('mouseMoved', 1160, 245);
+  await session.mouse('mouseWheel', 1160, 245, -120);
+
+  expect(dispatched).toEqual([
+    {
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mouseMoved', x: 1120, y: 215, buttons: 0 },
+      sessionId: 'session-1',
+    },
+    {
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mousePressed', x: 1135.25, y: 226, buttons: 1, button: 'left', clickCount: 1 },
+      sessionId: 'session-1',
+    },
+    {
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mouseMoved', x: 1153.25, y: 237, buttons: 1, button: 'left' },
+      sessionId: 'session-1',
+    },
+    {
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mouseReleased', x: 1153.25, y: 237, buttons: 0, button: 'left', clickCount: 1 },
+      sessionId: 'session-1',
+    },
+    {
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mouseMoved', x: 1160, y: 245, buttons: 0 },
+      sessionId: 'session-1',
+    },
+    {
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mouseWheel', x: 1160, y: 245, buttons: 0, deltaX: 0, deltaY: -120 },
+      sessionId: 'session-1',
+    },
+  ]);
+  expect('button' in dispatched[0]!.params).toBe(false);
+  expect('clickCount' in dispatched[2]!.params).toBe(false);
+  expect('button' in dispatched[4]!.params).toBe(false);
+});

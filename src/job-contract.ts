@@ -11,10 +11,21 @@
  * Only explicit close ends an active job. Direction carriage is metadata-only.
  */
 
+import type { JobPublicationReader } from './job-source.ts';
+
 export const JOB_API_SCHEMA = 'rig-review/job-api@2' as const;
+export const JOB_API_V3_SCHEMA = 'rig-review/job-api@3' as const;
 export const JOB_ACT_SCHEMA = 'rig-review/act@2' as const;
 /** New rig verdicts only. Store/reuse markers and all other acts retain @2. */
 export const JOB_RIG_REVIEW_ACT_SCHEMA = 'rig-review/act@3' as const;
+/** Record-source acts only under opt-in API@3. Package/image acts retain @2/@3. */
+export const JOB_RECORD_ACT_SCHEMA = 'rig-review/act@4' as const;
+export const JOB_RECORD_READER_ID = 'rig-create/publication-reader/2' as const;
+export const JOB_RECORD_SOURCE_SCHEMA = 'rig-review-job-record-source/1' as const;
+export const JOB_RECORD_INSTANCE_SCHEMA = 'rig-review-job-record-instance/1' as const;
+export const JOB_PUBLICATION_MODES = ['package-only', 'record-and-package'] as const;
+export type JobPublicationMode = typeof JOB_PUBLICATION_MODES[number];
+export type JobApiSchema = typeof JOB_API_SCHEMA | typeof JOB_API_V3_SCHEMA;
 export const jobStillByteLimit = 8 * 1024 * 1024;
 export const jobCaptureBodyLimit = 12 * 1024 * 1024;
 export const jobRawActMediaType = 'application/vnd.rig-review.act+json';
@@ -639,3 +650,291 @@ export interface JobConsumerGrant {
   readonly actKinds: readonly JobEnabledActKind[];
   readonly lifetime: 'until-explicit-close';
 }
+
+export interface RecordOptionResult {
+  readonly kind: 'option-set';
+  readonly questionId: string;
+  readonly setId: string;
+}
+
+export interface RecordPlanResult {
+  readonly kind: 'plan';
+}
+
+export type RecordResult = RecordOptionResult | RecordPlanResult;
+
+export interface PackageResultV3 {
+  readonly kind: 'package';
+  readonly path: string;
+  readonly selector: JobSelector | null;
+}
+
+export type PublishResultV3 = PackageResultV3 | RecordResult;
+
+export type ProjectRecord = JobFileIdentity & { readonly path: 'project.json' };
+
+export type RecordFreeze = Omit<JobPublishRequest['freeze'], 'record'> & {
+  readonly record: ProjectRecord;
+};
+
+export type PublishRequestV3 = Omit<JobPublishRequest, 'schema' | 'result' | 'freeze'> & {
+  readonly schema: typeof JOB_API_V3_SCHEMA;
+} & (
+  | {
+    readonly result: Extract<PublishResultV3, { readonly kind: 'package' }>;
+    readonly freeze: JobPublishRequest['freeze'];
+  }
+  | {
+    readonly result: RecordResult;
+    readonly freeze: RecordFreeze;
+  }
+);
+
+export type AskRequestV3 = Omit<JobAskRequest, 'schema'> & {
+  readonly schema: typeof JOB_API_V3_SCHEMA;
+};
+
+export type NextRequestV3 = Omit<JobNextRequest, 'schema'> & {
+  readonly schema: typeof JOB_API_V3_SCHEMA;
+};
+
+export type CloseRequestV3 = Omit<JobCloseRequest, 'schema'> & {
+  readonly schema: typeof JOB_API_V3_SCHEMA;
+};
+
+export type AgentRequestV3 =
+  | PublishRequestV3
+  | AskRequestV3
+  | NextRequestV3
+  | CloseRequestV3;
+
+export type FetchActRequestV3 = Omit<JobFetchActRequest, 'schema'> & {
+  readonly schema: typeof JOB_API_V3_SCHEMA;
+};
+
+export interface RecordPicksSubject {
+  readonly kind: 'interview-picks';
+  readonly questionId: string;
+  readonly setId: string;
+}
+
+export interface RecordCheckpointSubject {
+  readonly kind: 'checkpoint';
+  readonly checkpointId: string;
+}
+
+export type RecordSignoffStage = typeof JOB_PLAN_BOUND_SIGNOFF_STAGES[number];
+
+export interface RecordSignoffSubject {
+  readonly kind: 'signoff';
+  readonly stage: RecordSignoffStage;
+}
+
+export type RecordPlanSubject = RecordCheckpointSubject | RecordSignoffSubject;
+export type RecordSubject = RecordPicksSubject | RecordPlanSubject;
+
+export interface RecordPartsIdentity {
+  readonly name: string;
+  readonly version: string;
+  readonly integrity: string;
+}
+
+export interface RecordContextBase {
+  readonly label: string;
+  readonly parts: RecordPartsIdentity;
+  readonly inputs: readonly JobFileIdentity[];
+  readonly files: readonly JobFileIdentity[];
+}
+
+export type OptionContext = RecordContextBase & {
+  readonly plan: null;
+  readonly subjects: readonly [RecordPicksSubject];
+};
+
+export type PlanContext = RecordContextBase & {
+  readonly plan: JobPlanIdentity;
+  readonly subjects: readonly RecordPlanSubject[];
+};
+
+export type RecordPublishedContext = OptionContext | PlanContext;
+
+export interface RecordReaderInput<Result extends RecordResult = RecordResult> {
+  readonly root: string;
+  readonly record: ProjectRecord;
+  readonly result: Result;
+  readonly phase: 'inventory' | 'retained';
+  readonly parts?: RecordPartsIdentity;
+}
+
+export type ReaderValue<Value> = Value | Promise<Value>;
+
+export interface RecordPublicationReader {
+  (input: RecordReaderInput<RecordOptionResult>): ReaderValue<OptionContext>;
+  (input: RecordReaderInput<RecordPlanResult>): ReaderValue<PlanContext>;
+}
+
+export interface RecordHostHooks {
+  readonly publicationMode: 'record-and-package';
+  readonly readerId: typeof JOB_RECORD_READER_ID;
+  readonly readPublished: JobPublicationReader;
+  readonly readRecordPublished: RecordPublicationReader;
+}
+
+export interface RecordSourceBase {
+  readonly sourceHash: JobSha256;
+  readonly projectHash: JobSha256;
+  readonly record: ProjectRecord;
+  readonly inputs: readonly JobFileIdentity[];
+  readonly files: readonly JobFileIdentity[];
+}
+
+export type OptionSource = RecordSourceBase & {
+  readonly subject: 'option-set';
+  readonly selection: RecordOptionResult;
+  readonly optionSet: { readonly id: string; readonly sha256: JobSha256 };
+  readonly optionSetFile: JobFileIdentity;
+  readonly plan: null;
+  readonly subjects: readonly [RecordPicksSubject];
+};
+
+export type PlanSource = RecordSourceBase & {
+  readonly subject: 'plan';
+  readonly selection: RecordPlanResult;
+  readonly optionSet: null;
+  readonly optionSetFile: null;
+  readonly plan: JobPlanIdentity;
+  readonly subjects: readonly RecordPlanSubject[];
+};
+
+export type RecordSource = OptionSource | PlanSource;
+
+export type RecordSignoffValue = Omit<JobActValues['signoff'], 'stage'> & {
+  readonly stage: RecordSignoffStage;
+};
+
+export type RecordAct = Pick<JobLegacyAct,
+  'actId' | 'jobId' | 'askId' | 'publicationId' | 'authority' | 'at'> & {
+  readonly schema: typeof JOB_RECORD_ACT_SCHEMA;
+} & (
+  | {
+    readonly kind: 'interview-picks';
+    readonly source: OptionSource;
+    readonly value: JobActValues['interview-picks'];
+  }
+  | {
+    readonly kind: 'checkpoint';
+    readonly source: PlanSource;
+    readonly value: JobActValues['checkpoint'];
+  }
+  | {
+    readonly kind: 'signoff';
+    readonly source: PlanSource;
+    readonly value: RecordSignoffValue;
+  }
+);
+
+export type SourceV3 = JobSourceBinding | RecordSource;
+export type ActV3 = JobAct | RecordAct;
+
+export interface JobCapabilitiesV3 extends JobCapabilities {
+  readonly recordPublication: true;
+  readonly recordActSchema: typeof JOB_RECORD_ACT_SCHEMA;
+}
+
+export const JOB_CAPABILITIES_V3: JobCapabilitiesV3 = Object.freeze({
+  imageSetVerdict: true,
+  recordPublication: true,
+  recordActSchema: JOB_RECORD_ACT_SCHEMA,
+});
+
+export interface PendingAskV3 extends Omit<JobPendingAsk, 'source'> {
+  readonly source: SourceV3;
+}
+
+export interface PublicationV3 extends Omit<JobPublication, 'source'> {
+  readonly source: SourceV3;
+}
+
+export interface StatusV3 extends Omit<JobStatus, 'publication' | 'pending'> {
+  readonly publication: PublicationV3 | null;
+  readonly pending: readonly PendingAskV3[];
+}
+
+export type EventV3 = {
+  readonly cursor: JobCursor;
+  readonly jobId: JobId;
+  readonly generation: number;
+} & (
+  | { readonly type: 'published'; readonly publication: PublicationV3 }
+  | { readonly type: 'pending'; readonly ask: PendingAskV3 }
+  | { readonly type: 'act'; readonly act: ActV3 }
+  | { readonly type: 'closed'; readonly reason: string }
+);
+
+export interface NextValueV3 {
+  readonly capabilities?: JobCapabilitiesV3;
+  readonly events: readonly EventV3[];
+  readonly cursor: JobCursor | null;
+  readonly status: 'events' | 'timeout' | 'closed';
+}
+
+export interface ResponseValuesV3 {
+  readonly publish: PublicationV3;
+  readonly ask: PendingAskV3;
+  readonly next: NextValueV3;
+  readonly close: { readonly status: 'closed'; readonly cursor: JobCursor | null };
+  readonly 'fetch-act': ActV3;
+}
+
+export type ApiResponseV3 = {
+  [Verb in keyof ResponseValuesV3]: {
+    readonly schema: typeof JOB_API_V3_SCHEMA;
+    readonly verb: Verb;
+    readonly jobId: JobId;
+    readonly requestId: string;
+    readonly generation: number;
+  } & JobResult<ResponseValuesV3[Verb]>;
+}[keyof ResponseValuesV3];
+
+export type JobRecordOptionResult = RecordOptionResult;
+export type JobRecordPlanResult = RecordPlanResult;
+export type JobRecordResult = RecordResult;
+export type JobPublishResultV3 = PublishResultV3;
+export type JobProjectRecord = ProjectRecord;
+export type JobRecordFreeze = RecordFreeze;
+export type JobPublishRequestV3 = PublishRequestV3;
+export type JobAskRequestV3 = AskRequestV3;
+export type JobNextRequestV3 = NextRequestV3;
+export type JobCloseRequestV3 = CloseRequestV3;
+export type JobAgentRequestV3 = AgentRequestV3;
+export type JobFetchActRequestV3 = FetchActRequestV3;
+export type JobRecordPicksSubject = RecordPicksSubject;
+export type JobRecordCheckpointSubject = RecordCheckpointSubject;
+export type JobRecordSignoffStage = RecordSignoffStage;
+export type JobRecordSignoffSubject = RecordSignoffSubject;
+export type JobRecordPlanSubject = RecordPlanSubject;
+export type JobRecordSubject = RecordSubject;
+export type JobRecordPartsIdentity = RecordPartsIdentity;
+export type JobRecordContextBase = RecordContextBase;
+export type JobOptionContext = OptionContext;
+export type JobPlanContext = PlanContext;
+export type JobRecordPublishedContext = RecordPublishedContext;
+export type JobRecordReaderInput<Result extends RecordResult = RecordResult> = RecordReaderInput<Result>;
+export type JobRecordPublicationReader = RecordPublicationReader;
+export type JobRecordHostHooks = RecordHostHooks;
+export type JobRecordSourceBase = RecordSourceBase;
+export type JobOptionSource = OptionSource;
+export type JobPlanSource = PlanSource;
+export type JobRecordSource = RecordSource;
+export type JobRecordSignoffValue = RecordSignoffValue;
+export type JobRecordAct = RecordAct;
+export type JobSourceV3 = SourceV3;
+export type JobActV3 = ActV3;
+export type JobPendingAskV3 = PendingAskV3;
+export type JobPublicationV3 = PublicationV3;
+export type JobStatusV3 = StatusV3;
+export type JobEventV3 = EventV3;
+export type JobNextValueV3 = NextValueV3;
+export type JobResponseValuesV3 = ResponseValuesV3;
+export type JobApiResponseV3 = ApiResponseV3;
+
