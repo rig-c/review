@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test';
 import {readFileSync} from 'node:fs';
-import type {LiveFrame, PosedFrame, SlotIdentitySnapshot} from '@rig-c/play';
+import type {LiveFrame, PosedFrame, SlotIdentitySnapshot, TrackEntry} from '@rig-c/play';
 import {PartInspection, type PartEntry} from '../web/part-selection.ts';
 import type {JobRigPresentation} from '../web/viewport-capture.ts';
 import {freezeJobRigCapture, recordJobRigDraw, type JobRigDrawState} from '../web/job-rig-capture.ts';
@@ -17,7 +17,7 @@ const resetBody = fragment('            resetToSetup = (setup = true) => {', '  
 const poseBody = fragment('    function pose(seekReference = true): void {', '    function hubBinding()')
     .replace('pose(seekReference = true): void', 'pose(seekReference = true)')
     .replace("el<HTMLInputElement>('job-time')", "el('job-time')");
-const drawBody = fragment('    function drawInspection(owner: JobPreparedInspection): void {', '    function copyRigVerdict(')
+const drawBody = fragment('    function drawInspection(owner: JobPreparedInspection): void {', '    function syncTransportControls(')
     .replace('owner: JobPreparedInspection', 'owner').replace('): void {', ') {');
 
 /** Public-player test double models the published fresh null-pose and composed seek boundary.
@@ -27,6 +27,7 @@ class PublicPlayer {
     generation = 0;
     current: string | null = null;
     time = 0;
+    loop = false;
     slots = null;
     skin = undefined;
     set = null;
@@ -40,17 +41,22 @@ class PublicPlayer {
             this.frame = structuredClone(frame);
         },
     };
-    constructor(readonly root: object, readonly assets: object, readonly visible = true) {}
+    constructor(readonly root: object, readonly assets: {animations?: readonly {name: string; duration: number}[]}, readonly visible = true) {}
     clear(track: number, options: {mix: number}) {
         expect([track, options]).toEqual([0, {mix: 0}]);
         this.calls.push('clear');
+        this.current = null;
+        this.time = 0;
+        this.loop = false;
         this.composed = true;
         this.posed = true;
         this.generation++;
     }
-    play(animation: string) {
+    play(animation: string, options?: {loop?: boolean}) {
         this.calls.push('play');
         this.current = animation;
+        this.loop = options?.loop ?? false;
+        this.time = 0;
         this.posed = true;
         this.generation++;
     }
@@ -61,6 +67,17 @@ class PublicPlayer {
         this.generation++;
     }
     pause() {this.calls.push('pause');}
+    entry(track = 0): TrackEntry | null {
+        if (track !== 0 || !this.posed) return null;
+        if (this.current === null) {
+            return {animation: null, loop: false, trackTime: 0, animationTime: 0, duration: 0, alpha: 1, additive: false};
+        }
+        const duration = this.assets.animations?.find(item => item.name === this.current)?.duration ?? 1;
+        const animationTime = duration > 0
+            ? (this.loop ? Number((this.time % duration).toFixed(9)) : Math.min(this.time, duration))
+            : 0;
+        return {animation: this.current, loop: this.loop, trackTime: this.time, animationTime, duration, alpha: 1, additive: false};
+    }
     draw() {this.calls.push('draw'); if (this.posed) this.renderer.render(this.posedFrame());}
     posedFrame(): PosedFrame {
         return {generation: this.generation, order: this.posed && this.visible ? [{kind: 'mesh', slot: 'mesh', z: 0,
@@ -85,9 +102,10 @@ function windowPose(visible = true) {
     const scope = {
         player: null as PublicPlayer | null, inspection: null as PartInspection | null,
         runtime: {RigPlayer: class extends PublicPlayer {
-            constructor(root: object, assets: object) {super(root, assets, visible); players.push(this);}
+            constructor(root: object, assets: {animations?: readonly {name: string; duration: number}[]}) {super(root, assets, visible); players.push(this);}
         }}, rigRoot: root, loadedAssets: assets, parts: {PartInspection}, catalog: {entries},
-        clearRigPresentation: () => {}, resetToSetup: (_setup = true) => {}, animation: '', time: 0, selectedPart: '', partMode: 'context',
+        clearRigPresentation: () => {}, resetToSetup: (_setup = true) => {}, animation: '', time: 0, loop: true,
+        selectedPart: '', partMode: 'context', syncTransportControls: () => {},
         drawn: new WeakMap(), notice: {textContent: ''}, t: (key: string) => key,
         el: () => clock, setText: () => {}, viewport: {fitCamera() {}},
     };
@@ -105,7 +123,7 @@ function windowPose(visible = true) {
         return {player: current.player!, presentation, frameGeneration: current.inspection!.frame('single')!.generation,
             source: binding, layout: JSON.stringify(camera), defaultCamera: true, wholeRig: true, playing: false};
     }
-    return {current, scope, context, players, root, assets, camera, binding, at, state, reset};
+    return {current, scope, context, players, root, assets, camera, binding, clock, at, state, reset};
 }
 
 test('#557 setup initializes a fresh null-pose public player before draw/present', () => {
@@ -236,4 +254,34 @@ test('#557 setup reset clears its owned presentation before replacing the public
     h.reset();
     expect(clears).toBe(1);
     expect(previous.disposed).toBe(true);
+});
+
+test('#559 active-animation manual seek at duration under Repeat=true synchronizes UI clock, closure time, public entry.animationTime and captured frame to 0 while preserving Setup reference-only time', async () => {
+    const h = windowPose();
+    let drawGeneration = 0;
+    h.context.loop = true;
+    h.at('inspect', 1);
+    expect(h.current.player!.entry(0)!.animationTime).toBe(0);
+    expect(h.context.time).toBe(0);
+    expect(h.clock.value).toBe('0');
+    const stateLoop = h.state();
+    const captureLoop = await freezeJobRigCapture(recordJobRigDraw(stateLoop, ++drawGeneration), stateLoop, 'ask-loop-end',
+        () => ({width: 1, height: 1, encode: async () => 'data:image/png;base64,ZmFrZQ=='})).encode();
+    expect(captureLoop.frame).toBe(0);
+    expect(captureLoop.animation).toBe('inspect');
+
+    h.context.loop = false;
+    h.at('', 0);
+    h.at('inspect', 1);
+    expect(h.current.player!.entry(0)!.animationTime).toBe(1);
+    expect(h.context.time).toBe(1);
+    expect(h.clock.value).toBe('1');
+    const stateOneShot = h.state();
+    const captureOneShot = await freezeJobRigCapture(recordJobRigDraw(stateOneShot, ++drawGeneration), stateOneShot, 'ask-oneshot-end',
+        () => ({width: 1, height: 1, encode: async () => 'data:image/png;base64,ZmFrZQ=='})).encode();
+    expect(captureOneShot.frame).toBe(1);
+
+    h.at('', 1.25);
+    expect(h.context.time).toBe(1.25);
+    expect(h.clock.value).toBe('1.25');
 });
