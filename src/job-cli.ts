@@ -170,6 +170,7 @@ function outputConsumerAct(actBytes: Buffer, png: Buffer | undefined, act: JobAc
   let temporaryIdentity: {dev: number; ino: number} | undefined;
   let installed: string | undefined;
   let installedIdentity: {dev: number; ino: number} | undefined;
+  let pngDescriptor: number | undefined;
   let lock: string | undefined;
   let lockDescriptor: number | undefined;
   let emitted = 0;
@@ -207,19 +208,19 @@ function outputConsumerAct(actBytes: Buffer, png: Buffer | undefined, act: JobAc
         if (!existing) {
           temporary = join(directory, '.rig-review-still-' + randomUUID() + '.tmp');
           const descriptor = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
-          try {
-            const owned = fstatSync(descriptor);
-            temporaryIdentity = {dev: owned.dev, ino: owned.ino};
-            let offset = 0;
-            while (offset < png.byteLength) {
-              const written = writeSync(descriptor, png, offset, png.byteLength - offset);
-              if (written <= 0) throw new JobError('JOB_STILL_OUTPUT_FAILED');
-              offset += written;
-            }
-            fsyncSync(descriptor);
-            const info = fstatSync(descriptor);
-            installedIdentity = {dev: info.dev, ino: info.ino};
-          } finally { closeSync(descriptor); }
+          // Pin this inode through output and ownership cleanup, even if its path is replaced.
+          pngDescriptor = descriptor;
+          const owned = fstatSync(descriptor);
+          temporaryIdentity = {dev: owned.dev, ino: owned.ino};
+          let offset = 0;
+          while (offset < png.byteLength) {
+            const written = writeSync(descriptor, png, offset, png.byteLength - offset);
+            if (written <= 0) throw new JobError('JOB_STILL_OUTPUT_FAILED');
+            offset += written;
+          }
+          fsyncSync(descriptor);
+          const info = fstatSync(descriptor);
+          installedIdentity = {dev: info.dev, ino: info.ino};
           renameSync(temporary, target);
           temporary = undefined;
           installed = target;
@@ -249,11 +250,17 @@ function outputConsumerAct(actBytes: Buffer, png: Buffer | undefined, act: JobAc
     }
     throw error instanceof JobError ? error : new JobError('JOB_STILL_OUTPUT_FAILED');
   } finally {
-    if (temporary && temporaryIdentity) unlinkOwned(temporary, temporaryIdentity);
-    if (lockDescriptor !== undefined) {
-      const owned = fstatSync(lockDescriptor);
-      closeSync(lockDescriptor);
-      unlinkOwned(lock!, owned);
+    try {
+      try {
+        if (temporary && temporaryIdentity) unlinkOwned(temporary, temporaryIdentity);
+      } finally {
+        if (lockDescriptor !== undefined) {
+          try { unlinkOwned(lock!, fstatSync(lockDescriptor)); }
+          finally { closeSync(lockDescriptor); }
+        }
+      }
+    } finally {
+      if (pngDescriptor !== undefined) closeSync(pngDescriptor);
     }
   }
 }

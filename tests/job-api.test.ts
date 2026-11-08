@@ -681,6 +681,125 @@ for (const fault of ['ebadf', 'eio', 'einval'] as const) {
   });
 }
 
+for (const ending of ['success', 'zero-write', 'midwrite', 'legacy-write'] as const) {
+  test(`#567 newly installed PNG descriptor pins its unlinked inode through ${ending} output and closes once`, async () => {
+    const f = await fixture();
+    const {input, sha256} = await rigStillInput(f);
+    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+    if (!saved.ok) throw new Error(saved.error.code);
+    const directory = join(f.scratch, 'consumer-pinned-' + ending);
+    await mkdir(directory);
+    const target = join(directory, sha256 + '.png');
+    const realFsync = fs.fsyncSync, realClose = fs.closeSync, realUnlink = fs.unlinkSync;
+    let pngDescriptor: number | undefined;
+    let original: fs.Stats | undefined;
+    let beforeUnlink: fs.Stats | undefined;
+    let afterUnlink: fs.Stats | undefined;
+    let liveDuringLockCleanup = false;
+    let closeCalls = 0, writeCalls = 0;
+    const syncSpy = spyOn(fs, 'fsyncSync').mockImplementation((fd: number) => {
+      const info = fstatSync(fd);
+      if (info.isFile()) { pngDescriptor = fd; original = info; }
+      return realFsync(fd);
+    });
+    const closeSpy = spyOn(fs, 'closeSync').mockImplementation((fd: number) => {
+      if (fd === pngDescriptor) closeCalls++;
+      return realClose(fd);
+    });
+    const unlinkSpy = spyOn(fs, 'unlinkSync').mockImplementation((path: fs.PathLike) => {
+      if (path === join(directory, '.rig-review-still.lock')) {
+        try { liveDuringLockCleanup = fstatSync(pngDescriptor!).nlink === 0; } catch {}
+      }
+      return realUnlink(path);
+    });
+    const writeBytes = (chunk: Uint8Array): number => {
+      writeCalls++;
+      if (writeCalls === 1) {
+        try { beforeUnlink = fstatSync(pngDescriptor!); } catch {}
+        unlinkSync(target);
+        try { afterUnlink = fstatSync(pngDescriptor!); } catch {}
+        writeFileSync(target, 'other-writer-replacement-png');
+      }
+      if (ending === 'zero-write' || ending === 'legacy-write' || ending === 'midwrite' && writeCalls > 1) {
+        throw Object.assign(new Error('stdout EPIPE'), {code: 'EPIPE'});
+      }
+      return ending === 'midwrite' ? Math.min(17, chunk.byteLength) : chunk.byteLength;
+    };
+    try {
+      const pending = jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+        '--still-out', directory], {
+        consumerCapability: f.session.writerGrant().fetchCapability,
+        fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+        ...(ending === 'legacy-write' ? {write: (text: string) => { writeBytes(Buffer.from(text)); }} : {writeBytes}),
+      });
+      if (ending === 'success') await pending;
+      else await expect(pending).rejects.toThrow('JOB_STILL_OUTPUT_FAILED');
+      console.error(JSON.stringify({probe: '#567 pinned PNG descriptor', ending, pngDescriptor,
+        liveAtOutput: beforeUnlink !== undefined, liveAfterUnlink: afterUnlink !== undefined,
+        liveDuringLockCleanup, closeCalls}));
+      expect(pngDescriptor).toBeDefined();
+      expect(beforeUnlink).toMatchObject({dev: original!.dev, ino: original!.ino, nlink: 1});
+      expect(afterUnlink).toMatchObject({dev: original!.dev, ino: original!.ino, nlink: 0});
+      expect(liveDuringLockCleanup).toBe(true);
+      expect(statSync(target).ino).not.toBe(original!.ino);
+      expect(readFileSync(target, 'utf8')).toBe('other-writer-replacement-png');
+      expect(closeCalls).toBe(1);
+      expect(() => fstatSync(pngDescriptor!)).toThrow();
+      expect(readdirSync(directory)).toEqual([sha256 + '.png']);
+    } finally {
+      unlinkSpy.mockRestore();
+      closeSpy.mockRestore();
+      syncSpy.mockRestore();
+    }
+  });
+}
+
+for (const fault of ['file-fsync', 'directory-fsync', 'rename'] as const) {
+  test(`#567 newly created PNG descriptor closes once after ${fault} failure`, async () => {
+    const f = await fixture();
+    const {input} = await rigStillInput(f);
+    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+    if (!saved.ok) throw new Error(saved.error.code);
+    const directory = join(f.scratch, 'consumer-close-' + fault);
+    await mkdir(directory);
+    const realFsync = fs.fsyncSync, realClose = fs.closeSync;
+    let pngDescriptor: number | undefined;
+    let closeCalls = 0, writeCalls = 0;
+    const syncSpy = spyOn(fs, 'fsyncSync').mockImplementation((fd: number) => {
+      const info = fstatSync(fd);
+      if (info.isFile()) pngDescriptor = fd;
+      if (fault === 'file-fsync' && info.isFile() || fault === 'directory-fsync' && info.isDirectory()) {
+        throw Object.assign(new Error('planted fsync EIO'), {code: 'EIO'});
+      }
+      return realFsync(fd);
+    });
+    const closeSpy = spyOn(fs, 'closeSync').mockImplementation((fd: number) => {
+      if (fd === pngDescriptor) closeCalls++;
+      return realClose(fd);
+    });
+    const renameSpy = fault === 'rename' ? spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw Object.assign(new Error('planted rename EIO'), {code: 'EIO'});
+    }) : undefined;
+    try {
+      await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', saved.value.actId,
+        '--still-out', directory], {
+        consumerCapability: f.session.writerGrant().fetchCapability,
+        fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+        writeBytes(chunk) { writeCalls++; return chunk.byteLength; },
+      })).rejects.toThrow('JOB_STILL_OUTPUT_FAILED');
+      expect(pngDescriptor).toBeDefined();
+      expect(writeCalls).toBe(0);
+      expect(closeCalls).toBe(1);
+      expect(() => fstatSync(pngDescriptor!)).toThrow();
+      expect(readdirSync(directory)).toEqual([]);
+    } finally {
+      renameSpy?.mockRestore();
+      closeSpy.mockRestore();
+      syncSpy.mockRestore();
+    }
+  });
+}
+
 test('#567 retained .rig-review-still.lock produces named actionable refusal with exact local path, preserves lock bytes and owner serialization, and retries after removal', async () => {
   const f = await fixture();
   const {input, bytes, sha256} = await rigStillInput(f);
