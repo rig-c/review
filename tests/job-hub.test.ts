@@ -255,3 +255,50 @@ test('hub application admission permits 32 contexts and refuses the next before 
   expect(await readFile(join(f.state, 'jobs.sqlite'))).toEqual(before);
   expect((await h.openJob({...options, fingerprint: 'synthetic-0'})).reused).toBe(true);
 });
+
+test('#563 strict startJobHost reuseOnly attaches to an active hub-owned job while hub.openJob rejects reuseOnly', async () => {
+  const f = await fixture(), h = await hub(f.state), options = designation(f);
+  let installs = 0;
+  const job = await h.openJob({...options, installWriterBinding: () => { installs++; }, bindingId: 'hub-writer/1'});
+  expect(installs).toBe(1);
+
+  const hubHostRes = await fetch(h.origin + '/hub/host', {
+    headers: {'X-Review-Capability': new URL(h.ownerUrl).hash.slice(5)},
+  });
+  expect(hubHostRes.status).toBe(200);
+  const hubHostJson = await hubHostRes.json() as Record<string, unknown>;
+  expect(Object.keys(hubHostJson).sort()).toEqual([
+    'actSchema', 'apiSchema', 'capabilities', 'incarnation', 'origin', 'pid', 'schema',
+  ]);
+
+  const ordinary = await startJobHost({
+    ...options,
+    stateDir: f.state,
+    reviewer,
+    installWriterBinding: () => { installs++; },
+    bindingId: 'hub-writer/1',
+  });
+  expect(ordinary.reused).toBe(true);
+  expect(ordinary.attachment).not.toBeNull();
+  expect(installs).toBe(2);
+  const expected = ordinary.attachment!;
+  ordinary.stop();
+
+  const strictAttached = await startJobHost({
+    ...options,
+    stateDir: f.state,
+    reviewer,
+    installWriterBinding: () => { installs++; },
+    bindingId: 'hub-writer/1',
+    reuseOnly: {expected},
+  });
+  expect(strictAttached.reused).toBe(true);
+  expect(strictAttached.origin).toBe(h.origin);
+  expect(strictAttached.session.jobId).toBe(job.session.jobId);
+  expect(strictAttached.attachment).toEqual(expected);
+  expect(installs).toBe(2);
+  strictAttached.stop();
+
+  await expect(h.openJob({...options, ...({reuseOnly: {expected}} as unknown as JobHubJobOptions)}))
+    .rejects.toMatchObject({code: 'JOB_REQUEST_INVALID'});
+});

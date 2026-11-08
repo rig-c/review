@@ -1,4 +1,4 @@
-import { Database } from 'bun:sqlite';
+import { Database, constants as sqliteConstants } from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
@@ -106,6 +106,10 @@ function privateEntry(path: string, directory: boolean): void {
   }
 }
 
+export interface JobStoreOpenOptions {
+  readonly readonly?: boolean;
+}
+
 /** One SQLite transaction seals the entire job, including its events, acts and
  * idempotency receipts. IMMEDIATE transactions serialize independent daemons.
  * FULL synchronous durability and the rollback journal survive process death.
@@ -113,10 +117,56 @@ function privateEntry(path: string, directory: boolean): void {
  */
 export class JobStore<Data> {
   readonly root: string;
-  private readonly db: Database;
+  private readOnly: boolean;
+  get isReadonly(): boolean { return this.readOnly; }
+  private db: Database;
+  private identities!: {directory: {dev: number; ino: number}; file: {dev: number; ino: number}};
+  private writeAdoption?: () => void;
 
-  constructor(directory: string) {
+
+  constructor(directory: string, options: JobStoreOpenOptions = {}) {
+    this.readOnly = options.readonly === true;
     try {
+      if (this.isReadonly) {
+        privateEntry(directory, true);
+        const directInfo = lstatSync(directory);
+        this.root = realpathSync(directory);
+        const realInfo = lstatSync(this.root);
+        if (directInfo.dev !== realInfo.dev || directInfo.ino !== realInfo.ino) {
+          throw new JobError('JOB_STORAGE_FAILED', 'State directory must not be a symlink');
+        }
+        const file = join(this.root, 'jobs.sqlite');
+        privateEntry(file, false);
+        for (const suffix of ['-journal', '-wal', '-shm']) {
+          let exists = false;
+          try { lstatSync(file + suffix); exists = true; }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
+          if (exists) throw new JobError('JOB_STORAGE_FAILED', 'Unrecovered SQLite sidecar present');
+        }
+        const fileInfo = lstatSync(file);
+        this.identities = {directory: {dev: directInfo.dev, ino: directInfo.ino}, file: {dev: fileInfo.dev, ino: fileInfo.ino}};
+        this.db = new Database(file, sqliteConstants.SQLITE_OPEN_READONLY | sqliteConstants.SQLITE_OPEN_NOFOLLOW);
+        try {
+          this.db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=1000;');
+          this.assertStorage();
+          const tables = new Set(
+            this.db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'")
+              .all().map(row => row.name),
+          );
+          for (const required of [
+            'jobs', 'job_closures', 'job_snapshot_owners',
+            'job_snapshot_reads', 'job_snapshot_tombstones', 'job_act_stills',
+          ]) {
+            if (!tables.has(required)) throw new JobError('JOB_STORAGE_FAILED', 'Required job table missing');
+          }
+        } catch (error) {
+          this.db.close();
+          throw error;
+        }
+        return;
+      }
       mkdirSync(directory, { recursive: true, mode: 0o700 });
       privateEntry(directory, true);
       this.root = realpathSync(directory);
@@ -159,13 +209,55 @@ export class JobStore<Data> {
         sha256 TEXT NOT NULL, binding TEXT NOT NULL, png BLOB NOT NULL, act_bytes BLOB NOT NULL,
         PRIMARY KEY(job_id, act_id), UNIQUE(job_id, page_id, submission_id)
       );`);
+      this.captureStorage();
     } catch {
       throw new JobError('JOB_STORAGE_FAILED', 'Private job storage could not be opened');
     }
   }
 
+  private captureStorage(): void {
+    const directory = lstatSync(this.root), file = lstatSync(join(this.root, 'jobs.sqlite'));
+    this.identities = {directory: {dev: directory.dev, ino: directory.ino}, file: {dev: file.dev, ino: file.ino}};
+  }
+
+  assertStorage(): void {
+    for (const [path, captured, directory] of [
+      [this.root, this.identities.directory, true],
+      [join(this.root, 'jobs.sqlite'), this.identities.file, false],
+    ] as const) {
+      privateEntry(path, directory);
+      const current = lstatSync(path);
+      if (current.dev !== captured.dev || current.ino !== captured.ino) throw new JobError('JOB_STORAGE_FAILED');
+    }
+  }
+
+  /** Install the exact-job guard without opening a writable connection. */
+  allowExistingWrites(verify: () => void): void { this.writeAdoption = verify; }
+
+  /** Deferred snapshot: acceptance performs SELECTs only, ordered against sealClose. */
+  inspect<Value>(operation: () => Value): Value {
+    return this.db.transaction(operation).deferred();
+  }
+
   private transaction<Value>(operation: () => Value): Value {
-    try { return this.db.transaction(operation).immediate(); }
+    try {
+      if (this.readOnly) {
+        if (!this.writeAdoption) throw new JobError('JOB_STORAGE_FAILED');
+        this.assertStorage();
+        const writable = new Database(join(this.root, 'jobs.sqlite'), sqliteConstants.SQLITE_OPEN_READWRITE | sqliteConstants.SQLITE_OPEN_NOFOLLOW);
+        try {
+          this.assertStorage();
+          writable.exec('PRAGMA synchronous=FULL; PRAGMA busy_timeout=1000;');
+        } catch (error) { writable.close(); throw error; }
+        this.db.close(); this.db = writable; this.readOnly = false;
+      }
+      return this.db.transaction(() => {
+        if (this.writeAdoption) {
+          this.assertStorage(); this.writeAdoption(); this.writeAdoption = undefined;
+        }
+        return operation();
+      }).immediate();
+    }
     catch (error) {
       if (typeof (error as { code?: unknown }).code === 'string' &&
           String((error as { code: string }).code).startsWith('SQLITE_')) {
@@ -176,10 +268,24 @@ export class JobStore<Data> {
   }
 
   get(jobId: string): StoredJob<Data> {
-    const row = this.db.query<JobRow, [string]>(`SELECT jobs.*, job_closures.document AS closure
-      FROM jobs LEFT JOIN job_closures USING(job_id) WHERE job_id=?`).get(jobId);
-    if (!row) throw new JobError('JOB_UNKNOWN');
-    return decode<Data>(row);
+    try {
+      const row = this.db.query<JobRow, [string]>(`SELECT jobs.*, job_closures.document AS closure
+        FROM jobs LEFT JOIN job_closures USING(job_id) WHERE job_id=?`).get(jobId);
+      if (!row) throw new JobError('JOB_UNKNOWN');
+      return decode<Data>(row);
+    } catch (error) {
+      if (error instanceof JobError) throw error;
+      throw new JobError('JOB_STORAGE_FAILED', 'Stored job state is invalid');
+    }
+  }
+
+  activeByRootKey(rootKey: string): StoredJob<Data> | null {
+    try {
+      const row = this.db.query<JobRow, [string]>('SELECT * FROM jobs WHERE root_key=? AND active=1').get(rootKey);
+      return row ? decode<Data>(row) : null;
+    } catch {
+      throw new JobError('JOB_STORAGE_FAILED', 'Stored job state is invalid');
+    }
   }
 
   open(rootKey: string, initialize: (jobId: string) => Data, canonicalRoot?: string): StoredJob<Data> {

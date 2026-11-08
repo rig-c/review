@@ -6,7 +6,7 @@ import {buildWeb} from './build.ts';
 import {jobBody, jobObject, sameCapability} from './job-api.ts';
 import {JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_CAPABILITIES, type JobCapabilities, type JobHostPorts, type JobReviewerBinding} from './job-contract.ts';
 import {assertJobHostCompatible, createJobRequestContext, installJobWriterBinding, jobHostIdentity,
-  jobWindowResources, type JobHostOptions, type JobHostRecord} from './job-front.ts';
+  jobWindowResources, type JobHostOptions, type JobHostReuseExpectation, type JobHostRecord} from './job-front.ts';
 import {JobSession} from './job-session.ts';
 import {captureJobRoot} from './job-source.ts';
 import {JobError} from './job-store.ts';
@@ -19,13 +19,14 @@ export interface JobHubOptions {
   readonly reviewer: JobReviewerBinding;
   readonly port?: number;
 }
-export type JobHubJobOptions = Omit<JobHostOptions, 'stateDir' | 'port' | 'reviewer'>;
+export type JobHubJobOptions = Omit<JobHostOptions, 'stateDir' | 'port' | 'reviewer' | 'reuseOnly'>;
 export interface JobHubJob {
   readonly session: JobSession;
   readonly ports: JobHostPorts;
   readonly origin: string;
   readonly jobUrl: string;
   readonly reused: boolean;
+  readonly attachment: JobHostReuseExpectation;
 }
 export interface JobOwnerHub {
   readonly origin: string;
@@ -217,6 +218,9 @@ export async function startJobHub(options: JobHubOptions): Promise<JobOwnerHub> 
     await writePrivate(recordPath, record);
     async function register(input: JobHubJobOptions): Promise<JobHubJob> {
       if (closing) throw new HubError('JOB_HUB_CLOSED');
+      if (!input || typeof input !== 'object' || 'reuseOnly' in (input as Record<string, unknown>)) {
+        throw new JobError('JOB_REQUEST_INVALID');
+      }
       const startup: JobHostOptions = {...input, stateDir, reviewer};
       const identity = jobHostIdentity(startup);
       const root = captureJobRoot(startup.root).path;
@@ -235,7 +239,7 @@ export async function startJobHub(options: JobHubOptions): Promise<JobOwnerHub> 
           assertJobHostCompatible(existing.context.record, identity);
           await installJobWriterBinding(existing.session, startup, origin);
           return {session: existing.session, ports: existing.context.ports, origin,
-            jobUrl: origin + `/jobs/${session.jobId}/#cap=${existing.session.hostCredentials().ui}`, reused: true};
+            jobUrl: origin + `/jobs/${session.jobId}/#cap=${existing.session.hostCredentials().ui}`, reused: true, attachment: existing.context.ownerAttachment()};
         }
         if (members.size >= maximumJobs) throw new HubError('JOB_HUB_LIMIT');
         const path = join(control, session.jobId + '.json');
@@ -265,16 +269,17 @@ export async function startJobHub(options: JobHubOptions): Promise<JobOwnerHub> 
         if (!('claim' in acquiredJob)) throw new HubError('JOB_HUB_EXTERNAL_HOST');
         claim = acquiredJob.claim;
         await refuseExternal();
-        const context = createJobRequestContext(session, startup, origin, identity, resources, incarnation);
+        const context = createJobRequestContext(session, startup, origin, identity, resources, incarnation, incarnation, () => !closing && !!member?.ready);
         Object.assign(context.record, {hubIncarnation: incarnation});
         member = {root, fingerprint: startup.fingerprint, session, context, recordPath: path, ready: false};
         members.set(session.jobId, member);
         await installJobWriterBinding(session, startup, origin);
         if (closing) throw new HubError('JOB_HUB_CLOSED');
-        await writePrivate(path, context.record);
+        await writePrivate(path, context.descriptor().record);
+        context.publish();
         member.ready = true; retained = true;
         return {session, ports: context.ports, origin,
-          jobUrl: origin + `/jobs/${session.jobId}/#cap=${session.hostCredentials().ui}`, reused: false};
+          jobUrl: origin + `/jobs/${session.jobId}/#cap=${session.hostCredentials().ui}`, reused: false, attachment: context.ownerAttachment()};
       } finally {
         if (!retained) {
           if (member) {
