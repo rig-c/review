@@ -59,7 +59,7 @@ test('a consumed set ignores stale review output and preserves the historical an
 
 
 for (const adopted of [false, true]) {
- test(`interview routes preserve the unsupported scene code for ${adopted ? 'adopted' : 'legacy'} post contexts`, async () => {
+ test(`interview routes preserve the stale missing-scene code for ${adopted ? 'adopted' : 'legacy'} post contexts`, async () => {
   const fixture = projectFixture();
   const origin = 'http://127.0.0.1:4321';
   const capability = 'a'.repeat(64);
@@ -78,8 +78,8 @@ for (const adopted of [false, true]) {
     method: 'POST', headers: {origin, 'X-Review-Capability': capability, 'Content-Type': 'application/json'}, body: '{}',
    })]) {
     const response = await route(request, origin);
-    expect(response?.status).toBe(400);
-    expect(await response?.json()).toEqual({error: 'INTERVIEW_CONTEXT_KIND_UNSUPPORTED'});
+    expect(response?.status).toBe(409);
+    expect(await response?.json()).toEqual({error: 'INTERVIEW_OPTIONS_STALE'});
    }
   } finally {fixture.dispose();}
  });

@@ -1,0 +1,31 @@
+{
+  "label": "writer-built synthetic example, not real user project",
+  "create": "f1868eeeed2dcc6b792c230a8bf93117a05edcd5",
+  "archiveSHA256": "27c08078b12dd2ad2ea7c69eb148c3ac3f60c262a98b4db84140633b801eef7f",
+  "recipe": ".review-551-result/phase1/writer-recipe.ts",
+  "current": {
+    "path": "writer-current",
+    "now": 1794139201000,
+    "ref": {
+      "path": "evidence/interview/review551-scene-current.json",
+      "sha256": "636ce133f96af34deeeec962890f892ac5743970b61703b800c5bd5baa041461"
+    }
+  },
+  "historical": {
+    "path": "writer-history",
+    "now": 1794139206000
+  },
+  "projectJSON": "Only Create writers wrote project records; agent authored new option JSON only",
+  "generatorCheck": "UNRUN",
+  "recipes": [
+    ".review-551-result/phase1/writer-recipe.ts",
+    ".review-551-result/phase1/writer-history-complete.ts"
+  ],
+  "archives": {
+    "writer-chain.tar.gz": "495d7031c3a63fbdb7343973f3952db91c3aaf3c50b85a247aec9b7683013f5e",
+    "writer-current.tar.gz": "0a525f29fbf355edbec50c8a874bb1d2ea92394c29bf12e00eda4b77c38cbb0a",
+    "writer-history.tar.gz": "8a1352b69887a2b196e949f8309686d020dd37c60f6707daf6d87a7f2ce48122",
+    "writer-later-scene.tar.gz": "220b3a16552dca69df7a15b3e7f2cc3323ff4dffe0423297b937b9897e49fcd7"
+  },
+  "authority": "PROJECT f1868ee rule 4 replaces 9678 rule 4 only; INTERVIEW answer and decision own-at contract; Create code is fixture recipe only"
+}

@@ -1019,6 +1019,22 @@ and standalone parts retain their existing inspection surfaces.
 
 In the standing live-job contract ([Review #484](https://github.com/rig-c/review/issues/484)), direction carriage is metadata-only (`source.direction` and the `direction-review` stage on `review-verdict`). That metadata carriage is distinct from [Review #482](https://github.com/rig-c/review/issues/482) preview and [Review #483](https://github.com/rig-c/review/issues/483) actual plated take playback, while [Review #373](https://github.com/rig-c/review/issues/373) remains parked.
 
+### Scene interview records
+
+The interview reader supports the scene option codec and dated currentness in
+Create's merged [PROJECT contract](https://github.com/rig-c/create/blob/f1868eeeed2dcc6b792c230a8bf93117a05edcd5/docs/PROJECT.md#scene-option-context).
+It checks every historical answer and completed decision at its own time and
+retains original words, source, time and set bindings with named record issues.
+Pre-cutoff currentness-only exceptions display `INTERVIEW_OPTIONS_SCENE_LEGACY`
+without blocking the legacy interview. Full scene image and registration checks
+remain producer checks.
+
+The temporary [#555 gate](https://github.com/rig-c/review/issues/555) refuses
+standing publication with `JOB_RECORD_INCOMPLETE` for scene answers, legacy
+warnings or historical record issues before publication lookup or snapshot
+writes. Named diagnostic carriage remains an unmet gate pending the signed
+job API@2 contract. An editable current scene can proceed to publication lookup.
+
 ## Live job contract
 
 `src/job-contract.ts` defines the frozen semantic contract boundary for [Review #484](https://github.com/rig-c/review/issues/484), [Create #182](https://github.com/rig-c/create/issues/182), [Create #184](https://github.com/rig-c/create/issues/184), [Parts #1159](https://github.com/rig-c/parts/issues/1159) and [Parts #1163](https://github.com/rig-c/parts/issues/1163) under `JOB_API_SCHEMA` (`rig-review/job-api@2`) and `JOB_ACT_SCHEMA` (`rig-review/act@2`), implemented across the backend session/store (`src/job-store.ts`, `src/job-session.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-api.ts`, `src/job-worker.ts`), standing loopback job front and browser window runtime (`src/job-front.ts`, `web/job-session.ts`), and `rig-review session` CLI (`src/entry.ts`, `src/job-cli.ts`). The public installed managed-host entry is `@rig-c/review/job-host` with frozen exports in [Public API stability](STABILITY.md#managed-owner-host), and Create's production publication reader and writer-owned sibling `fetch-act` readback remain pending [Create #184](https://github.com/rig-c/create/issues/184) (publishing a Create root containing `project.json` without a host `readPublished` callback refuses `JOB_SOURCE_UNRETAINABLE` with `CREATE_PUBLICATION_CONTRACT_UNAVAILABLE`). One-shot file-handoff workflows documented elsewhere in this reference remain preserved as legacy/history compatibility for existing callers.

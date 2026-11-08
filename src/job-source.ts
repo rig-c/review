@@ -323,7 +323,12 @@ export async function prepareJobSource(options: {
       if (jobHash(bytes) !== record.sha256) throw new JobError('JOB_RECORD_MOVED');
       try { JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
       catch { throw new JobError('JOB_RECORD_INCOMPLETE'); }
-      if (record.path === 'project.json') project = readProject(root.path);
+      if (record.path === 'project.json') {
+        project = readProject(root.path);
+        // #555 owns API@2 diagnostic carriage. Refuse before publication lookup
+        // or snapshot writes when this reader's retained records need it.
+        if (project.sceneAnswers || project.diagnostics.length) throw new JobError('JOB_RECORD_INCOMPLETE');
+      }
     } else {
       try { lstatSync(join(root.path, 'project.json')); throw new JobError('JOB_FREEZE_REQUIRED'); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }

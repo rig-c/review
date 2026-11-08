@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { isDeepStrictEqual as equal } from 'node:util';
+import {coveringChange, sceneAt} from './interview-scene.ts';
 
 type RecordData = Record<string, unknown>;
 export interface SetRef {path: string; sha256: string}
@@ -13,7 +14,14 @@ export interface InterviewSet {
   asks: Ask[]; assembly: {rule: 'single' | 'concat' | 'merge'}; constraints?: Constraint[];
 }
 interface Image {ref: SetRef; name: string; type: string}
-export interface HistoricalInterview {question: string; verbatim: string; by?: string; at?: string}
+export interface HistoricalInterview {
+  question: string; verbatim: string; by?: string; at?: string;
+  ref?: SetRef; record?: string; answer?: RecordData;
+}
+export interface InterviewDiagnostic {
+  code: 'INTERVIEW_OPTIONS_STALE' | 'INTERVIEW_OPTIONS_SCENE_LEGACY';
+  question: string; record: string; ref: SetRef; at?: string;
+}
 export interface InterviewQuestion {ref: SetRef; set: InterviewSet; editable: boolean; images: Image[]; hasParts: boolean; partsUnavailable?: boolean; answer?: RecordData}
 export const digest = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
 export const object = (v: unknown): RecordData => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as RecordData : {};
@@ -24,7 +32,6 @@ const invalidOptions = (message: string): never => {throw new Error('INTERVIEW_O
 const stale = (message: string): never => {throw new Error('INTERVIEW_OPTIONS_STALE: ' + message);};
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
 const id = (v: unknown): v is string => typeof v === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(v);
-const stages = ['interview', 'plan-approved', 'parts', 'parts-review', 'rigging-interview', 'rigging', 'rig-review', 'post-interview', 'post', 'direction-review', 'accepted'];
 const optionStages = ['interview', 'rigging-interview', 'post-interview'];
 
 export function literalPath(path: unknown): path is string {
@@ -120,13 +127,7 @@ function validateSet(raw: RecordData, question: unknown, allowedStages: string[]
   return raw as unknown as InterviewSet;
 }
 
-function reopened(project: RecordData, stage: string, after: number, through: number): boolean {
-  return records(project.reopens).some(reopen => {
-    const index = stages.indexOf(String(reopen.stage));
-    const at = date(reopen.at);
-    return index >= 0 && index <= stages.indexOf(stage) && at > after && at <= through;
-  });
-}
+const reopened = coveringChange;
 function approval(project: RecordData, stage: string, at: number) {
   return records(project.signoffs).filter(s => s.stage === stage && (s.checkpoint === null || s.checkpoint === undefined) &&
     text(s.by) && s.by.toLowerCase() !== 'agent' && date(s.at) <= at &&
@@ -154,9 +155,30 @@ function contextAt(project: RecordData, stage: string, at: number): unknown {
     config: object(rig.provenance).config, parts: draft.parts};
 }
 
-function inspectContext(root: string, project: RecordData, raw: RecordData, set: InterviewSet, at: number, fresh: boolean) {
+function inspectContext(root: string, project: RecordData, raw: RecordData, set: InterviewSet, at: number, fresh: boolean): {
+  images: Image[]; hasParts: boolean; partsUnavailable?: boolean; legacy?: boolean;
+} {
   const drafted = date(set.drafted_at);
   const ctx = object(raw.context);
+  if (!Number.isFinite(at) || drafted > at || reopened(project, set.stage, drafted, at)) return stale(set.id);
+  if (ctx.kind === 'scene') {
+    if (set.stage !== 'post-interview') return stale(set.id);
+    let legacy = false;
+    let scene: RecordData = {};
+    for (const instant of [drafted, at]) {
+      const selected = sceneAt(project, instant, ref => jsonObject(boundBytes(root, ref)));
+      if (!selected || !equal(selected.context, ctx)) return stale(set.id);
+      if (!selected.current) {
+        if (drafted >= Date.parse('2026-11-08T00:00:00Z')) return stale(set.id);
+        legacy = true;
+      }
+      scene = selected.document;
+    }
+    const images = records(scene.plates).map(plate => ({
+      ref: {path: plate.path as string, sha256: plate.sha256 as string}, name: plate.role as string, type: 'image/png',
+    }));
+    return {images, hasParts: false, legacy};
+  }
   const expected = contextAt(project, set.stage, drafted);
   const historicalInputs = !fresh && set.stage === 'interview';
   const matches = historicalInputs ? ctx.kind === 'inputs' && records(ctx.files).length > 0 &&
@@ -214,13 +236,16 @@ export function readProject(root: string, now = Date.now()) {
   const interview = object(project.interview);
   const questions: InterviewQuestion[] = [];
   const historical: HistoricalInterview[] = [];
+  const diagnostics: InterviewDiagnostic[] = [];
+  let sceneAnswers = 0;
   const seen = new Map<string, string>();
-  for (const [items, answerKey, allowed] of [
-    [interview.framing, 'answer', ['interview']],
-    [interview.waypoints, 'guide', optionStages.slice(0, 2)],
-    [object(interview.post).items, 'guide', ['post-interview']],
+  for (const [items, answerKey, allowed, collection] of [
+    [interview.framing, 'answer', ['interview'], 'interview.framing'],
+    [interview.waypoints, 'guide', optionStages.slice(0, 2), 'interview.waypoints'],
+    [object(interview.post).items, 'guide', ['post-interview'], 'interview.post.items'],
   ] as const) {
-    for (const item of records(items)) {
+    for (const [itemIndex, item] of records(items).entries()) {
+      const itemPath = `${collection}[${itemIndex}]`;
       const current = object(item[answerKey]);
       const answers = [current, ...records(item.history)];
       for (const answer of answers) {
@@ -230,33 +255,63 @@ export function readProject(root: string, now = Date.now()) {
         }
       }
       const entries = [
-        ...(item.pending_options === undefined ? [] : [{ref: item.pending_options, answer: undefined}]),
-        ...answers.filter(answer => object(answer.choice).spec === 'rig-create/interview-choice@1')
-          .map(answer => ({ref: object(answer.choice).set, answer})),
+        ...(item.pending_options === undefined ? [] : [{ref: item.pending_options, answer: undefined, record: itemPath + '.pending_options'}]),
+        ...answers.map((answer, index) => ({answer, record: index === 0 ? itemPath + '.' + answerKey : `${itemPath}.history[${index - 1}]`}))
+          .filter(({answer}) => object(answer.choice).spec === 'rig-create/interview-choice@1')
+          .map(({answer, record}) => ({ref: object(answer.choice).set, answer, record})),
       ];
       for (const entry of entries) {
         const ref = binding(entry.ref);
         const prior = seen.get(ref.sha256);
         if (prior !== undefined) {
           if (prior !== ref.path) return invalid('A retained set hash has conflicting paths');
+        }
+        const editable = entry.answer === undefined;
+        let raw: RecordData;
+        let set: InterviewSet;
+        try {
+          raw = readSet(root, ref);
+          const expectedStage = allowed.length === 1 ? allowed[0]! :
+            ['rig_type','reference','seethrough','assemble'].includes(String(item.id)) ? 'interview' : 'rigging-interview';
+          set = validateSet(raw, item.id, [expectedStage]);
+        } catch (error) {
+          if (editable) throw error;
+          const answer = entry.answer!;
+          historical.push({question: String(item.id), verbatim: typeof answer.verbatim === 'string' ? answer.verbatim : '',
+            by: typeof answer.by === 'string' ? answer.by : undefined, at: typeof answer.at === 'string' ? answer.at : undefined,
+            ref, record: entry.record, answer});
+          diagnostics.push({code: 'INTERVIEW_OPTIONS_STALE', question: String(item.id), record: entry.record, ref,
+            ...(typeof answer.at === 'string' ? {at: answer.at} : {})});
           continue;
         }
-        const raw = readSet(root, ref);
-        const expectedStage = allowed.length === 1 ? allowed[0]! :
-          ['rig_type','reference','seethrough','assemble'].includes(String(item.id)) ? 'interview' : 'rigging-interview';
-        const set = validateSet(raw, item.id, [expectedStage]);
-        if (object(raw.context).kind === 'scene') throw new Error('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: scene');
-        const editable = entry.answer === undefined;
         if (editable && (set.stage === 'interview' || set.stage === 'rigging-interview') &&
             (object(interview.order).spec !== 'rig-create/stage-order@2' || !Number.isFinite(date(object(interview.order).choices_adopted_at)))) {
           throw new Error('INTERVIEW_CHOICE_REQUIRED: Adopt create choices before selecting');
         }
         if (editable && approval(project, set.stage === 'interview' ? 'plan-approved' : set.stage, now)) return invalid('Question approval is still live');
-        const context = inspectContext(root, project, raw, set, editable ? now : date(entry.answer?.at), editable);
+        const sceneKind = object(raw.context).kind === 'scene';
+        if (!editable && sceneKind) sceneAnswers++;
+        const evaluate = (at: number, record: string) => {
+          try {
+            const {legacy, ...context} = inspectContext(root, project, raw, set, at, editable);
+            if (legacy) diagnostics.push({code: 'INTERVIEW_OPTIONS_SCENE_LEGACY', question: set.question, record, ref, at: new Date(at).toISOString()});
+            return context;
+          } catch (error) {
+            if (editable || !(error instanceof Error) || !error.message.startsWith('INTERVIEW_OPTIONS_STALE:')) throw error;
+            diagnostics.push({code: 'INTERVIEW_OPTIONS_STALE', question: set.question, record, ref,
+              ...(Number.isFinite(at) ? {at: new Date(at).toISOString()} : {})});
+            return {images: [], hasParts: false};
+          }
+        };
+        const context = evaluate(editable ? now : date(entry.answer?.at), entry.record);
+        const decision = object(entry.answer?.agent_decision);
+        if (!editable && ['at', 'value', 'fragments'].some(key => Object.hasOwn(decision, key))) {
+          evaluate(date(decision.at), entry.record + '.agent_decision');
+        }
         questions.push({ref, set, editable, answer: entry.answer, ...context});
         seen.set(ref.sha256, ref.path);
       }
     }
   }
-  return {root, hash: digest(bytes), project, questions, historical};
+  return {root, hash: digest(bytes), project, questions, historical, diagnostics, sceneAnswers};
 }

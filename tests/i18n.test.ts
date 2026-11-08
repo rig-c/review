@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {feedbackTimingLabel,timeOnlyBasis} from '../src/stage-comment.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
-import {interviewErrors} from '../web/interview-panel.ts';
+import {interviewErrors,mountInterview} from '../web/interview-panel.ts';
 import {
  WEB_STRING_EXEMPTIONS,
  applyDomI18n,
@@ -1066,16 +1066,59 @@ test('#299: a link forces en or ko over the stored choice and the browser, and s
 });
 
 
-test('unsupported scene interview copy retains its named code and meaning in English and Korean', () => {
+test('unsupported interview kind copy retains its named code and meaning in English and Korean', () => {
  const code = 'INTERVIEW_CONTEXT_KIND_UNSUPPORTED';
  const key = interviewErrors[code];
  expect(key).toBe(code);
- expect(enCatalog[code]).toBe('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: The scene option context is unsupported.');
- expect(koCatalog[code]).toBe('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: scene 선택지 문맥은 지원하지 않습니다.');
+ expect(enCatalog[code]).toBe('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: This option context kind is unsupported.');
+ expect(koCatalog[code]).toBe('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: 지원하지 않는 선택지 문맥 유형입니다.');
  for (const language of ['en', 'ko'] as const) {
   const message = t(key!, undefined, language);
   expect(message).toStartWith(code + ': ');
-  expect(message).toContain('scene');
+  expect(message.length).toBeGreaterThan(code.length);
   expect(message).toBe(language === 'en' ? enCatalog[code]! : koCatalog[code]!);
+ }
+});
+
+test('scene interview warnings and historical issues render in EN/KO while original records and editability survive', async () => {
+ const {doc, root} = makeTestDoc();
+ const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+ const previousFetch = globalThis.fetch, preference = getLanguagePreference();
+ const host = doc.createElement('main'); root.append(host);
+ const ref = {path: 'evidence/interview/synthetic.json', sha256: 'f'.repeat(64)};
+ const words = 'Not drawn at current pose\n원문 그대로';
+ const set = {id: 'synthetic-ui', question: 'post_composition', drafted_by: 'agent', drafted_at: '2026-11-07T23:59:59Z', asks: []};
+ const payload = {historical: [], diagnostics: [
+  {code: 'INTERVIEW_OPTIONS_SCENE_LEGACY', question: set.question, record: 'interview.post.items[0].pending_options', ref},
+  {code: 'INTERVIEW_OPTIONS_STALE', question: set.question, record: 'interview.post.items[0].history[0].agent_decision', ref},
+ ], questions: [
+  {ref, set, editable: false, images: [], hasParts: false, saved: null, answer: {by: 'user', at: '2026-11-08T00:00:02Z', source: 'Check', verbatim: words}},
+  {ref, set: {...set, id: 'synthetic-editable'}, editable: true, images: [], hasParts: false, saved: null},
+ ]};
+ let unmount: (() => void) | undefined;
+ try {
+  Object.defineProperty(globalThis, 'document', {value: doc, configurable: true});
+  const fetchMock: typeof fetch = Object.assign(async () => Response.json(payload), {preconnect: previousFetch.preconnect});
+  globalThis.fetch = fetchMock;
+  unmount = await mountInterview(host as unknown as HTMLElement, {base: '/', key: 'synthetic', capability: 'a'.repeat(64), route: path => path, headers: init => new Headers(init)});
+  for (const language of ['en', 'ko'] as const) {
+   setLanguagePreference(language);
+   const picker = host.querySelectorAll('select')[0]!;
+   picker.value = '0'; (picker as any).onchange();
+   expect(host.textContent).toContain(t('INTERVIEW_OPTIONS_SCENE_LEGACY', undefined, language));
+   expect(host.textContent).toContain(t('interview.historicalIssue', undefined, language));
+   expect(host.textContent).toContain('history[0].agent_decision');
+   expect(host.querySelectorAll('pre').some((node: TestElement) => node.textContent === words)).toBe(true);
+   expect(host.textContent).toContain('user · 2026-11-08T00:00:02Z · Check');
+   expect(host.querySelectorAll('fieldset')[0]!.disabled).toBe(true);
+   const currentPicker = host.querySelectorAll('select')[0]!;
+   currentPicker.value = '1'; (currentPicker as any).onchange();
+   expect(host.querySelectorAll('fieldset')[0]!.disabled).toBe(false);
+   expect(host.textContent).toContain(t('interview.save', undefined, language));
+  }
+ } finally {
+  unmount?.(); globalThis.fetch = previousFetch; setLanguagePreference(preference);
+  if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument);
+  else delete (globalThis as {document?: Document}).document;
  }
 });
