@@ -215,7 +215,7 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
                 assert.equal(hash(png), act.still.sha256);
                 return png;
             }
-            async function authority(act: JobRigReviewAct, publication: JobPublication, id: string, words: string) {
+            async function authority(act: JobRigReviewAct, publication: JobPublication, id: string, words: string, expectedPlaying = false) {
                 assert.equal(act.askId, id);
                 assert.equal(act.publicationId, publication.publicationId);
                 assert.deepEqual(act.source, publication.source);
@@ -235,7 +235,7 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
                 assert.equal(capture.binding.pageId, request.input.pageId);
                 assert.equal(capture.binding.instanceKey, publication.instanceKey);
                 assert.ok(capture.binding.drawGeneration > 0 && capture.binding.playerGeneration >= 0);
-                assert.equal(capture.playing, false, 'current job UI uses seek and pause');
+                assert.equal(capture.playing, expectedPlaying, expectedPlaying ? 'continuous playback active at capture' : 'paused seek-and-pause capture');
             }
 
             let publication = await fixture.publish('rig');
@@ -249,9 +249,39 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
                 admitted: 'all whole device pixels inside the Rig client viewport, background included',
                 excluded: 'border, fractional boundary pixels, hidden tool UI and labels',
                 presentation: 'test-only overlay-free square frame, original inline styles restored in finally',
+                pausedOracle: 'full-viewport screenshot compared at 0 tolerance against exported CLI PNG',
+                movingOracle: 'synchronous HTMLCanvasElement.prototype.toBlob observation comparing displayed canonical bitmap == copied PNG == exported CLI PNG at 0 tolerance',
                 unsupported: ['non-DPR-1', 'transformed/filtered/translucent ancestors', 'visible in-pane UI overlays',
-                    'inside-Rig comparison compositor absent from current job UI', 'moving playback UI belongs to #559'],
-                playback: 'actual job UI seek-and-pause, no production play loop'});
+                    'inside-Rig comparison compositor absent from current job UI'],
+                playback: 'paused seek-and-pause plus continuous #job-play/#job-loop rAF playback (#559)'});
+            const initialTransport = await page.evaluate<{animation: string; time: number; playDisabled: boolean;
+                playPressed: string | null; playText: string | null; loopChecked: boolean; loopLabel: string | null;
+                timeAfterTwoFrames: number}>(`new Promise(resolve => {
+                const play = document.getElementById('job-play');
+                const loop = document.getElementById('job-loop');
+                const before = {
+                    animation: document.getElementById('job-animation').value,
+                    time: Number(document.getElementById('job-time').value),
+                    playDisabled: play.disabled,
+                    playPressed: play.getAttribute('aria-pressed'),
+                    playText: play.textContent,
+                    loopChecked: loop.checked,
+                    loopLabel: loop.closest('label')?.querySelector('span')?.textContent ?? null,
+                };
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve({
+                    ...before,
+                    timeAfterTwoFrames: Number(document.getElementById('job-time').value),
+                })));
+            })`);
+            await record('initial-transport', initialTransport);
+            assert.equal(initialTransport.animation, '');
+            assert.equal(initialTransport.time, 0);
+            assert.equal(initialTransport.timeAfterTwoFrames, 0);
+            assert.equal(initialTransport.playDisabled, true);
+            assert.equal(initialTransport.playPressed, 'false');
+            assert.equal(initialTransport.playText, catalog.Play);
+            assert.equal(initialTransport.loopChecked, true);
+            assert.equal(initialTransport.loopLabel, catalog.Repeat);
             await pixels('initial');
             // The pixel oracle must see the actual displayed Play canvas contribute pixels.
             await actualRaster('initial');
@@ -341,6 +371,207 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
             }
             await defaultView();
 
+            // #559: Continuous rAF playback, loop wrap, and mid-play verdict capture without pausing.
+            await edit('#job-animation', 'inspect');
+            await edit('#job-time', '0');
+            const prePlay = await page.evaluate<{disabled: boolean; pressed: string | null; text: string | null;
+                loopChecked: boolean; canonicalPng: string}>(`(()=>{
+                const play=document.getElementById('job-play'),loop=document.getElementById('job-loop');
+                loop.checked=true;loop.dispatchEvent(new Event('change'));
+                const canvas=document.querySelector('[data-job-rig-presentation]');
+                return {disabled:play.disabled,pressed:play.getAttribute('aria-pressed'),text:play.textContent,
+                    loopChecked:loop.checked,canonicalPng:canvas.toDataURL('image/png')};})()`);
+            assert.equal(prePlay.disabled, false);
+            assert.equal(prePlay.pressed, 'false');
+            assert.equal(prePlay.text, catalog.Play);
+            assert.equal(prePlay.loopChecked, true);
+
+            const midPlayWords = '  ' + language + ' mid-play-loop 원문\n';
+            const midPlayAsk = await ask(publication, midPlayWords);
+            await page.evaluate(`document.getElementById('job-play').click()`);
+            await wait(`document.getElementById('job-play').getAttribute('aria-pressed')==='true' && Number(document.getElementById('job-time').value)>=0.6`, 'mid-play motion reaches >=0.6s');
+            const beforeWrap = await page.evaluate<{time: number; pressed: string | null; text: string | null; canonicalPng: string}>(`(()=>{
+                const play=document.getElementById('job-play'),canvas=document.querySelector('[data-job-rig-presentation]');
+                return {time:Number(document.getElementById('job-time').value),pressed:play.getAttribute('aria-pressed'),
+                    text:play.textContent,canonicalPng:canvas.toDataURL('image/png')};})()`);
+            assert.equal(beforeWrap.pressed, 'true');
+            assert.equal(beforeWrap.text, catalog.Pause);
+            assert.ok(beforeWrap.time >= 0.6 && beforeWrap.time <= 1);
+            assert.notEqual(beforeWrap.canonicalPng, prePlay.canonicalPng, 'real rAF motion renders different canonical pixels');
+
+            await wait(`document.getElementById('job-play').getAttribute('aria-pressed')==='true' && Number(document.getElementById('job-time').value)>0 && Number(document.getElementById('job-time').value)<${JSON.stringify(beforeWrap.time - 0.2)}`, 'actual loop wrap decreases visible UI clock while playing');
+            const afterWrap = await page.evaluate<{time: number; pressed: string | null; text: string | null}>(`(()=>{
+                const play=document.getElementById('job-play');
+                return {time:Number(document.getElementById('job-time').value),pressed:play.getAttribute('aria-pressed'),text:play.textContent};})()`);
+            assert.equal(afterWrap.pressed, 'true');
+            assert.equal(afterWrap.text, catalog.Pause);
+            assert.ok(afterWrap.time > 0 && afterWrap.time < beforeWrap.time);
+
+            await armStillObservation(page, midPlayAsk.askId);
+            await page.evaluate(`(()=>{
+                const s=globalThis.__jobStillObservation,realOriginal=s.original;
+                globalThis.__midPlayRealOriginal=realOriginal;
+                globalThis.__midPlayEncodingHeld=false;
+                s.original=function(...args){
+                    const play=document.getElementById('job-play');
+                    globalThis.__midPlayEncodingHeld=true;
+                    globalThis.__midPlayAtCapture={
+                        time:Number(document.getElementById('job-time').value),
+                        pressed:play.getAttribute('aria-pressed'),
+                        text:play.textContent,
+                    };
+                    globalThis.__midPlayReleaseEncoding=()=>{s.original=realOriginal;return realOriginal.apply(this,args)};
+                };
+            })()`);
+            let continuedWhileHeld: {atCapture: {time: number; pressed: string; text: string};
+                afterTwoFrames: {time: number; pressed: string; text: string}};
+            try {
+                await click(midPlayAsk.askId);
+                await wait('globalThis.__midPlayEncodingHeld===true', 'mid-play synchronous copy completed and encoder held');
+                continuedWhileHeld = await page.evaluate<{atCapture: {time: number; pressed: string; text: string};
+                    afterTwoFrames: {time: number; pressed: string; text: string}}>(`new Promise(resolve => {
+                    requestAnimationFrame(() => requestAnimationFrame(() => {
+                        const play=document.getElementById('job-play');
+                        resolve({
+                            atCapture: globalThis.__midPlayAtCapture,
+                            afterTwoFrames: {
+                                time: Number(document.getElementById('job-time').value),
+                                pressed: play.getAttribute('aria-pressed'),
+                                text: play.textContent,
+                            },
+                        });
+                    }));
+                })`);
+                assert.equal(continuedWhileHeld.atCapture.pressed, 'true');
+                assert.equal(continuedWhileHeld.atCapture.text, catalog.Pause);
+                assert.equal(continuedWhileHeld.afterTwoFrames.pressed, 'true');
+                assert.equal(continuedWhileHeld.afterTwoFrames.text, catalog.Pause);
+                assert.notEqual(continuedWhileHeld.afterTwoFrames.time, continuedWhileHeld.atCapture.time, 'playback continues advancing while PNG encoding is held');
+                await page.evaluate('globalThis.__midPlayReleaseEncoding()');
+            } finally {
+                await page.evaluate(`(()=>{if(globalThis.__jobStillObservation&&globalThis.__midPlayRealOriginal)globalThis.__jobStillObservation.original=globalThis.__midPlayRealOriginal})()`);
+            }
+            await wait(`${status(midPlayAsk.askId)}.dataset.jobText==='job.saved'`, 'saved mid-play-loop');
+            const midPlayAct = await saved(midPlayAsk.askId);
+            await authority(midPlayAct, publication, midPlayAsk.askId, midPlayWords, true);
+            assert.equal(midPlayAct.still.animation, 'inspect');
+            assert.ok(typeof midPlayAct.still.frame === 'number' && midPlayAct.still.frame >= 0 && midPlayAct.still.frame <= 1, 'wrapped visible frame within clip duration');
+            const midPlayExported = await cli('mid-play-loop', midPlayAct);
+            const midPlayRequest = requests.find(entry => entry.input.askId === midPlayAsk.askId)!;
+            await persistStillObservation(page, output, 'mid-play-loop', midPlayAsk.askId, midPlayRequest.input.capture!, midPlayExported);
+            await record('mid-play-loop', {beforeWrap: {time: beforeWrap.time, pressed: beforeWrap.pressed, text: beforeWrap.text},
+                afterWrap, continuedWhileHeld, frame: midPlayAct.still.frame, playing: midPlayRequest.input.capture!.playing});
+
+            // #559: Reply-loss while playing retains byte-exact first request across natural motion and manual seek.
+            const midPlayRetryWords = '  ' + language + ' mid-play-retry 원문\n';
+            const midPlayRetryAsk = await ask(publication, midPlayRetryWords);
+            heldEvents = new Promise(resolve => {releaseEvents = resolve;});
+            loseReply = true;
+            await armStillObservation(page, midPlayRetryAsk.askId);
+            await click(midPlayRetryAsk.askId);
+            await wait(`${status(midPlayRetryAsk.askId)}.textContent.length>0 && !document.querySelector(${JSON.stringify(form(midPlayRetryAsk.askId))}).querySelector('fieldset').disabled`, 'mid-play committed reply lost');
+            assert.ok(lostReply);
+            const committedMidPlayRetry = await saved(midPlayRetryAsk.askId);
+            const firstMidPlayRetryReq = requests.at(-1)!;
+            assert.equal(firstMidPlayRetryReq.input.capture?.playing, true);
+            await wait(`Number(document.getElementById('job-time').value)!==${JSON.stringify(firstMidPlayRetryReq.input.capture!.frame)}`, 'natural motion advances after first mid-play capture');
+            await edit('#job-time', '0.375');
+            assert.equal(await page.evaluate(`document.getElementById('job-play').getAttribute('aria-pressed')`), 'false', 'manual seek pauses playback');
+            await click(midPlayRetryAsk.askId);
+            await wait(`${status(midPlayRetryAsk.askId)}.dataset.jobText==='job.saved'`, 'mid-play immutable retry saved');
+            assert.equal(requests.at(-1)!.sha256, firstMidPlayRetryReq.sha256);
+            const replayMidPlayRetry = await saved(midPlayRetryAsk.askId);
+            assert.deepEqual(replayMidPlayRetry, committedMidPlayRetry);
+            await authority(replayMidPlayRetry, publication, midPlayRetryAsk.askId, midPlayRetryWords, true);
+            const midPlayRetryExported = await cli('mid-play-retry', replayMidPlayRetry);
+            await persistStillObservation(page, output, 'mid-play-retry', midPlayRetryAsk.askId, firstMidPlayRetryReq.input.capture!, midPlayRetryExported);
+            releaseEvents!(); heldEvents = undefined;
+
+            // #559: Camera and selection refusals while playing send zero network posts.
+            for (const kind of ['zoom', 'highlight'] as const) {
+                await defaultView();
+                await edit('#job-animation', 'inspect');
+                await edit('#job-time', '0');
+                await page.evaluate(`document.getElementById('job-play').click()`);
+                await wait(`document.getElementById('job-play').getAttribute('aria-pressed')==='true'`, 'playing before ' + kind + ' refusal');
+                const pending = await ask(publication, 'refused playing ' + kind);
+                if (kind === 'zoom') await page.evaluate(`document.getElementById('zoom-in').click()`);
+                else await edit('#job-part', 'mesh');
+                const before = requests.length;
+                await click(pending.askId);
+                const code = kind === 'zoom' ? 'JOB_STILL_CAMERA_NOT_FIXED' : 'JOB_STILL_VIEW_UNSUPPORTED';
+                await wait(`${status(pending.askId)}.dataset.jobText===${JSON.stringify(code)}`, 'named playing ' + kind + ' refusal');
+                assert.equal(await page.evaluate(`${status(pending.askId)}.textContent`), catalog[code]);
+                assert.equal(await page.evaluate(`document.getElementById('job-play').getAttribute('aria-pressed')`), 'true');
+                assert.equal(requests.length, before);
+                assert.ok(!(await fixture.next()).events.some(event => event.type === 'act' && event.act.askId === pending.askId));
+                await record('refused-playing-' + kind, {code, visibleMessage: catalog[code], sentRequests: 0, playing: true});
+            }
+            await defaultView();
+
+            // #559: Toggle Repeat off at mid-clip deterministically seeks current visible time and finishes one-shot paused at exact duration.
+            await edit('#job-animation', 'inspect');
+            await edit('#job-time', '0');
+            await page.evaluate(`(()=>{const loop=document.getElementById('job-loop');loop.checked=true;loop.dispatchEvent(new Event('change'));document.getElementById('job-play').click()})()`);
+            await wait(`document.getElementById('job-play').getAttribute('aria-pressed')==='true' && Number(document.getElementById('job-time').value)>=0.15 && Number(document.getElementById('job-time').value)<=0.65`, 'mid-clip reached before Repeat toggle');
+            const toggledMidClip = await page.evaluate<{timeAtToggle: number; pressedAfterToggle: string | null; loopChecked: boolean}>(`(()=>{
+                const loop=document.getElementById('job-loop'),play=document.getElementById('job-play');
+                loop.checked=false;loop.dispatchEvent(new Event('change'));
+                return {timeAtToggle:Number(document.getElementById('job-time').value),pressedAfterToggle:play.getAttribute('aria-pressed'),loopChecked:loop.checked};})()`);
+            assert.equal(toggledMidClip.loopChecked, false);
+            assert.equal(toggledMidClip.pressedAfterToggle, 'true');
+            assert.ok(toggledMidClip.timeAtToggle > 0 && toggledMidClip.timeAtToggle < 1);
+            await wait(`document.getElementById('job-play').getAttribute('aria-pressed')==='false' && Number(document.getElementById('job-time').value)===1`, 'one-shot finishes paused at exact duration');
+            const oneShotEnd = await page.evaluate<{time: number; timeAfterTwoFrames: number; pressed: string | null; text: string | null}>(`new Promise(resolve => {
+                const play=document.getElementById('job-play'),time=Number(document.getElementById('job-time').value);
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve({
+                    time,
+                    timeAfterTwoFrames: Number(document.getElementById('job-time').value),
+                    pressed: play.getAttribute('aria-pressed'),
+                    text: play.textContent,
+                })));
+            })`);
+            assert.equal(oneShotEnd.time, 1);
+            assert.equal(oneShotEnd.timeAfterTwoFrames, 1);
+            assert.equal(oneShotEnd.pressed, 'false');
+            assert.equal(oneShotEnd.text, catalog.Play);
+            await page.evaluate(`(()=>{const loop=document.getElementById('job-loop');loop.checked=true;loop.dispatchEvent(new Event('change'))})()`);
+            await record('repeat-off-oneshot', {toggledMidClip, oneShotEnd});
+
+            // #559: Source-compatible replacement while playing pauses outgoing playback and preserves animation/time/selection/camera.
+            await edit('#job-animation', 'inspect');
+            await edit('#job-time', '0.25');
+            await edit('#job-part', 'mesh');
+            await page.evaluate(`(()=>{document.getElementById('zoom-in').click();document.getElementById('job-play').click()})()`);
+            await wait(`document.getElementById('job-play').getAttribute('aria-pressed')==='true'`, 'playing before source replacement');
+            const priorPlayingPub = publication;
+            publication = await fixture.publish('rig', 'rig-playing-replacement');
+            await show(publication);
+            const afterPlayingReplacement = await page.evaluate<{animation: string; part: string; zoom: number;
+                pressed: string | null; text: string | null; time: number; timeAfterTwoFrames: number}>(`new Promise(resolve => {
+                const play=document.getElementById('job-play');
+                const view=JSON.parse(document.getElementById('view-coordinates').textContent);
+                const time=Number(document.getElementById('job-time').value);
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve({
+                    animation: document.getElementById('job-animation').value,
+                    part: document.getElementById('job-part').value,
+                    zoom: view.cameras.rig.zoom,
+                    pressed: play.getAttribute('aria-pressed'),
+                    text: play.textContent,
+                    time,
+                    timeAfterTwoFrames: Number(document.getElementById('job-time').value),
+                })));
+            })`);
+            assert.equal(afterPlayingReplacement.pressed, 'false');
+            assert.equal(afterPlayingReplacement.text, catalog.Play);
+            assert.equal(afterPlayingReplacement.animation, 'inspect');
+            assert.equal(afterPlayingReplacement.part, 'mesh');
+            assert.ok(afterPlayingReplacement.zoom > 1);
+            assert.equal(afterPlayingReplacement.timeAfterTwoFrames, afterPlayingReplacement.time);
+            await record('playing-source-replacement', {before: priorPlayingPub.source.sourceHash,
+                after: publication.source.sourceHash, state: afterPlayingReplacement});
+            await defaultView();
+
             const encodingAsk = await ask(publication, 'encoding old source');
             await page.evaluate(`(()=>{globalThis.__stillOldForm=document.querySelector(${JSON.stringify(form(encodingAsk.askId))});
                 const original=HTMLCanvasElement.prototype.toBlob;globalThis.__stillEncodingHeld=false;
@@ -379,8 +610,10 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
             await record('source-inputs-after', changed);
             await fixture.finish();
             await record('complete', {language, cases: ['setup', 'numeric-zero', 'numeric-375', 'setup-return', 'reply-loss-seek-retry',
-                'pan', 'zoom', 'highlight', 'solo', 'encoding-source-replacement', 'negative-png-read'],
-                movingPlaybackAcceptance: '#559', consumerPairStaging: 'consumer-owned, CLI owns PNG only'});
+                'pan', 'zoom', 'highlight', 'solo', 'mid-play-loop', 'mid-play-retry', 'refused-playing-zoom',
+                'refused-playing-highlight', 'repeat-off-oneshot', 'playing-source-replacement',
+                'encoding-source-replacement', 'negative-png-read'],
+                movingPlaybackAcceptance: 'COVERED_559', consumerPairStaging: 'consumer-owned, CLI owns PNG only'});
             } finally {
                 const restoration = await restoreStillOracle(page);
                 await record('oracle-presentation-restored', restoration);

@@ -1310,3 +1310,1036 @@ describe('hub member event subscription lifetime', () => {
         expect(requests[0]!.aborted).toBe(true);
     });
 });
+
+import type {RigPlayer} from '@rig-c/play';
+import {createViewportController, createViewportState} from '../web/viewport-controller.ts';
+import {createRigViewportProvider} from '../web/rig-viewport-provider.ts';
+import {mountViewportPair} from '../web/viewport-pair.ts';
+import * as i18nModule from '../web/i18n.ts';
+import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, jobRigPixelPlacement} from '../web/job-rig-capture.ts';
+import {enCatalog} from '../web/catalog-en.ts';
+import {koCatalog} from '../web/catalog-ko.ts';
+import {JOB_HUB_READY} from '../web/job-hub.ts';
+import {advancePlayback} from '../web/playback-clock.ts';
+import {parseManifest} from '../src/manifest.ts';
+import type {JobPreparedInspection} from '../web/job-session.ts';
+
+describe('#559 continuous Rig motion transport and mid-play verdict capture', () => {
+    class RuntimeDomNode {
+        id = '';
+        className = '';
+        hidden = false;
+        disabled = false;
+        checked = false;
+        required = false;
+        value = '';
+        type = '';
+        name = '';
+        min = '';
+        step = '';
+        clientWidth = 640;
+        clientHeight = 480;
+        width = 64;
+        height = 64;
+        dataset: Record<string, string> = {};
+        style: Record<string, string> = {};
+        children: RuntimeDomNode[] = [];
+        parentElement: RuntimeDomNode | null = null;
+        onchange?: (event?: unknown) => unknown;
+        onclick?: (event?: unknown) => unknown;
+        oninput?: (event?: unknown) => unknown;
+        onsubmit?: (event?: unknown) => unknown;
+        private attributes = new Map<string, string>();
+        private listeners = new Map<string, Set<(event: any) => void>>();
+        private text = '';
+        private pixels = new Uint8ClampedArray(64 * 64 * 4);
+        readonly classList = {
+            add: (...tokens: string[]) => {
+                const set = new Set(this.className.split(/\s+/).filter(Boolean));
+                for (const token of tokens) set.add(token);
+                this.className = [...set].join(' ');
+            },
+        };
+        constructor(readonly tagName: string) {
+            this.pixels.fill(120);
+        }
+        get isConnected(): boolean { return true; }
+        get firstElementChild(): RuntimeDomNode | null {
+            return this.children.find(child => child.tagName !== '#text') ?? null;
+        }
+        get textContent(): string {
+            return this.text + this.children.map(child => child.textContent).join('');
+        }
+        set textContent(value: string) {
+            this.text = String(value);
+            this.children = [];
+        }
+        append(...nodes: RuntimeDomNode[]) {
+            for (const node of nodes) {
+                if (node.parentElement) node.remove();
+                node.parentElement = this;
+                this.children.push(node);
+            }
+        }
+        prepend(...nodes: RuntimeDomNode[]) {
+            for (const node of nodes) {
+                if (node.parentElement) node.remove();
+                node.parentElement = this;
+            }
+            this.children.unshift(...nodes);
+        }
+        replaceChildren(...nodes: RuntimeDomNode[]) {
+            for (const child of this.children) child.parentElement = null;
+            this.children = [];
+            this.append(...nodes);
+        }
+        replaceWith(node: RuntimeDomNode) {
+            const parent = this.parentElement;
+            if (!parent) return;
+            const index = parent.children.indexOf(this);
+            if (index >= 0) {
+                node.parentElement = parent;
+                parent.children.splice(index, 1, node);
+            }
+            this.parentElement = null;
+        }
+        remove() {
+            if (this.parentElement) {
+                this.parentElement.children = this.parentElement.children.filter(child => child !== this);
+                this.parentElement = null;
+            }
+        }
+        cloneNode(): RuntimeDomNode {
+            const copy = new RuntimeDomNode(this.tagName);
+            copy.id = this.id;
+            copy.className = this.className;
+            copy.text = this.text;
+            return copy;
+        }
+        setAttribute(name: string, value: string) {
+            this.attributes.set(name, value);
+            if (name === 'id') this.id = value;
+            else if (name === 'class') this.className = value;
+            else if (name === 'style') this.style.cssText = value;
+            else if (name.startsWith('data-')) {
+                const camel = name.slice(5).replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase());
+                this.dataset[camel] = value;
+            }
+        }
+        getAttribute(name: string): string | null {
+            if (name === 'id') return this.id || null;
+            if (name === 'class') return this.className || null;
+            if (name === 'style') return this.attributes.get('style') ?? 'left: 0px; top: 0px; width: 64px; height: 64px;';
+            return this.attributes.get(name) ?? null;
+        }
+        removeAttribute(name: string) {
+            this.attributes.delete(name);
+            if (name.startsWith('data-')) {
+                const camel = name.slice(5).replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase());
+                delete this.dataset[camel];
+            }
+        }
+        hasAttribute(name: string): boolean {
+            return this.getAttribute(name) !== null;
+        }
+        addEventListener(type: string, listener: (event: any) => void) {
+            let set = this.listeners.get(type);
+            if (!set) { set = new Set(); this.listeners.set(type, set); }
+            set.add(listener);
+        }
+        removeEventListener(type: string, listener: (event: any) => void) {
+            this.listeners.get(type)?.delete(listener);
+        }
+        dispatchEvent(event: {type: string; [key: string]: unknown}): boolean {
+            for (const listener of [...(this.listeners.get(event.type) ?? [])]) listener(event);
+            if (event.type === 'change') this.onchange?.(event);
+            if (event.type === 'input') this.oninput?.(event);
+            if (event.type === 'click') this.onclick?.(event);
+            if (event.type === 'submit') this.onsubmit?.(event);
+            return true;
+        }
+        click() {
+            if (this.disabled) return;
+            this.onclick?.({type: 'click', target: this, preventDefault() {}});
+            for (const listener of [...(this.listeners.get('click') ?? [])]) {
+                listener({type: 'click', target: this, preventDefault() {}});
+            }
+        }
+        reportValidity(): boolean { return true; }
+        pause() {}
+        toJSON() { return {}; }
+        getBoundingClientRect() {
+            return {left: 0, top: 0, right: 64, bottom: 64, width: 64, height: 64, x: 0, y: 0};
+        }
+        getContext(kind: string) {
+            if (kind !== '2d') return null;
+            const owner = this;
+            return {
+                getImageData(_x: number, _y: number, width: number, height: number) {
+                    return {width, height, data: owner.pixels.slice(0, width * height * 4)};
+                },
+                putImageData(image: {data: Uint8ClampedArray}, _x: number, _y: number) {
+                    owner.pixels.set(image.data.subarray(0, owner.pixels.length));
+                },
+            };
+        }
+        toBlob(callback: (blob: {size: number; png: string} | null) => void) {
+            const tag = Buffer.from(`${this.pixels[0]}-${this.pixels[1]}-${this.width}x${this.height}`).toString('base64');
+            callback({size: tag.length, png: 'data:image/png;base64,' + tag});
+        }
+        private matchesSingle(selector: string): boolean {
+            if (selector.startsWith('#')) return this.id === selector.slice(1);
+            if (selector.startsWith('.')) return this.className.split(/\s+/).includes(selector.slice(1));
+            const attrMatch = selector.match(/^([a-z0-9]*)\[([a-zA-Z0-9_-]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\]]*)))?\]$/);
+            if (attrMatch) {
+                const [, tag, attr, dq, sq, raw] = attrMatch;
+                if (tag && this.tagName !== tag) return false;
+                const expected = dq ?? sq ?? raw;
+                const actual = attr === 'name' ? (this.name || this.getAttribute('name'))
+                    : attr === 'type' ? (this.type || this.getAttribute('type'))
+                    : attr === 'role' ? this.getAttribute('role')
+                    : attr!.startsWith('data-') ? this.dataset[attr!.slice(5).replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase())]
+                    : this.getAttribute(attr!);
+                return expected === undefined ? actual !== undefined && actual !== null : actual === expected;
+            }
+            return this.tagName === selector;
+        }
+        matches(selector: string): boolean {
+            return selector.split(',').some(part => this.matchesSingle(part.trim()));
+        }
+        closest(selector: string): RuntimeDomNode | null {
+            for (let node: RuntimeDomNode | null = this; node; node = node.parentElement) {
+                if (node.matches(selector)) return node;
+            }
+            return null;
+        }
+        querySelector(selector: string): RuntimeDomNode | null {
+            return this.querySelectorAll(selector)[0] ?? null;
+        }
+        querySelectorAll(selector: string): RuntimeDomNode[] {
+            const groups = selector.split(',').map(part => part.trim()).filter(Boolean);
+            if (groups.length > 1) {
+                const seen = new Set<RuntimeDomNode>();
+                for (const group of groups) {
+                    for (const item of this.querySelectorAll(group)) seen.add(item);
+                }
+                return [...seen];
+            }
+            const parts = selector.trim().split(/\s+/);
+            const result: RuntimeDomNode[] = [];
+            const walk = (root: RuntimeDomNode, index: number) => {
+                for (const child of root.children) {
+                    if (child.matchesSingle(parts[index]!)) {
+                        if (index === parts.length - 1) result.push(child);
+                        else walk(child, index + 1);
+                    }
+                    walk(child, index);
+                }
+            };
+            walk(this, 0);
+            return result;
+        }
+        set innerHTML(markup: string) {
+            this.children = [];
+            this.text = '';
+            const stack: RuntimeDomNode[] = [this];
+            for (const token of markup.matchAll(/<\/?([a-z][a-z0-9]*)([^>]*)>|([^<]+)/g)) {
+                if (token[3]) {
+                    const textNode = new RuntimeDomNode('#text');
+                    textNode.textContent = token[3];
+                    stack.at(-1)!.append(textNode);
+                } else if (token[0].startsWith('</')) {
+                    stack.pop();
+                } else {
+                    const element = new RuntimeDomNode(token[1]!);
+                    for (const attribute of token[2]!.matchAll(/([a-z-]+)="([^"]*)"/g)) {
+                        element.setAttribute(attribute[1]!, attribute[2]!);
+                    }
+                    element.hidden = /\bhidden\b/.test(token[2]!);
+                    stack.at(-1)!.append(element);
+                    stack.push(element);
+                }
+            }
+        }
+        setPixelSeed(seed: number) {
+            this.pixels[0] = seed & 0xff;
+            this.pixels[1] = (seed >> 8) & 0xff;
+        }
+    }
+
+    function createPublicPlayerDouble(clips: readonly {name: string; duration: number}[] = [{name: 'inspect', duration: 0.5}]) {
+        let current: string | null = null;
+        let loop = true;
+        let trackTime = 0;
+        let paused = true;
+        let composed = false;
+        let clearedEmpty = false;
+        let generation = 1;
+        let disposed = false;
+        const renderer = {syncPixelRatio() {}, meshBackendActive: '2d' as const};
+        const history: string[] = [];
+        let playCalls = 0;
+        let pauseCalls = 0;
+        let resumeCalls = 0;
+        let seekCalls = 0;
+        let advanceCalls = 0;
+        let physicsEpoch = 0;
+        const durationOf = (name: string | null) => clips.find(item => item.name === name)?.duration ?? 0;
+        const player = {
+            get generation() { return generation; },
+            get current() { return current; },
+            get time() { return trackTime; },
+            get composed() { return composed; },
+            get paused() { return paused; },
+            get loop() { return loop; },
+            get physicsEpoch() { return physicsEpoch; },
+            get disposed() { return disposed; },
+            slots: null as RigPlayer['slots'],
+            renderer,
+            history,
+            counts: () => ({playCalls, pauseCalls, resumeCalls, seekCalls, advanceCalls, physicsEpoch}),
+            bounds: () => ({x: 0, y: 0, width: 64, height: 64}),
+            moved() {},
+            clear(track = 0, _options?: {mix?: number}) {
+                if (track === 0) {
+                    current = null;
+                    trackTime = 0;
+                    composed = true;
+                    clearedEmpty = true;
+                    generation++;
+                    physicsEpoch++;
+                    history.push('clear');
+                }
+            },
+            play(name: string, options?: {loop?: boolean}) {
+                playCalls++;
+                current = name;
+                loop = options?.loop ?? true;
+                trackTime = 0;
+                paused = false;
+                composed = false;
+                clearedEmpty = false;
+                generation++;
+                physicsEpoch++; // play opens track at 0 with physics reset
+                history.push(`play:${name}:loop=${loop}`);
+            },
+            pause() {
+                pauseCalls++;
+                paused = true;
+                history.push('pause');
+            },
+            resume() {
+                resumeCalls++;
+                paused = false;
+                history.push('resume');
+            },
+            seek(target: number) {
+                if (composed || !current) throw new Error('SEEK_UNSUPPORTED');
+                seekCalls++;
+                trackTime = target;
+                generation++;
+                physicsEpoch++; // seek replays from 0 in seekStep increments, resetting physics history to deterministic target state
+                history.push(`seek:${Number(target.toFixed(6))}`);
+            },
+            advance(dt: number) {
+                advanceCalls++;
+                if (paused || !current || !(dt > 0)) return;
+                trackTime = Number((trackTime + dt).toFixed(9));
+                generation++;
+                history.push(`advance:${Number(dt.toFixed(6))}->${Number(trackTime.toFixed(6))}`);
+            },
+            draw() {
+                history.push(`draw:${current ?? 'setup'}@${Number(trackTime.toFixed(6))}`);
+            },
+            entry(track = 0): ReturnType<RigPlayer['entry']> {
+                if (track !== 0) return null;
+                if (current === null) {
+                    return clearedEmpty
+                        ? {animation: null, loop: false, trackTime: 0, animationTime: 0, duration: 0, alpha: 1, additive: false}
+                        : null;
+                }
+                const duration = durationOf(current);
+                const animationTime = duration > 0
+                    ? (loop ? Number((trackTime % duration).toFixed(9)) : Math.min(trackTime, duration))
+                    : 0;
+                return {animation: current, loop, trackTime, animationTime, duration, alpha: 1, additive: false};
+            },
+            dispose() {
+                disposed = true;
+                history.push('dispose');
+            },
+        };
+        return player;
+    }
+
+    async function mountRuntimeSession(options?: {hub?: string; visible?: boolean; clips?: readonly {name: string; duration: number}[]}) {
+        const source = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+        const start = source.indexOf('    const node = <Tag extends keyof HTMLElementTagNameMap>');
+        const end = source.indexOf('    return () => { globalThis.removeEventListener(\'pagehide\', stop); stop(); };', start);
+        expect(start).toBeGreaterThan(0);
+        expect(end).toBeGreaterThan(start);
+        const closureBody = source.slice(start, end) + '\nreturn {window, workspace, stop: () => { globalThis.removeEventListener(\'pagehide\', stop); stop(); }};';
+        const transpiled = new Bun.Transpiler({loader: 'ts'}).transformSync(closureBody);
+
+        const saved = new Map<string, PropertyDescriptor | undefined>();
+        const setGlobal = (key: string, value: unknown) => {
+            if (!saved.has(key)) saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+            Object.defineProperty(globalThis, key, {configurable: true, writable: true, value});
+        };
+
+        const rafCallbacks = new Map<number, (now: number) => void>();
+        let nextRafId = 1;
+        let nowMs = 1000;
+        const globalListeners = new Map<string, Set<(event: any) => void>>();
+        const localStore = new Map<string, string>();
+        const parentMessages: unknown[] = [];
+        const parentWindow = {postMessage(data: unknown) { parentMessages.push(data); }};
+
+        class TestReader {
+            result: string | null = null;
+            onload?: () => void;
+            onerror?: () => void;
+            readAsDataURL(blob: {png: string}) {
+                this.result = blob.png;
+                this.onload?.();
+            }
+        }
+        class NoopObserver {
+            observe() {}
+            disconnect() {}
+        }
+
+        setGlobal('HTMLElement', RuntimeDomNode);
+        setGlobal('HTMLSelectElement', RuntimeDomNode);
+        setGlobal('HTMLInputElement', RuntimeDomNode);
+        setGlobal('HTMLTextAreaElement', RuntimeDomNode);
+        setGlobal('HTMLFormElement', RuntimeDomNode);
+        setGlobal('HTMLFieldSetElement', RuntimeDomNode);
+        setGlobal('HTMLButtonElement', RuntimeDomNode);
+        setGlobal('Element', RuntimeDomNode);
+        setGlobal('FileReader', TestReader);
+        setGlobal('ResizeObserver', NoopObserver);
+        setGlobal('MutationObserver', NoopObserver);
+        setGlobal('devicePixelRatio', 1);
+        setGlobal('parent', parentWindow);
+        setGlobal('location', {
+            href: 'http://127.0.0.1:4318/jobs/window-fixture/' + (options?.hub ? '?hub=' + options.hub : ''),
+            origin: 'http://127.0.0.1:4318',
+        });
+        setGlobal('localStorage', {
+            get length() { return localStore.size; },
+            key: (index: number) => [...localStore.keys()][index] ?? null,
+            getItem: (key: string) => localStore.get(key) ?? null,
+            setItem: (key: string, value: string) => { localStore.set(key, value); },
+        });
+        const host = new RuntimeDomNode('div');
+        const docNode = new RuntimeDomNode('document');
+        docNode.append(host);
+        setGlobal('window', globalThis);
+        setGlobal('document', {
+            documentElement: new RuntimeDomNode('html'),
+            createElement: (tag: string) => new RuntimeDomNode(tag),
+            createTextNode: (text: string) => { const n = new RuntimeDomNode('#text'); n.textContent = text; return n; },
+            getElementById: (id: string) => docNode.querySelector('#' + id),
+            addEventListener: (type: string, listener: (event: any) => void) => docNode.addEventListener(type, listener),
+            removeEventListener: (type: string, listener: (event: any) => void) => docNode.removeEventListener(type, listener),
+        });
+        setGlobal('getComputedStyle', (node: RuntimeDomNode) => ({
+            visibility: 'visible',
+            display: node.hidden ? 'none' : 'block',
+            opacity: '1',
+            filter: 'none',
+            perspective: 'none',
+            transform: node.id === 'rig-root' ? 'matrix(1, 0, 0, 1, 0, 0)' : 'none',
+            getPropertyValue: () => '#fff',
+        }));
+        setGlobal('matchMedia', () => ({addEventListener() {}, removeEventListener() {}}));
+        setGlobal('requestAnimationFrame', (callback: (now: number) => void) => {
+            const id = nextRafId++;
+            rafCallbacks.set(id, callback);
+            return id;
+        });
+        setGlobal('cancelAnimationFrame', (id: number) => {
+            rafCallbacks.delete(id);
+        });
+        setGlobal('addEventListener', (type: string, listener: (event: any) => void) => {
+            let set = globalListeners.get(type);
+            if (!set) { set = new Set(); globalListeners.set(type, set); }
+            set.add(listener);
+        });
+        setGlobal('removeEventListener', (type: string, listener: (event: any) => void) => {
+            globalListeners.get(type)?.delete(listener);
+        });
+
+        const fixture = createJobWindowFixture();
+        const players: ReturnType<typeof createPublicPlayerDouble>[] = [];
+        let failNextSubmit = false;
+        const clips = options?.clips ?? [{name: 'inspect', duration: 0.5}];
+
+        const prepareJobInspection = async (display: JobDisplayPublication): Promise<JobPreparedInspection> => {
+            const rigRoot = new RuntimeDomNode('div');
+            rigRoot.id = 'rig-root';
+            rigRoot.setAttribute('style', 'left: 0px; top: 0px; transform: scale(1);');
+            let player = createPublicPlayerDouble(clips);
+            players.push(player);
+            let selectedSlot: {side: 'single'; slot: string; mode: 'context' | 'solo'} | null = null;
+            let presentedGen: number | undefined = player.generation;
+            let rigPresentation: JobPreparedInspection['rigPresentation'];
+            const inspection = {
+                register() {},
+                present() { presentedGen = player.generation; },
+                frame: () => presentedGen === undefined ? undefined : ({generation: presentedGen} as any),
+                select(value: typeof selectedSlot) { selectedSlot = value; },
+                value: () => selectedSlot?.slot ?? null,
+                observation: () => selectedSlot ? {slot: selectedSlot.slot, mode: selectedSlot.mode} : null,
+                bounds: () => ({x: 0, y: 0, width: 64, height: 64}),
+                assertIdentity() {},
+            };
+            const setupPose = (setup = true) => {
+                rigPresentation?.canvas.remove();
+                rigPresentation = undefined;
+                if (setup) {
+                    player.clear(0, {mix: 0});
+                    player.draw();
+                    inspection.present();
+                } else if (player.composed) {
+                    player.dispose();
+                    player = createPublicPlayerDouble(clips);
+                    players[players.length - 1] = player;
+                    presentedGen = player.generation;
+                }
+            };
+            setupPose(true);
+            const refImg = new RuntimeDomNode('img') as unknown as HTMLImageElement;
+            return {
+                display,
+                metadata: {
+                    manifest: parseManifest({schema: 'rig-review/1', ...display.publication.source.package,
+                        title: 'Rig fixture', model: 'skeleton.model.json'}),
+                    sourceHash: display.publication.source.sourceHash,
+                    reviewedSource: {
+                        packageRevision: display.publication.source.package.revision,
+                        viewerVersion: '2.4.6',
+                        runtimeVersion: '1.23.0',
+                        rig: {path: 'skeleton.model.json', sha256: 'a'.repeat(64)},
+                        motion: null,
+                    },
+                    capabilities: {playback: true},
+                    feedbackCatalog: {slots: ['body', 'head']},
+                },
+                interview: null,
+                parts: null,
+                partImages: new Map(),
+                interviewImages: new Map(),
+                imageSetImages: [],
+                references: [{id: 'ref-1', label: 'Ref 1', element: refImg, width: 64, height: 64, seek: async () => {}}],
+                assets: {animations: clips, stage: {x: 0, y: 0, width: 64, height: 64}, dispose() {}} as any,
+                rigRoot: rigRoot as unknown as HTMLElement,
+                get rigPresentation() { return rigPresentation; },
+                set rigPresentation(value) {
+                    rigPresentation?.canvas.remove();
+                    rigPresentation = value;
+                },
+                get player() { return player as unknown as RigPlayer; },
+                get inspection() { return inspection as any; },
+                setupPose,
+                dispose() {
+                    rigPresentation?.canvas.remove();
+                    rigPresentation = undefined;
+                    player.dispose();
+                },
+            };
+        };
+
+        const presentJobRigViewport = () => {
+            const canvas = new RuntimeDomNode('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            canvas.setAttribute('data-job-rig-presentation', '');
+            canvas.setAttribute('style', 'left: 0px; top: 0px; width: 64px; height: 64px;');
+            const active = players.at(-1);
+            canvas.setPixelSeed(Math.round((active?.time ?? 0) * 1000) + (active?.generation ?? 0) * 17);
+            return {
+                canvas: canvas as unknown as HTMLCanvasElement,
+                width: 64,
+                height: 64,
+                ratio: 1,
+                area: {x: 0, y: 0, width: 64, height: 64},
+            };
+        };
+
+        const outgoingSubmits: {raw: string; body: any}[] = [];
+        const request = (body: unknown) => new Request('http://127.0.0.1:4318/jobs/window-fixture/ui/displayed', {
+            method: 'POST',
+            headers: {'content-type': 'application/json', origin: 'http://127.0.0.1:4318'},
+            body: JSON.stringify(body),
+        });
+        const transport = {
+            readPublication: (id: string) => fixture.ports.readPublication(fixture.jobId, id),
+            acknowledge: (body: unknown) => fixture.ports.ackDisplayed(fixture.jobId, request(body)),
+            submit: async (body: unknown) => {
+                const raw = JSON.stringify(body);
+                outgoingSubmits.push({raw, body: JSON.parse(raw)});
+                if (failNextSubmit) {
+                    failNextSubmit = false;
+                    throw new Error('Declared transport reply loss');
+                }
+                return fixture.ports.commitUIAct(fixture.jobId, request(body));
+            },
+        };
+        const hubIncarnation = options?.hub ?? null;
+        const hubVisible = options?.visible ?? !hubIncarnation;
+        const access = {jobId: fixture.jobId, capability: 'c'.repeat(64)};
+        const abort = new AbortController();
+        class CanvasRenderer {}
+        const assertJobAskSource = (ask: {source: {sourceHash: string}}, display: JobDisplayPublication) => {
+            if (ask.source.sourceHash !== display.publication.source.sourceHash) throw new Error('JOB_ACT_SOURCE_STALE');
+        };
+        const startEvents = () => ({displayed() {}, visibility() {}, done: Promise.resolve()});
+
+        const runner = new Function(
+            'host', 'access', 'hubIncarnation', 'hubVisible', 'events', 'pageId', 'transport', 'abort',
+            'i18n', 't', 'createViewportController', 'createViewportState', 'createRigViewportProvider', 'mountViewportPair',
+            'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal',
+            'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource',
+            'recordJobRigDraw', 'freezeJobRigCapture', 'copyJobRigViewport', 'createJobRigSubmission', 'jobRigPixelPlacement',
+            'presentJobRigViewport', 'CanvasRenderer', 'enCatalog', 'koCatalog', 'JOB_HUB_READY', 'jobHubMessageMatches', 'advancePlayback',
+            transpiled,
+        );
+        const mounted = runner(
+            host, access, hubIncarnation, hubVisible, undefined, 'page-one', transport, abort,
+            i18nModule, i18nModule.t, createViewportController, createViewportState, createRigViewportProvider, mountViewportPair,
+            createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal,
+            prepareJobInspection, startEvents, assertJobAskSource,
+            recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
+            presentJobRigViewport, CanvasRenderer, enCatalog, koCatalog, JOB_HUB_READY, jobHubMessageMatches, advancePlayback,
+        ) as {window: ReturnType<typeof createJobWindow>; workspace: RuntimeDomNode; stop: () => void};
+
+        return {
+            fixture,
+            host,
+            workspace: mounted.workspace,
+            window: mounted.window,
+            players,
+            activePlayer: () => players.at(-1)!,
+            parentWindow,
+            outgoingSubmits,
+            rafCount: () => rafCallbacks.size,
+            rafIds: () => [...rafCallbacks.keys()],
+            captureRafCallbacks: () => [...rafCallbacks.values()],
+            stepRaf(elapsedMs = 1000 / 60) {
+                nowMs += elapsedMs;
+                const entries = [...rafCallbacks.entries()];
+                rafCallbacks.clear();
+                for (const [, cb] of entries) cb(nowMs);
+            },
+            failNextTransportSubmit() { failNextSubmit = true; },
+            emitGlobal(type: string, event: Record<string, unknown> = {}) {
+                for (const listener of [...(globalListeners.get(type) ?? [])]) listener({type, ...event});
+            },
+            async publishRig(index: number) {
+                const base = fixturePublication(index);
+                if (base.publication.source.subject === 'image-set') {
+                    throw new Error('Expected model source in rig fixture publication');
+                }
+                const display: JobDisplayPublication = {
+                    ...base,
+                    publication: {
+                        ...base.publication,
+                        source: {
+                            ...base.publication.source,
+                            selector: {kind: 'rig', version: 1},
+                        },
+                    },
+                };
+                fixture.publish(display);
+                mounted.window.event(fixture.events.at(-1)!);
+                for (let tick = 0; tick < 12 && mounted.window.state().preparing; tick++) {
+                    await Bun.sleep(1);
+                    if (rafCallbacks.size > 0) {
+                        const entries = [...rafCallbacks.entries()];
+                        rafCallbacks.clear();
+                        for (const [, cb] of entries) cb(nowMs);
+                    }
+                }
+                await mounted.window.settled();
+                expect(mounted.window.state().error).toBeNull();
+                return display;
+            },
+            cleanup() {
+                try { mounted.stop(); } finally {
+                    for (const [key, descriptor] of saved) {
+                        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+                        else Reflect.deleteProperty(globalThis, key);
+                    }
+                }
+            },
+        };
+    }
+
+    test('#559 runtime transport lifecycle: #job-play, #job-loop, single rAF, loop wrap, physics-reset loop toggle, and one-shot completion', async () => {
+        const s = await mountRuntimeSession();
+        try {
+            await s.publishRig(1);
+            // Reached existing controls on initial Setup mount (no autoplay):
+            const animationSelect = s.workspace.querySelector('#job-animation')!;
+            const timeInput = s.workspace.querySelector('#job-time')!;
+            expect(animationSelect).not.toBeNull();
+            expect(timeInput).not.toBeNull();
+            expect(animationSelect.value).toBe('');
+            expect(timeInput.value).toBe('0');
+            expect(s.activePlayer().current).toBeNull();
+            expect(s.rafCount()).toBe(0);
+
+            // Selecting an animation poses at 0s and pauses without starting rAF:
+            animationSelect.value = 'inspect';
+            animationSelect.dispatchEvent({type: 'change'});
+            const player = s.activePlayer();
+            expect(player.current).toBe('inspect');
+            expect(player.paused).toBe(true);
+            expect(player.time).toBe(0);
+            expect(s.rafCount()).toBe(0);
+
+            // #559 transport controls required on .job-transport:
+            const playButton = s.workspace.querySelector('#job-play')!;
+            const loopInput = s.workspace.querySelector('#job-loop')!;
+            expect(playButton).not.toBeNull();
+            expect(loopInput).not.toBeNull();
+            expect(playButton.disabled).toBe(false);
+            expect(playButton.dataset.jobText).toBe('Play');
+            expect(playButton.getAttribute('aria-pressed')).toBe('false');
+            expect(loopInput.type).toBe('checkbox');
+            expect(loopInput.checked).toBe(true);
+
+            // Start continuous playback: single rAF armed, player resumed:
+            playButton.click();
+            expect(player.paused).toBe(false);
+            expect(playButton.dataset.jobText).toBe('Pause');
+            expect(playButton.getAttribute('aria-pressed')).toBe('true');
+            expect(s.rafCount()).toBe(1);
+
+            // Advance past one full 0.5s loop (36 steps of 1/60s = 0.6s):
+            s.stepRaf(0);
+            for (let i = 0; i < 6; i++) s.stepRaf(100);
+            expect(s.rafCount()).toBe(1);
+            expect(player.time).toBeCloseTo(0.6, 5);
+            expect(player.entry(0)?.animationTime).toBeCloseTo(0.1, 5);
+            expect(Number(timeInput.value)).toBeCloseTo(0.1, 5);
+
+            // Toggle loop off while playing: must explicitly reset physics via play(animation, {loop: false}) + seek(time) and keep playing:
+            const epochBeforeLoopToggle = player.physicsEpoch;
+            const playCallsBeforeToggle = player.counts().playCalls;
+            const seekCallsBeforeToggle = player.counts().seekCalls;
+            loopInput.checked = false;
+            loopInput.dispatchEvent({type: 'change'});
+            expect(player.loop).toBe(false);
+            expect(player.paused).toBe(false);
+            expect(player.counts().playCalls).toBe(playCallsBeforeToggle + 1);
+            expect(player.counts().seekCalls).toBe(seekCallsBeforeToggle + 1);
+            expect(player.physicsEpoch).toBeGreaterThan(epochBeforeLoopToggle);
+            expect(player.entry(0)?.animationTime).toBeCloseTo(0.1, 5);
+            expect(s.rafCount()).toBe(1);
+
+            // Step remaining 0.4s to reach one-shot duration (0.5s): must auto-pause at duration and disarm rAF:
+            for (let i = 0; i < 5; i++) s.stepRaf(100);
+            expect(player.paused).toBe(true);
+            expect(player.entry(0)?.animationTime).toBeCloseTo(0.5, 5);
+            expect(Number(timeInput.value)).toBeCloseTo(0.5, 5);
+            expect(playButton.dataset.jobText).toBe('Play');
+            expect(playButton.getAttribute('aria-pressed')).toBe('false');
+            expect(s.rafCount()).toBe(0);
+        } finally {
+            s.cleanup();
+        }
+    });
+
+    test('#559 runtime mid-play verdict capture without pause and byte-exact first request across motion, seek, play/pause, loop, camera, and part selection', async () => {
+        const s = await mountRuntimeSession();
+        try {
+            const act = fixtureAct('review-verdict', '  원문 그대로\n');
+            if (act.schema !== 'rig-review/act@2' || act.kind !== 'review-verdict' || act.value.stage !== 'rig-review') {
+                throw new Error('Expected review-verdict fixture act');
+            }
+            const display = await s.publishRig(1);
+            const source = display.publication.source;
+            if (source.subject === 'image-set' || source.selector?.kind !== 'rig' || !source.model) {
+                throw new Error('Expected rig model source');
+            }
+            const ask = {
+                askId: act.askId,
+                publicationId: display.publication.publicationId,
+                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const},
+                source,
+                status: 'pending' as const,
+            };
+            s.fixture.pending(ask, 2);
+            s.window.event(s.fixture.events.at(-1)!);
+            s.fixture.returnAct({
+                ...act,
+                publicationId: display.publication.publicationId,
+                source: {...source, selector: source.selector, model: source.model},
+                value: act.value,
+            });
+
+            const animationSelect = s.workspace.querySelector('#job-animation')!;
+            animationSelect.value = 'inspect';
+            animationSelect.dispatchEvent({type: 'change'});
+            const player = s.activePlayer();
+
+            const playButton = s.workspace.querySelector('#job-play')!;
+            const loopInput = s.workspace.querySelector('#job-loop')!;
+            expect(playButton).not.toBeNull();
+            expect(loopInput).not.toBeNull();
+            playButton.click();
+
+            // Step across loop seam (0.6s unwrapped -> 0.1s wrapped visible animationTime):
+            s.stepRaf(0);
+            for (let i = 0; i < 6; i++) s.stepRaf(100);
+            expect(player.time).toBeCloseTo(0.6, 5);
+            expect(player.entry(0)?.animationTime).toBeCloseTo(0.1, 5);
+            expect(player.paused).toBe(false);
+
+            const form = s.workspace.querySelector(`form[data-job-ask="${ask.askId}"]`)!;
+            const verdictSelect = form.querySelector('select[name="verdict"]')!;
+            const noteInput = form.querySelector('textarea[name="note"]')!;
+            verdictSelect.value = 'approved';
+            noteInput.value = '  원문 그대로\n';
+            form.dispatchEvent({type: 'input'});
+
+            // First submit loses reply in transport while playback is active:
+            const pausesBeforeCapture = player.counts().pauseCalls;
+            s.failNextTransportSubmit();
+            await form.onsubmit?.({preventDefault() {}});
+            expect(player.counts().pauseCalls).toBe(pausesBeforeCapture); // No pause() during mid-play capture
+            expect(player.paused).toBe(false);
+            expect(s.rafCount()).toBe(1);
+            expect(s.outgoingSubmits).toHaveLength(1);
+            expect(s.fixture.submissions).toHaveLength(0);
+            const firstAttempt = s.outgoingSubmits[0]!;
+            expect(firstAttempt.body.value.words).toBe('  원문 그대로\n');
+            expect(firstAttempt.body.capture.playing).toBe(true);
+            expect(firstAttempt.body.capture.animation).toBe('inspect');
+            expect(firstAttempt.body.capture.frame).toBeCloseTo(0.1, 5);
+            expect(typeof firstAttempt.body.capture.png).toBe('string');
+            expect(firstAttempt.body.capture.png.length).toBeGreaterThan(0);
+            expect(typeof firstAttempt.body.displayedNonce).toBe('string');
+            expect(typeof firstAttempt.body.submissionId).toBe('string');
+            expect(firstAttempt.body.expectedGeneration).toBe(2);
+
+            // While form is unchanged, advance natural motion, manual seek, play/pause, toggle loop, pan/zoom camera, and select part:
+            s.stepRaf(100);
+            const timeInput = s.workspace.querySelector('#job-time')!;
+            timeInput.value = '0.25';
+            timeInput.dispatchEvent({type: 'change'});
+            expect(player.paused).toBe(true);
+            expect(s.rafCount()).toBe(0);
+            playButton.click();
+            expect(player.paused).toBe(false);
+            playButton.click();
+            expect(player.paused).toBe(true);
+            loopInput.checked = false;
+            loopInput.dispatchEvent({type: 'change'});
+            s.workspace.querySelector('#zoom-in')!.click();
+            const partSelect = s.workspace.querySelector('#job-part')!;
+            partSelect.value = 'body';
+            partSelect.dispatchEvent({type: 'change'});
+
+            // Retry submit with unchanged form: must send byte-exact first mid-loop request without re-evaluating view guards:
+            await form.onsubmit?.({preventDefault() {}});
+            expect(s.outgoingSubmits).toHaveLength(2);
+            const retryAttempt = s.outgoingSubmits[1]!;
+            expect(retryAttempt.raw).toBe(firstAttempt.raw);
+            expect(retryAttempt.body).toEqual(firstAttempt.body);
+            expect(retryAttempt.body.capture.png).toBe(firstAttempt.body.capture.png);
+            expect(retryAttempt.body.value.words).toBe(firstAttempt.body.value.words);
+            expect(retryAttempt.body.displayedNonce).toBe(firstAttempt.body.displayedNonce);
+            expect(retryAttempt.body.submissionId).toBe(firstAttempt.body.submissionId);
+            expect(retryAttempt.body.expectedGeneration).toBe(firstAttempt.body.expectedGeneration);
+            expect(s.fixture.submissions).toHaveLength(1);
+            const committed = s.fixture.submissions[0]!.body as any;
+            expect(committed).toEqual(firstAttempt.body);
+        } finally {
+            s.cleanup();
+        }
+    });
+
+    test('#559 runtime cleanup and replacement ownership: source swap preserves compatible navigation, stale rAF never pauses replacement player, and hidden-hub/pagehide/unmount stop playback', async () => {
+        const incarnation = '12345678-1234-1234-1234-123456789abc';
+        const s = await mountRuntimeSession({hub: incarnation, visible: true});
+        try {
+            const first = await s.publishRig(1);
+            const animationSelect = s.workspace.querySelector('#job-animation')!;
+            const timeInput = s.workspace.querySelector('#job-time')!;
+            const partSelect = s.workspace.querySelector('#job-part')!;
+            animationSelect.value = 'inspect';
+            animationSelect.dispatchEvent({type: 'change'});
+            timeInput.value = '0.25';
+            timeInput.dispatchEvent({type: 'change'});
+            partSelect.value = 'body';
+            partSelect.dispatchEvent({type: 'change'});
+            const player1 = s.activePlayer();
+            expect(player1.current).toBe('inspect');
+            expect(player1.time).toBeCloseTo(0.25, 5);
+            expect(player1.paused).toBe(true);
+
+            const playButton = s.workspace.querySelector('#job-play')!;
+            expect(playButton).not.toBeNull();
+            playButton.click();
+            expect(player1.paused).toBe(false);
+            expect(s.rafCount()).toBe(1);
+            const staleCallbacks = s.captureRafCallbacks();
+            expect(staleCallbacks).toHaveLength(1);
+
+            // Replace source with compatible publication 2: stops rAF on outgoing player while preserving compatible navigation:
+            const second = await s.publishRig(2);
+            const player2 = s.activePlayer();
+            expect(player1.disposed).toBe(true);
+            expect(s.rafCount()).toBe(0);
+            expect(s.workspace.querySelector('#job-animation')!.value).toBe('inspect');
+            expect(Number(s.workspace.querySelector('#job-time')!.value)).toBeCloseTo(0.25, 5);
+            expect(s.workspace.querySelector('#job-part')!.value).toBe('body');
+            expect(player2.current).toBe('inspect');
+            expect(player2.paused).toBe(true);
+
+            // Start playback on replacement player2, then invoke the stale rAF callback from player1:
+            s.workspace.querySelector('#job-play')!.click();
+            expect(player2.paused).toBe(false);
+            const pausesOnPlayer2 = player2.counts().pauseCalls;
+            const advancesOnPlayer2 = player2.counts().advanceCalls;
+            staleCallbacks[0]!(2000);
+            expect(player2.paused).toBe(false);
+            expect(player2.counts().pauseCalls).toBe(pausesOnPlayer2);
+            expect(player2.counts().advanceCalls).toBe(advancesOnPlayer2);
+            expect(s.rafCount()).toBe(1);
+
+            // Hidden hub message cancels rAF and pauses player2:
+            s.emitGlobal('message', {
+                origin: 'http://127.0.0.1:4318',
+                source: s.parentWindow,
+                data: {
+                    schema: JOB_HUB_VISIBILITY,
+                    incarnation,
+                    jobId: s.fixture.jobId,
+                    publicationId: second.publication.publicationId,
+                    sourceHash: second.publication.source.sourceHash,
+                    visible: false,
+                    language: 'en',
+                },
+            });
+            expect(player2.paused).toBe(true);
+            expect(s.rafCount()).toBe(0);
+
+            // Restore hub visibility, resume play, and verify pagehide stops rAF and pauses player2:
+            s.emitGlobal('message', {
+                origin: 'http://127.0.0.1:4318',
+                source: s.parentWindow,
+                data: {
+                    schema: JOB_HUB_VISIBILITY,
+                    incarnation,
+                    jobId: s.fixture.jobId,
+                    publicationId: second.publication.publicationId,
+                    sourceHash: second.publication.source.sourceHash,
+                    visible: true,
+                    language: 'en',
+                },
+            });
+            s.workspace.querySelector('#job-play')!.click();
+            expect(player2.paused).toBe(false);
+            expect(s.rafCount()).toBe(1);
+            s.emitGlobal('pagehide');
+            expect(player2.paused).toBe(true);
+            expect(s.rafCount()).toBe(0);
+        } finally {
+            s.cleanup();
+        }
+    });
+
+    test('#559 runtime animation replacement while playing: switching clip or Setup cancels owned rAF, resets time to 0, and pauses without autoplay', async () => {
+        const s = await mountRuntimeSession({
+            clips: [
+                {name: 'inspect', duration: 0.5},
+                {name: 'second', duration: 0.75},
+            ],
+        });
+        try {
+            await s.publishRig(1);
+            const animationSelect = s.workspace.querySelector('#job-animation')!;
+            const timeInput = s.workspace.querySelector('#job-time')!;
+            const playButton = s.workspace.querySelector('#job-play')!;
+
+            // Select 'inspect' and start continuous playback:
+            animationSelect.value = 'inspect';
+            animationSelect.dispatchEvent({type: 'change'});
+            playButton.click();
+            expect(s.activePlayer().current).toBe('inspect');
+            expect(s.activePlayer().paused).toBe(false);
+            expect(s.rafCount()).toBe(1);
+
+            // Advance 'inspect' motion so visible time > 0:
+            s.stepRaf(0);
+            s.stepRaf(200);
+            expect(s.activePlayer().time).toBeGreaterThan(0);
+            expect(Number(timeInput.value)).toBeGreaterThan(0);
+            expect(s.rafCount()).toBe(1);
+            expect(playButton.dataset.jobText).toBe('Pause');
+            expect(playButton.getAttribute('aria-pressed')).toBe('true');
+
+            // While 'inspect' is playing with one rAF, switch animation select to 'second':
+            animationSelect.value = 'second';
+            animationSelect.dispatchEvent({type: 'change'});
+            const playerOnSecond = s.activePlayer();
+            expect(s.rafCount()).toBe(0);
+            expect(animationSelect.value).toBe('second');
+            expect(timeInput.value).toBe('0');
+            expect(playerOnSecond.current).toBe('second');
+            expect(playerOnSecond.time).toBe(0);
+            expect(playerOnSecond.entry(0)?.animation).toBe('second');
+            expect(playerOnSecond.entry(0)?.animationTime).toBe(0);
+            expect(playerOnSecond.paused).toBe(true);
+            expect(playButton.disabled).toBe(false);
+            expect(playButton.dataset.jobText).toBe('Play');
+            expect(playButton.getAttribute('aria-pressed')).toBe('false');
+
+            // Verify old motion does not advance across subsequent rAF steps while paused on 'second':
+            s.stepRaf(200);
+            expect(s.rafCount()).toBe(0);
+            expect(playerOnSecond.time).toBe(0);
+            expect(timeInput.value).toBe('0');
+
+            // Resume playback on 'second' and advance motion:
+            playButton.click();
+            expect(playerOnSecond.paused).toBe(false);
+            expect(s.rafCount()).toBe(1);
+            expect(playButton.dataset.jobText).toBe('Pause');
+            expect(playButton.getAttribute('aria-pressed')).toBe('true');
+            s.stepRaf(0);
+            s.stepRaf(200);
+            expect(playerOnSecond.time).toBeGreaterThan(0);
+            expect(Number(timeInput.value)).toBeGreaterThan(0);
+            expect(s.rafCount()).toBe(1);
+
+            // While 'second' is playing, switch animation select back to Setup (''):
+            animationSelect.value = '';
+            animationSelect.dispatchEvent({type: 'change'});
+            const playerOnSetup = s.activePlayer();
+            expect(s.rafCount()).toBe(0);
+            expect(animationSelect.value).toBe('');
+            expect(timeInput.value).toBe('0');
+            expect(playerOnSetup.current).toBeNull();
+            expect(playerOnSetup.paused).toBe(true);
+            expect(playerOnSetup.time).toBe(0);
+            expect(playButton.disabled).toBe(true);
+            expect(playButton.dataset.jobText).toBe('Play');
+            expect(playButton.getAttribute('aria-pressed')).toBe('false');
+
+            // Verify no autoplay across subsequent rAF steps on Setup:
+            s.stepRaf(200);
+            expect(s.rafCount()).toBe(0);
+            expect(playerOnSetup.current).toBeNull();
+            expect(playerOnSetup.time).toBe(0);
+            expect(timeInput.value).toBe('0');
+        } finally {
+            s.cleanup();
+        }
+    });
+});

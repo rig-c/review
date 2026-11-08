@@ -13,15 +13,50 @@ const laterPng = 'data:image/png;base64,bGF0ZXI=';
 /** Synthetic public-player state and pixel-copy boundaries, not browser pixel evidence. */
 function view() {
   let pauses = 0;
-  const player: {generation: number; current: string | null; time: number; slots: RigPlayer['slots']; renderer: object; pause(): void} = {
-    generation: 7, current: 'inspect', time: 0, slots: null, renderer: {}, pause() {pauses++;},
+  let loop = true;
+  let duration = 1;
+  let customEntry: (() => ReturnType<RigPlayer['entry']>) | undefined;
+  const player: {
+    generation: number;
+    current: string | null;
+    time: number;
+    slots: RigPlayer['slots'];
+    renderer: object;
+    pause(): void;
+    entry(track?: number): ReturnType<RigPlayer['entry']>;
+  } = {
+    generation: 7,
+    current: 'inspect',
+    time: 0,
+    slots: null,
+    renderer: {},
+    pause() {pauses++;},
+    entry(track = 0) {
+      if (track !== 0) return null;
+      if (customEntry) return customEntry();
+      if (player.current === null) return null;
+      const trackTime = player.time;
+      const animationTime = duration > 0 ? (loop ? trackTime % duration : Math.min(trackTime, duration)) : 0;
+      return {animation: player.current, loop, trackTime, animationTime, duration, alpha: 1, additive: false};
+    },
   };
   const presentation: JobRigPresentation = {canvas: {} as HTMLCanvasElement, width: 2, height: 2, ratio: 1,
     area: {x: 0, y: 0, width: 2, height: 2}};
   const state: JobRigDrawState = {player, presentation, frameGeneration: 7,
     source: {publicationId: 'publication-1', instanceKey: 'instance-1', sourceHash: 'a'.repeat(64), pageId: 'page-1'},
     layout: 'layout-1', defaultCamera: true, wholeRig: true, playing: true};
-  return {state, player, pauses: () => pauses};
+  return {
+    state,
+    player,
+    pauses: () => pauses,
+    setClip(options: {loop?: boolean; duration?: number}) {
+      if (options.loop !== undefined) loop = options.loop;
+      if (options.duration !== undefined) duration = options.duration;
+    },
+    setEntry(fn: (() => ReturnType<RigPlayer['entry']>) | undefined) {
+      customEntry = fn;
+    },
+  };
 }
 
 function submission() {
@@ -64,6 +99,7 @@ test('#557 UI freezes numeric zero and named playing frame before async encoding
 test('#557 UI setup remains distinct from animation zero', async () => {
   const v = view();
   v.player.current = null;
+  v.state.playing = false;
   const frozen = freezeJobRigCapture(recordJobRigDraw(v.state, 1), v.state, 'ask-1',
     () => ({width: 2, height: 2, encode: async () => firstPng}));
   const capture = await frozen.encode();
@@ -305,6 +341,7 @@ function canonicalLayout(ratio: number, run: (fixture: {
   publication: {source: {sourceHash: string}};
   player: ReturnType<typeof view>['player'];
   changeRatio(value: number): void;
+  setPlaying(value: boolean): void;
 }) => void) {
   const source = readFileSync(new URL('../web/job-session.ts', import.meta.url), 'utf8');
   const start = source.indexOf('    function rigDrawState(): JobRigDrawState {');
@@ -331,6 +368,7 @@ function canonicalLayout(ratio: number, run: (fixture: {
   const owner = {player: v.player, rigRoot, rigPresentation: presentation, display: {publication},
     inspection: {frame: () => ({generation: v.player.generation}), value: () => null}};
   const context = {current: owner, hubVisible: true, selectedPart: '', pageId: v.state.source.pageId,
+    playing: false,
     viewport: {paneFrame: () => ({center}), numericView: () => ({cameras: {rig: camera}})},
     el: (id: string) => id === 'rig-viewport' ? viewportPane : {hidden: false}, jobRigPixelPlacement};
   const read: () => JobRigDrawState = new Function('scope', `with(scope){${body};return rigDrawState;}`)(context);
@@ -342,6 +380,7 @@ function canonicalLayout(ratio: number, run: (fixture: {
   changeRatio(ratio);
   try {
     run({read, pane, pixels, canvas, publication, player: v.player, changeRatio,
+      setPlaying(value) {context.playing = value;},
       move(x, y) {pane.left += x; pane.top += y; pixels.left += x; pixels.top += y;}});
   } finally {
     for (const [key, descriptor] of descriptors) {
@@ -405,4 +444,165 @@ test('#557 device phase remains normalized for negative whole-pixel translations
   const canvas = {left: 0, top: -1};
   expect(jobRigPixelPlacement(pane, canvas, 2)).toEqual(jobRigPixelPlacement(
     {left: pane.left - 3, top: pane.top + 3}, {left: canvas.left - 3, top: canvas.top + 3}, 2));
+});
+
+test('#559 UI binds wrapped animationTime from required public entry(0) while preserving physical trackTime without pause', async () => {
+  const v = view();
+  v.setClip({loop: true, duration: 1});
+  v.player.time = 1.375;
+  v.state.playing = true;
+  const draw = recordJobRigDraw(v.state, 1);
+  expect(draw.time).toBeCloseTo(0.375, 12);
+  expect(draw.playing).toBe(true);
+  let copies = 0;
+  const frozen = freezeJobRigCapture(draw, v.state, 'ask-1', () => {
+    copies++;
+    return {width: 2, height: 2, encode: async () => firstPng};
+  });
+  expect(copies).toBe(1);
+  const capture = await frozen.encode();
+  expect(capture.frame).toBeCloseTo(0.375, 12);
+  expect(capture.animation).toBe('inspect');
+  expect(capture.playing).toBe(true);
+  expect(v.pauses()).toBe(0);
+
+  v.setClip({loop: false, duration: 0.5});
+  v.player.time = 0.5;
+  v.state.playing = false;
+  const endedDraw = recordJobRigDraw(v.state, 2);
+  const endedCapture = await freezeJobRigCapture(endedDraw, v.state, 'ask-1',
+    () => ({width: 2, height: 2, encode: async () => laterPng})).encode();
+  expect(endedCapture.frame).toBe(0.5);
+  expect(endedCapture.playing).toBe(false);
+  expect(v.pauses()).toBe(0);
+});
+
+test('#559 UI setup and active clip validate required entry(0) nullable animation and reject fabricated setup time', async () => {
+  const v = view();
+  v.player.current = null;
+  v.player.time = 0;
+  v.state.playing = false;
+  v.setEntry(() => null);
+  const nullSetup = await freezeJobRigCapture(recordJobRigDraw(v.state, 1), v.state, 'ask-1',
+    () => ({width: 2, height: 2, encode: async () => firstPng})).encode();
+  expect(nullSetup.frame).toBe('setup');
+  expect(nullSetup.playing).toBe(false);
+
+  // clear(0, {mix: 0}) on composed tracks leaves an empty entry with animation: null at 0s.
+  v.setEntry(() => ({animation: null, loop: false, trackTime: 0, animationTime: 0, duration: 0, alpha: 1, additive: false}));
+  const clearedSetup = await freezeJobRigCapture(recordJobRigDraw(v.state, 2), v.state, 'ask-1',
+    () => ({width: 2, height: 2, encode: async () => firstPng})).encode();
+  expect(clearedSetup.frame).toBe('setup');
+
+  // Fabricated setup time, playing: true in setup, or active animation in setup entry must refuse.
+  v.state.playing = true;
+  expect(() => recordJobRigDraw(v.state, 3)).toThrow('JOB_STILL_CAPTURE_FAILED');
+  v.state.playing = false;
+  v.player.time = 0.125;
+  expect(() => recordJobRigDraw(v.state, 3)).toThrow('JOB_STILL_CAPTURE_FAILED');
+  v.player.time = 0;
+  v.setEntry(() => ({animation: 'inspect', loop: false, trackTime: 0, animationTime: 0, duration: 1, alpha: 1, additive: false}));
+  expect(() => recordJobRigDraw(v.state, 3)).toThrow('JOB_STILL_CAPTURE_FAILED');
+  v.setEntry(() => ({animation: null, loop: false, trackTime: 0.125, animationTime: 0, duration: 0, alpha: 1, additive: false}));
+  expect(() => recordJobRigDraw(v.state, 3)).toThrow('JOB_STILL_CAPTURE_FAILED');
+
+  // Active clip must have a valid matching non-null entry(0).
+  v.player.current = 'inspect';
+  v.player.time = 0.25;
+  for (const invalid of [
+    null,
+    {animation: null, loop: true, trackTime: 0.25, animationTime: 0.25, duration: 1, alpha: 1, additive: false},
+    {animation: '', loop: true, trackTime: 0.25, animationTime: 0.25, duration: 1, alpha: 1, additive: false},
+    {animation: 'other', loop: true, trackTime: 0.25, animationTime: 0.25, duration: 1, alpha: 1, additive: false},
+    {animation: 'inspect', loop: true, trackTime: 0.5, animationTime: 0.25, duration: 1, alpha: 1, additive: false},
+    {animation: 'inspect', loop: true, trackTime: 0.25, animationTime: 1.25, duration: 1, alpha: 1, additive: false},
+    {animation: 'inspect', loop: true, trackTime: 0.25, animationTime: -0.01, duration: 1, alpha: 1, additive: false},
+  ]) {
+    v.setEntry(() => invalid);
+    expect(() => recordJobRigDraw(v.state, 4)).toThrow('JOB_STILL_CAPTURE_FAILED');
+  }
+});
+
+test('#559 UI refuses capture before and after synchronous pixel copy when playing, loop, or unwrapped trackTime drifts', () => {
+  for (const phase of ['before-copy', 'during-copy'] as const) {
+    for (const drift of ['playing', 'loop', 'wrapped-trackTime'] as const) {
+      const v = view();
+      v.setClip({loop: true, duration: 1});
+      v.player.time = 0.25;
+      v.state.playing = true;
+      const draw = recordJobRigDraw(v.state, 1);
+      const mutate = () => {
+        if (drift === 'playing') v.state.playing = false;
+        else if (drift === 'loop') v.setClip({loop: false});
+        else v.player.time = 1.25; // visible animationTime stays 0.25, but physical trackTime advanced a full loop
+      };
+      if (phase === 'before-copy') mutate();
+      let copies = 0;
+      expect(() => freezeJobRigCapture(draw, v.state, 'ask-1', () => {
+        copies++;
+        if (phase === 'during-copy') mutate();
+        return {width: 2, height: 2, encode: async () => firstPng};
+      })).toThrow('JOB_STILL_BINDING_MISMATCH');
+      expect(copies).toBe(phase === 'before-copy' ? 0 : 1);
+    }
+  }
+});
+
+test('#559 UI canonical rigDrawState binds live playing state instead of hardcoded false', () => {
+  canonicalLayout(1, fixture => {
+    expect(fixture.read().playing).toBe(false);
+    fixture.setPlaying(true);
+    expect(fixture.read().playing).toBe(true);
+  });
+});
+
+test('#559 UI reply-loss retry preserves byte-exact first submission across motion advance, seek, play/pause, loop, camera, and part selection', async () => {
+  const v = view(), cache = createJobRigSubmission(), input = submission();
+  v.setClip({loop: true, duration: 1});
+  v.player.time = 0.25;
+  v.state.playing = true;
+  let copies = 0;
+  const saved = await cache.prepare(input, () => {
+    copies++;
+    return freezeJobRigCapture(recordJobRigDraw(v.state, 1), v.state, input.askId,
+      () => ({width: 2, height: 2, encode: async () => firstPng}));
+  });
+  expect(saved.capture).toMatchObject({png: firstPng, frame: 0.25, animation: 'inspect', playing: true});
+  const savedBytes = JSON.stringify(saved);
+
+  // Advance continuous motion across a loop wrap, manual seek, pause, toggle loop, pan/zoom camera, and select part:
+  v.player.generation = 19;
+  v.player.time = 1.75;
+  v.player.time = 0.5;
+  v.state.playing = false;
+  v.setClip({loop: false});
+  v.state.defaultCamera = false;
+  v.state.wholeRig = false;
+  v.player.slots = ['head'];
+  v.state.layout = 'layout-after-motion-and-controls';
+
+  const replay = await cache.prepare(input, () => {
+    throw new Error('must reuse first frozen submission across motion and view controls');
+  });
+  expect(replay).toBe(saved);
+  expect(JSON.stringify(replay)).toBe(savedBytes);
+  expect(copies).toBe(1);
+  expect(v.pauses()).toBe(0);
+
+  // Only after form input resets the submission controller and creates a new submissionId does a wrapped mid-play retry re-capture:
+  cache.reset();
+  v.setClip({loop: true, duration: 1});
+  v.state.frameGeneration = 19;
+  v.player.time = 1.375;
+  v.state.playing = true;
+  v.state.defaultCamera = true;
+  v.state.wholeRig = true;
+  v.player.slots = null;
+  const fresh = await cache.prepare({...input, submissionId: 'submission-2'}, () => {
+    copies++;
+    return freezeJobRigCapture(recordJobRigDraw(v.state, 2), v.state, input.askId,
+      () => ({width: 2, height: 2, encode: async () => laterPng}));
+  });
+  expect(copies).toBe(2);
+  expect(fresh.capture).toMatchObject({png: laterPng, frame: 0.375, animation: 'inspect', playing: true});
 });
