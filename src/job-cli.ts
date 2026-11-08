@@ -176,42 +176,60 @@ function outputConsumerAct(actBytes: Buffer, png: Buffer | undefined, act: JobAc
   try {
     if (png && destination && act.schema === JOB_RIG_REVIEW_ACT_SCHEMA) {
       const directory = destinationDirectory(destination, 'JOB_STILL_OUTPUT_FAILED', false);
-      lock = join(directory, '.rig-review-still.lock');
-      lockDescriptor = openSync(lock, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
-      const target = join(directory, act.still.path);
-      let existing = false;
+      const directoryDescriptor = openSync(directory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | constants.O_NOFOLLOW);
       try {
-        const descriptor = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const directoryIdentity = fstatSync(directoryDescriptor);
+        if (!directoryIdentity.isDirectory()) throw new JobError('JOB_STILL_OUTPUT_FAILED');
+        lock = join(directory, '.rig-review-still.lock');
         try {
-          const info = fstatSync(descriptor);
-          if (!info.isFile() || info.size > jobStillByteLimit || jobHash(readFileSync(descriptor)) !== act.still.sha256) {
-            throw new JobError('JOB_STILL_OUTPUT_FAILED');
+          lockDescriptor = openSync(lock, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+            throw new JobError('JOB_STILL_OUTPUT_FAILED',
+              `JOB_STILL_OUTPUT_FAILED: retained lock ${lock} already exists; wait for another writer to finish or remove ${lock} if a killed process left it`);
           }
-          existing = true;
-        } finally { closeSync(descriptor); }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
-      if (!existing) {
-        temporary = join(directory, '.rig-review-still-' + randomUUID() + '.tmp');
-        const descriptor = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+          throw error;
+        }
+        const target = join(directory, act.still.path);
+        let existing = false;
         try {
-          const owned = fstatSync(descriptor);
-          temporaryIdentity = {dev: owned.dev, ino: owned.ino};
-          let offset = 0;
-          while (offset < png.byteLength) {
-            const written = writeSync(descriptor, png, offset, png.byteLength - offset);
-            if (written <= 0) throw new JobError('JOB_STILL_OUTPUT_FAILED');
-            offset += written;
-          }
-          fsyncSync(descriptor);
-          const info = fstatSync(descriptor);
-          installedIdentity = {dev: info.dev, ino: info.ino};
-        } finally { closeSync(descriptor); }
-        renameSync(temporary, target);
-        temporary = undefined;
-        installed = target;
-      }
+          const descriptor = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+          try {
+            const info = fstatSync(descriptor);
+            if (!info.isFile() || info.size > jobStillByteLimit || jobHash(readFileSync(descriptor)) !== act.still.sha256) {
+              throw new JobError('JOB_STILL_OUTPUT_FAILED');
+            }
+            existing = true;
+          } finally { closeSync(descriptor); }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+        if (!existing) {
+          temporary = join(directory, '.rig-review-still-' + randomUUID() + '.tmp');
+          const descriptor = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+          try {
+            const owned = fstatSync(descriptor);
+            temporaryIdentity = {dev: owned.dev, ino: owned.ino};
+            let offset = 0;
+            while (offset < png.byteLength) {
+              const written = writeSync(descriptor, png, offset, png.byteLength - offset);
+              if (written <= 0) throw new JobError('JOB_STILL_OUTPUT_FAILED');
+              offset += written;
+            }
+            fsyncSync(descriptor);
+            const info = fstatSync(descriptor);
+            installedIdentity = {dev: info.dev, ino: info.ino};
+          } finally { closeSync(descriptor); }
+          renameSync(temporary, target);
+          temporary = undefined;
+          installed = target;
+        }
+        const currentDirectory = lstatSync(directory);
+        if (currentDirectory.dev !== directoryIdentity.dev || currentDirectory.ino !== directoryIdentity.ino) {
+          throw new JobError('JOB_STILL_OUTPUT_FAILED');
+        }
+        fsyncSync(directoryDescriptor);
+      } finally { closeSync(directoryDescriptor); }
     }
     if (options.write && !options.writeBytes) {
       // A legacy callback cannot report partial progress, so preserve an installed PNG on a thrown write.
@@ -225,11 +243,11 @@ function outputConsumerAct(actBytes: Buffer, png: Buffer | undefined, act: JobAc
         emitted += written;
       }
     }
-  } catch {
+  } catch (error) {
     if (emitted === 0 && installed && installedIdentity) {
       unlinkOwned(installed, installedIdentity);
     }
-    throw new JobError('JOB_STILL_OUTPUT_FAILED');
+    throw error instanceof JobError ? error : new JobError('JOB_STILL_OUTPUT_FAILED');
   } finally {
     if (temporary && temporaryIdentity) unlinkOwned(temporary, temporaryIdentity);
     if (lockDescriptor !== undefined) {
