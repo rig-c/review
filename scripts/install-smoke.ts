@@ -157,7 +157,7 @@ try {
  const refused: JobHostAttachFailure = {code: 'JOB_HOST_ATTACH_REFUSED', reason: 'stopped', phase: 'acceptance'};
  assert(incarnation.length === 36 && reuseBinding.root === input && field === 'listenerIncarnation' &&
   refused.reason === 'stopped', 'ATTACH_TYPES');
- const strict = await start({...options, reuseOnly: {expected: attachment}});
+ const strict = await start({...options, port: Number(new URL(attachment.origin).port || '80'), reuseOnly: {expected: attachment}});
  try {assert(strict.reused && JSON.stringify(strict.attachment) === JSON.stringify(attachment), 'STRICT_ATTACH');}
  finally {strict.stop();}
  const session: JobSession = host.session;

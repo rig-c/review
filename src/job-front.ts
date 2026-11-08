@@ -614,7 +614,8 @@ export function createJobRequestContext(session: JobSession, startup: JobHostOpt
         if (!published || stopped || !accepting() || !descriptor().hasIncarnation) return null;
         try {
             const value = buildAttachment(session, origin, listenerIncarnation, identity);
-            return Buffer.byteLength(JSON.stringify({ok: true, attachment: value, pid: process.pid})) <= WORKSPACE_BODY_LIMIT ? value : null;
+            return Buffer.byteLength(JSON.stringify({expected: value, observed: captured})) <= WORKSPACE_BODY_LIMIT &&
+                Buffer.byteLength(JSON.stringify({ok: true, attachment: value, pid: process.pid})) <= WORKSPACE_BODY_LIMIT ? value : null;
         } catch {return null;}
     }
     return {
