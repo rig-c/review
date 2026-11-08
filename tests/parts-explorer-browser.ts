@@ -235,7 +235,8 @@ function findBrowserBinary(): string {
 
 export async function launchCdpSession(profileDir: string, options: {sendDeadlineMs?: number; onEvent?: CdpEventHandler} = {}): Promise<InputCdpSession> {
   const bin = findBrowserBinary();
-  const isHeadlessShell = bin.includes('headless');let mouseButtons=0;
+  const isHeadlessShell = bin.includes('headless');
+  let mouseButtons = 0;
   const childEnv: Record<string, string | undefined> = {
     ...process.env,
     DBUS_SESSION_BUS_ADDRESS: '/dev/null',
@@ -359,7 +360,16 @@ export async function launchCdpSession(profileDir: string, options: {sendDeadlin
         }
         return res?.result?.value as T;
       },
-      async mouse(type,x,y,deltaY=0){if(type==='mousePressed')mouseButtons=1;if(type==='mouseReleased')mouseButtons=0;await send('Input.dispatchMouseEvent',{type,x,y,buttons:mouseButtons,...(type==='mouseWheel'?{deltaX:0,deltaY}:type==='mouseMoved'?{}:{button:'left',clickCount:1})},sessionId);},
+      async mouse(type, x, y, deltaY = 0) {
+        if (type === 'mousePressed') mouseButtons = 1;
+        if (type === 'mouseReleased') mouseButtons = 0;
+        let event = {};
+        if (type === 'mouseWheel') event = { deltaX: 0, deltaY };
+        else if (type === 'mouseMoved') {
+          if (mouseButtons === 1) event = { button: 'left' };
+        } else event = { button: 'left', clickCount: 1 };
+        await send('Input.dispatchMouseEvent', { type, x, y, buttons: mouseButtons, ...event }, sessionId);
+      },
       async touch(type,points){await send('Input.dispatchTouchEvent',{type,touchPoints:points},sessionId);},
       async screenshot(clip?: { x: number; y: number; width: number; height: number }): Promise<Buffer> {
         const res = await send(
