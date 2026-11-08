@@ -94,7 +94,11 @@ function assertNextVerbatimOracle(
     const rig = expected.kind === 'review-verdict' &&
       (expected.value as {stage?: string}).stage === 'rig-review';
     expect(act.schema).toBe(rig ? JOB_RIG_REVIEW_ACT_SCHEMA : JOB_ACT_SCHEMA);
-    if (rig) expect((act as JobRigReviewAct).still).toEqual(expected.still);
+    if (rig) {
+      const expectedStill = expected.still;
+      expect(expectedStill).toBeDefined();
+      expect((act as JobRigReviewAct).still).toEqual(expectedStill!);
+    }
     expect(act.actId).toBe(expected.actId);
     expect(act.jobId).toBe(expected.jobId);
     expect(act.askId).toBe(expected.askId);
