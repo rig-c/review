@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.2](https://github.com/rig-c/review/compare/v2.4.1...v2.4.2) (2026-11-08)
+
+
+### Bug Fixes
+
+* preserve job snapshot lifetimes through close ([#537](https://github.com/rig-c/review/issues/537)) ([6505a05](https://github.com/rig-c/review/commit/6505a0569ffd8b052bcf6a2b0b1b54ad045a13a9))
+
 ## [2.4.1](https://github.com/rig-c/review/compare/v2.4.0...v2.4.1) (2026-11-07)
 
 
