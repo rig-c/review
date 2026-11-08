@@ -1461,3 +1461,95 @@ test('CP1 malformed origins, own accessors and HTTP gates refuse through normal 
     'X-Review-Capability': owner.session.hostCredentials().ui}, body}); expect(query.status).toBe(403); await query.body?.cancel();
   const ordinary = await startJobHost({...options, reuseOnly: undefined}); hosts.push(ordinary); expect(ordinary.reused).toBe(true);
 });
+
+test('CP1 ordinary startJobHost preserves released 2.6.0 getter and prototype option compatibility while strict reuseOnly enforces own-data snapshots', async () => {
+  const f = await createFixture(), base = baseOptions(f);
+  const proto = {inheritedTag: 'prototype-backed'};
+  const makeGetterOptions = (stateDir: string, counters: {root: number; reviewer: number; installs: number}, withUndefinedReuseOnly = false): JobHostOptions => {
+    const reviewerObj = Object.create(proto) as JobHostOptions['reviewer'];
+    Object.assign(reviewerObj, base.reviewer);
+    const target: Record<string, unknown> = {
+      stateDir,
+      fingerprint: base.fingerprint,
+      readPublished: base.readPublished,
+      readerId: base.readerId,
+      installWriterBinding: () => {counters.installs++;},
+      bindingId: base.bindingId,
+      partsEnumerator: base.partsEnumerator,
+      partsEnumeratorId: base.partsEnumeratorId,
+      ...(withUndefinedReuseOnly ? {reuseOnly: undefined} : {}),
+    };
+    Object.defineProperties(target, {
+      root: {enumerable: true, get() {counters.root++; return base.root;}},
+      reviewer: {enumerable: true, get() {counters.reviewer++; return reviewerObj;}},
+    });
+    return target as unknown as JobHostOptions;
+  };
+  const makeProtoOptions = (stateDir: string, counters: {root: number; reviewer: number; installs: number}, withUndefinedReuseOnly = false): JobHostOptions => {
+    const target = Object.create(proto) as Record<string, unknown>;
+    Object.defineProperties(target, {
+      root: {enumerable: true, get() {counters.root++; return base.root;}},
+      stateDir: {enumerable: true, value: stateDir},
+      fingerprint: {enumerable: true, value: base.fingerprint},
+      reviewer: {enumerable: true, get() {counters.reviewer++; return base.reviewer;}},
+      readPublished: {enumerable: true, value: base.readPublished},
+      readerId: {enumerable: true, value: base.readerId},
+      installWriterBinding: {enumerable: true, value: () => {counters.installs++;}},
+      bindingId: {enumerable: true, value: base.bindingId},
+      partsEnumerator: {enumerable: true, value: base.partsEnumerator},
+      partsEnumeratorId: {enumerable: true, value: base.partsEnumeratorId},
+      ...(withUndefinedReuseOnly ? {reuseOnly: {enumerable: true, value: undefined}} : {}),
+    });
+    return target as unknown as JobHostOptions;
+  };
+
+  for (const [label, factory] of [['getter', makeGetterOptions], ['proto', makeProtoOptions]] as const) {
+    const currentState = join(f.scratch, `current-ordinary-${label}`);
+    const currentCounts = {root: 0, reviewer: 0, installs: 0};
+    const owner = await startJobHost(factory(currentState, currentCounts));
+    hosts.push(owner);
+    expect(owner.reused).toBe(false);
+    expect(owner.attachment).not.toBeNull();
+    expect(currentCounts).toEqual({root: 1, reviewer: 1, installs: 1});
+
+    const reused = await startJobHost(factory(currentState, currentCounts, true));
+    hosts.push(reused);
+    expect(reused.reused).toBe(true);
+    expect(reused.attachment).toEqual(owner.attachment);
+    expect(currentCounts).toEqual({root: 2, reviewer: 2, installs: 2});
+    reused.stop();
+    owner.stop();
+  }
+
+  const owner = await startJobHost(base);
+  hosts.push(owner);
+
+  let reuseOnlyGetterCalls = 0;
+  const withReuseOnlyAccessor = {...base};
+  Object.defineProperty(withReuseOnlyAccessor, 'reuseOnly', {
+    enumerable: true,
+    get() {reuseOnlyGetterCalls++; return undefined;},
+  });
+  await expect(startJobHost(withReuseOnlyAccessor)).rejects.toMatchObject({code: 'JOB_REQUEST_INVALID'});
+  expect(reuseOnlyGetterCalls).toBe(0);
+
+  const protoWithReuseOnlyAccessor = Object.create({
+    get reuseOnly() {reuseOnlyGetterCalls++; return undefined;},
+  }) as JobHostOptions;
+  Object.assign(protoWithReuseOnlyAccessor, base);
+  await expect(startJobHost(protoWithReuseOnlyAccessor)).rejects.toMatchObject({code: 'JOB_REQUEST_INVALID'});
+  expect(reuseOnlyGetterCalls).toBe(0);
+
+  const expected = owner.attachment!;
+  await expect(startJobHost(Object.assign(Object.create(proto), {...base, reuseOnly: {expected}})))
+    .rejects.toMatchObject({code: 'JOB_REQUEST_INVALID'});
+
+  const nonEnumDeclared = {...base, reuseOnly: {expected: cloneExpected(expected)}} as Record<string, unknown>;
+  Object.defineProperty(nonEnumDeclared, 'fingerprint', {
+    value: base.fingerprint, enumerable: false, configurable: true, writable: true,
+  });
+  const strictAttached = await startJobHost(nonEnumDeclared as unknown as JobHostOptions);
+  hosts.push(strictAttached);
+  expect(strictAttached.reused).toBe(true);
+  expect(strictAttached.attachment).toEqual(expected);
+});

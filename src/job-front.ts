@@ -1120,11 +1120,21 @@ function snapshotHostOptions(options: JobHostOptions): JobHostOptions {
     return copy as unknown as JobHostOptions;
 }
 
+function reuseOnlyDescriptor(value: object): PropertyDescriptor | undefined {
+    for (let current: object | null = value; current; current = Object.getPrototypeOf(current)) {
+        const descriptor = Object.getOwnPropertyDescriptor(current, 'reuseOnly');
+        if (descriptor) return descriptor;
+    }
+    return undefined;
+}
+
 /** Full standing owner host. #489 can publish this seam after its own contract review. */
 export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHost> {
     if (!options || typeof options !== 'object') throw new JobError('JOB_REQUEST_INVALID');
-    const startup = snapshotHostOptions(options);
-    if (startup.reuseOnly !== undefined) return attachJobHost(startup);
+    const reuseOnly = reuseOnlyDescriptor(options);
+    if (reuseOnly && !('value' in reuseOnly)) throw new JobError('JOB_REQUEST_INVALID');
+    if (reuseOnly?.value !== undefined) return attachJobHost(snapshotHostOptions(options));
+    const startup = {...options};
     const identity = jobHostIdentity(startup);
     const session = new JobSession(startup);
     const installBinding = (origin: string) => installJobWriterBinding(session, startup, origin);
@@ -1174,7 +1184,7 @@ export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHos
             if (typeof acquired.row.listenerIncarnation === 'string' && UUID_V4_RE.test(acquired.row.listenerIncarnation)) {
                 try {
                     const expected = buildAttachment(session, origin, acquired.row.listenerIncarnation, identity);
-                    const attached = await attachJobHost({...startup, reuseOnly: {expected}});
+                    const attached = await attachJobHost({...startup, reviewer: expected.binding.reviewer, reuseOnly: {expected}});
                     attachment = attached.attachment; attached.stop();
                 } catch { /* Added metadata never changes ordinary reuse's existing decision. */ }
             }

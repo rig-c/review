@@ -18,11 +18,57 @@ C4 changes `JobPartsManifestPath`, `JobPartImagePath`, `JobPartsIdentity` and th
 import {startJobHost} from '@rig-c/review/job-host';
 import type {
   JobHostOptions, JobOwnerHost, JobHostPorts,
+  JobHostListenerIncarnation, JobHostReuseBinding, JobHostReuseExpectation,
+  JobHostAttachField, JobHostAttachFailure,
   JobSessionOptions, JobSession, JobWorkerOptions,
   JobPublicationReader, JobPublishedContext,
 } from '@rig-c/review/job-host';
 
 function startJobHost(options: JobHostOptions): Promise<JobOwnerHost>;
+
+type JobHostListenerIncarnation = string;
+
+interface JobHostReuseBinding {
+  readonly root: string;
+  readonly stateDir: string;
+  readonly fingerprint: string;
+  readonly reviewer: JobReviewerBinding;
+  readonly readerId: string | null;
+  readonly bindingId: string | null;
+  readonly partsEnumeratorId: string | null;
+  readonly partsEnumeratorVersion: string | null;
+  readonly apiSchema: typeof JOB_API_SCHEMA;
+  readonly actSchema: typeof JOB_ACT_SCHEMA;
+}
+
+interface JobHostReuseExpectation {
+  readonly jobId: JobId;
+  readonly origin: string;
+  readonly listenerIncarnation: JobHostListenerIncarnation;
+  readonly binding: JobHostReuseBinding;
+}
+
+type JobHostAttachField =
+  | 'jobId' | 'origin' | 'listenerIncarnation'
+  | 'root' | 'stateDir' | 'fingerprint'
+  | 'reviewer.id' | 'reviewer.role'
+  | 'readerId' | 'bindingId' | 'partsEnumeratorId'
+  | 'partsEnumeratorVersion' | 'apiSchema' | 'actSchema' | 'port';
+
+type JobHostAttachFailure =
+  | {
+      readonly code: 'JOB_HOST_ATTACH_REFUSED';
+      readonly reason: 'missing' | 'closed' | 'incarnation-missing'
+        | 'replaced' | 'read' | 'probe' | 'stopped' | 'race';
+      readonly phase: 'input' | 'state' | 'record'
+        | 'probe' | 'adoption' | 'acceptance';
+    }
+  | {
+      readonly code: 'JOB_HOST_REUSE_MISMATCH';
+      readonly field: JobHostAttachField;
+      readonly expected: string | null;
+      readonly actual: string | null;
+    };
 
 interface JobSessionOptions {
   readonly root: string;
@@ -48,6 +94,9 @@ interface JobHostOptions extends JobWorkerOptions {
   readonly readerId?: string;
   readonly bindingId?: string;
   readonly partsEnumeratorId?: string;
+  readonly reuseOnly?: {
+    readonly expected: JobHostReuseExpectation;
+  };
 }
 
 type JobPublicationReader = (input: {
@@ -92,6 +141,7 @@ interface JobOwnerHost {
   readonly origin: string;
   readonly ownerUrl: string;
   readonly reused: boolean;
+  readonly attachment: JobHostReuseExpectation | null;
   stop(): void;
 }
 
@@ -109,6 +159,27 @@ interface JobHostPorts {
     readonly active: boolean;
     readonly busy: boolean;
   }>>;
+}
+
+const attached = await startJobHost({
+  ...options,
+  reuseOnly: {expected},
+});
+
+interface InternalJobHostAttachRequest {
+  readonly expected: JobHostReuseExpectation;
+  readonly observed: {
+    readonly root: {readonly dev: number; readonly ino: number};
+    readonly stateDir: {readonly dev: number; readonly ino: number};
+    readonly store: {readonly dev: number; readonly ino: number};
+    readonly record: {readonly dev: number; readonly ino: number};
+  };
+}
+
+interface InternalJobHostAttachResponse {
+  readonly ok: true;
+  readonly attachment: JobHostReuseExpectation;
+  readonly pid: number;
 }
 ```
 
@@ -141,17 +212,137 @@ never migrated, relabelled or rebound to new approvals.
 
 `readPublished` supplies the producer's published semantic context for the exact
 frozen record. `installWriterBinding` receives the private finalized-act fetch
-grant after reuse validation on each successful new or reused startup. The trusted
+grant after reuse validation on each successful new or ordinary reused startup. The trusted
 writer adapter owns its private binding and storage. A callback failure rejects
 startup with `JOB_AUTHORITY_REFUSED`. `afterSnapshot` and `afterDirectorySync` are
 optional disposable-test boundary hooks inherited from the existing seam.
+
+Each standalone `startJobHost` and internal `startJobWorker` listener start mints a
+fresh canonical lowercase UUIDv4 `listenerIncarnation` via `randomUUID()`. The format
+matches `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` in
+exact lowercase with version `4`, variant `8|9|a|b` and zero leading or trailing
+whitespace. Stopping and restarting a listener on the same port, `jobId`, PID and
+durable grants rotates `listenerIncarnation`.
+
+`GET /jobs/<jobId>/host` preserves its exact legacy `JobHostRecord` projection, key
+order and raw bytes without `listenerIncarnation` or `attachment`. Complete live
+binding attestation uses the internal authenticated `POST /jobs/<jobId>/host` route
+with the `X-Review-Capability` UI grant and exact normalized `Origin`. That internal
+route has no public helper or wire-type export. It accepts
+`{expected, observed: {root, stateDir, store, record}}` with safe nonnegative
+`{dev, ino}` integers for `root`, `stateDir`, `jobs.sqlite` and
+`job-ui/<jobId>.json`, and returns `{ok: true, attachment, pid}` on HTTP 200.
+
+On a newly started standalone host (`reused === false`) or an ordinary reused host
+whose descriptor carries `listenerIncarnation` and whose POST attestation succeeds,
+`host.attachment` is a detached deeply frozen `JobHostReuseExpectation`. Ordinary
+compatible reuse (`reuseOnly` omitted) keeps its `GET /jobs/<jobId>/host`
+compatibility decision, `installWriterBinding` invocation timing and `ownerUrl`.
+Ordinary reuse returns `attachment: null` when `listenerIncarnation` or the
+additional POST attestation is unavailable.
+
+Each `job-ui/<jobId>.json` descriptor, each `POST /jobs/<jobId>/host` request and
+each `POST /jobs/<jobId>/host` response has a 65,536-byte (`WORKSPACE_BODY_LIMIT`)
+ceiling. When adding `listenerIncarnation` to `job-ui/<jobId>.json` would exceed
+65,536 UTF-8 bytes, the writer omits `listenerIncarnation` and writes the compact
+legacy descriptor. Ordinary start and reuse still succeed with `attachment: null`,
+while strict `reuseOnly` refuses `JOB_HOST_ATTACH_REFUSED` with
+`reason: 'incarnation-missing'` and `phase: 'record'`. Opaque hook IDs and
+fingerprints are bounded by each 65,536-byte descriptor, request and response
+envelope without separate 1,024-byte or 4,096-byte field caps.
+
+`startJobHost` inspects the `reuseOnly` property descriptor before invoking getters.
+A `reuseOnly` getter or accessor rejects immediately with `JOB_REQUEST_INVALID`
+without invoking the getter. When `reuseOnly` is absent or `undefined`,
+`startJobHost` uses the ordinary `{...options}` startup path and preserves existing
+ordinary getter, prototype and callback behavior. When `reuseOnly: {expected}` is
+provided, `startJobHost` snapshots own data properties (including non-enumerable
+declared fields) of `options`, `reviewer`, `partsEnumerator` and
+`reuseOnly.expected` (`binding` and `binding.reviewer`) via `Reflect.ownKeys` and
+property descriptors before the first `await` or session allocation, retaining
+function callbacks by reference. In that strict branch, non-plain objects, symbol
+keys, unknown keys and getters or accessors reject immediately with
+`JOB_REQUEST_INVALID` without invoking getters.
+
+When `reuseOnly: {expected}` is provided, `startJobHost` validates `expected` against
+the snapped caller options (`root`, `stateDir`, `fingerprint`, `reviewer.id`,
+`reviewer.role`, `readerId`, `bindingId`, `partsEnumeratorId`,
+`partsEnumeratorVersion`, `apiSchema`, `actSchema`, literal
+`http://127.0.0.1:<decimal-port>` `origin` in `1..65535` including explicit
+`http://127.0.0.1:80`, optional `port` matching the origin port, `jobId` and
+canonical lowercase UUIDv4 `listenerIncarnation`). Option, schema, hook presence or
+value mismatches reject with `JOB_REQUEST_INVALID`, `JOB_STORED_SCHEMA_MISMATCH`,
+`PARTS_ENUMERATOR_VERSION_MISMATCH`, `JOB_HOST_OPTION_ID_INVALID` or
+`JOB_HOST_REUSE_MISMATCH` (`field`, `expected` and `actual`). This includes cases
+where `expected.binding` has an explicit `null` for an omitted hook ID while the
+caller supplies that callback or enumerator, or the reverse.
+
+Strict `reuseOnly: {expected}` bootstrap invokes zero callbacks (`installWriterBinding`,
+`readPublished`, `partsEnumerator.enumerate`, `afterSnapshot`, `afterDirectorySync`)
+and performs zero job allocations (`JobStore.open`), DDL, `chmod` or journal-mode
+changes. Its bootstrap write set is empty on both success and refusal. It resolves
+existing `stateDir` without creating directories (`destinationDirectory(..., false)`),
+requires private owned entries without symlinks or hardlinks, and refuses SQLite
+`-wal`, `-shm` or `-journal` sidecars without running recovery. It inspects existing
+`jobs.sqlite` in read-only mode without creating files (`SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW`,
+`PRAGMA query_only=ON`), validates `job-ui/<jobId>.json` and PID liveness before
+sending credentials, and stages a read-only session for that exact job
+(`JobSession.openReadOnly`) before the single final `POST /jobs/<jobId>/host` probe.
+After staging, it rechecks `root`, `stateDir`, `store`, `record`, `job-ui`,
+descriptor bytes, revision, UI capability and full binding. Any drift refuses
+`JOB_HOST_ATTACH_REFUSED` with `reason: 'race'` and `phase: 'adoption'`.
+
+Literal `http://127.0.0.1:<decimal-port>` is preserved in `expected.origin` and
+`attachment.origin` including explicit port 80, while the HTTP `Origin` header check
+compares against normalized `new URL(origin).origin` (`http://127.0.0.1` for port 80).
+The client probe enforces a 1,500 ms total deadline across headers and body
+(`AbortSignal.timeout(1500)` plus a bounded body read up to 65,536 bytes within the
+remaining time) and `redirect: 'error'` so redirects are refused without following.
+Failed or aborted reads cancel and release their readers. The server enforces a
+10,000 ms body deadline (`jobBody(request, 65536)`).
+
+After body parsing, the owner executes a synchronous acceptance section inside a
+deferred SQLite read transaction (`db.transaction(...).deferred()`). It checks
+published, stopped and accepting flags (including standalone `stopped` and hub
+`closing`) and request abort, verifies UI capability, active job status and full
+binding, checks `listenerIncarnation` and captured, current and observed `{dev, ino}`
+identities (`root`, `stateDir`, `store`, `record`) plus exact descriptor bytes,
+rechecks accepting and abort flags, freezes `{ok: true, attachment, pid}` and
+finishes the read transaction. Because the deferred read transaction holds a SQLite
+read snapshot while `sealClose` commits with `BEGIN IMMEDIATE`, acceptance and close
+execute in a single serial order. A prior committed close returns HTTP 409 with
+`reason: 'closed'` and `phase: 'acceptance'`. A concurrent close waits for the read
+snapshot, and a close or stop after acceptance is an ordinary subsequent lifecycle
+event. Standalone or hub stop initiated before or during body parsing returns HTTP
+503 with `reason: 'stopped'` and `phase: 'acceptance'`. `JobHostAttachFailure` is a
+closed two-member union of `{code: 'JOB_HOST_ATTACH_REFUSED', reason, phase}`
+(`reason` in `'missing' | 'closed' | 'incarnation-missing' | 'replaced' | 'read' | 'probe' | 'stopped' | 'race'`
+and `phase` in `'input' | 'state' | 'record' | 'probe' | 'adoption' | 'acceptance'`)
+and `{code: 'JOB_HOST_REUSE_MISMATCH', field, expected, actual}` (`field` as
+`JobHostAttachField`, `expected` and `actual` as `string | null`).
 
 `session` retains its existing trusted-host `JobSession` type, including
 `jobId`, `hostCredentials()` and `status()` for bootstrap and inspection.
 `JobSession` is exported as a type for `host.session`. The host separates agent, owner UI and writer
 credentials through their respective channels. Only explicit semantic `close`
 ends a job and revokes its writer grant. `stop()` disposes this host handle and
-stops its owned listener. A reused handle disposes its local session.
+stops its owned listener. A reused handle (including strict `reuseOnly` with
+`reused === true` and non-null `attachment`) disposes only its local session and leaves
+the owner listener running. On a strict attached handle, reads use the read-only
+SQLite connection. A later semantic write (`publish`, `ask`, `close`, `ackDisplayed`,
+`commitUIAct`) lazily reopens the same existing `jobs.sqlite` file with
+`SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOFOLLOW` (omitting `SQLITE_OPEN_CREATE`) and
+rechecks storage and exact job identity in the first `IMMEDIATE` transaction.
+
+When `handleJobApi` (`POST /jobs/<jobId>/api`) catches a thrown refusal, the failure
+envelope `generation: number` reports `session.lastObservedGeneration`. That value is
+the last durable generation this session observed successfully in storage, carried in
+memory without rereading failing storage inside `catch`. It represents the last
+observed session value while preserving the original named refusal code and message
+(such as `JOB_STORAGE_FAILED` when SQLite files are removed or replaced) and keeping
+the numeric `generation: number` response type unchanged. A failed session
+constructor exposes no API ports when its initial storage read fails. Success
+responses continue to report current `session.status().generation`.
 
 Managed state is private storage accessed through the host ports. The canonical
 work root and configured managed-state directory must be disjoint. Before job
@@ -196,6 +387,7 @@ use `rig-review/job-api@2` and `rig-review/act@2`.
 import {startJobHub} from '@rig-c/review/job-host';
 import type {
   JobHubOptions, JobHubJobOptions, JobHubJob, JobOwnerHub,
+  JobHostReuseExpectation,
 } from '@rig-c/review/job-host';
 
 function startJobHub(options: JobHubOptions): Promise<JobOwnerHub>;
@@ -206,7 +398,7 @@ interface JobHubOptions {
   readonly port?: number;
 }
 
-type JobHubJobOptions = Omit<JobHostOptions, 'stateDir' | 'port' | 'reviewer'>;
+type JobHubJobOptions = Omit<JobHostOptions, 'stateDir' | 'port' | 'reviewer' | 'reuseOnly'>;
 
 interface JobHubJob {
   readonly session: JobSession;
@@ -214,6 +406,7 @@ interface JobHubJob {
   readonly origin: string;
   readonly jobUrl: string;
   readonly reused: boolean;
+  readonly attachment: JobHostReuseExpectation;
 }
 
 interface JobOwnerHub {
@@ -233,6 +426,15 @@ active job with a different reviewer refuses `JOB_AUTHORITY_REFUSED`.
 The human receives the hub owner URL once. Agents receive their own per-job
 bootstrap credentials privately and address `/jobs/<jobId>/api`.
 
+Each `startJobHub` listener start mints one canonical lowercase UUIDv4
+`listenerIncarnation` shared across all jobs registered on that hub. Opening
+additional jobs on the same hub preserves that incarnation. Each `openJob` call
+returns a required non-null detached deeply frozen `job.attachment: JobHostReuseExpectation`
+derived directly from the owning hub context, including when a compact on-disk
+`job-ui/<jobId>.json` descriptor omits `listenerIncarnation` at the 65,536-byte
+limit. Passing a runtime `reuseOnly` property to `hub.openJob` rejects with
+`JOB_REQUEST_INVALID`.
+
 Each job keeps its own identity, source bindings, generation CAS, idempotency
 keys, cursors, asks, acts, display receipts and agent/UI/writer grants. Hook IDs
 follow the existing `JobHostOptions` rules. Reopening an active root and
@@ -242,8 +444,10 @@ cross-process callback registration is deferred. The hub refuses an active
 standalone owner with `JOB_HUB_EXTERNAL_HOST`, and a live unresponsive owner
 with `JOB_HUB_HOST_UNRESPONSIVE`, preserving that owner. A second live hub for
 the state directory refuses `JOB_HUB_ALREADY_RUNNING`. Existing `startJobHost`
-callers can still attach to a compatible hub-owned job by authenticated reuse.
-Such attachment keeps the registered process-local hooks under hub ownership.
+callers can still attach to a compatible hub-owned job by ordinary authenticated
+reuse or strict `reuseOnly: {expected}` attachment (which skips
+`installWriterBinding` during strict bootstrap). Such attachment keeps the
+registered process-local hooks under hub ownership.
 
 Semantic `close` ends only the addressed job and revokes its writer grant.
 Closed entries remain in the current hub list. `await hub.stop()` drains work,
@@ -251,9 +455,10 @@ stops the shared transport and disposes local sessions. Active jobs retain their
 durable identity, grants, publications, asks, acts and replay history across
 that transport stop. Restart requires `startJobHub` and `openJob` for each
 required job, registering callbacks again and refreshing the writer adapter's
-origin. The hub capability and incarnation rotate, including the nonsecret
-`workspace` query that forces a fresh owner document. Obtain the new owner URL
-from the new handle. The retained active job's grants keep their identity until
+origin. The hub capability, `listenerIncarnation` and `workspace` incarnation
+query rotate, forcing a fresh owner document and invalidating prior strict
+`reuseOnly` expectations. Obtain the new owner URL and `job.attachment` from the
+new handle. The retained active job's grants keep their identity until
 semantic close. A later new job receives new grants.
 
 Admission is an application bound of 32 registered entries, including closed
@@ -353,7 +558,7 @@ model binding nor a valid image-set binding uses `JOB_ASK_INVALID`.
 
 ## Named export inventory
 
-The backend rig-still extension retains the twelve runtime exports and `JOB_ACT_SCHEMA` at act@2. `JobAct` additionally includes `JobRigReviewAct` at act@3 with top-level `JobRigStill`. The facade adds type-only `JobLegacyAct`, `JobRigReviewAct`, `JobRigStill` and `JobRigCapture` exports. Existing API/store/reuse markers and ordinary/historical acts retain @2. The rig revision constant and transport limits remain internal to `src/job-contract.ts`. Consumer checks distinguish these act revisions as described in [Rig verdict still backend](REVIEW_PACKAGE.md#rig-verdict-still-backend).
+The backend rig-still extension retains the twelve runtime exports and `JOB_ACT_SCHEMA` at act@2. `JobAct` additionally includes `JobRigReviewAct` at act@3 with top-level `JobRigStill`. The facade adds type-only `JobLegacyAct`, `JobRigReviewAct`, `JobRigStill` and `JobRigCapture` exports, and Review #563 adds five type-only exports (`JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`, `JobHostAttachField` and `JobHostAttachFailure`) while keeping the twelve runtime exports unchanged. Existing API/store/reuse markers and ordinary/historical acts retain @2. The rig revision constant, transport limits and the internal `POST /jobs/<jobId>/host` helper remain internal to their modules. Consumer checks distinguish these act revisions as described in [Rig verdict still backend](REVIEW_PACKAGE.md#rig-verdict-still-backend).
 
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
@@ -382,6 +587,11 @@ without aliases or copied wire shapes.
 - `JobOwnerHub`
 - `JobHostOptions`
 - `JobOwnerHost`
+- `JobHostListenerIncarnation`
+- `JobHostReuseBinding`
+- `JobHostReuseExpectation`
+- `JobHostAttachField`
+- `JobHostAttachFailure`
 - `JobSessionOptions`
 - `JobSession`
 - `JobWorkerOptions`
@@ -458,12 +668,19 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ## Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer imports the runtime and every listed type through
-`@rig-c/review/job-host`. TypeScript checks the installed consumer and the runtime
-checks the full owner resources, retained publication, semantic ports, declared
-hooks, enumerator version/row carriage, reuse and explicit-close grant lifetime using synthetic host data.
-This installed control uses an explicitly synthetic injected enumerator. Production
-Create integration and official-import evidence have their separate acceptance gates.
+A consumer imports the twelve runtime exports and every listed type, including
+`JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
+`JobHostAttachField` and `JobHostAttachFailure`, through `@rig-c/review/job-host`.
+TypeScript checks the installed consumer and the runtime checks the full owner
+resources, retained publication, semantic ports, declared hooks, enumerator
+version/row carriage, ordinary reuse, strict `reuseOnly: {expected}` attachment
+(including `JOB_HOST_REUSE_MISMATCH` on a rotated `listenerIncarnation` and
+`JOB_HOST_ATTACH_REFUSED` on unavailable attachment), and explicit-close grant
+lifetime using synthetic host data. Offline synthetic tarball or linked dependency
+consumer probes remain separate from the fresh `bun run smoke` install executed in
+hosted PR CI. This installed control uses an explicitly synthetic injected
+enumerator. Production Create integration and official-import evidence have their
+separate acceptance gates.
 
 The declared export-removal control deletes only `./job-host` from the disposable
 installed manifest and requires the public import to fail for that missing
