@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect, test } from 'bun:test';
+import { jobFixture } from './helpers/job-api-fixture.ts';
 import {
   JOB_ACT_SCHEMA,
   JOB_API_SCHEMA,
@@ -868,4 +871,75 @@ test('CP1 RecordAct (rig-review/act@4) validates interview-picks, checkpoint and
       actId: 'act-' + 'x'.repeat(125),
     }),
   ).toThrow('JOB_ACT_INVALID');
+});
+
+test('CP1 default normal host (createJobHostPorts + JobSession) refuses API@3 record publish with HTTP 400 JOB_API_SCHEMA_MISMATCH, leaving generation/head unchanged and doing no reader or snapshot work', async () => {
+  let snapshotCalls = 0;
+  const f = await jobFixture({
+    afterSnapshot: () => {
+      snapshotCalls++;
+    },
+  });
+  try {
+    expect(f.session.status().generation).toBe(0);
+    expect(f.session.status().publication).toBeNull();
+
+    const optRes = await f.call({
+      schema: JOB_API_V3_SCHEMA,
+      jobId: f.session.jobId,
+      requestId: 'req-v3-opt',
+      verb: 'publish',
+      expectedGeneration: 0,
+      idempotencyKey: 'idem-v3-opt',
+      result: optionSelection,
+      freeze: { kind: 'producer-held', holdId: 'hold-opt', record: recordIdentity },
+    });
+    expect(optRes.status).toBe(400);
+    expect(await optRes.json()).toEqual({
+      schema: JOB_API_SCHEMA,
+      verb: null,
+      jobId: f.session.jobId,
+      requestId: null,
+      generation: 0,
+      ok: false,
+      error: { code: 'JOB_REQUEST_INVALID', message: 'JOB_API_SCHEMA_MISMATCH' },
+    });
+    expect(f.session.status().generation).toBe(0);
+    expect(f.session.status().publication).toBeNull();
+    expect(snapshotCalls).toBe(0);
+    expect(existsSync(join(f.state, 'snapshots'))).toBe(false);
+
+    const committedPublication = await f.publish();
+    expect(f.session.status().generation).toBe(1);
+    expect(f.session.status().publication).toEqual(committedPublication);
+    const snapshotCallsAfterPackagePublish = snapshotCalls;
+    const snapshotsAfterPackagePublish = readdirSync(join(f.state, 'snapshots')).sort();
+
+    const planRes = await f.call({
+      schema: JOB_API_V3_SCHEMA,
+      jobId: f.session.jobId,
+      requestId: 'req-v3-plan',
+      verb: 'publish',
+      expectedGeneration: 1,
+      idempotencyKey: 'idem-v3-plan',
+      result: planSelection,
+      freeze: { kind: 'producer-held', holdId: 'hold-plan', record: recordIdentity },
+    });
+    expect(planRes.status).toBe(400);
+    expect(await planRes.json()).toEqual({
+      schema: JOB_API_SCHEMA,
+      verb: null,
+      jobId: f.session.jobId,
+      requestId: null,
+      generation: 1,
+      ok: false,
+      error: { code: 'JOB_REQUEST_INVALID', message: 'JOB_API_SCHEMA_MISMATCH' },
+    });
+    expect(f.session.status().generation).toBe(1);
+    expect(f.session.status().publication).toEqual(committedPublication);
+    expect(snapshotCalls).toBe(snapshotCallsAfterPackagePublish);
+    expect(readdirSync(join(f.state, 'snapshots')).sort()).toEqual(snapshotsAfterPackagePublish);
+  } finally {
+    await f.close();
+  }
 });
