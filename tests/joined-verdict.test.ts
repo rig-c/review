@@ -1,4 +1,4 @@
-import {expect,test} from 'bun:test';
+import {expect,spyOn,test} from 'bun:test';
 import {link,mkdtemp,readFile,readdir,realpath,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
@@ -188,5 +188,174 @@ test('draft source identity includes the package hash independently of the proje
     expect(joined.joined.opened.hash).toBe(f.joined.opened.hash);
     expect(joined.contentHash).not.toBe(f.p.sourceHash);
     await f.assertFixture();
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('#562A reopened history binds its selected original draft without producer jobs',async()=>{
+  const root=await mkdtemp(join(await realpath(tmpdir()),'review-reopened-draft-'));
+  const asynchronous=spyOn(Bun,'spawn');
+  const synchronous=spyOn(Bun,'spawnSync');
+  try{
+    // This retained four-version, region-only archive is a binding control, not five-version mesh acceptance.
+    const fixture=await joinedVerdictFixture(root,'reopened');
+    const record=fixture.joined.opened.project.drafts as unknown[];
+    expect(fixture.joined.opened.project.versions).toHaveLength(4);
+    expect(fixture.draft).toMatchObject({record:record[0],editable:true});
+    expect(fixture.joined.verdictDirectory?.()).toBe(fixture.output);
+    const original=await loadOpenPackage({input:fixture.input});
+    expect(fixture.p.sourceHash).toBe(digest(JSON.stringify({schema:'rig-review-joined-draft/1',
+      draftId:'example',projectHash:fixture.joined.opened.hash,packageSourceHash:original.contentHash})));
+    expect(fixture.p.manifest.model).toBeUndefined();
+    expect(fixture.p.handoff).toBeNull();
+    const ordered=(record[0] as {config:unknown;config_inputs:unknown[];parts:{files:unknown[]};files:unknown[]});
+    expect([...fixture.draft.files.values()]).toEqual([
+      ordered.config,...ordered.config_inputs,...ordered.parts.files,...ordered.files,
+    ].map(ref=>(ref as {sha256:string}).sha256));
+    await fixture.joined.assertCurrent();
+    await fixture.assertFixture();
+    expect(await readdir(fixture.output)).toEqual([]);
+    expect(await readdir(join(root,'reviewer-picks'))).toEqual([]);
+    expect(asynchronous).not.toHaveBeenCalled();
+    expect(synchronous.mock.calls).toHaveLength(1);
+    expect(synchronous.mock.calls[0]![0]).toEqual(['tar','-xzf','-','-C',root]);
+  }finally{
+    asynchronous.mockRestore();
+    synchronous.mockRestore();
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
+test('#562A retains published reference order and rejects incomplete or ambiguous bindings',async()=>{
+  const root=await mkdtemp(join(await realpath(tmpdir()),'review-draft-bindings-'));
+  try{
+    const fixture=await joinedVerdictFixture(root);
+    const path=join(root,'project.json'),bytes=await readFile(path);
+    // Metadata variants are local negative controls over retained producer bytes.
+    const changed=async(edit:(project:any)=>void)=>{
+      const project=JSON.parse(bytes.toString());
+      edit(project);
+      await writeFile(path,JSON.stringify(project));
+      return loadOpenPackage({input:fixture.input,project:fixture.project});
+    };
+    try{
+      const ordered=await changed(project=>{
+        project.drafts[0].parts.files.reverse();
+        project.drafts[0].files.reverse();
+      });
+      if(ordered.mode!=='single'||!ordered.joined?.draft)throw new Error('Expected ordered draft');
+      const selected=(ordered.joined.opened.project.drafts as unknown[])[0];
+      expect(JSON.stringify(ordered.joined.draft.record)).toBe(JSON.stringify(selected));
+      expect(ordered.joined.draft.editable).toBe(true);
+      expect(ordered.joined.draft.record.producer).toEqual(fixture.draft.record.producer);
+      expect(ordered.p.reviewedSource).toEqual(fixture.p.reviewedSource);
+      for(const edit of [
+        (project:any)=>{project.versions=null;},
+        (project:any)=>{project.drafts.push(project.drafts[0]);},
+        (project:any)=>{delete project.drafts[0].config_inputs;},
+        (project:any)=>{project.drafts[0].config_inputs=[];},
+        (project:any)=>{project.drafts[0].parts.files.splice(1,1);},
+        (project:any)=>{project.drafts[0].files=project.drafts[0].files.filter((file:{path:string})=>!file.path.includes('/images/'));},
+        (project:any)=>{project.drafts[0].config.sha256='0'.repeat(64);},
+        (project:any)=>{project.drafts[0].files.find((file:{path:string})=>file.path.endsWith('/skeleton.model.json')).sha256='0'.repeat(64);},
+        (project:any)=>{project.drafts[0].config_inputs[0].path='../outside.json';},
+        (project:any)=>{delete project.drafts[0].producer;},
+      ])await expect(changed(edit)).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
+    }finally{await writeFile(path,bytes);}
+    const extra=join(root,'derived/drafts/chain/out/unrecorded.json');
+    await writeFile(extra,'{}\n');
+    try{
+      await expect(loadOpenPackage({input:fixture.input,project:fixture.project})).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
+      await expect(fixture.joined.assertCurrent()).rejects.toThrow('INTERVIEW_OPTIONS_STALE');
+    }finally{await rm(extra);}
+    await fixture.joined.assertCurrent();
+    await fixture.assertFixture();
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('#562A optional config dependencies require their own raw bindings',async()=>{
+  const root=await mkdtemp(join(await realpath(tmpdir()),'review-draft-config-inputs-'));
+  try{
+    const fixture=await joinedVerdictFixture(root);
+    const projectPath=join(root,'project.json'),projectBytes=await readFile(projectPath);
+    const configPath=join(root,fixture.draft.record.config.path),configBytes=await readFile(configPath);
+    const inputPath=join(root,'derived/drafts/chain/motion-input.json');
+    const inputBytes=await readFile(join(root,'derived/drafts/chain/out/motion.json'));
+    await writeFile(inputPath,inputBytes);
+    try{
+      const project=JSON.parse(projectBytes.toString()),record=project.drafts[0];
+      const config=JSON.parse(configBytes.toString());
+      config.motion.animations_from='motion-input.json';
+      const text=JSON.stringify(config);
+      await writeFile(configPath,text);
+      record.config.sha256=digest(text);
+      await writeFile(projectPath,JSON.stringify(project));
+      await expect(loadOpenPackage({input:fixture.input,project:fixture.project})).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
+      record.config_inputs.push({path:'derived/drafts/chain/motion-input.json',sha256:digest(inputBytes)});
+      await writeFile(projectPath,JSON.stringify(project));
+      const bound=await loadOpenPackage({input:fixture.input,project:fixture.project});
+      if(bound.mode!=='single'||!bound.joined?.draft)throw new Error('Expected bound config input');
+      expect(bound.joined.draft.record.config_inputs).toEqual(record.config_inputs);
+      await bound.joined.assertCurrent();
+      await writeFile(inputPath,Buffer.concat([inputBytes,Buffer.from(' ')]));
+      await expect(bound.joined.assertCurrent()).rejects.toThrow('INTERVIEW_OPTIONS_STALE');
+
+      // A dependency-free legacy config may omit the optional inventory altogether.
+      delete config.motion.animations_from;
+      delete config.requirements;
+      config.generation={control:{skeleton:'stand_sides'}};
+      const independent=JSON.stringify(config);
+      await writeFile(configPath,independent);
+      record.config.sha256=digest(independent);
+      delete record.config_inputs;
+      await writeFile(projectPath,JSON.stringify(project));
+      const legacy=await loadOpenPackage({input:fixture.input,project:fixture.project});
+      if(legacy.mode!=='single'||!legacy.joined?.draft)throw new Error('Expected dependency-free draft');
+      expect(Object.hasOwn(legacy.joined.draft.record,'config_inputs')).toBe(false);
+      expect(legacy.joined.draft.record.producer).toEqual(fixture.draft.record.producer);
+    }finally{
+      await writeFile(projectPath,projectBytes);
+      await writeFile(configPath,configBytes);
+      await rm(inputPath);
+    }
+    await fixture.assertFixture();
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('#562A current stage and effective approval chronology determine editability',async()=>{
+  const root=await mkdtemp(join(await realpath(tmpdir()),'review-draft-eligibility-'));
+  try{
+    const fixture=await joinedVerdictFixture(root,'reopened');
+    const path=join(root,'project.json'),bytes=await readFile(path);
+    const original=JSON.parse(bytes.toString());
+    const prior=original.signoffs.find((entry:{stage:string})=>entry.stage==='parts-review');
+    const after=new Date(Date.parse(original.reopens[0].at)+1000).toISOString();
+    const cases:[string,boolean,(project:any)=>void][]=[
+      ['covering reopen',true,()=>{}],
+      ['no reopen',false,project=>{project.reopens=[];}],
+      ['later human approval',false,project=>{project.signoffs.push({...prior,at:after});}],
+      ['downstream reopen',false,project=>{project.reopens[0].stage='rig-review';}],
+      ['covering amendment',true,project=>{project.amendments=[{target:{stage:'parts-review'},at:project.reopens[0].at}];project.reopens=[];}],
+      ['checkpoint only',true,project=>{project.signoffs=project.signoffs.map((entry:any)=>entry.stage==='parts-review'?{...entry,checkpoint:'assemble'}:entry);} ],
+      ['rig review stage',false,project=>{project.stage='rig-review';}],
+      ['accepted stage',false,project=>{project.stage='accepted';}],
+      ['malformed approval time',false,project=>{project.signoffs.push({...prior,at:'invalid'});}],
+      ['malformed reopen time',false,project=>{project.reopens[0].at='invalid';}],
+      ['malformed reopen collection',false,project=>{project.reopens={};}],
+    ];
+    try{
+      for(const [name,editable,edit] of cases){
+        const project=JSON.parse(bytes.toString());
+        edit(project);
+        await writeFile(path,JSON.stringify(project));
+        const opened=await loadOpenPackage({input:fixture.input,project:fixture.project});
+        if(opened.mode!=='single'||!opened.joined?.draft)throw new Error('Expected selected draft');
+        expect(opened.joined.draft.editable,name).toBe(editable);
+        expect(Boolean(opened.joined.verdictDirectory),name).toBe(editable);
+        expect(opened.joined.draft.record,name).toEqual(project.drafts[0]);
+        expect(opened.joined.opened.project.versions,name).toEqual(original.versions);
+        expect(opened.joined.opened.project.signoffs,name).toEqual(project.signoffs);
+      }
+    }finally{await writeFile(path,bytes);}
+    await fixture.assertFixture();
   }finally{await rm(root,{recursive:true,force:true});}
 });

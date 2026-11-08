@@ -1,6 +1,7 @@
 import { lstatSync, readdirSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { boundBytes, checkedPath, digest, jsonObject, literalPath, object, readProject, readRegular } from './interview-project.ts';
+import { join, posix, relative, sep } from 'node:path';
+import { boundBytes, checkedPath, digest, jsonObject, literalPath, object, partsDraftEditable, readProject, readRegular, type SetRef } from './interview-project.ts';
+import { CONFIG_NAMED_FILES, CONFIG_SKELETON_NAMES } from './handoff.ts';
 import { DIRECTION_MAX_BYTES, readDirectionInspection } from './direction-inspection.ts';
 import { outputDirectory } from './interview-picks.ts';
 import { packagePath, type ReviewPackage } from './manifest.ts';
@@ -10,7 +11,19 @@ export type ProjectDesignation={root:string;picksDir:string}&(
   {version:number;postVersion?:number;draftId?:never;partsVerdictDir?:never} |
   {draftId:string;partsVerdictDir?:string;version?:never;postVersion?:never}
 );
+interface DraftRecord {
+  id:string;
+  kind:'draft-rig';
+  at:string;
+  producer:{name:string;version:string};
+  config:SetRef;
+  config_inputs?:SetRef[];
+  parts:{path:string;files:SetRef[]};
+  files:SetRef[];
+}
 interface DraftSource {
+  record:DraftRecord;
+  editable:boolean;
   parts:string;
   rig:string;
   meshReport:string;
@@ -154,12 +167,15 @@ function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draft
   const {draftId}=designation;
   const path='derived/drafts/'+draftId;
   const fail=():never=>{throw new Error('INTERVIEW_SOURCE_MISMATCH: expected the selected Create pre-rig draft and exact recorded files');};
-  if(!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(draftId)||!Array.isArray(project.versions)||project.versions.length||
+  if(!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(draftId)||!Array.isArray(project.versions)||
      !Array.isArray(project.drafts)||!Array.isArray(project.signoffs)||!p.manifest.model||!p.reviewedSource.rig||
      p.direction||p.handoffInputs)return fail();
   const matches=project.drafts.map(object).filter(draft=>draft.id===draftId);
   const record=matches[0],parts=object(record?.parts);
-  if(matches.length!==1||record?.kind!=='draft-rig'||!literalPath(parts.path)||!parts.path.startsWith(path+'/')||
+  const producer=object(record?.producer);
+  if(matches.length!==1||record?.kind!=='draft-rig'||typeof record.at!=='string'||!Number.isFinite(Date.parse(record.at))||
+     producer.name!=='@rig-c/parts'||typeof producer.version!=='string'||!producer.version.trim()||
+     !literalPath(parts.path)||!parts.path.startsWith(path+'/')||
      !Array.isArray(parts.files)||!Array.isArray(record.files)||
      (record.config_inputs!==undefined&&!Array.isArray(record.config_inputs)))return fail();
   const files=new Map<string,string>();
@@ -176,10 +192,28 @@ function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draft
     return paths;
   };
   let draft:DraftSource;
+  let assertInventory:()=>void;
   try{
     inventory([record.config,...(record.config_inputs??[])],path);
+    const config=object(record.config),doc=jsonObject(boundBytes(root,config as unknown as SetRef));
+    const dependencies=new Set((record.config_inputs??[]).map(ref=>object(ref).path));
+    for(const keys of CONFIG_NAMED_FILES){
+      const value=keys.reduce<unknown>((value,key)=>object(value)[key],doc);
+      if(typeof value!=='string'||!value||keys.length===3&&(CONFIG_SKELETON_NAMES as readonly string[]).includes(value))continue;
+      if(!literalPath(value)||!dependencies.has(posix.join(posix.dirname(config.path as string),value)))return fail();
+    }
     const input=inventory(parts.files,parts.path);
     if(!input.includes(parts.path+'/parts.json')||!input.some(file=>file.startsWith(parts.path+'/parts/')))return fail();
+    const manifest=jsonObject(boundBytes(root,{path:parts.path+'/parts.json',sha256:files.get(parts.path+'/parts.json')!}));
+    if(!Array.isArray(manifest.parts)||manifest.parts.some(part=>{
+      const {name}=object(part);
+      return !literalPath(name)||name.includes('/')||!input.includes(parts.path+'/parts/'+name+'.png');
+    }))return fail();
+    if(manifest.painting_in_rig!==undefined){
+      const painting=object(manifest.painting_in_rig);
+      if(!literalPath(painting.path)||!input.includes(parts.path+'/'+painting.path)||
+         files.get(parts.path+'/'+painting.path)!==painting.sha256)return fail();
+    }
     const output=inventory(record.files,path);
     const rigs=output.filter(file=>file.endsWith('/rig.json'));
     if(rigs.length!==1)return fail();
@@ -190,7 +224,26 @@ function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draft
     if(!output.includes(meshReport)||!output.includes(dir+'/motion.json')||
        !model.startsWith(checkRoot+'/check/')||!output.includes(model)||files.get(model)!==p.reviewedSource.rig.sha256||
        ![...p.files].every(file=>output.includes(relative(root,join(p.root,file)).split(sep).join('/'))))return fail();
-    draft={parts:checkedPath(root,parts.path,true),rig:checkedPath(root,rig),meshReport:checkedPath(root,meshReport),
+    const directoryInventory=(prefix:string,expected:string[])=>{
+      const remaining=new Set(expected);
+      const visit=(prefix:string)=>{
+        for(const entry of readdirSync(checkedPath(root,prefix,true),{withFileTypes:true})){
+          const file=prefix+'/'+entry.name;
+          if(!literalPath(file))return fail();
+          if(entry.isDirectory())visit(file);
+          else if(!entry.isFile()||!remaining.delete(file))return fail();
+        }
+      };
+      visit(prefix);
+      if(remaining.size)return fail();
+    };
+    assertInventory=()=>{
+      directoryInventory(parts.path+'/parts',input.filter(file=>file.startsWith(parts.path+'/parts/')));
+      directoryInventory(checkRoot,output);
+    };
+    assertInventory();
+    draft={record:record as unknown as DraftRecord,editable:partsDraftEditable(project),
+      parts:checkedPath(root,parts.path,true),rig:checkedPath(root,rig),meshReport:checkedPath(root,meshReport),
       model:checkedPath(root,model),files:new Map([...files].map(([file,sha])=>[checkedPath(root,file),sha]))};
     for(const [path,sha256] of files)boundBytes(root,{path,sha256});
   }catch{return fail();}
@@ -198,14 +251,13 @@ function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draft
   const assertCurrent=async()=>{
     try{
       await assertReviewUnchanged(p);
+      assertInventory();
       for(const [path,sha256] of files)boundBytes(root,{path,sha256});
       if(digest(readRegular(checkedPath(root,'project.json'),8*1024*1024))!==hash)throw new Error('Project changed');
     }catch{throw new Error(interviewStale+': project or draft changed; reopen the project');}
   };
   const dir=designation.partsVerdictDir;
   // An explicit output selects the write surface. A recorded parts approval closes it.
-  const pending=['parts','parts-review'].includes(String(project.stage))&&
-    !project.signoffs.map(object).some(signoff=>signoff.stage==='parts-review');
   let verdictDirectory:JoinedSource['verdictDirectory'];
   if(dir!==undefined){
     const locate=()=>{
@@ -217,7 +269,7 @@ function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draft
       catch{throw new Error('PARTS_VERDICT_OUTPUT');}
     };
     const original=lstatSync(locate());
-    if(pending)verdictDirectory=()=>{
+    if(draft.editable)verdictDirectory=()=>{
       const output=locate(),stat=lstatSync(output);
       if(stat.dev!==original.dev||stat.ino!==original.ino)throw new Error('PARTS_VERDICT_OUTPUT');
       return output;

@@ -133,6 +133,19 @@ function approval(project: RecordData, stage: string, at: number) {
     text(s.by) && s.by.toLowerCase() !== 'agent' && date(s.at) <= at &&
     !reopened(project, stage, date(s.at) - 1, at)).reverse().sort((a, b) => date(b.at) - date(a.at))[0];
 }
+/** Draft correction follows the existing effective parts approval, including covering reopens. */
+export function partsDraftEditable(project: RecordData, now = Date.now()): boolean {
+  if (!['parts', 'parts-review'].includes(String(project.stage))) return false;
+  if ((project.reopens !== undefined && !Array.isArray(project.reopens)) ||
+      (project.amendments !== undefined && !Array.isArray(project.amendments))) return false;
+  const approvals = records(project.signoffs).filter(s => s.stage === 'parts-review' &&
+    (s.checkpoint === null || s.checkpoint === undefined));
+  const changes = [...records(project.reopens), ...records(project.amendments).map((entry): RecordData =>
+    ({...entry, stage: object(entry.target).stage}))].filter(entry =>
+    ['interview', 'plan-approved', 'parts', 'parts-review'].includes(String(entry.stage)));
+  if ([...approvals, ...changes].some(entry => !Number.isFinite(date(entry.at)) || date(entry.at) > now)) return false;
+  return !approval(project, 'parts-review', now);
+}
 function draftFor(project: RecordData, signoff: RecordData | undefined, at: number) {
   return records(project.drafts).find(draft => draft.id === signoff?.draft_id && date(draft.at) <= at);
 }
