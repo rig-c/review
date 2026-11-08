@@ -1664,6 +1664,16 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 if (current.player.composed) current.setupPose(false);
                 current.player.play(animation, { loop });
                 if (time > 0) current.player.seek(time);
+                const activeEntry = current.player.entry(0);
+                if (!activeEntry || activeEntry.animation !== animation || activeEntry.loop !== loop ||
+                    !Number.isFinite(activeEntry.animationTime) || activeEntry.animationTime < 0 ||
+                    activeEntry.animationTime > activeEntry.duration) {
+                    stopPlayback(current.player);
+                    return;
+                }
+                time = activeEntry.animationTime;
+                const clockInput = workspace.querySelector<HTMLInputElement>('#job-time');
+                if (clockInput) clockInput.value = String(time);
                 if (!playing) current.player.pause();
                 syncTransportControls();
                 presentCurrentFrame(current);
@@ -1677,6 +1687,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         clock.type = 'number';
         clock.min = '0';
         clock.step = '0.001';
+        clock.oninput = () => {
+            if (!playing) return;
+            stopPlayback();
+            if (current) presentCurrentFrame(current);
+        };
         clock.onchange = () => {
             const value = Number(clock.value);
             const duration = current?.assets?.animations.find(clip => clip.name === animation)?.duration;
@@ -1809,10 +1824,21 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         if (current.player) {
             drawn.delete(current);
             current.rigPresentation = undefined;
-            if (animation && current.player.current !== animation)
+            if (animation && (current.player.current !== animation || current.player.entry(0)?.loop !== loop))
                 current.player.play(animation, { loop });
-            if (animation)
+            if (animation) {
                 current.player.seek(time);
+                const activeEntry = current.player.entry(0);
+                if (!activeEntry || activeEntry.animation !== animation || activeEntry.loop !== loop ||
+                    !Number.isFinite(activeEntry.animationTime) || activeEntry.animationTime < 0 ||
+                    activeEntry.animationTime > activeEntry.duration) {
+                    current.player.pause();
+                    notice.textContent = t('JOB_VISUAL_UNAVAILABLE');
+                    return;
+                }
+                time = activeEntry.animationTime;
+                clock.value = String(time);
+            }
             current.player.pause();
             drawInspection(current);
             current.inspection?.select(selectedPart ? { side: 'single', slot: selectedPart, mode: partMode } : null);
@@ -1987,6 +2013,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                         ? t('job.updated', [state.previousLabel, state.displayed.publication.label]) : state.displayed.publication.label;
                 if (compatibilityNotice)
                     notice.textContent += ' · ' + t('job.incompatible');
+                if (state.closed) {
+                    const wasPlaying = playing;
+                    stopPlayback();
+                    if (wasPlaying && current) presentCurrentFrame(current);
+                }
                 updateForms(state);
                 if (current)
                     showPanel();

@@ -1980,7 +1980,30 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
     test('#559 runtime transport lifecycle: #job-play, #job-loop, single rAF, loop wrap, physics-reset loop toggle, and one-shot completion', async () => {
         const s = await mountRuntimeSession();
         try {
-            await s.publishRig(1);
+            const act = fixtureAct('review-verdict', 'wrapped endpoint check');
+            if (act.schema !== 'rig-review/act@2' || act.kind !== 'review-verdict' || act.value.stage !== 'rig-review') {
+                throw new Error('Expected review-verdict fixture act');
+            }
+            const display = await s.publishRig(1);
+            const source = display.publication.source;
+            if (source.subject === 'image-set' || source.selector?.kind !== 'rig' || !source.model) {
+                throw new Error('Expected rig model source');
+            }
+            const ask = {
+                askId: act.askId,
+                publicationId: display.publication.publicationId,
+                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const},
+                source,
+                status: 'pending' as const,
+            };
+            s.fixture.pending(ask, 2);
+            s.window.event(s.fixture.events.at(-1)!);
+            s.fixture.returnAct({
+                ...act,
+                publicationId: display.publication.publicationId,
+                source: {...source, selector: source.selector, model: source.model},
+                value: act.value,
+            });
             // Reached existing controls on initial Setup mount (no autoplay):
             const animationSelect = s.workspace.querySelector('#job-animation')!;
             const timeInput = s.workspace.querySelector('#job-time')!;
@@ -2048,6 +2071,31 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(playButton.dataset.jobText).toBe('Play');
             expect(playButton.getAttribute('aria-pressed')).toBe('false');
             expect(s.rafCount()).toBe(0);
+
+            // Toggle Repeat back on at paused one-shot endpoint (time === duration):
+            // public entry(0).animationTime wraps to 0; visible #job-time and canonical capture frame must match wrapped 0, remaining paused without autoplay:
+            loopInput.checked = true;
+            loopInput.dispatchEvent({type: 'change'});
+            expect(player.loop).toBe(true);
+            expect(player.paused).toBe(true);
+            expect(s.rafCount()).toBe(0);
+            expect(playButton.dataset.jobText).toBe('Play');
+            expect(playButton.getAttribute('aria-pressed')).toBe('false');
+            expect(player.entry(0)?.animationTime).toBe(0);
+            expect(timeInput.value).toBe('0');
+            expect(Number(timeInput.value)).toBe(player.entry(0)!.animationTime);
+
+            const form = s.workspace.querySelector(`form[data-job-ask="${ask.askId}"]`)!;
+            const verdictSelect = form.querySelector('select[name="verdict"]')!;
+            const noteInput = form.querySelector('textarea[name="note"]')!;
+            verdictSelect.value = 'approved';
+            noteInput.value = 'wrapped endpoint check';
+            form.dispatchEvent({type: 'input'});
+            await form.onsubmit?.({preventDefault() {}});
+            expect(s.outgoingSubmits).toHaveLength(1);
+            expect(s.outgoingSubmits[0]!.body.capture.playing).toBe(false);
+            expect(s.outgoingSubmits[0]!.body.capture.animation).toBe('inspect');
+            expect(s.outgoingSubmits[0]!.body.capture.frame).toBe(0);
         } finally {
             s.cleanup();
         }
@@ -2229,7 +2277,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(player2.paused).toBe(true);
             expect(s.rafCount()).toBe(0);
 
-            // Restore hub visibility, resume play, and verify pagehide stops rAF and pauses player2:
+            // Restore hub visibility, resume play, advance motion, and deliver explicit standing-job close event through createJobWindow:
             s.emitGlobal('message', {
                 origin: 'http://127.0.0.1:4318',
                 source: s.parentWindow,
@@ -2243,7 +2291,29 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                     language: 'en',
                 },
             });
-            s.workspace.querySelector('#job-play')!.click();
+            const play2 = s.workspace.querySelector('#job-play')!;
+            const time2 = s.workspace.querySelector('#job-time')!;
+            play2.click();
+            expect(player2.paused).toBe(false);
+            expect(s.rafCount()).toBe(1);
+            s.stepRaf(0);
+            s.stepRaf(100);
+            const timeAtClose = player2.time;
+            expect(timeAtClose).toBeGreaterThan(0);
+            s.fixture.close(3);
+            s.window.event(s.fixture.events.at(-1)!);
+            expect(s.window.state().closed).toBe(true);
+            expect(player2.paused).toBe(true);
+            expect(s.rafCount()).toBe(0);
+            expect(play2.dataset.jobText).toBe('Play');
+            expect(play2.getAttribute('aria-pressed')).toBe('false');
+            s.stepRaf(100);
+            expect(player2.time).toBeCloseTo(timeAtClose, 5);
+            expect(Number(time2.value)).toBeCloseTo(timeAtClose, 5);
+            expect(player2.disposed).toBe(false);
+
+            // Resume play on the retained read-only view and verify pagehide stops rAF and pauses/disposes player2:
+            play2.click();
             expect(player2.paused).toBe(false);
             expect(s.rafCount()).toBe(1);
             s.emitGlobal('pagehide');
@@ -2338,6 +2408,130 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(playerOnSetup.current).toBeNull();
             expect(playerOnSetup.time).toBe(0);
             expect(timeInput.value).toBe('0');
+        } finally {
+            s.cleanup();
+        }
+    });
+
+    test('#559 runtime time input while playing: typing into #job-time pauses owned rAF without overwriting typed text or resetting rigSubmission, and commits seek on change', async () => {
+        const s = await mountRuntimeSession();
+        try {
+            const act = fixtureAct('review-verdict', 'check time input while playing');
+            if (act.schema !== 'rig-review/act@2' || act.kind !== 'review-verdict' || act.value.stage !== 'rig-review') {
+                throw new Error('Expected review-verdict fixture act');
+            }
+            const display = await s.publishRig(1);
+            const source = display.publication.source;
+            if (source.subject === 'image-set' || source.selector?.kind !== 'rig' || !source.model) {
+                throw new Error('Expected rig model source');
+            }
+            const ask = {
+                askId: act.askId,
+                publicationId: display.publication.publicationId,
+                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const},
+                source,
+                status: 'pending' as const,
+            };
+            s.fixture.pending(ask, 2);
+            s.window.event(s.fixture.events.at(-1)!);
+            s.fixture.returnAct({
+                ...act,
+                publicationId: display.publication.publicationId,
+                source: {...source, selector: source.selector, model: source.model},
+                value: act.value,
+            });
+
+            const animationSelect = s.workspace.querySelector('#job-animation')!;
+            const timeInput = s.workspace.querySelector('#job-time')!;
+            const playButton = s.workspace.querySelector('#job-play')!;
+            const form = s.workspace.querySelector(`form[data-job-ask="${ask.askId}"]`)!;
+            const verdictSelect = form.querySelector('select[name="verdict"]')!;
+            const noteInput = form.querySelector('textarea[name="note"]')!;
+
+            animationSelect.value = 'inspect';
+            animationSelect.dispatchEvent({type: 'change'});
+            playButton.click();
+            expect(s.activePlayer().paused).toBe(false);
+            expect(s.rafCount()).toBe(1);
+
+            s.stepRaf(0);
+            s.stepRaf(100);
+            const pausedFrameTime = s.activePlayer().time;
+            expect(pausedFrameTime).toBeCloseTo(0.1, 5);
+            expect(Number(timeInput.value)).toBeCloseTo(0.1, 5);
+
+            // Stage a failed submit so entry.rigSubmission holds an immutable first request:
+            verdictSelect.value = 'approved';
+            noteInput.value = 'check time input while playing';
+            form.dispatchEvent({type: 'input'});
+            s.failNextTransportSubmit();
+            await form.onsubmit?.({preventDefault() {}});
+            expect(s.outgoingSubmits).toHaveLength(1);
+            const firstAttempt = s.outgoingSubmits[0]!;
+
+            // User starts typing '0.375' into #job-time without change/blur:
+            timeInput.value = '0.375';
+            timeInput.dispatchEvent({type: 'input'});
+
+            // Stepping mock rAF must NOT overwrite #job-time.value, and playback must already be paused:
+            s.stepRaf(100);
+            s.stepRaf(100);
+            expect(timeInput.value).toBe('0.375');
+            expect(s.rafCount()).toBe(0);
+            expect(s.activePlayer().paused).toBe(true);
+            expect(playButton.dataset.jobText).toBe('Play');
+            expect(playButton.getAttribute('aria-pressed')).toBe('false');
+            // Uncommitted input must not seek player before change:
+            expect(s.activePlayer().time).toBeCloseTo(pausedFrameTime, 5);
+
+            // Typing into #job-time must not reset entry.rigSubmission when form inputs are unchanged:
+            await form.onsubmit?.({preventDefault() {}});
+            expect(s.outgoingSubmits).toHaveLength(2);
+            expect(s.outgoingSubmits[1]!.raw).toBe(firstAttempt.raw);
+
+            // Committing #job-time via change seeks the paused player to 0.375:
+            timeInput.dispatchEvent({type: 'change'});
+            expect(timeInput.value).toBe('0.375');
+            expect(s.activePlayer().time).toBeCloseTo(0.375, 5);
+            expect(s.activePlayer().paused).toBe(true);
+            expect(s.rafCount()).toBe(0);
+
+            // Active-animation manual seek at exact duration (0.5) under Repeat=true synchronizes UI #job-time, public entry(0).animationTime and captured frame to 0:
+            const loopCheckbox = s.workspace.querySelector('#job-loop')!;
+            expect(loopCheckbox.checked).toBe(true);
+            timeInput.value = '0.5';
+            timeInput.dispatchEvent({type: 'change'});
+            expect(s.activePlayer().entry(0)?.animationTime).toBe(0);
+            expect(timeInput.value).toBe('0');
+            expect(Number(timeInput.value)).toBe(s.activePlayer().entry(0)!.animationTime);
+            expect(s.activePlayer().paused).toBe(true);
+            expect(s.rafCount()).toBe(0);
+
+            const askAtDuration = {
+                askId: 'ask-seek-duration-loop',
+                publicationId: display.publication.publicationId,
+                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const},
+                source,
+                status: 'pending' as const,
+            };
+            s.fixture.pending(askAtDuration, 3);
+            s.window.event(s.fixture.events.at(-1)!);
+            const formAtDuration = s.workspace.querySelector(`form[data-job-ask="${askAtDuration.askId}"]`)!;
+            formAtDuration.querySelector('select[name="verdict"]')!.value = 'approved';
+            formAtDuration.querySelector('textarea[name="note"]')!.value = 'seek duration under Repeat=true';
+            formAtDuration.dispatchEvent({type: 'input'});
+            s.failNextTransportSubmit();
+            await formAtDuration.onsubmit?.({preventDefault() {}});
+            expect(s.outgoingSubmits).toHaveLength(3);
+            expect(s.outgoingSubmits[2]!.body.capture.frame).toBe(0);
+            expect(s.outgoingSubmits[2]!.body.capture.animation).toBe('inspect');
+
+            // Setup (animation === '') preserves reference-only time without wrapping:
+            animationSelect.value = '';
+            animationSelect.dispatchEvent({type: 'change'});
+            timeInput.value = '1.25';
+            timeInput.dispatchEvent({type: 'change'});
+            expect(timeInput.value).toBe('1.25');
         } finally {
             s.cleanup();
         }

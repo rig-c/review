@@ -79,8 +79,9 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
             wait(expression: string, what: string): Promise<void>;
             show(publication: JobPublication): Promise<void>;
             edit(selector: string, value: string): Promise<void>;
+            send: Send;
         }) {
-            const {wait, show, edit} = helpers;
+            const {wait, show, edit, send} = helpers;
             try {
             const form = (id: string) => 'form[data-job-ask=' + JSON.stringify(id) + ']';
             const status = (id: string) => `document.querySelector(${JSON.stringify(form(id))}).querySelector('[role=status]')`;
@@ -475,8 +476,42 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
             const firstMidPlayRetryReq = requests.at(-1)!;
             assert.equal(firstMidPlayRetryReq.input.capture?.playing, true);
             await wait(`Number(document.getElementById('job-time').value)!==${JSON.stringify(firstMidPlayRetryReq.input.capture!.frame)}`, 'natural motion advances after first mid-play capture');
-            await edit('#job-time', '0.375');
+            await page.evaluate(`(()=>{
+                const input=document.getElementById('job-time');
+                input.focus();
+                input.addEventListener('beforeinput',()=>{input.value=''},{once:true});
+            })()`);
+            await send('Input.insertText', {text: '0.375'});
+            const typedWhilePlaying = await page.evaluate<{valueImmediate: string; valueAfterTwoFrames: string;
+                pressedImmediate: string | null; pressedAfterTwoFrames: string | null;
+                textImmediate: string | null; textAfterTwoFrames: string | null}>(`new Promise(resolve => {
+                const input=document.getElementById('job-time'),play=document.getElementById('job-play');
+                const valueImmediate=input.value,pressedImmediate=play.getAttribute('aria-pressed'),textImmediate=play.textContent;
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve({
+                    valueImmediate,
+                    valueAfterTwoFrames: input.value,
+                    pressedImmediate,
+                    pressedAfterTwoFrames: play.getAttribute('aria-pressed'),
+                    textImmediate,
+                    textAfterTwoFrames: play.textContent,
+                })));
+            })`);
+            assert.equal(typedWhilePlaying.valueImmediate, '0.375');
+            assert.equal(typedWhilePlaying.valueAfterTwoFrames, '0.375', 'rAF does not overwrite uncommitted #job-time typing');
+            assert.equal(typedWhilePlaying.pressedImmediate, 'false', 'typing into #job-time immediately pauses playback');
+            assert.equal(typedWhilePlaying.pressedAfterTwoFrames, 'false');
+            assert.equal(typedWhilePlaying.textImmediate, catalog.Play);
+            assert.equal(typedWhilePlaying.textAfterTwoFrames, catalog.Play);
+            await page.evaluate(`(()=>{
+                const input=document.getElementById('job-time');
+                let changed=false;
+                input.addEventListener('change',()=>{changed=true},{once:true});
+                input.blur();
+                if(!changed)input.dispatchEvent(new Event('change',{bubbles:true}));
+            })()`);
+            assert.equal(await page.evaluate(`Number(document.getElementById('job-time').value)`), 0.375);
             assert.equal(await page.evaluate(`document.getElementById('job-play').getAttribute('aria-pressed')`), 'false', 'manual seek pauses playback');
+            await record('mid-play-time-input', typedWhilePlaying);
             await click(midPlayRetryAsk.askId);
             await wait(`${status(midPlayRetryAsk.askId)}.dataset.jobText==='job.saved'`, 'mid-play immutable retry saved');
             assert.equal(requests.at(-1)!.sha256, firstMidPlayRetryReq.sha256);
@@ -535,8 +570,40 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
             assert.equal(oneShotEnd.timeAfterTwoFrames, 1);
             assert.equal(oneShotEnd.pressed, 'false');
             assert.equal(oneShotEnd.text, catalog.Play);
-            await page.evaluate(`(()=>{const loop=document.getElementById('job-loop');loop.checked=true;loop.dispatchEvent(new Event('change'))})()`);
-            await record('repeat-off-oneshot', {toggledMidClip, oneShotEnd});
+            const repeatReenabledAtEnd = await page.evaluate<{loopChecked: boolean; time: string; numericTime: number;
+                timeAfterTwoFrames: number; pressed: string | null; text: string | null}>(`new Promise(resolve => {
+                const loop=document.getElementById('job-loop'),play=document.getElementById('job-play'),clock=document.getElementById('job-time');
+                loop.checked=true;loop.dispatchEvent(new Event('change'));
+                const time=clock.value,numericTime=Number(clock.value);
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve({
+                    loopChecked: loop.checked,
+                    time,
+                    numericTime,
+                    timeAfterTwoFrames: Number(clock.value),
+                    pressed: play.getAttribute('aria-pressed'),
+                    text: play.textContent,
+                })));
+            })`);
+            assert.equal(repeatReenabledAtEnd.loopChecked, true);
+            assert.equal(repeatReenabledAtEnd.time, '0');
+            assert.equal(repeatReenabledAtEnd.numericTime, 0);
+            assert.equal(repeatReenabledAtEnd.timeAfterTwoFrames, 0);
+            assert.equal(repeatReenabledAtEnd.pressed, 'false');
+            assert.equal(repeatReenabledAtEnd.text, catalog.Play);
+            await edit('#job-time', '0.375');
+            assert.equal(await page.evaluate(`document.getElementById('job-time').value`), '0.375');
+            await edit('#job-time', '1');
+            const manualSeekAtDuration = await page.evaluate<{loopChecked: boolean; time: string; numericTime: number;
+                pressed: string | null; text: string | null}>(`(()=>{
+                const loop=document.getElementById('job-loop'),play=document.getElementById('job-play'),clock=document.getElementById('job-time');
+                return {loopChecked:loop.checked,time:clock.value,numericTime:Number(clock.value),
+                    pressed:play.getAttribute('aria-pressed'),text:play.textContent};})()`);
+            assert.equal(manualSeekAtDuration.loopChecked, true);
+            assert.equal(manualSeekAtDuration.time, '0');
+            assert.equal(manualSeekAtDuration.numericTime, 0);
+            assert.equal(manualSeekAtDuration.pressed, 'false');
+            assert.equal(manualSeekAtDuration.text, catalog.Play);
+            await record('repeat-off-oneshot', {toggledMidClip, oneShotEnd, repeatReenabledAtEnd, manualSeekAtDuration});
 
             // #559: Source-compatible replacement while playing pauses outgoing playback and preserves animation/time/selection/camera.
             await edit('#job-animation', 'inspect');
@@ -608,7 +675,28 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
             assert.equal(pngReadFaults, 1);
             assert.deepEqual(await jobInputHashes(fixture.input.root), changed);
             await record('source-inputs-after', changed);
+            await edit('#job-animation', 'inspect');
+            await page.evaluate(`document.getElementById('job-play').click()`);
+            await wait(`document.getElementById('job-play').getAttribute('aria-pressed')==='true'`, 'playing before explicit job close');
             await fixture.finish();
+            await wait(`document.querySelector('.job-notice').textContent===${JSON.stringify(catalog['job.closed'])} && document.getElementById('job-play').getAttribute('aria-pressed')==='false'`, 'explicit job close stops playback');
+            const afterClose = await page.evaluate<{notice: string | null; pressed: string | null; text: string | null;
+                timeAtClose: number; timeAfterTwoFrames: number}>(`new Promise(resolve => {
+                const play=document.getElementById('job-play'),clock=document.getElementById('job-time');
+                const timeAtClose=Number(clock.value);
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve({
+                    notice: document.querySelector('.job-notice')?.textContent ?? null,
+                    pressed: play.getAttribute('aria-pressed'),
+                    text: play.textContent,
+                    timeAtClose,
+                    timeAfterTwoFrames: Number(clock.value),
+                })));
+            })`);
+            assert.equal(afterClose.notice, catalog['job.closed']);
+            assert.equal(afterClose.pressed, 'false');
+            assert.equal(afterClose.text, catalog.Play);
+            assert.equal(afterClose.timeAfterTwoFrames, afterClose.timeAtClose);
+            await record('closed-stops-playback', afterClose);
             await record('complete', {language, cases: ['setup', 'numeric-zero', 'numeric-375', 'setup-return', 'reply-loss-seek-retry',
                 'pan', 'zoom', 'highlight', 'solo', 'mid-play-loop', 'mid-play-retry', 'refused-playing-zoom',
                 'refused-playing-highlight', 'repeat-off-oneshot', 'playing-source-replacement',

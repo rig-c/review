@@ -257,7 +257,7 @@ try {
     await page.goto(owner.href);
     const sentinel = await page.evaluate<string>('globalThis.__jobWindowDocument = crypto.randomUUID()');
     if (stillProbe) {
-        await stillProbe.run(page, {wait, show, edit});
+        await stillProbe.run(page, {wait, show, edit, send: control!});
         assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
         assert.equal(navigation.length, 1);
     } else {
