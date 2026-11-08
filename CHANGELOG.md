@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.4](https://github.com/rig-c/review/compare/v2.4.3...v2.4.4) (2026-11-08)
+
+
+### Bug Fixes
+
+* **parts:** bind interpreted JSON to captured hash bytes ([#548](https://github.com/rig-c/review/issues/548)) ([691d73d](https://github.com/rig-c/review/commit/691d73d92388938f379d0761a99fd48982f756b9)), closes [#546](https://github.com/rig-c/review/issues/546)
+
 ## [2.4.3](https://github.com/rig-c/review/compare/v2.4.2...v2.4.3) (2026-11-08)
 
 
