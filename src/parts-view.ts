@@ -104,9 +104,12 @@ export async function insideRoot(root: string, path: string, code: string, what:
   return real;
 }
 
-async function hashFile(abs: string): Promise<LocalFile> {
-  const bytes = await readFile(abs);
+function hashBytes(abs: string, bytes: Buffer): LocalFile {
   return { abs, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+}
+
+async function hashFile(abs: string): Promise<LocalFile> {
+  return hashBytes(abs, await readFile(abs));
 }
 
 /** A part name is a file stem under `parts/`: no separators, no traversal. */
@@ -230,8 +233,13 @@ export function checkReadings(doc: unknown, names: ReadonlySet<string>): Produce
   return labelled ? rows : checkFlags(doc, names).map(f => ({...f, classification:'unclassified' as const, ...(f.kind === 'check' ? {line:JSON.stringify(f.entry)} : {})}));
 }
 
-async function readJson(abs: string, what: string): Promise<unknown> {
-  try { return JSON.parse(await readFile(abs, 'utf8')); } catch (e) { return refuse('PARTS_FLAGS_MALFORMED', `${what}: ${e instanceof Error ? e.message : String(e)}`); }
+function parseJson(bytes: Buffer, what: string): unknown {
+  try { return JSON.parse(bytes.toString('utf8')); } catch (e) { return refuse('PARTS_FLAGS_MALFORMED', `${what}: ${e instanceof Error ? e.message : String(e)}`); }
+}
+
+async function readJsonBytes(abs: string, what: string): Promise<{ bytes: Buffer; value: unknown }> {
+  try { const bytes = await readFile(abs); return { bytes, value: JSON.parse(bytes.toString('utf8')) }; }
+  catch (e) { return refuse('PARTS_FLAGS_MALFORMED', `${what}: ${e instanceof Error ? e.message : String(e)}`); }
 }
 
 /**
@@ -239,8 +247,9 @@ async function readJson(abs: string, what: string): Promise<unknown> {
  * writes `mesh_report.json` beside `parts.json` in `rig/`, and `check` writes `check/check.json` beside `rig/`.
  * `rigDir` is that `rig/` directory (parts mode) or null (atlas mode: explicit paths only, or `buildRoot`'s files).
  */
-async function producerFlags(rigDir: string | null, buildRoot: string | null, names: ReadonlySet<string>, options: PartsViewOptions): Promise<{ flags: ProducerFlag[]; readings: ProducerFlag[]; files: LocalFile[]; notes: string[] }> {
+async function producerFlags(rigDir: string | null, buildRoot: string | null, names: ReadonlySet<string>, options: PartsViewOptions): Promise<{ flags: ProducerFlag[]; readings: ProducerFlag[]; files: LocalFile[]; notes: string[]; meshReport: unknown }> {
   const flags: ProducerFlag[] = [], readings: ProducerFlag[] = [], files: LocalFile[] = [], notes: string[] = [];
+  let meshReport: unknown = null;
   // A discovered file must resolve inside the directory it was discovered in; a path given on the command line is the user's own choice.
   const pick = async (explicit: string | undefined, candidates: ([string, string] | null)[], what: string): Promise<string | null> => {
     if (explicit !== undefined) return realpath(resolve(explicit));
@@ -248,12 +257,12 @@ async function producerFlags(rigDir: string | null, buildRoot: string | null, na
     return found ? insideRoot(found[0], found[1], 'PARTS_FLAGS_OUTSIDE', what) : null;
   };
   const mesh = await pick(options.meshReport, [rigDir ? [rigDir, join(rigDir, 'mesh_report.json')] : null, buildRoot ? [buildRoot, join(buildRoot, 'rig', 'mesh_report.json')] : null], 'mesh_report.json');
-  if (mesh) { files.push(await hashFile(mesh)); flags.push(...meshReportFlags(await readJson(mesh, 'mesh_report.json'), names)); }
+  if (mesh) { const bytes = await readFile(mesh); files.push(hashBytes(mesh, bytes)); meshReport = parseJson(bytes, 'mesh_report.json'); flags.push(...meshReportFlags(meshReport, names)); }
   else notes.push('mesh_report.json');
   const check = await pick(options.check, [rigDir ? [dirname(rigDir), join(dirname(rigDir), 'check', 'check.json')] : null, buildRoot ? [buildRoot, join(buildRoot, 'check', 'check.json')] : null], 'check/check.json');
-  if (check) { files.push(await hashFile(check)); const doc = await readJson(check, 'check.json'); flags.push(...checkFlags(doc, names)); readings.push(...checkReadings(doc, names)); }
+  if (check) { const bytes = await readFile(check); files.push(hashBytes(check, bytes)); const doc = parseJson(bytes, 'check.json'); flags.push(...checkFlags(doc, names)); readings.push(...checkReadings(doc, names)); }
   else notes.push('check.json');
-  return { flags, readings, files, notes };
+  return { flags, readings, files, notes, meshReport };
 }
 
 /** Exact attachment identity and UV-derived geometry; never reconstruct through weights. */
@@ -322,12 +331,13 @@ async function locateMeshRasters(rig: unknown, root: string, items: ViewItem[], 
 
 async function loadPartsMode(root: string, options: PartsViewOptions): Promise<PartsViewPackage> {
   const partsJson = await insideRoot(root, join(root, 'parts.json'), 'PARTS_FILE_OUTSIDE', 'parts.json');
-  const doc = record(await readJson(partsJson, 'parts.json'));
+  const { bytes: partsBytes, value: partsRaw } = await readJsonBytes(partsJson, 'parts.json');
+  const doc = record(partsRaw);
   const list = doc?.parts;
   if (!doc || !Array.isArray(list)) return refuse('PARTS_JSON_MALFORMED', 'parts.json has no parts[] array');
   const size = doc.rig_size;
   const rigSize: [number, number] | null = Array.isArray(size) && size.length === 2 && finite(size[0], 1) && finite(size[1], 1) ? [size[0], size[1]] : null;
-  const items: ViewItem[] = [], imagePaths: string[] = [], files: LocalFile[] = [await hashFile(partsJson)];
+  const items: ViewItem[] = [], imagePaths: string[] = [], files: LocalFile[] = [hashBytes(partsJson, partsBytes)];
   const seen = new Set<string>();
   for (const [index, raw] of list.entries()) {
     const p = record(raw);
@@ -337,7 +347,7 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     seen.add(part.name);
     const abs = join(root, 'parts', partFileName(part.name));
     if (!existsSync(abs)) refuse('PARTS_IMAGE_MISSING', `parts/${part.name}.png is named in parts.json and is not on disk`);
-    // Hashed and served by its real path, so a link swapped after load cannot redirect what the page is shown.
+    // Resolved to its current real path inside root before hashing; full path-replacement pinning stays tracked in #479.
     const real = await insideRoot(root, abs, 'PARTS_IMAGE_OUTSIDE', `parts/${part.name}.png`);
     files.push(await hashFile(real));
     imagePaths.push(real);
@@ -368,7 +378,7 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     assertOriginalPaintingSize(png!.width,png!.height,rigSize,doc.scale_rig_per_source);
     const file={abs:abs!,bytes:bytes!.length,sha256:createHash('sha256').update(bytes!).digest('hex')};painting={...file,width:png!.width,height:png!.height};files.push(file);
   }
-  const { flags, readings, files: flagFiles, notes } = await producerFlags(root, null, seen, options);
+  const { flags, readings, files: flagFiles, notes, meshReport } = await producerFlags(root, null, seen, options);
   const protectedPaths = [join(root, 'rig.json'), join(root, 'config.json'), join(root, 'review.json'), join(root, 'report.json')];
   if (basename(root) === 'rig') protectedPaths.push(...['parts.json', 'config.json', 'review.json', 'report.json'].map(name => join(dirname(root), name)));
   if (options.rig !== undefined) protectedPaths.push(resolve(options.rig));
@@ -381,7 +391,7 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     let rig: unknown;
     try { rig = JSON.parse(rigBytes.toString('utf8')); }
     catch (e) { return refuse('PARTS_MESH_MALFORMED', `rig.json: ${e instanceof Error ? e.message : String(e)}`); }
-    readPartMeshes(rig, items, report ? await readJson(report.abs, 'mesh_report.json') : null);
+    readPartMeshes(rig, items, report ? meshReport : null);
     await locateMeshRasters(rig, dirname(rigPath), items, imagePaths, files);
     // Bind exactly the bytes parsed above, even if the path is replaced during raster checks.
     files.push({ abs: rigPath, bytes: rigBytes.length, sha256: createHash('sha256').update(rigBytes).digest('hex') });
@@ -402,10 +412,11 @@ export async function loadPartsAtlas(p: ReviewPackage, options: PartsViewOptions
   const modelPath = p.manifest.model;
   if (!modelPath) return refuse('PARTS_VIEW_NO_ATLAS', `The inspected package holds no compiled model with pages`);
   const modelAbs = await safeFile(p.root, modelPath);
-  const model = record(JSON.parse(await readFile(modelAbs, 'utf8')));
+  const modelBytes = await readFile(modelAbs);
+  const model = record(JSON.parse(modelBytes.toString('utf8')));
   const pagesRaw = model?.pages;
   if (!Array.isArray(pagesRaw)) return refuse('PARTS_VIEW_NO_ATLAS', `${modelPath} declares no pages`);
-  const pages: ViewPage[] = [], pagePaths: string[] = [], items: ViewItem[] = [], files: LocalFile[] = [await hashFile(modelAbs)];
+  const pages: ViewPage[] = [], pagePaths: string[] = [], items: ViewItem[] = [], files: LocalFile[] = [hashBytes(modelAbs, modelBytes)];
   const names = new Set<string>();
   for (const raw of pagesRaw) {
     const page = record(raw);
