@@ -15,10 +15,28 @@ import {admitStillOracle, armStillObservation, persistStillObservation, restoreS
 
 type Fixture = Awaited<ReturnType<typeof scriptedJobWindowFixture>>;
 type Send = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+type FocusSnapshot = {
+    hasFocus: boolean; visibility: string; activeElement: unknown;
+    timestamp: number; epochMs: number;
+};
+type ViewportIdentity = {
+    initialPaneId: number | null; currentPaneId: number | null; samePane: boolean; paneConnected: boolean;
+    initialRootId: number | null; currentRootId: number | null; sameRoot: boolean; rootConnected: boolean;
+    initialWorkspaceId: number | null; currentWorkspaceId: number | null; sameWorkspace: boolean; workspaceConnected: boolean;
+};
+type CdpCommandTrace = {
+    step: string; id: number | null; method: string; sessionId: string | null;
+    payload: Record<string, unknown> | null;
+    sendPerfMs: number; ackPerfMs: number; durationMs: number;
+    sendEpochMs: number; ackEpochMs: number;
+    status: 'ok' | 'error'; error?: string;
+};
 type PanSnapshot = {
     point: {x: number; y: number}; destination: {x: number; y: number};
     camera: {center: {x: number; y: number}; zoom: number};
     rect: {x: number; y: number; width: number; height: number};
+    window: {width: number; height: number; visibility: string; hasFocus: boolean; activeElement: unknown};
+    hasFocus: boolean; activeElement: unknown; viewportIdentity: ViewportIdentity;
     visible: boolean; hitInPane: boolean; destinationInPane: boolean; blocked: boolean;
     panning: boolean; captured: boolean; rootStyle: string | null; pressed: string | null;
 };
@@ -107,19 +125,50 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
                 return page.evaluate<{x: number; y: number}>(`(()=>{const r=document.getElementById('rig-viewport').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
             }
             async function panRig(): Promise<PanSnapshot> {
-                // Observe trusted input and the existing numeric camera readout, without replacing handlers.
+                // Observe trusted input, window/document focus, original viewport node identity and CDP mouse payloads without replacing product handlers.
                 await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
                 await page.evaluate(`(()=>{
                     if(Object.hasOwn(globalThis,'__jobStillPanProbe'))throw new Error('JOB_STILL_PAN_PROBE_ALREADY_ACTIVE');
-                    const pane=document.getElementById('rig-viewport'),r=pane.getBoundingClientRect();
+                    const nodeIds=new WeakMap();let nextNodeId=1;
+                    const idOf=n=>{
+                        if(!n||(typeof n!=='object'&&typeof n!=='function'))return null;
+                        let id=nodeIds.get(n);
+                        if(!id){id=nextNodeId++;nodeIds.set(n,id);}
+                        return id;
+                    };
+                    const pane=document.getElementById('rig-viewport'),root=document.getElementById('rig-root');
+                    const workspace=document.querySelector('[data-job-workspace]');
+                    const initialPaneId=idOf(pane),initialRootId=idOf(root),initialWorkspaceId=idOf(workspace);
+                    const r=pane.getBoundingClientRect();
                     const point={x:r.x+r.width/2,y:r.y+r.height/2},destination={x:point.x+18,y:point.y+11};
-                    const describe=n=>n instanceof Element?{tag:n.tagName,id:n.id,className:n.getAttribute('class')}:null;
-                    const events=[];let pointerId=null;
+                    const describe=n=>n===window?{kind:'window',id:'window'}:
+                        n===document?{kind:'document',id:'document'}:
+                        n instanceof Element?{kind:'element',nodeId:idOf(n),tag:n.tagName,id:n.id,className:n.getAttribute('class'),connected:n.isConnected}:
+                        n instanceof Node?{kind:'node',nodeId:idOf(n),nodeName:n.nodeName,connected:n.isConnected}:null;
+                    const events=[],focusEvents=[],mutations=[];let pointerId=null;
+                    const focusState=()=>({
+                        hasFocus:document.hasFocus(),
+                        visibility:document.visibilityState,
+                        activeElement:describe(document.activeElement),
+                        timestamp:performance.now(),
+                        epochMs:Date.now()
+                    });
+                    const viewportIdentity=()=>{
+                        const currentPane=document.getElementById('rig-viewport'),currentRoot=document.getElementById('rig-root');
+                        const currentWorkspace=document.querySelector('[data-job-workspace]');
+                        return {
+                            initialPaneId,currentPaneId:idOf(currentPane),samePane:currentPane===pane,paneConnected:!!pane?.isConnected,
+                            initialRootId,currentRootId:idOf(currentRoot),sameRoot:currentRoot===root,rootConnected:!!root?.isConnected,
+                            initialWorkspaceId,currentWorkspaceId:idOf(currentWorkspace),sameWorkspace:currentWorkspace===workspace,workspaceConnected:!!workspace?.isConnected
+                        };
+                    };
                     const snapshot=()=>{
                         const r=pane.getBoundingClientRect(),style=getComputedStyle(pane);
                         const hit=document.elementFromPoint(point.x,point.y),end=document.elementFromPoint(destination.x,destination.y);
+                        const hasFocus=document.hasFocus(),activeElement=describe(document.activeElement);
                         return {point,destination,camera:JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig,
-                            rect:r.toJSON(),window:{width:innerWidth,height:innerHeight,visibility:document.visibilityState},
+                            rect:r.toJSON(),window:{width:innerWidth,height:innerHeight,visibility:document.visibilityState,hasFocus,activeElement},
+                            hasFocus,activeElement,viewportIdentity:viewportIdentity(),
                             visible:pane.isConnected&&document.visibilityState==='visible'&&style.display!=='none'&&style.visibility==='visible'&&
                                 r.width>0&&r.height>0&&point.x>=0&&point.y>=0&&destination.x<innerWidth&&destination.y<innerHeight,
                             hit:describe(hit),destinationHit:describe(end),hitInPane:!!hit&&pane.contains(hit),destinationInPane:!!end&&pane.contains(end),
@@ -130,38 +179,134 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
                     };
                     const trace=phase=>event=>{
                         if(event.type==='pointerdown')pointerId=event.pointerId;
-                        events.push({type:event.type,phase,timestamp:performance.now(),isTrusted:event.isTrusted,
+                        events.push({kind:'pointer',type:event.type,phase,timestamp:performance.now(),epochMs:Date.now(),isTrusted:event.isTrusted,
                             pointerId:event.pointerId,pointerType:event.pointerType,isPrimary:event.isPrimary,
                             button:event.button,buttons:event.buttons,x:event.clientX,y:event.clientY,defaultPrevented:event.defaultPrevented,
+                            hasFocus:document.hasFocus(),visibilityState:document.visibilityState,activeElement:describe(document.activeElement),
                             target:describe(event.target),path:event.composedPath().map(describe).filter(Boolean),
-                            targetInPane:event.target instanceof Node&&pane.contains(event.target),state:snapshot()});
+                            targetInPane:event.target instanceof Node&&pane.contains(event.target),sameTargetAsInitialPane:event.target===pane,state:snapshot()});
                     };
+                    const traceFocus=(source,phase)=>event=>{
+                        const entry={kind:'focus',source,type:event.type,phase,timestamp:performance.now(),epochMs:Date.now(),isTrusted:event.isTrusted,
+                            targetKind:event.target===window?'window':event.target===document?'document':'element',
+                            target:describe(event.target),relatedTarget:'relatedTarget' in event?describe(event.relatedTarget):null,
+                            hasFocus:document.hasFocus(),visibilityState:document.visibilityState,activeElement:describe(document.activeElement),state:snapshot()};
+                        focusEvents.push(entry);events.push(entry);
+                    };
+                    const observer=new MutationObserver(records=>{
+                        for(const record of records){
+                            if(record.type!=='childList')continue;
+                            const removed=[...record.removedNodes].filter(n=>n instanceof Element);
+                            const added=[...record.addedNodes].filter(n=>n instanceof Element);
+                            if(removed.length===0&&added.length===0)continue;
+                            const entry={kind:'mutation',timestamp:performance.now(),epochMs:Date.now(),
+                                target:describe(record.target),removed:removed.map(describe),added:added.map(describe),
+                                paneRemoved:removed.some(n=>n===pane||n.contains(pane)),
+                                rootRemoved:removed.some(n=>n===root||(!!root&&n.contains(root))),
+                                viewportIdentity:viewportIdentity(),hasFocus:document.hasFocus(),visibilityState:document.visibilityState};
+                            mutations.push(entry);events.push(entry);
+                        }
+                    });
+                    if(workspace)observer.observe(workspace,{childList:true,subtree:true});
+                    else if(document.body)observer.observe(document.body,{childList:true,subtree:true});
                     const capture=trace('capture'),bubble=trace('bubble');
+                    const winCapture=traceFocus('window','capture'),winBubble=traceFocus('window','bubble');
+                    const docCapture=traceFocus('document','capture'),docBubble=traceFocus('document','bubble');
                     const types=['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture'];
-                    for(const type of types){document.addEventListener(type,capture,true);document.addEventListener(type,bubble);}
-                    globalThis.__jobStillPanProbe={snapshot,events,dispose(){
+                    const winFocusTypes=['focus','blur'],docFocusTypes=['visibilitychange','focusin','focusout'];
+                    for(const type of types){document.addEventListener(type,capture,{capture:true,passive:true});document.addEventListener(type,bubble,{passive:true});}
+                    for(const type of winFocusTypes){window.addEventListener(type,winCapture,{capture:true,passive:true});window.addEventListener(type,winBubble,{passive:true});}
+                    for(const type of docFocusTypes){document.addEventListener(type,docCapture,{capture:true,passive:true});document.addEventListener(type,docBubble,{passive:true});}
+                    globalThis.__jobStillPanProbe={snapshot,focusState,events,focusEvents,mutations,dispose(){
                         for(const type of types){document.removeEventListener(type,capture,true);document.removeEventListener(type,bubble);}
-                        try{return {events,state:snapshot()};}finally{delete globalThis.__jobStillPanProbe;}
+                        for(const type of winFocusTypes){window.removeEventListener(type,winCapture,true);window.removeEventListener(type,winBubble);}
+                        for(const type of docFocusTypes){document.removeEventListener(type,docCapture,true);document.removeEventListener(type,docBubble);}
+                        observer.disconnect();
+                        try{return {timeOrigin:performance.timeOrigin,events,focusEvents,mutations,state:snapshot(),
+                            restoration:{pointerListenersRemoved:true,focusListenersRemoved:true,mutationObserverDisconnected:true}};}
+                        finally{delete globalThis.__jobStillPanProbe;}
                     }};
                 })()`);
                 const sample = () => page.evaluate<PanSnapshot>(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(globalThis.__jobStillPanProbe.snapshot()))))`);
+                const readFocus = () => page.evaluate<FocusSnapshot>('globalThis.__jobStillPanProbe.focusState()');
+                const cdpCommands: CdpCommandTrace[] = [];
+                const originalWsSend = WebSocket.prototype.send;
+                type WireSample = {id: number | null; method: string; sessionId: string | null; payload: Record<string, unknown>; sendPerfMs: number; sendEpochMs: number};
+                let lastWire: WireSample | null = null;
+                WebSocket.prototype.send = function (data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+                    if (typeof data === 'string') {
+                        try {
+                            const parsed = JSON.parse(data) as {id?: number; method?: string; params?: Record<string, unknown>; sessionId?: string};
+                            if (parsed.method === 'Input.dispatchMouseEvent' || parsed.method === 'Page.bringToFront') {
+                                lastWire = {
+                                    id: typeof parsed.id === 'number' ? parsed.id : null,
+                                    method: parsed.method,
+                                    sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
+                                    payload: parsed.params ?? {},
+                                    sendPerfMs: performance.now(),
+                                    sendEpochMs: Date.now(),
+                                };
+                            }
+                        } catch {}
+                    }
+                    return originalWsSend.call(this, data as never);
+                };
+                async function traceCdp<T>(step: string, expectedMethod: string, action: () => Promise<T>): Promise<T> {
+                    lastWire = null;
+                    const callPerfMs = performance.now(), callEpochMs = Date.now();
+                    const pendingAction = action();
+                    const wire = lastWire as WireSample | null;
+                    lastWire = null;
+                    try {
+                        const result = await pendingAction;
+                        const ackPerfMs = performance.now(), ackEpochMs = Date.now();
+                        const sendPerfMs = wire?.sendPerfMs ?? callPerfMs;
+                        cdpCommands.push({step, id: wire?.id ?? null, method: wire?.method ?? expectedMethod,
+                            sessionId: wire?.sessionId ?? null, payload: wire?.payload ?? null,
+                            sendPerfMs, ackPerfMs, durationMs: ackPerfMs - sendPerfMs,
+                            sendEpochMs: wire?.sendEpochMs ?? callEpochMs, ackEpochMs, status: 'ok'});
+                        return result;
+                    } catch (error) {
+                        const ackPerfMs = performance.now(), ackEpochMs = Date.now();
+                        const sendPerfMs = wire?.sendPerfMs ?? callPerfMs;
+                        cdpCommands.push({step, id: wire?.id ?? null, method: wire?.method ?? expectedMethod,
+                            sessionId: wire?.sessionId ?? null, payload: wire?.payload ?? null,
+                            sendPerfMs, ackPerfMs, durationMs: ackPerfMs - sendPerfMs,
+                            sendEpochMs: wire?.sendEpochMs ?? callEpochMs, ackEpochMs, status: 'error',
+                            error: error instanceof Error ? error.message : String(error)});
+                        throw error;
+                    }
+                }
                 let held = false;
                 let before: PanSnapshot | undefined;
+                let focusBeforeBringToFront: FocusSnapshot | null = null;
+                let focusAfterBringToFront: FocusSnapshot | null = null;
                 try {
-                    before = await sample();
-                    await record('pan-input-before', before);
                     await screenshot('pan-input-before');
+                    focusBeforeBringToFront = await readFocus();
+                    await traceCdp('bringToFront', 'Page.bringToFront', () => send('Page.bringToFront', {}));
+                    focusAfterBringToFront = await readFocus();
+                    before = await sample();
+                    await record('pan-input-before', {...before, focusSetup: {beforeBringToFront: focusBeforeBringToFront, afterBringToFront: focusAfterBringToFront}});
                     assert.ok(before.visible && before.hitInPane && before.destinationInPane && !before.blocked,
                         new Error('JOB_STILL_PAN_TARGET_NOT_VISIBLE_OR_HITTABLE'));
+                    assert.ok(before.viewportIdentity.samePane && before.viewportIdentity.paneConnected &&
+                        before.viewportIdentity.sameRoot && before.viewportIdentity.rootConnected,
+                        new Error('JOB_STILL_PAN_VIEWPORT_DISCONNECTED'));
+                    assert.equal(before.hasFocus, true, 'owner document focused before pan gesture');
                     assert.equal(before.camera.zoom, 1);
                     assert.equal(before.pressed, 'false', 'paused pan refusal precondition');
                     held = true;
-                    await page.mouse('mousePressed', before.point.x, before.point.y);
+                    await traceCdp('mousePressed', 'Input.dispatchMouseEvent', () => page.mouse('mousePressed', before!.point.x, before!.point.y));
                     const down = await sample();
                     await record('pan-input-down', down);
+                    assert.equal(await page.evaluate<boolean>(`globalThis.__jobStillPanProbe.events.some(event => event.type === 'pointerdown' && event.phase === 'bubble' && event.isTrusted && event.hasFocus === true && event.state.viewportIdentity.samePane === true && event.state.viewportIdentity.paneConnected === true)`),
+                        true, 'owner document focused and original Rig viewport connected at pointerdown');
+                    assert.equal(down.hasFocus, true, 'owner document focused after pointerdown');
+                    assert.ok(down.viewportIdentity.samePane && down.viewportIdentity.paneConnected, new Error('JOB_STILL_PAN_VIEWPORT_REPLACED'));
                     assert.ok(down.panning && down.captured, new Error('JOB_STILL_PAN_POINTER_NOT_CAPTURED'));
                     assert.deepEqual(down.rect, before.rect, 'pan target geometry stays fixed after pointerdown');
-                    await page.mouse('mouseMoved', before.destination.x, before.destination.y);
+                    await traceCdp('mouseMoved', 'Input.dispatchMouseEvent', () => page.mouse('mouseMoved', before!.destination.x, before!.destination.y));
                     const moved = await sample();
                     await record('pan-input-moved', moved);
                     assert.deepEqual(moved.rect, before.rect, 'pan target geometry stays fixed after pointermove');
@@ -169,7 +314,7 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
                         new Error('JOB_STILL_PAN_CAMERA_DID_NOT_MOVE'));
                     assert.equal(moved.camera.zoom, before.camera.zoom, 'pan preserves zoom');
                     assert.notEqual(moved.rootStyle, before.rootStyle, 'pan reaches the rendered Rig transform');
-                    await page.mouse('mouseReleased', before.destination.x, before.destination.y);
+                    await traceCdp('mouseReleased', 'Input.dispatchMouseEvent', () => page.mouse('mouseReleased', before!.destination.x, before!.destination.y));
                     held = false;
                     const released = await sample();
                     await record('pan-input-released', released);
@@ -186,11 +331,23 @@ export function rigStillBrowserProbe(fixture: Fixture, output: string, language:
                     return released;
                 } finally {
                     try {
-                        if (held && before) await page.mouse('mouseReleased', before.destination.x, before.destination.y);
+                        if (held && before) {
+                            await traceCdp('mouseReleasedFinally', 'Input.dispatchMouseEvent',
+                                () => page.mouse('mouseReleased', before!.destination.x, before!.destination.y));
+                        }
                     } finally {
-                        const final = await page.evaluate(`globalThis.__jobStillPanProbe.dispose()`);
-                        await record('pan-input-trace', final);
-                        assert.equal(await page.evaluate(`Object.hasOwn(globalThis,'__jobStillPanProbe')`), false, 'pan listeners and probe state disposed');
+                        WebSocket.prototype.send = originalWsSend;
+                        const wsSendRestored = WebSocket.prototype.send === originalWsSend;
+                        const final = await page.evaluate<Record<string, unknown>>(`globalThis.__jobStillPanProbe.dispose()`);
+                        const probeDisposed = !(await page.evaluate<boolean>(`Object.hasOwn(globalThis,'__jobStillPanProbe')`));
+                        await record('pan-input-trace', {
+                            ...final,
+                            focusSetup: {beforeBringToFront: focusBeforeBringToFront, afterBringToFront: focusAfterBringToFront},
+                            cdpCommands,
+                            restoration: {...(final.restoration as Record<string, unknown>), wsSendRestored, probeDisposed},
+                        });
+                        assert.equal(wsSendRestored, true, 'CDP WebSocket send wrapper restored');
+                        assert.equal(probeDisposed, true, 'pan listeners and probe state disposed');
                     }
                 }
             }
