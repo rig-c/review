@@ -1,8 +1,16 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import {
-  JOB_API_SCHEMA, JOB_PARTS_ENUMERATOR_RANGE, JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS,
-  type JobAgentRequest, type JobDisplayAcknowledgment, type JobFetchActRequest,
-  type JobHostPorts, type JobResult, type JobSelector, type JobSubject,
+  JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PARTS_ENUMERATOR_RANGE,
+  JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RECORD_ACT_SCHEMA, JOB_RECORD_INSTANCE_SCHEMA, JOB_RECORD_SOURCE_SCHEMA,
+  JOB_RESERVED_ACT_KINDS,
+  type AgentRequestV3, type FetchActRequestV3, type JobAgentRequest, type JobApiSchema,
+  type JobDisplayAcknowledgment, type JobErrorCode, type JobFetchActRequest, type JobFileIdentity,
+  type JobHostPorts, type JobHumanAuthority, type JobPlanIdentity, type JobPublicationMode,
+  type JobPublishRequest, type JobResult, type JobSelector, type JobSha256, type JobSubject,
+  type OptionContext, type OptionSource, type PlanContext, type PlanSource, type ProjectRecord,
+  type PublishRequestV3, type PublishResultV3, type RecordAct, type RecordFreeze,
+  type RecordOptionResult, type RecordPartsIdentity, type RecordPicksSubject, type RecordPlanResult, type RecordPlanSubject,
+  type RecordResult, type RecordSignoffStage, type RecordSource, type RecordSubject,
   jobCaptureBodyLimit, jobRawActMediaType,
 } from './job-contract.ts';
 import { JobError } from './job-store.ts';
@@ -136,18 +144,170 @@ export function jobPartsEnumeratorVersion(value: unknown): string {
   return value;
 }
 
-export function assertJobApiSchema(value: unknown): void {
-  if (value !== JOB_API_SCHEMA) {
+export function jobApiSchemaForMode(mode: JobPublicationMode = 'package-only'): JobApiSchema {
+  if (mode === 'package-only') return JOB_API_SCHEMA;
+  if (mode === 'record-and-package') return JOB_API_V3_SCHEMA;
+  throw new JobError('JOB_REQUEST_INVALID');
+}
+
+export function assertJobApiSchema(
+  value: unknown,
+  expected: JobApiSchema | JobPublicationMode = JOB_API_SCHEMA,
+): void {
+  const schema = expected === 'package-only' || expected === 'record-and-package'
+    ? jobApiSchemaForMode(expected)
+    : expected;
+  if (value !== schema) {
     throw new JobError('JOB_REQUEST_INVALID', 'JOB_API_SCHEMA_MISMATCH');
   }
 }
 
-export function parseJobRequest(value: unknown): JobAgentRequest | JobFetchActRequest {
+export function parseProjectRecord(
+  value: unknown,
+  errorCode: JobErrorCode = 'JOB_FREEZE_REQUIRED',
+): ProjectRecord {
+  if (value === null || value === undefined) throw new JobError(errorCode);
+  const record = jobObject(value, ['path', 'sha256']);
+  const path = jobPath(record.path);
+  const sha256 = jobSha(record.sha256);
+  if (path !== 'project.json') throw new JobError(errorCode);
+  return { path: 'project.json', sha256 };
+}
+
+export function parseRecordFreeze(value: unknown): RecordFreeze {
+  if (value === null || value === undefined) throw new JobError('JOB_FREEZE_REQUIRED');
+  const freeze = jobObject(value, ['kind', 'holdId', 'record']);
+  if (freeze.kind !== 'producer-held') throw new JobError('JOB_FREEZE_REQUIRED');
+  const holdId = jobId(freeze.holdId);
+  const record = parseProjectRecord(freeze.record, 'JOB_FREEZE_REQUIRED');
+  return { kind: 'producer-held', holdId, record };
+}
+
+export function parsePublishResultV3(value: unknown): PublishResultV3 {
+  const item = jobObject(value, ['kind', 'path', 'selector', 'questionId', 'setId']);
+  switch (item.kind) {
+    case 'package':
+      jobObject(item, ['kind', 'path', 'selector']);
+      if (!('selector' in item) || item.selector === undefined) throw new JobError('JOB_REQUEST_INVALID');
+      return { kind: 'package', path: jobPath(item.path), selector: parseJobSelector(item.selector) };
+    case 'option-set':
+      jobObject(item, ['kind', 'questionId', 'setId']);
+      return { kind: 'option-set', questionId: jobId(item.questionId), setId: jobId(item.setId) };
+    case 'plan':
+      jobObject(item, ['kind']);
+      return { kind: 'plan' };
+  }
+  throw new JobError('JOB_REQUEST_INVALID');
+}
+
+export function parseRecordResult(value: unknown): RecordResult {
+  const result = parsePublishResultV3(value);
+  if (result.kind === 'package') throw new JobError('JOB_REQUEST_INVALID');
+  return result;
+}
+
+export function stripPackageResultKind(
+  result: Extract<PublishResultV3, { readonly kind: 'package' }>,
+): JobPublishRequest['result'] {
+  const parsed = parsePublishResultV3(result);
+  if (parsed.kind !== 'package') throw new JobError('JOB_REQUEST_INVALID');
+  return { path: parsed.path, selector: parsed.selector };
+}
+
+export function parseRecordSubject(value: unknown): RecordSubject {
+  const item = jobObject(value, ['kind', 'questionId', 'setId', 'checkpointId', 'draftId', 'stage']);
+  if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(item.kind)) {
+    throw new JobError('JOB_ACT_KIND_DISABLED');
+  }
+  if (item.kind !== 'interview-picks' && item.kind !== 'checkpoint' && item.kind !== 'signoff') {
+    throw new JobError('JOB_ASK_INVALID');
+  }
+  switch (item.kind) {
+    case 'interview-picks':
+      jobObject(item, ['kind', 'questionId', 'setId']);
+      return { kind: 'interview-picks', questionId: jobId(item.questionId), setId: jobId(item.setId) };
+    case 'checkpoint':
+      jobObject(item, ['kind', 'checkpointId']);
+      return { kind: 'checkpoint', checkpointId: jobId(item.checkpointId) };
+    case 'signoff': {
+      jobObject(item, ['kind', 'stage']);
+      const stage = jobId(item.stage);
+      if (!(JOB_PLAN_BOUND_SIGNOFF_STAGES as readonly string[]).includes(stage)) {
+        throw new JobError('JOB_ASK_INVALID');
+      }
+      return { kind: 'signoff', stage: stage as RecordSignoffStage };
+    }
+  }
+}
+
+export function parseJobRequest(
+  value: unknown,
+  mode?: typeof JOB_API_SCHEMA | 'package-only',
+): JobAgentRequest | JobFetchActRequest;
+export function parseJobRequest(
+  value: unknown,
+  mode: typeof JOB_API_V3_SCHEMA | 'record-and-package',
+): AgentRequestV3 | FetchActRequestV3;
+export function parseJobRequest(
+  value: unknown,
+  mode: JobApiSchema | JobPublicationMode = JOB_API_SCHEMA,
+): JobAgentRequest | JobFetchActRequest | AgentRequestV3 | FetchActRequestV3 {
   const item = jobObject(value, [
     'schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey',
     'result', 'freeze', 'publicationId', 'subject', 'after', 'waitMs', 'reason', 'actId',
   ]);
-  assertJobApiSchema(item.schema);
+  const targetSchema = mode === 'package-only' || mode === 'record-and-package'
+    ? jobApiSchemaForMode(mode)
+    : mode;
+  assertJobApiSchema(item.schema, targetSchema);
+  if (targetSchema === JOB_API_V3_SCHEMA) {
+    const base = { schema: JOB_API_V3_SCHEMA, jobId: jobId(item.jobId), requestId: jobId(item.requestId) };
+    if (item.verb === 'next') {
+      jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'after', 'waitMs']);
+      return { ...base, verb: 'next', after: item.after === null ? null : jobId(item.after), waitMs: jobInteger(item.waitMs, jobWaitLimitMs) };
+    }
+    if (item.verb === 'fetch-act') {
+      jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'actId']);
+      return { ...base, verb: 'fetch-act', actId: jobId(item.actId) };
+    }
+    const mutation = { ...base, expectedGeneration: jobInteger(item.expectedGeneration), idempotencyKey: jobId(item.idempotencyKey) };
+    switch (item.verb) {
+      case 'publish': {
+        jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey', 'result', 'freeze']);
+        const result = parsePublishResultV3(item.result);
+        if (result.kind === 'package') {
+          const freeze = jobObject(item.freeze, ['kind', 'holdId', 'record']);
+          if (freeze.kind !== 'producer-held') throw new JobError('JOB_FREEZE_REQUIRED');
+          const record = freeze.record === null ? null : jobObject(freeze.record, ['path', 'sha256']);
+          const parsedPublish: PublishRequestV3 = {
+            ...mutation,
+            verb: 'publish',
+            result,
+            freeze: {
+              kind: 'producer-held',
+              holdId: jobId(freeze.holdId),
+              record: record === null ? null : { path: jobPath(record.path), sha256: jobSha(record.sha256) },
+            },
+          };
+          return parsedPublish;
+        }
+        const parsedRecordPublish: PublishRequestV3 = {
+          ...mutation,
+          verb: 'publish',
+          result,
+          freeze: parseRecordFreeze(item.freeze),
+        };
+        return parsedRecordPublish;
+      }
+      case 'ask':
+        jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey', 'publicationId', 'subject']);
+        return { ...mutation, verb: 'ask', publicationId: jobId(item.publicationId), subject: parseJobSubject(item.subject) };
+      case 'close':
+        jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey', 'reason']);
+        return { ...mutation, verb: 'close', reason: jobText(item.reason, 1024) };
+    }
+    throw new JobError('JOB_REQUEST_INVALID');
+  }
   const base = { schema: JOB_API_SCHEMA, jobId: jobId(item.jobId), requestId: jobId(item.requestId) };
   if (item.verb === 'next') {
     jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'after', 'waitMs']);
@@ -182,6 +342,659 @@ export function parseJobRequest(value: unknown): JobAgentRequest | JobFetchActRe
       return { ...mutation, verb: 'close', reason: jobText(item.reason, 1024) };
   }
   throw new JobError('JOB_REQUEST_INVALID');
+}
+
+export function parseJobRequestV3(value: unknown): AgentRequestV3 | FetchActRequestV3 {
+  return parseJobRequest(value, JOB_API_V3_SCHEMA);
+}
+
+const maxRecordFiles = 4096;
+const maxActWords = 10_000;
+
+function asCode<Value>(fn: () => Value, code: JobErrorCode): Value {
+  try {
+    return fn();
+  } catch (error) {
+    if (error instanceof JobError && error.code === code) throw error;
+    throw new JobError(code);
+  }
+}
+
+function exactObject(
+  value: unknown,
+  keys: readonly string[],
+  code: JobErrorCode,
+): Record<string, unknown> {
+  const item = asCode(() => jobObject(value, keys), code);
+  if (Object.keys(item).length !== keys.length || keys.some(key => item[key] === undefined)) {
+    throw new JobError(code);
+  }
+  return item;
+}
+
+function parseFileRow(value: unknown, code: JobErrorCode): JobFileIdentity {
+  const item = exactObject(value, ['path', 'sha256'], code);
+  return asCode(() => ({ path: jobPath(item.path), sha256: jobSha(item.sha256) }), code);
+}
+
+function parseFileClosure(
+  rawInputs: unknown,
+  rawFiles: unknown,
+  record: ProjectRecord | undefined,
+  code: JobErrorCode,
+): { readonly inputs: readonly JobFileIdentity[]; readonly files: readonly JobFileIdentity[]; readonly byPath: Map<string, string> } {
+  if (!Array.isArray(rawInputs) || rawInputs.length > maxRecordFiles ||
+      !Array.isArray(rawFiles) || rawFiles.length === 0 || rawFiles.length > maxRecordFiles) {
+    throw new JobError(code);
+  }
+  const files: JobFileIdentity[] = [];
+  const byPath = new Map<string, string>();
+  for (let index = 0; index < rawFiles.length; index++) {
+    const file = parseFileRow(rawFiles[index], code);
+    if (index > 0 && !(files[index - 1]!.path < file.path)) {
+      throw new JobError(code);
+    }
+    files.push(file);
+    byPath.set(file.path, file.sha256);
+  }
+  const sealedProjectHash = byPath.get('project.json');
+  if (!sealedProjectHash || (record !== undefined && sealedProjectHash !== record.sha256)) {
+    throw new JobError(code);
+  }
+  const inputs: JobFileIdentity[] = [];
+  for (const rawInput of rawInputs) {
+    const input = parseFileRow(rawInput, code);
+    if (byPath.get(input.path) !== input.sha256) {
+      throw new JobError(code);
+    }
+    inputs.push(input);
+  }
+  return { inputs, files, byPath };
+}
+
+function parsePlanIdentity(value: unknown, code: JobErrorCode): {
+  readonly plan: JobPlanIdentity;
+  readonly stepIds: Set<string>;
+} {
+  const item = exactObject(value, ['steps'], code);
+  if (!Array.isArray(item.steps) || item.steps.length > maxRecordFiles) {
+    throw new JobError(code);
+  }
+  const stepIds = new Set<string>();
+  const steps = item.steps.map(rawStep => {
+    const step = exactObject(rawStep, ['id', 'hash'], code);
+    const id = asCode(() => jobId(step.id), code);
+    const hash = asCode(() => jobSha(step.hash), code);
+    if (stepIds.has(id)) throw new JobError(code);
+    stepIds.add(id);
+    return { id, hash };
+  });
+  return { plan: { steps }, stepIds };
+}
+
+function parsePlanSubjects(
+  rawSubjects: unknown,
+  stepIds: ReadonlySet<string>,
+  code: JobErrorCode,
+): readonly RecordPlanSubject[] {
+  if (!Array.isArray(rawSubjects) || rawSubjects.length > maxRecordFiles) {
+    throw new JobError(code);
+  }
+  if (rawSubjects.length > 0 && stepIds.size === 0) {
+    throw new JobError(code);
+  }
+  const seen = new Set<string>();
+  return rawSubjects.map(raw => {
+    const parsed = asCode(() => parseRecordSubject(raw), code);
+    if (parsed.kind === 'interview-picks') throw new JobError(code);
+    if (parsed.kind === 'checkpoint') {
+      if (!stepIds.has(parsed.checkpointId)) throw new JobError(code);
+      const key = `checkpoint:${parsed.checkpointId}`;
+      if (seen.has(key)) throw new JobError(code);
+      seen.add(key);
+      return { kind: 'checkpoint', checkpointId: parsed.checkpointId };
+    }
+    const key = `signoff:${parsed.stage}`;
+    if (seen.has(key)) throw new JobError(code);
+    seen.add(key);
+    return { kind: 'signoff', stage: parsed.stage };
+  });
+}
+
+function parseOptionSubjects(
+  rawSubjects: unknown,
+  selection: RecordOptionResult,
+  code: JobErrorCode,
+): readonly [RecordPicksSubject] {
+  if (!Array.isArray(rawSubjects) || rawSubjects.length !== 1) {
+    throw new JobError(code);
+  }
+  const parsed = asCode(() => parseRecordSubject(rawSubjects[0]), code);
+  if (parsed.kind !== 'interview-picks' ||
+      parsed.questionId !== selection.questionId ||
+      parsed.setId !== selection.setId) {
+    throw new JobError(code);
+  }
+  return [{ kind: 'interview-picks', questionId: parsed.questionId, setId: parsed.setId }];
+}
+
+export function parseRecordPartsIdentity(
+  value: unknown,
+  code: JobErrorCode = 'JOB_SOURCE_MISMATCH',
+): RecordPartsIdentity {
+  const raw = exactObject(value, ['name', 'version', 'integrity'], code);
+  return {
+    name: asCode(() => jobText(raw.name), code),
+    version: asCode(() => jobText(raw.version), code),
+    integrity: asCode(() => jobText(raw.integrity), code),
+  };
+}
+
+type ParsedRecordPayload =
+  | {
+      readonly kind: 'option-set';
+      readonly inputs: readonly JobFileIdentity[];
+      readonly files: readonly JobFileIdentity[];
+      readonly plan: null;
+      readonly subjects: readonly [RecordPicksSubject];
+    }
+  | {
+      readonly kind: 'plan';
+      readonly inputs: readonly JobFileIdentity[];
+      readonly files: readonly JobFileIdentity[];
+      readonly plan: JobPlanIdentity;
+      readonly subjects: readonly RecordPlanSubject[];
+    };
+
+function parseRecordClosureAndSubjects(
+  rawInputs: unknown,
+  rawFiles: unknown,
+  rawPlan: unknown,
+  rawSubjects: unknown,
+  selection: RecordResult,
+  checkedRecord?: ProjectRecord,
+): ParsedRecordPayload {
+  const { inputs, files } = parseFileClosure(rawInputs, rawFiles, checkedRecord, 'JOB_SOURCE_MISMATCH');
+  if (selection.kind === 'option-set') {
+    if (rawPlan !== null) throw new JobError('JOB_SOURCE_MISMATCH');
+    const subjects = parseOptionSubjects(rawSubjects, selection, 'JOB_SOURCE_MISMATCH');
+    return { kind: 'option-set', inputs, files, plan: null, subjects };
+  }
+  if (rawPlan === null) throw new JobError('JOB_SOURCE_MISMATCH');
+  const { plan, stepIds } = parsePlanIdentity(rawPlan, 'JOB_SOURCE_MISMATCH');
+  const subjects = parsePlanSubjects(rawSubjects, stepIds, 'JOB_SOURCE_MISMATCH');
+  return { kind: 'plan', inputs, files, plan, subjects };
+}
+
+export function parseRecordPublishedContext(
+  value: unknown,
+  result: RecordOptionResult,
+  record?: ProjectRecord,
+): OptionContext;
+export function parseRecordPublishedContext(
+  value: unknown,
+  result: RecordPlanResult,
+  record?: ProjectRecord,
+): PlanContext;
+export function parseRecordPublishedContext(
+  value: unknown,
+  result: RecordResult,
+  record?: ProjectRecord,
+): OptionContext | PlanContext;
+export function parseRecordPublishedContext(
+  value: unknown,
+  result: RecordResult,
+  record?: ProjectRecord,
+): OptionContext | PlanContext {
+  const selection = parseRecordResult(result);
+  const checkedRecord = record === undefined ? undefined : parseProjectRecord(record, 'JOB_SOURCE_MISMATCH');
+  const item = exactObject(value, ['label', 'parts', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH');
+  const label = asCode(() => jobText(item.label), 'JOB_SOURCE_MISMATCH');
+  const parts = parseRecordPartsIdentity(item.parts, 'JOB_SOURCE_MISMATCH');
+  const body = parseRecordClosureAndSubjects(
+    item.inputs,
+    item.files,
+    item.plan,
+    item.subjects,
+    selection,
+    checkedRecord,
+  );
+  if (body.kind === 'option-set') {
+    return { label, parts, inputs: body.inputs, files: body.files, plan: null, subjects: body.subjects };
+  }
+  return { label, parts, inputs: body.inputs, files: body.files, plan: body.plan, subjects: body.subjects };
+}
+
+export function assertEqualRecordContexts(
+  inventory: OptionContext | PlanContext,
+  retained: OptionContext | PlanContext,
+): void {
+  const inferResult = (ctx: OptionContext | PlanContext): RecordResult => {
+    if (ctx.plan === null) {
+      const first = Array.isArray(ctx.subjects) ? ctx.subjects[0] : undefined;
+      if (!first || first.kind !== 'interview-picks') throw new JobError('JOB_SOURCE_MISMATCH');
+      return { kind: 'option-set', questionId: first.questionId, setId: first.setId };
+    }
+    return { kind: 'plan' };
+  };
+  const selection = inferResult(inventory);
+  const a = parseRecordPublishedContext(inventory, selection);
+  const b = parseRecordPublishedContext(retained, selection);
+  if (JSON.stringify(a) !== JSON.stringify(b)) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+}
+
+export interface RecordSourceDigestInput {
+  readonly schema?: typeof JOB_RECORD_SOURCE_SCHEMA;
+  readonly sourceHash?: JobSha256;
+  readonly projectHash?: JobSha256;
+  readonly subject?: 'option-set' | 'plan';
+  readonly record: ProjectRecord;
+  readonly selection: RecordResult;
+  readonly inputs: readonly JobFileIdentity[];
+  readonly optionSet: { readonly id: string; readonly sha256: JobSha256 } | null;
+  readonly optionSetFile: JobFileIdentity | null;
+  readonly plan: JobPlanIdentity | null;
+  readonly subjects: readonly RecordSubject[];
+  readonly files: readonly JobFileIdentity[];
+}
+
+export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInput): string {
+  const item = asCode(
+    () =>
+      jobObject(input, [
+        'schema',
+        'sourceHash',
+        'projectHash',
+        'subject',
+        'record',
+        'selection',
+        'inputs',
+        'optionSet',
+        'optionSetFile',
+        'plan',
+        'subjects',
+        'files',
+      ]),
+    'JOB_SOURCE_MISMATCH',
+  );
+  for (const key of ['record', 'selection', 'inputs', 'optionSet', 'optionSetFile', 'plan', 'subjects', 'files'] as const) {
+    if (!(key in item) || item[key] === undefined) throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  if (item.schema !== undefined && item.schema !== JOB_RECORD_SOURCE_SCHEMA) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  if (item.sourceHash !== undefined) {
+    asCode(() => jobSha(item.sourceHash), 'JOB_SOURCE_MISMATCH');
+  }
+  const record = parseProjectRecord(item.record, 'JOB_SOURCE_MISMATCH');
+  if (item.projectHash !== undefined && asCode(() => jobSha(item.projectHash), 'JOB_SOURCE_MISMATCH') !== record.sha256) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  const selection = asCode(() => parseRecordResult(item.selection), 'JOB_SOURCE_MISMATCH');
+  if (item.subject !== undefined && item.subject !== selection.kind) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  const { inputs, files, byPath } = parseFileClosure(item.inputs, item.files, record, 'JOB_SOURCE_MISMATCH');
+
+  if (selection.kind === 'option-set') {
+    if (item.plan !== null || item.optionSet === null || item.optionSetFile === null) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+    const rawOptionSet = exactObject(item.optionSet, ['id', 'sha256'], 'JOB_SOURCE_MISMATCH');
+    const optionSet = {
+      id: asCode(() => jobId(rawOptionSet.id), 'JOB_SOURCE_MISMATCH'),
+      sha256: asCode(() => jobSha(rawOptionSet.sha256), 'JOB_SOURCE_MISMATCH'),
+    };
+    const optionSetFile = parseFileRow(item.optionSetFile, 'JOB_SOURCE_MISMATCH');
+    if (optionSet.id !== selection.setId ||
+        optionSet.sha256 !== optionSetFile.sha256 ||
+        optionSetFile.path === 'project.json' ||
+        byPath.get(optionSetFile.path) !== optionSetFile.sha256) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+    const subjects = parseOptionSubjects(item.subjects, selection, 'JOB_SOURCE_MISMATCH');
+    return JSON.stringify({
+      schema: JOB_RECORD_SOURCE_SCHEMA,
+      record: { path: 'project.json', sha256: record.sha256 },
+      selection: { kind: 'option-set', questionId: selection.questionId, setId: selection.setId },
+      inputs,
+      optionSet,
+      optionSetFile,
+      plan: null,
+      subjects,
+      files,
+    });
+  }
+
+  if (item.optionSet !== null || item.optionSetFile !== null || item.plan === null) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  const { plan, stepIds } = parsePlanIdentity(item.plan, 'JOB_SOURCE_MISMATCH');
+  const subjects = parsePlanSubjects(item.subjects, stepIds, 'JOB_SOURCE_MISMATCH');
+  return JSON.stringify({
+    schema: JOB_RECORD_SOURCE_SCHEMA,
+    record: { path: 'project.json', sha256: record.sha256 },
+    selection: { kind: 'plan' },
+    inputs,
+    optionSet: null,
+    optionSetFile: null,
+    plan,
+    subjects,
+    files,
+  });
+}
+
+export function recordSourceDigest(input: RecordSourceDigestInput): JobSha256 {
+  return jobHash(serializeRecordSourceDigestPayload(input));
+}
+
+export function recordInstanceKey(fingerprint: unknown, sourceHash: unknown): JobSha256 {
+  if (typeof fingerprint !== 'string') throw new JobError('JOB_REQUEST_INVALID');
+  const checkedSourceHash = jobSha(sourceHash);
+  return jobHash(
+    JSON.stringify({
+      schema: JOB_RECORD_INSTANCE_SCHEMA,
+      fingerprint,
+      sourceHash: checkedSourceHash,
+    }),
+  );
+}
+
+function assembleRecordSource(
+  record: ProjectRecord,
+  selection: RecordResult,
+  body: ParsedRecordPayload,
+  rawOptionSetFile?: unknown,
+): OptionSource | PlanSource {
+  if (selection.kind === 'option-set') {
+    if (body.kind !== 'option-set' || !rawOptionSetFile) throw new JobError('JOB_SOURCE_MISMATCH');
+    const optionSetFile = parseFileRow(rawOptionSetFile, 'JOB_SOURCE_MISMATCH');
+    const optionSet = { id: selection.setId, sha256: optionSetFile.sha256 };
+    const sourceHash = recordSourceDigest({
+      record,
+      selection,
+      inputs: body.inputs,
+      optionSet,
+      optionSetFile,
+      plan: null,
+      subjects: body.subjects,
+      files: body.files,
+    });
+    return {
+      sourceHash,
+      projectHash: record.sha256,
+      record,
+      inputs: body.inputs,
+      files: body.files,
+      subject: 'option-set',
+      selection: { kind: 'option-set', questionId: selection.questionId, setId: selection.setId },
+      optionSet,
+      optionSetFile,
+      plan: null,
+      subjects: body.subjects,
+    };
+  }
+  if (body.kind !== 'plan' || (rawOptionSetFile !== undefined && rawOptionSetFile !== null)) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  const sourceHash = recordSourceDigest({
+    record,
+    selection,
+    inputs: body.inputs,
+    optionSet: null,
+    optionSetFile: null,
+    plan: body.plan,
+    subjects: body.subjects,
+    files: body.files,
+  });
+  return {
+    sourceHash,
+    projectHash: record.sha256,
+    record,
+    inputs: body.inputs,
+    files: body.files,
+    subject: 'plan',
+    selection: { kind: 'plan' },
+    optionSet: null,
+    optionSetFile: null,
+    plan: body.plan,
+    subjects: body.subjects,
+  };
+}
+
+export function buildRecordSource(input: {
+  readonly record: ProjectRecord;
+  readonly selection: RecordOptionResult;
+  readonly context: OptionContext;
+  readonly optionSetFile: JobFileIdentity;
+}): OptionSource;
+export function buildRecordSource(input: {
+  readonly record: ProjectRecord;
+  readonly selection: RecordPlanResult;
+  readonly context: PlanContext;
+  readonly optionSetFile?: null;
+}): PlanSource;
+export function buildRecordSource(input: {
+  readonly record: ProjectRecord;
+  readonly selection: RecordResult;
+  readonly context: OptionContext | PlanContext;
+  readonly optionSetFile?: JobFileIdentity | null;
+}): OptionSource | PlanSource {
+  const record = parseProjectRecord(input.record, 'JOB_SOURCE_MISMATCH');
+  const selection = asCode(() => parseRecordResult(input.selection), 'JOB_SOURCE_MISMATCH');
+  const context = parseRecordPublishedContext(input.context, selection, record);
+  const body: ParsedRecordPayload =
+    context.plan === null
+      ? {
+          kind: 'option-set',
+          inputs: context.inputs,
+          files: context.files,
+          plan: null,
+          subjects: context.subjects,
+        }
+      : {
+          kind: 'plan',
+          inputs: context.inputs,
+          files: context.files,
+          plan: context.plan,
+          subjects: context.subjects,
+        };
+  return assembleRecordSource(record, selection, body, input.optionSetFile);
+}
+
+export function parseRecordSource(value: unknown): RecordSource {
+  const item = exactObject(
+    value,
+    [
+      'sourceHash',
+      'projectHash',
+      'record',
+      'inputs',
+      'files',
+      'subject',
+      'selection',
+      'optionSet',
+      'optionSetFile',
+      'plan',
+      'subjects',
+    ],
+    'JOB_SOURCE_MISMATCH',
+  );
+  const record = parseProjectRecord(item.record, 'JOB_SOURCE_MISMATCH');
+  const projectHash = asCode(() => jobSha(item.projectHash), 'JOB_SOURCE_MISMATCH');
+  const sourceHash = asCode(() => jobSha(item.sourceHash), 'JOB_SOURCE_MISMATCH');
+  if (projectHash !== record.sha256) throw new JobError('JOB_SOURCE_MISMATCH');
+  const selection = asCode(() => parseRecordResult(item.selection), 'JOB_SOURCE_MISMATCH');
+  if (item.subject !== selection.kind) throw new JobError('JOB_SOURCE_MISMATCH');
+  const body = parseRecordClosureAndSubjects(
+    item.inputs,
+    item.files,
+    item.plan,
+    item.subjects,
+    selection,
+    record,
+  );
+  if (selection.kind === 'option-set') {
+    const rawOptionSet = exactObject(item.optionSet, ['id', 'sha256'], 'JOB_SOURCE_MISMATCH');
+    const built = assembleRecordSource(record, selection, body, item.optionSetFile) as OptionSource;
+    if (rawOptionSet.id !== built.optionSet.id ||
+        rawOptionSet.sha256 !== built.optionSet.sha256 ||
+        sourceHash !== built.sourceHash) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+    return built;
+  }
+  if (item.optionSet !== null || item.optionSetFile !== null) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  const built = assembleRecordSource(record, selection, body, null) as PlanSource;
+  if (sourceHash !== built.sourceHash) throw new JobError('JOB_SOURCE_MISMATCH');
+  return built;
+}
+
+export function isRecordSource(value: unknown): value is RecordSource {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const subject = (value as { subject?: unknown }).subject;
+  return subject === 'option-set' || subject === 'plan';
+}
+
+export function validateRecordAskSubject(subject: unknown, source: RecordSource): RecordSubject {
+  const checkedSource = parseRecordSource(source);
+  const parsed = parseRecordSubject(subject);
+  if (checkedSource.subject === 'option-set') {
+    const expected = checkedSource.subjects[0];
+    if (parsed.kind !== 'interview-picks' ||
+        parsed.questionId !== expected.questionId ||
+        parsed.setId !== expected.setId) {
+      throw new JobError('JOB_ASK_INVALID');
+    }
+    return parsed;
+  }
+  if (parsed.kind === 'interview-picks' || checkedSource.plan.steps.length === 0) {
+    throw new JobError('JOB_ASK_INVALID');
+  }
+  const declared = checkedSource.subjects.some(candidate =>
+    candidate.kind === parsed.kind &&
+    (candidate.kind === 'checkpoint'
+      ? candidate.checkpointId === (parsed as Extract<RecordPlanSubject, { kind: 'checkpoint' }>).checkpointId
+      : candidate.stage === (parsed as Extract<RecordPlanSubject, { kind: 'signoff' }>).stage),
+  );
+  if (!declared) throw new JobError('JOB_ASK_INVALID');
+  return parsed;
+}
+
+function parseHumanAuthority(value: unknown, code: JobErrorCode): JobHumanAuthority {
+  const auth = exactObject(value, ['actor', 'channel', 'reviewer'], code);
+  if (auth.actor !== 'human' || auth.channel !== 'review-ui') throw new JobError(code);
+  const reviewer = exactObject(auth.reviewer, ['id', 'role'], code);
+  if (typeof reviewer.id !== 'string' || !reviewer.id) throw new JobError(code);
+  if (reviewer.role !== 'owner' && reviewer.role !== 'delegate') throw new JobError(code);
+  return {
+    actor: 'human',
+    channel: 'review-ui',
+    reviewer: { id: reviewer.id, role: reviewer.role },
+  };
+}
+
+function parseActWords(value: unknown, code: JobErrorCode): string {
+  if (typeof value !== 'string' || value.length > maxActWords) throw new JobError(code);
+  return value;
+}
+
+export function parseRecordAct(value: unknown): RecordAct {
+  const item = exactObject(
+    value,
+    ['schema', 'actId', 'jobId', 'askId', 'publicationId', 'kind', 'authority', 'at', 'source', 'value'],
+    'JOB_ACT_INVALID',
+  );
+  if (item.schema !== JOB_RECORD_ACT_SCHEMA) throw new JobError('JOB_ACT_INVALID');
+  const actId = asCode(() => jobId(item.actId), 'JOB_ACT_INVALID');
+  const jobIdValue = asCode(() => jobId(item.jobId), 'JOB_ACT_INVALID');
+  const askId = asCode(() => jobId(item.askId), 'JOB_ACT_INVALID');
+  const publicationId = asCode(() => jobId(item.publicationId), 'JOB_ACT_INVALID');
+  const authority = parseHumanAuthority(item.authority, 'JOB_ACT_INVALID');
+  const at = asCode(() => jobText(item.at, 128), 'JOB_ACT_INVALID');
+  if (Number.isNaN(Date.parse(at))) throw new JobError('JOB_ACT_INVALID');
+  const source = asCode(() => parseRecordSource(item.source), 'JOB_ACT_INVALID');
+
+  switch (item.kind) {
+    case 'interview-picks': {
+      if (source.subject !== 'option-set') throw new JobError('JOB_ACT_INVALID');
+      const rawValue = exactObject(item.value, ['questionId', 'selections', 'note'], 'JOB_ACT_INVALID');
+      const questionId = asCode(() => jobId(rawValue.questionId), 'JOB_ACT_INVALID');
+      if (questionId !== source.selection.questionId || !Array.isArray(rawValue.selections) ||
+          rawValue.selections.length > maxRecordFiles) {
+        throw new JobError('JOB_ACT_INVALID');
+      }
+      const selections = rawValue.selections.map(rawSelection => {
+        const entry = exactObject(rawSelection, ['itemId', 'optionId', 'otherText'], 'JOB_ACT_INVALID');
+        const itemId = asCode(() => jobId(entry.itemId), 'JOB_ACT_INVALID');
+        const optionId = asCode(() => jobId(entry.optionId), 'JOB_ACT_INVALID');
+        const otherText = entry.otherText === null ? null : parseActWords(entry.otherText, 'JOB_ACT_INVALID');
+        return { itemId, optionId, otherText };
+      });
+      const note = parseActWords(rawValue.note, 'JOB_ACT_INVALID');
+      return {
+        schema: JOB_RECORD_ACT_SCHEMA,
+        actId,
+        jobId: jobIdValue,
+        askId,
+        publicationId,
+        kind: 'interview-picks',
+        authority,
+        at,
+        source,
+        value: { questionId, selections, note },
+      };
+    }
+    case 'checkpoint': {
+      if (source.subject !== 'plan' || source.plan.steps.length === 0) throw new JobError('JOB_ACT_INVALID');
+      const rawValue = exactObject(item.value, ['checkpointId', 'planStepId', 'outcome', 'words'], 'JOB_ACT_INVALID');
+      const checkpointId = asCode(() => jobId(rawValue.checkpointId), 'JOB_ACT_INVALID');
+      const planStepId = asCode(() => jobId(rawValue.planStepId), 'JOB_ACT_INVALID');
+      if (planStepId !== checkpointId) throw new JobError('JOB_ACT_INVALID');
+      asCode(() => validateRecordAskSubject({ kind: 'checkpoint', checkpointId }, source), 'JOB_ACT_INVALID');
+      if (rawValue.outcome !== 'pass' && rawValue.outcome !== 'fail') throw new JobError('JOB_ACT_INVALID');
+      const words = parseActWords(rawValue.words, 'JOB_ACT_INVALID');
+      return {
+        schema: JOB_RECORD_ACT_SCHEMA,
+        actId,
+        jobId: jobIdValue,
+        askId,
+        publicationId,
+        kind: 'checkpoint',
+        authority,
+        at,
+        source,
+        value: { checkpointId, planStepId, outcome: rawValue.outcome, words },
+      };
+    }
+    case 'signoff': {
+      if (source.subject !== 'plan' || source.plan.steps.length === 0) throw new JobError('JOB_ACT_INVALID');
+      const rawValue = exactObject(item.value, ['stage', 'decision', 'words'], 'JOB_ACT_INVALID');
+      const stage = asCode(() => jobId(rawValue.stage), 'JOB_ACT_INVALID');
+      if (!(JOB_PLAN_BOUND_SIGNOFF_STAGES as readonly string[]).includes(stage) || rawValue.decision !== 'approved') {
+        throw new JobError('JOB_ACT_INVALID');
+      }
+      asCode(() => validateRecordAskSubject({ kind: 'signoff', stage }, source), 'JOB_ACT_INVALID');
+      const words = parseActWords(rawValue.words, 'JOB_ACT_INVALID');
+      return {
+        schema: JOB_RECORD_ACT_SCHEMA,
+        actId,
+        jobId: jobIdValue,
+        askId,
+        publicationId,
+        kind: 'signoff',
+        authority,
+        at,
+        source,
+        value: { stage: stage as RecordSignoffStage, decision: 'approved', words },
+      };
+    }
+  }
+  throw new JobError('JOB_ACT_INVALID');
 }
 
 export async function jobBody(request: Request, maximum = jobBodyLimit): Promise<unknown> {

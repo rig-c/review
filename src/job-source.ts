@@ -1,18 +1,44 @@
 import { randomUUID } from 'node:crypto';
-import { lstatSync, realpathSync, type Stats } from 'node:fs';
+import { type Dirent, lstatSync, readdirSync, realpathSync, type Stats } from 'node:fs';
 import { mkdir, open, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { PNG } from 'pngjs';
-import { JOB_PARTS_ENUMERATOR_RANGE } from './job-contract.ts';
+import {
+  JOB_API_V3_SCHEMA,
+  JOB_PARTS_ENUMERATOR_RANGE,
+} from './job-contract.ts';
 import type {
   JobFileIdentity, JobImageSetInput, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
   JobSelector, JobSourceBinding, JobSubject,
+  OptionContext, OptionSource, PackageResultV3, PlanContext, PlanSource, ProjectRecord, PublishRequestV3,
+  RecordFreeze, RecordOptionResult, RecordPlanResult, RecordPublicationReader, RecordPublishedContext,
+  RecordReaderInput, RecordResult, RecordSource, RecordSubject,
 } from './job-contract.ts';
-import { checkedPath, readProject, readRegular, type InterviewQuestion } from './interview-project.ts';
+import { checkedPath, jsonObject, readProject, readRegular, type InterviewQuestion, type InterviewSet } from './interview-project.ts';
 import { loadReview } from './manifest.ts';
 import { openKey } from './open.ts';
 import { assertReviewUnchanged } from './reference.ts';
-import { jobHash, jobId, jobPartsEnumeratorVersion, jobObject, jobPath, jobSha, jobText, requestDigest } from './job-api.ts';
+import {
+  assertEqualRecordContexts,
+  assertJobApiSchema,
+  buildRecordSource,
+  isRecordSource,
+  jobHash,
+  jobId,
+  jobObject,
+  jobPartsEnumeratorVersion,
+  jobPath,
+  jobSha,
+  jobText,
+  parseRecordFreeze,
+  parseRecordPublishedContext,
+  parseRecordResult,
+  parseRecordSource,
+  recordInstanceKey,
+  requestDigest,
+  stripPackageResultKind,
+  validateRecordAskSubject,
+} from './job-api.ts';
 import { JobError, type JobSnapshotOwner } from './job-store.ts';
 import { prepareJobImageSet } from './job-image-set.ts';
 
@@ -59,9 +85,35 @@ export interface JobRetainedSource {
   readonly partIds: readonly string[];
 }
 
+export interface JobRetainedRecordSource {
+  readonly kind: 'record';
+  readonly root: JobRootIdentity;
+  readonly record: ProjectRecord;
+  readonly result: RecordResult;
+  readonly seals: readonly JobFileIdentity[];
+  readonly snapshotRoot: string;
+  readonly snapshotIdentity?: { readonly dev: number; readonly ino: number };
+  readonly manifestPath: null;
+  readonly source: RecordSource;
+  readonly instanceKey: string;
+  readonly label: string;
+  readonly visual: { readonly status: 'unavailable'; readonly code: 'MODEL_UNAVAILABLE' };
+  readonly subjects: readonly RecordSubject[];
+  readonly questions: readonly InterviewQuestion[];
+  readonly partIds: readonly [];
+  readonly context: RecordPublishedContext;
+}
+
+export type JobRetainedSourceV3 = JobRetainedSource | JobRetainedRecordSource;
+
+export function isRetainedRecordSource(retained: JobRetainedSourceV3): retained is JobRetainedRecordSource {
+  return 'kind' in retained && retained.kind === 'record';
+}
+
 const maxSourceBytes = 256 * 1024 * 1024;
 const maxSourceFiles = 4096;
 const maxFileBytes = 64 * 1024 * 1024;
+const maxProjectBytes = 8 * 1024 * 1024;
 
 /** Private preservation identity. Keep the supplied seal order and fixed keys. */
 export function jobSnapshotHash(seals: readonly JobFileIdentity[]): string {
@@ -133,7 +185,9 @@ function assertRecord(root: JobRootIdentity, record: JobFileIdentity | null): vo
 /** Synchronous final read is used inside local CAS. The producer must still hold
  * its external freeze. This does not lock an independent producer's filesystem.
  */
-export function assertJobSourceCurrent(source: JobRetainedSource): void {
+export function assertJobSourceCurrent(
+  source: Pick<JobRetainedSourceV3, 'root' | 'record' | 'seals'>,
+): void {
   assertRecord(source.root, source.record);
   for (const file of source.seals) {
     try {
@@ -299,6 +353,659 @@ function collectQuestionFiles(root: string, questions: readonly InterviewQuestio
   return result;
 }
 
+function isOptionIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(value);
+}
+
+function isNonEmptyTrimmedText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function asPlainObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function validateOptionSetStructure(
+  raw: Record<string, unknown>,
+  questionId: string,
+  setId: string,
+  allowedStages: readonly string[],
+): InterviewSet {
+  const assembly = asPlainObject(raw.assembly);
+  const rule = assembly?.rule;
+  const asksRaw = Array.isArray(raw.asks) ? raw.asks : null;
+  if (
+    raw.schema !== 'rig-create/interview-options@1' ||
+    !isOptionIdentifier(raw.id) ||
+    raw.id !== setId ||
+    !isOptionIdentifier(questionId) ||
+    raw.question !== questionId ||
+    !allowedStages.includes(String(raw.stage)) ||
+    !isNonEmptyTrimmedText(raw.drafted_by) ||
+    typeof raw.drafted_at !== 'string' ||
+    !Number.isFinite(Date.parse(raw.drafted_at)) ||
+    !asksRaw ||
+    asksRaw.length === 0 ||
+    !['single', 'concat', 'merge'].includes(String(rule)) ||
+    (rule === 'single' && asksRaw.length !== 1)
+  ) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  const asks: Record<string, unknown>[] = [];
+  const askIds = new Set<string>();
+  for (const entry of asksRaw) {
+    const ask = asPlainObject(entry);
+    if (!ask || !isOptionIdentifier(ask.id) || askIds.has(ask.id) || !isNonEmptyTrimmedText(ask.prompt)) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+    askIds.add(ask.id);
+    if (!Array.isArray(ask.options)) throw new JobError('JOB_SOURCE_MISMATCH');
+    const options: Record<string, unknown>[] = [];
+    const optionIds = new Set<string>();
+    for (const optEntry of ask.options) {
+      const option = asPlainObject(optEntry);
+      if (
+        !option ||
+        !isOptionIdentifier(option.id) ||
+        optionIds.has(option.id) ||
+        !isNonEmptyTrimmedText(option.label) ||
+        !isNonEmptyTrimmedText(option.effect) ||
+        typeof option.recommended !== 'boolean' ||
+        !['value', 'other', 'auto'].includes(String(option.kind)) ||
+        (option.recommended && (option.kind !== 'value' || !isNonEmptyTrimmedText(option.reason))) ||
+        (option.kind === 'value'
+          ? !('fragment' in option) ||
+            (rule === 'concat' && !Array.isArray(option.fragment)) ||
+            (rule === 'merge' && asPlainObject(option.fragment) === null)
+          : 'fragment' in option)
+      ) {
+        throw new JobError('JOB_SOURCE_MISMATCH');
+      }
+      optionIds.add(option.id);
+      options.push(option);
+    }
+    if (
+      options.filter(option => option.kind === 'value').length < 2 ||
+      options.filter(option => option.kind === 'other').length !== 1 ||
+      options.filter(option => option.kind === 'auto').length !== 1 ||
+      options.filter(option => option.recommended === true).length !== 1
+    ) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+    asks.push(ask);
+  }
+  if (raw.constraints !== undefined) {
+    if (!Array.isArray(raw.constraints)) throw new JobError('JOB_SOURCE_MISMATCH');
+    for (const entry of raw.constraints) {
+      const constraint = asPlainObject(entry);
+      const names = constraint?.asks;
+      const allowed = constraint?.allowed;
+      if (
+        !constraint ||
+        !Array.isArray(names) ||
+        names.length === 0 ||
+        new Set(names).size !== names.length ||
+        names.some(name => typeof name !== 'string' || !askIds.has(name)) ||
+        !Array.isArray(allowed) ||
+        allowed.length === 0
+      ) {
+        throw new JobError('JOB_SOURCE_MISMATCH');
+      }
+      for (const tuple of allowed) {
+        if (!Array.isArray(tuple) || tuple.length !== names.length) {
+          throw new JobError('JOB_SOURCE_MISMATCH');
+        }
+        for (let i = 0; i < names.length; i++) {
+          const targetAsk = asks.find(ask => ask.id === names[i]);
+          const targetOptions = Array.isArray(targetAsk?.options) ? targetAsk.options as Record<string, unknown>[] : [];
+          if (!targetOptions.some(option => option.id === tuple[i] && option.kind === 'value')) {
+            throw new JobError('JOB_SOURCE_MISMATCH');
+          }
+        }
+      }
+    }
+  }
+  return raw as unknown as InterviewSet;
+}
+
+export function assertRetainedSnapshotIntact(
+  snapshotRoot: string,
+  seals: readonly JobFileIdentity[],
+  snapshotIdentity?: { readonly dev: number; readonly ino: number },
+  refusalCode: 'JOB_SOURCE_UNRETAINABLE' | 'JOB_ACT_SOURCE_STALE' = 'JOB_SOURCE_UNRETAINABLE',
+): void {
+  let rootInfo: Stats;
+  try {
+    rootInfo = lstatSync(snapshotRoot);
+    if (!rootInfo.isDirectory() || realpathSync(snapshotRoot) !== snapshotRoot || (rootInfo.mode & 0o077) !== 0) {
+      throw new Error('Invalid snapshot directory');
+    }
+    if (snapshotIdentity && (rootInfo.dev !== snapshotIdentity.dev || rootInfo.ino !== snapshotIdentity.ino)) {
+      throw new Error('Snapshot directory identity changed');
+    }
+  } catch {
+    throw new JobError(refusalCode);
+  }
+  const expectedFiles = new Map<string, string>();
+  const expectedDirs = new Set<string>(['']);
+  for (const seal of seals) {
+    let normalizedPath: string;
+    let normalizedSha: string;
+    try {
+      normalizedPath = jobPath(seal.path);
+      normalizedSha = jobSha(seal.sha256);
+    } catch {
+      throw new JobError(refusalCode);
+    }
+    if (expectedFiles.has(normalizedPath)) throw new JobError(refusalCode);
+    expectedFiles.set(normalizedPath, normalizedSha);
+    let dir = posix.dirname(normalizedPath);
+    while (dir !== '.' && dir !== '') {
+      expectedDirs.add(dir);
+      dir = posix.dirname(dir);
+    }
+  }
+  const visitedFiles = new Set<string>();
+  const visitDir = (relDir: string): void => {
+    const absDir = relDir ? join(snapshotRoot, relDir) : snapshotRoot;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      throw new JobError(refusalCode);
+    }
+    for (const entry of entries) {
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      const abs = join(absDir, entry.name);
+      let stat: Stats;
+      try {
+        stat = lstatSync(abs);
+      } catch {
+        throw new JobError(refusalCode);
+      }
+      if (stat.isSymbolicLink()) throw new JobError(refusalCode);
+      if (stat.isDirectory()) {
+        if (!expectedDirs.has(rel)) throw new JobError(refusalCode);
+        visitDir(rel);
+      } else if (stat.isFile()) {
+        const expectedSha = expectedFiles.get(rel);
+        if (!expectedSha || visitedFiles.has(rel)) throw new JobError(refusalCode);
+        let bytes: Buffer;
+        try {
+          bytes = sourceBytes(snapshotRoot, rel);
+        } catch {
+          throw new JobError(refusalCode);
+        }
+        if (jobHash(bytes) !== expectedSha) throw new JobError(refusalCode);
+        visitedFiles.add(rel);
+      } else {
+        throw new JobError(refusalCode);
+      }
+    }
+  };
+  visitDir('');
+  if (visitedFiles.size !== expectedFiles.size) throw new JobError(refusalCode);
+}
+
+function extractReaderToken(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null;
+  const candidate = error as { readonly code?: unknown; readonly message?: unknown };
+  for (const raw of [candidate.code, candidate.message]) {
+    if (typeof raw !== 'string') continue;
+    if (
+      raw === 'CREATE_PUBLICATION_CONTRACT_UNAVAILABLE' ||
+      raw === 'CREATE_PLAN_PUBLICATION_CONTRACT_UNAVAILABLE' ||
+      raw === 'JOB_RECORD_CLOSURE_INCOMPLETE' ||
+      raw === 'JOB_RECORD_PARTS_MISMATCH' ||
+      raw === 'JOB_RECORD_PARTS_LOCK_MISSING'
+    ) {
+      return raw;
+    }
+  }
+  return null;
+}
+
+function mapRecordReaderError(error: unknown, phase: 'publish' | 'ask' | 'finalize'): JobError {
+  const token = extractReaderToken(error);
+  if (
+    token === 'CREATE_PUBLICATION_CONTRACT_UNAVAILABLE' ||
+    token === 'CREATE_PLAN_PUBLICATION_CONTRACT_UNAVAILABLE'
+  ) {
+    return new JobError('JOB_SOURCE_UNRETAINABLE', token);
+  }
+  const refusalCode = phase === 'finalize' ? 'JOB_ACT_SOURCE_STALE' : 'JOB_RECORD_INCOMPLETE';
+  if (
+    token === 'JOB_RECORD_CLOSURE_INCOMPLETE' ||
+    token === 'JOB_RECORD_PARTS_MISMATCH' ||
+    token === 'JOB_RECORD_PARTS_LOCK_MISSING'
+  ) {
+    return new JobError(refusalCode, token);
+  }
+  return new JobError(refusalCode);
+}
+
+async function readRecordPublishedPhase(
+  readRecordPublished: RecordPublicationReader,
+  input: RecordReaderInput,
+  phase: 'publish' | 'ask' | 'finalize',
+): Promise<RecordPublishedContext> {
+  let raw: unknown;
+  try {
+    raw = input.result.kind === 'option-set'
+      ? await readRecordPublished({
+          root: input.root,
+          record: input.record,
+          result: input.result,
+          phase: input.phase,
+          ...(input.parts !== undefined ? { parts: input.parts } : {}),
+        })
+      : await readRecordPublished({
+          root: input.root,
+          record: input.record,
+          result: input.result,
+          phase: input.phase,
+          ...(input.parts !== undefined ? { parts: input.parts } : {}),
+        });
+  } catch (error) {
+    throw mapRecordReaderError(error, phase);
+  }
+  return parseRecordPublishedContext(raw, input.result, input.record);
+}
+
+function readProjectRecordBytes(root: string, record: ProjectRecord): {
+  readonly bytes: Buffer;
+  readonly project: Record<string, unknown>;
+} {
+  let stat: Stats;
+  try {
+    stat = lstatSync(join(root, record.path));
+  } catch {
+    throw new JobError('JOB_RECORD_MOVED');
+  }
+  if (!stat.isFile()) throw new JobError('JOB_RECORD_MOVED');
+  if (stat.size > maxProjectBytes) throw new JobError('JOB_SOURCE_UNRETAINABLE');
+  let bytes: Buffer;
+  try {
+    bytes = sourceBytes(root, record.path);
+  } catch {
+    throw new JobError('JOB_RECORD_MOVED');
+  }
+  if (jobHash(bytes) !== record.sha256) throw new JobError('JOB_RECORD_MOVED');
+  let project: Record<string, unknown>;
+  try {
+    project = jsonObject(bytes);
+  } catch {
+    throw new JobError('JOB_RECORD_INCOMPLETE');
+  }
+  if (project.schema !== 'rig-create/project@0') throw new JobError('JOB_RECORD_INCOMPLETE');
+  return { bytes, project };
+}
+
+function readClosureFileBytes(root: string, file: JobFileIdentity): Buffer {
+  if (file.path === 'project.json') {
+    return readProjectRecordBytes(root, file as ProjectRecord).bytes;
+  }
+  let target: string;
+  try {
+    target = checkedPath(root, file.path);
+  } catch {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE');
+  }
+  let stat: Stats;
+  try {
+    stat = lstatSync(target);
+  } catch {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE');
+  }
+  if (!stat.isFile() || stat.size > maxFileBytes) throw new JobError('JOB_SOURCE_UNRETAINABLE');
+  let bytes: Buffer;
+  try {
+    bytes = sourceBytes(root, file.path);
+  } catch (error) {
+    if (error instanceof JobError) throw error;
+    throw new JobError('JOB_SOURCE_UNRETAINABLE');
+  }
+  if (jobHash(bytes) !== file.sha256) throw new JobError('JOB_SOURCE_MISMATCH');
+  return bytes;
+}
+
+function decodeRetainedRecordProject(
+  snapshotRoot: string,
+  seals: readonly JobFileIdentity[],
+  result: RecordResult,
+  context: RecordPublishedContext,
+): {
+  readonly questions: readonly InterviewQuestion[];
+  readonly optionSetFile: JobFileIdentity | null;
+} {
+  const sealMap = new Map<string, string>();
+  for (const seal of seals) {
+    sealMap.set(seal.path, seal.sha256);
+  }
+  const recordSha = sealMap.get('project.json');
+  if (!recordSha) throw new JobError('JOB_SOURCE_MISMATCH');
+  const { project } = readProjectRecordBytes(snapshotRoot, { path: 'project.json', sha256: recordSha });
+
+  if (result.kind === 'option-set') {
+    if (context.plan !== null) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+    const { questionId, setId } = result;
+    const interview = asPlainObject(project.interview);
+    if (!interview) throw new JobError('JOB_SOURCE_MISMATCH');
+    const collections = [
+      [interview.framing, ['interview']],
+      [interview.waypoints, ['interview', 'rigging-interview']],
+      [asPlainObject(interview.post)?.items, ['post-interview']],
+    ] as const;
+    const matches: { readonly pending: unknown; readonly allowedStages: readonly string[] }[] = [];
+    for (const [items, allowedStages] of collections) {
+      if (items !== undefined && !Array.isArray(items)) throw new JobError('JOB_SOURCE_MISMATCH');
+      for (const rawItem of Array.isArray(items) ? items : []) {
+        const item = asPlainObject(rawItem);
+        if (!item) throw new JobError('JOB_SOURCE_MISMATCH');
+        if (item.id === questionId) {
+          matches.push({ pending: item.pending_options, allowedStages });
+        }
+      }
+    }
+    if (matches.length !== 1 || matches[0]!.pending === undefined) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+    let ref: JobFileIdentity;
+    try {
+      const pendingObj = jobObject(matches[0]!.pending, ['path', 'sha256']);
+      ref = { path: jobPath(pendingObj.path), sha256: jobSha(pendingObj.sha256) };
+    } catch {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+    if (
+      ref.path === 'project.json' ||
+      ['derived', 'outputs', 'scratch', 'node_modules', '.git'].includes(ref.path.split('/')[0]!) ||
+      sealMap.get(ref.path) !== ref.sha256
+    ) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+    let optionBytes: Buffer;
+    let rawSet: Record<string, unknown>;
+    try {
+      optionBytes = sourceBytes(snapshotRoot, ref.path);
+      if (jobHash(optionBytes) !== ref.sha256) throw new Error('Option set hash mismatch');
+      rawSet = jsonObject(optionBytes);
+    } catch {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+    const set = validateOptionSetStructure(rawSet, questionId, setId, matches[0]!.allowedStages);
+    const images: InterviewQuestion['images'] = [];
+    const ctx = asPlainObject(rawSet.context);
+    if (ctx && Array.isArray(ctx.files)) {
+      for (const rawFile of ctx.files) {
+        const fileObj = asPlainObject(rawFile);
+        if (!fileObj || typeof fileObj.path !== 'string' || typeof fileObj.sha256 !== 'string') {
+          throw new JobError('JOB_SOURCE_MISMATCH');
+        }
+        const filePath = jobPath(fileObj.path);
+        const fileSha = jobSha(fileObj.sha256);
+        if (sealMap.get(filePath) !== fileSha) throw new JobError('JOB_SOURCE_MISMATCH');
+        const ext = posix.extname(filePath).toLowerCase();
+        const mime = ({
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.webp': 'image/webp',
+          '.svg': 'image/svg+xml',
+        } as Record<string, string>)[ext];
+        if (mime) {
+          images.push({ ref: { path: filePath, sha256: fileSha }, name: posix.basename(filePath), type: mime });
+        }
+      }
+    }
+    return {
+      questions: [{
+        ref,
+        set,
+        editable: true,
+        images,
+        hasParts: false,
+      }],
+      optionSetFile: ref,
+    };
+  }
+
+  if (context.plan === null) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  const planObj = asPlainObject(project.plan);
+  const rawSteps = planObj?.steps;
+  if (!Array.isArray(rawSteps) || rawSteps.length !== context.plan.steps.length) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  for (let i = 0; i < rawSteps.length; i++) {
+    const stepObj = asPlainObject(rawSteps[i]);
+    if (!stepObj || typeof stepObj.id !== 'string' || stepObj.id !== context.plan.steps[i]!.id) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+  }
+  return { questions: [], optionSetFile: null };
+}
+
+export async function prepareJobRecordSource(options: {
+  readonly root: JobRootIdentity;
+  readonly stateRoot: string;
+  readonly fingerprint: string;
+  readonly request: {
+    readonly freeze: RecordFreeze;
+    readonly result: RecordResult;
+  };
+  readonly readRecordPublished?: RecordPublicationReader;
+  readonly afterSnapshot?: () => void | Promise<void>;
+  readonly afterDirectorySync?: (path: string) => void;
+}): Promise<JobRetainedRecordSource> {
+  const { root } = options;
+  assertJobRoot(root);
+  const freeze = parseRecordFreeze(options.request.freeze);
+  const result = parseRecordResult(options.request.result);
+  const record = freeze.record;
+  readProjectRecordBytes(root.path, record);
+  if (!options.readRecordPublished) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', 'CREATE_PUBLICATION_CONTRACT_UNAVAILABLE');
+  }
+  const inventory = await readRecordPublishedPhase(
+    options.readRecordPublished,
+    { root: root.path, record, result, phase: 'inventory' },
+    'publish',
+  );
+  if (inventory.files.length > maxSourceFiles) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE');
+  }
+  const snapshotRoot = join(options.stateRoot, 'snapshots', randomUUID());
+  const seals: JobFileIdentity[] = [];
+  let snapshotIdentity: { dev: number; ino: number } | null = null;
+  try {
+    await mkdir(dirname(snapshotRoot), { recursive: true, mode: 0o700 });
+    await mkdir(snapshotRoot, { mode: 0o700 });
+    const info = lstatSync(snapshotRoot);
+    snapshotIdentity = { dev: info.dev, ino: info.ino };
+    let retainedBytes = 0;
+    const directories = new Set([snapshotRoot, dirname(snapshotRoot), options.stateRoot]);
+    for (const file of inventory.files) {
+      const bytes = readClosureFileBytes(root.path, file);
+      retainedBytes += bytes.length;
+      if (retainedBytes > maxSourceBytes) throw new JobError('JOB_SOURCE_UNRETAINABLE');
+      const destination = join(snapshotRoot, file.path);
+      await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+      const handle = await open(destination, 'wx', 0o600);
+      try {
+        await handle.writeFile(bytes);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      let directory = dirname(destination);
+      while (directory !== snapshotRoot) {
+        directories.add(directory);
+        directory = dirname(directory);
+      }
+      seals.push({ path: file.path, sha256: file.sha256 });
+    }
+    for (const directory of [...directories].sort((a, b) => b.length - a.length)) {
+      const handle = await open(directory, 'r');
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      options.afterDirectorySync?.(directory);
+    }
+    assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity, 'JOB_SOURCE_UNRETAINABLE');
+    const retainedContext = await readRecordPublishedPhase(
+      options.readRecordPublished,
+      { root: snapshotRoot, record, result, phase: 'retained', parts: inventory.parts },
+      'publish',
+    );
+    assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity, 'JOB_SOURCE_UNRETAINABLE');
+    assertEqualRecordContexts(inventory, retainedContext);
+    const decoded = decodeRetainedRecordProject(snapshotRoot, seals, result, retainedContext);
+    const source = parseRecordSource(
+      result.kind === 'option-set'
+        ? buildRecordSource({
+            record,
+            selection: result,
+            context: retainedContext as OptionContext,
+            optionSetFile: decoded.optionSetFile!,
+          })
+        : buildRecordSource({
+            record,
+            selection: result,
+            context: retainedContext as PlanContext,
+            optionSetFile: null,
+          }),
+    );
+    const prepared: JobRetainedRecordSource = {
+      kind: 'record',
+      root,
+      record,
+      result,
+      seals,
+      snapshotRoot,
+      snapshotIdentity,
+      manifestPath: null,
+      source,
+      instanceKey: recordInstanceKey(options.fingerprint, source.sourceHash),
+      label: retainedContext.label,
+      visual: { status: 'unavailable', code: 'MODEL_UNAVAILABLE' },
+      subjects: retainedContext.subjects,
+      questions: decoded.questions,
+      partIds: [],
+      context: retainedContext,
+    };
+    await options.afterSnapshot?.();
+    assertJobSourceCurrent(prepared);
+    assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity, 'JOB_SOURCE_UNRETAINABLE');
+    return prepared;
+  } catch (error) {
+    if (snapshotIdentity) {
+      await removeOwnedJobSnapshot(options.stateRoot, { snapshotRoot, ...snapshotIdentity });
+    }
+    if (error instanceof JobError) throw error;
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+}
+
+export async function verifyJobRecordSourceFresh(options: {
+  readonly retained: JobRetainedRecordSource;
+  readonly readRecordPublished?: RecordPublicationReader;
+  readonly phase?: 'ask' | 'finalize';
+  readonly subject?: RecordSubject;
+}): Promise<RecordSource> {
+  const { retained } = options;
+  const phase = options.phase ?? 'ask';
+  assertJobSourceCurrent(retained);
+  assertRetainedSnapshotIntact(
+    retained.snapshotRoot,
+    retained.seals,
+    retained.snapshotIdentity,
+    'JOB_SOURCE_UNRETAINABLE',
+  );
+  if (!options.readRecordPublished) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', 'CREATE_PUBLICATION_CONTRACT_UNAVAILABLE');
+  }
+  const inventory = await readRecordPublishedPhase(
+    options.readRecordPublished,
+    { root: retained.root.path, record: retained.record, result: retained.result, phase: 'inventory' },
+    phase,
+  );
+  if (requestDigest(inventory.parts) !== requestDigest(retained.context.parts)) {
+    throw new JobError(phase === 'finalize' ? 'JOB_ACT_SOURCE_STALE' : 'JOB_SOURCE_MISMATCH');
+  }
+  assertRetainedSnapshotIntact(
+    retained.snapshotRoot,
+    retained.seals,
+    retained.snapshotIdentity,
+    'JOB_SOURCE_UNRETAINABLE',
+  );
+  const retainedContext = await readRecordPublishedPhase(
+    options.readRecordPublished,
+    {
+      root: retained.snapshotRoot,
+      record: retained.record,
+      result: retained.result,
+      phase: 'retained',
+      parts: retained.context.parts,
+    },
+    phase,
+  );
+  assertRetainedSnapshotIntact(
+    retained.snapshotRoot,
+    retained.seals,
+    retained.snapshotIdentity,
+    'JOB_SOURCE_UNRETAINABLE',
+  );
+  try {
+    assertEqualRecordContexts(inventory, retainedContext);
+  } catch (error) {
+    if (phase === 'finalize') throw new JobError('JOB_ACT_SOURCE_STALE');
+    throw error;
+  }
+  const decoded = decodeRetainedRecordProject(retained.snapshotRoot, retained.seals, retained.result, retainedContext);
+  const freshSource = parseRecordSource(
+    retained.result.kind === 'option-set'
+      ? buildRecordSource({
+          record: retained.record,
+          selection: retained.result,
+          context: retainedContext as OptionContext,
+          optionSetFile: decoded.optionSetFile!,
+        })
+      : buildRecordSource({
+          record: retained.record,
+          selection: retained.result,
+          context: retainedContext as PlanContext,
+          optionSetFile: null,
+        }),
+  );
+  if (
+    freshSource.sourceHash !== retained.source.sourceHash ||
+    requestDigest(freshSource) !== requestDigest(retained.source) ||
+    requestDigest(retainedContext.subjects) !== requestDigest(retained.subjects) ||
+    requestDigest(retainedContext.parts) !== requestDigest(retained.context.parts) ||
+    retainedContext.label !== retained.context.label
+  ) {
+    throw new JobError(phase === 'finalize' ? 'JOB_ACT_SOURCE_STALE' : 'JOB_SOURCE_MISMATCH');
+  }
+  if (options.subject !== undefined) {
+    try {
+      validateRecordAskSubject(options.subject, freshSource);
+    } catch (error) {
+      if (phase === 'finalize') throw new JobError('JOB_ACT_SOURCE_STALE');
+      throw error;
+    }
+  }
+  assertJobSourceCurrent(retained);
+  return freshSource;
+}
+
 export async function prepareJobSource(options: {
   readonly root: JobRootIdentity;
   readonly stateRoot: string;
@@ -308,8 +1015,81 @@ export async function prepareJobSource(options: {
   readonly partsEnumerator?: JobPartsEnumerator;
   readonly afterSnapshot?: () => void | Promise<void>;
   readonly afterDirectorySync?: (path: string) => void;
-}): Promise<JobRetainedSource> {
-  const { root, request } = options;
+}): Promise<JobRetainedSource>;
+export async function prepareJobSource(options: {
+  readonly root: JobRootIdentity;
+  readonly stateRoot: string;
+  readonly fingerprint: string;
+  readonly request: PublishRequestV3 & { readonly result: RecordResult };
+  readonly readRecordPublished?: RecordPublicationReader;
+  readonly afterSnapshot?: () => void | Promise<void>;
+  readonly afterDirectorySync?: (path: string) => void;
+}): Promise<JobRetainedRecordSource>;
+export async function prepareJobSource(options: {
+  readonly root: JobRootIdentity;
+  readonly stateRoot: string;
+  readonly fingerprint: string;
+  readonly request: PublishRequestV3 & { readonly result: PackageResultV3 };
+  readonly readPublished?: JobPublicationReader;
+  readonly partsEnumerator?: JobPartsEnumerator;
+  readonly afterSnapshot?: () => void | Promise<void>;
+  readonly afterDirectorySync?: (path: string) => void;
+}): Promise<JobRetainedSource>;
+export async function prepareJobSource(options: {
+  readonly root: JobRootIdentity;
+  readonly stateRoot: string;
+  readonly fingerprint: string;
+  readonly request: JobPublishRequest | PublishRequestV3;
+  readonly readPublished?: JobPublicationReader;
+  readonly readRecordPublished?: RecordPublicationReader;
+  readonly partsEnumerator?: JobPartsEnumerator;
+  readonly afterSnapshot?: () => void | Promise<void>;
+  readonly afterDirectorySync?: (path: string) => void;
+}): Promise<JobRetainedSourceV3>;
+export async function prepareJobSource(options: {
+  readonly root: JobRootIdentity;
+  readonly stateRoot: string;
+  readonly fingerprint: string;
+  readonly request: JobPublishRequest | PublishRequestV3;
+  readonly readPublished?: JobPublicationReader;
+  readonly readRecordPublished?: RecordPublicationReader;
+  readonly partsEnumerator?: JobPartsEnumerator;
+  readonly afterSnapshot?: () => void | Promise<void>;
+  readonly afterDirectorySync?: (path: string) => void;
+}): Promise<JobRetainedSourceV3> {
+  if ('kind' in options.request.result) {
+    assertJobApiSchema(options.request.schema, JOB_API_V3_SCHEMA);
+    if (options.request.result.kind !== 'package') {
+      return prepareJobRecordSource({
+        root: options.root,
+        stateRoot: options.stateRoot,
+        fingerprint: options.fingerprint,
+        request: {
+          freeze: parseRecordFreeze(options.request.freeze),
+          result: options.request.result,
+        },
+        readRecordPublished: options.readRecordPublished,
+        afterSnapshot: options.afterSnapshot,
+        afterDirectorySync: options.afterDirectorySync,
+      });
+    }
+    const strippedRequest: JobPublishRequest = {
+      schema: 'rig-review/job-api@2',
+      jobId: options.request.jobId,
+      requestId: options.request.requestId,
+      verb: 'publish',
+      expectedGeneration: options.request.expectedGeneration,
+      idempotencyKey: options.request.idempotencyKey,
+      freeze: options.request.freeze,
+      result: stripPackageResultKind(options.request.result),
+    };
+    return prepareJobSource({
+      ...options,
+      request: strippedRequest,
+    });
+  }
+  const { root } = options;
+  const request = options.request as JobPublishRequest;
   assertJobRoot(root);
   const record = request.freeze.record;
   let project: ReturnType<typeof readProject> | null = null;
