@@ -1001,7 +1001,8 @@ the compiled sliders available through the Turn Pad and the attachment sets
 loaded through Play. Independent depth control is unavailable on this surface.
 
 A manifest may declare `direction` as the literal package-relative path to a
-retained Create `rig-create/direction@1` document (up to 256 KiB). Preserve the
+retained Create `rig-create/direction@1` or `rig-create/direction@2` document
+(up to 256 KiB); a `direction@2` scene reference is accepted but not inspected. Preserve the
 document's model path relative to the Review package root. Review requires that
 path and SHA-256 to match the inspected compiled model and includes the direction
 file in the package source hash. The panel shows authored camera keys and timing
