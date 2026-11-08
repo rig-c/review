@@ -546,8 +546,13 @@ function setupPartsComments():void {
 if (typeof document !== 'undefined' && document.getElementById('parts-app')) void boot();
 
 function renderCorrections():void {
+ const data = state.data;
+ if (!stageEmbedded && (!data || (!Object.hasOwn(data, 'draft') && !Object.hasOwn(data, 'draftUnavailable')))) {
+  document.getElementById('pv-corrections')?.remove();
+  return;
+ }
  let host=document.getElementById('pv-corrections');if(!host){host=document.createElement('section');host.id='pv-corrections';document.querySelector('.pv-toolbar')!.after(host);}
- host.replaceChildren();const data=state.data,item=data?.items[state.selected],mapping=data?.draft?.mappings.find(m=>m.part===item?.name);
+ host.replaceChildren();const item=data?.items[state.selected],mapping=data?.draft?.mappings.find(m=>m.part===item?.name);
  const label=document.createElement('p');label.textContent=t(data?.draft&&!mapping?'STAGE_DRAFT_NO_MESH: this part has no mesh attachment; direct correction is unavailable.':data?.draft?.label??data?.draftUnavailable??'STAGE_DRAFT_UNAVAILABLE: no producer-compatible draft is supplied.');host.append(label);
  if(!mapping||!data?.draft)return;
  label.textContent+=` · ${mapping.part} · ${mapping.skin}/${mapping.slot}/${mapping.attachment} · v ${mapping.vertices} t ${mapping.triangles} · ${data.draft.buildId}`;
