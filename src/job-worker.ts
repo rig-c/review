@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto';
 import { createJobHostPorts } from './job-api.ts';
 import { JobSession, type JobSessionOptions } from './job-session.ts';
 import type { JobHostPorts } from './job-contract.ts';
@@ -7,6 +8,7 @@ export interface JobWorkerOptions extends JobSessionOptions {
   readonly port?: number;
   /** Trusted Create #184 adapter installs its private writer-owned sibling.
    * No project record key or binding-file format is defined by this callback.
+   * Reusable owner-host attachment (`reuseOnly`) belongs to JobHostOptions.
    */
   readonly installWriterBinding?: (binding: {
     readonly jobId: string;
@@ -23,9 +25,11 @@ export async function startJobWorker(options: JobWorkerOptions): Promise<{
   readonly session: JobSession;
   readonly ports: JobHostPorts;
   readonly origin: string;
+  readonly listenerIncarnation: string;
   stop(): void;
 }> {
   const session = new JobSession(options);
+  const listenerIncarnation = randomUUID();
   let ports: JobHostPorts;
   let stopped = false;
   const server = Bun.serve({
@@ -48,7 +52,7 @@ export async function startJobWorker(options: JobWorkerOptions): Promise<{
   };
   try {
     await options.installWriterBinding?.({ ...session.writerGrant(), origin });
-    return { session, ports, origin, stop };
+    return { session, ports, origin, listenerIncarnation, stop };
   } catch {
     stop();
     throw new JobError('JOB_AUTHORITY_REFUSED', 'Writer binding installation failed');

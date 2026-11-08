@@ -55,6 +55,7 @@ import {
  startJobHost, assertJobImageSetCapability, JOB_CAPABILITIES, JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_ENUMERATOR_RANGE, JOB_ENABLED_ACT_KINDS,
  JOB_RESERVED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_CONSUMER_AUTH_MODE, JOB_ERROR_CODES,
  type JobHostOptions, type JobOwnerHost, type JobSessionOptions, type JobSession, type JobWorkerOptions,
+ type JobHostListenerIncarnation, type JobHostReuseBinding, type JobHostReuseExpectation, type JobHostAttachField, type JobHostAttachFailure,
  type JobPublicationReader, type JobPublishedContext, type JobCapabilities, type JobImageSetInput,
  type JobImageSet, type JobImageSourceBinding, type JobModelSourceBinding, type JobModelReviewValue, type JobImageReviewValue,
  type JobEnabledActKind, type JobReservedActKind, type JobActKind, type JobSha256,
@@ -75,6 +76,7 @@ import * as publicHost from '@rig-c/review/job-host';
 
 export type PublicTypes = [
  JobHostOptions, JobOwnerHost, JobSessionOptions, JobSession, JobWorkerOptions,
+ JobHostListenerIncarnation, JobHostReuseBinding, JobHostReuseExpectation, JobHostAttachField, JobHostAttachFailure,
  JobPublicationReader, JobPublishedContext, JobCapabilities, JobImageSetInput, JobImageSet,
  JobImageSourceBinding, JobModelSourceBinding, JobModelReviewValue, JobImageReviewValue,
  JobEnabledActKind, JobReservedActKind, JobActKind, JobSha256, JobId, JobPublicationId,
@@ -147,6 +149,17 @@ const options: JobHostOptions = {...workerOptions,
 const start: (options: JobHostOptions) => Promise<JobOwnerHost> = startJobHost;
 const host: JobOwnerHost = await start(options);
 try {
+ const attachment: JobHostReuseExpectation | null = host.attachment;
+ assert(attachment, 'ATTACHMENT_AVAILABLE');
+ const incarnation: JobHostListenerIncarnation = attachment.listenerIncarnation;
+ const reuseBinding: JobHostReuseBinding = attachment.binding;
+ const field: JobHostAttachField = 'listenerIncarnation';
+ const refused: JobHostAttachFailure = {code: 'JOB_HOST_ATTACH_REFUSED', reason: 'stopped', phase: 'acceptance'};
+ assert(incarnation.length === 36 && reuseBinding.root === input && field === 'listenerIncarnation' &&
+  refused.reason === 'stopped', 'ATTACH_TYPES');
+ const strict = await start({...options, reuseOnly: {expected: attachment}});
+ try {assert(strict.reused && JSON.stringify(strict.attachment) === JSON.stringify(attachment), 'STRICT_ATTACH');}
+ finally {strict.stop();}
  const session: JobSession = host.session;
  const ports: JobHostPorts = host.ports;
  assert(binding && binding.jobId === session.jobId && binding.origin === host.origin &&

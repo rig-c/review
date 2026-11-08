@@ -280,7 +280,7 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
         const status = failure.error.code.includes('CAPABILITY') || failure.error.code === 'JOB_AUTHORITY_REFUSED' ? 403 :
           failure.error.code === 'JOB_BODY_LIMIT' ? 413 : failure.error.code === 'JOB_REQUEST_INVALID' ? 400 : 409;
         return Response.json({ schema: JOB_API_SCHEMA, verb: input?.verb ?? null, jobId: session.jobId,
-          requestId: input?.requestId ?? null, generation: session.status().generation, ...failure }, { status, headers: responseHeaders });
+          requestId: input?.requestId ?? null, generation: session.lastObservedGeneration, ...failure }, { status, headers: responseHeaders });
       }
     },
     subscribeJob: input => session.subscribe(input),
