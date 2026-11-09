@@ -477,6 +477,13 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
   await waitReady(handleA.ready,'A',slotsA);
   expect(firstPaintSettled).toBe(true);
   expect(slotsA.hostWrap.querySelector<FakeElement>('#pv-canvas')!.width).toBe(64);
+  const loadA=slotsA.hostWrap.querySelector<FakeElement>('#pv-load')!;
+  const loadB=slotsB.hostWrap.querySelector<FakeElement>('#pv-load')!;
+  expect(loadA.textContent).toBe('Saved sign-off loaded.');
+  expect(loadB.textContent).toBe('');
+  expect(loadA.getAttribute('role')).toBe('status');
+  expect(loadA.parentElement).toBe(slotsA.stage as unknown as FakeElement);
+  expect(loadA).not.toBe(slotsA.hostWrap.querySelector('#pv-save-status'));
 
 
   const sidebarA=slotsA.side as unknown as FakeElement,sidebarB=slotsB.side as unknown as FakeElement;
