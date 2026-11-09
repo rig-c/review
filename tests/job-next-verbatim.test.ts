@@ -26,7 +26,8 @@ import { jobFixture, jobInputHashes, syntheticJobParts } from './helpers/job-api
 import { joinedVerdictFixture } from './helpers/joined-verdict-fixture.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
 import {PNG} from 'pngjs';
-import {storePngCrop} from '../src/comment-crops.ts';
+import {preparePartsComment} from '../src/parts-comment-crops.ts';
+import {loadPartsView} from '../src/parts-view.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
@@ -334,9 +335,20 @@ test('real semantic next preserves verbatim issue summaries in act5 parts-verdic
   // Parts verdicts carry spatial issues. Preserve both human summaries and the final Words value.
   const partsFixture = await fixture();
   const partsIdentity = await syntheticJobParts(partsFixture, { project: true, painting: true });
+  await writeFile(join(partsFixture.root, 'out/parts.json'), JSON.stringify({
+    rig_size: [30, 20],
+    parts: [
+      {name: 'body', x: 0, y: 0, w: 20, h: 20},
+      {name: 'head', x: 10, y: 0, w: 20, h: 20},
+    ],
+  }));
+  partsIdentity.manifest.sha256 = jobHash(await readFile(join(partsFixture.root, 'out/parts.json')));
+  partsFixture.setContext({...partsFixture.getContext(), parts: partsIdentity});
   const partsBeforeHashes = await jobInputHashes(partsFixture.root);
   const partsPublication = await partsFixture.publish();
   if (partsPublication.source.subject === 'image-set') throw new Error('Expected model source binding');
+  const retained = partsFixture.session.retainedSource(partsPublication.publicationId);
+  const pkg = await loadPartsView(join(retained.snapshotRoot, 'out'));
   const partsAsk = await partsFixture.ask(partsPublication, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
   const partsPage = await partsFixture.display(partsPublication);
 
@@ -344,22 +356,27 @@ test('real semantic next preserves verbatim issue summaries in act5 parts-verdic
   const bodyMeshNote = '  [메쉬/Mesh] 삼각형 분할 밀도 부족 — add 2 edge loops 🔺\n';
   const partsSummaryWords = '  부품 & 메쉬 종합 의견: body 수정 후 재검수 요청합니다. 🚀\n  ';
 
-  const original = PNG.sync.read(await readFile(join(partsFixture.root, 'out/parts/body.png')));
+  const original = PNG.sync.read(await readFile(join(retained.snapshotRoot, 'out/parts/body.png')));
   const native = new PNG({width: 1, height: 1});
   original.data.copy(native.data, 0, 0, 4);
   const png = PNG.sync.write(native);
   const sha256 = jobHash(png);
   const crop = {path: `comment-crops/${sha256}.png`, sha256, width: 1, height: 1};
-  await storePngCrop({...crop, png: 'data:image/png;base64,' + png.toString('base64')});
   const body = partsIdentity.images.find(image => image.role === 'part' && image.path === 'parts/body.png')!;
-  const issue: PartsIssue = {
+  const unpreparedIssue: PartsIssue = {
     schema: 'rig-review-parts-comment/2', id: 'body-edge', summary: bodyPartNote,
     parts: [{name: 'body', imageHash: body.sha256}], sourceHash: partsPublication.source.sourceHash,
     imageRegion: {x: 0, y: 0, width: 1, height: 1}, rigRegion: {x: 0, y: 0, width: 1, height: 1},
     view: {mode: 'item', camera: {zoom: 1, center: {x: 0.5, y: 0.5}, viewport: {width: 32, height: 32}},
       cameraSync: false, referenceCamera: null, background: 'checker', alpha: false, footprints: false, mesh: false},
-    crop, nativeCrop: crop,
+    crop: {...crop, png: 'data:image/png;base64,' + png.toString('base64')}, nativeCrop: null,
   };
+  const prepared = await preparePartsComment(pkg, unpreparedIssue, false, {
+    sourceHash: partsPublication.source.sourceHash,
+  });
+  const {png: _inlinePng, ...storedCrop} = prepared.crop;
+  const issue = {...prepared, crop: storedCrop};
+  expect(issue.nativeCrop).not.toBeNull();
   const partsValue: JobActValues['parts-verdict'] = {
     verdict: 'changes-requested',
     issues: [issue, {...issue, id: 'body-mesh', summary: bodyMeshNote}],
