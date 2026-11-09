@@ -7,7 +7,7 @@ import {createHash} from 'node:crypto';
 import {PNG} from 'pngjs';
 import {writePartsPackage} from './helpers/parts-package.ts';
 import {loadPartsView,saveVerdict,saveVerdictWithReceipt,readVerdict,readPartsVerdictJson,verdictSource,exportPartsVerdict,partsViewJson} from '../src/parts-view.ts';
-import {preparePartsComment} from '../src/parts-comment-crops.ts';
+import {preparePartsComment,validateStoredPartsComment} from '../src/parts-comment-crops.ts';
 import {resolvedCropPath,storePngCrop} from '../src/comment-crops.ts';
 import {parsePartsComment,parsePartsIssue,snapImageRegion} from '../src/parts-comment.ts';
 import {parseStageComment} from '../src/stage-comment.ts';
@@ -125,5 +125,26 @@ test('selected pre-rig comment exports the same part image and exact original ev
   expect({jsonExit,diagnostic}).toEqual({jsonExit:0,diagnostic:''});
   expect(JSON.parse(bytes)).toMatchObject({issues:[comment],correction:{path:'described',itemId:comment.id,part:comment.parts[0]!.name,imageHash:comment.parts[0]!.imageHash,outcome:null}});
 
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('preparePartsComment and validateStoredPartsComment default to verdictSource(pkg).sha256 and accept server-trusted options.sourceHash for job stage-parts',async()=>{
+ const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'parts-sourcehash-'));
+ try{
+  const pkg=await commentFixture(root),c=candidate(pkg),standaloneHash=verdictSource(pkg).sha256,retainedHash='e'.repeat(64);
+  expect(retainedHash).not.toBe(standaloneHash);
+  const standaloneReady=await preparePartsComment(pkg,c);
+  expect(standaloneReady.sourceHash).toBe(standaloneHash);
+  expect(await validateStoredPartsComment(pkg,standaloneReady)).toEqual(standaloneReady);
+  await expect(preparePartsComment(pkg,{...c,sourceHash:retainedHash})).rejects.toThrow('PARTS_COMMENT_STALE_SOURCE');
+  await expect(validateStoredPartsComment(pkg,{...standaloneReady,sourceHash:retainedHash})).rejects.toThrow('PARTS_COMMENT_STALE_SOURCE');
+
+  const jobReady=await preparePartsComment(pkg,{...c,id:'job-comment-1',sourceHash:retainedHash},false,{sourceHash:retainedHash});
+  expect(jobReady.sourceHash).toBe(retainedHash);
+  expect(jobReady.nativeCrop).not.toBeNull();
+  expect(await validateStoredPartsComment(pkg,jobReady,false,{sourceHash:retainedHash})).toEqual(jobReady);
+  await expect(preparePartsComment(pkg,c,false,{sourceHash:retainedHash})).rejects.toThrow('PARTS_COMMENT_STALE_SOURCE');
+  await expect(validateStoredPartsComment(pkg,standaloneReady,false,{sourceHash:retainedHash})).rejects.toThrow('PARTS_COMMENT_STALE_SOURCE');
+  await expect(validateStoredPartsComment(pkg,jobReady)).rejects.toThrow('PARTS_COMMENT_STALE_SOURCE');
  }finally{await rm(root,{recursive:true,force:true});}
 });

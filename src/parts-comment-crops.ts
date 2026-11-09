@@ -6,20 +6,26 @@ import { parsePartsIssue, assertPartsIssueBinding, type PartsIssue } from './par
 import { validatePngCrop, storePngCrop, readPngCrop, type PngCrop } from './comment-crops.ts';
 import { assertPartsUnchanged, partsDifference, verdictSource, type PartsViewPackage } from './parts-view.ts';
 
+export interface PartsCommentBindingOptions {
+  readonly sourceHash?: string;
+}
+
 export async function preparePartsComment(
   pkg: PartsViewPackage,
   raw: unknown,
   requireNative = false,
+  options?: PartsCommentBindingOptions,
 ): Promise<PartsIssue> {
-  return resolvePartsComment(pkg, raw, requireNative, true, false);
+  return resolvePartsComment(pkg, raw, requireNative, true, false, options);
 }
 
 export async function validateStoredPartsComment(
   pkg: PartsViewPackage,
   raw: unknown,
   allowLegacy = false,
+  options?: PartsCommentBindingOptions,
 ): Promise<PartsIssue> {
-  return resolvePartsComment(pkg, raw, true, false, allowLegacy);
+  return resolvePartsComment(pkg, raw, true, false, allowLegacy, options);
 }
 
 async function resolvePartsComment(
@@ -28,6 +34,7 @@ async function resolvePartsComment(
   requireNative: boolean,
   persist: boolean,
   allowLegacy = false,
+  options?: PartsCommentBindingOptions,
 ): Promise<PartsIssue> {
   const c = parsePartsIssue(raw, requireNative, allowLegacy, persist && !requireNative);
   if (pkg.mode !== 'parts') {
@@ -45,7 +52,8 @@ async function resolvePartsComment(
     }
     itemMap.set(item.name, { ...item, imageHash: file.sha256, path });
   }
-  assertPartsIssueBinding(c, itemMap, verdictSource(pkg).sha256);
+  const expectedSourceHash = options?.sourceHash ?? verdictSource(pkg).sha256;
+  assertPartsIssueBinding(c, itemMap, expectedSourceHash);
   if (c.view.comparison?.mode === 'overlay' && !pkg.painting) {
     throw new Error('PARTS_COMPARISON_UNAVAILABLE: original painting required');
   }
