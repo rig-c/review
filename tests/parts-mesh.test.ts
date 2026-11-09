@@ -3,7 +3,7 @@ import { mkdtemp, readFile, realpath, rm, unlink, writeFile, symlink } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
-import { loadPartsView, readPartMeshes, buildVerdict, verdictSource, saveVerdict, readVerdict, assertPartsUnchanged } from '../src/parts-view.ts';
+import { loadPartsView, readPartMeshes, buildVerdict, verdictSource, saveVerdict, readVerdict, readPartsVerdictForCli, assertPartsUnchanged } from '../src/parts-view.ts';
 import { meshCoverage, paintMesh } from '../web/parts-render.ts';
 import { writeMeshPackage } from './helpers/parts-mesh-package.ts';
 const roots: string[] = [];
@@ -46,22 +46,40 @@ test('named planted malformed inputs reject unknown part, invalid UV, triangle, 
   expect(() => readPartMeshes(doc({ ...mesh, width: 0 }), item(), [])).toThrow('PARTS_MESH_SIZE');
   expect(() => readPartMeshes({ skins: { a: { a: { a: mesh } }, b: { a: { a: mesh } } } }, item(), [])).toThrow('PARTS_MESH_AMBIGUOUS');
 });
-test('mesh sign-off is source-bound, requires notes and clean mesh for approval, absent without rig', async () => {
+test('mesh sign-off is source-bound; legacy mesh outcomes retain their validation and absent-mesh controls', async () => {
   const root = await fixture(), pkg = await loadPartsView(root);
   const parts = Object.fromEntries(pkg.items.map(i => [i.name, { outcome: 'clean', mesh: { outcome: 'clean' } }]));
-  const v = await saveVerdict(pkg, { status: 'approved', parts });
-  expect(v.parts.gap!.mesh).toEqual({ outcome: 'clean', note: '' });
+  const v = await saveVerdict(pkg, { status: 'approved', issues: [] });
+  expect(v.schema).toBe('rig-review-parts-verdict/4');
+  expect(v.issues).toEqual([]);
+  expect(() => buildVerdict(pkg, {status: 'approved', parts}, '0')).toThrow('PARTS_VERDICT_INVALID');
   expect(verdictSource(pkg).files.map(f => f.path)).toContain('rig.json');
   expect(verdictSource(pkg).files.map(f => f.path)).toContain('mesh_report.json');
   expect(verdictSource(pkg).flags.map(f => f.path)).toContain('mesh_report.json');
   expect((await readVerdict(pkg)).verdict).not.toBeNull();
-  parts.gap!.mesh.outcome = 'pending'; expect(() => buildVerdict(pkg, { status: 'approved', parts }, '0')).toThrow('PARTS_VERDICT_NOT_CLEAN');
-  parts.gap!.mesh.outcome = 'flagged'; expect(() => buildVerdict(pkg, { status: 'pending', parts }, '0')).toThrow('PARTS_VERDICT_NOTE_REQUIRED');
+  const {issues: _issues, ...core} = v;
+  const legacy = {...core, schema: 'rig-review-parts-verdict/2', parts, comments: []};
+  await writeFile(pkg.verdictPath, JSON.stringify(legacy));
+  const decoded = await readPartsVerdictForCli(pkg);
+  expect(decoded?.schema).toBe('rig-review-parts-verdict/4');
+  await writeFile(pkg.verdictPath, JSON.stringify({...legacy, status: 'pending'}));
+  const pendingMesh = await readPartsVerdictForCli(pkg);
+  if (!pendingMesh || !('parts' in pendingMesh)) throw new Error('Expected legacy pending mesh record');
+  expect(pendingMesh.parts.gap!.mesh).toMatchObject({outcome: 'clean', note: ''});
+  parts.gap!.mesh.outcome = 'pending';
+  await writeFile(pkg.verdictPath, JSON.stringify(legacy));
+  await expect(readVerdict(pkg)).rejects.toThrow('PARTS_VERDICT_NOT_CLEAN');
+  parts.gap!.mesh.outcome = 'flagged';
+  await writeFile(pkg.verdictPath, JSON.stringify({...legacy, status: 'pending'}));
+  await expect(readVerdict(pkg)).rejects.toThrow('PARTS_VERDICT_NOTE_REQUIRED');
   await writeFile(join(root, 'rig.json'), '{}'); await expect(assertPartsUnchanged(pkg)).rejects.toThrow('PARTS_VIEW_SOURCE_CHANGED');
   await unlink(join(root, 'rig.json'));
   const noMesh = await loadPartsView(root); expect(noMesh.items.every(i => !Object.hasOwn(i, 'mesh'))).toBe(true);
-  expect(() => buildVerdict(noMesh, { status: 'pending', parts }, '0')).toThrow('PARTS_MESH_OUTCOME_UNAVAILABLE');
-  const plain = buildVerdict(noMesh, { status: 'pending', parts: { gap: { outcome: 'pending' }, covered: { outcome: 'pending' } } }, '0');
+  await writeFile(noMesh.verdictPath, JSON.stringify({...legacy, source: verdictSource(noMesh), status: 'pending'}));
+  await expect(readVerdict(noMesh)).rejects.toThrow('PARTS_MESH_OUTCOME_UNAVAILABLE');
+  await writeFile(noMesh.verdictPath, JSON.stringify({...legacy, source: verdictSource(noMesh), status: 'pending', parts: {gap: {outcome: 'pending'}, covered: {outcome: 'pending'}}}));
+  const plain = await readPartsVerdictForCli(noMesh);
+  if (!plain || !('parts' in plain)) throw new Error('Expected legacy pending mesh-free record');
   expect(Object.values(plain.parts).every(p => !Object.hasOwn(p, 'mesh'))).toBe(true);
 });
 test('discovered rig cannot escape; explicit rig is the user-designated input', async () => {
@@ -139,7 +157,7 @@ test('rig snapshot race: bind parsed A; reject B at approval, and planted late-h
       const pkg = await loadPartsView(${JSON.stringify(root)});
       const hash = pkg.files.find(f => f.abs === path).sha256;
       let refused = false;
-      try { await saveVerdict(pkg, {status:'approved', parts:{gap:{outcome:'clean',mesh:{outcome:'clean'}},covered:{outcome:'clean',mesh:{outcome:'clean'}}}}); }
+      try { await saveVerdict(pkg, {status:'approved', issues:[]}); }
       catch(e) { if (!String(e).includes('PARTS_VIEW_SOURCE_CHANGED')) throw e; refused = true; }
       console.log(JSON.stringify({swapped, reads, firstX:pkg.items[0].mesh.vertices[0],hash,refused}));
     `;
@@ -193,7 +211,7 @@ async function runMeshReportSwapProbe(
       const faintCount = pkg.flags.filter(f => f.kind === 'faint').length;
       const gapFigures = pkg.items.find(i => i.name === 'gap')?.mesh?.figures ?? null;
       let refused = false;
-      try { await saveVerdict(pkg, { status: 'approved', parts: { gap: { outcome: 'clean', mesh: { outcome: 'clean' } }, covered: { outcome: 'clean', mesh: { outcome: 'clean' } } } }); }
+      try { await saveVerdict(pkg, { status: 'approved', issues: [] }); }
       catch (e) { if (!String(e).includes('PARTS_VIEW_SOURCE_CHANGED')) throw e; refused = true; }
       console.log(JSON.stringify({
         swapped, reads: loadReads, meshReadsAfterSwap: loadMeshReadsAfterSwap, faintCount,

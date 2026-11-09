@@ -1,3 +1,6 @@
+import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
+useTemporaryReviewState();
+import {partsIssueSubmission} from './helpers/parts-comments-package.ts';
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { copyFile, link, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
@@ -10,7 +13,7 @@ import { writePartsPackage } from './helpers/parts-package.ts';
 const roots: string[] = [];
 const LIMIT = 4 * 1024 * 1024;
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
-const input = { status: 'approved', parts: Object.fromEntries(['back_defect', 'back_control', 'front'].map(name => [name, { outcome: 'clean' }])) };
+const input = { status: 'approved', issues: [] };
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'parts-input-boundaries-'));
@@ -42,8 +45,8 @@ for (const relative of ['rig/parts.json', 'rig/parts/front.png', 'rig/mesh_repor
 test('#372: ordinary verdict replacement remains supported', async () => {
   const pkg = await loadPartsView(await fixture());
   await saveVerdict(pkg, input);
-  await saveVerdict(pkg, { ...input, status: 'pending' });
-  expect(JSON.parse(await readFile(pkg.verdictPath, 'utf8')).status).toBe('pending');
+  await saveVerdict(pkg, await partsIssueSubmission(pkg));
+  expect(JSON.parse(await readFile(pkg.verdictPath, 'utf8')).status).toBe('changes-requested');
 });
 
 for (const mode of ['parts', 'atlas'] as const) {
@@ -68,7 +71,7 @@ for (const mode of ['parts', 'atlas'] as const) {
     const view = await loadPartsView(pkg, { verdict: output });
     expect(view.mode).toBe(mode);
     expect(view.verdictPath).toBe(join(physical, 'missing', 'verdict.json'));
-    const saved = await saveVerdict(view, mode === 'parts' ? input : { status: 'pending', parts: {} });
+    const saved = await saveVerdict(view, input);
     expect(JSON.parse(await readFile(output, 'utf8')).source).toEqual(saved.source);
     expect(await readFile(join(physical, 'file'), 'utf8')).toBe('sentinel');
   });

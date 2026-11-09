@@ -1,8 +1,11 @@
+import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
+useTemporaryReviewState();
+import {partsIssueSubmission} from './helpers/parts-comments-package.ts';
 import {afterEach, expect, test} from 'bun:test';
 import {createHash} from 'node:crypto';
 import {mkdir, mkdtemp, open, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
-import {resolve, join} from 'node:path';
+import {resolve, join, dirname} from 'node:path';
 import {loadPartsView, readVerdict, saveVerdict, saveVerdictWithReceipt, exportPartsVerdict} from '../src/parts-view.ts';
 import {startPartsServer, type PartsSavedEvent, type PartsServerOptions} from '../src/parts-server.ts';
 import {writePartsPackage} from './helpers/parts-package.ts';
@@ -11,9 +14,7 @@ const roots: string[] = [];
 const children = new Set<ChildProcessWithoutNullStreams>();
 const receiptDirectory = resolve('.review-568-result/implementation/continuation-v4/children', `${Date.now()}-${process.pid}`);
 let childSequence = 0;
-const input = {status: 'approved', parts: Object.fromEntries(
-  ['back_defect', 'back_control', 'front'].map(name => [name, {outcome: 'clean', note: 'checked'}]),
-)};
+const input = {status: 'approved', issues: []};
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 afterEach(async () => {
   for (const child of children) {
@@ -32,7 +33,7 @@ async function fixture() {
   return loadPartsView(root);
 }
 async function cli(args: string[]) {
-  const child = Bun.spawn([process.execPath, 'src/entry.ts', 'parts', ...args], {stdout: 'pipe', stderr: 'pipe'});
+  const child = Bun.spawn([process.execPath, 'src/entry.ts', 'parts', ...args], {stdout: 'pipe', stderr: 'pipe', env: {...process.env}});
   const [stdout, stderr, exit] = await Promise.all([
     new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
   ]);
@@ -44,7 +45,7 @@ async function cli(args: string[]) {
 }
 
 async function probe(script: string) {
-  const child = Bun.spawn([process.execPath, '-e', script], {stdout: 'pipe', stderr: 'pipe'});
+  const child = Bun.spawn([process.execPath, '-e', script], {stdout: 'pipe', stderr: 'pipe', env: {...process.env}});
   const timer = setTimeout(() => child.kill('SIGKILL'), 10000);
   try {
     const [stdout, stderr, exit] = await Promise.all([
@@ -119,12 +120,14 @@ test('#568 default JSON reads the ordinary verdict plus null attribution and the
   expect(await readFile(pkg.verdictPath)).toEqual(bytes);
 });
 
-test('#568 historical /1 and /2 ignored extensions remain unattributed and immutable', async () => {
+test('#568 historical /1 and /2 ignored extensions and /3 named provenance remain immutable', async () => {
   const pkg = await fixture();
   const core = await saveVerdict(pkg, input);
+  const {issues: _issues, ...legacyCore} = core;
+  const parts = Object.fromEntries(pkg.items.map(item => [item.name, {outcome: 'clean', note: 'checked', flags: pkg.flags.filter(flag => flag.item === item.name).map(flag => flag.id)}]));
   for (const schema of ['rig-review-parts-verdict/1', 'rig-review-parts-verdict/2']) {
     for (const by of ['old extension', null, 42, {name: 'ignored'}]) {
-      const bytes = Buffer.from(JSON.stringify({...core, schema, by}, null, 1) + '\n\n');
+      const bytes = Buffer.from(JSON.stringify({...legacyCore, schema, parts, comments: [], by}, null, 1) + '\n\n');
       await writeFile(pkg.verdictPath, bytes);
       const result = await cli([pkg.root, '--format', 'json']);
       expect({exit: result.exit, stderr: result.stderr}).toEqual({exit: 0, stderr: ''});
@@ -133,9 +136,17 @@ test('#568 historical /1 and /2 ignored extensions remain unattributed and immut
       expect(await readFile(pkg.verdictPath)).toEqual(bytes);
     }
   }
+  const by = ' historical reviewer ';
+  const bytes = Buffer.from(JSON.stringify({...legacyCore, schema: 'rig-review-parts-verdict/3', parts, comments: [], by}, null, 1) + '\n\n');
+  await writeFile(pkg.verdictPath, bytes);
+  const result = await cli([pkg.root, '--format', 'json']);
+  expect({exit: result.exit, stderr: result.stderr}).toEqual({exit: 0, stderr: ''});
+  expect(JSON.parse(result.stdout)).toEqual({...core, by, savedFileSha256: digest(bytes)});
+  expect(await readVerdict(pkg)).toEqual({verdict: {...core, by}, stale: null});
+  expect(await readFile(pkg.verdictPath)).toEqual(bytes);
 });
 
-test('#568 named launch owns attribution, shared HTTP stays /2, and an unnamed explicit save clears it', async () => {
+test('#568 named launch owns attribution, shared HTTP uses /4, and an unnamed explicit save clears it', async () => {
   const pkg = await fixture(), by = '  나루 \"declared\"\u2028\u2029  ';
   const named = await serve(pkg, {by});
   try {
@@ -143,7 +154,7 @@ test('#568 named launch owns attribution, shared HTTP stays /2, and an unnamed e
     expect(response.status).toBe(200);
     const {verdict} = await response.json();
     const bytes = await readFile(pkg.verdictPath);
-    expect(JSON.parse(bytes.toString())).toEqual({...verdict, schema: 'rig-review-parts-verdict/3', by});
+    expect(JSON.parse(bytes.toString())).toEqual({...verdict, schema: 'rig-review-parts-verdict/4', by});
     const shared = await readVerdict(pkg);
     expect(shared).toEqual({verdict, stale: null});
     const view = await (await fetch(named.origin + '/api/parts')).json();
@@ -162,7 +173,7 @@ test('#568 named launch owns attribution, shared HTTP stays /2, and an unnamed e
   try {
     expect((await unnamed.save({...input, by})).status).toBe(200);
     const stored = JSON.parse(await readFile(pkg.verdictPath, 'utf8'));
-    expect(stored.schema).toBe('rig-review-parts-verdict/2');
+    expect(stored.schema).toBe('rig-review-parts-verdict/4');
     expect(Object.hasOwn(stored, 'by')).toBe(false);
     expect(JSON.parse((await cli([pkg.root, '--format', 'json'])).stdout).by).toBeNull();
   } finally { unnamed.server.stop(true); }
@@ -170,14 +181,20 @@ test('#568 named launch owns attribution, shared HTTP stays /2, and an unnamed e
 
 test('#568 malformed named records retain PARTS_VERDICT_INVALID and cannot be reset by save', async () => {
   const pkg = await fixture(), core = await saveVerdict(pkg, input);
-  for (const by of [undefined, null, 2, '', ' \t\n']) {
-    const bytes = Buffer.from(JSON.stringify({...core, schema: 'rig-review-parts-verdict/3', by}));
-    await writeFile(pkg.verdictPath, bytes);
-    const result = await cli([pkg.root, '--format', 'json']);
-    expect({exit: result.exit, stdout: result.stdout}).toEqual({exit: 1, stdout: ''});
-    expect(result.stderr).toContain('PARTS_VERDICT_INVALID');
-    await expect(saveVerdict(pkg, input)).rejects.toThrow('PARTS_VERDICT_INVALID');
-    expect(await readFile(pkg.verdictPath)).toEqual(bytes);
+  const {issues: _issues, ...legacyCore} = core;
+  const parts = Object.fromEntries(pkg.items.map(item => [item.name, {outcome: 'clean', note: 'checked', flags: pkg.flags.filter(flag => flag.item === item.name).map(flag => flag.id)}]));
+  for (const schema of ['rig-review-parts-verdict/3', 'rig-review-parts-verdict/4']) {
+    const names = schema.endsWith('/3') ? [undefined, null, 2, '', ' \t\n'] : [null, 2, '', ' \t\n'];
+    for (const by of names) {
+      const record = schema.endsWith('/3') ? {...legacyCore, schema, parts, comments: [], by} : {...core, by};
+      const bytes = Buffer.from(JSON.stringify(record));
+      await writeFile(pkg.verdictPath, bytes);
+      const result = await cli([pkg.root, '--format', 'json']);
+      expect({exit: result.exit, stdout: result.stdout}).toEqual({exit: 1, stdout: ''});
+      expect(result.stderr).toContain('PARTS_VERDICT_INVALID');
+      await expect(saveVerdict(pkg, input)).rejects.toThrow('PARTS_VERDICT_INVALID');
+      expect(await readFile(pkg.verdictPath)).toEqual(bytes);
+    }
   }
 });
 
@@ -203,11 +220,12 @@ test('#568 actual CLI emits exactly three framed saves including identical saves
   const launched = await launch(args);
   const expected: PartsSavedEvent[] = [];
   try {
-    for (const status of ['approved', 'approved', 'pending']) {
-      const response = await post(launched.origin, launched.capability, {...input, status});
+    const fixes = await partsIssueSubmission(pkg);
+    for (const body of [input, input, fixes]) {
+      const response = await post(launched.origin, launched.capability, body);
       expect(response.status).toBe(200);
       await response.json();
-      expected.push({verdictPath: verdict, sha256: digest(await readFile(verdict)), status: status as PartsSavedEvent['status'], saveCount: expected.length + 1});
+      expected.push({verdictPath: verdict, sha256: digest(await readFile(verdict)), status: body.status as PartsSavedEvent['status'], saveCount: expected.length + 1});
     }
   } finally {
     const result = await launched.stop();
@@ -263,7 +281,8 @@ test('#568 concurrent saves serialize validation through notification and shutdo
     expect(digest(await readFile(pkg.verdictPath))).toBe(event.sha256);
     if (event.saveCount === 1) { entered(); await barrier; }
   }});
-  const requests = [serving.save(input), serving.save({...input, status: 'pending'}), serving.save(input)];
+  const fixes = await partsIssueSubmission(pkg);
+  const requests = [serving.save(input), serving.save(fixes), serving.save(input)];
   try {
     await firstNotification;
     // Every request reached the queue before graceful shutdown begins.
@@ -276,7 +295,7 @@ test('#568 concurrent saves serialize validation through notification and shutdo
     await Promise.all(responses.map(response => response.json()));
     await stopping;
     expect(events.map(event => event.saveCount)).toEqual([1, 2, 3]);
-    expect(events.map(event => event.status).sort()).toEqual(['approved', 'approved', 'pending']);
+    expect(events.map(event => event.status).sort()).toEqual(['approved', 'approved', 'changes-requested']);
     expect(digest(await readFile(pkg.verdictPath))).toBe(events[2]!.sha256);
   } finally { release(); serving.server.stop(true); }
 });
@@ -293,7 +312,7 @@ test('#568 a committed notification failure preserves the file and prevents queu
     expect((await response.json()).error).toContain('PARTS_VERDICT_NOTIFY_FAILED');
     const committed = await readFile(pkg.verdictPath);
     expect(attempts).toEqual([{verdictPath: pkg.verdictPath, sha256: digest(committed), status: 'approved', saveCount: 1}]);
-    const second = await serving.save({...input, status: 'pending'});
+    const second = await serving.save(await partsIssueSubmission(pkg));
     expect(second.status).toBe(400);
     expect((await second.json()).error).toContain('PARTS_VERDICT_NOTIFY_FAILED');
     expect(attempts.length).toBe(1);
@@ -314,7 +333,7 @@ test('#568 actual CLI broken pipe reports notification failure, exits 1 and pres
   expect(records(result.stdout)).toEqual([]);
   const bytes = await readFile(pkg.verdictPath);
   const stored = JSON.parse(bytes.toString());
-  expect(stored).toMatchObject({schema: 'rig-review-parts-verdict/3', by: 'pipe reviewer', status: 'approved'});
+  expect(stored).toMatchObject({schema: 'rig-review-parts-verdict/4', by: 'pipe reviewer', status: 'approved'});
   expect(JSON.parse((await cli([pkg.root, '--format', 'json'])).stdout).savedFileSha256).toBe(digest(bytes));
 });
 
@@ -341,8 +360,8 @@ test('#568 shared durable writer returns a normalized core and an independently 
   const {verdict, receipt} = await saveVerdictWithReceipt(pkg, {...input, by: 'ignored'}, undefined, ' reviewer ');
   const bytes = await readFile(pkg.verdictPath);
   expect(receipt).toEqual({verdictPath: pkg.verdictPath, sha256: digest(bytes), status: 'approved'});
-  expect(verdict.schema).toBe('rig-review-parts-verdict/2');
-  expect(Object.hasOwn(verdict, 'by')).toBe(false);
+  expect(verdict.schema).toBe('rig-review-parts-verdict/4');
+  expect(verdict.by).toBe(' reviewer ');
   expect(JSON.parse(bytes.toString()).by).toBe(' reviewer ');
 });
 
@@ -350,7 +369,7 @@ test('#568 default CLI parses and hashes one saved snapshot and rechecks input f
   const pkg = await fixture();
   await saveVerdictWithReceipt(pkg, input, undefined, 'snapshot A');
   const bytes = await readFile(pkg.verdictPath), other = JSON.parse(bytes.toString());
-  other.by = 'snapshot B';other.status = 'pending';
+  other.by = 'snapshot B';Object.assign(other, await partsIssueSubmission(pkg));
   const replacement = Buffer.from(JSON.stringify(other)).toString('base64');
   const script = (changeSource: boolean) => `
     import {mock} from 'bun:test';
@@ -389,6 +408,7 @@ test('#568 default CLI parses and hashes one saved snapshot and rechecks input f
 test('#568 filesystem write, file-fsync, rename and directory-fsync failures retain named errors and cleanup', async () => {
   const pkg = await fixture(), original = await saveVerdict(pkg, input);
   const bytes = await readFile(pkg.verdictPath);
+  const fixes = await partsIssueSubmission(pkg);
   for (const phase of ['mkdir', 'open', 'write', 'file-fsync', 'rename', 'directory-fsync']) {
     await writeFile(pkg.verdictPath, bytes);
     const result = await probe(`
@@ -396,18 +416,21 @@ test('#568 filesystem write, file-fsync, rename and directory-fsync failures ret
       import * as fs from 'node:fs/promises';
       const originalOpen = fs.open, originalRename = fs.rename, originalMkdir = fs.mkdir;
       const phase = ${JSON.stringify(phase)};
+      const destination = ${JSON.stringify(pkg.verdictPath)}, destinationParent = ${JSON.stringify(dirname(pkg.verdictPath))};
       const fail = () => {throw Object.assign(new Error('planted ENOSPC'), {code: 'ENOSPC'});};
       mock.module('node:fs/promises', () => ({...fs,
-        mkdir: async (...args) => {if (phase === 'mkdir') fail();return originalMkdir(...args);},
-        rename: async (...args) => {if (phase === 'rename') fail();return originalRename(...args);},
+        mkdir: async (path, ...args) => {if (phase === 'mkdir' && String(path) === destinationParent) fail();return originalMkdir(path, ...args);},
+        rename: async (from, to) => {if (phase === 'rename' && String(to) === destination) fail();return originalRename(from, to);},
         open: async (path, ...args) => {
-          const temporary = String(path).endsWith('.tmp');
+          const temporary = String(path).startsWith(destination + '.') && String(path).endsWith('.tmp');
+          const directory = String(path) === destinationParent;
           if (temporary && phase === 'open') fail();
           const handle = await originalOpen(path, ...args);
+          if (!temporary && !directory) return handle;
           return {
-            writeFile: async (...args) => {if (phase === 'write') fail();return handle.writeFile(...args);},
+            writeFile: async (...args) => {if (temporary && phase === 'write') fail();return handle.writeFile(...args);},
             sync: async () => {
-              if (temporary && phase === 'file-fsync' || !temporary && phase === 'directory-fsync') fail();
+              if (temporary && phase === 'file-fsync' || directory && phase === 'directory-fsync') fail();
               return handle.sync();
             },
             close: () => handle.close(),
@@ -416,7 +439,7 @@ test('#568 filesystem write, file-fsync, rename and directory-fsync failures ret
       }));
       const {loadPartsView, saveVerdict} = await import(${JSON.stringify(resolve('src/parts-view.ts'))});
       const pkg = await loadPartsView(${JSON.stringify(pkg.root)});
-      try {await saveVerdict(pkg, ${JSON.stringify({...input, status: 'pending'})});throw new Error('fault did not fire');}
+      try {await saveVerdict(pkg, ${JSON.stringify(fixes)});throw new Error('fault did not fire');}
       catch (error) {console.log(JSON.stringify({error: error.message}));}
       console.log(JSON.stringify({temporaryFiles: (await fs.readdir(pkg.root)).filter(name => name.endsWith('.tmp'))}));
     `);
@@ -426,7 +449,7 @@ test('#568 filesystem write, file-fsync, rename and directory-fsync failures ret
     expect(rows[0].error).toContain('ENOSPC');
     expect(rows[1].temporaryFiles).toEqual([]);
     if (phase === 'directory-fsync') {
-      expect(JSON.parse(await readFile(pkg.verdictPath, 'utf8')).status).toBe('pending');
+      expect(JSON.parse(await readFile(pkg.verdictPath, 'utf8')).status).toBe('changes-requested');
     } else expect(await readFile(pkg.verdictPath)).toEqual(bytes);
   }
   expect(original.status).toBe('approved');
@@ -434,13 +457,14 @@ test('#568 filesystem write, file-fsync, rename and directory-fsync failures ret
 
 test('#568 a failed second CLI write emits zero records for that save and cannot relabel prior success', async () => {
   const pkg = await fixture();
+  const fixes = await partsIssueSubmission(pkg);
   const bootstrap = `
     import {mock} from 'bun:test';
     import * as fs from 'node:fs/promises';
     const rename = fs.rename;
     let calls = 0;
     mock.module('node:fs/promises', () => ({...fs, rename: async (...args) => {
-      if (++calls === 2) throw Object.assign(new Error('planted ENOSPC'), {code: 'ENOSPC'});
+      if (String(args[1]) === ${JSON.stringify(pkg.verdictPath)} && ++calls === 2) throw Object.assign(new Error('planted ENOSPC'), {code: 'ENOSPC'});
       return rename(...args);
     }}));
     const {main} = await import(${JSON.stringify(resolve('src/cli.ts'))});
@@ -450,15 +474,15 @@ test('#568 a failed second CLI write emits zero records for that save and cannot
   try {
     expect((await post(launched.origin, launched.capability)).status).toBe(200);
     const before = await readFile(pkg.verdictPath);
-    const failed = await post(launched.origin, launched.capability, {...input, status: 'pending'});
+    const failed = await post(launched.origin, launched.capability, fixes);
     expect(failed.status).toBe(400);
     expect((await failed.json()).error).toContain('PARTS_VERDICT_WRITE_FAILED');
     expect(await readFile(pkg.verdictPath)).toEqual(before);
-    expect((await post(launched.origin, launched.capability, {...input, status: 'pending'})).status).toBe(200);
+    expect((await post(launched.origin, launched.capability, fixes)).status).toBe(200);
   } finally {
     const result = await launched.stop();
     expect(result.exit).toBe(0);
-    expect(records(result.stdout).map(row => [row.status, row.saveCount])).toEqual([['approved', 1], ['pending', 2]]);
+    expect(records(result.stdout).map(row => [row.status, row.saveCount])).toEqual([['approved', 1], ['changes-requested', 2]]);
     expect(result.stderr).toContain('PARTS_VERDICT_WRITE_FAILED');
   }
 });
@@ -490,6 +514,7 @@ test('#568 safe-integer exhaustion refuses before committing in an isolated coun
 
 test('#568 CLI awaits real Writable backpressure and split pipe writes before the next commit', async () => {
   const pkg = await fixture();
+  const fixes = await partsIssueSubmission(pkg);
   const bootstrap = `
     import {Writable} from 'node:stream';
     import {readFileSync} from 'node:fs';
@@ -521,7 +546,7 @@ test('#568 CLI awaits real Writable backpressure and split pipe writes before th
   try {
     const responses = await Promise.all([
       post(launched.origin, launched.capability),
-      post(launched.origin, launched.capability, {...input, status: 'pending'}),
+      post(launched.origin, launched.capability, fixes),
       post(launched.origin, launched.capability),
     ]);
     expect(responses.map(response => response.status)).toEqual([200, 200, 200]);

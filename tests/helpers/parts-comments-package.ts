@@ -3,7 +3,8 @@ import {readFile,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {PNG} from 'pngjs';
 import {createHash} from 'node:crypto';
-import {loadPartsView,verdictSource} from '../../src/parts-view.ts';
+import {loadPartsView,verdictSource,type PartsViewPackage,type VerdictSubmission} from '../../src/parts-view.ts';
+import {preparePartsComment} from '../../src/parts-comment-crops.ts';
 import type {PartsComment,PartsIssue} from '../../src/parts-comment.ts';
 export async function commentFixture(root:string){
  await writePartsPackage(root);const path=join(root,'rig/parts.json'),doc=JSON.parse(await readFile(path,'utf8'));doc.parts[0].x=.125;doc.parts[0].y=8.375;await writeFile(path,JSON.stringify(doc));
@@ -17,4 +18,14 @@ export function legacyCandidate(pkg:Awaited<ReturnType<typeof loadPartsView>>):P
 export function candidate(pkg:Awaited<ReturnType<typeof loadPartsView>>):PartsIssue {
  const c=legacyCandidate(pkg);
  return {schema:'rig-review-parts-comment/2',id:c.id,summary:c.summary,parts:[{name:c.part,imageHash:c.imageHash}],sourceHash:c.sourceHash,imageRegion:c.imageRegion,rigRegion:c.rigRegion,view:{...c.view,mode:'item'},crop:c.crop,nativeCrop:c.nativeCrop};
+}
+
+/** A real pointed issue for a current write, bound and cropped by the ordinary server pipeline. */
+export async function partsIssueSubmission(pkg:PartsViewPackage,summary='Pointed issue'):Promise<VerdictSubmission> {
+ const item=pkg.items[0]!,issue=candidate(pkg),r=issue.imageRegion;
+ if(!r)throw new Error('Expected individual-part issue fixture');
+ issue.summary=summary;
+ issue.parts=[{name:item.name,imageHash:pkg.files.find(file=>file.abs===pkg.imagePaths[item.index])!.sha256}];
+ issue.rigRegion={...r,x:item.x+r.x,y:item.y+r.y};
+ return {status:'changes-requested',issues:[await preparePartsComment(pkg,issue)]};
 }

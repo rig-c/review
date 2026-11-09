@@ -1,3 +1,6 @@
+import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
+useTemporaryReviewState();
+import {partsIssueSubmission} from './helpers/parts-comments-package.ts';
 import {afterEach, expect, test} from 'bun:test';
 import {createHash} from 'node:crypto';
 import {cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile} from 'node:fs/promises';
@@ -24,7 +27,7 @@ async function fixture() {
   await mkdir(out);
   return {arena, physical, alias, painting, build, out};
 }
-const pending = (pkg: PartsViewPackage, note = '') => ({status: 'pending', parts: Object.fromEntries(pkg.items.map(i => [i.name, {outcome: 'clean', note, ...(i.mesh ? {mesh: {outcome: 'clean'}} : {})}]))});
+const submission = async (pkg: PartsViewPackage, summary?: string) => summary ? partsIssueSubmission(pkg, summary) : {status: 'approved', issues: []};
 const hashes = (pkg: PartsViewPackage) => Promise.all([...pkg.files, ...pkg.flagFiles].map(async f => ({abs: f.abs, sha256: createHash('sha256').update(await readFile(f.abs)).digest('hex')})));
 const expectedPaths = {
   files: ['../build/rig/parts.json', '../build/rig/parts/back_defect.png', '../build/rig/parts/back_control.png', '../build/rig/parts/front.png'],
@@ -47,7 +50,7 @@ test('#472: painting aliases, including a lexical outside path to an inside file
     expect(pkg.painting!.abs).toBe(join(f.painting, 'painting.png'));
     expect(pkg.verdictPath).toBe(join(f.painting, 'parts-review.json'));
     expect(verdictSource(pkg)).toEqual(source); // Includes paths, sizes, hashes and aggregate hash.
-    const saved = await saveVerdict(pkg, pending(pkg));
+    const saved = await saveVerdict(pkg, await submission(pkg));
     expect(saved.source).toEqual(source);
     expect(saved.source.files.at(-1)!.path).toBe('painting.png');
     expect((await readVerdict(canonical)).verdict).toEqual(saved);
@@ -68,7 +71,7 @@ test('#472: canonical and alias destinations/explicit flags serialize exactly th
         expect(pkg.verdictPath).toBe(destination);
         expect(pkg.flagFiles).toEqual(canonical.flagFiles);
         expect(verdictSource(pkg)).toEqual(source);
-        const saved = await saveVerdict(pkg, pending(pkg));
+        const saved = await saveVerdict(pkg, await submission(pkg));
         expect((await readVerdict(await loadPartsView(f.build, {verdict: destination}))).verdict).toEqual(saved);
         expect(await hashes(pkg)).toEqual(before);
       }
@@ -83,7 +86,7 @@ test('#472: missing nested destination parents retain their suffix behind an ali
   expect(pkg.verdictPath).toBe(destination);
   expect(verdictSource(pkg)).toEqual(verdictSource(canonical));
   expect(verdictSource(pkg).files.map(file => file.path)).toEqual(expectedPaths.files.map(path => '../../' + path));
-  const saved = await saveVerdict(pkg, pending(pkg));
+  const saved = await saveVerdict(pkg, await submission(pkg));
   expect(JSON.parse(await readFile(destination, 'utf8'))).toEqual(saved);
   expect((await readVerdict(await loadPartsView(f.build, {verdict: destination}))).verdict).toEqual(saved);
   expect((await readVerdict(await loadPartsView(join(f.alias, 'build'), {verdict: join(f.alias, 'out/not-yet/deep/v.json')}))).verdict).toEqual(saved);
@@ -118,14 +121,14 @@ test('#472: alias input destinations and output leaf links to inputs preserve th
 test('#472: a verdict leaf link to ordinary output keeps its basename and never overwrites the link target', async () => {
   const f = await fixture(), target = join(f.out, 'target.json'), leaf = join(f.out, 'leaf.json');
   const targetPkg = await loadPartsView(f.build, {verdict: target});
-  await saveVerdict(targetPkg, pending(targetPkg, 'original target'));
+  await saveVerdict(targetPkg, await submission(targetPkg, 'original target'));
   const original = await readFile(target), before = await hashes(targetPkg);
   await symlink(target, leaf);
   const pkg = await loadPartsView(join(f.alias, 'build'), {verdict: join(f.alias, 'out/leaf.json')});
   expect(pkg.verdictPath).toBe(leaf); // Must NOT become target.json.
   expect((await lstat(leaf)).isSymbolicLink()).toBe(true);
   expect(verdictSource(pkg)).toEqual(verdictSource(targetPkg));
-  const saved = await saveVerdict(pkg, pending(pkg, 'new leaf verdict'));
+  const saved = await saveVerdict(pkg, await submission(pkg, 'new leaf verdict'));
   expect((await lstat(leaf)).isSymbolicLink()).toBe(false);
   expect(await readFile(target)).toEqual(original);
   expect(JSON.parse(await readFile(leaf, 'utf8'))).toEqual(saved);
@@ -141,7 +144,7 @@ test('#472: atlas verdict destinations and explicit flags also use physical path
   expect(pkg.mode).toBe('atlas');
   expect(pkg.verdictPath).toBe(canonical.verdictPath);
   expect(verdictSource(pkg)).toEqual(verdictSource(canonical));
-  const before = await hashes(pkg), saved = await saveVerdict(pkg, pending(pkg));
+  const before = await hashes(pkg), saved = await saveVerdict(pkg, await submission(pkg));
   expect((await readVerdict(canonical)).verdict).toEqual(saved);
   expect(await hashes(pkg)).toEqual(before);
 });
@@ -155,7 +158,7 @@ test('#472: an explicitly designated rig alias remains a physical verdict input'
   expect(pkg.files).toEqual(canonical.files);
   expect(verdictSource(pkg)).toEqual(verdictSource(canonical));
   expect(verdictSource(pkg).files.some(file => file.path === 'rig.json')).toBe(true);
-  const before = await hashes(pkg), saved = await saveVerdict(pkg, pending(pkg));
+  const before = await hashes(pkg), saved = await saveVerdict(pkg, await submission(pkg));
   expect((await readVerdict(canonical)).verdict).toEqual(saved);
   expect(await hashes(pkg)).toEqual(before);
 });
