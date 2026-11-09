@@ -25,7 +25,7 @@ export interface ViewportProvider {
  message:(value:string,error?:boolean)=>void;
 }
 export interface ViewportController {
- state:ViewportState;paneFrame:(target:CameraTarget,hidden?:boolean)=>CameraFrame|null;paneCamera:(target:CameraTarget)=>{zoom:number;center:ViewPoint|null};writeCamera:(target:CameraTarget,value:{zoom:number;center:ViewPoint|null})=>void;activateCamera:(target:CameraTarget)=>void;availableCamera:()=>CameraTarget|null;alignCameras:()=>void;renderCameraControls:()=>void;setCameraSync:(value:boolean)=>void;cameraAction:(action:()=>void)=>void;updateCamera:(target:CameraTarget,value:CameraSignature)=>void;zoomCamera:(factor:number,target?:CameraTarget|null,point?:CameraPoint|null)=>void;panCamera:(target:CameraTarget,dx:number,dy:number)=>void;fitActiveCamera:(target?:CameraTarget|null)=>void;zoomViewport:(target:CameraTarget,deltaY:number,point?:CameraPoint|null)=>void;fitCamera:()=>void;numericView:()=>ControlView;renderNumericView:()=>void;bindControls:()=>void;bindNavigation:(carryRig?:PanCarry,enabled?:()=>boolean)=>()=>void;observeResize:()=>ResizeObserver;
+ state:ViewportState;paneFrame:(target:CameraTarget,hidden?:boolean)=>CameraFrame|null;paneCamera:(target:CameraTarget)=>{zoom:number;center:ViewPoint|null};writeCamera:(target:CameraTarget,value:{zoom:number;center:ViewPoint|null})=>void;activateCamera:(target:CameraTarget)=>void;availableCamera:()=>CameraTarget|null;alignCameras:()=>void;renderCameraControls:()=>void;setCameraSync:(value:boolean)=>void;cameraAction:(action:()=>void)=>void;updateCamera:(target:CameraTarget,value:CameraSignature)=>void;zoomCamera:(factor:number,target?:CameraTarget|null,point?:CameraPoint|null)=>void;panCamera:(target:CameraTarget,dx:number,dy:number)=>void;fitActiveCamera:(target?:CameraTarget|null)=>void;zoomViewport:(target:CameraTarget,deltaY:number,point?:CameraPoint|null)=>void;fitCamera:()=>void;numericView:()=>ControlView;renderNumericView:()=>void;bindControls:()=>()=>void;bindNavigation:(carryRig?:PanCarry,enabled?:()=>boolean)=>()=>void;observeResize:()=>ResizeObserver;
 }
 
 export function createViewportController(provider:ViewportProvider,state=createViewportState()):ViewportController {
@@ -77,11 +77,17 @@ function numericView():ControlView {
 }
 function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
 
- function bindControls():void {
+ function bindControls():()=>void {
   button('zoom-in').onclick=()=>cameraAction(()=>zoomCamera(1.25));button('zoom-out').onclick=()=>cameraAction(()=>zoomCamera(1/1.25));button('fit').onclick=()=>cameraAction(()=>fitActiveCamera());
   input('camera-sync').onchange=()=>cameraAction(()=>setCameraSync(input('camera-sync').checked));
-  for(const target of targets())for(const event of ['pointerdown','focusin'] as const)paneNodes(target).viewport.addEventListener(event,()=>activateCamera(target));
-  for(const {target,viewport}of panes())viewport.addEventListener('wheel',event=>{event.preventDefault();const rect=viewport.getBoundingClientRect();cameraAction(()=>zoomViewport(target,event.deltaY,{x:event.clientX-rect.left,y:event.clientY-rect.top}));},{passive:false});
+  const disposers:(()=>void)[]=[];
+  for(const {target,viewport}of panes()){
+   const activate=()=>activateCamera(target);
+   const wheel=(event:WheelEvent)=>{event.preventDefault();const rect=viewport.getBoundingClientRect();cameraAction(()=>zoomViewport(target,event.deltaY,{x:event.clientX-rect.left,y:event.clientY-rect.top}));};
+   for(const event of ['pointerdown','focusin'] as const){viewport.addEventListener(event,activate);disposers.push(()=>viewport.removeEventListener(event,activate));}
+   viewport.addEventListener('wheel',wheel,{passive:false});disposers.push(()=>viewport.removeEventListener('wheel',wheel));
+  }
+  return ()=>{for(const dispose of disposers)dispose();for(const id of ['zoom-in','zoom-out','fit'])button(id).onclick=null;input('camera-sync').onchange=null;};
  }
  function bindNavigation(carryRig?:PanCarry,enabled:()=>boolean=()=>true):()=>void {
  const disposers:(()=>void)[]=[];disposers.push(bindStageLayout(el('stage-layout'),fitCamera));

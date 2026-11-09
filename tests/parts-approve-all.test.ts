@@ -25,25 +25,29 @@ async function caller(items:any[],opts?:{legacyVerdict?:ViewData['legacyVerdict'
  const nodes=new Map<string,Node>();const $=(id:string)=>{if(!nodes.has(id)){const n=new Node();n.id=id;nodes.set(id,n);}return nodes.get(id)!;};
  const state:any={selected:0,hidden:new Set(),data:{items,mode:'parts',flags:[],readings:[],flagMissing:[],verdictFile:'verdict.json',legacyVerdict:opts?.legacyVerdict}};
  const comments:PartsIssue[]=[];const requests:any[]=[];let selected=-1,painted=0;
- const host:PartsHost={locked:()=>Boolean(opts?.locked),changed:()=>{}};
+ const host:PartsHost={initial:()=>comments,register:()=>{},locked:()=>opts?.locked||opts?.legacyVerdict?.readOnly?'sent':'open',changed:()=>{}};
  const scope={
-  state,$,comments,host,options:{},stageEmbedded:false,
+  state,$,comments,host,options:{},stageEmbedded:false,embedded:false,disposed:false,busy:false,
+  get currentView(){return state.data;},output:{value:()=>({verdict:comments.length?'changes-requested':'approved',issues:[...comments],words:''})},required:(selector:string)=>$(selector.slice(1)),
   t:(s:string,values:Record<string,unknown>|unknown[]={})=>Array.isArray(values)?s.replace(/\{(\d+)\}/g,(_,k)=>String(values[Number(k)]??'{'+k+'}')):s.replace(/\{(\w+)\}/g,(_,k)=>String((values as Record<string,unknown>)[k]??'{'+k+'}')),
   countedFlag,
-  document:{createElement:(tag:string)=>new Node(tag),getElementById:(id:string)=>$(id),querySelectorAll:()=>[]},
+  doc:{createElement:(tag:string)=>new Node(tag),getElementById:(id:string)=>$(id),querySelectorAll:()=>[]},
+  query:(sel:string)=>$(sel.slice(1)),
   select:(i:number)=>{selected=i;},
   setView:()=>{},
   paint:async()=>{painted++;},
   renderMesh:()=>{},
   access:{capability:'cap',route:(s:string)=>s,headers:(v?:HeadersInit)=>new Headers(v)},
   stageHeaders:()=>new Headers(),
-  partsApi:'/api/parts',
+  partsApi:'/api/parts',headers:()=>new Headers(),
   stageBuild:'inspected',
   fetch:async(url:string,init:any)=>{requests.push({url,...init,body:JSON.parse(init.body)});return {ok:true,json:async()=>({verdict:{source:{sha256:'a'.repeat(64)}}})};},
  };
+ const adapter=await readFile('web/parts-page.ts','utf8');
+ const save=adapter.slice(adapter.indexOf('  const save = async () => {'),adapter.indexOf('  const exportVerdict =')).replace('const save = async () => {','async function save() {').replace(/};\s*$/, '}');
  const blocks=[
   source.slice(source.indexOf('function renderList()'),source.indexOf('function renderMesh()')),
-  source.slice(source.indexOf('function renderLegacyVerdict()'),source.indexOf('async function boot()')),
+  source.slice(source.indexOf('function renderLegacyVerdict()'),source.indexOf('async function boot()')),save,
  ];
  const binding="$('pv-save').onclick = () => save();";
  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(blocks.join('\n')+'\n'+binding);
@@ -134,8 +138,9 @@ test('#612 actual list caller renders complete names, producer flag counts, issu
  expect(c.painted).toBe(48);
  const css=await readFile('web/parts.css','utf8');expect(css).not.toMatch(/\.pv-count\{[^}]*grid-row:2/);
  const html=await readFile('web/parts.html','utf8');
- expect(html).toContain('id="pv-save"');
- expect(html).toContain('id="pv-legacy-flagged"');
+ expect(html).toContain('id="parts-actions"');
+ expect(html).not.toContain('id="pv-items"');
+ expect(html).not.toContain('id="pv-canvas"');
  expect(html).not.toContain('id="pv-approve-all"');
  expect(html).not.toContain('data-pv-outcome');
  expect(html).not.toContain('id="pv-note"');
@@ -164,10 +169,23 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
    toggle:(cls:string,force?:boolean)=>{const s=new Set(this.className.split(/\s+/).filter(Boolean));const on=force===undefined?!s.has(cls):force;if(on)s.add(cls);else s.delete(cls);this.className=[...s].join(' ');},
    contains:(cls:string)=>this.className.split(/\s+/).includes(cls),
   };
+  get ownerDocument(){return fakeDoc;}
   constructor(tag:string){this.tagName=tag.toUpperCase();}
+  set innerHTML(markup:string){
+   this.replaceChildren();const stack:FakeElement[]=[this];
+   for(const match of markup.matchAll(/<\/?([a-z][\w-]*)([^>]*)>/gi)){
+    const [whole,tag,attributes]=match;
+    if(whole.startsWith('</')){stack.pop();continue;}
+    const node=new FakeElement(tag!);
+    for(const attr of attributes!.matchAll(/([\w-]+)=(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g))node.setAttribute(attr[1]!,attr[2]??attr[3]??attr[4]??'');
+    if(attributes!.includes(' hidden'))node.hidden=true;
+    stack.at(-1)!.append(node);if(!['input','img','br'].includes(tag!))stack.push(node);
+   }
+  }
   setAttribute(k:string,v:string){
    this.attrs.set(k,String(v));
    if(k==='id')this.id=String(v);
+   if(k==='class')this.className=String(v);
    if(k.startsWith('data-')){
     const camel=k.slice(5).replace(/-([a-z])/g,(_,c)=>c.toUpperCase());
     this.dataset[camel]=String(v);
@@ -245,8 +263,13 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
    }
    return out as unknown as T[];
   }
-  addEventListener(){}
-  removeEventListener(){}
+  handlers=new Map<string,Set<Function>>();
+  addEventListener(type:string,fn:Function){const group=this.handlers.get(type)??new Set();group.add(fn);this.handlers.set(type,group);}
+  removeEventListener(type:string,fn:Function){this.handlers.get(type)?.delete(fn);}
+  emit(type:string,event:any){for(const fn of this.handlers.get(type)??[])fn(event);}
+  hasPointerCapture(){return false;}
+  focus(){fakeDoc.activeElement=this;fakeDoc.emit('focusin',{target:this});}
+
   getBoundingClientRect(){return {left:0,top:0,width:this.clientWidth,height:this.clientHeight,right:this.clientWidth,bottom:this.clientHeight,x:0,y:0};}
   getContext(){
    return {
@@ -269,19 +292,25 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
  const fakeDoc={
   body:rootDoc,
   title:'',
-  activeElement:null,
+  activeElement:null as FakeElement|null,
+  defaultView:null as any,
   createElement:(tag:string)=>new FakeElement(tag),
   getElementById:(id:string)=>rootDoc.querySelector(`#${id}`),
   querySelector:(sel:string)=>rootDoc.querySelector(sel),
   querySelectorAll:(sel:string)=>rootDoc.querySelectorAll(sel),
-  addEventListener(){},
-  removeEventListener(){},
+  handlers:new Map<string,Set<Function>>(),
+  addEventListener(type:string,fn:Function){const group=this.handlers.get(type)??new Set();group.add(fn);this.handlers.set(type,group);},
+  removeEventListener(type:string,fn:Function){this.handlers.get(type)?.delete(fn);},
+  emit(type:string,event:any){for(const fn of this.handlers.get(type)??[])fn(event);},
  };
  const fakeWin={
-  addEventListener(){},
-  removeEventListener(){},
-  devicePixelRatio:1,
+  handlers:new Map<string,Set<Function>>(),
+  addEventListener(type:string,fn:Function){const group=this.handlers.get(type)??new Set();group.add(fn);this.handlers.set(type,group);},
+  removeEventListener(type:string,fn:Function){this.handlers.get(type)?.delete(fn);},
+  emit(type:string,event:any){for(const fn of this.handlers.get(type)??[])fn(event);},
+  devicePixelRatio:1,Node:FakeElement,
  };
+ fakeDoc.defaultView=fakeWin;
  class FakeObserver{observe(){}disconnect(){}}
  Object.defineProperty(globalThis,'document',{value:fakeDoc,configurable:true,writable:true});
  Object.defineProperty(globalThis,'window',{value:fakeWin,configurable:true,writable:true});
@@ -319,7 +348,7 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
     mesh:false,
     comparison:{mode:'part',opacity:0.5},
    },
-   crop:{path:'crops/viewport.png',sha256:'c'.repeat(64),width:8,height:8,png:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='},
+   crop:{path:`comment-crops/${'c'.repeat(64)}.png`,sha256:'c'.repeat(64),width:8,height:8,png:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='},
    nativeCrop:null,
   };
   const makeView=(title:string,sourceHash:string,issues:PartsIssue[]):ViewData=>({
@@ -344,27 +373,51 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
 
   const slotsA=makeSlots('a'),slotsB=makeSlots('b');
   const outputs:{a?:PanelOutput;b?:PanelOutput}={};
+  let releaseFirstImage!: (image:HTMLImageElement) => void;
+  const firstImage=new Promise<HTMLImageElement>(resolve=>{releaseFirstImage=resolve;});
   const sourceA:PartsSource={
    view:async()=>makeView('Package A','1'.repeat(64),[sampleIssue]),
-   image:async()=>new Blob([new Uint8Array([137,80,78,71])],{type:'image/png'}),
+   image:()=>firstImage,page:async()=>({width:16,height:16} as HTMLImageElement),painting:()=>null,
    crop:async issue=>issue,
   };
   const sourceB:PartsSource={
    view:async()=>makeView('Package B','2'.repeat(64),[]),
-   image:async()=>new Blob([new Uint8Array([137,80,78,71])],{type:'image/png'}),
+   image:async()=>({width:16,height:16} as HTMLImageElement),page:async()=>({width:16,height:16} as HTMLImageElement),painting:()=>null,
    crop:async issue=>issue,
   };
-  const hostA:PartsHost={locked:()=>false,changed:()=>{},register:out=>{outputs.a=out;}};
-  const hostB:PartsHost={locked:()=>false,changed:()=>{},register:out=>{outputs.b=out;}};
+  let phase:ReturnType<PartsHost['locked']>='open';let changedA=0;
+  const hostA:PartsHost={initial:()=>[sampleIssue],locked:()=>phase,changed:()=>{changedA++;},register:out=>{outputs.a=out;}};
+  const hostB:PartsHost={initial:()=>[],locked:()=>'open',changed:()=>{},register:out=>{outputs.b=out;}};
 
-  handleA=mountPartsWorkspace(slotsA,sourceA,hostA);
-  handleB=mountPartsWorkspace(slotsB,sourceB,hostB);
-  await Promise.all([handleA.ready,handleB.ready]);
+  const importUrl=new URL('../web/parts.ts',import.meta.url);importUrl.searchParams.set('c3','import-purity');
+  const beforeImport=rootDoc.children.length;
+  const pure=await import(importUrl.href);
+  expect(pure.mountPartsWorkspace).toBeFunction();
+  expect(rootDoc.children.length).toBe(beforeImport);
+  expect(fakeDoc.handlers.size).toBe(0);
+  handleA=mountPartsWorkspace(slotsA,sourceA,hostA,{defaultView:'assembled'});
+  handleB=mountPartsWorkspace(slotsB,sourceB,hostB,{defaultView:'item'});
+  let firstPaintSettled=false;
+  void handleA.ready.then(()=>{firstPaintSettled=true;},()=>{});
+  const waitReady=async(promise:Promise<void>,label:string,slots:ReturnType<typeof makeSlots>)=>{
+   let timer:ReturnType<typeof setTimeout>|undefined;
+   try{return await Promise.race([promise,new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error(label+' readiness pending '+JSON.stringify({caption:slots.hostWrap.querySelector('#pv-caption')?.textContent,status:slots.hostWrap.querySelector('#pv-save-status')?.textContent,load:slots.hostWrap.querySelector('#pv-load')?.textContent}))),500);})]);}
+   finally{clearTimeout(timer);}
+  };
+  await waitReady(handleB.ready,'B',slotsB);
+  for(let i=0;i<20;i++)await Promise.resolve();
+  expect(firstPaintSettled).toBe(false);
+  expect(slotsA.hostWrap.querySelector<FakeElement>('#pv-canvas')!.width).toBe(1);
+  releaseFirstImage({width:16,height:16} as HTMLImageElement);
+  await waitReady(handleA.ready,'A',slotsA);
+  expect(firstPaintSettled).toBe(true);
+  expect(slotsA.hostWrap.querySelector<FakeElement>('#pv-canvas')!.width).toBe(64);
+
 
   expect(outputs.a?.kind).toBe('parts-verdict');
   expect(outputs.b?.kind).toBe('parts-verdict');
-  expect(outputs.a!.value('fix gap')).toEqual({verdict:'changes-requested',issues:[sampleIssue],words:'fix gap'});
-  expect(outputs.b!.value('all clean')).toEqual({verdict:'approved',issues:[],words:'all clean'});
+  expect(outputs.a!.value()).toEqual({verdict:'changes-requested',issues:[sampleIssue],words:''});
+  expect(outputs.b!.value()).toEqual({verdict:'approved',issues:[],words:''});
 
   // Selecting 'covered' in instance A does not change instance B's selection ('gap').
   handleA.select('covered');
@@ -378,6 +431,64 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
   const badgeB=slotsB.hostWrap.querySelector<FakeElement>('button[data-pv-item="gap"] .pv-badge');
   expect(badgeA?.dataset.issues).toBe('1');
   expect(badgeB?.dataset.issues).toBe('0');
+  expect(slotsA.hostWrap.querySelector('#pv-assemble')?.getAttribute('aria-pressed')).toBe('true');
+  expect(slotsB.hostWrap.querySelector('#pv-assemble')?.getAttribute('aria-pressed')).toBe('false');
+  const key=(key:string)=>({key,code:key,repeat:false,target:rootDoc,preventDefault(){},ctrlKey:false,metaKey:false,altKey:false});
+  const toggleA=slotsA.hostWrap.querySelector<FakeElement>('#stage-comment')!;
+  const toggleB=slotsB.hostWrap.querySelector<FakeElement>('#stage-comment')!;
+  for(let i=0;i<20;i++)await Promise.resolve();
+  slotsB.stage.focus();fakeDoc.emit('keydown',key('c'));
+  expect(toggleA.getAttribute('aria-expanded')).toBe('false');
+  expect(toggleB.getAttribute('aria-expanded')).toBe('true');
+  slotsA.stage.focus();phase='sent';fakeDoc.emit('keydown',key('c'));
+  expect(slotsA.hostWrap.querySelector('#stage-comment-refusal')?.textContent).toContain('Read-only');
+  expect(changedA).toBe(0);
+  fakeDoc.emit('keydown',key('Escape'));
+  expect(toggleB.getAttribute('aria-expanded')).toBe('true');
+  phase='open';
+  slotsB.stage.focus();fakeDoc.emit('keydown',key('Escape'));
+  expect(toggleB.getAttribute('aria-expanded')).toBe('false');
+
+  const value=outputs.a!.value();
+  if(!('issues' in value))throw new Error('Expected parts issue output');
+  value.issues[0]!.summary='external mutation';
+  expect(handleA.issues()[0]!.summary).toBe('seam gap on A');
+  slotsA.stage.focus();
+  const issueRow=slotsA.hostWrap.querySelector<FakeElement>('.stage-comment-summary')!;
+  await issueRow.onclick!();
+  const composer=slotsA.hostWrap.querySelector<FakeElement>('.stage-comment-composer')!;
+  const field=composer.querySelector<FakeElement>('input')!;
+  field.value='edited A issue';
+  await (composer as unknown as HTMLFormElement).onsubmit!({preventDefault(){}} as SubmitEvent);
+  expect(changedA).toBe(1);
+  expect(handleA.issues()[0]!.summary).toBe('edited A issue');
+  expect(handleB.issues()).toEqual([]);
+  const documentKeyCount=fakeDoc.handlers.get('keydown')!.size;
+  handleA.dispose();
+  expect(fakeDoc.handlers.get('keydown')!.size).toBeLessThan(documentKeyCount);
+  expect(slotsA.stage.children).toHaveLength(0);
+  expect(()=>outputs.a!.value()).toThrow('PARTS_VERDICT_READ_ONLY');
+  const failureSlots=makeSlots('failure');
+  const failureMount=mountPartsWorkspace(failureSlots,{...sourceB,image:async()=>{throw new Error('planted-initial-image-error');}},{...hostB,register(){}},{defaultView:'item'});
+  await expect(waitReady(failureMount.ready,'image-failure',failureSlots)).rejects.toThrow('planted-initial-image-error');
+  failureMount.dispose();
+  const sourceFailureSlots=makeSlots('source-failure');
+  const sourceFailureMount=mountPartsWorkspace(sourceFailureSlots,{...sourceB,view:async()=>{throw new Error('planted-source-error');}},{...hostB,register(){}},{defaultView:'item'});
+  await expect(waitReady(sourceFailureMount.ready,'source-failure',sourceFailureSlots)).rejects.toThrow('planted-source-error');
+  sourceFailureMount.dispose();
+  const disposalSlots=makeSlots('disposed-before-paint');
+  let releaseDisposedImage!:(image:HTMLImageElement)=>void;
+  const heldImage=new Promise<HTMLImageElement>(resolve=>{releaseDisposedImage=resolve;});
+  const disposalMount=mountPartsWorkspace(disposalSlots,{...sourceB,image:()=>heldImage},{...hostB,register(){}},{defaultView:'item'});
+  const disposalReady=waitReady(disposalMount.ready,'disposed',disposalSlots);
+  disposalMount.dispose();
+  await expect(disposalReady).rejects.toThrow('PARTS_WORKSPACE_DISPOSED');
+  releaseDisposedImage({width:16,height:16} as HTMLImageElement);
+  for(let i=0;i<20;i++)await Promise.resolve();
+  expect(disposalSlots.stage.children).toHaveLength(0);
+  handleB.select('covered');
+  expect(slotsB.hostWrap.querySelector<FakeElement>('button[aria-current="true"]')?.dataset.pvItem).toBe('covered');
+
  }finally{
   handleA?.dispose();
   handleB?.dispose();

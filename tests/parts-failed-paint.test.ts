@@ -19,12 +19,12 @@ const mutants = {
     'await paint();if(true){viewport!.writeCamera',
   ],
   STAGE_RESTORE_WITHOUT_GUARD: [
-    'select(index);await paint();if(!paintFailure){viewport.writeCamera',
-    'select(index);await paint();if(true){viewport.writeCamera',
+    'select(index);await paint();if(!disposed&&!paintFailure){viewport.writeCamera',
+    'select(index);await paint();if(!disposed){viewport.writeCamera',
   ],
   NAVIGATION_WITHOUT_FAILURE_GUARD: [
-    '()=>!commentUi?.active()&&!paintFailure',
-    '()=>!commentUi?.active()',
+    '()=>mountActive&&!disposed&&!commentUi?.active()&&!paintFailure',
+    '()=>mountActive&&!disposed&&!commentUi?.active()',
   ],
   REFERENCE_CLEAR_OMITTED: [
     "ref.getContext('2d')?.clearRect(0,0,ref.width,ref.height);",
@@ -123,7 +123,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
   const paintSlice = src.slice(src.indexOf('const itemImage ='), src.indexOf('\nfunction renderComparison('));
   const selectSlice = src.slice(src.indexOf('function select(index: number): void {'), src.indexOf('\nfunction renderLegacyVerdict('));
   const bootStart = src.indexOf('frameSize:target=>{');
-  const bootEnd = src.indexOf('});viewport.bindControls();');
+  const bootEnd = src.indexOf('});disposers.push(viewport.bindControls());');
   const frameSizeSlice = src.slice(bootStart, bootEnd);
 
   const canvas = makeCanvas(20, 16);
@@ -261,7 +261,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
     'paintAssemblyOutline',
     'paintMesh',
     'restoreDependencies',
-    `const { fetch, access, stageHeaders, defaultPartsComparison } = restoreDependencies;\nconst viewport = new Proxy({}, { get(_t, prop) { const v = getViewport(); return v ? v[prop] : undefined; }, set(_t, prop, val) { const v = getViewport(); if (v) v[prop] = val; return true; } });\n${code}`,
+    `const { fetch, access, stageHeaders, defaultPartsComparison } = restoreDependencies;const settleReady=()=>{};const disposed=false,mountActive=true,doc=document;const query=(s)=>document.querySelector(s),queryAll=(s)=>document.querySelectorAll(s);const cachedImage=(_key,read)=>read();const source={image:index=>load('/api/parts/image/'+index),page:index=>load('/api/parts/page/'+index),painting:()=>load('/api/parts/painting'),view:async()=>state.data};\nconst viewport = new Proxy({}, { get(_t, prop) { const v = getViewport(); return v ? v[prop] : undefined; }, set(_t, prop, val) { const v = getViewport(); if (v) v[prop] = val; return true; } });\n${code}`,
   )(
     state,
     $,

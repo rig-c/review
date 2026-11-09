@@ -79,7 +79,7 @@ test('#385 actual renderFlags/renderList callers collapse nonflags and count onl
  state.selected=state.data.items.findIndex((i:any)=>i.name==='front');
  const nodes=new Map<string,Node>(),$=(id:string)=>{if(!nodes.has(id))nodes.set(id,new Node('ul'));return nodes.get(id)!;};
  const {t}=await import('../web/i18n.ts');
- const run=new Function('scope',`with(scope){${code};return ()=>{renderFlags();renderList();};}`)({state,$,document:{createElement:(tag:string)=>new Node(tag)},...labels,t});
+ const run=new Function('scope',`with(scope){${code};return ()=>{renderFlags();renderList();};}`)({state,$,comments:[],doc:{createElement:(tag:string)=>new Node(tag)},...labels,t});
  run();
  expect(descend($('pv-flags')).filter(n=>n.dataset.pvCategory).map(n=>[n.dataset.pvCategory,n.open])).toEqual([['part',false],['pair',false],['evidence',false]]);
  const badges=()=>descend($('pv-items')).filter(n=>n.className==='pv-count').map(n=>n.textContent);
@@ -115,7 +115,7 @@ test('#385 adopted P1: real BREATH_VISIBLE FAIL/WARN without tuple remains visib
   const {t}=await import('../web/i18n.ts');
   for(const name of held){
    const nodes=new Map<string,Node>(),$=(id:string)=>{if(!nodes.has(id))nodes.set(id,new Node('ul'));return nodes.get(id)!;};
-   const run=new Function('scope',`with(scope){${code};return renderFlags;}`)({state:{selected:0,data:{items:[{name}],flags:reader.checkFlags(doc,held),readings:rows,flagSources:['check.json'],flagMissing:['mesh_report.json']}},$,document:{createElement:(tag:string)=>new Node(tag)},...labels,t});
+   const run=new Function('scope',`with(scope){${code};return renderFlags;}`)({state:{selected:0,data:{items:[{name}],flags:reader.checkFlags(doc,held),readings:rows,flagSources:['check.json'],flagMissing:['mesh_report.json']}},$,comments:[],doc:{createElement:(tag:string)=>new Node(tag)},...labels,t});
    run();
    const group=descend($('pv-flags')).find(n=>n.dataset.pvCategory==='unclassified');
    expect(group).toBeDefined();expect(descend(group!).some(n=>n.dataset.pvRoot==='BREATH_VISIBLE')).toBe(true);

@@ -21,12 +21,12 @@ export interface CommentCodec<Row extends CommentRow,Pose extends CommentUiPose>
  create:(pose:Pose,view:StageComment['viewport'],screen:MarkRegion,crop:StageComment['crop'],bookmark:unknown,summary:string)=>Promise<Row>;
 }
 interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=CommentPose> {
- toolbar:HTMLElement;viewports:Partial<Record<StageComment['viewport'],HTMLElement>>;
+ toolbar:HTMLElement;toggle?:HTMLButtonElement;viewports:Partial<Record<StageComment['viewport'],HTMLElement>>;
  pose:(view:StageComment['viewport'])=>Pose|null;pause:()=>Promise<void>;
  bookmark:()=>unknown;restore:(bookmark:unknown,timeOnly?:boolean)=>Promise<void>;
  feedback:()=>Row[];locked:(id:string)=>boolean;
  add:(feedback:Row,side?:'a'|'b')=>void;changed:()=>void;error:(message:string)=>void;
- refusal?:()=>string|null;blocked:()=>boolean;shortcutBlocked?:()=>boolean;codec?:CommentCodec<Row,Pose>;
+ refusal?:()=>string|null;blocked:()=>boolean;shortcutBlocked?:()=>boolean;shortcutActive?:()=>boolean;codec?:CommentCodec<Row,Pose>;
 }
 const markOf=(f:Feedback):StageComment|null=>{try{const c=f.context as Record<string,unknown>|undefined;return c?.comment?parseStageComment(c.comment):null;}catch{return null;}};
 const copy=<T>(v:T):T=>JSON.parse(JSON.stringify(v));
@@ -61,7 +61,7 @@ async function crop(pose:CommentUiPose,r:MarkRegion):Promise<StageComment['crop'
 }
 export function bindStageComments<Row extends CommentRow=Feedback,Pose extends CommentUiPose=CommentPose>(host:Host<Row,Pose>):{refresh:()=>void;dispose:()=>void;active:()=>boolean;draft:()=>boolean}{
  const readMark=(row:Row):CommentUiMark|null=>host.codec?host.codec.read(row):markOf(row as unknown as Feedback);
- const toggle=document.getElementById('stage-comment') as HTMLButtonElement;Object.assign(toggle.style,{whiteSpace:'nowrap',flex:'none'});
+ const toggle=host.toggle??document.getElementById('stage-comment') as HTMLButtonElement;if(!toggle)throw new Error('PARTS_WORKSPACE_NODE_REQUIRED: stage-comment');Object.assign(toggle.style,{whiteSpace:'nowrap',flex:'none'});
  const list=document.createElement('section');list.id='stage-comment-list';list.className='stage-comment-list stage-comment-ui';list.setAttribute('aria-label',t('Stage comments'));list.hidden=true;
  // An absolute overlay is not stage chrome: workspace measures stack children
  // to allocate Inspector height. Keep the list in its positioned main instead,
@@ -160,7 +160,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   pane!.addEventListener('pointerdown',down,true);pane!.addEventListener('pointermove',move,true);pane!.addEventListener('pointerup',up,true);pane!.addEventListener('pointercancel',abort,true);pane!.addEventListener('lostpointercapture',abort,true);
   disposers.push(()=>{pane!.removeEventListener('pointerdown',down,true);pane!.removeEventListener('pointermove',move,true);pane!.removeEventListener('pointerup',up,true);pane!.removeEventListener('pointercancel',abort,true);pane!.removeEventListener('lostpointercapture',abort,true);});
  }
- const key=(e:KeyboardEvent)=>{if(e.key==='Escape'&&(pending||composer||(enabled||!list.hidden)&&!host.shortcutBlocked?.()&&!textEntryFocused(e.target))){e.preventDefault();setOpen(false);return;}if(e.defaultPrevented||e.repeat||e.ctrlKey||e.metaKey||e.altKey||textEntryFocused(e.target)||host.shortcutBlocked?.())return;if(e.key.toLowerCase()==='c'){e.preventDefault();setOpen(list.hidden);}};
+ const key=(e:KeyboardEvent)=>{if(host.shortcutActive&&!host.shortcutActive())return;if(e.key==='Escape'&&(pending||composer||(enabled||!list.hidden)&&!host.shortcutBlocked?.()&&!textEntryFocused(e.target))){e.preventDefault();setOpen(false);return;}if(e.defaultPrevented||e.repeat||e.ctrlKey||e.metaKey||e.altKey||textEntryFocused(e.target)||host.shortcutBlocked?.())return;if(e.key.toLowerCase()==='c'){e.preventDefault();setOpen(list.hidden);}};
  window.addEventListener('blur',cancel);window.addEventListener('resize',placeList);document.addEventListener('keydown',key);toggle.onclick=()=>setOpen(list.hidden);
  const ro=typeof ResizeObserver==='function'?new ResizeObserver(()=>{if(!disposed&&!list.hidden)placeList();}):null;if(ro){try{ro.observe(host.toolbar);if(workspace)ro.observe(workspace);}catch{}}
  const renderPins=()=>{if(disposed)return;if(!list.hidden)placeList();const refusal=updateRefusal();if(refusal&&(enabled||pending||composer&&!composerReadOnly)){cancel();setCapture(false);host.error(refusal);}const all=host.feedback().map(f=>({f,mark:readMark(f)})).filter(x=>x.mark);
@@ -175,5 +175,5 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  }if(draftMark)layers.get(draftMark.view)?.append(rectElement(draftMark.screen));}};
  const paint=()=>{if(disposed)return;renderPins();raf=requestAnimationFrame(paint);};
  const offLang=onLang(()=>{if(disposed)return;updateRefusal();renderList();syncComposerLang?.();last='';renderPins();});
- refresh();paint();return {active:()=>enabled,draft:()=>!!pending||!!composer&&!composerReadOnly,refresh,dispose:()=>{disposed=true;ro?.disconnect();offLang();cancelAnimationFrame(raf);cancel();window.removeEventListener('blur',cancel);window.removeEventListener('resize',placeList);document.removeEventListener('keydown',key);for(const dispose of disposers)dispose();for(const layer of layers.values())layer.remove();list.remove();refusalNote.remove();}};
+ refresh();paint();return {active:()=>enabled,draft:()=>!!pending||!!composer&&!composerReadOnly,refresh,dispose:()=>{disposed=true;ro?.disconnect();offLang();cancelAnimationFrame(raf);cancel();window.removeEventListener('blur',cancel);window.removeEventListener('resize',placeList);document.removeEventListener('keydown',key);for(const dispose of disposers)dispose();for(const layer of layers.values())layer.remove();toggle.onclick=null;list.remove();refusalNote.remove();}};
 }

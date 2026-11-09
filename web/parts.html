@@ -3,37 +3,11 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>rig review parts</title><link rel="stylesheet" href="parts.css"></head>
 <body>
 <div id="parts-app" class="pv-app">
- <header class="pv-top"><div class="pv-brand"><span class="pv-mark">r</span>rig review</div><div><strong id="pv-title">Parts review</strong> <span id="pv-mode" class="pv-subtle"></span></div><span id="pv-load" class="pv-subtle" role="status">Loading…</span><nav data-stage-nav class="review-stage-nav" aria-label="Inspection stages"></nav></header>
+ <header class="pv-top"><div class="pv-brand"><span class="pv-mark">r</span>rig review</div><div><strong id="pv-title">Parts review</strong> <span id="pv-mode" class="pv-subtle"></span></div><nav data-stage-nav class="review-stage-nav" aria-label="Inspection stages"></nav></header>
  <div class="pv-layout">
-  <aside class="pv-list" aria-label="Parts"><h2 id="pv-list-title">PARTS</h2><ul id="pv-items" data-pv-items></ul></aside>
-  <main class="pv-stage">
-   <div class="pv-toolbar" role="toolbar" aria-label="View">
-    <button type="button" id="pv-assemble" aria-pressed="false">Assembled</button>
-    <label class="pv-field">Background <select id="pv-bg" data-pv-bg><option value="green">Green</option><option value="magenta">Magenta</option><option value="black">Black</option><option value="white">White</option><option value="checker">Checker</option></select></label>
-    <span class="pv-group" role="group" aria-label="Zoom"><button type="button" id="zoom-out">−</button><span id="zoom-value">1:1</span><button type="button" id="zoom-in">+</button><button type="button" id="fit">Fit</button><button type="button" id="native-one" aria-pressed="true">1:1</button></span>
-    <label class="pv-field"><input id="camera-sync" type="checkbox">Sync cameras</label>
-    <button type="button" id="stage-comment" aria-pressed="false" aria-controls="stage-comment-list">Comment · C (0)</button>
-    <label class="pv-field"><input type="checkbox" id="pv-alpha" data-pv-alpha> Alpha only</label>
-    <label class="pv-field" id="pv-footprint-control"><input type="checkbox" id="pv-footprints" data-pv-footprints> Footprints of parts in front</label>
-    <span id="pv-comparison" class="pv-comparison" hidden>
-     <span class="pv-field">Painting comparison <span class="pv-group" role="group" aria-label="Painting comparison"><button type="button" data-pv-comparison="part" aria-pressed="true">Part</button><button type="button" data-pv-comparison="overlay" aria-pressed="false">Overlay</button><button type="button" data-pv-comparison="difference" aria-pressed="false">Difference</button></span></span>
-     <label class="pv-field" id="pv-opacity-control" hidden>Part opacity <input type="range" id="pv-opacity" min="0" max="1" step="0.001" value="0.5"><output id="pv-opacity-value">50.0%</output></label>
-     <label class="pv-field" id="pv-threshold-control" hidden>Threshold <input type="number" id="pv-threshold" min="0" max="255" step="1" value="0"></label>
-    </span>
-    <span class="pv-group" role="group" aria-label="Atlas view" id="pv-atlas-switch" hidden><button type="button" data-pv-view="item" aria-pressed="true">Region</button><button type="button" data-pv-view="page" aria-pressed="false">Pages</button></span>
-   </div>
-   <div class="pv-canvas-wrap" id="stage-layout"><div class="pv-canvas-box" id="pv-canvas-box"><canvas id="pv-canvas" data-pv-canvas width="1" height="1"></canvas><div id="pv-overlay" class="pv-overlay"></div></div></div>
-   <p id="pv-caption" class="pv-subtle"></p>
-  </main>
-  <aside class="pv-side">
-   <section><h2>PRODUCER FLAGS</h2><ul id="pv-flags" data-pv-flags></ul><p id="pv-flag-sources" class="pv-subtle"></p></section>
-   <section class="pv-verdict"><h2>VERDICT</h2><p id="parts-correction-hint" class="subtle" hidden>Saved part notes and pointed comments can be handed off as described corrections.</p>
-    <ul id="pv-legacy-flagged" class="pv-legacy-flagged" hidden></ul>
-    <button id="pv-save" type="button" class="pv-primary">Save sign-off</button>
-    <span><button id="pv-export-json" type="button">Export JSON</button><button id="pv-export-issue" type="button">Export issue</button></span>
-    <p id="pv-save-status" class="pv-subtle" role="status"></p>
-   </section>
-  </aside>
+  <aside class="pv-list" aria-label="Parts"></aside>
+  <main class="pv-stage pv-stage-host"><div class="pv-toolbar" role="toolbar" aria-label="View"></div><div class="pv-stage" data-parts-stage></div></main>
+  <aside class="pv-side-host"><div class="pv-side"></div><div id="parts-actions"></div></aside>
  </div>
 </div>
 <script type="module" src="parts.js"></script>
