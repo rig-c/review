@@ -572,7 +572,7 @@ export function finalizeJobAct(options: {
       const issues: PartsIssue[] = value.issues.map(raw => {
         let issue: PartsIssue;
         try {
-          issue = parsePartsIssue(raw, false, false, false);
+          issue = parsePartsIssue(raw, true, false, false);
         } catch {
           throw new JobError('JOB_ACT_INVALID');
         }

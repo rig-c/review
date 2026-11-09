@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { isAbsolute, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
-  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
+  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
   type ActV3, type AgentRequestV3, type EventV3, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
   type JobDisplayPublication, type JobDisplayPublicationV3, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest, type JobFetchActRequestV3,
   type JobNextValue, type JobPendingAsk, type JobPublication, type JobPublicationMode, type JobReviewerBinding,
@@ -15,6 +15,9 @@ import {
 } from './job-source.ts';
 import { JobError, JobStore, type JobSnapshotOwner, type StoredJob } from './job-store.ts';
 import { canonicalStatePath } from './state-dir.ts';
+import { loadReview } from './manifest.ts';
+import { loadPartsView } from './parts-view.ts';
+import { validateStoredPartsComment } from './parts-comment-crops.ts';
 
 export type { JobDisplayPublicationV3 } from './job-contract.ts';
 
@@ -600,7 +603,9 @@ export class JobSession {
   }
 
   async commitUIAct(raw: unknown): Promise<ActV3> {
-    const input = parseUISubmission(raw, this.publicationMode), digest = requestDigest(input), key = `ui:${input.pageId}:${input.submissionId}`;
+    const parsed = parseUISubmission(raw, this.publicationMode);
+    const input = parsed.kind === 'parts-verdict' ? {...parsed, value: structuredClone(parsed.value)} : parsed;
+    const digest = requestDigest(input), key = `ui:${input.pageId}:${input.submissionId}`;
     const current = this.current();
     const previous = this.replay(current.data, key, digest);
     if (previous) return previous.value as ActV3;
@@ -627,6 +632,34 @@ export class JobSession {
             phase: 'finalize',
             subject: ask.subject as RecordSubject,
           });
+        } else if (ask && stored && input.kind === 'parts-verdict') {
+          assertJobSourceCurrent(stored.retained);
+          const candidate = finalizeJobAct({jobId: this.jobId, submission: input, ask,
+            retained: stored.retained, reviewer: current.data.reviewer});
+          if (candidate.schema === JOB_PARTS_VERDICT_ACT_SCHEMA && candidate.value.issues.length) {
+            await this.readPublicationResponse(input.publicationId, async retained => {
+              if (isRetainedRecordSource(retained) || !retained.source.parts) throw new JobError('JOB_ACT_SOURCE_STALE');
+              assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals,
+                retained.snapshotIdentity, 'JOB_ACT_SOURCE_STALE');
+              try {
+                const review = await loadReview(retained.manifestPath);
+                const painting = review.handoff?.source;
+                const sealedPainting = painting && retained.seals.some(file =>
+                  file.path === relative(retained.snapshotRoot, painting).split(sep).join('/')) ? painting : undefined;
+                const pkg = await loadPartsView(dirname(join(retained.snapshotRoot, retained.source.parts.manifest.path)),
+                  {painting: sealedPainting});
+                for (const issue of candidate.value.issues) {
+                  await validateStoredPartsComment(pkg, issue, false, {sourceHash: retained.source.sourceHash});
+                }
+              } catch (error) {
+                if (error instanceof JobError) throw error;
+                throw new JobError('JOB_ACT_INVALID');
+              }
+              assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals,
+                retained.snapshotIdentity, 'JOB_ACT_SOURCE_STALE');
+              return new Response(null, {status: 204});
+            });
+          }
         }
       }
     }
@@ -646,7 +679,7 @@ export class JobSession {
       if (!ask) throw new JobError('JOB_ASK_INVALID');
       const retained = fresh.data.publications[input.publicationId].retained;
       assertJobSourceCurrent(retained);
-      if (isRetainedRecordSource(retained)) {
+      if (isRetainedRecordSource(retained) || input.kind === 'parts-verdict') {
         assertRetainedSnapshotIntact(
           retained.snapshotRoot,
           retained.seals,

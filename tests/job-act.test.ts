@@ -1,3 +1,5 @@
+import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
+useTemporaryReviewState();
 import { afterEach, expect, test } from 'bun:test';
 import { finalizeJobAct, parseUISubmission } from '../src/job-act.ts';
 import { JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS, type JobPendingAsk, type JobUISubmission } from '../src/job-contract.ts';
@@ -8,6 +10,11 @@ import {rigStillInput, rigStillCapture} from './helpers/job-rig-still.ts';
 import {JobSession} from '../src/job-session.ts';
 import {Database} from 'bun:sqlite';
 import {jobSnapshotHash} from '../src/job-source.ts';
+import {loadPartsView} from '../src/parts-view.ts';
+import {preparePartsComment,validateStoredPartsComment} from '../src/parts-comment-crops.ts';
+import {parsePartsIssue} from '../src/parts-comment.ts';
+import {jobHash} from '../src/job-api.ts';
+import {PNG} from 'pngjs';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
@@ -163,13 +170,20 @@ test('synthetic private adapters validate ordered interview picks without exposi
 
 test('parts-verdict UI save finalizes rig-review/act@5 with issues[], preserves words, rejects invalid issue bindings and binds all referenced bytes', async () => {
   const f = await fixture(), parts = await syntheticJobParts(f, { project: true, painting: true });
+  await writeFile(join(f.root,'out/parts.json'),JSON.stringify({rig_size:[30,20],parts:[
+    {name:'body',x:0,y:0,w:20,h:20},{name:'head',x:10,y:0,w:20,h:20},
+  ]}));
+  parts.manifest.sha256=jobHash(await readFile(join(f.root,'out/parts.json')));
+  f.setContext({...f.getContext(),parts});
   const publication = await f.publish();
+  const retained=f.session.retainedSource(publication.publicationId);
+  const pkg=await loadPartsView(join(retained.snapshotRoot,'out'));
   const ask = await f.ask(publication, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
   const page = await f.display(publication);
   const bodyHash = parts.images.find(img => img.path === 'parts/body.png' && img.role === 'part')!.sha256;
   const headHash = parts.images.find(img => img.path === 'parts/head.png' && img.role === 'part')!.sha256;
-  const cropSha = 'a'.repeat(64);
-  const itemIssue = {
+  const cropPng=PNG.sync.write(new PNG({width:3,height:4})),cropSha=jobHash(cropPng);
+  const unpreparedIssue = {
     schema: 'rig-review-parts-comment/2' as const,
     id: 'issue-item',
     summary: 'Seam gap on body',
@@ -187,11 +201,16 @@ test('parts-verdict UI save finalizes rig-review/act@5 with issues[], preserves 
       footprints: true,
       mesh: false,
     },
-    crop: { path: `comment-crops/${cropSha}.png`, sha256: cropSha, width: 3, height: 4 },
+    crop: { path: `comment-crops/${cropSha}.png`, sha256: cropSha, width: 3, height: 4, png:'data:image/png;base64,'+cropPng.toString('base64') },
     nativeCrop: null,
   };
+  const prepared = await preparePartsComment(pkg, unpreparedIssue, false, {sourceHash: publication.source.sourceHash});
+  const {png: _inlinePng, ...storedCrop} = prepared.crop;
+  const itemIssue = {...prepared, crop: storedCrop};
+  expect(itemIssue.nativeCrop).not.toBeNull();
   const assembledIssue = {
     ...itemIssue,
+    nativeCrop:null,
     id: 'issue-assembled',
     summary: 'Overlap between body and head',
     parts: [{ name: 'body', imageHash: bodyHash }, { name: 'head', imageHash: headHash }],
@@ -213,11 +232,45 @@ test('parts-verdict UI save finalizes rig-review/act@5 with issues[], preserves 
     { verdict: 'changes-requested', issues: [{ ...assembledIssue, imageRegion: { x: 1, y: 2, width: 3, height: 4 } }], words: '' },
     { verdict: 'changes-requested', issues: [{ ...assembledIssue, rigRegion: { x: 1.5, y: 2, width: 3, height: 4 } }], words: '' },
     { verdict: 'approved', parts: [], words: '' },
+    { verdict: 'changes-requested', issues: [{...itemIssue, nativeCrop: null}], words: '' },
+    { verdict: 'changes-requested', issues: [{
+      ...itemIssue,
+      crop: {...storedCrop, path: `comment-crops/${'b'.repeat(64)}.png`, sha256: 'b'.repeat(64)},
+    }], words: '' },
+    { verdict: 'changes-requested', issues: [{
+      ...itemIssue,
+      nativeCrop: {...itemIssue.nativeCrop!, path: `comment-crops/${'c'.repeat(64)}.png`, sha256: 'c'.repeat(64)},
+    }], words: '' },
+    { verdict: 'changes-requested', issues: [{
+      ...itemIssue, rigRegion: {...itemIssue.rigRegion, x: itemIssue.rigRegion.x + 1},
+    }], words: '' },
+    { verdict: 'changes-requested', issues: [{...itemIssue, nativeCrop: {...itemIssue.nativeCrop!, width: 4}}], words: '' },
   ];
-  for (const badValue of invalidValues) {
-    expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, value: badValue }))).ok).toBe(false);
-  }
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  const db = new Database(join(f.state, 'jobs.sqlite'));
+  const storedDocument = () => db.query<{document: string}, [string]>(
+    'SELECT document FROM jobs WHERE job_id=?',
+  ).get(f.session.jobId)!.document;
+  const before = storedDocument();
+  try {
+    for (const badValue of invalidValues) {
+      const rejected = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, value: badValue}));
+      expect(rejected.ok, JSON.stringify(badValue)).toBe(false);
+      if (!rejected.ok) expect(rejected.error.code).toBe('parts' in badValue ? 'JOB_REQUEST_INVALID' : 'JOB_ACT_INVALID');
+      expect(storedDocument()).toBe(before);
+      expect(f.session.status().pending.map(pending => pending.askId)).toContain(ask.askId);
+    }
+  } finally { db.close(); }
+  const unpreparedSubmission = parseUISubmission({...input,
+    value: {verdict: 'changes-requested', issues: [{...itemIssue, nativeCrop: null}], words: ''},
+  });
+  expect(() => finalizeJobAct({jobId: f.session.jobId, submission: unpreparedSubmission, ask, retained,
+    reviewer: {id: 'declared-owner', role: 'owner'},
+  })).toThrow('JOB_ACT_INVALID');
+  const [saved, replayed] = await Promise.all([
+    f.ports.commitUIAct(f.session.jobId, f.uiRequest(input)),
+    f.ports.commitUIAct(f.session.jobId, f.uiRequest(input)),
+  ]);
+  expect(replayed).toEqual(saved);
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error(saved.error.code);
   expect(saved.value.schema).toBe('rig-review/act@5');
@@ -228,6 +281,17 @@ test('parts-verdict UI save finalizes rig-review/act@5 with issues[], preserves 
   expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual(saved);
   const fetched = await (await f.call({ ...f.base(), verb: 'fetch-act', actId: saved.value.actId }, f.session.writerGrant().fetchCapability)).json();
   expect(fetched.value).toEqual(saved.value);
+  const reopened = new JobSession({root: f.root, stateDir: f.state, fingerprint: 'f'.repeat(64),
+    reviewer: {id: 'declared-owner', role: 'owner'}});
+  try {
+    const restored = await reopened.execute({...f.base(), verb: 'fetch-act', actId: saved.value.actId}, new AbortController().signal);
+    expect(restored).toEqual(saved.value);
+    if (saved.value.kind !== 'parts-verdict' || saved.value.schema !== 'rig-review/act@5') throw new Error('Expected parts act');
+    for (const issue of saved.value.value.issues) {
+      expect(parsePartsIssue(issue, true, false, false)).toEqual(issue);
+      expect(await validateStoredPartsComment(pkg, issue, false, {sourceHash: publication.source.sourceHash})).toEqual(issue);
+    }
+  } finally { reopened.dispose(); }
   const { parseManifest, parsePanelComposition } = await import('../src/manifest.ts');
   const panels = {
     schema: 'rig-review/panels@1' as const,
@@ -261,6 +325,13 @@ test('parts-verdict UI save finalizes rig-review/act@5 with issues[], preserves 
     panels: { ...panels, stage: ['unknown-component'] },
   });
   expect(withUnknownComponent.panels?.stage as readonly string[]).toEqual(['unknown-component']);
+  const mutableAsk=await f.ask(publication,{kind:'parts-verdict',draftId:'synthetic-draft'});
+  const mutableInput={...input,askId:mutableAsk.askId,submissionId:'parts-mutable',
+    expectedGeneration:f.session.status().generation,value:structuredClone(input.value)};
+  const pending=f.session.commitUIAct(mutableInput);
+  mutableInput.value.issues[0]!.rigRegion.x++;
+  const isolated=await pending;
+  expect(isolated.value).toEqual(input.value);
   const secondAsk = await f.ask(publication, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
   await writeFile(join(f.root, 'out/parts/depth.png'), 'changed depth only');
   const stale = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, askId: secondAsk.askId,
