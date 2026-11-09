@@ -784,12 +784,16 @@ function bindAssemblyPicking():void {
   };
   const keyUp = (event: KeyboardEvent) => {if (event.key.toLowerCase() === 'p') releasePainting();};
   const deactivate = () => {if (!mountActive) releasePainting();};
+  const onVisibilityChange = () => {
+    if (doc.visibilityState === 'hidden') releasePainting();
+  };
   const bindings: [EventTarget, string, EventListener][] = [
     [pane, 'pointerdown', onDown as EventListener], [pane, 'pointermove', onMove as EventListener],
     [pane, 'pointercancel', onCancel as EventListener], [pane, 'pointerup', onUp as EventListener],
     [pane, 'pointerleave', clearHover], [pane, 'dblclick', onDoubleClick as EventListener],
     [doc, 'keydown', keyDown as EventListener], [doc, 'keyup', keyUp as EventListener],
     [doc, 'focusin', deactivate], [doc, 'pointerdown', deactivate], [eventWindow, 'blur', releasePainting],
+    [doc, 'visibilitychange', onVisibilityChange],
   ];
   for (const [target, type, handler] of bindings) target.addEventListener(type, handler);
   disposers.push(() => {for (const [target, type, handler] of bindings) target.removeEventListener(type, handler);});

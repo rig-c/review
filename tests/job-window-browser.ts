@@ -13,6 +13,7 @@ import {rigStillBrowserProbe} from './helpers/job-rig-still-browser.ts';
 import {interviewDiagnosticsBrowserProbe} from './helpers/job-interview-browser.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 import {readPngCrop} from '../src/comment-crops.ts';
+import {withDeadline} from './helpers/walk-deadline.ts';
 
 const argument = (key: string) => {const index = Bun.argv.indexOf(key); return index < 0 ? undefined : Bun.argv[index + 1];};
 const language = argument('--lang') ?? 'en';
@@ -488,9 +489,14 @@ async function c5PartsFlow(owner: URL) {
     await waitForPartsPaint('c5-item');
     assert.equal(await page.evaluate(`document.querySelector('#pv-items [aria-current="true"]').dataset.pvItem`), 'front');
     assert.equal(await page.evaluate(`document.querySelector('#pv-mesh-control input').checked`), true);
-    await page.evaluate(`(()=>{document.querySelector('#rig-viewport').focus();window.__c5Input=[];
+    await page.evaluate(`(()=>{document.querySelector('#rig-viewport').focus();window.__c5Input=[];window.__c5Visibility=[];
         document.addEventListener('keydown',event=>window.__c5Input.push({type:event.type,key:event.key,trusted:event.isTrusted}));
-        window.addEventListener('blur',event=>window.__c5Input.push({type:'blur',trusted:event.isTrusted}));})()`);
+        window.addEventListener('blur',event=>window.__c5Input.push({type:'blur',trusted:event.isTrusted}));
+        const record=event=>window.__c5Visibility.push({type:event.type,trusted:event.isTrusted,
+            wallMs:Date.now(),monotonicMs:performance.now(),visibility:document.visibilityState,
+            focused:document.hasFocus(),activeElement:document.activeElement?.id});
+        document.addEventListener('visibilitychange',record);
+        window.addEventListener('blur',record);window.addEventListener('focus',record);})()`);
     await c5Key('Escape');await c5Key('Escape', 'keyUp');
     await wait(`document.querySelector('#pv-assemble').getAttribute('aria-pressed')==='true'`, 'C5 Escape with persistent list');
     await waitForPartsPaint('c5-assembled');
@@ -509,13 +515,22 @@ async function c5PartsFlow(owner: URL) {
     const other = await control('Target.createTarget', {url: 'about:blank'}) as {targetId: string};
     try {
         await control('Target.activateTarget', {targetId: other.targetId});
-        await waitForPartsPaint('c5-P-native-blur');
-        assert.equal((await c5Capture('c5-painting-blur')).rgbaSha256, retainedView.rgbaSha256);
+        await wait(`document.visibilityState==='hidden'&&window.__c5Visibility.some(event=>event.type==='visibilitychange'&&event.visibility==='hidden'&&event.trusted)`,
+            'C5 native target visibility hidden');
+        await withDeadline('C5_PARTS_NATIVE_HIDDEN_READY', 20_000, () => waitForPartsPaint('c5-P-native-hidden'));
+        await checkpoints('c5-native-visibility-hidden', await page.evaluate(`({visibility:document.visibilityState,
+            focused:document.hasFocus(),events:window.__c5Visibility})`));
+        assert.equal((await c5Capture('c5-painting-hidden')).rgbaSha256, retainedView.rgbaSha256);
     } finally {
         await control('Target.activateTarget', {targetId: target.targetInfo.targetId});
         await control('Target.closeTarget', {targetId: other.targetId});
         await c5Key('p', 'keyUp');
     }
+    await wait(`document.visibilityState==='visible'&&window.__c5Visibility.some(event=>event.type==='visibilitychange'&&event.visibility==='visible'&&event.trusted)`,
+        'C5 native target visibility restored');
+    await withDeadline('C5_PARTS_NATIVE_VISIBLE_READY', 20_000, () => waitForPartsPaint('c5-P-native-visible'));
+    await checkpoints('c5-native-visibility-restored', await page.evaluate(`({visibility:document.visibilityState,
+        focused:document.hasFocus(),events:window.__c5Visibility})`));
     await page.evaluate(`document.querySelector('#rig-viewport').focus()`);
     await c5Click('#stage-comment');
     const start = await c5Point(12.2, 7.2), end = await c5Point(19.8, 14.8);
@@ -552,7 +567,11 @@ async function c5PartsFlow(owner: URL) {
     await edit('.stage-comment-composer input', edited);await c5Key('Enter');await c5Key('Enter', 'keyUp');
     await wait(`!document.querySelector('.stage-comment-composer')&&document.querySelector('.stage-comment-summary').textContent.includes(${JSON.stringify(edited)})`, 'C5 validated chip edit');
     const trustedInput = await page.evaluate<{type: string; key?: string; trusted: boolean}[]>(`window.__c5Input`);
-    assert.ok(trustedInput.some(event => event.type === 'blur'));
+    const visibilityEvents = await page.evaluate<{type: string; visibility: string; trusted: boolean}[]>(`window.__c5Visibility`);
+    assert.ok(visibilityEvents.some(event => event.type === 'visibilitychange' && event.visibility === 'hidden'));
+    assert.ok(visibilityEvents.some(event => event.type === 'visibilitychange' && event.visibility === 'visible'));
+    assert.ok(visibilityEvents.every(event => event.trusted));
+    await checkpoints('c5-native-visibility-events', visibilityEvents);
     assert.ok(trustedInput.some(event => event.key === 'p') && trustedInput.some(event => event.key === 'Escape'));
     assert.ok(trustedInput.every(event => event.trusted));
     await checkpoints('c5-trusted-input', trustedInput);

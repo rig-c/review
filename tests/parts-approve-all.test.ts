@@ -318,7 +318,7 @@ function partsMountDocument(raster = false) {
  const rootDoc=new FakeElement('body');
  const fakeDoc={
   body:rootDoc,
-  title:'',documentElement:rootDoc,
+  title:'',documentElement:rootDoc,visibilityState:'visible',
   activeElement:null as FakeElement|null,
   defaultView:null as any,
   createElement:(tag:string)=>new FakeElement(tag),
@@ -719,6 +719,19 @@ test('#614 shared mount creates real assembled issues, validates chip edits atom
   expect(node(slotsA,'#stage-comment').getAttribute('aria-pressed')).toBe('false');
   expect(pixels()).toBe(painted);expect(a.issues()).toEqual([]);
   dom.fakeDoc.emit('keyup',key('p'));await tick();expect(pixels()).toBe(base);
+  for(let hold=0;hold<2;hold++){
+   dom.fakeDoc.visibilityState='visible';
+   dom.fakeDoc.emit('keydown',key('p'));await tick();
+   expect(pixels()).toBe(painted);expect(node(slotsA,'#stage-comment').disabled).toBe(true);
+   dom.fakeDoc.emit('visibilitychange',{});await tick();
+   expect(pixels()).toBe(painted);expect(node(slotsA,'#stage-comment').disabled).toBe(true);
+   dom.fakeDoc.visibilityState='hidden';dom.fakeDoc.emit('visibilitychange',{});await tick();
+   expect(pixels()).toBe(base);expect(node(slotsA,'#stage-comment').disabled).toBe(false);
+   expect(slotsA.stage.dataset.partsPaintState).toBe('ready');
+   expect(canvasB.toDataURL()).toBe(otherBase);expect(node(slotsB,'#stage-comment').disabled).toBe(false);
+   dom.fakeDoc.visibilityState='visible';dom.fakeDoc.emit('visibilitychange',{});await tick();
+   expect(pixels()).toBe(base);
+  }
   dom.fakeDoc.emit('keydown',key('p'));await tick();dom.fakeWin.emit('blur',{});await tick();expect(pixels()).toBe(base);
   dom.fakeDoc.emit('keydown',key('p'));await tick();paneB.focus();await tick();expect(pixels()).toBe(base);
   paneA.focus();
@@ -789,5 +802,13 @@ test('#614 shared mount creates real assembled issues, validates chip edits atom
   expect(slotsA.side.querySelectorAll('.stage-comment-list')).toHaveLength(0);
   expect(slotsB.side.querySelectorAll('.stage-comment-list')).toHaveLength(1);
   expect(b.issues()).toEqual([]);expect(await Promise.all(pkg.files.map(file=>readFile(file.abs)))).toEqual(before);
+  const visibilityListeners=dom.fakeDoc.handlers.get('visibilitychange')!;
+  expect(visibilityListeners.size).toBe(1);
+  paneB.focus();dom.fakeDoc.emit('keydown',key('p'));await tick();
+  expect(node(slotsB,'#stage-comment').disabled).toBe(true);
+  b.dispose();expect(visibilityListeners.size).toBe(0);
+  dom.fakeDoc.visibilityState='hidden';dom.fakeDoc.emit('visibilitychange',{});
+  dom.fakeDoc.emit('keyup',key('p'));dom.fakeWin.emit('blur',{});await tick();
+  expect(slotsB.stage.children).toHaveLength(0);expect(slotsB.stage.dataset.partsPaintState).toBe('disposed');
  }finally{for(const mount of mounts)mount.dispose();dom.cleanup();await rm(root,{recursive:true,force:true});}
 });
