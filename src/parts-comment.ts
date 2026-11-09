@@ -323,11 +323,4 @@ export function assertPartsIssueBinding(
   if (r.x < minX || r.y < minY || r.x + r.width > maxX || r.y + r.height > maxY) {
     fail('PARTS_COMMENT_OUT_OF_BOUNDS', 'region exceeds union of issue parts');
   }
-  const unionW = Math.max(1, maxX - minX);
-  const unionH = Math.max(1, maxY - minY);
-  const camera = c.view.camera;
-  const fit = Math.max(0.001, Math.min((camera.viewport.width - 24) / unionW, (camera.viewport.height - 24) / unionH));
-  if (camera.zoom < Math.min(fit, 1)) {
-    fail('PARTS_CAMERA_RANGE', 'native zoom below fit/1 minimum');
-  }
 }
