@@ -192,7 +192,7 @@ async function officialFixture() {
 }
 
 test('C4 installed public enumeration binds five roles, shared roles and UTF-16 paths losslessly', async () => {
-  expect(officialEnumerator.version).toBe('2.25.1');
+  expect(officialEnumerator.version).toBe('2.35.0');
   const {f, references, parts} = await officialFixture();
   const before = await jobInputHashes(f.root);
   const publication = await f.publish();
