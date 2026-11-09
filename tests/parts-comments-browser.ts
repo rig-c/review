@@ -12,12 +12,25 @@ import {startPartsServer} from '../src/parts-server.ts';
 import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
 import {launchCdpSession,type InputCdpSession as CdpSession} from './parts-explorer-browser.ts';
+import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 const assert=(v:unknown,why:string)=>{if(!v)throw new Error(why);};
 const hash=(b:Buffer)=>createHash('sha256').update(b).digest('hex');
 async function wait(page:CdpSession,expression:string,label:string){for(let i=0;i<160;i++){if(await page.evaluate(expression))return;await Bun.sleep(25);}throw new Error('BROWSER_WAIT: '+label+' '+await page.evaluate(`document.getElementById('pv-save-status')?.textContent+' / '+document.querySelector('[role=alert]')?.textContent`));}
-async function click(page:CdpSession,selector:string){const at=await page.evaluate<{x:number;y:number}>(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error('Missing '+${JSON.stringify(selector)});const r=n.getBoundingClientRect();if(r.width<=0||r.height<=0)throw Error('Hidden control '+${JSON.stringify(selector)});return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);await page.mouse('mouseMoved',at.x,at.y);await page.mouse('mousePressed',at.x,at.y);await page.mouse('mouseReleased',at.x,at.y);}
 const rendered=`(()=>{const rect=n=>{const r=n.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};return {panes:['rig','reference'].map(t=>({target:t,pane:rect(document.getElementById(t+'-pane')),viewport:rect(document.getElementById(t+'-viewport')),root:rect(document.getElementById(t==='rig'?'rig-root':'reference-content')),transform:document.getElementById(t==='rig'?'rig-root':'reference-content').style.transform})),sync:document.getElementById('camera-sync').checked};})()`;
 const camera=`(()=>{const pane=document.getElementById('rig-viewport').getBoundingClientRect(),root=document.getElementById('rig-root').getBoundingClientRect(),s=new DOMMatrix(document.getElementById('rig-root').style.transform).a;return {x:root.left-pane.left,y:root.top-pane.top,scale:s,width:pane.width,height:pane.height,left:pane.left,top:pane.top};})()`;
+const commentState=`(()=>{
+ const stage=document.querySelector('[data-parts-paint-state]'),control=document.getElementById('stage-comment');
+ const rig=document.getElementById('rig-viewport'),reference=document.getElementById('reference-viewport');
+ if(!stage||!control||!rig||!reference)throw Error('PARTS_CAPTURE_STATE_MISSING');
+ return {paint:stage.dataset.partsPaintState,ariaBusy:stage.getAttribute('aria-busy'),disabled:control.disabled,
+  pressed:control.getAttribute('aria-pressed'),rigCapture:rig.classList.contains('stage-comment-mode'),
+  referenceCapture:reference.classList.contains('stage-comment-mode'),status:document.getElementById('pv-save-status')?.textContent,
+  assembled:document.getElementById('pv-assemble').getAttribute('aria-pressed')};
+})()`;
+const commentReady=`(()=>{const state=${commentState};
+ if(state.paint==='failed'||state.paint==='disposed')throw Error('PARTS_CAPTURE_PAINT_'+state.paint.toUpperCase()+' '+state.status);
+ return state.paint==='ready'&&state.ariaBusy==='false'&&!state.disabled;
+})()`;
 function source(c:any,p:{x:number;y:number}){return {x:(p.x-c.x)/c.scale,y:(p.y-c.y)/c.scale};}
 async function mark(page:CdpSession,from:{x:number;y:number},to:{x:number;y:number},summary:string){const c=await page.evaluate<any>(camera),a={x:c.left+c.x+from.x*c.scale,y:c.top+c.y+from.y*c.scale},b={x:c.left+c.x+to.x*c.scale,y:c.top+c.y+to.y*c.scale};await page.mouse('mouseMoved',a.x,a.y);await page.mouse('mousePressed',a.x,a.y);await page.mouse('mouseMoved',b.x,b.y);await page.mouse('mouseReleased',b.x,b.y);await wait(page,`!!document.querySelector('.stage-comment-composer input')`,'composer');await page.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(summary)};f.requestSubmit();})()`);await wait(page,`!document.querySelector('.stage-comment-composer')`,'comment accepted');}
 async function atlasClick(page:CdpSession,embedded=false){
@@ -51,10 +64,25 @@ async function main(){
  // The painting crop uses the same real pair. On an integer-placed part, compare decoded pixel bytes.
  await click(page,'#stage-comment');await click(page,'[data-pv-item="front"]');await Bun.sleep(180);report.paintingEqual=await page.evaluate(`(()=>{const c=document.getElementById('pv-reference'),d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;for(let y=0;y<c.height;y++)for(let x=0;x<c.width;x++){let i=(y*c.width+x)*4;if(d[i]!==3*(14+x)||d[i+1]!==3*(14+y)||d[i+2]!==90||d[i+3]!==255)return false;}return true;})()`);assert(report.paintingEqual,'painting original subrect');
  // The same gesture, composer and crop path now bind a seam across two parts.
- report.assembled=[];
+ report.assembled=[];report.assembledActivation=[];
  for(const lang of ['en','ko']){
   await page.goto(base+'?lang='+lang+'#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'assembled '+lang);
-  await click(page,'#pv-assemble');await click(page,'#fit');await click(page,'#stage-comment');
+  const activation:{lang:string;states:unknown[]}={lang,states:[]};report.assembledActivation.push(activation);
+  const record=async(phase:string)=>{const state=await page!.evaluate<any>(commentState);activation.states.push({phase,...state});return state;};
+  await record('boot-ready');
+  await click(page,'#pv-assemble');await record('assemble-clicked');
+  await wait(page,commentReady,'C5_ASSEMBLED_PAINT_READY '+lang);await record('assemble-ready');
+  await click(page,'#fit');await record('fit-clicked');
+  await wait(page,commentReady,'C5_FITTED_PAINT_READY '+lang);
+  const before=await record('before-comment');
+  assert(before.assembled==='true'&&before.paint==='ready'&&before.ariaBusy==='false'&&!before.disabled,
+   'C5_CAPTURE_NOT_READY '+lang+' '+JSON.stringify(before));
+  assert(before.pressed==='false'&&!before.rigCapture&&!before.referenceCapture,
+   'C5_CAPTURE_ALREADY_ACTIVE '+lang+' '+JSON.stringify(before));
+  await click(page,'#stage-comment');
+  const after=await record('after-comment');
+  assert(after.pressed==='true'&&after.rigCapture&&!after.referenceCapture,
+   'C5_CAPTURE_ACTIVATION_FAILED '+lang+' '+JSON.stringify(after));
   const summary='Seam '+lang;
   await mark(page,{x:12,y:12},{x:25,y:24},summary);
   const row=await page.evaluate<any>(`[...document.querySelectorAll('.stage-comment-item')].find(row=>row.textContent.includes(${JSON.stringify(summary)}))?.dataset.commentId`);

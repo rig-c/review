@@ -623,6 +623,10 @@ test('#613 C during a current paint exposes busy then clears only its owned stat
  const handle=mountPartsWorkspace(slots,{view:async()=>view,image:index=>{requested[index]!();return images[index]!;},page:async()=>({} as HTMLImageElement),painting:()=>null,crop:async issue=>issue},
   {initial:()=>[],changed(){},register(){},locked:()=>'open'},{defaultView:'item'});
  const flush=async()=>{for(let i=0;i<30;i++)await Promise.resolve();};
+ const browserSource=await readFile('tests/parts-comments-browser.ts','utf8');
+ const definitions=browserSource.slice(browserSource.indexOf('const commentState='),browserSource.indexOf('function source('));
+ const readinessExpression=new Function(definitions+';return commentReady;')() as string;
+ const captureReady=new Function('document','return '+readinessExpression) as (document:unknown)=>boolean;
  const pressC=()=>{
   node('rig-viewport').focus();
   fixture.fakeDoc.emit('keydown',{key:'c',target:node('rig-viewport'),defaultPrevented:false,repeat:false,ctrlKey:false,metaKey:false,altKey:false,preventDefault(){}});
@@ -640,6 +644,32 @@ test('#613 C during a current paint exposes busy then clears only its owned stat
   expect(slots.stage.dataset.partsPaintState).toBe('ready');
   expect(node('stage-comment').disabled).toBe(false);
   expect(node('pv-save-status').textContent).toBe('');
+
+  // Assemble waits for uncached part images even after the initial item is ready.
+  node('pv-assemble').onclick!();await arrivals[1];
+  expect(captureReady(fixture.fakeDoc)).toBe(false);
+  expect(slots.stage.dataset.partsPaintState).toBe('busy');
+  expect(node('stage-comment').disabled).toBe(true);
+  node('fit').onclick!();
+  expect(captureReady(fixture.fakeDoc)).toBe(false);
+  expect(slots.stage.dataset.partsPaintState).toBe('busy');
+  expect(node('stage-comment').disabled).toBe(true);
+  node('stage-comment').onclick!();
+  expect(node('stage-comment').getAttribute('aria-pressed')).toBe('false');
+  expect(node('rig-viewport').classList.contains('stage-comment-mode')).toBe(false);
+  expect(node('pv-save-status').textContent).toContain('COMMENT_BUSY');
+  node('pv-assemble').onclick!();await flush();
+  expect(captureReady(fixture.fakeDoc)).toBe(true);
+  expect(slots.stage.dataset.partsPaintState).toBe('ready');
+  expect(node('stage-comment').disabled).toBe(false);
+  node('stage-comment').onclick!();
+  expect(node('stage-comment').getAttribute('aria-pressed')).toBe('true');
+  expect(node('rig-viewport').classList.contains('stage-comment-mode')).toBe(true);
+  expect(node('reference-viewport').classList.contains('stage-comment-mode')).toBe(false);
+  node('stage-comment').onclick!();
+  expect(node('stage-comment').getAttribute('aria-pressed')).toBe('false');
+  console.log('PARTS_ASSEMBLY_CAPTURE_CONTROL '+JSON.stringify({assembledWithPendingImage:'busy',afterFit:'busy',
+   busyClickActivated:false,readyClickActivated:true,secondClickDeactivated:true,control:'actual mount and existing comment engine'}));
 
   handle.select('part-1');await arrivals[1];pressC();
   handle.select('part-2');await arrivals[2];pressC();

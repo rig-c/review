@@ -496,6 +496,11 @@ describe('parts screenshot normal controls', () => {
     fixture.nodes['native-one'].disabled = true;
     await expect(clickPartsViewControl(fixture.page, '#native-one')).rejects.toThrow('PARTS_SHOT_CONTROL_UNAVAILABLE');
     expect(fixture.actions).toEqual([]);
+    expect(fixture.mouseEvents).toEqual([]);
+    fixture.nodes['native-one'].disabled = false;
+    await clickPartsViewControl(fixture.page, '#native-one');
+    expect(fixture.mouseEvents.map(event => event.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased']);
+    expect(fixture.actions).toEqual(['native']);
   });
 });
 
