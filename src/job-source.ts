@@ -8,7 +8,7 @@ import {
   JOB_PARTS_ENUMERATOR_RANGE,
 } from './job-contract.ts';
 import type {
-  JobFileIdentity, JobImageSetInput, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
+  JobFileIdentity, JobImageSetInput, JobInterviewDiagnostics, JobInterviewRecord, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
   JobSelector, JobSourceBinding, JobSubject,
   OptionContext, OptionSource, PackageResultV3, PlanContext, PlanSource, ProjectRecord, PublishRequestV3,
   RecordFreeze, RecordOptionResult, RecordPlanResult, RecordPublicationReader, RecordPublishedContext,
@@ -30,6 +30,7 @@ import {
   jobPath,
   jobSha,
   jobText,
+  parseJobInterviewDiagnostics,
   parseRecordFreeze,
   parseRecordPublishedContext,
   parseRecordResult,
@@ -82,6 +83,7 @@ export interface JobRetainedSource {
   readonly visual: { readonly status: 'available' } | { readonly status: 'unavailable'; readonly code: string };
   readonly subjects: readonly JobSubject[];
   readonly questions: readonly InterviewQuestion[];
+  readonly interview?: JobInterviewDiagnostics | null;
   readonly partIds: readonly string[];
 }
 
@@ -100,6 +102,7 @@ export interface JobRetainedRecordSource {
   readonly visual: { readonly status: 'unavailable'; readonly code: 'MODEL_UNAVAILABLE' };
   readonly subjects: readonly RecordSubject[];
   readonly questions: readonly InterviewQuestion[];
+  readonly interview?: undefined;
   readonly partIds: readonly [];
   readonly context: RecordPublishedContext;
 }
@@ -335,22 +338,52 @@ async function prepareParts(root: string, snapshotRoot: string, claimed: JobPart
   return {identity: {enumeratorVersion: version, manifest: {path: manifestPath, sha256: jobHash(manifestBytes)}, images}, bytes};
 }
 
-function collectQuestionFiles(root: string, questions: readonly InterviewQuestion[]): JobFileIdentity[] {
-  const result: JobFileIdentity[] = [];
-  function visit(value: unknown): void {
-    if (Array.isArray(value)) { value.forEach(visit); return; }
+function collectQuestionFiles(
+  root: string,
+  questions: readonly InterviewQuestion[],
+  records: readonly JobInterviewRecord[] = [],
+): { readonly required: JobFileIdentity[]; readonly optional: JobFileIdentity[] } {
+  const required: JobFileIdentity[] = [];
+  const optional: JobFileIdentity[] = [];
+  function visit(value: unknown, isOptional: boolean): void {
+    if (Array.isArray(value)) { value.forEach(item => visit(item, isOptional)); return; }
     if (value === null || typeof value !== 'object') return;
     const entry = value as Record<string, unknown>;
     if (typeof entry.path === 'string' && typeof entry.sha256 === 'string') {
-      result.push({ path: jobPath(entry.path), sha256: jobSha(entry.sha256) });
+      if (!isOptional) {
+        required.push({ path: jobPath(entry.path), sha256: jobSha(entry.sha256) });
+      } else {
+        try {
+          const path = jobPath(entry.path);
+          const sha256 = jobSha(entry.sha256);
+          if (jobHash(sourceBytes(root, path)) === sha256) {
+            optional.push({ path, sha256 });
+          }
+        } catch {
+          // Historical non-editable context file is missing or changed; its stale diagnostic is already recorded.
+        }
+      }
     }
-    Object.values(entry).forEach(visit);
+    Object.values(entry).forEach(item => visit(item, isOptional));
   }
   for (const question of questions) {
-    result.push(question.ref, ...question.images.map(image => image.ref));
-    visit(JSON.parse(sourceBytes(root, question.ref.path).toString('utf8')));
+    required.push(question.ref, ...question.images.map(image => image.ref));
+    visit(JSON.parse(sourceBytes(root, question.ref.path).toString('utf8')), !question.editable);
   }
-  return result;
+  for (const row of records) {
+    if (row.observedSet) {
+      try {
+        const path = jobPath(row.observedSet.path);
+        const sha256 = jobSha(row.observedSet.sha256);
+        if (jobHash(sourceBytes(root, path)) === sha256) {
+          optional.push({ path, sha256 });
+        }
+      } catch {
+        // Unreadable or non-retained option set stays unsealed.
+      }
+    }
+  }
+  return { required, optional };
 }
 
 function isOptionIdentifier(value: unknown): value is string {
@@ -1118,9 +1151,6 @@ export async function prepareJobSource(options: {
       catch { throw new JobError('JOB_RECORD_INCOMPLETE'); }
       if (record.path === 'project.json') {
         project = readProject(root.path);
-        // #555 owns API@2 diagnostic carriage. Refuse before publication lookup
-        // or snapshot writes when this reader's retained records need it.
-        if (project.sceneAnswers || project.diagnostics.length) throw new JobError('JOB_RECORD_INCOMPLETE');
       }
     } else {
       try { lstatSync(join(root.path, 'project.json')); throw new JobError('JOB_FREEZE_REQUIRED'); }
@@ -1156,7 +1186,15 @@ export async function prepareJobSource(options: {
     add(rootRelative(root.path, review.handoff.source), review.handoff.record.source.sha256);
   }
   if (record) add(record.path, record.sha256);
-  for (const file of [...declared, ...collectQuestionFiles(root.path, project?.questions ?? [])]) add(file.path, file.sha256);
+  const questionFiles = collectQuestionFiles(
+    root.path,
+    project?.questions ?? [],
+    project?.interview.records ?? [],
+  );
+  for (const file of [...declared, ...questionFiles.required]) add(file.path, file.sha256);
+  for (const file of questionFiles.optional) {
+    if (!wanted.has(file.path)) add(file.path, file.sha256);
+  }
   if (wanted.size > maxSourceFiles) throw new JobError('JOB_SOURCE_UNRETAINABLE');
   const snapshotRoot = join(options.stateRoot, 'snapshots', randomUUID());
   const seals: JobFileIdentity[] = [];
@@ -1226,6 +1264,22 @@ export async function prepareJobSource(options: {
           packageSourceHash: modelSource.sourceHash, record, imageSet: imageSet.imageSet}))};
     }
     const boundReview = { ...review, sourceHash: source.sourceHash };
+    const sealedByPath = new Map(seals.map(seal => [seal.path, seal.sha256]));
+    const retainedInterview = project
+      ? parseJobInterviewDiagnostics(
+          {
+            ...project.interview,
+            records: project.interview.records.map(row => ({
+              ...row,
+              observedSet:
+                row.observedSet && sealedByPath.get(row.observedSet.path) === row.observedSet.sha256
+                  ? row.observedSet
+                  : null,
+            })),
+          },
+          'JOB_RECORD_INCOMPLETE',
+        ) ?? null
+      : null;
     const prepared: JobRetainedSource = {
       root, record, seals, snapshotRoot, snapshotIdentity,
       manifestPath: retained.manifestPath,
@@ -1237,9 +1291,14 @@ export async function prepareJobSource(options: {
         { status: 'unavailable', code: 'MODEL_UNAVAILABLE' },
       subjects: context.subjects,
       questions: (project?.questions ?? []).map(question => {
-        const { answer, ...fields } = question;
-        return answer === undefined ? fields : question;
+        const { answer, partsUnavailable, ...fields } = question;
+        return {
+          ...fields,
+          ...(partsUnavailable === undefined ? {} : { partsUnavailable }),
+          ...(answer === undefined ? {} : { answer: JSON.parse(JSON.stringify(answer)) as Record<string, unknown> }),
+        };
       }),
+      interview: retainedInterview,
       partIds: context.partIds,
     };
     await options.afterSnapshot?.();

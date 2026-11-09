@@ -384,6 +384,47 @@ export interface JobPendingAsk {
   readonly status: 'pending' | 'answered' | 'superseded';
 }
 
+export type JobInterviewJson =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly JobInterviewJson[]
+  | { readonly [key: string]: JobInterviewJson };
+
+export interface JobInterviewRecord {
+  readonly questionId: string;
+  readonly record: string;
+  readonly setId: string | null;
+  readonly ref: JobFileIdentity;
+  readonly observedSet: JobFileIdentity | null;
+  readonly timeKind: 'inspection' | 'answer' | 'decision';
+  readonly at: string | null;
+  readonly original: { readonly [key: string]: JobInterviewJson } | null;
+}
+
+export type JobInterviewDiagnostic = {
+  readonly record: string;
+  readonly at: string | null;
+} & (
+  | {
+      readonly code: 'INTERVIEW_OPTIONS_STALE';
+      readonly severity: 'error';
+    }
+  | {
+      readonly code: 'INTERVIEW_OPTIONS_SCENE_LEGACY';
+      readonly severity: 'warning';
+    }
+);
+
+export interface JobInterviewDiagnostics {
+  readonly schema: 'rig-review/job-interview@1';
+  readonly project: JobFileIdentity;
+  readonly evaluatedAt: string;
+  readonly records: readonly JobInterviewRecord[];
+  readonly diagnostics: readonly JobInterviewDiagnostic[];
+}
+
 export interface JobPublication {
   readonly publicationId: JobPublicationId;
   readonly instanceKey: JobSha256;
@@ -395,6 +436,7 @@ export interface JobPublication {
     readonly status: 'unavailable';
     readonly code: string;
   };
+  readonly interview?: JobInterviewDiagnostics | null;
 }
 
 export interface JobStatus {

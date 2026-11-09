@@ -1031,11 +1031,25 @@ Pre-cutoff currentness-only exceptions display `INTERVIEW_OPTIONS_SCENE_LEGACY`
 without blocking the legacy interview. Full scene image and registration checks
 remain producer checks.
 
-The temporary [#555 gate](https://github.com/rig-c/review/issues/555) refuses
-standing publication with `JOB_RECORD_INCOMPLETE` for scene answers, legacy
-warnings or historical record issues before publication lookup or snapshot
-writes. Named diagnostic carriage remains an unmet gate pending the signed
-job API@2 contract. An editable current scene can proceed to publication lookup.
+[Review #555](https://github.com/rig-c/review/issues/555) carries scene
+interview history and legacy warnings through standing job publications under
+`JobPublication.interview` (`rig-review/job-interview@1`, `null` for non-Create
+packages) across `publish`, `next`, `readPublication` and the retained
+`/jobs/<jobId>/publications/<publicationId>/instances/<instanceKey>/api/interview`
+route. Every inspected `pending_options` row, choice-bound `answer`/`guide`/`history[i]`
+row and completed `answer.agent_decision` row is recorded in `interview.records`
+with its own evaluation timestamp (`evaluatedAt` for inspection rows, `answer.at`
+for answer rows, `decision.at` for completed decisions, and `at: null` with no
+currentness evaluation for covers-only decisions) and joined 1:1 by `(record, at)`
+to `interview.diagnostics` (`INTERVIEW_OPTIONS_STALE` error or
+`INTERVIEW_OPTIONS_SCENE_LEGACY` warning). Active editable option sets that fail
+currentness or codec checks still refuse standing publication with
+`JOB_RECORD_INCOMPLETE` before publication lookup or snapshot writes. Browser
+and unit probes over `tests/fixtures/scene-interview-551` alter the committed
+writer archives into explicit synthetic controls
+(`SYNTHETIC_CONTROL_OVER_WRITER_ARCHIVE`); committed writer archive provenance
+does not make an altered project a real-user scene (`REAL_USER_SCENE_PENDING`)
+or establish official Create writer acceptance.
 
 ## Live job contract
 

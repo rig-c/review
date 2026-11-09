@@ -194,7 +194,7 @@ interface RetainedView {
 }
 
 /** The host reads only the committed retained snapshot and its sealed file inventory. */
-function retainedPublicationRoutes(session: JobSession) {
+export function retainedPublicationRoutes(session: JobSession) {
     const views = new Map<string, Promise<RetainedView>>();
     return async (jobId: string, publicationId: string, key: string, path: string, request: Request): Promise<Response> => {
         if (jobId !== session.jobId) return failure('JOB_UNKNOWN', 404);
@@ -279,15 +279,22 @@ function retainedPublicationRoutes(session: JobSession) {
                         sourcePainting: review.sourcePainting && {...review.sourcePainting, url: '/review-painting'},
                         feedbackCatalog: review.feedbackCatalog,
                         assetsBase: display.routes.assetsBase,
-                        capabilities: {playback: !!review.manifest.model, interview: retained.questions.length > 0,
+                        capabilities: {playback: !!review.manifest.model,
+                            interview: retained.questions.length > 0 ||
+                                (retained.interview?.records.length ?? 0) > 0 ||
+                                (retained.interview?.diagnostics.length ?? 0) > 0,
                             preRig: retained.source.selector?.kind === 'draft', modeling: false, motion: false, feedback: true, audio: false},
                     });
                 }
                 if (path === 'api/interview') {
-                    return json({questions: retained.questions.map(question => ({...question,
-                        images: question.images.map((image, index) => ({name: image.name,
-                            url: `/api/interview/image/${question.ref.sha256}/${index}`})),
-                    }))});
+                    const interview = retained.interview !== undefined ? retained.interview : display.publication.interview;
+                    return json({
+                        questions: retained.questions.map(question => ({...question,
+                            images: question.images.map((image, index) => ({name: image.name,
+                                url: `/api/interview/image/${question.ref.sha256}/${index}`})),
+                        })),
+                        ...(interview === undefined ? {} : {interview}),
+                    });
                 }
                 const interview = /^api\/interview\/image\/([a-f0-9]{64})\/(0|[1-9]\d*)$/.exec(path);
                 if (interview) {
