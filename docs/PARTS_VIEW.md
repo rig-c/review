@@ -99,9 +99,7 @@ Standalone sign-off uses saved files. The active Create and Parts cycle uses fin
 
 **Approve all** marks every pending part and available mesh clean, then saves an explicit approved sign-off. It preserves notes and existing clean outcomes; any flagged part or mesh refuses with `PARTS_APPROVE_ALL_FLAGGED` before changes are made. Individual approval remains available. `tests/parts-approve-all.test.ts` exercises the page action and unchanged verdict guard; `tests/parts-approve-all-browser.ts` checks the real save and refusal flows.
 
-Each item is **pending**, **clean** or **flagged** with a note (a note is optional on clean). **Save sign-off**
-writes `parts-review.json` beside `parts.json` (atlas mode: beside the model), or to `--verdict`.
-An unnamed save has the following `/2` shape.
+New saves write `schema: "rig-review-parts-verdict/4"` (`status: "approved"` when `issues` is empty, `"changes-requested"` when `issues` is non-empty, `issues: PartsIssue[]`, `updatedAt`, and optional `by`) to `parts-review.json` beside `parts.json` (atlas mode: beside the model), or to `--verdict`. In historical `/1`..`/3` saves, each item was **pending**, **clean** or **flagged** with a note (a note is optional on clean), and an unnamed historical `/2` save had the following shape (preserved on read):
 
 ```json
 {
@@ -170,17 +168,16 @@ no attribution authority. Opening and reading preserve the saved bytes.
 | --- | --- |
 | Legacy `rig-review-parts-verdict/1` or `/2` | `by: null`, including an ignored historical `by` extension |
 | Named `rig-review-parts-verdict/3` | Required nonblank `by`, preserved verbatim |
-| Explicit resave from an unnamed launch | New ordinary `/2` save with `by: null` on read, clearing the earlier name |
+| Pointed-issue `rig-review-parts-verdict/4` | `issues: PartsIssue[]` (`rig-review-parts-comment/2`), optional nonblank `by` (`null` on CLI read when omitted) |
+| Explicit resave from an unnamed launch | New `/4` save (historical `/2` before `/4`) with `by: null` on read, clearing the earlier name |
 
-Named `/3` keeps the existing verdict fields and adds required `by`. A missing, null, non-string or
-whitespace-only `/3` name refuses `PARTS_VERDICT_INVALID`. Older executables accepting only `/1` and `/2`
+Named `/3` keeps the existing historical verdict fields and adds required `by`. Pointed-issue `/4` replaces the per-part outcome map with `issues` (`rig-review-parts-comment/2`) and optional `by`; historical `/1`, `/2` and `/3` saves that are `pending` or contain bare flagged part or mesh notes without a matching comment surface in the UI as read-only legacy verdicts (`PARTS_VERDICT_LEGACY_FORMAT`, `flaggedCount`) and preserve their historical `/1`..`/3` schema and `parts` map on `parts <input> --format json`. A missing, null, non-string or
+whitespace-only `/3` (or present `/4`) name refuses `PARTS_VERDICT_INVALID`. Older executables accepting only `/1` and `/2`
 reject named `/3` with that refusal. This opt-in saved-format compatibility cost is part of the contract.
 
-Ordinary `parts <input> --format json` returns normalized `schema: "rig-review-parts-verdict/2"` with
-every existing field, including `mode`, `tool`, `source`, `status`, all per-part outcomes, notes and flags,
-available mesh outcomes and notes, `comments` and `updatedAt`. It adds root `by: string | null` and
+Ordinary `parts <input> --format json` returns `schema: "rig-review-parts-verdict/4"` (`mode`, `tool`, `source`, `status`, `issues` with resolved `crop.path` and `nativeCrop.path`, and `updatedAt`) for `/4` saves and for historical `/1`..`/3` saves whose flags are all covered by pointed comments (or that are approved with no issues, where `/1` normalizes to `issues: []`), while historical `/1`..`/3` saves that are `pending` or carry bare flagged part or mesh notes retain their historical `schema` (`"rig-review-parts-verdict/1"`, `"/2"`, or `"/3"`), per-part outcomes, notes and flags, available mesh outcomes and notes, optional `comments`, `issues` and `updatedAt`. Every CLI JSON read adds root `by: string | null` and
 `savedFileSha256`, a 64-character lowercase hexadecimal SHA-256 of the exact saved bytes, including any
-final LF. Legacy reads retain their original byte digest and `/1` normalizes to empty comments.
+final LF, retaining the original byte digest on legacy reads.
 
 The core, recorded name and digest derive from one validated saved-file snapshot, with current source
 and producer-flag checks. `source.sha256`, `source.files` and `source.flags` retain the inspected-input
@@ -294,11 +291,11 @@ While capture is on, drag draws only a region; close the toggle to pan. Enter ad
 part, both cameras, background, alpha, footprints, mesh and painting comparison view. There is no frame, animation or slot
 placeholder in a parts comment. Atlas inspection remains read only for pointed comments.
 
-`rig-review-parts-verdict/2` adds `comments[]`; a `/1` file reads with an empty comment array.
-Each closed `rig-review-parts-comment/1` carries `id`, original reviewer `summary`, `part`,
-`imageHash` (SHA-256 of the original part PNG), `sourceHash` (the verdict source identity),
-`imageRegion`, `rigRegion`, `view`, `crop` and `nativeCrop`. `imageRegion` has integer native
-pixel edges snapped outward from the drag. `rigRegion` is exact placement plus that region,
+`rig-review-parts-verdict/4` stores `issues[]` of closed `rig-review-parts-comment/2` records (historical `rig-review-parts-verdict/2` and `/3` stored `comments[]` of `rig-review-parts-comment/1`; a historical `/1` verdict file reads with an empty array).
+Each historical closed `rig-review-parts-comment/1` carries `id`, original reviewer `summary`, `part`,
+`imageHash` (SHA-256 of the original part PNG), `sourceHash` (the verdict source identity, or the server-retained publication `sourceHash` when prepared in a live job),
+`imageRegion`, `rigRegion`, `view`, `crop` and `nativeCrop`; `rig-review-parts-comment/2` generalizes `part` + `imageHash` to a non-empty unique `parts: [{name, imageHash}]` array and supports `view.mode: "item"` (requiring integer `imageRegion`, exact `rigRegion = placement(parts[0]) + imageRegion`, and server-cut `nativeCrop`) and `view.mode: "assembled"` (`imageRegion: null`, `nativeCrop: null`, and integer `rigRegion` fully contained within the union bounding box of `parts`). `imageRegion` has integer native
+pixel edges snapped outward from the drag. In item mode, `rigRegion` is exact placement plus that region,
 including fractional placement; it is never rounded. `view.camera` records native scale,
 center and viewport extent, plus `cameraSync` and the actual `referenceCamera` (or null), alongside `background`, `alpha`, `footprints` and `mesh`. New comments add optional
 `view.comparison: {mode:"part"|"overlay", opacity:0..1}`; older comments omit it and restore the
