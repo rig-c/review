@@ -250,6 +250,10 @@ export function parseJobRequest(
 ): AgentRequestV3 | FetchActRequestV3;
 export function parseJobRequest(
   value: unknown,
+  mode: JobApiSchema | JobPublicationMode,
+): JobAgentRequest | JobFetchActRequest | AgentRequestV3 | FetchActRequestV3;
+export function parseJobRequest(
+  value: unknown,
   mode: JobApiSchema | JobPublicationMode = JOB_API_SCHEMA,
 ): JobAgentRequest | JobFetchActRequest | AgentRequestV3 | FetchActRequestV3 {
   const item = jobObject(value, [
@@ -1069,10 +1073,21 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
   }
   return {
     async handleJobApi(request) {
-      let input: JobAgentRequest | JobFetchActRequest | null = null;
+      let input: JobAgentRequest | AgentRequestV3 | JobFetchActRequest | FetchActRequestV3 | null = null;
+      let responseSchema: typeof JOB_API_SCHEMA | typeof JOB_API_V3_SCHEMA = session.apiSchema;
       try {
         gate(request, base + '/api', false);
-        input = parseJobRequest(await jobBody(request));
+        const body = await jobBody(request);
+        const mode: JobPublicationMode =
+          session.publicationMode === 'record-and-package' &&
+          body !== null &&
+          typeof body === 'object' &&
+          !Array.isArray(body) &&
+          (body as { schema?: unknown }).schema === JOB_API_SCHEMA
+            ? 'package-only'
+            : session.publicationMode;
+        responseSchema = jobApiSchemaForMode(mode);
+        input = parseJobRequest(body, mode);
         if (input.jobId !== session.jobId) throw new JobError('JOB_UNKNOWN');
         session.authorize(input.verb === 'fetch-act' ? 'consumer' : 'agent', request.headers.get('authorization'));
         if (input.verb === 'fetch-act') {
@@ -1086,13 +1101,13 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
           if (accept && accept !== '*/*' && accept !== 'application/json') throw new JobError('JOB_REQUEST_INVALID');
         }
         const value = await session.execute(input, request.signal);
-        return Response.json({ schema: JOB_API_SCHEMA, verb: input.verb, jobId: input.jobId, requestId: input.requestId,
+        return Response.json({ schema: responseSchema, verb: input.verb, jobId: input.jobId, requestId: input.requestId,
           generation: session.status().generation, ok: true, value }, { headers: responseHeaders });
       } catch (error) {
         const failure = jobFailure(error);
         const status = failure.error.code.includes('CAPABILITY') || failure.error.code === 'JOB_AUTHORITY_REFUSED' ? 403 :
           failure.error.code === 'JOB_BODY_LIMIT' ? 413 : failure.error.code === 'JOB_REQUEST_INVALID' ? 400 : 409;
-        return Response.json({ schema: JOB_API_SCHEMA, verb: input?.verb ?? null, jobId: session.jobId,
+        return Response.json({ schema: responseSchema, verb: input?.verb ?? null, jobId: session.jobId,
           requestId: input?.requestId ?? null, generation: session.lastObservedGeneration, ...failure }, { status, headers: responseHeaders });
       }
     },

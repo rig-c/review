@@ -1,8 +1,8 @@
 /** Disjoint live-job routes. The backend receives the original authenticated Request. */
-import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobResult, type JobReviewerBinding } from './job-contract.ts';
+import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
 import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumeratorVersion } from './job-api.ts';
 import { JobSession } from './job-session.ts';
-import { assertJobRoot, captureJobRoot, type JobRootIdentity } from './job-source.ts';
+import { assertJobRoot, captureJobRoot, isRetainedRecordSource, type JobRootIdentity } from './job-source.ts';
 import type { JobWorkerOptions } from './job-worker.ts';
 import { JobError, JobStore } from './job-store.ts';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
@@ -202,6 +202,47 @@ function retainedPublicationRoutes(session: JobSession) {
             return await session.readPublicationResponse(publicationId, async retained => {
                 const display = session.displayPublication(publicationId);
                 if (key !== display.publication.instanceKey) return failure('JOB_DISPLAY_MISMATCH', 409);
+                const json = (value: unknown) => new Response(request.method === 'HEAD' ? null : JSON.stringify(value), {
+                    headers: {...headers, 'Content-Type': 'application/json'},
+                });
+                const sealedFile = async (relativePath: string) => {
+                    const seal = retained.seals.find(file => file.path === relativePath);
+                    if (!seal) return failure('JOB_SOURCE_UNRETAINABLE', 404);
+                    const file = await safeFile(retained.snapshotRoot, relativePath);
+                    return serveReference(request, file, seal.sha256, headers);
+                };
+                if (isRetainedRecordSource(retained)) {
+                    if (path === 'api/review') {
+                        return json({
+                            recordSource: retained.source,
+                            sourceHash: retained.source.sourceHash,
+                            assetsBase: display.routes.assetsBase,
+                            capabilities: {
+                                playback: false,
+                                interview: retained.questions.length > 0,
+                                preRig: false,
+                                modeling: false,
+                                motion: false,
+                                feedback: true,
+                                audio: false,
+                            },
+                            feedbackCatalog: {slots: null},
+                        });
+                    }
+                    if (path === 'api/interview') {
+                        return json({questions: retained.questions.map(question => ({...question,
+                            images: question.images.map((image, index) => ({name: image.name,
+                                url: `/api/interview/image/${question.ref.sha256}/${index}`})),
+                        }))});
+                    }
+                    const interview = /^api\/interview\/image\/([a-f0-9]{64})\/(0|[1-9]\d*)$/.exec(path);
+                    if (interview) {
+                        const image = retained.questions.find(question => question.ref.sha256 === interview[1])?.images[Number(interview[2])];
+                        if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
+                        return await sealedFile(image.ref.path);
+                    }
+                    return failure('JOB_REQUEST_INVALID', 404);
+                }
                 let pending = views.get(publicationId);
                 if (!pending) {
                     pending = (async () => {
@@ -226,15 +267,6 @@ function retainedPublicationRoutes(session: JobSession) {
                 }
                 const {review, parts} = await pending;
                 await assertReviewUnchanged(review);
-                const json = (value: unknown) => new Response(request.method === 'HEAD' ? null : JSON.stringify(value), {
-                    headers: {...headers, 'Content-Type': 'application/json'},
-                });
-                const sealedFile = async (relativePath: string) => {
-                    const seal = retained.seals.find(file => file.path === relativePath);
-                    if (!seal) return failure('JOB_SOURCE_UNRETAINABLE', 404);
-                    const file = await safeFile(retained.snapshotRoot, relativePath);
-                    return serveReference(request, file, seal.sha256, headers);
-                };
                 if (path === 'api/review') {
                     return json({
                         manifest: review.manifest,
@@ -311,6 +343,9 @@ export interface JobHostRecord {
     /** Absent on older records whose hook identity cannot be established. */
     readerId?: string | null;
     bindingId?: string | null;
+    /** Present when the host runs in record-and-package mode. */
+    publicationMode?: JobPublicationMode;
+    recordReaderId?: string | null;
 }
 
 export type JobHostListenerIncarnation = string;
@@ -497,11 +532,43 @@ function freezeExpectation(value: JobHostReuseExpectation): JobHostReuseExpectat
 }
 
 export function jobHostIdentity(startup: JobHostOptions) {
-    const readerId = declaredHostId('readPublished', startup.readPublished, startup.readerId);
+    if (startup.publicationMode !== undefined && startup.publicationMode !== 'package-only' && startup.publicationMode !== 'record-and-package') {
+        throw new JobHostOptionError('JOB_HOST_OPTION_ID_INVALID', 'readPublished', null, String(startup.publicationMode));
+    }
+    const isRecordMode = startup.publicationMode === 'record-and-package' || startup.readRecordPublished !== undefined;
+    let readerId: string | null;
+    let recordReaderId: string | null;
+    let publicationMode: JobPublicationMode;
+    if (isRecordMode) {
+        if (startup.publicationMode === 'package-only') {
+            throw new JobHostOptionError('JOB_HOST_OPTION_ID_INVALID', 'readPublished', 'package-only', startup.recordReaderId ?? startup.readerId);
+        }
+        if (typeof startup.readRecordPublished !== 'function') {
+            throw new JobHostOptionError('JOB_HOST_OPTION_ID_INVALID', 'readPublished', null, startup.recordReaderId ?? startup.readerId);
+        }
+        if (startup.recordReaderId !== undefined) {
+            recordReaderId = declaredHostId('readPublished', startup.readRecordPublished, startup.recordReaderId);
+            readerId = declaredHostId('readPublished', startup.readPublished, startup.readerId);
+        } else {
+            recordReaderId = declaredHostId('readPublished', startup.readRecordPublished, startup.readerId);
+            if (startup.readPublished !== undefined && typeof startup.readPublished !== 'function') {
+                throw new JobHostOptionError('JOB_HOST_OPTION_ID_INVALID', 'readPublished', null, startup.readerId);
+            }
+            readerId = startup.readPublished ? recordReaderId : null;
+        }
+        publicationMode = 'record-and-package';
+    } else {
+        if (startup.recordReaderId !== undefined) {
+            throw new JobHostOptionError('JOB_HOST_OPTION_ID_INVALID', 'readPublished', null, startup.recordReaderId);
+        }
+        readerId = declaredHostId('readPublished', startup.readPublished, startup.readerId);
+        recordReaderId = null;
+        publicationMode = 'package-only';
+    }
     const bindingId = declaredHostId('installWriterBinding', startup.installWriterBinding, startup.bindingId);
     const partsEnumeratorId = declaredHostId('partsEnumerator', startup.partsEnumerator?.enumerate, startup.partsEnumeratorId);
     const partsEnumeratorVersion = startup.partsEnumerator?.version ?? null;
-    return {readerId, bindingId, partsEnumeratorId, partsEnumeratorVersion};
+    return {readerId, bindingId, partsEnumeratorId, partsEnumeratorVersion, publicationMode, recordReaderId};
 }
 
 export async function installJobWriterBinding(session: JobSession, startup: JobHostOptions, origin: string): Promise<void> {
@@ -510,6 +577,19 @@ export async function installJobWriterBinding(session: JobSession, startup: JobH
 }
 
 export function assertJobHostCompatible(record: JobHostRecord, identity: ReturnType<typeof jobHostIdentity>): void {
+    const recordMode: JobPublicationMode = record.publicationMode ?? 'package-only';
+    const recordReaderId = record.recordReaderId ?? null;
+    if (recordMode !== identity.publicationMode) {
+        throw new JobHostOptionError(
+            'JOB_HOST_REUSE_MISMATCH',
+            'readPublished',
+            recordReaderId ?? record.readerId ?? recordMode,
+            identity.recordReaderId ?? identity.readerId ?? identity.publicationMode,
+        );
+    }
+    if (recordReaderId !== identity.recordReaderId) {
+        throw new JobHostOptionError('JOB_HOST_REUSE_MISMATCH', 'readPublished', recordReaderId, identity.recordReaderId);
+    }
     for (const [option, actual, requested] of [
         ['readPublished', record.readerId, identity.readerId],
         ['installWriterBinding', record.bindingId, identity.bindingId],
@@ -531,7 +611,12 @@ function buildAttachment(session: JobSession, origin: string, listenerIncarnatio
     if (live.status !== 'active') throw new JobHostAttachError('closed', 'acceptance');
     return freezeExpectation({jobId: session.jobId, origin, listenerIncarnation, binding: {
         root: live.root.path, stateDir: live.stateDir, fingerprint: live.fingerprint,
-        reviewer: live.reviewer, ...identity, apiSchema: live.apiSchema, actSchema: live.actSchema,
+        reviewer: live.reviewer,
+        readerId: identity.readerId ?? identity.recordReaderId,
+        bindingId: identity.bindingId,
+        partsEnumeratorId: identity.partsEnumeratorId,
+        partsEnumeratorVersion: identity.partsEnumeratorVersion,
+        apiSchema: live.apiSchema, actSchema: live.actSchema,
     }});
 }
 
@@ -598,8 +683,23 @@ export function createJobRequestContext(session: JobSession, startup: JobHostOpt
     listenerIncarnation: string = hubIncarnation ?? randomUUID(), accepting: () => boolean = () => true) {
     const ports = createJobHostPorts(session, new URL(origin).origin);
     // This legacy GET projection and its property order are deliberately unchanged.
-    const record: JobHostRecord = {schema: 'rig-review-job-host/1', apiSchema: JOB_API_SCHEMA, actSchema: JOB_ACT_SCHEMA,
-        ...identity, jobId: session.jobId, origin, fingerprint: startup.fingerprint, pid: process.pid};
+    const record: JobHostRecord = {
+        schema: 'rig-review-job-host/1',
+        apiSchema: JOB_API_SCHEMA,
+        actSchema: JOB_ACT_SCHEMA,
+        readerId: identity.readerId,
+        bindingId: identity.bindingId,
+        partsEnumeratorId: identity.partsEnumeratorId,
+        partsEnumeratorVersion: identity.partsEnumeratorVersion,
+        ...(identity.publicationMode === 'record-and-package' ? {
+            publicationMode: identity.publicationMode,
+            recordReaderId: identity.recordReaderId,
+        } : {}),
+        jobId: session.jobId,
+        origin,
+        fingerprint: startup.fingerprint,
+        pid: process.pid,
+    };
     const front = createJobFront({origin, ports, resource, hubIncarnation, publication: retainedPublicationRoutes(session)});
     let requests = 0, stopped = false, published = false;
     let captured: ObservedFiles;
@@ -824,7 +924,13 @@ async function attachJobHost(options: JobHostOptions): Promise<JobOwnerHost> {
         fingerprint,
         reviewer,
         ...(port !== undefined ? { port } : {}),
+        ...(options.publicationMode !== undefined ? { publicationMode: options.publicationMode } : {}),
         ...(options.readPublished ? { readPublished: options.readPublished, readerId: identity.readerId! } : {}),
+        ...(options.readRecordPublished ? {
+            readRecordPublished: options.readRecordPublished,
+            recordReaderId: identity.recordReaderId!,
+            ...(options.readerId !== undefined && !options.readPublished ? { readerId: options.readerId } : {}),
+        } : {}),
         ...(options.installWriterBinding ? { installWriterBinding: options.installWriterBinding, bindingId: identity.bindingId! } : {}),
         ...(options.partsEnumerator ? { partsEnumerator: {...options.partsEnumerator}, partsEnumeratorId: identity.partsEnumeratorId! } : {}),
         ...(options.afterSnapshot ? { afterSnapshot: options.afterSnapshot } : {}),
@@ -870,7 +976,10 @@ async function attachJobHost(options: JobHostOptions): Promise<JobOwnerHost> {
     if (fingerprint !== expected.binding.fingerprint) throw reuseMismatch('fingerprint', expected.binding.fingerprint, fingerprint);
     if (reviewer.id !== expected.binding.reviewer.id) throw reuseMismatch('reviewer.id', expected.binding.reviewer.id, reviewer.id);
     if (reviewer.role !== expected.binding.reviewer.role) throw reuseMismatch('reviewer.role', expected.binding.reviewer.role, reviewer.role);
-    if (identity.readerId !== expected.binding.readerId) throw reuseMismatch('readerId', expected.binding.readerId, identity.readerId);
+    const requestedBindingReaderId = identity.readerId ?? identity.recordReaderId;
+    if (requestedBindingReaderId !== expected.binding.readerId) {
+        throw reuseMismatch('readerId', expected.binding.readerId, requestedBindingReaderId);
+    }
     if (identity.bindingId !== expected.binding.bindingId) throw reuseMismatch('bindingId', expected.binding.bindingId, identity.bindingId);
     if (identity.partsEnumeratorId !== expected.binding.partsEnumeratorId) {
         throw reuseMismatch('partsEnumeratorId', expected.binding.partsEnumeratorId, identity.partsEnumeratorId);
@@ -996,14 +1105,36 @@ async function attachJobHost(options: JobHostOptions): Promise<JobOwnerHost> {
     if (descriptor.fingerprint !== expected.binding.fingerprint) {
         throw reuseMismatch('fingerprint', expected.binding.fingerprint, descriptor.fingerprint);
     }
+    const descriptorMode = Object.hasOwn(descriptor, 'publicationMode') ? descriptor.publicationMode : 'package-only';
+    if (descriptorMode !== 'package-only' && descriptorMode !== 'record-and-package') {
+        throw new JobHostAttachError('read', 'record');
+    }
+    const descriptorRecordReaderId = Object.hasOwn(descriptor, 'recordReaderId') ? descriptor.recordReaderId : null;
+    if (descriptorRecordReaderId !== null && (typeof descriptorRecordReaderId !== 'string' || !descriptorRecordReaderId)) {
+        throw new JobHostAttachError('read', 'record');
+    }
+    if (descriptorMode === 'package-only' && descriptorRecordReaderId !== null ||
+        descriptorMode === 'record-and-package' && descriptorRecordReaderId === null) {
+        throw new JobHostAttachError('read', 'record');
+    }
     for (const field of ['readerId', 'bindingId', 'partsEnumeratorId', 'partsEnumeratorVersion'] as const) {
         const val = descriptor[field];
         if (!Object.hasOwn(descriptor, field) || val !== null && (typeof val !== 'string' || !val)) {
             throw new JobHostAttachError('read', 'record');
         }
-        if (val !== expected.binding[field]) {
-            throw reuseMismatch(field, expected.binding[field], (val ?? null) as string | null);
+        const compareVal = field === 'readerId' ? (val ?? descriptorRecordReaderId) : val;
+        if (compareVal !== expected.binding[field]) {
+            throw reuseMismatch(field, expected.binding[field], (compareVal ?? null) as string | null);
         }
+    }
+    if (descriptorMode !== identity.publicationMode ||
+        descriptor.readerId !== identity.readerId ||
+        descriptorRecordReaderId !== identity.recordReaderId) {
+        throw reuseMismatch(
+            'readerId',
+            (descriptor.readerId ?? descriptorRecordReaderId ?? descriptorMode) as string | null,
+            identity.readerId ?? identity.recordReaderId ?? identity.publicationMode,
+        );
     }
     for (const field of ['apiSchema', 'actSchema'] as const) {
         const val = descriptor[field];
@@ -1109,7 +1240,8 @@ function validatedHostRefusal(raw: unknown, status: number): Error | null {
 function snapshotHostOptions(options: JobHostOptions): JobHostOptions {
     const copy = ownData(options);
     if (copy.reuseOnly !== undefined && Object.keys(copy).some(key => ![
-        'root', 'stateDir', 'fingerprint', 'reviewer', 'readPublished', 'readerId', 'installWriterBinding',
+        'root', 'stateDir', 'fingerprint', 'reviewer', 'publicationMode', 'readPublished', 'readerId',
+        'readRecordPublished', 'recordReaderId', 'installWriterBinding',
         'bindingId', 'partsEnumerator', 'partsEnumeratorId', 'port', 'reuseOnly', 'afterSnapshot', 'afterDirectorySync',
     ].includes(key))) throw new JobError('JOB_REQUEST_INVALID');
     if (copy.partsEnumerator !== undefined) copy.partsEnumerator = {...exactKeys(copy.partsEnumerator, ['version', 'enumerate'])};

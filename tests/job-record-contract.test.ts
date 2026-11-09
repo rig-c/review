@@ -1,8 +1,34 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, realpathSync, readdirSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'bun:test';
 import { jobFixture } from './helpers/job-api-fixture.ts';
+import { runRecordBrowserPreflightSetupCheck } from './job-record-browser.ts';
+import {
+  createJobWindow,
+  createJobWindowTransport,
+  jobCheckpointContext,
+  jobWindowAccess,
+  prepareJobForms,
+  prepareJobInspection,
+} from '../web/job-session.ts';
+import * as publicJobHost from '@rig-c/review/job-host';
+import {
+  JOB_API_V3_SCHEMA as HOST_JOB_API_V3_SCHEMA,
+  JOB_RECORD_ACT_SCHEMA as HOST_JOB_RECORD_ACT_SCHEMA,
+  JOB_RECORD_READER_ID as HOST_JOB_RECORD_READER_ID,
+  parseRecordAct as parseRecordActFromHost,
+  prepareJobRecordAct as prepareJobRecordActFromHost,
+  prepareJobRecordSource as prepareJobRecordSourceFromHost,
+  startJobHost,
+  type JobActV3,
+  type JobFetchActRequestV3,
+  type JobPlanSource,
+  type JobRecordAct,
+  type JobRecordHostHooks,
+} from '@rig-c/review/job-host';
 import {
   JOB_ACT_SCHEMA,
   JOB_API_SCHEMA,
@@ -943,3 +969,1405 @@ test('CP1 default normal host (createJobHostPorts + JobSession) refuses API@3 re
     await f.close();
   }
 });
+
+test('#588 @rig-c/review/job-host exports the record-mode constants, types and parser/preparer surface', () => {
+  expect(HOST_JOB_API_V3_SCHEMA).toBe('rig-review/job-api@3');
+  expect(HOST_JOB_RECORD_ACT_SCHEMA).toBe('rig-review/act@4');
+  expect(HOST_JOB_RECORD_READER_ID).toBe('rig-create/publication-reader/2');
+  expect(typeof parseRecordActFromHost).toBe('function');
+  expect(typeof prepareJobRecordActFromHost).toBe('function');
+  expect(typeof prepareJobRecordSourceFromHost).toBe('function');
+  expect(publicJobHost.JOB_API_V3_SCHEMA).toBe(JOB_API_V3_SCHEMA);
+  expect(publicJobHost.JOB_RECORD_ACT_SCHEMA).toBe(JOB_RECORD_ACT_SCHEMA);
+  expect(publicJobHost.JOB_RECORD_READER_ID).toBe(JOB_RECORD_READER_ID);
+  expect(publicJobHost.parseRecordAct).toBe(parseRecordAct);
+});
+
+// Archive-backed reader-double evidence using 2-rigging-answers.tar.gz with a local
+// readRecordPublished double and synthetic parts integrity (distinct from official
+// installed Create reader/consumer conformance in Create #278 and Create #317).
+test('#588 archive-backed reader-double evidence: host started with readRecordPublished serves a Create project archive under job-api@3, asks and finalizes checkpoint and signoff subjects, fetches rig-review/act@4 acts via parseRecordAct, and refuses undeclared subjects by name', async () => {
+  const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-588-create-record-'));
+  const root = join(scratch, 'project');
+  const stateDir = join(scratch, 'state');
+  await mkdir(root, { recursive: true });
+
+  const archivePath = new URL('./fixtures/create-pre-rig/2-rigging-answers.tar.gz', import.meta.url).pathname;
+  const sidecarPath = new URL('./fixtures/create-pre-rig/2-rigging-answers.json', import.meta.url).pathname;
+  const archiveBytes = await readFile(archivePath);
+  const extracted = Bun.spawnSync(['tar', '-xzf', '-', '-C', root], { stdin: archiveBytes });
+  expect(extracted.exitCode).toBe(0);
+
+  const sidecar = JSON.parse(await readFile(sidecarPath, 'utf8')) as {
+    project_sha256: string;
+    files: { path: string; sha256: string }[];
+  };
+  const projectBytes = await readFile(join(root, 'project.json'));
+  const projectSha = createHash('sha256').update(projectBytes).digest('hex');
+  expect(projectSha).toBe(sidecar.project_sha256);
+
+  const projectDoc = JSON.parse(projectBytes.toString('utf8')) as {
+    name: string;
+    inputs: { path: string; sha256: string }[];
+    plan: { steps: { id: string; [key: string]: unknown }[] };
+    signoffs: { stage: string; steps?: string[]; step_hashes?: Record<string, string> }[];
+  };
+  const planApprovedSignoff = projectDoc.signoffs.find(item => item.stage === 'plan-approved')!;
+  const planSteps = projectDoc.plan.steps.map(step => ({
+    id: step.id,
+    hash:
+      planApprovedSignoff.step_hashes?.[step.id] ??
+      createHash('sha256').update(JSON.stringify(step)).digest('hex'),
+  }));
+  expect(planSteps.slice(0, 2).map(s => s.id)).toEqual(['seethrough', 'assemble']);
+
+  const closureFiles = sidecar.files
+    .filter(f => f.path === 'project.json' || f.path.startsWith('inputs/') || f.path.startsWith('evidence/'))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const createInputs = projectDoc.inputs.map(({ path, sha256 }) => ({ path, sha256 }));
+  const partsIdentity: RecordPartsIdentity = {
+    name: '@rig-c/parts',
+    version: '2.25.1',
+    integrity: 'sha512-create-project-record-parts',
+  };
+
+  const readRecordPublished = (async (input: publicJobHost.JobRecordReaderInput) => {
+    const currentProjectBytes = await readFile(join(input.root, input.record.path));
+    const currentSha = createHash('sha256').update(currentProjectBytes).digest('hex');
+    if (currentSha !== input.record.sha256) {
+      throw new Error('Project record hash mismatch');
+    }
+    if (input.result.kind === 'option-set') {
+      const optionContext: OptionContext = {
+        label: `${projectDoc.name}:${input.result.questionId}`,
+        parts: input.parts ?? partsIdentity,
+        inputs: createInputs,
+        files: closureFiles,
+        plan: null,
+        subjects: [
+          {
+            kind: 'interview-picks',
+            questionId: input.result.questionId,
+            setId: input.result.setId,
+          },
+        ],
+      };
+      return optionContext;
+    }
+    const planContext: PlanContext = {
+      label: projectDoc.name,
+      parts: input.parts ?? partsIdentity,
+      inputs: createInputs,
+      files: closureFiles,
+      plan: { steps: planSteps },
+      subjects: [
+        { kind: 'checkpoint', checkpointId: 'seethrough' },
+        { kind: 'checkpoint', checkpointId: 'assemble' },
+        { kind: 'signoff', stage: 'plan-approved' },
+        { kind: 'signoff', stage: 'rigging-interview' },
+      ],
+    };
+    return planContext;
+  }) as publicJobHost.JobRecordPublicationReader;
+
+  const hooks: JobRecordHostHooks = {
+    publicationMode: 'record-and-package',
+    readerId: HOST_JOB_RECORD_READER_ID,
+    readPublished: async () => {
+      throw new Error('Unexpected package reader call on record publication');
+    },
+    readRecordPublished,
+  };
+
+  let consumerGrant: { jobId: string; fetchCapability: string; origin: string } | null = null;
+  const host = await startJobHost({
+    root,
+    stateDir,
+    fingerprint: 'f'.repeat(64),
+    reviewer: { id: 'reviewer-create-588', role: 'owner' },
+    ...hooks,
+    bindingId: 'record-writer/1',
+    installWriterBinding: grant => {
+      consumerGrant = grant;
+    },
+  });
+
+  try {
+    expect(consumerGrant).not.toBeNull();
+    const credentials = host.session.hostCredentials();
+    let seq = 0;
+    const callApi = async (body: Record<string, unknown>, token = credentials.agent, accept?: string) => {
+      return host.ports.handleJobApi(
+        new Request(`${host.origin}/jobs/${host.session.jobId}/api`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            ...(accept ? { Accept: accept } : {}),
+          },
+          body: JSON.stringify(body),
+        }),
+      );
+    };
+
+    // 1. next over job-api@3 reports record capabilities
+    const nextInitialRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'next',
+      after: null,
+      waitMs: 0,
+    });
+    expect(nextInitialRes.status).toBe(200);
+    const nextInitialJson = await nextInitialRes.json();
+    expect(nextInitialJson).toMatchObject({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      verb: 'next',
+      jobId: host.session.jobId,
+      ok: true,
+      value: {
+        status: 'timeout',
+        capabilities: JOB_CAPABILITIES_V3,
+        events: [],
+      },
+    });
+
+    // 2. Publish plan record publication from the Create project over job-api@3
+    const publishPlanRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'publish',
+      expectedGeneration: 0,
+      idempotencyKey: 'publish-create-plan-1',
+      result: { kind: 'plan' },
+      freeze: {
+        kind: 'producer-held',
+        holdId: 'hold-create-plan-1',
+        record: { path: 'project.json', sha256: projectSha },
+      },
+    });
+    expect(publishPlanRes.status).toBe(200);
+    const publishPlanJson = await publishPlanRes.json();
+    expect(publishPlanJson.schema).toBe(HOST_JOB_API_V3_SCHEMA);
+    expect(publishPlanJson.ok).toBe(true);
+    const planPublication = publishPlanJson.value as publicJobHost.JobPublicationV3;
+    const planSource = planPublication.source as JobPlanSource;
+    expect(planSource.subject).toBe('plan');
+    expect(planSource.projectHash).toBe(projectSha);
+    expect(planSource.plan.steps).toEqual(planSteps);
+
+    // 3. Undeclared subjects refuse by name (JOB_ASK_INVALID)
+    for (const undeclaredSubject of [
+      { kind: 'checkpoint', checkpointId: 'undeclared_step' },
+      { kind: 'signoff', stage: 'post-interview' },
+      { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
+    ]) {
+      const badAskRes = await callApi({
+        schema: HOST_JOB_API_V3_SCHEMA,
+        jobId: host.session.jobId,
+        requestId: `req-${++seq}`,
+        verb: 'ask',
+        expectedGeneration: host.session.status().generation,
+        idempotencyKey: `bad-ask-${seq}`,
+        publicationId: planPublication.publicationId,
+        subject: undeclaredSubject,
+      });
+      expect(badAskRes.status).toBe(409);
+      const badAskJson = await badAskRes.json();
+      expect(badAskJson).toMatchObject({
+        schema: HOST_JOB_API_V3_SCHEMA,
+        ok: false,
+        error: { code: 'JOB_ASK_INVALID' },
+      });
+    }
+
+    // Acknowledge display of the plan publication
+    const ackPlanRes = await host.ports.ackDisplayed(
+      host.session.jobId,
+      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/displayed`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: host.origin,
+          'X-Review-Capability': credentials.ui,
+        },
+        body: JSON.stringify({
+          publicationId: planPublication.publicationId,
+          pageId: 'page-create-plan',
+          sourceHash: planPublication.source.sourceHash,
+        }),
+      }),
+    );
+    expect(ackPlanRes.ok).toBe(true);
+    if (!ackPlanRes.ok) throw new Error(ackPlanRes.error.code);
+    const displayedNonce = ackPlanRes.value.displayedNonce;
+
+    // 4. Ask a declared checkpoint subject, verify undeclared/mismatched act value refuses JOB_ACT_INVALID, then finalize and fetch over job-api@3
+    const askCheckpointRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'ask',
+      expectedGeneration: host.session.status().generation,
+      idempotencyKey: 'ask-checkpoint-seethrough',
+      publicationId: planPublication.publicationId,
+      subject: { kind: 'checkpoint', checkpointId: 'seethrough' },
+    });
+    expect(askCheckpointRes.status).toBe(200);
+    const askCheckpointJson = await askCheckpointRes.json();
+    expect(askCheckpointJson.schema).toBe(HOST_JOB_API_V3_SCHEMA);
+    expect(askCheckpointJson.ok).toBe(true);
+    const checkpointAsk = askCheckpointJson.value as publicJobHost.JobPendingAskV3;
+
+    const badCheckpointActRes = await host.ports.commitUIAct(
+      host.session.jobId,
+      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: host.origin,
+          'X-Review-Capability': credentials.ui,
+        },
+        body: JSON.stringify({
+          publicationId: planPublication.publicationId,
+          askId: checkpointAsk.askId,
+          pageId: 'page-create-plan',
+          displayedNonce,
+          expectedGeneration: host.session.status().generation,
+          submissionId: 'sub-bad-checkpoint',
+          kind: 'checkpoint',
+          value: {
+            checkpointId: 'undeclared_step',
+            outcome: 'pass',
+            words: 'Mismatched checkpoint ID',
+          },
+        }),
+      }),
+    );
+    expect(badCheckpointActRes).toEqual({
+      ok: false,
+      error: { code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID' },
+    });
+
+    const commitCheckpointRes = await host.ports.commitUIAct(
+      host.session.jobId,
+      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: host.origin,
+          'X-Review-Capability': credentials.ui,
+        },
+        body: JSON.stringify({
+          publicationId: planPublication.publicationId,
+          askId: checkpointAsk.askId,
+          pageId: 'page-create-plan',
+          displayedNonce,
+          expectedGeneration: host.session.status().generation,
+          submissionId: 'sub-checkpoint-seethrough',
+          kind: 'checkpoint',
+          value: {
+            checkpointId: 'seethrough',
+            outcome: 'pass',
+            words: 'Seethrough checkpoint verified.',
+          },
+        }),
+      }),
+    );
+    expect(commitCheckpointRes.ok).toBe(true);
+    if (!commitCheckpointRes.ok) throw new Error(commitCheckpointRes.error.code);
+    const finalizedCheckpointAct = commitCheckpointRes.value as unknown as JobRecordAct;
+    expect(finalizedCheckpointAct.schema).toBe(HOST_JOB_RECORD_ACT_SCHEMA);
+
+    const fetchCheckpointReq: JobFetchActRequestV3 = {
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'fetch-act',
+      actId: finalizedCheckpointAct.actId,
+    };
+    const fetchCheckpointRes = await callApi(fetchCheckpointReq, consumerGrant!.fetchCapability);
+    expect(fetchCheckpointRes.status).toBe(200);
+    const fetchCheckpointJson = await fetchCheckpointRes.json();
+    expect(fetchCheckpointJson.schema).toBe(HOST_JOB_API_V3_SCHEMA);
+    expect(fetchCheckpointJson.ok).toBe(true);
+    const parsedCheckpointAct: JobActV3 = parseRecordActFromHost(fetchCheckpointJson.value);
+    expect(parsedCheckpointAct).toEqual(finalizedCheckpointAct);
+    expect(parsedCheckpointAct.kind).toBe('checkpoint');
+    if (parsedCheckpointAct.kind === 'checkpoint') {
+      expect(parsedCheckpointAct.value).toEqual({
+        checkpointId: 'seethrough',
+        planStepId: 'seethrough',
+        outcome: 'pass',
+        words: 'Seethrough checkpoint verified.',
+      });
+    }
+
+    // Raw act export succeeds while PNG still export refuses JOB_STILL_UNAVAILABLE
+    const rawCheckpointRes = await callApi(
+      fetchCheckpointReq,
+      consumerGrant!.fetchCapability,
+      'application/vnd.rig-review.act+json',
+    );
+    expect(rawCheckpointRes.status).toBe(200);
+    expect(parseRecordActFromHost(JSON.parse(await rawCheckpointRes.text()))).toEqual(finalizedCheckpointAct);
+
+    const pngCheckpointRes = await callApi(fetchCheckpointReq, consumerGrant!.fetchCapability, 'image/png');
+    expect(pngCheckpointRes.status).toBe(409);
+    expect(await pngCheckpointRes.json()).toMatchObject({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      ok: false,
+      error: { code: 'JOB_STILL_UNAVAILABLE' },
+    });
+
+    // Undeclared subject inside a forged RecordAct also refuses JOB_ACT_INVALID via exported parseRecordAct
+    expect(() =>
+      parseRecordActFromHost({
+        ...finalizedCheckpointAct,
+        value: {
+          checkpointId: 'undeclared_step',
+          planStepId: 'undeclared_step',
+          outcome: 'pass',
+          words: '',
+        },
+      }),
+    ).toThrow('JOB_ACT_INVALID');
+
+    // 5. Ask a declared signoff subject, verify undeclared stage refuses JOB_ACT_INVALID, then finalize and fetch over job-api@3
+    const askSignoffRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'ask',
+      expectedGeneration: host.session.status().generation,
+      idempotencyKey: 'ask-signoff-rigging-interview',
+      publicationId: planPublication.publicationId,
+      subject: { kind: 'signoff', stage: 'rigging-interview' },
+    });
+    expect(askSignoffRes.status).toBe(200);
+    const askSignoffJson = await askSignoffRes.json();
+    expect(askSignoffJson.schema).toBe(HOST_JOB_API_V3_SCHEMA);
+    expect(askSignoffJson.ok).toBe(true);
+    const signoffAsk = askSignoffJson.value as publicJobHost.JobPendingAskV3;
+
+    const badSignoffActRes = await host.ports.commitUIAct(
+      host.session.jobId,
+      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: host.origin,
+          'X-Review-Capability': credentials.ui,
+        },
+        body: JSON.stringify({
+          publicationId: planPublication.publicationId,
+          askId: signoffAsk.askId,
+          pageId: 'page-create-plan',
+          displayedNonce,
+          expectedGeneration: host.session.status().generation,
+          submissionId: 'sub-bad-signoff',
+          kind: 'signoff',
+          value: {
+            stage: 'post-interview',
+            decision: 'approved',
+            words: 'Undeclared stage',
+          },
+        }),
+      }),
+    );
+    expect(badSignoffActRes).toEqual({
+      ok: false,
+      error: { code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID' },
+    });
+
+    const commitSignoffRes = await host.ports.commitUIAct(
+      host.session.jobId,
+      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: host.origin,
+          'X-Review-Capability': credentials.ui,
+        },
+        body: JSON.stringify({
+          publicationId: planPublication.publicationId,
+          askId: signoffAsk.askId,
+          pageId: 'page-create-plan',
+          displayedNonce,
+          expectedGeneration: host.session.status().generation,
+          submissionId: 'sub-signoff-rigging-interview',
+          kind: 'signoff',
+          value: {
+            stage: 'rigging-interview',
+            decision: 'approved',
+            words: 'Approve rigging-interview plan.\n',
+          },
+        }),
+      }),
+    );
+    expect(commitSignoffRes.ok).toBe(true);
+    if (!commitSignoffRes.ok) throw new Error(commitSignoffRes.error.code);
+    const finalizedSignoffAct = commitSignoffRes.value as unknown as JobRecordAct;
+    expect(finalizedSignoffAct.schema).toBe(HOST_JOB_RECORD_ACT_SCHEMA);
+
+    const fetchSignoffReq: JobFetchActRequestV3 = {
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'fetch-act',
+      actId: finalizedSignoffAct.actId,
+    };
+    const fetchSignoffRes = await callApi(fetchSignoffReq, consumerGrant!.fetchCapability);
+    expect(fetchSignoffRes.status).toBe(200);
+    const fetchSignoffJson = await fetchSignoffRes.json();
+    expect(fetchSignoffJson.schema).toBe(HOST_JOB_API_V3_SCHEMA);
+    expect(fetchSignoffJson.ok).toBe(true);
+    const parsedSignoffAct = parseRecordActFromHost(fetchSignoffJson.value);
+    expect(parsedSignoffAct).toEqual(finalizedSignoffAct);
+    expect(parsedSignoffAct.kind).toBe('signoff');
+    if (parsedSignoffAct.kind === 'signoff') {
+      expect(parsedSignoffAct.value).toEqual({
+        stage: 'rigging-interview',
+        decision: 'approved',
+        words: 'Approve rigging-interview plan.\n',
+      });
+    }
+
+    // 6. Publish option-set record publication from the same Create project and finalize interview-picks
+    const publishOptionRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'publish',
+      expectedGeneration: host.session.status().generation,
+      idempotencyKey: 'publish-create-option-bones',
+      result: { kind: 'option-set', questionId: 'bones', setId: 'chain-bones' },
+      freeze: {
+        kind: 'producer-held',
+        holdId: 'hold-create-option-bones',
+        record: { path: 'project.json', sha256: projectSha },
+      },
+    });
+    expect(publishOptionRes.status).toBe(200);
+    const publishOptionJson = await publishOptionRes.json();
+    expect(publishOptionJson.schema).toBe(HOST_JOB_API_V3_SCHEMA);
+    expect(publishOptionJson.ok).toBe(true);
+    const optionPublication = publishOptionJson.value as publicJobHost.JobPublicationV3;
+    expect(optionPublication.source.subject).toBe('option-set');
+
+    const ackOptionRes = await host.ports.ackDisplayed(
+      host.session.jobId,
+      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/displayed`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: host.origin,
+          'X-Review-Capability': credentials.ui,
+        },
+        body: JSON.stringify({
+          publicationId: optionPublication.publicationId,
+          pageId: 'page-create-option',
+          sourceHash: optionPublication.source.sourceHash,
+        }),
+      }),
+    );
+    expect(ackOptionRes.ok).toBe(true);
+    if (!ackOptionRes.ok) throw new Error(ackOptionRes.error.code);
+
+    const askOptionRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'ask',
+      expectedGeneration: host.session.status().generation,
+      idempotencyKey: 'ask-option-bones',
+      publicationId: optionPublication.publicationId,
+      subject: { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
+    });
+    expect(askOptionRes.status).toBe(200);
+    const optionAsk = (await askOptionRes.json()).value as publicJobHost.JobPendingAskV3;
+
+    const commitOptionRes = await host.ports.commitUIAct(
+      host.session.jobId,
+      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: host.origin,
+          'X-Review-Capability': credentials.ui,
+        },
+        body: JSON.stringify({
+          publicationId: optionPublication.publicationId,
+          askId: optionAsk.askId,
+          pageId: 'page-create-option',
+          displayedNonce: ackOptionRes.value.displayedNonce,
+          expectedGeneration: host.session.status().generation,
+          submissionId: 'sub-option-bones',
+          kind: 'interview-picks',
+          value: {
+            questionId: 'bones',
+            selections: [
+              { itemId: 'chains', optionId: 'keep', otherText: null },
+              { itemId: 'placement', optionId: 'keep', otherText: null },
+              { itemId: 'length', optionId: 'keep', otherText: null },
+            ],
+            note: 'Keep synthetic bones options.',
+          },
+        }),
+      }),
+    );
+    expect(commitOptionRes.ok).toBe(true);
+    if (!commitOptionRes.ok) throw new Error(commitOptionRes.error.code);
+    const finalizedOptionAct = commitOptionRes.value as unknown as JobRecordAct;
+    const fetchOptionRes = await callApi(
+      {
+        schema: HOST_JOB_API_V3_SCHEMA,
+        jobId: host.session.jobId,
+        requestId: `req-${++seq}`,
+        verb: 'fetch-act',
+        actId: finalizedOptionAct.actId,
+      },
+      consumerGrant!.fetchCapability,
+    );
+    expect(fetchOptionRes.status).toBe(200);
+    const parsedOptionAct = parseRecordActFromHost((await fetchOptionRes.json()).value);
+    expect(parsedOptionAct).toEqual(finalizedOptionAct);
+    expect(parsedOptionAct.kind).toBe('interview-picks');
+
+    // 7. Close over job-api@3 succeeds and revokes consumer fetch
+    const closeRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'close',
+      expectedGeneration: host.session.status().generation,
+      idempotencyKey: 'close-create-record-job',
+      reason: 'completed record review',
+    });
+    expect(closeRes.status).toBe(200);
+    expect(await closeRes.json()).toMatchObject({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      verb: 'close',
+      ok: true,
+      value: { status: 'closed' },
+    });
+
+    const postCloseFetchRes = await callApi(fetchSignoffReq, consumerGrant!.fetchCapability);
+    expect(postCloseFetchRes.status).toBe(409);
+    expect(await postCloseFetchRes.json()).toMatchObject({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      ok: false,
+      error: { code: 'JOB_CLOSED' },
+    });
+  } finally {
+    host.stop();
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test('#588 record host compatibility: cold start hook pairing, ordinary reuse, and strict reuseOnly prevent silent mode or reader substitution while preserving the 10-field reuse binding', async () => {
+  const f = await jobFixture();
+  try {
+    const base: publicJobHost.JobHostOptions = {
+      root: f.root,
+      stateDir: f.state,
+      fingerprint: 'f'.repeat(64),
+      reviewer: { id: 'declared-owner', role: 'owner' },
+    };
+    const dummyRecordReader = (async () => {
+      throw new Error('unused');
+    }) as unknown as publicJobHost.JobRecordPublicationReader;
+
+    // 1. Invalid or unpaired record hook options refuse JOB_HOST_OPTION_ID_INVALID on cold start
+    for (const invalid of [
+      { readRecordPublished: dummyRecordReader },
+      { recordReaderId: HOST_JOB_RECORD_READER_ID },
+      { readRecordPublished: dummyRecordReader, recordReaderId: '' },
+      { publicationMode: 'record-and-package' as const },
+      { publicationMode: 'package-only' as const, readRecordPublished: dummyRecordReader, recordReaderId: HOST_JOB_RECORD_READER_ID },
+      { publicationMode: 'invalid-mode' as unknown as publicJobHost.JobPublicationMode },
+    ]) {
+      await expect(startJobHost({ ...base, ...invalid })).rejects.toMatchObject({
+        code: 'JOB_HOST_OPTION_ID_INVALID',
+        option: 'readPublished',
+      });
+    }
+
+    // 2. Package-only listener refuses ordinary reuse and strict reuseOnly from record-mode callers
+    const pkgOptions: publicJobHost.JobHostOptions = {
+      ...base,
+      readPublished: async () => f.getContext(),
+      readerId: 'pkg-reader/1',
+    };
+    const pkgHost = await startJobHost(pkgOptions);
+    try {
+      expect(pkgHost.reused).toBe(false);
+      expect(pkgHost.attachment).not.toBeNull();
+      expect(Object.keys(pkgHost.attachment!.binding)).toEqual([
+        'root', 'stateDir', 'fingerprint', 'reviewer',
+        'readerId', 'bindingId', 'partsEnumeratorId', 'partsEnumeratorVersion',
+        'apiSchema', 'actSchema',
+      ]);
+
+      // Descriptor for package-only host keeps exact legacy keys without publicationMode/recordReaderId
+      const hostDescRes = await fetch(`${pkgHost.origin}/jobs/${pkgHost.session.jobId}/host`, {
+        headers: { 'X-Review-Capability': pkgHost.session.hostCredentials().ui },
+      });
+      expect(hostDescRes.status).toBe(200);
+      const pkgDesc = await hostDescRes.json();
+      expect(pkgDesc).not.toHaveProperty('publicationMode');
+      expect(pkgDesc).not.toHaveProperty('recordReaderId');
+
+      const recordCallerOptions: publicJobHost.JobHostOptions = {
+        ...base,
+        publicationMode: 'record-and-package',
+        readPublished: async () => f.getContext(),
+        readRecordPublished: dummyRecordReader,
+        readerId: 'pkg-reader/1',
+      };
+      await expect(startJobHost(recordCallerOptions)).rejects.toMatchObject({
+        code: 'JOB_HOST_REUSE_MISMATCH',
+        option: 'readPublished',
+      });
+      await expect(
+        startJobHost({ ...recordCallerOptions, reuseOnly: { expected: pkgHost.attachment! } }),
+      ).rejects.toMatchObject({
+        code: 'JOB_HOST_REUSE_MISMATCH',
+        field: 'readerId',
+      });
+    } finally {
+      pkgHost.stop();
+    }
+
+    // 3. Stopped package-only host can restart in record-and-package mode; record listener enforces mode & reader ID on reuse and reuseOnly
+    const recordOptions: publicJobHost.JobHostOptions = {
+      ...base,
+      publicationMode: 'record-and-package',
+      readPublished: async () => f.getContext(),
+      readRecordPublished: dummyRecordReader,
+      readerId: HOST_JOB_RECORD_READER_ID,
+    };
+    const recordHost = await startJobHost(recordOptions);
+    try {
+      expect(recordHost.reused).toBe(false);
+      expect(recordHost.attachment).not.toBeNull();
+      expect(Object.keys(recordHost.attachment!.binding)).toEqual([
+        'root', 'stateDir', 'fingerprint', 'reviewer',
+        'readerId', 'bindingId', 'partsEnumeratorId', 'partsEnumeratorVersion',
+        'apiSchema', 'actSchema',
+      ]);
+      expect(recordHost.attachment!.binding.readerId).toBe(HOST_JOB_RECORD_READER_ID);
+
+      // Package-only caller cannot silently reuse the record-mode listener (even with same readerId string)
+      const pkgSameIdCaller: publicJobHost.JobHostOptions = {
+        ...base,
+        readPublished: async () => f.getContext(),
+        readerId: HOST_JOB_RECORD_READER_ID,
+      };
+      await expect(startJobHost(pkgSameIdCaller)).rejects.toMatchObject({
+        code: 'JOB_HOST_REUSE_MISMATCH',
+        option: 'readPublished',
+      });
+      await expect(
+        startJobHost({ ...pkgSameIdCaller, reuseOnly: { expected: recordHost.attachment! } }),
+      ).rejects.toMatchObject({
+        code: 'JOB_HOST_REUSE_MISMATCH',
+        field: 'readerId',
+      });
+
+      // Record caller with a different recordReaderId or missing readPublished refuses reuse
+      for (const mismatch of [
+        {
+          ...base,
+          publicationMode: 'record-and-package' as const,
+          readPublished: async () => f.getContext(),
+          readRecordPublished: dummyRecordReader,
+          readerId: 'other-record-reader/2',
+        },
+        {
+          ...base,
+          publicationMode: 'record-and-package' as const,
+          readRecordPublished: dummyRecordReader,
+          recordReaderId: HOST_JOB_RECORD_READER_ID,
+        },
+      ]) {
+        await expect(startJobHost(mismatch)).rejects.toMatchObject({
+          code: 'JOB_HOST_REUSE_MISMATCH',
+          option: 'readPublished',
+        });
+        await expect(
+          startJobHost({ ...mismatch, reuseOnly: { expected: recordHost.attachment! } }),
+        ).rejects.toMatchObject({
+          code: 'JOB_HOST_REUSE_MISMATCH',
+          field: 'readerId',
+        });
+      }
+
+      // Matching record-mode caller succeeds in both ordinary reuse and strict reuseOnly
+      const reusedRecord = await startJobHost(recordOptions);
+      try {
+        expect(reusedRecord.reused).toBe(true);
+        expect(reusedRecord.ownerUrl).toBe(recordHost.ownerUrl);
+        expect(reusedRecord.attachment).toEqual(recordHost.attachment);
+      } finally {
+        reusedRecord.stop();
+      }
+
+      const attachedRecord = await startJobHost({
+        ...recordOptions,
+        reuseOnly: { expected: recordHost.attachment! },
+      });
+      try {
+        expect(attachedRecord.reused).toBe(true);
+        expect(attachedRecord.attachment).toEqual(recordHost.attachment);
+        const nextRes = await attachedRecord.ports.handleJobApi(
+          new Request(`${attachedRecord.origin}/jobs/${attachedRecord.session.jobId}/api`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${recordHost.session.hostCredentials().agent}`,
+            },
+            body: JSON.stringify({
+              schema: HOST_JOB_API_V3_SCHEMA,
+              jobId: attachedRecord.session.jobId,
+              requestId: 'req-attached-next',
+              verb: 'next',
+              after: null,
+              waitMs: 0,
+            }),
+          }),
+        );
+        expect(nextRes.status).toBe(200);
+        expect(await nextRes.json()).toMatchObject({
+          schema: HOST_JOB_API_V3_SCHEMA,
+          ok: true,
+          value: { capabilities: JOB_CAPABILITIES_V3 },
+        });
+      } finally {
+        attachedRecord.stop();
+      }
+    } finally {
+      recordHost.stop();
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+test('#588 record-move and freshness boundaries: publish, ask, and commitUIAct report JOB_RECORD_MOVED when project.json moves during reader phases or before synchronous store commit', async () => {
+  const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-588-move-boundary-'));
+  const root = join(scratch, 'project');
+  const stateDir = join(scratch, 'state');
+  await mkdir(join(root, 'inputs'), { recursive: true });
+
+  const originalProject = '{"schema":"rig-create/project@0","plan":{"steps":[{"id":"step-1"}]}}\n';
+  const inputBytes = 'reference-image-bytes\n';
+  await writeFile(join(root, 'project.json'), originalProject);
+  await writeFile(join(root, 'inputs/ref.png'), inputBytes);
+
+  const hashBytes = (content: string | Buffer) => createHash('sha256').update(content).digest('hex');
+  const initialProjectSha = hashBytes(originalProject);
+  const inputSha = hashBytes(inputBytes);
+
+  let mode: 'normal' | 'move-on-retained-throw-generic' | 'move-after-retained-read' = 'normal';
+  let afterSnapshotHook: (() => Promise<void>) | undefined;
+
+  const readRecordPublished = (async (input: publicJobHost.JobRecordReaderInput) => {
+    if (input.phase === 'retained' && mode === 'move-on-retained-throw-generic') {
+      await writeFile(join(root, 'project.json'), '{"schema":"rig-create/project@0","plan":{"steps":[{"id":"step-1"}]},"moved":"during-retained"}\n');
+      throw new Error('Untagged reader parse error after concurrent project.json write');
+    }
+    const planContext: PlanContext = {
+      label: 'Move boundary plan',
+      parts: sealedParts,
+      inputs: [{ path: 'inputs/ref.png', sha256: inputSha }],
+      files: [
+        { path: 'inputs/ref.png', sha256: inputSha },
+        { path: 'project.json', sha256: input.record.sha256 },
+      ],
+      plan: { steps: [{ id: 'step-1', hash: sha('1') }] },
+      subjects: [
+        { kind: 'checkpoint', checkpointId: 'step-1' },
+        { kind: 'signoff', stage: 'plan-approved' },
+      ],
+    };
+    if (input.phase === 'retained' && mode === 'move-after-retained-read') {
+      await writeFile(join(root, 'project.json'), '{"schema":"rig-create/project@0","plan":{"steps":[{"id":"step-1"}]},"moved":"after-retained-read"}\n');
+    }
+    return planContext;
+  }) as publicJobHost.JobRecordPublicationReader;
+
+  const host = await startJobHost({
+    root,
+    stateDir,
+    fingerprint: 'e'.repeat(64),
+    reviewer: { id: 'reviewer-move-boundary', role: 'owner' },
+    publicationMode: 'record-and-package',
+    readerId: HOST_JOB_RECORD_READER_ID,
+    readRecordPublished,
+    afterSnapshot: async () => {
+      await afterSnapshotHook?.();
+    },
+  });
+
+  try {
+    const credentials = host.session.hostCredentials();
+    let seq = 0;
+    const callApi = async (body: Record<string, unknown>) =>
+      host.ports.handleJobApi(
+        new Request(`${host.origin}/jobs/${host.session.jobId}/api`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${credentials.agent}`,
+          },
+          body: JSON.stringify(body),
+        }),
+      );
+
+    // 1. Move during retained phase + untagged reader error must report JOB_RECORD_MOVED (never flattened to JOB_RECORD_INCOMPLETE)
+    mode = 'move-on-retained-throw-generic';
+    const moveRetainedRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'publish',
+      expectedGeneration: 0,
+      idempotencyKey: 'publish-move-retained',
+      result: { kind: 'plan' },
+      freeze: {
+        kind: 'producer-held',
+        holdId: 'hold-1',
+        record: { path: 'project.json', sha256: initialProjectSha },
+      },
+    });
+    expect(moveRetainedRes.status).toBe(409);
+    expect(await moveRetainedRes.json()).toMatchObject({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      ok: false,
+      error: { code: 'JOB_RECORD_MOVED' },
+    });
+    expect(host.session.status().generation).toBe(0);
+
+    // Restore project.json and test move in afterSnapshot (right before synchronous store.update commit)
+    await writeFile(join(root, 'project.json'), originalProject);
+    mode = 'normal';
+    afterSnapshotHook = async () => {
+      await writeFile(join(root, 'project.json'), '{"schema":"rig-create/project@1","step":"moved-before-store-commit"}\n');
+    };
+    const moveBeforeCommitRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'publish',
+      expectedGeneration: 0,
+      idempotencyKey: 'publish-move-before-commit',
+      result: { kind: 'plan' },
+      freeze: {
+        kind: 'producer-held',
+        holdId: 'hold-1',
+        record: { path: 'project.json', sha256: initialProjectSha },
+      },
+    });
+    expect(moveBeforeCommitRes.status).toBe(409);
+    expect(await moveBeforeCommitRes.json()).toMatchObject({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      ok: false,
+      error: { code: 'JOB_RECORD_MOVED' },
+    });
+    expect(host.session.status().generation).toBe(0);
+
+    // 2. Restore project.json and publish cleanly
+    await writeFile(join(root, 'project.json'), originalProject);
+    afterSnapshotHook = undefined;
+    const cleanPublishRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'publish',
+      expectedGeneration: 0,
+      idempotencyKey: 'publish-clean',
+      result: { kind: 'plan' },
+      freeze: {
+        kind: 'producer-held',
+        holdId: 'hold-1',
+        record: { path: 'project.json', sha256: initialProjectSha },
+      },
+    });
+    expect(cleanPublishRes.status).toBe(200);
+    const publication = (await cleanPublishRes.json()).value as publicJobHost.JobPublicationV3;
+    expect(host.session.status().generation).toBe(1);
+
+    // 3. During ask, if project.json moves right after retained reader returns, ask refuses JOB_RECORD_MOVED without advancing generation
+    mode = 'move-after-retained-read';
+    const moveAskRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'ask',
+      expectedGeneration: 1,
+      idempotencyKey: 'ask-move-after-retained',
+      publicationId: publication.publicationId,
+      subject: { kind: 'checkpoint', checkpointId: 'step-1' },
+    });
+    expect(moveAskRes.status).toBe(409);
+    expect(await moveAskRes.json()).toMatchObject({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      ok: false,
+      error: { code: 'JOB_RECORD_MOVED' },
+    });
+    expect(host.session.status().generation).toBe(1);
+    expect(host.session.status().pending).toHaveLength(0);
+
+    // 4. Restore project.json, ask cleanly, acknowledge display, then move project.json during commitUIAct retained check
+    await writeFile(join(root, 'project.json'), originalProject);
+    mode = 'normal';
+    const cleanAskRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'ask',
+      expectedGeneration: 1,
+      idempotencyKey: 'ask-clean',
+      publicationId: publication.publicationId,
+      subject: { kind: 'checkpoint', checkpointId: 'step-1' },
+    });
+    expect(cleanAskRes.status).toBe(200);
+    const ask = (await cleanAskRes.json()).value as publicJobHost.JobPendingAskV3;
+    expect(host.session.status().generation).toBe(2);
+
+    const ackRes = await host.ports.ackDisplayed(
+      host.session.jobId,
+      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/displayed`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: host.origin,
+          'X-Review-Capability': credentials.ui,
+        },
+        body: JSON.stringify({
+          publicationId: publication.publicationId,
+          pageId: 'page-move-boundary',
+          sourceHash: publication.source.sourceHash,
+        }),
+      }),
+    );
+    expect(ackRes.ok).toBe(true);
+    if (!ackRes.ok) throw new Error(ackRes.error.code);
+
+    mode = 'move-after-retained-read';
+    const moveActRes = await host.ports.commitUIAct(
+      host.session.jobId,
+      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: host.origin,
+          'X-Review-Capability': credentials.ui,
+        },
+        body: JSON.stringify({
+          publicationId: publication.publicationId,
+          askId: ask.askId,
+          pageId: 'page-move-boundary',
+          displayedNonce: ackRes.value.displayedNonce,
+          expectedGeneration: 2,
+          submissionId: 'sub-move-after-retained',
+          kind: 'checkpoint',
+          value: { checkpointId: 'step-1', outcome: 'pass', words: 'Should refuse' },
+        }),
+      }),
+    );
+    expect(moveActRes).toEqual({
+      ok: false,
+      error: { code: 'JOB_RECORD_MOVED', message: 'JOB_RECORD_MOVED' },
+    });
+    expect(host.session.status().generation).toBe(2);
+    expect(host.session.status().pending[0]?.status).toBe('pending');
+  } finally {
+    host.stop();
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+
+test('#588 normal owner URL model-free record inspection: retainedPublicationRoutes and prepareJobInspection prepare option-set and plan record publications without fabricated package/model metadata and finalize act@4 through createJobWindow', async () => {
+  const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-588-owner-window-'));
+  const root = join(scratch, 'project');
+  const stateDir = join(scratch, 'state');
+  await mkdir(root, { recursive: true });
+
+  const archivePath = new URL('./fixtures/create-pre-rig/2-rigging-answers.tar.gz', import.meta.url).pathname;
+  const sidecarPath = new URL('./fixtures/create-pre-rig/2-rigging-answers.json', import.meta.url).pathname;
+  const archiveBytes = await readFile(archivePath);
+  const extracted = Bun.spawnSync(['tar', '-xzf', '-', '-C', root], { stdin: archiveBytes });
+  expect(extracted.exitCode).toBe(0);
+
+  const sidecar = JSON.parse(await readFile(sidecarPath, 'utf8')) as {
+    project_sha256: string;
+    files: { path: string; sha256: string }[];
+  };
+  const projectBytes = await readFile(join(root, 'project.json'));
+  const projectSha = createHash('sha256').update(projectBytes).digest('hex');
+  const projectDoc = JSON.parse(projectBytes.toString('utf8')) as {
+    name: string;
+    inputs: { path: string; sha256: string }[];
+    plan: { steps: { id: string; [key: string]: unknown }[] };
+    signoffs: { stage: string; steps?: string[]; step_hashes?: Record<string, string> }[];
+  };
+  const planApprovedSignoff = projectDoc.signoffs.find(item => item.stage === 'plan-approved')!;
+  const planSteps = projectDoc.plan.steps.map(step => ({
+    id: step.id,
+    hash:
+      planApprovedSignoff.step_hashes?.[step.id] ??
+      createHash('sha256').update(JSON.stringify(step)).digest('hex'),
+  }));
+  const closureFiles = sidecar.files
+    .filter(f => f.path === 'project.json' || f.path.startsWith('inputs/') || f.path.startsWith('evidence/'))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const createInputs = projectDoc.inputs.map(({ path, sha256 }) => ({ path, sha256 }));
+  const partsIdentity: RecordPartsIdentity = {
+    name: '@rig-c/parts',
+    version: '2.25.1',
+    integrity: 'sha512-create-project-record-parts',
+  };
+
+  const readRecordPublished = (async (input: publicJobHost.JobRecordReaderInput) => {
+    if (input.result.kind === 'option-set') {
+      return {
+        label: `${projectDoc.name}:${input.result.questionId}`,
+        parts: input.parts ?? partsIdentity,
+        inputs: createInputs,
+        files: closureFiles,
+        plan: null,
+        subjects: [
+          {
+            kind: 'interview-picks',
+            questionId: input.result.questionId,
+            setId: input.result.setId,
+          },
+        ],
+      } satisfies OptionContext;
+    }
+    return {
+      label: projectDoc.name,
+      parts: input.parts ?? partsIdentity,
+      inputs: createInputs,
+      files: closureFiles,
+      plan: { steps: planSteps },
+      subjects: [
+        { kind: 'checkpoint', checkpointId: 'seethrough' },
+        { kind: 'signoff', stage: 'rigging-interview' },
+      ],
+    } satisfies PlanContext;
+  }) as publicJobHost.JobRecordPublicationReader;
+
+  let consumerGrant: { jobId: string; fetchCapability: string; origin: string } | null = null;
+  const host = await startJobHost({
+    root,
+    stateDir,
+    fingerprint: 'd'.repeat(64),
+    reviewer: { id: 'reviewer-owner-window', role: 'owner' },
+    publicationMode: 'record-and-package',
+    readerId: HOST_JOB_RECORD_READER_ID,
+    readRecordPublished,
+    bindingId: 'record-writer/1',
+    installWriterBinding: grant => {
+      consumerGrant = grant;
+    },
+  });
+
+  const savedLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  const savedDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  try {
+    Object.defineProperty(globalThis, 'location', {
+      value: new URL(host.ownerUrl),
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(globalThis, 'document', {
+      value: { createElement: () => ({ id: '' }) },
+      configurable: true,
+      writable: true,
+    });
+
+    const credentials = host.session.hostCredentials();
+    let seq = 0;
+    const callApi = async (body: Record<string, unknown>, token = credentials.agent) =>
+      host.ports.handleJobApi(
+        new Request(`${host.origin}/jobs/${host.session.jobId}/api`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+        }),
+      );
+
+    // 1. Publish plan record and ask checkpoint + signoff
+    const pubPlanRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'publish',
+      expectedGeneration: 0,
+      idempotencyKey: 'window-publish-plan',
+      result: { kind: 'plan' },
+      freeze: {
+        kind: 'producer-held',
+        holdId: 'hold-window-plan',
+        record: { path: 'project.json', sha256: projectSha },
+      },
+    });
+    const planPublication = (await pubPlanRes.json()).value as publicJobHost.JobPublicationV3;
+
+    const askCpRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'ask',
+      expectedGeneration: host.session.status().generation,
+      idempotencyKey: 'window-ask-cp',
+      publicationId: planPublication.publicationId,
+      subject: { kind: 'checkpoint', checkpointId: 'seethrough' },
+    });
+    const cpAsk = (await askCpRes.json()).value as publicJobHost.JobPendingAskV3;
+
+    const askSignoffRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'ask',
+      expectedGeneration: host.session.status().generation,
+      idempotencyKey: 'window-ask-signoff',
+      publicationId: planPublication.publicationId,
+      subject: { kind: 'signoff', stage: 'rigging-interview' },
+    });
+    const signoffAsk = (await askSignoffRes.json()).value as publicJobHost.JobPendingAskV3;
+
+    // 2. Drive normal owner URL access -> transport -> createJobWindow -> prepareJobInspection -> prepareJobForms -> submit
+    const slots = new Map<string, string>();
+    const access = jobWindowAccess(
+      host.ownerUrl,
+      {
+        getItem: key => slots.get(key) ?? null,
+        setItem: (key, val) => {
+          slots.set(key, val);
+        },
+      },
+      () => {},
+    );
+    expect(access.capability).toBe(credentials.ui);
+
+    const ownerFetcher: typeof fetch = Object.assign(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' || input instanceof URL ? new URL(input, host.origin).href : input.url;
+        const headers = new Headers(init?.headers);
+        if (!headers.has('Origin') && init?.method === 'POST') {
+          headers.set('Origin', host.origin);
+        }
+        return fetch(url, { ...init, headers });
+      },
+      { preconnect: fetch.preconnect },
+    );
+    const transport = createJobWindowTransport(access, ownerFetcher);
+
+    // Direct check of the retainedPublicationRoutes api/review response: no fabricated manifest or package
+    const displayResult = await transport.readPublication(planPublication.publicationId);
+    expect(displayResult.ok).toBe(true);
+    if (!displayResult.ok) throw new Error(displayResult.error.code);
+    const reviewRouteRes = await fetch(`${host.origin}${displayResult.value.routes.apiBase}review`);
+    expect(reviewRouteRes.status).toBe(200);
+    const reviewMetadata = await reviewRouteRes.json();
+    expect(reviewMetadata.manifest).toBeUndefined();
+    expect(reviewMetadata.reviewedSource).toBeUndefined();
+    expect(reviewMetadata.recordSource).toEqual(planPublication.source);
+    expect(reviewMetadata.capabilities).toEqual({
+      playback: false,
+      interview: false,
+      preRig: false,
+      modeling: false,
+      motion: false,
+      feedback: true,
+      audio: false,
+    });
+    expect(reviewMetadata.feedbackCatalog).toEqual({ slots: null });
+
+    type PreparedWindowView = {
+      inspection: Awaited<ReturnType<typeof prepareJobInspection>>;
+      forms: Map<string, { askId: string; kind: string }>;
+    };
+    let preparedPlanInspection: Awaited<ReturnType<typeof prepareJobInspection>> | null = null;
+    let preparedPlanForms: Map<string, { askId: string; kind: string }> | null = null;
+    const pendingPlanAsks: readonly publicJobHost.JobPendingAskV3[] = [cpAsk, signoffAsk];
+    const window = createJobWindow<PreparedWindowView>({
+      jobId: host.session.jobId,
+      pageId: 'owner-window-page-1',
+      transport,
+      adapter: {
+        async prepare(display, signal): Promise<PreparedWindowView> {
+          const inspection = await prepareJobInspection(display, signal);
+          const forms = prepareJobForms(display, pendingPlanAsks, ask => {
+            if (ask.subject.kind === 'checkpoint') {
+              const cp = jobCheckpointContext(ask, inspection.metadata.manifest?.checkpoints ?? []);
+              expect(cp.step.id).toBe('seethrough');
+            }
+            return { askId: ask.askId, kind: ask.subject.kind };
+          });
+          return { inspection, forms };
+        },
+        captureDraft: () => null,
+        commit(prepared) {
+          preparedPlanInspection = prepared.inspection;
+          preparedPlanForms = prepared.forms;
+          return {
+            rollback() {},
+            finalize() {},
+          };
+        },
+        async painted() {},
+        discard(prepared) {
+          prepared.inspection.dispose();
+        },
+        changed() {},
+      },
+    });
+
+    window.event({
+      type: 'published',
+      jobId: host.session.jobId,
+      generation: planPublication.generation,
+      cursor: 'c-1',
+      publication: planPublication,
+    });
+    window.event({
+      type: 'pending',
+      jobId: host.session.jobId,
+      generation: 2,
+      cursor: 'c-2',
+      ask: cpAsk,
+    });
+    window.event({
+      type: 'pending',
+      jobId: host.session.jobId,
+      generation: 3,
+      cursor: 'c-3',
+      ask: signoffAsk,
+    });
+    await window.settled();
+
+    expect(window.state().error).toBeNull();
+    expect(window.state().receipt?.publicationId).toBe(planPublication.publicationId);
+    expect(preparedPlanInspection).not.toBeNull();
+    const committedPlanInspection = preparedPlanInspection!;
+    const committedPlanForms = preparedPlanForms!;
+    expect(committedPlanInspection.player).toBeNull();
+    expect(committedPlanInspection.assets).toBeNull();
+    expect(committedPlanInspection.metadata.manifest).toBeUndefined();
+    expect(committedPlanInspection.metadata.recordSource).toEqual(
+      planPublication.source as publicJobHost.JobRecordSource,
+    );
+    expect(committedPlanForms.size).toBe(2);
+
+    const receipt = window.state().receipt!;
+    const submitCp = await window.submit({
+      publicationId: planPublication.publicationId,
+      askId: cpAsk.askId,
+      pageId: 'owner-window-page-1',
+      displayedNonce: receipt.displayedNonce,
+      expectedGeneration: window.state().generation,
+      submissionId: 'owner-window-cp-1',
+      kind: 'checkpoint',
+      value: { checkpointId: 'seethrough', outcome: 'pass', words: 'Checked via owner window' },
+    });
+    expect(submitCp.ok).toBe(true);
+    if (!submitCp.ok) throw new Error(submitCp.error.code);
+    expect(submitCp.value.schema).toBe(HOST_JOB_RECORD_ACT_SCHEMA);
+
+    const submitSignoff = await window.submit({
+      publicationId: planPublication.publicationId,
+      askId: signoffAsk.askId,
+      pageId: 'owner-window-page-1',
+      displayedNonce: receipt.displayedNonce,
+      expectedGeneration: window.state().generation,
+      submissionId: 'owner-window-signoff-1',
+      kind: 'signoff',
+      value: { stage: 'rigging-interview', decision: 'approved', words: 'Approved via owner window' },
+    });
+    expect(submitSignoff.ok).toBe(true);
+    if (!submitSignoff.ok) throw new Error(submitSignoff.error.code);
+    expect(submitSignoff.value.schema).toBe(HOST_JOB_RECORD_ACT_SCHEMA);
+
+    // 3. Publish option-set record and verify prepareJobInspection loads retained interview questions
+    const pubOptRes = await callApi({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      jobId: host.session.jobId,
+      requestId: `req-${++seq}`,
+      verb: 'publish',
+      expectedGeneration: host.session.status().generation,
+      idempotencyKey: 'window-publish-opt',
+      result: { kind: 'option-set', questionId: 'bones', setId: 'chain-bones' },
+      freeze: {
+        kind: 'producer-held',
+        holdId: 'hold-window-opt',
+        record: { path: 'project.json', sha256: projectSha },
+      },
+    });
+    const optPublication = (await pubOptRes.json()).value as publicJobHost.JobPublicationV3;
+    const optDisplayRes = await transport.readPublication(optPublication.publicationId);
+    expect(optDisplayRes.ok).toBe(true);
+    if (!optDisplayRes.ok) throw new Error(optDisplayRes.error.code);
+    const optInspection = await prepareJobInspection(optDisplayRes.value, new AbortController().signal);
+    expect(optInspection.metadata.manifest).toBeUndefined();
+    expect(optInspection.metadata.recordSource).toEqual(
+      optPublication.source as publicJobHost.JobRecordSource,
+    );
+    expect(optInspection.interview?.questions.map(q => q.set.id)).toEqual(['chain-bones']);
+    optInspection.dispose();
+
+    // 4. Explicit MODEL_UNAVAILABLE on a package publication still refuses before preparation
+    window.event({
+      type: 'published',
+      jobId: host.session.jobId,
+      generation: host.session.status().generation + 1,
+      cursor: 'c-unavailable',
+      publication: {
+        publicationId: 'unavailable-pkg-pub',
+        generation: host.session.status().generation + 1,
+        previousPublicationId: null,
+        label: 'Unavailable package model',
+        instanceKey: sha('9'),
+        visual: { status: 'unavailable', code: 'MODEL_UNAVAILABLE' },
+        source: {
+          sourceHash: sha('a'),
+          projectHash: sha('b'),
+          package: { id: 'pkg-id', revision: 'rev-1' },
+          selector: { kind: 'rig', version: 1 },
+          model: null,
+          direction: null,
+          optionSet: null,
+          appliedResult: null,
+          plan: null,
+          parts: null,
+        },
+      },
+    });
+    await window.settled();
+    expect(window.state().error).toBe('MODEL_UNAVAILABLE');
+    window.stop();
+  } finally {
+    if (savedLocation) Object.defineProperty(globalThis, 'location', savedLocation);
+    else Reflect.deleteProperty(globalThis, 'location');
+    if (savedDocument) Object.defineProperty(globalThis, 'document', savedDocument);
+    else Reflect.deleteProperty(globalThis, 'document');
+    host.stop();
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test('#588 browser packet preflight: shared archive reader fixture passes non-browser publish/ask setup check with duplicate-free closureFiles', async () => {
+  await runRecordBrowserPreflightSetupCheck();
+});
+

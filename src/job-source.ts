@@ -590,6 +590,7 @@ async function readRecordPublishedPhase(
   readRecordPublished: RecordPublicationReader,
   input: RecordReaderInput,
   phase: 'publish' | 'ask' | 'finalize',
+  assertCurrentBeforeGenericRefusal?: () => void,
 ): Promise<RecordPublishedContext> {
   let raw: unknown;
   try {
@@ -609,6 +610,9 @@ async function readRecordPublishedPhase(
           ...(input.parts !== undefined ? { parts: input.parts } : {}),
         });
   } catch (error) {
+    if (extractReaderToken(error) === null) {
+      assertCurrentBeforeGenericRefusal?.();
+    }
     throw mapRecordReaderError(error, phase);
   }
   return parseRecordPublishedContext(raw, input.result, input.record);
@@ -816,7 +820,9 @@ export async function prepareJobRecordSource(options: {
     options.readRecordPublished,
     { root: root.path, record, result, phase: 'inventory' },
     'publish',
+    () => assertRecord(root, record),
   );
+  assertRecord(root, record);
   if (inventory.files.length > maxSourceFiles) {
     throw new JobError('JOB_SOURCE_UNRETAINABLE');
   }
@@ -859,12 +865,15 @@ export async function prepareJobRecordSource(options: {
       }
       options.afterDirectorySync?.(directory);
     }
+    assertJobSourceCurrent({ root, record, seals });
     assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity, 'JOB_SOURCE_UNRETAINABLE');
     const retainedContext = await readRecordPublishedPhase(
       options.readRecordPublished,
       { root: snapshotRoot, record, result, phase: 'retained', parts: inventory.parts },
       'publish',
+      () => assertJobSourceCurrent({ root, record, seals }),
     );
+    assertJobSourceCurrent({ root, record, seals });
     assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity, 'JOB_SOURCE_UNRETAINABLE');
     assertEqualRecordContexts(inventory, retainedContext);
     const decoded = decodeRetainedRecordProject(snapshotRoot, seals, result, retainedContext);
@@ -936,7 +945,9 @@ export async function verifyJobRecordSourceFresh(options: {
     options.readRecordPublished,
     { root: retained.root.path, record: retained.record, result: retained.result, phase: 'inventory' },
     phase,
+    () => assertJobSourceCurrent(retained),
   );
+  assertJobSourceCurrent(retained);
   if (requestDigest(inventory.parts) !== requestDigest(retained.context.parts)) {
     throw new JobError(phase === 'finalize' ? 'JOB_ACT_SOURCE_STALE' : 'JOB_SOURCE_MISMATCH');
   }
@@ -956,7 +967,9 @@ export async function verifyJobRecordSourceFresh(options: {
       parts: retained.context.parts,
     },
     phase,
+    () => assertJobSourceCurrent(retained),
   );
+  assertJobSourceCurrent(retained);
   assertRetainedSnapshotIntact(
     retained.snapshotRoot,
     retained.seals,

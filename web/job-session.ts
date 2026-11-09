@@ -1,5 +1,16 @@
 /** Live job window transactions. Every form remains bound to its displayed publication. */
-import type { JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobPendingAsk, JobPublication, JobResult, JobUISubmission, JobSourceBinding, } from '../src/job-contract.ts';
+import type {
+    ActV3,
+    DisplayPublicationV3,
+    EventV3,
+    JobDisplayReceipt,
+    JobResult,
+    JobUISubmission,
+    PendingAskV3,
+    PublicationV3,
+    RecordSource,
+    SourceV3,
+} from '../src/job-contract.ts';
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
 import {t} from './i18n.ts';
@@ -20,13 +31,13 @@ export function jobWindowRefusal(error: unknown, fallback = 'JOB_WINDOW_FAILED')
     return t(fallback);
 }
 export interface JobWindowTransport {
-    readPublication(publicationId: string, signal?: AbortSignal): Promise<JobResult<JobDisplayPublication>>;
+    readPublication(publicationId: string, signal?: AbortSignal): Promise<JobResult<DisplayPublicationV3>>;
     acknowledge(input: {
         publicationId: string;
         pageId: string;
         sourceHash: string;
     }, signal: AbortSignal): Promise<JobResult<JobDisplayReceipt>>;
-    submit(input: JobUISubmission): Promise<JobResult<JobAct>>;
+    submit(input: JobUISubmission): Promise<JobResult<ActV3>>;
 }
 export interface JobPreparedCommit {
     /** Restore the previous view, including its original forms and route bindings. */
@@ -36,10 +47,10 @@ export interface JobPreparedCommit {
 }
 export interface JobWindowAdapter<Prepared> {
     /** Resolve assets, metadata, forms and publication-pinned routes before returning. */
-    prepare(display: JobDisplayPublication, signal: AbortSignal): Promise<Prepared>;
+    prepare(display: DisplayPublicationV3, signal: AbortSignal): Promise<Prepared>;
     /** Called immediately before commit, so edits made during preloading are retained. */
     captureDraft(): unknown | null;
-    commit(prepared: Prepared, display: JobDisplayPublication): JobPreparedCommit;
+    commit(prepared: Prepared, display: DisplayPublicationV3): JobPreparedCommit;
     painted(prepared: Prepared, signal: AbortSignal): Promise<void>;
     discard(prepared: Prepared): void;
     changed(state: JobWindowState): void;
@@ -47,19 +58,19 @@ export interface JobWindowAdapter<Prepared> {
 export interface JobRetainedDraft {
     readonly publicationId: string;
     readonly sourceHash: string;
-    readonly source?: JobSourceBinding;
+    readonly source?: SourceV3;
     readonly label: string;
     readonly value: unknown;
 }
 export interface JobWindowState {
     readonly generation: number;
-    readonly displayed: JobDisplayPublication | null;
+    readonly displayed: DisplayPublicationV3 | null;
     readonly receipt: JobDisplayReceipt | null;
     readonly preparing: boolean;
     readonly closed: boolean;
     readonly error: string | null;
     readonly previousLabel: string | null;
-    readonly pending: readonly JobPendingAsk[];
+    readonly pending: readonly PendingAskV3[];
     readonly retainedDrafts: readonly JobRetainedDraft[];
 }
 function unwrap<Value>(result: JobResult<Value>): Value {
@@ -67,7 +78,10 @@ function unwrap<Value>(result: JobResult<Value>): Value {
         throw new Error(result.error.code);
     return result.value;
 }
-function sourceSnapshot(source: JobSourceBinding): string {
+function isRecordSource(source: SourceV3): source is RecordSource {
+    return source.subject === 'option-set' || source.subject === 'plan';
+}
+function sourceSnapshot(source: SourceV3): string {
     return JSON.stringify(source, (_key, value: unknown) => {
         if (value === null || typeof value !== 'object' || Array.isArray(value))
             return value;
@@ -75,8 +89,9 @@ function sourceSnapshot(source: JobSourceBinding): string {
         return Object.fromEntries(Object.keys(record).sort().map(key => [key, record[key]]));
     });
 }
-function assertJobAskSource(ask: JobPendingAsk, display: JobDisplayPublication): void {
-    const source = ask.subject.kind === 'interview-picks'
+function assertJobAskSource(ask: PendingAskV3, display: DisplayPublicationV3): void {
+    const source: SourceV3 = ask.subject.kind === 'interview-picks' &&
+        !isRecordSource(display.publication.source) && !isRecordSource(ask.source)
         ? { ...ask.source, optionSet: display.publication.source.optionSet }
         : ask.source;
     if (sourceSnapshot(source) !== sourceSnapshot(display.publication.source)) {
@@ -90,9 +105,9 @@ function assertJobAskSource(ask: JobPendingAsk, display: JobDisplayPublication):
 
 /** Build pending form dependencies off-stage. A failure rejects the candidate before it is displayed. */
 export function prepareJobForms<Form>(
-    display: JobDisplayPublication,
-    asks: readonly JobPendingAsk[],
-    prepare: (ask: JobPendingAsk) => Form,
+    display: DisplayPublicationV3,
+    asks: readonly PendingAskV3[],
+    prepare: (ask: PendingAskV3) => Form,
 ): Map<string, Form> {
     const prepared = new Map<string, Form>();
     for (const ask of asks) {
@@ -105,7 +120,7 @@ export function prepareJobForms<Form>(
 
 /** C2 publishes the plan mapping in the ask. Legacy checkpoint metadata is optional guidance. */
 export function jobCheckpointContext(
-    ask: JobPendingAsk,
+    ask: PendingAskV3,
     checkpoints: readonly Pick<Checkpoint, 'id' | 'title' | 'note'>[],
 ) {
     if (ask.subject.kind !== 'checkpoint') throw new Error('JOB_ASK_INVALID');
@@ -129,11 +144,11 @@ export function createJobWindow<Prepared>(options: {
     adapter: JobWindowAdapter<Prepared>;
 }) {
     const { transport, adapter, pageId } = options;
-    const pending = new Map<string, JobPendingAsk>();
+    const pending = new Map<string, PendingAskV3>();
     const rigAttempts = new WeakSet<JobUISubmission>();
     const retainedDrafts: JobRetainedDraft[] = [];
     let generation = 0;
-    let displayed: JobDisplayPublication | null = null;
+    let displayed: DisplayPublicationV3 | null = null;
     let receipt: JobDisplayReceipt | null = null;
     let preparing = false;
     let closed = false;
@@ -150,7 +165,7 @@ export function createJobWindow<Prepared>(options: {
         };
     }
     function changed(): void { adapter.changed(state()); }
-    function replace(publication: JobPublication): Promise<void> {
+    function replace(publication: PublicationV3): Promise<void> {
         if (stopped)
             return Promise.resolve();
         const revision = ++intent;
@@ -166,7 +181,7 @@ export function createJobWindow<Prepared>(options: {
             let prepared: Prepared | undefined;
             let committed: JobPreparedCommit | undefined;
             try {
-                if (publication.visual.status !== 'available')
+                if (publication.visual.status !== 'available' && !isRecordSource(publication.source))
                     throw new Error(publication.visual.code);
                 const candidate = unwrap(await transport.readPublication(publication.publicationId, abort.signal));
                 if (candidate.publication.publicationId !== publication.publicationId ||
@@ -232,7 +247,7 @@ export function createJobWindow<Prepared>(options: {
         });
         return queue;
     }
-    function event(value: JobEvent): void {
+    function event(value: EventV3): void {
         if (stopped || value.jobId !== options.jobId)
             return;
         generation = Math.max(generation, value.generation);
@@ -258,7 +273,7 @@ export function createJobWindow<Prepared>(options: {
         }
         changed();
     }
-    async function submit(input: JobUISubmission): Promise<JobResult<JobAct>> {
+    async function submit(input: JobUISubmission): Promise<JobResult<ActV3>> {
         if (closed)
             return { ok: false, error: { code: 'JOB_CLOSED', message: 'JOB_CLOSED' } };
         const ask = pending.get(input.askId);
@@ -334,7 +349,7 @@ export function jobWindowAccess(href: string, storage: Pick<Storage, 'getItem' |
     };
 }
 /** Resolve only the publication's explicit immutable instance routes. */
-export function jobPublicationRoutes(display: JobDisplayPublication, origin: string) {
+export function jobPublicationRoutes(display: DisplayPublicationV3, origin: string) {
     const key = display.publication.instanceKey;
     if (!/^[a-f0-9]{64}$/.test(key))
         throw new Error('JOB_DISPLAY_MISMATCH');
@@ -408,7 +423,7 @@ export function createJobWindowTransport(access: JobWindowAccess, fetcher: typeo
     };
 }
 /** Bounded newline events. Reconnects resume after the last fully parsed event. */
-export async function* jobWindowEvents(access: JobWindowAccess, after: string | null, signal: AbortSignal, fetcher: typeof fetch = fetch): AsyncGenerator<JobEvent> {
+export async function* jobWindowEvents(access: JobWindowAccess, after: string | null, signal: AbortSignal, fetcher: typeof fetch = fetch): AsyncGenerator<EventV3> {
     const path = 'events' + (after === null ? '' : '?after=' + encodeURIComponent(after));
     const response = await fetcher(access.route(path), { signal, headers: access.headers() });
     if (!response.ok || !response.body)
@@ -431,7 +446,7 @@ export async function* jobWindowEvents(access: JobWindowAccess, after: string | 
             while (newline >= 0) {
                 if (newline > limit)
                     throw new Error('JOB_BODY_LIMIT');
-                const event = JSON.parse(buffered.slice(0, newline)) as JobEvent;
+                const event = JSON.parse(buffered.slice(0, newline)) as EventV3;
                 if (!event || event.jobId !== access.jobId || typeof event.cursor !== 'string' ||
                     !Number.isSafeInteger(event.generation) || event.generation < 0 ||
                     !['published', 'pending', 'act', 'closed'].includes(event.type))
@@ -454,7 +469,7 @@ export function startJobWindowEvents(options: {
     access: JobWindowAccess;
     signal: AbortSignal;
     member: boolean;
-    event(value: JobEvent): void;
+    event(value: EventV3): void;
     refused(error: unknown): void;
     fetcher?: typeof fetch;
 }) {
@@ -512,6 +527,7 @@ import type { FeedbackCatalog } from '../src/feedback-validation.ts';
 import type { InterviewQuestion } from '../src/interview-project.ts';
 export interface JobInspectionMetadata {
     manifest: ReviewManifest;
+    recordSource?: undefined;
     sourceHash: string;
     reviewedSource: ReviewedSource;
     setsHash?: string;
@@ -531,6 +547,24 @@ export interface JobInspectionMetadata {
     };
     feedbackCatalog: Pick<FeedbackCatalog, 'slots'>;
 }
+export interface JobRecordInspectionMetadata {
+    manifest?: undefined;
+    recordSource: RecordSource;
+    sourceHash: string;
+    reviewedSource?: undefined;
+    setsHash?: undefined;
+    initialAnimation?: null;
+    direction?: undefined;
+    referenceHashes?: undefined;
+    sourcePainting?: undefined;
+    capabilities: {
+        interview?: boolean;
+        preRig?: boolean;
+        playback: boolean;
+    };
+    feedbackCatalog: Pick<FeedbackCatalog, 'slots'>;
+}
+export type JobInspectionMetadataV3 = JobInspectionMetadata | JobRecordInspectionMetadata;
 type JobInterview = {
     questions: (Omit<InterviewQuestion, 'images'> & {
         images: {
@@ -606,8 +640,8 @@ export function createJobReferenceSelection<Reference extends Pick<JobReferenceV
 }
 
 export interface JobPreparedInspection {
-    display: JobDisplayPublication;
-    metadata: JobInspectionMetadata;
+    display: DisplayPublicationV3;
+    metadata: JobInspectionMetadataV3;
     interview: JobInterview | null;
     parts: JobPartsInventory | null;
     partImages: Map<string, HTMLImageElement>;
@@ -683,12 +717,21 @@ function mediaReady(media: HTMLVideoElement, name: 'loadeddata' | 'seeked', sign
     });
 }
 /** Prepare the real published Play model, references and every form dependency off-stage. */
-export async function prepareJobInspection(display: JobDisplayPublication, signal: AbortSignal): Promise<JobPreparedInspection> {
+export async function prepareJobInspection(display: DisplayPublicationV3, signal: AbortSignal): Promise<JobPreparedInspection> {
     const routes = jobPublicationRoutes(display, location.origin);
-    const metadata = await jobJson<JobInspectionMetadata>(routes.api('review'), signal);
-    if (metadata.manifest.id !== display.publication.source.package.id ||
-        metadata.manifest.revision !== display.publication.source.package.revision ||
-        (metadata.reviewedSource.rig?.sha256 ?? null) !== (display.publication.source.model?.sha256 ?? null)) {
+    const metadata = await jobJson<JobInspectionMetadataV3>(routes.api('review'), signal);
+    const publishedSource = display.publication.source;
+    if (isRecordSource(publishedSource)) {
+        if (!metadata.recordSource || metadata.manifest !== undefined || metadata.reviewedSource !== undefined ||
+            metadata.sourceHash !== publishedSource.sourceHash ||
+            sourceSnapshot(metadata.recordSource) !== sourceSnapshot(publishedSource)) {
+            throw new Error('JOB_DISPLAY_MISMATCH');
+        }
+    }
+    else if (!metadata.manifest || !metadata.reviewedSource ||
+        metadata.manifest.id !== publishedSource.package.id ||
+        metadata.manifest.revision !== publishedSource.package.revision ||
+        (metadata.reviewedSource.rig?.sha256 ?? null) !== (publishedSource.model?.sha256 ?? null)) {
         throw new Error('JOB_DISPLAY_MISMATCH');
     }
     const objectUrls: string[] = [];
@@ -748,7 +791,7 @@ export async function prepareJobInspection(display: JobDisplayPublication, signa
         const imageSetImages: HTMLImageElement[] = [];
         const source = display.publication.source;
         if (source.subject === 'image-set') {
-            if (metadata.sourceHash !== source.sourceHash || metadata.manifest.model)
+            if (metadata.sourceHash !== source.sourceHash || metadata.manifest?.model)
                 throw new Error('JOB_DISPLAY_MISMATCH');
             const canonical = source.imageSet.images.map(({role, name, sha256}) => ({role, name, sha256}));
             if (source.imageSet.images.length < 2 || source.imageSet.images.length > 8 ||
@@ -761,7 +804,7 @@ export async function prepareJobInspection(display: JobDisplayPublication, signa
                 }));
             }
         }
-        for (const reference of metadata.manifest.references) {
+        for (const reference of metadata.manifest?.references ?? []) {
             preload.push((async () => {
                 if (reference.type === 'image') {
                     const element = await image(routes.asset(reference.path), metadata.referenceHashes?.[reference.id]);
@@ -877,10 +920,10 @@ export async function prepareJobInspection(display: JobDisplayPublication, signa
         const failed = preloaded.find(result => result.status === 'rejected');
         if (failed?.status === 'rejected')
             throw failed.reason;
-        if (metadata.manifest.model) {
+        if (metadata.manifest?.model) {
             const runtime = await import('@rig-c/play');
             const modelUrl = routes.asset(metadata.manifest.model);
-            const modelHash = metadata.reviewedSource.rig!.sha256;
+            const modelHash = metadata.reviewedSource!.rig!.sha256;
             const setsUrl = metadata.manifest.sets ? routes.asset(metadata.manifest.sets) : null;
             const checkedFetch = new Proxy(fetch, { apply: async (_target, _receiver, args: Parameters<typeof fetch>) => {
                     const url = String(args[0]);
@@ -909,12 +952,12 @@ export async function prepareJobInspection(display: JobDisplayPublication, signa
             };
             resetToSetup();
         }
-        if (!player && !references.length && !partImages.size && !imageSetImages.length)
+        if (!isRecordSource(source) && !player && !references.length && !partImages.size && !imageSetImages.length)
             throw new Error('JOB_VISUAL_UNAVAILABLE');
         if (signal.aborted)
             throw new Error('JOB_PRELOAD_CANCELLED');
         // Preloads can finish out of order. Restore the producer's declared display order.
-        const order = [metadata.sourcePainting?.id, ...metadata.manifest.references.map(reference => reference.id)];
+        const order = [metadata.sourcePainting?.id, ...(metadata.manifest?.references.map(reference => reference.id) ?? [])];
         references.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
         return {
             display, metadata, interview, parts, partImages, interviewImages, imageSetImages, references, assets, rigRoot,
@@ -1198,7 +1241,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             armPlayback(expectedOwner, expectedPlayer);
         }
     }
-    function copyRigVerdict(ask: JobPendingAsk, owner: JobPreparedInspection) {
+    function copyRigVerdict(ask: PendingAskV3, owner: JobPreparedInspection) {
         if (owner !== current || ask.publicationId !== owner.display.publication.publicationId) {
             throw new Error('JOB_STILL_BINDING_MISMATCH');
         }
@@ -1234,7 +1277,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     });
     let unbindNavigation: (() => void) | null = null;
     let resize: ResizeObserver | null = null;
-    function localDraftKey(display: JobDisplayPublication): string {
+    function localDraftKey(display: DisplayPublicationV3): string {
         return 'rig-review-job-draft/1:' + access.jobId + ':' + display.publication.publicationId + ':' + display.publication.source.sourceHash;
     }
     function saveDraft(): void {
@@ -1275,7 +1318,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         parent.append(inputLabel(key, input));
         return input;
     }
-    function formFor(ask: JobPendingAsk, prepared: JobPreparedInspection): JobForm {
+    function formFor(ask: PendingAskV3, prepared: JobPreparedInspection): JobForm {
         if (ask.publicationId !== prepared.display.publication.publicationId)
             throw new Error('JOB_DISPLAY_MISMATCH');
         assertJobAskSource(ask, prepared.display);
@@ -1343,7 +1386,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {
-            const checkpoint = jobCheckpointContext(ask, prepared.metadata.manifest.checkpoints);
+            const checkpoint = jobCheckpointContext(ask, prepared.metadata.manifest?.checkpoints ?? []);
             const heading = node('h3');
             heading.textContent = checkpoint.title;
             fields.prepend(heading);
@@ -1534,7 +1577,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         sidebar.append(binding);
         const parts = node('select');
         parts.id = 'job-part';
-        parts.disabled = !prepared.metadata.manifest.model || prepared.metadata.feedbackCatalog.slots === null;
+        parts.disabled = !prepared.metadata.manifest?.model || prepared.metadata.feedbackCatalog.slots === null;
         const whole = node('option', 'job.wholeRig');
         whole.value = '';
         parts.append(whole);
@@ -1775,6 +1818,36 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 if (child instanceof HTMLElement && child !== identity && child !== binding) child.hidden = true;
             }
         }
+        else if (source.subject === 'option-set' || source.subject === 'plan') {
+            const summary = node('section');
+            summary.dataset.jobRecord = source.subject;
+            const recordLine = node('p');
+            recordLine.className = 'job-source';
+            recordLine.textContent = source.record.path + ' · ' + source.record.sha256;
+            summary.append(recordLine);
+            if (source.subject === 'option-set') {
+                const optionLine = node('p');
+                optionLine.className = 'job-source';
+                optionLine.textContent = source.selection.questionId + ' · ' + source.optionSet.id + ' · ' + source.optionSetFile.path + ' · ' + source.optionSet.sha256;
+                summary.append(optionLine);
+            }
+            else {
+                const list = node('ol');
+                list.className = 'job-source';
+                for (const step of source.plan.steps) {
+                    const item = node('li');
+                    item.textContent = step.id + ' · ' + step.hash;
+                    list.append(item);
+                }
+                summary.append(list);
+            }
+            stage.prepend(summary);
+            controls.hidden = pair.hidden = transport.hidden = true;
+            controls.style.display = pair.style.display = transport.style.display = 'none';
+            for (const child of sidebar.children) {
+                if (child instanceof HTMLElement && child !== identity && child !== binding) child.hidden = true;
+            }
+        }
         const formsHost = node('section');
         formsHost.className = 'job-forms';
         formsHost.dataset.jobForms = '';
@@ -1813,7 +1886,9 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             direction.hidden = panel !== '4';
         for (const [askId, entry] of forms) {
             const ask = window.state().pending.find(item => item.askId === askId);
-            entry.form.hidden = current?.display.publication.source.subject !== 'image-set' &&
+            const currentSubject = current?.display.publication.source.subject;
+            entry.form.hidden = currentSubject !== 'image-set' &&
+                currentSubject !== 'option-set' && currentSubject !== 'plan' &&
                 panel === '2' && ask?.subject.kind !== 'interview-picks';
         }
     }
@@ -1985,7 +2060,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                             unbindNavigation = nextUnbind;
                             resize = nextResize;
                             previous?.dispose();
-                            title.textContent = display.publication.source.package.id;
+                            title.textContent = display.publication.source.package?.id ?? display.publication.label;
                         },
                     };
                 }

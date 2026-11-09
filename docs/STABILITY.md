@@ -77,6 +77,9 @@ interface JobSessionOptions {
   readonly reviewer: JobReviewerBinding;
   readonly readPublished?: JobPublicationReader;
   readonly partsEnumerator?: JobPartsEnumerator;
+  readonly publicationMode?: JobPublicationMode;
+  readonly readRecordPublished?: RecordPublicationReader;
+  readonly recordReaderId?: string;
   readonly afterSnapshot?: () => void | Promise<void>;
   readonly afterDirectorySync?: (path: string) => void;
 }
@@ -558,7 +561,7 @@ model binding nor a valid image-set binding uses `JOB_ASK_INVALID`.
 
 ## Named export inventory
 
-The backend rig-still extension retains the twelve runtime exports and `JOB_ACT_SCHEMA` at act@2. `JobAct` additionally includes `JobRigReviewAct` at act@3 with top-level `JobRigStill`. The facade adds type-only `JobLegacyAct`, `JobRigReviewAct`, `JobRigStill` and `JobRigCapture` exports, and Review #563 adds five type-only exports (`JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`, `JobHostAttachField` and `JobHostAttachFailure`) while keeping the twelve runtime exports unchanged. Existing API/store/reuse markers and ordinary/historical acts retain @2. The rig revision constant, transport limits and the internal `POST /jobs/<jobId>/host` helper remain internal to their modules. Consumer checks distinguish these act revisions as described in [Rig verdict still backend](REVIEW_PACKAGE.md#rig-verdict-still-backend).
+The backend rig-still extension retains the original twelve runtime exports and `JOB_ACT_SCHEMA` at act@2. `JobAct` additionally includes `JobRigReviewAct` at act@3 with top-level `JobRigStill`. The facade adds type-only `JobLegacyAct`, `JobRigReviewAct`, `JobRigStill` and `JobRigCapture` exports, and [Review #563](https://github.com/rig-c/review/issues/563) adds five type-only exports (`JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`, `JobHostAttachField` and `JobHostAttachFailure`). [Review #588](https://github.com/rig-c/review/issues/588) activates record mode when `readRecordPublished` and `recordReaderId` are supplied to a host or session (`publicationMode: 'record-and-package'`), serving `rig-review/job-api@3` (`JOB_API_V3_SCHEMA`), `rig-review/act@4` (`JOB_RECORD_ACT_SCHEMA`) and normal owner URL model-free record inspection while keeping default package-only hosts and exact `package-only` `job-ui/<jobId>.json` descriptor bytes at @2 and enforcing `publicationMode` / `recordReaderId` reuse compatibility across ordinary reuse and strict `reuseOnly` attachment. It exports six additional record-mode runtime symbols (`JOB_API_V3_SCHEMA`, `JOB_RECORD_ACT_SCHEMA`, `JOB_RECORD_READER_ID`, `parseRecordAct`, `prepareJobRecordAct` and `prepareJobRecordSource`, for eighteen runtime exports total) and the V3/record type surface listed below. The rig revision constant, transport limits and the internal `POST /jobs/<jobId>/host` helper remain internal to their modules. Consumer checks distinguish these act revisions as described in [Rig verdict still backend](REVIEW_PACKAGE.md#rig-verdict-still-backend) and [Model-free record mode and source seam](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
 
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
@@ -566,9 +569,15 @@ values from the frozen semantic contract.
 - `startJobHost`
 - `startJobHub`
 - `assertJobImageSetCapability`
+- `parseRecordAct`
+- `prepareJobRecordAct`
+- `prepareJobRecordSource`
 - `JOB_CAPABILITIES`
 - `JOB_API_SCHEMA`
+- `JOB_API_V3_SCHEMA`
 - `JOB_ACT_SCHEMA`
+- `JOB_RECORD_ACT_SCHEMA`
+- `JOB_RECORD_READER_ID`
 - `JOB_PARTS_ENUMERATOR_RANGE`
 - `JOB_ENABLED_ACT_KINDS`
 - `JOB_RESERVED_ACT_KINDS`
@@ -577,7 +586,7 @@ values from the frozen semantic contract.
 - `JOB_ERROR_CODES`
 
 The exact type-only exports follow. Their existing definitions in
-`src/job-contract.ts`, `src/job-source.ts`, `src/job-session.ts`,
+`src/job-contract.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-session.ts`,
 `src/job-worker.ts`, `src/job-front.ts` and `src/job-hub.ts` are reexported
 without aliases or copied wire shapes.
 
@@ -622,6 +631,7 @@ without aliases or copied wire shapes.
 - `JobImageSetInput`
 - `JobImageSet`
 - `JobCapabilities`
+- `JobCapabilitiesV3`
 - `JobModelReviewValue`
 - `JobImageReviewValue`
 - `JobReviewerBinding`
@@ -629,33 +639,86 @@ without aliases or copied wire shapes.
 - `JobVerdict`
 - `JobPartOutcome`
 - `JobReviewStage`
+- `JobLegacyAct`
+- `JobRigReviewAct`
+- `JobRigStill`
+- `JobRigCapture`
 - `JobActValues`
 - `JobUIActValues`
 - `JobActSources`
 - `JobAct`
+- `JobRecordAct`
+- `JobActV3`
 - `JobSubject`
+- `JobRecordSubject`
 - `JobPendingAsk`
+- `JobPendingAskV3`
 - `JobPublication`
+- `JobPublicationV3`
 - `JobStatus`
+- `JobStatusV3`
 - `JobPublishRequest`
+- `JobPublishRequestV3`
+- `JobPublishResultV3`
 - `JobAskRequest`
+- `JobAskRequestV3`
 - `JobNextRequest`
+- `JobNextRequestV3`
 - `JobCloseRequest`
+- `JobCloseRequestV3`
 - `JobAgentRequest`
+- `JobAgentRequestV3`
 - `JobFetchActRequest`
+- `JobFetchActRequestV3`
 - `JobErrorCode`
 - `JobFailure`
 - `JobResult`
 - `JobEvent`
+- `JobEventV3`
 - `JobNextValue`
+- `JobNextValueV3`
 - `JobResponseValues`
+- `JobResponseValuesV3`
 - `JobApiResponse`
+- `JobApiResponseV3`
 - `JobUISubmission`
 - `JobDisplayAcknowledgment`
 - `JobDisplayReceipt`
 - `JobDisplayPublication`
+- `JobDisplayPublicationV3`
+- `DisplayPublicationV3`
 - `JobHostPorts`
 - `JobConsumerGrant`
+- `JobPublicationMode`
+- `JobRecordHostHooks`
+- `JobProjectRecord`
+- `JobRecordFreeze`
+- `JobRecordOptionResult`
+- `JobRecordPlanResult`
+- `JobRecordResult`
+- `JobRecordPartsIdentity`
+- `JobRecordSignoffStage`
+- `JobRecordPicksSubject`
+- `JobRecordCheckpointSubject`
+- `JobRecordSignoffSubject`
+- `JobRecordPlanSubject`
+- `JobRecordSubject`
+- `JobRecordContextBase`
+- `JobOptionContext`
+- `JobPlanContext`
+- `JobRecordPublishedContext`
+- `JobRecordReaderInput`
+- `JobRecordPublicationReader`
+- `JobRecordSourceBase`
+- `JobOptionSource`
+- `JobPlanSource`
+- `JobRecordSource`
+- `JobSourceV3`
+- `JobRecordSignoffValue`
+- `JobRetainedRecordSource`
+- `JobRetainedSource`
+- `JobRetainedSourceV3`
+- `JobRootIdentity`
 
 ## Parts enumeration boundary
 
@@ -668,9 +731,11 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ## Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer imports the twelve runtime exports and every listed type, including
+A consumer imports the eighteen runtime exports and every listed type, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
-`JobHostAttachField` and `JobHostAttachFailure`, through `@rig-c/review/job-host`.
+`JobHostAttachField`, `JobHostAttachFailure` and the record-mode `JobRecordAct` /
+`JobActV3` / `JobPlanSource` / `JobFetchActRequestV3` / `JobRecordHostHooks` surface,
+through `@rig-c/review/job-host`.
 TypeScript checks the installed consumer and the runtime checks the full owner
 resources, retained publication, semantic ports, declared hooks, enumerator
 version/row carriage, ordinary reuse, strict `reuseOnly: {expected}` attachment
