@@ -16,6 +16,7 @@ import {startCompareServer} from './compare-server.ts';
 import {selectAnimation,AnimationSelectionError,type AnimationSelection} from './animation-selection.ts';
 import {capabilityHeader,capabilityPattern,type OpenIdentity} from './open-protocol.ts';
 import {ensureFront,frontPort} from './front.ts';
+import {playBuildConditions} from './build.ts';
 import {playPackagePath} from './versions.ts';
 import {HandoffError,HANDOFF_FLAGS,isBuildRoot,type HandoffFlags,type HandoffRecord} from './handoff.ts';
 import {stateDirInside,stateRoots} from './state-dir.ts';
@@ -160,7 +161,7 @@ async function ensureWorker(p:OpenPackage,key:string,fingerprint:string,stateDir
   const row=await reuse();if(row)return {row,reused:true};
   const identity:OpenIdentity={key,contentHash:p.contentHash,nonce,fingerprint};request=join(canonicalControl,`${key}.${nonce}.request.json`);const log=join(canonicalControl,`${key}.${nonce}.log`);
   const spec:WorkerRequest={schema:'rig-review-open-request/1',inputs:p.inputs,identity,stateDir,registry,request,idleMs,...(graceMs!==undefined?{graceMs}:{}),cwd,...(viewOnly?{viewOnly:true}:{}),...(p.inputs.control?{controlToken:randomUUID()}:{} )};await writeFile(request,JSON.stringify(spec),{mode:0o600,flag:'wx'});
-  const logHandle=await openFile(log,'a',0o600);let child;try{child=spawn(process.execPath,[join(appRoot,'src/open-worker.ts'),request],{cwd:canonicalControl,detached:true,stdio:['ignore',logHandle.fd,logHandle.fd],env:process.env});spawned=child;child.unref();}finally{await logHandle.close();}
+  const logHandle=await openFile(log,'a',0o600);let child;try{child=spawn(process.execPath,[...playBuildConditions().map(c=>`--conditions=${c}`),join(appRoot,'src/open-worker.ts'),request],{cwd:canonicalControl,detached:true,stdio:['ignore',logHandle.fd,logHandle.fd],env:process.env});spawned=child;child.unref();}finally{await logHandle.close();}
   let exited:string|undefined;child.on('error',error=>{exited=error.message;});child.on('exit',(code,signal)=>{exited=`exit ${code} ${signal??''}`;});
   while(performance.now()<deadline){const record=await reuse();if(record){handedOff=true;return {row:record,reused:false};}if(exited)throw new Error(`OPEN_START: ${exited}; worker log ${log}`);await sleep(30);}throw new Error(`OPEN_TIMEOUT: worker did not become ready; log ${log}`);
  }finally{if(spawned&&!handedOff&&spawned.exitCode===null&&spawned.signalCode===null)spawned.kill('SIGTERM');await releaseClaim(claim,nonce);if(request)await unlink(request).catch(e=>{if(e.code!=='ENOENT')throw e;});}

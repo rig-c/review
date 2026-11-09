@@ -1,11 +1,18 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appRoot, buildWeb, PLAY_SOURCE_CONDITION, playBuildConditions } from '../src/build.ts';
+import { playPackagePath, toolVersions } from '../src/versions.ts';
 
 const buildModuleUrl = new URL('../src/build.ts', import.meta.url).href;
+const versionsModuleUrl = new URL('../src/versions.ts', import.meta.url).href;
 const tscBin = join(appRoot, 'node_modules', 'typescript', 'bin', 'tsc');
+const reviewManifest = JSON.parse(readFileSync(join(appRoot, 'package.json'), 'utf8')) as {
+  version: string;
+  dependencies: Record<string, string>;
+  devDependencies: Record<string, string>;
+};
 
 const PLAY_EXPORTS_WITH_SOURCE = {
   '.': {
@@ -84,19 +91,22 @@ function runSubprocessBuild(root: string, enableSourceCondition: boolean) {
   };
 }
 
-test('manifest, frozen lockfile and tsconfig declare parts 2.36.0, play 1.23.0 and @rig-c/source customConditions', () => {
-  const pkg = JSON.parse(readFileSync(join(appRoot, 'package.json'), 'utf8')) as {
-    dependencies: Record<string, string>;
-    devDependencies: Record<string, string>;
-  };
-  expect(pkg.dependencies['@rig-c/play']).toBe('1.23.0');
-  expect(pkg.devDependencies['@rig-c/parts']).toBe('2.36.0');
+test('manifest, frozen lockfile and tsconfig declare coherent @rig-c/parts and @rig-c/play pins and @rig-c/source customConditions', () => {
+  const playPin = reviewManifest.dependencies['@rig-c/play']!;
+  const partsPin = reviewManifest.devDependencies['@rig-c/parts']!;
+  expect(playPin).toMatch(/^\d+\.\d+\.\d+$/);
+  expect(partsPin).toMatch(/^\d+\.\d+\.\d+$/);
 
-  const lock = readFileSync(join(appRoot, 'bun.lock'), 'utf8');
-  expect(lock).toContain('"@rig-c/parts": "2.36.0"');
-  expect(lock).toContain('"@rig-c/parts@2.36.0"');
-  expect(lock).not.toContain('"@rig-c/parts@2.35.0"');
-  expect(lock).toContain('"@rig-c/play": "1.23.0"');
+  const lockText = readFileSync(join(appRoot, 'bun.lock'), 'utf8');
+  const lock = Bun.JSONC.parse(lockText) as {
+    workspaces: { '': { dependencies: Record<string, string>; devDependencies: Record<string, string> } };
+    packages: Record<string, [string, ...unknown[]]>;
+  };
+  expect(lock.workspaces[''].dependencies['@rig-c/play']).toBe(playPin);
+  expect(lock.workspaces[''].devDependencies['@rig-c/parts']).toBe(partsPin);
+  expect(lock.packages['@rig-c/play']?.[0]).toBe(`@rig-c/play@${playPin}`);
+  expect(lock.packages['@rig-c/parts']?.[0]).toBe(`@rig-c/parts@${partsPin}`);
+  expect(lockText).not.toContain('"@rig-c/parts@2.35.0"');
 
   const tsconfig = JSON.parse(readFileSync(join(appRoot, 'tsconfig.json'), 'utf8')) as {
     compilerOptions: { customConditions?: string[] };
@@ -105,10 +115,41 @@ test('manifest, frozen lockfile and tsconfig declare parts 2.36.0, play 1.23.0 a
 });
 
 test('installed dist-only package retains default dist bundling and never enables missing source condition', async () => {
-  expect(playBuildConditions(appRoot)).toEqual([]);
-  const withFlagOnInstalled = runSubprocessBuild(appRoot, true);
-  expect(withFlagOnInstalled.exitCode).toBe(0);
-  expect(JSON.parse(withFlagOnInstalled.stdout).conditions).toEqual([]);
+  const resolvedAppPlayManifest = JSON.parse(readFileSync(playPackagePath(), 'utf8')) as {
+    name: string;
+    version: string;
+  };
+  expect(resolvedAppPlayManifest.name).toBe('@rig-c/play');
+  expect(await toolVersions()).toEqual({
+    viewerVersion: reviewManifest.version,
+    runtimeVersion: resolvedAppPlayManifest.version,
+  });
+  const appResolvedEntry = Bun.resolveSync('@rig-c/play', appRoot);
+  expect(playBuildConditions(appRoot)).toEqual(
+    /[\\/]src[\\/]index\.ts$/.test(appResolvedEntry) ? [PLAY_SOURCE_CONDITION] : [],
+  );
+
+  // Pre-play#254 registry dist-only package (exports has only types + import, no @rig-c/source).
+  const legacyDistOnly = createSyntheticConsumer({
+    exportsField: {
+      '.': {
+        types: './dist/index.d.ts',
+        import: './dist/index.js',
+      },
+    },
+    distCode: 'export const PLAY_BUNDLE_MARKER = "LEGACY_DIST_ONLY_MARKER";\n',
+    distDts: 'export declare const PLAY_BUNDLE_MARKER: string;\n',
+  });
+  try {
+    expect(playBuildConditions(legacyDistOnly.root)).toEqual([]);
+    const withFlagOnLegacy = runSubprocessBuild(legacyDistOnly.root, true);
+    expect(withFlagOnLegacy.exitCode).toBe(0);
+    const legacyResult = JSON.parse(withFlagOnLegacy.stdout) as { conditions: string[]; text: string };
+    expect(legacyResult.conditions).toEqual([]);
+    expect(legacyResult.text).toContain('LEGACY_DIST_ONLY_MARKER');
+  } finally {
+    legacyDistOnly.cleanup();
+  }
 
   // Post-play#254 published dist-only package: exports declares @rig-c/source, but tarball ships only dist/.
   const fixture = createSyntheticConsumer({
@@ -122,6 +163,12 @@ test('installed dist-only package retains default dist bundling and never enable
     const blob = await buildWeb('single', fixture.root);
     const text = await blob.text();
     expect(text).toContain('DIST_ONLY_INSTALLED_MARKER');
+
+    const withFlagOnPost254DistOnly = runSubprocessBuild(fixture.root, true);
+    expect(withFlagOnPost254DistOnly.exitCode).toBe(0);
+    const post254Result = JSON.parse(withFlagOnPost254DistOnly.stdout) as { conditions: string[]; text: string };
+    expect(post254Result.conditions).toEqual([]);
+    expect(post254Result.text).toContain('DIST_ONLY_INSTALLED_MARKER');
   } finally {
     fixture.cleanup();
   }
@@ -220,5 +267,101 @@ test('linked source-only fixture with no dist bundles and typechecks under @rig-
     expect(tscFail.exitCode).not.toBe(0);
   } finally {
     fixture.cleanup();
+  }
+});
+
+test('symlinked peer target lane.ws/peers/rig-play with no dist resolves manifest identity, forwards only active source condition to spawned child, and refuses mismatched package names', () => {
+  const base = mkdtempSync(join(tmpdir(), 'review-peer-link-'));
+  try {
+    const peerPlay = join(base, 'lane.ws', 'peers', 'rig-play');
+    mkdirSync(join(peerPlay, 'src'), { recursive: true });
+    writeFileSync(
+      join(peerPlay, 'package.json'),
+      JSON.stringify({
+        name: '@rig-c/play',
+        version: '1.23.0-peer',
+        type: 'module',
+        exports: PLAY_EXPORTS_WITH_SOURCE,
+      }, null, 2) + '\n',
+    );
+    writeFileSync(
+      join(peerPlay, 'src', 'index.ts'),
+      'export const PLAY_BUNDLE_MARKER: string = "PEER_SYMLINK_SOURCE_MARKER";\n',
+    );
+    expect(existsSync(join(peerPlay, 'dist'))).toBe(false);
+
+    const consumer = join(base, 'lane.ws', 'review');
+    mkdirSync(join(consumer, 'node_modules', '@rig-c'), { recursive: true });
+    mkdirSync(join(consumer, 'web'), { recursive: true });
+    symlinkSync(peerPlay, join(consumer, 'node_modules', '@rig-c', 'play'), 'dir');
+    writeFileSync(
+      join(consumer, 'web', 'main.ts'),
+      'import { PLAY_BUNDLE_MARKER } from "@rig-c/play";\nconsole.log(PLAY_BUNDLE_MARKER);\n',
+    );
+
+    const childWorkerScript = join(base, 'detached-child-probe.ts');
+    writeFileSync(
+      childWorkerScript,
+      `
+      import { buildWeb, playBuildConditions } from ${JSON.stringify(buildModuleUrl)};
+      import { playPackagePath, toolVersions } from ${JSON.stringify(versionsModuleUrl)};
+      const root = process.argv[2]!;
+      const pkgPath = playPackagePath(root);
+      const versions = await toolVersions(root);
+      const conditions = playBuildConditions(root);
+      const text = await (await buildWeb('single', root)).text();
+      console.log(JSON.stringify({ execArgv: process.execArgv, pkgPath, versions, conditions, text }));
+      `,
+    );
+
+    // Parent run with --smol AND --conditions=@rig-c/source spawns child forwarding ONLY playBuildConditions(consumer).
+    const parentLauncherScript = `
+      import { playBuildConditions } from ${JSON.stringify(buildModuleUrl)};
+      const consumer = process.argv[1]!;
+      const worker = process.argv[2]!;
+      const forwarded = playBuildConditions(consumer).map(c => '--conditions=' + c);
+      const child = Bun.spawnSync([process.execPath, ...forwarded, worker, consumer], { stdout: 'pipe', stderr: 'pipe' });
+      if (child.exitCode !== 0) {
+        console.error(child.stderr.toString());
+        process.exit(child.exitCode);
+      }
+      console.log(child.stdout.toString().trim());
+    `;
+    const parentProc = Bun.spawnSync(
+      [process.execPath, '--smol', `--conditions=${PLAY_SOURCE_CONDITION}`, '-e', parentLauncherScript, consumer, childWorkerScript],
+      { cwd: appRoot, stdout: 'pipe', stderr: 'pipe' },
+    );
+    expect(parentProc.exitCode).toBe(0);
+    const childResult = JSON.parse(parentProc.stdout.toString().trim()) as {
+      execArgv: string[];
+      pkgPath: string;
+      versions: { viewerVersion: string; runtimeVersion: string };
+      conditions: string[];
+      text: string;
+    };
+    expect(childResult.execArgv).toEqual([`--conditions=${PLAY_SOURCE_CONDITION}`]);
+    expect(childResult.pkgPath).toBe(realpathSync(join(peerPlay, 'package.json')));
+    expect(childResult.versions).toEqual({ viewerVersion: reviewManifest.version, runtimeVersion: '1.23.0-peer' });
+    expect(childResult.conditions).toEqual([PLAY_SOURCE_CONDITION]);
+    expect(childResult.text).toContain('PEER_SYMLINK_SOURCE_MARKER');
+
+    // Negative control: if the symlinked target manifest name is not @rig-c/play, playPackagePath refuses by name.
+    writeFileSync(
+      join(peerPlay, 'package.json'),
+      JSON.stringify({
+        name: '@rig-c/not-play',
+        version: '1.23.0-peer',
+        type: 'module',
+        exports: PLAY_EXPORTS_WITH_SOURCE,
+      }, null, 2) + '\n',
+    );
+    const wrongNameProc = Bun.spawnSync(
+      [process.execPath, `--conditions=${PLAY_SOURCE_CONDITION}`, childWorkerScript, consumer],
+      { cwd: appRoot, stdout: 'pipe', stderr: 'pipe' },
+    );
+    expect(wrongNameProc.exitCode).not.toBe(0);
+    expect(wrongNameProc.stderr.toString()).toContain('@rig-c/play: package.json not found from resolved entry');
+  } finally {
+    rmSync(base, { recursive: true, force: true });
   }
 });

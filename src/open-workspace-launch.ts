@@ -2,7 +2,7 @@ import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {open, readFile, unlink} from 'node:fs/promises';
 import {join} from 'node:path';
-import {appRoot} from './build.ts';
+import {appRoot, playBuildConditions} from './build.ts';
 import {frontPort} from './front.ts';
 import {acquireClaim, defaultStateDir, openFingerprint, prepareOpenTarget, readOpenStatus, releaseClaim,
   type OpenInputs, type OpenOptions} from './open.ts';
@@ -61,7 +61,7 @@ export async function openWorkspace(inputs: readonly OpenInputs[], options: Open
       const logPath = join(directory, nonce + '.log');
       const log = await open(logPath, 'a', 0o600);
       try {
-        child = spawn(process.execPath, [join(appRoot, 'src/open-workspace-worker.ts'), request],
+        child = spawn(process.execPath, [...playBuildConditions().map(c => `--conditions=${c}`), join(appRoot, 'src/open-workspace-worker.ts'), request],
           {cwd: directory, detached: true, stdio: ['ignore', log.fd, log.fd], env: process.env});
         child.unref();
       } finally {await log.close();}
