@@ -3114,6 +3114,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Comment · C (active mesh editor keeps C)": "코멘트 · C (활성 메시 편집기가 C 키를 사용함)",
   "Comment · C (0)": "코멘트 · C (0)",
   "Comment · C ({0})": "코멘트 · C ({0})",
+  "Comment · C ({0}) · Rendering": "코멘트 · C ({0}) · 렌더링 중",
   "COMMENT_CROP_UNAVAILABLE: viewport pixel source unavailable": "COMMENT_CROP_UNAVAILABLE: 뷰포트 픽셀 소스를 사용할 수 없습니다",
   "viewport pixel source unavailable": "뷰포트 픽셀 소스를 사용할 수 없습니다",
   "COMMENT_CROP_UNAVAILABLE: mark is outside the viewport": "COMMENT_CROP_UNAVAILABLE: 표시 영역이 뷰포트 밖에 있습니다",

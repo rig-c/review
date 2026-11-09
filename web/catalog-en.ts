@@ -3114,6 +3114,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Comment · C (active mesh editor keeps C)": "Comment · C (active mesh editor keeps C)",
   "Comment · C (0)": "Comment · C (0)",
   "Comment · C ({0})": "Comment · C ({0})",
+  "Comment · C ({0}) · Rendering": "Comment · C ({0}) · Rendering",
   "COMMENT_CROP_UNAVAILABLE: viewport pixel source unavailable": "COMMENT_CROP_UNAVAILABLE: viewport pixel source unavailable",
   "viewport pixel source unavailable": "viewport pixel source unavailable",
   "COMMENT_CROP_UNAVAILABLE: mark is outside the viewport": "COMMENT_CROP_UNAVAILABLE: mark is outside the viewport",

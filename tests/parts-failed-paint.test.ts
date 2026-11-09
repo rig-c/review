@@ -170,6 +170,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
     'pv-alpha': { checked: false },
     'pv-footprints': { checked: false },
     'pv-load': { hidden: true, dataset: {}, textContent: '' },
+    'stage-comment': {disabled:false,textContent:'',setAttribute(){}},
   };
   const $ = <T = HTMLElement>(id: string): T => nodes[id] as T;
 
@@ -261,7 +262,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
     'paintAssemblyOutline',
     'paintMesh',
     'restoreDependencies',
-    `const { fetch, access, stageHeaders, defaultPartsComparison } = restoreDependencies;const settleReady=()=>{};const disposed=false,mountActive=true,doc=document;const query=(s)=>document.querySelector(s),queryAll=(s)=>document.querySelectorAll(s);const cachedImage=(_key,read)=>read();const source={image:index=>load('/api/parts/image/'+index),page:index=>load('/api/parts/page/'+index),painting:()=>load('/api/parts/painting'),view:async()=>state.data};\nconst viewport = new Proxy({}, { get(_t, prop) { const v = getViewport(); return v ? v[prop] : undefined; }, set(_t, prop, val) { const v = getViewport(); if (v) v[prop] = val; return true; } });\n${code}`,
+    `const { fetch, access, stageHeaders, defaultPartsComparison } = restoreDependencies;const settleReady=()=>{};const slots={stage:{dataset:{},setAttribute(){}}};const disposed=false,mountActive=true,doc=document;const query=(s)=>document.querySelector(s),queryAll=(s)=>document.querySelectorAll(s);const cachedImage=(_key,read)=>read();const source={image:index=>load('/api/parts/image/'+index),page:index=>load('/api/parts/page/'+index),painting:()=>load('/api/parts/painting'),view:async()=>state.data};\nconst viewport = new Proxy({}, { get(_t, prop) { const v = getViewport(); return v ? v[prop] : undefined; }, set(_t, prop, val) { const v = getViewport(); if (v) v[prop] = val; return true; } });\n${code}`,
   )(
     state,
     $,

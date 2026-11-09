@@ -211,7 +211,7 @@ export function mountPartsWorkspace(
   }
   const stageEmbedded = Boolean(options.embedded);
   const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, comparison:defaultPartsComparison(), differenceThreshold:0, hidden: new Set<string>(), view: options.defaultView as 'item' | 'page' | 'assembled', page: 0, meshShown: new Set<string>() };
-  const comments:PartsIssue[]=[];let commentUi:ReturnType<typeof bindStageComments>|null=null;let viewport:ReturnType<typeof createPartsViewport>|null=null;let painting=false;
+  const comments:PartsIssue[]=[];let commentUi:ReturnType<typeof bindStageComments>|null=null;let viewport:ReturnType<typeof createPartsViewport>|null=null;let painting=true;
   const images = new Map<string, HTMLImageElement>();
   const pendingImages = new Map<string, Promise<HTMLImageElement>>();
   let imageGeneration = 0;
@@ -258,12 +258,28 @@ function overlayBox(x: number, y: number, w: number, h: number): HTMLDivElement 
 
 let paintToken = 0;
 let paintFailure:string|null=null,paintReset=false;
+let paintBusyStatus: {token: number; text: string} | null = null;
+function syncPaintState(): void {
+ slots.stage.dataset.partsPaintState = disposed ? 'disposed' : painting ? 'busy' : paintFailure ? 'failed' : 'ready';
+ slots.stage.setAttribute('aria-busy', String(painting));
+ const toggle = $<HTMLButtonElement>('stage-comment');
+ toggle.disabled = painting;
+ toggle.setAttribute('aria-busy', String(painting));
+ if (commentUi) commentUi.refresh();
+ else toggle.textContent = t(painting ? 'Comment · C ({0}) · Rendering' : 'Comment · C ({0})', [0]);
+}
+
 async function paint():Promise<void>{
  const token=++paintToken;painting=true;
+ if (paintBusyStatus) {
+  if ($('pv-save-status').textContent === paintBusyStatus.text) paintBusyStatus.token = token;
+  else paintBusyStatus = null;
+ }
+ syncPaintState();
  try{
   await paintRaster(token);if(disposed||token!==paintToken)return;
   await paintReference(token);if(disposed||token!==paintToken)return;
-  if(paintFailure)$('pv-save-status').textContent='';paintFailure=null;viewport?.fitCamera();commentUi?.refresh();settleReady();
+  if(paintFailure&&$('pv-save-status').textContent===t(paintFailure))$('pv-save-status').textContent='';paintFailure=null;viewport?.fitCamera();commentUi?.refresh();settleReady();
  }catch(error){
   if(disposed||token!==paintToken)return;
   settleReady(error instanceof Error?error:new Error('PARTS_PAINT_FAILED'));
@@ -275,7 +291,16 @@ async function paint():Promise<void>{
   try{viewport?.writeCamera?.('rig',{zoom:1,center:null});viewport?.writeCamera?.('reference',{zoom:1,center:null});viewport?.fitCamera();}
   finally{paintReset=false;paintFailure=failure;}
   commentUi?.refresh();
- }finally{if(token===paintToken)painting=false;}
+ }finally{
+  if(!disposed&&token===paintToken){
+   painting=false;
+   if(paintBusyStatus?.token===token){
+    if(!paintFailure&&$('pv-save-status').textContent===paintBusyStatus.text)$('pv-save-status').textContent='';
+    paintBusyStatus=null;
+   }
+   syncPaintState();
+  }
+ }
 }
 const assemblyAlpha=new Map<string,Uint8ClampedArray>();
 function sourceAlpha(item:Item,img:HTMLImageElement):Uint8ClampedArray {
@@ -557,7 +582,7 @@ function renderLegacyVerdict(): void {
 
 async function boot(): Promise<void> {
   const box=$('pv-canvas-box'),layout=$('stage-layout');mountViewportPair(layout);$('rig-root').append(box);const reference=doc.createElement('canvas');reference.id='pv-reference';$('reference-content').append(reference);$('rig-empty').hidden=true;$('rig-overlay').hidden=true;$('rig-label').textContent=t('Selected part');$('rig-viewport').tabIndex=0;
-  viewport=createPartsViewport({el:$,canvas:$<HTMLCanvasElement>('pv-canvas'),message:(msg)=>{$('pv-save-status').textContent=t(msg);},reference:()=>state.data?.painting?$<HTMLCanvasElement>('pv-reference'):null,
+  viewport=createPartsViewport({el:$,canvas:$<HTMLCanvasElement>('pv-canvas'),message:(msg)=>{paintBusyStatus=null;$('pv-save-status').textContent=t(msg);},reference:()=>state.data?.painting?$<HTMLCanvasElement>('pv-reference'):null,
     frameSize:target=>{
       const data=state.data,item=data?.items[state.selected];
       if(!data||!item||paintReset)return null;
@@ -575,11 +600,12 @@ async function boot(): Promise<void> {
     const status = $('pv-load');
     status.textContent = t(err instanceof Error ? err.message : 'Save failed.');
     status.dataset.result = 'refused';
+    painting=false;paintFailure=err instanceof Error?err.message:String(err);syncPaintState();
     settleReady(err);
     return;
   }
   if (disposed) return;
-  if (data.error) { const status=$('pv-load');status.textContent=t(data.error);status.dataset.result='refused';settleReady(new Error(data.error));return; }
+  if (data.error) { const status=$('pv-load');status.textContent=t(data.error);status.dataset.result='refused';painting=false;paintFailure=data.error;syncPaintState();settleReady(new Error(data.error));return; }
   if (!data.items.length) throw new Error('PARTS_PAINT_FAILED');
   state.data = data;if(stageEmbedded)for(const item of data.items)if(item.mesh)state.meshShown.add(item.name);$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;
   if (data.mode !== 'parts' || !data.rigSize) state.view = 'item';
@@ -680,7 +706,7 @@ function setupPartsComments():void {
  const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||state.view!=='item')return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{mode:'item',camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshShown.has(item.name),comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
  commentUi=bindStageComments({toolbar:slots.toolbar,listHost:slots.side,toggle:$<HTMLButtonElement>('stage-comment'),viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
   restore:async(raw)=>{const current = await source.view();if(disposed)return;if(current.sourceHash!==state.data?.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE');const b=raw as {part:string;imageHash:string;sourceHash:string;view:PartsIssue['view']},item=state.data!.items.find(i=>i.name===b.part);if(!item||item.imageHash!==b.imageHash||state.data!.sourceHash!==b.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');setView('item');$('pv-assemble').setAttribute('aria-pressed','false');select(item.index);state.bg=b.view.background;state.alpha=b.view.alpha;state.footprints=b.view.footprints;state.comparison={...(b.view.comparison??defaultPartsComparison())};if(state.comparison.mode==='difference')state.differenceThreshold=state.comparison.threshold;renderComparison();if(b.view.mesh)state.meshShown.add(item.name);else state.meshShown.delete(item.name);$<HTMLSelectElement>('pv-bg').value=state.bg;$<HTMLInputElement>('pv-alpha').checked=state.alpha;$<HTMLInputElement>('pv-footprints').checked=state.footprints;renderMesh();viewport!.state.cameraRestoring=true;try{await paint();if(!paintFailure){viewport!.writeCamera('rig',{zoom:b.view.camera.zoom,center:{...b.view.camera.center}});if(b.view.referenceCamera)viewport!.writeCamera('reference',{zoom:b.view.referenceCamera.zoom,center:{...b.view.referenceCamera.center}});viewport!.state.cameraSync=b.view.cameraSync;viewport!.fitCamera();}}finally{viewport!.state.cameraRestoring=false;}},
-  feedback:()=>comments,locked:()=>Boolean(state.data?.legacyVerdict?.readOnly)||host.locked() !== 'open',add:c=>comments.push(c),changed:()=>{renderList();host.changed(structuredClone(comments));},error:m=>{$('pv-save-status').textContent=t(m);},blocked:()=>painting,shortcutActive:()=>mountActive&&!disposed,refusal:()=>paintFailure??(state.data?.legacyVerdict?.readOnly?state.data.legacyVerdict.code+': '+t('parts.legacyVerdictBanner',[state.data.legacyVerdict.flaggedCount]):null)??(host.locked() !== 'open'?'Read-only view: reopen with rig-review open to edit.':null)??(stageEmbedded&&state.data?.mode==='parts'?'PARTS_JOINED_ISSUE_UNSUPPORTED':null)??(state.view==='assembled'?'PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment':null)??(state.data?.mode!=='parts'?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
+  feedback:()=>comments,locked:()=>Boolean(state.data?.legacyVerdict?.readOnly)||host.locked() !== 'open',add:c=>comments.push(c),changed:()=>{renderList();host.changed(structuredClone(comments));},error:m=>{paintBusyStatus=null;$('pv-save-status').textContent=t(m);},blocked:()=>painting,busy:()=>painting,busyError:message=>{paintBusyStatus={token:paintToken,text:t(message)};$('pv-save-status').textContent=paintBusyStatus.text;},shortcutActive:()=>mountActive&&!disposed,refusal:()=>paintFailure??(state.data?.legacyVerdict?.readOnly?state.data.legacyVerdict.code+': '+t('parts.legacyVerdictBanner',[state.data.legacyVerdict.flaggedCount]):null)??(host.locked() !== 'open'?'Read-only view: reopen with rig-review open to edit.':null)??(stageEmbedded&&state.data?.mode==='parts'?'PARTS_JOINED_ISSUE_UNSUPPORTED':null)??(state.view==='assembled'?'PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment':null)??(state.data?.mode!=='parts'?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
 
 }
 
@@ -743,12 +769,14 @@ async function revalidateStageParts(savedState?: StagePartsState | null): Promis
   }
 }
 
-  void boot().catch(error => settleReady(error));
+  syncPaintState();
+  void boot().catch(error => {if(disposed)return;painting=false;paintFailure=error instanceof Error?error.message:String(error);syncPaintState();settleReady(error);});
   return {
     ready,
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      painting=false;syncPaintState();
       settleReady(new Error('PARTS_WORKSPACE_DISPOSED'));
       paintToken++; imageGeneration++;
       commentUi?.dispose();

@@ -147,12 +147,7 @@ test('#612 actual list caller renders complete names, producer flag counts, issu
  expect(html).not.toContain('id="pv-overall"');
 });
 
-test('#612 two simultaneous mountPartsWorkspace instances in one document stay isolated across slots and host adapters',async()=>{
- expect(REGION_MARGIN).toBe(4);
- const partsSourceText=await readFile('web/parts.ts','utf8');
- expect(partsSourceText).not.toContain("getElementById('parts-app')");
- expect(partsSourceText).not.toContain('pageInstanceAccess(');
-
+function partsMountDocument() {
  class FakeElement {
   tagName:string;id='';className='';textContent='';title='';type='';value='';min='';max='';step='';
   hidden=false;disabled=false;checked=false;tabIndex=0;clientWidth=160;clientHeight=120;width=16;height=16;
@@ -319,9 +314,6 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
  Object.defineProperty(globalThis,'ResizeObserver',{value:FakeObserver,configurable:true,writable:true});
  Object.defineProperty(globalThis,'MutationObserver',{value:FakeObserver,configurable:true,writable:true});
  Object.defineProperty(globalThis,'Element',{value:FakeElement,configurable:true,writable:true});
- let handleA:ReturnType<typeof mountPartsWorkspace>|null=null;
- let handleB:ReturnType<typeof mountPartsWorkspace>|null=null;
- try{
   const makeSlots=(prefix:string)=>{
    const hostWrap=new FakeElement('div');hostWrap.id=`host-${prefix}`;
    const left=new FakeElement('aside'),stage=new FakeElement('main'),toolbar=new FakeElement('div'),side=new FakeElement('aside');
@@ -329,6 +321,36 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
    rootDoc.append(hostWrap);
    return {left:left as unknown as HTMLElement,stage:stage as unknown as HTMLElement,toolbar:toolbar as unknown as HTMLElement,side:side as unknown as HTMLElement,hostWrap};
   };
+ return {FakeElement, fakeDoc, rootDoc, makeSlots, cleanup() {
+  if(savedDoc)Object.defineProperty(globalThis,'document',savedDoc);
+  else delete (globalThis as any).document;
+  if(savedWin)Object.defineProperty(globalThis,'window',savedWin);
+  else delete (globalThis as any).window;
+  if(savedRaf)Object.defineProperty(globalThis,'requestAnimationFrame',savedRaf);
+  else delete (globalThis as any).requestAnimationFrame;
+  if(savedCaf)Object.defineProperty(globalThis,'cancelAnimationFrame',savedCaf);
+  else delete (globalThis as any).cancelAnimationFrame;
+  if(savedRo)Object.defineProperty(globalThis,'ResizeObserver',savedRo);
+  else delete (globalThis as any).ResizeObserver;
+  if(savedMo)Object.defineProperty(globalThis,'MutationObserver',savedMo);
+  else delete (globalThis as any).MutationObserver;
+  if(savedEl)Object.defineProperty(globalThis,'Element',savedEl);
+  else delete (globalThis as any).Element;
+ }};
+}
+
+test('#612 two simultaneous mountPartsWorkspace instances in one document stay isolated across slots and host adapters',async()=>{
+ expect(REGION_MARGIN).toBe(4);
+ const partsSourceText=await readFile('web/parts.ts','utf8');
+ expect(partsSourceText).not.toContain("getElementById('parts-app')");
+ expect(partsSourceText).not.toContain('pageInstanceAccess(');
+
+ const fixture=partsMountDocument();
+ const {FakeElement, fakeDoc, rootDoc, makeSlots}=fixture;
+ type FakeElement=InstanceType<typeof FakeElement>;
+ let handleA:ReturnType<typeof mountPartsWorkspace>|null=null;
+ let handleB:ReturnType<typeof mountPartsWorkspace>|null=null;
+ try{
   const sampleIssue:PartsIssue={
    schema:'rig-review-parts-comment/2',
    id:'11111111-1111-4111-8111-111111111111',
@@ -514,20 +536,7 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
  }finally{
   handleA?.dispose();
   handleB?.dispose();
-  if(savedDoc)Object.defineProperty(globalThis,'document',savedDoc);
-  else delete (globalThis as any).document;
-  if(savedWin)Object.defineProperty(globalThis,'window',savedWin);
-  else delete (globalThis as any).window;
-  if(savedRaf)Object.defineProperty(globalThis,'requestAnimationFrame',savedRaf);
-  else delete (globalThis as any).requestAnimationFrame;
-  if(savedCaf)Object.defineProperty(globalThis,'cancelAnimationFrame',savedCaf);
-  else delete (globalThis as any).cancelAnimationFrame;
-  if(savedRo)Object.defineProperty(globalThis,'ResizeObserver',savedRo);
-  else delete (globalThis as any).ResizeObserver;
-  if(savedMo)Object.defineProperty(globalThis,'MutationObserver',savedMo);
-  else delete (globalThis as any).MutationObserver;
-  if(savedEl)Object.defineProperty(globalThis,'Element',savedEl);
-  else delete (globalThis as any).Element;
+  fixture.cleanup();
  }
 });
 
@@ -540,4 +549,62 @@ test('#612 paired legacy verdict labels and admitted Korean values use polite �
   expect(koCatalog[key]).toContain('파츠');
   expect(koCatalog[key]).not.toMatch(/파트|필요해요|이름을 씀/);
  }
+});
+
+
+test('#613 C during a current paint exposes busy then clears only its owned status at readiness', async () => {
+ const fixture=partsMountDocument();
+ const slots=fixture.makeSlots('paint-readiness');
+ const node=(id:string)=>slots.hostWrap.querySelector<InstanceType<typeof fixture.FakeElement>>('#'+id)!;
+ const requested: (()=>void)[]=[];
+ const arrivals=Array.from({length:4},(_,index)=>new Promise<void>(resolve=>{requested[index]=resolve;}));
+ const releases: ((image:HTMLImageElement)=>void)[]=[];
+ const rejects: ((error:Error)=>void)[]=[];
+ const images=Array.from({length:4},(_,index)=>new Promise<HTMLImageElement>((resolve,reject)=>{releases[index]=resolve;rejects[index]=reject;}));
+ const view:ViewData={mode:'parts',title:'Paint readiness',sourceHash:'1'.repeat(64),painting:null,rigSize:[64,64],
+  items:Array.from({length:4},(_,index)=>({name:'part-'+index,index,x:0,y:0,w:16,h:16,imageHash:'a'.repeat(64)})),
+  pages:[],flags:[],readings:[],flagSources:[],flagMissing:[],verdictFile:'parts-review.json',verdict:null,verdictStale:null};
+ const handle=mountPartsWorkspace(slots,{view:async()=>view,image:index=>{requested[index]!();return images[index]!;},page:async()=>({} as HTMLImageElement),painting:()=>null,crop:async issue=>issue},
+  {initial:()=>[],changed(){},register(){},locked:()=>'open'},{defaultView:'item'});
+ const flush=async()=>{for(let i=0;i<30;i++)await Promise.resolve();};
+ const pressC=()=>{
+  node('rig-viewport').focus();
+  fixture.fakeDoc.emit('keydown',{key:'c',target:node('rig-viewport'),defaultPrevented:false,repeat:false,ctrlKey:false,metaKey:false,altKey:false,preventDefault(){}});
+ };
+ try{
+  await arrivals[0];
+  expect(slots.stage.dataset.partsPaintState).toBe('busy');
+  expect(slots.stage.getAttribute('aria-busy')).toBe('true');
+  expect(node('stage-comment').disabled).toBe(true);
+  expect(node('stage-comment').textContent).toContain('Rendering');
+  pressC();
+  expect(node('pv-save-status').textContent).toContain('COMMENT_BUSY');
+  releases[0]!({width:16,height:16} as HTMLImageElement);
+  await handle.ready;
+  expect(slots.stage.dataset.partsPaintState).toBe('ready');
+  expect(node('stage-comment').disabled).toBe(false);
+  expect(node('pv-save-status').textContent).toBe('');
+
+  handle.select('part-1');await arrivals[1];pressC();
+  handle.select('part-2');await arrivals[2];pressC();
+  releases[1]!({width:16,height:16} as HTMLImageElement);await flush();
+  expect(slots.stage.dataset.partsPaintState).toBe('busy');
+  expect(node('stage-comment').disabled).toBe(true);
+  expect(node('pv-save-status').textContent).toContain('COMMENT_BUSY');
+  releases[2]!({width:16,height:16} as HTMLImageElement);await flush();
+  expect(slots.stage.dataset.partsPaintState).toBe('ready');
+  expect(node('stage-comment').disabled).toBe(false);
+  expect(node('pv-save-status').textContent).toBe('');
+
+  handle.select('part-0');pressC();
+  node('pv-save-status').textContent='Unrelated save status';await flush();
+  expect(slots.stage.dataset.partsPaintState).toBe('ready');
+  expect(node('pv-save-status').textContent).toBe('Unrelated save status');
+
+  handle.select('part-3');await arrivals[3];pressC();
+  rejects[3]!(new Error('planted-readiness-image-failure'));await flush();
+  expect(slots.stage.dataset.partsPaintState).toBe('failed');
+  expect(slots.stage.getAttribute('aria-busy')).toBe('false');
+  expect(node('pv-save-status').textContent).toContain('PARTS_PAINT_FAILED');
+ }finally{handle.dispose();fixture.cleanup();}
 });

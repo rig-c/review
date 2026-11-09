@@ -19,7 +19,8 @@ const observeStill = Bun.argv.includes('--rig-still-observe');
 const onlyStill = Bun.argv.includes('--rig-still-only');
 const onlyInterviewDiagnostics = Bun.argv.includes('--interview-diagnostics-only');
 const onlyParts = Bun.argv.includes('--parts-only');
-assert.ok([observeStill, onlyStill, onlyInterviewDiagnostics, onlyParts].filter(Boolean).length <= 1);
+const onlyIssueFlow = Bun.argv.includes('--parts-issue-only');
+assert.ok([observeStill, onlyStill, onlyInterviewDiagnostics, onlyParts, onlyIssueFlow].filter(Boolean).length <= 1);
 assert.ok(!observeStill || language === 'en', 'the diagnostic observation mode is EN only');
 const output = argument('--out') ?? 'evidence/job-window-' + language;
 await mkdir(output, {recursive: true});
@@ -274,6 +275,86 @@ async function captureFailure(error: unknown) {
     await writeFile(join(output, 'failure-responses.json'), redact(JSON.stringify(responses, null, 2)));
     await writeFile(join(output, 'failure.json'), redact(JSON.stringify(failure, null, 2)));
 }
+async function waitForPartsPaint(phase: string) {
+    const state = await page!.evaluate<{paint: string; ariaBusy: string; disabled: boolean; status: string; controlText: string; referenceAbsence: string | null}>(`new Promise((resolve,reject)=>{
+        const stage=document.querySelector('[data-job-parts-workspace] [data-parts-paint-state]');
+        const control=document.querySelector('#stage-comment'),status=document.querySelector('#pv-save-status');
+        if(!stage||!control||!status)throw new Error('PARTS_PAINT_READINESS_SIGNAL_MISSING');
+        const inspect=()=>{
+            const paint=stage.dataset.partsPaintState;
+            if(paint==='failed'||paint==='disposed'){observer.disconnect();reject(new Error('PARTS_PAINT_'+paint.toUpperCase()+': '+status.textContent));return;}
+            if(paint==='ready'&&stage.getAttribute('aria-busy')==='false'&&!control.disabled){
+                observer.disconnect();const absent=document.querySelector('#reference-empty');
+                resolve({paint,ariaBusy:stage.getAttribute('aria-busy'),disabled:control.disabled,status:status.textContent,controlText:control.textContent,
+                    referenceAbsence:absent&&!absent.hidden?absent.textContent:null});
+            }
+        };
+        const observer=new MutationObserver(inspect);
+        observer.observe(stage,{attributes:true});observer.observe(control,{attributes:true});inspect();
+    })`);
+    await checkpoints('parts-ready-' + phase, state);
+    assert.equal(state.status.includes('COMMENT_BUSY'), false,
+        'PARTS_READY_COMMENT_BUSY_PRODUCT_FAILURE: owner UI still reports COMMENT_BUSY after current paint readiness');
+}
+async function partsIssueFlow(owner: URL) {
+    const browser = page;
+    assert.ok(browser);
+        const issuePublication = await fixture.publish('parts', 'parts-issue');
+        await show(issuePublication);
+        const issueAsk = await fixture.ask(issuePublication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+        await wait(`!!document.querySelector('form[data-job-ask="${issueAsk.askId}"]')`, 'issue form');
+        const issueInputs = await jobInputHashes(fixture.input.root);
+        await checkpoints('parts-issue-fixture-hashes', {publicationId: issuePublication.publicationId,
+            syntheticReader: 'job-window-fixture-reader/1', partsEnumerator: 'synthetic-job-window-parts/1', files: issueInputs});
+        // Wait on the same mount state that disables the owner's visible C control.
+        await browser.evaluate(`(()=>{document.querySelector('[data-pv-item="mesh"]').click();
+            const assembled=document.querySelector('#pv-assemble');if(assembled.getAttribute('aria-pressed')==='true')assembled.click();
+            document.querySelector('#native-one').click();for(let i=0;i<4;i++)document.querySelector('#zoom-in').click();})()`);
+        await waitForPartsPaint('issue-item-and-zoom');
+        await browser.evaluate(`document.querySelector('#stage-comment').click()`);
+        assert.equal(await browser.evaluate(`document.querySelector('#stage-comment').getAttribute('aria-pressed')`), 'true',
+            'PARTS_CAPTURE_AFTER_READY_PRODUCT_FAILURE: C remains inactive after owner-visible readiness');
+        assert.equal(await browser.evaluate(`document.querySelector('#pv-save-status').textContent.includes('COMMENT_BUSY')`), false,
+            'PARTS_CAPTURE_AFTER_READY_PRODUCT_FAILURE: COMMENT_BUSY after owner-visible readiness');
+        const drag = await browser.evaluate<{x: number; y: number; endX: number; endY: number}>(`(()=>{
+            const canvas=document.getElementById('pv-canvas'),rect=canvas.getBoundingClientRect();
+            const scaleX=rect.width/canvas.width,scaleY=rect.height/canvas.height;
+            return {x:rect.left+3*scaleX,y:rect.top+3*scaleY,endX:rect.left+12*scaleX,endY:rect.top+12*scaleY,
+                canvasRect:rect.toJSON(),nativeWidth:canvas.width,nativeHeight:canvas.height,nativeStart:[3,3],nativeEnd:[12,12],scaleX,scaleY};})()`);
+        await checkpoints('parts-issue-native-drag', drag);
+        await browser.mouse('mouseMoved', drag.x, drag.y);
+        await browser.mouse('mousePressed', drag.x, drag.y);
+        await browser.mouse('mouseMoved', drag.endX, drag.endY);
+        await browser.mouse('mouseReleased', drag.endX, drag.endY);
+        await wait(`!!document.querySelector('.stage-comment-composer input')`, 'single-item issue composer');
+        await browser.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Visible boundary defect';form.requestSubmit();})()`);
+        await wait(`!document.querySelector('.stage-comment-composer') && document.querySelectorAll('.stage-comment-pin').length===1`, 'source-bound crop accepted');
+        await browser.evaluate(`(()=>{const toggle=document.querySelector('#stage-comment');if(toggle.getAttribute('aria-pressed')==='true')toggle.click();})()`);
+        assert.equal((await assertPersistentIssues(1, 'parts-right-issues-one-capture-off')).capture, 'false');
+        await writeFile(join(output, 'single-item-issue.png'), await browser.screenshot());
+        await browser.goto('about:blank');
+        await browser.goto(owner.href);
+        await show(issuePublication);
+        await wait(`document.querySelector('form[data-job-ask="${issueAsk.askId}"] button[type=submit]').textContent.includes('1')`, 'source-bound issue draft restored');
+        await assertPersistentIssues(1, 'parts-right-issues-one-reconnect');
+        await submit(issueAsk.askId);
+        await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='sent'`, 'changes requested');
+        const issues = (await fixture.next()).events.filter(event => event.type === 'act' && event.act.publicationId === issuePublication.publicationId);
+        assert.equal(issues.length, 1);
+        const issueAct = issues[0];
+        assert.ok(issueAct?.type === 'act' && issueAct.act.kind === 'parts-verdict' && issueAct.act.schema === 'rig-review/act@5');
+        assert.equal(issueAct.act.value.verdict, 'changes-requested');
+        assert.equal(issueAct.act.value.issues.length, 1);
+        assert.deepEqual(issueAct.act.value.issues[0]!.parts.map(part => part.name), ['mesh']);
+        assert.equal(issueAct.act.value.issues[0]!.sourceHash, issuePublication.source.sourceHash);
+        assert.equal(issueAct.act.value.issues[0]!.view.mode, 'item');
+        assert.ok(issueAct.act.value.issues[0]!.nativeCrop);
+        assert.deepEqual(await jobInputHashes(fixture.input.root), issueInputs);
+        await checkpoints('parts-single-item-issue-act', issueAct.act);
+        await fixture.finish();
+        await checkpoints('parts-complete', {language, createConsumerAcceptance: 'CREATE_380_AFTER_REVIEW_GREEN_MAIN'});
+}
+
 try {
     page = await launchCdpSession(profile, {async onEvent(event, send) {
         if (event.sessionId) control = send;
@@ -342,6 +423,8 @@ try {
         await interviewProbe.run(page, {wait, show, edit, submit, checkpoints, send: control!});
         assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
         assert.equal(navigation.length, 1);
+    } else if (onlyIssueFlow) {
+        await partsIssueFlow(owner);
     } else {
     const first = await fixture.publish('parts');
     await show(first);
@@ -423,52 +506,7 @@ try {
         assert.deepEqual(retryActs.map(event => event.type === 'act' && event.act.kind), ['parts-verdict', 'signoff']);
         await checkpoints('parts-retry-acts', retryActs);
 
-        const issuePublication = await fixture.publish('parts', 'parts-issue');
-        await show(issuePublication);
-        const issueAsk = await fixture.ask(issuePublication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
-        await wait(`!!document.querySelector('form[data-job-ask="${issueAsk.askId}"]')`, 'issue form');
-        const issueInputs = await jobInputHashes(fixture.input.root);
-        await checkpoints('parts-issue-fixture-hashes', {publicationId: issuePublication.publicationId,
-            syntheticReader: 'job-window-fixture-reader/1', partsEnumerator: 'synthetic-job-window-parts/1', files: issueInputs});
-        // Use the existing single-item gesture, independently of assembled issue support.
-        await page.evaluate(`(()=>{document.querySelector('[data-pv-item="mesh"]').click();
-            const assembled=document.querySelector('#pv-assemble');if(assembled.getAttribute('aria-pressed')==='true')assembled.click();
-            document.querySelector('#native-one').click();for(let i=0;i<4;i++)document.querySelector('#zoom-in').click();
-            document.querySelector('#stage-comment').click();})()`);
-        const drag = await page.evaluate<{x: number; y: number; endX: number; endY: number}>(`(()=>{
-            const pane=document.getElementById('rig-viewport').getBoundingClientRect(),m=new DOMMatrix(document.getElementById('rig-root').style.transform);
-            return {x:pane.left+m.e+3*m.a,y:pane.top+m.f+3*m.a,endX:pane.left+m.e+12*m.a,endY:pane.top+m.f+12*m.a};})()`);
-        await page.mouse('mouseMoved', drag.x, drag.y);
-        await page.mouse('mousePressed', drag.x, drag.y);
-        await page.mouse('mouseMoved', drag.endX, drag.endY);
-        await page.mouse('mouseReleased', drag.endX, drag.endY);
-        await wait(`!!document.querySelector('.stage-comment-composer input')`, 'single-item issue composer');
-        await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Visible boundary defect';form.requestSubmit();})()`);
-        await wait(`!document.querySelector('.stage-comment-composer') && document.querySelectorAll('.stage-comment-pin').length===1`, 'source-bound crop accepted');
-        await page.evaluate(`(()=>{const toggle=document.querySelector('#stage-comment');if(toggle.getAttribute('aria-pressed')==='true')toggle.click();})()`);
-        assert.equal((await assertPersistentIssues(1, 'parts-right-issues-one-capture-off')).capture, 'false');
-        await writeFile(join(output, 'single-item-issue.png'), await page.screenshot());
-        await page.goto('about:blank');
-        await page.goto(owner.href);
-        await show(issuePublication);
-        await wait(`document.querySelector('form[data-job-ask="${issueAsk.askId}"] button[type=submit]').textContent.includes('1')`, 'source-bound issue draft restored');
-        await assertPersistentIssues(1, 'parts-right-issues-one-reconnect');
-        await submit(issueAsk.askId);
-        await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='sent'`, 'changes requested');
-        const issues = (await fixture.next()).events.filter(event => event.type === 'act' && event.act.publicationId === issuePublication.publicationId);
-        assert.equal(issues.length, 1);
-        const issueAct = issues[0];
-        assert.ok(issueAct?.type === 'act' && issueAct.act.kind === 'parts-verdict' && issueAct.act.schema === 'rig-review/act@5');
-        assert.equal(issueAct.act.value.verdict, 'changes-requested');
-        assert.equal(issueAct.act.value.issues.length, 1);
-        assert.deepEqual(issueAct.act.value.issues[0]!.parts.map(part => part.name), ['mesh']);
-        assert.equal(issueAct.act.value.issues[0]!.sourceHash, issuePublication.source.sourceHash);
-        assert.equal(issueAct.act.value.issues[0]!.view.mode, 'item');
-        assert.ok(issueAct.act.value.issues[0]!.nativeCrop);
-        assert.deepEqual(await jobInputHashes(fixture.input.root), issueInputs);
-        await checkpoints('parts-single-item-issue-act', issueAct.act);
-        await fixture.finish();
-        await checkpoints('parts-complete', {language, createConsumerAcceptance: 'CREATE_380_AFTER_REVIEW_GREEN_MAIN'});
+        await partsIssueFlow(owner);
     } else {
     const draftPublication = await fixture.publish('parts', 'parts-draft');
     await show(draftPublication);
