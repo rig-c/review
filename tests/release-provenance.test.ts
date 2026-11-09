@@ -188,7 +188,7 @@ test('parsed YAML removes release-please, triggers on version tags, preserves le
  checkWorkflowPolicy(workflow);
 });
 
-for(const [label,mutate] of Object.entries<{[k:string]:(copy:Workflow)=>void}>({
+for(const [label,mutate] of Object.entries<(copy:Workflow)=>void>({
  'branch push trigger':copy=>{(copy.on as {push:unknown}).push={branches:['main']};},
  'reintroduced release-please step':copy=>{copy.jobs.release.steps.unshift({id:'release',uses:'googleapis/release-please-action@v4'});},
  'write permissions on selector job':copy=>{copy.jobs.release.permissions={contents:'write'};},
