@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.7.1](https://github.com/rig-c/review/compare/v2.7.0...v2.7.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* hash declared occluder inputs in review handoffs ([#593](https://github.com/rig-c/review/issues/593)) ([310f1d2](https://github.com/rig-c/review/commit/310f1d2d7be4f289e52b782e2ae7a4799e307f57))
+* preserve source-bound draft precision corrections ([#590](https://github.com/rig-c/review/issues/590)) ([663b184](https://github.com/rig-c/review/commit/663b1845e688e6c42be6a966f378f11c9880e8b3))
+
 ## [2.7.0](https://github.com/rig-c/review/compare/v2.6.0...v2.7.0) (2026-11-08)
 
 
