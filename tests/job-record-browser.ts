@@ -823,6 +823,9 @@ try {
   await page.goto(pkgOwnerUrl.href);
   await wait(
     `document.querySelector('.job-notice')?.dataset.failed === 'false' &&
+     document.querySelector('.job-header h1')?.textContent === ${JSON.stringify(pkgPubBody.value.source.package.id)} &&
+     document.querySelector('.job-notice')?.textContent?.includes(${JSON.stringify(pkgPubBody.value.label)}) &&
+     document.querySelector('.job-sidebar .job-source')?.textContent?.includes(${JSON.stringify(pkgPubBody.value.source.sourceHash)}) &&
      !!document.querySelector('#rig-root canvas') &&
      !document.querySelector('[data-job-record]')`,
     'package normal entry rendered with canvas',
