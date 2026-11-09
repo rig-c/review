@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.8.0](https://github.com/rig-c/review/compare/v2.7.1...v2.8.0) (2026-11-09)
+
+
+### Features
+
+* **review:** activate model-free record publications ([#599](https://github.com/rig-c/review/issues/599)) ([1029b6d](https://github.com/rig-c/review/commit/1029b6d9e99d6931b7edaff603449540eee36d9a))
+* **review:** carry source-bound scene interview diagnostics ([#597](https://github.com/rig-c/review/issues/597)) ([5fe7702](https://github.com/rig-c/review/commit/5fe77027876eb86adab3609a5ef6e704733ea8c5))
+* **review:** finalize declared record reopen acts ([#600](https://github.com/rig-c/review/issues/600)) ([02d0bf7](https://github.com/rig-c/review/commit/02d0bf75b96c4d87948361c1986702a65ec2ec48))
+* **review:** preserve standing window state across reconnects ([#595](https://github.com/rig-c/review/issues/595)) ([815b965](https://github.com/rig-c/review/commit/815b965d0fb74ae05aed0f37d85c82e5be9c9d5c))
+
 ## [2.7.1](https://github.com/rig-c/review/compare/v2.7.0...v2.7.1) (2026-11-09)
 
 
