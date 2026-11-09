@@ -72,8 +72,8 @@ test('an authored direction request refuses feedback captured on a checked scrat
 });
 
 test('pre-rig verdict note retains verbatim CRLF and uses only a parts selector', () => {
-  const verdict: PartsVerdict = {
-    schema: 'rig-review-parts-verdict/2', mode: 'parts', tool: { name: '@rig-c/review', version: '1.10.2' },
+  const verdict = {
+    schema: 'rig-review-parts-verdict/2', mode: 'parts' as const, tool: { name: '@rig-c/review', version: '1.10.2' },
     source: { sha256: hash('a'), files: [], flags: [] }, status: 'changes-requested',
     parts: { torso: { outcome: 'flagged', note: 'Keep these words.  \r\n', flags: [] } },
     comments: [], updatedAt: '2026-11-06T00:00:00Z',

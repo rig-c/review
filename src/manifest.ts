@@ -9,6 +9,7 @@ import { readFile, realpath, stat, lstat, readdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, posix } from 'node:path';
 import { isBuildRoot, parseHandoffDeclaration, resolveHandoff, type Handoff, type HandoffDeclaration, type HandoffFlags, type HandoffRecord } from './handoff.ts';
+import { JOB_PANEL_COMPOSITION_SCHEMA, PANEL_COMPONENTS, type JobPanelComposition, type PanelComponent } from './job-contract.ts';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export interface Reference { id: string; label: string; type: 'image' | 'video' | 'pose'; path: string; width?: number; height?: number }
@@ -22,6 +23,7 @@ export interface ReviewManifest {
   audio: { clips: { id: string; label?: string; path: string }[]; cues: { id: string; clip: string; time: number; animation?: string }[] };
   /** Optional producer handoff (#101): package-relative literal paths; checked when the package loads. */
   producer?: HandoffDeclaration;
+  panels?: JobPanelComposition;
 }
 export interface ReviewedSource { readonly packageRevision:string; readonly viewerVersion:string; readonly runtimeVersion:string; readonly rig:{readonly path:string;readonly sha256:string}|null; readonly motion:{readonly path:string;readonly sha256:string}|null; readonly handoff?:HandoffRecord }
 export interface ReviewPackage { direction?:DirectionInspection; setsHash?:string; referenceHashes?:Record<string,string>; root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; feedbackCatalog:FeedbackCatalog;
@@ -61,9 +63,56 @@ export async function safeFile(root: string, path: string): Promise<string> {
   if (!rel || rel.startsWith('..' + '/') || rel === '..' || isAbsolute(rel)) fail(path, 'file inside package (symlinks may not escape)');
   if (!(await stat(full)).isFile()) fail(path, 'regular file'); return full;
 }
+export function isPanelComponent(value: string): value is PanelComponent {
+  return (PANEL_COMPONENTS as readonly string[]).includes(value);
+}
+
+export function parsePanelComposition(input: unknown): JobPanelComposition {
+  if (input === null || typeof input !== 'object' || Array.isArray(input) || Object.getPrototypeOf(input) !== Object.prototype) {
+    throw new Error('JOB_PANELS_INVALID: panels must be a plain object');
+  }
+  const p = input as Record<string, unknown>;
+  if (p.schema !== JOB_PANEL_COMPOSITION_SCHEMA) {
+    throw new Error(`JOB_PANELS_INVALID: panels.schema must be ${JOB_PANEL_COMPOSITION_SCHEMA}`);
+  }
+  for (const key of Object.keys(p)) {
+    if (!['schema', 'left', 'stage', 'toolbar', 'side'].includes(key)) {
+      throw new Error(`JOB_PANELS_INVALID: unknown panel slot ${key}`);
+    }
+  }
+  const slot = (value: unknown, field: string): PanelComponent[] => {
+    if (!Array.isArray(value) || value.length > 32) {
+      throw new Error(`JOB_PANELS_INVALID: ${field} must be an array of at most 32 components`);
+    }
+    return value.map((item, index) => {
+      if (typeof item !== 'string' || !item.trim() || item.length > 128 || /[\r\n\0]/.test(item)) {
+        throw new Error(`JOB_PANELS_INVALID: ${field}[${index}] must be a nonblank component id`);
+      }
+      // Unknown component IDs are preserved in their declared slot so the host renders JOB_PANEL_UNKNOWN: <id>.
+      return item as PanelComponent;
+    });
+  };
+  const stage = slot(p.stage, 'panels.stage');
+  const side = slot(p.side, 'panels.side');
+  if (stage.length !== 1 || side.length < 1 || side[side.length - 1] !== 'act.submit') {
+    throw new Error('JOB_PANELS_INVALID: stage must have exactly one component and side must end with act.submit');
+  }
+  return {
+    schema: JOB_PANEL_COMPOSITION_SCHEMA,
+    ...(p.left === undefined ? {} : { left: slot(p.left, 'panels.left') }),
+    stage,
+    ...(p.toolbar === undefined ? {} : { toolbar: slot(p.toolbar, 'panels.toolbar') }),
+    side,
+  };
+}
 export function parseManifest(input: unknown): ReviewManifest {
   const m = object(input, 'review'); if (m.schema !== 'rig-review/1') fail('schema', 'rig-review/1');
   const audio = m.audio === undefined ? {} : object(m.audio, 'audio');
+  let panels: JobPanelComposition | undefined;
+  if (m.panels !== undefined) {
+    try { panels = parsePanelComposition(m.panels); }
+    catch { panels = undefined; }
+  }
   const manifest: ReviewManifest = {
     schema: 'rig-review/1', id: id(m.id, 'id'), title: string(m.title, 'title'), revision: string(m.revision, 'revision'),
     model: m.model === undefined ? undefined : packagePath(m.model, 'model'),
@@ -76,6 +125,7 @@ export function parseManifest(input: unknown): ReviewManifest {
     authoring:list(m.authoring,'authoring',(v,f)=>({label:string(v.label,f+'.label'),path:packagePath(v.path,f+'.path')})),
     axes:list(m.axes,'axes',(v,f)=>({id:id(v.id,f+'.id'),label:string(v.label,f+'.label'),animation:string(v.animation,f+'.animation'),min:number(v.min,f+'.min',-Number.MAX_VALUE),max:number(v.max,f+'.max',-Number.MAX_VALUE)})),
     ...(m.producer===undefined?{}:{producer:parseHandoffDeclaration(m.producer)}),
+    ...(panels===undefined?{}:{panels}),
     audio:{clips:list(audio.clips,'audio.clips',(v,f)=>({id:id(v.id,f+'.id'),label:optionalString(v.label,f+'.label'),path:packagePath(v.path,f+'.path')})),cues:list(audio.cues,'audio.cues',(v,f)=>({id:id(v.id,f+'.id'),clip:string(v.clip,f+'.clip'),time:number(v.time,f+'.time'),animation:optionalString(v.animation,f+'.animation')}))}
   };
   if(manifest.model&&!manifest.model.endsWith('.model.json'))fail('model','compiled model path ending .model.json (the play runtime input)');

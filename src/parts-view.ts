@@ -16,7 +16,7 @@
  * is relative to the verdict file's directory. rig-c/create recomputes it, so the definition is fixed here.
  */
 import {differencePixels,assertOriginalPaintingSize} from './parts-comparison.ts';
-import {parsePartsComment,assertPartsCommentBinding,type PartsComment} from './parts-comment.ts';
+import {parsePartsIssue,assertPartsIssueBinding,type PartsComment,type PartsIssue} from './parts-comment.ts';
 import {preparePartsComment,validateStoredPartsComment} from './parts-comment-crops.ts';
 import {resolvedCropPath} from './comment-crops.ts';
 import { createHash } from 'node:crypto';
@@ -27,13 +27,15 @@ import { PNG } from 'pngjs';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
 import { destinationDirectory } from './destination-directory.ts';
 
-export const PARTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/2';
-const NAMED_VERDICT_SCHEMA = 'rig-review-parts-verdict/3';
+export const PARTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/4';
+const LEGACY_VERDICT_SCHEMAS = ['rig-review-parts-verdict/1', 'rig-review-parts-verdict/2', 'rig-review-parts-verdict/3'] as const;
+export type LegacyVerdictSchema = typeof LEGACY_VERDICT_SCHEMAS[number];
 export const PARTS_VERDICT_FILE = 'parts-review.json';
 export const PARTS_NOTE_LIMIT = 10000;
 export type PartsViewMode = 'parts' | 'atlas';
 export type PartOutcome = 'pending' | 'clean' | 'flagged';
-export type VerdictStatus = 'pending' | 'approved' | 'changes-requested';
+export type VerdictStatus = 'approved' | 'changes-requested';
+export type LegacyVerdictStatus = 'pending' | 'approved' | 'changes-requested';
 
 /** One file the verdict rests on: `path` relative to the verdict file's directory, POSIX separators. */
 export interface HashedFile { path: string; bytes: number; sha256: string }
@@ -490,55 +492,256 @@ export interface PartsVerdict {
   tool: { name: '@rig-c/review'; version: string };
   source: ReturnType<typeof verdictSource>;
   status: VerdictStatus;
-  parts: Record<string, { outcome: PartOutcome; note: string; flags: string[]; mesh?: { outcome: PartOutcome; note: string } }>;
-  comments: PartsComment[];
+  issues: PartsIssue[];
   updatedAt: string;
+  by?: string;
 }
 
-/** What the page submits: the status and every item's outcome and note. */
-export interface VerdictSubmission { status: VerdictStatus; parts: Record<string, { outcome: PartOutcome; note?: string }> }
+export interface LegacyPartsVerdictView {
+  schema: LegacyVerdictSchema;
+  status: LegacyVerdictStatus;
+  readOnly: true;
+  code: 'PARTS_VERDICT_LEGACY_FORMAT';
+  flaggedCount: number;
+  flaggedParts: { name: string; note: string }[];
+  issues: PartsIssue[];
+  by?: string;
+}
+
+export interface LegacyPartsVerdictRecord {
+  schema: LegacyVerdictSchema;
+  mode: PartsViewMode;
+  tool: { name: '@rig-c/review'; version: string };
+  source: ReturnType<typeof verdictSource>;
+  status: LegacyVerdictStatus;
+  parts: Record<string, { outcome: PartOutcome; note: string; flags: string[]; mesh?: { outcome: PartOutcome; note: string; flags: string[] } }>;
+  comments?: import('./parts-comment.ts').PartsComment[];
+  issues: PartsIssue[];
+  updatedAt: string;
+  by?: string;
+}
+
+/** What the page submits: the status and pointed issues. */
+export interface VerdictSubmission { status: VerdictStatus; issues: PartsIssue[] }
 
 /** The distinct names, in item order (atlas sequence frames share a name). */
 export const itemNames = (pkg: Pick<PartsViewPackage, 'items'>): string[] => [...new Set(pkg.items.map(i => i.name))];
 
 /** Builds the verdict document, or refuses by name. Pure but for the clock. */
-export function buildVerdict(pkg: Pick<PartsViewPackage, 'mode' | 'items' | 'flags' | 'files' | 'flagFiles' | 'verdictPath' | 'imagePaths' | 'painting' | 'paintingInRig'>, input: unknown, version: string, now = new Date()): PartsVerdict {
+export function buildVerdict(
+  pkg: Pick<PartsViewPackage, 'mode' | 'items' | 'flags' | 'files' | 'flagFiles' | 'verdictPath' | 'imagePaths' | 'painting' | 'paintingInRig'>,
+  input: unknown,
+  version: string,
+  now = new Date(),
+  by?: string,
+): PartsVerdict {
   const body = record(input);
-  if (!body) return refuse('PARTS_VERDICT_INVALID', 'expected { status, parts }');
+  if (!body || body.parts !== undefined || body.comments !== undefined) {
+    return refuse('PARTS_VERDICT_INVALID', 'expected { status, issues }');
+  }
   const status = body.status;
-  if (status !== 'pending' && status !== 'approved' && status !== 'changes-requested') return refuse('PARTS_VERDICT_INVALID', 'status is pending, approved or changes-requested');
-  const given = record(body.parts);
-  if (!given) return refuse('PARTS_VERDICT_INVALID', 'parts is an object keyed by part name');
-  const names = itemNames(pkg), known = new Set(names);
-  for (const name of Object.keys(given)) if (!known.has(name)) refuse('PARTS_VERDICT_UNKNOWN_PART', `${name} is not a part of this input`);
-  const parts: PartsVerdict['parts'] = {};
+  if (status !== 'approved' && status !== 'changes-requested') {
+    return refuse('PARTS_VERDICT_INVALID', 'status is approved or changes-requested');
+  }
+  const issues = body.issues;
+  if (!Array.isArray(issues) || issues.length > 1000) {
+    return refuse('PARTS_COMMENT_LIMIT', 'issues must be an array of at most 1000 entries');
+  }
+  if (status === 'approved' && issues.length > 0) {
+    return refuse('PARTS_VERDICT_NOT_CLEAN', `approved needs zero issues; ${issues.length} present`);
+  }
+  if (status === 'changes-requested' && issues.length === 0) {
+    return refuse('PARTS_VERDICT_NOTHING_FLAGGED', 'changes-requested needs at least one issue');
+  }
+  const reviewer = by ?? (body.by === undefined ? undefined : body.by);
+  if (reviewer !== undefined && (typeof reviewer !== 'string' || !reviewer.trim())) {
+    return refuse('PARTS_VERDICT_INVALID', 'reviewer name must be nonblank');
+  }
+  const itemMap = new Map(
+    pkg.items.map(i => [i.name, { ...i, imageHash: pkg.files.find(f => f.abs === pkg.imagePaths[i.index])?.sha256 ?? '' }]),
+  );
+  const sourceHash = verdictSource(pkg).sha256;
+  const ids = new Set<string>();
+  const parsedIssues: PartsIssue[] = [];
+  for (const raw of issues as unknown[]) {
+    const c = parsePartsIssue(raw, true, false);
+    if (c.view.comparison?.mode === 'overlay' && !pkg.painting) {
+      refuse('PARTS_COMPARISON_UNAVAILABLE', 'original painting required');
+    }
+    if (c.view.comparison?.mode === 'difference' && !pkg.paintingInRig) {
+      refuse('PARTS_DIFFERENCE_UNAVAILABLE', 'declared painting_in_rig required');
+    }
+    if (pkg.mode !== 'parts') {
+      refuse('PARTS_COMMENT_UNAVAILABLE', 'original part required');
+    }
+    if (ids.has(c.id)) {
+      refuse('PARTS_COMMENT_DUPLICATE', 'duplicate issue id');
+    }
+    ids.add(c.id);
+    assertPartsIssueBinding(c, itemMap, sourceHash);
+    parsedIssues.push(c);
+  }
+  return {
+    schema: PARTS_VERDICT_SCHEMA,
+    mode: pkg.mode,
+    tool: { name: '@rig-c/review', version },
+    source: verdictSource(pkg),
+    status,
+    issues: parsedIssues,
+    updatedAt: now.toISOString(),
+    ...(reviewer !== undefined ? { by: reviewer } : {}),
+  };
+}
+
+/** Decode-only reader for legacy /1, /2 and /3 files: /1 comments become /2 item issues; uncommented flagged rows and pending open read-only. */
+async function decodeLegacyVerdict(
+  pkg: PartsViewPackage,
+  v: Record<string, unknown>,
+  version: string,
+  date: Date,
+  by: string | null,
+) {
+  const status = v.status;
+  if (status !== 'pending' && status !== 'approved' && status !== 'changes-requested') {
+    return refuse('PARTS_VERDICT_INVALID', 'status is pending, approved or changes-requested');
+  }
+  const given = record(v.parts);
+  if (!given) {
+    return refuse('PARTS_VERDICT_INVALID', 'parts is an object keyed by part name');
+  }
+  const names = itemNames(pkg);
+  const known = new Set(names);
+  for (const name of Object.keys(given)) {
+    if (!known.has(name)) {
+      return refuse('PARTS_VERDICT_UNKNOWN_PART', `${name} is not a part of this input`);
+    }
+  }
+  const parts: LegacyPartsVerdictRecord['parts'] = {};
   for (const name of names) {
     const entry = record(given[name]);
-    if (!entry) return refuse('PARTS_VERDICT_MISSING_PART', `${name} has no entry`);
+    if (!entry) {
+      return refuse('PARTS_VERDICT_MISSING_PART', `${name} has no entry`);
+    }
     const outcome = entry.outcome;
-    if (outcome !== 'pending' && outcome !== 'clean' && outcome !== 'flagged') return refuse('PARTS_VERDICT_INVALID', `${name}.outcome is pending, clean or flagged`);
+    if (outcome !== 'pending' && outcome !== 'clean' && outcome !== 'flagged') {
+      return refuse('PARTS_VERDICT_INVALID', `${name}.outcome is pending, clean or flagged`);
+    }
     const note = entry.note === undefined ? '' : entry.note;
-    if (typeof note !== 'string' || note.length > PARTS_NOTE_LIMIT) return refuse('PARTS_VERDICT_INVALID', `${name}.note is a string of at most ${PARTS_NOTE_LIMIT} characters`);
-    if (outcome === 'flagged' && !note.trim()) return refuse('PARTS_VERDICT_NOTE_REQUIRED', `${name} is flagged and has no note saying what is wrong`);
+    if (typeof note !== 'string' || note.length > PARTS_NOTE_LIMIT) {
+      return refuse('PARTS_VERDICT_INVALID', `${name}.note is a string of at most ${PARTS_NOTE_LIMIT} characters`);
+    }
+    if (outcome === 'flagged' && !note.trim()) {
+      return refuse('PARTS_VERDICT_NOTE_REQUIRED', `${name} is flagged and has no note saying what is wrong`);
+    }
+    const partFlags = Array.isArray(entry.flags) ? entry.flags.map(String) : [];
     const meshInput = record(entry.mesh);
     const hasMesh = pkg.items.some(i => i.name === name && i.mesh);
-    if (!hasMesh && entry.mesh !== undefined) refuse('PARTS_MESH_OUTCOME_UNAVAILABLE', `${name}: no mesh; required no mesh outcome`);
-    let mesh: { outcome: PartOutcome; note: string } | undefined;
-    if (hasMesh) {
-      if (!meshInput || !['pending', 'clean', 'flagged'].includes(String(meshInput.outcome))) refuse('PARTS_MESH_OUTCOME', `${name}: required mesh outcome pending, clean or flagged`);
-      const meshNote = meshInput!.note ?? '';
-      if (typeof meshNote !== 'string' || meshNote.length > PARTS_NOTE_LIMIT) refuse('PARTS_MESH_OUTCOME', `${name}: required mesh note up to ${PARTS_NOTE_LIMIT} characters`);
-      if (meshInput!.outcome === 'flagged' && !(meshNote as string).trim()) refuse('PARTS_VERDICT_NOTE_REQUIRED', `${name}.mesh is flagged and has no note`);
-      mesh = { outcome: meshInput!.outcome as PartOutcome, note: meshNote as string };
+    if (!hasMesh && entry.mesh !== undefined) {
+      return refuse('PARTS_MESH_OUTCOME_UNAVAILABLE', `${name}: no mesh; required no mesh outcome`);
     }
-    parts[name] = { ...(mesh ? { mesh } : {}), outcome, note, flags: [...new Set(pkg.flags.filter(f => f.item === name).map(f => f.id))] };
+    let mesh: { outcome: PartOutcome; note: string; flags: string[] } | undefined;
+    if (hasMesh) {
+      if (!meshInput || !['pending', 'clean', 'flagged'].includes(String(meshInput.outcome))) {
+        return refuse('PARTS_MESH_OUTCOME', `${name}: required mesh outcome pending, clean or flagged`);
+      }
+      const meshNote = meshInput.note ?? '';
+      if (typeof meshNote !== 'string' || meshNote.length > PARTS_NOTE_LIMIT) {
+        return refuse('PARTS_MESH_OUTCOME', `${name}: required mesh note up to ${PARTS_NOTE_LIMIT} characters`);
+      }
+      if (meshInput.outcome === 'flagged' && !meshNote.trim()) {
+        return refuse('PARTS_VERDICT_NOTE_REQUIRED', `${name}.mesh is flagged and has no note`);
+      }
+      const meshFlags = Array.isArray(meshInput.flags) ? meshInput.flags.map(String) : [];
+      mesh = { outcome: meshInput.outcome as PartOutcome, note: meshNote, flags: meshFlags };
+    }
+    parts[name] = { ...(mesh ? { mesh } : {}), outcome, note, flags: partFlags };
   }
-  const outcomes = Object.values(parts).flatMap(p => p.mesh ? [p.outcome, p.mesh.outcome] : [p.outcome]);
-  if (status === 'approved' && outcomes.some(o => o !== 'clean')) refuse('PARTS_VERDICT_NOT_CLEAN', `approved needs every part clean; ${outcomes.filter(o => o !== 'clean').length} are not`);
-  if (status === 'changes-requested' && !outcomes.includes('flagged')) refuse('PARTS_VERDICT_NOTHING_FLAGGED', 'changes-requested needs at least one flagged part');
-  const comments=body.comments??[];if(!Array.isArray(comments)||comments.length>1000)refuse('PARTS_COMMENT_LIMIT','comments must be an array of at most 1000 entries');
-  const ids=new Set<string>();for(const raw of comments as unknown[]){const c=parsePartsComment(raw);if(c.view.comparison?.mode==='overlay'&&!pkg.painting)refuse('PARTS_COMPARISON_UNAVAILABLE','original painting required');if(c.view.comparison?.mode==='difference'&&!pkg.paintingInRig)refuse('PARTS_DIFFERENCE_UNAVAILABLE','declared painting_in_rig required');const item=pkg.items.find(i=>i.name===c.part);if(!item||pkg.mode!=='parts')refuse('PARTS_COMMENT_UNAVAILABLE','original part required');if(ids.has(c.id))refuse('PARTS_COMMENT_DUPLICATE','duplicate comment id');ids.add(c.id);const file=pkg.files.find(f=>f.abs===pkg.imagePaths[item!.index]);assertPartsCommentBinding(c,item!,file?.sha256??'',verdictSource(pkg).sha256);}
-  return { schema: PARTS_VERDICT_SCHEMA, mode: pkg.mode, tool: { name: '@rig-c/review', version }, source: verdictSource(pkg), status, parts, comments:comments as PartsComment[], updatedAt: now.toISOString() };
+  const outcomes = Object.values(parts).flatMap(p => (p.mesh ? [p.outcome, p.mesh.outcome] : [p.outcome]));
+  if (status === 'approved' && outcomes.some(o => o !== 'clean')) {
+    return refuse('PARTS_VERDICT_NOT_CLEAN', 'approved needs every part clean');
+  }
+  if (status === 'changes-requested' && !outcomes.includes('flagged')) {
+    return refuse('PARTS_VERDICT_NOTHING_FLAGGED', 'changes-requested needs at least one flagged part');
+  }
+  const rawComments = v.schema === 'rig-review-parts-verdict/1' ? [] : (v.comments ?? []);
+  if (!Array.isArray(rawComments) || rawComments.length > 1000) {
+    return refuse('PARTS_COMMENT_LIMIT', 'comments must be an array of at most 1000 entries');
+  }
+  const ids = new Set<string>();
+  const issues: PartsIssue[] = [];
+  const legacyComments: import('./parts-comment.ts').PartsComment[] = [];
+  for (const raw of rawComments as unknown[]) {
+    const c = await validateStoredPartsComment(pkg, raw, true);
+    if (ids.has(c.id)) {
+      return refuse('PARTS_COMMENT_DUPLICATE', 'duplicate comment id');
+    }
+    ids.add(c.id);
+    issues.push(c);
+    const primary = c.parts[0]!;
+    const { mode: _mode, ...restView } = c.view;
+    legacyComments.push({
+      schema: 'rig-review-parts-comment/1',
+      id: c.id,
+      part: primary.name,
+      imageHash: primary.imageHash,
+      sourceHash: c.sourceHash,
+      summary: c.summary,
+      imageRegion: c.imageRegion!,
+      rigRegion: c.rigRegion,
+      crop: { ...c.crop, png: c.crop.png ?? '' },
+      nativeCrop: c.nativeCrop!,
+      view: restView,
+    });
+  }
+  const commentedParts = new Set(issues.flatMap(i => i.parts.map(p => p.name)));
+  const flaggedParts: { name: string; note: string }[] = [];
+  for (const name of names) {
+    const p = parts[name]!;
+    const pf = p.outcome === 'flagged';
+    const mf = p.mesh?.outcome === 'flagged';
+    if ((pf || mf) && !commentedParts.has(name)) {
+      flaggedParts.push({
+        name,
+        note: [pf ? p.note.trim() : '', mf ? p.mesh!.note.trim() : ''].filter(Boolean).join(' / '),
+      });
+    }
+  }
+  const legacyRecord: LegacyPartsVerdictRecord = {
+    schema: v.schema as LegacyVerdictSchema,
+    mode: pkg.mode,
+    tool: { name: '@rig-c/review', version },
+    source: verdictSource(pkg),
+    status,
+    parts,
+    ...(v.schema === 'rig-review-parts-verdict/1' ? {} : { comments: legacyComments }),
+    issues,
+    updatedAt: date.toISOString(),
+    ...(by ? { by } : {}),
+  };
+  if (flaggedParts.length > 0 || status === 'pending' || (status === 'approved') !== (issues.length === 0)) {
+    const legacy: LegacyPartsVerdictView = {
+      schema: v.schema as LegacyVerdictSchema,
+      status,
+      readOnly: true,
+      code: 'PARTS_VERDICT_LEGACY_FORMAT',
+      flaggedCount: flaggedParts.length,
+      flaggedParts,
+      issues,
+      ...(by ? { by } : {}),
+    };
+    return { verdict: null, legacy, legacyRecord };
+  }
+  const verdict: PartsVerdict = {
+    schema: PARTS_VERDICT_SCHEMA,
+    mode: pkg.mode,
+    tool: { name: '@rig-c/review', version },
+    source: verdictSource(pkg),
+    status,
+    issues,
+    updatedAt: date.toISOString(),
+    ...(by ? { by } : {}),
+  };
+  return { verdict, legacy: null, legacyRecord };
 }
 
 /** Every file the package was loaded from still has the bytes it was loaded with. */
@@ -572,11 +775,10 @@ export async function saveVerdictWithReceipt(pkg: PartsViewPackage, input: unkno
   await assertVerdictDestination(pkg);
   await assertPartsUnchanged(pkg);
   await readVerdict(pkg); // Existing read-side evidence errors must never become an implicit reset.
-  const verdict = buildVerdict(pkg, input, await packageVersion());
-  for(const comment of verdict.comments)await preparePartsComment(pkg,comment,true);
+  const verdict = buildVerdict(pkg, input, await packageVersion(), new Date(), by);
+  for(const issue of verdict.issues)await preparePartsComment(pkg,issue,true);
   await assertPartsUnchanged(pkg);
-  const stored = by === undefined ? verdict : {...verdict, schema: NAMED_VERDICT_SCHEMA, by};
-  const bytes = Buffer.from(JSON.stringify(stored, null, 2) + '\n');
+  const bytes = Buffer.from(JSON.stringify(verdict, null, 2) + '\n');
   const parent = dirname(pkg.verdictPath);
   const firstCreated = await verdictWrite('mkdir', () => mkdir(parent, { recursive: true }));
   const tmp = `${pkg.verdictPath}.${crypto.randomUUID()}.tmp`;
@@ -618,53 +820,129 @@ export type VerdictStale = 'files' | 'flags' | null;
  * were not shown.
  */
 async function readVerdictSnapshot(pkg: PartsViewPackage): Promise<{
-  verdict: PartsVerdict | null; stale: VerdictStale; by: string | null; savedFileSha256: string | null;
+  verdict: PartsVerdict | null;
+  stale: VerdictStale;
+  legacy: LegacyPartsVerdictView | null;
+  legacyRecord: LegacyPartsVerdictRecord | null;
+  by: string | null;
+  savedFileSha256: string | null;
 }> {
   let raw: unknown;
-  const unavailable = {verdict: null, by: null, savedFileSha256: null};
+  const unavailable = { verdict: null, legacy: null, legacyRecord: null, by: null, savedFileSha256: null };
   let bytes: Buffer;
-  try { bytes = await readFile(pkg.verdictPath); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {...unavailable, stale: null}; throw new Error('PARTS_VERDICT_READ: saved verdict cannot be read'); }
-  try{raw=JSON.parse(bytes.toString('utf8'));}catch{throw new Error('PARTS_VERDICT_INVALID: saved verdict is not valid JSON');}
-  const v = record(raw), source = record(v?.source), now = verdictSource(pkg);
-  if(!v||![PARTS_VERDICT_SCHEMA,'rig-review-parts-verdict/1',NAMED_VERDICT_SCHEMA].includes(String(v.schema))||typeof source?.sha256!=='string')throw new Error('PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid');
+  try {
+    bytes = await readFile(pkg.verdictPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { ...unavailable, stale: null };
+    }
+    throw new Error('PARTS_VERDICT_READ: saved verdict cannot be read');
+  }
+  try {
+    raw = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw new Error('PARTS_VERDICT_INVALID: saved verdict is not valid JSON');
+  }
+  const v = record(raw);
+  const source = record(v?.source);
+  const now = verdictSource(pkg);
+  const isLegacy = Boolean(v && (LEGACY_VERDICT_SCHEMAS as readonly string[]).includes(String(v.schema)));
+  if (!v || (v.schema !== PARTS_VERDICT_SCHEMA && !isLegacy) || typeof source?.sha256 !== 'string') {
+    throw new Error('PARTS_VERDICT_INVALID: saved verdict schema or binding is invalid');
+  }
   let by: string | null = null;
-  if (v.schema === NAMED_VERDICT_SCHEMA) {
-    if (typeof v.by !== 'string' || !v.by.trim()) refuse('PARTS_VERDICT_INVALID', 'saved reviewer name must be nonblank');
+  if (v.schema === 'rig-review-parts-verdict/3' || (v.schema === PARTS_VERDICT_SCHEMA && v.by !== undefined)) {
+    if (typeof v.by !== 'string' || !v.by.trim()) {
+      refuse('PARTS_VERDICT_INVALID', 'saved reviewer name must be nonblank');
+    }
     by = v.by as string;
   }
-  if(v.mode!==pkg.mode||source.sha256!==now.sha256)return {...unavailable,stale:'files'};
-  if (JSON.stringify(source.flags) !== JSON.stringify(now.flags)) return { ...unavailable, stale: 'flags' };
-  const date=new Date(String(v.updatedAt));if(!Number.isFinite(date.getTime()))throw new Error('PARTS_VERDICT_INVALID: saved verdict date is invalid');
-  const normalized=buildVerdict(pkg,{...v,comments:v.schema==='rig-review-parts-verdict/1'?[]:v.comments},String(record(v.tool)?.version??''),date);
-  for(const c of normalized.comments)await validateStoredPartsComment(pkg,c);
-  return {verdict:normalized,stale:null,by,savedFileSha256:createHash('sha256').update(bytes).digest('hex')};
+  if (v.mode !== pkg.mode || source.sha256 !== now.sha256) {
+    return { ...unavailable, stale: 'files' };
+  }
+  if (JSON.stringify(source.flags) !== JSON.stringify(now.flags)) {
+    return { ...unavailable, stale: 'flags' };
+  }
+  const date = new Date(String(v.updatedAt));
+  if (!Number.isFinite(date.getTime())) {
+    throw new Error('PARTS_VERDICT_INVALID: saved verdict date is invalid');
+  }
+  const savedFileSha256 = createHash('sha256').update(bytes).digest('hex');
+  const version = String(record(v.tool)?.version ?? '');
+  if (isLegacy) {
+    const decoded = await decodeLegacyVerdict(pkg, v, version, date, by);
+    return { ...decoded, stale: null, by, savedFileSha256 };
+  }
+  const normalized = buildVerdict(pkg, v, version, date, by ?? undefined);
+  for (const c of normalized.issues) {
+    await validateStoredPartsComment(pkg, c, false);
+  }
+  return { verdict: normalized, stale: null, legacy: null, legacyRecord: null, by, savedFileSha256 };
 }
 
 /** Explicitly project the shared response so retrieval metadata cannot escape through joined wrappers. */
-export async function readVerdict(pkg: PartsViewPackage): Promise<{verdict: PartsVerdict | null; stale: VerdictStale}> {
-  const {verdict, stale} = await readVerdictSnapshot(pkg);
-  return {verdict, stale};
+export async function readVerdict(
+  pkg: PartsViewPackage,
+): Promise<{ verdict: PartsVerdict | null; stale: VerdictStale; legacy?: LegacyPartsVerdictView }> {
+  const { verdict, stale, legacy } = await readVerdictSnapshot(pkg);
+  return legacy ? { verdict, stale, legacy } : { verdict, stale };
+}
+
+/** Validated current or legacy verdict record for CLI read and correction projection paths. */
+export async function readPartsVerdictForCli(
+  pkg: PartsViewPackage,
+): Promise<PartsVerdict | LegacyPartsVerdictRecord | null> {
+  const saved = await readVerdictSnapshot(pkg);
+  return saved.verdict ?? saved.legacyRecord;
 }
 
 /** Standalone CLI retrieval metadata and content come from one validated saved-file buffer. */
 export async function readPartsVerdictJson(pkg: PartsViewPackage): Promise<string> {
   const saved = await readVerdictSnapshot(pkg);
-  if (!saved.verdict) refuse('PARTS_VERDICT_UNAVAILABLE', 'save a verdict first');
+  const target = saved.verdict ?? saved.legacyRecord;
+  if (!target) {
+    return refuse('PARTS_VERDICT_UNAVAILABLE', 'save a verdict first');
+  }
   await assertPartsUnchanged(pkg);
-  return JSON.stringify({...JSON.parse(exportPartsVerdict(saved.verdict!, 'json')), by: saved.by, savedFileSha256: saved.savedFileSha256}, null, 2) + '\n';
+  return (
+    JSON.stringify(
+      {
+        ...JSON.parse(exportPartsVerdict(target, 'json')),
+        by: saved.by,
+        savedFileSha256: saved.savedFileSha256,
+      },
+      null,
+      2,
+    ) + '\n'
+  );
 }
 
 /** What the page reads: no absolute path leaves the server but the verdict file's name. */
-export function partsViewJson(pkg: PartsViewPackage, saved: { verdict: PartsVerdict | null; stale: VerdictStale }) {
+export function partsViewJson(
+  pkg: PartsViewPackage,
+  saved: { verdict: PartsVerdict | null; stale: VerdictStale; legacy?: LegacyPartsVerdictView | null },
+) {
   return {
-    schema: 'rig-review-parts-view/1', mode: pkg.mode, title: pkg.title, rigSize: pkg.rigSize,
-    differenceAvailable:!!pkg.paintingInRig,
-    painting:pkg.painting?{sha256:pkg.painting.sha256,width:pkg.painting.width,height:pkg.painting.height}:null,
-    sourceHash:verdictSource(pkg).sha256,
-    items:pkg.items.map(item=>({...item,...(pkg.mode==='parts'?{imageHash:pkg.files.find(f=>f.abs===pkg.imagePaths[item.index])?.sha256}:{})})), pages: pkg.pages, flags: pkg.flags, readings: pkg.readings ?? [],
-    flagSources: pkg.flagFiles.map(f => basename(f.abs)), flagMissing: pkg.flagNotes,
-    verdictFile: basename(pkg.verdictPath), verdict: saved.verdict, verdictStale: saved.stale,
+    schema: 'rig-review-parts-view/1',
+    mode: pkg.mode,
+    title: pkg.title,
+    rigSize: pkg.rigSize,
+    differenceAvailable: !!pkg.paintingInRig,
+    painting: pkg.painting ? { sha256: pkg.painting.sha256, width: pkg.painting.width, height: pkg.painting.height } : null,
+    sourceHash: verdictSource(pkg).sha256,
+    items: pkg.items.map(item => ({
+      ...item,
+      ...(pkg.mode === 'parts' ? { imageHash: pkg.files.find(f => f.abs === pkg.imagePaths[item.index])?.sha256 } : {}),
+    })),
+    pages: pkg.pages,
+    flags: pkg.flags,
+    readings: pkg.readings ?? [],
+    flagSources: pkg.flagFiles.map(f => basename(f.abs)),
+    flagMissing: pkg.flagNotes,
+    verdictFile: basename(pkg.verdictPath),
+    verdict: saved.verdict,
+    verdictStale: saved.stale,
+    ...(saved.legacy ? { legacyVerdict: saved.legacy } : {}),
   };
 }
 
@@ -674,31 +952,136 @@ export function servedImage(pkg: PartsViewPackage, kind: 'image' | 'page', index
   return Number.isInteger(index) && index >= 0 && index < list.length ? list[index]! : null;
 }
 
-
 /** Both export forms preserve original text, native and rig coordinates and resolved evidence. */
-export function exportPartsVerdict(verdict:PartsVerdict,format:'json'|'issue'):string {
- const comments=verdict.comments.map(c=>{const {png,...crop}=c.crop;return {...c,crop:{...crop,path:resolvedCropPath(crop.path)},nativeCrop:c.nativeCrop?{...c.nativeCrop,path:resolvedCropPath(c.nativeCrop.path)}:null};});
- if(format==='json')return JSON.stringify({...verdict,comments},null,2)+'\n';
- return [`# Parts review`, `Source: ${verdict.source.sha256}`,`Status: ${verdict.status}`,...Object.entries(verdict.parts).flatMap(([name,p])=>[`\n## ${name}`,`${p.outcome}: ${p.note}`,...comments.filter(c=>c.part===name).flatMap(c=>[`\n### ${c.summary}`,`Part: ${c.part} · image SHA-256: ${c.imageHash}`,`Image region: ${JSON.stringify(c.imageRegion)}`,`Rig region: ${JSON.stringify(c.rigRegion)}`,`Viewport crop: ${c.crop.path} · SHA-256 ${c.crop.sha256}`,`Native crop: ${c.nativeCrop!.path} · SHA-256 ${c.nativeCrop!.sha256}`,`View: ${JSON.stringify(c.view)}`])])].join('\n')+'\n';
+export function exportPartsVerdict(
+  verdict: PartsVerdict | LegacyPartsVerdictRecord,
+  format: 'json' | 'issue',
+): string {
+  const issues = verdict.issues.map(c => {
+    const { png, ...crop } = c.crop;
+    return {
+      ...c,
+      crop: { ...crop, path: resolvedCropPath(crop.path) },
+      nativeCrop: c.nativeCrop ? { ...c.nativeCrop, path: resolvedCropPath(c.nativeCrop.path) } : null,
+    };
+  });
+  const comments =
+    'comments' in verdict && Array.isArray(verdict.comments)
+      ? verdict.comments.map(c => {
+          const { png, ...crop } = c.crop;
+          return {
+            ...c,
+            crop: { ...crop, path: resolvedCropPath(crop.path) },
+            nativeCrop: { ...c.nativeCrop!, path: resolvedCropPath(c.nativeCrop!.path) },
+          };
+        })
+      : undefined;
+  if (format === 'json') {
+    return (
+      JSON.stringify(
+        {
+          ...verdict,
+          issues,
+          ...(comments !== undefined ? { comments } : {}),
+        },
+        null,
+        2,
+      ) + '\n'
+    );
+  }
+  const commentedParts = new Set(issues.flatMap(i => i.parts.map(p => p.name)));
+  const bareFlaggedLines =
+    'parts' in verdict && verdict.parts
+      ? Object.entries(verdict.parts).flatMap(([name, p]) => {
+          const pf = p.outcome === 'flagged';
+          const mf = p.mesh?.outcome === 'flagged';
+          if ((!pf && !mf) || commentedParts.has(name)) {
+            return [];
+          }
+          const note = [pf ? p.note.trim() : '', mf ? p.mesh!.note.trim() : ''].filter(Boolean).join(' / ');
+          return [`\n## ${name}`, note];
+        })
+      : [];
+  return (
+    [
+      `# Parts review`,
+      `Source: ${verdict.source.sha256}`,
+      `Status: ${verdict.status}`,
+      ...bareFlaggedLines,
+      ...issues.flatMap(c => [
+        `\n## ${c.parts.map(p => p.name).join(', ')}`,
+        `\n### ${c.summary}`,
+        `Part: ${c.parts.map(p => `${p.name} · image SHA-256: ${p.imageHash}`).join(', ')}`,
+        `Image region: ${JSON.stringify(c.imageRegion)}`,
+        `Rig region: ${JSON.stringify(c.rigRegion)}`,
+        `Viewport crop: ${c.crop.path} · SHA-256 ${c.crop.sha256}`,
+        ...(c.nativeCrop ? [`Native crop: ${c.nativeCrop.path} · SHA-256 ${c.nativeCrop.sha256}`] : []),
+        `View: ${JSON.stringify(c.view)}`,
+      ]),
+    ].join('\n') + '\n'
+  );
 }
 
 /** Numeric comparison is decoded from bound original PNG bytes on the server, never browser pixels. */
-export async function partsDifference(pkg:PartsViewPackage,index:number,threshold:number,footprints:boolean){
- await assertPartsUnchanged(pkg);
- if(!pkg.paintingInRig)refuse('PARTS_DIFFERENCE_UNAVAILABLE','declared painting_in_rig required; legacy records remain readable');
- const item=pkg.items[index];if(pkg.mode!=='parts'||!Number.isInteger(index)||!item)refuse('PARTS_DIFFERENCE_UNAVAILABLE','known original part required');
- const decode=async(path:string)=>{const bytes=await readFile(path);if(bytes[24]!==8||bytes[25]!==6)refuse('PARTS_DIFFERENCE_PNG','exact RGBA8 operands required');return PNG.sync.read(bytes);};
- const painting=await decode(pkg.paintingInRig!.abs),part=await decode(pkg.imagePaths[index]!);
- const fronts=footprints?await Promise.all(pkg.items.filter(f=>f.index>index&&f.x<item!.x+item!.w&&f.x+f.w>item!.x&&f.y<item!.y+item!.h&&f.y+f.h>item!.y).map(async box=>({box,raster:await decode(pkg.imagePaths[box.index]!)}))):[];
- const result=differencePixels(part,item!,painting,fronts,threshold,footprints);
- await assertPartsUnchanged(pkg);return result;
+export async function partsDifference(pkg: PartsViewPackage, index: number, threshold: number, footprints: boolean) {
+  await assertPartsUnchanged(pkg);
+  if (!pkg.paintingInRig) {
+    refuse('PARTS_DIFFERENCE_UNAVAILABLE', 'declared painting_in_rig required; legacy records remain readable');
+  }
+  const item = pkg.items[index];
+  if (pkg.mode !== 'parts' || !Number.isInteger(index) || !item) {
+    refuse('PARTS_DIFFERENCE_UNAVAILABLE', 'known original part required');
+  }
+  const decode = async (path: string) => {
+    const bytes = await readFile(path);
+    if (bytes[24] !== 8 || bytes[25] !== 6) {
+      refuse('PARTS_DIFFERENCE_PNG', 'exact RGBA8 operands required');
+    }
+    return PNG.sync.read(bytes);
+  };
+  const painting = await decode(pkg.paintingInRig!.abs);
+  const part = await decode(pkg.imagePaths[index]!);
+  const fronts = footprints
+    ? await Promise.all(
+        pkg.items
+          .filter(
+            f =>
+              f.index > index &&
+              f.x < item!.x + item!.w &&
+              f.x + f.w > item!.x &&
+              f.y < item!.y + item!.h &&
+              f.y + f.h > item!.y,
+          )
+          .map(async box => ({ box, raster: await decode(pkg.imagePaths[box.index]!) })),
+      )
+    : [];
+  const result = differencePixels(part, item!, painting, fronts, threshold, footprints);
+  await assertPartsUnchanged(pkg);
+  return result;
 }
 
 /** Selected JSON keeps the canonical verdict and names the user's handoff selection. */
-export function exportPartsCorrection(verdict:PartsVerdict, correction:ReturnType<typeof import('./correction-handoff.ts').projectPartsDescription>):string {
-  return JSON.stringify({...verdict,correction:{
-    path:'described',stage:correction.stage,itemId:correction.itemId,part:correction.part,
-    verbatim:correction.verbatim,selectorArgs:correction.on,outcome:null,
-    ...('imageHash' in correction?{imageHash:correction.imageHash}:{}),
-  }},null,2)+'\n';
+export function exportPartsCorrection(
+  verdict: PartsVerdict | LegacyPartsVerdictRecord,
+  correction: ReturnType<typeof import('./correction-handoff.ts').projectPartsDescription>,
+): string {
+  return (
+    JSON.stringify(
+      {
+        ...verdict,
+        correction: {
+          path: 'described',
+          stage: correction.stage,
+          itemId: correction.itemId,
+          part: correction.part,
+          verbatim: correction.verbatim,
+          selectorArgs: correction.on,
+          outcome: null,
+          ...('imageHash' in correction ? { imageHash: correction.imageHash } : {}),
+        },
+      },
+      null,
+      2,
+    ) + '\n'
+  );
 }

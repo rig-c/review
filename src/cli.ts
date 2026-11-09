@@ -18,7 +18,7 @@ import { readFeedbackSession, readFeedbackCompareSession } from './session-histo
 import { startServer } from './server.ts';
 import { loadCompare } from './compare.ts';
 import { startCompareServer } from './compare-server.ts';
-import { loadPartsView, readVerdict, readPartsVerdictJson, exportPartsVerdict, exportPartsCorrection, assertPartsUnchanged, type PartsViewOptions } from './parts-view.ts';
+import { loadPartsView, readVerdict, readPartsVerdictForCli, readPartsVerdictJson, exportPartsVerdict, exportPartsCorrection, assertPartsUnchanged, type PartsViewOptions } from './parts-view.ts';
 import { startPartsServer } from './parts-server.ts';
 import { readSession, parseSession, sessionFile, type Feedback } from './session.ts';
 import { readCompareSession } from './compare-session.ts';
@@ -217,16 +217,15 @@ async function partsCommand(args:string[]){
  if((itemId||partNote||inventory)&&(!format||!itemId||!inventory))throw new Error('CORRECTION_SELECTOR_INVALID: parts correction requires --format, --correction and --parts-file');
  const pkg=await loadPartsView(input,options);
  if(format&&itemId&&inventory){
-   const saved=await readVerdict(pkg);
-   if(!saved.verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE: save a current verdict first');
+   const verdict=await readPartsVerdictForCli(pkg);
+   if(!verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE: save a current verdict first');
    await assertPartsUnchanged(pkg);
-   const verdict=saved.verdict;
    const projected=projectPartsDescription({verdict,source:verdict.source,selector:{stage:'parts-review',kind:'parts',inventory},selection:partNote?{kind:'note',itemId,part:partNote}:{kind:'comment',itemId}});
    process.stdout.write(format==='json'?exportPartsCorrection(verdict,projected):formatCorrectionIssue(projected)+'\n');
    return;
  }
  if(format==='json'){process.stdout.write(await readPartsVerdictJson(pkg));return;}
- if(format){const saved=await readVerdict(pkg);if(!saved.verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE: save a verdict first');process.stdout.write(exportPartsVerdict(saved.verdict,format));return;}
+ if(format){const verdict=await readPartsVerdictForCli(pkg);if(!verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE: save a verdict first');process.stdout.write(exportPartsVerdict(verdict,format));return;}
  const capability=randomBytes(32).toString('hex');
  let outputFailure: Error | null = null;
  let rejectWrite: ((error: Error) => void) | undefined;

@@ -111,6 +111,7 @@ export async function syntheticJobParts(f: Awaited<ReturnType<typeof jobFixture>
   await mkdir(join(f.root, 'out/parts'));
   const bytes = await readFile(join(f.root, 'out/rigid.png'));
   const paths = ['out/parts/base.png', 'out/parts/alternate.png', 'out/parts/depth.png'];
+  if (options.project) paths.push('out/parts/body.png', 'out/parts/head.png');
   if (options.painting) paths.push('out/painting_in_rig.png');
   paths.sort();
   for (const path of paths) await writeFile(join(f.root, path), bytes);

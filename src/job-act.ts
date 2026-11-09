@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import {
-  JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
+  JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
   type ActV3, type JobAct, type JobActValues, type JobApiSchema, type JobPendingAsk, type JobPublicationMode, type JobReviewerBinding,
   type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
   type PendingAskV3, type RecordAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
 } from './job-contract.ts';
+import { parsePartsIssue, type PartsIssue } from './parts-comment.ts';
 import {
   isRecordSource, jobHash, jobId, jobInteger, jobObject,
   parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
@@ -558,30 +559,49 @@ export function finalizeJobAct(options: {
       } };
     }
     case 'parts-verdict': {
-      const value = jobObject(submission.value, ['verdict', 'parts', 'words']);
-      if (!Array.isArray(value.parts) || value.parts.length !== retained.partIds.length) throw new JobError('JOB_ACT_INVALID');
+      const value = jobObject(submission.value, ['verdict', 'issues', 'words']);
+      const verdict = choice(value.verdict, ['approved', 'changes-requested'] as const);
+      if (
+        !Array.isArray(value.issues) ||
+        value.issues.length > 1000 ||
+        (verdict === 'approved') !== (value.issues.length === 0)
+      ) {
+        throw new JobError('JOB_ACT_INVALID');
+      }
       const ids = new Set<string>();
-      const parts = value.parts.map(raw => {
-        const item = jobObject(raw, ['partId', 'part', 'mesh']);
-        const partId = jobId(item.partId);
-        if (!retained.partIds.includes(partId) || ids.has(partId)) throw new JobError('JOB_ACT_INVALID');
-        ids.add(partId);
-        const outcome = (raw: unknown) => {
-          const item = jobObject(raw, ['outcome', 'note']);
-          const result = { outcome: choice(item.outcome, ['pending', 'clean', 'flagged'] as const), note: words(item.note) };
-          // Match the existing parts verdict writer's flagged-note validation.
-          if (result.outcome === 'flagged' && !result.note.trim()) throw new JobError('JOB_ACT_INVALID');
-          return result;
-        };
-        return { partId, part: outcome(item.part), mesh: outcome(item.mesh) };
+      const issues: PartsIssue[] = value.issues.map(raw => {
+        let issue: PartsIssue;
+        try {
+          issue = parsePartsIssue(raw, false, false, false);
+        } catch {
+          throw new JobError('JOB_ACT_INVALID');
+        }
+        if (issue.sourceHash !== source.sourceHash || ids.has(issue.id)) {
+          throw new JobError('JOB_ACT_INVALID');
+        }
+        ids.add(issue.id);
+        for (const part of issue.parts) {
+          const matchesSource = source.parts!.images.some(
+            img => img.role === 'part' && img.path === `parts/${part.name}.png` && img.sha256 === part.imageHash,
+          );
+          if (!retained.partIds.includes(part.name) || !matchesSource) {
+            throw new JobError('JOB_ACT_INVALID');
+          }
+        }
+        return structuredClone(issue);
       });
-      const verdict = choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const);
-      const outcomes = parts.flatMap(part => [part.part.outcome, part.mesh.outcome]);
-      if (verdict === 'approved' && outcomes.some(outcome => outcome !== 'clean') ||
-          verdict === 'changes-requested' && !outcomes.includes('flagged')) throw new JobError('JOB_ACT_INVALID');
-      return { ...envelope, kind: 'parts-verdict', source: { ...source, projectHash: source.projectHash!,
-        selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, { kind: 'draft' }>, parts: source.parts! },
-      value: { verdict, parts, words: words(value.words) } };
+      return {
+        ...envelope,
+        schema: JOB_PARTS_VERDICT_ACT_SCHEMA,
+        kind: 'parts-verdict',
+        source: {
+          ...source,
+          projectHash: source.projectHash!,
+          selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, { kind: 'draft' }>,
+          parts: source.parts!,
+        },
+        value: { verdict, issues, words: words(value.words) },
+      };
     }
     case 'review-verdict': {
       const value = jobObject(submission.value, ['stage', 'verdict', 'words']);

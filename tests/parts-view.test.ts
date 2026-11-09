@@ -1,11 +1,15 @@
+import { useTemporaryReviewState } from './helpers/temporary-review-state.ts';
+useTemporaryReviewState();
 import { afterEach, expect, test } from 'bun:test';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildVerdict, checkFlags, loadPartsAtlas, loadPartsView, meshReportFlags, partsViewJson, readVerdict, saveVerdict, sourceSha256, verdictSource } from '../src/parts-view.ts';
+import { preparePartsComment } from '../src/parts-comment-crops.ts';
 import { startPartsServer } from '../src/parts-server.ts';
 import { FOOTPRINT_ALPHA, frontParts, paintPart } from '../web/parts-render.ts';
+import { candidate } from './helpers/parts-comments-package.ts';
 import { BACK_CONTROL, BACK_DEFECT, FAINT, FRONT, frontHolds, writePartsPackage } from './helpers/parts-package.ts';
 
 const roots: string[] = [];
@@ -89,32 +93,34 @@ test('#348: the verdict records parts.json and every PNG relative to the verdict
   expect(source.files.map(f => f.path)).toEqual([`../${base}/rig/parts.json`, `../${base}/rig/parts/back_defect.png`, `../${base}/rig/parts/back_control.png`, `../${base}/rig/parts/front.png`]);
   expect(source.flags.map(f => f.path)).toEqual([`../${base}/rig/mesh_report.json`, `../${base}/check/check.json`]);
   expect(source.sha256).toBe(sourceSha256(source.files));
-  const names = ['back_defect', 'back_control', 'front'];
-  expect(() => buildVerdict(pkg, { status: 'approved', parts: { ...clean(names), back_defect: { outcome: 'flagged', note: 'hole under front' } } }, '0')).toThrow('PARTS_VERDICT_NOT_CLEAN');
-  expect(() => buildVerdict(pkg, { status: 'changes-requested', parts: { ...clean(names), back_defect: { outcome: 'flagged' } } }, '0')).toThrow('PARTS_VERDICT_NOTE_REQUIRED');
-  expect(() => buildVerdict(pkg, { status: 'changes-requested', parts: clean(names) }, '0')).toThrow('PARTS_VERDICT_NOTHING_FLAGGED');
-  expect(() => buildVerdict(pkg, { status: 'pending', parts: { back_defect: { outcome: 'clean' } } }, '0')).toThrow('PARTS_VERDICT_MISSING_PART');
-  expect(() => buildVerdict(pkg, { status: 'pending', parts: { ...clean(names), ghost: { outcome: 'clean' } } }, '0')).toThrow('PARTS_VERDICT_UNKNOWN_PART');
-  // A note is optional on clean, and kept.
-  const ok = buildVerdict(pkg, { status: 'approved', parts: { ...clean(names), front: { outcome: 'clean', note: 'edge checked at 4x' } } }, '9.9.9');
-  expect(ok.parts.front).toEqual({ outcome: 'clean', note: 'edge checked at 4x', flags: ['check:seam_pairs[0]'] });
-  expect(ok.parts.back_defect!.flags).toEqual(['faint:0']);
-  expect(ok.schema).toBe('rig-review-parts-verdict/2');
+  const raw = candidate(pkg);
+  raw.rigRegion = { x: pkg.items[0]!.x + raw.imageRegion!.x, y: pkg.items[0]!.y + raw.imageRegion!.y, width: raw.imageRegion!.width, height: raw.imageRegion!.height };
+  const issue = await preparePartsComment(pkg, raw);
+  expect(() => buildVerdict(pkg, { status: 'approved', issues: [issue] }, '0')).toThrow('PARTS_VERDICT_NOT_CLEAN');
+  expect(() => buildVerdict(pkg, { status: 'changes-requested', issues: [] }, '0')).toThrow('PARTS_VERDICT_NOTHING_FLAGGED');
+  expect(() => buildVerdict(pkg, { status: 'pending' as never, issues: [] }, '0')).toThrow('PARTS_VERDICT_INVALID');
+  expect(() => buildVerdict(pkg, { status: 'changes-requested', issues: [{ ...issue, parts: [{ name: 'ghost', imageHash: issue.parts[0]!.imageHash }] }] }, '0')).toThrow('PARTS_COMMENT_PART_MISMATCH');
+  const ok = buildVerdict(pkg, { status: 'approved', issues: [] }, '9.9.9');
+  expect(ok.issues).toEqual([]);
+  expect(ok.schema).toBe('rig-review-parts-verdict/4');
   expect(ok.mode).toBe('parts');
 });
 
 test('#348: the sign-off is saved beside parts.json, reloads while the files hold, and is not offered once a part changes', async () => {
-  const root = await planted(), pkg = await loadPartsView(root), names = ['back_defect', 'back_control', 'front'];
+  const root = await planted(), pkg = await loadPartsView(root);
   // A build root opens on its rig/ (assemble's output); the sign-off lands beside parts.json there.
   expect(pkg.verdictPath).toBe(join(await realpath(root), 'rig', 'parts-review.json'));
   expect((await loadPartsView(join(root, 'rig'))).verdictPath).toBe(pkg.verdictPath);
-  const saved = await saveVerdict(pkg, { status: 'changes-requested', parts: { ...clean(names), back_defect: { outcome: 'flagged', note: 'no material under front' } } });
+  const raw = candidate(pkg);
+  raw.rigRegion = { x: pkg.items[0]!.x + raw.imageRegion!.x, y: pkg.items[0]!.y + raw.imageRegion!.y, width: raw.imageRegion!.width, height: raw.imageRegion!.height };
+  const issue = await preparePartsComment(pkg, raw);
+  const saved = await saveVerdict(pkg, { status: 'changes-requested', issues: [issue] });
   const disk = JSON.parse(await readFile(join(root, 'rig', 'parts-review.json'), 'utf8'));
   expect(disk).toEqual(JSON.parse(JSON.stringify(saved)));
   expect(disk.source.files[0]).toMatchObject({ path: 'parts.json' });
   expect((await readVerdict(await loadPartsView(root))).verdict?.status).toBe('changes-requested');
   await writeFile(join(root, 'rig', 'parts', 'front.png'), Buffer.from('changed'));
-  await expect(saveVerdict(pkg, { status: 'pending', parts: clean(names) })).rejects.toThrow('PARTS_VIEW_SOURCE_CHANGED');
+  await expect(saveVerdict(pkg, { status: 'approved', issues: [] })).rejects.toThrow('PARTS_VIEW_SOURCE_CHANGED');
 });
 
 test('#348 atlas bar: atlas mode on the public example shows every region named in the atlas file, with its box', async () => {
@@ -137,7 +143,7 @@ test('#348: the server serves the view, gates the sign-off on the capability, an
     expect((await fetch(origin + '/api/parts/image/9')).status).toBe(404);
     expect((await fetch(origin + '/')).status).toBe(200);
     expect((await fetch(origin + '/parts.js')).status).toBe(200);
-    const body = JSON.stringify({ status: 'approved', parts: clean(['back_defect', 'back_control', 'front']) });
+    const body = JSON.stringify({ status: 'approved', issues: [] });
     expect((await fetch(origin + '/api/parts/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body })).status).toBe(403);
     const saved = await fetch(origin + '/api/parts/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': capability }, body });
     expect(saved.status).toBe(200);
@@ -185,8 +191,8 @@ test('#348 P1: a part image or a discovered producer file that symlinks outside 
 });
 
 test('#348 P1: a saved sign-off is not restored when only the producer flags changed, and the page is told why', async () => {
-  const root = await planted(), names = ['back_defect', 'back_control', 'front'];
-  await saveVerdict(await loadPartsView(root), { status: 'approved', parts: clean(names) });
+  const root = await planted();
+  await saveVerdict(await loadPartsView(root), { status: 'approved', issues: [] });
   const same = await loadPartsView(root);
   expect(await readVerdict(same)).toMatchObject({ stale: null, verdict: { status: 'approved' } });
   // Only check.json changes: the part files, and so source.sha256 (what create gates on), are the same.
@@ -245,9 +251,8 @@ async function runPartsSwapProbe(
       const faint = pkg.flags.find(f => f.kind === 'faint');
       const checkFlag = pkg.flags.find(f => f.kind === 'check');
       const checkReading = pkg.readings?.find(f => f.kind === 'check');
-      const parts = Object.fromEntries(pkg.items.map(i => [i.name, { outcome: 'clean' }]));
       let refused = false;
-      try { await saveVerdict(pkg, { status: 'approved', parts }); }
+      try { await saveVerdict(pkg, { status: 'approved', issues: [] }); }
       catch (e) { if (!String(e).includes('PARTS_VIEW_SOURCE_CHANGED')) throw e; refused = true; }
       console.log(JSON.stringify({
         swapped, reads: loadReads,

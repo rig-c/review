@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeSync} from 'node:fs';
 import {join} from 'node:path';
-import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, jobRawActMediaType, jobStillByteLimit,
+import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, jobRawActMediaType, jobStillByteLimit,
   type JobAct, type JobAgentRequest, type JobNextRequest, type JobNextValue } from './job-contract.ts';
 import { assertJobApiSchema, jobFailure, jobHash, jobId, jobInteger, jobObject, jobWaitLimitMs, parseJobRequest } from './job-api.ts';
 import { JobError } from './job-store.ts';
@@ -150,7 +150,11 @@ function parseConsumerAct(bytes: Buffer, job: string, actId: string): JobAct {
   try { value = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes)); }
   catch { throw new JobError('JOB_REQUEST_INVALID'); }
   const act = jobObject(value, ['schema', 'actId', 'jobId', 'askId', 'publicationId', 'kind', 'authority', 'at', 'source', 'value', 'still']);
-  if (act.jobId !== job || act.actId !== actId || (act.schema !== JOB_ACT_SCHEMA && act.schema !== JOB_RIG_REVIEW_ACT_SCHEMA)) {
+  if (act.jobId !== job || act.actId !== actId ||
+      (act.schema !== JOB_ACT_SCHEMA && act.schema !== JOB_RIG_REVIEW_ACT_SCHEMA && act.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA)) {
+    throw new JobError('JOB_ACT_INVALID');
+  }
+  if (act.schema === JOB_PARTS_VERDICT_ACT_SCHEMA && (act.kind !== 'parts-verdict' || act.still !== undefined)) {
     throw new JobError('JOB_ACT_INVALID');
   }
   if (act.schema === JOB_RIG_REVIEW_ACT_SCHEMA) {

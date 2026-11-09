@@ -161,26 +161,66 @@ test('synthetic private adapters validate ordered interview picks without exposi
   ask, retained: withQuestion, reviewer: { id: 'owner', role: 'owner' } })).toThrow('JOB_ACT_INVALID');
 });
 
-test('parts-verdict UI save covers every declared part and mesh, preserves words, rejects invalid outcomes and binds all referenced bytes', async () => {
+test('parts-verdict UI save finalizes rig-review/act@5 with issues[], preserves words, rejects invalid issue bindings and binds all referenced bytes', async () => {
   const f = await fixture(), parts = await syntheticJobParts(f, { project: true, painting: true });
   const publication = await f.publish();
   const ask = await f.ask(publication, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
   const page = await f.display(publication);
-  const clean = ['body', 'head'].map(partId => ({ partId, part: { outcome: 'clean' as const, note: '' }, mesh: { outcome: 'clean' as const, note: '' } }));
+  const bodyHash = parts.images.find(img => img.path === 'parts/body.png' && img.role === 'part')!.sha256;
+  const headHash = parts.images.find(img => img.path === 'parts/head.png' && img.role === 'part')!.sha256;
+  const cropSha = 'a'.repeat(64);
+  const itemIssue = {
+    schema: 'rig-review-parts-comment/2' as const,
+    id: 'issue-item',
+    summary: 'Seam gap on body',
+    parts: [{ name: 'body', imageHash: bodyHash }],
+    sourceHash: publication.source.sourceHash,
+    imageRegion: { x: 1, y: 2, width: 3, height: 4 },
+    rigRegion: { x: 1, y: 2, width: 3, height: 4 },
+    view: {
+      mode: 'item' as const,
+      cameraSync: false,
+      referenceCamera: null,
+      camera: { zoom: 1, center: { x: 10, y: 10 }, viewport: { width: 100, height: 100 } },
+      background: 'checker' as const,
+      alpha: false,
+      footprints: true,
+      mesh: false,
+    },
+    crop: { path: `comment-crops/${cropSha}.png`, sha256: cropSha, width: 3, height: 4 },
+    nativeCrop: null,
+  };
+  const assembledIssue = {
+    ...itemIssue,
+    id: 'issue-assembled',
+    summary: 'Overlap between body and head',
+    parts: [{ name: 'body', imageHash: bodyHash }, { name: 'head', imageHash: headHash }],
+    imageRegion: null,
+    view: { ...itemIssue.view, mode: 'assembled' as const },
+  };
   const input = { ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: 'parts-submit', kind: 'parts-verdict', value: { verdict: 'approved' as const, parts: clean, words: ' \n원문 ' } };
-  const invalidParts = [clean.slice(0, 1), [clean[0], clean[0]], [...clean, clean[0]],
-    [{ ...clean[0], partId: 'unknown' }, clean[1]],
-    [{ ...clean[0], mesh: { outcome: 'flagged', note: '' } }, clean[1]],
-    [{ ...clean[0], mesh: { outcome: 'pending', note: '' } }, clean[1]]];
-  for (const given of invalidParts) {
-    expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, value: { ...input.value, parts: given } }))).ok).toBe(false);
+    submissionId: 'parts-submit', kind: 'parts-verdict',
+    value: { verdict: 'changes-requested' as const, issues: [itemIssue, assembledIssue], words: ' \n원문 ' } };
+  const invalidValues = [
+    { verdict: 'approved', issues: [itemIssue], words: '' },
+    { verdict: 'changes-requested', issues: [], words: '' },
+    { verdict: 'changes-requested', issues: [{ ...itemIssue, parts: [] }], words: '' },
+    { verdict: 'changes-requested', issues: [{ ...itemIssue, parts: [{ name: 'body', imageHash: bodyHash }, { name: 'body', imageHash: bodyHash }], imageRegion: null, view: { ...itemIssue.view, mode: 'assembled' } }], words: '' },
+    { verdict: 'changes-requested', issues: [{ ...itemIssue, parts: [{ name: 'unknown', imageHash: bodyHash }] }], words: '' },
+    { verdict: 'changes-requested', issues: [{ ...itemIssue, parts: [{ name: 'body', imageHash: '0'.repeat(64) }] }], words: '' },
+    { verdict: 'changes-requested', issues: [{ ...itemIssue, sourceHash: '0'.repeat(64) }], words: '' },
+    { verdict: 'changes-requested', issues: [{ ...itemIssue, imageRegion: null }], words: '' },
+    { verdict: 'changes-requested', issues: [{ ...assembledIssue, imageRegion: { x: 1, y: 2, width: 3, height: 4 } }], words: '' },
+    { verdict: 'changes-requested', issues: [{ ...assembledIssue, rigRegion: { x: 1.5, y: 2, width: 3, height: 4 } }], words: '' },
+    { verdict: 'approved', parts: [], words: '' },
+  ];
+  for (const badValue of invalidValues) {
+    expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, value: badValue }))).ok).toBe(false);
   }
-  expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input,
-    value: { ...input.value, verdict: 'changes-requested' } }))).ok).toBe(false);
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error(saved.error.code);
+  expect(saved.value.schema).toBe('rig-review/act@5');
   expect(saved.value.kind).toBe('parts-verdict');
   expect(saved.value.value).toEqual(input.value);
   expect(saved.value.source.parts).toEqual(parts);
@@ -188,6 +228,39 @@ test('parts-verdict UI save covers every declared part and mesh, preserves words
   expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual(saved);
   const fetched = await (await f.call({ ...f.base(), verb: 'fetch-act', actId: saved.value.actId }, f.session.writerGrant().fetchCapability)).json();
   expect(fetched.value).toEqual(saved.value);
+  const { parseManifest, parsePanelComposition } = await import('../src/manifest.ts');
+  const panels = {
+    schema: 'rig-review/panels@1' as const,
+    left: ['parts.list' as const],
+    stage: ['parts.canvas' as const],
+    toolbar: ['parts.layers' as const],
+    side: ['parts.issues' as const, 'act.submit' as const],
+  };
+  const withPanels = parseManifest({
+    schema: 'rig-review/1', id: 'pkg', title: 'Test Package', revision: 'r1', model: 'rig.model.json', panels,
+  });
+  expect(withPanels.panels).toEqual(panels);
+  const withoutPanels = parseManifest({
+    schema: 'rig-review/1', id: 'pkg', title: 'Test Package', revision: 'r1', model: 'rig.model.json',
+  });
+  expect(withoutPanels.panels).toBeUndefined();
+  for (const invalidPanels of [
+    { ...panels, schema: 'rig-review/panels@0' },
+    { ...panels, stage: ['parts.canvas', 'rig.playback'] },
+    { ...panels, side: ['parts.issues'] },
+    { ...panels, unknownSlot: ['parts.list'] },
+  ]) {
+    expect(() => parsePanelComposition(invalidPanels)).toThrow('JOB_PANELS_INVALID');
+    expect(parseManifest({
+      schema: 'rig-review/1', id: 'pkg', title: 'Test Package', revision: 'r1', model: 'rig.model.json',
+      panels: invalidPanels,
+    }).panels).toBeUndefined();
+  }
+  const withUnknownComponent = parseManifest({
+    schema: 'rig-review/1', id: 'pkg', title: 'Test Package', revision: 'r1', model: 'rig.model.json',
+    panels: { ...panels, stage: ['unknown-component'] },
+  });
+  expect(withUnknownComponent.panels?.stage as readonly string[]).toEqual(['unknown-component']);
   const secondAsk = await f.ask(publication, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
   await writeFile(join(f.root, 'out/parts/depth.png'), 'changed depth only');
   const stale = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, askId: secondAsk.askId,
