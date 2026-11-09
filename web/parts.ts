@@ -2,8 +2,9 @@ import {defaultPartsComparison,paintingRectangle,type PartsComparison} from '../
 import {mountViewportPair} from './viewport-pair.ts';
 import {createPartsViewport} from './parts-viewport-provider.ts';
 import {bindStageComments,type CommentUiPose,type CommentCodec} from './stage-comments.ts';
-import {parsePartsIssue,snapImageRegion,type PartsComment,type PartsIssue} from '../src/parts-comment.ts';
+import {parsePartsIssue,assertPartsIssueBinding,snapImageRegion,type PartsComment,type PartsIssue} from '../src/parts-comment.ts';
 import {projectMark,unprojectMark,region} from '../src/stage-comment.ts';
+import {textEntryFocused} from './view-controls.ts';
 import {stagePartsSelectionIndex,type StagePartsState} from './stage-nav.ts';
 import type {JobEnabledActKind,UISubmissionV3} from '../src/job-contract.ts';
 import type {LegacyPartsVerdictView} from '../src/parts-view.ts';
@@ -172,6 +173,7 @@ export function mountPartsWorkspace(
   const doc = slots.stage.ownerDocument;
   const win = doc.defaultView;
   if (!win || roots.some(root => root.ownerDocument !== doc)) throw new Error('PARTS_WORKSPACE_DOCUMENT_REQUIRED');
+  const eventWindow: EventTarget = win;
   for (const root of roots) root.replaceChildren();
   mountPartsMarkup(slots);
   const query = <T extends Element = HTMLElement>(selector: string): T | null => {
@@ -210,8 +212,11 @@ export function mountPartsWorkspace(
     disposers.push(() => doc.removeEventListener(event, activate, true));
   }
   const stageEmbedded = Boolean(options.embedded);
-  const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, comparison:defaultPartsComparison(), differenceThreshold:0, hidden: new Set<string>(), view: options.defaultView as 'item' | 'page' | 'assembled', page: 0, meshShown: new Set<string>() };
+  const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'checker', alpha: false, footprints: false, comparison:defaultPartsComparison(), differenceThreshold:0, hidden: new Set<string>(), view: options.defaultView as 'item' | 'page' | 'assembled', page: 0, meshVisible: false };
   const comments:PartsIssue[]=[];let commentUi:ReturnType<typeof bindStageComments>|null=null;let viewport:ReturnType<typeof createPartsViewport>|null=null;let painting=true;
+  let paintingHeld = false;
+  let hoverName: string | null = null;
+  const highlightedParts = new Set<string>();
   const images = new Map<string, HTMLImageElement>();
   const pendingImages = new Map<string, Promise<HTMLImageElement>>();
   let imageGeneration = 0;
@@ -263,7 +268,7 @@ function syncPaintState(): void {
  slots.stage.dataset.partsPaintState = disposed ? 'disposed' : painting ? 'busy' : paintFailure ? 'failed' : 'ready';
  slots.stage.setAttribute('aria-busy', String(painting));
  const toggle = $<HTMLButtonElement>('stage-comment');
- toggle.disabled = painting;
+ toggle.disabled = painting || paintingHeld;
  toggle.setAttribute('aria-busy', String(painting));
  if (commentUi) commentUi.refresh();
  else toggle.textContent = t(painting ? 'Comment · C ({0}) · Rendering' : 'Comment · C ({0})', [0]);
@@ -309,6 +314,37 @@ function sourceAlpha(item:Item,img:HTMLImageElement):Uint8ClampedArray {
  const rgba=ctx.getImageData(0,0,item.w,item.h).data,alpha=new Uint8ClampedArray(item.w*item.h);for(let i=0;i<alpha.length;i++)alpha[i]=rgba[i*4+3]!;assemblyAlpha.set(item.name,alpha);return alpha;
 }
 
+function drawMeshes(ctx: CanvasRenderingContext2D, layers: {box: Item; image: HTMLImageElement}[], assembled = true): void {
+  if (!state.meshVisible) return;
+  for (const {box, image} of layers) {
+    if (!box.mesh) continue;
+    const selected = box.index === state.selected;
+    ctx.save();
+    if (assembled) ctx.translate(box.x, box.y);
+    paintMesh(ctx, image, box.w, box.h, box.mesh,
+      (w, h) => Object.assign(doc.createElement('canvas'), {width: w, height: h}),
+      {tint: selected, alpha: selected ? 1 : .35});
+    ctx.restore();
+  }
+}
+
+function renderAssemblySelection(layers: {box: Item; image: HTMLImageElement}[]): void {
+  const overlay = $('pv-overlay'), canvas = $<HTMLCanvasElement>('pv-canvas');
+  overlay.replaceChildren();
+  if (paintingHeld) return;
+  const names = new Set([state.data!.items[state.selected]!.name, ...highlightedParts, hoverName]);
+  for (const {box, image} of layers) {
+    if (!names.has(box.name)) continue;
+    const outline = doc.createElement('canvas');
+    outline.width = canvas.width;outline.height = canvas.height;outline.dataset.assemblyOutline = box.name;
+    paintAssemblyOutline(outline.getContext('2d')!, box, sourceAlpha(box, image));overlay.append(outline);
+    if (box.name !== hoverName) continue;
+    const label = overlayBox(box.x, box.y, box.w, box.h), text = doc.createElement('span');
+    label.style.pointerEvents = 'none';label.dataset.assemblyHover = box.name;text.textContent = box.name;
+    label.append(text);overlay.append(label);
+  }
+}
+
 function partFrame(data:ViewData,item:Item) {
   if(state.view==='assembled'&&data.rigSize) {
     return {x:0,y:0,w:data.rigSize[0],h:data.rigSize[1]};
@@ -341,16 +377,15 @@ async function paintRaster(token:number): Promise<void> {
   if(state.view==='assembled'&&data.mode==='parts'&&data.rigSize){
     const shown=data.items.filter(i=>!state.hidden.has(i.name));
     const layers=await Promise.all(shown.map(async box=>({box,image:await itemImage(box)})));
-    const original=state.comparison.mode==='overlay'&&data.painting?await paintingImage():null;
+    const original=(paintingHeld||state.comparison.mode==='overlay')&&data.painting?await paintingImage():null;
     if(disposed||token!==paintToken)return;
     const ctx=setCanvas(canvas,w,h);
     if(original){
       paintPaintingCrop(ctx,original,paintingRectangle({x:0,y:0,w,h},data.rigSize,data.painting!),w,h,state.bg);
-      const assembled=doc.createElement('canvas');assembled.width=w;assembled.height=h;const a=assembled.getContext('2d')!;a.imageSmoothingEnabled=false;for(const l of layers)a.drawImage(l.image,l.box.x,l.box.y);ctx.globalAlpha=state.comparison.opacity;ctx.drawImage(assembled,0,0);ctx.globalAlpha=1;
+      const assembled=doc.createElement('canvas');assembled.width=w;assembled.height=h;const a=assembled.getContext('2d')!;a.imageSmoothingEnabled=false;for(const l of layers)a.drawImage(l.image,l.box.x,l.box.y);ctx.globalAlpha=paintingHeld?0:state.comparison.opacity;ctx.drawImage(assembled,0,0);ctx.globalAlpha=1;
     }else paintAssembly(ctx,w,h,layers,{bg:state.bg,alpha:state.alpha});
-    overlay.replaceChildren();
-    const selected=layers.find(l=>l.box.name===item.name);
-    if(selected){const outline=doc.createElement('canvas');outline.width=w;outline.height=h;outline.dataset.assemblyOutline=item.name;paintAssemblyOutline(outline.getContext('2d')!,item,sourceAlpha(item,selected.image));overlay.append(outline);}
+    if (!paintingHeld) drawMeshes(ctx, layers);
+    renderAssemblySelection(layers);
     caption.textContent=t('Assembled package · {count} visible parts.',{count:shown.length});
     return;
   }
@@ -388,24 +423,33 @@ async function paintRaster(token:number): Promise<void> {
     caption.textContent = t('Region {name} on {page} at {x},{y}, {width}×{height} px, with {margin} px of the page around it (dashed: the region box).', { name: item.name, page: item.page!, x: item.x, y: item.y, width: item.w, height: item.h, margin: REGION_MARGIN }) + (item.degrees ? ' ' + t('Packed at {degrees}°.', { degrees: item.degrees }) : '');
     return;
   }
+  if (paintingHeld && data.painting) {
+    const original = await paintingImage();
+    if (disposed || token !== paintToken) return;
+    const ctx = setCanvas(canvas, w, h);
+    paintPaintingCrop(ctx, original, paintingRectangle(item, data.rigSize!, data.painting), w, h, state.bg);
+    overlay.replaceChildren();
+    return;
+  }
   if(state.comparison.mode==='difference'){
     if (!source.difference) throw new Error('PARTS_DIFFERENCE_UNAVAILABLE: declared painting_in_rig and individual part view required.');
     const response = await source.difference(item.index, state.comparison.threshold, state.footprints);
     if(!response.ok){const out=await response.json() as {error:string};throw new Error(out.error);}
+    const meshImage=state.meshVisible&&item.mesh?await itemImage(item):null;
     const image=await createImageBitmap(await response.blob());
-    try{if(disposed||token!==paintToken)return;const ctx=setCanvas(canvas,w,h);paintBackground(ctx,w,h,state.bg);ctx.drawImage(image,0,0);overlay.replaceChildren();
+    try{if(disposed||token!==paintToken)return;const ctx=setCanvas(canvas,w,h);paintBackground(ctx,w,h,state.bg);ctx.drawImage(image,0,0);if(meshImage)drawMeshes(ctx,[{box:item,image:meshImage}],false);overlay.replaceChildren();
       caption.textContent=t('Difference: {count} pixels above threshold · {covered} covered pixels excluded · visual comparison, no automatic verdict.',{count:response.headers.get('X-Difference-Count')??'',covered:response.headers.get('X-Difference-Covered')??''});
     }finally{image.close();}return;
   }
   const img = await itemImage(item), front = state.footprints ? frontParts(data.items, item) : [];
   const fronts = await Promise.all(front.map(async o => ({ o, img: await itemImage(o) })));
-  const original=state.comparison.mode==='overlay'&&data.painting?await paintingImage():null;
+  const original=(paintingHeld||state.comparison.mode==='overlay')&&data.painting?await paintingImage():null;
   if (disposed || token !== paintToken) return;
   const ctx = setCanvas(canvas, w, h);
   const makeCanvas=(w:number,h:number)=>Object.assign(doc.createElement('canvas'),{width:w,height:h});
   if(original){paintOverlay(ctx,item,img,original,paintingRectangle(item,data.rigSize!,data.painting!),state.comparison.opacity,state.bg);paintFootprints(ctx,item,fronts.map(f=>({box:f.o,image:f.img})),makeCanvas);}
   else paintPart(ctx, item, img, { bg: state.bg, alpha: state.alpha, fronts: fronts.map(f => ({ box: f.o, image: f.img })), makeCanvas: (w, h) => Object.assign(doc.createElement('canvas'), { width: w, height: h }) });
-  if (!original && item.mesh && state.meshShown.has(item.name)) paintMesh(ctx, img, item.w, item.h, item.mesh, (w, h) => Object.assign(doc.createElement('canvas'), { width: w, height: h }));
+  drawMeshes(ctx, [{box: item, image: img}], false);
   overlay.replaceChildren(...data.flags.filter((f): f is Extract<Flag, { kind: 'faint' }> => f.item === item.name && f.kind === 'faint').map(f => {
     const box = overlayBox(f.box[0], f.box[1], f.box[2], f.box[3]);
     box.dataset.flag = f.id;
@@ -415,7 +459,7 @@ async function paintRaster(token:number): Promise<void> {
     + (state.footprints ? ' ' + (front.length === 1 ? t('Tinted: the footprint of the part drawn in front ({names}).', { names: front[0]!.name }) : front.length ? t('Tinted: the footprints of {count} parts drawn in front ({names}).', { count: front.length, names: front.map(o => o.name).join(', ') }) : t('No part is drawn in front of it.')) : '');
 }
 
-async function paintReference(token:number):Promise<void>{const data=state.data,item=data?.items[state.selected];if(!data?.painting||!item)return;const img=await paintingImage();if(token!==paintToken||data!==state.data||item!==state.data?.items[state.selected])return;const box=partFrame(data,item);const canvas=$<HTMLCanvasElement>('pv-reference');canvas.width=box.w;canvas.height=box.h;const ctx=canvas.getContext('2d')!;paintPaintingCrop(ctx,img,paintingRectangle(box,data.rigSize!,data.painting),box.w,box.h,state.bg);}
+async function paintReference(token:number):Promise<void>{const data=state.data,item=data?.items[state.selected];if(!data?.painting||!item)return;const img=await paintingImage();if(disposed||token!==paintToken||data!==state.data||item!==state.data?.items[state.selected])return;const box=partFrame(data,item);const canvas=$<HTMLCanvasElement>('pv-reference');canvas.width=box.w;canvas.height=box.h;const ctx=canvas.getContext('2d')!;paintPaintingCrop(ctx,img,paintingRectangle(box,data.rigSize!,data.painting),box.w,box.h,state.bg);}
 
 function renderComparison():void {
  const active=state.data?.mode==='parts'&&(!!state.data.painting||!!state.data.differenceAvailable),overlay=active&&state.comparison.mode==='overlay',difference=state.comparison.mode==='difference';
@@ -425,7 +469,7 @@ function renderComparison():void {
  $('pv-comparison').hidden=!active;for(const b of queryAll<HTMLElement>('[data-pv-comparison]'))b.setAttribute('aria-pressed',String(b.dataset.pvComparison===state.comparison.mode));
  $('pv-opacity-control').hidden=!overlay;$<HTMLInputElement>('pv-opacity').value=String(state.comparison.opacity);$('pv-opacity-value').textContent=(state.comparison.opacity*100).toFixed(1)+'%';
  $<HTMLInputElement>('pv-alpha').disabled=overlay||difference;
- const mesh=query<HTMLInputElement>('#pv-mesh-control input');if(mesh)mesh.disabled=overlay||difference||state.view==='assembled';
+
  $<HTMLInputElement>('pv-footprints').disabled=state.data?.mode==='atlas'||state.view==='assembled';
 }
 
@@ -524,13 +568,18 @@ function renderMesh(): void {
   query('#pv-mesh-panel')?.remove();
   query('#pv-mesh-control')?.remove();
   const item = state.data!.items[state.selected]!;
-  if (!item.mesh) return;
+  const meshCount = state.data!.items.filter(part => part.mesh).length;
   const control = doc.createElement('label'); control.id = 'pv-mesh-control'; control.className = 'pv-field';
-  const toggle = doc.createElement('input'); toggle.type = 'checkbox'; toggle.checked = state.meshShown.has(item.name); toggle.disabled=state.comparison.mode!=='part'||state.view==='assembled';
-  toggle.onchange = () => { if (toggle.checked) state.meshShown.add(item.name); else state.meshShown.delete(item.name); void paint(); };
-  control.append(toggle, t('mesh from rig.json UVs')); query('.pv-toolbar')?.append(control);
+  const toggle = doc.createElement('input'); toggle.type = 'checkbox'; toggle.checked = state.meshVisible;
+  toggle.onchange = () => { state.meshVisible = toggle.checked; void paint(); };
+  control.append(toggle, meshCount ? t('mesh from rig.json UVs') : t('Mesh (none 0/{0})', [state.data!.items.length])); query('.pv-toolbar')?.append(control);
   const panel = doc.createElement('section'); panel.id = 'pv-mesh-panel';
   const heading = doc.createElement('h2'); heading.textContent = t('Mesh geometry'); panel.append(heading);
+  if (!item.mesh) {
+    const unavailable = doc.createElement('p');
+    unavailable.textContent = t(meshCount ? 'No mesh geometry is available for this part.' : 'No mesh geometry is available for this draft.');
+    panel.append(unavailable);slots.side.append(panel);return;
+  }
   const figures = doc.createElement('dl');
   for (const key of ['mode', 'vertices', 'triangles', 'art_coverage', 'stray_cleared']) {
     const dt = doc.createElement('dt'), dd = doc.createElement('dd'); dt.textContent = key;
@@ -544,6 +593,7 @@ function renderMesh(): void {
 
 function select(index: number): void {
   if (disposed) return;
+  hoverName = null;highlightedParts.clear();
   queueMicrotask(() => { if (!disposed) renderCorrections(); });
   const data = state.data!;
   const item = data.items[index]!;
@@ -557,7 +607,8 @@ function setView(view: 'item' | 'page' | 'assembled'): void {
   if(view==='assembled'&&(state.data?.mode!=='parts'||!state.data.rigSize))return;
   if((state.view!==view||paintFailure)&&viewport){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
   if(view!=='item'&&state.comparison.mode==='difference')state.comparison={mode:'part',opacity:state.comparison.opacity};
-  state.view = view;renderMesh();renderComparison();$('rig-label').textContent=t(view==='assembled'?'Assembled':'Selected part');commentUi?.refresh();
+  hoverName = null;
+  state.view = view;$('pv-assemble').setAttribute('aria-pressed', String(view === 'assembled'));renderMesh();renderComparison();$('rig-label').textContent=t(view==='assembled'?'Assembled':'Selected part');commentUi?.refresh();
   for (const b of queryAll<HTMLButtonElement>('[data-pv-view]')) b.setAttribute('aria-pressed', String(b.dataset.pvView === view));
   void paint();
 }
@@ -607,7 +658,7 @@ async function boot(): Promise<void> {
   if (disposed) return;
   if (data.error) { const status=$('pv-load');status.textContent=t(data.error);status.dataset.result='refused';painting=false;paintFailure=data.error;syncPaintState();settleReady(new Error(data.error));return; }
   if (!data.items.length) throw new Error('PARTS_PAINT_FAILED');
-  state.data = data;if(stageEmbedded)for(const item of data.items)if(item.mesh)state.meshShown.add(item.name);$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;
+  state.data = data;state.meshVisible=stageEmbedded||!data.items.some(item=>item.mesh);$<HTMLSelectElement>('pv-bg').value=state.bg;$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;
   if (data.mode !== 'parts' || !data.rigSize) state.view = 'item';
   comments.push(...structuredClone(host.initial()).map(issue => parsePartsIssue(issue, false, true, false)));
   host.register({kind: 'parts-verdict', value: () => {
@@ -624,7 +675,7 @@ async function boot(): Promise<void> {
   const assemble=$<HTMLButtonElement>('pv-assemble');assemble.disabled=data.mode!=='parts'||!data.rigSize;assemble.title=assemble.disabled?t(data.mode==='atlas'?'Assembly unavailable: atlas regions carry no rig placement.':'Assembly unavailable: rig_size is not declared.'):'';
   assemble.onclick=()=>{setView(state.view==='assembled'?'item':'assembled');assemble.setAttribute('aria-pressed',String(state.view==='assembled'));};
   bindAssemblyPicking();
-  for(const button of queryAll<HTMLElement>('[data-pv-comparison]'))button.onclick=()=>{const mode=button.dataset.pvComparison as PartsComparison['mode'];state.comparison=mode==='difference'?{mode,opacity:state.comparison.opacity,threshold:state.differenceThreshold}:{mode,opacity:state.comparison.opacity};if(state.comparison.mode!=='part'){state.alpha=false;$<HTMLInputElement>('pv-alpha').checked=false;state.meshShown.delete(state.data!.items[state.selected]!.name);renderMesh();}renderComparison();void paint();};
+  for(const button of queryAll<HTMLElement>('[data-pv-comparison]'))button.onclick=()=>{const mode=button.dataset.pvComparison as PartsComparison['mode'];state.comparison=mode==='difference'?{mode,opacity:state.comparison.opacity,threshold:state.differenceThreshold}:{mode,opacity:state.comparison.opacity};if(state.comparison.mode!=='part'){state.alpha=false;$<HTMLInputElement>('pv-alpha').checked=false;renderMesh();}renderComparison();void paint();};
   $<HTMLInputElement>('pv-opacity').oninput=e=>{state.comparison.opacity=Number((e.target as HTMLInputElement).value);renderComparison();void paint();};
   $<HTMLInputElement>('pv-threshold').oninput=e=>{
     const input=e.target as HTMLInputElement,threshold=input.valueAsNumber,status=$('pv-save-status');
@@ -670,53 +721,160 @@ function localizeWorkspace(): void {
 }
 
 /** Observe taps only; the shared controller exclusively owns pan, zoom and pinch. */
+function assemblyLayers() {
+  return state.data!.items.flatMap(box => {
+    const image = images.get(`image:${box.index}`);
+    return image && !state.hidden.has(box.name) ? [{box, image, alpha: sourceAlpha(box, image)}] : [];
+  });
+}
+
 function bindAssemblyPicking():void {
- const pane=$('rig-viewport');let tap:{id:number;x:number;y:number}|null=null;const pointers=new Set<number>();
- const onDown=(e:PointerEvent)=>{pointers.add(e.pointerId);if(pointers.size===1&&e.button===0)tap={id:e.pointerId,x:e.clientX,y:e.clientY};else tap=null;};
- const onMove=(e:PointerEvent)=>{if(tap&&Math.hypot(e.clientX-tap.x,e.clientY-tap.y)>4)tap=null;};
- const onCancel=(e:PointerEvent)=>{pointers.delete(e.pointerId);tap=null;};
- const onUp=(e:PointerEvent)=>{
-  pointers.delete(e.pointerId);const start=tap;tap=null;
-  if(!start||start.id!==e.pointerId||Math.hypot(e.clientX-start.x,e.clientY-start.y)>4||state.view!=='assembled'||painting||paintFailure||commentUi?.active())return;
-  const data=state.data!,r=$('pv-canvas').getBoundingClientRect(),zoom=viewport!.paneCamera('rig').zoom;
-  const layers=data.items.flatMap(box=>{const img=images.get(`image:${box.index}`);return img?[{box,alpha:sourceAlpha(box,img)}]:[];});
-  const hit=pickAssembly(layers,(e.clientX-r.left)/zoom,(e.clientY-r.top)/zoom,state.hidden);if(hit)select(hit.index);
- };
- pane.addEventListener('pointerdown',onDown);
- pane.addEventListener('pointermove',onMove);
- pane.addEventListener('pointercancel',onCancel);
- pane.addEventListener('pointerup',onUp);
- disposers.push(()=>{
-  pane.removeEventListener('pointerdown',onDown);
-  pane.removeEventListener('pointermove',onMove);
-  pane.removeEventListener('pointercancel',onCancel);
-  pane.removeEventListener('pointerup',onUp);
- });
+  const pane = $('rig-viewport');
+  let tap: {id: number; x: number; y: number} | null = null;
+  const pointers = new Set<number>();
+  const available = () => !disposed && state.view === 'assembled' && !painting && !paintFailure && !paintingHeld && !commentUi?.active();
+  const hitAt = (event: MouseEvent) => {
+    const bounds = $('pv-canvas').getBoundingClientRect(), zoom = viewport!.paneCamera('rig').zoom;
+    return pickAssembly(assemblyLayers(), (event.clientX - bounds.left) / zoom, (event.clientY - bounds.top) / zoom);
+  };
+  const clearHover = () => {
+    if (!hoverName) return;
+    hoverName = null;
+    if (!disposed && state.view === 'assembled' && !painting && !paintFailure) renderAssemblySelection(assemblyLayers());
+  };
+  const onDown = (event: PointerEvent) => {
+    if ((event.target as Element)?.closest?.('.stage-comment-ui,button,input')) {tap = null;return;}
+    pointers.add(event.pointerId);
+    tap = pointers.size === 1 && event.button === 0 ? {id: event.pointerId, x: event.clientX, y: event.clientY} : null;
+    clearHover();
+  };
+  const onMove = (event: PointerEvent) => {
+    if (tap && Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > 4) tap = null;
+    if (!available() || pointers.size || event.buttons) {clearHover();return;}
+    const name = hitAt(event)?.name ?? null;
+    if (name !== hoverName) {hoverName = name;renderAssemblySelection(assemblyLayers());}
+  };
+  const onCancel = (event: PointerEvent) => {pointers.delete(event.pointerId);tap = null;clearHover();};
+  const onUp = (event: PointerEvent) => {
+    pointers.delete(event.pointerId);const start = tap;tap = null;
+    if (!start || start.id !== event.pointerId || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4 || !available()) return;
+    const hit = hitAt(event);if (hit) select(hit.index);
+  };
+  const onDoubleClick = (event: MouseEvent) => {
+    if (disposed || state.view !== 'assembled' || paintFailure || paintingHeld || commentUi?.active()) return;
+    if ((event.target as Element)?.closest?.('.stage-comment-ui,button,input')) return;
+    const hit = hitAt(event);if (hit) {select(hit.index);setView('item');}
+  };
+  const releasePainting = () => {
+    if (!paintingHeld) return;
+    paintingHeld = false;
+    if (!disposed) void paint();
+  };
+  const keyDown = (event: KeyboardEvent) => {
+    if (mountActive && commentUi?.active()) clearHover();
+    if (!mountActive || disposed || event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey || event.altKey || textEntryFocused(event.target)) return;
+    if (event.key === 'Escape' && state.view === 'item' && !commentUi?.active() && !commentUi?.draft()) {
+      event.preventDefault();setView('assembled');
+    }
+    if (event.key.toLowerCase() === 'p' && state.data?.mode === 'parts' && state.data.painting && !painting && !paintFailure && !commentUi?.draft()) {
+      event.preventDefault();paintingHeld = true;hoverName = null;void paint();
+    }
+  };
+  const keyUp = (event: KeyboardEvent) => {if (event.key.toLowerCase() === 'p') releasePainting();};
+  const deactivate = () => {if (!mountActive) releasePainting();};
+  const bindings: [EventTarget, string, EventListener][] = [
+    [pane, 'pointerdown', onDown as EventListener], [pane, 'pointermove', onMove as EventListener],
+    [pane, 'pointercancel', onCancel as EventListener], [pane, 'pointerup', onUp as EventListener],
+    [pane, 'pointerleave', clearHover], [pane, 'dblclick', onDoubleClick as EventListener],
+    [doc, 'keydown', keyDown as EventListener], [doc, 'keyup', keyUp as EventListener],
+    [doc, 'focusin', deactivate], [doc, 'pointerdown', deactivate], [eventWindow, 'blur', releasePainting],
+  ];
+  for (const [target, type, handler] of bindings) target.addEventListener(type, handler);
+  disposers.push(() => {for (const [target, type, handler] of bindings) target.removeEventListener(type, handler);});
 }
 
 interface PartsPose extends CommentUiPose {item:Item;sourceHash:string;view:PartsIssue['view']}
+function issueParts(names: string[]): PartsIssue['parts'] {
+  return names.map(name => {
+    const item = state.data?.items.find(item => item.name === name);
+    if (!item?.imageHash) throw new Error('PARTS_COMMENT_PART_MISMATCH: comment belongs to another part');
+    return {name, imageHash: item.imageHash};
+  });
+}
+
+async function prepareIssue(issue: PartsIssue): Promise<PartsIssue> {
+  const data = state.data!;
+  const bound = parsePartsIssue(issue, false, false, false);
+  const items = new Map(data.items.map(item => [item.name, {...item, imageHash: item.imageHash!}]));
+  assertPartsIssueBinding(bound, items, data.sourceHash);
+  const prepared = await source.crop(bound);
+  if (disposed || state.data !== data) throw new Error('PARTS_COMMENT_STALE_SOURCE');
+  return parsePartsIssue(prepared, true, false, false);
+}
+
 function setupPartsComments():void {
  const codec:CommentCodec<PartsIssue,PartsPose>={
- read:raw=>{try{const c=parsePartsIssue(raw,false,true,false);const camera={space:'image' as const,center:c.view.camera.center,zoom:c.view.camera.zoom,viewport:c.view.camera.viewport,visible:{x:c.view.camera.center.x-c.view.camera.viewport.width/c.view.camera.zoom/2,y:c.view.camera.center.y-c.view.camera.viewport.height/c.view.camera.zoom/2,width:c.view.camera.viewport.width/c.view.camera.zoom,height:c.view.camera.viewport.height/c.view.camera.zoom}};const r=c.view.mode==='assembled'?c.rigRegion:c.imageRegion!;const part=c.parts[0]!;return {mode:'parts',viewport:'rig',screen:region(projectMark(r,camera),projectMark({x:r.x+r.width,y:r.y+r.height},camera)),world:r,camera,crop:{...c.crop,png:c.crop.png??''},bookmark:{part:part.name,imageHash:part.imageHash,sourceHash:c.sourceHash,view:c.view}};}catch{return null;}},
- signature:p=>[p.item.name,p.item.imageHash,p.sourceHash,p.camera,p.view],
- matches:(_mark,p,raw)=>{try{const c=parsePartsIssue(raw,false,true,false);return c.view.mode==='item'&&p.item.name===c.parts[0]?.name&&p.item.imageHash===c.parts[0]?.imageHash&&p.sourceHash===c.sourceHash;}catch{return false;}},
+ read:raw=>{try{const c=parsePartsIssue(raw,false,true,false);const camera={space:'image' as const,center:c.view.camera.center,zoom:c.view.camera.zoom,viewport:c.view.camera.viewport,visible:{x:c.view.camera.center.x-c.view.camera.viewport.width/c.view.camera.zoom/2,y:c.view.camera.center.y-c.view.camera.viewport.height/c.view.camera.zoom/2,width:c.view.camera.viewport.width/c.view.camera.zoom,height:c.view.camera.viewport.height/c.view.camera.zoom}};const r=c.view.mode==='assembled'?c.rigRegion:c.imageRegion!;return {mode:'parts',viewport:'rig',screen:region(projectMark(r,camera),projectMark({x:r.x+r.width,y:r.y+r.height},camera)),world:r,camera,crop:{...c.crop,png:c.crop.png??''},bookmark:{parts:c.parts,sourceHash:c.sourceHash,view:c.view}};}catch{return null;}},
+ signature:p=>[p.view.mode,p.item.name,p.item.imageHash,p.sourceHash,p.camera,p.view],
+ matches:(_mark,p,raw)=>{try{const c=parsePartsIssue(raw,false,true,false);return p.sourceHash===c.sourceHash&&p.view.mode===c.view.mode&&(c.view.mode==='assembled'?c.parts.every(part=>state.data?.items.some(item=>item.name===part.name&&item.imageHash===part.imageHash)):p.item.name===c.parts[0]?.name&&p.item.imageHash===c.parts[0]?.imageHash);}catch{return false;}},
  label:raw=>{const c=parsePartsIssue(raw,false,true,false);return `${c.parts.map(pt=>pt.name).join(', ')} · ${c.summary}`;},
- create:async(p,_view,screen,crop,_bookmark,summary)=>{
-  const r=snapImageRegion(region(unprojectMark(screen,p.camera),
-   unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},p.camera),
-   {x:0,y:0,width:p.item.w,height:p.item.h}));
-  const c:PartsIssue={schema:'rig-review-parts-comment/2',id:crypto.randomUUID(),summary,
-   parts:[{name:p.item.name,imageHash:p.item.imageHash!}],sourceHash:p.sourceHash,
-   imageRegion:r,rigRegion:{...r,x:p.item.x+r.x,y:p.item.y+r.y},
-   view:{...p.view,mode:'item'},crop,nativeCrop:null};
-  return parsePartsIssue(await source.crop(parsePartsIssue(c,false)),true,true,false);
- }
+ chips:(pose,screen,existing)=>{
+  const visible = state.data!.items.filter(item => !state.hidden.has(item.name));
+  if (existing) return {selected: existing.parts.map(part => part.name), candidates: existing.view.mode === 'assembled' ? visible.map(item => item.name) : []};
+  if (pose.view.mode === 'item') return {selected: [pose.item.name], candidates: []};
+  const size = state.data!.rigSize!;
+  const r = snapImageRegion(region(unprojectMark(screen, pose.camera), unprojectMark({x: screen.x + screen.width, y: screen.y + screen.height}, pose.camera), {x: 0, y: 0, width: size[0], height: size[1]}));
+  const hits = new Set<string>(), layers = assemblyLayers();
+  const stepX = Math.max(1, r.width / 32), stepY = Math.max(1, r.height / 32);
+  for (let y = r.y + .5; y < r.y + r.height; y += stepY) {
+    for (let x = r.x + .5; x < r.x + r.width; x += stepX) {
+      const hit = pickAssembly(layers, x, y);if (hit) hits.add(hit.name);
+    }
+  }
+  return {selected: visible.filter(item => hits.has(item.name)).map(item => item.name), candidates: visible.map(item => item.name)};
+ },
+ create:async(p,_view,screen,crop,_bookmark,summary,parts)=>{
+  const isItem = p.view.mode === 'item';
+  const size = state.data!.rigSize!;
+  const bounds = {x: 0, y: 0, width: isItem ? p.item.w : size[0], height: isItem ? p.item.h : size[1]};
+  const r = snapImageRegion(region(unprojectMark(screen, p.camera),
+    unprojectMark({x: screen.x + screen.width, y: screen.y + screen.height}, p.camera), bounds));
+  return prepareIssue({schema:'rig-review-parts-comment/2',id:crypto.randomUUID(),summary,
+    parts:issueParts(isItem?[p.item.name]:parts??[]),sourceHash:p.sourceHash,
+    imageRegion:isItem?r:null,rigRegion:isItem?{...r,x:p.item.x+r.x,y:p.item.y+r.y}:r,
+    view:structuredClone(p.view),crop,nativeCrop:null});
+ },
+ update:async(existing,summary,parts)=>prepareIssue({...existing,summary,
+   parts:existing.view.mode==='assembled'?issueParts(parts??[]):existing.parts}),
  };
- const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||state.view!=='item')return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{mode:'item',camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshShown.has(item.name),comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
+ const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||paintingHeld||(state.view!=='item'&&state.view!=='assembled'))return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{mode:state.view,camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshVisible,comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
  commentUi=bindStageComments({toolbar:slots.toolbar,listHost:slots.side,toggle:$<HTMLButtonElement>('stage-comment'),viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
-  restore:async(raw)=>{const current = await source.view();if(disposed)return;if(current.sourceHash!==state.data?.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE');const b=raw as {part:string;imageHash:string;sourceHash:string;view:PartsIssue['view']},item=state.data!.items.find(i=>i.name===b.part);if(!item||item.imageHash!==b.imageHash||state.data!.sourceHash!==b.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');setView('item');$('pv-assemble').setAttribute('aria-pressed','false');select(item.index);state.bg=b.view.background;state.alpha=b.view.alpha;state.footprints=b.view.footprints;state.comparison={...(b.view.comparison??defaultPartsComparison())};if(state.comparison.mode==='difference')state.differenceThreshold=state.comparison.threshold;renderComparison();if(b.view.mesh)state.meshShown.add(item.name);else state.meshShown.delete(item.name);$<HTMLSelectElement>('pv-bg').value=state.bg;$<HTMLInputElement>('pv-alpha').checked=state.alpha;$<HTMLInputElement>('pv-footprints').checked=state.footprints;renderMesh();viewport!.state.cameraRestoring=true;try{await paint();if(!paintFailure){viewport!.writeCamera('rig',{zoom:b.view.camera.zoom,center:{...b.view.camera.center}});if(b.view.referenceCamera)viewport!.writeCamera('reference',{zoom:b.view.referenceCamera.zoom,center:{...b.view.referenceCamera.center}});viewport!.state.cameraSync=b.view.cameraSync;viewport!.fitCamera();}}finally{viewport!.state.cameraRestoring=false;}},
-  feedback:()=>comments,locked:()=>Boolean(state.data?.legacyVerdict?.readOnly)||host.locked() !== 'open',add:c=>comments.push(c),changed:()=>{renderList();host.changed(structuredClone(comments));},error:m=>{paintBusyStatus=null;$('pv-save-status').textContent=t(m);},blocked:()=>painting,busy:()=>painting,busyError:message=>{paintBusyStatus={token:paintToken,text:t(message)};$('pv-save-status').textContent=paintBusyStatus.text;},shortcutActive:()=>mountActive&&!disposed,refusal:()=>paintFailure??(state.data?.legacyVerdict?.readOnly?state.data.legacyVerdict.code+': '+t('parts.legacyVerdictBanner',[state.data.legacyVerdict.flaggedCount]):null)??(host.locked() !== 'open'?'Read-only view: reopen with rig-review open to edit.':null)??(stageEmbedded&&state.data?.mode==='parts'?'PARTS_JOINED_ISSUE_UNSUPPORTED':null)??(state.view==='assembled'?'PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment':null)??(state.data?.mode!=='parts'?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
-
+  restore:async(raw)=>{
+    const data = state.data!, navigation = paintToken, current = await source.view();
+    if (disposed) return;
+    if (navigation !== paintToken) throw new Error('COMMENT_BUSY: wait for inspection');
+    if (state.data !== data || current.sourceHash !== data.sourceHash) throw new Error('PARTS_COMMENT_STALE_SOURCE');
+    const bookmark = raw as {parts:PartsIssue['parts'];sourceHash:string;view:PartsIssue['view']};
+    const matched = bookmark.parts.map(part => data.items.find(item => item.name === part.name && item.imageHash === part.imageHash));
+    if (!matched.length || matched.some(item => !item) || data.sourceHash !== bookmark.sourceHash) throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');
+    setView(bookmark.view.mode);select(matched[0]!.index);
+    highlightedParts.clear();for (const part of bookmark.parts) {highlightedParts.add(part.name);state.hidden.delete(part.name);}
+    state.bg = bookmark.view.background;state.alpha = bookmark.view.alpha;state.footprints = bookmark.view.footprints;
+    state.comparison = {...(bookmark.view.comparison ?? defaultPartsComparison())};
+    if (state.comparison.mode === 'difference') state.differenceThreshold = state.comparison.threshold;
+    state.meshVisible = bookmark.view.mesh;
+    $<HTMLSelectElement>('pv-bg').value=state.bg;$<HTMLInputElement>('pv-alpha').checked=state.alpha;$<HTMLInputElement>('pv-footprints').checked=state.footprints;
+    renderList();renderMesh();renderComparison();viewport!.state.cameraRestoring = true;
+    const painted = paint(), token = paintToken;
+    try {
+      await painted;
+      if (disposed || token !== paintToken || paintFailure) return;
+      viewport!.writeCamera('rig', bookmark.view.camera);
+      if (bookmark.view.referenceCamera) viewport!.writeCamera('reference', bookmark.view.referenceCamera);
+      viewport!.state.cameraSync = bookmark.view.cameraSync;viewport!.fitCamera();
+    } finally {if (!disposed) viewport!.state.cameraRestoring = false;}
+  },
+  feedback:()=>comments,locked:()=>Boolean(state.data?.legacyVerdict?.readOnly)||host.locked() !== 'open',add:c=>comments.push(c),changed:()=>{renderList();host.changed(structuredClone(comments));},error:m=>{paintBusyStatus=null;$('pv-save-status').textContent=t(m);},blocked:()=>painting||paintingHeld,busy:()=>painting||paintingHeld,busyError:message=>{paintBusyStatus={token:paintToken,text:t(message)};$('pv-save-status').textContent=paintBusyStatus.text;},shortcutActive:()=>mountActive&&!disposed,refusal:()=>paintFailure??(state.data?.legacyVerdict?.readOnly?state.data.legacyVerdict.code+': '+t('parts.legacyVerdictBanner',[state.data.legacyVerdict.flaggedCount]):null)??(host.locked() !== 'open'?'Read-only view: reopen with rig-review open to edit.':null)??(stageEmbedded&&state.data?.mode==='parts'?'PARTS_JOINED_ISSUE_UNSUPPORTED':null)??(state.data?.mode!=='parts'?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
 }
 
 function renderCorrections():void {
@@ -740,14 +898,14 @@ function renderCorrections():void {
 function stagePartsSnapshot():StagePartsState|null {
  const data=state.data,item=data?.items[state.selected],mapping=data?.draft?.mappings.find(m=>m.part===item?.name);
  if(!data?.inspectionSourceHash||!item?.imageHash||!mapping||!viewport)return null;
- return {inspectionSourceHash:data.inspectionSourceHash,part:item.name,imageHash:item.imageHash,box:{x:item.x,y:item.y,w:item.w,h:item.h},mapping:{skin:mapping.skin,slot:mapping.slot,attachment:mapping.attachment},rig:{...viewport.paneCamera('rig')},reference:{...viewport.paneCamera('reference')},cameraSync:viewport.state.cameraSync,bg:state.bg,alpha:state.alpha,footprints:state.footprints,view:state.view,mesh:state.meshShown.has(item.name)};
+ return {inspectionSourceHash:data.inspectionSourceHash,part:item.name,imageHash:item.imageHash,box:{x:item.x,y:item.y,w:item.w,h:item.h},mapping:{skin:mapping.skin,slot:mapping.slot,attachment:mapping.attachment},rig:{...viewport.paneCamera('rig')},reference:{...viewport.paneCamera('reference')},cameraSync:viewport.state.cameraSync,bg:state.bg,alpha:state.alpha,footprints:state.footprints,view:state.view,mesh:state.meshVisible};
 }
 async function restoreStageParts(saved:StagePartsState):Promise<void>{
  if(disposed||!state.data||!viewport)return;
  try{
   const index=stagePartsSelectionIndex(state.data,saved);
   viewport.state.cameraRestoring=true;state.bg=saved.bg;state.alpha=saved.alpha;state.footprints=saved.footprints;state.view=saved.view;
-  if(saved.mesh)state.meshShown.add(saved.part);else state.meshShown.delete(saved.part);
+  state.meshVisible=saved.mesh;
   select(index);await paint();if(!disposed&&!paintFailure){viewport.writeCamera('rig',saved.rig);if(state.data.painting)viewport.writeCamera('reference',saved.reference);viewport.state.cameraSync=saved.cameraSync;viewport.fitCamera();}
  }catch{if(disposed)return;const status=$('pv-load');status.hidden=false;status.dataset.result='refused';status.textContent=t('STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.');$('stage-layout').hidden=true;}
  finally{viewport.state.cameraRestoring=false;}

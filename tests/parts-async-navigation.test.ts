@@ -8,7 +8,7 @@ import {join} from 'node:path';
 import {PNG} from 'pngjs';
 import {createPartsViewport} from '../web/parts-viewport-provider.ts';
 import {projectMark,unprojectMark,region} from '../src/stage-comment.ts';
-import {parsePartsIssue,snapImageRegion,type PartsIssue} from '../src/parts-comment.ts';
+import {parsePartsIssue,assertPartsIssueBinding,snapImageRegion,type PartsIssue} from '../src/parts-comment.ts';
 import {preparePartsComment} from '../src/parts-comment-crops.ts';
 import {readPngCrop} from '../src/comment-crops.ts';
 import {verdictSource} from '../src/parts-view.ts';
@@ -30,9 +30,9 @@ test('#389 adopted P2: late A painting image cannot overwrite already completed 
 
 /** Actual parts paint orchestration/raster and comment host; only image delivery and raster calls are controlled. */
 async function failedPaintDriver(){
- const source=await readFile('web/parts.ts','utf8'),start=source.indexOf('let paintToken = 0'),end=source.indexOf('\nfunction renderComparison(',start),setup=source.slice(source.indexOf('function setupPartsComments():void'),source.indexOf('\nfunction renderCorrections():void',source.indexOf('function setupPartsComments():void'))),code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(start,end)+'\n'+setup);
+ const source=await readFile('web/parts.ts','utf8'),start=source.indexOf('let paintToken = 0'),end=source.indexOf('\nfunction renderComparison(',start),setup=source.slice(source.indexOf('function issueParts('),source.indexOf('\nfunction renderCorrections():void',source.indexOf('function setupPartsComments():void'))),code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(start,end)+'\n'+setup);
  const nodes=new Map<string,any>();const node=(id:string)=>{if(!nodes.has(id)){const ctx={pixels:'',clearRect(){this.pixels='';}};nodes.set(id,{width:1,height:1,textContent:'',dataset:{},setAttribute(){},getContext:()=>ctx,replaceChildren(){}});}return nodes.get(id);};
- let host:any;const scope:any={settleReady:()=>{},disposed:false,mountActive:true,slots:{toolbar:{},stage:{dataset:{},setAttribute(){}}},host:{locked:()=>'open'},painting:0,commentUi:null,viewport:{fitCamera(){}},state:{data:{mode:'parts',rigSize:[100,100],painting:{width:100,height:100},items:[{name:'A',index:0,x:0,y:0,w:10,h:10},{name:'B',index:1,x:10,y:0,w:10,h:10}],flags:[]},selected:0,comparison:{mode:'overlay',opacity:.5},bg:'green',alpha:false,footprints:false,meshShown:new Set()},$:node,t:(s:string)=>s,itemImage:async(i:any)=>i.name,paintingImage:async()=>({}),frontParts:()=>[],setCanvas:(c:any,w:number,h:number)=>{c.width=w;c.height=h;c.getContext().pixels='';return c.getContext();},paintOverlay:(c:any,_i:any,img:any)=>{c.pixels=img;},paintPart:(c:any,_i:any,img:any)=>{c.pixels=img;},paintPaintingCrop:()=>{},paintFootprints:()=>{},paintingRectangle,doc:{createElement:()=>({})},query:()=>({}),stageEmbedded:false,bindStageComments:(h:any)=>{host=h;scope.boundHost=h;return {refresh(){}};}};
+ let host:any;const scope:any={settleReady:()=>{},paintingHeld:false,hoverName:null,highlightedParts:new Set(),disposed:false,mountActive:true,slots:{toolbar:{},stage:{dataset:{},setAttribute(){}}},host:{locked:()=>'open'},painting:0,commentUi:null,viewport:{fitCamera(){}},state:{data:{mode:'parts',rigSize:[100,100],painting:{width:100,height:100},items:[{name:'A',index:0,x:0,y:0,w:10,h:10},{name:'B',index:1,x:10,y:0,w:10,h:10}],flags:[]},selected:0,comparison:{mode:'overlay',opacity:.5},bg:'green',alpha:false,footprints:false,meshVisible:false},$:node,t:(s:string)=>s,itemImage:async(i:any)=>i.name,paintingImage:async()=>({}),frontParts:()=>[],setCanvas:(c:any,w:number,h:number)=>{c.width=w;c.height=h;c.getContext().pixels='';return c.getContext();},paintOverlay:(c:any,_i:any,img:any)=>{c.pixels=img;},paintPart:(c:any,_i:any,img:any)=>{c.pixels=img;},paintPaintingCrop:()=>{},paintFootprints:()=>{},paintingRectangle,doc:{createElement:()=>({})},query:()=>({}),stageEmbedded:false,bindStageComments:(h:any)=>{host=h;scope.boundHost=h;return {refresh(){}};}};
  const api=new Function('scope',`with(scope){${code};setupPartsComments();return {paint,host:()=>scope.boundHost};}`)(scope) as {paint:()=>Promise<void>;host:()=>any};
  // Keep the same scope object so controlled image failures can be replaced between generations.
  return {api,scope:scope as any,nodes,node};
@@ -73,7 +73,7 @@ test('#613 after first paint and a stage-height change the actual parts codec cr
    reference: () => null, frameSize: target => target === 'rig' ? {w: item.w, h: item.h} : null, message() {}});
   h.scope.viewport = controller;
   const sent: PartsIssue[] = [];
-  Object.assign(h.scope, {region, projectMark, unprojectMark, snapImageRegion, parsePartsIssue,
+  Object.assign(h.scope, {region, projectMark, unprojectMark, snapImageRegion, parsePartsIssue, assertPartsIssueBinding,
    source: {crop: async (issue: PartsIssue) => { sent.push(issue); return preparePartsComment(pkg, issue); }}});
   await h.api.paint();
   controller.writeCamera('rig', {zoom: 1, center: {x: item.w / 2, y: item.h / 2}});
@@ -135,4 +135,26 @@ test('#389 adopted P2: explicitly marked atlas action retains its click target; 
  pane.emit('pointerdown',{target:pane});expect(pane.captured.has(7)).toBe(true);pane.emit('pointermove',{target:pane,clientX:50,clientY:70});expect(moves).toEqual([[30,40]]);
  const parts=await readFile('web/parts.ts','utf8');expect(parts).toContain("box.dataset.viewportAction = 'select-region'");
  }finally{dispose();}
+});
+
+test('#614 a late Difference mesh image cannot draw, replace captions or retain its bitmap after newer selection',async()=>{
+ const h=await failedPaintDriver();
+ const prior=Object.getOwnPropertyDescriptor(globalThis,'createImageBitmap');
+ let release!:(image:unknown)=>void,closed=0,meshDraws=0;
+ Object.defineProperty(globalThis,'createImageBitmap',{configurable:true,writable:true,value:async()=>({close(){closed++;}})});
+ try{
+  h.scope.state.data.items[0].mesh={vertices:[0,0,10,0,0,10],triangles:[0,1,2]};
+  h.scope.state.view='item';h.scope.state.comparison={mode:'difference',opacity:.5,threshold:0};h.scope.state.meshVisible=true;
+  h.scope.source={difference:async()=>new Response(new Uint8Array([1]))};
+  h.scope.itemImage=(item:any)=>item.name==='A'?new Promise(resolve=>{release=resolve;}):Promise.resolve('B');
+  h.scope.paintMesh=()=>{meshDraws++;};
+  const older=h.api.paint();for(let i=0;i<12&&!release;i++)await Promise.resolve();expect(release).toBeDefined();
+  h.scope.state.selected=1;h.scope.state.comparison={mode:'part',opacity:.5};await h.api.paint();
+  const caption=h.node('pv-caption').textContent;expect(h.node('pv-canvas').getContext().pixels).toBe('B');
+  release('A');await older;
+  expect(h.node('pv-canvas').getContext().pixels).toBe('B');expect(h.node('pv-caption').textContent).toBe(caption);
+  expect(meshDraws).toBe(0);expect(closed).toBe(1);expect(h.api.host().refusal()).toBeNull();
+ }finally{
+  if(prior)Object.defineProperty(globalThis,'createImageBitmap',prior);else delete (globalThis as any).createImageBitmap;
+ }
 });

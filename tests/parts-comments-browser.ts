@@ -48,6 +48,38 @@ async function main(){
  await page.goto(base+'?lang=ko#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'reload ko');await click(page,'#stage-comment');await click(page,'.stage-comment-summary');await wait(page,`!!document.querySelector('.stage-comment-composer')`,'restore ko view');await click(page,'#stage-comment');await click(page,'#stage-comment');report.shots.ko=(await page.screenshot()).toString('base64');report.koLabels=await page.evaluate(`({selected:document.getElementById('rig-label').textContent,export:document.getElementById('pv-export-issue').textContent,comments:document.getElementById('stage-comment').textContent})`);assert(report.koLabels.selected===koCatalog['Selected part']&&report.koLabels.export===koCatalog['Export issue'],'ko visible UI');
  // The painting crop uses the same real pair. On an integer-placed part, compare decoded pixel bytes.
  await click(page,'#stage-comment');await click(page,'[data-pv-item="front"]');await Bun.sleep(180);report.paintingEqual=await page.evaluate(`(()=>{const c=document.getElementById('pv-reference'),d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;for(let y=0;y<c.height;y++)for(let x=0;x<c.width;x++){let i=(y*c.width+x)*4;if(d[i]!==3*(14+x)||d[i+1]!==3*(14+y)||d[i+2]!==90||d[i+3]!==255)return false;}return true;})()`);assert(report.paintingEqual,'painting original subrect');
+ // The same gesture, composer and crop path now bind a seam across two parts.
+ report.assembled=[];
+ for(const lang of ['en','ko']){
+  await page.goto(base+'?lang='+lang+'#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'assembled '+lang);
+  await click(page,'#pv-assemble');await click(page,'#fit');await click(page,'#stage-comment');
+  const summary='Seam '+lang;
+  await mark(page,{x:12,y:12},{x:25,y:24},summary);
+  const row=await page.evaluate<any>(`[...document.querySelectorAll('.stage-comment-item')].find(row=>row.textContent.includes(${JSON.stringify(summary)}))?.dataset.commentId`);
+  assert(row,'assembled issue row');
+  await click(page,`[data-comment-id="${row}"] .stage-comment-summary`);await wait(page,`!!document.querySelector('.stage-comment-composer')`,'assembled edit');
+  const selected=await page.evaluate<string[]>(`[...document.querySelectorAll('.stage-comment-parts [aria-pressed="true"]')].map(button=>button.textContent)`);
+  assert(JSON.stringify(selected)===JSON.stringify(['back_defect','front']),'frontmost grid auto-attaches seam in draw order');
+  await click(page,'.stage-comment-parts [data-comment-part="back_defect"]');
+  await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Invalid narrowed seam';form.requestSubmit();})()`);
+  await wait(page,`document.querySelector('.stage-comment-composer [role="alert"]')?.textContent.includes('PARTS_COMMENT_OUT_OF_BOUNDS')`,'invalid chip edit refused atomically');
+  assert(await page.evaluate(`document.querySelector('[data-comment-id="${row}"] .stage-comment-summary').textContent.includes(${JSON.stringify(summary)})`),'invalid summary did not mutate row');
+  await click(page,'.stage-comment-parts [data-comment-part="back_defect"]');
+  const edited='Edited seam '+lang;
+  await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value=${JSON.stringify(edited)};form.requestSubmit();})()`);
+  await wait(page,`!document.querySelector('.stage-comment-composer')`,'validated seam edit accepted');
+  await click(page,'#pv-save');await wait(page,`document.getElementById('pv-save-status').dataset.result==='saved'`,'assembled save');
+  const verdict=(await readVerdict(pkg)).verdict!,seam=verdict.issues.find(issue=>issue.id===row)!;
+  assert(seam?.view.mode==='assembled'&&seam.imageRegion===null&&seam.nativeCrop===null&&seam.summary===edited,'saved assembled evidence');
+  assert(JSON.stringify(seam.parts.map(part=>part.name))===JSON.stringify(['back_defect','front']),'bound parts survive edit and save');
+  const bytes=await readFile(resolvedCropPath(seam.crop.path));assert(hash(bytes)===seam.crop.sha256,'stored viewport crop bytes');
+  const decoded=PNG.sync.read(bytes);assert(decoded.width===seam.crop.width&&decoded.height===seam.crop.height,'stored viewport crop dimensions');
+  for(const format of ['json','issue']){const response=await fetch(base+'api/parts/export?format='+format),body=await response.text();assert(response.ok&&body.includes(seam.crop.sha256)&&body.includes(edited),'assembled export '+format);}
+  await page.goto(base+'?lang='+lang+'&seam-reload=1#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'assembled reopen');
+  await click(page,`[data-comment-id="${row}"] .stage-comment-summary`);await wait(page,`document.getElementById('pv-assemble').getAttribute('aria-pressed')==='true'`,'assembled restore');
+  assert(await page.evaluate(`['back_defect','front'].every(name=>document.querySelector('[data-assembly-outline="'+name+'"]'))`),'restored issue highlights every bound part');
+  report.assembled.push({lang,issue:seam,cropBytes:bytes.length,shot:(await page.screenshot()).toString('base64')});
+ }
  report.sourceUnchanged=(await Promise.all(before.map(async([f,h])=>hash(await readFile(f))===h))).every(Boolean);assert(report.sourceUnchanged,'source invariance');
  // Compiled Stage 1 reaches the exact canonical pair, no fabricated model for standalone parts.
  rigServer=await startServer(await loadReview('examples/demo'),{port:0,stateDir:join(root,'rig-state'),exitOnClose:false,graceMs:3600000,unopenedTimeoutMs:3600000});await page.goto(`http://127.0.0.1:${rigServer.port}/?lang=en`);await wait(page,`!!document.querySelector('[data-review-stage="1"]')`,'compiled stage nav');await wait(page,`!!document.getElementById('rig-root')?.style.transform`,'compiled camera');if(await page.evaluate(`document.getElementById('play')?.textContent.includes('Ⅱ')`))await click(page,'#play');const rc=await page.evaluate<any>(camera),rp={x:rc.width*.5,y:rc.height*.5},rsource=source(rc,rp),ra={x:rc.left+rp.x-40,y:rc.top+rp.y,id:1},rb={x:rc.left+rp.x+40,y:rc.top+rp.y,id:2};await page.touch('touchStart',[ra,rb]);await page.touch('touchMove',[{...ra,x:ra.x-20},{...rb,x:rb.x+40}]);await page.touch('touchEnd',[]);await Bun.sleep(80);const rafter=await page.evaluate<any>(camera),rend=source(rafter,{x:rp.x+10,y:rp.y});report.compiledPinch={ratio:rafter.scale/rc.scale,error:Math.max(Math.abs(rsource.x-rend.x),Math.abs(rsource.y-rend.y))};assert(report.compiledPinch.ratio>1.5&&report.compiledPinch.error<.1,'compiled rig common pinch');await click(page,'[data-review-stage="1"]');await wait(page,`(()=>{const d=document.querySelector('.review-stage-panel iframe')?.contentDocument;return d?.body?.dataset.ready==='true';})()`,'compiled stage 1');report.compiledPair=await page.evaluate(`(()=>{const d=document.querySelector('.review-stage-panel iframe').contentDocument;return ['rig-pane','reference-pane','rig-viewport','reference-viewport','rig-root'].every(id=>!!d.getElementById(id))&&d.querySelectorAll('#rig-viewport').length===1;})()`);assert(report.compiledPair,'same canonical pair');report.embeddedAtlasClick=await atlasClick(page,true);atlasServer=await startPartsServer(await loadPartsView('examples/demo'),{port:0,exitOnClose:false,graceMs:3600000,unopenedTimeoutMs:3600000});await page.goto(`http://127.0.0.1:${atlasServer.port}/?lang=en`);await wait(page,`document.body.dataset.ready==='true'`,'standalone atlas');report.standaloneAtlasClick=await atlasClick(page);

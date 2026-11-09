@@ -91,23 +91,30 @@ export function meshCoverage(w: number, h: number, mesh: MeshGeometry): Uint8Arr
   return mask;
 }
 /** Tint only nontransparent source-art pixels outside the triangle union, before drawing diagnostic edges. */
-export function paintMesh(ctx: Ctx, source: Source, w: number, h: number, mesh: MeshGeometry, makeCanvas: (w: number, h: number) => HTMLCanvasElement): void {
-  const scratch = makeCanvas(w, h), s = scratch.getContext('2d')!;
-  s.drawImage(source, 0, 0);
-  const art = s.getImageData(0, 0, w, h), tint = s.createImageData(w, h), mask = meshCoverage(w, h, mesh);
-  for (let i = 0; i < mask.length; i++) if (!mask[i] && art.data[i * 4 + 3]) {
-    tint.data[i * 4] = 255; tint.data[i * 4 + 2] = 80; tint.data[i * 4 + 3] = 160;
-  }
-  s.putImageData(tint, 0, 0); ctx.drawImage(scratch, 0, 0);
-  ctx.strokeStyle = '#00bfff'; ctx.fillStyle = '#ffffff'; ctx.lineWidth = .5;
-  ctx.beginPath();
-  const v = mesh.vertices;
-  for (let i = 0; i < mesh.triangles.length; i += 3) {
-    for (let j = 0; j < 3; j++) { const a = mesh.triangles[i + j]! * 2; if (!j) ctx.moveTo(v[a]!, v[a + 1]!); else ctx.lineTo(v[a]!, v[a + 1]!); }
-    ctx.closePath();
-  }
-  ctx.stroke();
-  for (let i = 0; i < v.length; i += 2) { ctx.beginPath(); ctx.arc(v[i]!, v[i + 1]!, .8, 0, Math.PI * 2); ctx.fill(); }
+export function paintMesh(ctx: Ctx, source: Source, w: number, h: number, mesh: MeshGeometry, makeCanvas: (w: number, h: number) => HTMLCanvasElement, options: {tint?: boolean; alpha?: number} = {}): void {
+  const tintEnabled = options.tint !== false;
+  ctx.save();
+  try {
+    ctx.globalAlpha *= options.alpha ?? 1;
+    if (tintEnabled) {
+      const scratch = makeCanvas(w, h), s = scratch.getContext('2d')!;
+      s.drawImage(source, 0, 0);
+      const art = s.getImageData(0, 0, w, h), tint = s.createImageData(w, h), mask = meshCoverage(w, h, mesh);
+      for (let i = 0; i < mask.length; i++) if (!mask[i] && art.data[i * 4 + 3]) {
+        tint.data[i * 4] = 255; tint.data[i * 4 + 2] = 80; tint.data[i * 4 + 3] = 160;
+      }
+      s.putImageData(tint, 0, 0); ctx.drawImage(scratch, 0, 0);
+    }
+    ctx.strokeStyle = '#00bfff'; ctx.fillStyle = '#ffffff'; ctx.lineWidth = .5;
+    ctx.beginPath();
+    const v = mesh.vertices;
+    for (let i = 0; i < mesh.triangles.length; i += 3) {
+      for (let j = 0; j < 3; j++) { const a = mesh.triangles[i + j]! * 2; if (!j) ctx.moveTo(v[a]!, v[a + 1]!); else ctx.lineTo(v[a]!, v[a + 1]!); }
+      ctx.closePath();
+    }
+    ctx.stroke();
+    if (tintEnabled) for (let i = 0; i < v.length; i += 2) { ctx.beginPath(); ctx.arc(v[i]!, v[i + 1]!, .8, 0, Math.PI * 2); ctx.fill(); }
+  } finally {ctx.restore();}
 }
 
 /** Package order is back to front. Placements remain continuous rig pixels. */

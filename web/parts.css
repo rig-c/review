@@ -109,3 +109,8 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 /* The shared parts host keeps the existing issue list in the sidebar flow. */
 .stage-comment-list.stage-comment-list-inline{position:static;position-anchor:auto;inset:auto;z-index:auto;width:100%;max-width:none;max-height:none;margin-top:12px}
 .stage-comment-list-inline .stage-comment-refusal-note{white-space:normal;overflow-wrap:anywhere}
+
+/* Part attribution stays inside the existing comment composer. */
+.stage-comment-parts{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+.stage-comment-parts button{font:inherit;max-width:100%;overflow-wrap:anywhere;border:1px solid var(--border);border-radius:5px;background:var(--panel);color:inherit;padding:3px 6px;cursor:pointer}
+.stage-comment-parts button[aria-pressed="true"]{border-color:var(--link);background:color-mix(in srgb,var(--link) 18%,var(--panel))}
