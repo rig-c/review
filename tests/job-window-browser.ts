@@ -11,6 +11,7 @@ import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 import {rigStillBrowserProbe} from './helpers/job-rig-still-browser.ts';
 import {interviewDiagnosticsBrowserProbe} from './helpers/job-interview-browser.ts';
+import type {PartsIssue} from '../src/parts-comment.ts';
 
 const argument = (key: string) => {const index = Bun.argv.indexOf(key); return index < 0 ? undefined : Bun.argv[index + 1];};
 const language = argument('--lang') ?? 'en';
@@ -33,6 +34,8 @@ const navigation: {url: string; loaderId?: string}[] = [];
 const browserEvents: unknown[] = [];
 const resourceResponses: {requestId: string; url: string; status: number; mimeType: string}[] = [];
 const completedResources = new Set<string>();
+const cropCaptures = new Map<string, {prefix: string; request: Promise<void>;
+    response?: Promise<{status: number; body: {error?: unknown}}>}>();
 let control: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
 type PlantedFailure = 'prepare' | 'acknowledge' | null;
 let plantedFailure: PlantedFailure = null;
@@ -239,6 +242,10 @@ async function capturePaint(name: string) {
     }
 }
 async function captureFailure(error: unknown) {
+    await Promise.allSettled([...cropCaptures.values()].map(async capture => {
+        await capture.request;
+        if (capture.response) await capture.response;
+    }));
     const captureErrors: string[] = [];
     const redact = (value: string) => value.replace(/#cap=[a-f0-9]{64}/gi, '#cap=REDACTED');
     const failure = {message: error instanceof Error ? error.message : String(error),
@@ -274,6 +281,25 @@ async function captureFailure(error: unknown) {
     }
     await writeFile(join(output, 'failure-responses.json'), redact(JSON.stringify(responses, null, 2)));
     await writeFile(join(output, 'failure.json'), redact(JSON.stringify(failure, null, 2)));
+}
+async function captureCropRequest(prefix: string, requestId: string, request: {url: string; postData?: string},
+    send: (method: string, params?: Record<string, unknown>) => Promise<unknown>) {
+    const postData = request.postData ?? (await send('Network.getRequestPostData', {requestId}) as {postData: string}).postData;
+    const input = JSON.parse(postData) as PartsIssue;
+    const {summary, crop, ...issue} = input;
+    const {png, ...metadata} = crop;
+    assert.ok(typeof png === 'string' && png.startsWith('data:image/png;base64,'), 'CROP_CAPTURE_INLINE_PNG_REQUIRED');
+    const bytes = Buffer.from(png.slice('data:image/png;base64,'.length), 'base64');
+    const file = prefix + '.png';
+    await writeFile(join(output, file), bytes);
+    await writeFile(join(output, prefix + '-request.json'), JSON.stringify({language, requestId,
+        method: 'POST', route: new URL(request.url).pathname,
+        requestBodySha256: new Bun.CryptoHasher('sha256').update(postData).digest('hex'),
+        requestBodyBytes: Buffer.byteLength(postData), summaryLength: summary.length,
+        issue: {...issue, crop: metadata}, actualCrop: {file, bytes: bytes.length,
+            sha256: new Bun.CryptoHasher('sha256').update(bytes).digest('hex'),
+            ihdrDimensions: bytes.length >= 24 && bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a'
+                ? {width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20)} : null}}, null, 2));
 }
 async function waitForPartsPaint(phase: string) {
     const state = await page!.evaluate<{paint: string; ariaBusy: string; disabled: boolean; status: string; controlText: string; referenceAbsence: string | null}>(`new Promise((resolve,reject)=>{
@@ -327,7 +353,17 @@ async function partsIssueFlow(owner: URL) {
         await browser.mouse('mouseMoved', drag.endX, drag.endY);
         await browser.mouse('mouseReleased', drag.endX, drag.endY);
         await wait(`!!document.querySelector('.stage-comment-composer input')`, 'single-item issue composer');
+        const priorCrops = cropCaptures.size;
         await browser.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Visible boundary defect';form.requestSubmit();})()`);
+        if (onlyIssueFlow) {
+            await until(() => cropCaptures.size > priorCrops, 'crop request captured');
+            const capture = [...cropCaptures.values()].at(-1)!;
+            await until(() => capture.response !== undefined, 'crop response captured');
+            const response = await capture.response!;
+            await checkpoints('parts-crop-response', {status: response.status, request: capture.prefix + '-request.json',
+                png: capture.prefix + '.png', response: capture.prefix + '-response.json', error: response.body.error});
+            assert.equal(response.status, 200, 'JOB_PARTS_CROP_REJECTED ' + JSON.stringify(response.body.error));
+        }
         await wait(`!document.querySelector('.stage-comment-composer') && document.querySelectorAll('.stage-comment-pin').length===1`, 'source-bound crop accepted');
         await browser.evaluate(`(()=>{const toggle=document.querySelector('#stage-comment');if(toggle.getAttribute('aria-pressed')==='true')toggle.click();})()`);
         assert.equal((await assertPersistentIssues(1, 'parts-right-issues-one-capture-off')).capture, 'false');
@@ -358,6 +394,16 @@ async function partsIssueFlow(owner: URL) {
 try {
     page = await launchCdpSession(profile, {async onEvent(event, send) {
         if (event.sessionId) control = send;
+        if (onlyIssueFlow && event.method === 'Network.requestWillBeSent') {
+            const request = event.params!.request as {url: string; method: string; postData?: string};
+            if (request.method === 'POST' && request.url.startsWith(fixture.host.origin + '/jobs/') &&
+                request.url.endsWith('/api/stage-parts/comment')) {
+                const requestId = event.params!.requestId as string;
+                const prefix = 'crop-' + (cropCaptures.size + 1);
+                cropCaptures.set(requestId, {prefix, request: captureCropRequest(prefix, requestId, request, send)});
+                await cropCaptures.get(requestId)!.request;
+            }
+        }
         if (event.method === 'Network.responseReceived') {
             const response = event.params!.response as {url: string; status: number; mimeType: string};
             if (response.url.startsWith(fixture.host.origin)) resourceResponses.push({
@@ -365,7 +411,25 @@ try {
                 status: response.status, mimeType: response.mimeType,
             });
         }
-        if (event.method === 'Network.loadingFinished') completedResources.add(event.params!.requestId as string);
+        if (event.method === 'Network.loadingFinished') {
+            const requestId = event.params!.requestId as string;
+            completedResources.add(requestId);
+            const capture = cropCaptures.get(requestId);
+            if (capture) {
+                capture.response = capture.request.then(async () => {
+                    const resource = resourceResponses.find(response => response.requestId === requestId);
+                    assert.ok(resource, 'CROP_CAPTURE_RESPONSE_REQUIRED');
+                    const response = await send('Network.getResponseBody', {requestId}) as {body: string; base64Encoded: boolean};
+                    const text = response.base64Encoded ? Buffer.from(response.body, 'base64').toString('utf8') : response.body;
+                    const body = JSON.parse(text) as {error?: unknown};
+                    await writeFile(join(output, capture.prefix + '-response.json'), JSON.stringify({requestId,
+                        status: resource.status, mimeType: resource.mimeType,
+                        responseBodySha256: new Bun.CryptoHasher('sha256').update(text).digest('hex'), body}, null, 2));
+                    return {status: resource.status, body};
+                });
+                await capture.response;
+            }
+        }
         if (event.method === 'Fetch.requestPaused') {
             if (await stillProbe?.intercept(event, send)) return;
             const requestId = event.params!.requestId;
@@ -402,7 +466,8 @@ try {
     }});
     await page.setViewport(1440, 960);
     assert.ok(control);
-    await control('Network.enable', stillProbe ? {maxPostDataSize: 12 * 1024 * 1024} : {});
+    await control('Network.enable', stillProbe ? {maxPostDataSize: 12 * 1024 * 1024} :
+        onlyIssueFlow ? {maxPostDataSize: 256 * 1024} : {});
     await control('Fetch.enable', {patterns: [
         {urlPattern: fixture.host.origin + '/jobs/*/publications/*/instances/*/api/review'},
         {urlPattern: fixture.host.origin + '/jobs/*/ui/displayed'},
