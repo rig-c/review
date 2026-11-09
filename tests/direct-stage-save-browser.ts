@@ -5,11 +5,12 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {digest} from '../src/interview-project.ts';
 import {loadOpenPackage,type RecordFile} from '../src/open.ts';
-import {verdictSource,loadPartsView} from '../src/parts-view.ts';
+import {verdictSource,loadPartsView,exportPartsVerdict} from '../src/parts-view.ts';
 import {t} from '../web/i18n.ts';
 import {inventory} from './helpers/four-stage-fixture.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
 import {withDeadline,walkCheckpoint} from './helpers/walk-deadline.ts';
+import {markJoinedIssue} from './joined-verdict-browser.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 
 assert.equal(process.platform,'linux','NOVA_LINUX_REQUIRED');
@@ -19,6 +20,8 @@ await mkdir(output);
 const mark=walkCheckpoint(join(output,'checkpoints.jsonl'));
 const root=await mkdtemp(join(await realpath(tmpdir()),'review443-'));
 const stateDir=join(root,'state');
+const previousState=process.env.RIG_REVIEW_STATE_DIR;
+process.env.RIG_REVIEW_STATE_DIR=stateDir;
 const frame="document.querySelector('.review-stage-panel iframe:not([hidden]):not(.review-interview-frame)')";
 type Fixture=Awaited<ReturnType<typeof joinedVerdictFixture>>;
 const pages=new Set<InputCdpSession>();
@@ -146,8 +149,7 @@ try{
   assert.equal(parts.joinedVerdictBinding,digest(JSON.stringify({projectHash:fixture.joined.opened.hash,
    version:fixture.joined.designation.version,sourceHash:review.sourceHash,parts:source})));
   assert.deepEqual(parts.draft.mappings,[{part:'torso',skin:'default',slot:'torso',attachment:'torso',vertices:30,triangles:40}]);
-  const payload={binding:parts.joinedVerdictBinding,status:'approved',parts:Object.fromEntries(parts.items.map(
-   (item:{name:string;mesh?:unknown})=>[item.name,{outcome:'clean',note:'',...(item.mesh?{mesh:{outcome:'clean',note:''}}:{})}]))};
+  const payload={binding:parts.joinedVerdictBinding,status:'approved',issues:[]};
   const page=await browser('owner-'+language);
   mark(language+'.direct-open');await navigate(page,url,language);
   assert.equal(await page.evaluate(`${frame}.contentDocument.getElementById('pv-save').disabled`),false,'DIRECT_SAVE_DISABLED');
@@ -174,21 +176,10 @@ try{
    await writeFile(join(output,language+'-fresh.png'),await fresh.screenshot());
   }finally{await close(fresh);}
 
-  const partNote=language==='en'?'  Check the torso seam.\nKeep these words.  ':'  몸통 이음새 확인.\n이 문구를 유지해 주세요.  ';
-  const meshNote=language==='en'?'  Torso mesh reviewed.  ':'  몸통 메시를 확인했어요.  ';
+  const partNote=language==='en'?'Check the torso seam. Keep these words.':'몸통 이음새 확인. 이 문구를 유지해 주세요.';
+  const meshNote=language==='en'?'Torso mesh reviewed.':'몸통 메시를 확인했어요.';
   await page.evaluate(`(()=>{
    const d=${frame}.contentDocument;
-   for(const name of [...d.querySelectorAll('[data-pv-item]')].map(item=>item.dataset.pvItem)){
-    d.querySelector('[data-pv-item="'+CSS.escape(name)+'"]').click();
-    d.querySelector('[data-pv-outcome][value=clean]').click();
-    const mesh=d.querySelector('#pv-mesh-panel select');
-    if(mesh){mesh.value='clean';mesh.dispatchEvent(new Event('change'));}
-   }
-   d.querySelector('[data-pv-item=torso]').click();
-   for(const [selector,value] of [['#pv-note',${JSON.stringify(partNote)}],['#pv-mesh-panel textarea',${JSON.stringify(meshNote)}]]){
-    const field=d.querySelector(selector);field.value=value;field.dispatchEvent(new Event('input'));
-   }
-   d.getElementById('pv-overall').value='approved';
    d.addEventListener('click',event=>{if(event.target.id==='pv-save')d.body.dataset.trustedSave=String(event.isTrusted);},true);
    const original=d.defaultView.fetch.bind(d.defaultView);d.defaultView.review443Posts=[];
    d.defaultView.fetch=async(...args)=>{
@@ -198,9 +189,11 @@ try{
     return response;
    };
   })()`);
+  await markJoinedIssue(page,frame,partNote);
+  await markJoinedIssue(page,frame,meshNote);
   await page.evaluate(`document.querySelector('[data-review-stage="3"]').click();document.querySelector('[data-review-stage="1"]').click()`);
   await ready(page);
-  assert.equal(await page.evaluate(`${frame}.contentDocument.getElementById('pv-note').value`),partNote);
+  assert(await page.evaluate<boolean>(`[...${frame}.contentDocument.querySelectorAll('.stage-comment-summary')].some(row=>row.textContent.includes(${JSON.stringify(partNote)}))`));
   assert.deepEqual(await readdir(fixture.output),[]);
   mark(language+'.trusted-save');await trustedSave(page);
   assert.equal(await page.evaluate(`${frame}.contentDocument.body.dataset.trustedSave`),'true');
@@ -210,15 +203,17 @@ try{
   assert.deepEqual(await readdir(fixture.output),[filename]);
   const bytes=await readFile(join(fixture.output,filename)),verdict=JSON.parse(bytes.toString());
   assert.deepEqual(posts[0]!.body.verdict,verdict);
-  assert.equal(verdict.schema,'rig-review-parts-verdict/2');assert.equal(verdict.status,'approved');
+  assert.equal(verdict.schema,'rig-review-parts-verdict/4');assert.equal(verdict.status,'changes-requested');
   // Verdict file paths are relative to the designated output directory, distinct from the inspected input.
   assert.deepEqual(verdict.source,verdictSource({...standalone,verdictPath:join(fixture.output,filename)}));
-  assert.equal(verdict.parts.torso.note,partNote);assert.equal(verdict.parts.torso.mesh.note,meshNote);
+  assert.deepEqual(verdict.issues.map((issue:{summary:string})=>issue.summary),[partNote,meshNote]);
+  assert(verdict.issues.every((issue:{parts:{name:string}[];nativeCrop:unknown})=>issue.parts.length===1&&issue.parts[0]!.name==='torso'&&issue.nativeCrop),'Actual issue binding and native crop required');
   const exported=await withDeadline('verdict-export',15000,async signal=>{
    const response=await fetch(new URL('/api/stage-parts/export/json',url),{signal});
    assert.equal(response.status,200);return response.text();
   });
-  assert.equal(exported,bytes.toString());
+  assert.equal(exported,exportPartsVerdict(verdict,'json'));
+  assert.deepEqual(await readFile(join(fixture.output,filename)),bytes);
   await writeFile(join(output,language+'-verdict.json'),bytes);
   await writeFile(join(output,language+'-saved.png'),await page.screenshot());
   mark(language+'.reopen');
@@ -230,15 +225,15 @@ try{
   try{
    await navigate(restored,reopened,language);
    await restored.evaluate(`${frame}.contentDocument.querySelector('[data-pv-item=torso]').click()`);
-   assert.equal(await restored.evaluate(`${frame}.contentDocument.getElementById('pv-note').value`),partNote);
-   assert.equal(await restored.evaluate(`${frame}.contentDocument.querySelector('#pv-mesh-panel textarea').value`),meshNote);
+   assert(await restored.evaluate<boolean>(`[...${frame}.contentDocument.querySelectorAll('.stage-comment-summary')].some(row=>row.textContent.includes(${JSON.stringify(partNote)}))`));
+   assert(await restored.evaluate<boolean>(`[...${frame}.contentDocument.querySelectorAll('.stage-comment-summary')].some(row=>row.textContent.includes(${JSON.stringify(meshNote)}))`));
    await writeFile(join(output,language+'-reopened.png'),await restored.screenshot());
    assert.deepEqual(await json('/api/review',reopened),review);
    assert.deepEqual(await json('/api/session',reopened),session);
    mark(language+'.no-verdict-directory');
    const readonly=await openDirect(fixture,false);
    await navigate(restored,readonly,language);
-   assert.equal(await restored.evaluate(`${frame}.contentDocument.querySelector('.pv-verdict').hidden`),true);
+   assert.equal(await restored.evaluate(`${frame}.contentDocument.querySelector('#parts-actions').hidden`),true);
    const denied=await rejectedPost(restored,payload,readonly.hash.slice(5));
    assert.deepEqual(denied,{status:409,error:'PARTS_VERDICT_READ_ONLY'});
    assert.deepEqual(await readdir(fixture.output),[filename]);
@@ -275,5 +270,6 @@ try{
    files:await inventory(fixture.project.root),
   }))),null,2)+'\n');
   await rm(root,{recursive:true,force:true});
+  if(previousState===undefined)delete process.env.RIG_REVIEW_STATE_DIR;else process.env.RIG_REVIEW_STATE_DIR=previousState;
  }
 }
