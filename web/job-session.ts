@@ -1,6 +1,6 @@
 /** Live job window transactions. Every form remains bound to its displayed publication. */
 import { parseControlPart, type ControlPart } from '../src/control.ts';
-import type { JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobPendingAsk, JobPublication, JobResult, JobUISubmission, JobSourceBinding, } from '../src/job-contract.ts';
+import type { JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobInterviewDiagnostics, JobPendingAsk, JobPublication, JobResult, JobUISubmission, JobSourceBinding, } from '../src/job-contract.ts';
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
 import {t} from './i18n.ts';
@@ -68,7 +68,7 @@ function unwrap<Value>(result: JobResult<Value>): Value {
         throw new Error(result.error.code);
     return result.value;
 }
-function sourceSnapshot(source: JobSourceBinding): string {
+function sourceSnapshot(source: unknown): string {
     return JSON.stringify(source, (_key, value: unknown) => {
         if (value === null || typeof value !== 'object' || Array.isArray(value))
             return value;
@@ -182,7 +182,9 @@ export function createJobWindow<Prepared>(options: {
                     candidate.publication.source.sourceHash !== publication.source.sourceHash ||
                     candidate.publication.instanceKey !== publication.instanceKey ||
                     candidate.publication.generation !== publication.generation ||
-                    sourceSnapshot(candidate.publication.source) !== sourceSnapshot(publication.source)) {
+                    sourceSnapshot(candidate.publication.source) !== sourceSnapshot(publication.source) ||
+                    (publication.interview !== undefined &&
+                        sourceSnapshot(candidate.publication.interview) !== sourceSnapshot(publication.interview))) {
                     throw new Error('JOB_DISPLAY_MISMATCH');
                 }
                 prepared = await adapter.prepare(candidate, abort.signal);
@@ -573,6 +575,7 @@ type JobInterview = {
             url: string;
         }[];
     })[];
+    interview?: JobInterviewDiagnostics | null;
 };
 interface JobPartsInventory {
     sourceHash: string;
@@ -775,6 +778,10 @@ export async function prepareJobInspection(display: JobDisplayPublication, signa
     }
     try {
         const interview = metadata.capabilities.interview ? await jobJson<JobInterview>(routes.api('interview'), signal) : null;
+        if (interview?.interview !== undefined && display.publication.interview !== undefined &&
+            sourceSnapshot(interview.interview) !== sourceSnapshot(display.publication.interview)) {
+            throw new Error('JOB_DISPLAY_MISMATCH');
+        }
         const parts = metadata.capabilities.preRig ? await jobJson<JobPartsInventory>(routes.api('stage-parts'), signal) : null;
         const references: JobReferenceView[] = [];
         const partImages = new Map<string, HTMLImageElement>();
@@ -1516,6 +1523,26 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             const question = prepared.interview?.questions.find(item => item.set.id === subject.setId && item.set.question === subject.questionId);
             if (!question || !question.editable) throw new Error('JOB_ASK_INVALID');
             if (question.ref.sha256 !== ask.source.optionSet?.sha256) throw new Error('JOB_ACT_SOURCE_STALE');
+            const interviewState = prepared.interview?.interview ?? prepared.display.publication.interview ?? null;
+            const inspectionRecord = interviewState?.records.find(
+                item => item.timeKind === 'inspection' &&
+                    item.questionId === subject.questionId &&
+                    item.setId === subject.setId &&
+                    item.record.endsWith('.pending_options'),
+            );
+            const legacyDiagnostic = inspectionRecord
+                ? interviewState?.diagnostics.find(
+                    item => item.code === 'INTERVIEW_OPTIONS_SCENE_LEGACY' &&
+                        item.record === inspectionRecord.record &&
+                        item.at === inspectionRecord.at,
+                )
+                : undefined;
+            if (legacyDiagnostic) {
+                const legacyNotice = node('p', 'INTERVIEW_OPTIONS_SCENE_LEGACY');
+                legacyNotice.dataset.jobInterviewWarning = legacyDiagnostic.code;
+                legacyNotice.dataset.record = legacyDiagnostic.record;
+                fields.prepend(legacyNotice);
+            }
             const heading = node('h3');
             heading.textContent = question.set.question;
             fields.prepend(heading);
@@ -2012,10 +2039,43 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         direction.dataset.jobDirection = '';
         if (prepared.metadata.direction)
             direction.textContent = t('job.metadata') + '\n' + JSON.stringify(prepared.metadata.direction, null, 2);
+        const interviewDiagnostics = node('section');
+        interviewDiagnostics.className = 'job-interview-diagnostics';
+        interviewDiagnostics.dataset.jobInterviewDiagnostics = '';
+        const interviewState = prepared.interview?.interview ?? prepared.display.publication.interview ?? null;
+        if (interviewState && (interviewState.diagnostics.length > 0 || interviewState.records.some(record => record.timeKind !== 'inspection'))) {
+            interviewDiagnostics.append(node('h3', 'interview.history'));
+            for (const diagnostic of interviewState.diagnostics) {
+                const item = node('div');
+                item.dataset.jobInterviewDiagnostic = diagnostic.code;
+                item.dataset.severity = diagnostic.severity;
+                item.dataset.record = diagnostic.record;
+                const summary = node('p', diagnostic.code);
+                const detail = node('pre');
+                detail.className = 'job-source';
+                detail.textContent = JSON.stringify(diagnostic, null, 2);
+                item.append(summary, detail);
+                interviewDiagnostics.append(item);
+            }
+            for (const record of interviewState.records) {
+                if (record.timeKind === 'inspection') continue;
+                const item = node('div');
+                item.dataset.jobInterviewRecord = record.record;
+                item.dataset.timeKind = record.timeKind;
+                const detail = node('pre');
+                detail.className = 'job-source';
+                detail.textContent = JSON.stringify(record, null, 2);
+                item.append(detail);
+                interviewDiagnostics.append(item);
+            }
+        }
+        else {
+            interviewDiagnostics.hidden = true;
+        }
         const history = node('div');
         history.className = 'job-history';
         history.dataset.jobHistory = '';
-        formsHost.append(direction, history);
+        formsHost.append(direction, interviewDiagnostics, history);
         root.append(sidebar, stage, formsHost);
         return root;
     }

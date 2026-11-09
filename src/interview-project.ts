@@ -3,6 +3,12 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpat
 import { extname, join, resolve } from 'node:path';
 import { isDeepStrictEqual as equal } from 'node:util';
 import {coveringChange, sceneAt} from './interview-scene.ts';
+import type {
+  JobInterviewDiagnostic,
+  JobInterviewDiagnostics,
+  JobInterviewJson,
+  JobInterviewRecord,
+} from './job-contract.ts';
 
 type RecordData = Record<string, unknown>;
 export interface SetRef {path: string; sha256: string}
@@ -234,7 +240,37 @@ function inspectContext(root: string, project: RecordData, raw: RecordData, set:
   return {images, hasParts: ctx.kind !== 'inputs'};
 }
 
+function cloneJson(value: unknown): JobInterviewJson {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (Array.isArray(value)) return value.map(cloneJson);
+  if (typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as RecordData)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, cloneJson(entry)]),
+    );
+  }
+  return null;
+}
+
+function cloneJsonObject(value: RecordData): { readonly [key: string]: JobInterviewJson } {
+  return cloneJson(value) as { readonly [key: string]: JobInterviewJson };
+}
+
+function observeRetainedSet(root: string, ref: SetRef): SetRef | null {
+  try {
+    if (['derived', 'outputs', 'scratch', 'node_modules', '.git'].includes(ref.path.split('/')[0]!)) return null;
+    const bytes = readRegular(checkedPath(root, ref.path), 64 * 1024 * 1024);
+    return { path: ref.path, sha256: digest(bytes) };
+  } catch {
+    return null;
+  }
+}
+
 export function readProject(root: string, now = Date.now()) {
+  if (!Number.isFinite(now)) return invalid('Evaluation instant must be finite');
+  const evaluatedAt = new Date(now).toISOString();
   try {
     root = realpathSync(resolve(root));
     if (!lstatSync(root).isDirectory()) return invalid('Project root must be a directory');
@@ -246,10 +282,13 @@ export function readProject(root: string, now = Date.now()) {
     project = jsonObject(bytes);
   } catch {return invalid('project.json must be a readable regular JSON file');}
   if (project.schema !== 'rig-create/project@0') return invalid('Unsupported create project');
+  const hash = digest(bytes);
   const interview = object(project.interview);
   const questions: InterviewQuestion[] = [];
   const historical: HistoricalInterview[] = [];
   const diagnostics: InterviewDiagnostic[] = [];
+  const interviewRecords: JobInterviewRecord[] = [];
+  const interviewDiagnostics: JobInterviewDiagnostic[] = [];
   let sceneAnswers = 0;
   const seen = new Map<string, string>();
   for (const [items, answerKey, allowed, collection] of [
@@ -290,11 +329,66 @@ export function readProject(root: string, now = Date.now()) {
         } catch (error) {
           if (editable) throw error;
           const answer = entry.answer!;
+          const observedSet = observeRetainedSet(root, ref);
+          const answerAt = typeof answer.at === 'string' ? answer.at : null;
           historical.push({question: String(item.id), verbatim: typeof answer.verbatim === 'string' ? answer.verbatim : '',
-            by: typeof answer.by === 'string' ? answer.by : undefined, at: typeof answer.at === 'string' ? answer.at : undefined,
+            by: typeof answer.by === 'string' ? answer.by : undefined, at: answerAt ?? undefined,
             ref, record: entry.record, answer});
           diagnostics.push({code: 'INTERVIEW_OPTIONS_STALE', question: String(item.id), record: entry.record, ref,
-            ...(typeof answer.at === 'string' ? {at: answer.at} : {})});
+            ...(answerAt !== null ? {at: answerAt} : {})});
+          interviewRecords.push({
+            questionId: String(item.id),
+            record: entry.record,
+            setId: null,
+            ref,
+            observedSet,
+            timeKind: 'answer',
+            at: answerAt,
+            original: cloneJsonObject(answer),
+          });
+          interviewDiagnostics.push({
+            record: entry.record,
+            at: answerAt,
+            code: 'INTERVIEW_OPTIONS_STALE',
+            severity: 'error',
+          });
+          const rawDecision = answer.agent_decision;
+          if (rawDecision !== null && typeof rawDecision === 'object' && !Array.isArray(rawDecision)) {
+            const decision = rawDecision as RecordData;
+            const decisionRecord = entry.record + '.agent_decision';
+            if (['at', 'value', 'fragments'].some(key => Object.hasOwn(decision, key))) {
+              const decisionAt = typeof decision.at === 'string' ? decision.at : null;
+              interviewRecords.push({
+                questionId: String(item.id),
+                record: decisionRecord,
+                setId: null,
+                ref,
+                observedSet,
+                timeKind: 'decision',
+                at: decisionAt,
+                original: cloneJsonObject(decision),
+              });
+              diagnostics.push({code: 'INTERVIEW_OPTIONS_STALE', question: String(item.id), record: decisionRecord, ref,
+                ...(decisionAt !== null ? {at: decisionAt} : {})});
+              interviewDiagnostics.push({
+                record: decisionRecord,
+                at: decisionAt,
+                code: 'INTERVIEW_OPTIONS_STALE',
+                severity: 'error',
+              });
+            } else {
+              interviewRecords.push({
+                questionId: String(item.id),
+                record: decisionRecord,
+                setId: null,
+                ref,
+                observedSet,
+                timeKind: 'decision',
+                at: null,
+                original: cloneJsonObject(decision),
+              });
+            }
+          }
           continue;
         }
         if (editable && (set.stage === 'interview' || set.stage === 'rigging-interview') &&
@@ -304,27 +398,96 @@ export function readProject(root: string, now = Date.now()) {
         if (editable && approval(project, set.stage === 'interview' ? 'plan-approved' : set.stage, now)) return invalid('Question approval is still live');
         const sceneKind = object(raw.context).kind === 'scene';
         if (!editable && sceneKind) sceneAnswers++;
-        const evaluate = (at: number, record: string) => {
+        const observedSet: SetRef = { path: ref.path, sha256: ref.sha256 };
+        const evaluate = (at: number, record: string, recordAt: string | null) => {
           try {
             const {legacy, ...context} = inspectContext(root, project, raw, set, at, editable);
-            if (legacy) diagnostics.push({code: 'INTERVIEW_OPTIONS_SCENE_LEGACY', question: set.question, record, ref, at: new Date(at).toISOString()});
+            if (legacy) {
+              diagnostics.push({code: 'INTERVIEW_OPTIONS_SCENE_LEGACY', question: set.question, record, ref,
+                ...(recordAt !== null ? {at: recordAt} : {})});
+              interviewDiagnostics.push({
+                record,
+                at: recordAt,
+                code: 'INTERVIEW_OPTIONS_SCENE_LEGACY',
+                severity: 'warning',
+              });
+            }
             return context;
           } catch (error) {
             if (editable || !(error instanceof Error) || !error.message.startsWith('INTERVIEW_OPTIONS_STALE:')) throw error;
             diagnostics.push({code: 'INTERVIEW_OPTIONS_STALE', question: set.question, record, ref,
-              ...(Number.isFinite(at) ? {at: new Date(at).toISOString()} : {})});
+              ...(recordAt !== null ? {at: recordAt} : {})});
+            interviewDiagnostics.push({
+              record,
+              at: recordAt,
+              code: 'INTERVIEW_OPTIONS_STALE',
+              severity: 'error',
+            });
             return {images: [], hasParts: false};
           }
         };
-        const context = evaluate(editable ? now : date(entry.answer?.at), entry.record);
-        const decision = object(entry.answer?.agent_decision);
-        if (!editable && ['at', 'value', 'fragments'].some(key => Object.hasOwn(decision, key))) {
-          evaluate(date(decision.at), entry.record + '.agent_decision');
+        const recordAt = editable ? evaluatedAt : typeof entry.answer?.at === 'string' ? entry.answer.at : null;
+        interviewRecords.push({
+          questionId: String(item.id),
+          record: entry.record,
+          setId: set.id,
+          ref,
+          observedSet,
+          timeKind: editable ? 'inspection' : 'answer',
+          at: recordAt,
+          original: editable ? null : cloneJsonObject(entry.answer!),
+        });
+        const context = evaluate(editable ? now : date(entry.answer?.at), entry.record, recordAt);
+        const rawDecision = entry.answer?.agent_decision;
+        if (!editable && rawDecision !== null && typeof rawDecision === 'object' && !Array.isArray(rawDecision)) {
+          const decision = rawDecision as RecordData;
+          const decisionRecord = entry.record + '.agent_decision';
+          if (['at', 'value', 'fragments'].some(key => Object.hasOwn(decision, key))) {
+            const decisionAt = typeof decision.at === 'string' ? decision.at : null;
+            interviewRecords.push({
+              questionId: String(item.id),
+              record: decisionRecord,
+              setId: set.id,
+              ref,
+              observedSet,
+              timeKind: 'decision',
+              at: decisionAt,
+              original: cloneJsonObject(decision),
+            });
+            evaluate(date(decision.at), decisionRecord, decisionAt);
+          } else {
+            interviewRecords.push({
+              questionId: String(item.id),
+              record: decisionRecord,
+              setId: set.id,
+              ref,
+              observedSet,
+              timeKind: 'decision',
+              at: null,
+              original: cloneJsonObject(decision),
+            });
+          }
         }
         questions.push({ref, set, editable, answer: entry.answer, ...context});
         seen.set(ref.sha256, ref.path);
       }
     }
   }
-  return {root, hash: digest(bytes), project, questions, historical, diagnostics, sceneAnswers};
+  const interviewDiagnosticsEnvelope: JobInterviewDiagnostics = {
+    schema: 'rig-review/job-interview@1',
+    project: { path: 'project.json', sha256: hash },
+    evaluatedAt,
+    records: interviewRecords,
+    diagnostics: interviewDiagnostics,
+  };
+  return {
+    root,
+    hash,
+    project,
+    questions,
+    historical,
+    diagnostics,
+    sceneAnswers,
+    interview: interviewDiagnosticsEnvelope,
+  };
 }

@@ -413,6 +413,7 @@ export class JobSession {
             const publication: JobPublication = {
               publicationId: randomUUID(), instanceKey: candidate!.instanceKey, generation: data.generation,
               source: candidate!.source, label: candidate!.label, previousPublicationId: data.head, visual: candidate!.visual,
+              ...(candidate!.interview === undefined ? {} : { interview: candidate!.interview }),
             };
             for (const ask of Object.values(data.asks)) {
               if (ask.status === 'pending') data.asks[ask.askId] = { ...ask, status: 'superseded' };
