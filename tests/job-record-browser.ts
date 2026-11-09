@@ -715,6 +715,56 @@ try {
 
   await writeFile(join(output, `record-plan-${language}.png`), await page.screenshot());
 
+  // Scroll the reopen form/button into view within the forms container, wait painted rAF, assert visible bounds, and capture record-reopen-<lang>.png
+  const reopenVisibleBounds = await page.evaluate<{
+    viewportWidth: number;
+    viewportHeight: number;
+    formsHostScrollTop: number;
+    formsHostRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
+    formRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
+    buttonRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
+    statusRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
+  }>(`(async () => {
+    const formsHost = document.querySelector('[data-job-forms]');
+    const form = document.querySelector('form[data-job-ask=${JSON.stringify(reopenAsk.askId)}]');
+    const button = form?.querySelector('button[type="submit"]');
+    const status = form?.querySelector('[role="status"]');
+    if (!formsHost || !form || !button || !status) {
+      throw new Error('Missing reopen form elements for visible bounds check');
+    }
+    button.scrollIntoView({ block: 'center', inline: 'nearest' });
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const rectOf = (el) => {
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height };
+    };
+    return {
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      formsHostScrollTop: formsHost.scrollTop,
+      formsHostRect: rectOf(formsHost),
+      formRect: rectOf(form),
+      buttonRect: rectOf(button),
+      statusRect: rectOf(status),
+    };
+  })()`);
+  assert.ok(reopenVisibleBounds.buttonRect.width > 0 && reopenVisibleBounds.buttonRect.height > 0);
+  assert.ok(
+    reopenVisibleBounds.buttonRect.top >= reopenVisibleBounds.formsHostRect.top &&
+      reopenVisibleBounds.buttonRect.bottom <= reopenVisibleBounds.formsHostRect.bottom &&
+      reopenVisibleBounds.buttonRect.top >= 0 &&
+      reopenVisibleBounds.buttonRect.bottom <= reopenVisibleBounds.viewportHeight &&
+      reopenVisibleBounds.buttonRect.left >= 0 &&
+      reopenVisibleBounds.buttonRect.right <= reopenVisibleBounds.viewportWidth,
+    `reopen submit button must be visible inside forms container and viewport: ${JSON.stringify(reopenVisibleBounds)}`,
+  );
+  assert.ok(
+    reopenVisibleBounds.formRect.bottom > reopenVisibleBounds.formsHostRect.top &&
+      reopenVisibleBounds.formRect.top < reopenVisibleBounds.formsHostRect.bottom,
+    `reopen form must intersect visible forms container: ${JSON.stringify(reopenVisibleBounds)}`,
+  );
+  await writeFile(join(output, `record-reopen-${language}.png`), await page.screenshot());
+
   // 3. Authenticated consumer fetch-act and exported parseRecordAct verification
   const nextRes = await callRecordApi({
     verb: 'next',
@@ -818,6 +868,7 @@ try {
     cpSubmitStatus,
     signoffSubmitStatus,
     reopenSubmitStatus,
+    reopenVisibleBounds,
     acts: fetchedActs,
     readerPhasesCount: readerPhases.length,
   });
