@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { observerEnv, type ObserverScope } from '../.review-562-sol-input/observe-tool-stderr.ts';
+import { observerEnv, type ObserverScope } from './helpers/stage1-draft-tool-stderr.ts';
 
 test('owned stderr observer preserves native stream bytes, stdout, exit and unmatched spawn', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'review-562-stderr-control-')));
@@ -50,7 +50,7 @@ test('owned stderr observer preserves native stream bytes, stdout, exit and unma
     const child = Bun.spawn([process.execPath, worker, request], {
       cwd: control, stdout: 'pipe', stderr: 'pipe',
       env: { ...process.env, [observerEnv]: JSON.stringify(scope),
-        BUN_OPTIONS: `--preload=${resolve(import.meta.dir, '../.review-562-sol-input/observe-tool-stderr.ts')}` },
+        BUN_OPTIONS: `--preload=${resolve(import.meta.dir, './helpers/stage1-draft-tool-stderr.ts')}` },
     });
     const [stdout, stderr, exit] = await Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
@@ -76,4 +76,31 @@ test('owned stderr observer preserves native stream bytes, stdout, exit and unma
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('teardown uses only the owned loopback browser root and bounds passive live socket events', async () => {
+  const { chromeRootEndpoint, observeLiveSockets } = await import('./helpers/stage1-draft-chrome-teardown.ts');
+  const root = '/devtools/browser/12345678-1234-1234-1234-123456789abc';
+  expect(chromeRootEndpoint(`4567\n${root}\n`)).toBe(`ws://127.0.0.1:4567${root}`);
+  for (const invalid of [`65536\n${root}`, `0\n${root}`, '4567\n/devtools/page/123', `4567\n${root}\nextra`]) {
+    expect(() => chromeRootEndpoint(invalid)).toThrow('TEST_CHROME_ROOT_ENDPOINT');
+  }
+
+  const observer = observeLiveSockets('http://127.0.0.1:4567/instances/test/?handoff=x');
+  const url = 'ws://127.0.0.1:4567/instances/test/api/live';
+  observer.onEvent({ method: 'Network.webSocketCreated', params: { requestId: 'foreign', url: 'ws://localhost:4567/api/live' } });
+  observer.onEvent({ method: 'Network.webSocketClosed', params: { requestId: 'foreign' } });
+  for (let i = 0; i < 65; i++) {
+    const requestId = String(i);
+    observer.onEvent({ method: 'Network.webSocketCreated', params: { requestId, url } });
+    observer.onEvent({ method: 'Network.webSocketHandshakeResponseReceived', params: { requestId, timestamp: i } });
+    observer.onEvent({ method: 'Network.webSocketClosed', params: { requestId, timestamp: i + 1 } });
+  }
+  const observed = observer.snapshot();
+  expect(observed.overflow).toBe(true);
+  expect(observed.events).toHaveLength(192);
+  expect(observed.events.slice(0, 3).map(event => event.method)).toEqual([
+    'Network.webSocketCreated', 'Network.webSocketHandshakeResponseReceived', 'Network.webSocketClosed',
+  ]);
+  expect(observed.events.some(event => event.requestId === 'foreign' || event.requestId === '64')).toBe(false);
 });

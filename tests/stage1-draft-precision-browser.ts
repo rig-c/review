@@ -1,6 +1,12 @@
 /**
  * Stage 1 pre-rig draft precision correction browser proof (#562).
  *
+ * Usage:
+ *   bun tests/stage1-draft-precision-browser.ts --fixture-root <dir> --inventory <file> [--mode <mode>] [--artifacts-dir <dir>]
+ *
+ * Both `--fixture-root` and `--inventory` are required for every phase; `--artifacts-dir` defaults to
+ * `artifacts/stage1-draft/<mode>`.
+ *
  * Browser phases (discovery-only controls never launch Chrome):
  * 1. `--mode synthetic` (default): reseals a disposable contour-enabled copy of the Create pre-rig draft in a temporary
  *    directory (keeping the sealed 209-file fixture untouched and verifying the resealed project's 209-file inventory
@@ -9,12 +15,13 @@
  *    `Mesh parameters`, `Edit Mesh`) with real two-frame-settled CDP stage pointer drags, visible Apply buttons,
  *    visible `#applied-undo` step-back restoration, visible `#mesh-panel-reset` restoration, direct Stage 3
  *    `RIG_VERSION_UNAVAILABLE` refusal, and the read-only `2-rigging-answers` Stage 1 control across `en` and `ko`.
- * 2. `--mode fixture-830fc98`: opens a byte-verified external copy of the sealed 209-file Create fixture. The real
- *    `@rig-c/parts@2.31.0` and `@rig-c/core@3.6.0` are discovered through the external toolchain cwd. It verifies
- *    the preceding view and source binding when `Chest regions` refuses (`REBUILD_PART_NOT_CONTOUR: torso`), and runs
- *    live `Mesh parameters` (`remesh --mesh` via real CDP pointer drag on the visible `grid` range control) and
- *    `Edit Mesh` (`remesh --delta` via `dragStage1Delta` + visible `#mesh-apply` CDP click), visible `#applied-undo`,
- *    and visible `#mesh-panel-reset` across `en` and `ko`.
+ * 2. `--mode fixture-59ed816` | `--mode fixture-830fc98`: opens a byte-verified external copy of the supplied sealed
+ *    Create fixture and verifies the preceding view and source binding when `Chest regions` refuses
+ *    (`REBUILD_PART_NOT_CONTOUR: torso`), then runs live `Mesh parameters` (`remesh --mesh` via real CDP pointer drag
+ *    on the visible `grid` range control) and `Edit Mesh` (`remesh --delta` via `dragStage1Delta` + visible
+ *    `#mesh-apply` CDP click), visible `#applied-undo`, and visible `#mesh-panel-reset` across `en` and `ko`.
+ * 3. `--mode discovery-external` | `--mode discovery-under-review`: runs toolchain discovery controls against the
+ *    supplied fixture without launching Chrome.
  */
 import { createCanvas, Image } from '@napi-rs/canvas';
 import { loadModel, readSetupMesh } from '@rig-c/play';
@@ -26,8 +33,10 @@ import { parseArgs } from 'node:util';
 import { MESH_EDIT_CODES, type MeshOp } from '../src/mesh-edit.ts';
 import { alive, loadOpenPackage, openReview, readRecord, running, smallJson, type RecordFile } from '../src/open.ts';
 import { resolveProducer } from '../src/producer.ts';
-import { observerEnv, type ObserverScope } from '../.review-562-sol-input/observe-tool-stderr.ts';
+import { observeLiveSockets, openChromeRoot, ownedTcpSockets } from './helpers/stage1-draft-chrome-teardown.ts';
+import { observerEnv, type ObserverScope } from './helpers/stage1-draft-tool-stderr.ts';
 import { readStoredSetupMesh, type WeightInfluence } from '../src/setup-mesh.ts';
+import { MESH_DELTA_APPLIED_SOURCE } from '../web/rebuild-client.ts';
 import { enCatalog } from '../web/catalog-en.ts';
 import { koCatalog } from '../web/catalog-ko.ts';
 import { assertNamedDeltaOps, dragStage1Delta, type DeltaDiagnostic } from './helpers/stage1-delta-target.ts';
@@ -40,7 +49,17 @@ process.env.UV_THREADPOOL_SIZE ||= '4';
 process.env.BUN_JSC_forceRAMSize ||= '6442450944';
 process.env.NODE_OPTIONS ||= '--max-old-space-size=6144';
 
-type DiscoveryMode = 'fixture-830fc98' | 'discovery-external' | 'discovery-under-review';
+type DiscoveryMode = 'fixture-59ed816' | 'fixture-830fc98' | 'discovery-external' | 'discovery-under-review';
+const actualFixture59 = {
+  tag: '59ed816',
+  createCommit: '59ed81647b9f9d8bafde63edb417067832a5f8c6',
+  fileCount: 254,
+} as const;
+const actualFixture830 = {
+  tag: '830fc98',
+  createCommit: '830fc988271984cdf696246e5bb4da755a5bd563',
+  fileCount: 209,
+} as const;
 type Locale = 'en' | 'ko';
 
 interface InventoryEntry {
@@ -220,9 +239,15 @@ function mapToInventoryEntries(map: Map<string, string>): InventoryEntry[] {
     .map(([path, sha256]) => ({ path, sha256 }));
 }
 
-async function verifyFixtureInventory(fixtureRoot: string, inventoryPath: string): Promise<number> {
+async function verifyFixtureInventory(
+  fixtureRoot: string,
+  inventoryPath: string,
+  expected: { createCommit: string; fileCount: number } = actualFixture830,
+): Promise<number> {
   const doc = JSON.parse(await readFile(inventoryPath, 'utf8')) as InventoryDocument;
-  assertCondition(Array.isArray(doc.files) && doc.files.length === 209, `Expected 209 inventory entries in ${inventoryPath}`);
+  assertCondition(doc.createCommit === expected.createCommit, `Unexpected Create commit in ${inventoryPath}: ${doc.createCommit}`);
+  assertCondition(Array.isArray(doc.files) && doc.files.length === expected.fileCount,
+    `Expected ${expected.fileCount} inventory entries in ${inventoryPath}`);
   const actual = await collectFileHashes(fixtureRoot, true);
   assertCondition(actual.size === doc.files.length, `Fixture file count mismatch: expected ${doc.files.length}, got ${actual.size}`);
   for (const entry of doc.files) {
@@ -1805,7 +1830,7 @@ async function ensureActualToolchain(toolchainRoot: string, artifactsDir: string
         name: 'review-562-actual-toolchain',
         private: true,
         dependencies: {
-          '@rig-c/parts': '2.31.0',
+          '@rig-c/parts': '2.35.0',
           '@rig-c/core': '3.6.0',
         },
       },
@@ -1832,11 +1857,11 @@ async function ensureActualToolchain(toolchainRoot: string, artifactsDir: string
     command, cwd: toolchainRoot, exitCode: res.exitCode, signalCode: res.signalCode,
   }, null, 2) + '\n', { flag: 'wx' });
   if (res.exitCode !== 0) {
-    throw new Error(`Failed to install @rig-c/parts@2.31.0 and @rig-c/core@3.6.0 in ${toolchainRoot}: ${res.stderr.toString()}`);
+    throw new Error(`Failed to install @rig-c/parts@2.35.0 and @rig-c/core@3.6.0 in ${toolchainRoot}: ${res.stderr.toString()}`);
   }
   const partsPkg = JSON.parse(await readFile(partsManifest, 'utf8')) as { version?: string };
   const corePkg = JSON.parse(await readFile(coreManifest, 'utf8')) as { version?: string };
-  assertCondition(partsPkg.version === '2.31.0', `Expected @rig-c/parts@2.31.0, got ${String(partsPkg.version)}`);
+  assertCondition(partsPkg.version === '2.35.0', `Expected @rig-c/parts@2.35.0, got ${String(partsPkg.version)}`);
   assertCondition(corePkg.version === '3.6.0', `Expected @rig-c/core@3.6.0, got ${String(corePkg.version)}`);
 }
 
@@ -1948,7 +1973,6 @@ async function captureFailureArtifacts(
       const registryExists = await lstat(registryPath).then(() => true, () => false);
       const registryRecord = await readRecord(registryPath, worker.key).catch(e => String(e));
       const pidRunning = running(worker.pid);
-      const statusAlive = await alive(worker);
       const procStatus = await readFile(`/proc/${worker.pid}/status`, 'utf8').then(s => s.slice(0, 2048), () => null);
       const procStat = await readFile(`/proc/${worker.pid}/stat`, 'utf8').then(s => s.trim(), () => null);
       const procCmdline = await readFile(`/proc/${worker.pid}/cmdline`, 'utf8').then(
@@ -1965,7 +1989,6 @@ async function captureFailureArtifacts(
         registryExists,
         registryRecordPresent: registryRecord !== null && typeof registryRecord === 'object',
         pidRunning,
-        statusAlive,
         procStatus,
         procStat,
         procCmdline,
@@ -2886,9 +2909,9 @@ async function verifyActualProducerDiscovery(openUrl: string, artifactsDir: stri
     'TEST_PRODUCER_DISCOVERY_CONTEXT: expected joined remesh draft without baseline',
   );
   assertCondition(
-    status.producer?.package === '@rig-c/parts' && status.producer.version === '2.31.0' &&
+    status.producer?.package === '@rig-c/parts' && status.producer.version === '2.35.0' &&
     status.compiler?.package === '@rig-c/core' && status.compiler.version === '3.6.0',
-    `TEST_PRODUCER_DISCOVERY_MISMATCH: expected @rig-c/parts@2.31.0 and @rig-c/core@3.6.0; received ${JSON.stringify({ producer: status.producer, compiler: status.compiler })}`,
+    `TEST_PRODUCER_DISCOVERY_MISMATCH: expected @rig-c/parts@2.35.0 and @rig-c/core@3.6.0; received ${JSON.stringify({ producer: status.producer, compiler: status.compiler })}`,
   );
 }
 
@@ -2908,7 +2931,7 @@ async function openObservedFixture(
       `TEST_STDERR_OBSERVER_TOOLCHAIN: unexpected executable for ${tool.package}`);
   }
   await mkdir(receiptDir);
-  const preload = resolve(import.meta.dir, '../.review-562-sol-input/observe-tool-stderr.ts');
+  const preload = resolve(import.meta.dir, './helpers/stage1-draft-tool-stderr.ts');
   assertCondition(!/\s/.test(preload) && process.env[observerEnv] === undefined, 'TEST_STDERR_OBSERVER_SCOPE: invalid preload environment');
   const originalBunOptions = process.env.BUN_OPTIONS;
   const scope: ObserverScope = {
@@ -2938,15 +2961,18 @@ async function runActualFixturePhase(
   artifactsDir: string,
   mode: DiscoveryMode,
 ): Promise<Record<string, unknown>> {
-  return await withDeadline('STAGE1_FIXTURE_830FC98_PHASE', 480_000, async () => {
+  const fixture = mode === 'fixture-59ed816' ? actualFixture59 : actualFixture830;
+  const { tag } = fixture;
+  return await withDeadline(`STAGE1_FIXTURE_${tag.toUpperCase()}_PHASE`, 480_000, async () => {
     await mkdir(dirname(artifactsDir), { recursive: true });
     await mkdir(artifactsDir);
-    const root = await realpath(await mkdtemp(join(tmpdir(), 'review-562-actual-830fc98-')));
+    const root = await realpath(await mkdtemp(join(tmpdir(), `review-562-actual-${tag}-`)));
     const projectRoot = mode === 'discovery-under-review' ? sealedFixtureRoot : join(root, 'project');
     const toolchainRoot = join(root, 'toolchain');
     const stateDir = join(root, 'state');
     const controlDir = join(stateDir, 'open');
     const frontPort = allocateUnusedLoopbackPort();
+    const browserProfile = join(root, 'browser-profile');
 
     let page: InputCdpSession | undefined;
     const ownedWorkers: RecordFile[] = [];
@@ -2955,6 +2981,16 @@ async function runActualFixturePhase(
     const expectedRemeshes = new Map<string, '--mesh' | '--delta'>();
     const errorCollector = createCdpErrorCollector();
     let rebuildHttp: ReturnType<typeof observeRebuildHttp> | undefined;
+    let liveSockets: ReturnType<typeof observeLiveSockets> | undefined;
+    let chrome: Awaited<ReturnType<typeof openChromeRoot>> | undefined;
+
+    const recordTeardown = async (step: string) => {
+      const pids = [...ownedWorkers.map(worker => worker.pid), ...frontPids, ...(chrome?.processes.map(entry => entry.id) ?? [])];
+      const ports = [frontPort, ...ownedWorkers.map(worker => Number(new URL(worker.origin).port))];
+      await writeFile(join(artifactsDir, `teardown-${step}.json`), JSON.stringify({
+        browserProcesses: chrome?.processes ?? [], live: liveSockets?.snapshot(), tcp: await ownedTcpSockets(pids, ports),
+      }, null, 2) + '\n', { flag: 'wx' });
+    };
 
     const recordCheckpoint = async (step: string, detail?: Record<string, unknown>) => {
       checkpoints.push({ at: new Date().toISOString(), step, ...(detail ? { detail } : {}) });
@@ -2962,30 +2998,30 @@ async function runActualFixturePhase(
     };
 
     try {
-      const entryCountBefore = await verifyFixtureInventory(sealedFixtureRoot, inventoryPath);
-      await recordCheckpoint('verified-830fc98-inventory-before', { entryCountBefore });
+      const entryCountBefore = await verifyFixtureInventory(sealedFixtureRoot, inventoryPath, fixture);
+      await recordCheckpoint(`verified-${tag}-inventory-before`, { entryCountBefore, createCommit: fixture.createCommit });
       if (mode !== 'discovery-under-review') {
         const reviewRoot = await realpath(import.meta.dir + '/..');
         const fromReview = relative(reviewRoot, root);
         assertCondition(fromReview.startsWith('..' + sep), 'TEST_FIXTURE_NOT_EXTERNAL: temporary root is inside Review');
         await cp(sealedFixtureRoot, projectRoot, { recursive: true, errorOnExist: true, force: false });
-        const copiedCount = await verifyFixtureInventory(projectRoot, inventoryPath);
-        await recordCheckpoint('verified-830fc98-external-copy', { projectRoot, copiedCount });
+        const copiedCount = await verifyFixtureInventory(projectRoot, inventoryPath, fixture);
+        await recordCheckpoint(`verified-${tag}-external-copy`, { projectRoot, copiedCount });
       }
       await ensureActualToolchain(toolchainRoot, artifactsDir);
       await recordCheckpoint('ensured-actual-toolchain', { toolchainRoot });
 
       const inspectedModelPath = join(projectRoot, 'derived/drafts/remesh/out/check/build/skeleton.model.json');
       const diskInspected = await readDiskCompiledGeometry(inspectedModelPath);
-      assertCondition(diskInspected.vertexCount === 30 && diskInspected.triangleCount === 40, 'Expected 30v / 40t in 830fc98 inspected model');
+      assertCondition(diskInspected.vertexCount === 30 && diskInspected.triangleCount === 40, `Expected 30v / 40t in ${tag} inspected model`);
 
       const openInputs = {
         input: join(projectRoot, 'derived/drafts/remesh/out/check'),
         project: { root: projectRoot, draftId: 'remesh', picksDir: 'inputs/references' } as const,
       };
       const loadedPkg = await loadOpenPackage(openInputs);
-      assertCondition(loadedPkg.mode === 'single' && loadedPkg.joined?.draft, 'Expected joined pre-rig draft on 830fc98 fixture');
-      assertCondition(loadedPkg.p.manifest.model === undefined, '830fc98 Stage 1 draft must omit manifest.model');
+      assertCondition(loadedPkg.mode === 'single' && loadedPkg.joined?.draft, `Expected joined pre-rig draft on ${tag} fixture`);
+      assertCondition(loadedPkg.p.manifest.model === undefined, `${tag} Stage 1 draft must omit manifest.model`);
 
       const launchOptions = {
         stateDir,
@@ -3009,19 +3045,21 @@ async function runActualFixturePhase(
         'TEST_STDERR_OBSERVER_SCOPE: expected only the owned worker marker before any Apply');
       if (mode === 'discovery-external') {
         const workerExitEvidence = await verifyOwnedWorkersExited(controlDir, ownedWorkers, [...frontPids]);
-        const sourceFilesVerified = await verifyFixtureInventory(sealedFixtureRoot, inventoryPath);
-        const copyFilesVerified = await verifyFixtureInventory(projectRoot, inventoryPath);
+        const sourceFilesVerified = await verifyFixtureInventory(sealedFixtureRoot, inventoryPath, fixture);
+        const copyFilesVerified = await verifyFixtureInventory(projectRoot, inventoryPath, fixture);
         return { phase: mode, sourceFilesVerified, copyFilesVerified, workerExitEvidence };
       }
 
       const httpDir = join(artifactsDir, 'rebuild-http');
       await mkdir(httpDir);
       rebuildHttp = observeRebuildHttp(opened.url, httpDir);
-      page = await launchCdpSession(join(root, 'browser-profile'), {
+      liveSockets = observeLiveSockets(opened.url);
+      page = await launchCdpSession(browserProfile, {
         sendDeadlineMs: 10_000,
         onEvent(event, send) {
           errorCollector.onEvent(event, send);
           rebuildHttp?.onEvent(event, send);
+          liveSockets?.onEvent(event);
         },
       });
       await errorCollector.send('Network.enable', rebuildHttp.networkOptions);
@@ -3051,7 +3089,7 @@ async function runActualFixturePhase(
             persisted.lang === 'ko' &&
               persisted.rebuildAppliedLength > 0 &&
               persisted.localStorageKeys.length > 0,
-            `Expected persisted EN draft (#rebuild-applied) to survive KO navigation before profile storage clear on 830fc98, got ${JSON.stringify(persisted)}`,
+            `Expected persisted EN draft (#rebuild-applied) to survive KO navigation before profile storage clear on ${tag}, got ${JSON.stringify(persisted)}`,
           );
           const neutralUrl = new URL('styles.css', opened.url);
           await page.goto(neutralUrl.href);
@@ -3078,7 +3116,7 @@ async function runActualFixturePhase(
               isolation.pathname === neutralUrl.pathname &&
               !isolation.hasAppGlobal &&
               isolation.keysAfterClear.length === 0,
-            `Expected neutral same-origin storage isolation at ${neutralUrl.href} on 830fc98, got ${JSON.stringify(isolation)}`,
+            `Expected neutral same-origin storage isolation at ${neutralUrl.href} on ${tag}, got ${JSON.stringify(isolation)}`,
           );
           await page.goto(targetUrl.href, locale);
           await waitForStage1Readiness(page, 'PAGE_NOT_READY');
@@ -3091,7 +3129,7 @@ async function runActualFixturePhase(
           })`);
           assertCondition(
             postReloadClean.lang === 'ko' && postReloadClean.rebuildAppliedLength === 0,
-            `Expected clean KO draft after isolated profile storage clear on 830fc98, got ${JSON.stringify(postReloadClean)}`,
+            `Expected clean KO draft after isolated profile storage clear on ${tag}, got ${JSON.stringify(postReloadClean)}`,
           );
           koPersistedDraftBeforeClear = {
             persistedBeforeClear: persisted,
@@ -3118,7 +3156,7 @@ async function runActualFixturePhase(
         await writeFile(join(artifactsDir, `${locale}-stage1-initial.png`), await page.screenshot());
         await recordCheckpoint(`${locale}-stage1-initial`, { correctionLine: stage1Initial.correctionLine });
 
-        // 1. Record preceding view & source binding before clicking Chest regions on non-contour 830fc98 torso.
+        // 1. Record preceding view & source binding before clicking Chest regions on non-contour torso.
         const beforeChestClick = await capturePrecedingView(page);
         await clickIframeCorrectionButton(page, 0, `Chest regions non-contour refusal (${locale})`);
         const statusText = await waitFor(`REBUILD_PART_NOT_CONTOUR refusal shown (${locale})`, async recordReadout => {
@@ -3141,17 +3179,17 @@ async function runActualFixturePhase(
         });
 
         // 2. Click Mesh parameters in Stage 1 -> opens Stage 3 Setup on grid torso -> drag visible grid range slider -> click #mesh-panel-apply.
-        await clickIframeCorrectionButton(page, 1, `Mesh parameters on 830fc98 (${locale})`);
+        await clickIframeCorrectionButton(page, 1, `Mesh parameters on ${tag} (${locale})`);
         await waitForSetupState(
           page,
           r => r.stage === '3' && r.meshOpen && r.meshPart === 'torso' && r.overlayTris === 40,
-          `830fc98 Mesh parameters ready (${locale})`,
+          `${tag} Mesh parameters ready (${locale})`,
         );
         const inspectedSetupSnapshot = await verifySetupModelAndGeometryAgainstDisk(
           page,
           'inspected',
           diskInspected,
-          `830fc98 Setup initial before Mesh Apply (${locale})`,
+          `${tag} Setup initial before Mesh Apply (${locale})`,
         );
 
         const gridControls = await page.evaluate<{
@@ -3169,7 +3207,7 @@ async function runActualFixturePhase(
           gridControls.addCircleDisabled && gridControls.drawPolygonDisabled && gridControls.dragDisabled,
           `Contour region buttons must be disabled on grid torso (${locale})`,
         );
-        assertCondition(gridControls.gridVal === '16', `Expected initial grid=16 on 830fc98 torso, got ${gridControls.gridVal}`);
+        assertCondition(gridControls.gridVal === '16', `Expected initial grid=16 on ${tag} torso, got ${gridControls.gridVal}`);
 
         // Drag the visible range slider for grid (min=2, max=80, initial=16 -> fraction ~0.18; drag to ~0.11 -> grid ~10..11).
         await dragVisibleRangeControl(
@@ -3177,7 +3215,7 @@ async function runActualFixturePhase(
           '#mesh-params input[type="range"][data-param="grid"]',
           (16 - 2) / (80 - 2),
           (10 - 2) / (80 - 2),
-          `830fc98 grid range slider (${locale})`,
+          `${tag} grid range slider (${locale})`,
         );
 
         const gridEdited = await waitFor(`#mesh-panel-apply enabled after pointer drag on grid slider (${locale})`, async recordReadout => {
@@ -3205,8 +3243,8 @@ async function runActualFixturePhase(
           return ready;
         });
 
-        await clickVisibleButton(page, '#mesh-panel-apply', `830fc98 Mesh panel Apply (${locale})`);
-        const meshApplied = await waitFor(`830fc98 Mesh panel Apply settled (${locale})`, async recordReadout => {
+        await clickVisibleButton(page, '#mesh-panel-apply', `${tag} Mesh panel Apply (${locale})`);
+        const meshApplied = await waitFor(`${tag} Mesh panel Apply settled (${locale})`, async recordReadout => {
           const state = await page!.evaluate<{
             busy: boolean;
             applied: { buildId: string; modelHash: string } | null;
@@ -3235,7 +3273,7 @@ async function runActualFixturePhase(
         }, 60_000);
         assertCondition(
           !meshApplied.meshError && meshApplied.applied !== null,
-          `830fc98 Mesh panel Apply refused (${locale}): ${meshApplied.meshStatus || 'missing applied build'} | state=${JSON.stringify(meshApplied)}`,
+          `${tag} Mesh panel Apply refused (${locale}): ${meshApplied.meshStatus || 'missing applied build'} | state=${JSON.stringify(meshApplied)}`,
         );
         const meshBuildId = meshApplied.applied!.buildId;
         expectedRemeshes.set(meshBuildId, '--mesh');
@@ -3246,7 +3284,7 @@ async function runActualFixturePhase(
           page,
           meshBuildId,
           diskMesh,
-          `830fc98 Mesh panel Apply (${locale})`,
+          `${tag} Mesh panel Apply (${locale})`,
         );
 
         const remeshDoc = JSON.parse(await readFile(join(meshScratchDir, 'rig/remesh.json'), 'utf8')) as {
@@ -3270,18 +3308,57 @@ async function runActualFixturePhase(
         });
 
         // Return to Stage 1 and verify scratch build is shown and matches disk.
-        await clickVisibleButton(page, '[data-review-stage="1"]', `Stage 1 after 830fc98 Mesh Apply (${locale})`);
+        await clickVisibleButton(page, '[data-review-stage="1"]', `Stage 1 after ${tag} Mesh Apply (${locale})`);
         await waitForStage1Readiness(page, 'MESH_ROUTE_TIMEOUT');
         await verifyStage1IframeAndApiAgainstDisk(page, meshBuildId, loadedPkg.p.sourceHash, diskMesh, true);
         await writeFile(join(artifactsDir, `${locale}-stage1-after-mesh.png`), await page.screenshot());
 
         // 3. Click Edit Mesh in Stage 1 -> opens Stage 3 Setup -> drag interior vertex hull + 1 -> click visible #mesh-apply.
-        await clickIframeCorrectionButton(page, 2, `830fc98 Edit Mesh (${locale})`);
+        await clickIframeCorrectionButton(page, 2, `${tag} Edit Mesh (${locale})`);
         await waitForSetupState(
           page,
           r => r.stage === '3' && r.meshEditPressed && r.meshEditSlot === 'torso' && r.overlayTris === diskMesh.triangleCount,
-          `830fc98 Edit Mesh ready (${locale})`,
+          `${tag} Edit Mesh ready (${locale})`,
         );
+
+        const refusalDraft = await page.evaluate<string>(`document.getElementById('rebuild-applied')?.value ?? ''`);
+        const processesBefore = (await readdir(producerReceipts)).sort();
+        const httpBefore = (await rebuildHttp.settle()).requestsObserved;
+        const refusedVertex = await dragStage1Delta(page, diagnostic => writeFile(
+          join(localeScratchOut, 'scratch-delta-refusal-diagnostic.json'), JSON.stringify(diagnostic, null, 2) + '\n',
+        ));
+        await clickVisibleButton(page, '#mesh-apply', `${tag} successive Edit Mesh Apply (${locale})`);
+        const expectedDeltaRefusal = (locale === 'ko' ? koCatalog : enCatalog)[MESH_DELTA_APPLIED_SOURCE];
+        assertCondition(expectedDeltaRefusal, 'Missing localized successive Delta refusal');
+        const refusal = await waitFor(`${tag} successive Delta refusal (${locale})`, async () => {
+          const result = await page!.evaluate<{ text: string; error: boolean; draft: string; model: string | null }>(`({
+            text: document.getElementById('mesh-editor-status')?.textContent ?? '',
+            error: Boolean(document.getElementById('mesh-editor-status')?.classList.contains('error')),
+            draft: document.getElementById('rebuild-applied')?.value ?? '',
+            model: window.rigReviewEditor?.stage?.()?.modelHash ?? null,
+          })`);
+          return result.error && result.text.includes(expectedDeltaRefusal) ? result : null;
+        });
+        assertCondition(refusal.draft === refusalDraft && refusal.model === diskMesh.modelHash,
+          'Successive Delta refusal must retain the applied model and record');
+        assertCondition(JSON.stringify((await readdir(producerReceipts)).sort()) === JSON.stringify(processesBefore) &&
+          (await rebuildHttp.settle()).requestsObserved === httpBefore, 'Successive Delta refusal must send no rebuild request or producer attempt');
+        await writeFile(join(artifactsDir, `${locale}-successive-delta-refused.png`), await page.screenshot());
+        await recordCheckpoint(`${locale}-successive-delta-refused`, { text: refusal.text, refusedVertex, meshBuildId });
+
+        // Reset the displayed build only. The server still holds the Mesh Parameters predecessor for Undo.
+        await clickVisibleButton(page, '[data-review-stage="1"]', `Stage 1 before ${tag} fresh Delta (${locale})`);
+        await waitForStage1Readiness(page, 'SCRATCH_NOT_READY');
+        await clickIframeCorrectionButton(page, 1, `Mesh parameters before ${tag} fresh Delta (${locale})`);
+        await waitForSetupState(page, r => r.stage === '3' && r.meshOpen, `Setup before fresh Delta Reset (${locale})`);
+        await clickVisibleButton(page, '#mesh-panel-reset', `Reset before ${tag} fresh Delta (${locale})`);
+        await verifySetupModelAndGeometryAgainstDisk(page, 'inspected', diskInspected, `${tag} fresh Delta base (${locale})`);
+        await clickVisibleButton(page, '[data-review-stage="1"]', `Stage 1 on ${tag} inspected Delta base (${locale})`);
+        await waitForStage1Readiness(page, 'SCRATCH_NOT_READY');
+        await verifyStage1IframeAndApiAgainstDisk(page, 'inspected', loadedPkg.p.sourceHash, diskInspected, true);
+        await clickIframeCorrectionButton(page, 2, `${tag} fresh Edit Mesh (${locale})`);
+        await waitForSetupState(page, r => r.stage === '3' && r.meshEditPressed && r.meshEditSlot === 'torso' &&
+          r.overlayTris === diskInspected.triangleCount, `${tag} fresh Edit Mesh ready (${locale})`);
 
         let deltaDiag: DeltaDiagnostic = {};
         const namedId = await dragStage1Delta(page, async diagnostic => {
@@ -3293,18 +3370,18 @@ async function runActualFixturePhase(
         });
         assertCondition(
           deltaDiag.settled && deltaDiag.after && namedId === deltaDiag.settled.edit.hull + 1,
-          'Expected settled & after delta diagnostic on 830fc98',
+          `Expected settled & after delta diagnostic on ${tag}`,
         );
 
         const prevAppliedRaw = await page.evaluate<string>(`document.getElementById('rebuild-applied')?.value ?? ''`);
-        await clickVisibleButton(page, '#mesh-apply', `830fc98 visible #mesh-apply (${locale})`);
+        await clickVisibleButton(page, '#mesh-apply', `${tag} visible #mesh-apply (${locale})`);
         const deltaRecord = await waitForDeltaApplySettled(
           page,
           prevAppliedRaw,
           meshBuildId,
-          `830fc98 Edit Mesh Apply settled (${locale})`,
+          `${tag} Edit Mesh Apply settled (${locale})`,
         );
-        assertCondition(deltaRecord.check?.pass === true, `Expected passing delta check on 830fc98 (${locale})`);
+        assertCondition(deltaRecord.check?.pass === true, `Expected passing delta check on ${tag} (${locale})`);
         assertNamedDeltaOps(deltaRecord.delta.ops, namedId);
 
         const deltaBuildId = deltaRecord.buildId;
@@ -3315,7 +3392,7 @@ async function runActualFixturePhase(
           page,
           deltaBuildId,
           diskDelta,
-          `830fc98 Edit Mesh Apply (${locale})`,
+          `${tag} Edit Mesh Apply (${locale})`,
         );
         const deltaDiskDoc = JSON.parse(await readFile(join(deltaScratchDir, 'mesh-edit.json'), 'utf8')) as {
           ops: MeshOp[];
@@ -3335,64 +3412,64 @@ async function runActualFixturePhase(
           namedId,
         });
 
-        await clickVisibleButton(page, '[data-review-stage="1"]', `Stage 1 after 830fc98 Delta Apply (${locale})`);
+        await clickVisibleButton(page, '[data-review-stage="1"]', `Stage 1 after ${tag} Delta Apply (${locale})`);
         await waitForStage1Readiness(page, 'DELTA_ROUTE_TIMEOUT');
         await verifyStage1IframeAndApiAgainstDisk(page, deltaBuildId, loadedPkg.p.sourceHash, diskDelta, true);
         await writeFile(join(artifactsDir, `${locale}-stage1-after-delta.png`), await page.screenshot());
 
         // 4. Re-open Setup and click visible #applied-undo -> step back to meshSetupSnapshot model & geometry.
-        await clickIframeCorrectionButton(page, 1, `Re-open Setup for Undo on 830fc98 (${locale})`);
+        await clickIframeCorrectionButton(page, 1, `Re-open Setup for Undo on ${tag} (${locale})`);
         await waitForSetupState(page, r => r.stage === '3' && r.overlayTris === diskDelta.triangleCount, `Setup before Undo (${locale})`);
-        await clickVisibleButton(page, '#applied-undo', `830fc98 visible #applied-undo (${locale})`);
+        await clickVisibleButton(page, '#applied-undo', `${tag} visible #applied-undo (${locale})`);
         const undoRestoredSnapshot = await verifySetupModelAndGeometryAgainstDisk(
           page,
           meshBuildId,
           diskMesh,
-          `830fc98 Undo restored meshBuildId (${locale})`,
+          `${tag} Undo restored meshBuildId (${locale})`,
         );
-        assertSetupSnapshotRestored(undoRestoredSnapshot, meshSetupSnapshot, `830fc98 Undo restoration (${locale})`);
+        assertSetupSnapshotRestored(undoRestoredSnapshot, meshSetupSnapshot, `${tag} Undo restoration (${locale})`);
         await writeFile(join(artifactsDir, `${locale}-setup-after-undo.png`), await page.screenshot());
 
-        await clickVisibleButton(page, '[data-review-stage="1"]', `Stage 1 after 830fc98 Undo (${locale})`);
+        await clickVisibleButton(page, '[data-review-stage="1"]', `Stage 1 after ${tag} Undo (${locale})`);
         await waitForStage1Readiness(page, 'SCRATCH_NOT_READY');
         await verifyStage1IframeAndApiAgainstDisk(page, meshBuildId, loadedPkg.p.sourceHash, diskMesh, true);
         await writeFile(join(artifactsDir, `${locale}-stage1-after-undo.png`), await page.screenshot());
 
         // 5. Re-open Setup and click visible #mesh-panel-reset -> restore inspectedSetupSnapshot model & geometry while keeping #rebuild-applied unchanged.
-        await clickIframeCorrectionButton(page, 1, `Re-open Setup for visible Reset on 830fc98 (${locale})`);
+        await clickIframeCorrectionButton(page, 1, `Re-open Setup for visible Reset on ${tag} (${locale})`);
         await waitForSetupState(page, r => r.stage === '3' && r.meshOpen && r.overlayTris === diskMesh.triangleCount, `Setup before Reset (${locale})`);
         const preResetAppliedRaw = await page.evaluate<string>(`document.getElementById('rebuild-applied')?.value ?? ''`);
-        assertCondition(preResetAppliedRaw.length > 0, `Expected non-empty #rebuild-applied before 830fc98 visible Reset (${locale})`);
-        await clickVisibleButton(page, '#mesh-panel-reset', `830fc98 visible #mesh-panel-reset (${locale})`);
+        assertCondition(preResetAppliedRaw.length > 0, `Expected non-empty #rebuild-applied before ${tag} visible Reset (${locale})`);
+        await clickVisibleButton(page, '#mesh-panel-reset', `${tag} visible #mesh-panel-reset (${locale})`);
         const resetRestoredSnapshot = await verifySetupModelAndGeometryAgainstDisk(
           page,
           'inspected',
           diskInspected,
-          `830fc98 Reset restored inspected (${locale})`,
+          `${tag} Reset restored inspected (${locale})`,
         );
-        assertSetupSnapshotRestored(resetRestoredSnapshot, inspectedSetupSnapshot, `830fc98 Reset restoration (${locale})`);
+        assertSetupSnapshotRestored(resetRestoredSnapshot, inspectedSetupSnapshot, `${tag} Reset restoration (${locale})`);
         const postResetAppliedRaw = await page.evaluate<string>(`document.getElementById('rebuild-applied')?.value ?? ''`);
         assertCondition(
           postResetAppliedRaw === preResetAppliedRaw,
-          `Expected #rebuild-applied textarea string unchanged after 830fc98 visible Reset (${locale})`,
+          `Expected #rebuild-applied textarea string unchanged after ${tag} visible Reset (${locale})`,
         );
         await writeFile(join(artifactsDir, `${locale}-reset-draft.json`), JSON.stringify({
           before: preResetAppliedRaw, after: postResetAppliedRaw,
         }, null, 2) + '\n', { flag: 'wx' });
         await writeFile(join(artifactsDir, `${locale}-setup-after-reset.png`), await page.screenshot());
 
-        await clickVisibleButton(page, '[data-review-stage="1"]', `Stage 1 after 830fc98 Reset (${locale})`);
+        await clickVisibleButton(page, '[data-review-stage="1"]', `Stage 1 after ${tag} Reset (${locale})`);
         await waitForStage1Readiness(page, 'SCRATCH_NOT_READY');
         await verifyStage1IframeAndApiAgainstDisk(page, 'inspected', loadedPkg.p.sourceHash, diskInspected, true);
         await writeFile(join(artifactsDir, `${locale}-stage1-after-reset.png`), await page.screenshot());
 
         // 6. Direct Stage 3 click refuses with RIG_VERSION_UNAVAILABLE.
-        await clickVisibleButton(page, '[data-review-stage="3"]', `830fc98 direct Stage 3 refusal (${locale})`);
+        await clickVisibleButton(page, '[data-review-stage="3"]', `${tag} direct Stage 3 refusal (${locale})`);
         const catalog = locale === 'ko' ? koCatalog : enCatalog;
         const expectedRefusal = catalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.']!;
         await assertRefusedStage3(page, locale, expectedRefusal);
         await writeFile(join(artifactsDir, `${locale}-stage3-direct-refused.png`), await page.screenshot());
-        errorCollector.assertClean(`fixture-830fc98-${locale}`);
+        errorCollector.assertClean(`fixture-${tag}-${locale}`);
 
         localeReceipts[locale] = {
           ...(koPersistedDraftBeforeClear ? { persistedDraftBeforeClear: koPersistedDraftBeforeClear } : {}),
@@ -3424,19 +3501,41 @@ async function runActualFixturePhase(
         await recordCheckpoint(`${locale}-completed`, localeReceipts[locale] as Record<string, unknown>);
       }
 
+      const frontRecordPath = join(controlDir, `front-${frontPort}.json`);
+      const frontRecord = await smallJson(frontRecordPath) as { nonce: string; pid: number };
+      assertCondition(frontRecord.pid === claimed.frontPid && typeof frontRecord.nonce === 'string',
+        'TEST_TEARDOWN_FRONT_IDENTITY: owned front record changed');
+      chrome = await openChromeRoot(browserProfile);
+      await recordTeardown('before-neutral');
       await page.goto('about:blank');
+      await recordTeardown('after-neutral');
       const httpEvidence = await rebuildHttp.settle();
       await writeFile(join(httpDir, 'summary.json'), JSON.stringify(httpEvidence, null, 2) + '\n', { flag: 'wx' });
       assertCondition(httpEvidence.requestsObserved > 0 && httpEvidence.errors.length === 0 && httpEvidence.unfinished.length === 0,
         `TEST_REBUILD_HTTP_EVIDENCE: incomplete passive rebuild capture; ${httpEvidence.errors[0] ?? 'see summary.json'}`);
-      await page.close();
+      const chromeExit = await chrome.close();
       page = undefined;
+      await recordTeardown('after-chrome-close');
       const workerExitEvidence = await verifyOwnedWorkersExited(controlDir, ownedWorkers, [...frontPids]);
+      const workerLog = await readFile(join(controlDir, `${claimed.record.key}.${claimed.record.nonce}.log`), 'utf8');
+      const frontLog = await readFile(join(controlDir, `front-${frontPort}.${frontRecord.nonce}.log`), 'utf8');
+      const frontRecordRemoved = await lstat(frontRecordPath).then(() => false, (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+        return true;
+      });
+      assertCondition(chromeExit.commandAcknowledged && chromeExit.socketClosed && chromeExit.processExited &&
+        frontRecordRemoved && workerLog.includes('last review window closed (0 live connections for 400ms)') &&
+        frontLog.includes('no live review instances remain (idle for 1200ms)'),
+        'TEST_TEARDOWN_NATURAL_EXIT: expected Chrome close and natural worker/front exit reasons');
+      await writeFile(join(artifactsDir, 'teardown-natural-exit.json'), JSON.stringify({
+        chromeExit, workerExitEvidence, frontPid: frontRecord.pid, frontRecordRemoved, workerLog, frontLog,
+      }, null, 2) + '\n', { flag: 'wx' });
 
-      const entryCountAfter = await verifyFixtureInventory(sealedFixtureRoot, inventoryPath);
-      assertCondition(entryCountBefore === 209 && entryCountAfter === 209, 'Expected 209 invariant files before and after 830fc98 phase');
+      const entryCountAfter = await verifyFixtureInventory(sealedFixtureRoot, inventoryPath, fixture);
+      assertCondition(entryCountBefore === fixture.fileCount && entryCountAfter === fixture.fileCount,
+        `Expected ${fixture.fileCount} invariant files before and after ${tag} phase`);
 
-      const copyFilesVerified = await verifyFixtureInventory(projectRoot, inventoryPath);
+      const copyFilesVerified = await verifyFixtureInventory(projectRoot, inventoryPath, fixture);
       const processDirs = (await readdir(producerReceipts)).filter(name => /^process-[1-9]\d*$/.test(name));
       const producerAttempts = await Promise.all(processDirs.map(async name => {
         const processDir = join(producerReceipts, name);
@@ -3453,7 +3552,8 @@ async function runActualFixturePhase(
         `TEST_STDERR_OBSERVER_MISSING_REBUILD: ${buildId} ${flag}`);
       }
       const summary = {
-        phase: 'fixture-830fc98',
+        phase: mode,
+        createCommit: fixture.createCommit,
         copyFilesVerified,
         httpEvidence,
         producerAttempts,
@@ -3466,11 +3566,12 @@ async function runActualFixturePhase(
       await writeFile(join(artifactsDir, 'summary.json'), JSON.stringify(summary, null, 2) + '\n');
       return summary;
     } catch (error) {
+      await recordTeardown('failure');
       if (rebuildHttp) {
         const evidence = await rebuildHttp.settle();
         await writeFile(join(artifactsDir, 'rebuild-http', 'failure-summary.json'), JSON.stringify(evidence, null, 2) + '\n', { flag: 'wx' });
       }
-      const readInventory = (path: string) => verifyFixtureInventory(path, inventoryPath)
+      const readInventory = (path: string) => verifyFixtureInventory(path, inventoryPath, fixture)
         .then(files => ({ files }), error => ({ error: String(error) }));
       const source = await readInventory(sealedFixtureRoot);
       const copy = projectRoot === sealedFixtureRoot ? null : await readInventory(projectRoot);
@@ -3488,6 +3589,8 @@ async function runActualFixturePhase(
       );
       throw error;
     } finally {
+      chrome?.disconnect();
+      // The shared helper's forced browser stop is for failure cleanup only.
       if (page) await page.close();
       for (const worker of ownedWorkers) {
         try {
@@ -3508,25 +3611,68 @@ async function runActualFixturePhase(
   });
 }
 
-if (import.meta.main) {
-  const { values } = parseArgs({
-    args: process.argv.slice(2),
-    options: {
-      mode: { type: 'string' },
-      'fixture-root': { type: 'string' },
-      inventory: { type: 'string' },
-      'artifacts-dir': { type: 'string' },
-    },
-    strict: true,
-  });
+export type Stage1DraftCliMode = 'synthetic' | DiscoveryMode;
 
-  const fixtureRoot = resolve(
-    values['fixture-root'] ?? '.review-562-browser-input/create-830fc98/templates/example-remesh',
-  );
-  const inventoryPath = resolve(values.inventory ?? '.review-562-browser-input/parent-fixture-inventory.json');
-  const mode = values.mode ?? (values['fixture-root'] === undefined ? 'synthetic' : 'fixture-830fc98');
-  assertCondition(mode === 'synthetic' || mode === 'fixture-830fc98' || mode === 'discovery-external' || mode === 'discovery-under-review', `Unknown phase: ${mode}`);
-  const artifactsDir = resolve(values['artifacts-dir'] ?? join('.review-562-browser-result/artifacts', mode));
+export interface Stage1DraftCliArgs {
+  mode: Stage1DraftCliMode;
+  fixtureRoot: string;
+  inventoryPath: string;
+  artifactsDir: string;
+}
+
+export function resolveStage1DraftCliArgs(argv: readonly string[]): Stage1DraftCliArgs {
+  let values: {
+    mode?: string;
+    'fixture-root'?: string;
+    inventory?: string;
+    'artifacts-dir'?: string;
+  };
+  try {
+    ({ values } = parseArgs({
+      args: [...argv],
+      options: {
+        mode: { type: 'string' },
+        'fixture-root': { type: 'string' },
+        inventory: { type: 'string' },
+        'artifacts-dir': { type: 'string' },
+      },
+      strict: true,
+    }));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`TEST_CLI_USAGE: ${detail}`);
+  }
+
+  const mode = values.mode ?? 'synthetic';
+  if (
+    mode !== 'synthetic' &&
+    mode !== 'fixture-59ed816' &&
+    mode !== 'fixture-830fc98' &&
+    mode !== 'discovery-external' &&
+    mode !== 'discovery-under-review'
+  ) {
+    throw new Error(`TEST_CLI_USAGE: unknown --mode ${mode}`);
+  }
+
+  const rawFixtureRoot = values['fixture-root']?.trim() ?? '';
+  const rawInventory = values.inventory?.trim() ?? '';
+  if (!rawFixtureRoot || !rawInventory) {
+    throw new Error(
+      'TEST_CLI_USAGE: --fixture-root <dir> and --inventory <file> are required for all stage1-draft-precision-browser phases',
+    );
+  }
+
+  const rawArtifactsDir = values['artifacts-dir']?.trim() ?? '';
+  return {
+    mode,
+    fixtureRoot: resolve(rawFixtureRoot),
+    inventoryPath: resolve(rawInventory),
+    artifactsDir: resolve(rawArtifactsDir || join('artifacts/stage1-draft', mode)),
+  };
+}
+
+if (import.meta.main) {
+  const { mode, fixtureRoot, inventoryPath, artifactsDir } = resolveStage1DraftCliArgs(process.argv.slice(2));
 
   const summary =
     mode === 'synthetic'

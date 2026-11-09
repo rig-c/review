@@ -220,6 +220,7 @@ export interface PatchJobView {stageInputHash?:string;id:string;kind:'patch';op?
 export interface PatchRequestBody {patch:ConfigPatch;environment?:import('../src/environment-schedule.ts').EnvironmentSchedule}
 /** Edit Mesh's delta Apply (#135): `remesh --delta`, the per-file diff and the part's counts; remesh's own gate holds check. */
 export interface DeltaJobView {stageInputHash?:string;check?:CheckSummary|null;id:string;kind:'delta';op:'remesh';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;hint?:string;exitCode:number|null;wallMs:{op:number|null;compile:number|null};files:FilesDiff|null;remesh:import('../src/mesh-entry.ts').RemeshCounts&{modelTriangles:number|null}|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;delta:Record<string,unknown>;deltaSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
+export const MESH_DELTA_APPLIED_SOURCE = 'MESH_DELTA_APPLIED_SOURCE: Edit Mesh starts from the inspected draft. Export the delta and rebuild the prior revision (including any Mesh Parameters patch) first.';
 /** `{part, delta, configHash}`: the server owns every path and flag; the delta is the editor's export as it stands. */
 export interface DeltaRequestBody {part:string;delta:import('../src/mesh-edit.ts').MeshEditDocument;configHash:string}
 /** A retarget Apply's job (#114): clean, retarget, compile; every FAIL line of the step that refused, verbatim; the listed lines. */

@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {createHash} from 'node:crypto';
-import {mkdir,mkdtemp,readdir,readFile,rm,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readdir,readFile,realpath,rm,writeFile} from 'node:fs/promises';
 import {join,relative} from 'node:path';
 import {tmpdir} from 'node:os';
 import {loadReview} from '../src/manifest.ts';
@@ -9,7 +9,7 @@ import {REMESH_DELTA_SINCE,remeshDeltaArgs} from '../src/producer.ts';
 import {deltaId,parseDeltaRequest,RebuildError} from '../src/rebuild.ts';
 import {MESH_EDIT_BASIS,MESH_EDIT_SCHEMA,MeshEditSession,meshEditDocument,meshEditText,type MeshSource} from '../src/mesh-edit.ts';
 import {APPLIED_DELTA_SCHEMA,appliedSummary,parseAppliedContext} from '../src/applied-context.ts';
-import {deltaAppliedRecord,deltaOutcomeLine,stageModel,type DeltaJobView} from '../web/rebuild-client.ts';
+import {MESH_DELTA_APPLIED_SOURCE,deltaAppliedRecord,deltaOutcomeLine,stageModel,type DeltaJobView} from '../web/rebuild-client.ts';
 
 /**
  * #135: Edit Mesh's Apply · Rebuild sends the exported setup-space delta through the shared runner as
@@ -64,7 +64,7 @@ const square=(hash=INPUT_HASH):MeshSource=>({slot:'panel',skin:'default',attachm
 /** One Modify move of vertex 4 by (+1.5, −1), exported as the editor exports it. */
 function delta(hash=INPUT_HASH){const s=new MeshEditSession(square(hash));s.record(s.moveOps([4],1.5,-1));return meshEditDocument(s);}
 async function settle(base:string,job:{id:string;status:string}):Promise<DeltaJobView>{let current=job as DeltaJobView;for(let i=0;current.status==='running'&&i<200;i++){await Bun.sleep(25);current=await (await fetch(`${base}/api/rebuild/${current.id}`)).json();}return current;}
-const post=(base:string,body:unknown)=>fetch(base+'/api/rebuild',{method:'POST',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify(body)});
+const post=(base:string,body:unknown,capability?:string)=>fetch(base+'/api/rebuild',{method:'POST',headers:{Origin:base,'Content-Type':'application/json',...(capability?{'X-Review-Capability':capability}:{})},body:JSON.stringify(body)});
 const calls=async(log:string)=>(await readFile(log,'utf8').catch(()=>'')).trim().split('\n').filter(Boolean);
 
 test('#135 request: exactly {part, delta, configHash}; the delta is one document; flags are remesh\'s with --delta in place of --mesh',()=>{
@@ -123,6 +123,65 @@ test('#135 bars 2 and 3 (stand-in): a stale source hash and a posed (pre-#100) b
   // A refusal leaves no scratch build behind.
   expect(await readdir(join(state,'rebuild',p.sourceHash))).toEqual([]);
   expect(await treeHash(pkg)).toBe(before);
+ }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
+});
+
+test('#562 joined draft rejects a retained scratch delta and still sends inspected or unknown deltas to Parts',async()=>{
+ const root=await realpath(await mkdtemp(join(tmpdir(),'review-joined-delta-')));
+ const {joinedVerdictFixture}=await import('./helpers/joined-verdict-fixture.ts');
+ const fixture=await joinedVerdictFixture(join(root,'project'));
+ const f=fixture.draft;
+ const log=join(root,'calls.log');
+ const initial=JSON.parse(await readFile(f.model,'utf8'));
+ const attachment=initial.skins.find((skin:{name:string})=>skin.name==='default').attachments.torso.torso;
+ const inspectedHash=sha(JSON.stringify(attachment));
+ const scratch=structuredClone(initial);
+ const scratchAttachment=scratch.skins.find((skin:{name:string})=>skin.name==='default').attachments.torso.torso;
+ scratchAttachment.triangles.splice(-3);
+ const scratchHash=sha(JSON.stringify(scratchAttachment));
+ await install(root,'1.44.0');
+ await writeFile(join(root,'node_modules/@rig-c/parts/bin/rig-parts.cjs'),`
+ const fs=require('fs'),path=require('path'),a=process.argv.slice(2),flag=n=>a[a.indexOf(n)+1];
+ fs.appendFileSync(${JSON.stringify(log)},a.join(' ')+'\\n');
+ const out=flag('--out');fs.mkdirSync(out,{recursive:true});
+ if(a[0]==='check'){fs.writeFileSync(path.join(out,'check.json'),'{"PASS":true}');console.log('check: PASS');process.exit(0);}
+ const isDelta=a.includes('--delta');
+ if(isDelta&&JSON.parse(fs.readFileSync(flag('--delta'),'utf8')).source.hash!==${JSON.stringify(inspectedHash)}){
+  console.log('FAIL  REMESH_DELTA_SOURCE: producer refused the unknown source');process.exit(1);
+ }
+ for(const n of ['rig.json','motion.json','mesh_report.json'])fs.copyFileSync(path.join(flag('--rig'),n),path.join(out,n));
+ fs.writeFileSync(path.join(out,'remesh.json'),JSON.stringify({spec:'rig-parts-remesh/1',request:{part:'torso',page_edges:'free',pack_shape:'polygon'}}));
+ `);
+ await writeFile(join(root,'node_modules/rig-c/bin/rigc.cjs'),`
+ const fs=require('fs'),path=require('path'),a=process.argv.slice(2);
+ const out=a[a.indexOf('--out')+1];fs.mkdirSync(out,{recursive:true});
+ const model=${JSON.stringify({...scratch,pages:[]})};
+ fs.writeFileSync(path.join(out,'skeleton.model.json'),JSON.stringify(model));
+ `);
+ const capability='a'.repeat(64);
+ const server=await startServer(fixture.p,{port:0,stateDir:join(root,'state'),cwd:root,joined:fixture.joined,capability});
+ const base=`http://127.0.0.1:${server.port}`;
+ const send=async(source:string)=>await (await post(base,{
+  part:'torso',configHash:f.record.config.sha256,delta:{...delta(source),slot:'torso',attachment:'torso'},
+ },capability)).json();
+ try{
+  const patch=await settle(base,await (await post(base,{patch:{
+   schema:'rig-review-config-patch/1',config_sha256:f.record.config.sha256,
+   ops:[{op:'add',path:'/meshes/torso/density',value:9}],
+   producer:{name:'@rig-c/parts',version:'1.44.0'},op:{cmd:'remesh',args:['--part','torso']},
+  }},capability)).json());
+  expect(patch).toMatchObject({status:'built',check:{pass:true,exitCode:0}});
+  const before=await calls(log);
+  expect(await send(scratchHash)).toEqual({status:'refused',error:MESH_DELTA_APPLIED_SOURCE,producerLine:null});
+  expect(await calls(log)).toEqual(before);
+  expect(await settle(base,await send('f'.repeat(64)))).toMatchObject({
+   status:'refused',producerLine:'FAIL  REMESH_DELTA_SOURCE: producer refused the unknown source',
+  });
+  expect(await settle(base,await send(inspectedHash))).toMatchObject({status:'built',check:{pass:true,exitCode:0}});
+  const invocations=(await calls(log)).filter(line=>line.includes('--delta'));
+  expect(invocations).toHaveLength(2);
+  expect(invocations.every(line=>line.includes(`--rig ${join(fixture.project.root,'derived/drafts/chain/out')} `))).toBe(true);
+  await fixture.assertFixture();
  }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
 });
 

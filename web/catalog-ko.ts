@@ -124,6 +124,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.": "STAGE_DRAFT_MISMATCH: 분리 파츠와 초안 메시의 식별 정보가 달라요.",
   "STAGE_DRAFT_STALE: the requested revision is pending or no longer applied.": "STAGE_DRAFT_STALE: 요청한 리비전이 대기 중이거나 더 이상 적용 상태가 아니에요.",
   "STAGE_DRAFT_CHANGED: scratch inputs changed after Apply.": "STAGE_DRAFT_CHANGED: 적용 후 작업 사본의 입력이 변경됐어요.",
+  "MESH_DELTA_APPLIED_SOURCE: Edit Mesh starts from the inspected draft. Export the delta and rebuild the prior revision (including any Mesh Parameters patch) first.": "MESH_DELTA_APPLIED_SOURCE: 메시 편집은 검사 중인 원본 초안에서 시작해요. 델타를 내보내고 메시 파라미터 변경을 포함한 이전 리비전을 먼저 다시 빌드하세요.",
   "STAGE_DRAFT_UNCHECKED: this revision has no successful producer check.": "STAGE_DRAFT_UNCHECKED: 이 리비전에는 성공한 제작기 검사 근거가 없어요.",
   "STAGE_DRAFT_OPERATION: this applied operation is not a mesh correction.": "STAGE_DRAFT_OPERATION: 적용된 작업이 메시 보정이 아니에요.",
   "Approve all": "모두 승인",

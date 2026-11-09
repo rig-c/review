@@ -1,5 +1,5 @@
 import {isDeepStrictEqual} from 'node:util';
-import {recordFor,type AnyJobView} from '../web/rebuild-client.ts';
+import {MESH_DELTA_APPLIED_SOURCE,recordFor,type AnyJobView} from '../web/rebuild-client.ts';
 /**
  * Apply · Rebuild (issue #99): the user's chest-region designation goes to the installed producer as one mesh entry,
  * `rig-parts remesh` re-fits that one part of the package's gated rig into a scratch revision, `rigc build` compiles
@@ -16,7 +16,8 @@ import { copyFile, mkdir, readFile, readdir, realpath, rename, rm, writeFile, ls
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts';
 import { compileArgs, firstRefusal, modelingProducerTooOld, REMESH_DELTA_SINCE, remeshArgs, remeshDeltaArgs, resolvePose, resolveProducer, runTool, versionAtLeast, type CompileRequest, type InstalledTool, type ProcessResult } from './producer.ts';
-import { meshEditText } from './mesh-edit.ts';
+import { attachmentHashText, MESH_EDIT_BASIS, MESH_EDIT_CODES, MESH_EDIT_SCHEMA, meshEditText } from './mesh-edit.ts';
+import { readStoredSetupMesh } from './setup-mesh.ts';
 import { CONFIG_NAMED_FILES, CONFIG_SKELETON_NAMES, HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
 import { assertWholeRigBaseline, BaselineError, baselineKey, producerDiff, runBaseline, runInspectedCheck, runningInspectedCheck, type BaselineResult, type InspectedCheck } from './baseline.ts';
 import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, parseConfigPatch, PATCH_FLAGS, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
@@ -1899,6 +1900,35 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     c.applied = true;
   }
 
+  /** Only identify a retained scratch attachment. The producer still judges deltas over the inspected rig. */
+  async function deltaOnAppliedDraft(request: DeltaRequest): Promise<boolean> {
+    const draft = options.draft?.source;
+    const delta = request.delta;
+    const source = delta.source as { hash?: unknown } | null | undefined;
+    const hash = source?.hash;
+    if (!draft || !stack.length || delta.schema !== MESH_EDIT_SCHEMA || delta.basis !== MESH_EDIT_BASIS ||
+        delta.slot !== request.part || typeof delta.skin !== 'string' || typeof delta.attachment !== 'string' ||
+        typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash)) return false;
+    const key = { skin: delta.skin, attachment: delta.attachment };
+    async function matches(path: string, expected: string | undefined): Promise<boolean> {
+      if (!expected) return false;
+      try {
+        const bytes = await readFile(path);
+        if (sha256(bytes) !== expected) return false;
+        const result = readStoredSetupMesh(JSON.parse(bytes.toString('utf8')), request.part, key, MESH_EDIT_CODES);
+        return result.ok && !result.mesh.linked && sha256(attachmentHashText(result.mesh.entry)) === hash;
+      } catch { return false; }
+    }
+    // Reset can leave the server stack intact. An inspected-compatible delta always goes to the producer.
+    if (await matches(draft.model, draft.files.get(draft.model))) return false;
+    for (const entry of stack.slice(-MAX_KEPT_BUILDS).reverse()) {
+      const dir = entry === stack.at(-1) ? rebuildDir(options.stateDir, p.sourceHash, entry.id)
+        : join(keptRoot(options.stateDir, p.sourceHash), entry.id);
+      if (await matches(join(dir, 'build', 'skeleton.model.json'), entry.modelHash)) return true;
+    }
+    return false;
+  }
+
   /** #135: the delta → `rig-parts remesh --delta mesh-edit.json --part <part>` → `<dir>/rig`; the tail adds the per-file diff. */
   function executeDelta(job: DeltaJob, dir: string, inputs: ProducerInputs, resolved: Resolved, text: string): Promise<void> {
     const producer = resolved.producer, part = job.request.part;
@@ -1949,6 +1979,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
     return reserve(`REBUILD_BUSY: rebuild ${id} is still running`, async () => {
+      if (await deltaOnAppliedDraft(request)) {
+        return { status: 200, body: { status: 'refused', error: MESH_DELTA_APPLIED_SOURCE, producerLine: null } };
+      }
       guardRestore(id);
       const dir = rebuildDir(options.stateDir, p.sourceHash, id);
       await adopt(id);

@@ -423,6 +423,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   outcomeLine,
   patchOutcomeLine,
   deltaOutcomeLine,
+  MESH_DELTA_APPLIED_SOURCE,
   stageModel,
   chestStatusForPart,
   designatedRegions,
@@ -1031,6 +1032,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    outcomeLine,
    patchOutcomeLine,
    deltaOutcomeLine,
+   MESH_DELTA_APPLIED_SOURCE,
    stageModel,
    chestPartFields,
    chestStatusForPart,
@@ -1533,13 +1535,16 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   expect(refreshedBuilds.at(-1)).toBe('inspected');
 
   // 7. Re-apply via `applyMeshDelta` and `applyRebuild`, then verify failed Reset preserves scratch and successful Reset restores `inspected`.
-  const deltaRes=await fns.applyMeshDelta({slot:'torso',skin:'default',attachment:'torso',basis:'setup',preview:'p',source:{hash:inspectedHash,vertices:[[0,0]],triangles:[0,0,0],hull:1},ops:[]},()=>{});
+  const deltaDoc={slot:'torso',skin:'default',attachment:'torso',basis:'setup',preview:'p',source:{hash:inspectedHash,vertices:[[0,0]],triangles:[0,0,0],hull:1},ops:[]};
+  const deltaRes=await fns.applyMeshDelta(deltaDoc,()=>{});
   expect(deltaRes.built).toBe(true);
   expect(fns.getState().appliedOnStage?.buildId).toBe(scratchId);
   expect(fns.getState().stageModelBones).toEqual(['root','torso_bone','scratch_rib']);
   expect(rigRoot.style.clipPath).toBe(scratchClipCss);
   expect(fns.meshSource().source.triangles.length/3).toBe(3);
 
+  expect(await fns.applyMeshDelta(deltaDoc,()=>{})).toEqual({built:false,error:true,text:MESH_DELTA_APPLIED_SOURCE});
+  expect(fns.getState().appliedOnStage?.buildId).toBe(scratchId);
   failStageBuild='inspected';
   await fns.resetRebuild();
   expect(fns.getState().appliedOnStage?.buildId).toBe(scratchId);
