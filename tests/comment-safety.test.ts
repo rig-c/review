@@ -137,7 +137,9 @@ test('#276 Bar 3: under COMMENT_UNAPPLIED_PREVIEW the list opens, rows restore, 
  };
  const actual=await runUnderPreview(binderSource);
  expect(actual).toEqual({listOpened:true,disabled:false,restored:1,editRefused:true,placeRefused:true});
- const planted=binderSource.replace('toggle.disabled=false;','toggle.disabled=!!reason;');
+ const assignment='toggle.disabled=!!host.busy?.();';
+ expect(binderSource.split(assignment)).toHaveLength(2);
+ const planted=binderSource.replace(assignment,'toggle.disabled=!!host.busy?.()||!!reason;');
  expect(planted).not.toBe(binderSource);
  const mutant=await runUnderPreview(planted);
  expect(mutant.disabled).toBe(true);
