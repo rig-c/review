@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { runInNewContext } from 'node:vm';
+import {readFile} from 'node:fs/promises';
 import { sourceSha256 } from '../src/parts-view.ts';
 import type { InputCdpSession } from './parts-explorer-browser.ts';
 import {
@@ -393,7 +394,7 @@ function pageFixture(target: PartsViewShotTarget, pinchScale = 1, options?: {
     },
     elementFromPoint: (x: number, y: number) => y === 5
       ? Object.values(nodes).find(node => node.getBoundingClientRect?.().left === x - 5)
-      : nodes['rig-viewport'].panBlocked ? null : nodes['rig-viewport'],
+      : nodes['rig-viewport'].panBlocked ? null : nodes['rig-viewport'].hitTarget ?? nodes['rig-viewport'],
   };
   const page: InputCdpSession = {
     async evaluate(expression) {
@@ -502,6 +503,37 @@ describe('parts screenshot normal controls', () => {
     expect(fixture.mouseEvents.map(event => event.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased']);
     expect(fixture.actions).toEqual(['native']);
   });
+});
+
+test('#614 actual comment mark refuses old pins and controls before press and accepts one empty-pane start',async()=>{
+  const source=await readFile('tests/parts-comments-browser.ts','utf8');
+  const begin=source.indexOf('const camera='),end=source.indexOf('const commentState=',begin);
+  const camera=new Function(source.slice(begin,end)+';return camera;')() as string;
+  const markBegin=source.indexOf('async function mark('),markEnd=source.indexOf('\nasync function atlasClick',markBegin);
+  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(markBegin,markEnd));
+  const mark=new Function('camera','assert','wait',code+';return mark;')(camera,
+    (value:unknown,message:string)=>{if(!value)throw Error(message);},()=>{throw Error('UNEXPECTED_COMPOSER_WAIT');}) as
+    (page:InputCdpSession,from:{x:number;y:number},to:{x:number;y:number},summary:string,onStart:(state:any)=>void)=>Promise<void>;
+  for(const blockedClass of ['stage-comment-pin stage-comment-ui','control','outside']){
+    const fixture=pageFixture(parts);fixture.nodes['rig-root'].style.transform='1';
+    const target={tagName:'BUTTON',id:'old-target',className:blockedClass,closest:()=>target};
+    fixture.nodes['rig-viewport'].contains=(node:unknown)=>node===fixture.nodes['rig-viewport']||node===target;
+    if(blockedClass==='outside')fixture.nodes['rig-viewport'].panBlocked=true;
+    else fixture.nodes['rig-viewport'].hitTarget=target;
+    let observed:any;
+    await expect(mark(fixture.page,{x:12,y:12},{x:25,y:24},'guard',state=>{observed=state;})).rejects.toThrow('PARTS_COMMENT_DRAG_START_BLOCKED');
+    expect(observed.hit.allowed).toBe(false);
+    expect(fixture.mouseEvents.map(event=>event.type)).toEqual(['mouseMoved']);
+    expect(fixture.actions).toEqual([]);
+  }
+  const fixture=pageFixture(parts);fixture.nodes['rig-root'].style.transform='1';
+  const originalMouse=fixture.page.mouse.bind(fixture.page);
+  fixture.page.mouse=async(type,x,y,delta)=>{await originalMouse(type,x,y,delta);if(type==='mousePressed')throw Error('CONTROLLED_ALLOWED_PRESS');};
+  let observed:any;
+  await expect(mark(fixture.page,{x:25,y:24},{x:12,y:12},'guard',state=>{observed=state;})).rejects.toThrow('CONTROLLED_ALLOWED_PRESS');
+  expect(observed.hit.allowed).toBe(true);
+  expect(observed.from).toEqual({x:25,y:24});expect(observed.to).toEqual({x:12,y:12});
+  expect(fixture.mouseEvents.map(event=>event.type)).toEqual(['mouseMoved','mousePressed']);
 });
 
 describe('atlas screenshot supported pointer pan', () => {

@@ -32,7 +32,23 @@ const commentReady=`(()=>{const state=${commentState};
  return state.paint==='ready'&&state.ariaBusy==='false'&&!state.disabled;
 })()`;
 function source(c:any,p:{x:number;y:number}){return {x:(p.x-c.x)/c.scale,y:(p.y-c.y)/c.scale};}
-async function mark(page:CdpSession,from:{x:number;y:number},to:{x:number;y:number},summary:string){const c=await page.evaluate<any>(camera),a={x:c.left+c.x+from.x*c.scale,y:c.top+c.y+from.y*c.scale},b={x:c.left+c.x+to.x*c.scale,y:c.top+c.y+to.y*c.scale};await page.mouse('mouseMoved',a.x,a.y);await page.mouse('mousePressed',a.x,a.y);await page.mouse('mouseMoved',b.x,b.y);await page.mouse('mouseReleased',b.x,b.y);await wait(page,`!!document.querySelector('.stage-comment-composer input')`,'composer');await page.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(summary)};f.requestSubmit();})()`);await wait(page,`!document.querySelector('.stage-comment-composer')`,'comment accepted');}
+async function mark(page:CdpSession,from:{x:number;y:number},to:{x:number;y:number},summary:string,onStart?:(state:unknown)=>void){
+ const c=await page.evaluate<any>(camera),a={x:c.left+c.x+from.x*c.scale,y:c.top+c.y+from.y*c.scale},b={x:c.left+c.x+to.x*c.scale,y:c.top+c.y+to.y*c.scale};
+ await page.mouse('mouseMoved',a.x,a.y);
+ const hit=await page.evaluate<{allowed:boolean;insidePane:boolean;target:unknown;blockedBy:unknown}>(`(()=>{
+  const pane=document.getElementById('rig-viewport'),target=document.elementFromPoint(${a.x},${a.y});
+  const blocked=target?.closest?.('.stage-comment-ui,button,input,select,textarea,a,[data-viewport-action]');
+  const describe=node=>node?{tag:node.tagName,id:node.id,className:String(node.className??''),ariaLabel:node.getAttribute?.('aria-label')}:null;
+  const insidePane=!!pane&&!!target&&pane.contains(target);
+  return {allowed:insidePane&&!blocked,insidePane,target:describe(target),blockedBy:describe(blocked)};
+ })()`);
+ const startState={from,to,screenStart:a,screenEnd:b,camera:c,hit};onStart?.(startState);
+ assert(hit.allowed,'PARTS_COMMENT_DRAG_START_BLOCKED '+JSON.stringify(startState));
+ await page.mouse('mousePressed',a.x,a.y);await page.mouse('mouseMoved',b.x,b.y);await page.mouse('mouseReleased',b.x,b.y);
+ await wait(page,`!!document.querySelector('.stage-comment-composer input')`,'composer');
+ await page.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(summary)};f.requestSubmit();})()`);
+ await wait(page,`!document.querySelector('.stage-comment-composer')`,'comment accepted');
+}
 async function atlasClick(page:CdpSession,embedded=false){
  const doc=embedded?`document.querySelector('.review-stage-panel iframe').contentDocument`:'document';
  await page.evaluate(`(()=>{const d=${doc};d.querySelector('[data-pv-view="page"]').click();})()`);
@@ -84,7 +100,8 @@ async function main(){
   assert(after.pressed==='true'&&after.rigCapture&&!after.referenceCapture,
    'C5_CAPTURE_ACTIVATION_FAILED '+lang+' '+JSON.stringify(after));
   const summary='Seam '+lang;
-  await mark(page,{x:12,y:12},{x:25,y:24},summary);
+  const from=lang==='ko'?{x:25,y:24}:{x:12,y:12},to=lang==='ko'?{x:12,y:12}:{x:25,y:24};
+  await mark(page,from,to,summary,gesture=>activation.states.push({phase:'before-drag',gesture}));
   const row=await page.evaluate<any>(`[...document.querySelectorAll('.stage-comment-item')].find(row=>row.textContent.includes(${JSON.stringify(summary)}))?.dataset.commentId`);
   assert(row,'assembled issue row');
   await click(page,`[data-comment-id="${row}"] .stage-comment-summary`);await wait(page,`!!document.querySelector('.stage-comment-composer')`,'assembled edit');
@@ -100,6 +117,7 @@ async function main(){
   await wait(page,`!document.querySelector('.stage-comment-composer')`,'validated seam edit accepted');
   await click(page,'#pv-save');await wait(page,`document.getElementById('pv-save-status').dataset.result==='saved'`,'assembled save');
   const verdict=(await readVerdict(pkg)).verdict!,seam=verdict.issues.find(issue=>issue.id===row)!;
+  if(lang==='ko'){const english=report.assembled[0].issue;assert(JSON.stringify(verdict.issues.find(issue=>issue.id===english.id))===JSON.stringify(english),'saved EN issue remains unchanged');}
   assert(seam?.view.mode==='assembled'&&seam.imageRegion===null&&seam.nativeCrop===null&&seam.summary===edited,'saved assembled evidence');
   assert(JSON.stringify(seam.parts.map(part=>part.name))===JSON.stringify(['back_defect','front']),'bound parts survive edit and save');
   const bytes=await readFile(resolvedCropPath(seam.crop.path));assert(hash(bytes)===seam.crop.sha256,'stored viewport crop bytes');
