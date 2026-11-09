@@ -84,6 +84,7 @@ export function bootPartsPage(): PartsWorkspaceHandle {
     painting: () => currentView?.painting ? image('/api/parts/painting') : null,
     difference: (index, threshold, footprints) => request(`${partsApi}/difference/${index}?threshold=${threshold}&footprints=${footprints}`),
     async crop(issue) {
+      if (embedded) throw new Error('PARTS_JOINED_ISSUE_UNSUPPORTED');
       const response = await fetch(access.route('/api/parts/comment'), {
         method: 'POST', headers: access.headers({'Content-Type': 'application/json'}), body: JSON.stringify(issue),
       });
@@ -108,6 +109,10 @@ export function bootPartsPage(): PartsWorkspaceHandle {
     try {
       const value = output.value();
       if (!('issues' in value) || !('verdict' in value)) throw new Error('PARTS_VERDICT_INVALID');
+      if (embedded && value.issues.length > 0) {
+        status.textContent = t('PARTS_JOINED_ISSUE_UNSUPPORTED'); status.dataset.result = 'refused';
+        return;
+      }
       const body = {status: value.verdict, issues: value.issues,
         ...(embedded ? {binding: currentView.joinedVerdictBinding} : {})};
       const writeHeaders = headers(); writeHeaders.set('Content-Type', 'application/json');
@@ -168,7 +173,9 @@ export function bootPartsPage(): PartsWorkspaceHandle {
   disposers.push(connectLiveWindow(access));
   const syncActions = () => {
     actions.hidden = embedded && !currentView?.joinedVerdictBinding;
-    required<HTMLButtonElement>('#pv-save').disabled = host.locked() !== 'open';
+    const button = required<HTMLButtonElement>('#pv-save');
+    button.disabled = host.locked() !== 'open';
+    button.title = embedded && !access.capability ? t('Read-only view: reopen with rig-review open to edit.') : '';
   };
   const mounted = mountPartsWorkspace(slots, source, host, {defaultView: 'item', embedded});
   actions.replaceChildren(); actions.classList.add('pv-verdict');

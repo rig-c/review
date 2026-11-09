@@ -10,7 +10,7 @@ import {t} from '../web/i18n.ts';
 import {inventory} from './helpers/four-stage-fixture.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
 import {withDeadline,walkCheckpoint} from './helpers/walk-deadline.ts';
-import {markJoinedIssue} from './joined-verdict-browser.ts';
+import {assertJoinedIssueUnsupported} from './joined-verdict-browser.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 
 assert.equal(process.platform,'linux','NOVA_LINUX_REQUIRED');
@@ -176,8 +176,6 @@ try{
    await writeFile(join(output,language+'-fresh.png'),await fresh.screenshot());
   }finally{await close(fresh);}
 
-  const partNote=language==='en'?'Check the torso seam. Keep these words.':'몸통 이음새 확인. 이 문구를 유지해 주세요.';
-  const meshNote=language==='en'?'Torso mesh reviewed.':'몸통 메시를 확인했어요.';
   await page.evaluate(`(()=>{
    const d=${frame}.contentDocument;
    d.addEventListener('click',event=>{if(event.target.id==='pv-save')d.body.dataset.trustedSave=String(event.isTrusted);},true);
@@ -189,11 +187,10 @@ try{
     return response;
    };
   })()`);
-  await markJoinedIssue(page,frame,partNote);
-  await markJoinedIssue(page,frame,meshNote);
+  await assertJoinedIssueUnsupported(page,frame,t('PARTS_JOINED_ISSUE_UNSUPPORTED',undefined,language));
   await page.evaluate(`document.querySelector('[data-review-stage="3"]').click();document.querySelector('[data-review-stage="1"]').click()`);
   await ready(page);
-  assert(await page.evaluate<boolean>(`[...${frame}.contentDocument.querySelectorAll('.stage-comment-summary')].some(row=>row.textContent.includes(${JSON.stringify(partNote)}))`));
+  assert.equal(await page.evaluate(`${frame}.contentDocument.getElementById('stage-comment-refusal').textContent`),t('PARTS_JOINED_ISSUE_UNSUPPORTED',undefined,language));
   assert.deepEqual(await readdir(fixture.output),[]);
   mark(language+'.trusted-save');await trustedSave(page);
   assert.equal(await page.evaluate(`${frame}.contentDocument.body.dataset.trustedSave`),'true');
@@ -203,11 +200,10 @@ try{
   assert.deepEqual(await readdir(fixture.output),[filename]);
   const bytes=await readFile(join(fixture.output,filename)),verdict=JSON.parse(bytes.toString());
   assert.deepEqual(posts[0]!.body.verdict,verdict);
-  assert.equal(verdict.schema,'rig-review-parts-verdict/4');assert.equal(verdict.status,'changes-requested');
+  assert.equal(verdict.schema,'rig-review-parts-verdict/4');assert.equal(verdict.status,'approved');
   // Verdict file paths are relative to the designated output directory, distinct from the inspected input.
   assert.deepEqual(verdict.source,verdictSource({...standalone,verdictPath:join(fixture.output,filename)}));
-  assert.deepEqual(verdict.issues.map((issue:{summary:string})=>issue.summary),[partNote,meshNote]);
-  assert(verdict.issues.every((issue:{parts:{name:string}[];nativeCrop:unknown})=>issue.parts.length===1&&issue.parts[0]!.name==='torso'&&issue.nativeCrop),'Actual issue binding and native crop required');
+  assert.deepEqual(verdict.issues,[]);
   const exported=await withDeadline('verdict-export',15000,async signal=>{
    const response=await fetch(new URL('/api/stage-parts/export/json',url),{signal});
    assert.equal(response.status,200);return response.text();
@@ -225,8 +221,7 @@ try{
   try{
    await navigate(restored,reopened,language);
    await restored.evaluate(`${frame}.contentDocument.querySelector('[data-pv-item=torso]').click()`);
-   assert(await restored.evaluate<boolean>(`[...${frame}.contentDocument.querySelectorAll('.stage-comment-summary')].some(row=>row.textContent.includes(${JSON.stringify(partNote)}))`));
-   assert(await restored.evaluate<boolean>(`[...${frame}.contentDocument.querySelectorAll('.stage-comment-summary')].some(row=>row.textContent.includes(${JSON.stringify(meshNote)}))`));
+   await assertJoinedIssueUnsupported(restored,frame,t('PARTS_JOINED_ISSUE_UNSUPPORTED',undefined,language));
    await writeFile(join(output,language+'-reopened.png'),await restored.screenshot());
    assert.deepEqual(await json('/api/review',reopened),review);
    assert.deepEqual(await json('/api/session',reopened),session);

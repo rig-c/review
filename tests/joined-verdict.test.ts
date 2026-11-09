@@ -1,6 +1,10 @@
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
 import {partsIssueSubmission} from './helpers/parts-comments-package.ts';
+import ts from 'typescript';
+import {enCatalog} from '../web/catalog-en.ts';
+import {koCatalog} from '../web/catalog-ko.ts';
+import {t} from '../web/i18n.ts';
 import {expect,spyOn,test} from 'bun:test';
 import {link,mkdir,mkdtemp,readFile,readdir,realpath,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -13,7 +17,7 @@ import {loadOpenPackage} from '../src/open.ts';
 import {loadPartsView,readVerdict,verdictSource,exportPartsVerdict} from '../src/parts-view.ts';
 import {draftProducerInputs,draftRebuildOption} from '../src/rebuild.ts';
 import {startServer} from '../src/server.ts';
-import {stageVerdictLimit} from '../src/stage-parts.ts';
+import {stageVerdictLimit,stageVerdictRefusals} from '../src/stage-parts.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
 
 test('verdict directory is explicit and only single joined open supports it',()=>{
@@ -24,6 +28,7 @@ test('verdict directory is explicit and only single joined open supports it',()=
   expect(frontRoute('single','POST','/api/stage-parts/verdict')?.limit).toBe(stageVerdictLimit);
   expect(frontRoute('compare','POST','/api/stage-parts/verdict')).toBeNull();
   expect(frontRoute('single','GET','/api/stage-parts/verdict')).toBeNull();
+  expect(stageVerdictRefusals).toContain('PARTS_JOINED_ISSUE_UNSUPPORTED');
 });
 
 test('joined verdict is bound to the inspected source and saves through the standalone writer',async()=>{
@@ -58,13 +63,19 @@ test('joined verdict is bound to the inspected source and saves through the stan
     const inspected=await loadPartsView(f.draft.parts,{rig:f.draft.rig,meshReport:f.draft.meshReport});
     const submission=await partsIssueSubmission(inspected,note);
     expect(submission.issues[0]!.sourceHash).toBe(data.sourceHash);
-    const payload={binding:data.joinedVerdictBinding,...submission};
+    const issuePayload={binding:data.joinedVerdictBinding,...submission};
+    const payload={binding:data.joinedVerdictBinding,status:'approved',issues:[]};
     await refusal(fetch(path+'/export/json'),'PARTS_VERDICT_UNAVAILABLE',409);
     await refusal(post(payload,{'X-Review-Capability':'0'.repeat(64)}),'REVIEW_CAPABILITY_REQUIRED: reopen with rig-review open to edit',403);
+    await refusal(post(issuePayload,{'X-Review-Capability':'0'.repeat(64)}),'REVIEW_CAPABILITY_REQUIRED: reopen with rig-review open to edit',403);
     await refusal(post(payload,{Origin:'https://foreign.invalid'}),'Same-origin Origin required',403);
+    await refusal(post(issuePayload,{Origin:'https://foreign.invalid'}),'Same-origin Origin required',403);
     await refusal(post(payload,{'X-Review-Open-Nonce':'0'.repeat(64)}),'OPEN_INSTANCE_REPLACED',409);
+    await refusal(post(issuePayload,{'X-Review-Open-Nonce':'0'.repeat(64)}),'OPEN_INSTANCE_REPLACED',409);
     await refusal(post({...payload,binding:'0'.repeat(64)}),'PARTS_VERDICT_SOURCE_MISMATCH',409);
     await refusal(post(payload,{'X-Review-Stage-Build':'1'.repeat(64)}),'PARTS_VERDICT_READ_ONLY',409);
+    await refusal(post(issuePayload,{'X-Review-Stage-Build':'1'.repeat(64)}),'PARTS_VERDICT_READ_ONLY',409);
+    await refusal(post({...issuePayload,binding:'0'.repeat(64)}),'PARTS_VERDICT_SOURCE_MISMATCH',409);
     await refusal(post({...payload,padding:'x'.repeat(stageVerdictLimit)}),'PARTS_VERDICT_BODY_LIMIT',400);
     await refusal(post({...payload,parts:{}}),'PARTS_VERDICT_INVALID',400);
     const {issues:_issues,...missingIssues}=payload;
@@ -75,26 +86,28 @@ test('joined verdict is bound to the inspected source and saves through the stan
     for(const base of [await serve(readOnly.joined),await serve(f.joined,true)]){
       expect((await (await fetch(base+api)).json()).readOnly).toBe(true);
       await refusal(post(payload,{},base+api),'PARTS_VERDICT_READ_ONLY',409);
+      await refusal(post(issuePayload,{},base+api),'PARTS_VERDICT_READ_ONLY',409);
     }
     expect(await readdir(f.output)).toEqual([]);
     const target=join(f.output,data.verdictFile);
     await link(join(root,'project.json'),target);
-    try{await refusal(post(payload),'PARTS_VERDICT_OUTPUT',409);}
+    try{await refusal(post(payload),'PARTS_VERDICT_OUTPUT',409);await refusal(post(issuePayload),'PARTS_VERDICT_OUTPUT',409);}
     finally{await rm(target);}
     const review=await (await fetch(origin+'/api/review')).json();
     expect(review.manifest.model).toBeUndefined();
     expect(review.capabilities).toMatchObject({preRig:true,playback:false});
-    const approved=await post({binding:data.joinedVerdictBinding,status:'approved',issues:[]});
-    expect(approved.status,await approved.clone().text()).toBe(200);
-    expect((await approved.json()).verdict).toMatchObject({schema:'rig-review-parts-verdict/4',status:'approved',issues:[]});
-    const response=await post(payload);const saved=await response.json();
-    expect(response.status,JSON.stringify({response:saved,inspectedSourceHash:data.sourceHash,outputSourceHash:verdictSource({...inspected,verdictPath:target}).sha256})).toBe(200);expect(saved.verdict.schema).toBe('rig-review-parts-verdict/4');
-    expect(saved.verdict.status).toBe('changes-requested');
-    expect(saved.verdict.issues).toEqual(submission.issues);
-    expect(saved.verdict.issues[0].summary).toBe(note);
+    const response=await post(payload),saved=await response.json();
+    expect(response.status,JSON.stringify(saved)).toBe(200);
+    expect(saved.verdict).toMatchObject({schema:'rig-review-parts-verdict/4',status:'approved',issues:[]});
     const bytes=await readFile(target);
+    await refusal(post(issuePayload),'PARTS_JOINED_ISSUE_UNSUPPORTED',400);
+    await refusal(post({...issuePayload,status:'approved'}),'PARTS_JOINED_ISSUE_UNSUPPORTED',400);
+    await refusal(post({...issuePayload,issues:[null]}),'PARTS_JOINED_ISSUE_UNSUPPORTED',400);
+    await refusal(post({...issuePayload,status:'pending'}),'PARTS_VERDICT_INVALID',400);
+    await refusal(post({...payload,status:'changes-requested'}),'PARTS_VERDICT_NOTHING_FLAGGED',400);
+    expect(await readFile(target)).toEqual(bytes);
     expect(await get('/export/json')).toEqual(JSON.parse(exportPartsVerdict(saved.verdict,'json')));
-    expect(await (await fetch(path+'/export/issue')).text()).toContain(note);
+    expect(await (await fetch(path+'/export/issue')).text()).toContain('Status: approved');
     expect((await get()).verdict).toEqual(saved.verdict);
     const standalone=await loadPartsView(f.draft.parts,{rig:f.draft.rig,meshReport:f.draft.meshReport,verdict:target});
     expect((await readVerdict(standalone)).verdict).toEqual(saved.verdict);
@@ -104,6 +117,7 @@ test('joined verdict is bound to the inspected source and saves through the stan
       try{
         await writeFile(file,Buffer.concat([before,Buffer.from(' ')]));
         await refusal(post(payload),'INTERVIEW_OPTIONS_STALE',409);
+        await refusal(post(issuePayload),'INTERVIEW_OPTIONS_STALE',409);
         await refusal(fetch(path+'/export/json'),'INTERVIEW_OPTIONS_STALE',409);
       }finally{await writeFile(file,before);}
     }
@@ -117,6 +131,47 @@ test('joined verdict is bound to the inspected source and saves through the stan
   }
 },15_000);
 
+
+test('joined comment and adapter boundaries name the standing job route in EN and KO',async()=>{
+  const code='PARTS_JOINED_ISSUE_UNSUPPORTED';
+  const parts=await readFile('web/parts.ts','utf8'),page=await readFile('web/parts-page.ts','utf8');
+  const expression=(source:string,name:string)=>{
+    const tree=ts.createSourceFile('boundary.ts',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
+    const found:ts.Node[]=[];
+    const visit=(node:ts.Node)=>{
+      if(ts.isPropertyAssignment(node)&&node.name.getText(tree)===name)found.push(node.initializer);
+      if(ts.isVariableDeclaration(node)&&node.name.getText(tree)===name&&node.initializer)found.push(node.initializer);
+      if(ts.isMethodDeclaration(node)&&node.name.getText(tree)===name)found.push(node);
+      ts.forEachChild(node,visit);
+    };
+    visit(tree);expect(found).toHaveLength(1);
+    const node=found[0]!,value=ts.isMethodDeclaration(node)?`({${node.getText(tree)}}).${name}`:node.getText(tree);
+    return new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(`const extracted = ${value};`);
+  };
+  const refusalCode=expression(parts,'refusal'),cropCode=expression(page,'crop'),saveCode=expression(page,'save');
+  for(const language of ['en','ko'] as const){
+    const message=(language==='en'?enCatalog:koCatalog)[code]!;
+    expect(message).toContain('/jobs/<jobId>/');
+    expect(t(code,undefined,language)).toBe(message);
+    let phase='open';
+    const scope={paintFailure:null as string|null,state:{data:{mode:'parts',legacyVerdict:null as {readOnly:boolean;code:string;flaggedCount:number}|null},view:'item'},stageEmbedded:true,host:{locked:()=>phase},t:(key:string)=>t(key,undefined,language)};
+    const refusal=new Function('scope',`with(scope){${refusalCode};return extracted;}`)(scope) as ()=>string|null;
+    expect(refusal()).toBe(code);
+    scope.state.view='assembled';expect(refusal()).toBe(code);scope.state.view='item';
+    phase='sent';expect(refusal()).toBe('Read-only view: reopen with rig-review open to edit.');phase='open';
+    scope.state.data.legacyVerdict={readOnly:true,code:'PARTS_VERDICT_LEGACY_FORMAT',flaggedCount:1};expect(refusal()).toStartWith('PARTS_VERDICT_LEGACY_FORMAT');scope.state.data.legacyVerdict=null;
+    scope.paintFailure='paint failure';expect(refusal()).toBe('paint failure');scope.paintFailure=null;
+    scope.stageEmbedded=false;expect(refusal()).toBeNull();scope.stageEmbedded=true;
+    let requests=0,outputs=0;
+    const status={textContent:'',dataset:{} as Record<string,string>},button={disabled:false};
+    const adapter={embedded:true,busy:false,disposed:false,currentView:{},host:{locked:()=>phase},output:{value:()=>{outputs++;return {verdict:'changes-requested',issues:[null]};}},required:(selector:string)=>selector==='#pv-save'?button:status,t:(key:string)=>t(key,undefined,language),fetch:async()=>{requests++;throw new Error('Unexpected joined issue request');}};
+    const crop=new Function('scope',`with(scope){${cropCode};return extracted;}`)(adapter) as (issue:unknown)=>Promise<unknown>;
+    await expect(crop({})).rejects.toThrow(code);expect(requests).toBe(0);
+    const save=new Function('scope',`with(scope){${saveCode};return extracted;}`)(adapter) as ()=>Promise<void>;
+    await save();expect(status.textContent).toBe(message);expect(status.dataset.result).toBe('refused');expect(requests).toBe(0);expect(button.disabled).toBe(false);
+    phase='sent';await save();expect(outputs).toBe(1);expect(requests).toBe(0);
+  }
+});
 
 test('checkpoint 2 exposes only the registered pending bones set, while its parts verdict stays read-only',async()=>{
   const root=await mkdtemp(join(await realpath(tmpdir()),'review-draft-interview-'));
@@ -140,7 +195,7 @@ test('checkpoint 2 exposes only the registered pending bones set, while its part
     const parts=await (await fetch(origin+'/api/stage-parts')).json();
     expect(parts.readOnly).toBe(true);
     expect(parts.verdictReadOnlyReason).toStartWith('PARTS_VERDICT_READ_ONLY');
-    const verdict=await fetch(origin+'/api/stage-parts/verdict',{method:'POST',headers,body:'{}'});
+    const verdict=await fetch(origin+'/api/stage-parts/verdict',{method:'POST',headers,body:JSON.stringify({status:'changes-requested',issues:[null]})});
     expect(verdict.status).toBe(409);
     expect(await verdict.json()).toEqual({error:'PARTS_VERDICT_READ_ONLY'});
     await fixture.assertFixture();

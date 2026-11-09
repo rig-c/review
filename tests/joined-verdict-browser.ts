@@ -6,7 +6,6 @@ import {join} from 'node:path';
 import {exportPartsVerdict} from '../src/parts-view.ts';
 import {openReview} from '../src/open.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
-import {withDeadline} from './helpers/walk-deadline.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
@@ -22,40 +21,19 @@ export async function clickJoinedFrame(page:InputCdpSession,frameSelector:string
   await page.mouse('mouseMoved',x,y);await page.mouse('mousePressed',x,y);await page.mouse('mouseReleased',x,y);
 }
 
-/** The ordinary comment gesture creates the record and crop through the mounted workspace. */
-export async function markJoinedIssue(page:InputCdpSession,frameSelector:string,summary:string):Promise<void> {
-  await clickJoinedFrame(page,frameSelector,'[data-pv-item="torso"]');
-  const active=await page.evaluate<boolean>(`${frameSelector}.contentDocument.getElementById('stage-comment').getAttribute('aria-pressed')==='true'`);
-  if(!active)await clickJoinedFrame(page,frameSelector,'#stage-comment');
-  const points=await page.evaluate<{from:{x:number;y:number};to:{x:number;y:number}}>(`(()=>{
-    const f=${frameSelector},d=f.contentDocument,refusal=d.getElementById('stage-comment-refusal').textContent;
-    if(refusal)throw Error(refusal);
-    const pane=d.getElementById('rig-viewport').getBoundingClientRect(),canvas=d.getElementById('pv-canvas').getBoundingClientRect(),frame=f.getBoundingClientRect();
-    const left=Math.max(pane.left,canvas.left),top=Math.max(pane.top,canvas.top),right=Math.min(pane.right,canvas.right),bottom=Math.min(pane.bottom,canvas.bottom);
-    if(right-left<8||bottom-top<8)throw Error('Joined issue image is not visible');
-    const point=(x,y)=>({x:frame.left+f.clientLeft+left+(right-left)*x,y:frame.top+f.clientTop+top+(bottom-top)*y});
-    return {from:point(.3,.55),to:point(.65,.8)};
+/** The joined boundary exposes the named refusal through the existing comment control. */
+export async function assertJoinedIssueUnsupported(page:InputCdpSession,frameSelector:string,message:string):Promise<void> {
+  await clickJoinedFrame(page,frameSelector,'#stage-comment');
+  const state=await page.evaluate<{reason:string;title:string;list:string;composer:boolean}>(`(()=>{
+    const d=${frameSelector}.contentDocument;
+    return {reason:d.getElementById('stage-comment-refusal').textContent,title:d.getElementById('stage-comment').title,
+      list:d.getElementById('stage-comment-list').textContent,composer:!!d.querySelector('.stage-comment-composer')};
   })()`);
-  await page.mouse('mouseMoved',points.from.x,points.from.y);
-  await page.mouse('mousePressed',points.from.x,points.from.y);
-  await page.mouse('mouseMoved',points.to.x,points.to.y);
-  await page.mouse('mouseReleased',points.to.x,points.to.y);
-  await withDeadline('joined-issue-composer',15000,async signal=>{
-    while(!await page.evaluate<boolean>(`!!${frameSelector}.contentDocument.querySelector('.stage-comment-composer input')`)){
-      signal.throwIfAborted();await Bun.sleep(30);
-    }
-  });
-  await page.evaluate(`(()=>{const form=${frameSelector}.contentDocument.querySelector('.stage-comment-composer');form.querySelector('input').value=${JSON.stringify(summary)};form.requestSubmit();})()`);
-  await withDeadline('joined-issue-accepted',15000,async signal=>{
-    while(await page.evaluate<boolean>(`!!${frameSelector}.contentDocument.querySelector('.stage-comment-composer')`)){
-      signal.throwIfAborted();
-      const error=await page.evaluate<string>(`${frameSelector}.contentDocument.querySelector('.stage-comment-composer [role=alert]')?.textContent??''`);
-      if(error)throw new Error(error);
-      await Bun.sleep(30);
-    }
-  });
-  const rows=await page.evaluate<string[]>(`[...${frameSelector}.contentDocument.querySelectorAll('.stage-comment-summary')].map(row=>row.textContent)`);
-  assert(rows.some(row=>row.includes(summary)),'Joined issue was not created by the workspace');
+  assert.equal(state.reason,message);
+  assert.equal(state.title,message);
+  assert(state.list.includes(message));
+  assert.equal(state.composer,false);
+  await clickJoinedFrame(page,frameSelector,'#stage-comment');
 }
 
 async function main(){
@@ -93,13 +71,12 @@ async function main(){
     for(const lang of ['en','ko']){
       const catalog=lang==='en'?enCatalog:koCatalog;
       const fixture=await joinedVerdictFixture(join(root,'parts-'+lang));
-      const note=lang==='en'?'Check the torso seam. Keep this wording.':'몸통 이음새 확인. 이 문구를 유지해 주세요.';
       const opened=await openReview({input:fixture.input,project:fixture.project},launchOptions);
       await navigate(opened.url,lang);
       assert.equal(await page.evaluate(`document.documentElement.dataset.inspectionStage`),'1');
       assert.deepEqual(await readdir(fixture.output),[]);
       await page.evaluate(`(()=>{const d=${frame}.contentDocument;d.addEventListener('click',e=>{if(e.target.id==='pv-save')d.body.dataset.trustedSave=String(e.isTrusted);},true);})()`);
-      await markJoinedIssue(page,frame,note);
+      await assertJoinedIssueUnsupported(page,frame,catalog['PARTS_JOINED_ISSUE_UNSUPPORTED']!);
       assert.deepEqual(await readdir(fixture.output),[]);
       const mesh=await page.evaluate<string>(`${frame}.contentDocument.querySelector('#pv-corrections').textContent`);
       assert.match(mesh,/torso.*v 30 t 40/);
@@ -112,10 +89,8 @@ async function main(){
       const filename=names[0]!,bytes=await readFile(join(fixture.output,filename));
       const verdict=JSON.parse(bytes.toString());
       assert.equal(verdict.schema,'rig-review-parts-verdict/4');
-      assert.equal(verdict.status,'changes-requested');assert.equal(verdict.issues[0].summary,note);
-      assert.equal(verdict.issues[0].schema,'rig-review-parts-comment/2');
-      assert.deepEqual(verdict.issues[0].parts.map((part:{name:string})=>part.name),['torso']);
-      assert(verdict.issues[0].nativeCrop,'Joined issue must retain its actual native crop');
+      assert.equal(verdict.status,'approved');
+      assert.deepEqual(verdict.issues,[]);
       const prefix=new URL(opened.url).pathname;
       const exported=await fetch(new URL(prefix+'api/stage-parts/export/json',opened.url));
       assert.equal(exported.status,200);assert.equal(await exported.text(),exportPartsVerdict(verdict,'json'));
