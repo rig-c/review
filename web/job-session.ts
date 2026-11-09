@@ -1952,14 +1952,27 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         panel.issues = panel.issues.map(issue => parsePartsIssue(issue, true, false, false));
         const routes = jobPublicationRoutes(prepared.display, location.origin);
         const painting = jobPartsPainting(prepared);
+        const lifetime = new AbortController();
         let readyView!: () => void;
         let refuseView!: (error: unknown) => void;
         const viewReady = new Promise<void>((resolve, reject) => {readyView = resolve; refuseView = reject;});
+        void viewReady.catch(() => {});
+        let mounted: ReturnType<typeof mountPartsWorkspace> | undefined;
+        const cancelPreparation = () => {lifetime.abort(); refuseView(new Error('JOB_PRELOAD_CANCELLED'));};
+        signal.addEventListener('abort', cancelPreparation, {once: true});
+        panel.dispose = () => {
+            signal.removeEventListener('abort', cancelPreparation);
+            lifetime.abort();
+            const instance = mounted;
+            mounted = undefined;
+            instance?.dispose();
+        };
         const source: PartsSource = {
             async view() {
                 try {
-                    const view = await jobJson<JobPartsInventory>(routes.api('stage-parts'), signal);
-                    if (view.sourceHash !== prepared.display.publication.source.sourceHash)
+                    const view = await jobJson<JobPartsInventory>(routes.api('stage-parts'), lifetime.signal);
+                    if (current !== prepared || lifetime.signal.aborted ||
+                        view.sourceHash !== prepared.display.publication.source.sourceHash)
                         throw new Error('JOB_ACT_SOURCE_STALE');
                     readyView();
                     return {...view, readOnly: false};
@@ -1978,51 +1991,69 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             },
             painting: () => painting?.element instanceof HTMLImageElement ? Promise.resolve(painting.element) : null,
             async crop(issue) {
-                if (current !== prepared || signal.aborted) throw new Error('JOB_ACT_SOURCE_STALE');
+                if (current !== prepared || lifetime.signal.aborted) throw new Error('JOB_ACT_SOURCE_STALE');
                 const response = await fetch(routes.api('stage-parts/comment'), {
-                    method: 'POST', signal, headers: access.headers({'Content-Type': 'application/json'}),
+                    method: 'POST', signal: lifetime.signal, headers: access.headers({'Content-Type': 'application/json'}),
                     body: JSON.stringify(issue),
                 });
                 const value = await response.json();
                 if (!response.ok) throw new Error(value?.error?.code ?? 'PARTS_COMMENT_UNAVAILABLE');
-                if (current !== prepared || signal.aborted) throw new Error('JOB_ACT_SOURCE_STALE');
+                if (current !== prepared || lifetime.signal.aborted) throw new Error('JOB_ACT_SOURCE_STALE');
                 return parsePartsIssue(value.comment);
             },
         };
         const host: PartsHost = {
             initial: () => panel.issues,
             changed(issues) {
+                if (current !== prepared || lifetime.signal.aborted) return;
                 panel.issues = issues;
                 for (const [askId, entry] of forms) {
                     if (window.state().pending.find(ask => ask.askId === askId)?.subject.kind !== 'parts-verdict') continue;
                     entry.dirty = true;
                     entry.submissionId = crypto.randomUUID();
                 }
-                if (current === prepared) {saveDraft(); window.refresh();}
+                saveDraft(); window.refresh();
             },
             register(output) {
+                if (current !== prepared || lifetime.signal.aborted) return;
                 if (output.kind === 'parts-verdict' && panel.composition.side?.includes('parts.issues')) panel.output = output;
-                if (current === prepared) window.refresh();
+                window.refresh();
             },
             locked() {
-                if (panel.legacy || window.state().closed) return 'sent';
+                if (lifetime.signal.aborted || panel.legacy || window.state().closed) return 'sent';
                 if (current !== prepared || [...forms.values()].some(entry => entry.submitting)) return 'sent';
                 const phase = jobPartsReviewState(window.state().pending, prepared.display.publication.publicationId);
                 return phase === 'reviewing' ? 'open' : phase;
             },
         };
-        const mount = mountPartsWorkspace(panel.slots, source, host, {defaultView: 'assembled'});
-        panel.dispose = () => mount.dispose();
-        if (panel.legacy) {
-            const legacy = node('p', 'JOB_PARTS_LEGACY_DRAFT');
-            const rows = node('pre');
-            rows.className = 'job-source';
-            rows.textContent = JSON.stringify(panel.legacy, null, 2);
-            panel.slots.side.append(legacy, rows);
+        try {
+            mounted = mountPartsWorkspace(panel.slots, source, host, {defaultView: 'assembled'});
+            if (panel.legacy) {
+                const legacy = node('p', 'JOB_PARTS_LEGACY_DRAFT');
+                const rows = node('pre');
+                rows.className = 'job-source';
+                rows.textContent = JSON.stringify(panel.legacy, null, 2);
+                panel.slots.side.append(legacy, rows);
+            }
+            await viewReady;
+            await new Promise<void>((resolve, reject) => {
+                let frame = 0;
+                const cancelled = () => {
+                    signal.removeEventListener('abort', cancelled);
+                    cancelAnimationFrame(frame);
+                    reject(new Error('JOB_PRELOAD_CANCELLED'));
+                };
+                signal.addEventListener('abort', cancelled, {once: true});
+                frame = requestAnimationFrame(() => {frame = requestAnimationFrame(() => {
+                    signal.removeEventListener('abort', cancelled);
+                    resolve();
+                });});
+                if (signal.aborted) cancelled();
+            });
+            if (signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
+        } finally {
+            signal.removeEventListener('abort', cancelPreparation);
         }
-        await viewReady;
-        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-        if (signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
     }
     function build(prepared: JobPreparedInspection): HTMLElement {
         const root = node('div');
@@ -2082,7 +2113,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             const panel = {slots, composition, issues: [] as PartsIssue[], legacy: null, dispose: undefined as (() => void) | undefined};
             partsPanels.set(prepared, panel);
             const dispose = prepared.dispose;
-            prepared.dispose = () => {panel.dispose?.(); dispose();};
+            prepared.dispose = () => {try {panel.dispose?.();} finally {dispose();}};
             return root;
         }
         const parts = node('select');

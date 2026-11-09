@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import {prepareJobInspection, resolveJobPanels, jobPartsReviewState, jobPartsPainting, type JobPreparedInspection, type JobInspectionMetadataV3, createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
+import {prepareJobInspection, resolveJobPanels, jobPartsReviewState, jobPartsPainting, type JobInspectionMetadataV3, createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
 import { JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobResult, type JobModelSourceBinding, type JobRigCapture, type PendingAskV3, type UISubmissionV3, type ActV3, type RecordAct } from '../src/job-contract.ts';
 import { buildRecordSource, parseRecordAct, parseRecordPublishedContext, parseRecordSource, recordInstanceKey } from '../src/job-api.ts';
 import {createJobRigSubmission} from '../web/job-rig-capture.ts';
@@ -3619,14 +3619,14 @@ describe('C4 shared parts host', () => {
     });
 });
 
-test('C4 retained crop host enforces same origin, UI capability, source and body bounds before native preparation', async () => {
+test('C4 retained crop host enforces origin, capability, instance, current publication, source and body bounds', async () => {
     const fixture = await scriptedJobWindowFixture();
     try {
         const publication = await fixture.publish('parts');
         const descriptor = await (await fetch(fixture.locator + '/publications/' + publication.publicationId)).json();
         const endpoint = fixture.host.origin + descriptor.value.routes.apiBase + 'stage-parts/comment';
         const capability = fixture.host.session.hostCredentials().ui;
-        const post = (body: string, origin: string | null, token: string | null, contentType = 'application/json') => fetch(endpoint, {
+        const post = (body: string, origin: string | null, token: string | null, contentType = 'application/json', url = endpoint) => fetch(url, {
             method: 'POST', headers: {'Content-Type': contentType,
                 ...(origin === null ? {} : {Origin: origin}), ...(token === null ? {} : {'X-Review-Capability': token})}, body,
         });
@@ -3640,6 +3640,21 @@ test('C4 retained crop host enforces same origin, UI capability, source and body
         expect((await post('{}', fixture.host.origin, capability, 'text/plain')).status).toBe(400);
         expect((await post(JSON.stringify({padding: 'x'.repeat(256 * 1024)}), fixture.host.origin, capability)).status).toBe(413);
         expect((await fetch(endpoint)).status).toBe(404);
+        const otherKey = publication.instanceKey === '0'.repeat(64) ? '1'.repeat(64) : '0'.repeat(64);
+        const mismatchedInstance = await post('{}', fixture.host.origin, capability, 'application/json',
+            endpoint.replace('/instances/' + publication.instanceKey + '/', '/instances/' + otherKey + '/'));
+        expect(mismatchedInstance.status).toBe(409);
+        expect((await mismatchedInstance.json()).error.code).toBe('JOB_DISPLAY_MISMATCH');
+        const unknownPublication = await post('{}', fixture.host.origin, capability, 'application/json',
+            endpoint.replace('/publications/' + publication.publicationId + '/', '/publications/missing-publication/'));
+        expect(unknownPublication.status).toBe(404);
+        expect((await unknownPublication.json()).error.code).toBe('JOB_PUBLICATION_UNKNOWN');
+        await fixture.publish('parts', 'parts-new-current');
+        const oldPublication = await post(JSON.stringify({sourceHash: publication.source.sourceHash}), fixture.host.origin, capability);
+        expect(oldPublication.status).toBe(409);
+        expect((await oldPublication.json()).error.code).toBe('JOB_ACT_SOURCE_STALE');
+        // Read-only access to the prior immutable publication remains supported.
+        expect((await fetch(fixture.host.origin + descriptor.value.routes.apiBase + 'review')).status).toBe(200);
     } finally {await fixture.close();}
 });
 
@@ -3686,4 +3701,285 @@ test('C4 declared source painting preloads from its pinned route without fetchin
             else Reflect.deleteProperty(globalThis, name);
         }
     }
+});
+
+test('C4 native crop host retains the job source identity through the trusted server context', async () => {
+    const {loadPartsView, verdictSource} = await import('../src/parts-view.ts');
+    const {candidate} = await import('./helpers/parts-comments-package.ts');
+    const {readPngCrop} = await import('../src/comment-crops.ts');
+    const {PNG} = await import('pngjs');
+    const fixture = await scriptedJobWindowFixture();
+    const previousState = process.env.RIG_REVIEW_STATE_DIR;
+    process.env.RIG_REVIEW_STATE_DIR = join(fixture.input.state, 'comment-state');
+    try {
+        const publication = await fixture.publish('parts');
+        const descriptor = await (await fetch(fixture.locator + '/publications/' + publication.publicationId)).json();
+        const endpoint = fixture.host.origin + descriptor.value.routes.apiBase + 'stage-parts/comment';
+        const pkg = await loadPartsView(fixture.packageRoot);
+        const part = pkg.items[0]!;
+        const original = PNG.sync.read(await readFile(pkg.imagePaths[part.index]!));
+        const sample = candidate(pkg);
+        const issue = {...sample, sourceHash: publication.source.sourceHash,
+            parts: [{name: part.name, imageHash: sample.parts[0]!.imageHash}],
+            imageRegion: {x: 0, y: 0, width: 1, height: 1},
+            rigRegion: {x: part.x, y: part.y, width: 1, height: 1},
+        };
+        const post = (value: unknown) => fetch(endpoint, {method: 'POST',
+            headers: {'Content-Type': 'application/json', Origin: fixture.host.origin,
+                'X-Review-Capability': fixture.host.session.hostCredentials().ui}, body: JSON.stringify(value)});
+        expect(verdictSource(pkg).sha256).not.toBe(publication.source.sourceHash);
+        const before = await jobInputHashes(fixture.input.root);
+        const response = await post(issue);
+        expect(response.status).toBe(200);
+        const {comment} = await response.json();
+        expect(comment.sourceHash).toBe(publication.source.sourceHash);
+        expect(comment.parts).toEqual(issue.parts);
+        expect(comment.crop).toEqual(issue.crop);
+        const native = PNG.sync.read(await readPngCrop(comment.nativeCrop));
+        expect([native.width, native.height]).toEqual([1, 1]);
+        expect([...native.data]).toEqual([...original.data.subarray(0, 4)]);
+        const refused = await post({...issue, sourceHash: verdictSource(pkg).sha256});
+        expect(refused.status).toBe(409);
+        expect((await refused.json()).error.code).toBe('JOB_ACT_SOURCE_STALE');
+        const retained = fixture.host.session.retainedSourceV3(publication.publicationId);
+        const record = retained.seals.find(file => file.path === 'project.json')!;
+        const recordPath = join(retained.snapshotRoot, record.path);
+        const recordBytes = await readFile(recordPath);
+        try {
+            // This disposable retained-record mutant must be caught even after the parts view is cached.
+            await writeFile(recordPath, Buffer.concat([recordBytes, Buffer.from('\n')]));
+            const changed = await post(issue);
+            expect(changed.status).toBe(409);
+            expect((await changed.json()).error.code).toBe('JOB_SOURCE_UNRETAINABLE');
+        } finally {
+            await writeFile(recordPath, recordBytes);
+            const restoredHash = new Bun.CryptoHasher('sha256').update(await readFile(recordPath)).digest('hex');
+            expect(restoredHash).toBe(record.sha256);
+            console.log('C4_SNAPSHOT_CONTROL ' + JSON.stringify({before: record.sha256, restored: restoredHash}));
+        }
+        expect(await jobInputHashes(fixture.input.root)).toEqual(before);
+    } finally {
+        if (previousState === undefined) delete process.env.RIG_REVIEW_STATE_DIR;
+        else process.env.RIG_REVIEW_STATE_DIR = previousState;
+        await fixture.close();
+    }
+});
+
+describe('C4 async source and host ownership', () => {
+    const roots: string[] = [];
+    afterEach(async () => {
+        const {rm} = await import('node:fs/promises');
+        for (const root of roots.splice(0)) await rm(root, {recursive: true, force: true});
+    });
+    // Execute the existing C4 adapter closures, never a replacement for the absent C3 mount.
+    async function adapters() {
+        const [{parsePartsIssue}, {commentFixture, candidate}, {mkdtemp}, {tmpdir}] = await Promise.all([
+            import('../src/parts-comment.ts'), import('./helpers/parts-comments-package.ts'),
+            import('node:fs/promises'), import('node:os'),
+        ]);
+        const h = harness();
+        let preparation!: AbortSignal;
+        h.prepareWith(async (_display, signal) => {preparation = signal;});
+        const display = await h.publish(1);
+        const prepared = {display};
+        const root = await mkdtemp(join(tmpdir(), 'review-c4-adapters-'));
+        roots.push(root);
+        const pkg = await commentFixture(root);
+        const sample = candidate(pkg);
+        const item = pkg.items[0]!;
+        const issue = {...sample, sourceHash: display.publication.source.sourceHash,
+            parts: [{name: item.name, imageHash: sample.parts[0]!.imageHash}],
+            imageRegion: {x: 0, y: 0, width: 1, height: 1},
+            rigRegion: {x: item.x, y: item.y, width: 1, height: 1}};
+        const sourceText = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+        const mountStart = sourceText.indexOf('    async function mountJobParts(');
+        const adapterStart = sourceText.indexOf('        const lifetime = new AbortController();', mountStart);
+        const adapterEnd = sourceText.indexOf('        try {\n            mounted = mountPartsWorkspace(', adapterStart);
+        const paintStart = sourceText.indexOf('            await new Promise<void>((resolve, reject)', adapterEnd);
+        const paintEnd = sourceText.indexOf('\n            if (signal.aborted)', paintStart);
+        const paintExpression = sourceText.slice(paintStart + '            await '.length, paintEnd).trim().replace(/;$/, '');
+        const finalizerStart = sourceText.indexOf('        } finally {', adapterEnd) + '        } finally {'.length;
+        const finalizerEnd = sourceText.indexOf('\n        }', finalizerStart);
+        const bytesStart = sourceText.indexOf('async function jobBytes(');
+        const bytesEnd = sourceText.indexOf('async function jobDigest(', bytesStart);
+        const jsonStart = sourceText.indexOf('async function jobJson<');
+        const jsonEnd = sourceText.indexOf('function mediaReady(', jsonStart);
+        expect(adapterStart).toBeGreaterThan(mountStart);
+        expect(adapterEnd).toBeGreaterThan(adapterStart);
+        const panel: {issues: typeof issue[]; legacy: unknown; composition: {side: string[]}; output?: unknown; dispose?: () => void} = {
+            issues: [issue], legacy: null, composition: {side: ['parts.issues', 'act.submit']},
+        };
+        const partsForm = {dirty: false, submissionId: 'original-parts-id'};
+        const otherForm = {dirty: false, submissionId: 'original-other-id'};
+        const forms = new Map([['parts-ask', partsForm], ['other-ask', otherForm]]);
+        h.window.event({type: 'pending', jobId: 'window-fixture', generation: 2, cursor: '2', ask: {
+            askId: 'parts-ask', publicationId: display.publication.publicationId,
+            source: display.publication.source, status: 'pending', subject: {kind: 'parts-verdict', draftId: 'draft-one'},
+        }});
+        let saves = 0;
+        const signals: AbortSignal[] = [];
+        let fetcher = async (_url: string, init: RequestInit): Promise<Response> => {
+            if (init.method === 'POST') return Response.json({error: {code: 'PARTS_COMMENT_UNAVAILABLE'}}, {status: 409});
+            return Response.json({sourceHash: display.publication.source.sourceHash});
+        };
+        const fetchAdapter = (url: string, init: RequestInit) => {signals.push(init.signal as AbortSignal); return fetcher(url, init);};
+        const frames = new Map<number, FrameRequestCallback>();
+        let frameId = 0;
+        const code = sourceText.slice(bytesStart, bytesEnd) + sourceText.slice(jsonStart, jsonEnd) +
+            sourceText.slice(adapterStart, adapterEnd) + '\nreturn {source, host, lifetime, viewReady,\n' +
+            'finishPreparation() {' + sourceText.slice(finalizerStart, finalizerEnd) + '\n},\n' +
+            'waitForPaint() {return ' + paintExpression + ';},\n' +
+            'activate(value) {current = value;}};';
+        const run = new Function('prepared', 'current', 'signal', 'panel', 'routes', 'painting', 'forms', 'window',
+            'access', 'fetch', 'parsePartsIssue', 'saveDraft', 'jobPartsReviewState', 'requestAnimationFrame', 'cancelAnimationFrame',
+            new Bun.Transpiler({loader: 'ts'}).transformSync(code));
+        const probe = run(prepared, prepared, preparation, panel,
+            jobPublicationRoutes(display, 'http://127.0.0.1:4318'), null, forms, h.window,
+            {headers: (init: HeadersInit) => new Headers(init)}, fetchAdapter, parsePartsIssue, () => {saves++;}, jobPartsReviewState,
+            (callback: FrameRequestCallback) => {frames.set(++frameId, callback); return frameId;},
+            (id: number) => {frames.delete(id);}) as {
+                source: import('../web/parts.ts').PartsSource;
+                host: import('../web/parts.ts').PartsHost;
+                lifetime: AbortController;
+                viewReady: Promise<void>;
+                finishPreparation(): void;
+                waitForPaint(): Promise<void>;
+                activate(value: object): void;
+            };
+        return {...h, probe, prepared, panel, partsForm, otherForm, signals, issue, preparation,
+            saved: () => saves, frames,
+            frame() {const first = frames.entries().next().value; if (first) {frames.delete(first[0]); first[1](0);}},
+            fetchWith(value: typeof fetcher) {fetcher = value;}};
+    }
+
+    test('C4 failed replacement keeps the retained adapter usable after its preparation signal aborts', async () => {
+        const h = await adapters();
+        await h.probe.source.view();
+        await h.probe.viewReady;
+        const painted = h.probe.waitForPaint();
+        h.frame(); h.frame();
+        await painted;
+        h.probe.finishPreparation();
+        h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
+        await h.publish(2);
+        expect(h.preparation.aborted).toBe(true);
+        expect(h.window.state().displayed?.publication.publicationId).toBe('publication-1');
+        expect(h.probe.lifetime.signal.aborted).toBe(false);
+        await expect(h.probe.source.view()).resolves.toMatchObject({sourceHash: h.issue.sourceHash});
+        await expect(h.probe.source.crop(h.issue)).rejects.toThrow('PARTS_COMMENT_UNAVAILABLE');
+        expect(h.signals.every(signal => signal === h.probe.lifetime.signal && !signal.aborted)).toBe(true);
+        h.panel.dispose!();
+    });
+
+    test('C4 cancellation while preparing aborts the actual source request and settles readiness', async () => {
+        const h = await adapters();
+        h.fetchWith(async (_url, init) => new Promise<Response>((_resolve, reject) => {
+            init.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {once: true});
+        }));
+        const refused = h.probe.source.view().catch(error => error);
+        const readiness = h.probe.viewReady.catch(error => error);
+        h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
+        await h.publish(2);
+        expect((await refused).message).toContain('Aborted');
+        expect((await readiness).message).toBe('JOB_PRELOAD_CANCELLED');
+        expect(h.probe.lifetime.signal.aborted).toBe(true);
+        h.panel.dispose!();
+    });
+
+    test('C4 cancellation between paint frames releases preparation without waiting for another frame', async () => {
+        for (const deliveredFrames of [0, 1]) {
+            const h = await adapters();
+            await h.probe.source.view();
+            await h.probe.viewReady;
+            const painted = h.probe.waitForPaint().catch(error => error);
+            if (deliveredFrames) h.frame();
+            h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
+            await h.publish(2);
+            expect((await painted).message).toBe('JOB_PRELOAD_CANCELLED');
+            expect(h.frames.size).toBe(0);
+            h.probe.finishPreparation();
+            h.panel.dispose!();
+        }
+    });
+
+    test('C4 late callbacks from an inactive or disposed adapter leave current forms and output intact', async () => {
+        const h = await adapters();
+        h.probe.finishPreparation();
+        const original = h.panel.issues;
+        const output = {kind: 'parts-verdict' as const, value: () => ({verdict: 'approved' as const, issues: [], words: ''})};
+        h.probe.activate({});
+        h.probe.host.changed([]);
+        h.probe.host.register(output);
+        expect(h.panel.issues).toBe(original);
+        expect(h.panel.output).toBeUndefined();
+        expect(h.partsForm).toEqual({dirty: false, submissionId: 'original-parts-id'});
+        expect(h.saved()).toBe(0);
+        h.probe.activate(h.prepared);
+        h.panel.dispose!();
+        h.probe.host.changed([]);
+        h.probe.host.register(output);
+        expect(h.panel.issues).toBe(original);
+        expect(h.panel.output).toBeUndefined();
+        expect(h.partsForm).toEqual({dirty: false, submissionId: 'original-parts-id'});
+        expect(h.probe.host.locked()).toBe('sent');
+    });
+
+    test('C4 active callbacks retain initial issues and dirty only the parts form', async () => {
+        const h = await adapters();
+        expect(h.probe.host.initial()).toBe(h.panel.issues);
+        h.probe.finishPreparation();
+        h.probe.host.changed([]);
+        expect(h.panel.issues).toEqual([]);
+        expect(h.partsForm.dirty).toBe(true);
+        expect(h.partsForm.submissionId).not.toBe('original-parts-id');
+        expect(h.otherForm).toEqual({dirty: false, submissionId: 'original-other-id'});
+        expect(h.saved()).toBe(1);
+        const output = {kind: 'parts-verdict' as const, value: () => ({verdict: 'approved' as const, issues: [], words: ''})};
+        h.probe.host.register(output);
+        expect(h.panel.output).toBe(output);
+        h.panel.dispose!();
+    });
+
+    test('C4 a late crop reply is refused after owner replacement or disposal', async () => {
+        for (const dispose of [false, true]) {
+            const h = await adapters();
+            h.probe.finishPreparation();
+            const response = deferred<Response>();
+            h.fetchWith(async () => response.promise);
+            const refused = h.probe.source.crop(h.issue).catch(error => error);
+            if (dispose) h.panel.dispose!(); else h.probe.activate({});
+            response.resolve(Response.json({comment: h.issue}));
+            expect((await refused).message).toBe('JOB_ACT_SOURCE_STALE');
+            expect(h.partsForm.dirty).toBe(false);
+            h.panel.dispose!();
+        }
+    });
+
+    test('C4 disposal aborts an active crop once and refuses subsequent crop requests', async () => {
+        const h = await adapters();
+        h.probe.finishPreparation();
+        let aborted = 0;
+        h.fetchWith(async (_url, init) => new Promise<Response>((_resolve, reject) => {
+            init.signal!.addEventListener('abort', () => {aborted++; reject(new DOMException('Aborted', 'AbortError'));}, {once: true});
+        }));
+        const refused = h.probe.source.crop(h.issue).catch(error => error);
+        h.panel.dispose!();
+        h.panel.dispose!();
+        expect((await refused).message).toContain('Aborted');
+        expect(aborted).toBe(1);
+        await expect(h.probe.source.crop(h.issue)).rejects.toThrow('JOB_ACT_SOURCE_STALE');
+        expect(h.signals).toHaveLength(1);
+    });
+});
+
+test('C4 base inspection resources are disposed even when workspace cleanup throws', async () => {
+    const text = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+    const start = text.indexOf('            prepared.dispose = () =>');
+    const end = text.indexOf('\n', start);
+    const prepared = {dispose() {}};
+    let disposed = 0;
+    new Function('prepared', 'panel', 'dispose', text.slice(start, end))(
+        prepared, {dispose() {throw new Error('Declared cleanup failure');}}, () => {disposed++;});
+    expect(() => prepared.dispose()).toThrow('Declared cleanup failure');
+    expect(disposed).toBe(1);
 });

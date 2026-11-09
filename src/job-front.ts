@@ -2,7 +2,7 @@
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
 import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumeratorVersion } from './job-api.ts';
 import { JobSession } from './job-session.ts';
-import { assertJobRoot, captureJobRoot, isRetainedRecordSource, type JobRootIdentity } from './job-source.ts';
+import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, type JobRootIdentity } from './job-source.ts';
 import type { JobWorkerOptions } from './job-worker.ts';
 import { JobError, JobStore } from './job-store.ts';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
@@ -210,6 +210,8 @@ export function retainedPublicationRoutes(session: JobSession) {
             return await session.readPublicationResponse(publicationId, async retained => {
                 const display = session.displayPublication(publicationId);
                 if (key !== display.publication.instanceKey) return failure('JOB_DISPLAY_MISMATCH', 409);
+                if (crop && session.status().publication?.publicationId !== publicationId)
+                    return failure('JOB_ACT_SOURCE_STALE', 409);
                 const json = (value: unknown) => new Response(request.method === 'HEAD' ? null : JSON.stringify(value), {
                     headers: {...headers, 'Content-Type': 'application/json'},
                 });
@@ -333,7 +335,11 @@ export function retainedPublicationRoutes(session: JobSession) {
                         (raw as {sourceHash?: unknown}).sourceHash !== retained.source.sourceHash)
                         return failure('JOB_ACT_SOURCE_STALE', 409);
                     // Preserve the exact displayed job identity through native evidence validation.
-                    const comment = await preparePartsComment(parts, raw);
+                    assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);
+                    const comment = await preparePartsComment(parts, raw, false, {sourceHash: retained.source.sourceHash});
+                    assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);
+                    if (session.status().publication?.publicationId !== publicationId)
+                        return failure('JOB_ACT_SOURCE_STALE', 409);
                     return json({comment});
                 }
                 if (path === 'api/stage-parts') {
