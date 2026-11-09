@@ -170,6 +170,9 @@ import {jobHash} from '../src/job-api.ts';
 // Runtime import of the approved dev-only public entry. Production Review has no Parts dependency.
 const installedPartsEntry = '@rig-c/parts/src/parts.ts';
 const installedParts = await import(installedPartsEntry);
+const reviewManifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+  devDependencies: Record<string, string>;
+};
 const installedPartsPackage = JSON.parse(await readFile(new URL('../node_modules/@rig-c/parts/package.json', import.meta.url), 'utf8'));
 const officialEnumerator: JobPartsEnumerator = {
   version: installedPartsPackage.version,
@@ -192,7 +195,7 @@ async function officialFixture() {
 }
 
 test('C4 installed public enumeration binds five roles, shared roles and UTF-16 paths losslessly', async () => {
-  expect(officialEnumerator.version).toBe('2.35.0');
+  expect(officialEnumerator.version).toBe(reviewManifest.devDependencies['@rig-c/parts']);
   const {f, references, parts} = await officialFixture();
   const before = await jobInputHashes(f.root);
   const publication = await f.publish();

@@ -225,7 +225,7 @@ test('front stays up while control directory has a live record and exits within 
  const frontSrc=await readFile(new URL('../src/front.ts',import.meta.url),'utf8');
  const plantedFrontSrc=frontSrc.replace(/async function liveInstances\(control:string\):Promise<boolean>\{[^\n]*\}/,'async function liveInstances(control:string):Promise<boolean>{for(const name of await readdir(control)){if(/^[a-f0-9]{64}\\.claim$/.test(name))return true;}return false;}');
  const plantedDir=join(f.root,'planted-src');await mkdir(plantedDir,{recursive:true});
- for(const name of ['open.ts','open-protocol.ts','live-lifecycle.ts','control.ts','reference.ts','manifest.ts','compare.ts','server.ts','compare-server.ts','animation-selection.ts','versions.ts','handoff.ts','state-dir.ts','stage-parts.ts','interview-routes.ts','interview-picks.ts','joined-project.ts']){
+ for(const name of ['build.ts','open.ts','open-protocol.ts','live-lifecycle.ts','control.ts','reference.ts','manifest.ts','compare.ts','server.ts','compare-server.ts','animation-selection.ts','versions.ts','handoff.ts','state-dir.ts','stage-parts.ts','interview-routes.ts','interview-picks.ts','joined-project.ts']){
   await writeFile(join(plantedDir,name),`export * from ${JSON.stringify(join(import.meta.dir,'../src',name))};\n`);
  }
  await writeFile(join(plantedDir,'front.ts'),plantedFrontSrc);

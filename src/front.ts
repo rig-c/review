@@ -12,6 +12,7 @@ import {lstat,readFile,readdir,realpath,rename,unlink,writeFile,open as openFile
 import {dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {acquireClaim,alive,openFingerprint,readRecord,releaseClaim,running,smallJson,type RecordFile} from './open.ts';
+import {playBuildConditions} from './build.ts';
 import {capabilityHeader,openKeyHeader,openNonceHeader,sameSecret} from './open-protocol.ts';
 import {DEFAULT_CLOSE_GRACE_MS,LIVE_PATH} from './live-lifecycle.ts';
 export const defaultFrontPort=4318; // Foreground `review <dir>` keeps 4317.
@@ -40,7 +41,7 @@ export async function ensureFront(options:{control:string;port:number;fingerprin
   const row=await reuse();if(row)return row.origin;
   request=join(control,`${name}.${nonce}.request.json`);const log=join(control,`${name}.${nonce}.log`);
   const spec:FrontRequest={schema:'rig-review-front-request/1',control,request,record:recordPath,port,nonce,fingerprint,idleMs};await writeFile(request,JSON.stringify(spec),{mode:0o600,flag:'wx'});
-  const logHandle=await openFile(log,'a',0o600);try{child=spawn(process.execPath,[join(appRoot,'src/front-worker.ts'),request],{cwd:control,detached:true,stdio:['ignore',logHandle.fd,logHandle.fd],env:process.env});child.unref();}finally{await logHandle.close();}
+  const logHandle=await openFile(log,'a',0o600);try{child=spawn(process.execPath,[...playBuildConditions().map(c=>`--conditions=${c}`),join(appRoot,'src/front-worker.ts'),request],{cwd:control,detached:true,stdio:['ignore',logHandle.fd,logHandle.fd],env:process.env});child.unref();}finally{await logHandle.close();}
   let exited:string|undefined;child.on('error',error=>{exited=error.message;});child.on('exit',(code,signal)=>{exited=`exit ${code} ${signal??''}`;});
   while(performance.now()<deadline){const live=await reuse();if(live){handedOff=true;return live.origin;}
    if(exited){if(/FRONT_PORT_BUSY/.test(await readFile(log,'utf8').catch(()=>'')))throw new Error(`FRONT_PORT_BUSY: 127.0.0.1:${port} is held by another listener; use --direct (or set RIG_REVIEW_FRONT_PORT)`);throw new Error(`FRONT_START: ${exited}; front log ${log}`);}

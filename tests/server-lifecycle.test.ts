@@ -914,6 +914,7 @@ test('a front stays up while its control directory has a live record and exits w
   const plantedDir = join(root, 'planted-src');
   await mkdir(plantedDir, { recursive: true });
   for (const name of [
+    'build.ts',
     'open.ts',
     'open-protocol.ts',
     'live-lifecycle.ts',
