@@ -635,6 +635,10 @@ without aliases or copied wire shapes.
 - `JobAct`
 - `JobSubject`
 - `JobPendingAsk`
+- `JobInterviewJson`
+- `JobInterviewRecord`
+- `JobInterviewDiagnostic`
+- `JobInterviewDiagnostics`
 - `JobPublication`
 - `JobStatus`
 - `JobPublishRequest`

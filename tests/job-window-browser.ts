@@ -9,18 +9,21 @@ import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {assertPartsViewportOracle, inspectPartsViewportPng} from './helpers/job-window-paint.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 import {rigStillBrowserProbe} from './helpers/job-rig-still-browser.ts';
+import {interviewDiagnosticsBrowserProbe} from './helpers/job-interview-browser.ts';
 
 const argument = (key: string) => {const index = Bun.argv.indexOf(key); return index < 0 ? undefined : Bun.argv[index + 1];};
 const language = argument('--lang') ?? 'en';
 assert.ok(language === 'en' || language === 'ko');
 const observeStill = Bun.argv.includes('--rig-still-observe');
 const onlyStill = Bun.argv.includes('--rig-still-only');
-assert.ok(!(observeStill && onlyStill));
+const onlyInterviewDiagnostics = Bun.argv.includes('--interview-diagnostics-only');
+assert.ok([observeStill, onlyStill, onlyInterviewDiagnostics].filter(Boolean).length <= 1);
 assert.ok(!observeStill || language === 'en', 'the diagnostic observation mode is EN only');
 const output = argument('--out') ?? 'evidence/job-window-' + language;
 await mkdir(output, {recursive: true});
 const fixture = await scriptedJobWindowFixture();
 const stillProbe = onlyStill || observeStill ? rigStillBrowserProbe(fixture, output, language, observeStill) : null;
+const interviewProbe = onlyInterviewDiagnostics ? await interviewDiagnosticsBrowserProbe(fixture, output, language) : null;
 const profile = await mkdtemp(join(tmpdir(), 'review-job-window-'));
 const observations: Record<string, unknown> = {};
 const navigation: {url: string; loaderId?: string}[] = [];
@@ -258,6 +261,10 @@ try {
     const sentinel = await page.evaluate<string>('globalThis.__jobWindowDocument = crypto.randomUUID()');
     if (stillProbe) {
         await stillProbe.run(page, {wait, show, edit, send: control!});
+        assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
+        assert.equal(navigation.length, 1);
+    } else if (interviewProbe) {
+        await interviewProbe.run(page, {wait, show, edit, submit, checkpoints, send: control!});
         assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
         assert.equal(navigation.length, 1);
     } else {

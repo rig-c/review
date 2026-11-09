@@ -247,6 +247,7 @@ export async function scriptedJobWindowFixture() {
         subjects: [...f.input.getContext().subjects, {kind: 'parts-verdict' as const, draftId: 'synthetic-parts'}],
     };
     f.input.setPartsReferences(context.parts.images.map(({path, role}) => ({path, role})));
+    f.input.setContext(context);
     let generation = 0;
     let sequence = 0;
     async function agent(verb: 'publish' | 'ask' | 'next' | 'close', value: Record<string, unknown>) {
@@ -276,7 +277,7 @@ export async function scriptedJobWindowFixture() {
                 manifest.direction = 'direction.json';
             }
             await writeFile(join(packageRoot, 'review.json'), JSON.stringify(manifest));
-            f.input.setContext({...context, selector});
+            f.input.setContext({...f.input.getContext(), selector});
             const record = {path: 'project.json', sha256: jobHash(await readFile(join(f.input.root, 'project.json')))};
             const result = await agent('publish', {result: {path: 'out', selector},
                 freeze: {kind: 'producer-held', holdId: 'scripted-window-held', record}});
