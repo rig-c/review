@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
-import type { JobDisplayPublication, JobDisplayReceipt, JobResult, JobModelSourceBinding, JobRigCapture } from '../src/job-contract.ts';
+import type { DisplayPublicationV3, JobDisplayPublication, JobDisplayReceipt, JobResult, JobModelSourceBinding, JobRigCapture } from '../src/job-contract.ts';
 import {createJobRigSubmission} from '../web/job-rig-capture.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
 import {t} from '../web/i18n.ts';
@@ -128,12 +128,12 @@ function harness() {
     const disposed: string[] = [];
     const rollbacks: string[] = [];
     let live: {
-        display: JobDisplayPublication;
+        display: DisplayPublicationV3;
         draft: {
             words: string;
         };
     } | null = null;
-    let preparation: ((display: JobDisplayPublication, signal: AbortSignal) => Promise<void>) | null = null;
+    let preparation: ((display: DisplayPublicationV3, signal: AbortSignal) => Promise<void>) | null = null;
     let acknowledgment: (() => Promise<JobResult<JobDisplayReceipt>>) | null = null;
     let failCleanup = false;
     const request = (body: unknown) => new Request('http://127.0.0.1:4318/jobs/window-fixture/ui/displayed', {

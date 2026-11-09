@@ -637,6 +637,12 @@ export interface JobDisplayPublication {
   };
 }
 
+export interface DisplayPublicationV3 {
+  readonly publication: PublicationV3;
+  /** Same-origin routes pinned to this publication and instance. No current alias. */
+  readonly routes: JobDisplayPublication['routes'];
+}
+
 /** Trusted host ports for Lane B. Raw Requests preserve real Origin, capability,
  * size and abort context. A TypeScript value is never authentication evidence.
  * handleJobApi accepts agent verbs and consumer fetch only. The host wires UI
@@ -649,9 +655,9 @@ export interface JobHostPorts {
     readonly jobId: JobId;
     readonly after: JobCursor | null;
     readonly signal: AbortSignal;
-  }): AsyncIterable<JobEvent>;
-  readPublication(jobId: JobId, publicationId: JobPublicationId): Promise<JobResult<JobDisplayPublication>>;
-  commitUIAct(jobId: JobId, request: Request): Promise<JobResult<JobAct>>;
+  }): AsyncIterable<EventV3>;
+  readPublication(jobId: JobId, publicationId: JobPublicationId): Promise<JobResult<DisplayPublicationV3>>;
+  commitUIAct(jobId: JobId, request: Request): Promise<JobResult<ActV3>>;
   ackDisplayed(jobId: JobId, request: Request): Promise<JobResult<JobDisplayReceipt>>;
   jobLiveness(jobId: JobId): Promise<JobResult<{
     readonly active: boolean;
@@ -823,6 +829,15 @@ export interface RecordHostHooks {
 }
 
 export interface RecordSourceBase {
+  readonly package?: never;
+  readonly selector?: never;
+  readonly model?: never;
+  readonly direction?: never;
+  readonly appliedResult?: never;
+  readonly parts?: never;
+  readonly imageSet?: never;
+  readonly imageSetDigest?: never;
+  readonly duplicateHashes?: never;
   readonly sourceHash: JobSha256;
   readonly projectHash: JobSha256;
   readonly record: ProjectRecord;
@@ -914,7 +929,7 @@ export type EventV3 = {
 );
 
 export interface NextValueV3 {
-  readonly capabilities?: JobCapabilitiesV3;
+  readonly capabilities?: JobCapabilities | JobCapabilitiesV3;
   readonly events: readonly EventV3[];
   readonly cursor: JobCursor | null;
   readonly status: 'events' | 'timeout' | 'closed';
@@ -974,6 +989,7 @@ export type JobSourceV3 = SourceV3;
 export type JobActV3 = ActV3;
 export type JobPendingAskV3 = PendingAskV3;
 export type JobPublicationV3 = PublicationV3;
+export type JobDisplayPublicationV3 = DisplayPublicationV3;
 export type JobStatusV3 = StatusV3;
 export type JobEventV3 = EventV3;
 export type JobNextValueV3 = NextValueV3;
