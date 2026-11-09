@@ -580,7 +580,25 @@ async function restoreStageParts(saved:StagePartsState):Promise<void>{
 }
 if(typeof window!=='undefined')window.addEventListener('message',event=>{if(event.source===parent&&event.origin===location.origin&&event.data?.type==='review-stage-restore'&&event.data.state)void restoreStageParts(event.data.state);});
 
-if(typeof window!=='undefined')window.addEventListener('message',event=>{if(event.source!==parent||event.origin!==location.origin||event.data?.type!=='review-stage-revalidate')return;void (async()=>{
- try{const response=await fetch(access.route(partsApi),{headers:stageHeaders()}),data=await response.json() as ViewData&{error?:string};if(!response.ok||data.sourceHash!==state.data?.sourceHash)throw new Error(data.error??'STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.');if(event.data.state)await restoreStageParts(event.data.state);}
- catch(error){document.querySelector<HTMLElement>('.pv-verdict')!.hidden=true;if(state.data)delete state.data.joinedVerdictBinding;const status=$('pv-load');status.hidden=false;status.dataset.result='refused';status.textContent=t(error instanceof Error?error.message:String(error));document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;}
-})();});
+async function revalidateStageParts(nextBuild?:string,savedState?:StagePartsState|null):Promise<void>{
+ const targetBuild=nextBuild==='inspected'||(typeof nextBuild==='string'&&/^[a-f0-9]{64}$/.test(nextBuild))?nextBuild:stageBuild;
+ try{
+  const headers=access.headers(stageEmbedded?{'X-Review-Stage-Build':targetBuild}:{});
+  const response=await fetch(access.route(partsApi),{headers}),data=await response.json() as ViewData&{error?:string};
+  const sameBuild=targetBuild===stageBuild&&(data.draft?.buildId??targetBuild)===(state.data?.draft?.buildId??stageBuild);
+  const validBuild=sameBuild?data.sourceHash===state.data?.sourceHash:Boolean(data.inspectionSourceHash&&data.inspectionSourceHash===state.data?.inspectionSourceHash&&data.draft?.buildId===targetBuild);
+  if(!response.ok||!validBuild)throw new Error(data.error??'STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.');
+  stageBuild=targetBuild;state.data=data;
+  if(stageEmbedded){
+   document.querySelector<HTMLElement>('.pv-verdict')!.hidden=!data.joinedVerdictBinding;
+   const status=$('pv-load');status.textContent=data.verdictReadOnlyReason?t(data.verdictReadOnlyReason):'';status.hidden=status.textContent==='';delete status.dataset.result;
+  }
+  if(savedState)await restoreStageParts(savedState);else if(!sameBuild){select(state.selected);await paint();}
+  renderCorrections();
+ }catch(error){
+  document.querySelector<HTMLElement>('.pv-verdict')!.hidden=true;if(state.data)delete state.data.joinedVerdictBinding;
+  const status=$('pv-load');status.hidden=false;status.dataset.result='refused';status.textContent=t(error instanceof Error?error.message:String(error));
+  document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;
+ }
+}
+if(typeof window!=='undefined')window.addEventListener('message',event=>{if(event.source!==parent||event.origin!==location.origin||event.data?.type!=='review-stage-revalidate')return;void revalidateStageParts(event.data.buildId,event.data.state);});

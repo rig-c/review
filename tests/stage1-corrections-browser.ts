@@ -22,7 +22,7 @@ const MESH_SETTLE_DEADLINE_MS = 40_000;
 const PARTS_DOCUMENT = "document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument";
 const PARTS_READY = `(() => {
   const d = ${PARTS_DOCUMENT};
-  return {ready: d?.body.dataset.ready === 'true', detail: d?.body.textContent};
+  return {ready: d?.body?.dataset.ready === 'true', detail: d?.body?.textContent};
 })()`;
 
 export const STAGE1_READINESS = {

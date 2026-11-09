@@ -124,6 +124,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.": "STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.",
   "STAGE_DRAFT_STALE: the requested revision is pending or no longer applied.": "STAGE_DRAFT_STALE: the requested revision is pending or no longer applied.",
   "STAGE_DRAFT_CHANGED: scratch inputs changed after Apply.": "STAGE_DRAFT_CHANGED: scratch inputs changed after Apply.",
+  "MESH_DELTA_APPLIED_SOURCE: Edit Mesh starts from the inspected draft. Export the delta and rebuild the prior revision (including any Mesh Parameters patch) first.": "MESH_DELTA_APPLIED_SOURCE: Edit Mesh starts from the inspected draft. Export the delta and rebuild the prior revision (including any Mesh Parameters patch) first.",
   "STAGE_DRAFT_UNCHECKED: this revision has no successful producer check.": "STAGE_DRAFT_UNCHECKED: this revision has no successful producer check.",
   "STAGE_DRAFT_OPERATION: this applied operation is not a mesh correction.": "STAGE_DRAFT_OPERATION: this applied operation is not a mesh correction.",
   "Approve all": "Approve all",
@@ -3454,4 +3455,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "KEY_TIME_OUT_OF_DOMAIN": "KEY_TIME_OUT_OF_DOMAIN",
   "MODEL_UNAVAILABLE": "MODEL_UNAVAILABLE",
   "REFERENCE_OUT_OF_DOMAIN": "REFERENCE_OUT_OF_DOMAIN",
+  " · installed {0} {1} · {2} {3}": " · installed {0} {1} · {2} {3}",
+  "Draft {0} ({1} {2}): {3} sha256 {4}… · parts {5}{6}": "Draft {0} ({1} {2}): {3} sha256 {4}… · parts {5}{6}",
+  "PARTS_VERDICT_READ_ONLY: Stage 1 draft is inspection-only": "PARTS_VERDICT_READ_ONLY: Stage 1 draft is inspection-only",
+  "STAGE_DRAFT_OPERATION: only applied mesh corrections belong to this inspection": "STAGE_DRAFT_OPERATION: only applied mesh corrections belong to this inspection",
 };

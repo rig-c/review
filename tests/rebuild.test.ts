@@ -319,3 +319,400 @@ if(a[0]==='rig'){`));
   expect(await treeHash(pkg)).toBe(before);
  }finally{server?.stop(true);await rm(root,{recursive:true,force:true});}
 });
+
+test('#562C recorded draft adapter starts zero producer jobs on describe, validates full inventories, runs Stage 1 remesh/delta with check gate, refuses unsupported ops, and preserves source bytes',async()=>{
+ const {spyOn}=await import('bun:test');
+ const {existsSync}=await import('node:fs');
+ const {symlink}=await import('node:fs/promises');
+ const {joinedVerdictFixture}=await import('./helpers/joined-verdict-fixture.ts');
+ const {stagePartsRoutes}=await import('../src/stage-parts.ts');
+ const root=await realpath(await mkdtemp(join(tmpdir(),'review-draft-rebuild-')));
+ const projectRoot=join(root,'project');
+ const state=join(root,'external-state');
+ try{
+  const f=await joinedVerdictFixture(projectRoot,'1-parts-verdict');
+  await install(root,'1.49.0');
+  const bin=join(root,'node_modules/@rig-c/parts/bin/rig-parts.cjs');
+  const rigcBin=join(root,'node_modules/rig-c/bin/rigc.cjs');
+  const baseRigText=await readFile(f.draft.rig,'utf8');
+  const baseReportText=await readFile(f.draft.meshReport,'utf8');
+  const baseModelText=await readFile(f.draft.model,'utf8');
+
+  // Stand-in producer that produces valid revision hash rows in remesh.json and matching geometry for stagePartsRoutes.
+  await writeFile(bin,`const fs=require('fs'),path=require('path'),crypto=require('crypto');
+const sha=b=>crypto.createHash('sha256').update(b).digest('hex');
+const a=process.argv.slice(2),f=n=>a[a.indexOf(n)+1];
+if(a[0]==='remesh'){
+ const out=f('--out'),part=f('--part'),inRig=f('--rig');
+ fs.mkdirSync(path.join(out,'images'),{recursive:true});
+ const imgBytes=fs.readFileSync(path.join(inRig,'images','torso.png'));
+ fs.writeFileSync(path.join(out,'images','torso.png'),imgBytes);
+ const rig=JSON.parse(${JSON.stringify(baseRigText)});
+ const reports=JSON.parse(${JSON.stringify(baseReportText)});
+ const isDelta=a.includes('--delta');
+ const cut=isDelta?12:6;
+ rig.skins.default.torso.torso.triangles.splice(-cut);
+ const triCount=rig.skins.default.torso.torso.triangles.length/3;
+ reports[0].triangles=triCount;
+ const rigBytes=JSON.stringify(rig),motionBytes='{}',reportBytes=JSON.stringify(reports);
+ fs.writeFileSync(path.join(out,'rig.json'),rigBytes);
+ fs.writeFileSync(path.join(out,'motion.json'),motionBytes);
+ fs.writeFileSync(path.join(out,'mesh_report.json'),reportBytes);
+ const failCheck=process.env.FAKE_CHECK_FAIL==='1';
+ const remeshDoc={
+  spec:'rig-parts-remesh/1',
+  request:{part,page_edges:'free',pack_shape:'polygon'},
+  target:{before:{vertices:30,triangles:40,hull:16},after:{vertices:30,triangles:triCount,hull:16}},
+  ...(failCheck?{}:{
+   check:{
+    revision:{
+     pass:true,
+     line:'check: PASS — 2 bar(s) met',
+     status:{gate:'PASS',BREATH_VISIBLE:'PASS',PART_SUPPORT_REPORT:'PASS'},
+    },
+   },
+   revision:[
+    {path:'images/torso.png',bytes:imgBytes.length,sha256:sha(imgBytes)},
+    {path:'rig.json',bytes:Buffer.byteLength(rigBytes),sha256:sha(rigBytes)},
+    {path:'motion.json',bytes:Buffer.byteLength(motionBytes),sha256:sha(motionBytes)},
+    {path:'mesh_report.json',bytes:Buffer.byteLength(reportBytes),sha256:sha(reportBytes)},
+   ],
+  }),
+ };
+ fs.writeFileSync(path.join(out,'remesh.json'),JSON.stringify(remeshDoc));
+ console.log('rig-parts remesh: wrote 3 file(s) under '+out);
+ process.exit(0);
+}
+if(a[0]==='check'){
+ const out=f('--out');fs.mkdirSync(out,{recursive:true});
+ fs.writeFileSync(path.join(out,'check.json'),JSON.stringify({PASS:false,gate_spine_html_green:false,BREATH_VISIBLE:{status:'FAIL'}}));
+ console.log('check: FAIL — 1 bar(s) not met');
+ process.exit(1);
+}
+process.exit(1);
+`);
+  await writeFile(rigcBin,`const fs=require('fs'),path=require('path');
+const a=process.argv.slice(2),f=n=>a[a.indexOf(n)+1];
+const out=f('--out'),rig=JSON.parse(fs.readFileSync(f('--rig'),'utf8'));
+fs.mkdirSync(out,{recursive:true});
+const model=JSON.parse(${JSON.stringify(baseModelText)});
+model.skins[0].attachments.torso.torso.triangles=rig.skins.default.torso.torso.triangles;
+model.pages=[{name:'skeleton.png'}];
+fs.writeFileSync(path.join(out,'skeleton.model.json'),JSON.stringify(model));
+fs.writeFileSync(path.join(out,'skeleton.png'),'png');
+console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));
+`);
+
+  const {draftRebuildOption,draftProducerInputs}=await import('../src/rebuild.ts');
+  const draftOpt=draftRebuildOption(f.joined)!;
+  const parsedDraftInputs=await draftProducerInputs(draftOpt);
+  expect(parsedDraftInputs.handoff).toBeNull();
+  let stageDraftUnchangedCount=0;
+  let onSecondStageDraftUnchanged:(()=>Promise<void>)|null=null;
+  const rebuilds=createRebuilds(f.p,{
+   stateDir:state,
+   starts:[root],
+   unchanged:async()=>{
+    await assertReviewUnchanged(f.p);
+    if(onSecondStageDraftUnchanged){
+     stageDraftUnchangedCount++;
+     if(stageDraftUnchangedCount===2){
+      const hook=onSecondStageDraftUnchanged;
+      onSecondStageDraftUnchanged=null;
+      await hook();
+     }
+    }
+   },
+   bones:null,
+   draft:draftOpt,
+  });
+
+  // 1. Metadata open (`describe()`) starts zero producer jobs / subprocesses and exposes separate input/out layout.
+  const spawnSpy=spyOn(Bun,'spawn');
+  const spawnSyncSpy=spyOn(Bun,'spawnSync');
+  let status:any;
+  try{
+   status=await rebuilds.describe();
+   expect(spawnSpy).not.toHaveBeenCalled();
+   expect(spawnSyncSpy).not.toHaveBeenCalled();
+  }finally{
+   spawnSpy.mockRestore();
+   spawnSyncSpy.mockRestore();
+  }
+  expect(status.available).toBe(false);
+  expect(status.reason).toBe('REBUILD_INPUTS_UNAVAILABLE: the config states no contour mesh');
+  expect(status.handoff).toBeNull();
+  expect(status.baseline).toBeNull();
+  expect(status.inspectedCheck).toBeNull();
+  expect(status.meshes?.torso).toBeDefined();
+  expect(status.draft).toMatchObject({
+   id:'chain',
+   kind:'draft-rig',
+   editable:true,
+   producer:f.draft.record.producer,
+   config:f.draft.record.config,
+  });
+  expect(status.inputs).toEqual({
+   config:'derived/drafts/chain/config.json',
+   parts:'derived/drafts/chain/input',
+   rig:'derived/drafts/chain/out',
+   configHash:f.draft.record.config.sha256,
+  });
+  expect(status.producer).toEqual({package:'@rig-c/parts',version:'1.49.0'});
+  expect(status.compiler).toEqual({package:'rig-c',version:'2.64.1'});
+
+  const waitJob=async(mgr:typeof rebuilds,id:string)=>{
+   let job=mgr.read(id) as any;
+   for(let i=0;job.status==='running'&&i<200;i++){
+    await Bun.sleep(20);
+    job=mgr.read(id);
+   }
+   return job;
+  };
+
+  // 2. Unsupported operations on a Stage 1 draft refuse by name (`STAGE_DRAFT_OPERATION`) before running anything.
+  const basePatch={
+   schema:'rig-review-config-patch/1',
+   config_sha256:status.inputs.configHash,
+   ops:[{op:'add',path:'/meshes/torso/density',value:16}],
+   producer:{name:'@rig-c/parts',version:'1.49.0'},
+   op:{cmd:'rig',args:[]},
+  };
+  await expect(rebuilds.start({patch:basePatch})).rejects.toThrow('STAGE_DRAFT_OPERATION');
+  await expect(rebuilds.start({animation:{
+   configHash:status.inputs.configHash,
+   animationsFromHash:'a'.repeat(64),
+   ops:[{op:'set',animation:'idle',track:'bones',target:'root',channel:'rotate',time:0,value:0}],
+  }})).rejects.toThrow('STAGE_DRAFT_OPERATION');
+  await expect(rebuilds.start({retarget:{}})).rejects.toThrow('STAGE_DRAFT_OPERATION');
+
+  // 3. Remesh `ConfigPatch` Apply (`op.cmd === 'remesh'`) and Edit Mesh `DeltaRequest` (`remesh --delta`) on non-contour draft.
+  const remeshPatch={...basePatch,op:{cmd:'remesh',args:['--part','torso']}};
+  const startedPatch=await rebuilds.start({patch:remeshPatch});
+  expect(startedPatch.status).toBe(202);
+  const patchJob=await waitJob(rebuilds,(startedPatch.body as {id:string}).id);
+  expect(patchJob.status).toBe('built');
+  expect(patchJob.check?.pass).toBe(true);
+  expect((await rebuilds.stageDraft(patchJob.id)).id).toBe(patchJob.id);
+
+  // Connect to stagePartsRoutes and verify end-to-end Stage 1 scratch display + Reset.
+  const stageRoute=stagePartsRoutes({single:f.p},undefined,id=>rebuilds.stageDraft(id),{
+   joined:f.joined,
+   readInput:async r=>r.json(),
+   viewOnly:false,
+  });
+  const stageScratch=await (await stageRoute(new Request('http://127.0.0.1/api/stage-parts',{headers:{'X-Review-Stage-Build':patchJob.id}})))!.json();
+  expect(stageScratch.draft.buildId).toBe(patchJob.id);
+  expect(stageScratch.draft.mappings[0].triangles).toBe(38);
+  expect(stageScratch.items.find((i:any)=>i.name==='torso').mesh.triangles.length/3).toBe(38);
+
+  const deltaReq={
+   part:'torso',
+   configHash:status.inputs.configHash,
+   delta:{
+    schema:'rig-review-mesh-edit/1',
+    slot:'torso',
+    skin:'default',
+    attachment:'torso',
+    source:{vertexCount:30,triangleCount:40,hullLength:16,hash:'f'.repeat(64)},
+    units:'setup',
+    basis:'setup',
+    preview:'preview',
+    ops:[{op:'move',v:0,from:[10,10],to:[12,12]}],
+   },
+  };
+  const startedDelta=await rebuilds.start(deltaReq);
+  expect(startedDelta.status).toBe(202);
+  const deltaJob=await waitJob(rebuilds,(startedDelta.body as {id:string}).id);
+  expect(deltaJob.status).toBe('built');
+  await expect(rebuilds.stageDraft(patchJob.id)).rejects.toThrow('STAGE_DRAFT_STALE');
+  const stageDelta=await (await stageRoute(new Request('http://127.0.0.1/api/stage-parts',{headers:{'X-Review-Stage-Build':deltaJob.id}})))!.json();
+  expect(stageDelta.draft.buildId).toBe(deltaJob.id);
+  expect(stageDelta.draft.mappings[0].triangles).toBe(36);
+
+  // 4. Undo restores the kept predecessor (`patchJob`), and mid-read new-Apply/busy or Reset/Undo during `stageDraft` refuses with `STAGE_DRAFT_STALE`.
+  const undone1=await rebuilds.undo({from:deltaJob.id});
+  expect((undone1.body as {status:string}).status).toBe('built');
+  expect((await rebuilds.stageDraft(patchJob.id)).id).toBe(patchJob.id);
+  await expect(rebuilds.stageDraft(deltaJob.id)).rejects.toThrow('STAGE_DRAFT_STALE');
+
+  let busyStarted:{status:number;body:unknown}|null=null;
+  stageDraftUnchangedCount=0;
+  onSecondStageDraftUnchanged=async()=>{
+   busyStarted=await rebuilds.start(deltaReq);
+   expect(busyStarted.status).toBe(202);
+   expect((busyStarted.body as {status:string}).status).toBe('running');
+   expect(rebuilds.busy()).toBe(true);
+   expect(rebuilds.running()).toBe(deltaJob.id);
+   expect(rebuilds.latest()?.id).toBe(patchJob.id);
+  };
+  try{
+   await expect(rebuilds.stageDraft(patchJob.id)).rejects.toThrow('STAGE_DRAFT_STALE');
+  }finally{
+   onSecondStageDraftUnchanged=null;
+   const started=busyStarted as {status:number;body:{id:string}}|null;
+   if(started){
+    const rebuiltDelta=await waitJob(rebuilds,started.body.id);
+    expect(rebuiltDelta.status).toBe('built');
+   }
+  }
+  await rebuilds.undo({from:deltaJob.id});
+  expect((await rebuilds.stageDraft(patchJob.id)).id).toBe(patchJob.id);
+
+  let undone2:{status:number;body:unknown}|null=null;
+  stageDraftUnchangedCount=0;
+  onSecondStageDraftUnchanged=async()=>{
+   undone2=await rebuilds.undo({from:patchJob.id});
+   expect((undone2.body as {status:string}).status).toBe('inspected');
+   expect(rebuilds.latest()).toBeNull();
+   expect(rebuilds.busy()).toBe(false);
+  };
+  try{
+   await expect(rebuilds.stageDraft(patchJob.id)).rejects.toThrow('STAGE_DRAFT_STALE');
+  }finally{
+   onSecondStageDraftUnchanged=null;
+  }
+  const undoneResult=undone2 as {status:number;body:{status:string}}|null;
+  expect(undoneResult?.body.status).toBe('inspected');
+  await expect(rebuilds.stageDraft(patchJob.id)).rejects.toThrow('STAGE_DRAFT_STALE');
+
+  // 5. Scratch check gate: a build with a failing check (`pass: false`) is refused by `stageDraft` with `STAGE_DRAFT_UNCHECKED`.
+  process.env.FAKE_CHECK_FAIL='1';
+  try{
+   const uncheckedPatch={...remeshPatch,ops:[{op:'add',path:'/meshes/torso/density',value:20}]};
+   const uncheckedStart=await rebuilds.start({patch:uncheckedPatch});
+   const uncheckedJob=await waitJob(rebuilds,(uncheckedStart.body as {id:string}).id);
+   expect(uncheckedJob.status).toBe('built');
+   expect(uncheckedJob.check?.pass).toBe(false);
+   await expect(rebuilds.stageDraft(uncheckedJob.id)).rejects.toThrow('STAGE_DRAFT_UNCHECKED');
+   await rebuilds.undo({from:uncheckedJob.id});
+  }finally{
+   delete process.env.FAKE_CHECK_FAIL;
+  }
+
+  // 6. Source & dependency tampering before launch refuses with `REBUILD_INPUTS_CHANGED` or `REBUILD_REQUIREMENTS_UNAVAILABLE`.
+  for(const rel of [
+   'project.json',
+   'derived/drafts/chain/config.json',
+   'derived/drafts/chain/interview-requirements.json',
+   'derived/drafts/chain/input/parts/torso.png',
+   'derived/drafts/chain/out/rig.json',
+  ]){
+   const target=join(projectRoot,rel),beforeBytes=await readFile(target);
+   try{
+    await writeFile(target,Buffer.concat([beforeBytes,Buffer.from(' ')]));
+    await expect(rebuilds.start({patch:remeshPatch})).rejects.toThrow('REBUILD_INPUTS_CHANGED');
+   }finally{await writeFile(target,beforeBytes);}
+  }
+  const reqFile=join(projectRoot,'derived/drafts/chain/interview-requirements.json'),reqBytes=await readFile(reqFile);
+  try{
+   await rm(reqFile);
+   await expect(rebuilds.start({patch:remeshPatch})).rejects.toThrow('REBUILD_REQUIREMENTS_UNAVAILABLE');
+  }finally{await writeFile(reqFile,reqBytes);}
+
+  // 7. Locked / inspection-only draft (`editable: false`) reports `PARTS_VERDICT_READ_ONLY` and refuses Apply.
+  const lockedRebuilds=createRebuilds(f.p,{
+   stateDir:state,
+   starts:[root],
+   unchanged:()=>assertReviewUnchanged(f.p),
+   bones:null,
+   draft:{...draftOpt,source:{...f.draft,editable:false}},
+  });
+  const lockedStatus=await lockedRebuilds.describe();
+  expect(lockedStatus.available).toBe(false);
+  expect(lockedStatus.reason).toStartWith('PARTS_VERDICT_READ_ONLY');
+  await expect(lockedRebuilds.start({patch:remeshPatch})).rejects.toThrow('PARTS_VERDICT_READ_ONLY');
+
+  // 7b. State directory inside designated Create project (outside selected draft folder), via symlink alias, or inside package/build root refuses with `REBUILD_STATE_INSIDE_PACKAGE` before state creation or producer launch.
+  const insideProjectState=join(projectRoot,'review-state');
+  const aliasToProject=join(root,'project-alias');
+  await symlink(projectRoot,aliasToProject);
+  const aliasProjectState=join(aliasToProject,'review-state-via-alias');
+  const insideBuildRootState=join(projectRoot,'derived/drafts/chain/out/in-build-state');
+  for(const badStateDir of [insideProjectState,aliasProjectState,insideBuildRootState]){
+   const badRebuilds=createRebuilds(f.p,{
+    stateDir:badStateDir,
+    starts:[root],
+    unchanged:()=>assertReviewUnchanged(f.p),
+    bones:null,
+    draft:draftOpt,
+   });
+   const badSpawnSpy=spyOn(Bun,'spawn');
+   const badSpawnSyncSpy=spyOn(Bun,'spawnSync');
+   try{
+    await expect(badRebuilds.start({patch:remeshPatch})).rejects.toThrow('REBUILD_STATE_INSIDE_PACKAGE');
+    await expect(badRebuilds.start(deltaReq)).rejects.toThrow('REBUILD_STATE_INSIDE_PACKAGE');
+    expect(badSpawnSpy).not.toHaveBeenCalled();
+    expect(badSpawnSyncSpy).not.toHaveBeenCalled();
+   }finally{
+    badSpawnSpy.mockRestore();
+    badSpawnSyncSpy.mockRestore();
+   }
+  }
+  expect(existsSync(insideProjectState)).toBe(false);
+  expect(existsSync(join(projectRoot,'review-state-via-alias'))).toBe(false);
+  expect(existsSync(insideBuildRootState)).toBe(false);
+
+  await f.assertFixture();
+
+  // 8. Contour-enabled Stage 1 sub-fixture: `describe().available === true`, Chest regions (`start(regionReq)`), and evicted predecessor undo (`UNDO_PREDECESSOR_CHANGED`).
+  const contourRoot=join(root,'contour-project');
+  await joinedVerdictFixture(contourRoot,'1-parts-verdict');
+  const contourCfgPath=join(contourRoot,'derived/drafts/chain/config.json');
+  const contourCfgDoc=JSON.parse(await readFile(contourCfgPath,'utf8'));
+  contourCfgDoc.meshes.torso.contour={spacing:16,simplify:1.5,margin:4};
+  const contourCfgBytes=Buffer.from(JSON.stringify(contourCfgDoc,null,2)+'\n');
+  await writeFile(contourCfgPath,contourCfgBytes);
+  const contourCfgSha=createHash('sha256').update(contourCfgBytes).digest('hex');
+  const contourProjPath=join(contourRoot,'project.json');
+  const contourProjDoc=JSON.parse(await readFile(contourProjPath,'utf8'));
+  contourProjDoc.drafts[0].config.sha256=contourCfgSha;
+  await writeFile(contourProjPath,JSON.stringify(contourProjDoc,null,2)+'\n');
+
+  const {loadOpenPackage}=await import('../src/open.ts');
+  const contourLoaded=await loadOpenPackage({
+   input:join(contourRoot,'derived/drafts/chain/out/check'),
+   project:{root:contourRoot,draftId:'chain',picksDir:'reviewer-picks',partsVerdictDir:'reviewer-verdicts'},
+  });
+  if(contourLoaded.mode!=='single')throw new Error('Expected single contour package');
+  const contourJoined=contourLoaded.joined!;
+  const contourDraftOpt=draftRebuildOption(contourJoined)!;
+  const contourState=join(root,'contour-state');
+  const contourRebuilds=createRebuilds(contourLoaded.p,{
+   stateDir:contourState,
+   starts:[root],
+   unchanged:()=>assertReviewUnchanged(contourLoaded.p),
+   bones:null,
+   draft:contourDraftOpt,
+  });
+  const contourStatus=await contourRebuilds.describe() as any;
+  expect(contourStatus.available).toBe(true);
+  expect(contourStatus.reason).toBeNull();
+  expect(contourStatus.parts.map((p:any)=>p.name)).toEqual(['torso']);
+
+  const regionJobs:any[]=[];
+  for(const cx of [110,120]){
+   const started=await contourRebuilds.start({
+    part:'torso',
+    regions:[{name:'chest',shape:'circle',cx,cy:120,r:24,bone:'torso',spacing:10,band:12}],
+    configHash:contourCfgSha,
+   });
+   expect(started.status).toBe(202);
+   const job=await waitJob(contourRebuilds,(started.body as {id:string}).id);
+   expect(job.status).toBe('built');
+   expect(job.check?.pass).toBe(true);
+   expect((await contourRebuilds.stageDraft(job.id)).id).toBe(job.id);
+   regionJobs.push(job);
+  }
+  // Evict job 0's kept build directory, tamper config, and verify undo refuses with `UNDO_PREDECESSOR_CHANGED`.
+  await rm(join(contourState,'rebuild-kept',contourLoaded.p.sourceHash,regionJobs[0].id),{recursive:true,force:true});
+  await writeFile(contourCfgPath,Buffer.concat([contourCfgBytes,Buffer.from(' ')]));
+  try{
+   await expect(contourRebuilds.undo({from:regionJobs[1].id})).rejects.toThrow('UNDO_PREDECESSOR_CHANGED');
+  }finally{
+   await writeFile(contourCfgPath,contourCfgBytes);
+  }
+ }finally{
+  await rm(root,{recursive:true,force:true});
+ }
+},20_000);

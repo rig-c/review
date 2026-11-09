@@ -6,7 +6,7 @@ import {timeOnlyBasis,feedbackTimingLabel,requireFeedbackFrames,isTimeOnlyFeedba
 import {bindStageComments,type CommentPose} from './stage-comments.ts';
 import {discoverTurnDials,TurnState} from '../src/turn-pad.ts';
 import {bindTurnPad,type TurnPad} from './turn-pad.ts';
-import {PartExplorer,loadPartModel,partBounds} from './part-selection.ts';
+import {PartExplorer,loadPartModel,partBounds,partCatalog,type PartEntry} from './part-selection.ts';
 import {AnimationInspectionPanel} from './animation-inspection.ts';
 import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
 import { CanvasRenderer, loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBounds } from '@rig-c/play';
@@ -25,14 +25,14 @@ import {chestOverlayPolygons,chestInputIds,chestRegionRows,chestRowId,evaluateCh
 import {bindChestEditor,canvasToCrop,bustLabel,bustSides,chestPoseOffset,LANDMARKS,landmarkInputId,posedChestMapping,rowShape,type ChestEditor,type LandmarkKey} from './chest-editor.ts';
 import {bindMeshEditor,meshEditSource,sha256Hex,type MeshEditor} from './mesh-editor.ts';
 import {bindWeightsView,setupPoseMesh,type WeightsView} from './weights-view.ts';
-import {readSetupPose} from './setup-pose.ts';
+import {readSetupPose,modelBoneNames} from './setup-pose.ts';
 import {bindBonesPanel,type BonesPanel,type BonesCheckView} from './bones-panel.ts';
 import {bindCutsPanel,type CutsPanel} from './cuts-panel.ts';
 import {bindClothPanel,type ClothPanel} from './cloth-panel.ts';
 import {animationAppliedRecord,animationOutcomeLine,retargetAppliedRecord,retargetOutcomeLine,stripPendingAfter,type AnimationJobView,type AnimationRequestBody,type AnimationSourceOp,type StageChange,type AppliedAnimation,type AppliedRetarget,type RetargetJobView,type RetargetRequestBody} from './rebuild-client.ts';
 import {bindRetargetPanel,type PoseMap,type RetargetPanel} from './retarget-panel.ts';
 import type {RetargetFlags} from '../src/retarget.ts';
-import {appliedCheckState,renderAppliedHistory,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
+import {appliedCheckState,renderAppliedHistory,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,MESH_DELTA_APPLIED_SOURCE,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
@@ -139,6 +139,9 @@ let cutsPanel:CutsPanel|null=null;
 let clothPanel:ClothPanel|null=null;
 /** The hash-verified compiled model document the parts catalog was read from (mesh edit reads attachments from it). */
 let partModel:unknown=null;
+let stageModelBones:string[]|null=null;
+function activeSetupBones():string[]|null{return data?.capabilities?.preRig?stageModelBones:data.feedbackCatalog.bones;}
+function hasStageModel():boolean{return Boolean(data.manifest.model||(data?.capabilities?.preRig&&stageSource&&player));}
 /** Apply · Rebuild (#99): the inspected model's URL, the producer status, and the applied record while its scratch build is on the stage. */
 let inspectedModel:{url:string;prefix:string;sha256:string}|null=null,rebuildStatus:RebuildStatusView|null=null,appliedOnStage:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation|null=null,rebuildBusy=false,stageModelHash:string|null=null;
 let appearance:ReturnType<typeof bindAppearance>|null=null;
@@ -987,7 +990,7 @@ function bind(): void {
     const picker=select('part-set');picker.value=name;picker.dispatchEvent(new Event('change',{bubbles:true}));
   });
   viewDisposers.push(()=>directionPanel?.dispose());
-  viewDisposers.push(bindStageNav({access,interview:data.capabilities.interview,preRig:data.capabilities.preRig,model:!!data.manifest.model,direction:active=>directionPanel?.show(active),setup:()=>showInspector('rig'),draftBuild:()=>appliedOnStage?.buildId??'inspected',correction:data.capabilities.preRig?undefined:openStageCorrection}));
+  viewDisposers.push(bindStageNav({access,interview:data.capabilities.interview,preRig:data.capabilities.preRig,model:!!data.manifest.model,direction:active=>directionPanel?.show(active),setup:()=>showInspector('rig'),draftBuild:()=>appliedOnStage?.buildId??'inspected',refresh:fn=>{refreshStageParts=fn;},correction:openStageCorrection}));
   workspace=bindWorkspaceUI({changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
@@ -995,8 +998,8 @@ function bind(): void {
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(tr(text)),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
-  weightsView=bindWeightsView({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,inspector:()=>selectedInspector(),slot:()=>parts?.value()?.slot??null,
-   model:()=>data.manifest.model?partModel??undefined:null,setup:slot=>assets?setupPoseMesh(assets,partModel,slot,document.createElement('div')):null,changed:()=>redrawOverlay(false),
+  weightsView=bindWeightsView({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,inspector:()=>selectedInspector(),slot:()=>parts?.value()?.slot??stageDraftSelection?.slot??null,
+   model:()=>hasStageModel()?partModel??undefined:null,setup:slot=>assets?setupPoseMesh(assets,partModel,slot,document.createElement('div')):null,changed:()=>redrawOverlay(false),
    token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
   viewDisposers.push(()=>weightsView?.dispose());weightsView.refresh();
   bonesPanel=bindBonesPanel({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),pause,changed:()=>redrawOverlay(false),saved:()=>persistence?.save(),
@@ -1013,7 +1016,7 @@ function bind(): void {
   physicsPanel=bindPhysicsPanel({preview:edits=>{const before=JSON.stringify(physicsPreview.read()),next=physicsPreview.sync(player,edits);if(player?.current&&!playing&&before!==JSON.stringify(next)){player.repose();drawRig(()=>player!.draw());}return physicsPreview.read();},previewRead:()=>physicsPreview.read(),apply:async ops=>{await applyPhysics(ops);},reset:resetPhysicsBuild,pane:el('rig-pane'),saved:()=>persistence?.save(),
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),pane=el('rig-pane').getBoundingClientRect(),view=el('rig-root').parentElement!.getBoundingClientRect(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name),p=project(b.x,b.y);out.set(name,{x:p.x+view.left-pane.left,y:p.y+view.top-pane.top});}catch{/* a bone this model lacks is not pickable */}}return out;}});
   viewDisposers.push(()=>physicsPanel?.dispose());
-  meshPanel=bindMeshPanel({pane:el('rig-pane'),project:()=>player?rigProject():null,mapping:()=>chestMapping,bones:()=>data.feedbackCatalog.bones??[],
+  meshPanel=bindMeshPanel({pane:el('rig-pane'),project:()=>player?rigProject():null,mapping:()=>chestMapping,bones:()=>activeSetupBones()??[],
    apply:async(part,entry)=>{await applyMesh(part,entry);},reset:resetMeshBuild,folds:async()=>{await meshFolds();},changed:()=>{redrawOverlay(false);densityStrip?.changed();},saved:()=>persistence?.save(),
    token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
   viewDisposers.push(()=>meshPanel?.dispose());
@@ -1024,7 +1027,7 @@ function bind(): void {
    bonePoints:bones=>{if(!player)return null;const project=rigProject(),out=new Map<string,{x:number;y:number}>();for(const name of bones){try{const b=player.bone(name);out.set(name,project(b.x,b.y));}catch{/* a bone this model lacks has no handle */}}return out;}});
   viewDisposers.push(()=>idlePanel?.dispose());
   rigFieldsPanel=bindRigFieldsPanel({apply:async ops=>{await applyRigFields(ops);},reset:resetRigFieldsBuild,reading:async(bone,relative)=>{await runReadings({readings:[{kind:'angle-range',bone,relative}]});},
-   part:()=>parts?.value()?.slot??null,inspector:()=>selectedInspector(),pause,saved:()=>persistence?.save(),
+   part:()=>parts?.value()?.slot??stageDraftSelection?.slot??null,inspector:()=>selectedInspector(),pause,saved:()=>persistence?.save(),
    toPane:(x,y)=>{if(!player||!chestMapping.available)return null;const w=chestMapping.toWorld(x,y);return rigProject()(w.x,w.y);},
    toRig:(x,y)=>player&&chestMapping.available?canvasToCrop(rigProject(),chestMapping.toWorld,{x,y}):null,
    slotBox:slot=>{const frame=player?.posedFrame();if(!frame)return null;try{const b=partBounds(frame,slot);if(!b)return null;const project=rigProject(),a=project(b.x,b.y),c=project(b.x+b.width,b.y+b.height);return {left:Math.min(a.x,c.x),right:Math.max(a.x,c.x),top:Math.min(a.y,c.y),bottom:Math.max(a.y,c.y)};}catch{return null;}},
@@ -1033,7 +1036,7 @@ function bind(): void {
   viewDisposers.push(()=>rigFieldsPanel?.dispose());
   readingsPanel=bindReadingsPanel({run:()=>{void runReadings();},seek:seekReading});
   retargetPanel=bindRetargetPanel({apply:body=>applyRetarget(body),reset:()=>{void resetRebuild(stageWorld());},seek:seekReading});
-  requirementsPanel=bindRequirementsPanel({check:runRequirements,seek:seekReading,animation:()=>animation,slot:()=>parts?.value()?.slot??null,hash:sha256Hex});
+  requirementsPanel=bindRequirementsPanel({check:runRequirements,seek:seekReading,animation:()=>animation,slot:()=>parts?.value()?.slot??stageDraftSelection?.slot??null,hash:sha256Hex});
   const tickResize=new ResizeObserver(()=>renderReadingTicks());tickResize.observe(el('transport'));viewDisposers.push(()=>tickResize.disconnect());
   viewDisposers.push(viewport.bindNavigation(rigPanCarry({player:()=>player},viewport.state),()=>!comments?.active()));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
@@ -1062,7 +1065,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();const part=parts?.value();if(stageCorrectionPart&&!stageCorrectionRebinding&&(part?.slot??null)!==stageCorrectionPart){stageCorrectionPart=null;document.getElementById('stage-draft-label')?.remove();}animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){player.seek(time);drawRig(()=>player!.draw());}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{const part=parts?.value();if(!stageCorrectionRebinding&&(previous?.side!==part?.side||previous?.slot!==part?.slot||previous?.mode!==part?.mode))stageDraftRequestToken++;if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();if(stageCorrectionPart&&!stageCorrectionRebinding&&(part?.slot??null)!==stageCorrectionPart){stageCorrectionPart=null;document.getElementById('stage-draft-label')?.remove();}animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){player.seek(time);drawRig(()=>player!.draw());}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
@@ -1103,7 +1106,7 @@ function redrawOverlay(fresh:boolean):void {
  if(!overlays||!player)return;
  const project=rigProject();
  const regions=[...chestRegions(),...(meshPanel?.overlayRegions()??[]),...(cutsPanel?.overlayRegions()??[]),...(clothPanel?.overlayRegions()??[])],circles=[...chestCircles(),...(meshPanel?.overlayCircles()??[])],markers=[...chestMarkers(),...(cutsPanel?.overlayMarkers()??[])];
- const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(data.feedbackCatalog.bones??[]).map(name=>({name})),project,settings:layers,regions,circles,markers,meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()}):overlays.redraw({project,settings:layers,regions,circles,markers,meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()});
+ const value=fresh?overlays.refresh({player,frame:parts?.frame('single'),selectedSlot:parts?.value()?.slot,bones:(activeSetupBones()??[]).map(name=>({name})),project,settings:layers,regions,circles,markers,meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()}):overlays.redraw({project,settings:layers,regions,circles,markers,meshEdit:meshEditor?.overlay(),weights:weightsView?.overlay(),anchors:bonesPanel?.overlay()});
  lastOverlay=value;
  text('layer-state',value.warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');idlePanel?.place(duration);rigFieldsPanel?.place();if(!fresh&&value.needsCapture&&!playing&&!seekingControl)drawRig(()=>player!.draw());
 }
@@ -1264,7 +1267,7 @@ async function setupPersistence():Promise<boolean> {
 }
 /** Setup's Chest regions tool: designation values, an overlay and a two-file client download. Nothing reaches the session's feedback or the package. */
 function chestField(id:string){const node=document.getElementById(id) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|null;return node?{value:node.value,...(node instanceof HTMLInputElement&&node.type==='checkbox'?{checked:node.checked}:{})}:undefined;}
-function chestEvaluation(){return evaluateChestForm(chestField,chestMapping,data.feedbackCatalog.bones);}
+function chestEvaluation(){return evaluateChestForm(chestField,chestMapping,activeSetupBones());}
 function chestRegions():OverlayRegion[]{
  // #345: the chest overlay is drawn only while the Chest regions toggle is on.
  if(!chestEditor?.active())return [];
@@ -1297,12 +1300,21 @@ function chestMarkers():OverlayMarker[]{
   return [{at:p,tag,active:armed===key,colors:{stroke,fill:stroke,ink:token('--rv-landmark-ink'),labelBg:token('--rv-bust-label-bg')},...(key==='cleavage'?{guideTo:apexes}:{})}];});
 }
 function populateChestBones():void {
- const list=document.getElementById('lm-bones');if(list){list.replaceChildren();for(const name of data.feedbackCatalog.bones??[])list.append(option(name,name));}
- const bones=data.feedbackCatalog.bones;
- for(const row of chestRegionRows){const node=select(chestRowId(row,'bone'));node.replaceChildren(option('',bones?'Select bone':'No model bones'));for(const name of bones??[])node.append(option(name,name));node.disabled=!bones;}
+ const bones=activeSetupBones();
+ const list=document.getElementById('lm-bones');if(list){list.replaceChildren();for(const name of bones??[])list.append(option(name,name));}
+ const part=stageCorrectionPart??chestFormPart,seeded=rebuildStatus&&part?chestSeed(chestStatusForPart(rebuildStatus,part)):null;
+ for(const row of chestRegionRows){
+  const id=chestRowId(row,'bone'),nameId=chestRowId(row,'name'),node=select(id),current=node.value,seededRow=seeded?.rows.find(r=>r.row===row);
+  const rowName=input(nameId).value.trim(),seededName=(seededRow?.fields[nameId]??'').trim();
+  const keep=current||(node.disabled&&rowName&&rowName===seededName?(seededRow?.fields[id]??'').trim():'');
+  node.replaceChildren(option('',bones?'Select bone':'No model bones'));
+  for(const name of bones??[])node.append(option(name,name));
+  if(bones&&keep&&bones.includes(keep))node.value=keep;
+  node.disabled=!bones;
+ }
 }
 function updateChestMapping():void {
- const root=data.feedbackCatalog.bones?.[0];let at:{x:number;y:number}|null=null;
+ const root=activeSetupBones()?.[0];let at:{x:number;y:number}|null=null;
  if(player&&root){try{const bone=player.bone(root);at={x:bone.x,y:bone.y};}catch{at=null;}}
  chestMapping=player?cropWorldMapping(assets?.stage,at):{available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: no compiled model drawn'};
  renderChest();
@@ -1474,8 +1486,8 @@ function boneSetup(document:unknown):BoneSetup {
 /** Setup's mesh edit: the selected slot's actual mesh as a typed delta. A two-file client download; nothing reaches the session or the package. */
 /** Edit Mesh's source (#100): the selected slot's mesh in the model document at the setup pose (a never-played player's bones). */
 function meshSource(){
- if(data.manifest.model&&!partModel)return {ok:false as const,code:'MESH_EDIT_RIG_UNAVAILABLE: the compiled model document is still loading'};
- return meshEditSource({slot:parts?.value()?.slot??null,model:data.manifest.model?partModel:null,pose:slot=>assets?readSetupPose(assets,slot,document.createElement('div')):null,mapping:chestMapping});
+ if(hasStageModel()&&!partModel)return {ok:false as const,code:'MESH_EDIT_RIG_UNAVAILABLE: the compiled model document is still loading'};
+ return meshEditSource({slot:parts?.value()?.slot??stageDraftSelection?.slot??null,model:hasStageModel()?partModel:null,pose:slot=>assets?readSetupPose(assets,slot,document.createElement('div')):null,mapping:chestMapping});
 }
 async function exportMesh(doc:MeshEditDocument):Promise<void> {
  const text=meshEditText(doc),digest=await sha256Hex(text);
@@ -1525,16 +1537,21 @@ async function applyRetarget(body:{sequence:string;map:PoseMap;flags:RetargetFla
 async function applyMeshDelta(doc:MeshEditDocument,line:(text:string)=>void):Promise<{built:boolean;text:string;error:boolean}> {
  if(rebuildBusy)return {built:false,text:'REBUILD_BUSY: an Apply is still running',error:true};
  if(readOnly)return {built:false,text:readOnly,error:true};
+ if(!inspectedModel&&appliedOnStage)return {built:false,text:MESH_DELTA_APPLIED_SOURCE,error:true};
  const status=rebuildStatus??await loadRebuildStatus();
+ if(!inspectedModel&&appliedOnStage)return {built:false,text:MESH_DELTA_APPLIED_SOURCE,error:true};
  if(!status?.inputs)return {built:false,text:status?.reason??'REBUILD_STATUS_UNAVAILABLE',error:true};
  const body:DeltaRequestBody={part:doc.slot,delta:doc,configHash:status.inputs.configHash},world=stageWorld();
+ const priorBuildId=appliedOnStage?.buildId??'inspected',priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
  rebuildBusy=true;rebuildState();
  try{
   const result=await runRebuild<DeltaRequestBody,DeltaJobView>(body,{post:value=>api<DeltaJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<DeltaJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),onLine:text=>line(text)});
   const outcome=deltaOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
   if(next.id===null||!('id' in result)){message(outcome.text,true);return {built:false,text:outcome.text,error:true};}
-  await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
+  if(inspectedModel)await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
+  else{const target=draftScratchTarget(result.id,result.build?.modelUrl,result.build?.modelHash);await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition:{kind:'apply',token,priorBuildId,priorPart},world});}
   appliedOnStage=deltaAppliedRecord(result);stageCheck=null;stageChanged({kind:'apply',via:'delta'});
+  if(!inspectedModel)refreshStageParts?.();
   meshEditor?.setStatusNote(outcome.text,false);
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   message(outcome.text);
@@ -1575,8 +1592,9 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  rigFieldsPanel?.load(rebuildStatus.inputs?rebuildStatus.fields??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'RIG_FIELDS_UNAVAILABLE: no producer handoff');
  clothPanel?.load(rebuildStatus.inputs?rebuildStatus.cloth??null:null,rebuildStatus.inputs?null:rebuildStatus.reason??'CLOTH_UNAVAILABLE: no producer handoff');
  cutsPanel?.load(rebuildStatus.inputs&&rebuildStatus.cuts?rebuildStatus.cuts.config:null,rebuildStatus.bones??[],rebuildStatus.inputs?null:rebuildStatus.reason??'CUTS_UNAVAILABLE: no producer handoff',rebuildStatus.cuts?.build??null);
- meshPanel?.load(rebuildStatus.inputs?rebuildStatus.meshes??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'MESH_PANEL_UNAVAILABLE: no producer handoff');meshPanel?.select(parts?.value()?.slot??null);
+ meshPanel?.load(rebuildStatus.inputs?rebuildStatus.meshes??{}:null,rebuildStatus.inputs?null:rebuildStatus.reason??'MESH_PANEL_UNAVAILABLE: no producer handoff');meshPanel?.select(parts?.value()?.slot??stageDraftSelection?.slot??null);
  animationPanel?.loadSource(rebuildStatus.animations??null,rebuildStatus.reason);
+ if(!inspectedModel&&canManageApplied())void refreshApplied();
  renderDropNotices();
  return rebuildStatus;
 }
@@ -1591,7 +1609,7 @@ function rebuildState():void {chestEditor?.rebuildState({busy:rebuildBusy,applie
 /** #166: the session's applied records (the server's stack), the last one on the stage when the stage shows it. */
 let appliedHistory:AppliedHistoryView|null=null;
 async function refreshApplied():Promise<void> {
- if(!inspectedModel)return;
+ if(!canManageApplied())return;
  try{appliedHistory=await api<AppliedHistoryView>('/api/rebuild/history');}catch{return;}
  renderApplied();
 }
@@ -1605,7 +1623,7 @@ function chestPartForNotice():string|null {
  return 'regions' in designated?pickPart(rebuildStatus,designated.regions):rebuildStatus.parts.length===1?rebuildStatus.parts[0]!.name:null;
 }
 function renderDropNotices():void {
- const slot=parts?.value()?.slot??null,meshPart=meshPanel?.part()??slot,chestPart=chestPartForNotice();
+ const slot=parts?.value()?.slot??stageDraftSelection?.slot??null,meshPart=meshPanel?.part()??slot,chestPart=chestPartForNotice();
  for(const node of document.querySelectorAll<HTMLElement>('[data-rebuild-drop]')){
   const panel=node.dataset.rebuildDrop as RebuildPanelKind;
   const part=panel==='mesh'?meshPart:panel==='mesh-edit'?slot:panel==='chest'?chestPart:null;
@@ -1697,8 +1715,8 @@ function appliedStatus(text:string,error=false):void {const node=el('applied-sta
  */
 async function undoApply():Promise<UndoView|null> {
  const from=appliedOnStage?.buildId;
- if(rebuildBusy||readOnly||!from||!inspectedModel)return null;
- const world=stageWorld();
+ if(rebuildBusy||readOnly||!from||!canManageApplied())return null;
+ const world=stageWorld(),priorBuildId=from,priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
  rebuildBusy=true;rebuildState();appliedStatus('Undoing the last Apply…');
  try{
   let result=await api<UndoView>('/api/rebuild/undo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from})});
@@ -1710,15 +1728,21 @@ async function undoApply():Promise<UndoView|null> {
    result={status:'built',undone,job,history:await api<AppliedHistoryView>('/api/rebuild/history')};
   }
   if(result.status==='refused'){appliedStatus(result.error,true);message(result.error,true);return result;}
-  if(result.status==='inspected'){await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;}
+  if(result.status==='inspected'){
+   if(inspectedModel)await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);
+   else{const target=draftInspectedTarget();await prepareStageDraftBuild('inspected',target.sha256,{target,transition:{kind:'undo',token,priorBuildId,priorPart},world});}
+   appliedOnStage=null;stageCheck=null;
+  }
   else{
    const job=result.job;if(!job.build)throw new Error('the restored job carries no build');
-   await swapRig(new URL(access.route(job.build.modelUrl),location.href).href,access.route(`/rebuild/${job.id}/`),job.build.modelHash,world);
+   if(inspectedModel)await swapRig(new URL(access.route(job.build.modelUrl),location.href).href,access.route(`/rebuild/${job.id}/`),job.build.modelHash,world);
+   else{const target=draftScratchTarget(job.id,job.build.modelUrl,job.build.modelHash);await prepareStageDraftBuild(job.id,target.sha256,{target,transition:{kind:'undo',token,priorBuildId,priorPart},world});}
    appliedOnStage=recordFor(job);stageCheck=(job as PatchJobView).kind==='patch'?{lines:[...job.lines],check:(job as PatchJobView).check}:null;
    // #186: a restored retarget build gets what its Apply set — its own clock, then its animation selected.
    const retarget=retargetStage(job,job.build.modelHash);stageClock=retarget?.clock??null;
    if(retarget&&assets?.animations.some(clip=>clip.name===retarget.animation))chooseAnimation(retarget.animation);
   }
+  if(!inspectedModel)refreshStageParts?.();
   stageChanged({kind:'undo'});
   // The panels mark the ops the stage's build applied; the pending edits stay as they are.
   renderAppliedBlocks(result.status==='built'?result.job:null);
@@ -1727,7 +1751,8 @@ async function undoApply():Promise<UndoView|null> {
   cutsPanel?.shown(block==='cuts'?restored:null);clothPanel?.shown(block==='cloth'?restored:null);
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=appliedOnStage?JSON.stringify(appliedOnStage):'';draft.dispatchEvent(new Event('input',{bubbles:true}));
   appliedHistory=result.history;
-  const text=`Undid ${result.undone.slice(0,12)}… · the stage is ${result.status==='inspected'?`the inspected build (model ${inspectedModel.sha256.slice(0,12)}…)`:`record ${result.history.depth} (model ${stageModelHash?.slice(0,12)}…)`} · ${result.history.depth} applied record(s) left`;
+  const inspectedHash=inspectedModel?.sha256??data.reviewedSource.rig?.sha256??data.sourceHash;
+  const text=`Undid ${result.undone.slice(0,12)}… · the stage is ${result.status==='inspected'?`the inspected build (model ${inspectedHash.slice(0,12)}…)`:`record ${result.history.depth} (model ${stageModelHash?.slice(0,12)}…)`} · ${result.history.depth} applied record(s) left`;
   appliedStatus(text);message(text);redrawOverlay(true);
   return result;
  }catch(error){const text=`UNDO_FAILED: ${errorText(error)}`;appliedStatus(text,true);message(text,true);return {status:'refused',error:text,producerLine:null};}
@@ -1739,7 +1764,8 @@ async function applyRebuild():Promise<void> {
  if(readOnly){chestEditor?.notify(readOnly,true);return;}
  const loadedStatus=rebuildStatus??await loadRebuildStatus();
  const status=loadedStatus?chestStatusForPart(loadedStatus,stageCorrectionPart):loadedStatus;
- if(stageCorrectionPart&&parts?.value()?.slot!==stageCorrectionPart){chestEditor?.notify('STAGE_DRAFT_MISMATCH',true);return;}
+ const selectedSlot=parts?.value()?.slot??stageDraftSelection?.slot??null;
+ if(stageCorrectionPart&&selectedSlot!==stageCorrectionPart){chestEditor?.notify('STAGE_DRAFT_MISMATCH',true);return;}
  if(!status||!status.available||!status.inputs){const noContour=status?noContourReason(status):null,reason=noContour?.text??status?.reason??'REBUILD_STATUS_UNAVAILABLE';chestEditor?.notify(reason,!noContour,noContour?.lines??[reason]);message(reason,!noContour);return;}
  let part:string,body:RebuildRequestBody;const lines:string[]=[];
  if(chestEditor?.mode()==='landmarks'){
@@ -1751,6 +1777,7 @@ async function applyRebuild():Promise<void> {
   const picked=pickPart(status,designated.regions);if(!picked){chestEditor?.notify(`REBUILD_PART_AMBIGUOUS: the config states ${status.parts.length} contour meshes and the designated bones name none of them alone`,true);return;}
   part=picked;body={part,regions:designated.regions,configHash:status.inputs.configHash};
  }
+ const priorBuildId=appliedOnStage?.buildId??'inspected',priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
  rebuildBusy=true;rebuildState();chestEditor?.notify(`Rebuilding ${part} with ${status.producer?.package} ${status.producer?.version}…`,false,[]);
  try{
   const result=await runRebuild(body,{post:value=>api<RebuildJobView|RebuildRefusal>('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}),get:id=>api<RebuildJobView>(`/api/rebuild/${id}`),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
@@ -1758,8 +1785,10 @@ async function applyRebuild():Promise<void> {
   const outcome=outcomeLine(result);
   // A refusal stays readable in full: the bar's status line is one line, so the log ends with the producer's line verbatim.
   if(!('id' in result)||result.status!=='built'||!result.build){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return;}
-  await swapRig(new URL(access.route(result.build.modelUrl),location.href).href,access.route(`/rebuild/${result.id}/`),result.build.modelHash);
+  if(inspectedModel)await swapRig(new URL(access.route(result.build.modelUrl),location.href).href,access.route(`/rebuild/${result.id}/`),result.build.modelHash);
+  else{const target=draftScratchTarget(result.id,result.build.modelUrl,result.build.modelHash);await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition:{kind:'apply',token,priorBuildId,priorPart}});}
   appliedOnStage=appliedRecord(result);stageCheck=null;stageChanged({kind:'apply',via:'regions'});
+  if(!inspectedModel)refreshStageParts?.();
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   // The log closes on success so nothing floats over the rebuilt stage; a refusal keeps it open.
   chestEditor?.notify(outcome.text,false,[]);message(outcome.text);
@@ -1776,7 +1805,7 @@ async function applyRebuild():Promise<void> {
 async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<PatchJobView|RebuildRefusal> {
  if(rebuildBusy)return {status:'refused',error:'REBUILD_BUSY: an Apply is still running',producerLine:null};
  if(readOnly){chestEditor?.notify(readOnly,true);return {status:'refused',error:readOnly,producerLine:null};}
- const lines:string[]=[];
+ const lines:string[]=[],priorBuildId=appliedOnStage?.buildId??'inspected',priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
  rebuildBusy=true;rebuildState();chestEditor?.notify(`Applying patch (${patch.op.cmd}, ${patch.ops.length} op(s))…`,false,[]);
  try{
   // #112: with "Use for readings" on, Apply's check reads the exported schedule of the clip check renders (its idle).
@@ -1786,8 +1815,10 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
    onLine:line=>{lines.push(line);chestEditor?.notify(line.trim()||'…',false,lines.slice(-6));}});
   const outcome=patchOutcomeLine(result),next=stageModel(result,{url:'',hash:stageModelHash??''});
   if(next.id===null||!('id' in result)){chestEditor?.notify(outcome.text,true,[...lines.slice(-5),outcome.text]);message(outcome.text,true);return result;}
-  await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
+  if(inspectedModel)await swapRig(new URL(access.route(next.url),location.href).href,access.route(`/rebuild/${next.id}/`),next.hash,world);
+  else{const target=draftScratchTarget(result.id,result.build?.modelUrl,result.build?.modelHash);await prepareStageDraftBuild(target.buildId,target.sha256,{target,transition:{kind:'apply',token,priorBuildId,priorPart},world});}
   appliedOnStage=patchAppliedRecord(result);stageCheck={lines:[...result.lines],check:result.check};stageChanged({kind:'apply',via:'patch'});
+  if(!inspectedModel)refreshStageParts?.();
   const draft=el<HTMLTextAreaElement>('rebuild-applied');draft.value=JSON.stringify(appliedOnStage);draft.dispatchEvent(new Event('input',{bubbles:true}));
   chestEditor?.notify(outcome.text,outcome.error,[]);message(outcome.text,outcome.error);
   return result;
@@ -2224,9 +2255,14 @@ function sampleLocals(bone:string,dt:number,n:number):{t:number;rotation:number;
  return [...rows.values()].sort((a,b)=>a.t-b.t);
 }
 async function resetRebuild(world:StageWorld|null=null):Promise<void> {
- if(rebuildBusy||(!appliedOnStage&&!stripPending)||!inspectedModel)return;
+ if(rebuildBusy||(!appliedOnStage&&!stripPending)||!canManageApplied())return;
+ const priorBuildId=appliedOnStage?.buildId??'inspected',priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
  rebuildBusy=true;rebuildState();
- try{await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);appliedOnStage=null;stageCheck=null;stageChanged({kind:'reset'});animationPanel?.reconcileStageApplied(null);chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');}
+ try{
+  if(inspectedModel)await swapRig(inspectedModel.url,inspectedModel.prefix,inspectedModel.sha256,world);
+  else{const target=draftInspectedTarget();await prepareStageDraftBuild('inspected',target.sha256,{target,transition:{kind:'reset',token,priorBuildId,priorPart},world});}
+  appliedOnStage=null;stageCheck=null;stageChanged({kind:'reset'});if(!inspectedModel)refreshStageParts?.();animationPanel?.reconcileStageApplied(null);chestEditor?.notify('Reset: the inspected build is on the stage. The draft keeps the last applied state.',false);message('Reset to the inspected build.');
+ }
  catch(error){chestEditor?.notify(`REBUILD_RESET_FAILED: ${errorText(error)}`,true);}
  finally{rebuildBusy=false;rebuildState();}
 }
@@ -2435,23 +2471,297 @@ function setupComments():void {
 }
 
 /** Open the existing precision instruments only after re-reading the same displayed draft binding. */
-let stageCorrectionPart:string|null=null,stageCorrectionRebinding=0;
+interface StageDraftModelTarget {buildId:string;url:string;prefix:string;sha256:string}
+interface StageDraftTransition {
+ kind:'open'|'apply'|'undo'|'reset';
+ token:number;
+ priorBuildId:string;
+ priorPart:string|null;
+ expectedPart?:string|null;
+ expectedSourceHash?:string;
+ instrument?:string;
+}
+let stageCorrectionPart:string|null=null,stageCorrectionRebinding=0,stageDraftRequestToken=0;
+let stageDraftSelection:{part:string;slot:string;skin:string;attachment:string;sourceHash:string;buildId:string}|null=null;
+let stageCommittedEntries:PartEntry[]|null=null;
+let stageDraftTarget:StageDraftModelTarget|null=null;
+let refreshStageParts:(()=>void)|null=null;
+function canManageApplied():boolean{return Boolean(inspectedModel||data?.capabilities?.preRig||rebuildStatus?.draft);}
+function draftInspectedTarget():StageDraftModelTarget{
+ const rig=data?.reviewedSource?.rig;
+ if(!rig||typeof rig.path!=='string'||!rig.path||typeof rig.sha256!=='string'||!rig.sha256)throw new Error('STAGE_DRAFT_MISMATCH');
+ return {buildId:'inspected',url:new URL(assetUrl(rig.path),location.href).href,prefix:access.route('/assets/'),sha256:rig.sha256};
+}
+function draftScratchTarget(buildId:unknown,modelUrl:unknown,modelHash:unknown):StageDraftModelTarget{
+ if(typeof buildId!=='string'||!buildId||buildId==='inspected'||typeof modelUrl!=='string'||!modelUrl||typeof modelHash!=='string'||!modelHash)throw new Error('STAGE_DRAFT_MISMATCH');
+ return {buildId,url:new URL(access.route(modelUrl),location.href).href,prefix:access.route(`/rebuild/${buildId}/`),sha256:modelHash};
+}
+async function resolveStageDraftTarget(buildId:string):Promise<StageDraftModelTarget>{
+ if(buildId==='inspected')return draftInspectedTarget();
+ if(!appliedOnStage||appliedOnStage.buildId!==buildId||typeof appliedOnStage.modelHash!=='string'||!appliedOnStage.modelHash)throw new Error('STAGE_DRAFT_STALE');
+ if(stageDraftTarget&&stageDraftTarget.buildId===buildId&&stageDraftTarget.sha256===appliedOnStage.modelHash)return stageDraftTarget;
+ const job=await api<AnyJobView>(`/api/rebuild/${buildId}`);
+ if(!job||job.id!==buildId||job.status!=='built'||!job.build||job.build.modelHash!==appliedOnStage.modelHash)throw new Error('STAGE_DRAFT_MISMATCH');
+ return draftScratchTarget(job.id,job.build.modelUrl,job.build.modelHash);
+}
+async function prepareStageDraftBuild(
+ buildId:string,
+ nextModelHash:string|null,
+ options?:{target?:StageDraftModelTarget;transition?:StageDraftTransition;world?:StageWorld|null},
+):Promise<{status:RebuildStatusView|null;mapping:{part:string;slot:string;skin:string;attachment:string}}>{
+ if(readOnly)throw new Error(readOnly);
+ const transition=options?.transition;
+ if(transition){
+  if(transition.token!==stageDraftRequestToken)throw new Error('STAGE_DRAFT_STALE');
+  if(transition.kind==='open'){
+   if(rebuildBusy||(appliedOnStage?.buildId??'inspected')!==buildId)throw new Error('STAGE_DRAFT_STALE');
+  }else{
+   if(!rebuildBusy||(appliedOnStage?.buildId??'inspected')!==transition.priorBuildId||(stageCorrectionPart??stageDraftSelection?.part??null)!==transition.priorPart)throw new Error('STAGE_DRAFT_STALE');
+  }
+ }
+
+ let nextAssets:ModelAssets|null=null;
+ let target:StageDraftModelTarget;
+ let verifiedDoc:unknown=null;
+ let verifiedEntries:PartEntry[]=[];
+ let verifiedBones:string[]=[];
+ let verifiedRegions:ReturnType<typeof pageRegionTable>|null=null;
+ let stageData:{sourceHash:string;draft?:{inspectionOnly?:boolean;buildId:string;mappings:{part:string;slot:string;skin:string;attachment:string;vertices:number;triangles:number}[]};draftUnavailable?:string};
+ let mapping:{part:string;slot:string;skin:string;attachment:string}|undefined;
+ let status:RebuildStatusView|null=rebuildStatus;
+ try{
+  stageData=await api<{sourceHash:string;draft?:{inspectionOnly?:boolean;buildId:string;mappings:{part:string;slot:string;skin:string;attachment:string;vertices:number;triangles:number}[]};draftUnavailable?:string}>('/api/stage-parts',{headers:{'X-Review-Stage-Build':buildId}});
+  if(!stageData.draft||stageData.draft.buildId!==buildId)throw new Error(stageData.draftUnavailable??'STAGE_DRAFT_MISMATCH');
+  if(stageData.draft.inspectionOnly)throw new Error('PARTS_VERDICT_READ_ONLY: Stage 1 draft is inspection-only');
+  if(transition?.expectedSourceHash!==undefined&&stageData.sourceHash!==transition.expectedSourceHash)throw new Error(stageData.draftUnavailable??'STAGE_DRAFT_MISMATCH');
+  const targetPart=transition?.expectedPart??stageCorrectionPart??stageDraftSelection?.part??null;
+  mapping=targetPart?stageData.draft.mappings.find(m=>m.part===targetPart):stageData.draft.mappings[0];
+  if(!mapping||mapping.slot!==mapping.part)throw new Error(stageData.draftUnavailable??'STAGE_DRAFT_MISMATCH');
+  if(transition?.kind==='open'){
+   status=rebuildStatus??await loadRebuildStatus();
+   if(!status)throw new Error('REBUILD_STATUS_UNAVAILABLE');
+   if(transition.instrument==='chest'&&!status.parts.some(part=>part.name===mapping!.part))throw new Error(`REBUILD_PART_NOT_CONTOUR: ${mapping.part}`);
+  }
+  if(!nextModelHash)throw new Error(buildId==='inspected'?'STAGE_DRAFT_MISMATCH':'STAGE_DRAFT_STALE');
+  target=options?.target??await resolveStageDraftTarget(buildId);
+  if(target.buildId!==buildId||target.sha256!==nextModelHash||!target.url||!target.prefix)throw new Error('STAGE_DRAFT_MISMATCH');
+  nextAssets=await loadModel({modelUrl:target.url,...stageLoadInputs(target.url,target.sha256),resolvePage:(name,url)=>{const pageUrl=new URL(name,url);if(pageUrl.origin!==location.origin||!pageUrl.pathname.startsWith(target.prefix))throw new Error(`Model page escapes its build: ${name}`);return pageUrl.href;}});
+  const loadedDoc=await loadModelDocument(target.url,target.sha256);
+  if(!loadedDoc.ok)throw new Error('PART_SOURCE_CHANGED: model bytes differ from reviewed SHA-256');
+  verifiedDoc=loadedDoc.document;
+  const rawSlots=verifiedDoc&&typeof verifiedDoc==='object'&&!Array.isArray(verifiedDoc)?(verifiedDoc as {slots?:unknown}).slots:null;
+  if(!Array.isArray(rawSlots))throw new Error('Part catalog requires bounded model slots and skins');
+  const slotNames=rawSlots.map(s=>s&&typeof s==='object'&&typeof (s as {name?:unknown}).name==='string'?(s as {name:string}).name:'');
+  verifiedEntries=partCatalog(verifiedDoc,slotNames);
+  verifiedBones=modelBoneNames(verifiedDoc);
+  verifiedRegions=pageRegionTable(verifiedDoc);
+  const slotEntry=verifiedEntries.find(e=>e.slot===mapping!.slot);
+  if(!slotEntry||!slotEntry.declarations.some(d=>d.skin===mapping!.skin&&d.attachment===mapping!.attachment&&d.kind==='mesh'))throw new Error('STAGE_DRAFT_MISMATCH');
+  const setupPose=readSetupPose(nextAssets,mapping.slot,document.createElement('div'));
+  if(!setupPose.identity||setupPose.identity.skin!==mapping.skin||setupPose.identity.attachment!==mapping.attachment||!setupPose.readMesh())throw new Error('STAGE_DRAFT_MISMATCH');
+  if(!verifiedBones.length)throw new Error('CHEST_REGION_MAPPING_UNAVAILABLE: no compiled model drawn');
+
+  const finalStage=await api<{sourceHash:string;draft?:{inspectionOnly?:boolean;buildId:string;mappings:{part:string;slot:string;skin:string;attachment:string}[]};draftUnavailable?:string}>('/api/stage-parts',{headers:{'X-Review-Stage-Build':buildId}});
+  if(!finalStage.draft||finalStage.draft.buildId!==buildId||finalStage.sourceHash!==stageData.sourceHash)throw new Error(finalStage.draftUnavailable??'STAGE_DRAFT_STALE');
+  if(finalStage.draft.inspectionOnly)throw new Error('PARTS_VERDICT_READ_ONLY: Stage 1 draft is inspection-only');
+  const finalMapping=finalStage.draft.mappings.find(m=>m.part===mapping!.part);
+  if(!finalMapping||finalMapping.slot!==mapping.slot||finalMapping.skin!==mapping.skin||finalMapping.attachment!==mapping.attachment)throw new Error(finalStage.draftUnavailable??'STAGE_DRAFT_MISMATCH');
+
+  if(readOnly)throw new Error(readOnly);
+  if(transition){
+   if(transition.token!==stageDraftRequestToken)throw new Error('STAGE_DRAFT_STALE');
+   if(transition.kind==='open'){
+    if(rebuildBusy||(appliedOnStage?.buildId??'inspected')!==buildId)throw new Error('STAGE_DRAFT_STALE');
+   }else{
+    if(!rebuildBusy||(appliedOnStage?.buildId??'inspected')!==transition.priorBuildId||(stageCorrectionPart??stageDraftSelection?.part??null)!==transition.priorPart)throw new Error('STAGE_DRAFT_STALE');
+   }
+  }
+ }catch(error){
+  try{nextAssets?.dispose();}catch{/* ignore */}
+  throw error;
+ }
+
+ const rigRoot=el('rig-root');
+ const prevNodes=[...rigRoot.childNodes];
+ const prevRootStyle={left:rigRoot.style.left,top:rigRoot.style.top,transform:rigRoot.style.transform,transformOrigin:rigRoot.style.transformOrigin,clipPath:rigRoot.style.clipPath};
+ const prevPlayer=player,prevAssets=assets,prevPartModel=partModel,prevStageModelBones=stageModelBones,prevCommittedEntries=stageCommittedEntries;
+ const prevInspectionSourceState=inspectionSourceState,prevStageModelHash=stageModelHash,prevStageSource=stageSource,prevSetupChestWorld=setupChestWorld,prevChestMapping=chestMapping,prevRigInput=rigInput,prevSelection=stageDraftSelection,prevStageDraftTarget=stageDraftTarget;
+ const prevPartValue=parts?.value()??null,prevPartRefusal=parts?.refusal('single')??null;
+ const prevView=view,prevEffectiveView=effectiveView,prevViewportState=structuredClone(viewport.state),prevInspector=selectedInspector(document);
+ const prevInspectorStates=[...document.querySelectorAll<HTMLElement>('[data-inspector]')].map(node=>({node,pressed:node.getAttribute('aria-pressed'),selected:node.getAttribute('aria-selected')}));
+ const prevAnimation=animation,prevTime=time,prevDuration=duration,prevWasPlaying=playing;
+ const partSetNode=document.getElementById('part-set') as HTMLSelectElement|null;
+ const keepSet=!partSetNode||partSetNode.disabled?'':partSetNode.value;
+ const animSelect=document.getElementById('animation-select') as HTMLSelectElement|null;
+ const prevAnimationOptions=animSelect?[...animSelect.childNodes]:[];
+ const prevAnimationControl=animSelect?{disabled:animSelect.disabled,value:animSelect.value}:null;
+ const prevSetOptions=partSetNode?[...partSetNode.childNodes]:[];
+ const prevSetControl=partSetNode?{disabled:partSetNode.disabled,value:partSetNode.value}:null;
+ const prevStageControls=['rig-empty','player-state','renderer-state','layer-images','layer-mesh','layer-bones'].map(id=>{
+  const node=document.getElementById(id) as HTMLInputElement|null;
+  return {node,hidden:node?.hidden,disabled:node?.disabled,text:node?.textContent};
+ });
+ let nextPlayer:RigPlayer|null=null;
+ stageCorrectionRebinding++;
+ try{
+  pause();
+  // Release the previous renderer's root clip while retaining its pose and views for rollback.
+  prevPlayer?.renderer.render({order:[]});
+  rigRoot.replaceChildren();
+  nextPlayer=new RigPlayer(rigRoot,nextAssets);
+  // A fresh player's draw has no held pose. Clearing track 0 publicly poses Setup.
+  nextPlayer.clear();
+  const nextSetupChest=readSetupChest(nextPlayer);
+  let rootAt:{x:number;y:number}|null=null;
+  try{const b=nextPlayer.bone(verifiedBones[0]!);rootAt={x:b.x,y:b.y};}catch{rootAt=null;}
+  const nextMapping=cropWorldMapping(nextAssets.stage,rootAt);
+  if(!nextMapping.available)throw new Error(nextMapping.reason);
+
+  assets=nextAssets;
+  player=nextPlayer;
+  partModel=verifiedDoc;
+  stageModelBones=verifiedBones;
+  stageCommittedEntries=verifiedEntries;
+  inspectionSourceState='ready';
+  stageModelHash=target.sha256;
+  stageSource={url:target.url,prefix:target.prefix,hash:target.sha256};
+  setupChestWorld=nextSetupChest;
+  chestMapping=nextMapping;
+  rigInput={state:'loaded'};
+
+  parts?.register('single',verifiedEntries,nextPlayer,new PartThumbnails(verifiedRegions!,nextAssets.pageImages));
+  drawRig(()=>nextPlayer!.draw());
+  parts?.select({side:'single',slot:mapping.slot,mode:prevPartValue?.slot===mapping.slot?prevPartValue.mode:'context'});
+  if(parts){
+   const liveIdentity=parts.value()?.identity;
+   if(!liveIdentity||liveIdentity.skin!==mapping.skin||liveIdentity.attachment!==mapping.attachment)throw new Error('STAGE_DRAFT_MISMATCH');
+  }
+  renderLayout();
+  updateChestMapping();
+  fitCamera();
+
+  if(animSelect){
+   animSelect.replaceChildren(...nextAssets.animations.map(item=>option(item.name,data.manifest?.animations?.find(a=>a.id===item.name)?.label??item.name)));
+   animSelect.disabled=nextAssets.animations.length===0;
+   animSelect.value='';
+  }
+  nextPlayer.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
+  if(partSetNode)configurePartSets(keepSet);
+  if(options?.world){
+   wind.resume(options.world.wind);
+   joltQueue=options.world.jolts.map(step=>({...step}));
+   const envApplied=document.getElementById('environment-applied') as HTMLInputElement|null;if(envApplied)envApplied.checked=options.world.applied;
+   const grav=document.getElementById('gravity') as HTMLInputElement|null;if(grav)grav.value=String(options.world.gravity);
+   syncEnvironmentInputs();
+  }
+  if(document.getElementById('environment-applied')&&environmentApplied()){
+   nextPlayer.environment(environmentFor(wind.read(),gravityValue()));
+   applyEnvironment();
+  }
+  animation='';duration=0;time=0;
+  renderTransport();renderCues();renderIdle();
+  stageDraftSelection={part:mapping.part,slot:mapping.slot,skin:mapping.skin,attachment:mapping.attachment,sourceHash:stageData.sourceHash,buildId};
+  stageDraftTarget=target;
+  const rigEmpty=document.getElementById('rig-empty');if(rigEmpty)rigEmpty.hidden=true;
+  if(document.getElementById('player-state'))text('player-state','Draft rig · structure evidence only');
+  for(const id of ['layer-images','layer-mesh','layer-bones']){const node=document.getElementById(id) as HTMLInputElement|null;if(node)node.disabled=false;}
+  populateChestBones();
+  configureTurnPad(verifiedDoc);
+  refreshAnimationInspection();
+  weightsView?.refresh();
+  meshEditor?.selectionChanged();
+  renderChest();
+  idlePanel?.model(boneSetup(verifiedDoc));
+  physicsPanel?.clearPreview();
+  stageDocumentSet=true;
+  if(prevWasPlaying)void playPreview();
+ }catch(commitError){
+  try{nextPlayer?.dispose();}catch{/* ignore */}
+  try{nextAssets.dispose();}catch{/* ignore */}
+  rigRoot.replaceChildren(...prevNodes);
+  assets=prevAssets;player=prevPlayer;partModel=prevPartModel;stageModelBones=prevStageModelBones;stageCommittedEntries=prevCommittedEntries;
+  inspectionSourceState=prevInspectionSourceState;stageModelHash=prevStageModelHash;stageSource=prevStageSource;setupChestWorld=prevSetupChestWorld;chestMapping=prevChestMapping;rigInput=prevRigInput;stageDraftSelection=prevSelection;stageDraftTarget=prevStageDraftTarget;
+  animation=prevAnimation;time=prevTime;duration=prevDuration;
+  // nextPlayer.dispose() has returned the caller's clip. Redraw before restoring
+  // the saved styles so the previous renderer borrows that baseline again.
+  if(prevPlayer&&prevAssets&&prevPartModel&&prevCommittedEntries){
+   parts?.register('single',prevCommittedEntries,prevPlayer,new PartThumbnails(pageRegionTable(prevPartModel),prevAssets.pageImages));
+   try{drawRig(()=>prevPlayer.draw());}catch{/* ignore */}
+   try{parts?.select(prevPartValue?{side:prevPartValue.side,slot:prevPartValue.slot,mode:prevPartValue.mode}:null);}catch{/* ignore */}
+  }else{
+   if(prevPartRefusal)parts?.refuseCatalog('single',prevPartRefusal.message);
+   else parts?.clear('single');
+  }
+  view=prevView;effectiveView=prevEffectiveView;
+  if(prevInspector)showInspector(prevInspector,false);
+  for(const {node,pressed,selected} of prevInspectorStates){
+   if(pressed===null)node.removeAttribute('aria-pressed');else node.setAttribute('aria-pressed',pressed);
+   if(selected===null)node.removeAttribute('aria-selected');else node.setAttribute('aria-selected',selected);
+  }
+  try{renderLayout();}catch{/* ignore */}
+  Object.assign(viewport.state,structuredClone(prevViewportState));
+  renderCameraControls();
+  Object.assign(rigRoot.style,{left:prevRootStyle.left,top:prevRootStyle.top,transform:prevRootStyle.transform,transformOrigin:prevRootStyle.transformOrigin,clipPath:prevRootStyle.clipPath});
+  if(animSelect&&prevAnimationControl){animSelect.replaceChildren(...prevAnimationOptions);Object.assign(animSelect,prevAnimationControl);}
+  if(partSetNode&&prevSetControl){partSetNode.replaceChildren(...prevSetOptions);Object.assign(partSetNode,prevSetControl);}
+  for(const {node,hidden,disabled,text:priorText} of prevStageControls){
+   if(!node)continue;
+   node.hidden=hidden!;node.disabled=disabled!;
+   if(node.id==='player-state'||node.id==='renderer-state')node.textContent=priorText!;
+  }
+  populateChestBones();
+  renderChest();
+  if(prevWasPlaying)void playPreview();
+  throw commitError;
+ }finally{
+  stageCorrectionRebinding--;
+  directionPanel?.refresh();
+ }
+ try{prevPlayer?.dispose();}catch{/* ignore */}
+ try{prevAssets?.dispose();}catch{/* ignore */}
+ return {status,mapping};
+}
 async function openStageCorrection(request:{part:string;sourceHash:string;buildId:string;instrument:string}):Promise<void>{
+ if(readOnly)throw new Error(readOnly);
+ if(rebuildBusy)throw new Error('STAGE_DRAFT_STALE');
  const buildId=appliedOnStage?.buildId??'inspected';
  if(request.buildId!==buildId)throw new Error('STAGE_DRAFT_STALE');
- const data=await api<{sourceHash:string;draft?:{buildId:string;mappings:{part:string;slot:string;skin:string;attachment:string}[]}}>('/api/stage-parts',{headers:{'X-Review-Stage-Build':buildId}});
- const mapping=data.draft?.mappings.find(m=>m.part===request.part);
- if(!mapping||data.sourceHash!==request.sourceHash||data.draft?.buildId!==buildId||mapping.slot!==mapping.part)throw new Error('STAGE_DRAFT_MISMATCH');
- pause();seek(0);showInspector('rig');parts?.select({side:'single',slot:mapping.slot,mode:'context'});meshPanel?.select(mapping.part);
- const identity=parts?.value()?.identity;if(!identity||identity.skin!==mapping.skin||identity.attachment!==mapping.attachment)throw new Error('STAGE_DRAFT_MISMATCH');
- const status=rebuildStatus??await loadRebuildStatus();
- if(!status)throw new Error('REBUILD_STATUS_UNAVAILABLE');
- if(request.instrument==='chest'&&!status.parts.some(part=>part.name===mapping.part))throw new Error(`REBUILD_PART_NOT_CONTOUR: ${mapping.part}`);
- rebindChestPart(status,mapping.part);
+ const priorPart=stageCorrectionPart??stageDraftSelection?.part??null,token=++stageDraftRequestToken;
+ let status:RebuildStatusView|null=null;
+ let mapping:{part:string;slot:string;skin:string;attachment:string}|undefined;
+ if(inspectedModel){
+  const stageData=await api<{sourceHash:string;draft?:{inspectionOnly?:boolean;buildId:string;mappings:{part:string;slot:string;skin:string;attachment:string}[]};draftUnavailable?:string}>('/api/stage-parts',{headers:{'X-Review-Stage-Build':buildId}});
+  if(stageData.draft?.inspectionOnly)throw new Error('PARTS_VERDICT_READ_ONLY: Stage 1 draft is inspection-only');
+  mapping=stageData.draft?.mappings.find(m=>m.part===request.part);
+  if(!mapping||stageData.sourceHash!==request.sourceHash||stageData.draft?.buildId!==buildId||mapping.slot!==mapping.part)throw new Error(stageData.draftUnavailable??'STAGE_DRAFT_MISMATCH');
+  status=rebuildStatus??await loadRebuildStatus();
+  if(!status)throw new Error('REBUILD_STATUS_UNAVAILABLE');
+  if(request.instrument==='chest'&&!status.parts.some(part=>part.name===mapping!.part))throw new Error(`REBUILD_PART_NOT_CONTOUR: ${mapping.part}`);
+  if(token!==stageDraftRequestToken||rebuildBusy||(appliedOnStage?.buildId??'inspected')!==buildId)throw new Error('STAGE_DRAFT_STALE');
+  pause();seek(0);showInspector('rig');
+  parts?.select({side:'single',slot:mapping.slot,mode:'context'});
+  const identity=parts?.value()?.identity;if(!identity||identity.skin!==mapping.skin||identity.attachment!==mapping.attachment)throw new Error('STAGE_DRAFT_MISMATCH');
+  stageDraftSelection={part:mapping.part,slot:mapping.slot,skin:mapping.skin,attachment:mapping.attachment,sourceHash:stageData.sourceHash,buildId};
+ }else{
+  const expectedHash=buildId==='inspected'?data?.reviewedSource?.rig?.sha256??null:appliedOnStage?.buildId===buildId&&typeof appliedOnStage.modelHash==='string'?appliedOnStage.modelHash:null;
+  const prepared=await prepareStageDraftBuild(buildId,expectedHash,{
+   transition:{kind:'open',token,priorBuildId:buildId,priorPart,expectedPart:request.part,expectedSourceHash:request.sourceHash,instrument:request.instrument},
+  });
+  status=prepared.status;
+  mapping=prepared.mapping;
+  showInspector('rig');
+ }
+ if(request.instrument==='mesh'&&!layers.mesh){
+  layers.mesh=true;
+  const layerMesh=document.getElementById('layer-mesh') as HTMLInputElement|null;if(layerMesh)layerMesh.checked=true;
+ }
+ meshPanel?.select(mapping.part);
+ rebindChestPart(status!,mapping.part);
  stageCorrectionPart=mapping.part;
  let label=document.getElementById('stage-draft-label');if(!label){label=document.createElement('p');label.id='stage-draft-label';label.setAttribute('data-i18n','Draft rig · structure evidence only');document.querySelector('.viewbar')?.prepend(label);}label.textContent=tr('Draft rig · structure evidence only');
  inspectorBlocks?.select('rig',request.instrument==='chest'?'chest-regions':request.instrument==='mesh'?'mesh-panel':'modeling-tools');
  if(request.instrument==='chest'&&button('chest-edit').getAttribute('aria-pressed')!=='true')button('chest-edit').click();
  if(request.instrument==='delta'&&button('mesh-edit').getAttribute('aria-pressed')!=='true')button('mesh-edit').click();
+ redrawOverlay(true);
  message(tr('Draft rig · structure evidence only')+tr(` · ${mapping.part} · rig-parts remesh ${request.instrument==='delta'?'--delta':'--mesh'}`));
 }

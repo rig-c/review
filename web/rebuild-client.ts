@@ -25,7 +25,8 @@ export interface HandoffView {how:'declared'|'discovered';via:string;outside:boo
 export interface BaselineView {status:'running'|'reproduced'|'not-reproduced'|'refused'|'failed';firstDifference:string|null;hashes:{baseline:{rigJson:string|null;tree:string};inspected:{rigJson:string|null;tree:string}}|null;line:string;wallMs:number|null}
 export interface RetargetStatusView {available:boolean;reason:string|null;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;rig:string|null;sequences:{id:string;label:string;path:string;cleaned:boolean;frames:number;people:string[]}[];bones:string[];animations:string[]}
 export type AnimationSourceView=import('../src/rebuild.ts').AnimationSourceStatus;
-export interface RebuildStatusView {retarget?:RetargetStatusView;animations?:AnimationSourceView|null;available:boolean;viewOnly?:boolean;handoff:HandoffView|null;baseline:BaselineView|null;inputs:{config:string;parts:string|null;rig:string|null;configHash:string}|null;parts:{name:string;regions:unknown[]}[];contour:Record<string,Record<string,unknown>>;meshes?:Record<string,unknown>;constraints?:unknown[]|null;bones?:unknown[]|null;fields?:Record<string,unknown>|null;cuts?:{config:Record<string,unknown>;build:string|null}|null;inspectedCheck?:InspectedCheckView|null;idle?:import('../src/idle-tracks.ts').IdleStatus|null;cloth?:ClothStatusView|null;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;reason:string|null}
+export interface DraftStatusView {id:string;kind:'draft-rig';at:string;producer:{name:string;version:string};editable:boolean;config:{path:string;sha256:string};config_inputs?:{path:string;sha256:string}[];parts:{path:string;files:{path:string;sha256:string}[]};files:{path:string;sha256:string}[]}
+export interface RebuildStatusView {retarget?:RetargetStatusView;animations?:AnimationSourceView|null;available:boolean;viewOnly?:boolean;handoff:HandoffView|null;draft?:DraftStatusView|null;baseline:BaselineView|null;inputs:{config:string;parts:string|null;rig:string|null;configHash:string}|null;parts:{name:string;regions:unknown[]}[];contour:Record<string,Record<string,unknown>>;meshes?:Record<string,unknown>;constraints?:unknown[]|null;bones?:unknown[]|null;fields?:Record<string,unknown>|null;cuts?:{config:Record<string,unknown>;build:string|null}|null;inspectedCheck?:InspectedCheckView|null;idle?:import('../src/idle-tracks.ts').IdleStatus|null;cloth?:ClothStatusView|null;producer:{package:string;version:string}|null;compiler:{package:string;version:string}|null;reason:string|null}
 /** #111: the cloth recipe form's status — the reader's tags, the recipes as written, each tag's parts and chains, the keypoints, the route and why Apply cannot run. */
 export interface ClothStatusView {targets:string[];targetsRead:boolean;recipes:Record<string,unknown>|null;tags:import('../src/cloth-recipe.ts').ClothTagView[];keypoints:{path:string;sha256:string}|null;route:'build'|'rig';reason:string|null}
 export interface RebuildJobView {stageInputHash?:string;files?:FilesDiff|null;remesh?:import('../src/mesh-entry.ts').RemeshCounts|null;check?:CheckSummary|null;id:string;status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;hint?:string;exitCode:number|null;wallMs:{remesh:number|null;compile:number|null};build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;regions:RegionEntry[];configHash:string;entrySha256:string;bust?:BustSpec};producer:{package:string;version:string};compiler:{package:string;version:string}}
@@ -219,6 +220,7 @@ export interface PatchJobView {stageInputHash?:string;id:string;kind:'patch';op?
 export interface PatchRequestBody {patch:ConfigPatch;environment?:import('../src/environment-schedule.ts').EnvironmentSchedule}
 /** Edit Mesh's delta Apply (#135): `remesh --delta`, the per-file diff and the part's counts; remesh's own gate holds check. */
 export interface DeltaJobView {stageInputHash?:string;check?:CheckSummary|null;id:string;kind:'delta';op:'remesh';status:'running'|'built'|'refused'|'failed';reused:boolean;lines:string[];producerLine:string|null;hint?:string;exitCode:number|null;wallMs:{op:number|null;compile:number|null};files:FilesDiff|null;remesh:import('../src/mesh-entry.ts').RemeshCounts&{modelTriangles:number|null}|null;build:{modelUrl:string;modelHash:string;files:Record<string,string>}|null;request:{part:string;delta:Record<string,unknown>;deltaSha256:string;configHash:string};producer:{package:string;version:string};compiler:{package:string;version:string}}
+export const MESH_DELTA_APPLIED_SOURCE = 'MESH_DELTA_APPLIED_SOURCE: Edit Mesh starts from the inspected draft. Export the delta and rebuild the prior revision (including any Mesh Parameters patch) first.';
 /** `{part, delta, configHash}`: the server owns every path and flag; the delta is the editor's export as it stands. */
 export interface DeltaRequestBody {part:string;delta:import('../src/mesh-edit.ts').MeshEditDocument;configHash:string}
 /** A retarget Apply's job (#114): clean, retarget, compile; every FAIL line of the step that refused, verbatim; the listed lines. */
@@ -350,7 +352,17 @@ export function outcomeLine(result:RebuildJobView|RebuildRefusal):{text:string;e
  * outside the opened folder when it is the `../config.json` beside an opened out/), its path and hash, then the
  * baseline. Without a handoff it is the refusal naming where it was looked for and how to declare it.
  */
-export function handoffText(status:Pick<RebuildStatusView,'handoff'|'baseline'|'reason'|'viewOnly'>):{text:string;error:boolean} {
+export function handoffText(status:Pick<RebuildStatusView,'handoff'|'draft'|'baseline'|'reason'|'viewOnly'>&Partial<Pick<RebuildStatusView,'producer'|'compiler'>>):{text:string;error:boolean} {
+ const d=status.draft;
+ if(d){
+  const reason=status.reason&&status.reason!==NO_CONTOUR_CODE?status.reason:null;
+  const installed=status.producer&&status.compiler?` · installed ${status.producer.package} ${status.producer.version} · ${status.compiler.package} ${status.compiler.version}`:'';
+  const tail=reason?`${installed} · ${reason}`:installed;
+  return {
+   text:`Draft ${d.id} (${d.producer.name} ${d.producer.version}): ${d.config.path} sha256 ${d.config.sha256.slice(0,12)}… · parts ${d.parts.path}${tail}`,
+   error:!d.editable||Boolean(reason),
+  };
+ }
  const h=status.handoff;
  if(!h)return status.viewOnly?{text:status.reason??'view only, no producer handoff',error:false}:{text:status.reason??'MODELING_HANDOFF_MISSING',error:true};
  const how=h.how==='declared'?`declared (${h.via})`:h.outside?'discovered outside the opened folder':'discovered';

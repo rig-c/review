@@ -444,6 +444,8 @@ Correction-record export is unfinished, blocked on review#369/create#91. Existin
 comments and feedback preserve reviewer wording, but are not a substitute for
 that shared export or for create-owned structure decisions.
 
+When `--project` and `--project-draft` select a recorded Create draft that declares its `config`, `parts`, `rig` and `check` directories, Stage 1 also enables the mesh correction instruments before a rig version exists while the draft is editable (`parts` or `parts-review` stage without an effective `parts-review` sign-off, and not `--view-only`). The status bar reports the recorded draft producer version as provenance alongside the installed producer and compiler versions; Apply runs the installed producer and compiler resolved by `resolveProducer` and its operation-capability floors (`REMESH_SINCE` and `REMESH_DELTA_SINCE`, plus `EDIT_PRODUCER_MISMATCH` if a patch's `producer` differs from the installed producer), without an equality version gate against the recorded draft producer. Opening an instrument switches to the Setup inspector for that mesh correction, while direct Stage 3 navigation stays refused with `RIG_VERSION_UNAVAILABLE`. When the project stage is outside `parts`/`parts-review`, an effective `parts-review` sign-off is already recorded, or `--view-only` is set, Stage 1 remains inspection-only (`draft.inspectionOnly: true`) and hides the correction instruments; omitting `--parts-verdict-dir` or viewing an applied scratch build keeps the Stage 1 parts verdict save/export controls read-only (`PARTS_VERDICT_READ_ONLY`) while leaving the correction instruments available on an editable draft.
+
 ### Declared-grid Difference
 
 **Difference** in an individual part view reads the optional producer declaration

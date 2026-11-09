@@ -978,3 +978,207 @@ test('a front stays up while its control directory has a live record and exits w
   expect(running(plantedProc.pid)).toBe(true);
   // Process starts take seconds under contention; the cap is not a wait, nothing sleeps toward it.
 }, 30_000);
+
+test('#562(ii) server context wires joined draft into rebuilds and stage-parts, enforces capability/viewOnly/locked gates, and leaves fixture bytes unchanged', async () => {
+  const { joinedVerdictFixture } = await import('./helpers/joined-verdict-fixture.ts');
+  const { createReviewRequestContext } = await import('../src/server.ts');
+  const { loadOpenPackage } = await import('../src/open.ts');
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'server-562-')));
+  roots.push(root);
+  const projectRoot = join(root, 'project');
+  const stateDir = join(root, 'state');
+  const f = await joinedVerdictFixture(projectRoot, '1-parts-verdict');
+
+  const partsMod = join(root, 'node_modules/@rig-c/parts/bin');
+  const rigcMod = join(root, 'node_modules/rig-c/bin');
+  await mkdir(partsMod, { recursive: true });
+  await mkdir(rigcMod, { recursive: true });
+  await writeFile(
+    join(root, 'node_modules/@rig-c/parts/package.json'),
+    JSON.stringify({ name: '@rig-c/parts', version: '1.49.0', bin: { 'rig-parts': 'bin/rig-parts.cjs' } }),
+  );
+  await writeFile(
+    join(root, 'node_modules/rig-c/package.json'),
+    JSON.stringify({ name: 'rig-c', version: '2.64.1', bin: { rigc: 'bin/rigc.cjs' } }),
+  );
+  const baseRigText = await readFile(f.draft.rig, 'utf8');
+  const baseReportText = await readFile(f.draft.meshReport, 'utf8');
+  const baseModelText = await readFile(f.draft.model, 'utf8');
+  await writeFile(
+    join(partsMod, 'rig-parts.cjs'),
+    `const fs=require('fs'),path=require('path'),crypto=require('crypto');
+const sha=b=>crypto.createHash('sha256').update(b).digest('hex');
+const a=process.argv.slice(2),f=n=>a[a.indexOf(n)+1];
+if(a[0]==='remesh'){
+ const out=f('--out'),part=f('--part'),inRig=f('--rig');
+ fs.mkdirSync(path.join(out,'images'),{recursive:true});
+ const imgBytes=fs.readFileSync(path.join(inRig,'images','torso.png'));
+ fs.writeFileSync(path.join(out,'images','torso.png'),imgBytes);
+ const rig=JSON.parse(${JSON.stringify(baseRigText)});
+ const reports=JSON.parse(${JSON.stringify(baseReportText)});
+ rig.skins.default.torso.torso.triangles.splice(-6);
+ const triCount=rig.skins.default.torso.torso.triangles.length/3;
+ reports[0].triangles=triCount;
+ const rigBytes=JSON.stringify(rig),motionBytes='{}',reportBytes=JSON.stringify(reports);
+ fs.writeFileSync(path.join(out,'rig.json'),rigBytes);
+ fs.writeFileSync(path.join(out,'motion.json'),motionBytes);
+ fs.writeFileSync(path.join(out,'mesh_report.json'),reportBytes);
+ fs.writeFileSync(path.join(out,'remesh.json'),JSON.stringify({
+  spec:'rig-parts-remesh/1',
+  request:{part,page_edges:'free',pack_shape:'polygon'},
+  target:{before:{vertices:30,triangles:40,hull:16},after:{vertices:30,triangles:triCount,hull:16}},
+  check:{revision:{pass:true,line:'check: PASS — 2 bar(s) met',status:{gate:'PASS',BREATH_VISIBLE:'PASS',PART_SUPPORT_REPORT:'PASS'}}},
+  revision:[
+   {path:'images/torso.png',bytes:imgBytes.length,sha256:sha(imgBytes)},
+   {path:'rig.json',bytes:Buffer.byteLength(rigBytes),sha256:sha(rigBytes)},
+   {path:'motion.json',bytes:Buffer.byteLength(motionBytes),sha256:sha(motionBytes)},
+   {path:'mesh_report.json',bytes:Buffer.byteLength(reportBytes),sha256:sha(reportBytes)}
+  ]
+ }));
+ console.log('rig-parts remesh: wrote 3 file(s) under '+out);
+ process.exit(0);
+}
+process.exit(1);`,
+  );
+  await writeFile(
+    join(rigcMod, 'rigc.cjs'),
+    `const fs=require('fs'),path=require('path');
+const a=process.argv.slice(2),f=n=>a[a.indexOf(n)+1];
+const out=f('--out'),rig=JSON.parse(fs.readFileSync(f('--rig'),'utf8'));
+fs.mkdirSync(out,{recursive:true});
+const model=JSON.parse(${JSON.stringify(baseModelText)});
+model.skins[0].attachments.torso.torso.triangles=rig.skins.default.torso.torso.triangles;
+model.pages=[{name:'skeleton.png'}];
+fs.writeFileSync(path.join(out,'skeleton.model.json'),JSON.stringify(model));
+fs.writeFileSync(path.join(out,'skeleton.png'),'png');
+console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`,
+  );
+
+  const cap = 'c'.repeat(64);
+  const port = 4399;
+  const origin = `http://127.0.0.1:${port}`;
+  const srv = { upgrade: () => false };
+  const ctx = await createReviewRequestContext(f.p, {
+    joined: f.joined,
+    capability: cap,
+    stateDir,
+    cwd: root,
+    bundle: new Blob(['// test']),
+  });
+  try {
+    const req = (path: string, init?: RequestInit) =>
+      ctx.handle(
+        new Request(`${origin}${path}`, {
+          ...init,
+          headers: {
+            ...(init?.method && init.method !== 'GET' ? { Origin: origin, 'X-Review-Capability': cap, 'Content-Type': 'application/json' } : {}),
+            ...(init?.headers as Record<string, string> | undefined),
+          },
+        }),
+        port,
+        srv,
+      );
+
+    // 1. GET /api/rebuild exposes recorded draft provenance without synthetic handoff or baseline.
+    const statusRes = await req('/api/rebuild');
+    expect(statusRes?.status).toBe(200);
+    const status = (await statusRes!.json()) as any;
+    expect(status.handoff).toBeNull();
+    expect(status.baseline).toBeNull();
+    expect(status.draft).toMatchObject({
+      id: 'chain',
+      kind: 'draft-rig',
+      editable: true,
+      producer: f.draft.record.producer,
+      config: f.draft.record.config,
+    });
+    expect(status.inputs?.configHash).toBe(f.draft.record.config.sha256);
+
+    // 2. Missing capability on POST /api/rebuild is rejected with 403 before reaching rebuilds.
+    const noCapRes = await ctx.handle(
+      new Request(`${origin}/api/rebuild`, {
+        method: 'POST',
+        headers: { Origin: origin, 'Content-Type': 'application/json' },
+        body: '{}',
+      }),
+      port,
+      srv,
+    );
+    expect(noCapRes?.status).toBe(403);
+
+    // 3. POST /api/rebuild runs remesh patch on the joined draft and serves the scratch build through GET /api/stage-parts.
+    const remeshPatch = {
+      schema: 'rig-review-config-patch/1',
+      config_sha256: status.inputs.configHash,
+      ops: [{ op: 'add', path: '/meshes/torso/density', value: 16 }],
+      producer: { name: '@rig-c/parts', version: '1.49.0' },
+      op: { cmd: 'remesh', args: ['--part', 'torso'] },
+    };
+    const startRes = await req('/api/rebuild', { method: 'POST', body: JSON.stringify({ patch: remeshPatch }) });
+    expect(startRes?.status).toBe(202);
+    const started = (await startRes!.json()) as { id: string; status: string };
+    let job = started as any;
+    for (let i = 0; job.status === 'running' && i < 200; i++) {
+      await Bun.sleep(20);
+      job = await (await req(`/api/rebuild/${started.id}`))!.json();
+    }
+    expect(job.status).toBe('built');
+
+    const stageScratchRes = await req('/api/stage-parts', { headers: { 'X-Review-Stage-Build': job.id } });
+    expect(stageScratchRes?.status).toBe(200);
+    const stageScratch = (await stageScratchRes!.json()) as any;
+    expect(stageScratch.draft.buildId).toBe(job.id);
+    expect(stageScratch.draft.mappings[0].triangles).toBe(38);
+    expect(stageScratch.joinedVerdictBinding).toBeUndefined();
+
+    // 4. Undo via POST /api/rebuild/undo restores `inspected` and invalidates the scratch build on /api/stage-parts.
+    const undoRes = await req('/api/rebuild/undo', { method: 'POST', body: JSON.stringify({ from: job.id }) });
+    expect(undoRes?.status).toBe(200);
+    const undone = (await undoRes!.json()) as any;
+    expect(undone.status).toBe('inspected');
+    const staleScratchRes = await req('/api/stage-parts', { headers: { 'X-Review-Stage-Build': job.id } });
+    expect(staleScratchRes?.status).toBe(409);
+    const inspectedRes = await req('/api/stage-parts', { headers: { 'X-Review-Stage-Build': 'inspected' } });
+    expect(inspectedRes?.status).toBe(200);
+    expect(((await inspectedRes!.json()) as any).draft.mappings[0].triangles).toBe(40);
+  } finally {
+    ctx.stop();
+  }
+
+  // 5. Locked draft opened through createReviewRequestContext reports non-editable draft and refuses rebuilds.
+  const projectPath = join(projectRoot, 'project.json');
+  const projectBytes = await readFile(projectPath);
+  try {
+    const lockedDoc = JSON.parse(projectBytes.toString());
+    lockedDoc.stage = 'rig-review';
+    lockedDoc.signoffs = [{ stage: 'parts-review', by: 'reviewer', at: '2026-04-01T00:00:00.000Z' }];
+    lockedDoc.reopens = [{ stage: 'rig-review', by: 'reviewer', at: '2026-04-02T00:00:00.000Z' }];
+    await writeFile(projectPath, JSON.stringify(lockedDoc));
+    const lockedOpen = await loadOpenPackage({
+      input: f.input,
+      project: { root: projectRoot, draftId: f.project.draftId, picksDir: f.project.picksDir },
+    });
+    if (lockedOpen.mode !== 'single' || !lockedOpen.joined?.draft) throw new Error('Expected locked draft');
+    const lockedCtx = await createReviewRequestContext(lockedOpen.p, {
+      joined: lockedOpen.joined,
+      capability: cap,
+      stateDir,
+      cwd: root,
+      bundle: new Blob(['// test']),
+    });
+    try {
+      const lockedStatus = (await (
+        await lockedCtx.handle(new Request(`${origin}/api/rebuild`), port, srv)
+      )!.json()) as any;
+      expect(lockedStatus.available).toBe(false);
+      expect(lockedStatus.draft?.editable).toBe(false);
+      expect(lockedStatus.reason).toStartWith('PARTS_VERDICT_READ_ONLY');
+    } finally {
+      lockedCtx.stop();
+    }
+  } finally {
+    await writeFile(projectPath, projectBytes);
+  }
+
+  await f.assertFixture();
+});

@@ -124,6 +124,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.": "STAGE_DRAFT_MISMATCH: 분리 파츠와 초안 메시의 식별 정보가 달라요.",
   "STAGE_DRAFT_STALE: the requested revision is pending or no longer applied.": "STAGE_DRAFT_STALE: 요청한 리비전이 대기 중이거나 더 이상 적용 상태가 아니에요.",
   "STAGE_DRAFT_CHANGED: scratch inputs changed after Apply.": "STAGE_DRAFT_CHANGED: 적용 후 작업 사본의 입력이 변경됐어요.",
+  "MESH_DELTA_APPLIED_SOURCE: Edit Mesh starts from the inspected draft. Export the delta and rebuild the prior revision (including any Mesh Parameters patch) first.": "MESH_DELTA_APPLIED_SOURCE: 메시 편집은 검사 중인 원본 초안에서 시작해요. 델타를 내보내고 메시 파라미터 변경을 포함한 이전 리비전을 먼저 다시 빌드하세요.",
   "STAGE_DRAFT_UNCHECKED: this revision has no successful producer check.": "STAGE_DRAFT_UNCHECKED: 이 리비전에는 성공한 제작기 검사 근거가 없어요.",
   "STAGE_DRAFT_OPERATION: this applied operation is not a mesh correction.": "STAGE_DRAFT_OPERATION: 적용된 작업이 메시 보정이 아니에요.",
   "Approve all": "모두 승인",
@@ -3454,4 +3455,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "KEY_TIME_OUT_OF_DOMAIN": "KEY_TIME_OUT_OF_DOMAIN",
   "MODEL_UNAVAILABLE": "MODEL_UNAVAILABLE",
   "REFERENCE_OUT_OF_DOMAIN": "REFERENCE_OUT_OF_DOMAIN",
+  " · installed {0} {1} · {2} {3}": " · 설치됨 {0} {1} · {2} {3}",
+  "Draft {0} ({1} {2}): {3} sha256 {4}… · parts {5}{6}": "초안 {0} ({1} {2}): {3} sha256 {4}… · 파츠 {5}{6}",
+  "PARTS_VERDICT_READ_ONLY: Stage 1 draft is inspection-only": "PARTS_VERDICT_READ_ONLY: 1단계 초안은 살펴보기 전용입니다",
+  "STAGE_DRAFT_OPERATION: only applied mesh corrections belong to this inspection": "STAGE_DRAFT_OPERATION: 이 점검에서는 적용된 메시 보정만 지원합니다",
 };
