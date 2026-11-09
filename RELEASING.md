@@ -1,8 +1,16 @@
 # Releasing
 
-`.github/workflows/release.yml` publishes the validated release commit through
-npm trusted publishing on a GitHub-hosted runner. Both the ordinary cut and tag
-recovery retain their existing commit/provenance and registry guards.
+`.github/workflows/release.yml` triggers on `vX.Y.Z` tag pushes and explicit
+tag dispatches (`gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`), and
+publishes the validated release commit through npm trusted publishing on a
+GitHub-hosted runner. Both paths require a strict `vX.Y.Z` tag ref
+(`RELEASE_TAG_FORM`, `RELEASE_REF_NOT_TAG`), resolve the tag to a full commit
+SHA (`RELEASE_TAG_UNRESOLVED`), require the run's `GITHUB_SHA` and fetched tag
+commit to match (`PROVENANCE_SHA_MISMATCH`), verify reachability from protected
+`origin/main` (`RELEASE_TAG_NOT_ON_MAIN`), verify `package.json` in the exact
+tagged tree matches `@rig-c/review@X.Y.Z` (`RELEASE_TAG_VERSION_MISMATCH`), and
+refuse a version the registry already serves (`RELEASE_ALREADY_PUBLISHED`),
+with no reliance on a pre-existing GitHub Release.
 
 ## The publish gate and packing order
 
