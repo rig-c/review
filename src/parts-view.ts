@@ -553,8 +553,7 @@ export function buildVerdict(
   if (status === 'changes-requested' && issues.length === 0) {
     return refuse('PARTS_VERDICT_NOTHING_FLAGGED', 'changes-requested needs at least one issue');
   }
-  const reviewer = by ?? (body.by === undefined ? undefined : body.by);
-  if (reviewer !== undefined && (typeof reviewer !== 'string' || !reviewer.trim())) {
+  if (by !== undefined && (typeof by !== 'string' || !by.trim())) {
     return refuse('PARTS_VERDICT_INVALID', 'reviewer name must be nonblank');
   }
   const itemMap = new Map(
@@ -589,7 +588,7 @@ export function buildVerdict(
     status,
     issues: parsedIssues,
     updatedAt: now.toISOString(),
-    ...(reviewer !== undefined ? { by: reviewer } : {}),
+    ...(by !== undefined ? { by } : {}),
   };
 }
 
