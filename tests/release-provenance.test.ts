@@ -13,9 +13,9 @@ const publish=workflow.jobs.publish;
 const target=steps.find(step=>step.id==='target')!;
 const tag='v0.11.1',commitSha='a'.repeat(40),oldSha='b'.repeat(40);
 type Fixture={
- event?:string;created?:string;cutTag?:string;inputTag?:string;runSha?:string;repo?:string;
- commitSha?:string;apiResponses?:Record<string,ApiResponse>;apiExit?:number;
- author?:string;releaseExit?:number;tagExit?:number;mainExit?:number;ancestorExit?:number;served?:string;
+ event?:string;ref?:string;inputTag?:string;runSha?:string;repo?:string;
+ commitSha?:string;localTagSha?:string;apiResponses?:Record<string,ApiResponse>;apiExit?:number;
+ tagExit?:number;mainExit?:number;ancestorExit?:number;packageJson?:string;packageExit?:number;served?:string;
 };
 type Call={command:string;args:string[]};
 type ApiResponse={status:number;body:string};
@@ -38,12 +38,12 @@ function observedCase(kind:'lightweight'|'annotated'){
  const apiResponses=Object.fromEntries([observed.full,observed.short].filter((id):id is string=>!!id).map(id=>{
   const row=capture(id);return [row.endpoint,{status:row.status,body:row.body}];
  }));
- return {...observed,expectedCommit,fixture:{repo:observed.repo,cutTag:observed.tag,
-  runSha:expectedCommit,apiResponses} satisfies Fixture};
+ return {...observed,expectedCommit,fixture:{repo:observed.repo,ref:`refs/tags/${observed.tag}`,inputTag:observed.tag,
+  runSha:expectedCommit,commitSha:expectedCommit,localTagSha:expectedCommit,
+  packageJson:JSON.stringify({name:'@rig-c/review',version:observed.tag.slice(1)}),apiResponses} satisfies Fixture};
 }
 
-
-// Only these stubs and grep exist on PATH. The extracted workflow runs with no repository,
+// Only these stubs and node exist on PATH. The extracted workflow runs with no repository,
 // inherited credentials, real gh/git/npm, network client, publish or dispatch command.
 const stub=String.raw`
 import {appendFileSync,readFileSync} from 'node:fs';
@@ -65,14 +65,15 @@ if(command==='gh'){
   // apiExit is a deliberate transport-failure injection, not recorded API behavior.
   reply(data.sha??null,f.apiExit);
  }
- if(is('release','view',f.inputTag,'--repo','rig-c/review','--json','author','--jq','.author.login'))reply(f.author,f.releaseExit);
 }
+const activeTag=f.event==='push'?String(f.ref).replace(/^refs\/tags\//,''):f.inputTag;
 if(command==='git'){
- if(is('rev-parse','--verify','--quiet','refs/tags/'+f.inputTag+'^{commit}'))reply(f.commitSha,f.tagExit);
+ if(is('rev-parse','--verify','--quiet','refs/tags/'+activeTag+'^{commit}'))reply(f.localTagSha,f.tagExit);
  if(is('rev-parse','--verify','--quiet','refs/remotes/origin/main'))reply(f.commitSha,f.mainExit);
  if(is('merge-base','--is-ancestor',f.commitSha,'refs/remotes/origin/main'))reply(undefined,f.ancestorExit);
+ if(is('show',f.commitSha+':package.json'))reply(f.packageJson,f.packageExit);
 }
-if(command==='npm'&&is('view','@rig-c/review@'+f.inputTag.slice(1),'version'))reply(f.served,f.served?0:1);
+if(command==='npm'&&is('view','@rig-c/review@'+activeTag.slice(1),'version'))reply(f.served,f.served?0:1);
 console.error('UNEXPECTED_STUB_COMMAND',command,JSON.stringify(args));process.exit(97);
 `;
 
@@ -80,24 +81,32 @@ function resolveTag(name:string,overrides:Fixture={}){
  const root=mkdtempSync(join(tmpdir(),'review-release-provenance-'));
  try{
   const bin=join(root,'bin');mkdirSync(bin);
+  const effectiveInputTag=overrides.inputTag??tag;
+  const effectiveRef=overrides.ref??`refs/tags/${effectiveInputTag}`;
+  const effectiveCommit=overrides.commitSha??commitSha;
+  const effectiveTag= (overrides.event??'push')==='push'?effectiveRef.replace(/^refs\/tags\//,''):effectiveInputTag;
   // Ordinary guard probes use synthetic JSON; observed tag cases override the entire
   // endpoint table with exact recorded bodies, with no short/full alias fallback.
-  const fixture={event:'push',created:'true',cutTag:tag,inputTag:tag,runSha:commitSha,repo:'rig-c/review',
-   commitSha,apiResponses:{[`repos/rig-c/review/commits/refs%2Ftags%2F${tag}`]:{status:200,body:JSON.stringify({sha:commitSha})}},
-   author:'github-actions[bot]',...overrides};
+  const fixture={event:'push',ref:effectiveRef,inputTag:effectiveInputTag,runSha:effectiveCommit,repo:'rig-c/review',
+   commitSha:effectiveCommit,localTagSha:effectiveCommit,
+   packageJson:JSON.stringify({name:'@rig-c/review',version:effectiveTag.replace(/^v/,'')}),
+   apiResponses:{[`repos/rig-c/review/commits/refs%2Ftags%2F${effectiveTag}`]:{status:200,body:JSON.stringify({sha:effectiveCommit})}},
+   ...overrides};
   writeFileSync(join(root,'fixture.json'),JSON.stringify(fixture));
+  // Plant a distractor working-tree package.json to prove the selector reads from git show $tag_sha:package.json, not cwd.
+  writeFileSync(join(root,'package.json'),JSON.stringify({name:'@rig-c/wrong-cwd',version:'0.0.0-cwd'}));
   const output=join(root,'output'),trace=join(root,'trace'),apiTrace=join(root,'api-trace');
   writeFileSync(output,'');writeFileSync(trace,'');writeFileSync(apiTrace,'');
   for(const command of ['gh','git','npm']){
    const path=join(bin,command);writeFileSync(path,`#!${process.execPath}\n${stub}`);chmodSync(path,0o755);
   }
-  symlinkSync('/usr/bin/grep',join(bin,'grep'));
+  symlinkSync(process.execPath,join(bin,'node'));
   expect(existsSync(join(root,'.git'))).toBe(false);
   const result=Bun.spawnSync(['/bin/bash','--noprofile','--norc','-c',target.run!],{
    cwd:root,timeout:10000,
-   env:{PATH:bin,HOME:root,EVENT:fixture.event,CREATED:fixture.created,CUT_TAG:fixture.cutTag,
+   env:{PATH:bin,HOME:root,EVENT:fixture.event,REF:fixture.ref,
     INPUT_TAG:fixture.inputTag,GITHUB_SHA:fixture.runSha,GITHUB_OUTPUT:output,REPO:fixture.repo,
-    RELEASE_AUTHOR:target.env!.RELEASE_AUTHOR!,FIXTURE:join(root,'fixture.json'),TRACE:trace,API_TRACE:apiTrace},
+    FIXTURE:join(root,'fixture.json'),TRACE:trace,API_TRACE:apiTrace},
   });
   const stdout=result.stdout.toString(),stderr=result.stderr.toString();
   const outputText=readFileSync(output,'utf8');
@@ -124,34 +133,74 @@ function refused(result:ReturnType<typeof resolveTag>,code:string){
 function onlyCommitLookup(calls:Call[],repo='rig-c/review',cutTag=tag){
  expect(calls).toEqual([{command:'gh',args:['api',`repos/${repo}/commits/refs%2Ftags%2F${cutTag}`,'--jq','.sha']}]);
 }
+function expectedResolutionCalls(repo='rig-c/review',releaseTag=tag,sha=commitSha):Call[]{
+ return [
+  {command:'gh',args:['api',`repos/${repo}/commits/refs%2Ftags%2F${releaseTag}`,'--jq','.sha']},
+  {command:'git',args:['rev-parse','--verify','--quiet',`refs/tags/${releaseTag}^{commit}`]},
+  {command:'git',args:['rev-parse','--verify','--quiet','refs/remotes/origin/main']},
+  {command:'git',args:['merge-base','--is-ancestor',sha,'refs/remotes/origin/main']},
+  {command:'git',args:['show',`${sha}:package.json`]},
+  {command:'npm',args:['view',`@rig-c/review@${releaseTag.slice(1)}`,'version']},
+ ];
+}
 
-test('parsed YAML preserves release authority, triggers and gates, and checks out only the validated commit',()=>{
- expect(workflow.on).toEqual({push:{branches:['main']},workflow_dispatch:{inputs:{tag:{description:'An existing release tag to publish, e.g. v0.7.1',required:true,type:'string'}}}});
- expect(workflow.permissions).toEqual({});
- expect(workflow.concurrency).toEqual({group:'release-${{ github.ref }}','cancel-in-progress':false});
- expect(workflow.jobs.release['runs-on']).toBe('ubuntu-latest');
- expect(workflow.jobs.release.permissions).toEqual({contents:'write','pull-requests':'write',issues:'write'});
- expect(workflow.jobs.release.outputs).toEqual({
+function checkWorkflowPolicy(wf:Workflow){
+ expect(wf.on).toEqual({push:{tags:['v*']},workflow_dispatch:{inputs:{tag:{description:'An existing release tag to publish, e.g. v0.7.1',required:true,type:'string'}}}});
+ expect(wf.permissions).toEqual({});
+ expect(wf.concurrency).toEqual({group:'release-${{ github.ref }}','cancel-in-progress':false});
+ expect(wf.jobs.release['runs-on']).toBe('ubuntu-latest');
+ expect(wf.jobs.release.permissions).toEqual({contents:'read'});
+ expect(wf.jobs.release.outputs).toEqual({
   publish:'${{ steps.target.outputs.publish }}',tag:'${{ steps.target.outputs.tag }}',sha:'${{ steps.target.outputs.sha }}',
  });
- expect(steps[0]).toMatchObject({id:'release',uses:'googleapis/release-please-action@v4',if:"${{ github.event_name == 'push' }}"});
- expect(steps[0]!.with).toEqual({token:'${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}','config-file':'release-please-config.json','manifest-file':'.release-please-manifest.json'});
- expect(steps.slice(0,steps.indexOf(target)).filter(step=>step.uses==='actions/checkout@v4')).toEqual([
-  {uses:'actions/checkout@v4',if:"${{ github.event_name == 'workflow_dispatch' }}",with:{ref:'main','fetch-depth':0,'persist-credentials':false}},
- ]);
- expect(target.env).toMatchObject({EVENT:'${{ github.event_name }}',CREATED:'${{ steps.release.outputs.release_created }}',CUT_TAG:'${{ steps.release.outputs.tag_name }}',INPUT_TAG:'${{ inputs.tag }}',GH_TOKEN:'${{ github.token }}',REPO:'${{ github.repository }}',RELEASE_AUTHOR:'github-actions[bot]'});
- expect(steps.at(-1)).toBe(target);
- expect(publish).toMatchObject({
+ const releaseSteps=wf.jobs.release.steps;
+ expect(releaseSteps.some(step=>step.uses?.includes('release-please'))).toBe(false);
+ expect(releaseSteps).toHaveLength(2);
+ expect(releaseSteps[0]).toEqual({
+  uses:'actions/checkout@v4',
+  with:{ref:'main','fetch-depth':0,'persist-credentials':false},
+ });
+ const targetStep=releaseSteps.find(step=>step.id==='target')!;
+ expect(targetStep.env).toEqual({
+  EVENT:'${{ github.event_name }}',REF:'${{ github.ref }}',INPUT_TAG:'${{ inputs.tag }}',
+  GH_TOKEN:'${{ github.token }}',REPO:'${{ github.repository }}',
+ });
+ expect(targetStep.run).not.toContain('release-please');
+ expect(targetStep.run).not.toContain('RELEASE_NOT_RELEASE_PLEASE');
+ expect(targetStep.run).not.toContain('RELEASE_TAG_UNRELEASED');
+ expect(releaseSteps.at(-1)).toBe(targetStep);
+ const pub=wf.jobs.publish;
+ expect(pub).toMatchObject({
   needs:'release',if:"${{ needs.release.outputs.publish == 'true' }}",'runs-on':'ubuntu-latest','timeout-minutes':20,
  });
- expect(publish.permissions).toEqual({contents:'read',actions:'read','pull-requests':'read','id-token':'write'});
- expect(publish.steps[0]).toMatchObject({uses:'actions/checkout@v4',with:{ref:'${{ needs.release.outputs.sha }}'}});
- expect(publish.steps.find(step=>step.env?.TAG_NAME)?.env?.TAG_NAME).toBe('${{ needs.release.outputs.tag }}');
- expect(publish.steps.filter(step=>step.run?.includes('npm publish')).map(step=>step.name)).toEqual(['Publish @rig-c/review','Publish the alias rig-review']);
- expect(publish.steps.find(step=>step.name==='Publish @rig-c/review')!.run!.trim()).toBe(
+ expect(pub.permissions).toEqual({contents:'read',actions:'read','pull-requests':'read','id-token':'write'});
+ expect(pub.steps[0]).toMatchObject({uses:'actions/checkout@v4',with:{ref:'${{ needs.release.outputs.sha }}'}});
+ expect(pub.steps.find(step=>step.env?.TAG_NAME)?.env?.TAG_NAME).toBe('${{ needs.release.outputs.tag }}');
+ expect(pub.steps.filter(step=>step.run?.includes('npm publish')).map(step=>step.name)).toEqual(['Publish @rig-c/review','Publish the alias rig-review']);
+ expect(pub.steps.find(step=>step.name==='Publish @rig-c/review')!.run!.trim()).toBe(
   'set -euo pipefail\nx="$(npm pack . --pack-destination .)"\nnpm publish "$x" --provenance --access public',
  );
+}
+
+test('parsed YAML removes release-please, triggers on version tags, preserves least privilege and gates, and checks out only the validated commit',()=>{
+ expect(existsSync(new URL('../release-please-config.json',import.meta.url))).toBe(false);
+ expect(existsSync(new URL('../.release-please-manifest.json',import.meta.url))).toBe(false);
+ checkWorkflowPolicy(workflow);
 });
+
+for(const [label,mutate] of Object.entries<{[k:string]:(copy:Workflow)=>void}>({
+ 'branch push trigger':copy=>{(copy.on as {push:unknown}).push={branches:['main']};},
+ 'reintroduced release-please step':copy=>{copy.jobs.release.steps.unshift({id:'release',uses:'googleapis/release-please-action@v4'});},
+ 'write permissions on selector job':copy=>{copy.jobs.release.permissions={contents:'write'};},
+ 'checkout restricted to workflow_dispatch':copy=>{copy.jobs.release.steps[0]!.if="${{ github.event_name == 'workflow_dispatch' }}";},
+ 'publish checks out mutable tag instead of validated SHA':copy=>{copy.jobs.publish.steps[0]!.with={ref:'${{ needs.release.outputs.tag }}'};},
+})){
+ test(`policy check rejects planted ${label}`,()=>{
+  const copy=structuredClone(workflow);
+  mutate(copy);
+  expect(()=>checkWorkflowPolicy(copy)).toThrow();
+ });
+}
 
 test('recorded API bodies retain exact byte hashes, HTTP statuses and annotated identity',()=>{
  for(const row of provenance.responses){
@@ -167,18 +216,27 @@ test('recorded API bodies retain exact byte hashes, HTTP statuses and annotated 
  expect(capture(provenance.cases.lightweight.full).status).toBe(200);
 });
 
-test('normal push resolves the matching commit without a checkout',()=>{
+test('manual version tag push resolves commit, verifies main ancestry, exact tagged package version and registry check',()=>{
  const result=resolveTag('push-normal');
  expect(result.exitCode).toBe(0);expect(result.outputs).toEqual({publish:'true',tag,sha:commitSha});
- onlyCommitLookup(result.calls);
+ expect(result.calls).toEqual(expectedResolutionCalls());
 });
+
 for(const kind of ['lightweight','annotated'] as const){
  const observed=observedCase(kind);
- test(`push ${kind} tag resolves to the commit without a checkout`,()=>{
+ test(`push ${kind} tag resolves to the commit and validates main ancestry and tagged package version`,()=>{
   const result=resolveTag(`push-${kind}`,observed.fixture);
   expect(result.exitCode).toBe(0);
   expect(result.outputs).toEqual({publish:'true',tag:observed.tag,sha:observed.expectedCommit});
-  onlyCommitLookup(result.calls,observed.repo,observed.tag);
+  expect(result.calls).toEqual(expectedResolutionCalls(observed.repo,observed.tag,observed.expectedCommit));
+  const full=capture(observed.full);
+  expect(result.apiCalls).toEqual([{endpoint:full.endpoint,status:200,bodySha256:full.bodySha256}]);
+ });
+ test(`dispatch ${kind} tag resolves to the commit and validates main ancestry and tagged package version`,()=>{
+  const result=resolveTag(`dispatch-${kind}`,{...observed.fixture,event:'workflow_dispatch'});
+  expect(result.exitCode).toBe(0);
+  expect(result.outputs).toEqual({publish:'true',tag:observed.tag,sha:observed.expectedCommit});
+  expect(result.calls).toEqual(expectedResolutionCalls(observed.repo,observed.tag,observed.expectedCommit));
   const full=capture(observed.full);
   expect(result.apiCalls).toEqual([{endpoint:full.endpoint,status:200,bodySha256:full.bodySha256}]);
  });
@@ -191,22 +249,19 @@ for(const kind of ['lightweight','annotated'] as const){
   expect(result.output).toBe('');onlyCommitLookup(result.calls,observed.repo,observed.tag);
  });
 }
+
 test('annotated tag object SHA cannot pass as the provenance commit',()=>{
  const observed=observedCase('annotated'),objectSha=JSON.parse(capture(observed.ref!).body).object.sha;
  const result=resolveTag('annotated-object-is-not-commit',{...observed.fixture,runSha:objectSha});
  refused(result,'PROVENANCE_SHA_MISMATCH');expect(result.text).toContain(observed.expectedCommit);expect(result.text).toContain(objectSha);
  onlyCommitLookup(result.calls,observed.repo,observed.tag);
 });
-for(const created of ['false','']){
- test(`push with release_created=${JSON.stringify(created)} does not resolve a tag or publish`,()=>{
-  const result=resolveTag(`no-release-${created||'empty'}`,{created,cutTag:'',apiExit:1});
-  expect(result.exitCode).toBe(0);expect(result.outputs).toEqual({publish:'false'});expect(result.calls).toEqual([]);
- });
-}
+
 test('push tag resolution error fails closed even if an API error emits a plausible SHA',()=>{
  const result=resolveTag('api-error',{apiExit:1});
  refused(result,'RELEASE_TAG_UNRESOLVED');expect(result.output).toBe('');onlyCommitLookup(result.calls);
 });
+
 for(const [name,apiOutput] of [['empty',''],['null','null'],['short',commitSha.slice(0,7)],['multiline',`${commitSha}\n${oldSha}`],['object','{"sha":"bad"}']]){
  test(`push refuses ${name} commit resolution`,()=>{
   const result=resolveTag(`invalid-sha-${name}`,{apiResponses:{
@@ -215,33 +270,55 @@ for(const [name,apiOutput] of [['empty',''],['null','null'],['short',commitSha.s
   refused(result,'RELEASE_TAG_UNRESOLVED');expect(result.output).toBe('');onlyCommitLookup(result.calls);
  });
 }
-test('push rejects a malformed cut tag before making an API request',()=>{
- const result=resolveTag('push-invalid-tag',{cutTag:'../heads/main'});
- refused(result,'RELEASE_TAG_FORM');expect(result.calls).toEqual([]);
-});
 
-test('dispatch on the tag keeps release-author, commit, main ancestry and registry checks',()=>{
- const result=resolveTag('dispatch-success',{event:'workflow_dispatch'});
- expect(result.exitCode).toBe(0);expect(result.outputs).toEqual({publish:'true',tag,sha:commitSha});
- expect(result.calls).toEqual([
-  {command:'gh',args:['release','view',tag,'--repo','rig-c/review','--json','author','--jq','.author.login']},
-  {command:'git',args:['rev-parse','--verify','--quiet',`refs/tags/${tag}^{commit}`]},
-  {command:'git',args:['rev-parse','--verify','--quiet','refs/remotes/origin/main']},
-  {command:'git',args:['merge-base','--is-ancestor',commitSha,'refs/remotes/origin/main']},
-  {command:'npm',args:['view','@rig-c/review@0.11.1','version']},
- ]);
-});
 for(const [name,fixture,code,callCount] of [
- ['invalid-tag',{inputTag:'main'},'RELEASE_TAG_FORM',0],
- ['unreleased',{releaseExit:1},'RELEASE_TAG_UNRELEASED',1],
- ['wrong-author',{author:'other-maintainer'},'RELEASE_NOT_RELEASE_PLEASE',1],
+ ['non-tag-ref',{ref:'refs/heads/main'},'RELEASE_REF_NOT_TAG',0],
+ ['unsupported-event',{event:'pull_request'},'RELEASE_REF_NOT_TAG',0],
+ ['traversal-tag',{ref:'refs/tags/../heads/main'},'RELEASE_TAG_FORM',0],
+ ['prerelease-tag',{ref:'refs/tags/v0.11.1-rc.1'},'RELEASE_TAG_FORM',0],
+ ['leading-zero-tag',{ref:'refs/tags/v01.11.1'},'RELEASE_TAG_FORM',0],
+ ['unprefixed-tag',{ref:'refs/tags/0.11.1'},'RELEASE_TAG_FORM',0],
  ['tag-not-commit',{tagExit:1},'RELEASE_TAG_NOT_ON_MAIN',2],
+ ['local-tag-sha-mismatch',{localTagSha:oldSha},'PROVENANCE_SHA_MISMATCH',2],
  ['missing-main',{mainExit:1},'RELEASE_TAG_NOT_ON_MAIN',3],
  ['not-on-main',{ancestorExit:1},'RELEASE_TAG_NOT_ON_MAIN',4],
- ['run-sha-mismatch',{runSha:oldSha},'PROVENANCE_SHA_MISMATCH',4],
- ['already-published',{served:'0.11.1'},'RELEASE_ALREADY_PUBLISHED',5],
- ] as const){
- test(`dispatch still refuses ${name} before publish=true`,()=>{
+ ['missing-package-json',{packageExit:1},'RELEASE_TAG_VERSION_MISMATCH',5],
+ ['invalid-package-json',{packageJson:'{not-json'},'RELEASE_TAG_VERSION_MISMATCH',5],
+ ['wrong-package-name',{packageJson:JSON.stringify({name:'@rig-c/other',version:'0.11.1'})},'RELEASE_TAG_VERSION_MISMATCH',5],
+ ['version-mismatch',{packageJson:JSON.stringify({name:'@rig-c/review',version:'0.11.0'})},'RELEASE_TAG_VERSION_MISMATCH',5],
+ ['already-published',{served:'0.11.1'},'RELEASE_ALREADY_PUBLISHED',6],
+] as const){
+ test(`push refuses ${name} before publish=true`,()=>{
+  const result=resolveTag(`push-${name}`,fixture);
+  refused(result,code);expect(result.calls).toHaveLength(callCount);
+ });
+}
+
+test('dispatch on the tag resolves commit, main ancestry, tagged package version and registry check without requiring a GitHub release',()=>{
+ const result=resolveTag('dispatch-success',{event:'workflow_dispatch'});
+ expect(result.exitCode).toBe(0);expect(result.outputs).toEqual({publish:'true',tag,sha:commitSha});
+ expect(result.calls).toEqual(expectedResolutionCalls());
+});
+
+for(const [name,fixture,code,callCount] of [
+ ['invalid-tag',{inputTag:'main'},'RELEASE_TAG_FORM',0],
+ ['prerelease-tag',{inputTag:'v0.11.1-rc.1'},'RELEASE_TAG_FORM',0],
+ ['leading-zero-tag',{inputTag:'v01.11.1'},'RELEASE_TAG_FORM',0],
+ ['branch-dispatch-ref',{ref:'refs/heads/main'},'RELEASE_REF_NOT_TAG',0],
+ ['other-tag-dispatch-ref',{ref:'refs/tags/v0.11.0'},'RELEASE_REF_NOT_TAG',0],
+ ['api-unresolved',{apiExit:1},'RELEASE_TAG_UNRESOLVED',1],
+ ['run-sha-mismatch',{runSha:oldSha},'PROVENANCE_SHA_MISMATCH',1],
+ ['tag-not-commit',{tagExit:1},'RELEASE_TAG_NOT_ON_MAIN',2],
+ ['local-tag-sha-mismatch',{localTagSha:oldSha},'PROVENANCE_SHA_MISMATCH',2],
+ ['missing-main',{mainExit:1},'RELEASE_TAG_NOT_ON_MAIN',3],
+ ['not-on-main',{ancestorExit:1},'RELEASE_TAG_NOT_ON_MAIN',4],
+ ['missing-package-json',{packageExit:1},'RELEASE_TAG_VERSION_MISMATCH',5],
+ ['invalid-package-json',{packageJson:'{not-json'},'RELEASE_TAG_VERSION_MISMATCH',5],
+ ['wrong-package-name',{packageJson:JSON.stringify({name:'@rig-c/other',version:'0.11.1'})},'RELEASE_TAG_VERSION_MISMATCH',5],
+ ['version-mismatch',{packageJson:JSON.stringify({name:'@rig-c/review',version:'0.11.0'})},'RELEASE_TAG_VERSION_MISMATCH',5],
+ ['already-published',{served:'0.11.1'},'RELEASE_ALREADY_PUBLISHED',6],
+] as const){
+ test(`dispatch refuses ${name} before publish=true`,()=>{
   const result=resolveTag(`dispatch-${name}`,{event:'workflow_dispatch',...fixture});
   refused(result,code);expect(result.calls).toHaveLength(callCount);
   if(name==='run-sha-mismatch'){
