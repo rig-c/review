@@ -2,6 +2,7 @@
  * Exact gate: --baseline-root <frozen original source> --instruments. All baseline imports and HTML/CSS/JS
  * come from the preserved source tree, never head sources. This nonshipping receipt input is not a fixture.
  */
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, relative, isAbsolute } from 'node:path';
@@ -64,24 +65,18 @@ try {
     await ready(`http://127.0.0.1:${server.port}/?lang=en#cap=${capability}`);
     for (const name of ['gap', 'covered']) {
       await choose(name);
-      await page.evaluate(`document.querySelector('[data-pv-outcome][value="clean"]').click()`);
-      if (name === 'covered') await meshOutcome('clean');
+      const noMeshVerdictFields = await page.evaluate<boolean>(`!document.querySelector('#pv-mesh-panel select')&&!document.querySelector('#pv-mesh-panel textarea')`);
+      if (!noMeshVerdictFields) throw new Error('legacy mesh outcome controls still present');
     }
-    await page.evaluate(`document.getElementById('pv-overall').value='approved'`);
-    const pending = await saved();
-    if (pending.result !== 'refused' || !pending.text.includes('PARTS_VERDICT_NOT_CLEAN')) throw new Error('pending mesh approved');
-    await choose('gap');
-    const note = 'Mesh gap at cell (1,1).'; await meshOutcome('flagged', note);
-    await page.evaluate(`document.getElementById('pv-overall').value='changes-requested'`);
-    const flagged = await saved(); if (flagged.result !== 'saved') throw new Error(`flagged save: ${flagged.text}`);
+    const cleanSave = await saved(); if (cleanSave.result !== 'saved') throw new Error(`clean save: ${cleanSave.text}`);
     for (const lang of ['en', 'ko']) {
       await ready(`http://127.0.0.1:${server.port}/?lang=${lang}#cap=${capability}`);
-      const reopened = await page.evaluate<{ outcome: string; note: string; status: string; restored: boolean }>(`({outcome:document.querySelector('#pv-mesh-panel select').value,note:document.querySelector('#pv-mesh-panel textarea').value,status:document.getElementById('pv-overall').value,restored:document.getElementById('pv-load').textContent===${JSON.stringify(lang === 'en' ? 'Saved sign-off loaded.' : '저장된 승인을 불러왔습니다.')}})`);
-      if (reopened.outcome !== 'flagged' || reopened.note !== note || reopened.status !== 'changes-requested' || !reopened.restored) throw new Error('flagged mesh not restored');
+      const reopened = await page.evaluate<{ restored: boolean; noMeshFields: boolean }>(`({restored:document.getElementById('pv-load').textContent===${JSON.stringify(lang === 'en' ? 'Saved sign-off loaded.' : '저장된 승인을 불러왔습니다.')},noMeshFields:!document.querySelector('#pv-mesh-panel select')&&!document.querySelector('#pv-mesh-panel textarea')})`);
+      if (!reopened.restored || !reopened.noMeshFields) throw new Error('saved sign-off not restored');
       await writeFile(join(shots, `mesh-reopened-${lang}.png`), await page.screenshot());
     }
     const sourceAfter = await hashSources();
-    report.saveReopen = { pending, flagged, reopenedInBothLanguages: true, sourceBytesUnchanged: JSON.stringify(sourceBefore) === JSON.stringify(sourceAfter), sources: sourceAfter };
+    report.saveReopen = { cleanSave, reopenedInBothLanguages: true, sourceBytesUnchanged: JSON.stringify(sourceBefore) === JSON.stringify(sourceAfter), sources: sourceAfter };
     if (JSON.stringify(sourceBefore) !== JSON.stringify(sourceAfter)) throw new Error('source bytes changed by sign-off');
     }
   } finally { server.stop(true); }
@@ -103,11 +98,12 @@ try {
       if (provenance.authoritativeCommit !== '37fe22adc46c8a55f86787982e3162f6984a7490') throw new Error('Wrong authoritative baseline');
       for (const [name, hash] of Object.entries(provenance.files)) if (digest(await readFile(join(baselineRoot!, name))) !== hash) throw new Error(`Baseline source changed: ${name}`);
     }
-    const base = await Bun.build({ entrypoints: [baselineRoot ? join(baselineRoot, 'web/parts.ts') : Bun.argv[baselineArg + 1]!], target: 'browser', format: 'esm', minify: false, metafile: true });
+    const baselineEntryFile = baselineRoot ? (existsSync(join(baselineRoot, 'web/parts-page.ts')) ? join(baselineRoot, 'web/parts-page.ts') : join(baselineRoot, 'web/parts.ts')) : Bun.argv[baselineArg + 1]!;
+    const base = await Bun.build({ entrypoints: [baselineEntryFile], target: 'browser', format: 'esm', minify: false, metafile: true });
     if (!base.success) throw new Error('baseline bundle failed');
     const bundleInputs = Object.keys(base.metafile?.inputs ?? {});
     const entryPoint = Object.values(base.metafile?.outputs ?? {}).find(o => o.entryPoint)?.entryPoint;
-    const expectedEntry = baselineRoot ? join(baselineRoot, 'web/parts.ts') : resolve(Bun.argv[baselineArg + 1]!);
+    const expectedEntry = resolve(baselineEntryFile);
     let bundleInputRoot = process.cwd();
     if (entryPoint && !isAbsolute(entryPoint)) {
       if (!expectedEntry.endsWith('/' + entryPoint)) throw new Error('Cannot establish baseline metafile input root');

@@ -14,6 +14,9 @@ export const stageVerdictRefusals=[
  'PARTS_VERDICT_BODY_LIMIT','PARTS_VERDICT_READ','PARTS_VERDICT_INVALID','PARTS_VERDICT_UNKNOWN_PART',
  'PARTS_VERDICT_MISSING_PART','PARTS_VERDICT_NOTE_REQUIRED','PARTS_MESH_OUTCOME_UNAVAILABLE','PARTS_MESH_OUTCOME',
  'PARTS_VERDICT_NOT_CLEAN','PARTS_VERDICT_NOTHING_FLAGGED','PARTS_VIEW_SOURCE_CHANGED','PARTS_VERDICT_INPUT_COLLISION',
+ 'PARTS_JOINED_ISSUE_UNSUPPORTED','PARTS_COMMENT_LIMIT','PARTS_COMMENT_INVALID','PARTS_COMMENT_DUPLICATE','PARTS_COMMENT_UNAVAILABLE',
+ 'PARTS_COMMENT_PART_MISMATCH','PARTS_COMMENT_STALE_SOURCE','PARTS_COMMENT_OUT_OF_BOUNDS','PARTS_COMMENT_RIG_REGION',
+ 'PARTS_COMMENT_CROP_INVALID','PARTS_COMMENT_EMPTY','PARTS_COMMENT_FRACTIONAL','PARTS_CAMERA_RANGE','COMMENT_CROP_INVALID',
 ] as const;
 interface JoinedVerdictOptions {
  joined:JoinedProject;
@@ -151,11 +154,12 @@ async function joinedVerdict(req:Request,p:ReviewPackage,pkg:PartsViewPackage,op
  };
  const input=save?object(await options.readInput(req)):null;
  if(input&&input.binding!==binding)throw new Error('PARTS_VERDICT_SOURCE_MISMATCH');
- // Pointed comments use the standalone crop endpoints. Joined sign-off exposes part and mesh notes.
+ // Joined issue editing is deferred. The standing job route owns issue submission.
  if(input&&input.comments!==undefined)throw new Error('PARTS_VERDICT_INVALID');
  await assertCurrent();
  const saved=await readVerdict(destination);
  if(saved.stale)throw new Error('PARTS_VERDICT_SOURCE_MISMATCH');
+ if(input&&(input.status==='approved'||input.status==='changes-requested')&&Array.isArray(input.issues)&&input.issues.length>0)throw new Error('PARTS_JOINED_ISSUE_UNSUPPORTED');
  if(input)return Response.json({verdict:await saveVerdict(destination,input,assertCurrent)},{headers});
  if(format){
   if(!saved.verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE');

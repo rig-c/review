@@ -57,7 +57,7 @@ test('stage 1 follows the explicitly drawn draft, refuses wrong bytes, and Reset
   await writeFile(join(root,'draft.model.json'),JSON.stringify(model));
   await writeFile(join(root,'review.json'),JSON.stringify({schema:'rig-review/1',id:'draft',title:'Generated draft',revision:'1',model:'draft.model.json',producer:{config:'config.json',parts:'out'}}));
   const originalParts=await loadPartsView(parts,{rig:join(parts,'rig/rig.json'),meshReport:join(parts,'rig/mesh_report.json')});
-  await saveVerdict(originalParts,{status:'approved',parts:{gap:{outcome:'clean',mesh:{outcome:'clean'}},covered:{outcome:'clean',mesh:{outcome:'clean'}}}});
+  await saveVerdict(originalParts,{status:'approved',issues:[]});
   const verdictBefore=await readFile(originalParts.verdictPath);
   const p=await loadReview(root),route=stagePartsRoutes({single:p});
   const req=(build='inspected')=>new Request('http://127.0.0.1/api/stage-parts',{headers:{'X-Review-Stage-Build':build}});
@@ -180,7 +180,10 @@ test('#562(i) standalone partsViewJson omits STAGE_DRAFT_UNAVAILABLE and removes
      t:(key:string)=>catalog[key]??key,
      location:{origin:'http://127.0.0.1:4173'},
      parent:{postMessage:(data:unknown,origin:string)=>{posted.push({data,origin});}},
-     document:{
+     CustomEvent:class{constructor(public type:string,public options:any){}get detail(){return this.options.detail;}},
+     slots:{stage:{append:(node:CorrectionNode)=>{dom.host=node;},dispatchEvent:(event:any)=>{posted.push({data:event.detail,origin:'http://127.0.0.1:4173'});}}},
+     query:(selector:string)=>selector==='#pv-corrections'?dom.host:null,
+     doc:{
       getElementById:(id:string)=>id==='pv-corrections'?dom.host:null,
       createElement:(tag:string)=>new CorrectionNode(tag,node=>{if(dom.host===node)dom.host=null;}),
       querySelector:(sel:string)=>sel==='.pv-toolbar'?{after:(node:CorrectionNode)=>{dom.host=node;}}:null,

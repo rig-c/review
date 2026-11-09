@@ -53,7 +53,8 @@ async function main(){
  report.invalidEn=await invalidThresholds(page,'en',out);
  const displayed=await page.evaluate<string>(pixels('pv-canvas'));await writeFile(join(out,'difference-en.png'),await page.screenshot());
  await click(page,'#stage-comment');report.mark=await mark(page,'Declared grid difference');await click(page,'#pv-save');await wait(page,`document.getElementById('pv-save-status').dataset.result==='saved'`,'save');
- const saved=(await readVerdict(pkg)).verdict!,comment=saved.comments[0]!;assert(comment.view.comparison?.mode==='difference'&&comment.view.comparison.threshold===16&&comment.view.footprints,'saved comparison and footprints');
+ const saved=(await readVerdict(pkg)).verdict!,comment=saved.issues[0]!;assert(comment.view.comparison?.mode==='difference'&&comment.view.comparison.threshold===16&&comment.view.footprints,'saved comparison and footprints');
+ if(!comment.imageRegion)throw new Error('Expected item region');
  const original=PNG.sync.read(await readFile(pkg.imagePaths[0]!)),native=PNG.sync.read(await readFile(resolvedCropPath(comment.nativeCrop!.path))),r=comment.imageRegion;
  for(let y=0;y<r.height;y++)assert(native.data.subarray(y*r.width*4,(y+1)*r.width*4).equals(original.data.subarray(((r.y+y)*20+r.x)*4,((r.y+y)*20+r.x+r.width)*4)),'native original RGBA');
  const crop=PNG.sync.read(await readFile(resolvedCropPath(comment.crop.path))),centre=[...crop.data.subarray((Math.floor(crop.height/2)*crop.width+Math.floor(crop.width/2))*4,(Math.floor(crop.height/2)*crop.width+Math.floor(crop.width/2))*4+4)];

@@ -41,17 +41,17 @@ test('#390 declared raster refuses hash, size, provenance, encoding, alpha, path
  delete base.painting_in_rig;await writeFile(manifest,JSON.stringify(base));const old=await loadPartsView(root);await expect(partsDifference(old,0,0,false)).rejects.toThrow('PARTS_DIFFERENCE_UNAVAILABLE');
 }));
 test('#390 difference comment save/reopen/JSON/issue preserves state and original native RGBA',()=>fixture(async root=>{
- const f=await writeDifferencePackage(root,true),pkg=await loadPartsView(root),before=await Promise.all(pkg.files.map(f=>readFile(f.abs))),c=candidate(pkg);c.part='body';c.rigRegion={...c.imageRegion,x:6,y:7};c.view.comparison={mode:'difference',opacity:.5,threshold:16};c.view.alpha=false;
- const prepared=await preparePartsComment(pkg,c),parts=Object.fromEntries(pkg.items.map(i=>[i.name,{outcome:'pending'}]));await saveVerdict(pkg,{status:'pending',parts,comments:[prepared]});
- const saved=(await readVerdict(await loadPartsView(root))).verdict!;expect(saved.comments[0]).toEqual(prepared);
+ const f=await writeDifferencePackage(root,true),pkg=await loadPartsView(root),before=await Promise.all(pkg.files.map(f=>readFile(f.abs))),c=candidate(pkg);c.parts=[{name:'body',imageHash:c.parts[0]!.imageHash}];if(!c.imageRegion)throw new Error('Expected item region');c.rigRegion={...c.imageRegion,x:6,y:7};c.view.comparison={mode:'difference',opacity:.5,threshold:16};c.view.alpha=false;
+ const prepared=await preparePartsComment(pkg,c);await saveVerdict(pkg,{status:'changes-requested',issues:[prepared]});
+ const saved=(await readVerdict(await loadPartsView(root))).verdict!;expect(saved.issues[0]).toEqual(prepared);
  const native=PNG.sync.read(await readFile(resolvedCropPath(prepared.nativeCrop!.path))),r=c.imageRegion;
  for(let y=0;y<r.height;y++)expect(native.data.subarray(y*r.width*4,(y+1)*r.width*4)).toEqual(f.part.data.subarray(((r.y+y)*20+r.x)*4,((r.y+y)*20+r.x+r.width)*4));
- expect(JSON.parse(exportPartsVerdict(saved,'json')).comments[0].view.comparison).toEqual(c.view.comparison);expect(exportPartsVerdict(saved,'issue')).toContain(JSON.stringify(c.view.comparison));expect(await Promise.all(pkg.files.map(f=>readFile(f.abs)))).toEqual(before);
+ expect(JSON.parse(exportPartsVerdict(saved,'json')).issues[0].view.comparison).toEqual(c.view.comparison);expect(exportPartsVerdict(saved,'issue')).toContain(JSON.stringify(c.view.comparison));expect(await Promise.all(pkg.files.map(f=>readFile(f.abs)))).toEqual(before);
 }));
 
 test('#390 changed declared operand refuses API load, difference, crop, sign-off and export before reuse',()=>fixture(async root=>{
- await writeDifferencePackage(root,true);const pkg=await loadPartsView(root),c=candidate(pkg);c.part='body';c.rigRegion={...c.imageRegion,x:6,y:7};c.view.comparison={mode:'difference',opacity:.5,threshold:16};
- const prepared=await preparePartsComment(pkg,c),parts=Object.fromEntries(pkg.items.map(i=>[i.name,{outcome:'pending'}])),body={status:'pending',parts,comments:[prepared]};await saveVerdict(pkg,body);
+ await writeDifferencePackage(root,true);const pkg=await loadPartsView(root),c=candidate(pkg);c.parts=[{name:'body',imageHash:c.parts[0]!.imageHash}];if(!c.imageRegion)throw new Error('Expected item region');c.rigRegion={...c.imageRegion,x:6,y:7};c.view.comparison={mode:'difference',opacity:.5,threshold:16};
+ const prepared=await preparePartsComment(pkg,c),body={status:'changes-requested',issues:[prepared]};await saveVerdict(pkg,body);
  const {startPartsServer}=await import('../src/parts-server.ts'),server=await startPartsServer(pkg,{port:0,exitOnClose:false});const base=`http://127.0.0.1:${server.port}`;
  try{
   await writeFile(join(root,'painting_in_rig.png'),Buffer.from('tampered'));

@@ -74,3 +74,35 @@ test('styles.css: resize separators and scrollbars never share a colour, in eith
  const rules=cssRules(source),body=(selector:string)=>rules.filter(r=>r.selector.trim()===selector&&!r.at.length).map(r=>r.body).join(';');
  expect(body('.workspace-separator')).toContain('background:var(--rv-separator)');expect(body('.workspace-separator:hover')).toContain('background:var(--rv-separator-hover)');
 });
+
+
+test('parts job grid reuses shared columns, fills the workspace and keeps ordinary publication layout', async () => {
+ const source = await readFile(new URL('../web/styles.css', import.meta.url), 'utf8');
+ const parts = await readFile(new URL('../web/parts.css', import.meta.url), 'utf8');
+ const body = (css: string, selector: string) => new Map(cssRules(css)
+  .filter(rule => rule.selector.trim() === selector && !rule.at.length)
+  .flatMap(rule => declarations(rule.body)).map(({name, value}) => [name, value]));
+ const root = '.job-window .job-inspection[data-job-parts-workspace]';
+ const check = (css: string) => {
+  const ordinary = body(css, '.job-window .job-inspection');
+  expect(ordinary.get('grid-template-columns')).toBe('230px minmax(0,1fr)');
+  expect(ordinary.get('grid-template-rows')).toBe('minmax(250px,1fr) minmax(100px,30dvh)');
+  const layout = body(css, root);
+  expect(layout.get('grid-template-columns')).toBe(body(parts, '.pv-layout').get('grid-template-columns'));
+  expect(layout.get('grid-template-rows')).toBe('minmax(0,1fr)');
+  expect(layout.get('flex')).toBe('1');
+  expect(layout.get('min-height')).toBe('0');
+  const side = body(css, root + '>.job-forms');
+  expect(side.get('grid-column')).toBe('3');
+  expect(side.get('grid-row')).toBe('1');
+  expect(side.get('min-height')).toBe('0');
+  expect(side.get('border-top')).toBe('0');
+  expect(body(css, '.job-window .job-parts-stage').get('flex-direction')).toBe('column');
+ };
+ check(source);
+ for (const mutant of [
+  source.replace('grid-template-columns:240px minmax(0,1fr) 300px', 'grid-template-columns:230px minmax(0,1fr)'),
+  source.replace('[data-job-parts-workspace]{flex:1;', '[data-job-parts-workspace]{flex:0;'),
+  source.replace('>.job-forms{grid-column:3;', '>.job-forms{grid-column:2;'),
+ ]) expect(() => check(mutant)).toThrow();
+});

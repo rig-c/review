@@ -494,14 +494,10 @@ test('pre-rig joined project preserves source-bound refusal and verdict output a
   // Source-bound Stage 1 verdict mismatch is refused and exact binding writes the verdict cleanly.
   const partsData=await (await fetch(origin+'/api/stage-parts')).json();
   expect(partsData.readOnly).toBe(false);
-  const note='Stage 1 verdict preserved while Stage 3 is refused.';
   const payload={
    binding:partsData.joinedVerdictBinding,
    status:'approved',
-   parts:Object.fromEntries(partsData.items.map((item:{name:string;mesh?:unknown})=>[
-    item.name,
-    {outcome:'clean',note,...(item.mesh?{mesh:{outcome:'clean',note}}:{})},
-   ])),
+   issues:[],
   };
   const mismatch=await fetch(origin+'/api/stage-parts/verdict',{
    method:'POST',
@@ -518,7 +514,10 @@ test('pre-rig joined project preserves source-bound refusal and verdict output a
    body:JSON.stringify(payload),
   });
   expect(saved.status).toBe(200);
+  const savedBody=await saved.json();
+  expect(savedBody.verdict).toMatchObject({schema:'rig-review-parts-verdict/4',status:'approved',issues:[]});
   expect(await readdir(fixture.output)).toEqual([partsData.verdictFile]);
+  expect(JSON.parse(await readFile(join(fixture.output,partsData.verdictFile),'utf8'))).toEqual(savedBody.verdict);
   await fixture.assertFixture();
  }finally{
   server?.stop(true);

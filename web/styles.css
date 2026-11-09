@@ -459,8 +459,6 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .job-window .job-forms .job-source,.job-window .job-history{overflow-wrap:anywhere;font-family:var(--font-mono);font-size:11px;color:var(--fg-muted)}
 .job-window .job-history{white-space:pre-wrap;color:var(--warn)}
 .job-window .job-direction{white-space:pre-wrap;overflow-wrap:anywhere}
-.job-window .job-part-images{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
-.job-window .job-part-images img{width:100%;height:auto;background:var(--rv-media-bg)}
 @media(max-width:780px){.job-window .job-inspection{grid-template-columns:160px minmax(0,1fr)}.job-window .job-stage #stage-layout{grid-template-columns:minmax(0,1fr);grid-template-rows:repeat(2,minmax(0,1fr))}}
 
 
@@ -476,3 +474,13 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
   transform: none;
   opacity: 1;
 }
+
+/* Parts publications reuse the shared parts columns and fill the job workspace. */
+.job-window .job-inspection[data-job-parts-workspace]{flex:1;grid-template-columns:240px minmax(0,1fr) 300px;grid-template-rows:minmax(0,1fr);min-height:0;min-width:0}
+.job-window .job-inspection[data-job-parts-workspace]>.job-forms{grid-column:3;grid-row:1;min-height:0;min-width:0;border-top:0;border-left:1px solid var(--border)}
+
+/* Both job and standalone hosts use the existing parts workspace presentation. */
+.job-window [data-job-parts-workspace]{--panel:var(--rv-panel);--line:var(--border);--text:var(--fg);--muted:var(--fg-muted);--accent:var(--link);--flag:var(--warn);--clean:var(--pass)}
+.job-window .job-parts-stage{display:flex;flex-direction:column;flex:1;min-height:180px;min-width:0;position:relative}
+.job-window .job-parts-stage>main{display:flex;flex:1;min-height:0;min-width:0}
+.job-window [data-job-parts-workspace] [hidden]{display:none!important}

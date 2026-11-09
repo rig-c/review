@@ -4,7 +4,7 @@ import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {writePartsPackage} from './helpers/parts-package.ts';
-import {loadPartsView,readVerdict} from '../src/parts-view.ts';
+import {loadPartsView,readVerdict,verdictSource} from '../src/parts-view.ts';
 import {startPartsServer} from '../src/parts-server.ts';
 import {launchCdpSession} from './parts-explorer-browser.ts';
 const root=await mkdtemp(join(tmpdir(),'scope-')),profile=await mkdtemp(join(tmpdir(),'p')),out=resolve(process.env.PARTS_CHECK_SHOTS??'evidence/check-385');
@@ -31,9 +31,9 @@ try{
   await writeFile(join(out,'expanded-'+lang+'.png'),await page.screenshot());
   await page.evaluate(`document.querySelector('[data-pv-item="back_defect"]').click()`);
   check(lang+' pair shown on second explicit subject',await page.evaluate(`document.querySelector('[data-pv-category="pair"] [data-flag-id]')?.dataset.flagId==='check:UNKNOWN_ROOT.rows[2]'`));
-  await page.evaluate(`document.querySelector('[data-pv-item="front"]').click();document.querySelector('input[data-pv-outcome][value="clean"]').click();document.getElementById('pv-save').click()`);
+  await page.evaluate(`document.querySelector('[data-pv-item="front"]').click();document.getElementById('pv-save').click()`);
   await wait(`document.getElementById('pv-save-status').dataset.result==='saved'`);
-  check(lang+' save keeps original IDs',JSON.stringify((await readVerdict(pkg)).verdict?.parts.front?.flags)==='[]');
+  const verdict=(await readVerdict(pkg)).verdict;check(lang+' zero-issue /4 save keeps producer identity',verdict?.schema==='rig-review-parts-verdict/4'&&verdict.status==='approved'&&verdict.issues.length===0&&JSON.stringify(verdict.source.flags)===JSON.stringify(verdictSource(pkg).flags),verdict);
  }
  // Pre-field legacy package: rows stay available but never count as classified findings.
  const legacy=await readFile(new URL('./fixtures/parts-check-380.json',import.meta.url));await writeFile(join(root,'check/check.json'),legacy);

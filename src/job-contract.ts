@@ -12,6 +12,7 @@
  */
 
 import type { JobPublicationReader } from './job-source.ts';
+import type { PartsIssue } from './parts-comment.ts';
 
 export const JOB_API_SCHEMA = 'rig-review/job-api@2' as const;
 export const JOB_API_V3_SCHEMA = 'rig-review/job-api@3' as const;
@@ -20,6 +21,65 @@ export const JOB_ACT_SCHEMA = 'rig-review/act@2' as const;
 export const JOB_RIG_REVIEW_ACT_SCHEMA = 'rig-review/act@3' as const;
 /** Record-source acts only under opt-in API@3. Package/image acts retain @2/@3. */
 export const JOB_RECORD_ACT_SCHEMA = 'rig-review/act@4' as const;
+/** New parts verdicts only. Historical @2 parts-verdict acts remain readable. */
+export const JOB_PARTS_VERDICT_ACT_SCHEMA = 'rig-review/act@5' as const;
+export const JOB_PANEL_COMPOSITION_SCHEMA = 'rig-review/panels@1' as const;
+
+export type PanelSlot = 'left' | 'stage' | 'toolbar' | 'side';
+export const PANEL_COMPONENTS = [
+  'parts.canvas', 'parts.list', 'parts.issues', 'parts.layers', 'act.submit',
+  'interview.picks', 'plan.body', 'rig.playback', 'scene.composite', 'images.set',
+] as const;
+export type PanelComponent = typeof PANEL_COMPONENTS[number];
+export interface JobPanelComposition {
+  readonly schema: typeof JOB_PANEL_COMPOSITION_SCHEMA;
+  readonly left?: readonly PanelComponent[];
+  readonly stage?: readonly PanelComponent[];
+  readonly toolbar?: readonly PanelComponent[];
+  readonly side?: readonly PanelComponent[];
+}
+export function isPanelComponent(value: string): value is PanelComponent {
+  return (PANEL_COMPONENTS as readonly string[]).includes(value);
+}
+
+export function parsePanelComposition(input: unknown): JobPanelComposition {
+  if (input === null || typeof input !== 'object' || Array.isArray(input) || Object.getPrototypeOf(input) !== Object.prototype) {
+    throw new Error('JOB_PANELS_INVALID: panels must be a plain object');
+  }
+  const p = input as Record<string, unknown>;
+  if (p.schema !== JOB_PANEL_COMPOSITION_SCHEMA) {
+    throw new Error(`JOB_PANELS_INVALID: panels.schema must be ${JOB_PANEL_COMPOSITION_SCHEMA}`);
+  }
+  for (const key of Object.keys(p)) {
+    if (!['schema', 'left', 'stage', 'toolbar', 'side'].includes(key)) {
+      throw new Error(`JOB_PANELS_INVALID: unknown panel slot ${key}`);
+    }
+  }
+  const slot = (value: unknown, field: string): PanelComponent[] => {
+    if (!Array.isArray(value) || value.length > 32) {
+      throw new Error(`JOB_PANELS_INVALID: ${field} must be an array of at most 32 components`);
+    }
+    return value.map((item, index) => {
+      if (typeof item !== 'string' || !item.trim() || item.length > 128 || /[\r\n\0]/.test(item)) {
+        throw new Error(`JOB_PANELS_INVALID: ${field}[${index}] must be a nonblank component id`);
+      }
+      // Unknown component IDs are preserved in their declared slot so the host renders JOB_PANEL_UNKNOWN: <id>.
+      return item as PanelComponent;
+    });
+  };
+  const stage = slot(p.stage, 'panels.stage');
+  const side = slot(p.side, 'panels.side');
+  if (stage.length !== 1 || side.length < 1 || side[side.length - 1] !== 'act.submit') {
+    throw new Error('JOB_PANELS_INVALID: stage must have exactly one component and side must end with act.submit');
+  }
+  return {
+    schema: JOB_PANEL_COMPOSITION_SCHEMA,
+    ...(p.left === undefined ? {} : { left: slot(p.left, 'panels.left') }),
+    stage,
+    ...(p.toolbar === undefined ? {} : { toolbar: slot(p.toolbar, 'panels.toolbar') }),
+    side,
+  };
+}
 export const JOB_RECORD_READER_ID = 'rig-create/publication-reader/2' as const;
 export const JOB_RECORD_SOURCE_SCHEMA = 'rig-review-job-record-source/1' as const;
 export const JOB_RECORD_INSTANCE_SCHEMA = 'rig-review-job-record-instance/1' as const;
@@ -228,6 +288,22 @@ export type JobVerdict = 'pending' | 'approved' | 'changes-requested';
 export type JobPartOutcome = 'pending' | 'clean' | 'flagged';
 export type JobReviewStage = 'rig-review' | 'direction-review' | 'image-review';
 
+export type PartsVerdictValue = {
+  readonly verdict: 'approved' | 'changes-requested';
+  readonly issues: readonly PartsIssue[];
+  readonly words: string;
+};
+
+export interface JobLegacyPartsVerdictValue {
+  readonly verdict: JobVerdict;
+  readonly parts: readonly {
+    readonly partId: string;
+    readonly part: { readonly outcome: JobPartOutcome; readonly note: string };
+    readonly mesh: { readonly outcome: JobPartOutcome; readonly note: string };
+  }[];
+  readonly words: string;
+}
+
 export interface JobActValues {
   readonly 'interview-picks': {
     readonly questionId: string;
@@ -251,15 +327,7 @@ export interface JobActValues {
      */
     readonly words: string;
   };
-  readonly 'parts-verdict': {
-    readonly verdict: JobVerdict;
-    readonly parts: readonly {
-      readonly partId: string;
-      readonly part: { readonly outcome: JobPartOutcome; readonly note: string };
-      readonly mesh: { readonly outcome: JobPartOutcome; readonly note: string };
-    }[];
-    readonly words: string;
-  };
+  readonly 'parts-verdict': PartsVerdictValue;
   readonly 'review-verdict': JobModelReviewValue | JobImageReviewValue;
   readonly signoff: {
     /** An explicitly declared Create stage. Validation belongs to its writer. */
@@ -321,7 +389,8 @@ export type JobLegacyAct = {
   } & (Kind extends 'review-verdict' ? (
     | {readonly source: Exclude<JobActSources['review-verdict'], JobImageSourceBinding>; readonly value: JobModelReviewValue}
     | {readonly source: JobImageSourceBinding; readonly value: JobImageReviewValue}
-  ) : {readonly source: JobActSources[Kind]; readonly value: JobActValues[Kind]});
+  ) : Kind extends 'parts-verdict' ? {readonly source: JobActSources['parts-verdict']; readonly value: JobLegacyPartsVerdictValue}
+  : {readonly source: JobActSources[Kind]; readonly value: JobActValues[Kind]});
 }[JobEnabledActKind];
 
 export type JobRigStill = {
@@ -343,8 +412,13 @@ export type JobRigReviewAct = Omit<Extract<JobLegacyAct, {kind: 'review-verdict'
   readonly still: JobRigStill;
 };
 
-/** Historical @2 rig acts remain readable without being backfilled or relabelled. */
-export type JobAct = JobLegacyAct | JobRigReviewAct;
+export type JobPartsVerdictAct = Omit<Extract<JobLegacyAct, {kind: 'parts-verdict'}>, 'schema' | 'value'> & {
+  readonly schema: typeof JOB_PARTS_VERDICT_ACT_SCHEMA;
+  readonly value: PartsVerdictValue;
+};
+
+/** Historical @2 acts remain readable without being backfilled or relabelled. */
+export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct;
 
 /** Authenticated browser provenance. The daemon validates identity and hashes PNG bytes. */
 export interface JobRigCapture {

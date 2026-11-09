@@ -9,6 +9,13 @@ import {startJobHost, type JobHostOptions} from '../src/job-front.ts';
 import {JobSession} from '../src/job-session.ts';
 import {jobFixture, syntheticJobParts} from './helpers/job-api-fixture.ts';
 import * as publicHost from '../src/job-host.ts';
+import type {
+  JobLegacyPartsVerdictValue,
+  JobPanelComposition,
+  JobPartsVerdictAct,
+  PanelComponent,
+  PartsVerdictValue,
+} from '../src/job-host.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => {for (const fixture of fixtures.splice(0)) await fixture.close();});
@@ -31,6 +38,14 @@ test('#557/#588 control public job-host retains its runtime exports, record-mode
   expect(publicHost.JOB_ACT_SCHEMA).toBe('rig-review/act@2');
   expect(publicHost.JOB_RECORD_ACT_SCHEMA).toBe('rig-review/act@4');
   expect(publicHost.JOB_RECORD_READER_ID).toBe('rig-create/publication-reader/2');
+  const _c2Types: [
+    JobPartsVerdictAct['schema'],
+    PartsVerdictValue['verdict'],
+    JobLegacyPartsVerdictValue['verdict'],
+    JobPanelComposition['schema'],
+    PanelComponent,
+  ] = ['rig-review/act@5', 'approved', 'pending', 'rig-review/panels@1', 'act.submit'];
+  expect(_c2Types[0]).toBe('rig-review/act@5');
 });
 
 // Planned incompatible-schema and version controls operate only on disposable state.

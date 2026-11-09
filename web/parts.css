@@ -102,3 +102,10 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 #pv-corrections p:last-child{margin:8px 0 0;color:var(--muted)}
 #pv-corrections button{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:5px 9px;margin:0 6px 4px 0;cursor:pointer}
 #reference-empty{padding:30px 12px 12px;color:var(--muted);overflow-wrap:anywhere}
+
+.pv-stage-host>[data-parts-stage]{flex:1}
+.pv-side-host{background:var(--panel);overflow:auto}
+#parts-actions{padding:10px}
+/* The shared parts host keeps the existing issue list in the sidebar flow. */
+.stage-comment-list.stage-comment-list-inline{position:static;position-anchor:auto;inset:auto;z-index:auto;width:100%;max-width:none;max-height:none;margin-top:12px}
+.stage-comment-list-inline .stage-comment-refusal-note{white-space:normal;overflow-wrap:anywhere}

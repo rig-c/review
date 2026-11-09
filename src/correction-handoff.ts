@@ -196,9 +196,21 @@ export function projectSessionCorrection(input: SessionInput) {
   return { ...common, kind: 'checked-patch' as const, applied, sessionBytes, patchBytes: patchText(patch), outcome: null };
 }
 
+type PartsCorrectionVerdict = PartsVerdict | {
+  schema?: string;
+  mode: PartsVerdict['mode'];
+  tool?: { name: string; version: string };
+  source: PartsVerdict['source'];
+  status?: string;
+  parts?: Record<string, { outcome: string; note: string; flags: string[] }>;
+  comments?: import('./parts-comment.ts').PartsComment[];
+  issues?: import('./parts-comment.ts').PartsIssue[];
+  updatedAt?: string;
+};
+
 /** Standalone parts notes and pointed comments keep their original parts identity. */
 export function projectPartsDescription(input: {
-  verdict: PartsVerdict;
+  verdict: PartsCorrectionVerdict;
   source: PartsVerdict['source'];
   selector: Extract<Selector, { kind: 'parts' }>;
   selection: { kind: 'comment'; itemId: string } | { kind: 'note'; itemId: string; part: string };
@@ -210,13 +222,24 @@ export function projectPartsDescription(input: {
   }
   const { itemId } = selection;
   if (selection.kind === 'comment') {
-    const matches = verdict.comments.filter(comment => comment.id === itemId);
+    if ('issues' in verdict && Array.isArray(verdict.issues)) {
+      const matches = verdict.issues.filter(issue => issue.id === itemId);
+      const item = matches[0];
+      if (matches.length !== 1 || !item || item.sourceHash !== source.sha256) {
+        return refuse('CORRECTION_ITEM_INVALID', 'expected one source-bound parts comment');
+      }
+      const primary = item.parts[0]!;
+      return { kind: 'described' as const, itemId, verbatim: itemWords(itemId, item.summary), stage: selector.stage, on, source, part: primary.name, imageHash: primary.imageHash, parts: item.parts, comment: item, outcome: null };
+    }
+    const comments = ('comments' in verdict && Array.isArray(verdict.comments)) ? verdict.comments : [];
+    const matches = comments.filter(comment => comment.id === itemId);
     const item = matches[0];
     if (matches.length !== 1 || !item || item.sourceHash !== source.sha256) {
       return refuse('CORRECTION_ITEM_INVALID', 'expected one source-bound parts comment');
     }
     return { kind: 'described' as const, itemId, verbatim: itemWords(itemId, item.summary), stage: selector.stage, on, source, part: item.part, imageHash: item.imageHash, comment: item, outcome: null };
   }
-  if (!Object.hasOwn(verdict.parts, selection.part)) return refuse('CORRECTION_ITEM_INVALID', 'expected a saved part note');
-  return { kind: 'described' as const, itemId, verbatim: itemWords(itemId, verdict.parts[selection.part]!.note), stage: selector.stage, on, source, part: selection.part, outcome: null };
+  const parts = ('parts' in verdict && verdict.parts) ? verdict.parts : null;
+  if (!parts || !Object.hasOwn(parts, selection.part)) return refuse('CORRECTION_ITEM_INVALID', 'expected a saved part note');
+  return { kind: 'described' as const, itemId, verbatim: itemWords(itemId, parts[selection.part]!.note), stage: selector.stage, on, source, part: selection.part, outcome: null };
 }

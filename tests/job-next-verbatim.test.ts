@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   JOB_ACT_SCHEMA,
   JOB_RIG_REVIEW_ACT_SCHEMA,
+  JOB_PARTS_VERDICT_ACT_SCHEMA,
   JOB_API_SCHEMA,
   type JobAct,
   type JobActSources,
@@ -24,6 +25,12 @@ import { readProject } from '../src/interview-project.ts';
 import { jobFixture, jobInputHashes, syntheticJobParts } from './helpers/job-api-fixture.ts';
 import { joinedVerdictFixture } from './helpers/joined-verdict-fixture.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
+import {PNG} from 'pngjs';
+import {preparePartsComment} from '../src/parts-comment-crops.ts';
+import {loadPartsView} from '../src/parts-view.ts';
+import type {PartsIssue} from '../src/parts-comment.ts';
+import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
+useTemporaryReviewState();
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => {
@@ -93,7 +100,8 @@ function assertNextVerbatimOracle(
     const act: JobAct = event.act;
     const rig = expected.kind === 'review-verdict' &&
       (expected.value as {stage?: string}).stage === 'rig-review';
-    expect(act.schema).toBe(rig ? JOB_RIG_REVIEW_ACT_SCHEMA : JOB_ACT_SCHEMA);
+    expect(act.schema).toBe(rig ? JOB_RIG_REVIEW_ACT_SCHEMA :
+      expected.kind === 'parts-verdict' ? JOB_PARTS_VERDICT_ACT_SCHEMA : JOB_ACT_SCHEMA);
     if (rig) {
       const expectedStill = expected.still;
       expect(expectedStill).toBeDefined();
@@ -323,35 +331,55 @@ test('real semantic next preserves verbatim reviewer words across checkpoint, si
   }
 });
 
-test('real semantic next preserves verbatim nested human notes in parts-verdict and rejects named in-memory mutations', async () => {
-  // Part A: parts-verdict with part note, mesh note, whitespace-only clean note, and summary words
+test('real semantic next preserves verbatim issue summaries in act5 parts-verdict and rejects named in-memory mutations', async () => {
+  // Parts verdicts carry spatial issues. Preserve both human summaries and the final Words value.
   const partsFixture = await fixture();
   const partsIdentity = await syntheticJobParts(partsFixture, { project: true, painting: true });
+  await writeFile(join(partsFixture.root, 'out/parts.json'), JSON.stringify({
+    rig_size: [30, 20],
+    parts: [
+      {name: 'body', x: 0, y: 0, w: 20, h: 20},
+      {name: 'head', x: 10, y: 0, w: 20, h: 20},
+    ],
+  }));
+  partsIdentity.manifest.sha256 = jobHash(await readFile(join(partsFixture.root, 'out/parts.json')));
+  partsFixture.setContext({...partsFixture.getContext(), parts: partsIdentity});
   const partsBeforeHashes = await jobInputHashes(partsFixture.root);
   const partsPublication = await partsFixture.publish();
   if (partsPublication.source.subject === 'image-set') throw new Error('Expected model source binding');
+  const retained = partsFixture.session.retainedSource(partsPublication.publicationId);
+  const pkg = await loadPartsView(join(retained.snapshotRoot, 'out'));
   const partsAsk = await partsFixture.ask(partsPublication, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
   const partsPage = await partsFixture.display(partsPublication);
 
   const bodyPartNote = '  [몸통/Body] 외곽선 브릿지 1px 여백 확인 필요! 🔍\n\t(좌측 겨드랑이 라인)  ';
   const bodyMeshNote = '  [메쉬/Mesh] 삼각형 분할 밀도 부족 — add 2 edge loops 🔺\n';
-  const headCleanNote = ' \t\n ';
   const partsSummaryWords = '  부품 & 메쉬 종합 의견: body 수정 후 재검수 요청합니다. 🚀\n  ';
 
+  const original = PNG.sync.read(await readFile(join(retained.snapshotRoot, 'out/parts/body.png')));
+  const native = new PNG({width: 1, height: 1});
+  original.data.copy(native.data, 0, 0, 4);
+  const png = PNG.sync.write(native);
+  const sha256 = jobHash(png);
+  const crop = {path: `comment-crops/${sha256}.png`, sha256, width: 1, height: 1};
+  const body = partsIdentity.images.find(image => image.role === 'part' && image.path === 'parts/body.png')!;
+  const unpreparedIssue: PartsIssue = {
+    schema: 'rig-review-parts-comment/2', id: 'body-edge', summary: bodyPartNote,
+    parts: [{name: 'body', imageHash: body.sha256}], sourceHash: partsPublication.source.sourceHash,
+    imageRegion: {x: 0, y: 0, width: 1, height: 1}, rigRegion: {x: 0, y: 0, width: 1, height: 1},
+    view: {mode: 'item', camera: {zoom: 1, center: {x: 0.5, y: 0.5}, viewport: {width: 32, height: 32}},
+      cameraSync: false, referenceCamera: null, background: 'checker', alpha: false, footprints: false, mesh: false},
+    crop: {...crop, png: 'data:image/png;base64,' + png.toString('base64')}, nativeCrop: null,
+  };
+  const prepared = await preparePartsComment(pkg, unpreparedIssue, false, {
+    sourceHash: partsPublication.source.sourceHash,
+  });
+  const {png: _inlinePng, ...storedCrop} = prepared.crop;
+  const issue = {...prepared, crop: storedCrop};
+  expect(issue.nativeCrop).not.toBeNull();
   const partsValue: JobActValues['parts-verdict'] = {
     verdict: 'changes-requested',
-    parts: [
-      {
-        partId: 'body',
-        part: { outcome: 'flagged', note: bodyPartNote },
-        mesh: { outcome: 'flagged', note: bodyMeshNote },
-      },
-      {
-        partId: 'head',
-        part: { outcome: 'clean', note: headCleanNote },
-        mesh: { outcome: 'clean', note: '' },
-      },
-    ],
+    issues: [issue, {...issue, id: 'body-mesh', summary: bodyMeshNote}],
     words: partsSummaryWords,
   };
 
@@ -394,14 +422,15 @@ test('real semantic next preserves verbatim nested human notes in parts-verdict 
   expect(await jobInputHashes(partsFixture.root)).toEqual(partsBeforeHashes);
 
   assertPlantedMutantRejectedBySameOracle(genuinePartsNext, partsFixture.session.jobId, expectedPartsActs, {
-    name: 'planted-mutant:parts-verdict-nested-mesh-note-rewrite',
-    targetField: 'events[parts-verdict].act.value.parts[0].mesh.note',
+    name: 'planted-mutant:parts-verdict-issue-summary-rewrite',
+    targetField: 'events[parts-verdict].act.value.issues[1].summary',
     originalWords: bodyMeshNote,
     mutatedWords: bodyMeshNote.trim(),
     mutate(cloned) {
       const event = cloned.value.events.find(e => e.type === 'act' && e.act.kind === 'parts-verdict');
-      if (!event || event.type !== 'act' || event.act.kind !== 'parts-verdict') throw new Error('Missing parts-verdict');
-      (event.act.value.parts[0]!.mesh as { note: string }).note = bodyMeshNote.trim();
+      if (!event || event.type !== 'act' || event.act.kind !== 'parts-verdict' || event.act.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA)
+        throw new Error('Missing act5 parts-verdict');
+      event.act.value.issues[1]!.summary = bodyMeshNote.trim();
     },
   });
 });

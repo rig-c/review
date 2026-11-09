@@ -1,12 +1,63 @@
 import { describe, expect, test } from 'bun:test';
-import { createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
-import { JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobResult, type JobModelSourceBinding, type JobRigCapture, type PendingAskV3, type RecordAct } from '../src/job-contract.ts';
+import {prepareJobInspection, resolveJobPanels, jobPartsReviewState, jobPartsPainting, type JobInspectionMetadataV3, createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
+import { JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobResult, type JobModelSourceBinding, type JobRigCapture, type PendingAskV3, type UISubmissionV3, type ActV3, type JobPartsVerdictAct, type RecordAct } from '../src/job-contract.ts';
 import { buildRecordSource, parseRecordAct, parseRecordPublishedContext, parseRecordSource, recordInstanceKey } from '../src/job-api.ts';
 import {createJobRigSubmission} from '../web/job-rig-capture.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
 import {t} from '../web/i18n.ts';
 import {jobHubMessageMatches, JOB_HUB_VISIBILITY, type JobHubBinding} from '../web/job-hub.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
+
+test('C4 panel parser shares one browser-safe implementation with manifest compatibility exports', async () => {
+    const contract = await import('../src/job-contract.ts');
+    const manifest = await import('../src/manifest.ts');
+    expect(manifest.parsePanelComposition).toBe(contract.parsePanelComposition);
+    expect(manifest.isPanelComponent).toBe(contract.isPanelComponent);
+    expect(contract.isPanelComponent('parts.canvas')).toBe(true);
+    expect(contract.isPanelComponent('future.component')).toBe(false);
+    expect<unknown>(contract.parsePanelComposition({schema: contract.JOB_PANEL_COMPOSITION_SCHEMA,
+        stage: ['future.component'], side: ['act.submit']})).toEqual({
+        schema: contract.JOB_PANEL_COMPOSITION_SCHEMA, stage: ['future.component'], side: ['act.submit'],
+    });
+});
+
+test('C4 job browser runtime graph excludes the server manifest and Node imports and rejects a planted edge', async () => {
+    const entry = new URL('../web/job-session.ts', import.meta.url);
+    const manifest = new URL('../src/manifest.ts', import.meta.url).href;
+    const transpiler = new Bun.Transpiler({loader: 'ts', target: 'browser'});
+    async function runtimeGraph(extraEntryImport = '') {
+        const pending = [entry];
+        const files = new Set<string>();
+        const imports = new Set<string>();
+        while (pending.length) {
+            const file = pending.pop()!;
+            if (files.has(file.href)) continue;
+            files.add(file.href);
+            if (!file.pathname.endsWith('.ts') && !file.pathname.endsWith('.js')) continue;
+            const source = await Bun.file(file).text();
+            const javascript = transpiler.transformSync(source + (file.href === entry.href ? extraEntryImport : ''));
+            for (const dependency of transpiler.scan(javascript).imports) {
+                imports.add(dependency.path);
+                if (dependency.path.startsWith('.')) pending.push(new URL(dependency.path, file));
+            }
+        }
+        return {files, imports};
+    }
+    function assertBrowserBoundary(graph: Awaited<ReturnType<typeof runtimeGraph>>) {
+        expect(graph.files.has(manifest)).toBe(false);
+        expect([...graph.imports].filter(path => path.startsWith('node:'))).toEqual([]);
+    }
+    const graph = await runtimeGraph();
+    expect(graph.files.has(new URL('../src/job-contract.ts', import.meta.url).href)).toBe(true);
+    expect(graph.files.has(new URL('../web/parts.ts', import.meta.url).href)).toBe(true);
+    const contractSource = await Bun.file(new URL('../src/job-contract.ts', import.meta.url)).text();
+    expect(transpiler.scan(transpiler.transformSync(contractSource)).imports).toEqual([]);
+    assertBrowserBoundary(graph);
+    const mutant = await runtimeGraph("\nvoid import('../src/manifest.ts');");
+    expect(mutant.files.has(manifest)).toBe(true);
+    expect([...mutant.imports]).toContain('node:fs/promises');
+    expect(() => assertBrowserBoundary(mutant)).toThrow();
+});
 
 test('window refusals retain registered codes and bound arbitrary runtime prose', () => {
     expect(jobWindowRefusal(new Error('INTERVIEW_OPTIONS_STALE'))).toBe(t('INTERVIEW_OPTIONS_STALE'));
@@ -1888,6 +1939,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 interview: options?.interview ?? null,
                 parts: null,
                 partImages: new Map(),
+                partPages: new Map(),
                 interviewImages: new Map(),
                 imageSetImages: [],
                 references,
@@ -1958,7 +2010,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         const runner = new Function(
             'host', 'access', 'hubIncarnation', 'hubVisible', 'events', 'pageId', 'transport', 'abort',
             'i18n', 't', 'createViewportController', 'createViewportState', 'createRigViewportProvider', 'mountViewportPair',
-            'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal',
+            'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal', 'jobPartsReviewState',
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
             'recordJobRigDraw', 'freezeJobRigCapture', 'copyJobRigViewport', 'createJobRigSubmission', 'jobRigPixelPlacement',
             'presentJobRigViewport', 'CanvasRenderer', 'enCatalog', 'koCatalog', 'JOB_HUB_READY', 'jobHubMessageMatches', 'advancePlayback',
@@ -1967,7 +2019,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         const mounted = runner(
             host, access, hubIncarnation, hubVisible, undefined, options?.pageId ?? 'page-one', transport, abort,
             i18nModule, i18nModule.t, createViewportController, createViewportState, createRigViewportProvider, mountViewportPair,
-            createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal,
+            createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal, jobPartsReviewState,
             prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,
             recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
             presentJobRigViewport, CanvasRenderer, enCatalog, koCatalog, JOB_HUB_READY, jobHubMessageMatches, advancePlayback,
@@ -3080,9 +3132,6 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             refSelect.value = 'ref-2';
             refSelect.dispatchEvent({type: 'change'});
             await Bun.sleep(1);
-            const panelSelect = s.workspace.querySelector('#job-panel')!;
-            panelSelect.value = '4';
-            panelSelect.dispatchEvent({type: 'change'});
             expect(s.workspace.querySelector('[data-job-direction]')!.hidden).toBe(false);
 
             // Edit draft on Rig 1:
@@ -3101,7 +3150,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(s.workspace.querySelector('#job-part')!.value).toBe('body');
             expect(s.workspace.querySelector('#job-solo')!.checked).toBe(true);
             expect(s.workspace.querySelector('#job-reference')!.value).toBe('ref-2');
-            expect(s.workspace.querySelector('#job-panel')!.value).toBe('4');
+            expect(s.workspace.querySelector('#job-panel')).toBeNull();
             expect(s.workspace.querySelector('[data-job-direction]')!.hidden).toBe(false);
             expect(s.window.state().retainedDrafts).toEqual([{
                 publicationId: 'publication-1',
@@ -3124,7 +3173,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(s.workspace.querySelector('#job-animation')!.value).toBe('');
             expect(s.workspace.querySelector('#job-time')!.value).toBe('0');
             expect(s.workspace.querySelector('#job-part')!.value).toBe('');
-            expect(s.workspace.querySelector('#job-panel')!.value).toBe('4');
+            expect(s.workspace.querySelector('#job-panel')).toBeNull();
             expect(second.publication.publicationId).toBe('publication-2');
         } finally {
             s.cleanup();
@@ -3176,9 +3225,6 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             refSelect.value = 'ref-2';
             refSelect.dispatchEvent({type: 'change'});
             await Bun.sleep(1);
-            const panelSelect = s1.workspace.querySelector('#job-panel')!;
-            panelSelect.value = '4';
-            panelSelect.dispatchEvent({type: 'change'});
 
             const form1 = s1.workspace.querySelector(`form[data-job-ask="${ask1.askId}"]`)!;
             form1.querySelector('select[name="verdict"]')!.value = 'changes-requested';
@@ -3233,7 +3279,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(s2.workspace.querySelector('#job-part')!.value).toBe('body');
             expect(s2.workspace.querySelector('#job-solo')!.checked).toBe(true);
             expect(s2.workspace.querySelector('#job-reference')!.value).toBe('ref-2');
-            expect(s2.workspace.querySelector('#job-panel')!.value).toBe('4');
+            expect(s2.workspace.querySelector('#job-panel')).toBeNull();
             expect(s2.workspace.querySelector('[data-job-direction]')!.hidden).toBe(false);
 
             const restoredForm2 = s2.workspace.querySelector('form[data-job-ask="ask-reconnect-2"]')!;
@@ -3267,7 +3313,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(s3.workspace.querySelector('#job-part')!.value).toBe('body');
             expect(s3.workspace.querySelector('#job-solo')!.checked).toBe(true);
             expect(s3.workspace.querySelector('#job-reference')!.value).toBe('ref-2');
-            expect(s3.workspace.querySelector('#job-panel')!.value).toBe('4');
+            expect(s3.workspace.querySelector('#job-panel')).toBeNull();
             expect(s3.window.state().retainedDrafts.map(item => item.publicationId)).toEqual(['publication-1', 'publication-2']);
             expect(s3.workspace.querySelector('[data-job-history]')!.textContent).toContain(firstDisplay!.publication.source.sourceHash);
             expect(s3.workspace.querySelector('[data-job-history]')!.textContent).toContain(secondDisplay!.publication.source.sourceHash);
@@ -3471,4 +3517,566 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             s3.cleanup();
         }
     });
+});
+
+describe('C4 shared parts host', () => {
+    function partsMetadata(panels?: unknown) {
+        return {manifest: {panels}, capabilities: {preRig: true, playback: false}} as unknown as JobInspectionMetadataV3;
+    }
+    function partsAct(verdict: 'approved' | 'changes-requested' = 'approved') {
+        const base = fixtureAct('parts-verdict', '  source words\n');
+        return {...base, schema: 'rig-review/act@5', value: {verdict, words: '  source words\n',
+            issues: verdict === 'approved' ? [] : [{id: 'spatial-issue'}]}} as unknown as JobPartsVerdictAct;
+    }
+    async function partsHarness(withSignoff = true) {
+        const h = harness();
+        const act = partsAct();
+        const display = await h.publish(1, act.source);
+        const verdict = {askId: act.askId, publicationId: act.publicationId,
+            subject: {kind: 'parts-verdict', draftId: 'draft-one'}, source: act.source, status: 'pending'} as PendingAskV3;
+        const signoff = {...verdict, askId: 'parts-signoff', subject: {kind: 'signoff', stage: 'parts-review'}} as PendingAskV3;
+        h.window.event({type: 'pending', jobId: 'window-fixture', generation: 2, cursor: '2', ask: verdict});
+        if (withSignoff) h.window.event({type: 'pending', jobId: 'window-fixture', generation: 3, cursor: '3', ask: signoff});
+        const input = {kind: 'parts-verdict', askId: act.askId, publicationId: act.publicationId,
+            pageId: 'page-one', displayedNonce: h.window.state().receipt!.displayedNonce,
+            expectedGeneration: h.window.state().generation, submissionId: 'parts-submit', value: act.value} as UISubmissionV3;
+        return {...h, act, verdict, signoff, display, input};
+    }
+    const actEvent = (act: ActV3, generation = 4) => ({type: 'act' as const, jobId: 'window-fixture',
+        generation, cursor: String(generation), act});
+
+    test('C4 default, explicit, invalid and unknown panel declarations preserve the signed slots', () => {
+        const source = fixturePublication().publication.source;
+        const fallback = resolveJobPanels(partsMetadata(), source);
+        expect(fallback.invalid).toBe(false);
+        expect(fallback.composition).toEqual({schema: 'rig-review/panels@1', left: ['parts.list'],
+            stage: ['parts.canvas'], toolbar: ['parts.layers'], side: ['parts.issues', 'act.submit']});
+        const explicit = {...fallback.composition, toolbar: []};
+        expect(resolveJobPanels(partsMetadata(explicit), source).composition).toEqual(explicit);
+        for (const raw of [null, [], {}, {...explicit, schema: 'wrong'}, {...explicit, stage: []},
+            {...explicit, stage: ['parts.canvas', 'rig.playback']}, {...explicit, side: ['act.submit', 'parts.issues']},
+            {...explicit, left: [false]}]) {
+            expect(resolveJobPanels(partsMetadata(raw), source)).toEqual({...fallback, invalid: true});
+        }
+        const unknown = {...explicit, left: ['future.component']};
+        expect<unknown>(resolveJobPanels(partsMetadata(unknown), source)).toEqual({composition: unknown, invalid: false});
+    });
+
+    test('C4 painting is selected by declared identity, including a non-first painting role', () => {
+        const source = fixtureAct('parts-verdict').source;
+        const painting = {...source.parts!.images[0]!, role: 'painting', path: 'painting.png'};
+        const display = fixturePublication();
+        Object.assign(display.publication, {source: {...source, parts: {...source.parts, images: [...source.parts!.images, painting]}}});
+        const reference = (id: string, label: string) => ({id, label}) as JobPreparedInspection['references'][number];
+        const mask = reference('mask', 'figure_mask figure.png');
+        const original = reference('original', 'painting painting.png');
+        const declared = reference('declared', 'declared painting');
+        const prepared = {display, metadata: partsMetadata(), references: [mask, original, declared]};
+        expect(jobPartsPainting(prepared)).toBe(original);
+        Object.assign(prepared.metadata, {sourcePainting: {id: 'declared'}});
+        expect(jobPartsPainting(prepared)).toBe(declared);
+        prepared.references = [mask, original];
+        expect(jobPartsPainting(prepared)).toBeNull();
+    });
+
+    test('C4 zero issues sends verdict then signoff with the original words', async () => {
+        const h = await partsHarness();
+        const requests: UISubmissionV3[] = [];
+        h.fixture.ports.commitUIAct = async (_job, request) => {
+            const input = await request.json() as UISubmissionV3;
+            requests.push(input);
+            const act = input.kind === 'parts-verdict' ? h.act : {...fixtureAct('signoff'),
+                askId: h.signoff.askId, source: h.act.source, value: input.value} as ActV3;
+            return {ok: true, value: act};
+        };
+        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(true);
+        expect(requests.map(input => input.kind)).toEqual(['parts-verdict', 'signoff']);
+        expect(requests[1]!.value).toEqual({stage: 'parts-review', decision: 'approved', words: '  source words\n'});
+        expect(h.window.state().pending.find(ask => ask.askId === h.act.askId)?.act).toEqual(h.act);
+        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('approved');
+    });
+
+    test('C4 issues send only the registered verdict value', async () => {
+        const h = await partsHarness(false);
+        const act = partsAct('changes-requested');
+        const requests: UISubmissionV3[] = [];
+        h.fixture.ports.commitUIAct = async (_job, request) => {
+            requests.push(await request.json() as UISubmissionV3);
+            return {ok: true, value: act};
+        };
+        expect((await h.window.submitParts({...h.input, value: act.value} as UISubmissionV3, 'unused')).ok).toBe(true);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]!.value).toEqual(act.value);
+        expect(jobPartsReviewState(h.window.state().pending, act.publicationId)).toBe('sent');
+    });
+
+    test('C4 first failure retries the verdict, second failure retries only the pending signoff', async () => {
+        const h = await partsHarness();
+        const requests: UISubmissionV3[] = [];
+        let fail = 'parts-verdict';
+        h.fixture.ports.commitUIAct = async (_job, request) => {
+            const input = await request.json() as UISubmissionV3;
+            requests.push(input);
+            if (input.kind === fail) return {ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}};
+            return {ok: true, value: input.kind === 'parts-verdict' ? h.act : {...fixtureAct('signoff'),
+                askId: h.signoff.askId, source: h.act.source, value: input.value} as ActV3};
+        };
+        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(false);
+        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('reviewing');
+        fail = 'signoff';
+        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(false);
+        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('retry-signoff');
+        fail = '';
+        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(true);
+        expect(requests.map(input => input.kind)).toEqual(['parts-verdict', 'parts-verdict', 'signoff', 'signoff']);
+        expect(requests.slice(2).map(input => input.submissionId)).toEqual(['signoff-submit', 'signoff-submit']);
+    });
+
+    test('C4 act events and reconnect replay retain the finalized value and never fabricate a signoff', async () => {
+        const h = await partsHarness();
+        h.window.event(actEvent(h.act));
+        h.window.event({type: 'pending', jobId: 'window-fixture', generation: 3, cursor: '3', ask: h.verdict});
+        expect(h.window.state().pending.find(ask => ask.askId === h.act.askId)?.act).toEqual(h.act);
+        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('retry-signoff');
+        const reload = await partsHarness();
+        reload.window.event(actEvent(h.act));
+        expect(jobPartsReviewState(reload.window.state().pending, h.act.publicationId)).toBe('retry-signoff');
+        const signoff = {...fixtureAct('signoff'), askId: h.signoff.askId, source: h.act.source,
+            value: {stage: 'parts-review', decision: 'approved', words: ''}} as ActV3;
+        reload.window.event(actEvent(signoff, 5));
+        expect(jobPartsReviewState(reload.window.state().pending, h.act.publicationId)).toBe('approved');
+        expect(jobPartsReviewState(reload.window.state().pending, 'publication-2')).toBe('reviewing');
+        const legacy: ActV3 = {...h.act, schema: 'rig-review/act@2', value: {
+            verdict: 'approved', words: h.act.value.words,
+            parts: [{partId: 'body', part: {outcome: 'clean', note: ''}, mesh: {outcome: 'clean', note: ''}}],
+        }};
+        expect(jobPartsReviewState([{...h.verdict, status: 'answered', act: legacy}], h.act.publicationId)).toBe('reviewing');
+    });
+
+    test('C4 missing signoff and stale source are refused before another write', async () => {
+        const h = await partsHarness(false);
+        await expect(h.window.submitParts(h.input, 'signoff-submit')).rejects.toThrow('JOB_PARTS_SIGNOFF_MISSING');
+        expect(h.fixture.submissions).toHaveLength(0);
+        await h.publish(2);
+        await expect(h.window.submitParts(h.input, 'signoff-submit')).rejects.toThrow('JOB_ACT_SOURCE_STALE');
+        expect(h.fixture.submissions).toHaveLength(0);
+    });
+
+    test('C4 source mounts one workspace and removes duplicate parts controls', async () => {
+        const source = await Bun.file(new URL('../web/job-session.ts', import.meta.url)).text();
+        expect(source.match(/mountPartsWorkspace\(panel\.slots/g)).toHaveLength(1);
+        expect(source).not.toContain("images.className = 'job-part-images'");
+        expect(source).not.toContain("partOutcome.name = 'parts.'");
+        expect(source).not.toContain("panels.id = 'job-panel'");
+        expect(source).toContain("import('./parts.ts')");
+        expect(source).toContain('return {...panel.output.value(), words: note.value}');
+    });
+});
+
+test('C4 retained crop host enforces origin, capability, instance, current publication, source and body bounds', async () => {
+    const fixture = await scriptedJobWindowFixture();
+    try {
+        const publication = await fixture.publish('parts');
+        const descriptor = await (await fetch(fixture.locator + '/publications/' + publication.publicationId)).json();
+        const endpoint = fixture.host.origin + descriptor.value.routes.apiBase + 'stage-parts/comment';
+        const capability = fixture.host.session.hostCredentials().ui;
+        const post = (body: string, origin: string | null, token: string | null, contentType = 'application/json', url = endpoint) => fetch(url, {
+            method: 'POST', headers: {'Content-Type': contentType,
+                ...(origin === null ? {} : {Origin: origin}), ...(token === null ? {} : {'X-Review-Capability': token})}, body,
+        });
+        expect((await post('{}', null, capability)).status).toBe(403);
+        expect((await post('{}', 'http://attacker.example', capability)).status).toBe(403);
+        expect((await post('{}', fixture.host.origin, null)).status).toBe(403);
+        expect((await post('{}', fixture.host.origin, fixture.host.session.hostCredentials().agent)).status).toBe(403);
+        const stale = await post(JSON.stringify({sourceHash: 'f'.repeat(64)}), fixture.host.origin, capability);
+        expect(stale.status).toBe(409);
+        expect((await stale.json()).error.code).toBe('JOB_ACT_SOURCE_STALE');
+        expect((await post('{}', fixture.host.origin, capability, 'text/plain')).status).toBe(400);
+        expect((await post(JSON.stringify({padding: 'x'.repeat(256 * 1024)}), fixture.host.origin, capability)).status).toBe(413);
+        expect((await fetch(endpoint)).status).toBe(404);
+        const otherKey = publication.instanceKey === '0'.repeat(64) ? '1'.repeat(64) : '0'.repeat(64);
+        const mismatchedInstance = await post('{}', fixture.host.origin, capability, 'application/json',
+            endpoint.replace('/instances/' + publication.instanceKey + '/', '/instances/' + otherKey + '/'));
+        expect(mismatchedInstance.status).toBe(409);
+        expect((await mismatchedInstance.json()).error.code).toBe('JOB_DISPLAY_MISMATCH');
+        const unknownPublication = await post('{}', fixture.host.origin, capability, 'application/json',
+            endpoint.replace('/publications/' + publication.publicationId + '/', '/publications/missing-publication/'));
+        expect(unknownPublication.status).toBe(404);
+        expect((await unknownPublication.json()).error.code).toBe('JOB_PUBLICATION_UNKNOWN');
+        await fixture.publish('parts', 'parts-new-current');
+        const oldPublication = await post(JSON.stringify({sourceHash: publication.source.sourceHash}), fixture.host.origin, capability);
+        expect(oldPublication.status).toBe(409);
+        expect((await oldPublication.json()).error.code).toBe('JOB_ACT_SOURCE_STALE');
+        // Read-only access to the prior immutable publication remains supported.
+        expect((await fetch(fixture.host.origin + descriptor.value.routes.apiBase + 'review')).status).toBe(200);
+    } finally {await fixture.close();}
+});
+
+test('C4 declared source painting preloads from its pinned route without fetching the synthetic manifest asset', async () => {
+    const display = fixturePublication();
+    Object.assign(display.publication, {source: {...display.publication.source, model: null}});
+    const bytes = Uint8Array.from([1, 2, 3]);
+    const hash = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+    const metadata = {
+        manifest: parseManifest({schema: 'rig-review/1', id: 'window-fixture', revision: '1', title: 'Painting',
+            references: [{id: 'source-painting', label: 'Original painting', type: 'image', path: '__review_source_painting__.png'}]}),
+        sourceHash: display.publication.source.sourceHash,
+        reviewedSource: {rig: null},
+        sourcePainting: {id: 'source-painting', path: 'original.png', sha256: hash, url: '/review-painting'},
+        capabilities: {playback: false}, feedbackCatalog: {slots: null},
+    };
+    const names = ['document', 'location', 'Image', 'fetch'] as const;
+    const saved = names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+    const requested: string[] = [];
+    class PreparedImage {
+        naturalWidth = 1;
+        naturalHeight = 1;
+        src = '';
+        async decode() {}
+    }
+    try {
+        Object.defineProperty(globalThis, 'document', {configurable: true, value: {createElement: () => ({})}});
+        Object.defineProperty(globalThis, 'location', {configurable: true, value: {origin: 'http://127.0.0.1:4318'}});
+        Object.defineProperty(globalThis, 'Image', {configurable: true, value: PreparedImage});
+        Object.defineProperty(globalThis, 'fetch', {configurable: true, value: async (url: string) => {
+            requested.push(url);
+            if (url.endsWith('/api/review')) return Response.json(metadata);
+            if (url.endsWith('/review-painting')) return new Response(bytes);
+            throw new Error('Unexpected asset route');
+        }});
+        const prepared = await prepareJobInspection(display, new AbortController().signal);
+        expect(prepared.references.map(reference => reference.id)).toEqual(['source-painting']);
+        expect(requested.filter(url => url.endsWith('/review-painting'))).toHaveLength(1);
+        expect(requested.some(url => url.includes('__review_source_painting__'))).toBe(false);
+        prepared.dispose();
+    } finally {
+        for (const [name, descriptor] of saved) {
+            if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+            else Reflect.deleteProperty(globalThis, name);
+        }
+    }
+});
+
+test('C4 native crop host retains the job source identity through the trusted server context', async () => {
+    const {loadPartsView, verdictSource} = await import('../src/parts-view.ts');
+    const {candidate} = await import('./helpers/parts-comments-package.ts');
+    const {readPngCrop} = await import('../src/comment-crops.ts');
+    const {PNG} = await import('pngjs');
+    const fixture = await scriptedJobWindowFixture();
+    const previousState = process.env.RIG_REVIEW_STATE_DIR;
+    process.env.RIG_REVIEW_STATE_DIR = join(fixture.input.state, 'comment-state');
+    try {
+        const publication = await fixture.publish('parts');
+        const descriptor = await (await fetch(fixture.locator + '/publications/' + publication.publicationId)).json();
+        const endpoint = fixture.host.origin + descriptor.value.routes.apiBase + 'stage-parts/comment';
+        const pkg = await loadPartsView(fixture.packageRoot);
+        const part = pkg.items[0]!;
+        const original = PNG.sync.read(await readFile(pkg.imagePaths[part.index]!));
+        const sample = candidate(pkg);
+        const issue = {...sample, sourceHash: publication.source.sourceHash,
+            parts: [{name: part.name, imageHash: sample.parts[0]!.imageHash}],
+            imageRegion: {x: 0, y: 0, width: 1, height: 1},
+            rigRegion: {x: part.x, y: part.y, width: 1, height: 1},
+        };
+        const post = (value: unknown) => fetch(endpoint, {method: 'POST',
+            headers: {'Content-Type': 'application/json', Origin: fixture.host.origin,
+                'X-Review-Capability': fixture.host.session.hostCredentials().ui}, body: JSON.stringify(value)});
+        expect(verdictSource(pkg).sha256).not.toBe(publication.source.sourceHash);
+        const before = await jobInputHashes(fixture.input.root);
+        const response = await post(issue);
+        expect(response.status).toBe(200);
+        const {comment} = await response.json();
+        expect(comment.sourceHash).toBe(publication.source.sourceHash);
+        expect(comment.parts).toEqual(issue.parts);
+        expect(comment.crop).toEqual(issue.crop);
+        const native = PNG.sync.read(await readPngCrop(comment.nativeCrop));
+        expect([native.width, native.height]).toEqual([1, 1]);
+        expect([...native.data]).toEqual([...original.data.subarray(0, 4)]);
+        const refused = await post({...issue, sourceHash: verdictSource(pkg).sha256});
+        expect(refused.status).toBe(409);
+        expect((await refused.json()).error.code).toBe('JOB_ACT_SOURCE_STALE');
+        const retained = fixture.host.session.retainedSourceV3(publication.publicationId);
+        const record = retained.seals.find(file => file.path === 'project.json')!;
+        const recordPath = join(retained.snapshotRoot, record.path);
+        const recordBytes = await readFile(recordPath);
+        try {
+            // This disposable retained-record mutant must be caught even after the parts view is cached.
+            await writeFile(recordPath, Buffer.concat([recordBytes, Buffer.from('\n')]));
+            const changed = await post(issue);
+            expect(changed.status).toBe(409);
+            expect((await changed.json()).error.code).toBe('JOB_SOURCE_UNRETAINABLE');
+        } finally {
+            await writeFile(recordPath, recordBytes);
+            const restoredHash = new Bun.CryptoHasher('sha256').update(await readFile(recordPath)).digest('hex');
+            expect(restoredHash).toBe(record.sha256);
+            console.log('C4_SNAPSHOT_CONTROL ' + JSON.stringify({before: record.sha256, restored: restoredHash}));
+        }
+        expect(await jobInputHashes(fixture.input.root)).toEqual(before);
+    } finally {
+        if (previousState === undefined) delete process.env.RIG_REVIEW_STATE_DIR;
+        else process.env.RIG_REVIEW_STATE_DIR = previousState;
+        await fixture.close();
+    }
+});
+
+describe('C4 async source and host ownership', () => {
+    const roots: string[] = [];
+    afterEach(async () => {
+        const {rm} = await import('node:fs/promises');
+        for (const root of roots.splice(0)) await rm(root, {recursive: true, force: true});
+    });
+    // Exercise the production C4 adapter closures. Browser validation uses the shared C3 mount.
+    async function adapters() {
+        const [{parsePartsIssue}, {commentFixture, candidate}, {mkdtemp}, {tmpdir}] = await Promise.all([
+            import('../src/parts-comment.ts'), import('./helpers/parts-comments-package.ts'),
+            import('node:fs/promises'), import('node:os'),
+        ]);
+        const h = harness();
+        let preparation!: AbortSignal;
+        h.prepareWith(async (_display, signal) => {preparation = signal;});
+        const display = await h.publish(1);
+        const prepared = {display};
+        const root = await mkdtemp(join(tmpdir(), 'review-c4-adapters-'));
+        roots.push(root);
+        const pkg = await commentFixture(root);
+        const sample = candidate(pkg);
+        const item = pkg.items[0]!;
+        const issue = {...sample, sourceHash: display.publication.source.sourceHash,
+            parts: [{name: item.name, imageHash: sample.parts[0]!.imageHash}],
+            imageRegion: {x: 0, y: 0, width: 1, height: 1},
+            rigRegion: {x: item.x, y: item.y, width: 1, height: 1}};
+        const sourceText = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+        const mountStart = sourceText.indexOf('    async function mountJobParts(');
+        const adapterStart = sourceText.indexOf('        const lifetime = new AbortController();', mountStart);
+        const adapterEnd = sourceText.indexOf('        try {\n            mounted = mountPartsWorkspace(', adapterStart);
+        const readyStart = sourceText.indexOf('            await Promise.race(', adapterEnd);
+        const readyEnd = sourceText.indexOf(';', readyStart);
+        const readyExpression = sourceText.slice(readyStart + '            await '.length, readyEnd);
+        const paintStart = sourceText.indexOf('            await new Promise<void>((resolve, reject)', adapterEnd);
+        const paintEnd = sourceText.indexOf('\n            if (signal.aborted)', paintStart);
+        const paintExpression = sourceText.slice(paintStart + '            await '.length, paintEnd).trim().replace(/;$/, '');
+        const finalizerStart = sourceText.indexOf('        } finally {', adapterEnd) + '        } finally {'.length;
+        const finalizerEnd = sourceText.indexOf('\n        }', finalizerStart);
+        const bytesStart = sourceText.indexOf('async function jobBytes(');
+        const bytesEnd = sourceText.indexOf('async function jobDigest(', bytesStart);
+        const jsonStart = sourceText.indexOf('async function jobJson<');
+        const jsonEnd = sourceText.indexOf('function mediaReady(', jsonStart);
+        expect(adapterStart).toBeGreaterThan(mountStart);
+        expect(adapterEnd).toBeGreaterThan(adapterStart);
+        expect(readyStart).toBeGreaterThan(adapterEnd);
+        expect(paintStart).toBeGreaterThan(readyEnd);
+        const panel: {issues: typeof issue[]; legacy: unknown; composition: {side: string[]}; output?: unknown; dispose?: () => void} = {
+            issues: [issue], legacy: null, composition: {side: ['parts.issues', 'act.submit']},
+        };
+        const partsForm = {dirty: false, submissionId: 'original-parts-id'};
+        const otherForm = {dirty: false, submissionId: 'original-other-id'};
+        const forms = new Map([['parts-ask', partsForm], ['other-ask', otherForm]]);
+        h.window.event({type: 'pending', jobId: 'window-fixture', generation: 2, cursor: '2', ask: {
+            askId: 'parts-ask', publicationId: display.publication.publicationId,
+            source: display.publication.source, status: 'pending', subject: {kind: 'parts-verdict', draftId: 'draft-one'},
+        }});
+        let saves = 0;
+        const signals: AbortSignal[] = [];
+        let fetcher = async (_url: string, init: RequestInit): Promise<Response> => {
+            if (init.method === 'POST') return Response.json({error: {code: 'PARTS_COMMENT_UNAVAILABLE'}}, {status: 409});
+            return Response.json({sourceHash: display.publication.source.sourceHash});
+        };
+        const fetchAdapter = (url: string, init: RequestInit) => {signals.push(init.signal as AbortSignal); return fetcher(url, init);};
+        const frames = new Map<number, FrameRequestCallback>();
+        let frameId = 0;
+        const code = sourceText.slice(bytesStart, bytesEnd) + sourceText.slice(jsonStart, jsonEnd) +
+            sourceText.slice(adapterStart, adapterEnd) + '\nreturn {source, host, lifetime, preparationCancelled,\n' +
+            'finishPreparation() {' + sourceText.slice(finalizerStart, finalizerEnd) + '\n},\n' +
+            'waitForPaint() {return ' + paintExpression + ';},\n' +
+            'waitUntilReady(ready) {const mounted = {ready}; return ' + readyExpression + ';},\n' +
+            'activate(value) {current = value;}};';
+        const run = new Function('prepared', 'current', 'signal', 'panel', 'routes', 'painting', 'forms', 'window',
+            'access', 'fetch', 'parsePartsIssue', 'saveDraft', 'jobPartsReviewState', 'requestAnimationFrame', 'cancelAnimationFrame',
+            new Bun.Transpiler({loader: 'ts'}).transformSync(code));
+        const probe = run(prepared, prepared, preparation, panel,
+            jobPublicationRoutes(display, 'http://127.0.0.1:4318'), null, forms, h.window,
+            {headers: (init: HeadersInit) => new Headers(init)}, fetchAdapter, parsePartsIssue, () => {saves++;}, jobPartsReviewState,
+            (callback: FrameRequestCallback) => {frames.set(++frameId, callback); return frameId;},
+            (id: number) => {frames.delete(id);}) as {
+                source: import('../web/parts.ts').PartsSource;
+                host: import('../web/parts.ts').PartsHost;
+                lifetime: AbortController;
+                preparationCancelled: Promise<never>;
+                waitUntilReady(ready: Promise<void>): Promise<void>;
+                finishPreparation(): void;
+                waitForPaint(): Promise<void>;
+                activate(value: object): void;
+            };
+        return {...h, probe, prepared, panel, partsForm, otherForm, signals, issue, preparation,
+            saved: () => saves, frames,
+            frame() {const first = frames.entries().next().value; if (first) {frames.delete(first[0]); first[1](0);}},
+            fetchWith(value: typeof fetcher) {fetcher = value;}};
+    }
+
+    test('C4 failed replacement keeps the retained adapter usable after its preparation signal aborts', async () => {
+        const h = await adapters();
+        await h.probe.source.view();
+        const painted = h.probe.waitForPaint();
+        h.frame(); h.frame();
+        await painted;
+        h.probe.finishPreparation();
+        h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
+        await h.publish(2);
+        expect(h.preparation.aborted).toBe(true);
+        expect(h.window.state().displayed?.publication.publicationId).toBe('publication-1');
+        expect(h.probe.lifetime.signal.aborted).toBe(false);
+        await expect(h.probe.source.view()).resolves.toMatchObject({sourceHash: h.issue.sourceHash});
+        await expect(h.probe.source.crop(h.issue)).rejects.toThrow('PARTS_COMMENT_UNAVAILABLE');
+        expect(h.signals.every(signal => signal === h.probe.lifetime.signal && !signal.aborted)).toBe(true);
+        h.panel.dispose!();
+    });
+
+    test('C4 cancellation while preparing aborts the actual source request and settles readiness', async () => {
+        const h = await adapters();
+        h.fetchWith(async (_url, init) => new Promise<Response>((_resolve, reject) => {
+            init.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {once: true});
+        }));
+        const refused = h.probe.source.view().catch(error => error);
+        const readiness = h.probe.preparationCancelled.catch(error => error);
+        h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
+        await h.publish(2);
+        expect((await refused).message).toContain('Aborted');
+        expect((await readiness).message).toBe('JOB_PRELOAD_CANCELLED');
+        expect(h.probe.lifetime.signal.aborted).toBe(true);
+        h.panel.dispose!();
+    });
+
+    test('C4 awaits the handle readiness contract after source loading and propagates its rejection', async () => {
+        const text = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+        expect(text).toContain('await Promise.race([mounted.ready, preparationCancelled]);');
+        const readyIndex = text.indexOf('await Promise.race([mounted.ready, preparationCancelled]);');
+        const fitIndex = text.indexOf("panel.slots.toolbar.querySelector<HTMLButtonElement>('#fit')?.click();", readyIndex);
+        const paintIndex = text.indexOf('await new Promise<void>((resolve, reject)', readyIndex);
+        expect(fitIndex).toBeGreaterThan(readyIndex);
+        expect(fitIndex).toBeLessThan(paintIndex);
+        const h = await adapters();
+        await h.probe.source.view();
+        const ready = deferred<void>();
+        let settled = false;
+        const waiting = h.probe.waitUntilReady(ready.promise).then(() => {settled = true;});
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        ready.resolve();
+        await waiting;
+        expect(settled).toBe(true);
+        const failure = new Error('PARTS_PAINT_FAILED');
+        await expect(h.probe.waitUntilReady(Promise.reject(failure))).rejects.toBe(failure);
+        h.probe.finishPreparation();
+        h.panel.dispose!();
+    });
+
+    test('C4 replacement cancels preparation while handle readiness is unresolved', async () => {
+        const h = await adapters();
+        await h.probe.source.view();
+        const ready = deferred<void>();
+        const waiting = h.probe.waitUntilReady(ready.promise).catch(error => error);
+        h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
+        await h.publish(2);
+        expect((await waiting).message).toBe('JOB_PRELOAD_CANCELLED');
+        expect(h.probe.lifetime.signal.aborted).toBe(true);
+        ready.resolve();
+        expect(h.frames.size).toBe(0);
+        h.panel.dispose!();
+    });
+
+    test('C4 cancellation between paint frames releases preparation without waiting for another frame', async () => {
+        for (const deliveredFrames of [0, 1]) {
+            const h = await adapters();
+            await h.probe.source.view();
+            const painted = h.probe.waitForPaint().catch(error => error);
+            if (deliveredFrames) h.frame();
+            h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
+            await h.publish(2);
+            expect((await painted).message).toBe('JOB_PRELOAD_CANCELLED');
+            expect(h.frames.size).toBe(0);
+            h.probe.finishPreparation();
+            h.panel.dispose!();
+        }
+    });
+
+    test('C4 late callbacks from an inactive or disposed adapter leave current forms and output intact', async () => {
+        const h = await adapters();
+        h.probe.finishPreparation();
+        const original = h.panel.issues;
+        const output = {kind: 'parts-verdict' as const, value: () => ({verdict: 'approved' as const, issues: [], words: ''})};
+        h.probe.activate({});
+        h.probe.host.changed([]);
+        h.probe.host.register(output);
+        expect(h.panel.issues).toBe(original);
+        expect(h.panel.output).toBeUndefined();
+        expect(h.partsForm).toEqual({dirty: false, submissionId: 'original-parts-id'});
+        expect(h.saved()).toBe(0);
+        h.probe.activate(h.prepared);
+        h.panel.dispose!();
+        h.probe.host.changed([]);
+        h.probe.host.register(output);
+        expect(h.panel.issues).toBe(original);
+        expect(h.panel.output).toBeUndefined();
+        expect(h.partsForm).toEqual({dirty: false, submissionId: 'original-parts-id'});
+        expect(h.probe.host.locked()).toBe('sent');
+    });
+
+    test('C4 active callbacks retain initial issues and dirty only the parts form', async () => {
+        const h = await adapters();
+        expect(h.probe.host.initial()).toBe(h.panel.issues);
+        h.probe.finishPreparation();
+        h.probe.host.changed([]);
+        expect(h.panel.issues).toEqual([]);
+        expect(h.partsForm.dirty).toBe(true);
+        expect(h.partsForm.submissionId).not.toBe('original-parts-id');
+        expect(h.otherForm).toEqual({dirty: false, submissionId: 'original-other-id'});
+        expect(h.saved()).toBe(1);
+        const output = {kind: 'parts-verdict' as const, value: () => ({verdict: 'approved' as const, issues: [], words: ''})};
+        h.probe.host.register(output);
+        expect(h.panel.output).toBe(output);
+        h.panel.dispose!();
+    });
+
+    test('C4 a late crop reply is refused after owner replacement or disposal', async () => {
+        for (const dispose of [false, true]) {
+            const h = await adapters();
+            h.probe.finishPreparation();
+            const response = deferred<Response>();
+            h.fetchWith(async () => response.promise);
+            const refused = h.probe.source.crop(h.issue).catch(error => error);
+            if (dispose) h.panel.dispose!(); else h.probe.activate({});
+            response.resolve(Response.json({comment: h.issue}));
+            expect((await refused).message).toBe('JOB_ACT_SOURCE_STALE');
+            expect(h.partsForm.dirty).toBe(false);
+            h.panel.dispose!();
+        }
+    });
+
+    test('C4 disposal aborts an active crop once and refuses subsequent crop requests', async () => {
+        const h = await adapters();
+        h.probe.finishPreparation();
+        let aborted = 0;
+        h.fetchWith(async (_url, init) => new Promise<Response>((_resolve, reject) => {
+            init.signal!.addEventListener('abort', () => {aborted++; reject(new DOMException('Aborted', 'AbortError'));}, {once: true});
+        }));
+        const refused = h.probe.source.crop(h.issue).catch(error => error);
+        h.panel.dispose!();
+        h.panel.dispose!();
+        expect((await refused).message).toContain('Aborted');
+        expect(aborted).toBe(1);
+        await expect(h.probe.source.crop(h.issue)).rejects.toThrow('JOB_ACT_SOURCE_STALE');
+        expect(h.signals).toHaveLength(1);
+    });
+});
+
+test('C4 base inspection resources are disposed even when workspace cleanup throws', async () => {
+    const text = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+    const start = text.indexOf('            prepared.dispose = () =>');
+    const end = text.indexOf('\n', start);
+    const prepared = {dispose() {}};
+    let disposed = 0;
+    new Function('prepared', 'panel', 'dispose', text.slice(start, end))(
+        prepared, {dispose() {throw new Error('Declared cleanup failure');}}, () => {disposed++;});
+    expect(() => prepared.dispose()).toThrow('Declared cleanup failure');
+    expect(disposed).toBe(1);
 });

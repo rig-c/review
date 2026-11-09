@@ -2,11 +2,12 @@
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
 import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumeratorVersion } from './job-api.ts';
 import { JobSession } from './job-session.ts';
-import { assertJobRoot, captureJobRoot, isRetainedRecordSource, type JobRootIdentity } from './job-source.ts';
+import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, type JobRootIdentity } from './job-source.ts';
 import type { JobWorkerOptions } from './job-worker.ts';
 import { JobError, JobStore } from './job-store.ts';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
 import { serveReference, assertReviewUnchanged } from './reference.ts';
+import {preparePartsComment} from './parts-comment-crops.ts';
 import { loadPartsView, partsViewJson, servedImage, type PartsViewPackage } from './parts-view.ts';
 import { destinationDirectory, DestinationDirectoryError } from './destination-directory.ts';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
@@ -22,8 +23,60 @@ const headers = {
     'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
 };
-function failure(code: string, status: number): Response {
-    return Response.json({ ok: false, error: { code, message: code } }, { status, headers });
+interface CropFailureDiagnostic {
+    field: string;
+    expected: string | number[];
+    received: string | number[];
+}
+function failure(code: string, status: number, diagnostic?: CropFailureDiagnostic): Response {
+    return Response.json({ ok: false, error: { code, message: code, ...(diagnostic ? {diagnostic} : {}) } }, { status, headers });
+}
+
+/** Explain an existing rejection without returning body text, filesystem paths or PNG bytes. */
+function cropFailureDiagnostic(error: unknown, raw: unknown): CropFailureDiagnostic {
+    const message = error instanceof Error ? error.message : '';
+    const invariants: Record<string, [string, string]> = {
+        'PARTS_COMMENT_RIG_REGION: rig region must be exact placement plus image region': ['rigRegion', 'exact placement plus imageRegion'],
+        'PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image': ['imageRegion', 'inside original image bounds'],
+        'PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds union of issue parts': ['rigRegion', 'inside union of bound parts'],
+        'PARTS_CAMERA_RANGE: native zoom below fit/1 minimum': ['view.camera.zoom', 'at least min(fit, 1)'],
+        'PARTS_CAMERA_RANGE: native scale or camera extent': ['view.camera', 'bounded positive zoom and viewport'],
+        'PARTS_COMMENT_IMAGE_SIZE: original dimensions differ from placement': ['part.image.dimensions', 'equal retained placement dimensions'],
+        'PARTS_COMMENT_CROP_INVALID: bounded content-addressed crop': ['crop', 'bounded content-addressed PNG metadata'],
+        'COMMENT_CROP_INVALID: bounded content-addressed PNG required': ['crop', 'bounded content-addressed PNG'],
+        'COMMENT_CROP_INVALID: expected noninterlaced 8-bit RGB/RGBA': ['crop.png.format', 'noninterlaced 8-bit RGB/RGBA'],
+        'COMMENT_CROP_INVALID: truncated PNG chunk': ['crop.png.chunks', 'complete chunks'],
+        'COMMENT_CROP_INVALID: PNG chunk length': ['crop.png.chunk.length', 'inside PNG byte bounds'],
+        'COMMENT_CROP_INVALID: PNG chunk CRC': ['crop.png.chunk.crc', 'matching CRC'],
+        'COMMENT_CROP_INVALID: static PNG required': ['crop.png.animation', 'static PNG'],
+        'COMMENT_CROP_INVALID: PNG end': ['crop.png.end', 'final empty IEND'],
+        'COMMENT_CROP_INVALID: PNG data/end missing': ['crop.png.data', 'IDAT and IEND present'],
+        'COMMENT_CROP_INVALID: bounded PNG data decode': ['crop.png.data', 'bounded decodable scanlines'],
+        'COMMENT_CROP_INVALID: PNG scanlines': ['crop.png.scanlines', 'exact dimensions and valid filters'],
+        'COMMENT_CROP_PATH: existing crop is not the bound regular PNG': ['crop.storage', 'regular file with matching SHA-256'],
+        'COMMENT_CROP_PATH: regular state directory required': ['crop.storage', 'regular state directory'],
+    };
+    // Inspect metadata only after the existing validator reports this exact invariant.
+    if (message === 'COMMENT_CROP_INVALID: PNG signature, dimensions or SHA-256 differ' &&
+        raw && typeof raw === 'object' && 'crop' in raw) {
+        const crop = raw.crop as {png?: unknown; sha256?: unknown; width?: unknown; height?: unknown} | null;
+        if (crop && typeof crop.png === 'string' && crop.png.length <= 200000 &&
+            typeof crop.sha256 === 'string' && /^[a-f0-9]{64}$/.test(crop.sha256)) {
+            const bytes = Buffer.from(crop.png.slice('data:image/png;base64,'.length), 'base64');
+            const hash = jobHash(bytes);
+            if (hash !== crop.sha256) return {field: 'crop.sha256', expected: crop.sha256, received: hash};
+            if (bytes.length >= 24 && bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' &&
+                typeof crop.width === 'number' && typeof crop.height === 'number' &&
+                (crop.width !== bytes.readUInt32BE(16) || crop.height !== bytes.readUInt32BE(20))) {
+                return {field: 'crop.dimensions', expected: [crop.width, crop.height],
+                    received: [bytes.readUInt32BE(16), bytes.readUInt32BE(20)]};
+            }
+        }
+        return {field: 'crop.png.signature', expected: 'PNG signature and IHDR', received: 'invalid'};
+    }
+    const invariant = Object.hasOwn(invariants, message) ? invariants[message] : undefined;
+    return invariant ? {field: invariant[0], expected: invariant[1], received: 'rejected by existing validator'} :
+        {field: 'partsComment.prepare', expected: 'valid source-bound crop and writable evidence state', received: 'unclassified rejection'};
 }
 const errorStatus: Partial<Record<JobErrorCode, number>> = {
     JOB_REQUEST_INVALID: 400,
@@ -83,8 +136,11 @@ export function createJobFront(options: {
                 return result(await options.ports.ackDisplayed(jobId, request));
             return result(await options.ports.commitUIAct(jobId, request));
         }
-        if (!read)
+        const partsCrop = request.method === 'POST' &&
+            /^publications\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/instances\/[a-f0-9]{64}\/api\/stage-parts\/comment$/.test(route);
+        if (!read && !partsCrop)
             return failure('JOB_REQUEST_INVALID', 405);
+        if (partsCrop && sentOrigin !== origin.origin) return failure('JOB_SAME_ORIGIN_REQUIRED', 403);
         const liveness = await options.ports.jobLiveness(jobId);
         if (!liveness.ok)
             return result(liveness);
@@ -172,7 +228,9 @@ export function jobWindowResources() {
                 '<body data-job-window><script type="module" src="job.js"></script></body></html>';
         }
         if (name === 'styles.css')
-            return Bun.file(new URL('../web/styles.css', import.meta.url));
+            return (await Bun.file(new URL('../web/styles.css', import.meta.url)).text()) +
+                '\n@scope (.job-inspection[data-job-parts-workspace]) {\n' +
+                (await Bun.file(new URL('../web/parts.css', import.meta.url)).text()) + '\n}';
         bundle ??= buildJobWindow();
         return bundle;
     };
@@ -199,9 +257,13 @@ export function retainedPublicationRoutes(session: JobSession) {
     return async (jobId: string, publicationId: string, key: string, path: string, request: Request): Promise<Response> => {
         if (jobId !== session.jobId) return failure('JOB_UNKNOWN', 404);
         try {
+            const crop = path === 'api/stage-parts/comment' && request.method === 'POST';
+            if (crop) session.authorize('ui', request.headers.get('X-Review-Capability'));
             return await session.readPublicationResponse(publicationId, async retained => {
                 const display = session.displayPublication(publicationId);
                 if (key !== display.publication.instanceKey) return failure('JOB_DISPLAY_MISMATCH', 409);
+                if (crop && session.status().publication?.publicationId !== publicationId)
+                    return failure('JOB_ACT_SOURCE_STALE', 409);
                 const json = (value: unknown) => new Response(request.method === 'HEAD' ? null : JSON.stringify(value), {
                     headers: {...headers, 'Content-Type': 'application/json'},
                 });
@@ -247,9 +309,17 @@ export function retainedPublicationRoutes(session: JobSession) {
                 if (!pending) {
                     pending = (async () => {
                         const review = await loadReview(retained.manifestPath);
-                        const parts = retained.source.parts
-                            ? await loadPartsView(dirname(join(retained.snapshotRoot, retained.source.parts.manifest.path)))
-                            : null;
+                        const partsRoot = retained.source.parts
+                            ? dirname(join(retained.snapshotRoot, retained.source.parts.manifest.path)) : null;
+                        // Forward only retained producer files. Discovery never reads the live draft.
+                        const retainedFile = (path: string) => retained.seals.some(file =>
+                            file.path === relative(retained.snapshotRoot, path).split('\\').join('/')) ? path : undefined;
+                        const rigRoot = review.handoff?.rig ?? partsRoot;
+                        const parts = partsRoot ? await loadPartsView(partsRoot, {
+                            rig: rigRoot ? retainedFile(join(rigRoot, 'rig.json')) : undefined,
+                            meshReport: rigRoot ? retainedFile(join(rigRoot, 'mesh_report.json')) : undefined,
+                            painting: review.handoff?.source ? retainedFile(review.handoff.source) : undefined,
+                        }) : null;
                         if (parts) {
                             if (parts.items.length !== retained.partIds.length || parts.items.some(item => !retained.partIds.includes(item.name))) {
                                 throw new JobError('JOB_SOURCE_MISMATCH');
@@ -308,6 +378,29 @@ export function retainedPublicationRoutes(session: JobSession) {
                     if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
                     return await sealedFile(image.path);
                 }
+                if (crop) {
+                    if (!parts) return failure('JOB_SOURCE_UNRETAINABLE', 409);
+                    if (request.headers.get('origin') !== new URL(request.url).origin)
+                        return failure('JOB_SAME_ORIGIN_REQUIRED', 403);
+                    const raw = await jobBody(request);
+                    if (!raw || typeof raw !== 'object' || Array.isArray(raw) ||
+                        (raw as {sourceHash?: unknown}).sourceHash !== retained.source.sourceHash)
+                        return failure('JOB_ACT_SOURCE_STALE', 409);
+                    // Preserve the exact displayed job identity through native evidence validation.
+                    assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);
+                    let comment;
+                    try {
+                        comment = await preparePartsComment(parts, raw, false, {sourceHash: retained.source.sourceHash});
+                    } catch (error) {
+                        if (error instanceof JobError ||
+                            error instanceof Error && error.message.startsWith('PARTS_COMMENT_STALE_SOURCE:')) throw error;
+                        return failure('JOB_SOURCE_MISMATCH', 409, cropFailureDiagnostic(error, raw));
+                    }
+                    assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);
+                    if (session.status().publication?.publicationId !== publicationId)
+                        return failure('JOB_ACT_SOURCE_STALE', 409);
+                    return json({comment});
+                }
                 if (path === 'api/stage-parts') {
                     if (!parts) return failure('JOB_SOURCE_UNRETAINABLE', 409);
                     return json({...partsViewJson(parts, {verdict: null, stale: null}), sourceHash: retained.source.sourceHash,
@@ -330,7 +423,10 @@ export function retainedPublicationRoutes(session: JobSession) {
                 return failure('JOB_REQUEST_INVALID', 404);
             });
         } catch (error) {
-            return failure(error instanceof JobError ? error.code : 'JOB_SOURCE_MISMATCH', 409);
+            const code = error instanceof JobError ? error.code :
+                error instanceof Error && error.message.startsWith('PARTS_COMMENT_STALE_SOURCE:')
+                    ? 'PARTS_COMMENT_STALE_SOURCE' : 'JOB_SOURCE_MISMATCH';
+            return failure(code, errorStatus[code as JobErrorCode] ?? 409);
         }
     };
 }

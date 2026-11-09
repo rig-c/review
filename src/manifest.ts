@@ -9,6 +9,8 @@ import { readFile, realpath, stat, lstat, readdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, posix } from 'node:path';
 import { isBuildRoot, parseHandoffDeclaration, resolveHandoff, type Handoff, type HandoffDeclaration, type HandoffFlags, type HandoffRecord } from './handoff.ts';
+import { parsePanelComposition, type JobPanelComposition } from './job-contract.ts';
+export { isPanelComponent, parsePanelComposition } from './job-contract.ts';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export interface Reference { id: string; label: string; type: 'image' | 'video' | 'pose'; path: string; width?: number; height?: number }
@@ -22,6 +24,7 @@ export interface ReviewManifest {
   audio: { clips: { id: string; label?: string; path: string }[]; cues: { id: string; clip: string; time: number; animation?: string }[] };
   /** Optional producer handoff (#101): package-relative literal paths; checked when the package loads. */
   producer?: HandoffDeclaration;
+  panels?: JobPanelComposition;
 }
 export interface ReviewedSource { readonly packageRevision:string; readonly viewerVersion:string; readonly runtimeVersion:string; readonly rig:{readonly path:string;readonly sha256:string}|null; readonly motion:{readonly path:string;readonly sha256:string}|null; readonly handoff?:HandoffRecord }
 export interface ReviewPackage { direction?:DirectionInspection; setsHash?:string; referenceHashes?:Record<string,string>; root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; feedbackCatalog:FeedbackCatalog;
@@ -64,6 +67,11 @@ export async function safeFile(root: string, path: string): Promise<string> {
 export function parseManifest(input: unknown): ReviewManifest {
   const m = object(input, 'review'); if (m.schema !== 'rig-review/1') fail('schema', 'rig-review/1');
   const audio = m.audio === undefined ? {} : object(m.audio, 'audio');
+  let panels: JobPanelComposition | undefined;
+  if (m.panels !== undefined) {
+    try { panels = parsePanelComposition(m.panels); }
+    catch { panels = undefined; }
+  }
   const manifest: ReviewManifest = {
     schema: 'rig-review/1', id: id(m.id, 'id'), title: string(m.title, 'title'), revision: string(m.revision, 'revision'),
     model: m.model === undefined ? undefined : packagePath(m.model, 'model'),
@@ -76,6 +84,7 @@ export function parseManifest(input: unknown): ReviewManifest {
     authoring:list(m.authoring,'authoring',(v,f)=>({label:string(v.label,f+'.label'),path:packagePath(v.path,f+'.path')})),
     axes:list(m.axes,'axes',(v,f)=>({id:id(v.id,f+'.id'),label:string(v.label,f+'.label'),animation:string(v.animation,f+'.animation'),min:number(v.min,f+'.min',-Number.MAX_VALUE),max:number(v.max,f+'.max',-Number.MAX_VALUE)})),
     ...(m.producer===undefined?{}:{producer:parseHandoffDeclaration(m.producer)}),
+    ...(panels===undefined?{}:{panels}),
     audio:{clips:list(audio.clips,'audio.clips',(v,f)=>({id:id(v.id,f+'.id'),label:optionalString(v.label,f+'.label'),path:packagePath(v.path,f+'.path')})),cues:list(audio.cues,'audio.cues',(v,f)=>({id:id(v.id,f+'.id'),clip:string(v.clip,f+'.clip'),time:number(v.time,f+'.time'),animation:optionalString(v.animation,f+'.animation')}))}
   };
   if(manifest.model&&!manifest.model.endsWith('.model.json'))fail('model','compiled model path ending .model.json (the play runtime input)');
