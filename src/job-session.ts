@@ -1,22 +1,32 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isAbsolute, relative, sep } from 'node:path';
 import {
-  JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, jobStillByteLimit, JOB_CAPABILITIES, JOB_ENABLED_ACT_KINDS, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
-  type JobDisplayPublication, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest,
-  type JobNextValue, type JobPendingAsk, type JobPublication, type JobReviewerBinding, type JobStatus,
+  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
+  type ActV3, type AgentRequestV3, type EventV3, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
+  type JobDisplayPublication, type JobDisplayPublicationV3, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest, type JobFetchActRequestV3,
+  type JobNextValue, type JobPendingAsk, type JobPublication, type JobPublicationMode, type JobReviewerBinding,
+  type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
 } from './job-contract.ts';
-import { bindJobAsk, finalizeJobAct, parseUISubmission, prepareJobStill } from './job-act.ts';
-import { jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
+import { bindJobAsk, bindJobRecordAsk, finalizeJobAct, parseUISubmission, prepareJobRecordAct, prepareJobStill } from './job-act.ts';
+import { jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
-  assertJobRoot, assertJobSourceCurrent, captureJobRoot, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot,
-  type JobPublicationReader, type JobRetainedSource, type JobRootIdentity,
+  assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
+  type JobPublicationReader, type JobRetainedSource, type JobRetainedSourceV3, type JobRootIdentity,
 } from './job-source.ts';
 import { JobError, JobStore, type JobSnapshotOwner, type StoredJob } from './job-store.ts';
 import { canonicalStatePath } from './state-dir.ts';
 
+export type { JobDisplayPublicationV3 } from './job-contract.ts';
+
+type JobEventPayload =
+  | { readonly type: 'published'; readonly publication: JobPublication | PublicationV3 }
+  | { readonly type: 'pending'; readonly ask: JobPendingAsk | PendingAskV3 }
+  | { readonly type: 'act'; readonly act: JobAct | ActV3 }
+  | { readonly type: 'closed'; readonly reason: string };
+
 interface StoredPublication {
-  publication: JobPublication;
-  retained: JobRetainedSource;
+  publication: JobPublication | PublicationV3;
+  retained: JobRetainedSourceV3;
 }
 
 interface Replay {
@@ -36,9 +46,9 @@ interface JobData {
   generation: number;
   head: string | null;
   publications: Record<string, StoredPublication>;
-  asks: Record<string, JobPendingAsk>;
-  acts: Record<string, JobAct>;
-  events: JobEvent[];
+  asks: Record<string, JobPendingAsk | PendingAskV3>;
+  acts: Record<string, JobAct | ActV3>;
+  events: (JobEvent | EventV3)[];
   replays: Record<string, Replay>;
   pages: Record<string, JobDisplayReceipt>;
 }
@@ -50,7 +60,10 @@ export interface JobSessionOptions {
   readonly stateDir: string;
   readonly fingerprint: string;
   readonly reviewer: JobReviewerBinding;
+  readonly publicationMode?: JobPublicationMode;
   readonly readPublished?: JobPublicationReader;
+  readonly readRecordPublished?: RecordPublicationReader;
+  readonly recordReaderId?: typeof JOB_RECORD_READER_ID | (string & {});
   readonly partsEnumerator?: JobPartsEnumerator;
   /** Deterministic boundary hook for disposable concurrency controls only. */
   readonly afterSnapshot?: () => void | Promise<void>;
@@ -74,6 +87,8 @@ function within(root: string, path: string): boolean {
  */
 export class JobSession {
   readonly jobId: string;
+  readonly publicationMode: JobPublicationMode;
+  readonly apiSchema: typeof JOB_API_SCHEMA | typeof JOB_API_V3_SCHEMA;
   private readonly store: JobStore<JobData>;
   private readonly listeners = new Set<() => void>();
   private operations = 0;
@@ -88,6 +103,16 @@ export class JobSession {
   }
 
   constructor(private readonly options: JobSessionOptions, readonlyTarget?: { readonly jobId: string }) {
+    if (options.publicationMode !== undefined &&
+        options.publicationMode !== 'package-only' &&
+        options.publicationMode !== 'record-and-package') {
+      throw new JobError('JOB_REQUEST_INVALID');
+    }
+    if (options.readRecordPublished !== undefined && typeof options.readRecordPublished !== 'function') {
+      throw new JobError('JOB_REQUEST_INVALID');
+    }
+    this.publicationMode = options.publicationMode ?? (options.readRecordPublished ? 'record-and-package' : 'package-only');
+    this.apiSchema = jobApiSchemaForMode(this.publicationMode);
     const root = captureJobRoot(options.root), state = canonicalStatePath(options.stateDir);
     if (within(root.path, state)) {
       throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Job state must be outside the designated work root');
@@ -184,7 +209,7 @@ export class JobSession {
     if (role === 'ui' && !current.active) throw new JobError('JOB_CLOSED');
   }
 
-  status(): JobStatus {
+  status(): StatusV3 {
     const current = this.current(), data = current.data;
     return {
       jobId: this.jobId, generation: data.generation, status: current.active ? 'active' : 'closed',
@@ -226,6 +251,14 @@ export class JobSession {
   }
 
   retainedSource(publicationId: string): JobRetainedSource {
+    const retained = this.retainedSourceV3(publicationId);
+    if (isRetainedRecordSource(retained)) {
+      throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Record publication has no package manifest');
+    }
+    return retained;
+  }
+
+  retainedSourceV3(publicationId: string): JobRetainedSourceV3 {
     const current = this.current();
     if (!current.active) throw new JobError('JOB_CLOSED');
     const stored = current.data.publications[publicationId];
@@ -233,7 +266,7 @@ export class JobSession {
     return stored.retained;
   }
 
-  displayPublication(publicationId: string): JobDisplayPublication {
+  displayPublication(publicationId: string): JobDisplayPublicationV3 {
     const current = this.current();
     if (!current.active) throw new JobError('JOB_CLOSED');
     const stored = current.data.publications[publicationId];
@@ -244,8 +277,8 @@ export class JobSession {
 
   /** Internal front seam. A count covers preparation and the entire file stream. */
   async readPublicationResponse(publicationId: string,
-    read: (retained: JobRetainedSource) => Promise<Response>): Promise<Response> {
-    const retained = this.retainedSource(publicationId);
+    read: (retained: JobRetainedSourceV3) => Promise<Response>): Promise<Response> {
+    const retained = this.retainedSourceV3(publicationId);
     const readId = this.store.beginSnapshotRead(this.jobId, publicationId,
       jobSnapshotHash(retained.seals), retained.snapshotRoot);
     this.operations++;
@@ -334,17 +367,18 @@ export class JobSession {
     assertJobRoot(current.data.root);
   }
 
-  private event(data: JobData, value: Omit<JobEvent, 'cursor' | 'jobId' | 'generation'>): void {
-    const event = { ...value, cursor: randomUUID(), jobId: this.jobId, generation: data.generation } as JobEvent;
+  private event(data: JobData, value: JobEventPayload): EventV3 {
+    const event: EventV3 = { ...value, cursor: randomUUID(), jobId: this.jobId, generation: data.generation };
     if (Buffer.byteLength(JSON.stringify(event)) > maximumEventBytes) {
       throw new JobError('JOB_BODY_LIMIT', 'Job event exceeds its delivery bound');
     }
     data.events.push(event);
+    return event;
   }
 
   private notify(): void { for (const listener of this.listeners) listener(); }
 
-  async execute(input: JobAgentRequest | JobFetchActRequest, signal: AbortSignal): Promise<unknown> {
+  async execute(input: JobAgentRequest | AgentRequestV3 | JobFetchActRequest | JobFetchActRequestV3, signal: AbortSignal): Promise<unknown> {
     if (input.jobId !== this.jobId) throw new JobError('JOB_UNKNOWN');
     if (input.verb === 'next') return this.next(input.after, input.waitMs, signal);
     if (input.verb === 'fetch-act') {
@@ -380,8 +414,17 @@ export class JobSession {
         }, fresh => {
           this.active(fresh, input.expectedGeneration);
           fresh.data.generation++;
-          this.event(fresh.data, {type: 'closed', reason: input.reason} as Omit<JobEvent, 'cursor' | 'jobId' | 'generation'>);
-          const event = fresh.data.events.at(-1)!;
+          const event: JobEvent = {
+            type: 'closed',
+            reason: input.reason,
+            cursor: randomUUID(),
+            jobId: this.jobId,
+            generation: fresh.data.generation,
+          };
+          if (Buffer.byteLength(JSON.stringify(event)) > maximumEventBytes) {
+            throw new JobError('JOB_BODY_LIMIT', 'Job event exceeds its delivery bound');
+          }
+          fresh.data.events.push(event);
           const value = {status: 'closed', cursor: event.cursor};
           return {generation: fresh.data.generation, event, replayKey: key, replay: {digest, value}};
         });
@@ -390,14 +433,48 @@ export class JobSession {
         return closure.replay.value;
       } finally { this.finishOperation(); }
     }
-    let candidate: JobRetainedSource | null = null;
+    let candidate: JobRetainedSourceV3 | null = null;
     this.operations++;
     try {
       if (input.verb === 'publish') {
-        candidate = await prepareJobSource({ root: current.data.root, stateRoot: this.store.root,
-          fingerprint: current.data.fingerprint, request: input,
-          readPublished: this.options.readPublished, partsEnumerator: this.options.partsEnumerator, afterSnapshot: this.options.afterSnapshot,
-          afterDirectorySync: this.options.afterDirectorySync });
+        candidate = input.schema === JOB_API_V3_SCHEMA
+          ? await prepareJobSource({
+              root: current.data.root,
+              stateRoot: this.store.root,
+              fingerprint: current.data.fingerprint,
+              request: input,
+              readPublished: this.options.readPublished,
+              readRecordPublished: this.options.readRecordPublished,
+              partsEnumerator: this.options.partsEnumerator,
+              afterSnapshot: this.options.afterSnapshot,
+              afterDirectorySync: this.options.afterDirectorySync,
+            })
+          : await prepareJobSource({
+              root: current.data.root,
+              stateRoot: this.store.root,
+              fingerprint: current.data.fingerprint,
+              request: input,
+              readPublished: this.options.readPublished,
+              partsEnumerator: this.options.partsEnumerator,
+              afterSnapshot: this.options.afterSnapshot,
+              afterDirectorySync: this.options.afterDirectorySync,
+            });
+      } else if (input.verb === 'ask') {
+        if (current.data.head === input.publicationId) {
+          const stored = current.data.publications[input.publicationId];
+          if (stored && isRetainedRecordSource(stored.retained)) {
+            bindJobRecordAsk(input.subject, stored.retained);
+            if (!this.options.readRecordPublished) {
+              throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Record publication requires a trusted record reader');
+            }
+            await verifyJobRecordSourceFresh({
+              retained: stored.retained,
+              readRecordPublished: this.options.readRecordPublished,
+              phase: 'ask',
+              subject: input.subject as RecordSubject,
+            });
+          }
+        }
       }
       if (signal.aborted) throw new JobError('JOB_REQUEST_INVALID', 'Request cancelled');
       current = this.current();
@@ -410,9 +487,18 @@ export class JobSession {
         switch (input.verb) {
           case 'publish': {
             assertJobSourceCurrent(candidate!);
-            const publication: JobPublication = {
+            if (isRetainedRecordSource(candidate!)) {
+              assertRetainedSnapshotIntact(
+                candidate!.snapshotRoot,
+                candidate!.seals,
+                candidate!.snapshotIdentity,
+                'JOB_SOURCE_UNRETAINABLE',
+              );
+            }
+            const publication: JobPublication | PublicationV3 = {
               publicationId: randomUUID(), instanceKey: candidate!.instanceKey, generation: data.generation,
               source: candidate!.source, label: candidate!.label, previousPublicationId: data.head, visual: candidate!.visual,
+              ...(!isRetainedRecordSource(candidate!) && candidate!.interview !== undefined ? { interview: candidate!.interview } : {}),
             };
             for (const ask of Object.values(data.asks)) {
               if (ask.status === 'pending') data.asks[ask.askId] = { ...ask, status: 'superseded' };
@@ -421,7 +507,7 @@ export class JobSession {
             snapshot = {publicationId: publication.publicationId, snapshotHash: jobSnapshotHash(candidate!.seals),
               snapshotRoot: candidate!.snapshotRoot, ...candidate!.snapshotIdentity!};
             data.head = publication.publicationId;
-            this.event(data, { type: 'published', publication } as Omit<JobEvent, 'cursor' | 'jobId' | 'generation'>);
+            this.event(data, { type: 'published', publication });
             result = publication;
             break;
           }
@@ -429,10 +515,31 @@ export class JobSession {
             if (data.head !== input.publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
             const retained = data.publications[input.publicationId].retained;
             assertJobSourceCurrent(retained);
-            const ask: JobPendingAsk = { askId: randomUUID(), publicationId: input.publicationId,
-              subject: input.subject, source: bindJobAsk(input.subject, retained), status: 'pending' };
+            if (isRetainedRecordSource(retained)) {
+              assertRetainedSnapshotIntact(
+                retained.snapshotRoot,
+                retained.seals,
+                retained.snapshotIdentity,
+                'JOB_SOURCE_UNRETAINABLE',
+              );
+            }
+            const ask: JobPendingAsk | PendingAskV3 = isRetainedRecordSource(retained)
+              ? {
+                  askId: randomUUID(),
+                  publicationId: input.publicationId,
+                  subject: input.subject,
+                  source: bindJobRecordAsk(input.subject, retained),
+                  status: 'pending',
+                }
+              : {
+                  askId: randomUUID(),
+                  publicationId: input.publicationId,
+                  subject: input.subject,
+                  source: bindJobAsk(input.subject, retained),
+                  status: 'pending',
+                };
             data.asks[ask.askId] = ask;
-            this.event(data, { type: 'pending', ask } as Omit<JobEvent, 'cursor' | 'jobId' | 'generation'>);
+            this.event(data, { type: 'pending', ask });
             result = ask;
             break;
           }
@@ -492,12 +599,38 @@ export class JobSession {
     return receipt!;
   }
 
-  async commitUIAct(raw: unknown): Promise<JobAct> {
-    const input = parseUISubmission(raw), digest = requestDigest(input), key = `ui:${input.pageId}:${input.submissionId}`;
+  async commitUIAct(raw: unknown): Promise<ActV3> {
+    const input = parseUISubmission(raw, this.publicationMode), digest = requestDigest(input), key = `ui:${input.pageId}:${input.submissionId}`;
     const current = this.current();
     const previous = this.replay(current.data, key, digest);
-    if (previous) return previous.value as JobAct;
-    let act: JobAct;
+    if (previous) return previous.value as ActV3;
+    if (current.active && input.expectedGeneration <= current.data.generation) {
+      const page = current.data.pages[input.pageId];
+      if (page && page.publicationId === input.publicationId && sameCapability(input.displayedNonce, page.displayedNonce) &&
+          current.data.head === input.publicationId) {
+        const ask = current.data.asks[input.askId];
+        const stored = current.data.publications[input.publicationId];
+        if (ask && stored && isRetainedRecordSource(stored.retained)) {
+          prepareJobRecordAct({
+            jobId: this.jobId,
+            submission: input,
+            ask,
+            retained: stored.retained,
+            reviewer: current.data.reviewer,
+          });
+          if (!this.options.readRecordPublished) {
+            throw new JobError('JOB_ACT_SOURCE_STALE', 'Record publication requires a trusted record reader');
+          }
+          await verifyJobRecordSourceFresh({
+            retained: stored.retained,
+            readRecordPublished: this.options.readRecordPublished,
+            phase: 'finalize',
+            subject: ask.subject as RecordSubject,
+          });
+        }
+      }
+    }
+    let act: ActV3;
     this.store.update(this.jobId, null, fresh => {
       // UI captures an observed generation. Unrelated asks may advance it while
       // this same ask/source/publication/nonce stays valid. Agent mutation CAS
@@ -513,15 +646,23 @@ export class JobSession {
       if (!ask) throw new JobError('JOB_ASK_INVALID');
       const retained = fresh.data.publications[input.publicationId].retained;
       assertJobSourceCurrent(retained);
-      const captured = ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ?
-        prepareJobStill(input, ask, retained) : undefined;
+      if (isRetainedRecordSource(retained)) {
+        assertRetainedSnapshotIntact(
+          retained.snapshotRoot,
+          retained.seals,
+          retained.snapshotIdentity,
+          'JOB_ACT_SOURCE_STALE',
+        );
+      }
+      const captured = !isRetainedRecordSource(retained) && ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ?
+        prepareJobStill(input, ask as JobPendingAsk, retained) : undefined;
       act = finalizeJobAct({ jobId: this.jobId, submission: input, ask, retained, reviewer: fresh.data.reviewer,
         still: captured?.still });
       fresh.data.generation++;
       fresh.data.acts[act.actId] = act;
       fresh.data.asks[ask.askId] = { ...ask, status: 'answered' };
       fresh.data.replays[key] = { digest, value: act };
-      this.event(fresh.data, { type: 'act', act } as Omit<JobEvent, 'cursor' | 'jobId' | 'generation'>);
+      this.event(fresh.data, { type: 'act', act });
       return { data: fresh.data, ...(captured ? {still: {
         actId: act.actId, pageId: input.pageId, submissionId: input.submissionId,
         sha256: captured.still.sha256, binding: JSON.stringify(captured.binding),
@@ -530,18 +671,18 @@ export class JobSession {
     }, fresh => {
       const raced = this.replay(fresh.data, key, digest);
       if (!raced) return false;
-      act = raced.value as JobAct;
+      act = raced.value as ActV3;
       return true;
     });
     this.notify();
     return act!;
   }
 
-  private events(after: string | null): JobNextValue {
+  private events(after: string | null): JobNextValue | NextValueV3 {
     const current = this.current(), events = current.data.events;
     const index = after === null ? -1 : events.findIndex(event => event.cursor === after);
     if (after !== null && index < 0) throw new JobError('JOB_CURSOR_INVALID');
-    const batch: JobEvent[] = [];
+    const batch: EventV3[] = [];
     let size = 0;
     for (const event of events.slice(index + 1, index + 65)) {
       const bytes = Buffer.byteLength(JSON.stringify(event));
@@ -550,11 +691,17 @@ export class JobSession {
       size += bytes;
       batch.push(event);
     }
-    return { capabilities: JOB_CAPABILITIES, events: batch, cursor: batch.at(-1)?.cursor ?? after,
-      status: batch.length ? 'events' : current.active ? 'timeout' : 'closed' };
+    const cursor = batch.at(-1)?.cursor ?? after;
+    const status = batch.length ? 'events' : current.active ? 'timeout' : 'closed';
+    return {
+      capabilities: this.publicationMode === 'record-and-package' ? JOB_CAPABILITIES_V3 : JOB_CAPABILITIES,
+      events: batch,
+      cursor,
+      status,
+    };
   }
 
-  private async next(after: string | null, waitMs: number, signal: AbortSignal): Promise<JobNextValue> {
+  private async next(after: string | null, waitMs: number, signal: AbortSignal): Promise<JobNextValue | NextValueV3> {
     if (waitMs < 0 || waitMs > jobWaitLimitMs || !Number.isSafeInteger(waitMs)) throw new JobError('JOB_REQUEST_INVALID');
     if (signal.aborted) throw new JobError('JOB_REQUEST_INVALID', 'Request cancelled');
     const ready = this.events(after);
@@ -571,11 +718,11 @@ export class JobSession {
     return this.events(after);
   }
 
-  async *subscribe(input: { readonly jobId: string; readonly after: string | null; readonly signal: AbortSignal }): AsyncIterable<JobEvent> {
+  async *subscribe(input: { readonly jobId: string; readonly after: string | null; readonly signal: AbortSignal }): AsyncIterable<EventV3> {
     if (input.jobId !== this.jobId) throw new JobError('JOB_UNKNOWN');
     let after = input.after;
     while (!input.signal.aborted) {
-      let value: JobNextValue;
+      let value: JobNextValue | NextValueV3;
       try { value = await this.next(after, jobWaitLimitMs, input.signal); }
       catch (error) {
         if (input.signal.aborted && error instanceof JobError && error.code === 'JOB_REQUEST_INVALID') return;

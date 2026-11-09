@@ -11,8 +11,12 @@ import {join, resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {digest, readProject} from '../src/interview-project.ts';
 import {captureJobRoot, prepareJobSource} from '../src/job-source.ts';
+import {JobSession} from '../src/job-session.ts';
+import {createJobHostPorts, parseJobInterviewDiagnostics} from '../src/job-api.ts';
+import {createJobFront, retainedPublicationRoutes} from '../src/job-front.ts';
 import {interviewRoutes} from '../src/interview-routes.ts';
-import type {JobPublishRequest} from '../src/job-contract.ts';
+import {JOB_API_SCHEMA, type JobPublishRequest} from '../src/job-contract.ts';
+import {verifyInterviewDiagnosticsFixtureDryRun} from './helpers/job-interview-browser.ts';
 
 const fixtureDir=join(import.meta.dir,'fixtures/scene-interview-551');
 const runtime=resolve(import.meta.dir,'../.review-551-result/phase1/runtime');
@@ -251,24 +255,141 @@ test('history SYNTHETIC shared set does not deduplicate away a later stale recor
  });const r=opened(root);expect(diagnostics(r)).toContain('INTERVIEW_OPTIONS_STALE');expect(diagnostics(r)).toContain('second historical answer');
 });
 
-// #555 guard is checked before the synthetic publication adapter and snapshot writes.
-for (const kind of ['historical', 'legacy', 'diagnostics']) test(`standing ${kind} actual prepareJobSource refuses before publication or snapshot (#555 unmet)`, async () => {
+// #555 carries scene history, legacy warnings, and historical diagnostics through standing publications while active stale sets still refuse.
+for (const kind of ['historical', 'legacy', 'diagnostics'] as const) test(`standing ${kind} actual prepareJobSource and JobSession carry interview diagnostics and retained sets (#555)`, async () => {
+ const {setSystemTime} = await import('bun:test');
  const root = fixture(kind === 'historical' ? 'writer-history' : kind === 'diagnostics' ? 'writer-chain' : 'writer-current');
  if (kind === 'historical') historicalOnly(root);
  if (kind === 'legacy') legacy(root);
  if (kind === 'diagnostics') alterProject(root, project => {
   project.amendments = [{target: {stage: 'post-interview'}, at: '2026-11-06T01:00:45Z'}];
  });
- const inspected = opened(root);
- if (kind === 'historical') expect(inspected.sceneAnswers).toBe(1);
- else {
-  expect(inspected.sceneAnswers).toBe(0);
-  expect(inspected.diagnostics.some(d => d.code === (kind === 'legacy' ? 'INTERVIEW_OPTIONS_SCENE_LEGACY' : 'INTERVIEW_OPTIONS_STALE'))).toBe(true);
+ const before = sealTree(root);
+ const projectSha = digest(readFileSync(join(root, 'project.json')));
+ const request = {result: {path: 'derived/review/v1/out', selector: null}, freeze: {kind: 'producer-held', holdId: 'synthetic-test-held',
+  record: {path: 'project.json', sha256: projectSha}}} as JobPublishRequest;
+ const state = join(runtime, 'standing-' + kind);
+ mkdirSync(state, {recursive: true}); roots.push(state);
+ let publicationReads = 0, snapshots = 0;
+ try {
+  setSystemTime(new Date(NOW));
+  const inspected = readProject(root);
+  expect(Object.keys(inspected)).toContain('interview');
+  expect(Object.getOwnPropertyDescriptor(inspected, 'interview')?.enumerable).toBe(true);
+  if (kind === 'historical') expect(inspected.sceneAnswers).toBe(1);
+  else {
+   expect(inspected.sceneAnswers).toBe(0);
+   expect(inspected.diagnostics.some(d => d.code === (kind === 'legacy' ? 'INTERVIEW_OPTIONS_SCENE_LEGACY' : 'INTERVIEW_OPTIONS_STALE'))).toBe(true);
+  }
+  const prepared = await prepareJobSource({
+   root: captureJobRoot(root),
+   stateRoot: state,
+   fingerprint: 'f'.repeat(64),
+   request,
+   readPublished: async () => {
+    publicationReads++;
+    return {selector: null, plan: null, parts: null, subjects: [], partIds: [], files: []};
+   },
+   afterSnapshot: () => {snapshots++;},
+  });
+  expect(publicationReads).toBe(1);
+  expect(snapshots).toBe(1);
+  expect(sealTree(root)).toEqual(before);
+  const interview = parseJobInterviewDiagnostics(prepared.interview);
+  expect(interview).not.toBeNull();
+  expect(interview?.schema).toBe('rig-review/job-interview@1');
+  expect(interview?.project).toEqual({path: 'project.json', sha256: projectSha});
+  expect(interview?.evaluatedAt).toBe(iso(NOW));
+  for (const record of interview!.records) {
+   if (record.observedSet) {
+    expect(prepared.seals.some(seal => seal.path === record.observedSet!.path && seal.sha256 === record.observedSet!.sha256)).toBe(true);
+   }
+  }
+  if (kind === 'historical') {
+   const histRow = interview!.records.find(r => r.record === 'interview.post.items[2].history[0]');
+   expect(histRow).toBeDefined();
+   expect(histRow?.questionId).toBe('post_composition');
+   expect(histRow?.timeKind).toBe('answer');
+   expect(histRow?.observedSet?.path).toBe('evidence/interview/review551-scene-current.json');
+   expect(interview!.diagnostics).toEqual([]);
+  } else if (kind === 'legacy') {
+   const pendingRow = interview!.records.find(r => r.record === 'interview.post.items[2].pending_options');
+   expect(pendingRow).toEqual({
+    questionId: 'post_composition',
+    record: 'interview.post.items[2].pending_options',
+    setId: 'review551-scene-current',
+    ref: inspected.questions.find(q => q.set.id === 'review551-scene-current')!.ref,
+    observedSet: inspected.questions.find(q => q.set.id === 'review551-scene-current')!.ref,
+    timeKind: 'inspection',
+    at: iso(NOW),
+    original: null,
+   });
+   expect(interview!.diagnostics).toEqual([{
+    code: 'INTERVIEW_OPTIONS_SCENE_LEGACY',
+    severity: 'warning',
+    record: 'interview.post.items[2].pending_options',
+    at: iso(NOW),
+   }]);
+  } else {
+   expect(interview!.diagnostics.length).toBeGreaterThan(0);
+   expect(interview!.diagnostics.every(d => d.code === 'INTERVIEW_OPTIONS_STALE' && d.severity === 'error')).toBe(true);
+  }
+  // Verify full JobSession publish -> next -> readPublication -> /api/interview carriage:
+  const sessionState = join(runtime, 'standing-session-' + kind + '-' + Date.now());
+  roots.push(sessionState);
+  const session = new JobSession({
+   root,
+   stateDir: sessionState,
+   fingerprint: 'f'.repeat(64),
+   reviewer: {id: 'owner', role: 'owner'},
+   readPublished: async () => ({selector: null, plan: null, parts: null, subjects: [], partIds: [], files: []}),
+  });
+  try {
+   const origin = 'http://127.0.0.1:19485';
+   const ports = createJobHostPorts(session, origin);
+   const pubRes = await ports.handleJobApi(new Request(origin + `/jobs/${session.jobId}/api`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + session.hostCredentials().agent},
+    body: JSON.stringify({schema: JOB_API_SCHEMA, jobId: session.jobId, verb: 'publish', requestId: 'pub-' + kind,
+     expectedGeneration: 0, idempotencyKey: 'pub-' + kind, result: request.result, freeze: request.freeze}),
+   }));
+   const published = await pubRes.json();
+   expect(published.ok).toBe(true);
+   expect(published.value.interview).toEqual(interview);
+   const nextRes = await ports.handleJobApi(new Request(origin + `/jobs/${session.jobId}/api`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + session.hostCredentials().agent},
+    body: JSON.stringify({schema: JOB_API_SCHEMA, jobId: session.jobId, verb: 'next', requestId: 'next-' + kind, after: null, waitMs: 0}),
+   }));
+   const nextVal = await nextRes.json();
+   expect(nextVal.ok).toBe(true);
+   expect(nextVal.value.events[0].publication.interview).toEqual(interview);
+   const display = await ports.readPublication(session.jobId, published.value.publicationId);
+   expect(display.ok).toBe(true);
+   if (display.ok) {
+    expect(display.value.publication.interview).toEqual(interview);
+    const front = createJobFront({origin, ports, resource: async name => name, publication: retainedPublicationRoutes(session)});
+    const revRes = await front.fetch(new Request(origin + display.value.routes.apiBase + 'review'));
+    const revBody = await revRes!.json();
+    expect(revBody.capabilities.interview).toBe(true);
+    const intRes = await front.fetch(new Request(origin + display.value.routes.apiBase + 'interview'));
+    const intBody = await intRes!.json();
+    expect(intBody.interview).toEqual(interview);
+   }
+  } finally {
+   session.dispose();
+  }
+ } finally {
+  setSystemTime();
  }
+});
+
+test('standing active stale scene option set still refuses before publication or snapshot (#555)', async () => {
+ const root = fixture('writer-later-scene');
  const before = sealTree(root);
  const request = {result: {path: 'derived/review/v1/out', selector: null}, freeze: {kind: 'producer-held', holdId: 'synthetic-test-held',
   record: {path: 'project.json', sha256: digest(readFileSync(join(root, 'project.json')))}}} as JobPublishRequest;
- const state = join(runtime, 'standing-' + kind);
+ const state = join(runtime, 'standing-active-stale');
  mkdirSync(state, {recursive: true}); roots.push(state);
  writeFileSync(join(state, 'existing-state.txt'), 'retained state');
  const stateBefore = sealTree(state);
@@ -284,6 +405,131 @@ for (const kind of ['historical', 'legacy', 'diagnostics']) test(`standing ${kin
  expect(publicationReads).toBe(0); expect(snapshots).toBe(0);
  expect(sealTree(root)).toEqual(before); expect(sealTree(state)).toEqual(stateBefore);
  expect(readdirSync(state)).toEqual(['existing-state.txt']);
+});
+
+test('standing SYNTHETIC completed agent_decision, covers-only decision, broken historical set observedSet, and parseJobInterviewDiagnostics validation (#555)', async () => {
+ const {setSystemTime} = await import('bun:test');
+ const root = fixture('writer-history');
+ const answer = historicalOnly(root);
+ alterProject(root, p => {
+  addScene(p, root, DRAFT + 2500);
+  const a0 = item(p).history[0];
+  a0.delegated = true;
+  a0.verbatim = 'auto delegated';
+  const set = json(root, a0.choice.set.path), ask = set.asks[0];
+  a0.choice.picks = [{ask: ask.id, option_id: 'auto', shown: {label: 'Auto', effect: 'Delegate'}}];
+  a0.agent_decision = {
+   by: 'agent',
+   at: iso(DRAFT + 3000),
+   reasoning: 'Completed decision after later scene',
+   covers: ask.id,
+   fragments: [{ask: ask.id, fragment: {framing: 'whole synthetic plate'}}],
+   value: {framing: 'whole synthetic plate'},
+  };
+  const a1 = structuredClone(a0);
+  a1.at = iso(DRAFT + 3100);
+  a1.verbatim = 'second stale answer sharing set with covers-only delegation';
+  a1.agent_decision = {covers: ask.id};
+  item(p).history.push(a1);
+ });
+ const state = join(runtime, 'standing-decision-matrix');
+ mkdirSync(state, {recursive: true}); roots.push(state);
+ try {
+  setSystemTime(new Date(NOW));
+  const projectSha = digest(readFileSync(join(root, 'project.json')));
+  const prepared = await prepareJobSource({
+   root: captureJobRoot(root),
+   stateRoot: state,
+   fingerprint: 'f'.repeat(64),
+   request: {result: {path: 'derived/review/v1/out', selector: null}, freeze: {kind: 'producer-held', holdId: 'held', record: {path: 'project.json', sha256: projectSha}}} as JobPublishRequest,
+   readPublished: async () => ({selector: null, plan: null, parts: null, subjects: [], partIds: [], files: []}),
+  });
+  const interview = parseJobInterviewDiagnostics(prepared.interview)!;
+  const completedRow = interview.records.find(r => r.record === 'interview.post.items[2].history[0].agent_decision');
+  expect(completedRow).toEqual({
+   record: 'interview.post.items[2].history[0].agent_decision',
+   questionId: 'post_composition',
+   timeKind: 'decision',
+   at: iso(DRAFT + 3000),
+   setId: 'review551-scene-current',
+   ref: answer.choice.set,
+   observedSet: answer.choice.set,
+   original: {
+    by: 'agent',
+    at: iso(DRAFT + 3000),
+    reasoning: 'Completed decision after later scene',
+    covers: 'post_composition',
+    fragments: [{ask: 'post_composition', fragment: {framing: 'whole synthetic plate'}}],
+    value: {framing: 'whole synthetic plate'},
+   },
+  });
+  expect(interview.diagnostics).toContainEqual({
+   code: 'INTERVIEW_OPTIONS_STALE',
+   severity: 'error',
+   record: 'interview.post.items[2].history[0].agent_decision',
+   at: iso(DRAFT + 3000),
+  });
+  // Multiple distinct records sharing the same option set each retain their own valid diagnostic:
+  expect(interview.diagnostics).toContainEqual({
+   code: 'INTERVIEW_OPTIONS_STALE',
+   severity: 'error',
+   record: 'interview.post.items[2].history[1]',
+   at: iso(DRAFT + 3100),
+  });
+  const coversOnlyRow = interview.records.find(r => r.record === 'interview.post.items[2].history[1].agent_decision');
+  expect(coversOnlyRow).toEqual({
+   record: 'interview.post.items[2].history[1].agent_decision',
+   questionId: 'post_composition',
+   timeKind: 'decision',
+   at: null,
+   setId: 'review551-scene-current',
+   ref: answer.choice.set,
+   observedSet: answer.choice.set,
+   original: {covers: 'post_composition'},
+  });
+  expect(interview.diagnostics.some(d => d.record === 'interview.post.items[2].history[1].agent_decision')).toBe(false);
+  // Broken historical option set JSON with matching hash retains observedSet in seals; missing file produces observedSet: null:
+  writeFileSync(join(root, answer.choice.set.path), '{broken json');
+  const brokenHash = digest(readFileSync(join(root, answer.choice.set.path)));
+  alterProject(root, p => {
+   item(p).history = [{...answer, choice: {...answer.choice, set: {path: answer.choice.set.path, sha256: brokenHash}}}];
+  });
+  const brokenPrepared = await prepareJobSource({
+   root: captureJobRoot(root),
+   stateRoot: state,
+   fingerprint: 'f'.repeat(64),
+   request: {result: {path: 'derived/review/v1/out', selector: null}, freeze: {kind: 'producer-held', holdId: 'held',
+    record: {path: 'project.json', sha256: digest(readFileSync(join(root, 'project.json')))}}} as JobPublishRequest,
+   readPublished: async () => ({selector: null, plan: null, parts: null, subjects: [], partIds: [], files: []}),
+  });
+  const brokenRow = brokenPrepared.interview?.records.find(r => r.record === 'interview.post.items[2].history[0]');
+  expect(brokenRow?.setId).toBeNull();
+  expect(brokenRow?.observedSet).toEqual({path: answer.choice.set.path, sha256: brokenHash});
+  expect(brokenPrepared.seals.some(s => s.path === answer.choice.set.path && s.sha256 === brokenHash)).toBe(true);
+  rmSync(join(root, answer.choice.set.path));
+  const missingPrepared = await prepareJobSource({
+   root: captureJobRoot(root),
+   stateRoot: state,
+   fingerprint: 'f'.repeat(64),
+   request: {result: {path: 'derived/review/v1/out', selector: null}, freeze: {kind: 'producer-held', holdId: 'held',
+    record: {path: 'project.json', sha256: digest(readFileSync(join(root, 'project.json')))}}} as JobPublishRequest,
+   readPublished: async () => ({selector: null, plan: null, parts: null, subjects: [], partIds: [], files: []}),
+  });
+  const missingRow = missingPrepared.interview?.records.find(r => r.record === 'interview.post.items[2].history[0]');
+  expect(missingRow?.observedSet).toBeNull();
+  // Validator negative controls (1:1 (record, at) join, duplicate record/diagnostic refusal, covers-only refusal):
+  expect(() => parseJobInterviewDiagnostics({...interview, diagnostics: [{...interview.diagnostics[0]!, record: 'interview.post.items[99].history[0]'}]})).toThrow('JOB_REQUEST_INVALID');
+  expect(() => parseJobInterviewDiagnostics({...interview, diagnostics: [{...interview.diagnostics[0]!, at: iso(DRAFT + 9999)}]})).toThrow('JOB_REQUEST_INVALID');
+  expect(() => parseJobInterviewDiagnostics({...interview, records: [...interview.records, interview.records[0]!]})).toThrow('JOB_REQUEST_INVALID');
+  expect(() => parseJobInterviewDiagnostics({...interview, records: [...interview.records, {...interview.records[0]!, at: iso(DRAFT + 9999)}]})).toThrow('JOB_REQUEST_INVALID');
+  expect(() => parseJobInterviewDiagnostics({...interview, diagnostics: [...interview.diagnostics, interview.diagnostics[0]!]})).toThrow('JOB_REQUEST_INVALID');
+  expect(() => parseJobInterviewDiagnostics({...interview, diagnostics: [...interview.diagnostics, {...interview.diagnostics[0]!, code: 'INTERVIEW_OPTIONS_SCENE_LEGACY', severity: 'warning'}]})).toThrow('JOB_REQUEST_INVALID');
+  expect(() => parseJobInterviewDiagnostics({...interview, records: interview.records.map(r => r.record === coversOnlyRow!.record ? {...r, at: iso(DRAFT + 3000)} : r)})).toThrow('JOB_REQUEST_INVALID');
+  expect(() => parseJobInterviewDiagnostics({...interview, diagnostics: [...interview.diagnostics, {record: coversOnlyRow!.record, at: null, code: 'INTERVIEW_OPTIONS_STALE', severity: 'error'}]})).toThrow('JOB_REQUEST_INVALID');
+  expect(() => parseJobInterviewDiagnostics({...interview, records: [{...coversOnlyRow!, timeKind: 'inspection', at: iso(NOW)}]})).toThrow('JOB_REQUEST_INVALID');
+ } finally {
+  setSystemTime();
+ }
 });
 test('legacy transport SYNTHETIC nonfatal warning survives actual GET /api/interview',async()=>{
  const root=fixture();legacy(root);const output='review551-picks';mkdirSync(join(root,output));
@@ -382,4 +628,7 @@ test('legacy transport SYNTHETIC historical issues keep full original records th
  const retained = body.questions.find((q: any) => q.ref.path === answer.choice.set.path);
  expect(retained.answer.verbatim).toBe(answer.verbatim); expect(retained.answer.source).toBe(answer.source);
  expect(retained.answer.at).toBe(iso(DRAFT + 3000)); expect(retained.ref).toEqual(answer.choice.set);
+});
+test('standing SYNTHETIC browser probe fixture dry check uses current post_composition reader subjects through publish, ask, UI act, and close (#555)', async () => {
+ await verifyInterviewDiagnosticsFixtureDryRun();
 });

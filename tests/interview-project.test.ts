@@ -72,7 +72,8 @@ test('designated root aliases are canonicalized while project.json aliases and m
   try {
     const alias = join(fixture.root,'root-link');
     symlinkSync(fixture.root,alias);
-    expect(readProject(alias)).toEqual(readProject(fixture.root));
+    const now = Date.now();
+    expect(readProject(alias,now)).toEqual(readProject(fixture.root,now));
     expect(() => readProject(join(fixture.root,'missing'))).toThrow('INTERVIEW_CHOICE_INVALID: Project root');
     const path = join(fixture.root,'project.json');
     rmSync(path);

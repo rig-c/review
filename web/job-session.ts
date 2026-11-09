@@ -1,5 +1,19 @@
 /** Live job window transactions. Every form remains bound to its displayed publication. */
-import type { ActV3, DisplayPublicationV3, EventV3, JobDisplayReceipt, JobPendingAsk, JobResult, JobUISubmission, PendingAskV3, PublicationV3, SourceV3, UISubmissionV3, } from '../src/job-contract.ts';
+import { parseControlPart, type ControlPart } from '../src/control.ts';
+import type {
+    ActV3,
+    DisplayPublicationV3,
+    EventV3,
+    JobDisplayReceipt,
+    JobInterviewDiagnostics,
+    JobResult,
+    JobUISubmission,
+    PendingAskV3,
+    PublicationV3,
+    RecordSource,
+    SourceV3,
+    UISubmissionV3,
+} from '../src/job-contract.ts';
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
 import {t} from './i18n.ts';
@@ -67,7 +81,10 @@ function unwrap<Value>(result: JobResult<Value>): Value {
         throw new Error(result.error.code);
     return result.value;
 }
-function sourceSnapshot(source: SourceV3): string {
+function isRecordSource(source: SourceV3): source is RecordSource {
+    return source.subject === 'option-set' || source.subject === 'plan';
+}
+function sourceSnapshot(source: unknown): string {
     return JSON.stringify(source, (_key, value: unknown) => {
         if (value === null || typeof value !== 'object' || Array.isArray(value))
             return value;
@@ -76,8 +93,9 @@ function sourceSnapshot(source: SourceV3): string {
     });
 }
 function assertJobAskSource(ask: PendingAskV3, display: DisplayPublicationV3): void {
-    const source: SourceV3 = ask.subject.kind === 'interview-picks'
-        ? { ...ask.source, optionSet: display.publication.source.optionSet } as SourceV3
+    const source: SourceV3 = ask.subject.kind === 'interview-picks' &&
+        !isRecordSource(display.publication.source) && !isRecordSource(ask.source)
+        ? { ...ask.source, optionSet: display.publication.source.optionSet }
         : ask.source;
     if (sourceSnapshot(source) !== sourceSnapshot(display.publication.source)) {
         throw new Error('JOB_ACT_SOURCE_STALE');
@@ -127,11 +145,19 @@ export function createJobWindow<Prepared>(options: {
     pageId: string;
     transport: JobWindowTransport;
     adapter: JobWindowAdapter<Prepared>;
+    previousDisplayed?: {
+        readonly publicationId: string;
+        readonly label: string;
+        readonly previousLabel: string | null;
+    } | null;
+    initialRetainedDrafts?: readonly JobRetainedDraft[];
 }) {
     const { transport, adapter, pageId } = options;
     const pending = new Map<string, PendingAskV3>();
     const rigAttempts = new WeakSet<UISubmissionV3>();
     const retainedDrafts: JobRetainedDraft[] = [];
+    let initialDrafts: readonly JobRetainedDraft[] | null = options.initialRetainedDrafts
+        ? [...options.initialRetainedDrafts] : null;
     let generation = 0;
     let displayed: DisplayPublicationV3 | null = null;
     let receipt: JobDisplayReceipt | null = null;
@@ -167,14 +193,16 @@ export function createJobWindow<Prepared>(options: {
             let prepared: Prepared | undefined;
             let committed: JobPreparedCommit | undefined;
             try {
-                if (publication.visual.status !== 'available')
+                if (publication.visual.status !== 'available' && !isRecordSource(publication.source))
                     throw new Error(publication.visual.code);
                 const candidate = unwrap(await transport.readPublication(publication.publicationId, abort.signal));
                 if (candidate.publication.publicationId !== publication.publicationId ||
                     candidate.publication.source.sourceHash !== publication.source.sourceHash ||
                     candidate.publication.instanceKey !== publication.instanceKey ||
                     candidate.publication.generation !== publication.generation ||
-                    sourceSnapshot(candidate.publication.source) !== sourceSnapshot(publication.source)) {
+                    sourceSnapshot(candidate.publication.source) !== sourceSnapshot(publication.source) ||
+                    (publication.interview !== undefined &&
+                        sourceSnapshot(candidate.publication.interview) !== sourceSnapshot(publication.interview))) {
                     throw new Error('JOB_DISPLAY_MISMATCH');
                 }
                 prepared = await adapter.prepare(candidate, abort.signal);
@@ -195,16 +223,42 @@ export function createJobWindow<Prepared>(options: {
                     acknowledged.pageId !== pageId || !acknowledged.displayedNonce) {
                     throw new Error('JOB_DISPLAY_MISMATCH');
                 }
+                if (initialDrafts) {
+                    for (const item of initialDrafts) {
+                        if (item.publicationId !== candidate.publication.publicationId &&
+                            !retainedDrafts.some(existing => existing.publicationId === item.publicationId)) {
+                            retainedDrafts.push(structuredClone(item));
+                        }
+                    }
+                    initialDrafts = null;
+                }
+                for (let index = retainedDrafts.length - 1; index >= 0; index--) {
+                    if (retainedDrafts[index]?.publicationId === candidate.publication.publicationId)
+                        retainedDrafts.splice(index, 1);
+                }
                 if (displayed && draft !== null) {
-                    retainedDrafts.push({
+                    const nextDraft: JobRetainedDraft = {
                         publicationId: displayed.publication.publicationId,
                         sourceHash: displayed.publication.source.sourceHash,
                         source: structuredClone(displayed.publication.source),
                         label: displayed.publication.label,
                         value: structuredClone(draft),
-                    });
+                    };
+                    const existing = retainedDrafts.findIndex(item => item.publicationId === nextDraft.publicationId);
+                    if (existing >= 0) retainedDrafts[existing] = nextDraft;
+                    else retainedDrafts.push(nextDraft);
                 }
-                previousLabel = displayed?.publication.label ?? null;
+                if (displayed) {
+                    previousLabel = displayed.publication.label;
+                }
+                else if (options.previousDisplayed) {
+                    previousLabel = options.previousDisplayed.publicationId === candidate.publication.publicationId
+                        ? options.previousDisplayed.previousLabel
+                        : options.previousDisplayed.label;
+                }
+                else {
+                    previousLabel = null;
+                }
                 displayed = candidate;
                 receipt = acknowledged;
                 const cleanup = committed;
@@ -513,6 +567,7 @@ import type { FeedbackCatalog } from '../src/feedback-validation.ts';
 import type { InterviewQuestion } from '../src/interview-project.ts';
 export interface JobInspectionMetadata {
     manifest: ReviewManifest;
+    recordSource?: undefined;
     sourceHash: string;
     reviewedSource: ReviewedSource;
     setsHash?: string;
@@ -532,6 +587,24 @@ export interface JobInspectionMetadata {
     };
     feedbackCatalog: Pick<FeedbackCatalog, 'slots'>;
 }
+export interface JobRecordInspectionMetadata {
+    manifest?: undefined;
+    recordSource: RecordSource;
+    sourceHash: string;
+    reviewedSource?: undefined;
+    setsHash?: undefined;
+    initialAnimation?: null;
+    direction?: undefined;
+    referenceHashes?: undefined;
+    sourcePainting?: undefined;
+    capabilities: {
+        interview?: boolean;
+        preRig?: boolean;
+        playback: boolean;
+    };
+    feedbackCatalog: Pick<FeedbackCatalog, 'slots'>;
+}
+export type JobInspectionMetadataV3 = JobInspectionMetadata | JobRecordInspectionMetadata;
 type JobInterview = {
     questions: (Omit<InterviewQuestion, 'images'> & {
         images: {
@@ -539,6 +612,7 @@ type JobInterview = {
             url: string;
         }[];
     })[];
+    interview?: JobInterviewDiagnostics | null;
 };
 interface JobPartsInventory {
     sourceHash: string;
@@ -608,7 +682,7 @@ export function createJobReferenceSelection<Reference extends Pick<JobReferenceV
 
 export interface JobPreparedInspection {
     display: DisplayPublicationV3;
-    metadata: JobInspectionMetadata;
+    metadata: JobInspectionMetadataV3;
     interview: JobInterview | null;
     parts: JobPartsInventory | null;
     partImages: Map<string, HTMLImageElement>;
@@ -686,16 +760,19 @@ function mediaReady(media: HTMLVideoElement, name: 'loadeddata' | 'seeked', sign
 /** Prepare the real published Play model, references and every form dependency off-stage. */
 export async function prepareJobInspection(display: DisplayPublicationV3, signal: AbortSignal): Promise<JobPreparedInspection> {
     const routes = jobPublicationRoutes(display, location.origin);
-    const metadata = await jobJson<JobInspectionMetadata>(routes.api('review'), signal);
-    const pubSource = display.publication.source;
-    if ('package' in pubSource) {
-        if (metadata.manifest.id !== pubSource.package.id ||
-            metadata.manifest.revision !== pubSource.package.revision ||
-            (metadata.reviewedSource.rig?.sha256 ?? null) !== (pubSource.model?.sha256 ?? null)) {
+    const metadata = await jobJson<JobInspectionMetadataV3>(routes.api('review'), signal);
+    const publishedSource = display.publication.source;
+    if (isRecordSource(publishedSource)) {
+        if (!metadata.recordSource || metadata.manifest !== undefined || metadata.reviewedSource !== undefined ||
+            metadata.sourceHash !== publishedSource.sourceHash ||
+            sourceSnapshot(metadata.recordSource) !== sourceSnapshot(publishedSource)) {
             throw new Error('JOB_DISPLAY_MISMATCH');
         }
     }
-    else if (metadata.sourceHash !== pubSource.sourceHash) {
+    else if (!metadata.manifest || !metadata.reviewedSource ||
+        metadata.manifest.id !== publishedSource.package.id ||
+        metadata.manifest.revision !== publishedSource.package.revision ||
+        (metadata.reviewedSource.rig?.sha256 ?? null) !== (publishedSource.model?.sha256 ?? null)) {
         throw new Error('JOB_DISPLAY_MISMATCH');
     }
     const objectUrls: string[] = [];
@@ -747,6 +824,10 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
     }
     try {
         const interview = metadata.capabilities.interview ? await jobJson<JobInterview>(routes.api('interview'), signal) : null;
+        if (interview?.interview !== undefined && display.publication.interview !== undefined &&
+            sourceSnapshot(interview.interview) !== sourceSnapshot(display.publication.interview)) {
+            throw new Error('JOB_DISPLAY_MISMATCH');
+        }
         const parts = metadata.capabilities.preRig ? await jobJson<JobPartsInventory>(routes.api('stage-parts'), signal) : null;
         const references: JobReferenceView[] = [];
         const partImages = new Map<string, HTMLImageElement>();
@@ -755,7 +836,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         const imageSetImages: HTMLImageElement[] = [];
         const source = display.publication.source;
         if (source.subject === 'image-set') {
-            if (metadata.sourceHash !== source.sourceHash || metadata.manifest.model)
+            if (metadata.sourceHash !== source.sourceHash || metadata.manifest?.model)
                 throw new Error('JOB_DISPLAY_MISMATCH');
             const canonical = source.imageSet.images.map(({role, name, sha256}) => ({role, name, sha256}));
             if (source.imageSet.images.length < 2 || source.imageSet.images.length > 8 ||
@@ -768,7 +849,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
                 }));
             }
         }
-        for (const reference of metadata.manifest.references) {
+        for (const reference of metadata.manifest?.references ?? []) {
             preload.push((async () => {
                 if (reference.type === 'image') {
                     const element = await image(routes.asset(reference.path), metadata.referenceHashes?.[reference.id]);
@@ -884,10 +965,10 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         const failed = preloaded.find(result => result.status === 'rejected');
         if (failed?.status === 'rejected')
             throw failed.reason;
-        if (metadata.manifest.model) {
+        if (metadata.manifest?.model) {
             const runtime = await import('@rig-c/play');
             const modelUrl = routes.asset(metadata.manifest.model);
-            const modelHash = metadata.reviewedSource.rig!.sha256;
+            const modelHash = metadata.reviewedSource!.rig!.sha256;
             const setsUrl = metadata.manifest.sets ? routes.asset(metadata.manifest.sets) : null;
             const checkedFetch = new Proxy(fetch, { apply: async (_target, _receiver, args: Parameters<typeof fetch>) => {
                     const url = String(args[0]);
@@ -916,12 +997,12 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
             };
             resetToSetup();
         }
-        if (!player && !references.length && !partImages.size && !imageSetImages.length)
+        if (!isRecordSource(source) && !player && !references.length && !partImages.size && !imageSetImages.length)
             throw new Error('JOB_VISUAL_UNAVAILABLE');
         if (signal.aborted)
             throw new Error('JOB_PRELOAD_CANCELLED');
         // Preloads can finish out of order. Restore the producer's declared display order.
-        const order = [metadata.sourcePainting?.id, ...metadata.manifest.references.map(reference => reference.id)];
+        const order = [metadata.sourcePainting?.id, ...(metadata.manifest?.references.map(reference => reference.id) ?? [])];
         references.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
         return {
             display, metadata, interview, parts, partImages, interviewImages, imageSetImages, references, assets, rigRoot,
@@ -993,24 +1074,142 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     host.replaceChildren(header, notice, workspace);
     let current: JobPreparedInspection | null = null;
     let currentElement: HTMLElement | null = null;
-    let animation = '';
-    let time = 0;
+    type SavedCameraState = Pick<
+        ReturnType<typeof createViewportState>,
+        'cameraSync' | 'activeCamera' | 'zoom' | 'cameraCenter' | 'referenceZoom' | 'referenceCenter'
+    >;
+    type SavedJobWindowState = {
+        publicationId: string;
+        label: string;
+        sourceHash: string;
+        previousLabel: string | null;
+        compatibilityNotice?: boolean;
+        animation?: string;
+        time?: number;
+        loop?: boolean;
+        selectedPart?: string;
+        partMode?: 'context' | 'solo';
+        selectedReference?: string;
+        panel?: string;
+        partIdentity?: unknown;
+        camera?: unknown;
+    };
+    const parseSavedPoint = (raw: unknown): { x: number; y: number } | null | undefined => {
+        if (raw === null) return null;
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+        const point = raw as Record<string, unknown>;
+        return typeof point.x === 'number' && Number.isFinite(point.x) &&
+            typeof point.y === 'number' && Number.isFinite(point.y)
+            ? { x: point.x, y: point.y }
+            : undefined;
+    };
+    const parseSavedCamera = (raw: unknown): SavedCameraState | null => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const value = raw as Record<string, unknown>;
+        const cameraCenter = parseSavedPoint(value.cameraCenter);
+        const referenceCenter = parseSavedPoint(value.referenceCenter);
+        if (typeof value.cameraSync !== 'boolean' ||
+            (value.activeCamera !== 'rig' && value.activeCamera !== 'reference') ||
+            typeof value.zoom !== 'number' || !Number.isFinite(value.zoom) || value.zoom < 0.25 || value.zoom > 8 ||
+            typeof value.referenceZoom !== 'number' || !Number.isFinite(value.referenceZoom) || value.referenceZoom < 0.25 || value.referenceZoom > 8 ||
+            cameraCenter === undefined || referenceCenter === undefined) {
+            return null;
+        }
+        return {
+            cameraSync: value.cameraSync,
+            activeCamera: value.activeCamera,
+            zoom: value.zoom,
+            cameraCenter,
+            referenceZoom: value.referenceZoom,
+            referenceCenter,
+        };
+    };
+    const parseSavedPartIdentity = (raw: unknown): ControlPart | null => {
+        try {
+            return parseControlPart(raw);
+        }
+        catch {
+            return null;
+        }
+    };
+    const parseSavedDraftRecord = (raw: unknown): JobRetainedDraft | null => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const draft = raw as Record<string, unknown>;
+        if (!Array.isArray(draft.forms) || !draft.forms.length ||
+            typeof draft.publicationId !== 'string' || !draft.publicationId ||
+            typeof draft.sourceHash !== 'string' || !draft.sourceHash ||
+            typeof draft.label !== 'string' || !draft.label ||
+            !draft.source || typeof draft.source !== 'object' || Array.isArray(draft.source) ||
+            (draft.source as { sourceHash?: unknown }).sourceHash !== draft.sourceHash) {
+            return null;
+        }
+        const forms = draft.forms.filter((item: unknown): item is { askId: string; value: unknown } =>
+            !!item && typeof item === 'object' && !Array.isArray(item) &&
+            typeof (item as { askId?: unknown }).askId === 'string' && !!(item as { askId: string }).askId);
+        if (!forms.length) return null;
+        return {
+            publicationId: draft.publicationId,
+            sourceHash: draft.sourceHash,
+            source: draft.source as SourceV3,
+            label: draft.label,
+            value: forms.map(item => ({ askId: item.askId, value: item.value })),
+        };
+    };
+    const localWindowKey = 'rig-review-job-window/1:' + access.jobId;
+    let savedWindow: SavedJobWindowState | null = null;
+    try {
+        const parsed = JSON.parse(localStorage.getItem(localWindowKey) ?? 'null');
+        if (parsed && typeof parsed.publicationId === 'string' && typeof parsed.label === 'string' &&
+            typeof parsed.sourceHash === 'string') {
+            savedWindow = parsed as SavedJobWindowState;
+        }
+    }
+    catch { /* Invalid saved window state falls back to defaults. */ }
+    const initialRetainedDrafts: JobRetainedDraft[] = [];
+    try {
+        const draftPrefix = 'rig-review-job-draft/1:' + access.jobId + ':';
+        for (let index = 0; index < localStorage.length; index++) {
+            const key = localStorage.key(index);
+            if (!key?.startsWith(draftPrefix)) continue;
+            try {
+                const parsedDraft = parseSavedDraftRecord(JSON.parse(localStorage.getItem(key) ?? 'null'));
+                if (parsedDraft) initialRetainedDrafts.push(parsedDraft);
+            }
+            catch { /* Ignore malformed draft entries without dropping sibling drafts. */ }
+        }
+    }
+    catch { /* In-memory standing state remains active when storage is unavailable. */ }
+    const previousDisplayed = savedWindow ? {
+        publicationId: savedWindow.publicationId,
+        label: savedWindow.label,
+        previousLabel: typeof savedWindow.previousLabel === 'string' ? savedWindow.previousLabel : null,
+    } : null;
+    let animation = typeof savedWindow?.animation === 'string' ? savedWindow.animation : '';
+    let time = typeof savedWindow?.time === 'number' && Number.isFinite(savedWindow.time) && savedWindow.time >= 0
+        ? savedWindow.time : 0;
     let playing = false;
-    let loop = true;
+    let loop = typeof savedWindow?.loop === 'boolean' ? savedWindow.loop : true;
     let playbackCarry = 0;
     let rafHandle = 0;
     let lastFrameTime = 0;
-    let selectedPart = '';
-    let partMode: 'context' | 'solo' = 'context';
-    let selectedReference = '';
-    let panel = '3';
-    let compatibilityNotice = false;
+    let inPlaybackStep = false;
+    let lastRunningSaveMs: number | null = null;
+    let lastSavedWindowJson: string | null = null;
+    let selectedPart = typeof savedWindow?.selectedPart === 'string' ? savedWindow.selectedPart : '';
+    let partMode: 'context' | 'solo' = savedWindow?.partMode === 'solo' ? 'solo' : 'context';
+    let selectedReference = typeof savedWindow?.selectedReference === 'string' ? savedWindow.selectedReference : '';
+    let panel = typeof savedWindow?.panel === 'string' && ['1', '2', '3', '4'].includes(savedWindow.panel)
+        ? savedWindow.panel : '3';
+    let restoredPartIdentity: ControlPart | null = parseSavedPartIdentity(savedWindow?.partIdentity);
+    let restoredCamera: SavedCameraState | null = parseSavedCamera(savedWindow?.camera);
+    let compatibilityNotice = Boolean(savedWindow?.compatibilityNotice);
     type JobForm = {
         form: HTMLFormElement;
         fieldset: HTMLFieldSetElement;
         read: () => UISubmissionV3['value'];
         submissionId: string;
         dirty: boolean;
+        submitting: boolean;
         rigSubmission: ReturnType<typeof createJobRigSubmission>;
     };
     type PreparedWindow = JobPreparedInspection & {
@@ -1021,6 +1220,59 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     const drawn = new WeakMap<JobPreparedInspection, JobRigDraw>();
     let drawGeneration = 0;
     const viewportState = createViewportState();
+    if (restoredCamera) {
+        Object.assign(viewportState, restoredCamera, { cameraRestoring: false });
+    }
+    function saveWindowState(nowMs?: number): void {
+        if (!current)
+            return;
+        if (inPlaybackStep && nowMs === undefined)
+            return;
+        const state = window.state();
+        if (state.displayed?.publication.publicationId !== current.display.publication.publicationId)
+            return;
+        if (nowMs !== undefined) {
+            if (lastRunningSaveMs === null) {
+                lastRunningSaveMs = nowMs;
+                return;
+            }
+            if (nowMs - lastRunningSaveMs < 1000)
+                return;
+            lastRunningSaveMs = nowMs;
+        }
+        try {
+            const serialized = JSON.stringify({
+                publicationId: current.display.publication.publicationId,
+                label: current.display.publication.label,
+                sourceHash: current.display.publication.source.sourceHash,
+                previousLabel: state.previousLabel,
+                compatibilityNotice,
+                animation,
+                time,
+                loop,
+                selectedPart,
+                partMode,
+                selectedReference,
+                panel,
+                partIdentity: current.inspection?.value() ?? null,
+                camera: {
+                    cameraSync: viewportState.cameraSync,
+                    activeCamera: viewportState.activeCamera,
+                    zoom: viewportState.zoom,
+                    cameraCenter: viewportState.cameraCenter
+                        ? { x: viewportState.cameraCenter.x, y: viewportState.cameraCenter.y } : null,
+                    referenceZoom: viewportState.referenceZoom,
+                    referenceCenter: viewportState.referenceCenter
+                        ? { x: viewportState.referenceCenter.x, y: viewportState.referenceCenter.y } : null,
+                },
+            });
+            if (serialized === lastSavedWindowJson)
+                return;
+            localStorage.setItem(localWindowKey, serialized);
+            lastSavedWindowJson = serialized;
+        }
+        catch { /* Standing state stays in memory when storage is unavailable. */ }
+    }
     const el = <Element extends HTMLElement = HTMLElement>(id: string): Element => {
         const element = workspace.querySelector<HTMLElement>('#' + id);
         if (!element)
@@ -1041,6 +1293,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         canonicalControls(controller);
         const fit = el('fit');
         fit.textContent = t(fit.textContent ?? 'Fit');
+        saveWindowState();
     };
     const viewport = createViewportController(provider, viewportState);
     const renderViewport = provider.render;
@@ -1137,8 +1390,10 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         playing = false;
         playbackCarry = 0;
         lastFrameTime = 0;
+        lastRunningSaveMs = null;
         targetPlayer?.pause();
         syncTransportControls();
+        saveWindowState();
     }
     function presentCurrentFrame(owner: JobPreparedInspection): void {
         if (!owner.player) return;
@@ -1199,8 +1454,20 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         }
         const clock = workspace.querySelector<HTMLInputElement>('#job-time');
         if (clock) clock.value = playbackTimeLabel(clip.duration, activeEntry.trackTime);
-        syncTransportControls();
-        presentCurrentFrame(expectedOwner);
+        inPlaybackStep = true;
+        try {
+            syncTransportControls();
+            presentCurrentFrame(expectedOwner);
+        }
+        finally {
+            inPlaybackStep = false;
+        }
+        if (playing) {
+            saveWindowState(now);
+        } else {
+            lastRunningSaveMs = null;
+            saveWindowState();
+        }
         if (playing && current === expectedOwner && current.player === expectedPlayer && hubVisible) {
             armPlayback(expectedOwner, expectedPlayer);
         }
@@ -1302,6 +1569,26 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             const question = prepared.interview?.questions.find(item => item.set.id === subject.setId && item.set.question === subject.questionId);
             if (!question || !question.editable) throw new Error('JOB_ASK_INVALID');
             if (question.ref.sha256 !== ask.source.optionSet?.sha256) throw new Error('JOB_ACT_SOURCE_STALE');
+            const interviewState = prepared.interview?.interview ?? prepared.display.publication.interview ?? null;
+            const inspectionRecord = interviewState?.records.find(
+                item => item.timeKind === 'inspection' &&
+                    item.questionId === subject.questionId &&
+                    item.setId === subject.setId &&
+                    item.record.endsWith('.pending_options'),
+            );
+            const legacyDiagnostic = inspectionRecord
+                ? interviewState?.diagnostics.find(
+                    item => item.code === 'INTERVIEW_OPTIONS_SCENE_LEGACY' &&
+                        item.record === inspectionRecord.record &&
+                        item.at === inspectionRecord.at,
+                )
+                : undefined;
+            if (legacyDiagnostic) {
+                const legacyNotice = node('p', 'INTERVIEW_OPTIONS_SCENE_LEGACY');
+                legacyNotice.dataset.jobInterviewWarning = legacyDiagnostic.code;
+                legacyNotice.dataset.record = legacyDiagnostic.record;
+                fields.prepend(legacyNotice);
+            }
             const heading = node('h3');
             heading.textContent = question.set.question;
             fields.prepend(heading);
@@ -1350,7 +1637,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {
-            const checkpoint = jobCheckpointContext(ask, prepared.metadata.manifest.checkpoints);
+            const checkpoint = jobCheckpointContext(ask, prepared.metadata.manifest?.checkpoints ?? []);
             const heading = node('h3');
             heading.textContent = checkpoint.title;
             fields.prepend(heading);
@@ -1454,7 +1741,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         status.setAttribute('role', 'status');
         form.append(status);
         const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
-            rigSubmission: createJobRigSubmission() };
+            submitting: false, rigSubmission: createJobRigSubmission() };
         try {
             const saved = JSON.parse(localStorage.getItem(localDraftKey(prepared.display)) ?? 'null');
             if (saved?.publicationId === prepared.display.publication.publicationId &&
@@ -1492,12 +1779,14 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 if (!activeAsk) throw new Error('JOB_ASK_INVALID');
                 const pending = subject.kind === 'review-verdict' && subject.stage === 'rig-review'
                     ? entry.rigSubmission.prepare(input as JobUISubmission, () => copyRigVerdict(activeAsk, prepared)) : Promise.resolve(input);
+                entry.submitting = true;
                 fields.disabled = true;
                 const frozen = await pending;
                 if (entry.submissionId !== frozen.submissionId) throw new Error('JOB_STILL_BINDING_MISMATCH');
                 const result = await window.submit(frozen);
                 if (!result.ok)
                     throw new Error(result.error.code);
+                entry.submitting = false;
                 entry.dirty = false;
                 entry.rigSubmission.reset();
                 status.dataset.jobText = 'job.saved';
@@ -1505,6 +1794,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 saveDraft();
             }
             catch (error) {
+                entry.submitting = false;
                 status.dataset.jobText = error instanceof Error && Object.hasOwn(enCatalog, error.message) && Object.hasOwn(koCatalog, error.message)
                     ? error.message : 'JOB_ACT_INVALID';
                 status.textContent = jobWindowRefusal(error, 'JOB_ACT_INVALID');
@@ -1536,7 +1826,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 }
             }
             if (entry)
-                entry.fieldset.disabled = ask.status !== 'pending' || state.preparing || state.closed || !state.receipt || !access.capability;
+                entry.fieldset.disabled = entry.submitting || ask.status !== 'pending' || state.closed || !state.receipt || !access.capability;
         }
     }
     function build(prepared: JobPreparedInspection): HTMLElement {
@@ -1557,7 +1847,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         sidebar.append(binding);
         const parts = node('select');
         parts.id = 'job-part';
-        parts.disabled = !prepared.metadata.manifest.model || prepared.metadata.feedbackCatalog.slots === null;
+        parts.disabled = !prepared.metadata.manifest?.model || prepared.metadata.feedbackCatalog.slots === null;
         const whole = node('option', 'job.wholeRig');
         whole.value = '';
         parts.append(whole);
@@ -1677,6 +1967,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             playing = true;
             playbackCarry = 0;
             lastFrameTime = 0;
+            lastRunningSaveMs = null;
             const clockInput = workspace.querySelector<HTMLInputElement>('#job-time');
             if (clockInput) clockInput.value = playbackTimeLabel(clip.duration, current.player.time);
             syncTransportControls();
@@ -1709,9 +2000,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 if (!playing) current.player.pause();
                 syncTransportControls();
                 presentCurrentFrame(current);
+                saveWindowState();
                 if (playing && hubVisible) armPlayback(current, current.player);
             } else {
                 syncTransportControls();
+                saveWindowState();
             }
         };
         const clock = node('input');
@@ -1798,6 +2091,36 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 if (child instanceof HTMLElement && child !== identity && child !== binding) child.hidden = true;
             }
         }
+        else if (source.subject === 'option-set' || source.subject === 'plan') {
+            const summary = node('section');
+            summary.dataset.jobRecord = source.subject;
+            const recordLine = node('p');
+            recordLine.className = 'job-source';
+            recordLine.textContent = source.record.path + ' · ' + source.record.sha256;
+            summary.append(recordLine);
+            if (source.subject === 'option-set') {
+                const optionLine = node('p');
+                optionLine.className = 'job-source';
+                optionLine.textContent = source.selection.questionId + ' · ' + source.optionSet.id + ' · ' + source.optionSetFile.path + ' · ' + source.optionSet.sha256;
+                summary.append(optionLine);
+            }
+            else {
+                const list = node('ol');
+                list.className = 'job-source';
+                for (const step of source.plan.steps) {
+                    const item = node('li');
+                    item.textContent = step.id + ' · ' + step.hash;
+                    list.append(item);
+                }
+                summary.append(list);
+            }
+            stage.prepend(summary);
+            controls.hidden = pair.hidden = transport.hidden = true;
+            controls.style.display = pair.style.display = transport.style.display = 'none';
+            for (const child of sidebar.children) {
+                if (child instanceof HTMLElement && child !== identity && child !== binding) child.hidden = true;
+            }
+        }
         const formsHost = node('section');
         formsHost.className = 'job-forms';
         formsHost.dataset.jobForms = '';
@@ -1808,10 +2131,43 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         direction.dataset.jobDirection = '';
         if (prepared.metadata.direction)
             direction.textContent = t('job.metadata') + '\n' + JSON.stringify(prepared.metadata.direction, null, 2);
+        const interviewDiagnostics = node('section');
+        interviewDiagnostics.className = 'job-interview-diagnostics';
+        interviewDiagnostics.dataset.jobInterviewDiagnostics = '';
+        const interviewState = prepared.interview?.interview ?? prepared.display.publication.interview ?? null;
+        if (interviewState && (interviewState.diagnostics.length > 0 || interviewState.records.some(record => record.timeKind !== 'inspection'))) {
+            interviewDiagnostics.append(node('h3', 'interview.history'));
+            for (const diagnostic of interviewState.diagnostics) {
+                const item = node('div');
+                item.dataset.jobInterviewDiagnostic = diagnostic.code;
+                item.dataset.severity = diagnostic.severity;
+                item.dataset.record = diagnostic.record;
+                const summary = node('p', diagnostic.code);
+                const detail = node('pre');
+                detail.className = 'job-source';
+                detail.textContent = JSON.stringify(diagnostic, null, 2);
+                item.append(summary, detail);
+                interviewDiagnostics.append(item);
+            }
+            for (const record of interviewState.records) {
+                if (record.timeKind === 'inspection') continue;
+                const item = node('div');
+                item.dataset.jobInterviewRecord = record.record;
+                item.dataset.timeKind = record.timeKind;
+                const detail = node('pre');
+                detail.className = 'job-source';
+                detail.textContent = JSON.stringify(record, null, 2);
+                item.append(detail);
+                interviewDiagnostics.append(item);
+            }
+        }
+        else {
+            interviewDiagnostics.hidden = true;
+        }
         const history = node('div');
         history.className = 'job-history';
         history.dataset.jobHistory = '';
-        formsHost.append(direction, history);
+        formsHost.append(direction, interviewDiagnostics, history);
         root.append(sidebar, stage, formsHost);
         return root;
     }
@@ -1836,9 +2192,12 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             direction.hidden = panel !== '4';
         for (const [askId, entry] of forms) {
             const ask = window.state().pending.find(item => item.askId === askId);
-            entry.form.hidden = current?.display.publication.source.subject !== 'image-set' &&
+            const currentSubject = current?.display.publication.source.subject;
+            entry.form.hidden = currentSubject !== 'image-set' &&
+                currentSubject !== 'option-set' && currentSubject !== 'plan' &&
                 panel === '2' && ask?.subject.kind !== 'interview-picks';
         }
+        saveWindowState();
     }
     function pose(seekReference = true): void {
         if (!current)
@@ -1902,7 +2261,9 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     function announceHubFrame(): void {
         if (hubIncarnation) globalThis.parent.postMessage({...hubBinding(), schema: JOB_HUB_READY}, location.origin);
     }
-    const window = createJobWindow({ jobId: access.jobId, pageId, transport, adapter: {
+    const window = createJobWindow({ jobId: access.jobId, pageId, transport,
+        previousDisplayed, initialRetainedDrafts,
+        adapter: {
             async prepare(display, signal): Promise<PreparedWindow> {
                 const inspection = await prepareJobInspection(display, signal);
                 try {
@@ -1929,9 +2290,13 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 stopPlayback(previous?.player);
                 const previousElement = currentElement;
                 const previousForms = new Map(forms);
-                const navigation = { animation, time, selectedPart, partMode, selectedReference, panel,
-                    partIdentity: current?.inspection?.value(), camera: structuredClone(viewportState) };
-                compatibilityNotice = false;
+                const restoringCamera = Boolean(previous || restoredCamera);
+                const navigation = { animation, time, loop, selectedPart, partMode, selectedReference, panel,
+                    partIdentity: previous ? (previous.inspection?.value() ?? null) : restoredPartIdentity,
+                    camera: structuredClone(viewportState) };
+                compatibilityNotice = Boolean(!previous &&
+                    savedWindow?.publicationId === display.publication.publicationId &&
+                    savedWindow.compatibilityNotice);
                 if (animation && !prepared.assets?.animations.some(item => item.name === animation && time <= item.duration)) {
                     animation = '';
                     time = 0;
@@ -1953,6 +2318,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     currentElement = previousElement;
                     animation = navigation.animation;
                     time = navigation.time;
+                    loop = navigation.loop;
                     selectedPart = navigation.selectedPart;
                     partMode = navigation.partMode;
                     selectedReference = navigation.selectedReference;
@@ -1978,13 +2344,17 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     el<HTMLInputElement>('job-solo').checked = partMode === 'solo';
                     el<HTMLSelectElement>('job-reference').value = selectedReference;
                     el<HTMLSelectElement>('job-animation').value = animation;
+                    el<HTMLInputElement>('job-loop').checked = loop;
                     el<HTMLSelectElement>('job-panel').value = panel;
                     el('rig-empty').hidden = !!prepared.player;
-                    Object.assign(viewportState, navigation.camera, { cameraRestoring: true });
+                    Object.assign(viewportState, navigation.camera, { cameraRestoring: restoringCamera });
                     showReference();
                     pose(false);
                     if (selectedPart) {
                         try {
+                            if (!navigation.partIdentity || navigation.partIdentity.slot !== selectedPart) {
+                                throw new Error('PART_IDENTITY_UNAVAILABLE');
+                            }
                             prepared.inspection?.assertIdentity(navigation.partIdentity);
                         }
                         catch {
@@ -2003,14 +2373,15 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     return {
                         rollback,
                         finalize() {
+                            restoredPartIdentity = null;
+                            restoredCamera = null;
+                            savedWindow = null;
                             unbindNavigation?.();
                             resize?.disconnect();
                             unbindNavigation = nextUnbind;
                             resize = nextResize;
                             previous?.dispose();
-                            title.textContent = 'package' in display.publication.source
-                                ? display.publication.source.package.id
-                                : display.publication.label;
+                            title.textContent = display.publication.source.package?.id ?? display.publication.label;
                         },
                     };
                 }
@@ -2043,11 +2414,12 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     notice.textContent = t('job.closed');
                 else if (state.preparing)
                     notice.textContent = t('job.preparing');
-                else if (state.displayed)
+                else if (state.displayed) {
                     notice.textContent = state.previousLabel
                         ? t('job.updated', [state.previousLabel, state.displayed.publication.label]) : state.displayed.publication.label;
-                if (compatibilityNotice)
-                    notice.textContent += ' · ' + t('job.incompatible');
+                    if (compatibilityNotice)
+                        notice.textContent += ' · ' + t('job.incompatible');
+                }
                 if (state.closed) {
                     const wasPlaying = playing;
                     stopPlayback();
@@ -2065,18 +2437,19 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                             const key = localStorage.key(index);
                             if (!key?.startsWith(prefix))
                                 continue;
-                            const saved = JSON.parse(localStorage.getItem(key) ?? 'null');
-                            if (!saved?.forms?.length || saved.publicationId === state.displayed?.publication.publicationId)
-                                continue;
-                            if (typeof saved.publicationId !== 'string' || typeof saved.sourceHash !== 'string' || typeof saved.label !== 'string')
-                                continue;
-                            retained.set(saved.publicationId, { publicationId: saved.publicationId, sourceHash: saved.sourceHash,
-                                source: saved.source, label: saved.label, value: saved.forms });
+                            try {
+                                const parsedDraft = parseSavedDraftRecord(JSON.parse(localStorage.getItem(key) ?? 'null'));
+                                if (!parsedDraft || parsedDraft.publicationId === state.displayed?.publication.publicationId)
+                                    continue;
+                                retained.set(parsedDraft.publicationId, parsedDraft);
+                            }
+                            catch { /* Ignore malformed draft entries without dropping sibling drafts. */ }
                         }
                     }
                     catch { /* In-memory retained evidence remains available. */ }
                     history.textContent = [...retained.values()].map(draft => t('job.retained', [draft.label]) + '\n' + draft.sourceHash + '\n' + JSON.stringify(draft.value, null, 2)).join('\n');
                 }
+                saveWindowState();
                 pauseHiddenHubFrame(); announceHubFrame();
                 if (state.receipt && !state.preparing) events?.displayed();
             },
@@ -2126,6 +2499,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         resolution?.removeEventListener('change', resolutionChanged);
         globalThis.removeEventListener('message', hubVisibility);
         saveDraft();
+        saveWindowState();
         referenceSelection.cancel();
         abort.abort();
         window.stop();

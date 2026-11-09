@@ -251,6 +251,7 @@ export async function scriptedJobWindowFixture() {
         subjects: [...f.input.getContext().subjects, {kind: 'parts-verdict' as const, draftId: 'synthetic-parts'}],
     };
     f.input.setPartsReferences(context.parts.images.map(({path, role}) => ({path, role})));
+    f.input.setContext(context);
     let generation = 0;
     let sequence = 0;
     async function agent(verb: 'publish' | 'ask' | 'next' | 'close', value: Record<string, unknown>) {
@@ -262,12 +263,18 @@ export async function scriptedJobWindowFixture() {
         return result;
     }
     return {...f, question, packageRoot,
-        async publish(stage: 'parts' | 'rig' | 'direction', revision: string = stage) {
+        async publish(stage: 'parts' | 'rig' | 'direction', revision: string = stage, options?: {stripShortAnimation?: boolean}) {
             await agent('next', {after: null, waitMs: 0});
             const model = structuredClone(originalModel);
-            if (stage !== 'parts') model.bones.find((bone: {name: string}) => bone.name === 'mesh').x = 19;
+            if (stage !== 'parts') model.bones.find((bone: {name: string}) => bone.name === 'mesh').x = options?.stripShortAnimation ? 20 : 19;
+            if (options?.stripShortAnimation) {
+                model.animations = model.animations.filter((item: {name: string}) => item.name !== 'short');
+                if (model.editorOrder?.animations) {
+                    model.editorOrder.animations = model.editorOrder.animations.filter((name: string) => name !== 'short');
+                }
+            }
             await writeFile(join(packageRoot, 'skeleton.model.json'), JSON.stringify(model));
-            const manifest = {...originalManifest, title: 'Synthetic ' + stage, revision};
+            const manifest = {...originalManifest, title: 'Synthetic ' + revision, revision};
             const selector = stage === 'parts' ? {kind: 'draft' as const, id: 'synthetic-parts'} :
                 stage === 'rig' ? {kind: 'rig' as const, version: 2} : {kind: 'post' as const, version: 3, rigVersion: 2};
             if (stage === 'direction') {
@@ -280,7 +287,7 @@ export async function scriptedJobWindowFixture() {
                 manifest.direction = 'direction.json';
             }
             await writeFile(join(packageRoot, 'review.json'), JSON.stringify(manifest));
-            f.input.setContext({...context, selector});
+            f.input.setContext({...f.input.getContext(), selector});
             const record = {path: 'project.json', sha256: jobHash(await readFile(join(f.input.root, 'project.json')))};
             const result = await agent('publish', {result: {path: 'out', selector},
                 freeze: {kind: 'producer-held', holdId: 'scripted-window-held', record}});

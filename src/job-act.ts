@@ -142,6 +142,10 @@ export function parseUISubmission(
 ): UISubmissionV3;
 export function parseUISubmission(
   value: unknown,
+  mode?: JobApiSchema | JobPublicationMode,
+): UISubmissionV3;
+export function parseUISubmission(
+  value: unknown,
   mode: JobApiSchema | JobPublicationMode = JOB_API_SCHEMA,
 ): JobUISubmission | UISubmissionV3 {
   const item = jobObject(value, ['publicationId', 'askId', 'pageId', 'displayedNonce', 'expectedGeneration', 'submissionId', 'kind', 'value', 'capture']);
@@ -161,7 +165,7 @@ export function parseUISubmission(
 }
 
 /** The browser supplies pixels and draw provenance, never a trusted hash or path. */
-export function prepareJobStill(input: JobUISubmission, ask: JobPendingAsk, retained: JobRetainedSource): {
+export function prepareJobStill(input: UISubmissionV3, ask: JobPendingAsk, retained: JobRetainedSource): {
   readonly still: JobRigStill;
   readonly bytes: Buffer;
   readonly binding: JobRigCapture['binding'];
@@ -478,6 +482,7 @@ export function finalizeJobAct(options: {
       at: options.at,
     });
   }
+  if ((options.submission.kind as string) === 'reopen') throw new JobError('JOB_ACT_INVALID');
   const { submission, ask, retained, reviewer } = options as {
     readonly jobId: string;
     readonly submission: JobUISubmission;

@@ -9,18 +9,21 @@ import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {assertPartsViewportOracle, inspectPartsViewportPng} from './helpers/job-window-paint.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 import {rigStillBrowserProbe} from './helpers/job-rig-still-browser.ts';
+import {interviewDiagnosticsBrowserProbe} from './helpers/job-interview-browser.ts';
 
 const argument = (key: string) => {const index = Bun.argv.indexOf(key); return index < 0 ? undefined : Bun.argv[index + 1];};
 const language = argument('--lang') ?? 'en';
 assert.ok(language === 'en' || language === 'ko');
 const observeStill = Bun.argv.includes('--rig-still-observe');
 const onlyStill = Bun.argv.includes('--rig-still-only');
-assert.ok(!(observeStill && onlyStill));
+const onlyInterviewDiagnostics = Bun.argv.includes('--interview-diagnostics-only');
+assert.ok([observeStill, onlyStill, onlyInterviewDiagnostics].filter(Boolean).length <= 1);
 assert.ok(!observeStill || language === 'en', 'the diagnostic observation mode is EN only');
 const output = argument('--out') ?? 'evidence/job-window-' + language;
 await mkdir(output, {recursive: true});
 const fixture = await scriptedJobWindowFixture();
 const stillProbe = onlyStill || observeStill ? rigStillBrowserProbe(fixture, output, language, observeStill) : null;
+const interviewProbe = onlyInterviewDiagnostics ? await interviewDiagnosticsBrowserProbe(fixture, output, language) : null;
 const profile = await mkdtemp(join(tmpdir(), 'review-job-window-'));
 const observations: Record<string, unknown> = {};
 const navigation: {url: string; loaderId?: string}[] = [];
@@ -48,8 +51,11 @@ async function until(check: () => Promise<boolean> | boolean, what: string): Pro
 async function wait(expression: string, what: string): Promise<void> {
     await until(() => page!.evaluate<boolean>(expression), what);
 }
-async function show(publication: {label: string}) {
-    await wait(`!!document.querySelector('#job-time') && document.querySelector('.job-notice')?.textContent.includes(${JSON.stringify(publication.label)}) && document.querySelector('.job-notice')?.dataset.failed==='false'`, 'display ' + publication.label);
+async function show(publication: {label: string; source?: {sourceHash: string}}) {
+    const hashCheck = publication.source?.sourceHash
+        ? ` && document.querySelector('.job-source')?.textContent.includes(${JSON.stringify(publication.source.sourceHash)})`
+        : '';
+    await wait(`!!document.querySelector('#job-time') && document.querySelector('.job-notice')?.textContent.includes(${JSON.stringify(publication.label)}) && document.querySelector('.job-notice')?.dataset.failed==='false'${hashCheck}`, 'display ' + publication.label);
 }
 async function edit(selector: string, value: string) {
     await page!.evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.value=${JSON.stringify(value)};node.dispatchEvent(new Event('input',{bubbles:true}));node.dispatchEvent(new Event('change',{bubbles:true}));})()`);
@@ -146,13 +152,14 @@ async function assertHeaderGeometry(name: string) {
 }
 async function capturePaint(name: string) {
     await assertHeaderGeometry(name);
-    const rectangle = await page!.evaluate<{x: number; y: number; width: number; height: number}>(`(()=>{const canvas=document.querySelector('#rig-root canvas');const r=canvas.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()`);
+    const pickCanvas = 'document.querySelector("#rig-viewport[data-job-rig-canonical] > canvas[data-job-rig-presentation]") ?? document.querySelector("#rig-root canvas")';
+    const rectangle = await page!.evaluate<{x: number; y: number; width: number; height: number}>(`(()=>{const canvas=${pickCanvas};const r=canvas.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()`);
     assert.ok(rectangle.width > 0 && rectangle.height > 0);
     const shown = PNG.sync.read(await page!.screenshot(rectangle));
-    const previous = await page!.evaluate<string>(`(()=>{const canvas=document.querySelector('#rig-root canvas');const value=canvas.style.visibility;canvas.style.visibility='hidden';return value})()`);
+    const previous = await page!.evaluate<string>(`(()=>{const canvas=${pickCanvas};const value=canvas.style.visibility;canvas.style.visibility='hidden';return value})()`);
     let hidden: PNG;
     try {hidden = PNG.sync.read(await page!.screenshot(rectangle));}
-    finally {await page!.evaluate(`document.querySelector('#rig-root canvas').style.visibility=${JSON.stringify(previous)}`);}
+    finally {await page!.evaluate(`(${pickCanvas}).style.visibility=${JSON.stringify(previous)}`);}
     let changedPixels = 0;
     for (let offset = 0; offset < shown.data.length; offset += 4) {
         if (!shown.data.subarray(offset, offset + 4).equals(hidden.data.subarray(offset, offset + 4))) changedPixels++;
@@ -258,6 +265,10 @@ try {
     const sentinel = await page.evaluate<string>('globalThis.__jobWindowDocument = crypto.randomUUID()');
     if (stillProbe) {
         await stillProbe.run(page, {wait, show, edit, send: control!});
+        assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
+        assert.equal(navigation.length, 1);
+    } else if (interviewProbe) {
+        await interviewProbe.run(page, {wait, show, edit, submit, checkpoints, send: control!});
         assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
         assert.equal(navigation.length, 1);
     } else {
@@ -371,17 +382,49 @@ try {
     assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
     assert.equal(navigation.length, 1);
     await edit('#job-panel', '4');
+    await edit('#job-animation', 'short');
+    await edit('#job-time', '0.75');
+    await page.evaluate(`document.getElementById('zoom-in').click()`);
+    const directionDraftAsk = await fixture.ask(direction, {kind: 'checkpoint', checkpointId: 'step-one'});
+    await wait(`!!document.querySelector('form[data-job-ask="${directionDraftAsk.askId}"]')`, 'direction draft form');
+    await edit(`form[data-job-ask="${directionDraftAsk.askId}"] select[name=outcome]`, 'fail');
+    await edit(`form[data-job-ask="${directionDraftAsk.askId}"] textarea[name=note]`, '  active draft across reconnect\n');
     await wait(`!document.querySelector('[data-job-direction]').hidden && document.querySelector('[data-job-direction]').textContent.includes('rig-world-y-up')`, 'direction metadata');
+    const beforeReconnect = await snapshot();
     await capturePaint('direction');
     events = await fixture.next();
-    await checkpoints('direction-update', {publication: direction, events, navigation});
+    await checkpoints('direction-update', {publication: direction, beforeReconnect, events, navigation});
     // Leave the last owner document. The job must remain active without a connected owner tab.
     await page.goto('about:blank');
     assert.notEqual((await fixture.next()).status, 'closed');
     await page.goto(owner.href);
     await show(direction);
-    assert.ok(await page.evaluate<boolean>(`document.querySelector('[data-job-history]').textContent.includes('old-source draft')`));
-    await checkpoints('reopened-same-job', {jobId: fixture.host.session.jobId, publicationId: direction.publicationId});
+    const afterReconnect = await snapshot();
+    assert.deepEqual(afterReconnect, beforeReconnect);
+    assert.equal(await page.evaluate(`document.getElementById('job-animation').value`), 'short');
+    assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${directionDraftAsk.askId}"] textarea[name=note]')?.value`), '  active draft across reconnect\n');
+    assert.ok(await page.evaluate<boolean>(`document.querySelector('.job-notice').textContent.includes(${JSON.stringify(rig.label)}) && document.querySelector('.job-notice').textContent.includes(${JSON.stringify(direction.label)})`));
+    assert.ok(await page.evaluate<boolean>(`document.querySelector('[data-job-history]').textContent.includes('old-source draft') && document.querySelector('[data-job-history]').textContent.includes(${JSON.stringify(first.source.sourceHash)})`));
+    await checkpoints('reopened-same-job', {jobId: fixture.host.session.jobId, publicationId: direction.publicationId, afterReconnect});
+
+    // Sequential update #3 (incompatible selection): removes 'short' animation while preserving camera/panel and source-bound drafts in place.
+    const postReconnectSentinel = await page.evaluate<string>('globalThis.__jobWindowPostReconnect = crypto.randomUUID()');
+    const incompatible = await fixture.publish('direction', 'direction-incompatible', {stripShortAnimation: true});
+    await show(incompatible);
+    assert.equal(await page.evaluate('globalThis.__jobWindowPostReconnect'), postReconnectSentinel);
+    assert.equal(navigation.length, 2);
+    const afterIncompatible = await snapshot();
+    assert.deepEqual(afterIncompatible.cameras, beforeReconnect.cameras);
+    assert.equal(afterIncompatible.panel, '4');
+    assert.equal(await page.evaluate(`document.getElementById('job-animation').value`), '');
+    assert.equal(afterIncompatible.time, '0');
+    const expectedIncompatibleNotice = language === 'ko'
+        ? '이 결과에서 이전 선택 항목을 사용할 수 없습니다.'
+        : 'The previous selection is unavailable in this result.';
+    assert.ok(await page.evaluate<boolean>(`document.querySelector('.job-notice').textContent.includes(${JSON.stringify(expectedIncompatibleNotice)})`));
+    assert.ok(await page.evaluate<boolean>(`document.querySelector('[data-job-history]').textContent.includes('old-source draft') && document.querySelector('[data-job-history]').textContent.includes('active draft across reconnect') && document.querySelector('[data-job-history]').textContent.includes(${JSON.stringify(first.source.sourceHash)}) && document.querySelector('[data-job-history]').textContent.includes(${JSON.stringify(direction.source.sourceHash)})`));
+    await checkpoints('incompatible-update', {publication: incompatible, afterIncompatible, navigation});
+
     await fixture.finish();
     await wait(`document.querySelector('.job-notice').textContent.includes(${JSON.stringify(language === 'ko' ? '명시적으로 종료' : 'explicitly closed')})`, 'explicit close');
     await checkpoints('complete', {language, metadataOnly: true, createWriterReadback: 'PENDING_CREATE_182_184', separateUID: 'PARENT_A_GATE'});

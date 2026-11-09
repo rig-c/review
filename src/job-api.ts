@@ -5,7 +5,8 @@ import {
   JOB_RESERVED_ACT_KINDS,
   type AgentRequestV3, type FetchActRequestV3, type JobAgentRequest, type JobApiSchema,
   type JobDisplayAcknowledgment, type JobErrorCode, type JobFetchActRequest, type JobFileIdentity,
-  type JobHostPorts, type JobHumanAuthority, type JobPlanIdentity, type JobPublicationMode,
+  type JobHostPorts, type JobHumanAuthority, type JobInterviewDiagnostic, type JobInterviewDiagnostics,
+  type JobInterviewJson, type JobInterviewRecord, type JobPlanIdentity, type JobPublicationMode,
   type JobPublishRequest, type JobResult, type JobSelector, type JobSha256, type JobSubject,
   type OptionContext, type OptionSource, type PlanContext, type PlanSource, type ProjectRecord,
   type PublishRequestV3, type PublishResultV3, type RecordAct, type RecordFreeze,
@@ -15,6 +16,13 @@ import {
 } from './job-contract.ts';
 import { JobError } from './job-store.ts';
 import type { JobSession } from './job-session.ts';
+
+export type {
+  JobInterviewJson,
+  JobInterviewRecord,
+  JobInterviewDiagnostic,
+  JobInterviewDiagnostics,
+} from './job-contract.ts';
 
 export const jobBodyLimit = 256 * 1024;
 export const jobWaitLimitMs = 30_000;
@@ -258,6 +266,10 @@ export function parseJobRequest(
 ): AgentRequestV3 | FetchActRequestV3;
 export function parseJobRequest(
   value: unknown,
+  mode: JobApiSchema | JobPublicationMode,
+): JobAgentRequest | JobFetchActRequest | AgentRequestV3 | FetchActRequestV3;
+export function parseJobRequest(
+  value: unknown,
   mode: JobApiSchema | JobPublicationMode = JOB_API_SCHEMA,
 ): JobAgentRequest | JobFetchActRequest | AgentRequestV3 | FetchActRequestV3 {
   const item = jobObject(value, [
@@ -394,6 +406,119 @@ function exactObject(
 function parseFileRow(value: unknown, code: JobErrorCode): JobFileIdentity {
   const item = exactObject(value, ['path', 'sha256'], code);
   return asCode(() => ({ path: jobPath(item.path), sha256: jobSha(item.sha256) }), code);
+}
+
+function parseInterviewJson(value: unknown, code: JobErrorCode, depth = 0): JobInterviewJson {
+  if (depth > 32) throw new JobError(code);
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new JobError(code);
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(entry => parseInterviewJson(entry, code, depth + 1));
+  }
+  if (typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+        key,
+        parseInterviewJson(child, code, depth + 1),
+      ]),
+    );
+  }
+  throw new JobError(code);
+}
+
+function parseInterviewJsonObject(
+  value: unknown,
+  code: JobErrorCode,
+): { readonly [key: string]: JobInterviewJson } {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new JobError(code);
+  }
+  return parseInterviewJson(value, code) as { readonly [key: string]: JobInterviewJson };
+}
+
+export function parseJobInterviewDiagnostics(
+  value: unknown,
+  code: JobErrorCode = 'JOB_REQUEST_INVALID',
+): JobInterviewDiagnostics | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const item = exactObject(
+    value,
+    ['schema', 'project', 'evaluatedAt', 'records', 'diagnostics'],
+    code,
+  );
+  if (item.schema !== 'rig-review/job-interview@1') throw new JobError(code);
+  const project = asCode(() => parseProjectRecord(item.project, code), code);
+  const evaluatedAt = asCode(() => jobText(item.evaluatedAt), code);
+  if (!Number.isFinite(Date.parse(evaluatedAt))) throw new JobError(code);
+  if (!Array.isArray(item.records) || item.records.length > maxRecordFiles ||
+      !Array.isArray(item.diagnostics) || item.diagnostics.length > maxRecordFiles) {
+    throw new JobError(code);
+  }
+  const recordsByLocator = new Map<string, JobInterviewRecord>();
+  const records: JobInterviewRecord[] = item.records.map(rawRow => {
+    const row = exactObject(
+      rawRow,
+      ['questionId', 'record', 'setId', 'ref', 'observedSet', 'timeKind', 'at', 'original'],
+      code,
+    );
+    const questionId = asCode(() => jobId(row.questionId), code);
+    const record = asCode(() => jobText(row.record, 256), code);
+    if (recordsByLocator.has(record)) throw new JobError(code);
+    const setId = row.setId === null ? null : asCode(() => jobId(row.setId), code);
+    const ref = parseFileRow(row.ref, code);
+    const observedSet = row.observedSet === null ? null : parseFileRow(row.observedSet, code);
+    if (row.timeKind !== 'inspection' && row.timeKind !== 'answer' && row.timeKind !== 'decision') {
+      throw new JobError(code);
+    }
+    const timeKind = row.timeKind;
+    const at = row.at === null ? null : asCode(() => jobText(row.at), code);
+    if (timeKind === 'inspection') {
+      if (at !== evaluatedAt || row.original !== null) throw new JobError(code);
+      const parsed: JobInterviewRecord = { questionId, record, setId, ref, observedSet, timeKind, at, original: null };
+      recordsByLocator.set(record, parsed);
+      return parsed;
+    }
+    const original = parseInterviewJsonObject(row.original, code);
+    if (timeKind === 'decision') {
+      const completed = ['at', 'value', 'fragments'].some(key => Object.hasOwn(original, key));
+      if (!completed && at !== null) throw new JobError(code);
+    }
+    const parsed: JobInterviewRecord = { questionId, record, setId, ref, observedSet, timeKind, at, original };
+    recordsByLocator.set(record, parsed);
+    return parsed;
+  });
+  const seenDiagnosticRecords = new Set<string>();
+  const diagnostics: JobInterviewDiagnostic[] = item.diagnostics.map(rawDiag => {
+    const diag = exactObject(rawDiag, ['record', 'at', 'code', 'severity'], code);
+    const record = asCode(() => jobText(diag.record, 256), code);
+    const at = diag.at === null ? null : asCode(() => jobText(diag.at), code);
+    if (seenDiagnosticRecords.has(record)) throw new JobError(code);
+    const matching = recordsByLocator.get(record);
+    if (!matching || matching.at !== at) throw new JobError(code);
+    if (matching.timeKind === 'decision' && matching.original &&
+        !['at', 'value', 'fragments'].some(key => Object.hasOwn(matching.original!, key))) {
+      throw new JobError(code);
+    }
+    seenDiagnosticRecords.add(record);
+    if (diag.code === 'INTERVIEW_OPTIONS_STALE' && diag.severity === 'error') {
+      return { record, at, code: 'INTERVIEW_OPTIONS_STALE', severity: 'error' };
+    }
+    if (diag.code === 'INTERVIEW_OPTIONS_SCENE_LEGACY' && diag.severity === 'warning') {
+      return { record, at, code: 'INTERVIEW_OPTIONS_SCENE_LEGACY', severity: 'warning' };
+    }
+    throw new JobError(code);
+  });
+  return {
+    schema: 'rig-review/job-interview@1',
+    project,
+    evaluatedAt,
+    records,
+    diagnostics,
+  };
 }
 
 function parseFileClosure(
@@ -1114,10 +1239,21 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
   }
   return {
     async handleJobApi(request) {
-      let input: JobAgentRequest | JobFetchActRequest | null = null;
+      let input: JobAgentRequest | AgentRequestV3 | JobFetchActRequest | FetchActRequestV3 | null = null;
+      let responseSchema: typeof JOB_API_SCHEMA | typeof JOB_API_V3_SCHEMA = session.apiSchema;
       try {
         gate(request, base + '/api', false);
-        input = parseJobRequest(await jobBody(request));
+        const body = await jobBody(request);
+        const mode: JobPublicationMode =
+          session.publicationMode === 'record-and-package' &&
+          body !== null &&
+          typeof body === 'object' &&
+          !Array.isArray(body) &&
+          (body as { schema?: unknown }).schema === JOB_API_SCHEMA
+            ? 'package-only'
+            : session.publicationMode;
+        responseSchema = jobApiSchemaForMode(mode);
+        input = parseJobRequest(body, mode);
         if (input.jobId !== session.jobId) throw new JobError('JOB_UNKNOWN');
         session.authorize(input.verb === 'fetch-act' ? 'consumer' : 'agent', request.headers.get('authorization'));
         if (input.verb === 'fetch-act') {
@@ -1131,13 +1267,13 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
           if (accept && accept !== '*/*' && accept !== 'application/json') throw new JobError('JOB_REQUEST_INVALID');
         }
         const value = await session.execute(input, request.signal);
-        return Response.json({ schema: JOB_API_SCHEMA, verb: input.verb, jobId: input.jobId, requestId: input.requestId,
+        return Response.json({ schema: responseSchema, verb: input.verb, jobId: input.jobId, requestId: input.requestId,
           generation: session.status().generation, ok: true, value }, { headers: responseHeaders });
       } catch (error) {
         const failure = jobFailure(error);
         const status = failure.error.code.includes('CAPABILITY') || failure.error.code === 'JOB_AUTHORITY_REFUSED' ? 403 :
           failure.error.code === 'JOB_BODY_LIMIT' ? 413 : failure.error.code === 'JOB_REQUEST_INVALID' ? 400 : 409;
-        return Response.json({ schema: JOB_API_SCHEMA, verb: input?.verb ?? null, jobId: session.jobId,
+        return Response.json({ schema: responseSchema, verb: input?.verb ?? null, jobId: session.jobId,
           requestId: input?.requestId ?? null, generation: session.lastObservedGeneration, ...failure }, { status, headers: responseHeaders });
       }
     },
