@@ -1,7 +1,7 @@
 import { lstatSync, readdirSync } from 'node:fs';
 import { join, posix, relative, sep } from 'node:path';
 import { boundBytes, checkedPath, digest, jsonObject, literalPath, object, partsDraftEditable, readProject, readRegular, type SetRef } from './interview-project.ts';
-import { CONFIG_NAMED_FILES, CONFIG_SKELETON_NAMES } from './handoff.ts';
+import { configNamedReferences, DIRECTORY_INPUT_RECEIPT, plateReceiptSpec, receiptSpec } from './handoff.ts';
 import { DIRECTION_MAX_BYTES, readDirectionInspection } from './direction-inspection.ts';
 import { outputDirectory } from './interview-picks.ts';
 import { packagePath, type ReviewPackage } from './manifest.ts';
@@ -17,7 +17,7 @@ interface DraftRecord {
   at:string;
   producer:{name:string;version:string};
   config:SetRef;
-  config_inputs?:SetRef[];
+  config_inputs?:(SetRef&{directory?:string;spec?:string})[];
   parts:{path:string;files:SetRef[]};
   files:SetRef[];
 }
@@ -29,6 +29,7 @@ interface DraftSource {
   meshReport:string;
   model:string;
   files:ReadonlyMap<string,string>;
+  starts?:readonly string[];
 }
 interface JoinedSource {
   review:ReviewPackage;
@@ -44,8 +45,8 @@ export const interviewMismatch = 'INTERVIEW_SOURCE_MISMATCH';
 export const interviewStale = 'INTERVIEW_OPTIONS_STALE';
 export const directionStale = 'DIRECTION_SOURCE_STALE';
 
-export function joinProject(p: ReviewPackage, designation: ProjectDesignation):JoinedSource {
-  if(designation.draftId!==undefined)return joinDraft(p,designation);
+export function joinProject(p: ReviewPackage, designation: ProjectDesignation, options: { starts?: readonly string[] } = {}):JoinedSource {
+  if(designation.draftId!==undefined)return joinDraft(p,designation,options);
   const opened = readProject(designation.root);
   const {root, hash, project} = opened;
   const {version} = designation;
@@ -161,7 +162,7 @@ export function joinProject(p: ReviewPackage, designation: ProjectDesignation):J
     available:opened.questions.length > 0 || opened.historical.length > 0};
 }
 /** Match the draft writer's explicit parts and rig inventories, independently of a production version. */
-function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draftId:string}>):JoinedSource {
+function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draftId:string}>,options:{starts?:readonly string[]}={}):JoinedSource {
   const opened=readProject(designation.root);
   const {root,hash,project}=opened;
   const {draftId}=designation;
@@ -193,14 +194,31 @@ function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draft
   };
   let draft:DraftSource;
   let assertInventory:()=>void;
+  const searchStarts=options.starts??[...(p.cwd?[p.cwd]:[]),process.cwd()];
   try{
     inventory([record.config,...(record.config_inputs??[])],path);
     const config=object(record.config),doc=jsonObject(boundBytes(root,config as unknown as SetRef));
-    const dependencies=new Set((record.config_inputs??[]).map(ref=>object(ref).path));
-    for(const keys of CONFIG_NAMED_FILES){
-      const value=keys.reduce<unknown>((value,key)=>object(value)[key],doc);
-      if(typeof value!=='string'||!value||keys.length===3&&(CONFIG_SKELETON_NAMES as readonly string[]).includes(value))continue;
-      if(!literalPath(value)||!dependencies.has(posix.join(posix.dirname(config.path as string),value)))return fail();
+    const configDir=posix.dirname(config.path as string);
+    const {partsRoot,references}=configNamedReferences(doc,[join(root,configDir),root,p.root,...searchStarts]);
+    const rawInputs=(record.config_inputs??[]).map(object);
+    for(const entry of rawInputs){
+      if(entry.directory!==undefined){
+        if(!literalPath(entry.directory)||!entry.directory.startsWith(path+'/')||entry.path!==`${entry.directory}/${DIRECTORY_INPUT_RECEIPT}`||typeof entry.spec!=='string'||!entry.spec)return fail();
+        checkedPath(root,entry.directory,true);
+        const bytes=boundBytes(root,{path:entry.path as string,sha256:entry.sha256 as string});
+        if(receiptSpec(bytes)!==entry.spec)return fail();
+      }else if(entry.spec!==undefined)return fail();
+    }
+    for(const ref of references){
+      if(!literalPath(ref.value))return fail();
+      const resolved=posix.join(configDir,ref.value);
+      if(ref.kind==='plate'){
+        const expectedSpec=plateReceiptSpec(partsRoot,`config ${ref.at}`);
+        const receiptPath=`${resolved}/${DIRECTORY_INPUT_RECEIPT}`;
+        if(!rawInputs.some(entry=>entry.path===receiptPath&&entry.directory===resolved&&entry.spec===expectedSpec))return fail();
+      }else if(!rawInputs.some(entry=>entry.path===resolved&&entry.directory===undefined)){
+        return fail();
+      }
     }
     const input=inventory(parts.files,parts.path);
     if(!input.includes(parts.path+'/parts.json')||!input.some(file=>file.startsWith(parts.path+'/parts/')))return fail();
@@ -244,7 +262,8 @@ function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draft
     assertInventory();
     draft={record:record as unknown as DraftRecord,editable:partsDraftEditable(project),
       parts:checkedPath(root,parts.path,true),rig:checkedPath(root,rig),meshReport:checkedPath(root,meshReport),
-      model:checkedPath(root,model),files:new Map([...files].map(([file,sha])=>[checkedPath(root,file),sha]))};
+      model:checkedPath(root,model),files:new Map([...files].map(([file,sha])=>[checkedPath(root,file),sha])),
+      starts:[join(root,configDir),root,p.root,...searchStarts]};
     for(const [path,sha256] of files)boundBytes(root,{path,sha256});
   }catch{return fail();}
   outputDirectory(root,designation.picksDir,project);

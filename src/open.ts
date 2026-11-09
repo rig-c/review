@@ -43,9 +43,9 @@ const appRoot=fileURLToPath(new URL('..',import.meta.url));
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep=(ms:number)=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 export const defaultStateDir=()=>process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review');
-export async function loadOpenPackage(inputs:OpenInputs):Promise<OpenPackage>{
+export async function loadOpenPackage(inputs:OpenInputs,options:{cwd?:string}={}):Promise<OpenPackage>{
  // Handoff flags become canonical absolute paths here, so the worker and every reload read exactly these files.
- if(!inputs.compare){const base=await loadReferencedReview(inputs.input,inputs.reference,handoffFlags(inputs));const joined=inputs.project?joinProject(base,inputs.project):undefined;const p=joined?.review??base,selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);if(inputs.viewOnly)p.viewOnly=true;return {mode:'single',p,selection,contentHash:p.sourceHash,...(joined?{joined}:{}),inputs:{input:p.manifestPath,...(joined?{project:joined.designation}:{}),...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{}),...(inputs.control?{control:true}:{}),...(p.handoffInputs??{})}};}
+ if(!inputs.compare){const base=await loadReferencedReview(inputs.input,inputs.reference,handoffFlags(inputs),options.cwd);const joined=inputs.project?joinProject(base,inputs.project,{starts:[options.cwd??process.cwd()]}):undefined;const p=joined?.review??base,selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);if(inputs.viewOnly)p.viewOnly=true;return {mode:'single',p,selection,contentHash:p.sourceHash,...(joined?{joined}:{}),inputs:{input:p.manifestPath,...(joined?{project:joined.designation}:{}),...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{}),...(inputs.control?{control:true}:{}),...(p.handoffInputs??{})}};}
  if(inputs.project)throw new Error('INTERVIEW_SOURCE_MISMATCH: compare takes no joined project');
  if(handoffFlags(inputs))throw new HandoffError('HANDOFF_FLAGS_INVALID','--config','compare takes no producer handoff; open one package with --config');
  if(!inputs.reference)throw new Error('open compare: explicit --reference required');
@@ -130,7 +130,7 @@ export async function prepareOpenTarget(inputs: OpenInputs, options: OpenOptions
  const viewOnly=options.viewOnly??inputs.viewOnly??false;
  for(const path of [inputs.input,...(inputs.compare!==undefined?[inputs.compare]:[])])await assertOpenInput(path);
  if(inputs.compare!==undefined&&!inputs.reference)throw new Error('OPEN_REFERENCE_REQUIRED: compare: explicit --reference required');
- let p:OpenPackage;try{p=await loadOpenPackage(inputs);}catch(error){throw await openRefusal(error,inputs);}
+ let p:OpenPackage;try{p=await loadOpenPackage(inputs,{cwd:options.cwd});}catch(error){throw await openRefusal(error,inputs);}
  fingerprint??=await openFingerprint();const key=openKey(p,fingerprint);
  // #187: canonical (symlinks and ancestors resolved) and outside every supplied folder: the package, the build root a check package belongs to, the handoff root.
  const stateDir=destinationDirectory(options.stateDir??defaultStateDir(),'OPEN_STATE_INVALID: the state directory path has a non-directory component or a symlink loop'),roots=p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
@@ -168,7 +168,8 @@ async function ensureWorker(p:OpenPackage,key:string,fingerprint:string,stateDir
 export async function runOpenWorker(requestPath:string):Promise<void>{
  const raw=await smallJson(requestPath) as WorkerRequest;if(raw.schema!=='rig-review-open-request/1'||!raw.identity||!recordValue({schema:'rig-review-open-instance/1',...raw.identity,pid:process.pid,origin:'http://127.0.0.1:1',mode:'single',capability:'0'.repeat(64)},raw.identity.key))throw new Error('open worker: invalid request');
  const spec=raw,control=await realpath(join(spec.stateDir,'open'));if(dirname(await realpath(requestPath))!==control||spec.request!==requestPath||spec.registry!==join(control,spec.identity.key+'.json')||!Number.isSafeInteger(spec.idleMs)||spec.idleMs<100)throw new Error('open worker: invalid state locations or idle limit');
- const p=await loadOpenPackage(spec.inputs),fingerprint=await openFingerprint();if(fingerprint!==spec.identity.fingerprint||openKey(p,fingerprint)!==spec.identity.key||p.contentHash!==spec.identity.contentHash)throw new Error('open worker: inputs changed before startup');
+ const workerCwd=typeof spec.cwd==='string'&&isAbsolute(spec.cwd)?spec.cwd:undefined;
+ const p=await loadOpenPackage(spec.inputs,{cwd:workerCwd}),fingerprint=await openFingerprint();if(fingerprint!==spec.identity.fingerprint||openKey(p,fingerprint)!==spec.identity.key||p.contentHash!==spec.identity.contentHash)throw new Error('open worker: inputs changed before startup');
  if(spec.inputs.control&&(!spec.controlToken||!/^[a-f0-9-]{36}$/.test(spec.controlToken)))throw new Error('open control: invalid private capability');
  // The worker mints its own page capability; it lives only in this process and the private record.
  const removeRecord=async()=>{const current=await readRecord(spec.registry,spec.identity.key);if(current?.nonce===spec.identity.nonce)await unlink(spec.registry).catch(()=>{});};

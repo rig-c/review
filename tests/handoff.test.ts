@@ -8,7 +8,9 @@ import {assertReviewUnchanged} from '../src/reference.ts';
 import {readSession,saveSession,sessionFile,freshSession} from '../src/session.ts';
 import {startServer} from '../src/server.ts';
 import producerPins from './fixtures/correction-producer-pins.json';
-import {CONFIG_NAMED_FILES,CONFIG_SKELETON_NAMES,DISCOVERY_PLACES,MODELING_INPUT_UNAVAILABLE,resolveHandoff,HandoffError} from '../src/handoff.ts';
+import {CONFIG_NAMED_FILES,CONFIG_SKELETON_NAMES,configNamedReferences,DIRECTORY_INPUT_RECEIPT,DISCOVERY_PLACES,findInstalledParts,locateInstalledParts,MODELING_INPUT_UNAVAILABLE,plateReceiptSpec,resolveHandoff,HandoffError} from '../src/handoff.ts';
+import {MODELING_PRODUCER_NOT_INSTALLED} from '../src/producer.ts';
+import {assertNamedFilesHeld,handoffGap,producerInputs,scratchConfigText} from '../src/rebuild.ts';
 import {assertWholeRigBaseline,BaselineError,compareBaseline,firstDifference,rigTree,type BaselineResult} from '../src/baseline.ts';
 import {loadOpenPackage,openKey,openFingerprint} from '../src/open.ts';
 import {handoffText} from '../web/rebuild-client.ts';
@@ -295,4 +297,242 @@ test('requirements bytes join the handoff without aliasing other named inputs or
   expect(sha(await readFile(configPath))).toBe(configDigest);
   expect(sha(await readFile(path))).toBe(sha(bytes));
  }finally{await s.done();}
+});
+
+async function writeStubParts(root:string,version:string,configTs:string):Promise<string>{
+ const realDir=join(root,`.stub-parts-${version}-${Math.random().toString(36).slice(2,8)}`);
+ const linkPath=join(root,'node_modules/@rig-c/parts');
+ await rm(linkPath,{recursive:true,force:true});
+ await mkdir(join(realDir,'src'),{recursive:true});
+ await mkdir(join(root,'node_modules/@rig-c'),{recursive:true});
+ await writeFile(join(realDir,'package.json'),JSON.stringify({name:'@rig-c/parts',version}));
+ await writeFile(join(realDir,'src/config.ts'),configTs);
+ await symlink(realDir,linkPath);
+ return realDir;
+}
+
+const legacy225ConfigTs=`export function configFileReferences(raw){
+ const out=[];
+ if(raw&&typeof raw==='object'){
+  if(typeof raw.requirements==='string'&&raw.requirements)out.push({at:'requirements',value:raw.requirements,set(v){raw.requirements=v;}});
+  if(raw.motion&&typeof raw.motion.animations_from==='string'&&raw.motion.animations_from)out.push({at:'motion.animations_from',value:raw.motion.animations_from,set(v){raw.motion.animations_from=v;}});
+ }
+ return out;
+}\n`;
+
+test('#591: derives assemble.occluders image and plate directory receipt bindings from installed @rig-c/parts@2.35.0 (create#326 93b361f shape) without hashing plate siblings',async()=>{
+ const s=await scratch();
+ try{
+  const dir=await pkg(s.root,'rig/config.json'),configPath=join(dir,'rig/config.json');
+  const installedParts=locateInstalledParts([dir,process.cwd()]);
+  const spec=plateReceiptSpec(installedParts);
+  expect(spec).toBe('rig-parts-plate-receipt/1');
+
+  await mkdir(join(dir,'rig/occluders'),{recursive:true});
+  await mkdir(join(dir,'rig/plates/front'),{recursive:true});
+  const imagePath=join(dir,'rig/occluders/front.png'),imageBytes='png-occluder-front';
+  const receiptPath=join(dir,'rig/plates/front',DIRECTORY_INPUT_RECEIPT);
+  const receiptBytes=JSON.stringify({spec,mode:'occluder',plate:'plate.png',mask:'mask.png'},null,2)+'\n';
+  const siblingPlate=join(dir,'rig/plates/front/plate.png');
+  const siblingMask=join(dir,'rig/plates/front/mask.png');
+  await writeFile(imagePath,imageBytes);
+  await writeFile(receiptPath,receiptBytes);
+  await writeFile(siblingPlate,'sibling-plate-v1');
+  await writeFile(siblingMask,'sibling-mask-v1');
+
+  const declared={
+   ...config,
+   assemble:{
+    occluders:[
+     {part:'topwear',image:'occluders/front.png',plate:'plates/front'},
+    ],
+   },
+  };
+  await writeFile(configPath,JSON.stringify(declared,null,2));
+
+  const opened=await loadReview(dir);
+  const handoff=opened.reviewedSource.handoff!;
+  expect(handoff.missing).toEqual([]);
+  expect(handoff.files).toContainEqual({
+   path:'rig/occluders/front.png',
+   sha256:sha(imageBytes),
+  });
+  expect(handoff.files).toContainEqual({
+   path:'rig/plates/front/receipt.json',
+   sha256:sha(receiptBytes),
+   directory:'rig/plates/front',
+   spec:'rig-parts-plate-receipt/1',
+  });
+  expect(handoff.files.some(f=>f.path.endsWith('plate.png')||f.path.endsWith('mask.png'))).toBe(false);
+
+  // Plate sibling changes do not invalidate the handoff or producerInputs when receipt.json is unchanged.
+  await writeFile(siblingPlate,'sibling-plate-v2');
+  await assertReviewUnchanged(opened);
+  expect(handoffGap(opened.handoff!)).toBeNull();
+  await expect(producerInputs(opened.handoff!,opened.handoffReason)).resolves.toMatchObject({
+   config:join(dir,'rig/config.json'),
+  });
+
+  // Changing the bound receipt.json or image invalidates both assertReviewUnchanged and producerInputs.
+  const modifiedReceipt=JSON.stringify({spec,mode:'occluder',plate:'plate-2.png'},null,2)+'\n';
+  await writeFile(receiptPath,modifiedReceipt);
+  await expect(assertReviewUnchanged(opened)).rejects.toThrow('Package inputs changed');
+  await expect(producerInputs(opened.handoff!,opened.handoffReason)).rejects.toThrow('REBUILD_INPUTS_CHANGED: rig/plates/front/receipt.json changed');
+  await writeFile(receiptPath,receiptBytes);
+  await assertReviewUnchanged(opened);
+
+  await writeFile(imagePath,'png-occluder-front-changed');
+  await expect(assertReviewUnchanged(opened)).rejects.toThrow('Package inputs changed');
+  await expect(producerInputs(opened.handoff!,opened.handoffReason)).rejects.toThrow('REBUILD_INPUTS_CHANGED: rig/occluders/front.png changed');
+  await writeFile(imagePath,imageBytes);
+  await assertReviewUnchanged(opened);
+
+  // Scratch config resolution and held-path enforcement cover both image and plate references.
+  const scratchCfg=JSON.parse(scratchConfigText(configPath,declared));
+  expect(scratchCfg.assemble.occluders[0].image).toBe(imagePath);
+  expect(scratchCfg.assemble.occluders[0].plate).toBe(join(dir,'rig/plates/front'));
+  expect(()=>assertNamedFilesHeld(declared,declared,[dir,process.cwd()])).not.toThrow();
+  expect(()=>assertNamedFilesHeld(declared,{...declared,assemble:{occluders:[{part:'topwear',image:'occluders/other.png',plate:'plates/front'}]}},[dir,process.cwd()])).toThrow('EDIT_PATCH_PATH_HELD: assemble.occluders[0].image');
+  expect(()=>assertNamedFilesHeld(declared,{...declared,assemble:{occluders:[{part:'topwear',image:'occluders/front.png',plate:'plates/other'}]}},[dir,process.cwd()])).toThrow('EDIT_PATCH_PATH_HELD: assemble.occluders[0].plate');
+
+  // Missing image or plate directory records in missing[] and blocks handoffGap / producerInputs.
+  await rm(join(dir,'rig/plates/front'),{recursive:true,force:true});
+  const missingPlate=await loadReview(dir);
+  expect(missingPlate.reviewedSource.handoff!.missing).toContain('assemble.occluders[0].plate rig/plates/front/receipt.json');
+  expect(handoffGap(missingPlate.handoff!)).toBe('MODELING_INPUT_UNAVAILABLE: assemble.occluders[0].plate rig/plates/front/receipt.json');
+  await expect(producerInputs(missingPlate.handoff!,missingPlate.handoffReason)).rejects.toThrow('MODELING_INPUT_UNAVAILABLE: assemble.occluders[0].plate rig/plates/front/receipt.json');
+ }finally{
+  await s.done();
+ }
+});
+
+test('#591: refuses invalid plate directory receipts, symlinks, older loaders omitting occluders, and unknown configFileReferences by name without mutating sources',async()=>{
+ const s=await scratch();
+ try{
+  const dir=await pkg(s.root,'rig/config.json'),configPath=join(dir,'rig/config.json');
+  await mkdir(join(dir,'rig/occluders'),{recursive:true});
+  await mkdir(join(dir,'rig/plates/front'),{recursive:true});
+  await writeFile(join(dir,'rig/occluders/front.png'),'png-bytes');
+  const receiptPath=join(dir,'rig/plates/front/receipt.json');
+  await writeFile(receiptPath,JSON.stringify({spec:'rig-parts-plate-receipt/1'})+'\n');
+  const declared={...config,assemble:{occluders:[{part:'topwear',image:'occluders/front.png',plate:'plates/front'}]}};
+  await writeFile(configPath,JSON.stringify(declared));
+
+  // 1) Older installed loader in package ancestry (e.g. 2.25.1 stub omitting assemble.occluders) refuses declared occluder inputs by name instead of falling back to OWN_ROOT or guessing.
+  await writeStubParts(s.root,'2.25.1',legacy225ConfigTs);
+  const beforeOlder=await treeMd5(dir);
+  await expect(loadReview(dir)).rejects.toThrow('HANDOFF_INPUT_INVALID config assemble.occluders[0].image: @rig-c/parts 2.25.1 configFileReferences does not declare assemble.occluders[0].image');
+  expect(await treeMd5(dir)).toBe(beforeOlder);
+  await writeFile(configPath,JSON.stringify({...config,assemble:{occluders:[{part:'topwear',plate:'plates/front'}]}}));
+  const beforeOlderPlate=await treeMd5(dir);
+  await expect(loadReview(dir)).rejects.toThrow('HANDOFF_INPUT_INVALID config assemble.occluders[0].plate: @rig-c/parts 2.25.1 configFileReferences does not declare assemble.occluders[0].plate');
+  expect(await treeMd5(dir)).toBe(beforeOlderPlate);
+  await rm(join(s.root,'node_modules'),{recursive:true,force:true});
+  await writeFile(configPath,JSON.stringify(declared));
+
+  // 2) Under installed @rig-c/parts@2.35.0, missing receipt.json, wrong spec, symlinked receipt.json, and escaping plate directory refuse by name without mutating sources.
+  await writeFile(receiptPath,JSON.stringify({spec:'wrong-spec/1'})+'\n');
+  const beforeWrongSpec=await treeMd5(dir);
+  await expect(loadReview(dir)).rejects.toThrow('HANDOFF_INPUT_INVALID config assemble.occluders[0].plate: rig/plates/front/receipt.json declares spec "wrong-spec/1"');
+  expect(await treeMd5(dir)).toBe(beforeWrongSpec);
+
+  await rm(receiptPath);
+  const beforeNoReceipt=await treeMd5(dir);
+  await expect(loadReview(dir)).rejects.toThrow('HANDOFF_INPUT_INVALID config assemble.occluders[0].plate: rig/plates/front holds no regular-file receipt.json');
+  expect(await treeMd5(dir)).toBe(beforeNoReceipt);
+
+  const realReceipt=join(dir,'rig/plates/real-receipt.json');
+  await writeFile(realReceipt,JSON.stringify({spec:'rig-parts-plate-receipt/1'})+'\n');
+  await symlink(realReceipt,receiptPath);
+  const beforeSymlinkReceipt=await treeMd5(dir);
+  await expect(loadReview(dir)).rejects.toThrow('HANDOFF_INPUT_INVALID config assemble.occluders[0].plate: rig/plates/front/receipt.json is not a regular file');
+  expect(await treeMd5(dir)).toBe(beforeSymlinkReceipt);
+  await rm(receiptPath);
+  await rm(realReceipt);
+
+  const outsideDir=join(s.root,'outside-plate');
+  await mkdir(outsideDir,{recursive:true});
+  await writeFile(join(outsideDir,'receipt.json'),JSON.stringify({spec:'rig-parts-plate-receipt/1'})+'\n');
+  await rm(join(dir,'rig/plates/front'),{recursive:true,force:true});
+  await symlink(outsideDir,join(dir,'rig/plates/front'));
+  await expect(loadReview(dir)).rejects.toThrow('HANDOFF_SYMLINK_ESCAPE config assemble.occluders[0].plate');
+  await rm(join(dir,'rig/plates/front'),{recursive:true,force:true});
+  await mkdir(join(dir,'rig/plates/front'),{recursive:true});
+  await writeFile(receiptPath,JSON.stringify({spec:'rig-parts-plate-receipt/1'})+'\n');
+
+  // 3) Named plant: an unknown configFileReferences entry from @rig-c/parts is refused by name, never silently skipped.
+  await writeStubParts(s.root,'9.99.0',`export function configFileReferences(raw){return [{at:'future.unknown_ref',value:'mystery.json',set(){}}];}\n`);
+  await writeFile(configPath,JSON.stringify(config));
+  const beforeUnknown=await treeMd5(dir);
+  expect(()=>configNamedReferences(config,[dir])).toThrow('HANDOFF_INPUT_INVALID config future.unknown_ref: unsupported config file reference future.unknown_ref');
+  await expect(loadReview(dir)).rejects.toThrow('HANDOFF_INPUT_INVALID config future.unknown_ref');
+  expect(await treeMd5(dir)).toBe(beforeUnknown);
+ }finally{
+  await s.done();
+ }
+});
+
+test('#591: threads logical options.cwd across loadReview, loadOpenPackage, assertReviewUnchanged, and producerInputs, and preserves read-only inspection when optional @rig-c/parts is absent',async()=>{
+ const s=await scratch();
+ const originalCwd=process.cwd();
+ try{
+  const installedParts=locateInstalledParts([originalCwd]);
+  const dir=await pkg(s.root,'rig/config.json'),configPath=join(dir,'rig/config.json');
+  await mkdir(join(dir,'rig/occluders'),{recursive:true});
+  await mkdir(join(dir,'rig/plates/front'),{recursive:true});
+  await writeFile(join(dir,'rig/occluders/front.png'),'png-bytes');
+  await writeFile(join(dir,'rig/plates/front/receipt.json'),JSON.stringify({spec:'rig-parts-plate-receipt/1'})+'\n');
+
+  // 1) When optional @rig-c/parts is completely absent (starts = [dir, s.root], no node_modules in package or cwd),
+  // non-occluder packages still open for read-only inspection while rebuild reports MODELING_PRODUCER_NOT_INSTALLED.
+  expect(findInstalledParts([dir,s.root])).toBeNull();
+  const readOnlyOpened=await loadReview(dir,{cwd:s.root});
+  expect(readOnlyOpened.reviewedSource.handoff?.files.map(f=>f.path)).toContain('rig/clips.json');
+  await assertReviewUnchanged(readOnlyOpened);
+
+  const srv=await startServer(readOnlyOpened,{port:0,stateDir:s.state,cwd:s.root});
+  const base=`http://127.0.0.1:${srv.port}`;
+  try{
+   const res=await (await fetch(`${base}/api/rebuild`)).json() as {available:boolean;reason:string|null};
+   expect(res.available).toBe(false);
+   expect(res.reason).toBe(MODELING_PRODUCER_NOT_INSTALLED);
+  }finally{await srv.stop(true);}
+
+  // When @rig-c/parts is absent, a config declaring assemble.occluders fails closed by name with MODELING_PRODUCER_NOT_INSTALLED.
+  const declared={...config,assemble:{occluders:[{part:'topwear',image:'occluders/front.png',plate:'plates/front'}]}};
+  await writeFile(configPath,JSON.stringify(declared));
+  await expect(loadReview(dir,{cwd:s.root})).rejects.toThrow(`HANDOFF_INPUT_INVALID config assemble.occluders[0].image: ${MODELING_PRODUCER_NOT_INSTALLED}`);
+
+  // 2) Logical options.cwd resolution: even when process.cwd() is a bare directory (like the open worker's canonicalControl)
+  // and the package directory has no node_modules, options.cwd (externalCwd) supplies the producer.
+  const externalCwd=join(s.root,'external-cwd');
+  const bareWorkerCwd=join(s.root,'worker-control');
+  await mkdir(join(externalCwd,'node_modules/@rig-c'),{recursive:true});
+  await mkdir(bareWorkerCwd,{recursive:true});
+  await symlink(installedParts,join(externalCwd,'node_modules/@rig-c/parts'));
+
+  process.chdir(bareWorkerCwd);
+  const openedViaCwd=await loadReview(dir,{cwd:externalCwd});
+  expect(openedViaCwd.reviewedSource.handoff?.files).toContainEqual(expect.objectContaining({
+   path:'rig/plates/front/receipt.json',
+   directory:'rig/plates/front',
+   spec:'rig-parts-plate-receipt/1',
+  }));
+  await assertReviewUnchanged(openedViaCwd);
+  await expect(producerInputs(openedViaCwd.handoff!,openedViaCwd.handoffReason)).resolves.toMatchObject({
+   config:configPath,
+  });
+
+  const openTarget=await loadOpenPackage({input:dir},{cwd:externalCwd});
+  if(openTarget.mode!=='single')throw new Error('Expected single package');
+  await assertReviewUnchanged(openTarget.p);
+
+  // If logical options.cwd holds an older producer (2.25.1 stub), loadOpenPackage / loadReview uses options.cwd and refuses.
+  const olderCwd=join(s.root,'older-cwd');
+  await writeStubParts(olderCwd,'2.25.1',legacy225ConfigTs);
+  await expect(loadOpenPackage({input:dir},{cwd:olderCwd})).rejects.toThrow('HANDOFF_INPUT_INVALID config assemble.occluders[0].image: @rig-c/parts 2.25.1');
+ }finally{
+  process.chdir(originalCwd);
+  await s.done();
+ }
 });

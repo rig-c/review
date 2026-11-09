@@ -70,7 +70,7 @@ export async function createReviewRequestContext(p: ReviewPackage, options: Revi
   const bundle=options.bundle??await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
-  const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones,...(options.stripConcurrency?{stripConcurrency:options.stripConcurrency}:{}),...(options.viewOnly??p.viewOnly?{viewOnly:true}:{}),...(joined?.draft?{draft:draftRebuildOption(joined)}:{})});
+  const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones,...(options.stripConcurrency?{stripConcurrency:options.stripConcurrency}:{}),...(options.viewOnly??p.viewOnly?{viewOnly:true}:{}),...(joined?.draft?{draft:draftRebuildOption(joined,starts)}:{})});
   const stageParts=stagePartsRoutes({single:p},undefined,rebuilds.stageDraft,joined?.draft?{
     joined,viewOnly:options.viewOnly??p.viewOnly??false,readInput:async req=>{
       try{return await bodyJson(req,stageVerdictLimit,'PARTS_VERDICT_BODY_LIMIT');}

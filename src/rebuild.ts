@@ -18,7 +18,7 @@ import { object, packagePath, safeFile, type ReviewPackage } from './manifest.ts
 import { compileArgs, firstRefusal, modelingProducerTooOld, REMESH_DELTA_SINCE, remeshArgs, remeshDeltaArgs, resolvePose, resolveProducer, runTool, versionAtLeast, type CompileRequest, type InstalledTool, type ProcessResult } from './producer.ts';
 import { attachmentHashText, MESH_EDIT_BASIS, MESH_EDIT_CODES, MESH_EDIT_SCHEMA, meshEditText } from './mesh-edit.ts';
 import { readStoredSetupMesh } from './setup-mesh.ts';
-import { CONFIG_NAMED_FILES, CONFIG_SKELETON_NAMES, HANDOFF_DECLARATION, type Handoff, type HandoffRecord } from './handoff.ts';
+import { CONFIG_NAMED_FILES, CONFIG_SKELETON_NAMES, configNamedReferences, DIRECTORY_INPUT_RECEIPT, HANDOFF_DECLARATION, plateReceiptSpec, receiptSpec, type ConfigReference, type Handoff, type HandoffRecord } from './handoff.ts';
 import { assertWholeRigBaseline, BaselineError, baselineKey, producerDiff, runBaseline, runInspectedCheck, runningInspectedCheck, type BaselineResult, type InspectedCheck } from './baseline.ts';
 import { applyConfigPatch, assertOpNames, assertPatchFresh, ConfigPatchError, parseConfigPatch, PATCH_FLAGS, patchSha256, patchText, remeshPart, type ConfigPatch, type JsonValue } from './config-patch.ts';
 import { barLine } from './physics-tuning.ts';
@@ -55,11 +55,11 @@ export const VIEW_ONLY_HANDOFF_STATUS = 'view only, no producer handoff';
 /** What remesh needs from the handoff, or the line naming what is missing. */
 export function handoffGap(handoff: Handoff): string | null {
   if (!handoff.parts) return `MODELING_INPUT_UNAVAILABLE: ${handoff.record.missing.join(', ')}`;
-  const missing = handoff.record.missing.filter(m => m.startsWith('parts.json') || m.startsWith('rig ') || m.startsWith('requirements '));
+  const missing = handoff.record.missing.filter(m => m.startsWith('parts.json') || m.startsWith('rig ') || m.startsWith('requirements ') || m.startsWith('assemble.occluders['));
   return handoff.rig && !missing.length ? null : `MODELING_INPUT_UNAVAILABLE: ${missing.join(', ') || 'rig'}`;
 }
 /** The handoff's config, parts and inspected rig, the config read and checked against the bytes the session is bound to. */
-export async function producerInputs(handoff: Handoff | null, reason: string | null): Promise<ProducerInputs> {
+export async function producerInputs(handoff: Handoff | null, reason: string | null, starts?: readonly string[]): Promise<ProducerInputs> {
   if (!handoff) throw new RebuildError('MODELING_HANDOFF_MISSING', modelingHandoffMissing(reason).slice('MODELING_HANDOFF_MISSING: '.length));
   const gap = handoffGap(handoff);
   if (gap) throw new RebuildError('MODELING_INPUT_UNAVAILABLE', gap.slice('MODELING_INPUT_UNAVAILABLE: '.length));
@@ -67,7 +67,10 @@ export async function producerInputs(handoff: Handoff | null, reason: string | n
   if (configHash !== handoff.record.config.sha256) throw new RebuildError('REBUILD_INPUTS_CHANGED', `${handoff.record.config.path} changed since the review was opened; restart review`);
   let config: unknown;
   try { config = JSON.parse(configText); } catch { /* the producer diagnoses invalid JSON */ }
-  const value = namedFile(config, ['requirements']);
+  const searchStarts = [dirname(handoff.config), handoff.root, ...(starts ?? handoff.starts ?? [process.cwd()])];
+  const { partsRoot, references } = config !== undefined ? configNamedReferences(config, searchStarts) : { partsRoot: null, references: [] };
+  const reqRef = references.find(ref => ref.kind === 'requirements');
+  const value = reqRef?.value ?? namedFile(config, ['requirements']);
   let requirements: ProducerInputs['requirements'];
   if (typeof value === 'string' && value) {
     const lexical = resolve(dirname(handoff.config), value);
@@ -84,6 +87,45 @@ export async function producerInputs(handoff: Handoff | null, reason: string | n
     if (!binding) throw new RebuildError('REBUILD_REQUIREMENTS_UNAVAILABLE', 'config.requirements has no bound handoff hash');
     requirements = { source, sha256: binding.sha256 };
   }
+  for (const ref of references) {
+    if (!ref.at.startsWith('assemble.occluders[')) continue;
+    const lexical = resolve(dirname(handoff.config), ref.value);
+    const recordedRel = posix.join(posix.dirname(handoff.record.config.path), ref.value);
+    if (ref.kind === 'plate') {
+      const receiptPath = `${recordedRel}/${DIRECTORY_INPUT_RECEIPT}`;
+      const binding = handoff.record.files.find(file => file.path === receiptPath && file.directory === recordedRel);
+      if (!binding) throw new RebuildError('MODELING_INPUT_UNAVAILABLE', `${ref.at} ${receiptPath}`);
+      let bytes: Buffer;
+      try {
+        const dirSt = await lstat(lexical);
+        if (!dirSt.isDirectory() || await realpath(lexical) !== lexical) throw new Error('invalid dir');
+        const receiptLexical = join(lexical, DIRECTORY_INPUT_RECEIPT);
+        const fileSt = await lstat(receiptLexical);
+        if (!fileSt.isFile() || await realpath(receiptLexical) !== receiptLexical) throw new Error('invalid file');
+        bytes = await readFile(receiptLexical);
+      } catch {
+        throw new RebuildError('REBUILD_INPUTS_CHANGED', `${receiptPath} changed since the review was opened; restart review`);
+      }
+      const expectedSpec = plateReceiptSpec(partsRoot, `config ${ref.at}`);
+      if (sha256(bytes) !== binding.sha256 || binding.spec !== expectedSpec || receiptSpec(bytes) !== expectedSpec) {
+        throw new RebuildError('REBUILD_INPUTS_CHANGED', `${receiptPath} changed since the review was opened; restart review`);
+      }
+      continue;
+    }
+    const binding = handoff.record.files.find(file => file.path === recordedRel && file.directory === undefined);
+    if (!binding) throw new RebuildError('MODELING_INPUT_UNAVAILABLE', `${ref.at} ${recordedRel}`);
+    let bytes: Buffer;
+    try {
+      const fileSt = await lstat(lexical);
+      if (!fileSt.isFile() || await realpath(lexical) !== lexical) throw new Error('invalid file');
+      bytes = await readFile(lexical);
+    } catch {
+      throw new RebuildError('REBUILD_INPUTS_CHANGED', `${recordedRel} changed since the review was opened; restart review`);
+    }
+    if (sha256(bytes) !== binding.sha256) {
+      throw new RebuildError('REBUILD_INPUTS_CHANGED', `${recordedRel} changed since the review was opened; restart review`);
+    }
+  }
   return { config: handoff.config, parts: handoff.parts!, rig: handoff.rig!, configText, configHash, handoff: handoff.record, ...(requirements ? { requirements } : {}) };
 }
 
@@ -92,11 +134,12 @@ export interface DraftRebuildOption {
   draftId?: string;
   source: NonNullable<JoinedProject['draft']>;
   assertCurrent?: () => Promise<void>;
+  starts?: readonly string[];
 }
 
-export function draftRebuildOption(joined?: JoinedProject): DraftRebuildOption | undefined {
+export function draftRebuildOption(joined?: JoinedProject, starts?: readonly string[]): DraftRebuildOption | undefined {
   if (!joined?.draft) return undefined;
-  return { root: joined.opened.root, draftId: joined.designation.draftId, source: joined.draft, assertCurrent: joined.assertCurrent };
+  return { root: joined.opened.root, draftId: joined.designation.draftId, source: joined.draft, assertCurrent: joined.assertCurrent, ...(starts ? { starts } : {}) };
 }
 
 async function checkDraftRef(root: string, entry: { path: string; sha256: string }): Promise<{ abs: string; bytes: Buffer }> {
@@ -132,7 +175,7 @@ async function checkDraftRef(root: string, entry: { path: string; sha256: string
  * #562C: recorded Create Stage 1 draft adapter (`project.json` `drafts[]`). Validates in CP1 order (`config` ->
  * `config_inputs` -> `parts.files` -> `files`) with project-root containment and separate `parts` vs `rig` directories.
  */
-export async function draftProducerInputs(draft: DraftRebuildOption, requireEditable = true): Promise<ProducerInputs> {
+export async function draftProducerInputs(draft: DraftRebuildOption, requireEditable = true, starts?: readonly string[]): Promise<ProducerInputs> {
   if (requireEditable && !draft.source.editable) {
     throw new RebuildError('PARTS_VERDICT_READ_ONLY', 'Stage 1 draft is inspection-only');
   }
@@ -153,16 +196,52 @@ export async function draftProducerInputs(draft: DraftRebuildOption, requireEdit
   try { configDoc = JSON.parse(configText); } catch { /* the producer diagnoses invalid JSON */ }
   const configInputs = record.config_inputs ?? [];
   let requirements: ProducerInputs['requirements'];
-  for (const keys of CONFIG_NAMED_FILES) {
-    const value = namedFile(configDoc, keys);
-    if (keys.length === 3 && (CONFIG_SKELETON_NAMES as readonly unknown[]).includes(value)) continue;
-    if (typeof value !== 'string' || !value) continue;
-    const isReq = keys.length === 1 && keys[0] === 'requirements';
-    if (isAbsolute(value)) {
-      throw new RebuildError(isReq ? 'REBUILD_REQUIREMENTS_UNAVAILABLE' : 'INTERVIEW_SOURCE_MISMATCH', `config.${keys.join('.')} must be relative to the config directory`);
+  let partsRoot: string | null = null;
+  let references: ConfigReference[] = [];
+  const searchStarts = [dirname(cfg.abs), root, ...(starts ?? draft.starts ?? draft.source.starts ?? [process.cwd()])];
+  if (configDoc !== undefined) {
+    try {
+      ({ partsRoot, references } = configNamedReferences(configDoc, searchStarts));
+    } catch (e) {
+      throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', e instanceof Error ? e.message : String(e));
     }
-    const lexical = resolve(dirname(cfg.abs), value);
+  }
+  for (const ref of references) {
+    const isReq = ref.kind === 'requirements';
+    if (isAbsolute(ref.value)) {
+      throw new RebuildError(isReq ? 'REBUILD_REQUIREMENTS_UNAVAILABLE' : 'INTERVIEW_SOURCE_MISMATCH', `config.${ref.at} must be relative to the config directory`);
+    }
+    const lexical = resolve(dirname(cfg.abs), ref.value);
     const rel = relative(root, lexical).split(sep).join('/');
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+      throw new RebuildError(isReq ? 'REBUILD_REQUIREMENTS_UNAVAILABLE' : 'INTERVIEW_SOURCE_MISMATCH', `config.${ref.at} is missing or outside the bound project`);
+    }
+    if (ref.kind === 'plate') {
+      try {
+        const st = await lstat(lexical);
+        if (!st.isDirectory()) throw new Error('not a directory');
+        const realDir = await realpath(lexical);
+        if (realDir !== lexical) throw new Error('redirected');
+      } catch {
+        throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', `config.${ref.at} is missing or outside the bound project`);
+      }
+      const receiptRel = `${rel}/${DIRECTORY_INPUT_RECEIPT}`;
+      const binding = configInputs.find(file => file.path === receiptRel && file.directory === rel);
+      if (!binding) {
+        throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', `config.${ref.at} has no bound draft config_inputs hash`);
+      }
+      const checked = await checkDraftRef(root, binding);
+      let expectedSpec: string;
+      try {
+        expectedSpec = plateReceiptSpec(partsRoot, `config.${ref.at}`);
+      } catch (e) {
+        throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', e instanceof Error ? e.message : String(e));
+      }
+      if (binding.spec !== expectedSpec || receiptSpec(checked.bytes) !== expectedSpec) {
+        throw new RebuildError('INTERVIEW_SOURCE_MISMATCH', `config.${ref.at} receipt spec does not match ${expectedSpec}`);
+      }
+      continue;
+    }
     let source: string;
     try {
       const st = await lstat(lexical);
@@ -170,11 +249,11 @@ export async function draftProducerInputs(draft: DraftRebuildOption, requireEdit
       source = await safeFile(root, rel);
       if (source !== lexical) throw new Error('redirected');
     } catch {
-      throw new RebuildError(isReq ? 'REBUILD_REQUIREMENTS_UNAVAILABLE' : 'INTERVIEW_SOURCE_MISMATCH', `config.${keys.join('.')} is missing or outside the bound project`);
+      throw new RebuildError(isReq ? 'REBUILD_REQUIREMENTS_UNAVAILABLE' : 'INTERVIEW_SOURCE_MISMATCH', `config.${ref.at} is missing or outside the bound project`);
     }
-    const binding = configInputs.find(file => file.path === rel);
+    const binding = configInputs.find(file => file.path === rel && file.directory === undefined);
     if (!binding) {
-      throw new RebuildError(isReq ? 'REBUILD_REQUIREMENTS_UNAVAILABLE' : 'INTERVIEW_SOURCE_MISMATCH', `config.${keys.join('.')} has no bound draft config_inputs hash`);
+      throw new RebuildError(isReq ? 'REBUILD_REQUIREMENTS_UNAVAILABLE' : 'INTERVIEW_SOURCE_MISMATCH', `config.${ref.at} has no bound draft config_inputs hash`);
     }
     if (isReq) requirements = { source, sha256: binding.sha256 };
   }
@@ -226,7 +305,7 @@ export async function verifyHandoffReadiness(p: ReviewPackage, starts: readonly 
   if (gap) return gap;
   let inputs: ProducerInputs;
   try {
-    inputs = await producerInputs(p.handoff, p.handoffReason);
+    inputs = await producerInputs(p.handoff, p.handoffReason, starts);
   } catch (e) {
     return e instanceof Error ? e.message : String(e);
   }
@@ -641,12 +720,13 @@ const namedFile = (doc: unknown, keys: readonly string[]): unknown => keys.reduc
  * loader resolves against the config's directory made
  * absolute when it names a file there, so the scratch copy reads the same files as the handoff config.
  */
-export function scratchConfigText(configPath: string, doc: JsonValue): string {
+export function scratchConfigText(configPath: string, doc: JsonValue, starts: readonly string[] = [process.cwd()]): string {
   const configDir = dirname(resolve(configPath)), out = structuredClone(doc) as Record<string, unknown>;
-  for (const keys of CONFIG_NAMED_FILES) {
-    const holder = namedFile(out, keys.slice(0, -1)) as Record<string, unknown> | undefined, key = keys.at(-1)!, value = holder?.[key];
-    if (keys.length === 3 && (CONFIG_SKELETON_NAMES as readonly unknown[]).includes(value)) continue;
-    if (typeof value === 'string' && value && !isAbsolute(value) && existsSync(resolve(configDir, value))) holder![key] = resolve(configDir, value);
+  const { references } = configNamedReferences(out, [configDir, ...starts]);
+  for (const ref of references) {
+    if (!isAbsolute(ref.value) && existsSync(resolve(configDir, ref.value))) {
+      ref.set(resolve(configDir, ref.value));
+    }
   }
   return JSON.stringify(out, null, 2) + '\n';
 }
@@ -673,8 +753,24 @@ function rebuildConfigIdentity(inputs: ProducerInputs): string {
 }
 
 /** A patch may not change which files the config names (they are the handoff's hashed files): `EDIT_PATCH_PATH_HELD`. */
-export function assertNamedFilesHeld(before: unknown, after: unknown): void {
-  for (const keys of CONFIG_NAMED_FILES) if (JSON.stringify(namedFile(before, keys)) !== JSON.stringify(namedFile(after, keys))) throw new RebuildError('EDIT_PATCH_PATH_HELD', `${keys.join('.')} names a handoff file; a patch may not change it`);
+export function assertNamedFilesHeld(before: unknown, after: unknown, starts: readonly string[] = [process.cwd()]): void {
+  for (const keys of CONFIG_NAMED_FILES) {
+    if (JSON.stringify(namedFile(before, keys)) !== JSON.stringify(namedFile(after, keys))) {
+      throw new RebuildError('EDIT_PATCH_PATH_HELD', `${keys.join('.')} names a handoff file; a patch may not change it`);
+    }
+  }
+  const beforeRefs = configNamedReferences(before, starts).references;
+  const afterRefs = configNamedReferences(after, starts).references;
+  const byAt = new Map(beforeRefs.map(ref => [ref.at, ref.value]));
+  for (const ref of afterRefs) {
+    if (byAt.get(ref.at) !== ref.value) {
+      throw new RebuildError('EDIT_PATCH_PATH_HELD', `${ref.at} names a handoff file; a patch may not change it`);
+    }
+    byAt.delete(ref.at);
+  }
+  for (const [at] of byAt) {
+    throw new RebuildError('EDIT_PATCH_PATH_HELD', `${at} names a handoff file; a patch may not change it`);
+  }
 }
 /** The value of a flag in the patch's args, or the producer's default. */
 const flagValue = (args: readonly string[], flag: string, fallback: string) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1]! : fallback; };
@@ -916,7 +1012,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       if (requireEditable && (options.viewOnly ?? p.viewOnly)) {
         throw new RebuildError('PARTS_VERDICT_READ_ONLY', 'Stage 1 draft is inspection-only');
       }
-      const inputs = await draftProducerInputs(options.draft, requireEditable);
+      const inputs = await draftProducerInputs(options.draft, requireEditable, options.starts);
       try {
         await options.unchanged();
       } catch (e) {
@@ -929,7 +1025,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       return inputs;
     }
     await options.unchanged();
-    return producerInputs(p.handoff, p.handoffReason);
+    return producerInputs(p.handoff, p.handoffReason, options.starts);
   }
   /** Once per session: the first time the handoff and the producer both resolve, the baseline starts (or is reused). */
   let baseline: BaselineResult | null = null, baselineRun: Promise<BaselineResult> | null = null;
@@ -1032,7 +1128,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     await options.unchanged();
     const handoff = p.handoff, gap = handoff ? handoffGap(handoff) : null;
     const viewOnly = Boolean((options.viewOnly ?? p.viewOnly) && !handoff);
-    const inputs = handoff && !gap ? await producerInputs(handoff, p.handoffReason) : null;
+    const inputs = handoff && !gap ? await producerInputs(handoff, p.handoffReason, options.starts) : null;
     const resolved = resolveProducer(options.starts);
     const parts = inputs ? contourParts(inputs.configText).map(({ name, regions }) => ({ name, regions })) : [];
     const contour = inputs ? Object.fromEntries(contourParts(inputs.configText).map(({ name, entry }) => [name, entry])) : {};
@@ -1168,7 +1264,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       await options.unchanged();
       if (options.draft) {
         if (options.viewOnly ?? p.viewOnly) throw new RebuildError('STAGE_DRAFT_UNAVAILABLE', 'Stage 1 draft is inspection-only');
-        await draftProducerInputs(options.draft, true);
+        await draftProducerInputs(options.draft, true, options.starts);
       }
     };
     const assertCurrentSelection = () => {
@@ -1476,7 +1572,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       // The handoff files are in the reviewed identity, so this also catches a config, parts or rig change.
       try {
         await options.unchanged();
-        if (options.draft) await draftProducerInputs(options.draft, true);
+        if (options.draft) await draftProducerInputs(options.draft, true, options.starts);
       } catch {
         throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild');
       }
@@ -1538,7 +1634,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     let counts: RemeshCounts | null = null;
     let built: ProcessResult | null = null;
     async function writePatchConfig(): Promise<void> {
-      const doc = JSON.parse(scratchConfigText(inputs.config, patched)) as Record<string, unknown>;
+      const doc = JSON.parse(scratchConfigText(inputs.config, patched, options.starts)) as Record<string, unknown>;
       await stageRequirements(dir, inputs.requirements, doc);
       await writeFile(join(dir, 'config.json'), JSON.stringify(doc, null, 2) + '\n', { mode: 0o600 });
     }
@@ -1564,7 +1660,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       const c = job.cloth!, plan2 = cloth!;
       // cloth.json: the patched handoff config with every path it names made absolute (the scratch copy reads the
       // handoff's files), so the config propose writes beside it builds from the same files.
-      const input = JSON.parse(scratchConfigText(inputs.config, patched)) as Record<string, unknown>;
+      const input = JSON.parse(scratchConfigText(inputs.config, patched, options.starts)) as Record<string, unknown>;
       absolutizeBuildFiles(input, value => (isAbsolute(value) ? value : resolve(dirname(inputs.config), value)));
       await stageRequirements(dir, inputs.requirements, input);
       await writeFile(join(dir, 'cloth.json'), JSON.stringify(input, null, 2) + '\n', { mode: 0o600 });
@@ -1597,7 +1693,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         if (job.op === 'cloth' && cloth) return runCloth(push);
         if (job.op === 'build' && plan) {
           // #115: assemble → rig → check from the painting and the runs, the patched config's assemble-read files absolute.
-          const doc = JSON.parse(scratchConfigText(inputs.config, patched)) as Record<string, unknown>;
+          const doc = JSON.parse(scratchConfigText(inputs.config, patched, options.starts)) as Record<string, unknown>;
           absolutizeBuildFiles(doc, value => (isAbsolute(value) ? value : resolve(dirname(inputs.config), value)));
           await stageRequirements(dir, inputs.requirements, doc);
           await writeFile(join(dir, 'config.json'), JSON.stringify(doc, null, 2) + '\n', { mode: 0o600 });
@@ -1700,7 +1796,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       patched = applyConfigPatch(original, patch.ops);
       if (patch.op.cmd === 'remesh') part = remeshPart(patch);
     } catch (e) { if (e instanceof ConfigPatchError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
-    assertNamedFilesHeld(original, patched);
+    assertNamedFilesHeld(original, patched, [dirname(inputs.config), ...options.starts]);
     // #111: a cloth recipe patch (every op under /cloth) runs propose --cloth --write-config, then builds what it wrote.
     // Decision 1: without the declared keypoints the draft moves the body bones, so it is refused before anything else.
     const clothKind = clothPatchKind(patch.ops);
@@ -1781,7 +1877,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       let patched: JsonValue;
       try { assertPatchFresh(patch, inputs.configHash); assertOpNames(original, patch.ops); patched = applyConfigPatch(original, patch.ops); remeshPart(patch); }
       catch (e) { if (e instanceof ConfigPatchError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
-      assertNamedFilesHeld(original, patched);
+      assertNamedFilesHeld(original, patched, [dirname(inputs.config), ...options.starts]);
       planned.push({ patch, patched });
     }
     const resolved = resolveProducer(options.starts);
@@ -2225,7 +2321,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
 
-    const scratchDoc = JSON.parse(scratchConfigText(inputs.config, configDoc as unknown as JsonValue)) as Record<string, unknown>;
+    const scratchDoc = JSON.parse(scratchConfigText(inputs.config, configDoc as unknown as JsonValue, options.starts)) as Record<string, unknown>;
     (scratchDoc.motion as Record<string, unknown>).animations_from = 'animations.json';
     const scratchCfgText = JSON.stringify(scratchDoc, null, 2) + '\n';
     const recordedBody = {
