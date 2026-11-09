@@ -1,5 +1,5 @@
 /** Lane B's frozen-port fake. This proves window behavior, never backend authority. */
-import { JOB_ACT_SCHEMA, JOB_API_SCHEMA } from '../../src/job-contract.ts';
+import { JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_API_SCHEMA } from '../../src/job-contract.ts';
 import type { ActV3, DisplayPublicationV3, EventV3, JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobHostPorts, JobPendingAsk, JobPublication, JobResult, JobSourceBinding, JobEnabledActKind, JobActValues, PendingAskV3, } from '../../src/job-contract.ts';
 export function fixturePublication(index = 1): JobDisplayPublication {
     const hash = String(index).padStart(64, '0');
@@ -153,14 +153,12 @@ export function fixtureAct(kind: JobEnabledActKind, words = ''): JobAct {
                 { itemId: 'body', optionId: 'other', otherText: '  원래 표현\n' },
             ], note: words },
         checkpoint: { checkpointId: 'silhouette', planStepId: 'inspect-body', outcome: 'pass', words },
-        'parts-verdict': { verdict: 'approved', words, parts: [
-                { partId: 'body', part: { outcome: 'clean', note: '' }, mesh: { outcome: 'clean', note: '' } },
-            ] },
+        'parts-verdict': { verdict: 'approved', words, issues: [] },
         'review-verdict': { stage: 'rig-review', verdict: 'approved', words },
         signoff: { stage: 'plan-approved', decision: 'approved', words },
     };
     return {
-        schema: JOB_ACT_SCHEMA, actId: 'act-' + kind, jobId: 'window-fixture', askId: 'ask-' + kind,
+        schema: kind === 'parts-verdict' ? JOB_PARTS_VERDICT_ACT_SCHEMA : JOB_ACT_SCHEMA, actId: 'act-' + kind, jobId: 'window-fixture', askId: 'ask-' + kind,
         publicationId: 'publication-1', kind, at: '2026-11-07T10:00:00.000Z',
         authority: { actor: 'human', channel: 'review-ui', reviewer: { id: 'fixture-owner', role: 'owner' } },
         source: { ...source, selector: kind === 'parts-verdict' ? { kind: 'draft', id: 'draft-one' } : { kind: 'rig', version: 1 } },

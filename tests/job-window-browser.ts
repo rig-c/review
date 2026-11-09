@@ -165,7 +165,7 @@ async function capturePaint(name: string) {
     for (let offset = 0; offset < shown.data.length; offset += 4) {
         if (!shown.data.subarray(offset, offset + 4).equals(hidden.data.subarray(offset, offset + 4))) changedPixels++;
     }
-    assert.ok(changedPixels > 0, 'the actual Play canvas contributes visible pixels');
+    assert.ok(changedPixels > 0, 'the actual shared workspace canvas contributes visible pixels');
     await checkpoints(name + '-paint', {rectangle, changedPixels, width: shown.width, height: shown.height});
     const fullScreenshot = await page!.screenshot();
     await writeFile(join(output, name + '.png'), fullScreenshot);
@@ -285,6 +285,13 @@ try {
     } else {
     const first = await fixture.publish('parts');
     await show(first);
+    const firstPaint = await page.evaluate<{width: number; height: number; assembled: string}>(`(()=>{
+        const canvas=document.querySelector('[data-job-parts-workspace] #pv-canvas');
+        return {width:canvas.width,height:canvas.height,assembled:document.querySelector('#pv-assemble').getAttribute('aria-pressed')};})()`);
+    assert.ok(firstPaint.width > 1 && firstPaint.height > 1, 'the acknowledged shared mount has painted its initial image');
+    assert.equal(firstPaint.assembled, 'true');
+    await checkpoints('parts-initial-paint', {publicationId: first.publicationId, sourceHash: first.source.sourceHash,
+        ...firstPaint, fixture: 'public viewport-387 package with declared synthetic job metadata'});
     fixture.input.setContext({...fixture.input.getContext(), subjects: [...fixture.input.getContext().subjects,
         {kind: 'signoff', stage: 'parts-review'}]});
     // Publish the updated semantic ask declaration through the ordinary agent command.

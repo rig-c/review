@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {prepareJobInspection, resolveJobPanels, jobPartsReviewState, jobPartsPainting, type JobInspectionMetadataV3, createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
-import { JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobResult, type JobModelSourceBinding, type JobRigCapture, type PendingAskV3, type UISubmissionV3, type ActV3, type RecordAct } from '../src/job-contract.ts';
+import { JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobResult, type JobModelSourceBinding, type JobRigCapture, type PendingAskV3, type UISubmissionV3, type ActV3, type JobPartsVerdictAct, type RecordAct } from '../src/job-contract.ts';
 import { buildRecordSource, parseRecordAct, parseRecordPublishedContext, parseRecordSource, recordInstanceKey } from '../src/job-api.ts';
 import {createJobRigSubmission} from '../web/job-rig-capture.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
@@ -3475,7 +3475,7 @@ describe('C4 shared parts host', () => {
     function partsAct(verdict: 'approved' | 'changes-requested' = 'approved') {
         const base = fixtureAct('parts-verdict', '  source words\n');
         return {...base, schema: 'rig-review/act@5', value: {verdict, words: '  source words\n',
-            issues: verdict === 'approved' ? [] : [{id: 'spatial-issue'}]}} as unknown as ActV3;
+            issues: verdict === 'approved' ? [] : [{id: 'spatial-issue'}]}} as unknown as JobPartsVerdictAct;
     }
     async function partsHarness(withSignoff = true) {
         const h = harness();
@@ -3508,7 +3508,7 @@ describe('C4 shared parts host', () => {
             expect(resolveJobPanels(partsMetadata(raw), source)).toEqual({...fallback, invalid: true});
         }
         const unknown = {...explicit, left: ['future.component']};
-        expect(resolveJobPanels(partsMetadata(unknown), source)).toEqual({composition: unknown, invalid: false});
+        expect<unknown>(resolveJobPanels(partsMetadata(unknown), source)).toEqual({composition: unknown, invalid: false});
     });
 
     test('C4 painting is selected by declared identity, including a non-first painting role', () => {
@@ -3595,7 +3595,10 @@ describe('C4 shared parts host', () => {
         reload.window.event(actEvent(signoff, 5));
         expect(jobPartsReviewState(reload.window.state().pending, h.act.publicationId)).toBe('approved');
         expect(jobPartsReviewState(reload.window.state().pending, 'publication-2')).toBe('reviewing');
-        const legacy = {...h.act, schema: 'rig-review/act@2'} as ActV3;
+        const legacy: ActV3 = {...h.act, schema: 'rig-review/act@2', value: {
+            verdict: 'approved', words: h.act.value.words,
+            parts: [{partId: 'body', part: {outcome: 'clean', note: ''}, mesh: {outcome: 'clean', note: ''}}],
+        }};
         expect(jobPartsReviewState([{...h.verdict, status: 'answered', act: legacy}], h.act.publicationId)).toBe('reviewing');
     });
 
@@ -3771,7 +3774,7 @@ describe('C4 async source and host ownership', () => {
         const {rm} = await import('node:fs/promises');
         for (const root of roots.splice(0)) await rm(root, {recursive: true, force: true});
     });
-    // Execute the existing C4 adapter closures, never a replacement for the absent C3 mount.
+    // Exercise the production C4 adapter closures. Browser validation uses the shared C3 mount.
     async function adapters() {
         const [{parsePartsIssue}, {commentFixture, candidate}, {mkdtemp}, {tmpdir}] = await Promise.all([
             import('../src/parts-comment.ts'), import('./helpers/parts-comments-package.ts'),
@@ -3795,6 +3798,9 @@ describe('C4 async source and host ownership', () => {
         const mountStart = sourceText.indexOf('    async function mountJobParts(');
         const adapterStart = sourceText.indexOf('        const lifetime = new AbortController();', mountStart);
         const adapterEnd = sourceText.indexOf('        try {\n            mounted = mountPartsWorkspace(', adapterStart);
+        const readyStart = sourceText.indexOf('            await Promise.race(', adapterEnd);
+        const readyEnd = sourceText.indexOf(';', readyStart);
+        const readyExpression = sourceText.slice(readyStart + '            await '.length, readyEnd);
         const paintStart = sourceText.indexOf('            await new Promise<void>((resolve, reject)', adapterEnd);
         const paintEnd = sourceText.indexOf('\n            if (signal.aborted)', paintStart);
         const paintExpression = sourceText.slice(paintStart + '            await '.length, paintEnd).trim().replace(/;$/, '');
@@ -3806,6 +3812,8 @@ describe('C4 async source and host ownership', () => {
         const jsonEnd = sourceText.indexOf('function mediaReady(', jsonStart);
         expect(adapterStart).toBeGreaterThan(mountStart);
         expect(adapterEnd).toBeGreaterThan(adapterStart);
+        expect(readyStart).toBeGreaterThan(adapterEnd);
+        expect(paintStart).toBeGreaterThan(readyEnd);
         const panel: {issues: typeof issue[]; legacy: unknown; composition: {side: string[]}; output?: unknown; dispose?: () => void} = {
             issues: [issue], legacy: null, composition: {side: ['parts.issues', 'act.submit']},
         };
@@ -3826,9 +3834,10 @@ describe('C4 async source and host ownership', () => {
         const frames = new Map<number, FrameRequestCallback>();
         let frameId = 0;
         const code = sourceText.slice(bytesStart, bytesEnd) + sourceText.slice(jsonStart, jsonEnd) +
-            sourceText.slice(adapterStart, adapterEnd) + '\nreturn {source, host, lifetime, viewReady,\n' +
+            sourceText.slice(adapterStart, adapterEnd) + '\nreturn {source, host, lifetime, preparationCancelled,\n' +
             'finishPreparation() {' + sourceText.slice(finalizerStart, finalizerEnd) + '\n},\n' +
             'waitForPaint() {return ' + paintExpression + ';},\n' +
+            'waitUntilReady(ready) {const mounted = {ready}; return ' + readyExpression + ';},\n' +
             'activate(value) {current = value;}};';
         const run = new Function('prepared', 'current', 'signal', 'panel', 'routes', 'painting', 'forms', 'window',
             'access', 'fetch', 'parsePartsIssue', 'saveDraft', 'jobPartsReviewState', 'requestAnimationFrame', 'cancelAnimationFrame',
@@ -3841,7 +3850,8 @@ describe('C4 async source and host ownership', () => {
                 source: import('../web/parts.ts').PartsSource;
                 host: import('../web/parts.ts').PartsHost;
                 lifetime: AbortController;
-                viewReady: Promise<void>;
+                preparationCancelled: Promise<never>;
+                waitUntilReady(ready: Promise<void>): Promise<void>;
                 finishPreparation(): void;
                 waitForPaint(): Promise<void>;
                 activate(value: object): void;
@@ -3855,7 +3865,6 @@ describe('C4 async source and host ownership', () => {
     test('C4 failed replacement keeps the retained adapter usable after its preparation signal aborts', async () => {
         const h = await adapters();
         await h.probe.source.view();
-        await h.probe.viewReady;
         const painted = h.probe.waitForPaint();
         h.frame(); h.frame();
         await painted;
@@ -3877,7 +3886,7 @@ describe('C4 async source and host ownership', () => {
             init.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {once: true});
         }));
         const refused = h.probe.source.view().catch(error => error);
-        const readiness = h.probe.viewReady.catch(error => error);
+        const readiness = h.probe.preparationCancelled.catch(error => error);
         h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
         await h.publish(2);
         expect((await refused).message).toContain('Aborted');
@@ -3886,11 +3895,43 @@ describe('C4 async source and host ownership', () => {
         h.panel.dispose!();
     });
 
+    test('C4 awaits the handle readiness contract after source loading and propagates its rejection', async () => {
+        const text = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+        expect(text).toContain('await Promise.race([mounted.ready, preparationCancelled]);');
+        const h = await adapters();
+        await h.probe.source.view();
+        const ready = deferred<void>();
+        let settled = false;
+        const waiting = h.probe.waitUntilReady(ready.promise).then(() => {settled = true;});
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        ready.resolve();
+        await waiting;
+        expect(settled).toBe(true);
+        const failure = new Error('PARTS_PAINT_FAILED');
+        await expect(h.probe.waitUntilReady(Promise.reject(failure))).rejects.toBe(failure);
+        h.probe.finishPreparation();
+        h.panel.dispose!();
+    });
+
+    test('C4 replacement cancels preparation while handle readiness is unresolved', async () => {
+        const h = await adapters();
+        await h.probe.source.view();
+        const ready = deferred<void>();
+        const waiting = h.probe.waitUntilReady(ready.promise).catch(error => error);
+        h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
+        await h.publish(2);
+        expect((await waiting).message).toBe('JOB_PRELOAD_CANCELLED');
+        expect(h.probe.lifetime.signal.aborted).toBe(true);
+        ready.resolve();
+        expect(h.frames.size).toBe(0);
+        h.panel.dispose!();
+    });
+
     test('C4 cancellation between paint frames releases preparation without waiting for another frame', async () => {
         for (const deliveredFrames of [0, 1]) {
             const h = await adapters();
             await h.probe.source.view();
-            await h.probe.viewReady;
             const painted = h.probe.waitForPaint().catch(error => error);
             if (deliveredFrames) h.frame();
             h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});

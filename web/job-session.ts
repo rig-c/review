@@ -370,7 +370,7 @@ export function createJobWindow<Prepared>(options: {
         if (latest.displayed?.publication.publicationId !== publicationId || !latest.receipt || !signoff)
             throw new Error('JOB_ACT_SOURCE_STALE');
         assertJobAskSource(signoff, latest.displayed);
-        return submit({...input, kind: 'signoff', askId: signoff.askId,
+        return submit({kind: 'signoff', publicationId, pageId: input.pageId, askId: signoff.askId,
             expectedGeneration: latest.generation, displayedNonce: latest.receipt.displayedNonce,
             submissionId: signoffSubmissionId,
             value: {stage: 'parts-review', decision: 'approved', words: value.words}});
@@ -1953,12 +1953,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         const routes = jobPublicationRoutes(prepared.display, location.origin);
         const painting = jobPartsPainting(prepared);
         const lifetime = new AbortController();
-        let readyView!: () => void;
-        let refuseView!: (error: unknown) => void;
-        const viewReady = new Promise<void>((resolve, reject) => {readyView = resolve; refuseView = reject;});
-        void viewReady.catch(() => {});
+        let rejectPreparation!: (error: unknown) => void;
+        const preparationCancelled = new Promise<never>((_resolve, reject) => {rejectPreparation = reject;});
+        void preparationCancelled.catch(() => {});
         let mounted: ReturnType<typeof mountPartsWorkspace> | undefined;
-        const cancelPreparation = () => {lifetime.abort(); refuseView(new Error('JOB_PRELOAD_CANCELLED'));};
+        const cancelPreparation = () => {lifetime.abort(); rejectPreparation(new Error('JOB_PRELOAD_CANCELLED'));};
         signal.addEventListener('abort', cancelPreparation, {once: true});
         panel.dispose = () => {
             signal.removeEventListener('abort', cancelPreparation);
@@ -1969,14 +1968,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         };
         const source: PartsSource = {
             async view() {
-                try {
-                    const view = await jobJson<JobPartsInventory>(routes.api('stage-parts'), lifetime.signal);
-                    if (current !== prepared || lifetime.signal.aborted ||
-                        view.sourceHash !== prepared.display.publication.source.sourceHash)
-                        throw new Error('JOB_ACT_SOURCE_STALE');
-                    readyView();
-                    return {...view, readOnly: false};
-                } catch (error) {refuseView(error); throw error;}
+                const view = await jobJson<JobPartsInventory>(routes.api('stage-parts'), lifetime.signal);
+                if (current !== prepared || lifetime.signal.aborted ||
+                    view.sourceHash !== prepared.display.publication.source.sourceHash)
+                    throw new Error('JOB_ACT_SOURCE_STALE');
+                return {...view, readOnly: false};
             },
             async image(index) {
                 const item = prepared.parts?.items.find(item => item.index === index);
@@ -2035,7 +2031,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 rows.textContent = JSON.stringify(panel.legacy, null, 2);
                 panel.slots.side.append(legacy, rows);
             }
-            await viewReady;
+            await Promise.race([mounted.ready, preparationCancelled]);
             await new Promise<void>((resolve, reject) => {
                 let frame = 0;
                 const cancelled = () => {
