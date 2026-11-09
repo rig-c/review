@@ -121,7 +121,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
   const selection = productNode(selectionSource, node => ts.isFunctionDeclaration(node) &&
     node.name?.text === 'stagePartsSelectionIndex').replace('export function', 'function');
   const paintSlice = src.slice(src.indexOf('const itemImage ='), src.indexOf('\nfunction renderComparison('));
-  const selectSlice = src.slice(src.indexOf('function select(index: number): void {'), src.indexOf('\nfunction updateEntry('));
+  const selectSlice = src.slice(src.indexOf('function select(index: number): void {'), src.indexOf('\nfunction renderLegacyVerdict('));
   const bootStart = src.indexOf('frameSize:target=>{');
   const bootEnd = src.indexOf('});viewport.bindControls();');
   const frameSizeSlice = src.slice(bootStart, bootEnd);

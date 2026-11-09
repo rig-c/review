@@ -2,70 +2,366 @@ import {defaultPartsComparison,paintingRectangle,type PartsComparison} from '../
 import {mountViewportPair} from './viewport-pair.ts';
 import {createPartsViewport} from './parts-viewport-provider.ts';
 import {bindStageComments,type CommentUiPose,type CommentCodec} from './stage-comments.ts';
-import {parsePartsComment,snapImageRegion,type PartsComment} from '../src/parts-comment.ts';
+import {parsePartsIssue,snapImageRegion,type PartsComment,type PartsIssue} from '../src/parts-comment.ts';
 import {projectMark,unprojectMark,region} from '../src/stage-comment.ts';
-import {bindStageNav,stagePartsSelectionIndex,type StagePartsState,type StagePartsWindow} from './stage-nav.ts';
+import {stagePartsSelectionIndex,type StagePartsState,type StagePartsWindow} from './stage-nav.ts';
+import type {JobEnabledActKind,JobUISubmissionV3,PanelSlot} from '../src/job-contract.ts';
+import type {LegacyPartsVerdictView} from '../src/parts-view.ts';
 /**
  * The parts and atlas view (#348). Every part on its own, on a sentinel background, through the shared native-scale
- * viewport controller; the footprints of the parts drawn in front of it; the producer's flags on it; and a
- * per-part verdict saved as `rig-review-parts-verdict/2`. In atlas mode, the pages as packed with every region's box
+ * viewport controller; the footprints of the parts drawn in front of it; the producer's flags on it; and pointed
+ * issues saved as `rig-review-parts-verdict/4`. In atlas mode, the pages as packed with every region's box
  * and name, and a click from a region to its own view.
  *
  * Nothing here measures the art: flags come from the producer's files, and the footprint is the front parts' own
  * alpha drawn over the selected part (the parts.json draw order, back first, says which parts are in front).
  */
-import { bindDomI18n, onLanguageChange, setLinkLanguage, setLanguagePreference, t } from './i18n.ts';
-import { pageInstanceAccess } from './instance-access.ts';
-import { connectLiveWindow } from './live-connection.ts';
+import { onLanguageChange, t } from './i18n.ts';
+import type { InstanceAccess } from './instance-access.ts';
 import { flagLabel, readingGroup, countedFlag } from './parts-flags.ts';
 import { paintAssembly, pickAssembly, paintAssemblyOutline, frontParts, paintAlphaOnly, paintBackground, paintPart, paintMesh, paintOverlay, paintPaintingCrop, paintFootprints } from './parts-render.ts';
 
-type Outcome = 'pending' | 'clean' | 'flagged';
-interface Mesh { vertices: number[]; triangles: number[]; figures: Record<string, unknown> }
-interface Entry { outcome: Outcome; note: string; mesh?: { outcome: Outcome; note: string } }
-interface Item { mesh?: Mesh; name: string; index: number; x: number; y: number; w: number; h: number; page?: string; degrees?: number; image?: boolean;imageHash?:string }
-interface Page { name: string; width: number; height: number; index: number }
-type Flag =
+export interface Mesh { vertices: number[]; triangles: number[]; figures: Record<string, unknown> }
+export interface Item { mesh?: Mesh; name: string; index: number; x: number; y: number; w: number; h: number; page?: string; degrees?: number; image?: boolean;imageHash?:string }
+export interface Page { name: string; width: number; height: number; index: number }
+export type Flag =
   | { id: string; item: string; source: 'mesh_report'; kind: 'faint'; art: number; maxAlpha: number; box: [number, number, number, number] }
   | { id: string; item: string; source: 'check'; kind: 'check'; path: string; line: string; root: string; status: string | null; entry: Record<string, unknown>; classification?: 'part' | 'pair' | 'evidence' | 'unclassified' };
-interface ViewData {
+export interface ViewData {
  inspectionSourceHash?:string;
  joinedVerdictBinding?:string;
  verdictReadOnlyReason?:string;
  draft?:{inspectionOnly?:boolean;label:string;buildId:string;inspectionSourceHash:string;mappings:{part:string;skin:string;slot:string;attachment:string;vertices:number;triangles:number}[];evidence:unknown};draftUnavailable?:string;
   differenceAvailable?:boolean;painting:{sha256:string;width:number;height:number}|null;sourceHash:string;mode: 'parts' | 'atlas'; title: string; rigSize: [number, number] | null; items: Item[]; pages: Page[]; flags: Flag[]; readings?: Flag[];
   flagSources: string[]; flagMissing: string[]; verdictFile: string;
-  verdict: { comments?:PartsComment[];status: string; parts: Record<string, Entry> } | null; verdictStale: 'files' | 'flags' | null;
+  verdict: { issues?:PartsIssue[];comments?:PartsComment[];status: string; parts?: Record<string, unknown> } | null; verdictStale: 'files' | 'flags' | null;
+  legacyVerdict?: LegacyPartsVerdictView;
+}
+
+export interface PanelOutput {
+  kind: JobEnabledActKind;
+  value(words?: string): JobUISubmissionV3['value'];
+}
+
+export interface PartsSource {
+  view(): Promise<ViewData>;
+  image(part: string): Promise<Blob>;
+  page?(name: string): Promise<Blob>;
+  painting?(): Promise<Blob | null>;
+  difference?(part: string, threshold: number, footprints: boolean): Promise<{ png: Blob; count: number; covered: number; compared: number }>;
+  crop(issue: PartsIssue): Promise<PartsIssue>;
+}
+
+export interface PartsHost {
+  locked(): boolean;
+  changed(issues: PartsIssue[]): void;
+  register?(output: PanelOutput): void;
+  message?(text: string): void;
+}
+
+export interface MountPartsWorkspaceOptions {
+  stageEmbedded?: boolean;
+  stageSide?: string | null;
+  stageBuild?: string;
+  initialRestore?: StagePartsState | null;
+  sourceReady?: Promise<void>;
+  access?: InstanceAccess;
+  saveVerdict?: (body: { status: 'approved' | 'changes-requested'; issues: PartsIssue[]; binding?: string }) => Promise<{ ok: boolean; error?: string; verdict?: { source: { sha256: string } } }>;
+  exportVerdict?: (format: 'json' | 'issue', data: ViewData) => Promise<void>;
+}
+
+export interface PartsWorkspaceHandle {
+  dispose(): void;
+  select(part: string): void;
+  ready: Promise<void>;
+  issues(): PartsIssue[];
+  snapshot(): StagePartsState | null;
+  restore(saved: StagePartsState): Promise<void>;
+  revalidate(nextBuild?: string, savedState?: StagePartsState | null): Promise<void>;
 }
 
 /** Page pixels shown around a region in its own view, so the packer's bleed and padding are visible. */
 export const REGION_MARGIN = 4;
 
-const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const access = pageInstanceAccess();
-const stageEmbedded=new URL(location.href).searchParams.get('stageEmbed')==='1';
-const stageSide=new URL(location.href).searchParams.get('side');
-let stageBuild='inspected',stageRestore:StagePartsState|null=null;
-let receiveSource:()=>void=()=>{};const sourceReady=new Promise<void>(resolve=>{receiveSource=resolve;});
-if(typeof window!=='undefined')window.addEventListener('message',event=>{if(event.source===parent&&event.origin===location.origin&&event.data?.type==='review-stage-source'&&(event.data.buildId==='inspected'||/^[a-f0-9]{64}$/.test(event.data.buildId))){stageBuild=event.data.buildId;stageRestore=event.data.state??null;receiveSource();}});
-const stageHeaders=()=>access.headers(stageEmbedded?{'X-Review-Stage-Build':stageBuild}:{});
-const partsApi=stageEmbedded?(stageSide==='a'||stageSide==='b'?`/api/compare/${stageSide}/stage-parts`:'/api/stage-parts'):'/api/parts';
-
-const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, comparison:defaultPartsComparison(), differenceThreshold:0, hidden: new Set<string>(), view: 'item' as 'item' | 'page' | 'assembled', page: 0, meshShown: new Set<string>(), verdict: new Map<string, Entry>() };
-const comments:PartsComment[]=[];let commentUi:ReturnType<typeof bindStageComments>|null=null;let viewport:ReturnType<typeof createPartsViewport>|null=null;let painting=false;
-const images = new Map<string, HTMLImageElement>();
-
-function load(src: string): Promise<HTMLImageElement> {
-  const cached = images.get(src);
-  if (cached) return Promise.resolve(cached);
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => { images.set(src, img); resolve(img); };
-    img.onerror = () => reject(new Error(src));
-    if(stageEmbedded)void fetch(access.route(src),{headers:stageHeaders()}).then(async res=>{if(!res.ok)throw new Error('STAGE_DRAFT_CHANGED');const url=URL.createObjectURL(await res.blob());img.addEventListener('load',()=>URL.revokeObjectURL(url),{once:true});img.src=url;}).catch(reject);
-    else img.src = access.route(src);
-  });
+function ensureSlotMarkup(slots: Partial<Record<PanelSlot, HTMLElement>>, query: <T extends Element = HTMLElement>(sel: string) => T | null): void {
+  const doc = typeof globalThis.document !== 'undefined' ? globalThis.document : null;
+  if (!doc || typeof doc.createElement !== 'function') return;
+  if (slots.left && !query('#pv-items')) {
+    const title = doc.createElement('h2'); title.id = 'pv-list-title'; title.textContent = t('PARTS');
+    const ul = doc.createElement('ul'); ul.id = 'pv-items'; ul.setAttribute('data-pv-items', '');
+    slots.left.append(title, ul);
+  }
+  if (slots.toolbar && !query('#pv-assemble')) {
+    slots.toolbar.classList?.add?.('pv-toolbar');
+    const assemble = doc.createElement('button'); assemble.type = 'button'; assemble.id = 'pv-assemble'; assemble.setAttribute('aria-pressed', 'false'); assemble.textContent = t('Assembled');
+    const bgLabel = doc.createElement('label'); bgLabel.className = 'pv-field'; bgLabel.textContent = t('Background');
+    const bgSelect = doc.createElement('select'); bgSelect.id = 'pv-bg'; bgSelect.setAttribute('data-pv-bg', '');
+    for (const [val, text] of [['green', 'Green'], ['magenta', 'Magenta'], ['black', 'Black'], ['white', 'White'], ['checker', 'Checker']]) {
+      const opt = doc.createElement('option'); opt.value = val!; opt.textContent = t(text!); bgSelect.append(opt);
+    }
+    bgLabel.append(bgSelect);
+    const zoomGroup = doc.createElement('span'); zoomGroup.className = 'pv-group'; zoomGroup.setAttribute('role', 'group'); zoomGroup.setAttribute('aria-label', t('Zoom'));
+    for (const [id, text] of [['zoom-out', '−'], ['zoom-in', '+'], ['fit', 'Fit'], ['native-one', '1:1']]) {
+      if (id === 'zoom-in') { const zv = doc.createElement('span'); zv.id = 'zoom-value'; zv.textContent = '1:1'; zoomGroup.append(zv); }
+      const btn = doc.createElement('button'); btn.type = 'button'; btn.id = id!; btn.textContent = text === 'Fit' ? t('Fit') : text!;
+      if (id === 'native-one') btn.setAttribute('aria-pressed', 'true');
+      zoomGroup.append(btn);
+    }
+    const syncLabel = doc.createElement('label'); syncLabel.className = 'pv-field';
+    const syncInput = doc.createElement('input'); syncInput.id = 'camera-sync'; syncInput.type = 'checkbox';
+    syncLabel.append(syncInput, t('Sync cameras'));
+    const commentBtn = doc.createElement('button'); commentBtn.type = 'button'; commentBtn.id = 'stage-comment'; commentBtn.setAttribute('aria-pressed', 'false'); commentBtn.setAttribute('aria-controls', 'stage-comment-list'); commentBtn.textContent = t('Comment · C ({0})', [0]);
+    const alphaLabel = doc.createElement('label'); alphaLabel.className = 'pv-field';
+    const alphaInput = doc.createElement('input'); alphaInput.type = 'checkbox'; alphaInput.id = 'pv-alpha'; alphaInput.setAttribute('data-pv-alpha', '');
+    alphaLabel.append(alphaInput, t('Alpha only'));
+    const fpLabel = doc.createElement('label'); fpLabel.className = 'pv-field'; fpLabel.id = 'pv-footprint-control';
+    const fpInput = doc.createElement('input'); fpInput.type = 'checkbox'; fpInput.id = 'pv-footprints'; fpInput.setAttribute('data-pv-footprints', '');
+    fpLabel.append(fpInput, t('Footprints of parts in front'));
+    const compSpan = doc.createElement('span'); compSpan.id = 'pv-comparison'; compSpan.className = 'pv-comparison'; compSpan.hidden = true;
+    const compGroupWrap = doc.createElement('span'); compGroupWrap.className = 'pv-field'; compGroupWrap.textContent = t('Painting comparison');
+    const compGroup = doc.createElement('span'); compGroup.className = 'pv-group'; compGroup.setAttribute('role', 'group'); compGroup.setAttribute('aria-label', t('Painting comparison'));
+    for (const [mode, text] of [['part', 'Part'], ['overlay', 'Overlay'], ['difference', 'Difference']]) {
+      const btn = doc.createElement('button'); btn.type = 'button'; btn.setAttribute('data-pv-comparison', mode!); btn.setAttribute('aria-pressed', String(mode === 'part')); btn.textContent = t(text!);
+      compGroup.append(btn);
+    }
+    compGroupWrap.append(compGroup);
+    const opLabel = doc.createElement('label'); opLabel.className = 'pv-field'; opLabel.id = 'pv-opacity-control'; opLabel.hidden = true; opLabel.textContent = t('Part opacity');
+    const opInput = doc.createElement('input'); opInput.type = 'range'; opInput.id = 'pv-opacity'; opInput.min = '0'; opInput.max = '1'; opInput.step = '0.001'; opInput.value = '0.5';
+    const opOut = doc.createElement('output'); opOut.id = 'pv-opacity-value'; opOut.textContent = '50.0%';
+    opLabel.append(opInput, opOut);
+    const thLabel = doc.createElement('label'); thLabel.className = 'pv-field'; thLabel.id = 'pv-threshold-control'; thLabel.hidden = true; thLabel.textContent = t('Threshold');
+    const thInput = doc.createElement('input'); thInput.type = 'number'; thInput.id = 'pv-threshold'; thInput.min = '0'; thInput.max = '255'; thInput.step = '1'; thInput.value = '0';
+    thLabel.append(thInput);
+    compSpan.append(compGroupWrap, opLabel, thLabel);
+    const atlasSwitch = doc.createElement('span'); atlasSwitch.className = 'pv-group'; atlasSwitch.setAttribute('role', 'group'); atlasSwitch.setAttribute('aria-label', t('Atlas view')); atlasSwitch.id = 'pv-atlas-switch'; atlasSwitch.hidden = true;
+    for (const [view, text] of [['item', 'Region'], ['page', 'Pages']]) {
+      const btn = doc.createElement('button'); btn.type = 'button'; btn.setAttribute('data-pv-view', view!); btn.setAttribute('aria-pressed', String(view === 'item')); btn.textContent = t(text!);
+      atlasSwitch.append(btn);
+    }
+    slots.toolbar.append(assemble, bgLabel, zoomGroup, syncLabel, commentBtn, alphaLabel, fpLabel, compSpan, atlasSwitch);
+  }
+  if (slots.stage && !query('#stage-layout')) {
+    const wrap = doc.createElement('div'); wrap.className = 'pv-canvas-wrap'; wrap.id = 'stage-layout';
+    const box = doc.createElement('div'); box.className = 'pv-canvas-box'; box.id = 'pv-canvas-box';
+    const canvas = doc.createElement('canvas'); canvas.id = 'pv-canvas'; canvas.setAttribute('data-pv-canvas', ''); canvas.width = 1; canvas.height = 1;
+    const overlay = doc.createElement('div'); overlay.id = 'pv-overlay'; overlay.className = 'pv-overlay';
+    box.append(canvas, overlay); wrap.append(box);
+    const caption = doc.createElement('p'); caption.id = 'pv-caption'; caption.className = 'pv-subtle';
+    slots.stage.append(wrap, caption);
+  }
+  if (slots.side && !query('#pv-flags')) {
+    const flagsSec = doc.createElement('section');
+    const flagsH2 = doc.createElement('h2'); flagsH2.textContent = t('PRODUCER FLAGS');
+    const flagsUl = doc.createElement('ul'); flagsUl.id = 'pv-flags'; flagsUl.setAttribute('data-pv-flags', '');
+    const flagsSources = doc.createElement('p'); flagsSources.id = 'pv-flag-sources'; flagsSources.className = 'pv-subtle';
+    flagsSec.append(flagsH2, flagsUl, flagsSources);
+    const verdictSec = doc.createElement('section'); verdictSec.className = 'pv-verdict';
+    const verdictH2 = doc.createElement('h2'); verdictH2.textContent = t('VERDICT');
+    const hint = doc.createElement('p'); hint.id = 'parts-correction-hint'; hint.className = 'subtle'; hint.hidden = true;
+    const legacyUl = doc.createElement('ul'); legacyUl.id = 'pv-legacy-flagged'; legacyUl.className = 'pv-legacy-flagged'; legacyUl.hidden = true;
+    const saveBtn = doc.createElement('button'); saveBtn.id = 'pv-save'; saveBtn.type = 'button'; saveBtn.className = 'pv-primary'; saveBtn.textContent = t('Save sign-off');
+    const expSpan = doc.createElement('span');
+    const expJson = doc.createElement('button'); expJson.id = 'pv-export-json'; expJson.type = 'button'; expJson.textContent = t('Export JSON');
+    const expIssue = doc.createElement('button'); expIssue.id = 'pv-export-issue'; expIssue.type = 'button'; expIssue.textContent = t('Export issue');
+    expSpan.append(expJson, expIssue);
+    const saveStatus = doc.createElement('p'); saveStatus.id = 'pv-save-status'; saveStatus.className = 'pv-subtle'; saveStatus.setAttribute('role', 'status');
+    verdictSec.append(verdictH2, hint, legacyUl, saveBtn, expSpan, saveStatus);
+    slots.side.append(flagsSec, verdictSec);
+  }
 }
+
+export function mountPartsWorkspace(
+  slots: Partial<Record<PanelSlot, HTMLElement>>,
+  source: PartsSource,
+  host: PartsHost,
+  options: MountPartsWorkspaceOptions = {},
+): PartsWorkspaceHandle {
+  const slotRoots = (): HTMLElement[] => [slots.left, slots.stage, slots.toolbar, slots.side].filter((n): n is HTMLElement => Boolean(n));
+  const appWrapper = (): HTMLElement | null => slots.stage?.closest?.('.pv-app') ?? slots.left?.closest?.('.pv-app') ?? null;
+  const fallbackElements = new Map<string, HTMLElement>();
+  const queryInRoots = <T extends Element = HTMLElement>(roots: HTMLElement[], selector: string): T | null => {
+    for (const r of roots) {
+      if (typeof r.matches === 'function' && r.matches(selector)) return r as unknown as T;
+      const found = r.querySelector?.<T>(selector);
+      if (found) return found;
+    }
+    return null;
+  };
+  const query = <T extends Element = HTMLElement>(selector: string): T | null => {
+    const roots = slotRoots();
+    const inSlots = queryInRoots<T>(roots, selector);
+    if (inSlots) return inSlots;
+    const wrapper = appWrapper();
+    if (wrapper) {
+      const inWrapper = queryInRoots<T>([wrapper], selector);
+      if (inWrapper) return inWrapper;
+    }
+    if (!roots.length && typeof globalThis.document !== 'undefined') {
+      return globalThis.document.querySelector?.<T>(selector) ?? null;
+    }
+    return null;
+  };
+  const queryAll = <T extends Element = HTMLElement>(selector: string): T[] => {
+    const roots = slotRoots();
+    if (roots.length) {
+      const seen = new Set<T>();
+      for (const r of roots) {
+        if (typeof r.matches === 'function' && r.matches(selector)) seen.add(r as unknown as T);
+        for (const el of r.querySelectorAll?.<T>(selector) ?? []) seen.add(el);
+      }
+      return [...seen];
+    }
+    return typeof globalThis.document !== 'undefined' ? [...(globalThis.document.querySelectorAll?.<T>(selector) ?? [])] : [];
+  };
+  ensureSlotMarkup(slots, query);
+  const $ = <T extends HTMLElement>(id: string): T => {
+    const found = query<T>(`#${id}`);
+    if (found) return found;
+    if (!slotRoots().length && typeof globalThis.document !== 'undefined') {
+      const byId = globalThis.document.getElementById?.(id);
+      if (byId) return byId as T;
+    }
+    if (!fallbackElements.has(id)) {
+      const dummy = typeof globalThis.document?.createElement === 'function'
+        ? globalThis.document.createElement('div')
+        : ({ id, style: {}, dataset: {}, hidden: false, disabled: false, textContent: '', value: '', checked: false, replaceChildren() {}, append() {}, remove() {}, setAttribute() {}, getAttribute() { return null; }, addEventListener() {}, removeEventListener() {}, getContext() { return null; } } as unknown as HTMLElement);
+      dummy.id = id;
+      fallbackElements.set(id, dummy);
+    }
+    return fallbackElements.get(id)! as T;
+  };
+  const disposers: (() => void)[] = [];
+  let disposed = false;
+  let pendingSelectPart: string | null = null;
+  const roots = slotRoots();
+  let mountActive = true;
+  if (roots.length && typeof globalThis.document !== 'undefined' && typeof globalThis.document.addEventListener === 'function') {
+    const updateActive = (e: Event) => {
+      const tNode = e.target as Node | null;
+      if (!tNode) return;
+      const inThisMount = roots.some(r => r === tNode || r.contains?.(tNode));
+      if (inThisMount) {
+        mountActive = true;
+      } else if ((tNode as HTMLElement).closest?.('[data-pv-items], .pv-canvas-wrap, .pv-toolbar, .pv-verdict')) {
+        mountActive = false;
+      }
+    };
+    globalThis.document.addEventListener('pointerdown', updateActive, true);
+    globalThis.document.addEventListener('pointerover', updateActive, true);
+    globalThis.document.addEventListener('focusin', updateActive, true);
+    disposers.push(() => {
+      globalThis.document.removeEventListener('pointerdown', updateActive, true);
+      globalThis.document.removeEventListener('pointerover', updateActive, true);
+      globalThis.document.removeEventListener('focusin', updateActive, true);
+    });
+  }
+  const document = new Proxy((typeof globalThis.document !== 'undefined' ? globalThis.document : {}) as Document, {
+    get(target, prop) {
+      if (prop === 'getElementById') return (id: string) => query(`#${id}`);
+      if (prop === 'querySelector') return (sel: string) => query(sel);
+      if (prop === 'querySelectorAll') return (sel: string) => queryAll(sel);
+      if (prop === 'addEventListener') {
+        return (type: string, listener: EventListenerOrEventListenerObject, opts?: boolean | AddEventListenerOptions) => {
+          if (typeof target.addEventListener !== 'function') return;
+          const wrapped: EventListener = (e: Event) => {
+            if (disposed) return;
+            if ((type === 'keydown' || type === 'keyup') && slotRoots().length && !mountActive) return;
+            if (typeof listener === 'function') listener.call(target, e);
+            else listener.handleEvent(e);
+          };
+          target.addEventListener(type, wrapped, opts);
+          disposers.push(() => target.removeEventListener?.(type, wrapped, opts));
+        };
+      }
+      const val = Reflect.get(target, prop);
+      return typeof val === 'function' ? val.bind(target) : val;
+    },
+    set(target, prop, value) {
+      return Reflect.set(target, prop, value);
+    },
+  });
+  const window = new Proxy((typeof globalThis.window !== 'undefined' ? globalThis.window : {}) as Window & typeof globalThis, {
+    get(target, prop) {
+      if (prop === 'addEventListener') {
+        return (type: string, listener: EventListenerOrEventListenerObject, opts?: boolean | AddEventListenerOptions) => {
+          if (typeof target.addEventListener !== 'function') return;
+          target.addEventListener(type, listener, opts);
+          disposers.push(() => target.removeEventListener?.(type, listener, opts));
+        };
+      }
+      const val = Reflect.get(target, prop);
+      return typeof val === 'function' ? val.bind(target) : val;
+    },
+    set(target, prop, value) {
+      return Reflect.set(target, prop, value);
+    },
+  });
+
+  const access: InstanceAccess = options.access ?? {
+    base: '/',
+    key: 'direct',
+    capability: null,
+    route: (path: string) => path,
+    headers: (init?: HeadersInit) => new Headers(init),
+  };
+  const stageEmbedded = Boolean(options.stageEmbedded);
+  const stageSide = options.stageSide ?? null;
+  let stageBuild = options.stageBuild ?? 'inspected';
+  const stageRestore: StagePartsState | null = options.initialRestore ?? null;
+  const sourceReady = options.sourceReady ?? Promise.resolve();
+  const stageHeaders = () => access.headers(stageEmbedded ? { 'X-Review-Stage-Build': stageBuild } : {});
+  const partsApi = stageEmbedded ? (stageSide === 'a' || stageSide === 'b' ? `/api/compare/${stageSide}/stage-parts` : '/api/stage-parts') : '/api/parts';
+
+  const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'green', alpha: false, footprints: false, comparison:defaultPartsComparison(), differenceThreshold:0, hidden: new Set<string>(), view: 'item' as 'item' | 'page' | 'assembled', page: 0, meshShown: new Set<string>() };
+  const comments:PartsIssue[]=[];let commentUi:ReturnType<typeof bindStageComments>|null=null;let viewport:ReturnType<typeof createPartsViewport>|null=null;let painting=false;
+  const images = new Map<string, HTMLImageElement>();
+  const objectUrls = new Set<string>();
+
+  const decodeBlobToImage = async (src: string, blob: Blob | null): Promise<HTMLImageElement> => {
+    if (!blob) throw new Error('PARTS_PAINT_FAILED');
+    if (typeof Image === 'undefined') {
+      const stub = { width: 1, height: 1, src } as unknown as HTMLImageElement;
+      images.set(src, stub);
+      return stub;
+    }
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+    const dataUrl = `data:${blob.type || 'image/png'};base64,${btoa(binary)}`;
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => { images.set(src, img); resolve(img); };
+      img.onerror = () => reject(new Error(src));
+      img.src = dataUrl;
+    });
+  };
+
+  function load(src: string): Promise<HTMLImageElement> {
+    const cached = images.get(src);
+    if (cached) return Promise.resolve(cached);
+    const imageMatch = /\/image\/(\d+)$/.exec(src);
+    if (imageMatch && typeof source?.image === 'function') {
+      const item = state.data?.items[Number(imageMatch[1])];
+      if (!item) return Promise.reject(new Error('PARTS_PAINT_FAILED'));
+      return source.image(item.name).then(blob => decodeBlobToImage(src, blob));
+    }
+    const pageMatch = /\/page\/(\d+)$/.exec(src);
+    if (pageMatch && typeof source?.page === 'function') {
+      const page = state.data?.pages[Number(pageMatch[1])];
+      if (!page) return Promise.reject(new Error('PARTS_PAINT_FAILED'));
+      return source.page(page.name).then(blob => decodeBlobToImage(src, blob));
+    }
+    if (src === '/api/parts/painting' && typeof source?.painting === 'function') {
+      return source.painting().then(blob => decodeBlobToImage(src, blob));
+    }
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => { images.set(src, img); resolve(img); };
+      img.onerror = () => reject(new Error(src));
+      if(stageEmbedded)void fetch(access.route(src),{headers:stageHeaders()}).then(async res=>{if(!res.ok)throw new Error('STAGE_DRAFT_CHANGED');const url=URL.createObjectURL(await res.blob());objectUrls.add(url);img.addEventListener('load',()=>{URL.revokeObjectURL(url);objectUrls.delete(url);},{once:true});img.src=url;}).catch(reject);
+      else img.src = access.route(src);
+    });
+  }
 const itemImage = (item: Item) => load(`${partsApi}/image/${item.index}`);
 const pageImage = (name: string) => { const page = state.data?.pages.find(p => p.name === name); return page ? load(`${partsApi}/page/${page.index}`) : Promise.reject(new Error('PARTS_PAINT_FAILED')); };
 
@@ -192,6 +488,16 @@ async function paintRaster(token:number): Promise<void> {
     return;
   }
   if(state.comparison.mode==='difference'){
+    if (typeof source !== 'undefined' && typeof source?.difference === 'function') {
+      const diff = await source.difference(item.name, state.comparison.threshold, state.footprints);
+      const image = await createImageBitmap(diff.png);
+      try {
+        if (token !== paintToken) return;
+        const ctx = setCanvas(canvas, w, h); paintBackground(ctx, w, h, state.bg); ctx.drawImage(image, 0, 0); overlay.replaceChildren();
+        caption.textContent = t('Difference: {count} pixels above threshold · {covered} covered pixels excluded · visual comparison, no automatic verdict.', { count: String(diff.count), covered: String(diff.covered) });
+      } finally { image.close(); }
+      return;
+    }
     const response=await fetch(access.route(`${partsApi}/difference/${item.index}?threshold=${state.comparison.threshold}&footprints=${state.footprints}`),{headers:stageHeaders()});
     if(!response.ok){const out=await response.json() as {error:string};throw new Error(out.error);}
     const image=await createImageBitmap(await response.blob());
@@ -222,7 +528,7 @@ async function paintReference(token:number):Promise<void>{const data=state.data,
 function renderComparison():void {
  const active=state.data?.mode==='parts'&&(!!state.data.painting||!!state.data.differenceAvailable),overlay=active&&state.comparison.mode==='overlay',difference=state.comparison.mode==='difference';
  const button=document.querySelector<HTMLButtonElement>('[data-pv-comparison="difference"]');if(button){button.disabled=!state.data?.differenceAvailable||state.view!=='item';button.title=button.disabled?t('PARTS_DIFFERENCE_UNAVAILABLE: declared painting_in_rig and individual part view required.'):'';}
- document.querySelector<HTMLButtonElement>('[data-pv-comparison="overlay"]')!.disabled=!state.data?.painting;
+ const overlayButton=document.querySelector<HTMLButtonElement>('[data-pv-comparison="overlay"]');if(overlayButton)overlayButton.disabled=!state.data?.painting;
  $('pv-threshold-control').hidden=!difference;$<HTMLInputElement>('pv-threshold').value=String(state.comparison.mode==='difference'?state.comparison.threshold:state.differenceThreshold);
  $('pv-comparison').hidden=!active;for(const b of document.querySelectorAll<HTMLElement>('[data-pv-comparison]'))b.setAttribute('aria-pressed',String(b.dataset.pvComparison===state.comparison.mode));
  $('pv-opacity-control').hidden=!overlay;$<HTMLInputElement>('pv-opacity').value=String(state.comparison.opacity);$('pv-opacity-value').textContent=(state.comparison.opacity*100).toFixed(1)+'%';
@@ -293,6 +599,7 @@ function renderFlags(): void {
 function renderList(): void {
   const data = state.data!, list = $('pv-items');
   const seen = new Set<string>();
+  const issueList = typeof comments !== 'undefined' ? comments : [];
   list.replaceChildren(...data.items.filter(i => !seen.has(i.name) && seen.add(i.name)).map(item => {
     const li = document.createElement('li'), button = document.createElement('button');
     button.type = 'button'; button.dataset.pvItem = item.name; button.title = item.name;
@@ -308,8 +615,8 @@ function renderList(): void {
       else if (meshRead) flags.textContent = t('mesh {mesh}', { mesh });
       else if (checkRead) flags.textContent = t('check {check}', { check });
     }
-    const outcome = state.verdict.get(item.name)?.outcome ?? 'pending';
-    const badge = document.createElement('span'); badge.className = 'pv-badge'; badge.dataset.outcome = outcome; badge.textContent = t(outcome === 'clean' ? 'Clean' : outcome === 'flagged' ? 'Flagged' : 'Pending');
+    const issueCount = issueList.filter(c => Array.isArray(c.parts) ? c.parts.some(p => p.name === item.name) : (c as unknown as PartsComment).part === item.name).length;
+    const badge = document.createElement('span'); badge.className = 'pv-badge'; badge.dataset.issues = String(issueCount); badge.textContent = issueCount ? String(issueCount) : '';
     button.append(name, flags, badge);
     button.onclick = () => { select(item.index); if (data.mode === 'atlas') setView('item'); };
     li.append(button);
@@ -321,15 +628,6 @@ function renderList(): void {
   }));
 }
 
-function renderVerdict(): void {
-  const item = state.data!.items[state.selected];
-  if (!item) return;
-  const entry = state.verdict.get(item.name) ?? { outcome: 'pending' as Outcome, note: '' };
-  for (const radio of document.querySelectorAll<HTMLInputElement>('input[data-pv-outcome]')) radio.checked = radio.value === entry.outcome;
-  $<HTMLTextAreaElement>('pv-note').value = entry.note;
-  $('pv-comment-count').textContent=t('Comments on this part: {count}',{count:comments.filter(c=>c.part===item.name).length});
-}
-
 function renderMesh(): void {
   document.getElementById('pv-mesh-panel')?.remove();
   document.getElementById('pv-mesh-control')?.remove();
@@ -338,7 +636,7 @@ function renderMesh(): void {
   const control = document.createElement('label'); control.id = 'pv-mesh-control'; control.className = 'pv-field';
   const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = state.meshShown.has(item.name); toggle.disabled=state.comparison.mode!=='part'||state.view==='assembled';
   toggle.onchange = () => { if (toggle.checked) state.meshShown.add(item.name); else state.meshShown.delete(item.name); void paint(); };
-  control.append(toggle, t('mesh from rig.json UVs')); document.querySelector('.pv-toolbar')!.append(control);
+  control.append(toggle, t('mesh from rig.json UVs')); document.querySelector('.pv-toolbar')?.append(control);
   const panel = document.createElement('section'); panel.id = 'pv-mesh-panel';
   const heading = document.createElement('h2'); heading.textContent = t('Mesh geometry'); panel.append(heading);
   const figures = document.createElement('dl');
@@ -349,17 +647,7 @@ function renderMesh(): void {
   }
   panel.append(figures);
   const help = document.createElement('p'); help.textContent = t('Pink: art pixels outside every triangle.'); panel.append(help);
-  if(stageEmbedded&&!state.data?.joinedVerdictBinding){document.querySelector('.pv-verdict')!.before(panel);return;}
-  const entry = state.verdict.get(item.name)!;
-  const select = document.createElement('select'); select.setAttribute('aria-label', t('Mesh outcome'));
-  for (const [value, label] of [['pending', 'Pending'], ['clean', 'Clean'], ['flagged', 'Flagged']]) { const option = document.createElement('option'); option.value = value!; option.textContent = t(label!); select.append(option); }
-  select.value = entry.mesh!.outcome;
-  const note = document.createElement('textarea'); note.maxLength = 10000; note.value = entry.mesh!.note; note.setAttribute('aria-label', t('Mesh note'));
-  select.onchange = () => { entry.mesh!.outcome = select.value as Outcome; };
-  note.oninput = () => { entry.mesh!.note = note.value; };
-  const outcomeLabel = document.createElement('label'), noteLabel = document.createElement('label');
-  outcomeLabel.append(t('Mesh outcome'), select); noteLabel.append(t('Mesh note'), note);
-  panel.append(outcomeLabel, noteLabel); document.querySelector('.pv-verdict')!.before(panel);
+  document.querySelector('.pv-verdict')?.before(panel);
 }
 
 function select(index: number): void {
@@ -369,7 +657,7 @@ function select(index: number): void {
   if (item.page !== undefined) state.page = data.pages.findIndex(p => p.name === item.page);
   const changed=state.selected!==index;state.selected = index;if((changed||paintFailure)&&viewport&&state.view!=='assembled'){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
   commentUi?.refresh();
-  renderList(); renderFlags(); renderVerdict(); renderMesh(); renderComparison(); void paint();
+  renderList(); renderFlags(); renderMesh(); renderComparison(); void paint();
 }
 
 function setView(view: 'item' | 'page' | 'assembled'): void {
@@ -381,50 +669,41 @@ function setView(view: 'item' | 'page' | 'assembled'): void {
   void paint();
 }
 
-function updateEntry(change: Partial<{ outcome: Outcome; note: string }>): void {
-  const item = state.data!.items[state.selected]!;
-  const entry = { ...(state.verdict.get(item.name) ?? { outcome: 'pending' as Outcome, note: '' }), ...change };
-  state.verdict.set(item.name, entry);
-  renderList();
-}
-
-/** Explicit approval only: refuse before changing any pending entry when a flag remains. */
-async function approveAll(): Promise<void> {
-  if (stageEmbedded || !state.data) return;
-  const entries = state.data.items.map(item => state.verdict.get(item.name));
-  if (entries.some(entry => entry?.outcome === 'flagged' || entry?.mesh?.outcome === 'flagged')) {
-    const status = $('pv-save-status');
-    status.textContent = t('PARTS_APPROVE_ALL_FLAGGED: resolve flagged part and mesh outcomes before approving all.');
-    status.dataset.result = 'refused';
+function renderLegacyVerdict(): void {
+  const legacy = state.data?.legacyVerdict;
+  const list = document.getElementById('pv-legacy-flagged') as HTMLElement | null;
+  if (!list) return;
+  if (!legacy) {
+    list.hidden = true;
+    list.replaceChildren();
     return;
   }
-  for (const item of state.data.items) {
-    const entry = state.verdict.get(item.name) ?? { outcome: 'pending' as Outcome, note: '' };
-    if (entry.outcome === 'pending') entry.outcome = 'clean';
-    if (item.mesh) {
-      entry.mesh ??= { outcome: 'pending', note: '' };
-      if (entry.mesh.outcome === 'pending') entry.mesh.outcome = 'clean';
-    }
-    state.verdict.set(item.name, entry);
-  }
-  $<HTMLSelectElement>('pv-overall').value = 'approved';
-  renderList(); renderVerdict(); renderMesh();
-  await save();
+  list.hidden = !legacy.flaggedParts.length;
+  list.replaceChildren(...legacy.flaggedParts.map(fp => {
+    const li = document.createElement('li');
+    li.dataset.legacyFlaggedPart = fp.name;
+    li.textContent = fp.note ? fp.name + ': ' + fp.note : fp.name;
+    return li;
+  }));
 }
 
 async function save(): Promise<void> {
   const data=state.data;
-  if(!data||stageEmbedded&&(!data.joinedVerdictBinding||!access.capability||stageBuild!=='inspected'))return;
+  if(!data||data.legacyVerdict?.readOnly||(typeof host!=='undefined'&&host?.locked?.())||stageEmbedded&&(!data.joinedVerdictBinding||!access.capability||stageBuild!=='inspected'))return;
   const status = $('pv-save-status'),button=$<HTMLButtonElement>('pv-save');
-  const body = { status: $<HTMLSelectElement>('pv-overall').value, parts: Object.fromEntries(state.verdict),
-    ...(stageEmbedded?{binding:data.joinedVerdictBinding}:{comments}) };
+  const body = { status: (comments.length === 0 ? 'approved' : 'changes-requested') as 'approved' | 'changes-requested', issues: [...comments],
+    ...(stageEmbedded?{binding:data.joinedVerdictBinding}:{}) };
   button.disabled=true;
   try{
-    const headers=stageEmbedded?stageHeaders():access.headers();headers.set('Content-Type','application/json');
-    const res = await fetch(access.route(stageEmbedded?partsApi+'/verdict':'/api/parts/verdict'), { method: 'POST', headers, body: JSON.stringify(body) });
-    const out = await res.json() as { error?: string; verdict?: { source: { sha256: string } } };
-    status.textContent = res.ok ? t('Saved {file}: source {hash}.', { file: data.verdictFile, hash: out.verdict!.source.sha256.slice(0, 12) }) : out.error ? t(out.error) : t('Save failed.');
-    status.dataset.result = res.ok ? 'saved' : 'refused';
+    const out = typeof options !== 'undefined' && options?.saveVerdict
+      ? await options.saveVerdict(body)
+      : await (async () => {
+          const headers=stageEmbedded?stageHeaders():access.headers();headers.set('Content-Type','application/json');
+          const res = await fetch(access.route(stageEmbedded?partsApi+'/verdict':'/api/parts/verdict'), { method: 'POST', headers, body: JSON.stringify(body) });
+          return { ok: res.ok, ...(await res.json() as { error?: string; verdict?: { source: { sha256: string } } }) };
+        })();
+    status.textContent = out.ok ? t('Saved {file}: source {hash}.', { file: data.verdictFile, hash: out.verdict!.source.sha256.slice(0, 12) }) : out.error ? t(out.error) : t('Save failed.');
+    status.dataset.result = out.ok ? 'saved' : 'refused';
   }catch{
     status.textContent=t('Save failed.');status.dataset.result='refused';
   }finally{button.disabled=false;}
@@ -432,7 +711,7 @@ async function save(): Promise<void> {
 
 async function boot(): Promise<void> {
   const box=$('pv-canvas-box'),layout=$('stage-layout');mountViewportPair(layout);$('rig-root').append(box);const reference=document.createElement('canvas');reference.id='pv-reference';$('reference-content').append(reference);$('rig-empty').hidden=true;$('rig-overlay').hidden=true;$('rig-label').textContent=t('Selected part');$('rig-viewport').tabIndex=0;
-  viewport=createPartsViewport({el:$,canvas:$<HTMLCanvasElement>('pv-canvas'),message:(msg)=>{$('pv-save-status').textContent=t(msg);},reference:()=>state.data?.painting?$<HTMLCanvasElement>('pv-reference'):null,
+  viewport=createPartsViewport({el:$,canvas:$<HTMLCanvasElement>('pv-canvas'),message:(msg)=>{$('pv-save-status').textContent=t(msg);host?.message?.(t(msg));},reference:()=>state.data?.painting?$<HTMLCanvasElement>('pv-reference'):null,
     frameSize:target=>{
       const data=state.data,item=data?.items[state.selected];
       if(!data||!item||paintReset)return null;
@@ -441,40 +720,58 @@ async function boot(): Promise<void> {
     },
   });viewport.bindControls();
   $('native-one').onclick=()=>viewport!.cameraAction(()=>viewport!.updateCamera(viewport!.availableCamera()??'rig',{zoom:1,pan:{x:0,y:0}}));
-  bindDomI18n(document);
-  bindStageNav({partsOnly:true,model:false});
   if(stageEmbedded){
-    const header=document.querySelector<HTMLElement>('.pv-top')!,status=$('pv-load');
-    header.hidden=true;status.classList.add('pv-embedded-status');header.after(status);
-    document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;
-    document.querySelector<HTMLElement>('.pv-verdict')!.hidden=true;
-    const approveButton=$<HTMLButtonElement>('pv-approve-all');approveButton.disabled=true;
+    const header=document.querySelector<HTMLElement>('.pv-top'),status=$('pv-load');
+    if(header){header.hidden=true;status.classList.add('pv-embedded-status');header.after(status);}
+    const pvLayout=document.querySelector<HTMLElement>('.pv-layout');if(pvLayout)pvLayout.hidden=true;
+    const pvVerdict=document.querySelector<HTMLElement>('.pv-verdict');if(pvVerdict)pvVerdict.hidden=true;
     const saveButton=$<HTMLButtonElement>('pv-save');saveButton.disabled=true;
   }
-  window.addEventListener('message',event=>{if(event.source!==parent||event.origin!==location.origin||event.data?.type!=='review-stage-language'||!['en','ko'].includes(event.data.language))return;setLinkLanguage(null);setLanguagePreference(event.data.language);});
-  connectLiveWindow(access);
+  host.register?.({
+    kind: 'parts-verdict',
+    value: (words = '') => ({
+      verdict: comments.length === 0 ? 'approved' : 'changes-requested',
+      issues: [...comments],
+      words,
+    }),
+  });
   if(stageEmbedded)await sourceReady;
-  const res = await fetch(access.route(partsApi), { headers: stageHeaders() });
-  const data = await res.json() as ViewData & { error?: string };
-  if (!res.ok) { const status=$('pv-load');status.textContent=t(data.error??'Load failed.');status.dataset.result='refused';return; }
-  state.data = data;if(!data.differenceAvailable)document.querySelector('[data-pv-comparison="difference"]')?.remove();if(stageEmbedded)for(const item of data.items)if(item.mesh)state.meshShown.add(item.name);$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;comments.push(...data.verdict?.comments??[]);setupPartsComments();viewport.bindNavigation(undefined,()=>!commentUi?.active()&&!paintFailure);viewport.observeResize();
-  if(stageEmbedded&&data.joinedVerdictBinding){
-    document.querySelector<HTMLElement>('.pv-verdict')!.hidden=false;
-    $('pv-approve-all').hidden=true;
-    $('pv-comment-count').hidden=true;
-    const save=$<HTMLButtonElement>('pv-save');
-    save.disabled=!access.capability;
-    if(!access.capability)save.title=t('Read-only view: reopen with rig-review open to edit.');
+  if (disposed) return;
+  let data: ViewData & { error?: string };
+  try {
+    data = await source.view();
+  } catch (err) {
+    const status = $('pv-load');
+    status.textContent = t(err instanceof Error ? err.message : 'Save failed.');
+    status.dataset.result = 'refused';
+    return;
   }
-  document.getElementById('parts-correction-hint')!.hidden = data.mode !== 'parts' || stageEmbedded;
-  for (const item of data.items) state.verdict.set(item.name, { outcome: 'pending', note: '', ...(item.mesh ? { mesh: { outcome: 'pending' as Outcome, note: '' } } : {}) });
-  if (data.verdict) { for (const [name, v] of Object.entries(data.verdict.parts)) if (state.verdict.has(name)) state.verdict.set(name, { outcome: v.outcome, note: v.note ?? '', ...(v.mesh ? { mesh: v.mesh } : {}) }); $<HTMLSelectElement>('pv-overall').value = data.verdict.status; }
-  document.title = data.title;
+  if (disposed) return;
+  if (data.error) { const status=$('pv-load');status.textContent=t(data.error);status.dataset.result='refused';return; }
+  state.data = data;if(!data.differenceAvailable)document.querySelector('[data-pv-comparison="difference"]')?.remove();if(stageEmbedded)for(const item of data.items)if(item.mesh)state.meshShown.add(item.name);$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;
+  const initialIssues = data.verdict?.issues ?? data.legacyVerdict?.issues ?? (data.verdict?.comments ?? []).map(c => parsePartsIssue(c, true, true, false));
+  comments.push(...initialIssues);
+  setupPartsComments();const ro=viewport.observeResize();disposers.push(viewport.bindNavigation(undefined,()=>!commentUi?.active()&&!paintFailure),()=>ro.disconnect());
+  if(stageEmbedded&&data.joinedVerdictBinding){
+    const pvVerdict=document.querySelector<HTMLElement>('.pv-verdict');if(pvVerdict)pvVerdict.hidden=false;
+    const saveBtn=$<HTMLButtonElement>('pv-save');
+    saveBtn.disabled=!access.capability||Boolean(data.legacyVerdict?.readOnly)||host.locked();
+    if(!access.capability)saveBtn.title=t('Read-only view: reopen with rig-review open to edit.');
+  }
+  if(data.legacyVerdict?.readOnly||host.locked()){
+    $<HTMLButtonElement>('pv-save').disabled=true;
+  }
+  const correctionHint = document.getElementById('parts-correction-hint');
+  if (correctionHint) correctionHint.hidden = data.mode !== 'parts' || stageEmbedded;
+  renderLegacyVerdict();
+  const legacyBanner = data.legacyVerdict ? data.legacyVerdict.code + ': ' + t('parts.legacyVerdictBanner', [data.legacyVerdict.flaggedCount]) : '';
+  if (typeof globalThis.document !== 'undefined' && !slotRoots().length) globalThis.document.title = data.title;
   $('pv-title').textContent = data.title;
   $('pv-mode').textContent = data.mode === 'parts' ? t('Parts package, before rigging') : t('Atlas of a built rig');
   $('pv-list-title').textContent = data.mode === 'parts' ? t('PARTS') : t('REGIONS');
-  $('pv-load').textContent = data.verdictStale === 'files' ? t('A saved sign-off was made on other files; this review starts fresh.') : data.verdictStale === 'flags' ? t('The saved sign-off is for different producer flags; this review starts fresh.') : data.verdict ? t('Saved sign-off loaded.') : data.verdictReadOnlyReason?t(data.verdictReadOnlyReason):'';
-  if(stageEmbedded){$('pv-load').hidden=$('pv-load').textContent==='';document.querySelector<HTMLElement>('.pv-layout')!.hidden=false;}
+  $('pv-load').textContent = data.verdictStale === 'files' ? t('A saved sign-off was made on other files; this review starts fresh.') : data.verdictStale === 'flags' ? t('The saved sign-off is for different producer flags; this review starts fresh.') : legacyBanner ? legacyBanner : data.verdict ? t('Saved sign-off loaded.') : data.verdictReadOnlyReason?t(data.verdictReadOnlyReason):'';
+  if (legacyBanner) $('pv-load').dataset.result = 'readonly';
+  if(stageEmbedded){$('pv-load').hidden=$('pv-load').textContent==='';const pvLayout=document.querySelector<HTMLElement>('.pv-layout');if(pvLayout)pvLayout.hidden=false;}
   $('pv-atlas-switch').hidden = data.mode !== 'atlas';
   const assemble=$<HTMLButtonElement>('pv-assemble');assemble.disabled=data.mode!=='parts'||!data.rigSize;assemble.title=assemble.disabled?t(data.mode==='atlas'?'Assembly unavailable: atlas regions carry no rig placement.':'Assembly unavailable: rig_size is not declared.'):'';
   assemble.onclick=()=>{setView(state.view==='assembled'?'item':'assembled');assemble.setAttribute('aria-pressed',String(state.view==='assembled'));};
@@ -501,49 +798,73 @@ async function boot(): Promise<void> {
   footprints.onchange = e => { state.footprints = (e.target as HTMLInputElement).checked; void paint(); };
 
   for (const b of document.querySelectorAll<HTMLButtonElement>('[data-pv-view]')) b.onclick = () => setView(b.dataset.pvView as 'item' | 'page');
-  for (const r of document.querySelectorAll<HTMLInputElement>('input[data-pv-outcome]')) r.onchange = () => { if (r.checked) updateEntry({ outcome: r.value as Outcome }); };
-  $<HTMLTextAreaElement>('pv-note').oninput = e => updateEntry({ note: (e.target as HTMLTextAreaElement).value });
   $('pv-save').onclick = () => { void save(); };
-  $('pv-approve-all').onclick = () => approveAll();
-  for(const format of ['json','issue'])$('pv-export-'+format).onclick=async()=>{const res=await fetch(access.route(stageEmbedded?partsApi+'/export/'+format:'/api/parts/export?format='+format),{headers:stageHeaders()});const value=await res.text();if(!res.ok){$('pv-save-status').textContent=JSON.parse(value).error??t('Save failed.');return;}const url=URL.createObjectURL(new Blob([value],{type:format==='json'?'application/json':'text/markdown'})),a=document.createElement('a');a.href=url;a.download=stageEmbedded?(format==='json'?data.verdictFile:data.verdictFile.replace(/\.json$/,'.md')):format==='json'?'parts-review-export.json':'parts-review-export.md';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
-  onLanguageChange(() => { if (state.data) select(state.selected); });
-  if(stageEmbedded)(window as StagePartsWindow).rigReviewStageParts={snapshot:stagePartsSnapshot};
-  if(data.items.length){if(stageRestore)await restoreStageParts(stageRestore);else select(0);}
+  for(const format of ['json','issue'] as const)$('pv-export-'+format).onclick=async()=>{
+    if (options.exportVerdict) { await options.exportVerdict(format, data); return; }
+    const res=await fetch(access.route(stageEmbedded?partsApi+'/export/'+format:'/api/parts/export?format='+format),{headers:stageHeaders()});const value=await res.text();if(!res.ok){$('pv-save-status').textContent=JSON.parse(value).error??t('Save failed.');return;}const url=URL.createObjectURL(new Blob([value],{type:format==='json'?'application/json':'text/markdown'})),a=document.createElement('a');a.href=url;a.download=stageEmbedded?(format==='json'?data.verdictFile:data.verdictFile.replace(/\.json$/,'.md')):format==='json'?'parts-review-export.json':'parts-review-export.md';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+  const offLang = onLanguageChange(() => { if (!disposed && state.data) select(state.selected); });
+  disposers.push(offLang);
+  if(stageEmbedded && typeof window !== 'undefined')(window as StagePartsWindow).rigReviewStageParts={snapshot:stagePartsSnapshot};
+  if(data.items.length){
+    if(stageRestore)await restoreStageParts(stageRestore);
+    else if(pendingSelectPart){const idx=data.items.findIndex(i=>i.name===pendingSelectPart);select(idx>=0?idx:0);}
+    else select(0);
+  }
   renderCorrections();
-  document.body.dataset.ready = 'true';
+  if (typeof globalThis.document !== 'undefined' && globalThis.document.body) globalThis.document.body.dataset.ready = 'true';
 }
 
 /** Observe taps only; the shared controller exclusively owns pan, zoom and pinch. */
 function bindAssemblyPicking():void {
  const pane=$('rig-viewport');let tap:{id:number;x:number;y:number}|null=null;const pointers=new Set<number>();
- pane.addEventListener('pointerdown',e=>{pointers.add(e.pointerId);if(pointers.size===1&&e.button===0)tap={id:e.pointerId,x:e.clientX,y:e.clientY};else tap=null;});
- pane.addEventListener('pointermove',e=>{if(tap&&Math.hypot(e.clientX-tap.x,e.clientY-tap.y)>4)tap=null;});
- pane.addEventListener('pointercancel',e=>{pointers.delete(e.pointerId);tap=null;});
- pane.addEventListener('pointerup',e=>{
+ const onDown=(e:PointerEvent)=>{pointers.add(e.pointerId);if(pointers.size===1&&e.button===0)tap={id:e.pointerId,x:e.clientX,y:e.clientY};else tap=null;};
+ const onMove=(e:PointerEvent)=>{if(tap&&Math.hypot(e.clientX-tap.x,e.clientY-tap.y)>4)tap=null;};
+ const onCancel=(e:PointerEvent)=>{pointers.delete(e.pointerId);tap=null;};
+ const onUp=(e:PointerEvent)=>{
   pointers.delete(e.pointerId);const start=tap;tap=null;
   if(!start||start.id!==e.pointerId||Math.hypot(e.clientX-start.x,e.clientY-start.y)>4||state.view!=='assembled'||painting||paintFailure||commentUi?.active())return;
   const data=state.data!,r=$('pv-canvas').getBoundingClientRect(),zoom=viewport!.paneCamera('rig').zoom;
   const layers=data.items.flatMap(box=>{const img=images.get(`${partsApi}/image/${box.index}`);return img?[{box,alpha:sourceAlpha(box,img)}]:[];});
   const hit=pickAssembly(layers,(e.clientX-r.left)/zoom,(e.clientY-r.top)/zoom,state.hidden);if(hit)select(hit.index);
+ };
+ pane.addEventListener('pointerdown',onDown);
+ pane.addEventListener('pointermove',onMove);
+ pane.addEventListener('pointercancel',onCancel);
+ pane.addEventListener('pointerup',onUp);
+ disposers.push(()=>{
+  pane.removeEventListener('pointerdown',onDown);
+  pane.removeEventListener('pointermove',onMove);
+  pane.removeEventListener('pointercancel',onCancel);
+  pane.removeEventListener('pointerup',onUp);
  });
 }
 
-interface PartsPose extends CommentUiPose {item:Item;sourceHash:string;view:PartsComment['view']}
+interface PartsPose extends CommentUiPose {item:Item;sourceHash:string;view:PartsIssue['view']}
 function setupPartsComments():void {
- const codec:CommentCodec<PartsComment,PartsPose>={
- read:c=>{try{parsePartsComment(c);const camera={space:'image' as const,center:c.view.camera.center,zoom:c.view.camera.zoom,viewport:c.view.camera.viewport,visible:{x:c.view.camera.center.x-c.view.camera.viewport.width/c.view.camera.zoom/2,y:c.view.camera.center.y-c.view.camera.viewport.height/c.view.camera.zoom/2,width:c.view.camera.viewport.width/c.view.camera.zoom,height:c.view.camera.viewport.height/c.view.camera.zoom}};const r=c.imageRegion;return {mode:'parts',viewport:'rig',screen:region(projectMark(r,camera),projectMark({x:r.x+r.width,y:r.y+r.height},camera)),world:r,camera,crop:c.crop,bookmark:{part:c.part,imageHash:c.imageHash,sourceHash:c.sourceHash,view:c.view}};}catch{return null;}},
+ const codec:CommentCodec<PartsIssue,PartsPose>={
+ read:raw=>{try{const c=parsePartsIssue(raw,false,true,false);const camera={space:'image' as const,center:c.view.camera.center,zoom:c.view.camera.zoom,viewport:c.view.camera.viewport,visible:{x:c.view.camera.center.x-c.view.camera.viewport.width/c.view.camera.zoom/2,y:c.view.camera.center.y-c.view.camera.viewport.height/c.view.camera.zoom/2,width:c.view.camera.viewport.width/c.view.camera.zoom,height:c.view.camera.viewport.height/c.view.camera.zoom}};const r=c.view.mode==='assembled'?c.rigRegion:c.imageRegion!;const part=c.parts[0]!;return {mode:'parts',viewport:'rig',screen:region(projectMark(r,camera),projectMark({x:r.x+r.width,y:r.y+r.height},camera)),world:r,camera,crop:{...c.crop,png:c.crop.png??''},bookmark:{part:part.name,imageHash:part.imageHash,sourceHash:c.sourceHash,view:c.view}};}catch{return null;}},
  signature:p=>[p.item.name,p.item.imageHash,p.sourceHash,p.camera,p.view],
- matches:(_mark,p,c)=>p.item.name===c.part&&p.item.imageHash===c.imageHash&&p.sourceHash===c.sourceHash,
- label:c=>`${c.part} · ${c.summary}`,
- create:async(p,_view,screen,crop,_bookmark,summary)=>{const r=snapImageRegion(region(unprojectMark(screen,p.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},p.camera)));const c:PartsComment={schema:'rig-review-parts-comment/1',id:crypto.randomUUID(),summary,part:p.item.name,imageHash:p.item.imageHash!,sourceHash:p.sourceHash,imageRegion:r,rigRegion:{...r,x:p.item.x+r.x,y:p.item.y+r.y},view:p.view,crop,nativeCrop:null};const res=await fetch(access.route('/api/parts/comment'),{method:'POST',headers:access.headers({'Content-Type':'application/json'}),body:JSON.stringify(c)}),out=await res.json() as {comment:PartsComment;error?:string};if(!res.ok)throw new Error(out.error);return parsePartsComment(out.comment);}
+ matches:(_mark,p,raw)=>{try{const c=parsePartsIssue(raw,false,true,false);return c.view.mode==='item'&&p.item.name===c.parts[0]?.name&&p.item.imageHash===c.parts[0]?.imageHash&&p.sourceHash===c.sourceHash;}catch{return false;}},
+ label:raw=>{const c=parsePartsIssue(raw,false,true,false);return `${c.parts.map(pt=>pt.name).join(', ')} · ${c.summary}`;},
+ create:async(p,_view,screen,crop,_bookmark,summary)=>{const r=snapImageRegion(region(unprojectMark(screen,p.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},p.camera)));const c:PartsIssue={schema:'rig-review-parts-comment/2',id:crypto.randomUUID(),summary,parts:[{name:p.item.name,imageHash:p.item.imageHash!}],sourceHash:p.sourceHash,imageRegion:r,rigRegion:{...r,x:p.item.x+r.x,y:p.item.y+r.y},view:{...p.view,mode:'item'},crop,nativeCrop:null};if(typeof source!=='undefined'&&typeof source?.crop==='function')return parsePartsIssue(await source.crop(c),true,true,false);const res=await fetch(access.route('/api/parts/comment'),{method:'POST',headers:access.headers({'Content-Type':'application/json'}),body:JSON.stringify(c)}),out=await res.json() as {comment:PartsIssue;error?:string};if(!res.ok)throw new Error(out.error);return parsePartsIssue(out.comment,true,true,false);}
  };
- const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||state.view!=='item')return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshShown.has(item.name),comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
- commentUi=bindStageComments({toolbar:document.querySelector<HTMLElement>('.pv-toolbar')!,viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
- restore:async(raw)=>{const res=await fetch(access.route(partsApi),{headers:stageHeaders()});const current=await res.json() as ViewData&{error?:string};if(!res.ok||current.sourceHash!==state.data?.sourceHash)throw new Error(current.error??'PARTS_COMMENT_STALE_SOURCE');const b=raw as {part:string;imageHash:string;sourceHash:string;view:PartsComment['view']},item=state.data!.items.find(i=>i.name===b.part);if(!item||item.imageHash!==b.imageHash||state.data!.sourceHash!==b.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');setView('item');$('pv-assemble').setAttribute('aria-pressed','false');select(item.index);state.bg=b.view.background;state.alpha=b.view.alpha;state.footprints=b.view.footprints;state.comparison={...(b.view.comparison??defaultPartsComparison())};if(state.comparison.mode==='difference')state.differenceThreshold=state.comparison.threshold;renderComparison();if(b.view.mesh)state.meshShown.add(item.name);else state.meshShown.delete(item.name);$<HTMLSelectElement>('pv-bg').value=state.bg;$<HTMLInputElement>('pv-alpha').checked=state.alpha;$<HTMLInputElement>('pv-footprints').checked=state.footprints;renderMesh();viewport!.state.cameraRestoring=true;try{await paint();if(!paintFailure){viewport!.writeCamera('rig',{zoom:b.view.camera.zoom,center:{...b.view.camera.center}});if(b.view.referenceCamera)viewport!.writeCamera('reference',{zoom:b.view.referenceCamera.zoom,center:{...b.view.referenceCamera.center}});viewport!.state.cameraSync=b.view.cameraSync;viewport!.fitCamera();}}finally{viewport!.state.cameraRestoring=false;}},
- feedback:()=>comments,locked:()=>false,add:c=>comments.push(c),changed:()=>renderVerdict(),error:m=>{$('pv-save-status').textContent=t(m);},blocked:()=>painting,refusal:()=>paintFailure??(state.view==='assembled'?'PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment':null)??(state.data?.mode!=='parts'||stageEmbedded?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
+ const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||state.view!=='item')return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{mode:'item',camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshShown.has(item.name),comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
+ const toolbarEl = document.querySelector<HTMLElement>('.pv-toolbar') ?? $('stage-comment').parentElement ?? $('rig-viewport');
+ const toggleEl = $('stage-comment') as HTMLButtonElement;
+ const rawDoc = typeof globalThis.document !== 'undefined' ? globalThis.document : null;
+ const origGetById = rawDoc?.getElementById;
+ if (rawDoc && toggleEl) {
+  rawDoc.getElementById = ((id: string) => id === 'stage-comment' ? toggleEl : origGetById?.call(rawDoc, id) ?? null) as typeof document.getElementById;
+ }
+ try {
+  commentUi=bindStageComments({toolbar:toolbarEl,viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
+  restore:async(raw)=>{const current:ViewData&{error?:string}=typeof source!=='undefined'&&typeof source?.view==='function'?await source.view().catch((e:unknown)=>({error:e instanceof Error?e.message:String(e)} as ViewData&{error?:string})):await (async()=>{const res=await fetch(access.route(partsApi),{headers:stageHeaders()});const json=await res.json() as ViewData&{error?:string};return res.ok?json:{...json,error:json.error??'PARTS_COMMENT_STALE_SOURCE'};})();if(current.error||current.sourceHash!==state.data?.sourceHash)throw new Error(current.error??'PARTS_COMMENT_STALE_SOURCE');const b=raw as {part:string;imageHash:string;sourceHash:string;view:PartsIssue['view']},item=state.data!.items.find(i=>i.name===b.part);if(!item||item.imageHash!==b.imageHash||state.data!.sourceHash!==b.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');setView('item');$('pv-assemble').setAttribute('aria-pressed','false');select(item.index);state.bg=b.view.background;state.alpha=b.view.alpha;state.footprints=b.view.footprints;state.comparison={...(b.view.comparison??defaultPartsComparison())};if(state.comparison.mode==='difference')state.differenceThreshold=state.comparison.threshold;renderComparison();if(b.view.mesh)state.meshShown.add(item.name);else state.meshShown.delete(item.name);$<HTMLSelectElement>('pv-bg').value=state.bg;$<HTMLInputElement>('pv-alpha').checked=state.alpha;$<HTMLInputElement>('pv-footprints').checked=state.footprints;renderMesh();viewport!.state.cameraRestoring=true;try{await paint();if(!paintFailure){viewport!.writeCamera('rig',{zoom:b.view.camera.zoom,center:{...b.view.camera.center}});if(b.view.referenceCamera)viewport!.writeCamera('reference',{zoom:b.view.referenceCamera.zoom,center:{...b.view.referenceCamera.center}});viewport!.state.cameraSync=b.view.cameraSync;viewport!.fitCamera();}}finally{viewport!.state.cameraRestoring=false;}},
+  feedback:()=>comments,locked:()=>Boolean(state.data?.legacyVerdict?.readOnly)||(typeof host!=='undefined'&&Boolean(host?.locked?.())),add:c=>comments.push(c),changed:()=>{renderList();if(typeof host!=='undefined')host?.changed?.([...comments]);},error:m=>{$('pv-save-status').textContent=t(m);if(typeof host!=='undefined')host?.message?.(t(m));},blocked:()=>painting,refusal:()=>paintFailure??(state.data?.legacyVerdict?.readOnly?state.data.legacyVerdict.code+': '+t('parts.legacyVerdictBanner',[state.data.legacyVerdict.flaggedCount]):null)??(typeof host!=='undefined'&&host?.locked?.()?'Read-only view: reopen with rig-review open to edit.':null)??(state.view==='assembled'?'PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment':null)??(state.data?.mode!=='parts'||stageEmbedded?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
+ } finally {
+  if (rawDoc && origGetById) rawDoc.getElementById = origGetById;
+ }
 }
-
-if (typeof document !== 'undefined' && document.getElementById('parts-app')) void boot();
 
 function renderCorrections():void {
  const data = state.data;
@@ -578,7 +899,6 @@ async function restoreStageParts(saved:StagePartsState):Promise<void>{
  }catch{const status=$('pv-load');status.hidden=false;status.dataset.result='refused';status.textContent=t('STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.');document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;}
  finally{viewport.state.cameraRestoring=false;}
 }
-if(typeof window!=='undefined')window.addEventListener('message',event=>{if(event.source===parent&&event.origin===location.origin&&event.data?.type==='review-stage-restore'&&event.data.state)void restoreStageParts(event.data.state);});
 
 async function revalidateStageParts(nextBuild?:string,savedState?:StagePartsState|null):Promise<void>{
  const targetBuild=nextBuild==='inspected'||(typeof nextBuild==='string'&&/^[a-f0-9]{64}$/.test(nextBuild))?nextBuild:stageBuild;
@@ -590,15 +910,48 @@ async function revalidateStageParts(nextBuild?:string,savedState?:StagePartsStat
   if(!response.ok||!validBuild)throw new Error(data.error??'STAGE_DRAFT_MISMATCH: separated parts and draft mesh identity differ.');
   stageBuild=targetBuild;state.data=data;
   if(stageEmbedded){
-   document.querySelector<HTMLElement>('.pv-verdict')!.hidden=!data.joinedVerdictBinding;
+   const pvVerdict=document.querySelector<HTMLElement>('.pv-verdict');if(pvVerdict)pvVerdict.hidden=!data.joinedVerdictBinding;
    const status=$('pv-load');status.textContent=data.verdictReadOnlyReason?t(data.verdictReadOnlyReason):'';status.hidden=status.textContent==='';delete status.dataset.result;
   }
   if(savedState)await restoreStageParts(savedState);else if(!sameBuild){select(state.selected);await paint();}
   renderCorrections();
  }catch(error){
-  document.querySelector<HTMLElement>('.pv-verdict')!.hidden=true;if(state.data)delete state.data.joinedVerdictBinding;
+  const pvVerdict=document.querySelector<HTMLElement>('.pv-verdict');if(pvVerdict)pvVerdict.hidden=true;if(state.data)delete state.data.joinedVerdictBinding;
   const status=$('pv-load');status.hidden=false;status.dataset.result='refused';status.textContent=t(error instanceof Error?error.message:String(error));
-  document.querySelector<HTMLElement>('.pv-layout')!.hidden=true;
+  const pvLayout=document.querySelector<HTMLElement>('.pv-layout');if(pvLayout)pvLayout.hidden=true;
  }
 }
-if(typeof window!=='undefined')window.addEventListener('message',event=>{if(event.source!==parent||event.origin!==location.origin||event.data?.type!=='review-stage-revalidate')return;void revalidateStageParts(event.data.buildId,event.data.state);});
+
+  const ready = boot();
+  return {
+    ready,
+    dispose(): void {
+      disposed = true;
+      paintToken++;
+      commentUi?.dispose();
+      commentUi = null;
+      for (const dispose of disposers.splice(0)) dispose();
+      for (const url of objectUrls) URL.revokeObjectURL(url);
+      objectUrls.clear();
+      images.clear();
+      assemblyAlpha.clear();
+    },
+    select(part: string): void {
+      pendingSelectPart = part;
+      const idx = state.data?.items.findIndex(i => i.name === part) ?? -1;
+      if (idx >= 0) select(idx);
+    },
+    issues(): PartsIssue[] {
+      return [...comments];
+    },
+    snapshot(): StagePartsState | null {
+      return stagePartsSnapshot();
+    },
+    restore(saved: StagePartsState): Promise<void> {
+      return restoreStageParts(saved);
+    },
+    revalidate(nextBuild?: string, savedState?: StagePartsState | null): Promise<void> {
+      return revalidateStageParts(nextBuild, savedState);
+    },
+  };
+}

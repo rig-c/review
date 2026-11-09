@@ -11,59 +11,400 @@ import {buildVerdict,loadPartsView,verdictSource} from '../src/parts-view.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {countedFlag} from '../web/parts-flags.ts';
+import {mountPartsWorkspace,REGION_MARGIN,type PanelOutput,type PartsHost,type PartsSource,type ViewData} from '../web/parts.ts';
+import type {PartsIssue} from '../src/parts-comment.ts';
+
 class Node {
- children:any[]=[];dataset:Record<string,string>={};attrs:Record<string,string>={};className='';textContent='';value='';checked=false;title='';onclick?:()=>unknown;onchange?:()=>unknown;
- constructor(public tag='div'){} append(...c:any[]){this.children.push(...c);} replaceChildren(...c:any[]){this.children=c;} setAttribute(k:string,v:string){this.attrs[k]=v;}
+ children:any[]=[];dataset:Record<string,string>={};attrs:Record<string,string>={};className='';textContent='';value='';checked=false;disabled=false;hidden=false;title='';id='';type='';onclick?:()=>unknown;onchange?:()=>unknown;
+ constructor(public tag='div'){} append(...c:any[]){this.children.push(...c);} replaceChildren(...c:any[]){this.children=c;} setAttribute(k:string,v:string){this.attrs[k]=v;} getAttribute(k:string){return this.attrs[k]??null;} remove(){}
 }
 const walk=(n:Node):Node[]=>[n,...n.children.filter(c=>c instanceof Node).flatMap(walk)];
-async function caller(items:any[],flag?:'part'|'mesh') {
+
+async function caller(items:any[],opts?:{legacyVerdict?:ViewData['legacyVerdict'];locked?:boolean}) {
  const source=await readFile('web/parts.ts','utf8');
- const nodes=new Map<string,Node>();const $=(id:string)=>{if(!nodes.has(id))nodes.set(id,new Node());return nodes.get(id)!;};
- const state:any={selected:0,hidden:new Set(),verdict:new Map(items.map((i,n)=>[i.name,{outcome:n===0?'clean':'pending',note:'note '+n,...(i.mesh?{mesh:{outcome:n===0?'clean':'pending',note:'mesh note '+n}}:{})}])),data:{items,mode:'parts',flags:[],readings:[],flagMissing:[],verdictFile:'verdict.json'}};
- if(flag){const entry=state.verdict.get(items.at(-1).name);if(flag==='part')entry.outcome='flagged';else entry.mesh.outcome='flagged';}
- const comments:any[]=[];const requests:any[]=[];const radios=['pending','clean','flagged'].map(value=>Object.assign(new Node('input'),{value}));let selected=-1,painted=0;
- const scope={state,$,comments,stageEmbedded:false,t:(s:string,values:Record<string,unknown>={})=>s.replace(/\{(\w+)\}/g,(_,k)=>String(values[k]??'{'+k+'}')),countedFlag,document:{createElement:(tag:string)=>new Node(tag),querySelectorAll:()=>radios},select:(i:number)=>{selected=i;},setView:()=>{},paint:async()=>{painted++;},renderVerdict:()=>{},renderMesh:()=>{},access:{route:(s:string)=>s,headers:(v?:HeadersInit)=>new Headers(v)},fetch:async(url:string,opts:any)=>{requests.push({url,...opts,body:JSON.parse(opts.body)});return {ok:true,json:async()=>({verdict:{source:{sha256:'a'.repeat(64)}}})};}};
- const blocks=[source.slice(source.indexOf('function renderList()'),source.indexOf('function renderVerdict()')),source.slice(source.indexOf('function updateEntry('),source.indexOf('async function boot()'))];
- const binding=source.split('\n').filter(s=>s.includes("$('pv-approve-all').onclick")||s.includes("$('pv-save').onclick" )||s.includes("r.onchange =")).join('\n');
+ const nodes=new Map<string,Node>();const $=(id:string)=>{if(!nodes.has(id)){const n=new Node();n.id=id;nodes.set(id,n);}return nodes.get(id)!;};
+ const state:any={selected:0,hidden:new Set(),data:{items,mode:'parts',flags:[],readings:[],flagMissing:[],verdictFile:'verdict.json',legacyVerdict:opts?.legacyVerdict}};
+ const comments:PartsIssue[]=[];const requests:any[]=[];let selected=-1,painted=0;
+ const host:PartsHost={locked:()=>Boolean(opts?.locked),changed:()=>{}};
+ const scope={
+  state,$,comments,host,options:{},stageEmbedded:false,
+  t:(s:string,values:Record<string,unknown>|unknown[]={})=>Array.isArray(values)?s.replace(/\{(\d+)\}/g,(_,k)=>String(values[Number(k)]??'{'+k+'}')):s.replace(/\{(\w+)\}/g,(_,k)=>String((values as Record<string,unknown>)[k]??'{'+k+'}')),
+  countedFlag,
+  document:{createElement:(tag:string)=>new Node(tag),getElementById:(id:string)=>$(id),querySelectorAll:()=>[]},
+  select:(i:number)=>{selected=i;},
+  setView:()=>{},
+  paint:async()=>{painted++;},
+  renderMesh:()=>{},
+  access:{capability:'cap',route:(s:string)=>s,headers:(v?:HeadersInit)=>new Headers(v)},
+  stageHeaders:()=>new Headers(),
+  partsApi:'/api/parts',
+  stageBuild:'inspected',
+  fetch:async(url:string,init:any)=>{requests.push({url,...init,body:JSON.parse(init.body)});return {ok:true,json:async()=>({verdict:{source:{sha256:'a'.repeat(64)}}})};},
+ };
+ const blocks=[
+  source.slice(source.indexOf('function renderList()'),source.indexOf('function renderMesh()')),
+  source.slice(source.indexOf('function renderLegacyVerdict()'),source.indexOf('async function boot()')),
+ ];
+ const binding="$('pv-save').onclick = () => save();";
  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(blocks.join('\n')+'\n'+binding);
- const api=new Function('scope',`with(scope){${code};return {renderList,updateEntry,save};}`)(scope);
- return {state,$,comments,requests,radios,api,get selected(){return selected;},get painted(){return painted;}};
+ const api=new Function('scope',`with(scope){${code};return {renderList,renderLegacyVerdict,save};}`)(scope);
+ return {state,$,comments,requests,api,get selected(){return selected;},get painted(){return painted;}};
 }
-test('#395 actual page Approve all saves every explicit part and mesh; unchanged buildVerdict accepts and guards',async()=>{
+
+test('#612 zero-issue sign-off saves approvedrig-review-parts-verdict/4 without per-part outcome map',async()=>{
  const root=await mkdtemp(join(tmpdir(),'approve-'));try{
- await writeMeshPackage(root);const pkg=await loadPartsView(root),binding=verdictSource(pkg),c=await caller(pkg.items),before=structuredClone([...c.state.verdict]);
- expect(c.$('pv-approve-all').onclick).toBeFunction();await c.$('pv-approve-all').onclick!();
- expect(c.requests).toHaveLength(1);const request=c.requests[0];expect(request.url).toBe('/api/parts/verdict');expect(request.method).toBe('POST');expect(request.body.status).toBe('approved');
- const verdict=buildVerdict(pkg,request.body,'test');expect(verdict.source).toEqual(binding);expect(Object.keys(verdict.parts)).toEqual(pkg.items.map(i=>i.name));
- for(const [name,entry] of before as any){expect(verdict.parts[name]!.outcome).toBe('clean');expect(verdict.parts[name]!.note).toBe(entry.note);expect(verdict.parts[name]!.mesh).toEqual({...entry.mesh,outcome:'clean'});}
- expect(c.$('pv-save-status').dataset.result).toBe('saved');expect(request.body.comments).toEqual(c.comments);
- const pending=structuredClone(request.body);pending.parts[pkg.items[0]!.name].mesh.outcome='pending';expect(()=>buildVerdict(pkg,pending,'test')).toThrow('PARTS_VERDICT_NOT_CLEAN');delete pending.parts[pkg.items[0]!.name];expect(()=>buildVerdict(pkg,pending,'test')).toThrow('PARTS_VERDICT_MISSING_PART');
+ await writeMeshPackage(root);const pkg=await loadPartsView(root),binding=verdictSource(pkg),c=await caller(pkg.items);
+ expect(c.$('pv-save').onclick).toBeFunction();await c.$('pv-save').onclick!();
+ expect(c.requests).toHaveLength(1);const request=c.requests[0];
+ expect(request.url).toBe('/api/parts/verdict');expect(request.method).toBe('POST');
+ expect(request.body).toEqual({status:'approved',issues:[]});
+ const verdict=buildVerdict(pkg,request.body,'test');
+ expect(verdict.schema).toBe('rig-review-parts-verdict/4');
+ expect(verdict.status).toBe('approved');
+ expect(verdict.source).toEqual(binding);
+ expect(verdict.issues).toEqual([]);
+ expect(c.$('pv-save-status').dataset.result).toBe('saved');
+ expect(()=>buildVerdict(pkg,{status:'approved',issues:[{}]},'test')).toThrow();
  }finally{await rm(root,{recursive:true,force:true});}
 });
-for(const flag of ['part','mesh'] as const)test('#395 actual page preserves and refuses flagged '+flag+' atomically',async()=>{
- const c=await caller([{name:'a',index:0,mesh:{}},{name:'b',index:1,mesh:{}}],flag),before=JSON.stringify([...c.state.verdict]);c.$('pv-overall').value='changes-requested';
- expect(c.$('pv-approve-all').onclick).toBeFunction();await c.$('pv-approve-all').onclick!();
- expect(c.requests).toHaveLength(0);expect(JSON.stringify([...c.state.verdict])).toBe(before);expect(c.$('pv-overall').value).toBe('changes-requested');expect(c.$('pv-save-status').textContent).toContain('PARTS_APPROVE_ALL_FLAGGED');expect(c.$('pv-save-status').dataset.result).toBe('refused');
-});
-test('#395 individual approval and actual list callers preserve complete names, counts, badges, selection and visibility',async()=>{
- const items=Array.from({length:24},(_,index)=>({name:index===23?'a very long complete part name '.repeat(5):'part '+index,index})),c=await caller(items);
- c.state.data.flags=[{kind:'faint',source:'mesh_report',item:items[23]!.name,id:'faint:0'}];c.state.data.readings=[{kind:'check',source:'check',classification:'part',item:items[23]!.name,id:'check:one'}];
- c.radios[1]!.checked=true;c.radios[1]!.onchange!();c.api.renderList();const rows=c.$('pv-items').children as Node[];expect(rows).toHaveLength(24);
- for(const [i,row]of rows.entries()) {const button=row.children[0] as Node,input=walk(row).find(n=>n.tag==='input')!;expect(button.title).toBe(items[i]!.name);expect(walk(button).find(n=>n.className==='pv-name')!.textContent).toBe(items[i]!.name);expect(input.attrs['aria-label']).toBe('Show '+items[i]!.name+' in assembly');expect(row.children.flatMap(n=>n instanceof Node?n.children:[])).not.toContain('Visible');expect(walk(button).find(n=>n.className==='pv-badge')).toBeDefined();button.onclick!();expect(c.selected).toBe(i);input.checked=false;input.onchange!();expect(c.state.hidden.has(items[i]!.name)).toBe(true);input.checked=true;input.onchange!();expect(c.state.hidden.has(items[i]!.name)).toBe(false);}
- expect(walk(rows[23]!).find(n=>n.className==='pv-count')!.textContent).toBe('mesh 1 · check 1');expect(rows[0]!.children[0].attrs['aria-current']).toBe('true');
- expect(c.painted).toBe(48);expect(c.state.verdict.get(items[0]!.name).outcome).toBe('clean');expect(c.state.verdict.get(items[1]!.name).outcome).toBe('pending');
- const css=await readFile('web/parts.css','utf8');expect(css).not.toMatch(/\.pv-count\{[^}]*grid-row:2/);expect(await readFile('web/parts.html','utf8')).toContain('id="pv-approve-all"');
-});
-test('#395 actual approval preserves a real source-bound comment and producer flag IDs',async()=>{
+
+test('#612 pointed issue switches save payload to changes-requested and preserves source-bound issue',async()=>{
  const root=await mkdtemp(join(tmpdir(),'approve-comments-'));try{
- const pkg=await commentFixture(root),comment=await preparePartsComment(pkg,candidate(pkg)),c=await caller(pkg.items);c.comments.push(comment);
- const before=await Promise.all(pkg.files.map(f=>readFile(f.abs)));await c.$('pv-approve-all').onclick!();
- const verdict=buildVerdict(pkg,c.requests[0].body,'test');expect(verdict.comments).toEqual([comment]);
- for(const item of pkg.items)expect(verdict.parts[item.name]!.flags).toEqual([...new Set(pkg.flags.filter(f=>f.item===item.name).map(f=>f.id))]);
+ const pkg=await commentFixture(root),comment=await preparePartsComment(pkg,candidate(pkg)),c=await caller(pkg.items);
+ c.comments.push(comment);
+ const before=await Promise.all(pkg.files.map(f=>readFile(f.abs)));
+ await c.$('pv-save').onclick!();
+ expect(c.requests).toHaveLength(1);
+ expect(c.requests[0].body).toEqual({status:'changes-requested',issues:[comment]});
+ const verdict=buildVerdict(pkg,c.requests[0].body,'test');
+ expect(verdict.schema).toBe('rig-review-parts-verdict/4');
+ expect(verdict.status).toBe('changes-requested');
+ expect(verdict.issues).toEqual([comment]);
  expect(await Promise.all(pkg.files.map(f=>readFile(f.abs)))).toEqual(before);
  }finally{await rm(root,{recursive:true,force:true});}
 });
-test('#395 paired approval labels and admitted Korean values use polite 파츠 vocabulary',()=>{
- for(const key of ['Approve all','PARTS_APPROVE_ALL_FLAGGED: resolve flagged part and mesh outcomes before approving all.']){expect(enCatalog[key]).toBeTruthy();expect(koCatalog[key]).toBeTruthy();}
- for(const key of ['REBUILD_REGION_DUPLICATE: {0} (two regions of the chest part carry this name)','PARTS_COMMENT_UNAVAILABLE: original part image required','Comments on this part: {count}','PARTS_COMPARISON_INVALID: part/overlay mode and opacity 0..1 required']){expect(koCatalog[key]).toContain('파츠');expect(koCatalog[key]).not.toMatch(/파트|필요해요|이름을 씀/);}
+
+test('#612 legacy read-only verdict renders flagged parts and refuses save when legacy read-only or host locked',async()=>{
+ const legacy={
+  readOnly:true as const,
+  code:'PARTS_VERDICT_LEGACY_FORMAT' as const,
+  schema:'rig-review-parts-verdict/2' as const,
+  status:'changes-requested' as const,
+  flaggedCount:1,
+  flaggedParts:[{name:'gap',outcome:'flagged' as const,note:'legacy seam note',flags:['faint:0']}],
+  issues:[],
+ };
+ const c=await caller([{name:'gap',index:0},{name:'covered',index:1}],{legacyVerdict:legacy});
+ c.api.renderLegacyVerdict();
+ const list=c.$('pv-legacy-flagged');
+ expect(list.hidden).toBe(false);
+ expect(list.children).toHaveLength(1);
+ expect(list.children[0].dataset.legacyFlaggedPart).toBe('gap');
+ expect(list.children[0].textContent).toBe('gap: legacy seam note');
+ await c.$('pv-save').onclick!();
+ expect(c.requests).toHaveLength(0);
+
+ const lockedCaller=await caller([{name:'gap',index:0}],{locked:true});
+ await lockedCaller.$('pv-save').onclick!();
+ expect(lockedCaller.requests).toHaveLength(0);
+});
+
+test('#612 actual list caller renders complete names, producer flag counts, issue count badges, selection, and assembly visibility',async()=>{
+ const items=Array.from({length:24},(_,index)=>({name:index===23?'a very long complete part name '.repeat(5):'part '+index,index})),c=await caller(items);
+ c.state.data.flags=[{kind:'faint',source:'mesh_report',item:items[23]!.name,id:'faint:0'}];
+ c.state.data.readings=[{kind:'check',source:'check',classification:'part',item:items[23]!.name,id:'check:one'}];
+ c.comments.push({parts:[{name:items[0]!.name,imageHash:'a'.repeat(64)}]} as unknown as PartsIssue);
+ c.api.renderList();
+ const rows=c.$('pv-items').children as Node[];expect(rows).toHaveLength(24);
+ for(const [i,row] of rows.entries()){
+  const button=row.children[0] as Node,input=walk(row).find(n=>n.tag==='input')!;
+  expect(button.title).toBe(items[i]!.name);
+  expect(walk(button).find(n=>n.className==='pv-name')!.textContent).toBe(items[i]!.name);
+  expect(input.attrs['aria-label']).toBe('Show '+items[i]!.name+' in assembly');
+  const badge=walk(button).find(n=>n.className==='pv-badge')!;
+  expect(badge).toBeDefined();
+  expect(badge.dataset.issues).toBe(i===0?'1':'0');
+  expect(badge.textContent).toBe(i===0?'1':'');
+  button.onclick!();expect(c.selected).toBe(i);
+  input.checked=false;input.onchange!();expect(c.state.hidden.has(items[i]!.name)).toBe(true);
+  input.checked=true;input.onchange!();expect(c.state.hidden.has(items[i]!.name)).toBe(false);
+ }
+ expect(walk(rows[23]!).find(n=>n.className==='pv-count')!.textContent).toBe('mesh 1 · check 1');
+ expect(rows[0]!.children[0].attrs['aria-current']).toBe('true');
+ expect(c.painted).toBe(48);
+ const css=await readFile('web/parts.css','utf8');expect(css).not.toMatch(/\.pv-count\{[^}]*grid-row:2/);
+ const html=await readFile('web/parts.html','utf8');
+ expect(html).toContain('id="pv-save"');
+ expect(html).toContain('id="pv-legacy-flagged"');
+ expect(html).not.toContain('id="pv-approve-all"');
+ expect(html).not.toContain('data-pv-outcome');
+ expect(html).not.toContain('id="pv-note"');
+ expect(html).not.toContain('id="pv-overall"');
+});
+
+test('#612 two simultaneous mountPartsWorkspace instances in one document stay isolated across slots and host adapters',async()=>{
+ expect(REGION_MARGIN).toBe(4);
+ const partsSourceText=await readFile('web/parts.ts','utf8');
+ expect(partsSourceText).not.toContain("getElementById('parts-app')");
+ expect(partsSourceText).not.toContain('pageInstanceAccess(');
+
+ class FakeElement {
+  tagName:string;id='';className='';textContent='';title='';type='';value='';min='';max='';step='';
+  hidden=false;disabled=false;checked=false;tabIndex=0;clientWidth=160;clientHeight=120;width=16;height=16;
+  style:Record<string,string>={left:'',top:'',width:'',height:'',transform:'',transformOrigin:''};
+  dataset:Record<string,string>={};
+  attrs=new Map<string,string>();
+  parentElement:FakeElement|null=null;
+  children:FakeElement[]=[];
+  onclick:((e?:any)=>unknown)|null=null;
+  onchange:((e?:any)=>unknown)|null=null;
+  oninput:((e?:any)=>unknown)|null=null;
+  classList={
+   add:(...tokens:string[])=>{const s=new Set(this.className.split(/\s+/).filter(Boolean));for(const t of tokens)s.add(t);this.className=[...s].join(' ');},
+   toggle:(cls:string,force?:boolean)=>{const s=new Set(this.className.split(/\s+/).filter(Boolean));const on=force===undefined?!s.has(cls):force;if(on)s.add(cls);else s.delete(cls);this.className=[...s].join(' ');},
+   contains:(cls:string)=>this.className.split(/\s+/).includes(cls),
+  };
+  constructor(tag:string){this.tagName=tag.toUpperCase();}
+  setAttribute(k:string,v:string){
+   this.attrs.set(k,String(v));
+   if(k==='id')this.id=String(v);
+   if(k.startsWith('data-')){
+    const camel=k.slice(5).replace(/-([a-z])/g,(_,c)=>c.toUpperCase());
+    this.dataset[camel]=String(v);
+   }
+  }
+  getAttribute(k:string){return this.attrs.get(k)??null;}
+  removeAttribute(k:string){this.attrs.delete(k);}
+  append(...nodes:any[]){
+   for(const n of nodes){
+    if(n instanceof FakeElement){
+     if(n.parentElement)n.parentElement.children=n.parentElement.children.filter(c=>c!==n);
+     n.parentElement=this;
+     this.children.push(n);
+    }else if(typeof n==='string'){
+     this.textContent+=n;
+    }
+   }
+  }
+  replaceChildren(...nodes:any[]){
+   for(const c of this.children)c.parentElement=null;
+   this.children=[];this.textContent='';
+   this.append(...nodes);
+  }
+  before(node:FakeElement){
+   if(!this.parentElement)return;
+   const idx=this.parentElement.children.indexOf(this);
+   if(idx>=0){node.parentElement=this.parentElement;this.parentElement.children.splice(idx,0,node);}
+  }
+  after(node:FakeElement){
+   if(!this.parentElement)return;
+   const idx=this.parentElement.children.indexOf(this);
+   if(idx>=0){node.parentElement=this.parentElement;this.parentElement.children.splice(idx+1,0,node);}
+  }
+  remove(){
+   if(this.parentElement){
+    this.parentElement.children=this.parentElement.children.filter(c=>c!==this);
+    this.parentElement=null;
+   }
+  }
+  contains(target:any):boolean{return target===this||this.children.some(c=>c.contains(target));}
+  closest(sel:string):FakeElement|null{
+   let cur:FakeElement|null=this;
+   while(cur){if(cur.matches(sel))return cur;cur=cur.parentElement;}
+   return null;
+  }
+  matches(sel:string):boolean{
+   if(sel.startsWith('#'))return this.id===sel.slice(1);
+   if(sel.startsWith('.'))return this.classList.contains(sel.slice(1));
+   const m=/^([a-zA-Z0-9_-]+)?\[([a-zA-Z0-9_-]+)(?:="([^"]*)")?\]$/.exec(sel);
+   if(m){
+    const [,tag,attr,val]=m;
+    if(tag&&this.tagName!==tag.toUpperCase())return false;
+    const camel=attr!.startsWith('data-')?attr!.slice(5).replace(/-([a-z])/g,(_,c)=>c.toUpperCase()):null;
+    const actual=this.attrs.get(attr!)??(camel?this.dataset[camel]:undefined);
+    return val===undefined?actual!==undefined:actual===val;
+   }
+   return this.tagName===sel.toUpperCase();
+  }
+  querySelector<T=FakeElement>(sel:string):T|null{return (this.querySelectorAll(sel)[0]??null) as T|null;}
+  querySelectorAll<T=FakeElement>(sel:string):T[]{
+   const parts=sel.split(/\s+/).filter(Boolean);
+   if(parts.length>1){
+    let current:FakeElement[]=[this];
+    for(const part of parts){
+     const next:FakeElement[]=[];
+     for(const node of current)for(const found of node.querySelectorAll<FakeElement>(part))if(!next.includes(found))next.push(found);
+     current=next;
+    }
+    return current as unknown as T[];
+   }
+   const out:FakeElement[]=[];
+   for(const child of this.children){
+    if(child.matches(sel))out.push(child);
+    out.push(...child.querySelectorAll<FakeElement>(sel));
+   }
+   return out as unknown as T[];
+  }
+  addEventListener(){}
+  removeEventListener(){}
+  getBoundingClientRect(){return {left:0,top:0,width:this.clientWidth,height:this.clientHeight,right:this.clientWidth,bottom:this.clientHeight,x:0,y:0};}
+  getContext(){
+   return {
+    imageSmoothingEnabled:false,fillStyle:'',strokeStyle:'',lineWidth:1,globalAlpha:1,
+    clearRect(){},fillRect(){},strokeRect(){},drawImage(){},beginPath(){},moveTo(){},lineTo(){},stroke(){},
+    getImageData:(_x:number,_y:number,w:number,h:number)=>({data:new Uint8ClampedArray(Math.max(4,w*h*4))}),
+    putImageData(){},
+   };
+  }
+ }
+
+ const savedDoc=Object.getOwnPropertyDescriptor(globalThis,'document');
+ const savedWin=Object.getOwnPropertyDescriptor(globalThis,'window');
+ const savedRaf=Object.getOwnPropertyDescriptor(globalThis,'requestAnimationFrame');
+ const savedCaf=Object.getOwnPropertyDescriptor(globalThis,'cancelAnimationFrame');
+ const savedRo=Object.getOwnPropertyDescriptor(globalThis,'ResizeObserver');
+ const savedMo=Object.getOwnPropertyDescriptor(globalThis,'MutationObserver');
+ const savedEl=Object.getOwnPropertyDescriptor(globalThis,'Element');
+ const rootDoc=new FakeElement('body');
+ const fakeDoc={
+  body:rootDoc,
+  title:'',
+  activeElement:null,
+  createElement:(tag:string)=>new FakeElement(tag),
+  getElementById:(id:string)=>rootDoc.querySelector(`#${id}`),
+  querySelector:(sel:string)=>rootDoc.querySelector(sel),
+  querySelectorAll:(sel:string)=>rootDoc.querySelectorAll(sel),
+  addEventListener(){},
+  removeEventListener(){},
+ };
+ const fakeWin={
+  addEventListener(){},
+  removeEventListener(){},
+  devicePixelRatio:1,
+ };
+ class FakeObserver{observe(){}disconnect(){}}
+ Object.defineProperty(globalThis,'document',{value:fakeDoc,configurable:true,writable:true});
+ Object.defineProperty(globalThis,'window',{value:fakeWin,configurable:true,writable:true});
+ Object.defineProperty(globalThis,'requestAnimationFrame',{value:()=>1,configurable:true,writable:true});
+ Object.defineProperty(globalThis,'cancelAnimationFrame',{value:()=>{},configurable:true,writable:true});
+ Object.defineProperty(globalThis,'ResizeObserver',{value:FakeObserver,configurable:true,writable:true});
+ Object.defineProperty(globalThis,'MutationObserver',{value:FakeObserver,configurable:true,writable:true});
+ Object.defineProperty(globalThis,'Element',{value:FakeElement,configurable:true,writable:true});
+ let handleA:ReturnType<typeof mountPartsWorkspace>|null=null;
+ let handleB:ReturnType<typeof mountPartsWorkspace>|null=null;
+ try{
+  const makeSlots=(prefix:string)=>{
+   const hostWrap=new FakeElement('div');hostWrap.id=`host-${prefix}`;
+   const left=new FakeElement('aside'),stage=new FakeElement('main'),toolbar=new FakeElement('div'),side=new FakeElement('aside');
+   hostWrap.append(left,stage,toolbar,side);
+   rootDoc.append(hostWrap);
+   return {left:left as unknown as HTMLElement,stage:stage as unknown as HTMLElement,toolbar:toolbar as unknown as HTMLElement,side:side as unknown as HTMLElement,hostWrap};
+  };
+  const sampleIssue:PartsIssue={
+   schema:'rig-review-parts-comment/2',
+   id:'11111111-1111-4111-8111-111111111111',
+   summary:'seam gap on A',
+   parts:[{name:'gap',imageHash:'a'.repeat(64)}],
+   sourceHash:'1'.repeat(64),
+   imageRegion:{x:1,y:2,width:4,height:5},
+   rigRegion:{x:1,y:2,width:4,height:5},
+   view:{
+    mode:'item',
+    camera:{zoom:1,center:{x:8,y:8},viewport:{width:160,height:120}},
+    cameraSync:false,
+    referenceCamera:null,
+    background:'green',
+    alpha:false,
+    footprints:false,
+    mesh:false,
+    comparison:{mode:'part',opacity:0.5},
+   },
+   crop:{path:'crops/viewport.png',sha256:'c'.repeat(64),width:8,height:8,png:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='},
+   nativeCrop:null,
+  };
+  const makeView=(title:string,sourceHash:string,issues:PartsIssue[]):ViewData=>({
+   mode:'parts',
+   title,
+   sourceHash,
+   painting:null,
+   rigSize:[64,64],
+   items:[
+    {name:'gap',index:0,x:0,y:0,w:16,h:16,imageHash:'a'.repeat(64)},
+    {name:'covered',index:1,x:8,y:8,w:16,h:16,imageHash:'b'.repeat(64)},
+   ],
+   pages:[],
+   flags:[],
+   readings:[],
+   flagSources:[],
+   flagMissing:['mesh_report.json','check.json'],
+   verdictFile:'parts-review.json',
+   verdict:issues.length?{status:'changes-requested',issues}:null,
+   verdictStale:null,
+  });
+
+  const slotsA=makeSlots('a'),slotsB=makeSlots('b');
+  const outputs:{a?:PanelOutput;b?:PanelOutput}={};
+  const sourceA:PartsSource={
+   view:async()=>makeView('Package A','1'.repeat(64),[sampleIssue]),
+   image:async()=>new Blob([new Uint8Array([137,80,78,71])],{type:'image/png'}),
+   crop:async issue=>issue,
+  };
+  const sourceB:PartsSource={
+   view:async()=>makeView('Package B','2'.repeat(64),[]),
+   image:async()=>new Blob([new Uint8Array([137,80,78,71])],{type:'image/png'}),
+   crop:async issue=>issue,
+  };
+  const hostA:PartsHost={locked:()=>false,changed:()=>{},register:out=>{outputs.a=out;}};
+  const hostB:PartsHost={locked:()=>false,changed:()=>{},register:out=>{outputs.b=out;}};
+
+  handleA=mountPartsWorkspace(slotsA,sourceA,hostA);
+  handleB=mountPartsWorkspace(slotsB,sourceB,hostB);
+  await Promise.all([handleA.ready,handleB.ready]);
+
+  expect(outputs.a?.kind).toBe('parts-verdict');
+  expect(outputs.b?.kind).toBe('parts-verdict');
+  expect(outputs.a!.value('fix gap')).toEqual({verdict:'changes-requested',issues:[sampleIssue],words:'fix gap'});
+  expect(outputs.b!.value('all clean')).toEqual({verdict:'approved',issues:[],words:'all clean'});
+
+  // Selecting 'covered' in instance A does not change instance B's selection ('gap').
+  handleA.select('covered');
+  const activeA=slotsA.hostWrap.querySelector<FakeElement>('button[aria-current="true"]');
+  const activeB=slotsB.hostWrap.querySelector<FakeElement>('button[aria-current="true"]');
+  expect(activeA?.dataset.pvItem).toBe('covered');
+  expect(activeB?.dataset.pvItem).toBe('gap');
+
+  // Badge counts stay isolated between instances A and B.
+  const badgeA=slotsA.hostWrap.querySelector<FakeElement>('button[data-pv-item="gap"] .pv-badge');
+  const badgeB=slotsB.hostWrap.querySelector<FakeElement>('button[data-pv-item="gap"] .pv-badge');
+  expect(badgeA?.dataset.issues).toBe('1');
+  expect(badgeB?.dataset.issues).toBe('0');
+ }finally{
+  handleA?.dispose();
+  handleB?.dispose();
+  if(savedDoc)Object.defineProperty(globalThis,'document',savedDoc);
+  else delete (globalThis as any).document;
+  if(savedWin)Object.defineProperty(globalThis,'window',savedWin);
+  else delete (globalThis as any).window;
+  if(savedRaf)Object.defineProperty(globalThis,'requestAnimationFrame',savedRaf);
+  else delete (globalThis as any).requestAnimationFrame;
+  if(savedCaf)Object.defineProperty(globalThis,'cancelAnimationFrame',savedCaf);
+  else delete (globalThis as any).cancelAnimationFrame;
+  if(savedRo)Object.defineProperty(globalThis,'ResizeObserver',savedRo);
+  else delete (globalThis as any).ResizeObserver;
+  if(savedMo)Object.defineProperty(globalThis,'MutationObserver',savedMo);
+  else delete (globalThis as any).MutationObserver;
+  if(savedEl)Object.defineProperty(globalThis,'Element',savedEl);
+  else delete (globalThis as any).Element;
+ }
+});
+
+test('#612 paired legacy verdict labels and admitted Korean values use polite 파츠 vocabulary',()=>{
+ for(const key of ['PARTS_VERDICT_LEGACY_FORMAT','parts.legacyVerdictBanner']){
+  expect(enCatalog[key]).toBeTruthy();
+  expect(koCatalog[key]).toBeTruthy();
+ }
+ for(const key of ['REBUILD_REGION_DUPLICATE: {0} (two regions of the chest part carry this name)','PARTS_COMMENT_UNAVAILABLE: original part image required','Comments on this part: {count}','PARTS_COMPARISON_INVALID: part/overlay mode and opacity 0..1 required']){
+  expect(koCatalog[key]).toContain('파츠');
+  expect(koCatalog[key]).not.toMatch(/파트|필요해요|이름을 씀/);
+ }
 });

@@ -208,11 +208,11 @@ export async function runPartsViewBrowser(shotDir?: string, partsDir?: string) {
         !standalone.hasCorrectionsHost &&
         !standalone.hasDraftUnavailableText &&
         standalone.verdictVisible &&
-        standalone.outcomes === 3 &&
+        standalone.outcomes === 0 &&
         standalone.saveEnabled &&
         standalone.saveText === catalog['Save sign-off'] &&
-        standalone.approveAllEnabled &&
-        standalone.approveAllText === catalog['Approve all'] &&
+        !standalone.approveAllEnabled &&
+        standalone.approveAllText === null &&
         standalone.positivePixels > 0;
       standalone562[lang] = { ...standalone, pass: standaloneOk };
       if (shotDir) await writeFile(join(shotDir, 'raw-report.json'), JSON.stringify(report, null, 2) + '\n');

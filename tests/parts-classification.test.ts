@@ -51,13 +51,13 @@ test('#385 serving path exposes separate readings, keeps verdict/2 IDs and refus
  let server:Awaited<ReturnType<typeof startPartsServer>>|undefined;
  try{
  await writePartsPackage(root);const path=join(root,'check/check.json');await writeFile(path,JSON.stringify(fixture));
- const pkg=await reader.loadPartsView(root),wireBefore=reader.buildVerdict(pkg,{status:'pending',parts:Object.fromEntries([...names].map(n=>[n,{outcome:'pending'}]))},'test');
- expect(wireBefore.schema).toBe('rig-review-parts-verdict/2');
- expect(wireBefore.parts.front!.flags).toEqual([]); // legacy PASS extraction stays unchanged
+ const pkg=await reader.loadPartsView(root),wireBefore=reader.buildVerdict(pkg,{status:'approved',issues:[]},'test');
+ expect(wireBefore.schema).toBe('rig-review-parts-verdict/4');
+ expect(wireBefore.issues).toEqual([]);
  expect(pkg.readings!.filter(labels.countedFlag)).toHaveLength(1);
  const time=new Date(wireBefore.updatedAt);
- expect(reader.buildVerdict({...pkg,readings:[]} as any,{status:'pending',parts:Object.fromEntries([...names].map(n=>[n,{outcome:'pending'}]))},'test',time)).toEqual(wireBefore);
- await reader.saveVerdict(pkg,{status:'pending',parts:Object.fromEntries([...names].map(n=>[n,{outcome:'pending'}]))});
+ expect(reader.buildVerdict({...pkg,readings:[]} as any,{status:'approved',issues:[]},'test',time)).toEqual(wireBefore);
+ await reader.saveVerdict(pkg,{status:'approved',issues:[]});
  server=await startPartsServer(pkg,{port:0,exitOnClose:false});const origin=`http://127.0.0.1:${server.port}`;
  const res=await fetch(origin+'/api/parts'),body=await res.json();expect(res.status).toBe(200);expect(body.readings).toEqual(pkg.readings);expect(body.flags).toEqual(pkg.flags);expect(JSON.stringify(body)).not.toContain(root);
  const exported=await fetch(origin+'/api/parts/export');expect(exported.status).toBe(200);expect(await exported.json()).toEqual((await reader.readVerdict(pkg)).verdict);
@@ -74,7 +74,7 @@ class Node {
 }
 const descend=(n:Node):Node[]=>[n,...n.children.filter(c=>c instanceof Node).flatMap(descend)];
 test('#385 actual renderFlags/renderList callers collapse nonflags and count only mesh + part; legacy has no fabricated count',async()=>{
- const source=await readFile('web/parts.ts','utf8'),code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(source.indexOf('function renderFlags()'),source.indexOf('function renderVerdict()')));
+ const source=await readFile('web/parts.ts','utf8'),code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(source.indexOf('function renderFlags()'),source.indexOf('function renderMesh()')));
  const state:any={selected:2,hidden:new Set(),verdict:new Map(),data:{mode:'parts',items:[...names].reverse().map((name,index)=>({name,index})),flags:[],readings:reader.checkReadings(fixture,names),flagSources:['check.json'],flagMissing:['mesh_report.json']}};
  state.selected=state.data.items.findIndex((i:any)=>i.name==='front');
  const nodes=new Map<string,Node>(),$=(id:string)=>{if(!nodes.has(id))nodes.set(id,new Node('ul'));return nodes.get(id)!;};

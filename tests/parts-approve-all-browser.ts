@@ -1,4 +1,4 @@
-/** #395 CDP receipt. Run only in the authorized browser environment; never invokes a producer.
+/** #395 / #612 CDP receipt. Run only in the authorized browser environment; never invokes a producer.
  * TMPDIR=<prepared short parent> bun tests/parts-approve-all-browser.ts
  *   --public-root <sealed 23-part package> --baseline-root <installed rig-review@1.8.0>
  *   --out <persistent evidence directory> [--width 1600] [--height 1100]
@@ -10,7 +10,7 @@ import { join, resolve, relative, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { loadPartsView, readVerdict, buildVerdict, type PartsViewPackage, type PartsVerdict } from '../src/parts-view.ts';
+import { loadPartsView, readVerdict, buildVerdict, verdictSource, type PartsViewPackage, type PartsVerdict } from '../src/parts-view.ts';
 import { startPartsServer } from '../src/parts-server.ts';
 import { writeMeshPackage } from './helpers/parts-mesh-package.ts';
 import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
@@ -30,8 +30,7 @@ const same = (a: unknown, b: unknown, label: string) => check(isDeepStrictEqual(
 const cap = 'd'.repeat(64), lifetime = 60 * 60 * 1000;
 const serverOptions = { port: 0, capability: cap, exitOnClose: false, graceMs: lifetime, unopenedTimeoutMs: lifetime };
 type Server = Awaited<ReturnType<typeof startPartsServer>>;
-type Entry = { outcome: string; note: string; mesh?: { outcome: string; note: string } };
-type Submission = { status: string; parts: Record<string, Entry>; comments: PartsVerdict['comments'] };
+type Submission = { status: 'approved' | 'changes-requested'; issues: PartsVerdict['issues'] };
 type Wire = { path: string; method: string; contentType: string | null; body: Submission; status?: number };
 
 async function hashes(root: string): Promise<Record<string, string>> {
@@ -72,7 +71,7 @@ async function open(page: InputCdpSession, server: Server, lang: string) {
   await page.evaluate(`document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))`);
   // Passive observation: forwards the original request and response, never substitutes a save.
   await page.evaluate(`(()=>{window.__rv395wire=[];window.__rv395clicks=[];
-    document.addEventListener('click',e=>{const n=e.target.closest?.('#pv-save,#pv-approve-all');if(n)window.__rv395clicks.push({id:n.id,trusted:e.isTrusted});},true);
+    document.addEventListener('click',e=>{const n=e.target.closest?.('#pv-save');if(n)window.__rv395clicks.push({id:n.id,trusted:e.isTrusted});},true);
     const original=window.fetch;window.fetch=async(...args)=>{const path=new URL(typeof args[0]==='string'?args[0]:args[0].url,location.href).pathname;
       const init=args[1]??{};let row;if(path==='/api/parts/verdict'&&init.method==='POST'){
         row={path,method:init.method,contentType:new Headers(init.headers).get('Content-Type'),body:JSON.parse(init.body)};window.__rv395wire.push(row);
@@ -86,23 +85,30 @@ async function save(page: InputCdpSession, button = '#pv-save') {
   return page.evaluate<{ result: string; text: string }>(`(()=>{const n=document.getElementById('pv-save-status');return {result:n.dataset.result,text:n.textContent};})()`);
 }
 async function ui(page: InputCdpSession) {
-  return page.evaluate<{ status: string; parts: Record<string, Entry> }>(`(()=>{
-    const names=[...document.querySelectorAll('[data-pv-item]')].map(n=>n.dataset.pvItem),parts={},selected=document.querySelector('[data-pv-item][aria-current="true"]')?.dataset.pvItem;
-    for(const name of names){[...document.querySelectorAll('[data-pv-item]')].find(n=>n.dataset.pvItem===name).click();
-      const s=document.querySelector('#pv-mesh-panel select');parts[name]={outcome:document.querySelector('[data-pv-outcome]:checked').value,note:document.getElementById('pv-note').value,
-        ...(s?{mesh:{outcome:s.value,note:document.querySelector('#pv-mesh-panel textarea').value}}:{})};}
-    if(selected)[...document.querySelectorAll('[data-pv-item]')].find(n=>n.dataset.pvItem===selected).click();
-    return {status:document.getElementById('pv-overall').value,parts};})()`);
+  return page.evaluate<{ noLegacyVerdictControls: boolean; issueCounts: Record<string, number> }>(`(()=>{
+    const issueCounts = Object.fromEntries([...document.querySelectorAll('[data-pv-item]')].map(n => [
+      n.dataset.pvItem,
+      Number(n.querySelector('.pv-badge')?.dataset.issues ?? '0'),
+    ]));
+    const noLegacyVerdictControls =
+      document.querySelectorAll('input[data-pv-outcome]').length === 0 &&
+      !document.getElementById('pv-note') &&
+      !document.getElementById('pv-overall') &&
+      !document.getElementById('pv-approve-all') &&
+      !document.querySelector('#pv-mesh-panel select') &&
+      !document.querySelector('#pv-mesh-panel textarea');
+    return { noLegacyVerdictControls, issueCounts };
+  })()`);
 }
 async function assertSaved(page: InputCdpSession, pkg: PartsViewPackage, body: Submission) {
   const requests = await wire(page), request = requests.at(-1);
   check(request?.status === 200, 'actual verdict POST succeeded');
-  same(Object.keys(request.body).sort(), ['comments', 'parts', 'status'], 'unchanged wire top-level fields');
+  same(Object.keys(request.body).sort(), ['issues', 'status'], 'wire top-level fields are status and issues only');
   check(request.path === '/api/parts/verdict' && request.method === 'POST' && request.contentType === 'application/json', 'unchanged save route/method/content type');
   same(request.body, body, 'actual UI body equals expected input');
   const saved = (await readVerdict(pkg)).verdict;
   check(saved, 'saved verdict exists');
-  same(saved, buildVerdict(pkg, body, saved.tool.version, new Date(saved.updatedAt)), 'disk verdict equals unchanged buildVerdict');
+  same(saved, buildVerdict(pkg, body, saved.tool.version, new Date(saved.updatedAt)), 'disk verdict equals buildVerdict');
   check(await page.evaluate(`window.__rv395clicks.at(-1)?.trusted===true`), 'save action was a trusted CDP click');
   return saved;
 }
@@ -137,7 +143,7 @@ async function layout(page: InputCdpSession): Promise<Layout> {
       const name=button.dataset.pvItem;const accessibleName=button.getAttribute('aria-label')||button.textContent;
       return {name,display:s.display,wrap:s.flexWrap,height:r.height,
         oneLine:getComputedStyle(label).whiteSpace==='nowrap'&&new Set(textRows.map(r=>Math.round(r.top*100)/100)).size<=1&&inline.every(n=>Math.abs((n.top+n.height/2)-(b.top+b.height/2))<=2)&&!!c&&Math.abs((b.top+b.height/2)-(c.top+c.height/2))<=2,
-        contained:r.top>=Math.max(0,lr.top)-1&&r.bottom<=Math.min(innerHeight,lr.bottom)+1&&r.left>=lr.left-1&&r.right<=lr.right+1&&!!c&&c.left>=r.left&&c.right<=r.right,
+        contained:r.top>=Math.max(0,lr.top)-1&&r.bottom<=Math.min(innerHeight,lr.bottom)+1&&r.left>=lr.left-1&&r.right<=lr.right+1&&!!c&&c.left>=r.left&&c.right<=lr.right,
         checkbox:!!input&&!input.disabled&&input.checked&&!!input.getAttribute('aria-label')&&input.getAttribute('aria-label').includes(name),
         accessible:label.textContent===name&&button.title===name&&accessibleName.includes(name),caption:input?.parentElement.textContent.trim()??''};});
     return {rows,viewport:{width:innerWidth,height:innerHeight},language:document.documentElement.lang,approveText:document.getElementById('pv-approve-all')?.textContent??null};})()`);
@@ -168,68 +174,72 @@ async function main() {
     page = await launchCdpSession(profile); await page.setViewport(width, height);
     const serve = async (pkg: PartsViewPackage) => { const server = await startPartsServer(pkg, serverOptions); servers.push(server); return server; };
     const load = (name: string) => loadPartsView(input, { verdict: join(scratch, name + '.json') });
-    for (const lang of ['en', 'ko']) {
-      // Fresh UI: one real batch click, all pending part AND mesh entries reach the existing save.
+    for (const lang of ['en', 'ko'] as const) {
+      const catalog = lang === 'ko' ? koCatalog : enCatalog;
       const pkg = await load('fresh-' + lang), server = await serve(pkg);
       check(pkg.items.filter(i => i.mesh).length === 2, 'synthetic fixture has two actual meshes');
-      await open(page, server, lang); const pending = await ui(page);
-      check(Object.values(pending.parts).every(p => p.outcome === 'pending' && (!p.mesh || p.mesh.outcome === 'pending')), 'fresh UI pending');
+      await open(page, server, lang);
+      const initialUi = await ui(page);
+      check(initialUi.noLegacyVerdictControls, 'per-part outcome radios, note, overall select, approve-all and mesh outcome fields removed');
+      check(Object.values(initialUi.issueCounts).every(c => c === 0), 'fresh UI has zero issues');
       check((await readVerdict(pkg)).verdict === null, 'opening never saves approval');
-      let guarded = false; try { buildVerdict(pkg, { ...pending, status: 'approved', comments: [] }, 'oracle'); } catch (e) { guarded = String(e).includes('PARTS_VERDICT_NOT_CLEAN'); }
-      check(guarded, 'unchanged server validator refuses approved with pending inputs');
       const measured = await layout(page); assertLayout(measured, pkg.items.map(i => i.name));
       await writeFile(join(out, `synthetic-before-${lang}.png`), await page.screenshot());
-      const approved: Submission = { status: 'approved', comments: [], parts: Object.fromEntries(Object.entries(pending.parts).map(([n, p]) => [n, { ...p, outcome: 'clean', ...(p.mesh ? { mesh: { ...p.mesh, outcome: 'clean' } } : {}) }])) };
-      check((await save(page, '#pv-approve-all')).result === 'saved', 'fresh approve-all saved');
-      check((await wire(page)).length === 1, 'one batch click makes exactly one save');
-      await assertSaved(page, pkg, approved); same(await ui(page), { status: approved.status, parts: approved.parts }, 'approved UI refreshed');
+      const approved: Submission = { status: 'approved', issues: [] };
+      check((await save(page, '#pv-save')).result === 'saved', 'zero-issue save succeeds as approved');
+      check((await wire(page)).length === 1, 'one click makes exactly one save');
+      await assertSaved(page, pkg, approved);
       await writeFile(join(out, `synthetic-after-${lang}.png`), await page.screenshot());
-      await open(page, server, lang); same(await ui(page), { status: approved.status, parts: approved.parts }, 'approval reopens');
-      api.push({ case: 'fresh-' + lang, pendingGuard: true, oneTrustedClickOneSave: true, meshClean: true, persisted: true, expectedInput: approved });
+      await open(page, server, lang);
+      check((await ui(page)).noLegacyVerdictControls, 'reopened UI has no legacy verdict controls');
+      api.push({ case: 'fresh-' + lang, oneTrustedClickOneSave: true, persisted: true, expectedInput: approved });
       (report.syntheticVisuals ??= {} as Record<string, unknown>);
       (report.syntheticVisuals as Record<string, unknown>)[lang] = measured;
 
-      // Both refusal subjects use saved evidence, then reopen. Every local field and the saved bytes stay intact.
-      for (const subject of ['part', 'mesh']) {
-        const flaggedPkg = await load(subject + '-' + lang), flaggedServer = await serve(flaggedPkg);
-        await open(page, flaggedServer, lang); await choose(page, 'gap');
-        if (subject === 'part') { await click(page, '[data-pv-outcome][value="flagged"]'); await field(page, '#pv-note', 'Keep flagged part 한글', 'input'); }
-        else { await field(page, '#pv-mesh-panel select', 'flagged'); await field(page, '#pv-mesh-panel textarea', 'Keep flagged mesh 한글', 'input'); }
-        await field(page, '#pv-overall', 'changes-requested'); check((await save(page)).result === 'saved', 'seed flagged evidence through UI');
-        const bytes = await readFile(flaggedPkg.verdictPath), seed = (await readVerdict(flaggedPkg)).verdict!;
-        await open(page, flaggedServer, lang); const stateBefore = await ui(page);
-        const rejected = await save(page, '#pv-approve-all');
-        const refusalKey = 'PARTS_APPROVE_ALL_FLAGGED: resolve flagged part and mesh outcomes before approving all.';
-        check(rejected.result === 'refused' && rejected.text === (lang === 'ko' ? koCatalog : enCatalog)[refusalKey], 'named localized batch refusal ' + subject);
-        check((await wire(page)).length === 0, 'refusal sends no POST');
-        same(await ui(page), stateBefore, 'refusal is atomic across every part/mesh/note/overall');
-        check(bytes.equals(await readFile(flaggedPkg.verdictPath)), 'refusal leaves disk bytes unchanged');
-        let refused = false; try { buildVerdict(flaggedPkg, { ...stateBefore, status: 'approved', comments: seed.comments }, 'oracle'); } catch (e) { refused = String(e).includes('PARTS_VERDICT_NOT_CLEAN'); }
-        check(refused, 'server still independently refuses flagged approval');
-        await writeFile(join(out, `refused-${subject}-${lang}.png`), await page.screenshot());
-        api.push({ case: subject + '-refused-' + lang, noPost: true, noLocalMutation: true, noDiskMutation: true, serverGuard: true, rejected, stateBefore, savedSha256: sha(bytes) });
-      }
+      // Legacy verdict with bare flagged parts opens read-only with localized banner and flagged list.
+      const legacyPkg = await load('legacy-' + lang);
+      const legacyParts = Object.fromEntries(legacyPkg.items.map(i => [
+        i.name,
+        {
+          outcome: i.name === 'gap' ? 'flagged' : 'clean',
+          note: i.name === 'gap' ? 'Legacy flagged note' : '',
+          ...(i.mesh ? { mesh: { outcome: 'clean', note: '' } } : {}),
+        },
+      ]));
+      await writeFile(legacyPkg.verdictPath, JSON.stringify({
+        schema: 'rig-review-parts-verdict/2',
+        mode: 'parts',
+        tool: { name: '@rig-c/review', version: '2.8.0' },
+        source: verdictSource(legacyPkg),
+        status: 'changes-requested',
+        parts: legacyParts,
+        comments: [],
+        updatedAt: '2026-04-01T00:00:00.000Z',
+      }));
+      const legacyServer = await serve(legacyPkg);
+      await open(page, legacyServer, lang);
+      const legacyState = await page.evaluate<{ loadText: string; saveDisabled: boolean; items: string[] }>(`(()=>{
+        return {
+          loadText: document.getElementById('pv-load')?.textContent ?? '',
+          saveDisabled: Boolean(document.getElementById('pv-save')?.disabled),
+          items: [...document.querySelectorAll('#pv-legacy-flagged li')].map(li => li.textContent ?? ''),
+        };
+      })()`);
+      const expectedBanner = 'PARTS_VERDICT_LEGACY_FORMAT: ' + catalog['parts.legacyVerdictBanner']!.replace('{0}', '1');
+      check(legacyState.loadText === expectedBanner && legacyState.saveDisabled && isDeepStrictEqual(legacyState.items, ['gap: Legacy flagged note']), 'legacy verdict opens read-only with banner and flagged parts list');
+      api.push({ case: 'legacy-readonly-' + lang, legacyState });
     }
-    // Reviewer text and a real pointed comment survive batch approval unchanged; manual approval still works.
+    // Pointed issue save submits changes-requested with issues array and updates issue count badge.
     const pkg = await load('preserve'), server = await serve(pkg);
-    await open(page, server, 'en'); await choose(page, 'gap');
-    await field(page, '#pv-note', 'Exact note 한글\nsecond line', 'input'); await field(page, '#pv-mesh-panel textarea', 'Exact mesh note 한글', 'input');
-    await click(page, '[data-pv-outcome][value="clean"]'); await field(page, '#pv-mesh-panel select', 'clean');
-    await addComment(page); check((await save(page)).result === 'saved', 'seed notes/comment');
-    const seeded = (await readVerdict(pkg)).verdict!; check(seeded.comments.length === 1, 'nonempty real comment fixture');
-    await open(page, server, 'ko'); const state = await ui(page);
-    const expected: Submission = { status: 'approved', comments: seeded.comments, parts: Object.fromEntries(Object.entries(state.parts).map(([n, p]) => [n, { ...p, outcome: 'clean', ...(p.mesh ? { mesh: { ...p.mesh, outcome: 'clean' } } : {}) }])) };
-    check((await save(page, '#pv-approve-all')).result === 'saved', 'batch preserves existing clean entries');
-    const batch = await assertSaved(page, pkg, expected);
-    same(batch.source, seeded.source, 'source hash/files/flags unchanged'); same(batch.comments, seeded.comments, 'comments unchanged including hashes/wire evidence');
     await open(page, server, 'en');
-    for (const item of pkg.items) { await choose(page, item.name); await click(page, '[data-pv-outcome][value="pending"]'); if (item.mesh) await field(page, '#pv-mesh-panel select', 'pending'); }
-    await field(page, '#pv-overall', 'pending'); check((await save(page)).result === 'saved', 'manual pending reset');
-    for (const item of pkg.items) { await choose(page, item.name); await click(page, '[data-pv-outcome][value="clean"]'); if (item.mesh) await field(page, '#pv-mesh-panel select', 'clean'); }
-    await field(page, '#pv-overall', 'approved'); check((await save(page)).result === 'saved', 'individual approval works');
-    const manual = await assertSaved(page, pkg, expected);
-    same({ ...manual, updatedAt: batch.updatedAt }, batch, 'manual and batch wire verdicts equivalent');
-    api.push({ case: 'notes-comments-and-individual', nonemptyCommentPreserved: true, notesPreserved: true, sourceUnchanged: true, manualEquivalent: true, requests: await wire(page), saved: manual });
+    await addComment(page);
+    const afterCommentUi = await ui(page);
+    check(afterCommentUi.issueCounts.gap === 1, 'part badge displays issue count 1');
+    check((await save(page)).result === 'saved', 'save pointed issue');
+    const seeded = (await readVerdict(pkg)).verdict!;
+    check(seeded.issues.length === 1 && seeded.status === 'changes-requested', 'pointed issue saved as changes-requested');
+    await assertSaved(page, pkg, { status: 'changes-requested', issues: seeded.issues });
+    api.push({ case: 'pointed-issue-save', saved: seeded });
     same(await hashes(input), before, 'synthetic source tree unchanged'); report.syntheticSources = before;
 
     if (publicRoot) {

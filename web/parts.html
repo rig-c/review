@@ -28,15 +28,7 @@
   <aside class="pv-side">
    <section><h2>PRODUCER FLAGS</h2><ul id="pv-flags" data-pv-flags></ul><p id="pv-flag-sources" class="pv-subtle"></p></section>
    <section class="pv-verdict"><h2>VERDICT</h2><p id="parts-correction-hint" class="subtle" hidden>Saved part notes and pointed comments can be handed off as described corrections.</p>
-    <div class="pv-outcomes" role="radiogroup" aria-label="Part outcome">
-     <label><input type="radio" name="pv-outcome" value="pending" data-pv-outcome> Pending</label>
-     <label><input type="radio" name="pv-outcome" value="clean" data-pv-outcome> Clean</label>
-     <label><input type="radio" name="pv-outcome" value="flagged" data-pv-outcome> Flagged</label>
-    </div>
-    <p id="pv-comment-count" role="status"></p>
-    <label class="pv-label" for="pv-note">Note</label><textarea id="pv-note" rows="4" maxlength="10000"></textarea>
-    <label class="pv-label" for="pv-overall">Sign-off</label><select id="pv-overall"><option value="pending">Pending</option><option value="approved">Approved</option><option value="changes-requested">Changes requested</option></select>
-    <button id="pv-approve-all" type="button">Approve all</button>
+    <ul id="pv-legacy-flagged" class="pv-legacy-flagged" hidden></ul>
     <button id="pv-save" type="button" class="pv-primary">Save sign-off</button>
     <span><button id="pv-export-json" type="button">Export JSON</button><button id="pv-export-issue" type="button">Export issue</button></span>
     <p id="pv-save-status" class="pv-subtle" role="status"></p>
