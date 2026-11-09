@@ -35,7 +35,10 @@ async function main(){
  assert(await page.evaluate(`document.querySelector('[data-assembly-outline="body"]')?.getContext('2d').getImageData(0,0,32,24).data.some((v,i)=>i%4===3&&v>0)`),'outline has pixels');
  const beforePan=await page.evaluate(camera);await point(page,15,9,true);assert(await page.evaluate(`document.querySelector('[data-pv-item="body"]').getAttribute('aria-current')==='true'`),'pan never selects');assert(JSON.stringify(beforePan)!==JSON.stringify(await page.evaluate(camera)),'shared drag pans');
  await click(page,'[data-pv-visible="front"]');await point(page,15,9);assert(await page.evaluate(`document.querySelector('[data-pv-item="body"]').getAttribute('aria-current')==='true'`),'hidden front excluded');await click(page,'[data-pv-visible="front"]');
- await click(page,'input[data-pv-outcome][value="clean"]');await click(page,'#pv-save');await wait(page,`document.getElementById('pv-save-status').dataset.result==='saved'`);const verdict=(await readVerdict(pkg)).verdict!;assert(verdict.parts.body?.outcome==='clean'&&verdict.parts.front?.outcome==='pending'&&!('assembled' in verdict.parts),'per-part verdict invariant');
+ await click(page,'#pv-save');
+ await wait(page,`document.getElementById('pv-save-status').dataset.result==='saved'`);
+ const verdict=(await readVerdict(pkg)).verdict!;
+ assert(verdict.schema==='rig-review-parts-verdict/4'&&verdict.status==='approved'&&verdict.issues.length===0,'zero-issue verdict/4 invariant');
  const cam=await page.evaluate(camera);await click(page,'[data-pv-comparison="overlay"]');assert(JSON.stringify(cam)===JSON.stringify(await page.evaluate(camera)),'comparison preserves camera');await writeFile(join(out,'assembled-overlay-'+lang+'.png'),await page.screenshot());
  await click(page,'[data-pv-comparison="part"]');await click(page,'#pv-alpha');const alpha=await page.evaluate(pixels);assert(alpha!==base1,'alpha changes assembly');await click(page,'#pv-alpha');
  await click(page,'#pv-bg');await page.evaluate(`(()=>{const s=document.getElementById('pv-bg');s.value='magenta';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);await settle(page);assert(await page.evaluate(`Array.from(document.getElementById('pv-canvas').getContext('2d').getImageData(0,0,1,1).data).join(',')==='255,0,255,255'`),'chosen sentinel');

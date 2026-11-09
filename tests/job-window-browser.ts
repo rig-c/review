@@ -4,6 +4,8 @@ import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {PNG} from 'pngjs';
+import {enCatalog} from '../web/catalog-en.ts';
+import {koCatalog} from '../web/catalog-ko.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
@@ -150,6 +152,25 @@ async function assertHeaderGeometry(name: string) {
     assert.ok(geometry.control.height >= 24 && geometry.control.height <= 64);
     assert.ok(geometry.title.x >= geometry.header.x && geometry.title.right <= geometry.control.x);
     assert.ok(geometry.control.right <= geometry.viewport.width);
+}
+async function assertPersistentIssues(count: number, checkpoint: string) {
+    const state = await page!.evaluate<{visible: boolean; rightSide: boolean; rows: number; text: string; capture: string}>(`(()=>{
+        const list=document.querySelector('[data-job-parts-workspace] .job-forms #stage-comment-list');
+        const stage=document.querySelector('[data-job-parts-workspace] .job-stage');
+        if(!list||!stage)return {visible:false,rightSide:false,rows:-1,text:'',capture:''};
+        const box=list.getBoundingClientRect(),stageBox=stage.getBoundingClientRect(),style=getComputedStyle(list);
+        return {visible:!list.hidden&&box.width>0&&box.height>0&&style.display!=='none'&&style.visibility!=='hidden',
+            rightSide:box.left>=stageBox.right-1&&box.right<=innerWidth+1,
+            rows:list.querySelectorAll('.stage-comment-item').length,text:list.textContent,
+            capture:document.querySelector('#stage-comment').getAttribute('aria-pressed')};})()`);
+    await checkpoints(checkpoint, state);
+    assert.equal(state.visible, true, 'the shared issue list stays visible in the side slot');
+    assert.equal(state.rightSide, true, 'the issue list occupies the right pane');
+    assert.equal(state.rows, count);
+    const catalog = language === 'ko' ? koCatalog : enCatalog;
+    assert.ok(state.text.includes(catalog['Issues']));
+    assert.ok(state.text.includes(count ? 'Visible boundary defect' : catalog['No issues yet.']));
+    return state;
 }
 async function capturePaint(name: string) {
     await assertHeaderGeometry(name);
@@ -304,6 +325,11 @@ try {
     const partsInputs = await jobInputHashes(fixture.input.root);
     await checkpoints('parts-public-fixture-hashes', {publicationId: partsPublication.publicationId,
         syntheticReader: 'job-window-fixture-reader/1', partsEnumerator: 'synthetic-job-window-parts/1', files: partsInputs});
+    assert.equal((await assertPersistentIssues(0, 'parts-right-issues-zero')).capture, 'false');
+    await page.evaluate(`document.querySelector('#stage-comment').click()`);
+    assert.equal((await assertPersistentIssues(0, 'parts-right-issues-zero-capture-on')).capture, 'true');
+    await page.evaluate(`document.querySelector('#stage-comment').click()`);
+    assert.equal((await assertPersistentIssues(0, 'parts-right-issues-zero-capture-off')).capture, 'false');
     await capturePaint('parts');
     await submit(approvedParts.askId);
     await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='approved'`, 'parts approved');
@@ -372,11 +398,14 @@ try {
         await wait(`!!document.querySelector('.stage-comment-composer input')`, 'single-item issue composer');
         await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Visible boundary defect';form.requestSubmit();})()`);
         await wait(`!document.querySelector('.stage-comment-composer') && document.querySelectorAll('.stage-comment-pin').length===1`, 'source-bound crop accepted');
+        await page.evaluate(`(()=>{const toggle=document.querySelector('#stage-comment');if(toggle.getAttribute('aria-pressed')==='true')toggle.click();})()`);
+        assert.equal((await assertPersistentIssues(1, 'parts-right-issues-one-capture-off')).capture, 'false');
         await writeFile(join(output, 'single-item-issue.png'), await page.screenshot());
         await page.goto('about:blank');
         await page.goto(owner.href);
         await show(issuePublication);
         await wait(`document.querySelector('form[data-job-ask="${issueAsk.askId}"] button[type=submit]').textContent.includes('1')`, 'source-bound issue draft restored');
+        await assertPersistentIssues(1, 'parts-right-issues-one-reconnect');
         await submit(issueAsk.askId);
         await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='sent'`, 'changes requested');
         const issues = (await fixture.next()).events.filter(event => event.type === 'act' && event.act.publicationId === issuePublication.publicationId);
