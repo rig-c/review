@@ -7,6 +7,7 @@ import type { JobWorkerOptions } from './job-worker.ts';
 import { JobError, JobStore } from './job-store.ts';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
 import { serveReference, assertReviewUnchanged } from './reference.ts';
+import {preparePartsComment} from './parts-comment-crops.ts';
 import { loadPartsView, partsViewJson, servedImage, type PartsViewPackage } from './parts-view.ts';
 import { destinationDirectory, DestinationDirectoryError } from './destination-directory.ts';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
@@ -83,8 +84,11 @@ export function createJobFront(options: {
                 return result(await options.ports.ackDisplayed(jobId, request));
             return result(await options.ports.commitUIAct(jobId, request));
         }
-        if (!read)
+        const partsCrop = request.method === 'POST' &&
+            /^publications\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/instances\/[a-f0-9]{64}\/api\/stage-parts\/comment$/.test(route);
+        if (!read && !partsCrop)
             return failure('JOB_REQUEST_INVALID', 405);
+        if (partsCrop && sentOrigin !== origin.origin) return failure('JOB_SAME_ORIGIN_REQUIRED', 403);
         const liveness = await options.ports.jobLiveness(jobId);
         if (!liveness.ok)
             return result(liveness);
@@ -172,7 +176,9 @@ export function jobWindowResources() {
                 '<body data-job-window><script type="module" src="job.js"></script></body></html>';
         }
         if (name === 'styles.css')
-            return Bun.file(new URL('../web/styles.css', import.meta.url));
+            return (await Bun.file(new URL('../web/styles.css', import.meta.url)).text()) +
+                '\n@scope (.job-inspection[data-job-parts-workspace]) {\n' +
+                (await Bun.file(new URL('../web/parts.css', import.meta.url)).text()) + '\n}';
         bundle ??= buildJobWindow();
         return bundle;
     };
@@ -199,6 +205,8 @@ export function retainedPublicationRoutes(session: JobSession) {
     return async (jobId: string, publicationId: string, key: string, path: string, request: Request): Promise<Response> => {
         if (jobId !== session.jobId) return failure('JOB_UNKNOWN', 404);
         try {
+            const crop = path === 'api/stage-parts/comment' && request.method === 'POST';
+            if (crop) session.authorize('ui', request.headers.get('X-Review-Capability'));
             return await session.readPublicationResponse(publicationId, async retained => {
                 const display = session.displayPublication(publicationId);
                 if (key !== display.publication.instanceKey) return failure('JOB_DISPLAY_MISMATCH', 409);
@@ -247,9 +255,17 @@ export function retainedPublicationRoutes(session: JobSession) {
                 if (!pending) {
                     pending = (async () => {
                         const review = await loadReview(retained.manifestPath);
-                        const parts = retained.source.parts
-                            ? await loadPartsView(dirname(join(retained.snapshotRoot, retained.source.parts.manifest.path)))
-                            : null;
+                        const partsRoot = retained.source.parts
+                            ? dirname(join(retained.snapshotRoot, retained.source.parts.manifest.path)) : null;
+                        // Forward only retained producer files. Discovery never reads the live draft.
+                        const retainedFile = (path: string) => retained.seals.some(file =>
+                            file.path === relative(retained.snapshotRoot, path).split('\\').join('/')) ? path : undefined;
+                        const rigRoot = review.handoff?.rig ?? partsRoot;
+                        const parts = partsRoot ? await loadPartsView(partsRoot, {
+                            rig: rigRoot ? retainedFile(join(rigRoot, 'rig.json')) : undefined,
+                            meshReport: rigRoot ? retainedFile(join(rigRoot, 'mesh_report.json')) : undefined,
+                            painting: review.handoff?.source ? retainedFile(review.handoff.source) : undefined,
+                        }) : null;
                         if (parts) {
                             if (parts.items.length !== retained.partIds.length || parts.items.some(item => !retained.partIds.includes(item.name))) {
                                 throw new JobError('JOB_SOURCE_MISMATCH');
@@ -308,6 +324,18 @@ export function retainedPublicationRoutes(session: JobSession) {
                     if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
                     return await sealedFile(image.path);
                 }
+                if (crop) {
+                    if (!parts) return failure('JOB_SOURCE_UNRETAINABLE', 409);
+                    if (request.headers.get('origin') !== new URL(request.url).origin)
+                        return failure('JOB_SAME_ORIGIN_REQUIRED', 403);
+                    const raw = await jobBody(request);
+                    if (!raw || typeof raw !== 'object' || Array.isArray(raw) ||
+                        (raw as {sourceHash?: unknown}).sourceHash !== retained.source.sourceHash)
+                        return failure('JOB_ACT_SOURCE_STALE', 409);
+                    // Preserve the exact displayed job identity through native evidence validation.
+                    const comment = await preparePartsComment(parts, raw);
+                    return json({comment});
+                }
                 if (path === 'api/stage-parts') {
                     if (!parts) return failure('JOB_SOURCE_UNRETAINABLE', 409);
                     return json({...partsViewJson(parts, {verdict: null, stale: null}), sourceHash: retained.source.sourceHash,
@@ -330,7 +358,10 @@ export function retainedPublicationRoutes(session: JobSession) {
                 return failure('JOB_REQUEST_INVALID', 404);
             });
         } catch (error) {
-            return failure(error instanceof JobError ? error.code : 'JOB_SOURCE_MISMATCH', 409);
+            const code = error instanceof JobError ? error.code :
+                error instanceof Error && error.message.startsWith('PARTS_COMMENT_STALE_SOURCE:')
+                    ? 'PARTS_COMMENT_STALE_SOURCE' : 'JOB_SOURCE_MISMATCH';
+            return failure(code, errorStatus[code as JobErrorCode] ?? 409);
         }
     };
 }

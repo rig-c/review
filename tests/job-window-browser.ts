@@ -6,7 +6,6 @@ import {join} from 'node:path';
 import {PNG} from 'pngjs';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
-import {assertPartsViewportOracle, inspectPartsViewportPng} from './helpers/job-window-paint.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 import {rigStillBrowserProbe} from './helpers/job-rig-still-browser.ts';
 import {interviewDiagnosticsBrowserProbe} from './helpers/job-interview-browser.ts';
@@ -17,7 +16,8 @@ assert.ok(language === 'en' || language === 'ko');
 const observeStill = Bun.argv.includes('--rig-still-observe');
 const onlyStill = Bun.argv.includes('--rig-still-only');
 const onlyInterviewDiagnostics = Bun.argv.includes('--interview-diagnostics-only');
-assert.ok([observeStill, onlyStill, onlyInterviewDiagnostics].filter(Boolean).length <= 1);
+const onlyParts = Bun.argv.includes('--parts-only');
+assert.ok([observeStill, onlyStill, onlyInterviewDiagnostics, onlyParts].filter(Boolean).length <= 1);
 assert.ok(!observeStill || language === 'en', 'the diagnostic observation mode is EN only');
 const output = argument('--out') ?? 'evidence/job-window-' + language;
 await mkdir(output, {recursive: true});
@@ -35,6 +35,7 @@ type PlantedFailure = 'prepare' | 'acknowledge' | null;
 let plantedFailure: PlantedFailure = null;
 let injectedFailure: PlantedFailure = null;
 let page: InputCdpSession | null = null;
+let partsFailure: 'parts-verdict' | 'signoff' | null = null;
 const checkpoints = async (name: string, value: unknown) => {
     observations[name] = value;
     await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2));
@@ -55,13 +56,13 @@ async function show(publication: {label: string; source?: {sourceHash: string}})
     const hashCheck = publication.source?.sourceHash
         ? ` && document.querySelector('.job-source')?.textContent.includes(${JSON.stringify(publication.source.sourceHash)})`
         : '';
-    await wait(`!!document.querySelector('#job-time') && document.querySelector('.job-notice')?.textContent.includes(${JSON.stringify(publication.label)}) && document.querySelector('.job-notice')?.dataset.failed==='false'${hashCheck}`, 'display ' + publication.label);
+    await wait(`(!!document.querySelector('#job-time') || !!document.querySelector('[data-job-parts-workspace] #pv-canvas')) && document.querySelector('.job-notice')?.textContent.includes(${JSON.stringify(publication.label)}) && document.querySelector('.job-notice')?.dataset.failed==='false'${hashCheck}`, 'display ' + publication.label);
 }
 async function edit(selector: string, value: string) {
     await page!.evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.value=${JSON.stringify(value)};node.dispatchEvent(new Event('input',{bubbles:true}));node.dispatchEvent(new Event('change',{bubbles:true}));})()`);
 }
 async function snapshot() {
-    return page!.evaluate<{cameras: {rig: {center: unknown; zoom: number}; reference: {center: unknown; zoom: number}}; sync: boolean; time: string; part: string; panel: string}>(`(()=>{const view=JSON.parse(document.getElementById('view-coordinates').textContent);return {cameras:{rig:{center:view.cameras.rig.center,zoom:view.cameras.rig.zoom},reference:{center:view.cameras.reference.center,zoom:view.cameras.reference.zoom}},sync:view.cameraSync,time:document.getElementById('job-time').value,part:document.getElementById('job-part').value,panel:document.getElementById('job-panel').value}})()`);
+    return page!.evaluate<{cameras: {rig: {center: unknown; zoom: number}; reference: {center: unknown; zoom: number}}; sync: boolean; time: string; part: string}>(`(()=>{const view=JSON.parse(document.getElementById('view-coordinates').textContent);return {cameras:{rig:{center:view.cameras.rig.center,zoom:view.cameras.rig.zoom},reference:{center:view.cameras.reference.center,zoom:view.cameras.reference.zoom}},sync:view.cameraSync,time:document.getElementById('job-time')?.value ?? '0',part:document.getElementById('job-part')?.value ?? document.querySelector('#pv-items [aria-current=true] .pv-name')?.textContent ?? ''}})()`);
 }
 async function verifyTimedReferences() {
     await edit('#job-animation', 'inspect');
@@ -152,7 +153,7 @@ async function assertHeaderGeometry(name: string) {
 }
 async function capturePaint(name: string) {
     await assertHeaderGeometry(name);
-    const pickCanvas = 'document.querySelector("#rig-viewport[data-job-rig-canonical] > canvas[data-job-rig-presentation]") ?? document.querySelector("#rig-root canvas")';
+    const pickCanvas = 'document.querySelector("#pv-canvas") ?? document.querySelector("#rig-viewport[data-job-rig-canonical] > canvas[data-job-rig-presentation]") ?? document.querySelector("#rig-root canvas")';
     const rectangle = await page!.evaluate<{x: number; y: number; width: number; height: number}>(`(()=>{const canvas=${pickCanvas};const r=canvas.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()`);
     assert.ok(rectangle.width > 0 && rectangle.height > 0);
     const shown = PNG.sync.read(await page!.screenshot(rectangle));
@@ -169,10 +170,11 @@ async function capturePaint(name: string) {
     const fullScreenshot = await page!.screenshot();
     await writeFile(join(output, name + '.png'), fullScreenshot);
     if (name === 'parts') {
-        const fullViewport = inspectPartsViewportPng(fullScreenshot);
-        observations[name + '-paint'] = {rectangle, changedPixels, width: shown.width, height: shown.height, fullViewport};
-        await checkpoints('parts-viewport-paint', fullViewport);
-        assertPartsViewportOracle(fullViewport);
+        const shared = await page!.evaluate(`(()=>({workspace:document.querySelectorAll('[data-job-parts-workspace]').length,
+            canvas:document.querySelectorAll('#pv-canvas').length,
+            deadControls:document.querySelectorAll('#job-part,#job-solo,#job-part-observation,#job-panel,.job-part-images,.job-transport').length}))()`);
+        await checkpoints('shared-parts-workspace', shared);
+        assert.deepEqual(shared, {workspace: 1, canvas: 1, deadControls: 0});
     }
 }
 async function captureFailure(error: unknown) {
@@ -226,7 +228,15 @@ try {
         if (event.method === 'Fetch.requestPaused') {
             if (await stillProbe?.intercept(event, send)) return;
             const requestId = event.params!.requestId;
-            const request = event.params!.request as {url: string};
+            const request = event.params!.request as {url: string; postData?: string};
+            if (partsFailure && request.url.endsWith('/ui/acts') &&
+                JSON.parse(request.postData ?? '{}').kind === partsFailure) {
+                partsFailure = null;
+                await send('Fetch.fulfillRequest', {requestId, responseCode: 409,
+                    responseHeaders: [{name: 'Content-Type', value: 'application/json'}],
+                    body: Buffer.from(JSON.stringify({ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}})).toString('base64')});
+                return;
+            }
             const failure = plantedFailure;
             if (failure === 'prepare' && request.url.endsWith('/api/review')) {
                 plantedFailure = null;
@@ -255,6 +265,7 @@ try {
     await control('Fetch.enable', {patterns: [
         {urlPattern: fixture.host.origin + '/jobs/*/publications/*/instances/*/api/review'},
         {urlPattern: fixture.host.origin + '/jobs/*/ui/displayed'},
+        ...(!stillProbe ? [{urlPattern: fixture.host.origin + '/jobs/*/ui/acts'}] : []),
         ...(stillProbe ? [
             {urlPattern: fixture.host.origin + '/jobs/*/ui/acts', requestStage: 'Request'},
             {urlPattern: fixture.host.origin + '/jobs/*/ui/acts', requestStage: 'Response'},
@@ -274,33 +285,108 @@ try {
     } else {
     const first = await fixture.publish('parts');
     await show(first);
-    await verifyTimedReferences();
-    const approvedParts = await fixture.ask(first, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
-    await wait(`!!document.querySelector('form[data-job-ask="${approvedParts.askId}"]')`, 'parts coverage form');
-    await edit(`form[data-job-ask="${approvedParts.askId}"] select[name=verdict]`, 'approved');
-    await edit(`form[data-job-ask="${approvedParts.askId}"] select[name="parts.mesh.outcome"]`, 'clean');
-    await edit(`form[data-job-ask="${approvedParts.askId}"] select[name="mesh.mesh.outcome"]`, 'clean');
+    fixture.input.setContext({...fixture.input.getContext(), subjects: [...fixture.input.getContext().subjects,
+        {kind: 'signoff', stage: 'parts-review'}]});
+    // Publish the updated semantic ask declaration through the ordinary agent command.
+    const partsPublication = await fixture.publish('parts', 'parts-submit');
+    await show(partsPublication);
+    const approvedParts = await fixture.ask(partsPublication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+    const partsSignoff = await fixture.ask(partsPublication, {kind: 'signoff', stage: 'parts-review'});
+    await wait(`!!document.querySelector('form[data-job-ask="${approvedParts.askId}"]')`, 'shared parts submit');
+    assert.equal(await page.evaluate(`document.querySelectorAll('select[name^="parts."],select[name^="mesh."],form[data-job-ask="${partsSignoff.askId}"]').length`), 0);
     const partsInputs = await jobInputHashes(fixture.input.root);
+    await capturePaint('parts');
     await submit(approvedParts.askId);
+    await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='approved'`, 'parts approved');
     assert.deepEqual(await jobInputHashes(fixture.input.root), partsInputs);
     const partsEvents = await fixture.next();
     const partsAct = partsEvents.events.find(event => event.type === 'act' && event.act.askId === approvedParts.askId);
     assert.ok(partsAct?.type === 'act' && partsAct.act.kind === 'parts-verdict');
-    assert.equal(partsAct.act.source.sourceHash, first.source.sourceHash);
-    assert.equal(partsAct.act.value.words, '');
-    assert.deepEqual(partsAct.act.value.parts.map(part => part.partId), ['mesh']);
+    assert.equal(partsAct.act.source.sourceHash, partsPublication.source.sourceHash);
+    assert.equal(partsAct.act.schema, 'rig-review/act@5');
+    assert.deepEqual(partsAct.act.value.issues, []);
+    const submitted = partsEvents.events.filter(event => event.type === 'act' &&
+        (event.act.askId === approvedParts.askId || event.act.askId === partsSignoff.askId));
+    assert.deepEqual(submitted.map(event => event.type === 'act' && event.act.kind), ['parts-verdict', 'signoff']);
     await checkpoints('parts-act', partsAct.act);
-    const parts = await fixture.ask(first, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
-    await wait(`!!document.querySelector('form[data-job-ask="${parts.askId}"]')`, 'parts verdict');
-    await edit(`#job-animation`, 'inspect');
-    await edit(`#job-time`, '0.5');
-    await edit(`#job-part`, 'mesh');
-    await page.evaluate(`(()=>{const c=document.getElementById('camera-sync');c.checked=false;c.dispatchEvent(new Event('change'));document.getElementById('zoom-in').click();})()`);
-    const reference = await page.evaluate<{x: number; y: number}>(`(()=>{const r=document.getElementById('reference-viewport').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
-    await page.mouse('mousePressed', reference.x, reference.y);
-    await page.mouse('mouseMoved', reference.x + 20, reference.y + 10);
-    await page.mouse('mouseReleased', reference.x + 20, reference.y + 10);
-    await page.evaluate(`document.getElementById('zoom-out').click()`);
+    // Reconnect reconstructs approval from the ordinary event stream.
+    await page.goto('about:blank');
+    await page.goto(owner.href);
+    await show(partsPublication);
+    await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='approved'`, 'parts approval replay');
+    await checkpoints('parts-reconnect-approved', {publicationId: partsPublication.publicationId});
+    if (onlyParts) {
+        const retryPublication = await fixture.publish('parts', 'parts-retry');
+        await show(retryPublication);
+        const retryVerdict = await fixture.ask(retryPublication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+        const retrySignoff = await fixture.ask(retryPublication, {kind: 'signoff', stage: 'parts-review'});
+        const retrySelector = `form[data-job-ask="${retryVerdict.askId}"] button[type=submit]`;
+        await wait(`!!document.querySelector(${JSON.stringify(retrySelector)}) && !document.querySelector(${JSON.stringify(retrySelector)}).disabled`, 'retry form');
+        partsFailure = 'parts-verdict';
+        await page.evaluate(`document.querySelector(${JSON.stringify(retrySelector)}).click()`);
+        await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='reviewing' && document.querySelector('form[data-job-ask="${retryVerdict.askId}"] [role=status]').textContent.includes('JOB_ACT_INVALID')`, 'first-write refusal');
+        assert.equal((await fixture.next()).events.filter(event => event.type === 'act' && event.act.askId === retryVerdict.askId).length, 0);
+        partsFailure = 'signoff';
+        await page.evaluate(`document.querySelector(${JSON.stringify(retrySelector)}).click()`);
+        await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='retry-signoff'`, 'signoff-only retry state');
+        await writeFile(join(output, 'retry-signoff.png'), await page.screenshot());
+        await page.goto('about:blank');
+        await page.goto(owner.href);
+        await show(retryPublication);
+        await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='retry-signoff'`, 'retry state replay');
+        await submit(retryVerdict.askId);
+        await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='approved'`, 'signoff retry approved');
+        const retryActs = (await fixture.next()).events.filter(event => event.type === 'act' &&
+            (event.act.askId === retryVerdict.askId || event.act.askId === retrySignoff.askId));
+        assert.deepEqual(retryActs.map(event => event.type === 'act' && event.act.kind), ['parts-verdict', 'signoff']);
+        await checkpoints('parts-retry-acts', retryActs);
+
+        const issuePublication = await fixture.publish('parts', 'parts-issue');
+        await show(issuePublication);
+        const issueAsk = await fixture.ask(issuePublication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+        await wait(`!!document.querySelector('form[data-job-ask="${issueAsk.askId}"]')`, 'issue form');
+        const issueInputs = await jobInputHashes(fixture.input.root);
+        // Use the existing single-item gesture, independently of assembled issue support.
+        await page.evaluate(`(()=>{document.querySelector('[data-pv-item="mesh"]').click();
+            const assembled=document.querySelector('#pv-assemble');if(assembled.getAttribute('aria-pressed')==='true')assembled.click();
+            document.querySelector('#native-one').click();for(let i=0;i<4;i++)document.querySelector('#zoom-in').click();
+            document.querySelector('#stage-comment').click();})()`);
+        const drag = await page.evaluate<{x: number; y: number; endX: number; endY: number}>(`(()=>{
+            const pane=document.getElementById('rig-viewport').getBoundingClientRect(),m=new DOMMatrix(document.getElementById('rig-root').style.transform);
+            return {x:pane.left+m.e+3*m.a,y:pane.top+m.f+3*m.a,endX:pane.left+m.e+12*m.a,endY:pane.top+m.f+12*m.a};})()`);
+        await page.mouse('mouseMoved', drag.x, drag.y);
+        await page.mouse('mousePressed', drag.x, drag.y);
+        await page.mouse('mouseMoved', drag.endX, drag.endY);
+        await page.mouse('mouseReleased', drag.endX, drag.endY);
+        await wait(`!!document.querySelector('.stage-comment-composer input')`, 'single-item issue composer');
+        await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Visible boundary defect';form.requestSubmit();})()`);
+        await wait(`!document.querySelector('.stage-comment-composer') && document.querySelectorAll('.stage-comment-pin').length===1`, 'source-bound crop accepted');
+        await writeFile(join(output, 'single-item-issue.png'), await page.screenshot());
+        await page.goto('about:blank');
+        await page.goto(owner.href);
+        await show(issuePublication);
+        await wait(`document.querySelector('form[data-job-ask="${issueAsk.askId}"] button[type=submit]').textContent.includes('1')`, 'source-bound issue draft restored');
+        await submit(issueAsk.askId);
+        await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='sent'`, 'changes requested');
+        const issues = (await fixture.next()).events.filter(event => event.type === 'act' && event.act.publicationId === issuePublication.publicationId);
+        assert.equal(issues.length, 1);
+        const issueAct = issues[0];
+        assert.ok(issueAct?.type === 'act' && issueAct.act.kind === 'parts-verdict' && issueAct.act.schema === 'rig-review/act@5');
+        assert.equal(issueAct.act.value.verdict, 'changes-requested');
+        assert.equal(issueAct.act.value.issues.length, 1);
+        assert.deepEqual(issueAct.act.value.issues[0]!.parts.map(part => part.name), ['mesh']);
+        assert.equal(issueAct.act.value.issues[0]!.sourceHash, issuePublication.source.sourceHash);
+        assert.equal(issueAct.act.value.issues[0]!.view.mode, 'item');
+        assert.ok(issueAct.act.value.issues[0]!.nativeCrop);
+        assert.deepEqual(await jobInputHashes(fixture.input.root), issueInputs);
+        await checkpoints('parts-single-item-issue-act', issueAct.act);
+        await fixture.finish();
+        await checkpoints('parts-complete', {language, officialCreateConsumer: 'PENDING_INTEGRATED_PACKET'});
+    } else {
+    const draftPublication = await fixture.publish('parts', 'parts-draft');
+    await show(draftPublication);
+    const parts = await fixture.ask(draftPublication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+    await wait(`!!document.querySelector('form[data-job-ask="${parts.askId}"]')`, 'parts draft');
     await edit(`form[data-job-ask="${parts.askId}"] textarea[name=note]`, '  old-source draft\n원문');
     const before = await snapshot();
     await checkpoints('before-update', before);
@@ -321,9 +407,9 @@ try {
     const rig = await fixture.publish('rig');
     await show(rig);
     const after = await snapshot();
-    assert.deepEqual(after, before);
-    assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
-    assert.equal(navigation.length, 1);
+    await verifyTimedReferences();
+    await checkpoints('parts-to-rig', {before, after});
+    assert.equal(navigation.length, 2);
     await wait(`document.querySelector('[data-job-history]')?.textContent.includes('old-source draft')`, 'retained old draft');
     // The restoration above remains covered. A new Rig verdict requires whole/default framing.
     await edit('#job-part', '');
@@ -367,7 +453,7 @@ try {
     await submit(signoff.askId);
     events = await fixture.next();
     const finalized = events.events.flatMap(event => event.type === 'act' ? [event.act] : []);
-    assert.deepEqual(finalized.map(act => act.kind).sort(), ['checkpoint', 'interview-picks', 'parts-verdict', 'review-verdict', 'signoff']);
+    assert.deepEqual(finalized.map(act => act.kind).sort(), ['checkpoint', 'interview-picks', 'parts-verdict', 'review-verdict', 'signoff', 'signoff']);
     assert.ok(finalized.every(act => act.authority.actor === 'human' && act.authority.channel === 'review-ui'));
     const checkpointAct = finalized.find(act => act.kind === 'checkpoint')!;
     assert.ok(checkpointAct.kind === 'checkpoint');
@@ -379,9 +465,7 @@ try {
     const direction = await fixture.publish('direction');
     await show(direction);
     assert.deepEqual(await snapshot(), verdictView);
-    assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
-    assert.equal(navigation.length, 1);
-    await edit('#job-panel', '4');
+    assert.equal(navigation.length, 2);
     await edit('#job-animation', 'short');
     await edit('#job-time', '0.75');
     await page.evaluate(`document.getElementById('zoom-in').click()`);
@@ -404,7 +488,7 @@ try {
     assert.equal(await page.evaluate(`document.getElementById('job-animation').value`), 'short');
     assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${directionDraftAsk.askId}"] textarea[name=note]')?.value`), '  active draft across reconnect\n');
     assert.ok(await page.evaluate<boolean>(`document.querySelector('.job-notice').textContent.includes(${JSON.stringify(rig.label)}) && document.querySelector('.job-notice').textContent.includes(${JSON.stringify(direction.label)})`));
-    assert.ok(await page.evaluate<boolean>(`document.querySelector('[data-job-history]').textContent.includes('old-source draft') && document.querySelector('[data-job-history]').textContent.includes(${JSON.stringify(first.source.sourceHash)})`));
+    assert.ok(await page.evaluate<boolean>(`document.querySelector('[data-job-history]').textContent.includes('old-source draft') && document.querySelector('[data-job-history]').textContent.includes(${JSON.stringify(draftPublication.source.sourceHash)})`));
     await checkpoints('reopened-same-job', {jobId: fixture.host.session.jobId, publicationId: direction.publicationId, afterReconnect});
 
     // Sequential update #3 (incompatible selection): removes 'short' animation while preserving camera/panel and source-bound drafts in place.
@@ -412,22 +496,23 @@ try {
     const incompatible = await fixture.publish('direction', 'direction-incompatible', {stripShortAnimation: true});
     await show(incompatible);
     assert.equal(await page.evaluate('globalThis.__jobWindowPostReconnect'), postReconnectSentinel);
-    assert.equal(navigation.length, 2);
+    assert.equal(navigation.length, 3);
     const afterIncompatible = await snapshot();
     assert.deepEqual(afterIncompatible.cameras, beforeReconnect.cameras);
-    assert.equal(afterIncompatible.panel, '4');
+    assert.equal(await page.evaluate(`document.querySelector('#job-panel')`), null);
     assert.equal(await page.evaluate(`document.getElementById('job-animation').value`), '');
     assert.equal(afterIncompatible.time, '0');
     const expectedIncompatibleNotice = language === 'ko'
         ? '이 결과에서 이전 선택 항목을 사용할 수 없습니다.'
         : 'The previous selection is unavailable in this result.';
     assert.ok(await page.evaluate<boolean>(`document.querySelector('.job-notice').textContent.includes(${JSON.stringify(expectedIncompatibleNotice)})`));
-    assert.ok(await page.evaluate<boolean>(`document.querySelector('[data-job-history]').textContent.includes('old-source draft') && document.querySelector('[data-job-history]').textContent.includes('active draft across reconnect') && document.querySelector('[data-job-history]').textContent.includes(${JSON.stringify(first.source.sourceHash)}) && document.querySelector('[data-job-history]').textContent.includes(${JSON.stringify(direction.source.sourceHash)})`));
+    assert.ok(await page.evaluate<boolean>(`document.querySelector('[data-job-history]').textContent.includes('old-source draft') && document.querySelector('[data-job-history]').textContent.includes('active draft across reconnect') && document.querySelector('[data-job-history]').textContent.includes(${JSON.stringify(draftPublication.source.sourceHash)}) && document.querySelector('[data-job-history]').textContent.includes(${JSON.stringify(direction.source.sourceHash)})`));
     await checkpoints('incompatible-update', {publication: incompatible, afterIncompatible, navigation});
 
     await fixture.finish();
     await wait(`document.querySelector('.job-notice').textContent.includes(${JSON.stringify(language === 'ko' ? '명시적으로 종료' : 'explicitly closed')})`, 'explicit close');
     await checkpoints('complete', {language, metadataOnly: true, createWriterReadback: 'PENDING_CREATE_182_184', separateUID: 'PARENT_A_GATE'});
+    }
     }
 } catch (error) {
     try {await captureFailure(error);}
