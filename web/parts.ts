@@ -382,7 +382,9 @@ async function paintRaster(token:number): Promise<void> {
     const ctx=setCanvas(canvas,w,h);
     if(original){
       paintPaintingCrop(ctx,original,paintingRectangle({x:0,y:0,w,h},data.rigSize,data.painting!),w,h,state.bg);
-      const assembled=doc.createElement('canvas');assembled.width=w;assembled.height=h;const a=assembled.getContext('2d')!;a.imageSmoothingEnabled=false;for(const l of layers)a.drawImage(l.image,l.box.x,l.box.y);ctx.globalAlpha=paintingHeld?0:state.comparison.opacity;ctx.drawImage(assembled,0,0);ctx.globalAlpha=1;
+      const assembled=doc.createElement('canvas');assembled.width=w;assembled.height=h;
+      paintAssembly(assembled.getContext('2d')!,w,h,layers,{bg:state.bg,alpha:false,transparent:true});
+      ctx.globalAlpha=paintingHeld?0:state.comparison.opacity;ctx.drawImage(assembled,0,0);ctx.globalAlpha=1;
     }else paintAssembly(ctx,w,h,layers,{bg:state.bg,alpha:state.alpha});
     if (!paintingHeld) drawMeshes(ctx, layers);
     renderAssemblySelection(layers);

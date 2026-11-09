@@ -118,9 +118,9 @@ export function paintMesh(ctx: Ctx, source: Source, w: number, h: number, mesh: 
 }
 
 /** Package order is back to front. Placements remain continuous rig pixels. */
-export function paintAssembly(ctx:Ctx,w:number,h:number,layers:readonly {box:Box;image:Source}[],options:{bg:string;alpha:boolean}):void {
+export function paintAssembly(ctx:Ctx,w:number,h:number,layers:readonly {box:Box;image:Source}[],options:{bg:string;alpha:boolean;transparent?:boolean}):void {
  ctx.imageSmoothingEnabled=false;
- if(!options.alpha)paintBackground(ctx,w,h,options.bg);else ctx.clearRect(0,0,w,h);
+ if(options.alpha||options.transparent)ctx.clearRect(0,0,w,h);else paintBackground(ctx,w,h,options.bg);
  for(const {box,image} of layers)ctx.drawImage(image,box.x,box.y);
  if(options.alpha){const data=ctx.getImageData(0,0,w,h),px=data.data;for(let i=0;i<px.length;i+=4){px[i]=px[i+1]=px[i+2]=px[i+3]!;px[i+3]=255;}ctx.putImageData(data,0,0);}
 }

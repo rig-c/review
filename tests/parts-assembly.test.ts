@@ -46,3 +46,27 @@ test('#381 actual parts page raster caller keeps outline separate, hides pixels,
  state.hidden.add('body');await paint(1);expect(pixel()).toEqual([255,0,255,255]);expect(children).toHaveLength(0);state.alpha=true;await paint(1);expect(pixel()).toEqual([0,0,0,255]);expect(JSON.stringify([...state.verdict])).toBe(before);
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('#614 transparent assembly reuses ordered source-over pixels for Overlay and 100-percent painting hold',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'assembly-transparent-'));
+ try{
+  const f=await writeComparisonPackage(root);
+  const layers=await Promise.all([f.body,f.front].map(async(box,index)=>({box:{...box,index},image:await loadImage(join(root,'parts',box.name+'.png'))})));
+  const painting=await loadImage(join(root,'painting.png'));
+  const actual=createCanvas(32,24),expected=createCanvas(32,24);
+  actual.getContext('2d').fillStyle='#ff00ff';actual.getContext('2d').fillRect(0,0,32,24);
+  renderer.paintAssembly(actual.getContext('2d') as never,32,24,layers as never,{bg:'green',alpha:false,transparent:true});
+  const oracle=expected.getContext('2d');oracle.imageSmoothingEnabled=false;
+  oracle.drawImage(layers[0]!.image,4,4);oracle.drawImage(layers[1]!.image,14,8);
+  const bytes=(canvas:typeof actual)=>Buffer.from(canvas.getContext('2d').getImageData(0,0,32,24).data);
+  expect(bytes(actual)).toEqual(bytes(expected));
+  expect([...actual.getContext('2d').getImageData(0,0,1,1).data]).toEqual([0,0,0,0]);
+  for(const opacity of [0,.25,1]){
+   const composite=createCanvas(32,24),control=createCanvas(32,24);
+   for(const canvas of [composite,control]){const ctx=canvas.getContext('2d');ctx.drawImage(painting,0,0);ctx.globalAlpha=opacity;}
+   composite.getContext('2d').drawImage(actual,0,0);control.getContext('2d').drawImage(expected,0,0);
+   expect(bytes(composite)).toEqual(bytes(control));
+   if(opacity===0){const original=createCanvas(32,24);original.getContext('2d').drawImage(painting,0,0);expect(bytes(composite)).toEqual(bytes(original));}
+  }
+ }finally{await rm(root,{recursive:true,force:true});}
+});
