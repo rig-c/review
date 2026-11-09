@@ -258,6 +258,8 @@ async function captureFailure(error: unknown) {
     browserEvents,
     browserExceptions,
     navigationUrls,
+    reviewApiPayloads,
+    interviewApiPayloads,
     captureErrors,
   };
   if (page) {
@@ -501,14 +503,34 @@ try {
   assert.ok(optionDom.recordSummary[0]?.includes(`project.json · ${projectSha}`));
   assert.ok(optionDom.recordSummary[1]?.includes('bones · chain-bones · evidence/interview/bones.json'));
 
-  const optionReviewApi = reviewApiPayloads.find(
-    entry => (entry.body.recordSource as { sourceHash?: string } | undefined)?.sourceHash === optionPublication.source.sourceHash,
+  const optionInstanceBase = `/jobs/${recordHost.session.jobId}/publications/${optionPublication.publicationId}/instances/${optionPublication.instanceKey}`;
+  const optionRoutes = await page.evaluate<{
+    reviewStatus: number;
+    reviewBody: Record<string, unknown>;
+    interviewStatus: number;
+    interviewBody: { questions?: Array<{ set?: { id?: string; question?: string } }> };
+  }>(`(async () => {
+    const [reviewRes, interviewRes] = await Promise.all([
+      fetch(${JSON.stringify(`${optionInstanceBase}/api/review`)}),
+      fetch(${JSON.stringify(`${optionInstanceBase}/api/interview`)}),
+    ]);
+    return {
+      reviewStatus: reviewRes.status,
+      reviewBody: await reviewRes.json(),
+      interviewStatus: interviewRes.status,
+      interviewBody: await interviewRes.json(),
+    };
+  })()`);
+  assert.equal(optionRoutes.reviewStatus, 200, 'fetched api/review payload for option-set publication');
+  assert.equal(Object.hasOwn(optionRoutes.reviewBody, 'manifest'), false);
+  assert.equal(Object.hasOwn(optionRoutes.reviewBody, 'reviewedSource'), false);
+  assert.deepEqual(optionRoutes.reviewBody.recordSource, optionPublication.source);
+  assert.equal(optionRoutes.interviewStatus, 200, 'fetched api/interview payload for option-set publication');
+  assert.ok(
+    Array.isArray(optionRoutes.interviewBody.questions) &&
+      optionRoutes.interviewBody.questions.some(q => q.set?.id === 'chain-bones' && q.set?.question === 'bones'),
+    'captured api/interview questions for option-set publication',
   );
-  assert.ok(optionReviewApi, 'captured api/review payload for option-set publication');
-  assert.equal(Object.hasOwn(optionReviewApi.body, 'manifest'), false);
-  assert.equal(Object.hasOwn(optionReviewApi.body, 'reviewedSource'), false);
-  assert.deepEqual(optionReviewApi.body.recordSource, optionPublication.source);
-  assert.ok(interviewApiPayloads.length >= 1, 'captured api/interview payload for option-set publication');
 
   for (const name of optionDom.selectNames) {
     await edit(`form[data-job-ask="${picksAsk.askId}"] select[name="${name}"]`, 'keep');
@@ -518,7 +540,7 @@ try {
   assert.equal(picksSubmitStatus.statusKey, 'job.saved');
   assert.equal(picksSubmitStatus.statusText, catalog['job.saved']);
   await writeFile(join(output, `record-option-set-${language}.png`), await page.screenshot());
-  await record('option-set-submitted', { optionDom, picksSubmitStatus });
+  await record('option-set-submitted', { optionDom, optionRoutes, picksSubmitStatus });
 
   // 2. Publish model-free plan via job-api@3 and ask checkpoint + signoff on the same standing owner window
   const pubPlan = await callRecordApi({
@@ -618,16 +640,26 @@ try {
   assert.equal(planDom.rigCanvasCount, 0);
   assert.equal(planDom.cpFormHidden, false);
   assert.equal(planDom.signoffFormHidden, false);
-  assert.equal(planDom.cpStepText, `${planSteps[2]!.id} · ${planSteps[2]!.hash}`);
+  const expectedCpStep = planSteps.find(step => step.id === 'seethrough');
+  assert.ok(expectedCpStep, 'declared seethrough step exists in planSteps');
+  assert.equal(planDom.cpStepText, `${expectedCpStep.id} · ${expectedCpStep.hash}`);
   assert.equal(planDom.signoffStageText, 'rigging-interview');
 
-  const planReviewApi = reviewApiPayloads.find(
-    entry => (entry.body.recordSource as { sourceHash?: string } | undefined)?.sourceHash === planPublication.source.sourceHash,
-  );
-  assert.ok(planReviewApi, 'captured api/review payload for plan publication');
-  assert.equal(Object.hasOwn(planReviewApi.body, 'manifest'), false);
-  assert.equal(Object.hasOwn(planReviewApi.body, 'reviewedSource'), false);
-  assert.deepEqual(planReviewApi.body.recordSource, planPublication.source);
+  const planInstanceBase = `/jobs/${recordHost.session.jobId}/publications/${planPublication.publicationId}/instances/${planPublication.instanceKey}`;
+  const planRoutes = await page.evaluate<{
+    reviewStatus: number;
+    reviewBody: Record<string, unknown>;
+  }>(`(async () => {
+    const reviewRes = await fetch(${JSON.stringify(`${planInstanceBase}/api/review`)});
+    return {
+      reviewStatus: reviewRes.status,
+      reviewBody: await reviewRes.json(),
+    };
+  })()`);
+  assert.equal(planRoutes.reviewStatus, 200, 'fetched api/review payload for plan publication');
+  assert.equal(Object.hasOwn(planRoutes.reviewBody, 'manifest'), false);
+  assert.equal(Object.hasOwn(planRoutes.reviewBody, 'reviewedSource'), false);
+  assert.deepEqual(planRoutes.reviewBody.recordSource, planPublication.source);
 
   // Submit checkpoint and signoff through actual DOM forms
   await edit(`form[data-job-ask="${cpAsk.askId}"] select[name="outcome"]`, 'pass');
@@ -736,6 +768,7 @@ try {
   assert.deepEqual(await jobInputHashes(recordRoot), beforeRecordHashes, 'supplied record project files remain immutable');
   await record('record-acts-verified', {
     planDom,
+    planRoutes,
     cpSubmitStatus,
     signoffSubmitStatus,
     acts: fetchedActs,
