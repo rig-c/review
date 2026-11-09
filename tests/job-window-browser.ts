@@ -302,6 +302,8 @@ try {
     await wait(`!!document.querySelector('form[data-job-ask="${approvedParts.askId}"]')`, 'shared parts submit');
     assert.equal(await page.evaluate(`document.querySelectorAll('select[name^="parts."],select[name^="mesh."],form[data-job-ask="${partsSignoff.askId}"]').length`), 0);
     const partsInputs = await jobInputHashes(fixture.input.root);
+    await checkpoints('parts-public-fixture-hashes', {publicationId: partsPublication.publicationId,
+        syntheticReader: 'job-window-fixture-reader/1', partsEnumerator: 'synthetic-job-window-parts/1', files: partsInputs});
     await capturePaint('parts');
     await submit(approvedParts.askId);
     await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='approved'`, 'parts approved');
@@ -353,6 +355,8 @@ try {
         const issueAsk = await fixture.ask(issuePublication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
         await wait(`!!document.querySelector('form[data-job-ask="${issueAsk.askId}"]')`, 'issue form');
         const issueInputs = await jobInputHashes(fixture.input.root);
+        await checkpoints('parts-issue-fixture-hashes', {publicationId: issuePublication.publicationId,
+            syntheticReader: 'job-window-fixture-reader/1', partsEnumerator: 'synthetic-job-window-parts/1', files: issueInputs});
         // Use the existing single-item gesture, independently of assembled issue support.
         await page.evaluate(`(()=>{document.querySelector('[data-pv-item="mesh"]').click();
             const assembled=document.querySelector('#pv-assemble');if(assembled.getAttribute('aria-pressed')==='true')assembled.click();
@@ -388,7 +392,7 @@ try {
         assert.deepEqual(await jobInputHashes(fixture.input.root), issueInputs);
         await checkpoints('parts-single-item-issue-act', issueAct.act);
         await fixture.finish();
-        await checkpoints('parts-complete', {language, officialCreateConsumer: 'PENDING_INTEGRATED_PACKET'});
+        await checkpoints('parts-complete', {language, createConsumerAcceptance: 'CREATE_380_AFTER_REVIEW_GREEN_MAIN'});
     } else {
     const draftPublication = await fixture.publish('parts', 'parts-draft');
     await show(draftPublication);

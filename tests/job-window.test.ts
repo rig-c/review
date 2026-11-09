@@ -8,6 +8,57 @@ import {t} from '../web/i18n.ts';
 import {jobHubMessageMatches, JOB_HUB_VISIBILITY, type JobHubBinding} from '../web/job-hub.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 
+test('C4 panel parser shares one browser-safe implementation with manifest compatibility exports', async () => {
+    const contract = await import('../src/job-contract.ts');
+    const manifest = await import('../src/manifest.ts');
+    expect(manifest.parsePanelComposition).toBe(contract.parsePanelComposition);
+    expect(manifest.isPanelComponent).toBe(contract.isPanelComponent);
+    expect(contract.isPanelComponent('parts.canvas')).toBe(true);
+    expect(contract.isPanelComponent('future.component')).toBe(false);
+    expect<unknown>(contract.parsePanelComposition({schema: contract.JOB_PANEL_COMPOSITION_SCHEMA,
+        stage: ['future.component'], side: ['act.submit']})).toEqual({
+        schema: contract.JOB_PANEL_COMPOSITION_SCHEMA, stage: ['future.component'], side: ['act.submit'],
+    });
+});
+
+test('C4 job browser runtime graph excludes the server manifest and Node imports and rejects a planted edge', async () => {
+    const entry = new URL('../web/job-session.ts', import.meta.url);
+    const manifest = new URL('../src/manifest.ts', import.meta.url).href;
+    const transpiler = new Bun.Transpiler({loader: 'ts', target: 'browser'});
+    async function runtimeGraph(extraEntryImport = '') {
+        const pending = [entry];
+        const files = new Set<string>();
+        const imports = new Set<string>();
+        while (pending.length) {
+            const file = pending.pop()!;
+            if (files.has(file.href)) continue;
+            files.add(file.href);
+            if (!file.pathname.endsWith('.ts') && !file.pathname.endsWith('.js')) continue;
+            const source = await Bun.file(file).text();
+            const javascript = transpiler.transformSync(source + (file.href === entry.href ? extraEntryImport : ''));
+            for (const dependency of transpiler.scan(javascript).imports) {
+                imports.add(dependency.path);
+                if (dependency.path.startsWith('.')) pending.push(new URL(dependency.path, file));
+            }
+        }
+        return {files, imports};
+    }
+    function assertBrowserBoundary(graph: Awaited<ReturnType<typeof runtimeGraph>>) {
+        expect(graph.files.has(manifest)).toBe(false);
+        expect([...graph.imports].filter(path => path.startsWith('node:'))).toEqual([]);
+    }
+    const graph = await runtimeGraph();
+    expect(graph.files.has(new URL('../src/job-contract.ts', import.meta.url).href)).toBe(true);
+    expect(graph.files.has(new URL('../web/parts.ts', import.meta.url).href)).toBe(true);
+    const contractSource = await Bun.file(new URL('../src/job-contract.ts', import.meta.url)).text();
+    expect(transpiler.scan(transpiler.transformSync(contractSource)).imports).toEqual([]);
+    assertBrowserBoundary(graph);
+    const mutant = await runtimeGraph("\nvoid import('../src/manifest.ts');");
+    expect(mutant.files.has(manifest)).toBe(true);
+    expect([...mutant.imports]).toContain('node:fs/promises');
+    expect(() => assertBrowserBoundary(mutant)).toThrow();
+});
+
 test('window refusals retain registered codes and bound arbitrary runtime prose', () => {
     expect(jobWindowRefusal(new Error('INTERVIEW_OPTIONS_STALE'))).toBe(t('INTERVIEW_OPTIONS_STALE'));
     expect(jobWindowRefusal(new Error('Unregistered runtime detail /private/path'))).toBe(t('JOB_WINDOW_FAILED'));

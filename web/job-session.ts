@@ -27,8 +27,7 @@ import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigS
 import {advancePlayback} from './playback-clock.ts';
 import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
 import {CanvasRenderer} from '@rig-c/play';
-import {JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA} from '../src/job-contract.ts';
-import {parsePanelComposition} from '../src/manifest.ts';
+import {JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsSource, PartsHost} from './parts.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 

@@ -38,6 +38,48 @@ export interface JobPanelComposition {
   readonly toolbar?: readonly PanelComponent[];
   readonly side?: readonly PanelComponent[];
 }
+export function isPanelComponent(value: string): value is PanelComponent {
+  return (PANEL_COMPONENTS as readonly string[]).includes(value);
+}
+
+export function parsePanelComposition(input: unknown): JobPanelComposition {
+  if (input === null || typeof input !== 'object' || Array.isArray(input) || Object.getPrototypeOf(input) !== Object.prototype) {
+    throw new Error('JOB_PANELS_INVALID: panels must be a plain object');
+  }
+  const p = input as Record<string, unknown>;
+  if (p.schema !== JOB_PANEL_COMPOSITION_SCHEMA) {
+    throw new Error(`JOB_PANELS_INVALID: panels.schema must be ${JOB_PANEL_COMPOSITION_SCHEMA}`);
+  }
+  for (const key of Object.keys(p)) {
+    if (!['schema', 'left', 'stage', 'toolbar', 'side'].includes(key)) {
+      throw new Error(`JOB_PANELS_INVALID: unknown panel slot ${key}`);
+    }
+  }
+  const slot = (value: unknown, field: string): PanelComponent[] => {
+    if (!Array.isArray(value) || value.length > 32) {
+      throw new Error(`JOB_PANELS_INVALID: ${field} must be an array of at most 32 components`);
+    }
+    return value.map((item, index) => {
+      if (typeof item !== 'string' || !item.trim() || item.length > 128 || /[\r\n\0]/.test(item)) {
+        throw new Error(`JOB_PANELS_INVALID: ${field}[${index}] must be a nonblank component id`);
+      }
+      // Unknown component IDs are preserved in their declared slot so the host renders JOB_PANEL_UNKNOWN: <id>.
+      return item as PanelComponent;
+    });
+  };
+  const stage = slot(p.stage, 'panels.stage');
+  const side = slot(p.side, 'panels.side');
+  if (stage.length !== 1 || side.length < 1 || side[side.length - 1] !== 'act.submit') {
+    throw new Error('JOB_PANELS_INVALID: stage must have exactly one component and side must end with act.submit');
+  }
+  return {
+    schema: JOB_PANEL_COMPOSITION_SCHEMA,
+    ...(p.left === undefined ? {} : { left: slot(p.left, 'panels.left') }),
+    stage,
+    ...(p.toolbar === undefined ? {} : { toolbar: slot(p.toolbar, 'panels.toolbar') }),
+    side,
+  };
+}
 export const JOB_RECORD_READER_ID = 'rig-create/publication-reader/2' as const;
 export const JOB_RECORD_SOURCE_SCHEMA = 'rig-review-job-record-source/1' as const;
 export const JOB_RECORD_INSTANCE_SCHEMA = 'rig-review-job-record-instance/1' as const;
