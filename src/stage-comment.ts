@@ -63,7 +63,15 @@ export function requireFeedbackFrames(f:{frameStart:number|null;frameEnd:number|
  if(hasStageComment(comment)&&comment.frame?.basis==='reference')throw new Error('COMMENT_REFERENCE_STRIP_UNAVAILABLE: decoded reference frames are not producer frames; reference-basis comments cannot be exported as producer-frame strips');
  return frames;
 }
-export function region(a:MarkPoint,b:MarkPoint):MarkRegion{return {x:Math.min(a.x,b.x),y:Math.min(a.y,b.y),width:Math.abs(a.x-b.x),height:Math.abs(a.y-b.y)};}
+/** Optional bounds select only the intersecting portion of a dragged region. */
+export function region(a:MarkPoint,b:MarkPoint,bounds?:MarkRegion):MarkRegion {
+ const bounded=(point:MarkPoint)=>bounds?{
+  x:Math.max(bounds.x,Math.min(bounds.x+bounds.width,point.x)),
+  y:Math.max(bounds.y,Math.min(bounds.y+bounds.height,point.y)),
+ }:point;
+ const first=bounded(a),last=bounded(b);
+ return {x:Math.min(first.x,last.x),y:Math.min(first.y,last.y),width:Math.abs(first.x-last.x),height:Math.abs(first.y-last.y)};
+}
 export function projectMark(p:MarkPoint,c:ControlNumericCamera):MarkPoint {const s=c.viewport.width/c.visible.width;return {x:(p.x-c.visible.x)*s,y:c.space==='world'?(c.visible.y+c.visible.height-p.y)*s:(p.y-c.visible.y)*s};}
 export function unprojectMark(p:MarkPoint,c:ControlNumericCamera):MarkPoint {const s=c.visible.width/c.viewport.width;return {x:c.visible.x+p.x*s,y:c.space==='world'?c.visible.y+c.visible.height-p.y*s:c.visible.y+p.y*s};}
 const cross=(a:MarkPoint,b:MarkPoint,c:MarkPoint)=>(b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);

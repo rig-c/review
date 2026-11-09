@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {createViewportController,createViewportState,type ViewportProvider} from '../web/viewport-controller.ts';
-import {unprojectMark} from '../src/stage-comment.ts';
+import {projectMark,unprojectMark} from '../src/stage-comment.ts';
 import {viewportPairMarkup,expandViewportPair,viewportPairPlaceholder} from '../web/viewport-pair.ts';
 import {createPartsViewport} from '../web/parts-viewport-provider.ts';
 function host(){
@@ -73,4 +73,72 @@ test('#464 pending parts zoom uses the selected frame and preserves explicit pai
  expect(c.paneCamera('rig')).toEqual({zoom:1.5625,center:{x:0,y:9}});
  c.fitCamera();
  expect(c.paneCamera('rig')).toEqual({zoom:1.5625,center:{x:0,y:9}});
+});
+
+test('#613 stage-only resize after first paint keeps displayed parts roots and exported cameras aligned before and after ResizeObserver', () => {
+ const previous = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+ const observed: unknown[] = [];
+ let resize!: () => void;
+ let disconnected = false;
+ class Observer {
+  constructor(callback: () => void) { resize = callback; }
+  observe(node: unknown) { observed.push(node); }
+  disconnect() { disconnected = true; }
+ }
+ Object.defineProperty(globalThis, 'ResizeObserver', {configurable: true, value: Observer});
+ const nodes = new Map<string, any>();
+ const el = (id: string) => {
+  if (!nodes.has(id)) nodes.set(id, {clientWidth: 437, clientHeight: 722, hidden: false, style: {}, setAttribute() {}});
+  return nodes.get(id);
+ };
+ let wrapDuringControls = false;
+ Object.defineProperty(el('fit'), 'textContent', {set() {
+  if (wrapDuringControls) { wrapDuringControls = false; el('rig-viewport').clientHeight -= 27; }
+ }});
+ const controller = createPartsViewport({el, canvas: {width: 20, height: 20} as HTMLCanvasElement,
+  reference: () => null, frameSize: target => target === 'rig' ? {w: 20, h: 20} : null, message() {}});
+ let observer: ResizeObserver | undefined;
+ try {
+  controller.writeCamera('rig', {zoom: 2.44140625, center: {x: 10, y: 10}});
+  controller.fitCamera();
+  observer = controller.observeResize();
+  expect(observed).toContain(el('rig-viewport'));
+  expect(observed).toContain(el('reference-viewport'));
+  const verify = () => {
+   const camera = controller.numericView().cameras.rig!;
+   const origin = projectMark({x: 0, y: 0}, camera);
+   expect(camera.viewport.height).toBe(el('rig-viewport').clientHeight);
+   expect(parseFloat(el('rig-root').style.top)).toBeCloseTo(origin.y, 10);
+   expect(parseFloat(el('rig-root').style.left)).toBeCloseTo(origin.x, 10);
+   expect(unprojectMark({x: origin.x + 3 * camera.zoom, y: origin.y + 3 * camera.zoom}, camera).y).toBeCloseTo(3, 10);
+   return {height: camera.viewport.height, rootTop: parseFloat(el('rig-root').style.top)};
+  };
+  const before = verify();
+  // No window resize. A wrapped toolbar changes only the mounted pane.
+  el('rig-viewport').clientHeight = 695;
+  const beforeObserver = verify();
+  el('rig-viewport').clientHeight = 722;
+  const expandedBeforeObserver = verify();
+  // The retained KO root was rendered for 695px while its exported camera used 722px.
+  const oldOrigin = {x: 437 / 2 - 10 * 2.44140625, y: 695 / 2 - 10 * 2.44140625};
+  const staleNative = unprojectMark({x: oldOrigin.x + 3 * 2.44140625, y: oldOrigin.y + 3 * 2.44140625},
+   controller.numericView().cameras.rig!);
+  expect(Math.floor(staleNative.y)).toBe(-3);
+  resize();
+  expect(el('rig-root').style.top).toBe(`${722 / 2 - 10 * 2.44140625}px`);
+  verify();
+  // A translated control can also change geometry inside the render itself.
+  wrapDuringControls = true;
+  controller.fitCamera();
+  expect(el('rig-root').style.top).toBe(`${695 / 2 - 10 * 2.44140625}px`);
+  const afterControlWrap = verify();
+  console.log('PARTS_STAGE_RESIZE ' + JSON.stringify({before, beforeObserver, expandedBeforeObserver,
+   capturedGeometryStaleNativeY: staleNative.y, capturedGeometrySnappedY: Math.floor(staleNative.y),
+   afterControlWrap, windowResize: false}));
+ } finally {
+  observer?.disconnect();
+  if (previous) Object.defineProperty(globalThis, 'ResizeObserver', previous);
+  else Reflect.deleteProperty(globalThis, 'ResizeObserver');
+ }
+ expect(disconnected).toBe(true);
 });

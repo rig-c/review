@@ -72,6 +72,9 @@ function zoomViewport(target:CameraTarget,deltaY:number,point?:CameraPoint|null)
  provider.render(api);
  }
 function numericView():ControlView {
+ // ResizeObserver delivery can follow a pointer event. Keep native-image evidence
+ // on the same freshly rendered layout before exporting its camera coordinates.
+ if(provider.nativeScale&&provider.layoutKey()!==state.cameraLayout)fitCamera();
  const numeric=(target:CameraTarget)=>{const frame=paneFrame(target,true);if(!frame)return null;const camera=paneCamera(target);if(provider.nativeScale){const center=camera.center??frame.center;return {space:frame.space,center,zoom:camera.zoom,viewport:{width:frame.width,height:frame.height},visible:{x:center.x-frame.width/camera.zoom/2,y:center.y-frame.height/camera.zoom/2,width:frame.width/camera.zoom,height:frame.height/camera.zoom}};}return numericCamera(frame.space,camera.center??frame.center,camera.zoom,frame.baseScale*camera.zoom,frame.width,frame.height);};
  return {schema:'rig-review-view/1',cameraSync:state.cameraSync,activeCamera:state.activeCamera,cameras:{rig:numeric('rig'),a:null,b:null,reference:numeric('reference')}};
 }

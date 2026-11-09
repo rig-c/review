@@ -701,7 +701,16 @@ function setupPartsComments():void {
  signature:p=>[p.item.name,p.item.imageHash,p.sourceHash,p.camera,p.view],
  matches:(_mark,p,raw)=>{try{const c=parsePartsIssue(raw,false,true,false);return c.view.mode==='item'&&p.item.name===c.parts[0]?.name&&p.item.imageHash===c.parts[0]?.imageHash&&p.sourceHash===c.sourceHash;}catch{return false;}},
  label:raw=>{const c=parsePartsIssue(raw,false,true,false);return `${c.parts.map(pt=>pt.name).join(', ')} · ${c.summary}`;},
- create:async(p,_view,screen,crop,_bookmark,summary)=>{const r=snapImageRegion(region(unprojectMark(screen,p.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},p.camera)));const c:PartsIssue={schema:'rig-review-parts-comment/2',id:crypto.randomUUID(),summary,parts:[{name:p.item.name,imageHash:p.item.imageHash!}],sourceHash:p.sourceHash,imageRegion:r,rigRegion:{...r,x:p.item.x+r.x,y:p.item.y+r.y},view:{...p.view,mode:'item'},crop,nativeCrop:null};return parsePartsIssue(await source.crop(c),true,true,false);}
+ create:async(p,_view,screen,crop,_bookmark,summary)=>{
+  const r=snapImageRegion(region(unprojectMark(screen,p.camera),
+   unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},p.camera),
+   {x:0,y:0,width:p.item.w,height:p.item.h}));
+  const c:PartsIssue={schema:'rig-review-parts-comment/2',id:crypto.randomUUID(),summary,
+   parts:[{name:p.item.name,imageHash:p.item.imageHash!}],sourceHash:p.sourceHash,
+   imageRegion:r,rigRegion:{...r,x:p.item.x+r.x,y:p.item.y+r.y},
+   view:{...p.view,mode:'item'},crop,nativeCrop:null};
+  return parsePartsIssue(await source.crop(parsePartsIssue(c,false)),true,true,false);
+ }
  };
  const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||state.view!=='item')return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{mode:'item',camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshShown.has(item.name),comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
  commentUi=bindStageComments({toolbar:slots.toolbar,listHost:slots.side,toggle:$<HTMLButtonElement>('stage-comment'),viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,

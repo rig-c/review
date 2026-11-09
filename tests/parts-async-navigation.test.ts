@@ -2,7 +2,17 @@ import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
 import {expect,test} from 'bun:test';
 import {paintingRectangle} from '../src/parts-comparison.ts';
-import {readFile} from 'node:fs/promises';
+import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {PNG} from 'pngjs';
+import {createPartsViewport} from '../web/parts-viewport-provider.ts';
+import {projectMark,unprojectMark,region} from '../src/stage-comment.ts';
+import {parsePartsIssue,snapImageRegion,type PartsIssue} from '../src/parts-comment.ts';
+import {preparePartsComment} from '../src/parts-comment-crops.ts';
+import {readPngCrop} from '../src/comment-crops.ts';
+import {verdictSource} from '../src/parts-view.ts';
+import {commentFixture,candidate} from './helpers/parts-comments-package.ts';
 
 /** Run the actual reference painter, with only image completion and canvas calls controlled. */
 async function referenceDriver(){
@@ -39,6 +49,76 @@ test('#391 adopted P2: an older failed painting generation cannot clear or refus
  const h=await failedPaintDriver();await h.api.paint();let reject!:(e:Error)=>void;h.scope.state.selected=1;h.scope.paintingImage=()=>new Promise((_r:unknown,r:any)=>{reject=r;});const older=h.api.paint();for(let i=0;i<10&&!reject;i++)await Promise.resolve();expect(reject).toBeDefined();
  h.scope.state.selected=0;h.scope.paintingImage=async()=>({});await h.api.paint();expect(h.api.host().blocked()).toBe(false);reject(Error('late old load failure'));await older.catch(()=>{});
  expect(h.node('pv-canvas').getContext().pixels).toBe('A');expect(h.api.host().refusal()).toBeNull();expect(h.api.host().blocked()).toBe(false);
+});
+
+test('#613 after first paint and a stage-height change the actual parts codec crops only the visible original-image intersection', async () => {
+ const root = await mkdtemp(join(tmpdir(), 'parts-edge-resize-'));
+ try {
+  const pkg = await commentFixture(root);
+  const item = pkg.items[0]!;
+  const sample = candidate(pkg);
+  const h = await failedPaintDriver();
+  const el = <T extends HTMLElement>(id: string): T => {
+   const node = h.node(id);
+   node.style ??= {};
+   node.clientWidth ??= 437;
+   node.clientHeight ??= 722;
+   return node as T;
+  };
+  h.scope.state.view = 'item';
+  h.scope.state.comparison = {mode: 'part', opacity: .5};
+  h.scope.state.data = {...h.scope.state.data, sourceHash: verdictSource(pkg).sha256,
+   items: pkg.items.map(part => ({...part, imageHash: pkg.files.find(file => file.abs === pkg.imagePaths[part.index])!.sha256}))};
+  const controller = createPartsViewport({el, canvas: el<HTMLCanvasElement>('pv-canvas'),
+   reference: () => null, frameSize: target => target === 'rig' ? {w: item.w, h: item.h} : null, message() {}});
+  h.scope.viewport = controller;
+  const sent: PartsIssue[] = [];
+  Object.assign(h.scope, {region, projectMark, unprojectMark, snapImageRegion, parsePartsIssue,
+   source: {crop: async (issue: PartsIssue) => { sent.push(issue); return preparePartsComment(pkg, issue); }}});
+  await h.api.paint();
+  controller.writeCamera('rig', {zoom: 1, center: {x: item.w / 2, y: item.h / 2}});
+  controller.fitCamera();
+  expect(controller.numericView().cameras.rig!.viewport.height).toBe(722);
+  h.node('rig-viewport').clientHeight = 695;
+  controller.fitCamera();
+  const pose = h.api.host().pose();
+  expect(pose.camera.viewport.height).toBe(695);
+  expect(parseFloat(h.node('rig-root').style.top)).toBeCloseTo(projectMark({x: 0, y: 0}, pose.camera).y, 10);
+  const codec = h.api.host().codec;
+  const cases = [
+   {start: {x: -3, y: -3}, end: {x: 12, y: 12}, expected: {x: 0, y: 0, width: 12, height: 12}},
+   {start: {x: 25, y: 28}, end: {x: 35, y: 36}, expected: {x: 25, y: 28, width: 5, height: 4}},
+   {start: {x: 12, y: 12}, end: {x: -3, y: -3}, expected: {x: 0, y: 0, width: 12, height: 12}},
+   {start: {x: 3, y: 3}, end: {x: 12, y: 12}, expected: {x: 3, y: 3, width: 9, height: 9}},
+  ];
+  const original = PNG.sync.read(await readFile(pkg.imagePaths[item.index]!));
+  for (const control of cases) {
+   const screen = region(projectMark(control.start, pose.camera), projectMark(control.end, pose.camera));
+   const issue: PartsIssue = await codec.create(pose, 'rig', screen, sample.crop, null, 'Visible edge');
+   expect(issue.imageRegion).toEqual(control.expected);
+   expect(issue.rigRegion).toEqual({...control.expected, x: item.x + control.expected.x, y: item.y + control.expected.y});
+   expect(issue.parts).toEqual(sample.parts);
+   expect(issue.sourceHash).toBe(sample.sourceHash);
+   const decoded = PNG.sync.read(await readPngCrop(issue.nativeCrop!));
+   const expected = Buffer.alloc(control.expected.width * control.expected.height * 4);
+   for (let y = 0; y < control.expected.height; y++) {
+    const start = ((control.expected.y + y) * original.width + control.expected.x) * 4;
+    original.data.copy(expected, y * control.expected.width * 4, start, start + control.expected.width * 4);
+   }
+   expect(decoded.data).toEqual(expected);
+  }
+  const outside = region(projectMark({x: 35, y: 36}, pose.camera), projectMark({x: 40, y: 40}, pose.camera));
+  await expect(codec.create(pose, 'rig', outside, sample.crop, null, 'Outside')).rejects.toThrow('PARTS_COMMENT_EMPTY');
+  expect(sent).toHaveLength(cases.length);
+  const invalid = structuredClone(sent[0]!);
+  invalid.imageRegion!.y = -3;
+  invalid.rigRegion.y = item.y - 3;
+  await expect(preparePartsComment(pkg, invalid)).rejects.toThrow('PARTS_COMMENT_OUT_OF_BOUNDS');
+  console.log('PARTS_EDGE_CROP ' + JSON.stringify({firstPaintHeight: 722, resizedHeight: 695,
+   sentRegions: sent.map(issue => issue.imageRegion), nativeRGBA: 'bound original subrects matched', serverOOB: 'still refused'}));
+ } finally {
+  await rm(root, {recursive: true, force: true});
+ }
 });
 
 /** Actual pan binder with event/capture surfaces substituted; independent background control stays pannable. */
