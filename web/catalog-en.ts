@@ -3484,4 +3484,6 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "PARTS_WORKSPACE_DOCUMENT_REQUIRED": "PARTS_WORKSPACE_DOCUMENT_REQUIRED",
   "PARTS_WORKSPACE_DISPOSED": "PARTS_WORKSPACE_DISPOSED · The parts workspace was disposed before its first paint.",
   "PARTS_JOINED_ISSUE_UNSUPPORTED": "PARTS_JOINED_ISSUE_UNSUPPORTED · To report issues, use the standing job review route (/jobs/<jobId>/). This joined page supports approval with no issues.",
+  "Issues": "Issues",
+  "No issues yet.": "No issues yet.",
 };

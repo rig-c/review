@@ -414,6 +414,24 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
   expect(slotsA.hostWrap.querySelector<FakeElement>('#pv-canvas')!.width).toBe(64);
 
 
+  const sidebarA=slotsA.side as unknown as FakeElement,sidebarB=slotsB.side as unknown as FakeElement;
+  const issueListA=sidebarA.querySelector<FakeElement>('.stage-comment-list')!;
+  const issueListB=sidebarB.querySelector<FakeElement>('.stage-comment-list')!;
+  expect(issueListA.parentElement).toBe(sidebarA);
+  expect(issueListB.parentElement).toBe(sidebarB);
+  for(const [slots,list] of [[slotsA,issueListA],[slotsB,issueListB]] as const){
+   expect(slots.hostWrap.querySelectorAll('.stage-comment-list')).toHaveLength(1);
+   expect(list.classList.contains('stage-comment-list-inline')).toBe(true);
+   expect(list.hidden).toBe(false);
+   expect(list.style.top).toBe('');
+  }
+  expect(issueListA.querySelectorAll('.stage-comment-item')).toHaveLength(1);
+  expect(issueListA.querySelector('.stage-comment-summary')?.textContent).toContain('seam gap on A');
+  expect(issueListB.querySelectorAll('.stage-comment-item')).toHaveLength(0);
+  expect(issueListB.querySelector('p')?.textContent).toBe('No issues yet.');
+  const partsCss=await readFile('web/parts.css','utf8');
+  expect(partsCss).toMatch(/\.stage-comment-list\.stage-comment-list-inline\{position:static;/);
+
   expect(outputs.a?.kind).toBe('parts-verdict');
   expect(outputs.b?.kind).toBe('parts-verdict');
   expect(outputs.a!.value()).toEqual({verdict:'changes-requested',issues:[sampleIssue],words:''});
@@ -438,16 +456,18 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
   const toggleB=slotsB.hostWrap.querySelector<FakeElement>('#stage-comment')!;
   for(let i=0;i<20;i++)await Promise.resolve();
   slotsB.stage.focus();fakeDoc.emit('keydown',key('c'));
-  expect(toggleA.getAttribute('aria-expanded')).toBe('false');
-  expect(toggleB.getAttribute('aria-expanded')).toBe('true');
+  expect(toggleA.getAttribute('aria-pressed')).toBe('false');
+  expect(toggleB.getAttribute('aria-pressed')).toBe('true');
   slotsA.stage.focus();phase='sent';fakeDoc.emit('keydown',key('c'));
   expect(slotsA.hostWrap.querySelector('#stage-comment-refusal')?.textContent).toContain('Read-only');
   expect(changedA).toBe(0);
   fakeDoc.emit('keydown',key('Escape'));
-  expect(toggleB.getAttribute('aria-expanded')).toBe('true');
+  expect(toggleB.getAttribute('aria-pressed')).toBe('true');
   phase='open';
   slotsB.stage.focus();fakeDoc.emit('keydown',key('Escape'));
-  expect(toggleB.getAttribute('aria-expanded')).toBe('false');
+  expect(toggleB.getAttribute('aria-pressed')).toBe('false');
+  expect(issueListA.hidden).toBe(false);expect(issueListB.hidden).toBe(false);
+  expect(toggleB.getAttribute('aria-expanded')).toBe('true');
 
   const value=outputs.a!.value();
   if(!('issues' in value))throw new Error('Expected parts issue output');
@@ -467,6 +487,8 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
   handleA.dispose();
   expect(fakeDoc.handlers.get('keydown')!.size).toBeLessThan(documentKeyCount);
   expect(slotsA.stage.children).toHaveLength(0);
+  expect(sidebarA.querySelectorAll('.stage-comment-list')).toHaveLength(0);
+  expect(sidebarB.querySelectorAll('.stage-comment-list')).toHaveLength(1);
   expect(()=>outputs.a!.value()).toThrow('PARTS_VERDICT_READ_ONLY');
   const failureSlots=makeSlots('failure');
   const failureMount=mountPartsWorkspace(failureSlots,{...sourceB,image:async()=>{throw new Error('planted-initial-image-error');}},{...hostB,register(){}},{defaultView:'item'});

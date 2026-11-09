@@ -3484,4 +3484,6 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "PARTS_WORKSPACE_DOCUMENT_REQUIRED": "PARTS_WORKSPACE_DOCUMENT_REQUIRED · 같은 문서의 작업 공간 슬롯이 필요합니다.",
   "PARTS_WORKSPACE_DISPOSED": "PARTS_WORKSPACE_DISPOSED · 첫 화면을 그리기 전에 파츠 작업 공간이 닫혔습니다.",
   "PARTS_JOINED_ISSUE_UNSUPPORTED": "PARTS_JOINED_ISSUE_UNSUPPORTED · 이슈는 상시 잡 리뷰 경로(/jobs/<jobId>/)에서 등록해 주세요. 연결된 점검 페이지에서는 이슈 없는 승인을 지원합니다.",
+  "Issues": "이슈",
+  "No issues yet.": "아직 이슈가 없습니다.",
 };
