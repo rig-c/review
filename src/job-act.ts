@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
-  JOB_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
-  type ActV3, type JobAct, type JobActValues, type JobPendingAsk, type JobReviewerBinding,
+  JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
+  type ActV3, type JobAct, type JobActValues, type JobApiSchema, type JobPendingAsk, type JobPublicationMode, type JobReviewerBinding,
   type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
-  type PendingAskV3, type RecordAct, type RecordSource, type RecordSubject, type SourceV3,
+  type PendingAskV3, type RecordAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
 } from './job-contract.ts';
 import {
   isRecordSource, jobHash, jobId, jobInteger, jobObject,
@@ -75,6 +75,12 @@ export function bindJobRecordAsk(subject: unknown, retained: JobRetainedRecordSo
       }
       return source;
     }
+    case 'reopen': {
+      if (source.subject !== 'plan') {
+        throw new JobError('JOB_ASK_INVALID');
+      }
+      return source;
+    }
   }
 }
 
@@ -121,20 +127,37 @@ export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRet
       if (!declared) throw new JobError('JOB_ASK_INVALID');
       if ((JOB_PLAN_BOUND_SIGNOFF_STAGES as readonly string[]).includes(subject.stage)) requirePlan(source);
       return source;
+    case 'reopen':
+      throw new JobError('JOB_ASK_INVALID');
   }
 }
 
-export function parseUISubmission(value: unknown): JobUISubmission {
+export function parseUISubmission(
+  value: unknown,
+  mode?: typeof JOB_API_SCHEMA | 'package-only',
+): JobUISubmission;
+export function parseUISubmission(
+  value: unknown,
+  mode: typeof JOB_API_V3_SCHEMA | 'record-and-package',
+): UISubmissionV3;
+export function parseUISubmission(
+  value: unknown,
+  mode: JobApiSchema | JobPublicationMode = JOB_API_SCHEMA,
+): JobUISubmission | UISubmissionV3 {
   const item = jobObject(value, ['publicationId', 'askId', 'pageId', 'displayedNonce', 'expectedGeneration', 'submissionId', 'kind', 'value', 'capture']);
   if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(item.kind)) throw new JobError('JOB_ACT_KIND_DISABLED');
   jobId(item.publicationId); jobId(item.askId); jobId(item.pageId); jobId(item.displayedNonce); jobId(item.submissionId);
   jobInteger(item.expectedGeneration);
-  if (!(JOB_ENABLED_ACT_KINDS as readonly string[]).includes(String(item.kind))) {
+  const recordEnabled = mode === JOB_API_V3_SCHEMA || mode === 'record-and-package';
+  const kind = String(item.kind);
+  const allowed = (JOB_ENABLED_ACT_KINDS as readonly string[]).includes(kind) ||
+    (recordEnabled && (JOB_RECORD_ACT_KINDS as readonly string[]).includes(kind));
+  if (!allowed) {
     throw new JobError('JOB_ACT_INVALID');
   }
   if (item.capture !== undefined && (item.kind !== 'review-verdict' ||
     (item.value as {stage?: unknown} | null)?.stage !== 'rig-review')) throw new JobError('JOB_REQUEST_INVALID');
-  return item as unknown as JobUISubmission;
+  return item as unknown as UISubmissionV3;
 }
 
 /** The browser supplies pixels and draw provenance, never a trusted hash or path. */
@@ -201,7 +224,7 @@ function actIdField(value: unknown): string {
 
 export function prepareJobRecordAct(options: {
   readonly jobId: string;
-  readonly submission: JobUISubmission;
+  readonly submission: UISubmissionV3;
   readonly ask: PendingAskV3;
   readonly retained: JobRetainedRecordSource;
   readonly reviewer: JobReviewerBinding;
@@ -379,6 +402,26 @@ export function prepareJobRecordAct(options: {
         },
       });
     }
+    case 'reopen': {
+      if (boundSource.subject !== 'plan') throw new JobError('JOB_ACT_SOURCE_STALE');
+      const value = actObject(submission.value, ['stage', 'words']);
+      if (
+        !('stage' in value) ||
+        !('words' in value) ||
+        value.stage !== askSubject.stage
+      ) {
+        throw new JobError('JOB_ACT_INVALID');
+      }
+      return parseRecordAct({
+        ...envelope,
+        kind: 'reopen',
+        source: boundSource,
+        value: {
+          stage: askSubject.stage,
+          words: words(value.words),
+        },
+      });
+    }
   }
 }
 
@@ -395,7 +438,7 @@ export function finalizeJobAct(options: {
 }): JobAct;
 export function finalizeJobAct(options: {
   readonly jobId: string;
-  readonly submission: JobUISubmission;
+  readonly submission: UISubmissionV3;
   readonly ask: PendingAskV3;
   readonly retained: JobRetainedRecordSource;
   readonly reviewer: JobReviewerBinding;
@@ -405,7 +448,7 @@ export function finalizeJobAct(options: {
 }): RecordAct;
 export function finalizeJobAct(options: {
   readonly jobId: string;
-  readonly submission: JobUISubmission;
+  readonly submission: UISubmissionV3;
   readonly ask: JobPendingAsk | PendingAskV3;
   readonly retained: JobRetainedSourceV3;
   readonly reviewer: JobReviewerBinding;
@@ -415,7 +458,7 @@ export function finalizeJobAct(options: {
 }): ActV3;
 export function finalizeJobAct(options: {
   readonly jobId: string;
-  readonly submission: JobUISubmission;
+  readonly submission: UISubmissionV3;
   readonly ask: JobPendingAsk | PendingAskV3;
   readonly retained: JobRetainedSourceV3;
   readonly reviewer: JobReviewerBinding;

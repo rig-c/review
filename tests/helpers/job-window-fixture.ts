@@ -1,6 +1,6 @@
 /** Lane B's frozen-port fake. This proves window behavior, never backend authority. */
 import { JOB_ACT_SCHEMA, JOB_API_SCHEMA } from '../../src/job-contract.ts';
-import type { JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobHostPorts, JobPendingAsk, JobPublication, JobResult, JobSourceBinding, JobEnabledActKind, JobActValues, } from '../../src/job-contract.ts';
+import type { ActV3, DisplayPublicationV3, EventV3, JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobHostPorts, JobPendingAsk, JobPublication, JobResult, JobSourceBinding, JobEnabledActKind, JobActValues, PendingAskV3, } from '../../src/job-contract.ts';
 export function fixturePublication(index = 1): JobDisplayPublication {
     const hash = String(index).padStart(64, '0');
     const source: JobSourceBinding = {
@@ -28,8 +28,8 @@ export function fixturePublication(index = 1): JobDisplayPublication {
     return { publication, routes: { entry, apiBase: entry + 'api/', assetsBase: entry + 'assets/' } };
 }
 export function createJobWindowFixture(jobId = 'window-fixture') {
-    const publications = new Map<string, JobDisplayPublication>();
-    const events: JobEvent[] = [];
+    const publications = new Map<string, DisplayPublicationV3>();
+    const events: EventV3[] = [];
     const acknowledgments: {
         request: Request;
         body: unknown;
@@ -42,13 +42,17 @@ export function createJobWindowFixture(jobId = 'window-fixture') {
     const listeners = new Set<() => void>();
     let active = true;
     let acknowledgeFailure: JobResult<JobDisplayReceipt> | null = null;
-    let submittedAct: JobAct | null = null;
-    function append(event: JobEvent): void {
+    let submittedAct: ActV3 | null = null;
+    function append(event: EventV3): void {
         events.push(structuredClone(event));
         for (const listener of listeners)
             listener();
     }
-    const ports: JobHostPorts = {
+    const ports: Omit<JobHostPorts, 'subscribeJob' | 'readPublication' | 'commitUIAct'> & {
+        subscribeJob(options: { jobId: string; after: string | null; signal: AbortSignal }): AsyncIterable<EventV3>;
+        readPublication(jobId: string, publicationId: string): Promise<JobResult<DisplayPublicationV3>>;
+        commitUIAct(jobId: string, request: Request): Promise<JobResult<ActV3>>;
+    } = {
         async handleJobApi(request) {
             apiRequests.push(request);
             return Response.json({ fixture: true }, { status: 501 });
@@ -109,13 +113,13 @@ export function createJobWindowFixture(jobId = 'window-fixture') {
         },
     };
     return {
-        jobId, ports, publications, events, acknowledgments, submissions, apiRequests,
-        publish(display: JobDisplayPublication) {
+        jobId, ports: ports as JobHostPorts & typeof ports, publications, events, acknowledgments, submissions, apiRequests,
+        publish(display: DisplayPublicationV3) {
             publications.set(display.publication.publicationId, structuredClone(display));
             append({ type: 'published', jobId, generation: display.publication.generation,
                 cursor: String(events.length + 1), publication: display.publication });
         },
-        pending(ask: JobPendingAsk, generation: number) {
+        pending(ask: PendingAskV3, generation: number) {
             append({ type: 'pending', jobId, generation, cursor: String(events.length + 1), ask });
         },
         close(generation: number) {
@@ -123,7 +127,7 @@ export function createJobWindowFixture(jobId = 'window-fixture') {
             append({ type: 'closed', jobId, generation, cursor: String(events.length + 1), reason: 'Explicit fixture close' });
         },
         failAcknowledgment(result: JobResult<JobDisplayReceipt> | null) { acknowledgeFailure = result; },
-        returnAct(act: JobAct) { submittedAct = structuredClone(act); },
+        returnAct(act: ActV3) { submittedAct = structuredClone(act); },
     };
 }
 /** C2 fixture sources carry the explicit producer-published identities verbatim. */

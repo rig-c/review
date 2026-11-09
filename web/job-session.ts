@@ -1,5 +1,5 @@
 /** Live job window transactions. Every form remains bound to its displayed publication. */
-import type { JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobPendingAsk, JobPublication, JobResult, JobUISubmission, JobSourceBinding, } from '../src/job-contract.ts';
+import type { ActV3, DisplayPublicationV3, EventV3, JobDisplayReceipt, JobPendingAsk, JobResult, JobUISubmission, PendingAskV3, PublicationV3, SourceV3, UISubmissionV3, } from '../src/job-contract.ts';
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
 import {t} from './i18n.ts';
@@ -20,13 +20,13 @@ export function jobWindowRefusal(error: unknown, fallback = 'JOB_WINDOW_FAILED')
     return t(fallback);
 }
 export interface JobWindowTransport {
-    readPublication(publicationId: string, signal?: AbortSignal): Promise<JobResult<JobDisplayPublication>>;
+    readPublication(publicationId: string, signal?: AbortSignal): Promise<JobResult<DisplayPublicationV3>>;
     acknowledge(input: {
         publicationId: string;
         pageId: string;
         sourceHash: string;
     }, signal: AbortSignal): Promise<JobResult<JobDisplayReceipt>>;
-    submit(input: JobUISubmission): Promise<JobResult<JobAct>>;
+    submit(input: UISubmissionV3): Promise<JobResult<ActV3>>;
 }
 export interface JobPreparedCommit {
     /** Restore the previous view, including its original forms and route bindings. */
@@ -36,10 +36,10 @@ export interface JobPreparedCommit {
 }
 export interface JobWindowAdapter<Prepared> {
     /** Resolve assets, metadata, forms and publication-pinned routes before returning. */
-    prepare(display: JobDisplayPublication, signal: AbortSignal): Promise<Prepared>;
+    prepare(display: DisplayPublicationV3, signal: AbortSignal): Promise<Prepared>;
     /** Called immediately before commit, so edits made during preloading are retained. */
     captureDraft(): unknown | null;
-    commit(prepared: Prepared, display: JobDisplayPublication): JobPreparedCommit;
+    commit(prepared: Prepared, display: DisplayPublicationV3): JobPreparedCommit;
     painted(prepared: Prepared, signal: AbortSignal): Promise<void>;
     discard(prepared: Prepared): void;
     changed(state: JobWindowState): void;
@@ -47,19 +47,19 @@ export interface JobWindowAdapter<Prepared> {
 export interface JobRetainedDraft {
     readonly publicationId: string;
     readonly sourceHash: string;
-    readonly source?: JobSourceBinding;
+    readonly source?: SourceV3;
     readonly label: string;
     readonly value: unknown;
 }
 export interface JobWindowState {
     readonly generation: number;
-    readonly displayed: JobDisplayPublication | null;
+    readonly displayed: DisplayPublicationV3 | null;
     readonly receipt: JobDisplayReceipt | null;
     readonly preparing: boolean;
     readonly closed: boolean;
     readonly error: string | null;
     readonly previousLabel: string | null;
-    readonly pending: readonly JobPendingAsk[];
+    readonly pending: readonly PendingAskV3[];
     readonly retainedDrafts: readonly JobRetainedDraft[];
 }
 function unwrap<Value>(result: JobResult<Value>): Value {
@@ -67,7 +67,7 @@ function unwrap<Value>(result: JobResult<Value>): Value {
         throw new Error(result.error.code);
     return result.value;
 }
-function sourceSnapshot(source: JobSourceBinding): string {
+function sourceSnapshot(source: SourceV3): string {
     return JSON.stringify(source, (_key, value: unknown) => {
         if (value === null || typeof value !== 'object' || Array.isArray(value))
             return value;
@@ -75,9 +75,9 @@ function sourceSnapshot(source: JobSourceBinding): string {
         return Object.fromEntries(Object.keys(record).sort().map(key => [key, record[key]]));
     });
 }
-function assertJobAskSource(ask: JobPendingAsk, display: JobDisplayPublication): void {
-    const source = ask.subject.kind === 'interview-picks'
-        ? { ...ask.source, optionSet: display.publication.source.optionSet }
+function assertJobAskSource(ask: PendingAskV3, display: DisplayPublicationV3): void {
+    const source: SourceV3 = ask.subject.kind === 'interview-picks'
+        ? { ...ask.source, optionSet: display.publication.source.optionSet } as SourceV3
         : ask.source;
     if (sourceSnapshot(source) !== sourceSnapshot(display.publication.source)) {
         throw new Error('JOB_ACT_SOURCE_STALE');
@@ -90,9 +90,9 @@ function assertJobAskSource(ask: JobPendingAsk, display: JobDisplayPublication):
 
 /** Build pending form dependencies off-stage. A failure rejects the candidate before it is displayed. */
 export function prepareJobForms<Form>(
-    display: JobDisplayPublication,
-    asks: readonly JobPendingAsk[],
-    prepare: (ask: JobPendingAsk) => Form,
+    display: DisplayPublicationV3,
+    asks: readonly PendingAskV3[],
+    prepare: (ask: PendingAskV3) => Form,
 ): Map<string, Form> {
     const prepared = new Map<string, Form>();
     for (const ask of asks) {
@@ -105,12 +105,12 @@ export function prepareJobForms<Form>(
 
 /** C2 publishes the plan mapping in the ask. Legacy checkpoint metadata is optional guidance. */
 export function jobCheckpointContext(
-    ask: JobPendingAsk,
+    ask: PendingAskV3,
     checkpoints: readonly Pick<Checkpoint, 'id' | 'title' | 'note'>[],
 ) {
     if (ask.subject.kind !== 'checkpoint') throw new Error('JOB_ASK_INVALID');
     const checkpointId = ask.subject.checkpointId;
-    const planStepId = ask.subject.planStepId ?? checkpointId;
+    const planStepId = ('planStepId' in ask.subject ? ask.subject.planStepId : undefined) ?? checkpointId;
     const step = ask.source.plan?.steps.find(item => item.id === planStepId);
     if (!step) throw new Error('JOB_ASK_INVALID');
     const checkpoint = checkpoints.find(item => item.id === checkpointId);
@@ -129,15 +129,16 @@ export function createJobWindow<Prepared>(options: {
     adapter: JobWindowAdapter<Prepared>;
 }) {
     const { transport, adapter, pageId } = options;
-    const pending = new Map<string, JobPendingAsk>();
-    const rigAttempts = new WeakSet<JobUISubmission>();
+    const pending = new Map<string, PendingAskV3>();
+    const rigAttempts = new WeakSet<UISubmissionV3>();
     const retainedDrafts: JobRetainedDraft[] = [];
     let generation = 0;
-    let displayed: JobDisplayPublication | null = null;
+    let displayed: DisplayPublicationV3 | null = null;
     let receipt: JobDisplayReceipt | null = null;
     let preparing = false;
     let closed = false;
-    let error: string | null = null;
+    let error: string | null;
+    error = null;
     let previousLabel: string | null = null;
     let intent = 0;
     let stopped = false;
@@ -150,7 +151,7 @@ export function createJobWindow<Prepared>(options: {
         };
     }
     function changed(): void { adapter.changed(state()); }
-    function replace(publication: JobPublication): Promise<void> {
+    function replace(publication: PublicationV3): Promise<void> {
         if (stopped)
             return Promise.resolve();
         const revision = ++intent;
@@ -232,7 +233,7 @@ export function createJobWindow<Prepared>(options: {
         });
         return queue;
     }
-    function event(value: JobEvent): void {
+    function event(value: EventV3): void {
         if (stopped || value.jobId !== options.jobId)
             return;
         generation = Math.max(generation, value.generation);
@@ -258,7 +259,7 @@ export function createJobWindow<Prepared>(options: {
         }
         changed();
     }
-    async function submit(input: JobUISubmission): Promise<JobResult<JobAct>> {
+    async function submit(input: UISubmissionV3): Promise<JobResult<ActV3>> {
         if (closed)
             return { ok: false, error: { code: 'JOB_CLOSED', message: 'JOB_CLOSED' } };
         const ask = pending.get(input.askId);
@@ -334,7 +335,7 @@ export function jobWindowAccess(href: string, storage: Pick<Storage, 'getItem' |
     };
 }
 /** Resolve only the publication's explicit immutable instance routes. */
-export function jobPublicationRoutes(display: JobDisplayPublication, origin: string) {
+export function jobPublicationRoutes(display: DisplayPublicationV3, origin: string) {
     const key = display.publication.instanceKey;
     if (!/^[a-f0-9]{64}$/.test(key))
         throw new Error('JOB_DISPLAY_MISMATCH');
@@ -408,7 +409,7 @@ export function createJobWindowTransport(access: JobWindowAccess, fetcher: typeo
     };
 }
 /** Bounded newline events. Reconnects resume after the last fully parsed event. */
-export async function* jobWindowEvents(access: JobWindowAccess, after: string | null, signal: AbortSignal, fetcher: typeof fetch = fetch): AsyncGenerator<JobEvent> {
+export async function* jobWindowEvents(access: JobWindowAccess, after: string | null, signal: AbortSignal, fetcher: typeof fetch = fetch): AsyncGenerator<EventV3> {
     const path = 'events' + (after === null ? '' : '?after=' + encodeURIComponent(after));
     const response = await fetcher(access.route(path), { signal, headers: access.headers() });
     if (!response.ok || !response.body)
@@ -431,7 +432,7 @@ export async function* jobWindowEvents(access: JobWindowAccess, after: string | 
             while (newline >= 0) {
                 if (newline > limit)
                     throw new Error('JOB_BODY_LIMIT');
-                const event = JSON.parse(buffered.slice(0, newline)) as JobEvent;
+                const event = JSON.parse(buffered.slice(0, newline)) as EventV3;
                 if (!event || event.jobId !== access.jobId || typeof event.cursor !== 'string' ||
                     !Number.isSafeInteger(event.generation) || event.generation < 0 ||
                     !['published', 'pending', 'act', 'closed'].includes(event.type))
@@ -454,7 +455,7 @@ export function startJobWindowEvents(options: {
     access: JobWindowAccess;
     signal: AbortSignal;
     member: boolean;
-    event(value: JobEvent): void;
+    event(value: EventV3): void;
     refused(error: unknown): void;
     fetcher?: typeof fetch;
 }) {
@@ -606,7 +607,7 @@ export function createJobReferenceSelection<Reference extends Pick<JobReferenceV
 }
 
 export interface JobPreparedInspection {
-    display: JobDisplayPublication;
+    display: DisplayPublicationV3;
     metadata: JobInspectionMetadata;
     interview: JobInterview | null;
     parts: JobPartsInventory | null;
@@ -683,12 +684,18 @@ function mediaReady(media: HTMLVideoElement, name: 'loadeddata' | 'seeked', sign
     });
 }
 /** Prepare the real published Play model, references and every form dependency off-stage. */
-export async function prepareJobInspection(display: JobDisplayPublication, signal: AbortSignal): Promise<JobPreparedInspection> {
+export async function prepareJobInspection(display: DisplayPublicationV3, signal: AbortSignal): Promise<JobPreparedInspection> {
     const routes = jobPublicationRoutes(display, location.origin);
     const metadata = await jobJson<JobInspectionMetadata>(routes.api('review'), signal);
-    if (metadata.manifest.id !== display.publication.source.package.id ||
-        metadata.manifest.revision !== display.publication.source.package.revision ||
-        (metadata.reviewedSource.rig?.sha256 ?? null) !== (display.publication.source.model?.sha256 ?? null)) {
+    const pubSource = display.publication.source;
+    if ('package' in pubSource) {
+        if (metadata.manifest.id !== pubSource.package.id ||
+            metadata.manifest.revision !== pubSource.package.revision ||
+            (metadata.reviewedSource.rig?.sha256 ?? null) !== (pubSource.model?.sha256 ?? null)) {
+            throw new Error('JOB_DISPLAY_MISMATCH');
+        }
+    }
+    else if (metadata.sourceHash !== pubSource.sourceHash) {
         throw new Error('JOB_DISPLAY_MISMATCH');
     }
     const objectUrls: string[] = [];
@@ -1001,7 +1008,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     type JobForm = {
         form: HTMLFormElement;
         fieldset: HTMLFieldSetElement;
-        read: () => JobUISubmission['value'];
+        read: () => UISubmissionV3['value'];
         submissionId: string;
         dirty: boolean;
         rigSubmission: ReturnType<typeof createJobRigSubmission>;
@@ -1198,7 +1205,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             armPlayback(expectedOwner, expectedPlayer);
         }
     }
-    function copyRigVerdict(ask: JobPendingAsk, owner: JobPreparedInspection) {
+    function copyRigVerdict(ask: PendingAskV3, owner: JobPreparedInspection) {
         if (owner !== current || ask.publicationId !== owner.display.publication.publicationId) {
             throw new Error('JOB_STILL_BINDING_MISMATCH');
         }
@@ -1234,7 +1241,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     });
     let unbindNavigation: (() => void) | null = null;
     let resize: ResizeObserver | null = null;
-    function localDraftKey(display: JobDisplayPublication): string {
+    function localDraftKey(display: DisplayPublicationV3): string {
         return 'rig-review-job-draft/1:' + access.jobId + ':' + display.publication.publicationId + ':' + display.publication.source.sourceHash;
     }
     function saveDraft(): void {
@@ -1275,7 +1282,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         parent.append(inputLabel(key, input));
         return input;
     }
-    function formFor(ask: JobPendingAsk, prepared: JobPreparedInspection): JobForm {
+    function formFor(ask: PendingAskV3, prepared: JobPreparedInspection): JobForm {
         if (ask.publicationId !== prepared.display.publication.publicationId)
             throw new Error('JOB_DISPLAY_MISMATCH');
         assertJobAskSource(ask, prepared.display);
@@ -1288,7 +1295,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         source.textContent = prepared.display.publication.label + ' · ' + ask.source.sourceHash;
         fields.append(source);
         const note = textArea(fields, 'interview.note');
-        let read: () => JobUISubmission['value'];
+        let read: () => UISubmissionV3['value'];
         let submitKey = 'Submit review';
         const subject = ask.subject;
         if (subject.kind === 'interview-picks') {
@@ -1421,6 +1428,22 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             read = () => ({ stage: subject.stage, decision: 'approved', words: note.value });
             submitKey = 'job.signoff';
         }
+        else if (subject.kind === 'reopen') {
+            if (
+                !('record' in ask.source) ||
+                ask.source.subject !== 'plan' ||
+                typeof subject.stage !== 'string' ||
+                !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(subject.stage) ||
+                !ask.source.subjects.some(candidate => candidate.kind === 'reopen' && candidate.stage === subject.stage)
+            ) {
+                throw new Error('JOB_ASK_INVALID');
+            }
+            const stage = node('p');
+            stage.textContent = subject.stage;
+            fields.append(stage);
+            read = () => ({ stage: subject.stage, words: note.value });
+            submitKey = 'job.reopen';
+        }
         else {
             throw new Error('JOB_ACT_KIND_DISABLED');
         }
@@ -1464,11 +1487,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             try {
                 const input = { kind: subject.kind, publicationId: ask.publicationId,
                     askId: ask.askId, pageId, displayedNonce: receipt.displayedNonce,
-                    expectedGeneration: state.generation, submissionId: entry.submissionId, value: read() } as JobUISubmission;
+                    expectedGeneration: state.generation, submissionId: entry.submissionId, value: read() } as UISubmissionV3;
                 const activeAsk = state.pending.find(item => item.askId === ask.askId);
                 if (!activeAsk) throw new Error('JOB_ASK_INVALID');
                 const pending = subject.kind === 'review-verdict' && subject.stage === 'rig-review'
-                    ? entry.rigSubmission.prepare(input, () => copyRigVerdict(activeAsk, prepared)) : Promise.resolve(input);
+                    ? entry.rigSubmission.prepare(input as JobUISubmission, () => copyRigVerdict(activeAsk, prepared)) : Promise.resolve(input);
                 fields.disabled = true;
                 const frozen = await pending;
                 if (entry.submissionId !== frozen.submissionId) throw new Error('JOB_STILL_BINDING_MISMATCH');
@@ -1985,7 +2008,9 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                             unbindNavigation = nextUnbind;
                             resize = nextResize;
                             previous?.dispose();
-                            title.textContent = display.publication.source.package.id;
+                            title.textContent = 'package' in display.publication.source
+                                ? display.publication.source.package.id
+                                : display.publication.label;
                         },
                     };
                 }

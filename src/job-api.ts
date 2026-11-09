@@ -219,7 +219,12 @@ export function parseRecordSubject(value: unknown): RecordSubject {
   if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(item.kind)) {
     throw new JobError('JOB_ACT_KIND_DISABLED');
   }
-  if (item.kind !== 'interview-picks' && item.kind !== 'checkpoint' && item.kind !== 'signoff') {
+  if (
+    item.kind !== 'interview-picks' &&
+    item.kind !== 'checkpoint' &&
+    item.kind !== 'signoff' &&
+    item.kind !== 'reopen'
+  ) {
     throw new JobError('JOB_ASK_INVALID');
   }
   switch (item.kind) {
@@ -237,6 +242,9 @@ export function parseRecordSubject(value: unknown): RecordSubject {
       }
       return { kind: 'signoff', stage: stage as RecordSignoffStage };
     }
+    case 'reopen':
+      jobObject(item, ['kind', 'stage']);
+      return { kind: 'reopen', stage: jobId(item.stage) };
   }
 }
 
@@ -299,9 +307,20 @@ export function parseJobRequest(
         };
         return parsedRecordPublish;
       }
-      case 'ask':
+      case 'ask': {
         jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey', 'publicationId', 'subject']);
-        return { ...mutation, verb: 'ask', publicationId: jobId(item.publicationId), subject: parseJobSubject(item.subject) };
+        const isReopenSubject =
+          item.subject !== null &&
+          typeof item.subject === 'object' &&
+          !Array.isArray(item.subject) &&
+          (item.subject as { kind?: unknown }).kind === 'reopen';
+        return {
+          ...mutation,
+          verb: 'ask',
+          publicationId: jobId(item.publicationId),
+          subject: isReopenSubject ? parseRecordSubject(item.subject) : parseJobSubject(item.subject),
+        };
+      }
       case 'close':
         jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey', 'reason']);
         return { ...mutation, verb: 'close', reason: jobText(item.reason, 1024) };
@@ -440,9 +459,6 @@ function parsePlanSubjects(
   if (!Array.isArray(rawSubjects) || rawSubjects.length > maxRecordFiles) {
     throw new JobError(code);
   }
-  if (rawSubjects.length > 0 && stepIds.size === 0) {
-    throw new JobError(code);
-  }
   const seen = new Set<string>();
   return rawSubjects.map(raw => {
     const parsed = asCode(() => parseRecordSubject(raw), code);
@@ -454,6 +470,13 @@ function parsePlanSubjects(
       seen.add(key);
       return { kind: 'checkpoint', checkpointId: parsed.checkpointId };
     }
+    if (parsed.kind === 'reopen') {
+      const key = `reopen:${parsed.stage}`;
+      if (seen.has(key)) throw new JobError(code);
+      seen.add(key);
+      return { kind: 'reopen', stage: parsed.stage };
+    }
+    if (stepIds.size === 0) throw new JobError(code);
     const key = `signoff:${parsed.stage}`;
     if (seen.has(key)) throw new JobError(code);
     seen.add(key);
@@ -872,14 +895,17 @@ export function validateRecordAskSubject(subject: unknown, source: RecordSource)
     }
     return parsed;
   }
-  if (parsed.kind === 'interview-picks' || checkedSource.plan.steps.length === 0) {
+  if (
+    parsed.kind === 'interview-picks' ||
+    ((parsed.kind === 'checkpoint' || parsed.kind === 'signoff') && checkedSource.plan.steps.length === 0)
+  ) {
     throw new JobError('JOB_ASK_INVALID');
   }
   const declared = checkedSource.subjects.some(candidate =>
     candidate.kind === parsed.kind &&
     (candidate.kind === 'checkpoint'
       ? candidate.checkpointId === (parsed as Extract<RecordPlanSubject, { kind: 'checkpoint' }>).checkpointId
-      : candidate.stage === (parsed as Extract<RecordPlanSubject, { kind: 'signoff' }>).stage),
+      : candidate.stage === (parsed as Extract<RecordPlanSubject, { kind: 'signoff' | 'reopen' }>).stage),
   );
   if (!declared) throw new JobError('JOB_ASK_INVALID');
   return parsed;
@@ -991,6 +1017,25 @@ export function parseRecordAct(value: unknown): RecordAct {
         at,
         source,
         value: { stage: stage as RecordSignoffStage, decision: 'approved', words },
+      };
+    }
+    case 'reopen': {
+      if (source.subject !== 'plan') throw new JobError('JOB_ACT_INVALID');
+      const rawValue = exactObject(item.value, ['stage', 'words'], 'JOB_ACT_INVALID');
+      const stage = asCode(() => jobId(rawValue.stage), 'JOB_ACT_INVALID');
+      asCode(() => validateRecordAskSubject({ kind: 'reopen', stage }, source), 'JOB_ACT_INVALID');
+      const words = parseActWords(rawValue.words, 'JOB_ACT_INVALID');
+      return {
+        schema: JOB_RECORD_ACT_SCHEMA,
+        actId,
+        jobId: jobIdValue,
+        askId,
+        publicationId,
+        kind: 'reopen',
+        authority,
+        at,
+        source,
+        value: { stage, words },
       };
     }
   }

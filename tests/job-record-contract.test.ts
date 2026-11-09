@@ -943,3 +943,228 @@ test('CP1 default normal host (createJobHostPorts + JobSession) refuses API@3 re
     await f.close();
   }
 });
+
+test('#586 reopen subject and rig-review/act@4 contract enforce exact keys, declared plan subjects, and API@2 isolation', () => {
+  expect(parseRecordSubject({ kind: 'reopen', stage: 'plan-approved' })).toEqual({
+    kind: 'reopen',
+    stage: 'plan-approved',
+  });
+  expect(parseRecordSubject({ kind: 'reopen', stage: 'design-interview' })).toEqual({
+    kind: 'reopen',
+    stage: 'design-interview',
+  });
+
+  // Alias, extra keys, and malformed stage IDs refuse with JOB_REQUEST_INVALID
+  for (const invalid of [
+    { kind: 'reopen' },
+    { kind: 'reopen', stage: '' },
+    { kind: 'reopen', stage: '   ' },
+    { kind: 'reopen', stage: 'plan-approved', decision: 'reopen' },
+    { kind: 'reopen', stage: 'plan-approved', checkpointId: 'step_1' },
+    { kind: 'reopen', stage: 'plan-approved', version: 1 },
+    { kind: 'reopen', step: 'plan-approved' },
+    { kind: 'reopen', checkpoint: 'plan-approved' },
+  ]) {
+    expect(() => parseRecordSubject(invalid)).toThrow(
+      expect.objectContaining({ code: 'JOB_REQUEST_INVALID' }),
+    );
+  }
+
+  // Package API@2 refuses reopen subjects while opt-in API@3 accepts them
+  expect(() => parseJobSubject({ kind: 'reopen', stage: 'plan-approved' })).toThrow(
+    expect.objectContaining({ code: 'JOB_ASK_INVALID' }),
+  );
+  expect(() =>
+    parseJobRequest({
+      schema: JOB_API_SCHEMA,
+      jobId: 'job-1',
+      requestId: 'req-ask-v2-reopen',
+      verb: 'ask',
+      expectedGeneration: 1,
+      idempotencyKey: 'idem-ask-v2-reopen',
+      publicationId: 'pub-1',
+      subject: { kind: 'reopen', stage: 'plan-approved' },
+    }),
+  ).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
+
+  const v3Ask = parseJobRequestV3({
+    schema: JOB_API_V3_SCHEMA,
+    jobId: 'job-1',
+    requestId: 'req-ask-v3-reopen',
+    verb: 'ask',
+    expectedGeneration: 1,
+    idempotencyKey: 'idem-ask-v3-reopen',
+    publicationId: 'pub-1',
+    subject: { kind: 'reopen', stage: 'plan-approved' },
+  });
+  expect(v3Ask).toEqual({
+    schema: JOB_API_V3_SCHEMA,
+    jobId: 'job-1',
+    requestId: 'req-ask-v3-reopen',
+    verb: 'ask',
+    expectedGeneration: 1,
+    idempotencyKey: 'idem-ask-v3-reopen',
+    publicationId: 'pub-1',
+    subject: { kind: 'reopen', stage: 'plan-approved' },
+  });
+
+  const baseOptionContext: OptionContext = {
+    label: 'Interview',
+    parts: sealedParts,
+    inputs: [inputFileA],
+    files: [optionFile, inputFileA, recordIdentity],
+    plan: null,
+    subjects: [{ kind: 'interview-picks', questionId: optionSelection.questionId, setId: optionSelection.setId }],
+  };
+  const baseOptionSource = buildRecordSource({
+    record: recordIdentity,
+    selection: optionSelection,
+    context: baseOptionContext,
+    optionSetFile: optionFile,
+  });
+
+  const basePlanContext: PlanContext = {
+    label: 'Plan',
+    parts: sealedParts,
+    inputs: [inputFileA],
+    files: [inputFileA, recordIdentity],
+    plan: { steps: [{ id: 'step-1', hash: sha('1') }] },
+    subjects: [
+      { kind: 'checkpoint', checkpointId: 'step-1' },
+      { kind: 'signoff', stage: 'post-interview' },
+    ],
+  };
+  const basePlanSource = buildRecordSource({
+    record: recordIdentity,
+    selection: planSelection,
+    context: basePlanContext,
+  });
+
+  // Plan context and source bind declared reopen subjects into sourceHash
+  const reopenPlanContext = parseRecordPublishedContext(
+    {
+      ...basePlanContext,
+      subjects: [
+        ...basePlanContext.subjects,
+        { kind: 'reopen', stage: 'plan-approved' },
+        { kind: 'reopen', stage: 'design-interview' },
+      ],
+    },
+    planSelection,
+    recordIdentity,
+  );
+  const reopenPlanSource = buildRecordSource({
+    record: recordIdentity,
+    selection: planSelection,
+    context: reopenPlanContext,
+  });
+  expect(reopenPlanSource.sourceHash).toBe(recordSourceDigest(reopenPlanSource));
+  expect(reopenPlanSource.sourceHash).not.toBe(basePlanSource.sourceHash);
+
+  // Duplicate reopen stage in published context refuses with JOB_SOURCE_MISMATCH
+  expect(() =>
+    parseRecordPublishedContext(
+      {
+        ...basePlanContext,
+        subjects: [
+          { kind: 'reopen', stage: 'plan-approved' },
+          { kind: 'reopen', stage: 'plan-approved' },
+        ],
+      },
+      planSelection,
+      recordIdentity,
+    ),
+  ).toThrow(expect.objectContaining({ code: 'JOB_SOURCE_MISMATCH' }));
+
+  // Option context refuses reopen subjects
+  expect(() =>
+    parseRecordPublishedContext(
+      {
+        ...baseOptionContext,
+        subjects: [{ kind: 'reopen', stage: 'plan-approved' }],
+      },
+      optionSelection,
+      recordIdentity,
+    ),
+  ).toThrow(expect.objectContaining({ code: 'JOB_SOURCE_MISMATCH' }));
+
+  // validateRecordAskSubject checks declared reopen subjects on plan source only
+  expect(
+    validateRecordAskSubject({ kind: 'reopen', stage: 'plan-approved' }, reopenPlanSource),
+  ).toEqual({ kind: 'reopen', stage: 'plan-approved' });
+  expect(
+    validateRecordAskSubject({ kind: 'reopen', stage: 'design-interview' }, reopenPlanSource),
+  ).toEqual({ kind: 'reopen', stage: 'design-interview' });
+  expect(() =>
+    validateRecordAskSubject({ kind: 'reopen', stage: 'post-interview' }, reopenPlanSource),
+  ).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
+  expect(() =>
+    validateRecordAskSubject({ kind: 'reopen', stage: 'plan-approved' }, baseOptionSource),
+  ).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
+
+  // parseRecordAct validates reopen act@4 and preserves verbatim words including empty/whitespace
+  for (const verbatimWords of ['', '   \n\t  ', '다시 열어서 실루엣 확인 필요']) {
+    const reopenAct = parseRecordAct({
+      schema: JOB_RECORD_ACT_SCHEMA,
+      actId: 'act-reopen-1',
+      jobId: 'job-1',
+      askId: 'ask-reopen-1',
+      publicationId: 'pub-plan-1',
+      kind: 'reopen',
+      authority: {
+        actor: 'human',
+        channel: 'review-ui',
+        reviewer: { id: 'reviewer-1', role: 'owner' },
+      },
+      at: '2026-11-09T09:00:00.000Z',
+      source: reopenPlanSource,
+      value: {
+        stage: 'plan-approved',
+        words: verbatimWords,
+      },
+    });
+    expect(reopenAct.value).toEqual({
+      stage: 'plan-approved',
+      words: verbatimWords,
+    });
+  }
+
+  // Undeclared reopen stage, extra value keys, > 10_000 words, or option-set source refuse with JOB_ACT_INVALID
+  for (const badAct of [
+    {
+      source: reopenPlanSource,
+      value: { stage: 'post-interview', words: 'undeclared stage' },
+    },
+    {
+      source: reopenPlanSource,
+      value: { stage: 'plan-approved', decision: 'reopened', words: 'extra key' },
+    },
+    {
+      source: reopenPlanSource,
+      value: { stage: 'plan-approved', words: 'x'.repeat(10_001) },
+    },
+    {
+      source: baseOptionSource,
+      value: { stage: 'plan-approved', words: 'wrong source' },
+    },
+  ]) {
+    expect(() =>
+      parseRecordAct({
+        schema: JOB_RECORD_ACT_SCHEMA,
+        actId: 'act-reopen-bad',
+        jobId: 'job-1',
+        askId: 'ask-reopen-1',
+        publicationId: 'pub-plan-1',
+        kind: 'reopen',
+        authority: {
+          actor: 'human',
+          channel: 'review-ui',
+          reviewer: { id: 'reviewer-1', role: 'owner' },
+        },
+        at: '2026-11-09T09:00:00.000Z',
+        source: badAct.source,
+        value: badAct.value,
+      }),
+    ).toThrow(expect.objectContaining({ code: 'JOB_ACT_INVALID' }));
+  }
+});
