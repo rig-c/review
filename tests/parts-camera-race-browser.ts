@@ -1,21 +1,24 @@
 import {cp, mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {loadPartsView} from '../src/parts-view.ts';
+import {assertPartsUnchanged, loadPartsView} from '../src/parts-view.ts';
 import {startPartsServer} from '../src/parts-server.ts';
 import {writeComparisonPackage} from './helpers/parts-comparison-package.ts';
 import {writeDifferencePackage} from './helpers/parts-difference-package.ts';
-import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
+import {launchCdpSession, type CdpPageEvent, type InputCdpSession} from './parts-explorer-browser.ts';
 
 const TARGET_ROUTE = '/api/parts/image/1';
 const EXPECTED = {x: 4, y: 5, zoom: 1.25};
+const GATE_BOUNDARY = 'pending-source-response-delivery';
 const report: {
   status: string;
+  boundary: typeof GATE_BOUNDARY;
   expected: typeof EXPECTED;
   phase: string;
   observations: {lang: string; progress: Record<string, unknown>}[];
   controls?: Record<string, unknown>;
-} = {status: 'running', expected: EXPECTED, phase: 'setup', observations: []};
+  failure?: {message: string; sample?: Sample; captureError?: string};
+} = {status: 'running', boundary: GATE_BOUNDARY, expected: EXPECTED, phase: 'setup', observations: []};
 const out = resolve(process.env.REVIEW464_CAMERA_ARTIFACTS ?? 'artifacts/parts-camera-race');
 const require = (condition: unknown, name: string) => {
   if (!condition) throw Error(name);
@@ -123,12 +126,16 @@ function sample(page: InputCdpSession, expected:Camera|null=null, target: 'rig' 
   })()`);
 }
 
-const INSTALL_GATE = `(() => {
+// Observe genuine decode completion without withholding or rewriting img.src.
+const INSTALL_GATE_OBSERVERS = `(() => {
   const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src');
-  if (!descriptor?.set) throw Error('IMAGE_SRC_SETTER_MISSING');
-  let pending = null;
+  if (!descriptor?.set) throw Error('IMAGE_OBSERVER_SETTER_MISSING');
   const events = [], inputs = [], errors = [];
-  const targetRoute = ${JSON.stringify(TARGET_ROUTE)};
+  const gate = window.__parts464Gate = {
+    boundary:${JSON.stringify(GATE_BOUNDARY)}, pending:false, events,
+    held:() => gate.pending,
+    report:() => ({boundary:gate.boundary,events,inputs,errors,pending:gate.pending})
+  };
   window.addEventListener('error', event => errors.push(String(event.message ?? event.type)));
   window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
   document.addEventListener('click', event => {
@@ -138,31 +145,67 @@ const INSTALL_GATE = `(() => {
   Object.defineProperty(HTMLImageElement.prototype,'src',{
     ...descriptor,
     set(value) {
-      const url = new URL(String(value), location.href);
-      if (url.origin !== location.origin || url.pathname !== targetRoute) {
-        descriptor.set.call(this,value);
-        return;
+      if (new URL(String(value), location.href).protocol === 'blob:') {
+        this.addEventListener('load', () => {
+          if (this.naturalWidth !== 8 || this.naturalHeight !== 10 ||
+              !events.some(event => event.phase === 'released')) return;
+          events.push({phase:'loaded',width:this.naturalWidth,height:this.naturalHeight});
+          Object.defineProperty(HTMLImageElement.prototype,'src',descriptor);
+        }, {once:true});
+        this.addEventListener('error', () => events.push({phase:'image-error'}), {once:true});
       }
-      if (pending || events.length) throw Error('IMAGE_SRC_DUPLICATE');
-      pending = {image:this,value};
-      this.addEventListener('load', () => events.push({phase:'loaded', width:this.naturalWidth,height:this.naturalHeight}), {once:true});
-      this.addEventListener('error', () => events.push({phase:'image-error'}), {once:true});
-      events.push({phase:'held',route:url.pathname,rawSource:this.getAttribute('src')});
+      descriptor.set.call(this,value);
     }
   });
-  window.__parts464Gate = {
-    held:() => pending !== null,
-    report:() => ({events, inputs, errors, pending:pending !== null}),
-    release() {
-      if (!pending) throw Error('IMAGE_SRC_RELEASE_WITHOUT_HOLD');
-      const {image,value} = pending;
-      pending = null;
-      Object.defineProperty(HTMLImageElement.prototype,'src',descriptor);
-      events.push({phase:'released',route:new URL(String(value),location.href).pathname});
-      descriptor.set.call(image,value);
-    }
-  };
 })()`;
+
+type SendCdp = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+let sendCdp: SendCdp | undefined;
+let sourceTarget = '';
+let sourceArmed = false;
+let pendingSourceResponse: {requestId: string; send: SendCdp} | null = null;
+
+async function sourceResponseEvent(event: CdpPageEvent, send: SendCdp): Promise<void> {
+  if (event.sessionId) sendCdp = send;
+  if (event.method !== 'Fetch.requestPaused') return;
+  const params = event.params!;
+  const requestId = params.requestId as string;
+  const request = params.request as {url: string};
+  if (!sourceArmed || request.url !== sourceTarget) {
+    await send('Fetch.continueRequest', {requestId});
+    return;
+  }
+  require(!pendingSourceResponse, 'PARTS_SOURCE_RESPONSE_DUPLICATE');
+  require(params.responseStatusCode === 200, 'PARTS_SOURCE_RESPONSE_STATUS ' + params.responseStatusCode);
+  pendingSourceResponse = {requestId, send};
+  await page!.evaluate(`(() => {
+    const gate = window.__parts464Gate;
+    gate.pending = true;
+    gate.events.push({phase:'held',route:${JSON.stringify(TARGET_ROUTE)},status:200});
+  })()`);
+}
+
+async function armSourceResponse(page: InputCdpSession, url: string) {
+  require(!pendingSourceResponse, 'PARTS_SOURCE_RESPONSE_STILL_HELD');
+  await page.evaluate(INSTALL_GATE_OBSERVERS);
+  sourceTarget = new URL(TARGET_ROUTE, url).href;
+  sourceArmed = true;
+  require(sendCdp, 'PARTS_SOURCE_RESPONSE_SESSION_MISSING');
+  await sendCdp!('Fetch.enable', {patterns:[{urlPattern:sourceTarget,requestStage:'Response'}]});
+}
+
+async function releaseSourceResponse(page: InputCdpSession) {
+  const held = pendingSourceResponse;
+  require(held, 'PARTS_SOURCE_RESPONSE_RELEASE_WITHOUT_HOLD');
+  sourceArmed = false;
+  await page.evaluate(`(() => {
+    const gate = window.__parts464Gate;
+    gate.pending = false;
+    gate.events.push({phase:'released',route:${JSON.stringify(TARGET_ROUTE)}});
+  })()`);
+  await held!.send('Fetch.continueRequest', {requestId:held!.requestId});
+  pendingSourceResponse = null;
+}
 
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const midpoint = (dimensions:readonly [number,number], zoom=1.25):Camera =>
@@ -239,7 +282,7 @@ async function controls(page: InputCdpSession, url: string, rows:Record<string,u
 
   await page.goto(url, 'en');
   await wait(page, `document.body.dataset.ready === 'true' && document.getElementById('pv-canvas').width === 20`, 'PARTS_STALE_CONTROL_BOOT');
-  await page.evaluate(INSTALL_GATE);
+  await armSourceResponse(page, url);
   await click(page, '[data-pv-item="front"]');
   await wait(page, 'window.__parts464Gate.held()', 'PARTS_STALE_CONTROL_GATE');
   await click(page, '#zoom-in');
@@ -248,7 +291,7 @@ async function controls(page: InputCdpSession, url: string, rows:Record<string,u
   const bodyCamera=midpoint([20,16]);
   const beforeLate = await sample(page,bodyCamera);
   await record(rows,'beforeLate',beforeLate);
-  await page.evaluate('window.__parts464Gate.release()');
+  await releaseSourceResponse(page);
   await wait(page, `window.__parts464Gate.report().events.some(event => event.phase === 'loaded')`, 'PARTS_STALE_CONTROL_RELEASE');
   const afterLate = await sample(page,bodyCamera);
   await record(rows,'afterLate',afterLate);
@@ -287,6 +330,7 @@ async function comparisonFrames(page: InputCdpSession, dir: string, rows:Record<
       requireMidpoint(rig,dims,action);
       requireMidpoint(reference,dims,action + ':reference');
     }
+    await assertPartsUnchanged(pkg);
   } finally { server.stop(true); }
 }
 
@@ -322,6 +366,7 @@ async function legacyAtlasFrames(page: InputCdpSession, dir: string, rows:Record
     const fullPage = await sample(page,midpoint(dimensions));
     await record(rows,'fullPage',fullPage);
     requireMidpoint(fullPage,dimensions,'full-page');
+    await assertPartsUnchanged(pkg);
   } finally { server.stop(true); }
 }
 
@@ -338,7 +383,7 @@ try {
     port: 0, capability: 'a'.repeat(64), exitOnClose: false,
     graceMs: 600_000, unopenedTimeoutMs: 600_000,
   });
-  page = await launchCdpSession(join(root, 'profile'), {sendDeadlineMs: 10_000});
+  page = await launchCdpSession(join(root, 'profile'), {sendDeadlineMs: 10_000, onEvent: sourceResponseEvent});
   await page.setViewport(1440, 1000);
   for (const lang of ['en', 'ko'] as const) {
     report.phase = lang + ':boot';
@@ -358,7 +403,7 @@ try {
     require(equal(initial.pixel, pixelAt3(fixture.part)), 'PARTS_BODY_PIXEL');
 
     report.phase = lang + ':held';
-    await page.evaluate(INSTALL_GATE);
+    await armSourceResponse(page, `http://127.0.0.1:${server.port}/`);
     await click(page, '[data-pv-item="front"]');
     await wait(page, 'window.__parts464Gate.held()', 'PARTS_IMAGE_GATE_TIMEOUT');
     const held = await sample(page);
@@ -376,7 +421,7 @@ try {
     await writeFile(join(out, lang + '-held.png'), await page.screenshot());
 
     report.phase = lang + ':released';
-    await page.evaluate('window.__parts464Gate.release()');
+    await releaseSourceResponse(page);
     progress.released = await page.evaluate('window.__parts464Gate.report()');
     await save();
     await wait(page, `(() => {
@@ -390,8 +435,9 @@ try {
     require(final.selected === 'front' && final.lang === lang && final.status === '', 'PARTS_SETTLED_IDENTITY');
     require(equal(final.pixel, pixelAt3(fixture.cover)), 'PARTS_FRONT_PIXEL');
     require(equal(final.gate, {
+      boundary:GATE_BOUNDARY,
       events:[
-        {phase:'held',route:TARGET_ROUTE,rawSource:null},
+        {phase:'held',route:TARGET_ROUTE,status:200},
         {phase:'released',route:TARGET_ROUTE},
         {phase:'loaded',width:8,height:10},
       ],
@@ -423,10 +469,16 @@ try {
   await save();
   report.phase = 'legacy-atlas-frames';
   await legacyAtlasFrames(page,join(root,'atlas'),atlas);
+  await assertPartsUnchanged(pkg);
   report.status = 'passed';
   await save();
 } catch (error) {
   report.status = 'failed';
+  report.failure = {message:error instanceof Error ? error.message : String(error)};
+  if (page) {
+    try { report.failure.sample = await sample(page); }
+    catch (captureError) { report.failure.captureError = String(captureError); }
+  }
   await save();
   throw error;
 } finally {
