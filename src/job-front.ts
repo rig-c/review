@@ -23,8 +23,60 @@ const headers = {
     'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
 };
-function failure(code: string, status: number): Response {
-    return Response.json({ ok: false, error: { code, message: code } }, { status, headers });
+interface CropFailureDiagnostic {
+    field: string;
+    expected: string | number[];
+    received: string | number[];
+}
+function failure(code: string, status: number, diagnostic?: CropFailureDiagnostic): Response {
+    return Response.json({ ok: false, error: { code, message: code, ...(diagnostic ? {diagnostic} : {}) } }, { status, headers });
+}
+
+/** Explain an existing rejection without returning body text, filesystem paths or PNG bytes. */
+function cropFailureDiagnostic(error: unknown, raw: unknown): CropFailureDiagnostic {
+    const message = error instanceof Error ? error.message : '';
+    const invariants: Record<string, [string, string]> = {
+        'PARTS_COMMENT_RIG_REGION: rig region must be exact placement plus image region': ['rigRegion', 'exact placement plus imageRegion'],
+        'PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image': ['imageRegion', 'inside original image bounds'],
+        'PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds union of issue parts': ['rigRegion', 'inside union of bound parts'],
+        'PARTS_CAMERA_RANGE: native zoom below fit/1 minimum': ['view.camera.zoom', 'at least min(fit, 1)'],
+        'PARTS_CAMERA_RANGE: native scale or camera extent': ['view.camera', 'bounded positive zoom and viewport'],
+        'PARTS_COMMENT_IMAGE_SIZE: original dimensions differ from placement': ['part.image.dimensions', 'equal retained placement dimensions'],
+        'PARTS_COMMENT_CROP_INVALID: bounded content-addressed crop': ['crop', 'bounded content-addressed PNG metadata'],
+        'COMMENT_CROP_INVALID: bounded content-addressed PNG required': ['crop', 'bounded content-addressed PNG'],
+        'COMMENT_CROP_INVALID: expected noninterlaced 8-bit RGB/RGBA': ['crop.png.format', 'noninterlaced 8-bit RGB/RGBA'],
+        'COMMENT_CROP_INVALID: truncated PNG chunk': ['crop.png.chunks', 'complete chunks'],
+        'COMMENT_CROP_INVALID: PNG chunk length': ['crop.png.chunk.length', 'inside PNG byte bounds'],
+        'COMMENT_CROP_INVALID: PNG chunk CRC': ['crop.png.chunk.crc', 'matching CRC'],
+        'COMMENT_CROP_INVALID: static PNG required': ['crop.png.animation', 'static PNG'],
+        'COMMENT_CROP_INVALID: PNG end': ['crop.png.end', 'final empty IEND'],
+        'COMMENT_CROP_INVALID: PNG data/end missing': ['crop.png.data', 'IDAT and IEND present'],
+        'COMMENT_CROP_INVALID: bounded PNG data decode': ['crop.png.data', 'bounded decodable scanlines'],
+        'COMMENT_CROP_INVALID: PNG scanlines': ['crop.png.scanlines', 'exact dimensions and valid filters'],
+        'COMMENT_CROP_PATH: existing crop is not the bound regular PNG': ['crop.storage', 'regular file with matching SHA-256'],
+        'COMMENT_CROP_PATH: regular state directory required': ['crop.storage', 'regular state directory'],
+    };
+    // Inspect metadata only after the existing validator reports this exact invariant.
+    if (message === 'COMMENT_CROP_INVALID: PNG signature, dimensions or SHA-256 differ' &&
+        raw && typeof raw === 'object' && 'crop' in raw) {
+        const crop = raw.crop as {png?: unknown; sha256?: unknown; width?: unknown; height?: unknown} | null;
+        if (crop && typeof crop.png === 'string' && crop.png.length <= 200000 &&
+            typeof crop.sha256 === 'string' && /^[a-f0-9]{64}$/.test(crop.sha256)) {
+            const bytes = Buffer.from(crop.png.slice('data:image/png;base64,'.length), 'base64');
+            const hash = jobHash(bytes);
+            if (hash !== crop.sha256) return {field: 'crop.sha256', expected: crop.sha256, received: hash};
+            if (bytes.length >= 24 && bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' &&
+                typeof crop.width === 'number' && typeof crop.height === 'number' &&
+                (crop.width !== bytes.readUInt32BE(16) || crop.height !== bytes.readUInt32BE(20))) {
+                return {field: 'crop.dimensions', expected: [crop.width, crop.height],
+                    received: [bytes.readUInt32BE(16), bytes.readUInt32BE(20)]};
+            }
+        }
+        return {field: 'crop.png.signature', expected: 'PNG signature and IHDR', received: 'invalid'};
+    }
+    const invariant = Object.hasOwn(invariants, message) ? invariants[message] : undefined;
+    return invariant ? {field: invariant[0], expected: invariant[1], received: 'rejected by existing validator'} :
+        {field: 'partsComment.prepare', expected: 'valid source-bound crop and writable evidence state', received: 'unclassified rejection'};
 }
 const errorStatus: Partial<Record<JobErrorCode, number>> = {
     JOB_REQUEST_INVALID: 400,
@@ -336,7 +388,14 @@ export function retainedPublicationRoutes(session: JobSession) {
                         return failure('JOB_ACT_SOURCE_STALE', 409);
                     // Preserve the exact displayed job identity through native evidence validation.
                     assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);
-                    const comment = await preparePartsComment(parts, raw, false, {sourceHash: retained.source.sourceHash});
+                    let comment;
+                    try {
+                        comment = await preparePartsComment(parts, raw, false, {sourceHash: retained.source.sourceHash});
+                    } catch (error) {
+                        if (error instanceof JobError ||
+                            error instanceof Error && error.message.startsWith('PARTS_COMMENT_STALE_SOURCE:')) throw error;
+                        return failure('JOB_SOURCE_MISMATCH', 409, cropFailureDiagnostic(error, raw));
+                    }
                     assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);
                     if (session.status().publication?.publicationId !== publicationId)
                         return failure('JOB_ACT_SOURCE_STALE', 409);
