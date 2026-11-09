@@ -10,6 +10,14 @@
 * **review:** finalize declared record reopen acts ([#600](https://github.com/rig-c/review/issues/600)) ([02d0bf7](https://github.com/rig-c/review/commit/02d0bf75b96c4d87948361c1986702a65ec2ec48))
 * **review:** preserve standing window state across reconnects ([#595](https://github.com/rig-c/review/issues/595)) ([815b965](https://github.com/rig-c/review/commit/815b965d0fb74ae05aed0f37d85c82e5be9c9d5c))
 
+
+### Consumer compatibility
+
+* `JobHostPorts.commitUIAct`, `JobHostPorts.readPublication` and `JobHostPorts.subscribeJob` now return `ActV3`, `DisplayPublicationV3` and `EventV3` unions (`JobActV3`, `JobDisplayPublicationV3` and `JobEventV3`), so typed consumers narrow the source and act variants they support. Existing package `JOB_API_SCHEMA` (`rig-review/job-api@2`) and `JOB_ACT_SCHEMA` (`rig-review/act@2`) wire declarations and runtime constants remain unchanged.
+* `AskRequestV3.subject` and `PendingAskV3.subject` (`JobAskRequestV3` and `JobPendingAskV3`) include `RecordSubject` (`JobRecordSubject`), and `RecordPlanSubject` (`JobRecordPlanSubject`) adds the stage-only `RecordReopenSubject` (`JobRecordReopenSubject`). `DisplayPublicationV3` (`JobDisplayPublicationV3`) remains exported with the same `{publication, routes}` shape (`PublicationV3` and `{entry, apiBase, assetsBase}`). The `reopen` act value (`RecordReopenValue` / `JobRecordReopenValue`) carries exact `{stage, words}` keys and preserves empty or whitespace-only `words` verbatim, while Create owns stage eligibility and apply semantics.
+
+Record-mode and EN/KO inspection proofs in this release use an archive-backed synthetic `readRecordPublished` reader double. Installed Create #278, Create #317 and Create #356 consumer acceptance and `REAL_USER_SCENE_PENDING` remain external gates.
+
 ## [2.7.1](https://github.com/rig-c/review/compare/v2.7.0...v2.7.1) (2026-11-09)
 
 
