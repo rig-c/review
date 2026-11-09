@@ -105,6 +105,7 @@ export async function prepareBrowserRecordArchiveFixture(recordRoot: string): Pr
       subjects: [
         { kind: 'checkpoint', checkpointId: 'seethrough' },
         { kind: 'signoff', stage: 'rigging-interview' },
+        { kind: 'reopen', stage: 'plan-approved' },
       ],
     };
     return planContext;
@@ -194,6 +195,14 @@ export async function runRecordBrowserPreflightSetupCheck(): Promise<void> {
       subject: { kind: 'signoff', stage: 'rigging-interview' },
     });
     if (askSignoff.verb !== 'ask' || !askSignoff.ok) throw new Error('Preflight signoff ask failed');
+    const askReopen = await call({
+      verb: 'ask',
+      expectedGeneration: askSignoff.generation,
+      idempotencyKey: 'preflight-ask-reopen',
+      publicationId: pubPlan.value.publicationId,
+      subject: { kind: 'reopen', stage: 'plan-approved' },
+    });
+    if (askReopen.verb !== 'ask' || !askReopen.ok) throw new Error('Preflight reopen ask failed');
   } finally {
     try {
       host?.stop();
@@ -578,13 +587,24 @@ try {
   assert.ok(askSignoff.verb === 'ask' && askSignoff.ok);
   const signoffAsk = askSignoff.value as JobPendingAskV3;
 
+  const askReopen = await callRecordApi({
+    verb: 'ask',
+    expectedGeneration: askSignoff.generation,
+    idempotencyKey: 'browser-ask-reopen',
+    publicationId: planPublication.publicationId,
+    subject: { kind: 'reopen', stage: 'plan-approved' },
+  });
+  assert.ok(askReopen.verb === 'ask' && askReopen.ok);
+  const reopenAsk = askReopen.value as JobPendingAskV3;
+
   await wait(
     `document.querySelector('.job-notice')?.dataset.failed === 'false' &&
      document.querySelector('.job-notice')?.textContent?.includes(${JSON.stringify(planPublication.label)}) &&
      !!document.querySelector('[data-job-record="plan"]') &&
      !!document.querySelector('form[data-job-ask=${JSON.stringify(cpAsk.askId)}]') &&
-     !!document.querySelector('form[data-job-ask=${JSON.stringify(signoffAsk.askId)}]')`,
-    'plan displayed with checkpoint and signoff forms on normal owner URL',
+     !!document.querySelector('form[data-job-ask=${JSON.stringify(signoffAsk.askId)}]') &&
+     !!document.querySelector('form[data-job-ask=${JSON.stringify(reopenAsk.askId)}]')`,
+    'plan displayed with checkpoint, signoff and reopen forms on normal owner URL',
   );
 
   // Verify panel switching to '2' (Interview) keeps record forms visible
@@ -600,13 +620,19 @@ try {
     rigCanvasCount: number;
     cpFormHidden: boolean;
     signoffFormHidden: boolean;
+    reopenFormHidden: boolean;
     cpStepText: string | null;
     signoffStageText: string | null;
+    reopenStageText: string | null;
+    reopenSubmitKey: string | null;
+    reopenSubmitText: string | null;
   }>(`(()=>{
     const sourceBinding = JSON.parse(document.querySelector('.job-sidebar details pre').textContent);
     const stage = document.getElementById('stage-layout');
     const cpForm = document.querySelector('form[data-job-ask=${JSON.stringify(cpAsk.askId)}]');
     const signoffForm = document.querySelector('form[data-job-ask=${JSON.stringify(signoffAsk.askId)}]');
+    const reopenForm = document.querySelector('form[data-job-ask=${JSON.stringify(reopenAsk.askId)}]');
+    const reopenBtn = reopenForm?.querySelector('button[type="submit"]');
     return {
       sentinel: globalThis.__jobRecordOwnerSentinel,
       lang: document.documentElement.lang,
@@ -618,8 +644,12 @@ try {
       rigCanvasCount: document.querySelectorAll('#rig-root canvas').length,
       cpFormHidden: !cpForm || cpForm.hidden,
       signoffFormHidden: !signoffForm || signoffForm.hidden,
+      reopenFormHidden: !reopenForm || reopenForm.hidden,
       cpStepText: cpForm?.querySelectorAll('p.job-source')[1]?.textContent ?? null,
       signoffStageText: [...(signoffForm?.querySelectorAll('fieldset > p') ?? [])].at(-1)?.textContent ?? null,
+      reopenStageText: [...(reopenForm?.querySelectorAll('fieldset > p') ?? [])].at(-1)?.textContent ?? null,
+      reopenSubmitKey: reopenBtn?.dataset.jobText ?? null,
+      reopenSubmitText: reopenBtn?.textContent ?? null,
     };
   })()`);
 
@@ -640,10 +670,14 @@ try {
   assert.equal(planDom.rigCanvasCount, 0);
   assert.equal(planDom.cpFormHidden, false);
   assert.equal(planDom.signoffFormHidden, false);
+  assert.equal(planDom.reopenFormHidden, false);
   const expectedCpStep = planSteps.find(step => step.id === 'seethrough');
   assert.ok(expectedCpStep, 'declared seethrough step exists in planSteps');
   assert.equal(planDom.cpStepText, `${expectedCpStep.id} · ${expectedCpStep.hash}`);
   assert.equal(planDom.signoffStageText, 'rigging-interview');
+  assert.equal(planDom.reopenStageText, 'plan-approved');
+  assert.equal(planDom.reopenSubmitKey, 'job.reopen');
+  assert.equal(planDom.reopenSubmitText, catalog['job.reopen']);
 
   const planInstanceBase = `/jobs/${recordHost.session.jobId}/publications/${planPublication.publicationId}/instances/${planPublication.instanceKey}`;
   const planRoutes = await page.evaluate<{
@@ -661,7 +695,7 @@ try {
   assert.equal(Object.hasOwn(planRoutes.reviewBody, 'reviewedSource'), false);
   assert.deepEqual(planRoutes.reviewBody.recordSource, planPublication.source);
 
-  // Submit checkpoint and signoff through actual DOM forms
+  // Submit checkpoint, signoff and reopen through actual DOM forms
   await edit(`form[data-job-ask="${cpAsk.askId}"] select[name="outcome"]`, 'pass');
   await edit(`form[data-job-ask="${cpAsk.askId}"] textarea[name="note"]`, `Checkpoint approved in ${language}`);
   const cpSubmitStatus = await submitForm(cpAsk.askId);
@@ -673,7 +707,63 @@ try {
   assert.equal(signoffSubmitStatus.statusKey, 'job.saved');
   assert.equal(signoffSubmitStatus.statusText, catalog['job.saved']);
 
+  const reopenVerbatimWords = `  Reopen plan-approved in ${language}\n`;
+  await edit(`form[data-job-ask="${reopenAsk.askId}"] textarea[name="note"]`, reopenVerbatimWords);
+  const reopenSubmitStatus = await submitForm(reopenAsk.askId);
+  assert.equal(reopenSubmitStatus.statusKey, 'job.saved');
+  assert.equal(reopenSubmitStatus.statusText, catalog['job.saved']);
+
   await writeFile(join(output, `record-plan-${language}.png`), await page.screenshot());
+
+  // Scroll the reopen form/button into view within the forms container, wait painted rAF, assert visible bounds, and capture record-reopen-<lang>.png
+  const reopenVisibleBounds = await page.evaluate<{
+    viewportWidth: number;
+    viewportHeight: number;
+    formsHostScrollTop: number;
+    formsHostRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
+    formRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
+    buttonRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
+    statusRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
+  }>(`(async () => {
+    const formsHost = document.querySelector('[data-job-forms]');
+    const form = document.querySelector('form[data-job-ask=${JSON.stringify(reopenAsk.askId)}]');
+    const button = form?.querySelector('button[type="submit"]');
+    const status = form?.querySelector('[role="status"]');
+    if (!formsHost || !form || !button || !status) {
+      throw new Error('Missing reopen form elements for visible bounds check');
+    }
+    button.scrollIntoView({ block: 'center', inline: 'nearest' });
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const rectOf = (el) => {
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height };
+    };
+    return {
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      formsHostScrollTop: formsHost.scrollTop,
+      formsHostRect: rectOf(formsHost),
+      formRect: rectOf(form),
+      buttonRect: rectOf(button),
+      statusRect: rectOf(status),
+    };
+  })()`);
+  assert.ok(reopenVisibleBounds.buttonRect.width > 0 && reopenVisibleBounds.buttonRect.height > 0);
+  assert.ok(
+    reopenVisibleBounds.buttonRect.top >= reopenVisibleBounds.formsHostRect.top &&
+      reopenVisibleBounds.buttonRect.bottom <= reopenVisibleBounds.formsHostRect.bottom &&
+      reopenVisibleBounds.buttonRect.top >= 0 &&
+      reopenVisibleBounds.buttonRect.bottom <= reopenVisibleBounds.viewportHeight &&
+      reopenVisibleBounds.buttonRect.left >= 0 &&
+      reopenVisibleBounds.buttonRect.right <= reopenVisibleBounds.viewportWidth,
+    `reopen submit button must be visible inside forms container and viewport: ${JSON.stringify(reopenVisibleBounds)}`,
+  );
+  assert.ok(
+    reopenVisibleBounds.formRect.bottom > reopenVisibleBounds.formsHostRect.top &&
+      reopenVisibleBounds.formRect.top < reopenVisibleBounds.formsHostRect.bottom,
+    `reopen form must intersect visible forms container: ${JSON.stringify(reopenVisibleBounds)}`,
+  );
+  await writeFile(join(output, `record-reopen-${language}.png`), await page.screenshot());
 
   // 3. Authenticated consumer fetch-act and exported parseRecordAct verification
   const nextRes = await callRecordApi({
@@ -687,7 +777,7 @@ try {
   const actEvents = nextRes.value.events.filter(
     (e): e is Extract<JobEventV3, { type: 'act' }> => e.type === 'act',
   );
-  assert.equal(actEvents.length, 3);
+  assert.equal(actEvents.length, 4);
 
   const fetchedActs: Record<string, JobRecordAct> = {};
   for (const event of actEvents) {
@@ -765,12 +855,20 @@ try {
     words: `Signoff approved in ${language}`,
   });
 
+  assert.equal(fetchedActs.reopen?.source.subject, 'plan');
+  assert.deepEqual(fetchedActs.reopen?.value, {
+    stage: 'plan-approved',
+    words: reopenVerbatimWords,
+  });
+
   assert.deepEqual(await jobInputHashes(recordRoot), beforeRecordHashes, 'supplied record project files remain immutable');
   await record('record-acts-verified', {
     planDom,
     planRoutes,
     cpSubmitStatus,
     signoffSubmitStatus,
+    reopenSubmitStatus,
+    reopenVisibleBounds,
     acts: fetchedActs,
     readerPhasesCount: readerPhases.length,
   });

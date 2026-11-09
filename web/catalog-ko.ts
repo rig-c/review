@@ -3352,6 +3352,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.savePartsVerdict": "파츠 판정 저장",
   "job.saved": "사용자 작업을 저장했습니다.",
   "job.signoff": "단계 승인 저장",
+  "job.reopen": "단계 다시 열기",
   "job.time": "검사 시간 (초)",
   "job.title": "실시간 리뷰 작업",
   "job.updated": "{0}에서 {1}(으)로 업데이트되었습니다.",

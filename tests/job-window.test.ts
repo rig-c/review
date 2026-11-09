@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
-import type { DisplayPublicationV3, JobDisplayPublication, JobDisplayReceipt, JobResult, JobModelSourceBinding, JobRigCapture } from '../src/job-contract.ts';
+import { JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobResult, type JobModelSourceBinding, type JobRigCapture, type PendingAskV3, type RecordAct } from '../src/job-contract.ts';
+import { buildRecordSource, parseRecordAct, parseRecordPublishedContext, parseRecordSource, recordInstanceKey } from '../src/job-api.ts';
 import {createJobRigSubmission} from '../web/job-rig-capture.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
 import {t} from '../web/i18n.ts';
@@ -174,8 +175,8 @@ function harness() {
         prepareWith(value: typeof preparation) { preparation = value; },
         acknowledgeWith(value: typeof acknowledgment) { acknowledgment = value; },
         failCleanup() { failCleanup = true; },
-        async publish(index: number, source?: JobDisplayPublication['publication']['source']) {
-            const display = fixturePublication(index);
+        async publish(index: number, source?: DisplayPublicationV3['publication']['source']) {
+            const display: DisplayPublicationV3 = fixturePublication(index);
             if (source)
                 Object.assign(display, { publication: { ...display.publication, source } });
             fixture.publish(display);
@@ -1853,6 +1854,9 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 }
             };
             setupPose(true);
+            const pkgIdentity = 'package' in display.publication.source && display.publication.source.package
+                ? display.publication.source.package
+                : { id: 'record-plan-fixture', revision: String(display.publication.generation) };
             const references = refDefs.map(ref => ({
                 id: ref.id,
                 label: ref.label,
@@ -1864,11 +1868,11 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             return {
                 display,
                 metadata: {
-                    manifest: parseManifest({schema: 'rig-review/1', ...display.publication.source.package,
+                    manifest: parseManifest({schema: 'rig-review/1', ...pkgIdentity,
                         title: 'Rig fixture', model: 'skeleton.model.json'}),
                     sourceHash: display.publication.source.sourceHash,
                     reviewedSource: {
-                        packageRevision: display.publication.source.package.revision,
+                        packageRevision: pkgIdentity.revision,
                         viewerVersion: '2.4.6',
                         runtimeVersion: '1.23.0',
                         rig: {path: 'skeleton.model.json', sha256: 'a'.repeat(64)},
@@ -2007,6 +2011,12 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             emitGlobal(type: string, event: Record<string, unknown> = {}) {
                 for (const listener of [...(globalListeners.get(type) ?? [])]) listener({type, ...event});
             },
+            async publishDisplay<Display extends DisplayPublicationV3>(display: Display): Promise<Display> {
+                fixture.publish(display);
+                mounted.window.event(fixture.events.at(-1)!);
+                await drainPreparing();
+                return display;
+            },
             async publishRig(index: number, overrides?: {
                 optionSet?: {id: string; sha256: string} | null;
                 interview?: JobDisplayPublication['publication']['interview'];
@@ -2027,10 +2037,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                         },
                     },
                 };
-                fixture.publish(display);
-                mounted.window.event(fixture.events.at(-1)!);
-                await drainPreparing();
-                return display;
+                return this.publishDisplay(display);
             },
             async replayPublication(display: JobDisplayPublication) {
                 mounted.window.event({
@@ -2714,6 +2721,158 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             timeInput.value = '1.25';
             timeInput.dispatchEvent({type: 'change'});
             expect(timeInput.value).toBe('1.25');
+        } finally {
+            s.cleanup();
+        }
+    });
+
+    test('#586 runtime reopen form renders declared reopen stage on an independently prepared PlanSource, submits {stage, words} with verbatim words to return reopen act@4, and refuses undeclared or package-only reopen asks', async () => {
+        const s = await mountRuntimeSession();
+        try {
+            // 1. Package-only publication remains completely immutable and refuses a reopen ask with JOB_ASK_INVALID
+            const pkgDisplay = await s.publishRig(1);
+            const immutablePkgSourceSnapshot = structuredClone(pkgDisplay.publication.source);
+            const packageReopenAsk: PendingAskV3 = {
+                askId: 'ask-reopen-package',
+                publicationId: pkgDisplay.publication.publicationId,
+                subject: { kind: 'reopen', stage: 'plan-approved' },
+                source: pkgDisplay.publication.source,
+                status: 'pending',
+            };
+            s.fixture.pending(packageReopenAsk, 2);
+            s.window.event(s.fixture.events.at(-1)!);
+            expect(s.workspace.querySelector('form[data-job-ask="ask-reopen-package"]')).toBeNull();
+            expect(pkgDisplay.publication.source).toEqual(immutablePkgSourceSnapshot);
+
+            // 2. Independently prepare a valid PlanSource (validated via parseRecordPublishedContext + buildRecordSource + parseRecordSource)
+            const recordIdentity = { path: 'project.json' as const, sha256: '1'.repeat(64) };
+            const inputFile = { path: 'inputs/painting.png', sha256: '2'.repeat(64) };
+            const planSelection = { kind: 'plan' as const };
+            const planContext = parseRecordPublishedContext(
+                {
+                    label: 'Plan record — reopen inspection',
+                    parts: {
+                        name: '@rig-c/parts',
+                        version: '2.25.1',
+                        integrity: 'sha512-synthetic-parts-lock-integrity',
+                    },
+                    inputs: [inputFile],
+                    files: [inputFile, recordIdentity],
+                    plan: {
+                        steps: [{ id: 'step_layout', hash: '3'.repeat(64) }],
+                    },
+                    subjects: [
+                        { kind: 'checkpoint', checkpointId: 'step_layout' },
+                        { kind: 'signoff', stage: 'plan-approved' },
+                        { kind: 'reopen', stage: 'plan-approved' },
+                        { kind: 'reopen', stage: 'design-interview' },
+                    ],
+                },
+                planSelection,
+                recordIdentity,
+            );
+            const planSource = parseRecordSource(
+                buildRecordSource({
+                    record: recordIdentity,
+                    selection: planSelection,
+                    context: planContext,
+                }),
+            );
+            if (planSource.subject !== 'plan') {
+                throw new Error('Expected validated PlanSource');
+            }
+            const instanceKey = recordInstanceKey('fp-window-reopen-plan', planSource.sourceHash);
+            const recordPublicationId = 'publication-record-plan-2';
+            const entryRoute = `/jobs/${s.fixture.jobId}/publications/${recordPublicationId}/instances/${instanceKey}/`;
+            const recordDisplay: DisplayPublicationV3 = {
+                publication: {
+                    publicationId: recordPublicationId,
+                    instanceKey,
+                    generation: 3,
+                    source: planSource,
+                    label: planContext.label,
+                    previousPublicationId: pkgDisplay.publication.publicationId,
+                    visual: { status: 'available' },
+                },
+                routes: {
+                    entry: entryRoute,
+                    apiBase: `${entryRoute}api/`,
+                    assetsBase: `${entryRoute}assets/`,
+                },
+            };
+            await s.publishDisplay(recordDisplay);
+            expect(s.window.state().displayed?.publication.publicationId).toBe(recordPublicationId);
+            expect(s.window.state().displayed?.publication.source).toEqual(planSource);
+            expect(pkgDisplay.publication.source).toEqual(immutablePkgSourceSnapshot);
+
+            // 3. Declared reopen stage renders form with job.reopen submit button, submits exact {stage, words}, and receives validated reopen RecordAct (rig-review/act@4)
+            const reopenAsk: PendingAskV3 = {
+                askId: 'ask-reopen-declared',
+                publicationId: recordPublicationId,
+                subject: { kind: 'reopen', stage: 'plan-approved' },
+                source: planSource,
+                status: 'pending',
+            };
+            s.fixture.pending(reopenAsk, 4);
+            s.window.event(s.fixture.events.at(-1)!);
+
+            const form = s.workspace.querySelector('form[data-job-ask="ask-reopen-declared"]')!;
+            expect(form).not.toBeNull();
+            const submitButton = form.querySelector('button[type="submit"]')!;
+            expect(submitButton.dataset.jobText).toBe('job.reopen');
+            expect(submitButton.textContent).toBe(t('job.reopen'));
+
+            const verbatimWords = '  reopen stage with verbatim spaces\n';
+            const noteInput = form.querySelector('textarea[name="note"]')!;
+            noteInput.value = verbatimWords;
+            form.dispatchEvent({ type: 'input' });
+
+            const expectedReopenAct: RecordAct = parseRecordAct({
+                schema: JOB_RECORD_ACT_SCHEMA,
+                actId: 'act-reopen-declared-1',
+                jobId: s.fixture.jobId,
+                askId: reopenAsk.askId,
+                publicationId: recordPublicationId,
+                kind: 'reopen',
+                authority: {
+                    actor: 'human',
+                    channel: 'review-ui',
+                    reviewer: { id: 'declared-owner', role: 'owner' },
+                },
+                at: '2026-11-09T10:00:00.000Z',
+                source: planSource,
+                value: {
+                    stage: 'plan-approved',
+                    words: verbatimWords,
+                },
+            });
+            s.fixture.returnAct(expectedReopenAct);
+            await form.onsubmit?.({ preventDefault() {} });
+            expect(s.outgoingSubmits).toHaveLength(1);
+            expect(s.outgoingSubmits[0]!.body).toMatchObject({
+                publicationId: recordPublicationId,
+                askId: 'ask-reopen-declared',
+                kind: 'reopen',
+                value: {
+                    stage: 'plan-approved',
+                    words: verbatimWords,
+                },
+            });
+            expect(s.outgoingSubmits[0]!.body).not.toHaveProperty('capture');
+            const statusNode = form.querySelector('[role="status"]')!;
+            expect(statusNode.dataset.jobText).toBe('job.saved');
+
+            // 4. Undeclared reopen stage on the same PlanSource refuses with JOB_ASK_INVALID and does not mount a form
+            const undeclaredAsk: PendingAskV3 = {
+                askId: 'ask-reopen-undeclared',
+                publicationId: recordPublicationId,
+                subject: { kind: 'reopen', stage: 'post-interview' },
+                source: planSource,
+                status: 'pending',
+            };
+            s.fixture.pending(undeclaredAsk, 5);
+            s.window.event(s.fixture.events.at(-1)!);
+            expect(s.workspace.querySelector('form[data-job-ask="ask-reopen-undeclared"]')).toBeNull();
         } finally {
             s.cleanup();
         }

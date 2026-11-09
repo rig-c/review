@@ -12,6 +12,7 @@ import type {
     PublicationV3,
     RecordSource,
     SourceV3,
+    UISubmissionV3,
 } from '../src/job-contract.ts';
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
@@ -39,7 +40,7 @@ export interface JobWindowTransport {
         pageId: string;
         sourceHash: string;
     }, signal: AbortSignal): Promise<JobResult<JobDisplayReceipt>>;
-    submit(input: JobUISubmission): Promise<JobResult<ActV3>>;
+    submit(input: UISubmissionV3): Promise<JobResult<ActV3>>;
 }
 export interface JobPreparedCommit {
     /** Restore the previous view, including its original forms and route bindings. */
@@ -127,7 +128,7 @@ export function jobCheckpointContext(
 ) {
     if (ask.subject.kind !== 'checkpoint') throw new Error('JOB_ASK_INVALID');
     const checkpointId = ask.subject.checkpointId;
-    const planStepId = ask.subject.planStepId ?? checkpointId;
+    const planStepId = ('planStepId' in ask.subject ? ask.subject.planStepId : undefined) ?? checkpointId;
     const step = ask.source.plan?.steps.find(item => item.id === planStepId);
     if (!step) throw new Error('JOB_ASK_INVALID');
     const checkpoint = checkpoints.find(item => item.id === checkpointId);
@@ -153,7 +154,7 @@ export function createJobWindow<Prepared>(options: {
 }) {
     const { transport, adapter, pageId } = options;
     const pending = new Map<string, PendingAskV3>();
-    const rigAttempts = new WeakSet<JobUISubmission>();
+    const rigAttempts = new WeakSet<UISubmissionV3>();
     const retainedDrafts: JobRetainedDraft[] = [];
     let initialDrafts: readonly JobRetainedDraft[] | null = options.initialRetainedDrafts
         ? [...options.initialRetainedDrafts] : null;
@@ -162,7 +163,8 @@ export function createJobWindow<Prepared>(options: {
     let receipt: JobDisplayReceipt | null = null;
     let preparing = false;
     let closed = false;
-    let error: string | null = null;
+    let error: string | null;
+    error = null;
     let previousLabel: string | null = null;
     let intent = 0;
     let stopped = false;
@@ -311,7 +313,7 @@ export function createJobWindow<Prepared>(options: {
         }
         changed();
     }
-    async function submit(input: JobUISubmission): Promise<JobResult<ActV3>> {
+    async function submit(input: UISubmissionV3): Promise<JobResult<ActV3>> {
         if (closed)
             return { ok: false, error: { code: 'JOB_CLOSED', message: 'JOB_CLOSED' } };
         const ask = pending.get(input.askId);
@@ -1204,7 +1206,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     type JobForm = {
         form: HTMLFormElement;
         fieldset: HTMLFieldSetElement;
-        read: () => JobUISubmission['value'];
+        read: () => UISubmissionV3['value'];
         submissionId: string;
         dirty: boolean;
         submitting: boolean;
@@ -1560,7 +1562,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         source.textContent = prepared.display.publication.label + ' · ' + ask.source.sourceHash;
         fields.append(source);
         const note = textArea(fields, 'interview.note');
-        let read: () => JobUISubmission['value'];
+        let read: () => UISubmissionV3['value'];
         let submitKey = 'Submit review';
         const subject = ask.subject;
         if (subject.kind === 'interview-picks') {
@@ -1713,6 +1715,22 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             read = () => ({ stage: subject.stage, decision: 'approved', words: note.value });
             submitKey = 'job.signoff';
         }
+        else if (subject.kind === 'reopen') {
+            if (
+                !('record' in ask.source) ||
+                ask.source.subject !== 'plan' ||
+                typeof subject.stage !== 'string' ||
+                !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(subject.stage) ||
+                !ask.source.subjects.some(candidate => candidate.kind === 'reopen' && candidate.stage === subject.stage)
+            ) {
+                throw new Error('JOB_ASK_INVALID');
+            }
+            const stage = node('p');
+            stage.textContent = subject.stage;
+            fields.append(stage);
+            read = () => ({ stage: subject.stage, words: note.value });
+            submitKey = 'job.reopen';
+        }
         else {
             throw new Error('JOB_ACT_KIND_DISABLED');
         }
@@ -1756,11 +1774,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             try {
                 const input = { kind: subject.kind, publicationId: ask.publicationId,
                     askId: ask.askId, pageId, displayedNonce: receipt.displayedNonce,
-                    expectedGeneration: state.generation, submissionId: entry.submissionId, value: read() } as JobUISubmission;
+                    expectedGeneration: state.generation, submissionId: entry.submissionId, value: read() } as UISubmissionV3;
                 const activeAsk = state.pending.find(item => item.askId === ask.askId);
                 if (!activeAsk) throw new Error('JOB_ASK_INVALID');
                 const pending = subject.kind === 'review-verdict' && subject.stage === 'rig-review'
-                    ? entry.rigSubmission.prepare(input, () => copyRigVerdict(activeAsk, prepared)) : Promise.resolve(input);
+                    ? entry.rigSubmission.prepare(input as JobUISubmission, () => copyRigVerdict(activeAsk, prepared)) : Promise.resolve(input);
                 entry.submitting = true;
                 fields.disabled = true;
                 const frozen = await pending;

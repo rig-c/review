@@ -600,7 +600,7 @@ export class JobSession {
   }
 
   async commitUIAct(raw: unknown): Promise<ActV3> {
-    const input = parseUISubmission(raw), digest = requestDigest(input), key = `ui:${input.pageId}:${input.submissionId}`;
+    const input = parseUISubmission(raw, this.publicationMode), digest = requestDigest(input), key = `ui:${input.pageId}:${input.submissionId}`;
     const current = this.current();
     const previous = this.replay(current.data, key, digest);
     if (previous) return previous.value as ActV3;

@@ -686,6 +686,7 @@ without aliases or copied wire shapes.
 - `JobApiResponse`
 - `JobApiResponseV3`
 - `JobUISubmission`
+- `JobUISubmissionV3`
 - `JobDisplayAcknowledgment`
 - `JobDisplayReceipt`
 - `JobDisplayPublication`
@@ -701,10 +702,12 @@ without aliases or copied wire shapes.
 - `JobRecordPlanResult`
 - `JobRecordResult`
 - `JobRecordPartsIdentity`
+- `JobRecordActKind`
 - `JobRecordSignoffStage`
 - `JobRecordPicksSubject`
 - `JobRecordCheckpointSubject`
 - `JobRecordSignoffSubject`
+- `JobRecordReopenSubject`
 - `JobRecordPlanSubject`
 - `JobRecordSubject`
 - `JobRecordContextBase`
@@ -719,6 +722,9 @@ without aliases or copied wire shapes.
 - `JobRecordSource`
 - `JobSourceV3`
 - `JobRecordSignoffValue`
+- `JobRecordReopenValue`
+- `JobRecordUIActValues`
+- `JobRecordUISubmission`
 - `JobRetainedRecordSource`
 - `JobRetainedSource`
 - `JobRetainedSourceV3`

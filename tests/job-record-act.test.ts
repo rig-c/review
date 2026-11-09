@@ -3,23 +3,27 @@ import { mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  JOB_API_V3_SCHEMA,
   JOB_RECORD_ACT_SCHEMA,
   type JobReviewerBinding,
   type JobUISubmission,
   type PendingAskV3,
   type RecordSubject,
+  type RecordUISubmission,
 } from '../src/job-contract.ts';
 import { parseRecordAct } from '../src/job-api.ts';
 import {
   bindJobAsk,
   bindJobRecordAsk,
   finalizeJobAct,
+  parseUISubmission,
   prepareJobRecordAct,
 } from '../src/job-act.ts';
 import {
   assertRetainedSnapshotIntact,
   captureJobRoot,
   prepareJobRecordSource,
+  verifyJobRecordSourceFresh,
 } from '../src/job-source.ts';
 import {
   createSyntheticOptionRecordWorkspace,
@@ -605,5 +609,192 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
         reviewer: validReviewer,
       }),
     ).toThrow(expect.objectContaining({ code: 'JOB_ACT_SOURCE_STALE' }));
+  });
+
+  test('#586 binds declared reopen subjects and prepares rig-review/act@4 with verbatim words and negative controls', async () => {
+    const workspaceRoot = makeTempDir('rig-review-rec-reopen-ws-');
+    const stateRoot = makeTempDir('rig-review-rec-reopen-state-');
+    const ws = createSyntheticPlanRecordWorkspace(workspaceRoot, {
+      subjects: [
+        { kind: 'checkpoint', checkpointId: 'step_layout' },
+        { kind: 'signoff', stage: 'plan-approved' },
+        { kind: 'reopen', stage: 'plan-approved' },
+        { kind: 'reopen', stage: 'design-interview' },
+      ],
+    });
+    const optWsRoot = makeTempDir('rig-review-rec-reopen-opt-ws-');
+    const optWs = createSyntheticOptionRecordWorkspace(optWsRoot);
+    const { reader } = createSyntheticRecordReader({
+      onOption: () => structuredClone(optWs.context),
+      onPlan: () => structuredClone(ws.context),
+    });
+    const retained = await prepareJobRecordSource({
+      root: captureJobRoot(workspaceRoot),
+      stateRoot,
+      fingerprint: 'fp-reopen-plan',
+      request: {
+        freeze: { kind: 'producer-held', holdId: 'hold_reopen_plan', record: ws.record },
+        result: ws.result,
+      },
+      readRecordPublished: reader,
+    });
+
+    const reopenSubject: RecordSubject = {
+      kind: 'reopen',
+      stage: 'plan-approved',
+    };
+    const bound = bindJobRecordAsk(reopenSubject, retained);
+    expect(bound).toEqual(retained.source);
+    expect(bindJobAsk(reopenSubject, retained)).toEqual(retained.source);
+    if (retained.source.subject !== 'plan') {
+      throw new Error('Expected plan record source');
+    }
+
+    // Undeclared reopen stage refuses with JOB_ASK_INVALID
+    expect(() =>
+      bindJobRecordAsk({ kind: 'reopen', stage: 'post-interview' }, retained),
+    ).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
+
+    // Option-set retained source refuses reopen subject
+    const optRetained = await prepareJobRecordSource({
+      root: captureJobRoot(optWsRoot),
+      stateRoot,
+      fingerprint: 'fp-reopen-opt',
+      request: {
+        freeze: { kind: 'producer-held', holdId: 'hold_reopen_opt', record: optWs.record },
+        result: optWs.result,
+      },
+      readRecordPublished: reader,
+    });
+    expect(() =>
+      bindJobRecordAsk(reopenSubject, optRetained),
+    ).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
+
+    // parseUISubmission refuses reopen in package-only mode and accepts it in record-and-package / API@3 mode
+    const rawReopenSubmission: RecordUISubmission = {
+      publicationId: 'pub_plan_reopen',
+      askId: 'ask_reopen_1',
+      pageId: 'page_1',
+      displayedNonce: 'nonce_1',
+      expectedGeneration: 2,
+      submissionId: 'sub_reopen_1',
+      kind: 'reopen',
+      value: {
+        stage: 'plan-approved',
+        words: '  reopen note with surrounding spaces\n',
+      },
+    };
+    expect(() => parseUISubmission(rawReopenSubmission)).toThrow(
+      expect.objectContaining({ code: 'JOB_ACT_INVALID' }),
+    );
+    expect(parseUISubmission(rawReopenSubmission, JOB_API_V3_SCHEMA)).toEqual(rawReopenSubmission);
+    expect(parseUISubmission(rawReopenSubmission, 'record-and-package')).toEqual(rawReopenSubmission);
+    expect(() =>
+      parseUISubmission(
+        { ...rawReopenSubmission, capture: { png: 'data:image/png;base64,AA==' } },
+        JOB_API_V3_SCHEMA,
+      ),
+    ).toThrow(expect.objectContaining({ code: 'JOB_REQUEST_INVALID' }));
+
+    const ask = buildPendingRecordAsk(
+      'pub_plan_reopen',
+      'ask_reopen_1',
+      reopenSubject,
+      bound,
+    );
+    const validReviewer: JobReviewerBinding = { id: 'rev_1', role: 'owner' };
+
+    // Preserves empty string, whitespace-only, and non-empty words verbatim
+    for (const verbatimWords of ['', '  \n\t  ', '  reopen note with surrounding spaces\n']) {
+      const submission: RecordUISubmission = {
+        ...rawReopenSubmission,
+        value: {
+          stage: 'plan-approved',
+          words: verbatimWords,
+        },
+      };
+      const act = finalizeJobAct({
+        jobId: 'job_1',
+        submission,
+        ask,
+        retained,
+        reviewer: { id: 'rev_delegate', role: 'delegate' },
+        actId: 'act_reopen_1',
+        at: '2026-11-09T09:30:00.000Z',
+      });
+      expect(act).toEqual({
+        schema: JOB_RECORD_ACT_SCHEMA,
+        actId: 'act_reopen_1',
+        jobId: 'job_1',
+        askId: 'ask_reopen_1',
+        publicationId: 'pub_plan_reopen',
+        kind: 'reopen',
+        authority: {
+          actor: 'human',
+          channel: 'review-ui',
+          reviewer: { id: 'rev_delegate', role: 'delegate' },
+        },
+        at: '2026-11-09T09:30:00.000Z',
+        source: retained.source,
+        value: {
+          stage: 'plan-approved',
+          words: verbatimWords,
+        },
+      });
+      expect(parseRecordAct(act)).toEqual(act);
+    }
+
+    // Rejects mismatched stage, extra keys, or words > 10_000
+    for (const invalidValue of [
+      { stage: 'design-interview', words: 'wrong stage' },
+      { stage: 'plan-approved', decision: 'reopened', words: 'extra key' },
+      { stage: 'plan-approved', words: 'x'.repeat(10_001) },
+    ]) {
+      expect(() =>
+        prepareJobRecordAct({
+          jobId: 'job_1',
+          submission: {
+            ...rawReopenSubmission,
+            value: invalidValue,
+          } as unknown as RecordUISubmission,
+          ask,
+          retained,
+          reviewer: validReviewer,
+        }),
+      ).toThrow(expect.objectContaining({ code: 'JOB_ACT_INVALID' }));
+    }
+
+    // Freshness verification succeeds before record movement and refuses after live project.json changes while snapshot stays intact
+    const freshBeforeMove = await verifyJobRecordSourceFresh({
+      retained,
+      readRecordPublished: reader,
+      phase: 'finalize',
+      subject: reopenSubject,
+    });
+    expect(freshBeforeMove).toEqual(retained.source);
+
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      join(workspaceRoot, 'project.json'),
+      `${JSON.stringify({ schema: 'rig-create/project@1', mutated: true }, null, 2)}\n`,
+      'utf8',
+    );
+    await expect(
+      verifyJobRecordSourceFresh({
+        retained,
+        readRecordPublished: reader,
+        phase: 'ask',
+        subject: reopenSubject,
+      }),
+    ).rejects.toThrow(expect.objectContaining({ code: 'JOB_RECORD_MOVED' }));
+    await expect(
+      verifyJobRecordSourceFresh({
+        retained,
+        readRecordPublished: reader,
+        phase: 'finalize',
+        subject: reopenSubject,
+      }),
+    ).rejects.toThrow(expect.objectContaining({ code: 'JOB_RECORD_MOVED' }));
+    assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals, retained.snapshotIdentity);
   });
 });

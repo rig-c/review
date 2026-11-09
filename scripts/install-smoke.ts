@@ -74,6 +74,7 @@ import {
  type JobApiResponse, type JobUISubmission, type JobDisplayAcknowledgment, type JobDisplayReceipt,
  type JobDisplayPublication, type JobHostPorts, type JobConsumerGrant,
  type JobRecordAct, type JobActV3, type JobPlanSource, type JobFetchActRequestV3, type JobRecordHostHooks,
+ type JobRecordReopenSubject, type JobRecordReopenValue, type JobUISubmissionV3,
 } from '@rig-c/review/job-host';
 import * as publicHost from '@rig-c/review/job-host';
 
@@ -94,6 +95,7 @@ export type PublicTypes = [
  JobUISubmission, JobDisplayAcknowledgment, JobDisplayReceipt, JobDisplayPublication,
  JobHostPorts, JobConsumerGrant,
  JobRecordAct, JobActV3, JobPlanSource, JobFetchActRequestV3, JobRecordHostHooks,
+ JobRecordReopenSubject, JobRecordReopenValue, JobUISubmissionV3,
 ];
 function assert(ok: unknown, name: string): asserts ok {
  if (!ok) throw new Error('SMOKE_PUBLIC_HOST_' + name);

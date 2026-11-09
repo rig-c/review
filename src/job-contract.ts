@@ -39,8 +39,16 @@ export const JOB_ENABLED_ACT_KINDS = [
   'signoff',
 ] as const;
 
+export const JOB_RECORD_ACT_KINDS = [
+  'interview-picks',
+  'checkpoint',
+  'signoff',
+  'reopen',
+] as const;
+
 export const JOB_RESERVED_ACT_KINDS = ['described-correction', 'mesh-edit'] as const;
 export type JobEnabledActKind = typeof JOB_ENABLED_ACT_KINDS[number];
+export type RecordActKind = typeof JOB_RECORD_ACT_KINDS[number];
 export type JobReservedActKind = typeof JOB_RESERVED_ACT_KINDS[number];
 export type JobActKind = JobEnabledActKind | JobReservedActKind;
 
@@ -637,12 +645,6 @@ export interface JobDisplayPublication {
   };
 }
 
-export interface DisplayPublicationV3 {
-  readonly publication: PublicationV3;
-  /** Same-origin routes pinned to this publication and instance. No current alias. */
-  readonly routes: JobDisplayPublication['routes'];
-}
-
 /** Trusted host ports for Lane B. Raw Requests preserve real Origin, capability,
  * size and abort context. A TypeScript value is never authentication evidence.
  * handleJobApi accepts agent verbs and consumer fetch only. The host wires UI
@@ -738,8 +740,9 @@ export type PublishRequestV3 = Omit<JobPublishRequest, 'schema' | 'result' | 'fr
   }
 );
 
-export type AskRequestV3 = Omit<JobAskRequest, 'schema'> & {
+export type AskRequestV3 = Omit<JobAskRequest, 'schema' | 'subject'> & {
   readonly schema: typeof JOB_API_V3_SCHEMA;
+  readonly subject: JobSubject | RecordSubject;
 };
 
 export type NextRequestV3 = Omit<JobNextRequest, 'schema'> & {
@@ -778,7 +781,12 @@ export interface RecordSignoffSubject {
   readonly stage: RecordSignoffStage;
 }
 
-export type RecordPlanSubject = RecordCheckpointSubject | RecordSignoffSubject;
+export interface RecordReopenSubject {
+  readonly kind: 'reopen';
+  readonly stage: JobId;
+}
+
+export type RecordPlanSubject = RecordCheckpointSubject | RecordSignoffSubject | RecordReopenSubject;
 export type RecordSubject = RecordPicksSubject | RecordPlanSubject;
 
 export interface RecordPartsIdentity {
@@ -869,6 +877,34 @@ export type RecordSignoffValue = Omit<JobActValues['signoff'], 'stage'> & {
   readonly stage: RecordSignoffStage;
 };
 
+export interface RecordReopenValue {
+  readonly stage: JobId;
+  readonly words: string;
+}
+
+export interface RecordUIActValues {
+  readonly 'interview-picks': JobUIActValues['interview-picks'];
+  readonly checkpoint: JobUIActValues['checkpoint'];
+  readonly signoff: JobUIActValues['signoff'];
+  readonly reopen: RecordReopenValue;
+}
+
+export type RecordUISubmission = {
+  [Kind in keyof RecordUIActValues]: {
+    readonly publicationId: JobPublicationId;
+    readonly askId: JobAskId;
+    readonly pageId: string;
+    readonly displayedNonce: string;
+    readonly expectedGeneration: number;
+    readonly submissionId: string;
+    readonly kind: Kind;
+    readonly value: RecordUIActValues[Kind];
+    readonly capture?: never;
+  };
+}[keyof RecordUIActValues];
+
+export type UISubmissionV3 = JobUISubmission | RecordUISubmission;
+
 export type RecordAct = Pick<JobLegacyAct,
   'actId' | 'jobId' | 'askId' | 'publicationId' | 'authority' | 'at'> & {
   readonly schema: typeof JOB_RECORD_ACT_SCHEMA;
@@ -888,6 +924,11 @@ export type RecordAct = Pick<JobLegacyAct,
     readonly source: PlanSource;
     readonly value: RecordSignoffValue;
   }
+  | {
+    readonly kind: 'reopen';
+    readonly source: PlanSource;
+    readonly value: RecordReopenValue;
+  }
 );
 
 export type SourceV3 = JobSourceBinding | RecordSource;
@@ -904,12 +945,17 @@ export const JOB_CAPABILITIES_V3: JobCapabilitiesV3 = Object.freeze({
   recordActSchema: JOB_RECORD_ACT_SCHEMA,
 });
 
-export interface PendingAskV3 extends Omit<JobPendingAsk, 'source'> {
+export interface PendingAskV3 extends Omit<JobPendingAsk, 'subject' | 'source'> {
+  readonly subject: JobSubject | RecordSubject;
   readonly source: SourceV3;
 }
 
 export interface PublicationV3 extends Omit<JobPublication, 'source'> {
   readonly source: SourceV3;
+}
+
+export interface DisplayPublicationV3 extends Omit<JobDisplayPublication, 'publication'> {
+  readonly publication: PublicationV3;
 }
 
 export interface StatusV3 extends Omit<JobStatus, 'publication' | 'pending'> {
@@ -969,8 +1015,10 @@ export type JobRecordPicksSubject = RecordPicksSubject;
 export type JobRecordCheckpointSubject = RecordCheckpointSubject;
 export type JobRecordSignoffStage = RecordSignoffStage;
 export type JobRecordSignoffSubject = RecordSignoffSubject;
+export type JobRecordReopenSubject = RecordReopenSubject;
 export type JobRecordPlanSubject = RecordPlanSubject;
 export type JobRecordSubject = RecordSubject;
+export type JobRecordActKind = RecordActKind;
 export type JobRecordPartsIdentity = RecordPartsIdentity;
 export type JobRecordContextBase = RecordContextBase;
 export type JobOptionContext = OptionContext;
@@ -984,6 +1032,10 @@ export type JobOptionSource = OptionSource;
 export type JobPlanSource = PlanSource;
 export type JobRecordSource = RecordSource;
 export type JobRecordSignoffValue = RecordSignoffValue;
+export type JobRecordReopenValue = RecordReopenValue;
+export type JobRecordUIActValues = RecordUIActValues;
+export type JobRecordUISubmission = RecordUISubmission;
+export type JobUISubmissionV3 = UISubmissionV3;
 export type JobRecordAct = RecordAct;
 export type JobSourceV3 = SourceV3;
 export type JobActV3 = ActV3;
