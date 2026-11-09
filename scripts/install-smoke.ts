@@ -105,7 +105,7 @@ const expectedExports = ['assertJobImageSetCapability', 'JOB_CAPABILITIES', 'sta
  'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES', 'parseRecordAct', 'prepareJobRecordAct', 'prepareJobRecordSource'];
 assert(JSON.stringify(Object.keys(publicHost).sort()) === JSON.stringify(expectedExports.sort()), 'EXPORTS');
 assert(JOB_API_SCHEMA === 'rig-review/job-api@2' && JOB_ACT_SCHEMA === 'rig-review/act@2' &&
- JOB_PARTS_ENUMERATOR_RANGE === '>=2.25.0 <3.0.0', 'SCHEMAS');
+ JOB_PARTS_ENUMERATOR_RANGE === '>=2.25.0 <4.0.0', 'SCHEMAS');
 assert(JOB_ENABLED_ACT_KINDS.length === 5 && JOB_RESERVED_ACT_KINDS.length === 2 &&
  JOB_PLAN_BOUND_SIGNOFF_STAGES.length === 3 && JOB_CONSUMER_AUTH_MODE === 'writer-owned-sibling-fetch-capability' &&
  JOB_ERROR_CODES.includes('JOB_CLOSED'), 'CONTRACT');

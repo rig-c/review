@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.7.0
+
+**Explicit `@rig-c/play` source resolution in workspace builds and launches** (#610). Workspace bundling and launch paths resolve `@rig-c/play` through its explicit `@rig-c/source` export condition when building and starting the review server and web entrypoints.
+
+Job source retention accepts the supported Parts 3.x enumerator and still refuses versions below 2.25.0 or at/above 4.0.0.
+
+**Manual version-tag release workflow** (#608). `.github/workflows/release.yml` now triggers on deliberate `vX.Y.Z` tag pushes and explicit tag dispatches (`gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`) instead of `release-please`, requiring a strict `vX.Y.Z` tag ref (`RELEASE_TAG_FORM`, `RELEASE_REF_NOT_TAG`), resolving the tag to a 40-character commit SHA (`RELEASE_TAG_UNRESOLVED`), verifying `GITHUB_SHA` and fetched tag commit equality (`PROVENANCE_SHA_MISMATCH`), `origin/main` reachability (`RELEASE_TAG_NOT_ON_MAIN`), `@rig-c/review@X.Y.Z` in the tagged `package.json` (`RELEASE_TAG_VERSION_MISMATCH`), and npm non-existence (`RELEASE_ALREADY_PUBLISHED`) without relying on a pre-existing GitHub Release, then publishing `@rig-c/review` and the `rig-review` alias tarball and confirming `rig-review@<version>` from an empty-project install.
+
+**Contributor and agent guidance** (#603). Repository agent instructions explicitly forbid re-implementing an existing module.
+
+### Bug Fixes
+
+* **workspace:** bundle and launch explicitly resolved play source (#610) (dfbb88f)
+
 ## [2.8.0](https://github.com/rig-c/review/compare/v2.7.1...v2.8.0) (2026-11-09)
 
 
