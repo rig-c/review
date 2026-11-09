@@ -265,6 +265,9 @@ export function assertPartsCommentBinding(
     fail('PARTS_CAMERA_RANGE', 'native zoom below fit/1 minimum');
   }
   const r = c.imageRegion;
+  if (r.width * r.height > 16777216) {
+    fail('PARTS_COMMENT_CROP_LIMIT', 'native crop exceeds 16 million pixels');
+  }
   if (r.x < 0 || r.y < 0 || r.x + r.width > item.w || r.y + r.height > item.h) {
     fail('PARTS_COMMENT_OUT_OF_BOUNDS', 'region exceeds original image');
   }

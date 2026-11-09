@@ -57,7 +57,12 @@ test('parts closed codec refuses empty, fractional, OOB, stale, tampered viewpor
  await expect(preparePartsComment(pkg,{...c,rigRegion:{...c.rigRegion,x:Math.round(c.rigRegion.x)}})).rejects.toThrow('PARTS_COMMENT_RIG_REGION');
  await expect(preparePartsComment(pkg,{...c,crop:{...c.crop,sha256:'0'.repeat(64),path:'comment-crops/'+ '0'.repeat(64)+'.png'}})).rejects.toThrow('COMMENT_CROP_INVALID');
  const ready=await preparePartsComment(pkg,c),altered=PNG.sync.read(await readFile(resolvedCropPath(ready.nativeCrop!.path)));altered.data[0]^=1;const png=PNG.sync.write(altered),sha256=createHash('sha256').update(png).digest('hex'),nativeCrop={...ready.nativeCrop!,sha256,path:`comment-crops/${sha256}.png`};await storePngCrop({...nativeCrop,png:'data:image/png;base64,'+png.toString('base64')});await expect(preparePartsComment(pkg,{...ready,nativeCrop},true)).rejects.toThrow('PARTS_COMMENT_NATIVE_CROP_TAMPERED');
- await writeFile(pkg.imagePaths[0]!,Buffer.from('changed'));await expect(preparePartsComment(pkg,c)).rejects.toThrow('PARTS_COMMENT_STALE_SOURCE');
+ const hugePkg={...pkg,items:pkg.items.map((it,i)=>i===0?{...it,w:5000,h:5000}:it)};
+ await expect(preparePartsComment(hugePkg,{...c,imageRegion:{x:0,y:0,width:4097,height:4097},rigRegion:{x:c.rigRegion.x-c.imageRegion!.x,y:c.rigRegion.y-c.imageRegion!.y,width:4097,height:4097}})).rejects.toThrow('PARTS_COMMENT_CROP_LIMIT');
+ const origFront=await readFile(pkg.imagePaths[2]!);await writeFile(pkg.imagePaths[2]!,Buffer.from('changed-unreferenced'));await expect(preparePartsComment(pkg,c)).rejects.toThrow('PARTS_VIEW_SOURCE_CHANGED');await writeFile(pkg.imagePaths[2]!,origFront);
+ const changedPng=PNG.sync.write(new PNG({width:pkg.items[0]!.w,height:pkg.items[0]!.h})),forgedHash=createHash('sha256').update(changedPng).digest('hex');await writeFile(pkg.imagePaths[0]!,changedPng);
+ await expect(preparePartsComment(pkg,{...c,parts:[{name:'back_defect',imageHash:forgedHash}]})).rejects.toThrow('PARTS_COMMENT_STALE_SOURCE');
+ await expect(preparePartsComment(pkg,c)).rejects.toThrow('PARTS_COMMENT_STALE_SOURCE');
  }finally{await rm(root,{recursive:true,force:true});}
 });
 test('drag snapping is integer only; preserves fractional placement by later exact addition',()=>{expect(snapImageRegion({x:2.2,y:3.9,width:4.1,height:5.2})).toEqual({x:2,y:3,width:5,height:7});});
