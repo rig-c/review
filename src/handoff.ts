@@ -23,8 +23,11 @@
  * folder no symlink at all — and when present it is the record's `source` like a declared one.
  */
 import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
+import { findPackage, MODELING_PRODUCER_NOT_INSTALLED, PRODUCER_PACKAGE } from './producer.ts';
 
 export const HANDOFF_SCHEMA = 'rig-review-handoff/1';
 /** The fixed discovery order, as the refusal names it. */
@@ -37,6 +40,12 @@ export const BUILD_MODELING_INPUT_UNAVAILABLE = `MODELING_INPUT_UNAVAILABLE: con
 /** Files the producer reads by the config's own naming, resolved against the config's directory (rig-parts `relativeConfigPaths`). */
 export const CONFIG_NAMED_FILES = [['requirements'], ['motion', 'animations_from'], ['generation', 'control', 'skeleton']] as const;
 export const CONFIG_SKELETON_NAMES = ['stand_sides', 'stand_clasp'] as const;
+/**
+ * #591 (create#326, 93b361f8bfec0ec7e20318d9c8e643eef5d7a674): the file a directory reference binds.
+ * A See-through occluder plate directory (`comfy plate --mode occluder`) is bound by its producer's receipt;
+ * review never hashes or generates plate sibling files.
+ */
+export const DIRECTORY_INPUT_RECEIPT = 'receipt.json';
 /** What `rig-parts rig` writes into its --out and remesh reads from --rig: the rig spec, its motion, the mesh report and the part images. */
 export const RIG_FILES = ['rig.json', 'motion.json', 'mesh_report.json'] as const;
 const MAX_LISTED = 4096;
@@ -46,7 +55,9 @@ export const DISCOVERED_PAINTING = 'painting.png';
 export interface HandoffDeclaration { config: string; parts?: string; source?: string; full?: string; head?: string; keypoints?: string }
 export type HandoffFlags = HandoffDeclaration;
 export const HANDOFF_FLAGS = ['config', 'parts', 'source', 'full', 'head', 'keypoints'] as const;
-export interface HandoffFile { path: string; sha256: string }
+export interface HandoffFile { path: string; sha256: string; directory?: string; spec?: string }
+export type ConfigReferenceKind = 'requirements' | 'file' | 'plate';
+export interface ConfigReference { at: string; value: string; set: (value: string) => void; kind: ConfigReferenceKind }
 /** The identity record: paths relative to the package root (`../` only for the discovered parent config), every hashed file. */
 export interface HandoffRecord {
   schema: typeof HANDOFF_SCHEMA;
@@ -64,10 +75,147 @@ export interface HandoffRecord {
 /** `source` (#109): the declared source painting's absolute path, which `propose --from-config` reads; null when none was declared. */
 /** `full` / `head` (#115): the declared See-through runs' absolute paths, which `rig-parts build` reads; null when none was declared. */
 /** `keypoints` (#111): the declared keypoint file's absolute path, which a cloth recipe Apply's `propose --keypoints` reads; null when none was declared. */
-export interface Handoff { record: HandoffRecord; config: string; parts: string | null; rig: string | null; root: string; flags?: HandoffFlags; source?: string | null; full?: string | null; head?: string | null; keypoints?: string | null }
+export interface Handoff { record: HandoffRecord; config: string; parts: string | null; rig: string | null; root: string; flags?: HandoffFlags; source?: string | null; full?: string | null; head?: string | null; keypoints?: string | null; starts?: readonly string[] }
+export interface ResolveHandoffOptions { starts?: readonly string[] }
 
 export class HandoffError extends Error {
   constructor(readonly code: string, readonly field: string, readonly detail: string) { super(`${code} ${field}: ${detail}`); }
+}
+const load = createRequire(import.meta.url);
+const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+function expandStarts(starts: readonly string[]): string[] {
+  const roots: string[] = [];
+  for (const start of starts) {
+    if (!start) continue;
+    const resolved = resolve(start);
+    if (!roots.includes(resolved)) roots.push(resolved);
+    try {
+      const real = realpathSync(resolved);
+      if (!roots.includes(real)) roots.push(real);
+    } catch { /* non-existent start path */ }
+  }
+  return roots;
+}
+
+/** Resolve the nearest installed `@rig-c/parts` package directory using `findPackage` from `src/producer.ts`. */
+export function findInstalledParts(starts: readonly string[] = [process.cwd()]): string | null {
+  const manifest = findPackage(PRODUCER_PACKAGE, expandStarts(starts));
+  if (!manifest) return null;
+  try { return realpathSync(dirname(manifest)); } catch { return dirname(manifest); }
+}
+
+/** Resolve the nearest installed `@rig-c/parts` package directory, or refuse by name when absent. */
+export function locateInstalledParts(starts: readonly string[] = [process.cwd()]): string {
+  const found = findInstalledParts(starts);
+  if (!found) throw new HandoffError('HANDOFF_INPUT_INVALID', 'config', MODELING_PRODUCER_NOT_INSTALLED);
+  return found;
+}
+
+export function classifyConfigReference(at: string): ConfigReferenceKind | null {
+  if (at === 'requirements') return 'requirements';
+  if (at === 'motion.animations_from' || at === 'generation.control.skeleton' || /^assemble\.occluders\[\d+\]\.image$/.test(at)) return 'file';
+  if (/^assemble\.occluders\[\d+\]\.plate$/.test(at)) return 'plate';
+  return null;
+}
+
+function undeclaredOccluderReference(raw: unknown, declaredAt: ReadonlySet<string>): string | null {
+  const assemble = isPlainObject(raw) ? raw.assemble : undefined;
+  const occluders = isPlainObject(assemble) && Array.isArray(assemble.occluders) ? assemble.occluders : [];
+  for (let i = 0; i < occluders.length; i++) {
+    const entry = occluders[i];
+    if (!isPlainObject(entry)) continue;
+    if (typeof entry.image === 'string' && entry.image !== '' && !declaredAt.has(`assemble.occluders[${i}].image`)) {
+      return `assemble.occluders[${i}].image`;
+    }
+    if (typeof entry.plate === 'string' && entry.plate !== '' && !declaredAt.has(`assemble.occluders[${i}].plate`)) {
+      return `assemble.occluders[${i}].plate`;
+    }
+  }
+  return null;
+}
+
+function fallbackNamedReferences(raw: Record<string, unknown>): ConfigReference[] {
+  const out: ConfigReference[] = [];
+  if (typeof raw.requirements === 'string' && raw.requirements !== '') {
+    out.push({ at: 'requirements', value: raw.requirements, set: value => { raw.requirements = value; }, kind: 'requirements' });
+  }
+  const motion = isPlainObject(raw.motion) ? raw.motion : null;
+  if (motion && typeof motion.animations_from === 'string' && motion.animations_from !== '') {
+    out.push({ at: 'motion.animations_from', value: motion.animations_from, set: value => { motion.animations_from = value; }, kind: 'file' });
+  }
+  const generation = isPlainObject(raw.generation) ? raw.generation : null;
+  const control = generation && isPlainObject(generation.control) ? generation.control : null;
+  if (control && typeof control.skeleton === 'string' && control.skeleton !== '' && !(CONFIG_SKELETON_NAMES as readonly string[]).includes(control.skeleton)) {
+    out.push({ at: 'generation.control.skeleton', value: control.skeleton, set: value => { control.skeleton = value; }, kind: 'file' });
+  }
+  return out;
+}
+
+/**
+ * #591: enumerate config-named references from the installed `@rig-c/parts` `configFileReferences` export (stable since v2.23.0).
+ * Refuses by name when a parts reference is unknown to the handoff or when an older/absent loader omits a declared occluder input,
+ * while preserving read-only inspection for non-occluder configs when optional `@rig-c/parts` is not installed.
+ */
+export function configNamedReferences(
+  raw: unknown,
+  starts: readonly string[] = [process.cwd()],
+): { partsRoot: string | null; references: ConfigReference[] } {
+  const partsRoot = findInstalledParts(starts);
+  if (!isPlainObject(raw)) return { partsRoot, references: [] };
+  const configModulePath = partsRoot ? join(partsRoot, 'src', 'config.ts') : null;
+  if (!partsRoot || !configModulePath || !existsSync(configModulePath)) {
+    const missingOccluder = undeclaredOccluderReference(raw, new Set());
+    if (missingOccluder) {
+      if (!partsRoot) {
+        throw new HandoffError('HANDOFF_INPUT_INVALID', `config ${missingOccluder}`, MODELING_PRODUCER_NOT_INSTALLED);
+      }
+      const pkg = JSON.parse(readFileSync(join(partsRoot, 'package.json'), 'utf8')) as { version?: string };
+      throw new HandoffError('HANDOFF_INPUT_INVALID', `config ${missingOccluder}`, `@rig-c/parts ${pkg.version ?? 'unknown'} has no configFileReferences export; install a version providing occluder file declarations`);
+    }
+    return { partsRoot, references: fallbackNamedReferences(raw) };
+  }
+  const mod = load(configModulePath) as { configFileReferences?: (config: unknown) => { at: string; value: string; set: (value: string) => void }[] };
+  if (typeof mod.configFileReferences !== 'function') {
+    const missingOccluder = undeclaredOccluderReference(raw, new Set());
+    const pkg = JSON.parse(readFileSync(join(partsRoot, 'package.json'), 'utf8')) as { version?: string };
+    if (missingOccluder) {
+      throw new HandoffError('HANDOFF_INPUT_INVALID', `config ${missingOccluder}`, `@rig-c/parts ${pkg.version ?? 'unknown'} has no configFileReferences export; install a version providing occluder file declarations`);
+    }
+    return { partsRoot, references: fallbackNamedReferences(raw) };
+  }
+  const rawRefs = mod.configFileReferences(raw);
+  const missingOccluder = undeclaredOccluderReference(raw, new Set(rawRefs.map(r => r.at)));
+  if (missingOccluder) {
+    const pkg = JSON.parse(readFileSync(join(partsRoot, 'package.json'), 'utf8')) as { version?: string };
+    throw new HandoffError('HANDOFF_INPUT_INVALID', `config ${missingOccluder}`, `@rig-c/parts ${pkg.version ?? 'unknown'} configFileReferences does not declare ${missingOccluder}; install a version providing occluder file declarations`);
+  }
+  const references: ConfigReference[] = [];
+  for (const ref of rawRefs) {
+    const kind = classifyConfigReference(ref.at);
+    if (!kind) throw new HandoffError('HANDOFF_INPUT_INVALID', `config ${ref.at}`, `unsupported config file reference ${ref.at}`);
+    references.push({ ...ref, kind });
+  }
+  return { partsRoot, references };
+}
+
+/** Read `PLATE_RECEIPT_SPEC` from the installed `@rig-c/parts/src/plate.ts` without copying the constant into review. */
+export function plateReceiptSpec(partsRoot: string | null, field = 'config'): string {
+  if (!partsRoot) throw new HandoffError('HANDOFF_INPUT_INVALID', field, MODELING_PRODUCER_NOT_INSTALLED);
+  let spec: unknown;
+  try { spec = (load(join(partsRoot, 'src', 'plate.ts')) as { PLATE_RECEIPT_SPEC?: unknown }).PLATE_RECEIPT_SPEC; } catch { spec = undefined; }
+  if (typeof spec !== 'string' || !spec) {
+    const pkg = JSON.parse(readFileSync(join(partsRoot, 'package.json'), 'utf8')) as { version?: string };
+    throw new HandoffError('HANDOFF_INPUT_INVALID', field, `@rig-c/parts ${pkg.version ?? 'unknown'} has no PLATE_RECEIPT_SPEC export in src/plate.ts; install a version declaring the plate receipt spec before binding a directory input`);
+  }
+  return spec;
+}
+
+/** The `spec` a receipt's bytes declare, or null when they are not a JSON object with a string spec. */
+export function receiptSpec(bytes: Uint8Array): string | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(Buffer.from(bytes).toString('utf8')); } catch { return null; }
+  return isPlainObject(parsed) && typeof parsed.spec === 'string' ? parsed.spec : null;
 }
 const sha256 = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
 const inside = (base: string, path: string, allowSelf = false) => { const rel = relative(base, path); return rel === '' ? allowSelf : rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel); };
@@ -179,28 +327,46 @@ async function listed(base: string, dir: string, field: string): Promise<string[
 }
 
 /** Hash every handoff file and build the record. `root` is the package root (display paths are relative to it). */
-async function record(root: string, base: string, how: HandoffRecord['how'], via: HandoffRecord['via'], config: string, partsPath: string | null, extra: { source?: string; full?: string; head?: string; keypoints?: string }, partsDeclared: boolean): Promise<Handoff> {
+async function record(root: string, base: string, how: HandoffRecord['how'], via: HandoffRecord['via'], config: string, partsPath: string | null, extra: { source?: string; full?: string; head?: string; keypoints?: string }, partsDeclared: boolean, options: ResolveHandoffOptions = {}): Promise<Handoff> {
   const show = (path: string) => relative(root, path).split(sep).join('/') || '.';
-  const files = new Map<string, string>(), missing: string[] = [];
-  const add = async (path: string) => { files.set(show(path), await hashFile(path)); };
+  const files = new Map<string, HandoffFile>(), missing: string[] = [];
+  const add = async (path: string) => { const p = show(path); files.set(p, { path: p, sha256: await hashFile(path) }); };
   await add(config);
   // Files the config names that the producer reads, resolved against the config's own directory.
   let parsed: unknown = null;
   try { parsed = JSON.parse(await readFile(config, 'utf8')); } catch { /* the producer refuses an unreadable config by name */ }
-  for (const keys of CONFIG_NAMED_FILES) {
-    let value: unknown = parsed;
-    for (const k of keys) value = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>)[k] : undefined;
-    if (typeof value !== 'string' || !value) continue;
-    if (keys.length === 3 && (CONFIG_SKELETON_NAMES as readonly string[]).includes(value)) continue;
-    const field = `config ${keys.join('.')}`, lexical = resolve(dirname(config), value);
-    if (!inside(base, lexical)) throw new HandoffError('HANDOFF_PATH_OUTSIDE_ROOT', field, `${value} resolves outside ${base}`);
-    if (keys[0] === 'requirements' && (isAbsolute(value) || /[:\\%?#\x00-\x1f]/.test(value) ||
-        value.split('/').some(part => !part || part === '.' || part === '..'))) {
+  const searchStarts = [dirname(config), base, root, ...(options.starts ?? [process.cwd()])];
+  const { partsRoot, references } = configNamedReferences(parsed, searchStarts);
+  for (const ref of references) {
+    const field = `config ${ref.at}`, lexical = resolve(dirname(config), ref.value);
+    if (!inside(base, lexical)) throw new HandoffError('HANDOFF_PATH_OUTSIDE_ROOT', field, `${ref.value} resolves outside ${base}`);
+    if (ref.kind === 'requirements' && (isAbsolute(ref.value) || /[:\\%?#\x00-\x1f]/.test(ref.value) ||
+        ref.value.split('/').some(part => !part || part === '.' || part === '..'))) {
       throw new HandoffError('HANDOFF_PATH_INVALID', field, 'expected a literal portable config-relative path');
     }
-    if (!(await exists(lexical))) { missing.push(`${keys.join('.')} ${show(lexical)}`); continue; }
+    if (ref.kind === 'plate') {
+      if (!(await exists(lexical))) { missing.push(`${ref.at} ${show(lexical)}/${DIRECTORY_INPUT_RECEIPT}`); continue; }
+      const dir = await contained(base, lexical, field, 'dir', true);
+      const dirRel = show(dir), receiptLexical = join(dir, DIRECTORY_INPUT_RECEIPT), boundRel = `${dirRel}/${DIRECTORY_INPUT_RECEIPT}`;
+      if (!(await exists(receiptLexical))) {
+        throw new HandoffError('HANDOFF_INPUT_INVALID', field, `${dirRel} holds no regular-file ${DIRECTORY_INPUT_RECEIPT}; a directory input binds its producer's receipt, such as a comfy plate --mode occluder output`);
+      }
+      const receiptReal = await contained(base, receiptLexical, `${field}/${DIRECTORY_INPUT_RECEIPT}`, 'file', true);
+      if (receiptReal !== receiptLexical || !(await lstat(receiptLexical)).isFile()) {
+        throw new HandoffError('HANDOFF_INPUT_INVALID', field, `${boundRel} is not a regular file`);
+      }
+      const bytes = await readFile(receiptReal);
+      const spec = plateReceiptSpec(partsRoot, field);
+      const declared = receiptSpec(bytes);
+      if (declared !== spec) {
+        throw new HandoffError('HANDOFF_INPUT_INVALID', field, `${boundRel} declares spec ${JSON.stringify(declared)}; a directory input binds a ${spec} receipt, such as a comfy plate --mode occluder output`);
+      }
+      files.set(boundRel, { path: boundRel, sha256: sha256(bytes), directory: dirRel, spec });
+      continue;
+    }
+    if (!(await exists(lexical))) { missing.push(`${ref.at} ${show(lexical)}`); continue; }
     const file = await contained(base, lexical, field, 'file', true);
-    if (keys[0] === 'requirements' && file !== lexical) {
+    if (ref.kind === 'requirements' && file !== lexical) {
       throw new HandoffError('HANDOFF_PATH_INVALID', field, 'expected a regular file without a symlink alias');
     }
     await add(file);
@@ -221,14 +387,15 @@ async function record(root: string, base: string, how: HandoffRecord['how'], via
     } else missing.push(`rig ${show(rigDir)}`);
   } else missing.push(`parts ${partsPath ? show(partsPath) : '(none)'}`);
   let source: HandoffFile | null = null;
-  if (extra.source) { await add(extra.source); source = { path: show(extra.source), sha256: files.get(show(extra.source))! }; }
+  if (extra.source) { await add(extra.source); source = { path: show(extra.source), sha256: files.get(show(extra.source))!.sha256 }; }
   for (const dir of [extra.full, extra.head]) if (dir) for (const file of await listed(base, dir, show(dir))) await add(file);
   // #111: hashed only when declared — an undeclared handoff's record (and so its identity) holds no keypoints key at all.
   if (extra.keypoints) await add(extra.keypoints);
-  const sorted = [...files].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([path, hash]) => ({ path, sha256: hash }));
+  const sorted = [...files.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return {
-    record: { schema: HANDOFF_SCHEMA, how, via, outside: !inside(root, config), config: { path: show(config), sha256: files.get(show(config))! }, parts: parts ? show(parts) : null, rig: rig ? show(rig) : null, source, full: extra.full ? show(extra.full) : null, head: extra.head ? show(extra.head) : null, ...(extra.keypoints ? { keypoints: { path: show(extra.keypoints), sha256: files.get(show(extra.keypoints))! } } : {}), files: sorted, missing },
+    record: { schema: HANDOFF_SCHEMA, how, via, outside: !inside(root, config), config: { path: show(config), sha256: files.get(show(config))!.sha256 }, parts: parts ? show(parts) : null, rig: rig ? show(rig) : null, source, full: extra.full ? show(extra.full) : null, head: extra.head ? show(extra.head) : null, ...(extra.keypoints ? { keypoints: { path: show(extra.keypoints), sha256: files.get(show(extra.keypoints))!.sha256 } } : {}), files: sorted, missing },
     config, parts, rig, root: base, source: extra.source ?? null, full: extra.full ?? null, head: extra.head ?? null, keypoints: extra.keypoints ?? null,
+    starts: searchStarts,
   };
 }
 
@@ -237,7 +404,7 @@ async function record(root: string, base: string, how: HandoffRecord['how'], via
  * fixed discovery order. `root` is the canonical package root (the opened folder). A declared path that is missing,
  * outside its root or a symlink escape is refused by name; nothing found is `{handoff: null}` with the refusal line.
  */
-export async function resolveHandoff(root: string, declared: HandoffDeclaration | undefined, flags: HandoffFlags | undefined): Promise<{ handoff: Handoff | null; reason: string | null }> {
+export async function resolveHandoff(root: string, declared: HandoffDeclaration | undefined, flags: HandoffFlags | undefined, options: ResolveHandoffOptions = {}): Promise<{ handoff: Handoff | null; reason: string | null }> {
   if (flags) {
     const problem = checkHandoffFlags(flags);
     if (problem) throw new HandoffError('HANDOFF_FLAGS_INVALID', problem.split(':')[0]!, problem);
@@ -251,7 +418,7 @@ export async function resolveHandoff(root: string, declared: HandoffDeclaration 
     const full = flags.full !== undefined ? await flagPath(base, flags.full, '--full', 'dir') : undefined;
     const head = flags.head !== undefined ? await flagPath(base, flags.head, '--head', 'dir') : undefined;
     const keypoints = flags.keypoints !== undefined ? await flagPath(base, flags.keypoints, '--keypoints', 'file') : undefined;
-    const handoff = await record(root, base, 'declared', 'open --config', config, parts, { source, full, head, keypoints }, flags.parts !== undefined);
+    const handoff = await record(root, base, 'declared', 'open --config', config, parts, { source, full, head, keypoints }, flags.parts !== undefined, options);
     // Canonical absolute flags: the background worker and later reloads read exactly these.
     handoff.flags = { config, ...(flags.parts !== undefined ? { parts } : {}), ...(source ? { source } : {}), ...(full ? { full } : {}), ...(head ? { head } : {}), ...(keypoints ? { keypoints } : {}) };
     return { handoff, reason: null };
@@ -264,14 +431,14 @@ export async function resolveHandoff(root: string, declared: HandoffDeclaration 
     const head = declared.head !== undefined ? await blockPath(root, declared.head, 'producer.head', 'dir') : undefined;
     const keypoints = declared.keypoints !== undefined ? await blockPath(root, declared.keypoints, 'producer.keypoints', 'file') : undefined;
     if ((source === undefined) !== (full === undefined) || (head !== undefined && full === undefined)) throw new HandoffError('HANDOFF_FLAGS_INVALID', 'producer', 'source and full are given together, head only with them');
-    return { handoff: await record(root, root, 'declared', 'review.json producer', config, parts, { source, full, head, keypoints }, declared.parts !== undefined), reason: null };
+    return { handoff: await record(root, root, 'declared', 'review.json producer', config, parts, { source, full, head, keypoints }, declared.parts !== undefined, options), reason: null };
   }
   for (const name of ['config.json', 'rig/config.json']) {
     const path = join(root, name);
     if (!(await exists(path))) continue;
     const config = await contained(root, path, name, 'file', true);
     const source = await discoveredPainting(root, path, name, false);
-    return { handoff: await record(root, root, 'discovered', 'discovery', config, join(dirname(path), 'out'), { source }, false), reason: null };
+    return { handoff: await record(root, root, 'discovered', 'discovery', config, join(dirname(path), 'out'), { source }, false, options), reason: null };
   }
   // #149: the check package of a rig-parts build root — the build's own config, in the build root, else beside it.
   const build = await buildPlaces(root);
@@ -281,7 +448,7 @@ export async function resolveHandoff(root: string, declared: HandoffDeclaration 
       const config = await contained(place.base, place.config, place.field, 'file', true);
       if (config !== place.config) throw new HandoffError('HANDOFF_SYMLINK_ESCAPE', place.field, `${place.config} is a symlink; only the build's own config file is discovered`);
       const source = await discoveredPainting(place.base, config, place.field, true);
-      return { handoff: await record(root, place.base, 'discovered', 'discovery', config, build.build, { source }, false), reason: null };
+      return { handoff: await record(root, place.base, 'discovered', 'discovery', config, build.build, { source }, false, options), reason: null };
     }
     return { handoff: null, reason: BUILD_MODELING_INPUT_UNAVAILABLE };
   }
@@ -292,7 +459,7 @@ export async function resolveHandoff(root: string, declared: HandoffDeclaration 
       const config = await contained(parent, path, '../config.json', 'file', true);
       if (config !== path) throw new HandoffError('HANDOFF_SYMLINK_ESCAPE', '../config.json', `${path} is a symlink; only the file beside out/ is discovered`);
       const source = await discoveredPainting(parent, config, '../config.json', true);
-      return { handoff: await record(root, parent, 'discovered', 'discovery', config, root, { source }, false), reason: null };
+      return { handoff: await record(root, parent, 'discovered', 'discovery', config, root, { source }, false, options), reason: null };
     }
   }
   return { handoff: null, reason: MODELING_INPUT_UNAVAILABLE };

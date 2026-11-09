@@ -1,12 +1,14 @@
 import {expect,spyOn,test} from 'bun:test';
-import {link,mkdtemp,readFile,readdir,realpath,rm,symlink,writeFile} from 'node:fs/promises';
+import {link,mkdir,mkdtemp,readFile,readdir,realpath,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {parseOpenInputs} from '../src/cli.ts';
 import {frontRoute} from '../src/front.ts';
 import {digest} from '../src/interview-project.ts';
+import {locateInstalledParts} from '../src/handoff.ts';
 import {loadOpenPackage} from '../src/open.ts';
 import {loadPartsView,readVerdict} from '../src/parts-view.ts';
+import {draftProducerInputs,draftRebuildOption} from '../src/rebuild.ts';
 import {startServer} from '../src/server.ts';
 import {stageVerdictLimit} from '../src/stage-parts.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
@@ -358,4 +360,108 @@ test('#562A current stage and effective approval chronology determine editabilit
     }finally{await writeFile(path,bytes);}
     await fixture.assertFixture();
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('#591 Stage 1 draft config_inputs binds assemble.occluders image and plate directory receipt (create#326 93b361f shape) and enforces draftProducerInputs consistency across logical options.cwd',async()=>{
+  const root=await mkdtemp(join(await realpath(tmpdir()),'review-draft-occluders-'));
+  try{
+    const fixture=await joinedVerdictFixture(root,'reopened');
+    const projectPath=join(root,'project.json'),projectBytes=await readFile(projectPath);
+    const configPath=join(root,fixture.draft.record.config.path),configBytes=await readFile(configPath);
+    const draftDir=join(root,'derived/drafts/example');
+    const occluderDir=join(draftDir,'occluders');
+    const plateDir=join(draftDir,'plates/front');
+    await mkdir(occluderDir,{recursive:true});
+    await mkdir(plateDir,{recursive:true});
+    const imagePath=join(occluderDir,'front.png'),imageBytes=Buffer.from('png-occluder-front');
+    const receiptPath=join(plateDir,'receipt.json');
+    const receiptBytes=Buffer.from(JSON.stringify({spec:'rig-parts-plate-receipt/1',mode:'occluder',plate:'plate.png',mask:'mask.png'},null,2)+'\n');
+    const siblingPath=join(plateDir,'plate.png');
+    await writeFile(imagePath,imageBytes);
+    await writeFile(receiptPath,receiptBytes);
+    await writeFile(siblingPath,'sibling-plate-v1');
+
+    const config=JSON.parse(configBytes.toString());
+    config.assemble={
+      ...(config.assemble??{}),
+      occluders:[{part:'torso',image:'occluders/front.png',plate:'plates/front'}],
+    };
+    const configText=JSON.stringify(config);
+    await writeFile(configPath,configText);
+
+    const baseProject=JSON.parse(projectBytes.toString());
+    baseProject.drafts[0].config.sha256=digest(configText);
+    const imageEntry={path:'derived/drafts/example/occluders/front.png',sha256:digest(imageBytes)};
+    const plateEntry={
+      path:'derived/drafts/example/plates/front/receipt.json',
+      sha256:digest(receiptBytes),
+      directory:'derived/drafts/example/plates/front',
+      spec:'rig-parts-plate-receipt/1',
+    };
+
+    // With an older loader stub (2.25.1) in project ancestry, declared occluder inputs are refused instead of falling back to OWN_ROOT.
+    const stubParts=join(root,'node_modules/@rig-c/parts');
+    await mkdir(join(stubParts,'src'),{recursive:true});
+    await writeFile(join(stubParts,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.25.1'}));
+    await writeFile(join(stubParts,'src/config.ts'),`export function configFileReferences(raw){
+      const out=[];
+      if(raw&&typeof raw==='object'){
+        if(typeof raw.requirements==='string'&&raw.requirements)out.push({at:'requirements',value:raw.requirements,set(v){raw.requirements=v;}});
+        if(raw.motion&&typeof raw.motion.animations_from==='string'&&raw.motion.animations_from)out.push({at:'motion.animations_from',value:raw.motion.animations_from,set(v){raw.motion.animations_from=v;}});
+      }
+      return out;
+    }\n`);
+    const withEntries=structuredClone(baseProject);
+    withEntries.drafts[0].config_inputs.push(imageEntry,plateEntry);
+    await writeFile(projectPath,JSON.stringify(withEntries));
+    await expect(loadOpenPackage({input:fixture.input,project:fixture.project})).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
+    await rm(join(root,'node_modules'),{recursive:true,force:true});
+
+    // Missing image or plate entry in config_inputs is refused under installed @rig-c/parts@2.35.0.
+    const missingPlate=structuredClone(baseProject);
+    missingPlate.drafts[0].config_inputs.push(imageEntry);
+    await writeFile(projectPath,JSON.stringify(missingPlate));
+    await expect(loadOpenPackage({input:fixture.input,project:fixture.project})).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
+
+    // Wrong spec on plate entry is refused.
+    const wrongSpec=structuredClone(baseProject);
+    wrongSpec.drafts[0].config_inputs.push(imageEntry,{...plateEntry,spec:'wrong-spec/1'});
+    await writeFile(projectPath,JSON.stringify(wrongSpec));
+    await expect(loadOpenPackage({input:fixture.input,project:fixture.project})).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
+
+    // Exact create#326 (93b361f) shape succeeds across joinProject, assertCurrent, and draftProducerInputs via logical options.cwd.
+    const externalCwd=join(root,'external-cwd');
+    await mkdir(join(externalCwd,'node_modules/@rig-c'),{recursive:true});
+    await symlink(locateInstalledParts(),join(externalCwd,'node_modules/@rig-c/parts'));
+    await writeFile(projectPath,JSON.stringify(withEntries));
+    const opened=await loadOpenPackage({input:fixture.input,project:fixture.project},{cwd:externalCwd});
+    if(opened.mode!=='single'||!opened.joined?.draft)throw new Error('Expected joined draft with occluders');
+    expect(opened.joined.draft.record.config_inputs).toContainEqual(imageEntry);
+    expect(opened.joined.draft.record.config_inputs).toContainEqual(plateEntry);
+    await opened.joined.assertCurrent();
+
+    // Changing sibling plate.png does not invalidate assertCurrent or draftProducerInputs.
+    await writeFile(siblingPath,'sibling-plate-v2');
+    await opened.joined.assertCurrent();
+    const opt=draftRebuildOption(opened.joined)!;
+    await expect(draftProducerInputs(opt,true)).resolves.toMatchObject({
+      config:configPath,
+      configHash:digest(configText),
+    });
+
+    // Mutating receipt.json or image invalidates assertCurrent and draftProducerInputs.
+    await writeFile(receiptPath,Buffer.concat([receiptBytes,Buffer.from(' ')]));
+    await expect(opened.joined.assertCurrent()).rejects.toThrow('INTERVIEW_OPTIONS_STALE');
+    await expect(draftProducerInputs(opt,true)).rejects.toThrow('REBUILD_INPUTS_CHANGED');
+    await writeFile(receiptPath,receiptBytes);
+    await opened.joined.assertCurrent();
+
+    await writeFile(imagePath,Buffer.concat([imageBytes,Buffer.from('x')]));
+    await expect(opened.joined.assertCurrent()).rejects.toThrow('INTERVIEW_OPTIONS_STALE');
+    await expect(draftProducerInputs(opt,true)).rejects.toThrow('REBUILD_INPUTS_CHANGED');
+    await writeFile(imagePath,imageBytes);
+    await opened.joined.assertCurrent();
+  }finally{
+    await rm(root,{recursive:true,force:true});
+  }
 });
