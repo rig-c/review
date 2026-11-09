@@ -154,23 +154,62 @@ async function assertHeaderGeometry(name: string) {
     assert.ok(geometry.control.right <= geometry.viewport.width);
 }
 async function assertPersistentIssues(count: number, checkpoint: string) {
-    const state = await page!.evaluate<{visible: boolean; rightSide: boolean; rows: number; text: string; capture: string}>(`(()=>{
+    const state = await page!.evaluate<{visible: boolean; rightSide: boolean; rows: number; text: string; capture: string; listRect: unknown; stageRect: unknown; view: unknown}>(`(()=>{
         const list=document.querySelector('[data-job-parts-workspace] .job-forms #stage-comment-list');
         const stage=document.querySelector('[data-job-parts-workspace] .job-stage');
-        if(!list||!stage)return {visible:false,rightSide:false,rows:-1,text:'',capture:''};
+        if(!list||!stage)return {visible:false,rightSide:false,rows:-1,text:'',capture:'',listRect:null,stageRect:null,view:null};
         const box=list.getBoundingClientRect(),stageBox=stage.getBoundingClientRect(),style=getComputedStyle(list);
         return {visible:!list.hidden&&box.width>0&&box.height>0&&style.display!=='none'&&style.visibility!=='hidden',
             rightSide:box.left>=stageBox.right-1&&box.right<=innerWidth+1,
             rows:list.querySelectorAll('.stage-comment-item').length,text:list.textContent,
+            listRect:box.toJSON(),stageRect:stageBox.toJSON(),view:{width:innerWidth,height:innerHeight},
             capture:document.querySelector('#stage-comment').getAttribute('aria-pressed')};})()`);
     await checkpoints(checkpoint, state);
     assert.equal(state.visible, true, 'the shared issue list stays visible in the side slot');
-    assert.equal(state.rightSide, true, 'the issue list occupies the right pane');
+    assert.equal(state.rightSide, true, 'JOB_PARTS_RIGHT_COLUMN: the issue list occupies the right pane');
     assert.equal(state.rows, count);
     const catalog = language === 'ko' ? koCatalog : enCatalog;
     assert.ok(state.text.includes(catalog['Issues']));
     assert.ok(state.text.includes(count ? 'Visible boundary defect' : catalog['No issues yet.']));
     return state;
+}
+async function assertPartsLayout(checkpoint: string) {
+    type Box = {left: number; top: number; right: number; bottom: number; width: number; height: number};
+    const geometry = await page!.evaluate<{
+        viewport: {width: number; height: number}; boxes: Record<string, Box>;
+        canvas: {intrinsicWidth: number; intrinsicHeight: number; clientRect: Box; zoom: number};
+        referenceAbsence: string | null;
+    }>(`(()=>{
+        const selectors={header:'.job-header',notice:'.job-notice',workspace:'body.job-window > main',
+            grid:'[data-job-parts-workspace]',stage:'.job-stage',forms:'.job-forms',toolbar:'.pv-toolbar',
+            pair:'#stage-layout',rigPane:'#rig-pane',referencePane:'#reference-pane',
+            rigViewport:'#rig-viewport',referenceViewport:'#reference-viewport',rigRoot:'#rig-root'};
+        const boxes=Object.fromEntries(Object.entries(selectors).map(([name,selector])=>[name,document.querySelector(selector).getBoundingClientRect().toJSON()]));
+        const canvas=document.querySelector('#pv-canvas'),absence=document.querySelector('#reference-empty');
+        return {viewport:{width:innerWidth,height:innerHeight},boxes,
+            canvas:{intrinsicWidth:canvas.width,intrinsicHeight:canvas.height,clientRect:canvas.getBoundingClientRect().toJSON(),zoom:new DOMMatrix(document.querySelector('#rig-root').style.transform).a},
+            referenceAbsence:absence&&!absence.hidden?absence.textContent:null};})()`);
+    await checkpoints(checkpoint, geometry);
+    const {viewport, boxes, canvas} = geometry;
+    assert.ok(boxes.forms!.left >= boxes.stage!.right - 1 && boxes.forms!.right <= viewport.width + 1,
+        'JOB_PARTS_RIGHT_COLUMN: forms occupy the right column');
+    assert.ok(Math.abs(boxes.workspace!.bottom - viewport.height) <= 2 &&
+        Math.abs(boxes.grid!.bottom - viewport.height) <= 2 &&
+        Math.abs(boxes.grid!.top - boxes.workspace!.top) <= 2,
+        'JOB_PARTS_VIEWPORT_FILL: workspace and grid consume available viewport height');
+    assert.ok(Math.abs(boxes.stage!.height - boxes.grid!.height) <= 2 &&
+        boxes.pair!.height >= boxes.stage!.height * 0.65,
+        'JOB_PARTS_STAGE_ALLOCATION: the stage and pair receive the freed height');
+    for (const name of ['rigViewport', 'referenceViewport']) {
+        assert.ok(boxes[name]!.height >= boxes.pair!.height - 24 && boxes[name]!.width >= boxes.pair!.width * 0.35,
+            'JOB_PARTS_PANE_ALLOCATION: ' + name + ' receives the available pair area');
+    }
+    assert.equal(canvas.intrinsicWidth, 80, 'JOB_PARTS_SOURCE_PIXELS: assembled buffer width');
+    assert.equal(canvas.intrinsicHeight, 64, 'JOB_PARTS_SOURCE_PIXELS: assembled buffer height');
+    assert.ok(canvas.zoom > 1, 'JOB_PARTS_INITIAL_FIT: the small fixture uses the existing Fit camera');
+    assert.ok(Math.abs(canvas.clientRect.width - canvas.intrinsicWidth * canvas.zoom) <= 1,
+        'JOB_PARTS_DISPLAY_SCALE: client size records camera zoom separately from source pixels');
+    await writeFile(join(output, checkpoint + '.png'), await page!.screenshot());
 }
 async function capturePaint(name: string) {
     await assertHeaderGeometry(name);
@@ -325,11 +364,19 @@ try {
     const partsInputs = await jobInputHashes(fixture.input.root);
     await checkpoints('parts-public-fixture-hashes', {publicationId: partsPublication.publicationId,
         syntheticReader: 'job-window-fixture-reader/1', partsEnumerator: 'synthetic-job-window-parts/1', files: partsInputs});
+    await assertPartsLayout('parts-initial-layout');
     assert.equal((await assertPersistentIssues(0, 'parts-right-issues-zero')).capture, 'false');
+    await page.evaluate(`document.querySelector('#pv-assemble').click()`);
+    await wait(`document.querySelector('#pv-assemble').getAttribute('aria-pressed')==='false' && document.querySelector('#stage-comment-refusal').hidden`, 'item view available for C capture');
     await page.evaluate(`document.querySelector('#stage-comment').click()`);
     assert.equal((await assertPersistentIssues(0, 'parts-right-issues-zero-capture-on')).capture, 'true');
     await page.evaluate(`document.querySelector('#stage-comment').click()`);
     assert.equal((await assertPersistentIssues(0, 'parts-right-issues-zero-capture-off')).capture, 'false');
+    await page.evaluate(`document.querySelector('#pv-assemble').click()`);
+    await wait(`document.querySelector('#pv-assemble').getAttribute('aria-pressed')==='true' && document.querySelector('#pv-canvas').width===80 && document.querySelector('#pv-canvas').height===64`, 'assembled default restored for approval');
+    await page.evaluate(`document.querySelector('#fit').click()`);
+    await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    await assertPartsLayout('parts-approval-layout');
     await capturePaint('parts');
     await submit(approvedParts.askId);
     await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='approved'`, 'parts approved');

@@ -3307,7 +3307,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Show {name} in assembly": "Show {name} in assembly",
   "Assembly unavailable: atlas regions carry no rig placement.": "Assembly unavailable: atlas regions carry no rig placement.",
   "Assembly unavailable: rig_size is not declared.": "Assembly unavailable: rig_size is not declared.",
-  "Assembled package \u00b7 {count} visible parts. Selection and verdict remain per part.": "Assembled package · {count} visible parts. Selection and verdict remain per part.",
+  "Assembled package \u00b7 {count} visible parts.": "Assembled package · {count} visible parts.",
   "PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment": "PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment",
   "Mesh flags": "Mesh flags",
   "Part findings": "Part findings",

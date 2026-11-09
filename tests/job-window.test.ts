@@ -3949,6 +3949,11 @@ describe('C4 async source and host ownership', () => {
     test('C4 awaits the handle readiness contract after source loading and propagates its rejection', async () => {
         const text = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
         expect(text).toContain('await Promise.race([mounted.ready, preparationCancelled]);');
+        const readyIndex = text.indexOf('await Promise.race([mounted.ready, preparationCancelled]);');
+        const fitIndex = text.indexOf("panel.slots.toolbar.querySelector<HTMLButtonElement>('#fit')?.click();", readyIndex);
+        const paintIndex = text.indexOf('await new Promise<void>((resolve, reject)', readyIndex);
+        expect(fitIndex).toBeGreaterThan(readyIndex);
+        expect(fitIndex).toBeLessThan(paintIndex);
         const h = await adapters();
         await h.probe.source.view();
         const ready = deferred<void>();

@@ -326,7 +326,7 @@ async function paintRaster(token:number): Promise<void> {
     overlay.replaceChildren();
     const selected=layers.find(l=>l.box.name===item.name);
     if(selected){const outline=doc.createElement('canvas');outline.width=w;outline.height=h;outline.dataset.assemblyOutline=item.name;paintAssemblyOutline(outline.getContext('2d')!,item,sourceAlpha(item,selected.image));overlay.append(outline);}
-    caption.textContent=t('Assembled package · {count} visible parts. Selection and verdict remain per part.',{count:shown.length});
+    caption.textContent=t('Assembled package · {count} visible parts.',{count:shown.length});
     return;
   }
   if (data.mode === 'atlas' && state.view === 'page') {

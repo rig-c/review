@@ -2031,6 +2031,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 panel.slots.side.append(legacy, rows);
             }
             await Promise.race([mounted.ready, preparationCancelled]);
+            panel.slots.toolbar.querySelector<HTMLButtonElement>('#fit')?.click();
             await new Promise<void>((resolve, reject) => {
                 let frame = 0;
                 const cancelled = () => {

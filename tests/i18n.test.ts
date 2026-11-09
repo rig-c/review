@@ -1203,3 +1203,13 @@ test('parts save provenance and notification refusals translate in EN/KO while p
   setLanguagePreference(preference);
  }
 });
+
+
+test('assembly caption reports the visible part count in both languages', async () => {
+ const key = 'Assembled package · {count} visible parts.';
+ expect(enCatalog[key]).toBe('Assembled package · {count} visible parts.');
+ expect(koCatalog[key]).toBe('조립 패키지 · 파츠 {count}개 표시.');
+ const source = await readFile(new URL('../web/parts.ts', import.meta.url), 'utf8');
+ expect(source).toContain("t('" + key + "',{count:shown.length})");
+ expect(source).not.toContain('Selection and verdict remain per part.');
+});

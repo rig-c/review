@@ -3307,7 +3307,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Show {name} in assembly": "조립 보기에서 {name} 표시",
   "Assembly unavailable: atlas regions carry no rig placement.": "조립 불가: 아틀라스 영역에는 리그 배치 정보가 없어요.",
   "Assembly unavailable: rig_size is not declared.": "조립 불가: rig_size가 선언되지 않았어요.",
-  "Assembled package \u00b7 {count} visible parts. Selection and verdict remain per part.": "조립 패키지 · 파츠 {count}개 표시. 선택과 판정은 파츠별로 유지돼요.",
+  "Assembled package \u00b7 {count} visible parts.": "조립 패키지 · 파츠 {count}개 표시.",
   "PARTS_COMMENT_UNAVAILABLE: select the individual part view to comment": "PARTS_COMMENT_UNAVAILABLE: 댓글을 쓰려면 개별 파츠 보기로 전환해 주세요",
   "Mesh flags": "메시 플래그",
   "Part findings": "파츠 발견 사항",
