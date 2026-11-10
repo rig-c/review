@@ -484,3 +484,9 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .job-window .job-parts-stage{display:flex;flex-direction:column;flex:1;min-height:180px;min-width:0;position:relative}
 .job-window .job-parts-stage>main{display:flex;flex:1;min-height:0;min-width:0}
 .job-window [data-job-parts-workspace] [hidden]{display:none!important}
+
+.job-window [data-job-checkpoint-evidence]{min-width:0;margin:12px 0}
+.job-window [data-job-checkpoint-evidence] table{border-collapse:collapse;width:100%}
+.job-window [data-job-checkpoint-evidence] th,.job-window [data-job-checkpoint-evidence] td{padding:6px 10px;border:1px solid var(--border);text-align:left;white-space:pre-wrap;overflow-wrap:anywhere}
+.job-window [data-job-checkpoint-evidence] caption{text-align:left;margin-bottom:8px}
+.job-window [data-job-checkpoint-evidence] pre{white-space:pre-wrap;overflow-wrap:anywhere}

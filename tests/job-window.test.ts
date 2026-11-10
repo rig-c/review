@@ -649,7 +649,10 @@ test('a route descriptor with changed plan or referenced parts refuses despite e
         expect(h.fixture.acknowledgments).toHaveLength(1);
     }
 });
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {syntheticCheckpointEvidence} from './job-checkpoint-evidence-browser.ts';
+import {createSyntheticPlanRecordWorkspace} from './helpers/job-record-fixture.ts';
 import { checkWebHardcodedStrings } from '../web/i18n.ts';
 test('the new job web module passes the existing i18n scanner without exemptions', async () => {
     const content = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
@@ -1781,6 +1784,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         localStore?: Map<string, string>;
         fixture?: ReturnType<typeof createJobWindowFixture>;
         pageId?: string;
+        evidence?: ReturnType<typeof syntheticCheckpointEvidence>;
     }) {
         const source = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
         const start = source.indexOf('    const node = <Tag extends keyof HTMLElementTagNameMap>');
@@ -2013,6 +2017,8 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 partPages: new Map(),
                 interviewImages: new Map(),
                 imageSetImages: [],
+                ...(options?.evidence ? {checkpointEvidence: [{packet: options.evidence.packet, table: options.evidence.table,
+                    images: options.evidence.packet.tiles.map(() => new RuntimeDomNode('img') as unknown as HTMLImageElement)}]} : {}),
                 references,
                 assets: {animations: clips, stage: {x: 0, y: 0, width: 64, height: 64}, dispose() {}} as any,
                 rigRoot: rigRoot as unknown as HTMLElement,
@@ -2850,6 +2856,87 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         } finally {
             s.cleanup();
         }
+    });
+
+    test('#629 checkpoint gallery keeps 103 ordered scalar rows, EN/KO mapping, verbatim payload and reconnect draft', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'review629-dom-'));
+        const evidence = syntheticCheckpointEvidence(root, 'motion-card', 'inspect-motion');
+        const display = fixturePublication();
+        Object.assign(display, {publication: {...display.publication, source: {...display.publication.source,
+            plan: {steps: [{id: 'inspect-motion', hash: 'a'.repeat(64)}]}, checkpointEvidence: [evidence.packet]} as JobModelSourceBinding}});
+        const fixture = createJobWindowFixture();
+        const store = new Map<string, string>();
+        const words = '  Pass 한글 <owner>\n원문\n';
+        let session: Awaited<ReturnType<typeof mountRuntimeSession>> | undefined;
+        try {
+            session = await mountRuntimeSession({fixture, localStore: store, evidence});
+            await session.publishDisplay(display);
+            const ask: PendingAskV3 = {askId: 'evidence-checkpoint', publicationId: display.publication.publicationId,
+                source: display.publication.source, subject: {kind: 'checkpoint', checkpointId: 'motion-card', planStepId: 'inspect-motion'}, status: 'pending'};
+            fixture.pending(ask, 2); session.window.event(fixture.events.at(-1)!);
+            const form = session.workspace.querySelector('form[data-job-ask="evidence-checkpoint"]')!;
+            const section = form.querySelector('[data-job-checkpoint-evidence]')!;
+            expect(section.querySelectorAll('figure').map(figure => figure.querySelector('h3')!.textContent))
+                .toEqual(evidence.packet.tiles.map(tile => tile.label));
+            expect(section.querySelectorAll('th').map(cell => cell.textContent)).toEqual([...evidence.table.columns]);
+            expect(section.querySelectorAll('tbody')[0]!.querySelectorAll('tr').map(row => row.querySelectorAll('td').map(cell => cell.textContent)))
+                .toEqual(evidence.table.rows.map(row => row.map(String)));
+            expect(section.querySelectorAll('script')).toHaveLength(0);
+            expect(section.querySelectorAll('pre').map(block => block.textContent)).toEqual([evidence.packet.routesText, evidence.packet.recommendationText]);
+            const note = form.querySelector('textarea[name="note"]')!;
+            const outcome = form.querySelector('select[name="outcome"]')!;
+            note.value = words; outcome.value = 'fail'; form.dispatchEvent({type: 'input'});
+            for (const lang of ['en', 'ko'] as const) {
+                i18nModule.setLanguagePreference(lang);
+                const catalog = lang === 'ko' ? koCatalog : enCatalog;
+                expect(form.querySelector('[data-job-text="job.checkpointRouteMapping"]')!.textContent).toBe(catalog['job.checkpointRouteMapping']);
+                expect(section.querySelector('[data-job-text="job.checkpointRecommendation"]')!.textContent).toBe(catalog['job.checkpointRecommendation']);
+                expect(note.value).toBe(words);
+                expect(section.querySelectorAll('pre').map(block => block.textContent)).toEqual([evidence.packet.routesText, evidence.packet.recommendationText]);
+            }
+            for (const value of ['pass', 'fail']) {
+                outcome.value = value; form.dispatchEvent({type: 'input'});
+                session.failNextTransportSubmit();
+                await form.onsubmit?.({preventDefault() {}});
+                expect(session.outgoingSubmits.at(-1)!.body.value).toEqual({checkpointId: 'motion-card', outcome: value, words});
+                expect(session.outgoingSubmits.at(-1)!.body.value).not.toHaveProperty('planStepId');
+            }
+            session.cleanup(); session = undefined;
+            session = await mountRuntimeSession({fixture, localStore: store, evidence});
+            await session.replayPublication(display);
+            session.window.event(fixture.events.find(event => event.type === 'pending')!);
+            const restored = session.workspace.querySelector('form[data-job-ask="evidence-checkpoint"]')!;
+            expect(restored.querySelector('textarea[name="note"]')!.value).toBe(words);
+            expect(restored.querySelector('select[name="outcome"]')!.value).toBe('fail');
+            expect(restored.querySelectorAll('tbody')[0]!.querySelectorAll('tr')).toHaveLength(103);
+        } finally {
+            session?.cleanup(); i18nModule.setLanguagePreference('en');
+            await rm(root, {recursive: true, force: true});
+        }
+    });
+
+    test('#629 absent evidence keeps legacy checkpoint controls and refuses a mismatched admitted plan mapping', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'review629-map-'));
+        const evidence = syntheticCheckpointEvidence(root, 'motion-card', 'inspect-motion');
+        for (const present of [false, true]) {
+            const session = await mountRuntimeSession(present ? {evidence} : undefined);
+            try {
+                const display = fixturePublication();
+                Object.assign(display, {publication: {...display.publication, source: {...display.publication.source,
+                    plan: {steps: [{id: 'inspect-motion', hash: 'a'.repeat(64)}, {id: 'other', hash: 'b'.repeat(64)}]},
+                    ...(present ? {checkpointEvidence: [evidence.packet]} : {})} as JobModelSourceBinding}});
+                await session.publishDisplay(display);
+                const ask: PendingAskV3 = {askId: 'mapping-check', publicationId: display.publication.publicationId,
+                    source: display.publication.source, subject: {kind: 'checkpoint', checkpointId: 'motion-card',
+                        planStepId: present ? 'other' : 'inspect-motion'}, status: 'pending'};
+                session.fixture.pending(ask, 2); session.window.event(session.fixture.events.at(-1)!);
+                expect(session.workspace.querySelector('[data-job-checkpoint-evidence]')).toBeNull();
+                expect(session.workspace.querySelector('[data-job-text="job.checkpointRouteMapping"]')).toBeNull();
+                if (present) expect(session.workspace.textContent).toContain('CHECKPOINT_EVIDENCE_INVALID');
+                else expect(session.workspace.querySelector('select[name="outcome"]')).not.toBeNull();
+            } finally {session.cleanup();}
+        }
+        await rm(root, {recursive: true, force: true});
     });
 
     test('#586 runtime reopen form renders declared reopen stage on an independently prepared PlanSource, submits {stage, words} with verbatim words to return reopen act@4, and refuses undeclared or package-only reopen asks', async () => {
@@ -4879,4 +4966,201 @@ test('#626: retained job publication with producer.config, producer.parts, produ
     });
 
     expect(await jobInputHashes(f.input.root)).toEqual(beforeHashes);
+});
+
+
+describe('#629 sealed checkpoint preparation without browser or raster execution', () => {
+    async function setup(kind: 'plan' | 'package' = 'plan', absent = false) {
+        const root = await mkdtemp(join(tmpdir(), 'review629-prepare-'));
+        const workspace = createSyntheticPlanRecordWorkspace(root);
+        const evidence = syntheticCheckpointEvidence(root);
+        const context = {...workspace.context, files: [...workspace.files, ...evidence.files].sort((a, b) => a.path < b.path ? -1 : 1),
+            ...(absent ? {} : {checkpointEvidence: [evidence.packet]})};
+        const recordSource = buildRecordSource({record: workspace.record, selection: workspace.result, context});
+        const display: DisplayPublicationV3 = fixturePublication();
+        const source = kind === 'plan' ? recordSource : {...display.publication.source, model: null,
+            plan: context.plan, ...(absent ? {} : {checkpointEvidence: [evidence.packet]})} as JobModelSourceBinding;
+        Object.assign(display, {publication: {...display.publication, source}});
+        const projection = {...evidence.packet, tiles: evidence.packet.tiles.map((tile, index) => ({...tile,
+            url: `/api/checkpoint-evidence/${evidence.packet.checkpointId}/tiles/${index}`})),
+            table: {...evidence.packet.table, ...evidence.table, url: `/api/checkpoint-evidence/${evidence.packet.checkpointId}/table`}};
+        const metadata: any = {sourceHash: source.sourceHash, capabilities: {playback: false}, feedbackCatalog: {slots: null},
+            ...(kind === 'plan' ? {recordSource: source} : {
+                manifest: parseManifest({schema: 'rig-review/1', id: 'window-fixture', revision: '1', title: 'Synthetic evidence'}),
+                reviewedSource: {rig: null, motion: null, packageRevision: '1', viewerVersion: 'synthetic', runtimeVersion: 'synthetic'}}),
+            ...(absent ? {} : {checkpointEvidence: [projection]})};
+        const saved = new Map<string, PropertyDescriptor | undefined>();
+        function replace(key: string, value: unknown) {
+            saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+            Object.defineProperty(globalThis, key, {value, configurable: true, writable: true});
+        }
+        const images: FakeImage[] = [], created: string[] = [], revoked: string[] = [], requests: string[] = [];
+        let hold = false;
+        class FakeImage {
+            src = ''; alt = ''; naturalWidth = 2; naturalHeight = 2;
+            resolve!: () => void; reject!: (error: Error) => void;
+            constructor() {images.push(this);}
+            decode() {return hold ? new Promise<void>((resolve, reject) => {this.resolve = resolve; this.reject = reject;}) : Promise.resolve();}
+        }
+        const bytes = new Map<string, Uint8Array>();
+        for (const [index, tile] of evidence.packet.tiles.entries()) bytes.set('/tiles/' + index, await readFile(join(root, tile.path)));
+        bytes.set('/table', await readFile(join(root, evidence.packet.table.path)));
+        replace('location', {origin: 'http://127.0.0.1:19484'});
+        replace('document', {createElement: () => ({id: ''})});
+        replace('Image', FakeImage);
+        replace('fetch', async (input: string) => {
+            requests.push(input);
+            if (input.endsWith('/api/review')) return Response.json(metadata);
+            const suffix = [...bytes.keys()].find(key => input.endsWith(key));
+            if (!suffix) throw new Error('Unexpected synthetic asset request');
+            return new Response(bytes.get(suffix)!.slice().buffer as ArrayBuffer);
+        });
+        const originalCreate = URL.createObjectURL, originalRevoke = URL.revokeObjectURL;
+        URL.createObjectURL = blob => {const url = originalCreate(blob); created.push(url); return url;};
+        URL.revokeObjectURL = url => {revoked.push(url); originalRevoke(url);};
+        return {display, source, metadata, evidence, bytes, requests, images, created, revoked,
+            hold() {hold = true;},
+            async close() {
+                URL.createObjectURL = originalCreate; URL.revokeObjectURL = originalRevoke;
+                for (const [key, descriptor] of saved) {
+                    if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key);
+                }
+                await rm(root, {recursive: true, force: true});
+            }};
+    }
+    async function until(check: () => boolean) {
+        const deadline = Date.now() + 1000;
+        while (!check() && Date.now() < deadline) await Bun.sleep(1);
+        expect(check()).toBe(true);
+    }
+    for (const kind of ['plan', 'package'] as const) test('#629 ' + kind + ' authenticates ordered four tiles and all 103 rows before ready, disposal is idempotent', async () => {
+        const f = await setup(kind); f.hold();
+        try {
+            let returned = false;
+            const pending = prepareJobInspection(f.display, new AbortController().signal).then(value => {returned = true; return value;});
+            await until(() => f.images.length === 4);
+            for (const image of [...f.images].reverse().slice(0, 3)) image.resolve();
+            await Bun.sleep(1); expect(returned).toBe(false);
+            f.images[0]!.resolve();
+            const ready = await pending;
+            expect(ready.checkpointEvidence?.[0]?.images.map(image => image.alt)).toEqual(f.evidence.packet.tiles.map(tile => tile.label));
+            expect(ready.checkpointEvidence?.[0]?.table).toEqual(f.evidence.table);
+            expect(ready.checkpointEvidence?.[0]?.table.rows).toHaveLength(103);
+            console.log('CHECKPOINT_EVIDENCE_SYNTHETIC_SEALS', JSON.stringify({kind, sourceHash: f.source.sourceHash, files: f.evidence.files, rows: 103}));
+            expect(f.requests.every(url => url.startsWith('http://127.0.0.1:19484' + f.display.routes.apiBase))).toBe(true);
+            ready.dispose(); ready.dispose();
+            expect(f.revoked).toEqual(f.created);
+        } finally {await f.close();}
+    });
+    test('#629 missing evidence keeps legacy record preparation manifest-free without evidence fetch', async () => {
+        const f = await setup('plan', true);
+        try {
+            const ready = await prepareJobInspection(f.display, new AbortController().signal);
+            expect(ready.metadata.manifest).toBeUndefined();
+            expect(ready.checkpointEvidence).toEqual([]);
+            expect(f.requests).toHaveLength(1); ready.dispose();
+        } finally {await f.close();}
+    });
+    test('#629 declaration metadata mutants refuse under unchanged publication sourceHash in both branches', async () => {
+        for (const kind of ['plan', 'package'] as const) {
+            const f = await setup(kind);
+            const original = structuredClone(f.metadata.checkpointEvidence);
+            try {
+                for (const mutate of [
+                    (p: any) => {p[0].tiles[0].label += '!';}, (p: any) => {p[0].tiles.reverse();},
+                    (p: any) => {p[0].routesText += '!';}, (p: any) => {p[0].recommendationText += '!';},
+                    (p: any) => {p[0].table.label += '!';}, (p: any) => {p[0].table.path += '!';},
+                    (p: any) => {p[0].tiles[0].url = 'https://example.invalid/tile.png';},
+                    (p: any) => {p[0].table.url = '/api/checkpoint-evidence/other/table';},
+                    (p: any) => {p[0].planStepId = 'other';}, (p: any) => {p[0].checkpointId = 'other';},
+                ]) {
+                    f.metadata.checkpointEvidence = structuredClone(original); mutate(f.metadata.checkpointEvidence);
+                    await expect(prepareJobInspection(f.display, new AbortController().signal)).rejects.toThrow('CHECKPOINT_EVIDENCE_INVALID');
+                }
+                delete f.metadata.checkpointEvidence;
+                await expect(prepareJobInspection(f.display, new AbortController().signal)).rejects.toThrow('CHECKPOINT_EVIDENCE_INVALID');
+                expect(f.images).toHaveLength(0);
+            } finally {await f.close();}
+        }
+    });
+    test('#629 undeclared injected metadata refuses instead of showing attachments', async () => {
+        const f = await setup('plan', true);
+        try {
+            f.metadata.checkpointEvidence = [];
+            await expect(prepareJobInspection(f.display, new AbortController().signal)).rejects.toThrow('CHECKPOINT_EVIDENCE_INVALID');
+        } finally {await f.close();}
+    });
+    test('#629 raw-table projection mutants refuse without changed sourceHash or raw bytes', async () => {
+        const f = await setup(); const original = structuredClone(f.metadata.checkpointEvidence);
+        try {
+            for (const mutate of [
+                (table: any) => {table.rows[0][2] = 'forged PASS';}, (table: any) => {table.rows.reverse();},
+                (table: any) => {table.columns.reverse();}, (table: any) => {table.rows.pop();},
+                (table: any) => {table.schema = 'changed';},
+            ]) {
+                f.metadata.checkpointEvidence = structuredClone(original); mutate(f.metadata.checkpointEvidence[0].table);
+                await expect(prepareJobInspection(f.display, new AbortController().signal)).rejects.toThrow('CHECKPOINT_EVIDENCE_TABLE_INVALID');
+            }
+            expect(f.images).toHaveLength(0);
+        } finally {await f.close();}
+    });
+    for (const suffix of ['/table', '/tiles/0']) test('#629 raw seal mismatch refuses by name for ' + suffix, async () => {
+        const f = await setup();
+        try {
+            f.bytes.set(suffix, new Uint8Array([1, 2, 3]));
+            await expect(prepareJobInspection(f.display, new AbortController().signal)).rejects.toThrow('CHECKPOINT_EVIDENCE_HASH_MISMATCH');
+            await Bun.sleep(1); expect([...f.revoked].sort()).toEqual([...f.created].sort());
+        } finally {await f.close();}
+    });
+    test('#629 image decode failure and cancellation dispose every allocated URL', async () => {
+        for (const cancel of [false, true]) {
+            const f = await setup(); f.hold();
+            try {
+                const abort = new AbortController();
+                const pending = prepareJobInspection(f.display, abort.signal);
+                const refusal = pending.then(() => null, error => error as Error);
+                await until(() => f.images.length === 4);
+                if (cancel) abort.abort();
+                else {f.images[0]!.reject(new Error('decoder refusal')); for (const image of f.images.slice(1)) image.resolve();}
+                expect((await refusal)?.message).toBe(cancel ? 'JOB_PRELOAD_CANCELLED' : 'CHECKPOINT_EVIDENCE_PNG_INVALID');
+                for (const image of f.images) image.resolve();
+                await Bun.sleep(1); expect([...f.revoked].sort()).toEqual([...f.created].sort());
+            } finally {await f.close();}
+        }
+    });
+    test('#629 superseded real preparation never acknowledges stale tiles or leaks their URLs', async () => {
+        const f = await setup(); f.hold();
+        const acknowledged: string[] = [];
+        let active: JobPreparedInspection | undefined;
+        const next: DisplayPublicationV3 = {...f.display, publication: {...f.display.publication,
+            publicationId: 'publication-2', generation: 2, previousPublicationId: f.display.publication.publicationId},
+            routes: {entry: f.display.routes.entry.replace('publication-1', 'publication-2'),
+                apiBase: f.display.routes.apiBase.replace('publication-1', 'publication-2'),
+                assetsBase: f.display.routes.assetsBase.replace('publication-1', 'publication-2')}};
+        const window = createJobWindow({jobId: 'window-fixture', pageId: 'evidence-page',
+            transport: {readPublication: async id => ({ok: true, value: id === next.publication.publicationId ? next : f.display}),
+                async acknowledge(input) {acknowledged.push(input.publicationId); return {ok: true, value: {...input, displayedNonce: 'nonce'}};},
+                async submit() {throw new Error('Unused ordinary fixture submission');}},
+            adapter: {prepare: prepareJobInspection, captureDraft: () => null,
+                commit(prepared) {
+                    const previous = active; active = prepared;
+                    return {rollback() {active = previous;}, finalize() {previous?.dispose();}};
+                }, painted: async () => {},
+                discard: prepared => prepared.dispose(), changed() {}}});
+        try {
+            window.event({type: 'published', jobId: 'window-fixture', generation: 1, cursor: '1', publication: f.display.publication});
+            await until(() => f.images.length === 4);
+            window.event({type: 'published', jobId: 'window-fixture', generation: 2, cursor: '2', publication: next.publication});
+            await until(() => f.images.length === 8);
+            for (const image of f.images.slice(4)) image.resolve();
+            await window.settled();
+            expect(acknowledged).toEqual(['publication-2']);
+            expect(window.state().displayed?.publication.publicationId).toBe('publication-2');
+            for (const image of f.images.slice(0, 4)) image.resolve();
+            await Bun.sleep(1);
+            expect([...f.revoked].sort()).toEqual(f.created.slice(0, 4).sort());
+            window.stop(); active?.dispose();
+            expect([...f.revoked].sort()).toEqual([...f.created].sort());
+        } finally {window.stop(); active?.dispose(); await f.close();}
+    });
 });

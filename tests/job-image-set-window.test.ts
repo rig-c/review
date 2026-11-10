@@ -215,13 +215,15 @@ async function actualBuildBody() {
   const source = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
   const parsed = ts.createSourceFile('job-session.ts', source, ts.ScriptTarget.Latest, true);
   let body: string | undefined;
+  let gallery: string | undefined;
   function visit(node: ts.Node) {
     if (ts.isFunctionDeclaration(node) && node.name?.text === 'build') body = node.getText(parsed);
+    if (ts.isFunctionDeclaration(node) && node.name?.text === 'imageGallery') gallery = node.getText(parsed);
     ts.forEachChild(node, visit);
   }
   visit(parsed);
-  if (!body) throw new Error('Production build body missing');
-  return body;
+  if (!body || !gallery) throw new Error('Production build/gallery body missing');
+  return gallery + '\n' + body;
 }
 
 function mountActualBuild(body: string, prepared: JobPreparedInspection): MountElement {

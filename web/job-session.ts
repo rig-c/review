@@ -5,6 +5,8 @@ import type {
     DisplayPublicationV3,
     EventV3,
     JobDisplayReceipt,
+    JobCheckpointEvidence,
+    JobCheckpointTable,
     JobInterviewDiagnostics,
     JobResult,
     JobUISubmission,
@@ -611,7 +613,12 @@ import type { Checkpoint, ReviewManifest, ReviewedSource } from '../src/manifest
 import type { DirectionInspection } from '../src/direction-inspection.ts';
 import type { FeedbackCatalog } from '../src/feedback-validation.ts';
 import type { InterviewQuestion } from '../src/interview-project.ts';
+type JobCheckpointEvidenceMetadata = Omit<JobCheckpointEvidence, 'tiles' | 'table'> & {
+    tiles: readonly (JobCheckpointEvidence['tiles'][number] & {url: string})[];
+    table: JobCheckpointEvidence['table'] & JobCheckpointTable & {url: string};
+};
 export interface JobInspectionMetadata {
+    checkpointEvidence?: readonly JobCheckpointEvidenceMetadata[];
     manifest: ReviewManifest;
     recordSource?: undefined;
     sourceHash: string;
@@ -634,6 +641,7 @@ export interface JobInspectionMetadata {
     feedbackCatalog: Pick<FeedbackCatalog, 'slots'> & Partial<Pick<FeedbackCatalog, 'bones'>>;
 }
 export interface JobRecordInspectionMetadata {
+    checkpointEvidence?: readonly JobCheckpointEvidenceMetadata[];
     manifest?: undefined;
     recordSource: RecordSource;
     sourceHash: string;
@@ -757,6 +765,11 @@ export interface JobPreparedInspection {
     partPages?: Map<number, HTMLImageElement>;
     interviewImages: Map<string, HTMLImageElement>;
     imageSetImages?: readonly HTMLImageElement[];
+    checkpointEvidence?: readonly {
+        packet: JobCheckpointEvidence;
+        table: JobCheckpointTable;
+        images: readonly HTMLImageElement[];
+    }[];
     references: JobReferenceView[];
     assets: ModelAssets | null;
     player: RigPlayer | null;
@@ -874,22 +887,39 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         for (const url of objectUrls)
             URL.revokeObjectURL(url);
     };
-    async function visualBytes(url: string, hash?: string) {
-        const bytes = await jobBytes(url, signal, 128 * 1024 * 1024);
+    async function visualBytes(url: string, hash?: string, maximum = 128 * 1024 * 1024,
+        hashRefusal = 'JOB_SOURCE_MISMATCH') {
+        const bytes = await jobBytes(url, signal, maximum);
         if (hash && await jobDigest(bytes) !== hash)
-            throw new Error('JOB_SOURCE_MISMATCH');
+            throw new Error(hashRefusal);
+        if (disposed || signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
         return bytes;
     }
-    async function image(url: string, hash?: string): Promise<HTMLImageElement> {
-        const bytes = await visualBytes(url, hash);
+    async function image(url: string, hash?: string, evidence = false): Promise<HTMLImageElement> {
+        const bytes = await visualBytes(url, hash, evidence ? 8 * 1024 * 1024 : undefined,
+            evidence ? 'CHECKPOINT_EVIDENCE_HASH_MISMATCH' : undefined);
+        if (disposed || signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
         const blob = URL.createObjectURL(new Blob([bytes.slice().buffer]));
         objectUrls.push(blob);
         const image = new Image();
         image.src = blob;
-        await image.decode();
-        if (!image.naturalWidth || !image.naturalHeight || signal.aborted)
-            throw new Error('JOB_VISUAL_UNAVAILABLE');
-        return image;
+        let cancel: () => void = () => {};
+        const cancelled = new Promise<never>((_resolve, reject) => {
+            cancel = () => reject(new Error('JOB_PRELOAD_CANCELLED'));
+            signal.addEventListener('abort', cancel, {once: true});
+            if (signal.aborted) cancel();
+        });
+        try {
+            await Promise.race([image.decode().catch(() => {
+                throw new Error(evidence ? 'CHECKPOINT_EVIDENCE_PNG_INVALID' : 'JOB_VISUAL_UNAVAILABLE');
+            }), cancelled]);
+            if (disposed || signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
+            if (!image.naturalWidth || !image.naturalHeight)
+                throw new Error(evidence ? 'CHECKPOINT_EVIDENCE_PNG_INVALID' : 'JOB_VISUAL_UNAVAILABLE');
+            return image;
+        } finally {
+            signal.removeEventListener('abort', cancel);
+        }
     }
     try {
         const interview = metadata.capabilities.interview ? await jobJson<JobInterview>(routes.api('interview'), signal) : null;
@@ -907,6 +937,48 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         const preload: Promise<void>[] = [];
         const imageSetImages: HTMLImageElement[] = [];
         const source = display.publication.source;
+        const checkpointEvidence: NonNullable<JobPreparedInspection['checkpointEvidence']>[number][] = [];
+        if (Object.hasOwn(metadata, 'checkpointEvidence') !== Object.hasOwn(source, 'checkpointEvidence') ||
+            source.checkpointEvidence !== undefined && (!Array.isArray(metadata.checkpointEvidence) ||
+                metadata.checkpointEvidence.length !== source.checkpointEvidence.length)) {
+            throw new Error('CHECKPOINT_EVIDENCE_INVALID');
+        }
+        for (const [index, packet] of (source.checkpointEvidence ?? []).entries()) {
+            const projection = metadata.checkpointEvidence?.[index];
+            const tableUrl = `/api/checkpoint-evidence/${packet.checkpointId}/table`;
+            if (!projection?.table || !source.plan?.steps.some(step => step.id === packet.planStepId) ||
+                source.subject === 'plan' && !source.subjects.some(subject => subject.kind === 'checkpoint' &&
+                    subject.checkpointId === packet.checkpointId && packet.planStepId === packet.checkpointId) ||
+                sourceSnapshot(projection) !== sourceSnapshot({...packet,
+                    tiles: packet.tiles.map((tile, tileIndex) => ({...tile,
+                        url: `/api/checkpoint-evidence/${packet.checkpointId}/tiles/${tileIndex}`})),
+                    table: {...packet.table, url: tableUrl, schema: projection.table.schema,
+                        columns: projection.table.columns, rows: projection.table.rows}})) {
+                throw new Error('CHECKPOINT_EVIDENCE_INVALID');
+            }
+        }
+        for (const [index, packet] of (source.checkpointEvidence ?? []).entries()) {
+            preload.push((async () => {
+                const bytes = await visualBytes(routes.api(`checkpoint-evidence/${packet.checkpointId}/table`),
+                    packet.table.sha256, 256 * 1024, 'CHECKPOINT_EVIDENCE_HASH_MISMATCH');
+                let table: JobCheckpointTable;
+                try {
+                    table = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes));
+                    const projection = metadata.checkpointEvidence![index]!.table;
+                    if (sourceSnapshot(table) !== sourceSnapshot({schema: projection.schema,
+                        columns: projection.columns, rows: projection.rows})) throw new Error();
+                } catch {
+                    throw new Error('CHECKPOINT_EVIDENCE_TABLE_INVALID');
+                }
+                const images = await Promise.all(packet.tiles.map(async (tile, tileIndex) => {
+                    const element = await image(routes.api(`checkpoint-evidence/${packet.checkpointId}/tiles/${tileIndex}`),
+                        tile.sha256, true);
+                    element.alt = tile.label;
+                    return element;
+                }));
+                checkpointEvidence[index] = {packet, table, images};
+            })());
+        }
         if (source.subject === 'image-set') {
             if (metadata.sourceHash !== source.sourceHash || metadata.manifest?.model)
                 throw new Error('JOB_DISPLAY_MISMATCH');
@@ -1076,7 +1148,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
             };
             resetToSetup();
         }
-        if (!isRecordSource(source) && !player && !references.length && !partImages.size && !imageSetImages.length)
+        if (!isRecordSource(source) && !player && !references.length && !partImages.size && !imageSetImages.length && !checkpointEvidence.length)
             throw new Error('JOB_VISUAL_UNAVAILABLE');
         if (signal.aborted)
             throw new Error('JOB_PRELOAD_CANCELLED');
@@ -1084,7 +1156,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         const order = [metadata.sourcePainting?.id, ...(metadata.manifest?.references.map(reference => reference.id) ?? [])];
         references.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
         return {
-            display, metadata, interview, parts, partImages, partPages, interviewImages, imageSetImages, references, assets, rigRoot,
+            display, metadata, interview, parts, partImages, partPages, interviewImages, imageSetImages, checkpointEvidence, references, assets, rigRoot,
             get rigPresentation() { return rigPresentation; },
             set rigPresentation(value) {
                 clearRigPresentation();
@@ -1668,6 +1740,43 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         parent.append(inputLabel(key, input));
         return input;
     }
+    function imageGallery(images: readonly {name: string; sha256: string; element?: HTMLImageElement;
+        role?: string; duplicate?: boolean}[]): HTMLElement {
+        const gallery = node('section');
+        gallery.style.display = 'grid';
+        gallery.style.gridAutoFlow = 'column';
+        gallery.style.gridAutoColumns = 'minmax(180px, 1fr)';
+        gallery.style.gap = '16px';
+        gallery.style.overflow = 'auto';
+        gallery.style.minHeight = '0';
+        gallery.style.flex = '1';
+        for (const image of images) {
+            const element = image.element;
+            if (!element) throw new Error('JOB_VISUAL_UNAVAILABLE');
+            const figure = node('figure');
+            figure.style.margin = '0';
+            figure.style.minWidth = '0';
+            figure.dataset.imageName = image.name;
+            const name = node('h3');
+            name.textContent = image.name;
+            name.style.overflowWrap = 'anywhere';
+            const role = image.role ? node('p', 'job.imageRole.' + image.role) : node('p');
+            const hash = node('code');
+            hash.className = 'job-source';
+            hash.style.display = 'block';
+            hash.style.overflowWrap = 'anywhere';
+            hash.textContent = image.sha256;
+            element.style.width = '100%';
+            element.style.height = 'auto';
+            element.style.maxHeight = '70vh';
+            element.style.objectFit = 'contain';
+            figure.append(name, role, element, hash);
+            if (image.duplicate)
+                figure.append(node('p', 'job.identicalImages'));
+            gallery.append(figure);
+        }
+        return gallery;
+    }
     function formFor(ask: PendingAskV3, prepared: JobPreparedInspection): JobForm {
         if (ask.publicationId !== prepared.display.publication.publicationId)
             throw new Error('JOB_DISPLAY_MISMATCH');
@@ -1766,6 +1875,57 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             planStep.className = 'job-source';
             planStep.textContent = checkpoint.step.id + ' · ' + checkpoint.step.hash;
             fields.append(planStep, guidance);
+            const evidence = prepared.checkpointEvidence?.find(item => item.packet.checkpointId === subject.checkpointId);
+            const declared = ask.source.checkpointEvidence?.find(item => item.checkpointId === subject.checkpointId);
+            if (Boolean(declared) !== Boolean(evidence) || evidence &&
+                (JSON.stringify(evidence.packet) !== JSON.stringify(declared) || evidence.packet.planStepId !== checkpoint.step.id)) {
+                throw new Error('CHECKPOINT_EVIDENCE_INVALID');
+            }
+            if (evidence) {
+                const section = node('section');
+                section.dataset.jobCheckpointEvidence = subject.checkpointId;
+                section.append(node('h4', 'job.checkpointEvidence'));
+                section.append(imageGallery(evidence.packet.tiles.map((tile, index) => ({name: tile.label,
+                    sha256: tile.sha256, element: evidence.images[index]?.cloneNode(true) as HTMLImageElement}))));
+                const tableHost = node('div');
+                tableHost.style.overflow = 'auto';
+                tableHost.style.maxHeight = '50dvh';
+                const table = node('table');
+                table.dataset.jobCheckpointTable = '';
+                const caption = node('caption', 'job.checkpointTable');
+                if (evidence.packet.table.label !== undefined) {
+                    delete caption.dataset.jobText;
+                    caption.textContent = evidence.packet.table.label;
+                }
+                const head = node('thead');
+                const columns = node('tr');
+                for (const column of evidence.table.columns) {
+                    const cell = node('th');
+                    cell.scope = 'col';
+                    cell.textContent = column;
+                    columns.append(cell);
+                }
+                head.append(columns);
+                const body = node('tbody');
+                for (const row of evidence.table.rows) {
+                    const cells = node('tr');
+                    for (const value of row) {
+                        const cell = node('td');
+                        cell.textContent = String(value);
+                        cells.append(cell);
+                    }
+                    body.append(cells);
+                }
+                table.append(caption, head, body);
+                tableHost.append(table);
+                const routes = node('pre');
+                routes.textContent = evidence.packet.routesText;
+                const recommendation = node('pre');
+                recommendation.textContent = evidence.packet.recommendationText;
+                section.append(tableHost, node('h4', 'job.checkpointRoutes'), routes,
+                    node('h4', 'job.checkpointRecommendation'), recommendation);
+                fields.append(section, node('p', 'job.checkpointRouteMapping'));
+            }
             const outcome = selectValues(['', 'pass', 'fail'], ['Pending', 'Pass', 'job.fail']);
             outcome.required = true;
             outcome.name = 'outcome';
@@ -2434,40 +2594,10 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             const digestValue = node('code');
             digestValue.textContent = source.imageSetDigest;
             digest.append(digestLabel, document.createTextNode(' '), digestValue);
-            const gallery = node('section');
+            const gallery = imageGallery(source.imageSet.images.map((image, index) => ({...image,
+                element: prepared.imageSetImages?.[index],
+                duplicate: source.duplicateHashes.some(group => group.names.includes(image.name))})));
             gallery.dataset.jobImageSet = '';
-            gallery.style.display = 'grid';
-            gallery.style.gridAutoFlow = 'column';
-            gallery.style.gridAutoColumns = 'minmax(180px, 1fr)';
-            gallery.style.gap = '16px';
-            gallery.style.overflow = 'auto';
-            gallery.style.minHeight = '0';
-            gallery.style.flex = '1';
-            for (const [index, image] of source.imageSet.images.entries()) {
-                const element = prepared.imageSetImages?.[index];
-                if (!element) throw new Error('JOB_VISUAL_UNAVAILABLE');
-                const figure = node('figure');
-                figure.style.margin = '0';
-                figure.style.minWidth = '0';
-                figure.dataset.imageName = image.name;
-                const name = node('h3');
-                name.textContent = image.name;
-                name.style.overflowWrap = 'anywhere';
-                const role = node('p', 'job.imageRole.' + image.role);
-                const hash = node('code');
-                hash.className = 'job-source';
-                hash.style.display = 'block';
-                hash.style.overflowWrap = 'anywhere';
-                hash.textContent = image.sha256;
-                element.style.width = '100%';
-                element.style.height = 'auto';
-                element.style.maxHeight = '70vh';
-                element.style.objectFit = 'contain';
-                figure.append(name, role, element, hash);
-                if (source.duplicateHashes.some(group => group.names.includes(image.name)))
-                    figure.append(node('p', 'job.identicalImages'));
-                gallery.append(figure);
-            }
             stage.prepend(heading, digest, gallery);
             controls.hidden = pair.hidden = transport.hidden = true;
             controls.style.display = pair.style.display = transport.style.display = 'none';
