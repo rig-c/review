@@ -1376,11 +1376,15 @@ import {advancePlayback} from '../web/playback-clock.ts';
 import {parseControlPart, parsePartIdentity, type ControlPart} from '../src/control.ts';
 import {parseManifest} from '../src/manifest.ts';
 import type {JobPreparedInspection} from '../web/job-session.ts';
+import {RigOverlays} from '../web/rig-overlays.ts';
+import {bindLayerShortcuts, describeLayerToggles, layerShortcuts} from '../web/view-controls.ts';
+import {SENTINELS} from '../web/parts-render.ts';
 
 describe('#559 continuous Rig motion transport and mid-play verdict capture', () => {
     class RuntimeDomNode {
         id = '';
         className = '';
+        title = '';
         hidden = false;
         disabled = false;
         checked = false;
@@ -1398,6 +1402,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         style: Record<string, string> = {};
         children: RuntimeDomNode[] = [];
         parentElement: RuntimeDomNode | null = null;
+        canvasOps: string[] = [];
         onchange?: (event?: unknown) => unknown;
         onclick?: (event?: unknown) => unknown;
         oninput?: (event?: unknown) => unknown;
@@ -1473,6 +1478,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             this.attributes.set(name, value);
             if (name === 'id') this.id = value;
             else if (name === 'class') this.className = value;
+            else if (name === 'title') this.title = value;
             else if (name === 'style') this.style.cssText = value;
             else if (name.startsWith('data-')) {
                 const camel = name.slice(5).replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase());
@@ -1482,11 +1488,13 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         getAttribute(name: string): string | null {
             if (name === 'id') return this.id || null;
             if (name === 'class') return this.className || null;
+            if (name === 'title') return this.title || this.attributes.get('title') || null;
             if (name === 'style') return this.attributes.get('style') ?? 'left: 0px; top: 0px; width: 64px; height: 64px;';
             return this.attributes.get(name) ?? null;
         }
         removeAttribute(name: string) {
             this.attributes.delete(name);
+            if (name === 'title') this.title = '';
             if (name.startsWith('data-')) {
                 const camel = name.slice(5).replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase());
                 delete this.dataset[camel];
@@ -1513,6 +1521,13 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         }
         click() {
             if (this.disabled) return;
+            if (this.tagName === 'input' && this.type === 'checkbox') {
+                this.checked = !this.checked;
+                this.onchange?.({type: 'change', target: this, preventDefault() {}});
+                for (const listener of [...(this.listeners.get('change') ?? [])]) {
+                    listener({type: 'change', target: this, preventDefault() {}});
+                }
+            }
             this.onclick?.({type: 'click', target: this, preventDefault() {}});
             for (const listener of [...(this.listeners.get('click') ?? [])]) {
                 listener({type: 'click', target: this, preventDefault() {}});
@@ -1528,6 +1543,21 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             if (kind !== '2d') return null;
             const owner = this;
             return {
+                strokeStyle: '',
+                fillStyle: '',
+                lineWidth: 1,
+                globalAlpha: 1,
+                save() {},
+                restore() {},
+                setLineDash() {},
+                setTransform() { owner.canvasOps.push('setTransform'); },
+                clearRect(x: number, y: number, w: number, h: number) { owner.canvasOps.push(`clearRect:${x},${y},${w},${h}`); },
+                beginPath() { owner.canvasOps.push('beginPath'); },
+                moveTo(x: number, y: number) { owner.canvasOps.push(`moveTo:${Math.round(x * 100) / 100},${Math.round(y * 100) / 100}`); },
+                lineTo(x: number, y: number) { owner.canvasOps.push(`lineTo:${Math.round(x * 100) / 100},${Math.round(y * 100) / 100}`); },
+                stroke() { owner.canvasOps.push(`stroke:${this.strokeStyle}`); },
+                arc(x: number, y: number, r: number) { owner.canvasOps.push(`arc:${Math.round(x * 100) / 100},${Math.round(y * 100) / 100},${r}`); },
+                fill() { owner.canvasOps.push(`fill:${this.fillStyle}`); },
                 getImageData(_x: number, _y: number, width: number, height: number) {
                     return {width, height, data: owner.pixels.slice(0, width * height * 4)};
                 },
@@ -1652,6 +1682,16 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             history,
             counts: () => ({playCalls, pauseCalls, resumeCalls, seekCalls, advanceCalls, physicsEpoch}),
             bounds: () => ({x: 0, y: 0, width: 64, height: 64}),
+            bone(name: string) {
+                return {
+                    x: name === 'head_b' ? 16 : 8,
+                    y: name === 'head_b' ? 32 : 12,
+                    a: 1, b: 0, c: 0, d: 1,
+                    worldX: name === 'head_b' ? 16 : 8,
+                    worldY: name === 'head_b' ? 32 : 12,
+                    active: true,
+                };
+            },
             moved() {},
             clear(track = 0, _options?: {mix?: number}) {
                 if (track === 0) {
@@ -1868,10 +1908,41 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 set: null,
                 activeSkin: null,
             });
+            const fullOrder = [
+                {
+                    slot: 'body',
+                    attachment: 'body_mesh',
+                    kind: 'mesh' as const,
+                    page: '0',
+                    sequence: null,
+                    vertices: [0, 0, 20, 0, 20, 20, 0, 20],
+                    triangles: [0, 1, 2, 0, 2, 3],
+                    uvs: [0, 0, 1, 0, 1, 1, 0, 1],
+                    z: 0,
+                    tint: [1, 1, 1, 1] as [number, number, number, number],
+                },
+                {
+                    slot: 'head',
+                    attachment: 'head_gen_mesh',
+                    kind: 'mesh' as const,
+                    page: '0',
+                    sequence: null,
+                    vertices: [10, 20, 30, 20, 20, 40],
+                    triangles: [0, 1, 2],
+                    uvs: [0, 0, 1, 0, 0.5, 1],
+                    z: 1,
+                    tint: [1, 1, 1, 1] as [number, number, number, number],
+                },
+            ];
             const inspection = {
                 register() {},
                 present() { presentedGen = player.generation; },
-                frame: () => presentedGen === undefined ? undefined : ({generation: presentedGen} as any),
+                frame: () => presentedGen === undefined ? undefined : ({
+                    generation: presentedGen,
+                    order: selectedSlot?.mode === 'solo'
+                        ? fullOrder.filter(row => row.slot === selectedSlot!.slot)
+                        : fullOrder,
+                } as any),
                 select(value: typeof selectedSlot) { selectedSlot = value; },
                 value: (): ControlPart | null => selectedSlot
                     ? {side: selectedSlot.side, slot: selectedSlot.slot, mode: selectedSlot.mode, identity: slotIdentity(selectedSlot.slot)}
@@ -1934,7 +2005,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                         camera: {space: 'rig-world-y-up'},
                     } as any,
                     capabilities: {playback: true, ...(options?.interview ? {interview: true} : {})},
-                    feedbackCatalog: {slots},
+                    feedbackCatalog: {slots, bones: ['root', 'head_b']},
                 },
                 interview: options?.interview ?? null,
                 parts: null,
@@ -2010,6 +2081,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         const runner = new Function(
             'host', 'access', 'hubIncarnation', 'hubVisible', 'events', 'pageId', 'transport', 'abort',
             'i18n', 't', 'createViewportController', 'createViewportState', 'createRigViewportProvider', 'mountViewportPair',
+            'RigOverlays', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'SENTINELS',
             'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal', 'jobPartsReviewState',
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
             'recordJobRigDraw', 'freezeJobRigCapture', 'copyJobRigViewport', 'createJobRigSubmission', 'jobRigPixelPlacement',
@@ -2019,6 +2091,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         const mounted = runner(
             host, access, hubIncarnation, hubVisible, undefined, options?.pageId ?? 'page-one', transport, abort,
             i18nModule, i18nModule.t, createViewportController, createViewportState, createRigViewportProvider, mountViewportPair,
+            RigOverlays, bindLayerShortcuts, describeLayerToggles, layerShortcuts, SENTINELS,
             createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal, jobPartsReviewState,
             prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,
             recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
@@ -2061,6 +2134,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             },
             failNextTransportSubmit() { failNextSubmit = true; },
             emitGlobal(type: string, event: Record<string, unknown> = {}) {
+                docNode.dispatchEvent({type, ...event});
                 for (const listener of [...(globalListeners.get(type) ?? [])]) listener({type, ...event});
             },
             async publishDisplay<Display extends DisplayPublicationV3>(display: Display): Promise<Display> {
@@ -3515,6 +3589,275 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             );
         } finally {
             s3.cleanup();
+        }
+    });
+
+    test('#630 compiled wire inspector adapter: layer controls, I/M/B shortcuts, textEntryFocused guard, checkpoint-only SENTINELS background, and still-capture invalidation', async () => {
+        const s = await mountRuntimeSession();
+        try {
+            const base = fixturePublication(1);
+            if (base.publication.source.subject === 'image-set') throw new Error('Expected model source');
+            const display: JobDisplayPublication = {
+                ...base,
+                publication: {
+                    ...base.publication,
+                    source: {
+                        ...base.publication.source,
+                        selector: {kind: 'rig', version: 1},
+                        plan: {
+                            steps: [{id: 'meshes', hash: 'b'.repeat(64)}],
+                        },
+                    },
+                },
+            };
+            await s.publishDisplay(display);
+            const source = display.publication.source;
+            if (source.subject === 'image-set') throw new Error('Expected model source');
+
+            // 1. Default model representation starts unchanged (images: true, mesh: false, bones: false),
+            // and both layer controls and background selector stay hidden/disabled on normal asks:
+            const verdictAct = fixtureAct('review-verdict', 'verdict after wire check');
+            if (verdictAct.schema !== 'rig-review/act@2' || verdictAct.kind !== 'review-verdict' || verdictAct.value.stage !== 'rig-review') {
+                throw new Error('Expected review-verdict act');
+            }
+            const verdictAsk = {
+                askId: 'ask-verdict-630',
+                publicationId: display.publication.publicationId,
+                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const},
+                source,
+                status: 'pending' as const,
+            };
+            s.fixture.pending(verdictAsk, 2);
+            s.window.event(s.fixture.events.at(-1)!);
+
+            const layerControls = s.workspace.querySelector('#layer-controls')!;
+            const layerImages = s.workspace.querySelector('#layer-images')!;
+            const layerMesh = s.workspace.querySelector('#layer-mesh')!;
+            const layerBones = s.workspace.querySelector('#layer-bones')!;
+            const overlayCanvas = s.workspace.querySelector('#rig-overlay')!;
+            const rigViewport = s.workspace.querySelector('#rig-viewport')!;
+            const bgField = s.workspace.querySelector('#job-background-field')!;
+            const bgSelect = s.workspace.querySelector('#job-background')!;
+            expect(layerControls).not.toBeNull();
+            expect(layerControls.hidden).toBe(true);
+            expect(layerImages.checked).toBe(true);
+            expect(layerMesh.checked).toBe(false);
+            expect(layerBones.checked).toBe(false);
+            expect(layerImages.disabled).toBe(true);
+            expect(layerMesh.disabled).toBe(true);
+            expect(layerBones.disabled).toBe(true);
+            expect(overlayCanvas).not.toBeNull();
+            expect(overlayCanvas.getAttribute('aria-label')).toBe('Actual rig mesh and bone overlay');
+            expect(rigViewport.getAttribute('tabindex')).toBe('-1');
+            expect(bgField).not.toBeNull();
+            expect(bgSelect).not.toBeNull();
+            expect(bgField.hidden).toBe(true);
+            expect(bgSelect.disabled).toBe(true);
+            expect(rigViewport.style.backgroundColor ?? '').toBe('');
+            expect(rigViewport.dataset.jobRigCanonical).toBe('');
+            expect(rigViewport.querySelector('[data-job-rig-presentation]')).not.toBeNull();
+
+            // Shortcuts I/M/B are inert while no checkpoint ask is pending:
+            s.emitGlobal('keydown', {key: 'i', target: rigViewport, preventDefault() {}});
+            s.emitGlobal('keydown', {key: 'm', target: rigViewport, preventDefault() {}});
+            s.emitGlobal('keydown', {key: 'b', target: rigViewport, preventDefault() {}});
+            expect(layerImages.checked).toBe(true);
+            expect(layerMesh.checked).toBe(false);
+            expect(layerBones.checked).toBe(false);
+
+            // 2. Ask a meshes checkpoint: layer controls and Background selector become visible & enabled:
+            const checkpointAsk = {
+                askId: 'ask-meshes-630',
+                publicationId: display.publication.publicationId,
+                subject: {kind: 'checkpoint' as const, checkpointId: 'meshes', planStepId: 'meshes'},
+                source,
+                status: 'pending' as const,
+            };
+            s.fixture.pending(checkpointAsk, 3);
+            s.window.event(s.fixture.events.at(-1)!);
+            expect(layerControls.hidden).toBe(false);
+            expect(layerImages.disabled).toBe(false);
+            expect(layerMesh.disabled).toBe(false);
+            expect(layerBones.disabled).toBe(false);
+            expect(bgField.hidden).toBe(false);
+            expect(bgSelect.disabled).toBe(false);
+            expect(bgSelect.children.map(opt => opt.value)).toEqual(['', ...Object.keys(SENTINELS)]);
+
+            // 3. Toggle Mesh edges (M) and Bone points (B): draws inline + generated mesh triangles and bone joints on #rig-overlay:
+            overlayCanvas.canvasOps.length = 0;
+            s.emitGlobal('keydown', {key: 'm', target: rigViewport, preventDefault() {}});
+            expect(layerMesh.checked).toBe(true);
+            expect(overlayCanvas.canvasOps.some(op => op.startsWith('stroke:'))).toBe(true);
+            const fullRigMoveCount = overlayCanvas.canvasOps.filter(op => op.startsWith('moveTo:')).length;
+            // body_mesh (5 unique edges) + head_gen_mesh (3 unique edges) = 8 unique edges * 2 strokes = 16 moveTo calls:
+            expect(fullRigMoveCount).toBe(16);
+
+            overlayCanvas.canvasOps.length = 0;
+            s.emitGlobal('keydown', {key: 'b', target: rigViewport, preventDefault() {}});
+            expect(layerBones.checked).toBe(true);
+            expect(overlayCanvas.canvasOps.filter(op => op.startsWith('arc:'))).toHaveLength(2);
+
+            // 4. Detail controls: selecting a part (#job-part) in solo (#job-solo) filters overlay mesh to that slot; zoom (#zoom-in) redraws overlay in alignment:
+            const partSelect = s.workspace.querySelector('#job-part')!;
+            const soloInput = s.workspace.querySelector('#job-solo')!;
+            soloInput.checked = true;
+            soloInput.dispatchEvent({type: 'change'});
+            overlayCanvas.canvasOps.length = 0;
+            partSelect.value = 'head';
+            partSelect.dispatchEvent({type: 'change'});
+            // head_gen_mesh alone (3 unique edges * 2 strokes = 6) + 4 selection box edges + 4 bone axis ticks = 14 moveTo calls:
+            expect(overlayCanvas.canvasOps.filter(op => op.startsWith('moveTo:'))).toHaveLength(14);
+            soloInput.checked = false;
+            soloInput.dispatchEvent({type: 'change'});
+            overlayCanvas.canvasOps.length = 0;
+            partSelect.value = '';
+            partSelect.dispatchEvent({type: 'change'});
+            // Whole rig (16 mesh moveTo) + 4 bone axis ticks = 20 moveTo calls:
+            expect(overlayCanvas.canvasOps.filter(op => op.startsWith('moveTo:'))).toHaveLength(20);
+
+            overlayCanvas.canvasOps.length = 0;
+            s.workspace.querySelector('#zoom-in')!.click();
+            expect(overlayCanvas.canvasOps.filter(op => op.startsWith('moveTo:'))).toHaveLength(20);
+            s.workspace.querySelector('#fit')!.click();
+
+            // 5. Images off (I): hides #rig-root and removes .job-rig-presentation while keeping wire overlay visible:
+            overlayCanvas.canvasOps.length = 0;
+            s.emitGlobal('keydown', {key: 'i', target: rigViewport, preventDefault() {}});
+            expect(layerImages.checked).toBe(false);
+            expect(s.workspace.querySelector('#rig-root')!.style.visibility).toBe('hidden');
+            expect(rigViewport.querySelector('[data-job-rig-presentation]')).toBeNull();
+            expect(rigViewport.dataset.jobRigCanonical).toBeUndefined();
+            expect(overlayCanvas.canvasOps.filter(op => op.startsWith('moveTo:'))).toHaveLength(20);
+
+            // 6. Sentinel background (white and green): updates #rig-viewport background and invalidates canonical still capture:
+            bgSelect.value = 'white';
+            bgSelect.dispatchEvent({type: 'change'});
+            expect(rigViewport.style.backgroundColor).toBe(SENTINELS.white);
+            expect(rigViewport.querySelector('[data-job-rig-presentation]')).toBeNull();
+            bgSelect.value = 'green';
+            bgSelect.dispatchEvent({type: 'change'});
+            expect(rigViewport.style.backgroundColor).toBe(SENTINELS.green);
+
+            // 7. Canonical review-verdict still capture is refused while any overlay layer or non-default background is active:
+            s.fixture.returnAct({
+                ...verdictAct,
+                askId: verdictAsk.askId,
+                publicationId: display.publication.publicationId,
+                source: {...source, selector: {kind: 'rig', version: 1}, model: source.model!},
+                value: verdictAct.value,
+            });
+            const vForm = s.workspace.querySelector(`form[data-job-ask="${verdictAsk.askId}"]`)!;
+            vForm.querySelector('select[name="verdict"]')!.value = 'approved';
+            vForm.querySelector('textarea[name="note"]')!.value = 'verdict after wire check';
+            vForm.dispatchEvent({type: 'input'});
+            await vForm.onsubmit?.({preventDefault() {}});
+            expect(s.outgoingSubmits).toHaveLength(0);
+            expect(vForm.querySelector('[role="status"]')!.dataset.jobText).toBe('JOB_STILL_VIEW_UNSUPPORTED');
+
+            // Restore layers (Images on, Mesh off, Bones off), but leave sentinel background on -> still refused:
+            s.emitGlobal('keydown', {key: 'i', target: rigViewport, preventDefault() {}});
+            s.emitGlobal('keydown', {key: 'm', target: rigViewport, preventDefault() {}});
+            s.emitGlobal('keydown', {key: 'b', target: rigViewport, preventDefault() {}});
+            expect(layerImages.checked).toBe(true);
+            expect(layerMesh.checked).toBe(false);
+            expect(layerBones.checked).toBe(false);
+            vForm.dispatchEvent({type: 'input'});
+            await vForm.onsubmit?.({preventDefault() {}});
+            expect(s.outgoingSubmits).toHaveLength(0);
+            expect(vForm.querySelector('[role="status"]')!.dataset.jobText).toBe('JOB_STILL_VIEW_UNSUPPORTED');
+
+            // Re-enable wire + green background for checkpoint submission:
+            s.emitGlobal('keydown', {key: 'i', target: rigViewport, preventDefault() {}});
+            s.emitGlobal('keydown', {key: 'm', target: rigViewport, preventDefault() {}});
+            s.emitGlobal('keydown', {key: 'b', target: rigViewport, preventDefault() {}});
+
+            // 8. Typing I/M/B in checkpoint textarea[name="note"] must NOT toggle layers, and checkpoint submits verbatim words:
+            const cpForm = s.workspace.querySelector(`form[data-job-ask="${checkpointAsk.askId}"]`)!;
+            const cpNote = cpForm.querySelector('textarea[name="note"]')!;
+            s.emitGlobal('keydown', {key: 'i', target: cpNote, preventDefault() {}});
+            s.emitGlobal('keydown', {key: 'm', target: cpNote, preventDefault() {}});
+            s.emitGlobal('keydown', {key: 'b', target: cpNote, preventDefault() {}});
+            expect(layerImages.checked).toBe(false);
+            expect(layerMesh.checked).toBe(true);
+            expect(layerBones.checked).toBe(true);
+
+            const cpAct = fixtureAct('checkpoint', '  Inspecting I M B mesh seam verbatim\n');
+            if (cpAct.kind !== 'checkpoint') throw new Error('Expected checkpoint act');
+            s.fixture.returnAct({
+                ...cpAct,
+                askId: checkpointAsk.askId,
+                publicationId: display.publication.publicationId,
+                source: {...source, plan: source.plan!},
+                value: {checkpointId: 'meshes', planStepId: 'meshes', outcome: 'pass', words: '  Inspecting I M B mesh seam verbatim\n'},
+            });
+            cpForm.querySelector('select[name="outcome"]')!.value = 'pass';
+            cpNote.value = '  Inspecting I M B mesh seam verbatim\n';
+            cpForm.dispatchEvent({type: 'input'});
+            await cpForm.onsubmit?.({preventDefault() {}});
+            expect(s.outgoingSubmits).toHaveLength(1);
+            expect(s.outgoingSubmits[0]!.body.kind).toBe('checkpoint');
+            expect(s.outgoingSubmits[0]!.body.value).toEqual({
+                checkpointId: 'meshes',
+                outcome: 'pass',
+                words: '  Inspecting I M B mesh seam verbatim\n',
+            });
+
+            // 9. Transition 1 (Answering the pending checkpoint ask resets layers/background, hides/disables controls,
+            // and restores canonical presentation for the remaining unrelated review-verdict ask):
+            expect(layerControls.hidden).toBe(true);
+            expect(layerImages.disabled).toBe(true);
+            expect(layerImages.checked).toBe(true);
+            expect(layerMesh.checked).toBe(false);
+            expect(layerBones.checked).toBe(false);
+            expect(bgField.hidden).toBe(true);
+            expect(bgSelect.disabled).toBe(true);
+            expect(rigViewport.style.backgroundColor ?? '').toBe('');
+            expect(rigViewport.dataset.jobRigCanonical).toBe('');
+            expect(rigViewport.querySelector('[data-job-rig-presentation]')).not.toBeNull();
+
+            s.fixture.returnAct({
+                ...verdictAct,
+                askId: verdictAsk.askId,
+                publicationId: display.publication.publicationId,
+                source: {...source, selector: {kind: 'rig', version: 1}, model: source.model!},
+                value: verdictAct.value,
+            });
+            vForm.dispatchEvent({type: 'input'});
+            await vForm.onsubmit?.({preventDefault() {}});
+            expect(s.outgoingSubmits).toHaveLength(2);
+            expect(s.outgoingSubmits[1]!.body.kind).toBe('review-verdict');
+            expect(s.outgoingSubmits[1]!.body.capture.view).toBe('whole-rig');
+
+            // 10. Transition 2 (Publication swap while a checkpoint ask is pending with active wire/background resets state on the new publication):
+            const checkpointAsk2 = {
+                askId: 'ask-meshes-630-2',
+                publicationId: display.publication.publicationId,
+                subject: {kind: 'checkpoint' as const, checkpointId: 'meshes', planStepId: 'meshes'},
+                source,
+                status: 'pending' as const,
+            };
+            s.fixture.pending(checkpointAsk2, 4);
+            s.window.event(s.fixture.events.at(-1)!);
+            expect(layerControls.hidden).toBe(false);
+            s.emitGlobal('keydown', {key: 'm', target: rigViewport, preventDefault() {}});
+            bgSelect.value = 'magenta';
+            bgSelect.dispatchEvent({type: 'change'});
+            expect(layerMesh.checked).toBe(true);
+            expect(rigViewport.style.backgroundColor).toBe(SENTINELS.magenta);
+
+            const display2 = fixturePublication(2);
+            await s.publishDisplay(display2);
+            const rigViewport2 = s.workspace.querySelector('#rig-viewport')!;
+            expect(s.workspace.querySelector('#layer-controls')!.hidden).toBe(true);
+            expect(s.workspace.querySelector('#layer-images')!.disabled).toBe(true);
+            expect(s.workspace.querySelector('#layer-images')!.checked).toBe(true);
+            expect(s.workspace.querySelector('#layer-mesh')!.checked).toBe(false);
+            expect(s.workspace.querySelector('#job-background-field')!.hidden).toBe(true);
+            expect(rigViewport2.style.backgroundColor ?? '').toBe('');
+            expect(rigViewport2.dataset.jobRigCanonical).toBe('');
+            expect(rigViewport2.querySelector('[data-job-rig-presentation]')).not.toBeNull();
+        } finally {
+            s.cleanup();
         }
     });
 });
