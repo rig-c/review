@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.10.0
+
+* Install Korean fonts in CI for camera captures (#631).
+* Settle the camera layout before comment drags (#632).
+* Expose existing compiled wire inspection controls at checkpoints (#633).
+* Bind sealed checkpoint evidence to source identity (#634).
+* Display source-bound evidence tiles, tables, routes and recommendations in the job UI (#635).
+
+Retain exact pins to `@rig-c/play@1.24.0` and development-only `@rig-c/parts@2.37.0`. Browser acceptance uses synthetic fixtures. Installed Create consumer acceptance and `REAL_USER_SCENE_PENDING` remain external gates.
+
 ## 2.9.0
 
 Return `@rig-c/review` to its `2.x` release line, with exact pins to `@rig-c/play@1.24.0` and development-only `@rig-c/parts@2.37.0` (rig-hq#22). Restore the Parts enumerator package range to `>=2.25.0 <3.0.0`.
