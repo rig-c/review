@@ -3,8 +3,9 @@ import { mkdtemp, readFile, realpath, rm, unlink, writeFile, symlink } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
-import { loadPartsView, readPartMeshes, buildVerdict, verdictSource, saveVerdict, readVerdict, readPartsVerdictForCli, assertPartsUnchanged } from '../src/parts-view.ts';
-import { meshCoverage, paintMesh } from '../web/parts-render.ts';
+import { loadPartsView, partsViewJson, readPartMeshes, buildVerdict, verdictSource, saveVerdict, readVerdict, readPartsVerdictForCli, assertPartsUnchanged, type ViewItem } from '../src/parts-view.ts';
+import { meshCoverage, paintMesh, paintPart } from '../web/parts-render.ts';
+import { t } from '../web/i18n.ts';
 import { writeMeshPackage } from './helpers/parts-mesh-package.ts';
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
@@ -295,4 +296,208 @@ test('#614 mesh wire-only alpha keeps tint and vertices selected-only and restor
  paintMesh(selectedCtx as never,source as never,64,64,item.mesh!, (w,h)=>createCanvas(w,h) as never,{tint:true,alpha:1});
  expect(selectedCtx.getImageData(24,24,1,1).data[0]).toBeGreaterThan(136);
  expect(ctx.getImageData(24,24,1,1).data[3]).toBe(0);
+});
+
+test('#626: readPartMeshes accepts object generator mesh without uvs/triangles, sets meshUnavailable PARTS_MESH_GENERATED without reconstructing geometry, and enforces all invalid/ambiguous/raster/report controls', () => {
+  const inlineMesh = { type: 'mesh', image: 'gap.png', width: 64, height: 64, uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2] };
+  const generatorMesh = {
+    type: 'mesh',
+    image: 'face.png',
+    width: 112,
+    height: 133,
+    generator: { kind: 'grid', cols: 13, rows: 16, depth: { image: 'face_depth.png', near: 'white', zScale: 120 } },
+  };
+  const makeItems = (): ViewItem[] => [
+    { name: 'gap', index: 0, x: 0, y: 0, w: 64, h: 64 },
+    { name: 'face', index: 1, x: 64, y: 0, w: 112, h: 133 },
+  ];
+  const doc = (skins: Record<string, unknown>) => ({ skins });
+
+  // Valid mixed inline + generator (and generator with sibling hull/weights): never reconstructs geometry for generator.
+  for (const genVariant of [generatorMesh, { ...generatorMesh, hull: 4, weights: [[[0, 1, 0, 1]]] }]) {
+    const items = makeItems();
+    readPartMeshes(doc({ default: { gap: { gap: inlineMesh }, face: { face: genVariant } } }), items, [
+      { part: 'gap', mode: 'lattice', vertices: 3, triangles: 1 },
+      { part: 'face', mode: 'grid', vertices: 238, triangles: 416 },
+    ]);
+    expect(items[0]!.mesh).toEqual({
+      vertices: [0, 0, 64, 0, 0, 64],
+      triangles: [0, 1, 2],
+      figures: { mode: 'lattice', vertices: 3, triangles: 1 },
+      width: 64,
+      height: 64,
+      image: 'gap.png',
+    });
+    expect((items[0] as { meshUnavailable?: string }).meshUnavailable).toBeUndefined();
+    expect(items[1]!.mesh).toBeUndefined();
+    expect((items[1] as { meshUnavailable?: string }).meshUnavailable).toBe('PARTS_MESH_GENERATED');
+  }
+
+  // Unknown part on generator path refuses PARTS_MESH_UNKNOWN_PART.
+  expect(() => readPartMeshes(doc({ default: { unknown: { unknown: generatorMesh } } }), makeItems(), [])).toThrow('PARTS_MESH_UNKNOWN_PART');
+
+  // Ambiguous meshes (generator+generator, inline+generator, generator+inline) refuse PARTS_MESH_AMBIGUOUS.
+  expect(() => readPartMeshes(doc({ a: { face: { face: generatorMesh } }, b: { face: { face: generatorMesh } } }), makeItems(), [])).toThrow('PARTS_MESH_AMBIGUOUS');
+  expect(() => readPartMeshes(doc({ a: { face: { face: { ...inlineMesh, image: 'face.png', width: 112, height: 133 } } }, b: { face: { face: generatorMesh } } }), makeItems(), [])).toThrow('PARTS_MESH_AMBIGUOUS');
+  expect(() => readPartMeshes(doc({ a: { face: { face: generatorMesh } }, b: { face: { face: { ...inlineMesh, image: 'face.png', width: 112, height: 133 } } } }), makeItems(), [])).toThrow('PARTS_MESH_AMBIGUOUS');
+
+  // Raster declaration checks (width, height, image) apply BEFORE generator skip.
+  for (const bad of [
+    { ...generatorMesh, width: 0 },
+    { ...generatorMesh, width: -1 },
+    { ...generatorMesh, width: 1.5 },
+    { ...generatorMesh, width: NaN },
+    { ...generatorMesh, height: 0 },
+    { ...generatorMesh, height: 1.5 },
+    { ...generatorMesh, image: 123 },
+    { ...generatorMesh, image: null },
+    { ...generatorMesh, image: undefined },
+  ]) {
+    expect(() => readPartMeshes(doc({ default: { face: { face: bad } } }), makeItems(), [])).toThrow('PARTS_MESH_SIZE');
+  }
+
+  // Non-object generator (including null, arrays, primitives, undefined) refuses PARTS_MESH_UV.
+  for (const badGen of [null, [], [{ kind: 'grid' }], 'grid', 123, true, false, undefined]) {
+    expect(() => readPartMeshes(doc({ default: { face: { face: { ...generatorMesh, generator: badGen } } } }), makeItems(), [])).toThrow('PARTS_MESH_UV');
+  }
+
+  // Hybrid generator + uvs or triangles (including undefined/null or valid inline arrays) refuses PARTS_MESH_UV / PARTS_MESH_TRIANGLE.
+  for (const hybridUv of [
+    { ...generatorMesh, uvs: [0, 0, 1, 0, 0, 1], triangles: [0, 1, 2] },
+    { ...generatorMesh, uvs: [0, 0, 1, 0, 0, 1] },
+    { ...generatorMesh, uvs: undefined },
+    { ...generatorMesh, uvs: null },
+    { ...generatorMesh, uvs: [] },
+  ]) {
+    expect(() => readPartMeshes(doc({ default: { face: { face: hybridUv } } }), makeItems(), [])).toThrow('PARTS_MESH_UV');
+  }
+  for (const hybridTri of [
+    { ...generatorMesh, triangles: [0, 1, 2] },
+    { ...generatorMesh, triangles: undefined },
+    { ...generatorMesh, triangles: null },
+    { ...generatorMesh, triangles: [] },
+  ]) {
+    expect(() => readPartMeshes(doc({ default: { face: { face: hybridTri } } }), makeItems(), [])).toThrow('PARTS_MESH_TRIANGLE');
+  }
+
+  // Inline uvs present without triangles (no generator) refuses PARTS_MESH_TRIANGLE.
+  expect(() => readPartMeshes(doc({ default: { gap: { gap: { type: 'mesh', image: 'gap.png', width: 64, height: 64, uvs: [0, 0, 1, 0, 0, 1] } } } }), makeItems(), [])).toThrow('PARTS_MESH_TRIANGLE');
+
+  // Ambiguous mesh_report rows on generator part still refuse PARTS_MESH_REPORT_AMBIGUOUS.
+  expect(() => readPartMeshes(doc({ default: { face: { face: generatorMesh } } }), makeItems(), [{ part: 'face' }, { part: 'face' }])).toThrow('PARTS_MESH_REPORT_AMBIGUOUS');
+});
+
+test('#626: loadPartsView on mixed inline + generator rig preserves inline mesh overlay, skips locateMeshRasters on generator part, serializes meshUnavailable, and renders EN/KO #pv-mesh-panel p', async () => {
+  const root = await fixture();
+  const faceCanvas = createCanvas(112, 133), faceCtx = faceCanvas.getContext('2d');
+  faceCtx.fillStyle = '#446688'; faceCtx.fillRect(0, 0, 112, 133);
+  await writeFile(join(root, 'parts/face.png'), faceCanvas.toBuffer('image/png'));
+  const partsDoc = JSON.parse(await readFile(join(root, 'parts.json'), 'utf8'));
+  partsDoc.rig_size = [240, 133];
+  partsDoc.parts.push({ name: 'face', x: 128, y: 0, w: 112, h: 133 });
+  await writeFile(join(root, 'parts.json'), JSON.stringify(partsDoc));
+  const rigDoc = JSON.parse(await readFile(join(root, 'rig.json'), 'utf8'));
+  delete rigDoc.skins.default.covered;
+  rigDoc.skins.default.face = {
+    face: {
+      type: 'mesh',
+      image: 'face.png',
+      width: 112,
+      height: 133,
+      generator: { kind: 'grid', cols: 13, rows: 16, depth: { image: 'face_depth.png', near: 'white', zScale: 120 } },
+    },
+  };
+  await writeFile(join(root, 'rig.json'), JSON.stringify(rigDoc));
+
+  const pkg = await loadPartsView(root);
+  const gapItem = pkg.items.find(i => i.name === 'gap')!;
+  const coveredItem = pkg.items.find(i => i.name === 'covered')!;
+  const faceItem = pkg.items.find(i => i.name === 'face')!;
+
+  // Inline mesh part retains its geometry and 256-pixel gap coverage mask.
+  expect(gapItem.mesh).toBeDefined();
+  expect((gapItem as { meshUnavailable?: string }).meshUnavailable).toBeUndefined();
+  const mask = meshCoverage(64, 64, gapItem.mesh!);
+  expect(mask.reduce((sum, v) => sum + (v === 0 ? 1 : 0), 0)).toBe(256);
+
+  // Ordinary non-mesh part has neither mesh nor meshUnavailable.
+  expect(coveredItem.mesh).toBeUndefined();
+  expect((coveredItem as { meshUnavailable?: string }).meshUnavailable).toBeUndefined();
+
+  // Generator mesh part has no mesh overlay, marks meshUnavailable PARTS_MESH_GENERATED, and renders its normal raster.
+  expect(faceItem.mesh).toBeUndefined();
+  expect((faceItem as { meshUnavailable?: string }).meshUnavailable).toBe('PARTS_MESH_GENERATED');
+  const faceImage = await loadImage(join(root, 'parts/face.png'));
+  const renderCanvas = createCanvas(112, 133), renderCtx = renderCanvas.getContext('2d');
+  paintPart(renderCtx as never, faceItem, faceImage as never, {
+    bg: 'checker', alpha: false, fronts: [], makeCanvas: (w, h) => createCanvas(w, h) as never,
+  });
+  expect([...renderCtx.getImageData(10, 10, 1, 1).data]).toEqual([0x44, 0x66, 0x88, 255]);
+
+  // Wire serialization in partsViewJson preserves meshUnavailable on face only.
+  const view = partsViewJson(pkg, { verdict: null, stale: null });
+  expect(view.items.map(i => ({ name: i.name, hasMesh: Boolean(i.mesh), meshUnavailable: (i as { meshUnavailable?: string }).meshUnavailable }))).toEqual([
+    { name: 'gap', hasMesh: true, meshUnavailable: undefined },
+    { name: 'covered', hasMesh: false, meshUnavailable: undefined },
+    { name: 'face', hasMesh: false, meshUnavailable: 'PARTS_MESH_GENERATED' },
+  ]);
+
+  // Legacy verdict mesh outcome remains unavailable on generator-mesh part (hasMesh is false).
+  const saved = await saveVerdict(pkg, { status: 'approved', issues: [] });
+  const { issues: _issues, ...core } = saved;
+  await writeFile(pkg.verdictPath, JSON.stringify({
+    ...core, schema: 'rig-review-parts-verdict/2', status: 'pending',
+    parts: {
+      gap: { outcome: 'clean', mesh: { outcome: 'clean' } },
+      covered: { outcome: 'clean' },
+      face: { outcome: 'clean', mesh: { outcome: 'clean' } },
+    },
+  }));
+  await expect(readVerdict(pkg)).rejects.toThrow('PARTS_MESH_OUTCOME_UNAVAILABLE');
+
+  // Verify web/parts.ts renderMesh DOM slot (#pv-mesh-panel p) in both EN and KO, with mixed meshes and generator-only meshes.
+  const webPartsSource = await readFile('web/parts.ts', 'utf8');
+  const renderMeshBlock = webPartsSource.slice(webPartsSource.indexOf('function renderMesh(): void {'), webPartsSource.indexOf('\nfunction select('));
+  const compiledRenderMesh = new Bun.Transpiler({ loader: 'ts', target: 'bun' }).transformSync(renderMeshBlock);
+  class FakeEl {
+    id = ''; className = ''; type = ''; checked = false; textContent = ''; dataset: Record<string, string> = {}; children: FakeEl[] = [];
+    constructor(public tag: string) {}
+    append(...nodes: (FakeEl | string)[]) {
+      for (const n of nodes) {
+        if (typeof n === 'string') this.textContent += n;
+        else this.children.push(n);
+      }
+    }
+    remove() {}
+  }
+  const runRenderMesh = (items: unknown[], selected: number, lang: 'en' | 'ko') => {
+    const toolbar = new FakeEl('div');
+    const side = new FakeEl('div');
+    const state = { data: { items }, selected, meshVisible: false };
+    const doc = { createElement: (tag: string) => new FakeEl(tag) };
+    const query = (sel: string) => (sel === '.pv-toolbar' ? toolbar : null);
+    const fn = new Function('state', 'doc', 'query', 'slots', 't', 'paint', `${compiledRenderMesh}; renderMesh();`);
+    fn(state, doc, query, { side }, (key: string, params?: unknown) => t(key, params as never, lang), async () => {});
+    const panel = side.children.find(c => c.id === 'pv-mesh-panel')!;
+    const p = panel.children.find(c => c.tag === 'p')!;
+    return { controlText: toolbar.children[0]!.textContent, pText: p.textContent };
+  };
+
+  expect(runRenderMesh(view.items, 2, 'en').pText).toBe('PARTS_MESH_GENERATED: No mesh geometry is available for this part.');
+  expect(runRenderMesh(view.items, 2, 'ko').pText).toBe('PARTS_MESH_GENERATED: 이 파츠에는 표시할 메시 형상이 없습니다.');
+  expect(runRenderMesh(view.items, 1, 'en').pText).toBe('No mesh geometry is available for this part.');
+  expect(runRenderMesh(view.items, 1, 'ko').pText).toBe('이 파츠에는 표시할 메시 형상이 없습니다.');
+
+  // Even when a draft has 0 inline meshes (generator-only), selecting the generator part shows PARTS_MESH_GENERATED while an ordinary part shows the draft message.
+  const genOnlyItems = [view.items[1]!, view.items[2]!];
+  expect(runRenderMesh(genOnlyItems, 1, 'en')).toEqual({
+    controlText: 'Mesh (none 0/2)',
+    pText: 'PARTS_MESH_GENERATED: No mesh geometry is available for this part.',
+  });
+  expect(runRenderMesh(genOnlyItems, 1, 'ko')).toEqual({
+    controlText: '메시 (없음 0/2)',
+    pText: 'PARTS_MESH_GENERATED: 이 파츠에는 표시할 메시 형상이 없습니다.',
+  });
+  expect(runRenderMesh(genOnlyItems, 0, 'en').pText).toBe('No mesh geometry is available for this draft.');
+  expect(runRenderMesh(genOnlyItems, 0, 'ko').pText).toBe('이 드래프트에는 표시할 메시 형상이 없습니다.');
 });

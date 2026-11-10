@@ -45,6 +45,7 @@ interface LocalFile { abs: string; bytes: number; sha256: string }
 export interface PartMesh { vertices: number[]; triangles: number[]; figures: Record<string, unknown>; width: number; height: number; image: string }
 export interface ViewItem {
   mesh?: PartMesh;
+  meshUnavailable?: 'PARTS_MESH_GENERATED';
   name: string;
   /** Draw order, back first (parts mode); the region's place in the atlas file (atlas mode). */
   index: number;
@@ -279,8 +280,16 @@ export function readPartMeshes(raw: unknown, items: ViewItem[], reports: unknown
       if (a?.type !== 'mesh') continue;
       const item = byName.get(name);
       if (!item) refuse('PARTS_MESH_UNKNOWN_PART', `${name}: found mesh; required a part in parts.json`);
-      if (item!.mesh) refuse('PARTS_MESH_AMBIGUOUS', `${name}: found multiple meshes; required one attachment`);
+      if (item!.mesh || item!.meshUnavailable) refuse('PARTS_MESH_AMBIGUOUS', `${name}: found multiple meshes; required one attachment`);
       if (!finite(a.width, 1) || !Number.isInteger(a.width) || !finite(a.height, 1) || !Number.isInteger(a.height) || typeof a.image !== 'string') refuse('PARTS_MESH_SIZE', `${name}: found invalid raster declaration; required image and positive integer dimensions`);
+      if (Object.hasOwn(a, 'generator')) {
+        if (!record(a.generator) || Object.hasOwn(a, 'uvs')) refuse('PARTS_MESH_UV', `${name}: found invalid uvs; required nonempty coordinate pairs in [0,1]`);
+        if (Object.hasOwn(a, 'triangles')) refuse('PARTS_MESH_TRIANGLE', `${name}: found invalid triangles; required nonempty index triples`);
+        const rows = Array.isArray(reports) ? reports.filter(r => record(r)?.part === name) : [];
+        if (rows.length > 1) refuse('PARTS_MESH_REPORT_AMBIGUOUS', `${name}: found ${rows.length} report rows; required at most one`);
+        item!.meshUnavailable = 'PARTS_MESH_GENERATED';
+        continue;
+      }
       const uv = a.uvs, triangles = a.triangles;
       if (!Array.isArray(uv) || !uv.length || uv.length % 2) refuse('PARTS_MESH_UV', `${name}: found invalid uvs; required nonempty coordinate pairs in [0,1]`);
       for (const v of uv as unknown[]) if (!finite(v, 0) || v > 1) refuse('PARTS_MESH_UV', `${name}: found ${String(v)}; required UV in [0,1]`);

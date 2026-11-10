@@ -5,7 +5,7 @@ import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildVerdict, checkFlags, loadPartsAtlas, loadPartsView, meshReportFlags, partsViewJson, readVerdict, saveVerdict, sourceSha256, verdictSource } from '../src/parts-view.ts';
+import { buildVerdict, checkFlags, loadPartsAtlas, loadPartsView, meshReportFlags, partsDifference, partsViewJson, readVerdict, saveVerdict, sourceSha256, verdictSource } from '../src/parts-view.ts';
 import { preparePartsComment } from '../src/parts-comment-crops.ts';
 import { startPartsServer } from '../src/parts-server.ts';
 import { FOOTPRINT_ALPHA, frontParts, paintPart } from '../web/parts-render.ts';
@@ -424,4 +424,67 @@ test('#623: standalone loadPartsView defaults painting containment to parts root
   const wrongSizePath = join(realRoot, 'wrong-size.png');
   await writeFile(wrongSizePath, createCanvas(32, 32).toBuffer('image/png'));
   await expect(loadPartsView(realRoot, { painting: wrongSizePath, paintingRoot: realRoot })).rejects.toThrow('PARTS_PAINTING_SIZE:');
+});
+
+test('#626: loadPartsView with nested rig.json containing mixed inline and generator meshes preserves original painting, source hashes, inline mesh overlay, and Difference boundary', async () => {
+  const root = await planted();
+  const realRoot = await realpath(root);
+  const { mkdir } = await import('node:fs/promises');
+  await mkdir(join(realRoot, 'rig/images'), { recursive: true });
+  await writeFile(join(realRoot, 'rig/images/back_defect.png'), await readFile(join(realRoot, 'rig/parts/back_defect.png')));
+  const rigDoc = {
+    images: 'images',
+    skins: {
+      default: {
+        back_defect: {
+          back_defect: {
+            type: 'mesh',
+            image: 'back_defect.png',
+            width: BACK_DEFECT.w,
+            height: BACK_DEFECT.h,
+            uvs: [0, 0, 1, 0, 1, 1, 0, 1],
+            triangles: [0, 1, 2, 0, 2, 3],
+          },
+        },
+        front: {
+          front: {
+            type: 'mesh',
+            image: 'front.png',
+            width: FRONT.w,
+            height: FRONT.h,
+            generator: { kind: 'grid', cols: 13, rows: 16, depth: { image: 'front_depth.png', near: 'white', zScale: 120 } },
+          },
+        },
+      },
+    },
+  };
+  await writeFile(join(realRoot, 'rig/rig.json'), JSON.stringify(rigDoc, null, 2) + '\n');
+
+  const paintingCanvas = createCanvas(64, 64), pCtx = paintingCanvas.getContext('2d');
+  pCtx.fillStyle = '#204060'; pCtx.fillRect(0, 0, 64, 64);
+  const paintingBytes = paintingCanvas.toBuffer('image/png');
+  const paintingHash = new Bun.CryptoHasher('sha256').update(paintingBytes).digest('hex');
+  const paintingPath = join(realRoot, 'painting.png');
+  await writeFile(paintingPath, paintingBytes);
+
+  const pkg = await loadPartsView(realRoot, {
+    rig: join(realRoot, 'rig/rig.json'),
+    meshReport: join(realRoot, 'rig/mesh_report.json'),
+    painting: paintingPath,
+    paintingRoot: realRoot,
+  });
+
+  const expectedPainting = { abs: paintingPath, bytes: paintingBytes.length, sha256: paintingHash, width: 64, height: 64 };
+  expect(pkg.painting).toEqual(expectedPainting);
+  expect(pkg.paintingInRig).toBeUndefined();
+  expect(pkg.items.map(i => ({ name: i.name, hasMesh: Boolean(i.mesh), meshUnavailable: i.meshUnavailable }))).toEqual([
+    { name: 'back_defect', hasMesh: true, meshUnavailable: undefined },
+    { name: 'back_control', hasMesh: false, meshUnavailable: undefined },
+    { name: 'front', hasMesh: false, meshUnavailable: 'PARTS_MESH_GENERATED' },
+  ]);
+  const view = partsViewJson(pkg, { verdict: null, stale: null });
+  expect(view.painting).toEqual({ sha256: paintingHash, width: 64, height: 64 });
+  expect(view.differenceAvailable).toBe(false);
+  expect(view.items.find(i => i.name === 'front')?.meshUnavailable).toBe('PARTS_MESH_GENERATED');
+  await expect(partsDifference(pkg, 2, 0, false)).rejects.toThrow('PARTS_DIFFERENCE_UNAVAILABLE');
 });

@@ -5,6 +5,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Select at least one part.": "Select at least one part.",
   "Mesh (none 0/{0})": "Mesh (none 0/{0})",
   "No mesh geometry is available for this part.": "No mesh geometry is available for this part.",
+  "PARTS_MESH_GENERATED": "PARTS_MESH_GENERATED",
+  "PARTS_MESH_GENERATED: No mesh geometry is available for this part.": "PARTS_MESH_GENERATED: No mesh geometry is available for this part.",
   "JOB_STILL_CAPTURE_FAILED": "JOB_STILL_CAPTURE_FAILED · The displayed Rig frame could not be captured. Wait for a successful draw and try again.",
   "JOB_STILL_CAMERA_NOT_FIXED": "JOB_STILL_CAMERA_NOT_FIXED · Restore the default Rig framing before submitting this verdict.",
   "JOB_STILL_VIEW_UNSUPPORTED": "JOB_STILL_VIEW_UNSUPPORTED · Show the whole Rig without solo, highlight or comparison layers before submitting.",

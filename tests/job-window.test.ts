@@ -4325,3 +4325,215 @@ test('#623: job stage-parts accepts a sealed source-only painting outside parts 
 
     expect(await jobInputHashes(f.input.root)).toEqual(beforeHashes);
 });
+
+test('#626: retained job publication with producer.config, producer.parts, producer.source and nested rig.json containing mixed inline and generator meshes serves 200 on api/review, api/stage-parts and review-painting while preserving seals and Difference boundary', async () => {
+    const f = await realWindow();
+    const {mkdir} = await import('node:fs/promises');
+    const {createCanvas} = await import('@napi-rs/canvas');
+    const {PNG} = await import('pngjs');
+    const {jobHash} = await import('../src/job-api.ts');
+    const packageRoot = join(f.input.root, 'out');
+    const canvas = createCanvas(240, 160), ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#336699'; ctx.fillRect(0, 0, 240, 160);
+    const paintingBytes = canvas.toBuffer('image/png');
+    const paintingHash = jobHash(paintingBytes);
+
+    const partBytes = await readFile(join(packageRoot, 'mesh.png'));
+    const pixels = PNG.sync.read(partBytes);
+    const faceCanvas = createCanvas(112, 133), faceCtx = faceCanvas.getContext('2d');
+    faceCtx.fillStyle = '#557799'; faceCtx.fillRect(0, 0, 112, 133);
+    const faceBytes = faceCanvas.toBuffer('image/png');
+
+    await mkdir(join(packageRoot, 'draft/parts'), {recursive: true});
+    await mkdir(join(packageRoot, 'draft/rig/images'), {recursive: true});
+    await writeFile(join(packageRoot, 'draft/parts/mesh.png'), partBytes);
+    await writeFile(join(packageRoot, 'draft/rig/images/mesh.png'), partBytes);
+    await writeFile(join(packageRoot, 'draft/parts/face.png'), faceBytes);
+
+    const rigJsonContent = JSON.stringify({
+        images: 'images',
+        skins: {
+            default: {
+                mesh: {
+                    mesh: {
+                        type: 'mesh',
+                        image: 'mesh.png',
+                        width: pixels.width,
+                        height: pixels.height,
+                        uvs: [0, 0, 1, 0, 1, 1, 0, 1],
+                        triangles: [0, 1, 2, 0, 2, 3],
+                    },
+                },
+                face: {
+                    face: {
+                        type: 'mesh',
+                        image: 'face.png',
+                        width: 112,
+                        height: 133,
+                        generator: {
+                            kind: 'grid',
+                            cols: 13,
+                            rows: 16,
+                            depth: {image: 'face_depth.png', near: 'white', zScale: 120},
+                        },
+                    },
+                },
+            },
+        },
+    }, null, 2) + '\n';
+    const meshReportContent = JSON.stringify([
+        {part: 'mesh', mode: 'lattice', vertices: 4, triangles: 2, art_coverage: 1, stray_cleared: 0},
+        {part: 'face', mode: 'grid', vertices: 238, triangles: 416, art_coverage: 1, stray_cleared: 0},
+    ], null, 2) + '\n';
+    await writeFile(join(packageRoot, 'draft/rig/rig.json'), rigJsonContent);
+    await writeFile(join(packageRoot, 'draft/rig/motion.json'), '{}\n');
+    await writeFile(join(packageRoot, 'draft/rig/mesh_report.json'), meshReportContent);
+
+    const partsManifestBytes = Buffer.from(JSON.stringify({
+        rig_size: [240, 160], scale_rig_per_source: 1,
+        parts: [
+            {name: 'mesh', from: 'full:mesh', x: 0, y: 0, w: pixels.width, h: pixels.height},
+            {name: 'face', from: 'full:face', x: 64, y: 12, w: 112, h: 133},
+        ],
+    }, null, 2) + '\n');
+    await writeFile(join(packageRoot, 'draft/parts.json'), partsManifestBytes);
+    await writeFile(join(packageRoot, 'config.json'), '{}\n');
+    await writeFile(join(packageRoot, 'painting.png'), paintingBytes);
+    const manifest = JSON.parse(await readFile(join(packageRoot, 'review.json'), 'utf8'));
+    await writeFile(join(packageRoot, 'review.json'), JSON.stringify({
+        ...manifest,
+        producer: {config: 'config.json', parts: 'draft', source: 'painting.png'},
+    }, null, 2) + '\n');
+
+    const partsIdentity = {
+        enumeratorVersion: f.input.partsEnumerator.version,
+        manifest: {path: 'out/draft/parts.json' as const, sha256: jobHash(partsManifestBytes)},
+        images: [
+            {path: 'parts/mesh.png' as const, role: 'part', sha256: jobHash(partBytes)},
+            {path: 'parts/face.png' as const, role: 'part', sha256: jobHash(faceBytes)},
+        ],
+    };
+    f.input.setPartsReferences(partsIdentity.images.map(({path, role}) => ({path, role})));
+    f.input.setContext({
+        ...f.input.getContext(),
+        selector: {kind: 'draft', id: 'synthetic-parts-626'},
+        parts: partsIdentity,
+        partIds: ['mesh', 'face'],
+        subjects: [{kind: 'parts-verdict', draftId: 'synthetic-parts-626'}],
+    });
+    await writeFile(join(f.input.root, 'project.json'), '{"schema":"rig-create/project@0","interview":{}}\n');
+    f.input.setRecordPath('project.json');
+
+    const beforeHashes = await jobInputHashes(f.input.root);
+    const publication = await f.publish();
+    const descriptor = await (await fetch(f.locator + '/publications/' + publication.publicationId)).json();
+    expect(descriptor.ok).toBe(true);
+    const routes = jobPublicationRoutes(descriptor.value, f.host.origin);
+
+    const reviewRes = await fetch(routes.api('review'));
+    expect(reviewRes.status).toBe(200);
+    const reviewMeta = await reviewRes.json();
+    expect(reviewMeta.sourcePainting).toEqual({id: 'source-painting', path: 'painting.png', sha256: paintingHash, url: '/review-painting'});
+
+    const stagePartsRes = await fetch(routes.api('stage-parts'));
+    expect(stagePartsRes.status).toBe(200);
+    const stageParts = await stagePartsRes.json();
+    expect(stageParts.painting).toEqual({sha256: paintingHash, width: 240, height: 160});
+    expect(stageParts.differenceAvailable).toBe(false);
+    expect(stageParts.items.map((item: {name: string; mesh?: unknown; meshUnavailable?: string}) => ({
+        name: item.name, hasMesh: Boolean(item.mesh), meshUnavailable: item.meshUnavailable,
+    }))).toEqual([
+        {name: 'mesh', hasMesh: true, meshUnavailable: undefined},
+        {name: 'face', hasMesh: false, meshUnavailable: 'PARTS_MESH_GENERATED'},
+    ]);
+    expect(stageParts.items[0].mesh).toMatchObject({
+        vertices: [0, 0, pixels.width, 0, pixels.width, pixels.height, 0, pixels.height],
+        triangles: [0, 1, 2, 0, 2, 3],
+        figures: {mode: 'lattice', vertices: 4, triangles: 2, art_coverage: 1, stray_cleared: 0},
+    });
+
+    const paintingRes = await fetch(routes.instance('/review-painting'));
+    expect(paintingRes.status).toBe(200);
+    const paintingBody = new Uint8Array(await paintingRes.arrayBuffer());
+    expect(paintingBody).toEqual(new Uint8Array(paintingBytes));
+    expect(jobHash(paintingBody)).toBe(paintingHash);
+
+    const meshImageRes = await fetch(routes.api('stage-parts/image/0'));
+    expect(meshImageRes.status).toBe(200);
+    expect(new Uint8Array(await meshImageRes.arrayBuffer())).toEqual(new Uint8Array(partBytes));
+    const faceImageRes = await fetch(routes.api('stage-parts/image/1'));
+    expect(faceImageRes.status).toBe(200);
+    expect(new Uint8Array(await faceImageRes.arrayBuffer())).toEqual(new Uint8Array(faceBytes));
+
+    // Overlay comment on the generator-mesh part succeeds while Difference remains refused.
+    const cropBuffer = createCanvas(4, 4).toBuffer('image/png');
+    const cropSha = jobHash(cropBuffer);
+    const cropPng = 'data:image/png;base64,' + cropBuffer.toString('base64');
+    const faceOverlayComment = {
+        schema: 'rig-review-parts-comment/2',
+        id: 'face-overlay-626', summary: 'generator face part overlay check',
+        sourceHash: publication.source.sourceHash,
+        parts: [{name: 'face', imageHash: jobHash(faceBytes)}],
+        view: {
+            mode: 'item',
+            camera: {zoom: 1, center: {x: 10, y: 10}, viewport: {width: 112, height: 133}},
+            cameraSync: true, referenceCamera: {zoom: 1, center: {x: 10, y: 10}, viewport: {width: 112, height: 133}},
+            background: 'checker', alpha: false, footprints: false, mesh: true,
+            comparison: {mode: 'overlay', opacity: 0.5},
+        },
+        imageRegion: {x: 4, y: 5, width: 10, height: 12},
+        rigRegion: {x: 68, y: 17, width: 10, height: 12},
+        crop: {path: `comment-crops/${cropSha}.png`, sha256: cropSha, width: 4, height: 4, png: cropPng},
+        nativeCrop: null,
+    };
+    const overlayRes = await fetch(routes.api('stage-parts/comment'), {
+        method: 'POST',
+        headers: {Origin: f.host.origin, 'Content-Type': 'application/json', 'X-Review-Capability': f.credentials.ui},
+        body: JSON.stringify(faceOverlayComment),
+    });
+    expect(overlayRes.status).toBe(200);
+    const overlayBody = await overlayRes.json();
+    expect(overlayBody.comment.parts).toEqual([{name: 'face', imageHash: jobHash(faceBytes)}]);
+
+    const diffRes = await fetch(routes.api('stage-parts/comment'), {
+        method: 'POST',
+        headers: {Origin: f.host.origin, 'Content-Type': 'application/json', 'X-Review-Capability': f.credentials.ui},
+        body: JSON.stringify({
+            ...faceOverlayComment,
+            id: 'face-diff-626',
+            view: {...faceOverlayComment.view, comparison: {mode: 'difference', opacity: 0.5, threshold: 8}},
+        }),
+    });
+    expect(diffRes.status).toBe(409);
+    expect((await diffRes.json()).error.code).toBe('JOB_SOURCE_MISMATCH');
+
+    // Complete normal ask -> displayed -> ui/acts -> fetch-act cycle.
+    const asked = await (await f.call({
+        ...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
+        idempotencyKey: 'parts-verdict-ask-626', publicationId: publication.publicationId,
+        subject: {kind: 'parts-verdict', draftId: 'synthetic-parts-626'},
+    })).json();
+    expect(asked.ok).toBe(true);
+    const ack = await (await f.ui('displayed', {
+        publicationId: publication.publicationId, pageId: 'parts-page-626', sourceHash: publication.source.sourceHash,
+    })).json();
+    expect(ack.ok).toBe(true);
+    const committed = await (await f.ui('acts', {
+        ...ack.value, askId: asked.value.askId,
+        expectedGeneration: f.host.session.status().generation,
+        submissionId: 'parts-verdict-submit-626',
+        kind: 'parts-verdict',
+        value: {verdict: 'changes-requested', issues: [overlayBody.comment], words: 'face generator part reviewed'},
+    })).json();
+    expect(committed).toMatchObject({
+        ok: true,
+        value: {
+            kind: 'parts-verdict',
+            askId: asked.value.askId,
+            publicationId: publication.publicationId,
+            value: {verdict: 'changes-requested', issues: [overlayBody.comment], words: 'face generator part reviewed'},
+        },
+    });
+
+    expect(await jobInputHashes(f.input.root)).toEqual(beforeHashes);
+});
