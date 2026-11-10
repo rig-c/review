@@ -1,3 +1,4 @@
+import {checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-checkpoint-evidence.ts';
 /** Disjoint live-job routes. The backend receives the original authenticated Request. */
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
 import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumeratorVersion } from './job-api.ts';
@@ -28,8 +29,8 @@ interface CropFailureDiagnostic {
     expected: string | number[];
     received: string | number[];
 }
-function failure(code: string, status: number, diagnostic?: CropFailureDiagnostic): Response {
-    return Response.json({ ok: false, error: { code, message: code, ...(diagnostic ? {diagnostic} : {}) } }, { status, headers });
+function failure(code: string, status: number, diagnostic?: CropFailureDiagnostic, message = code): Response {
+    return Response.json({ ok: false, error: { code, message, ...(diagnostic ? {diagnostic} : {}) } }, { status, headers });
 }
 
 /** Explain an existing rejection without returning body text, filesystem paths or PNG bytes. */
@@ -273,9 +274,19 @@ export function retainedPublicationRoutes(session: JobSession) {
                     const file = await safeFile(retained.snapshotRoot, relativePath);
                     return serveReference(request, file, seal.sha256, headers);
                 };
+                const evidenceRoute = /^api\/checkpoint-evidence\/([A-Za-z0-9][A-Za-z0-9._-]*)\/(table|tiles\/(0|[1-9]\d*))$/.exec(path);
+                if (evidenceRoute) {
+                    const packet = retained.source.checkpointEvidence?.find(item => item.checkpointId === evidenceRoute[1]);
+                    const isTable = evidenceRoute[2] === 'table';
+                    const member = isTable ? packet?.table : packet?.tiles[Number(evidenceRoute[3])];
+                    if (!member) return failure('JOB_SOURCE_UNRETAINABLE', 404);
+                    readCheckpointEvidenceBytes(retained.snapshotRoot, member, isTable ? 256 * 1024 : 8 * 1024 * 1024);
+                    return await sealedFile(member.path);
+                }
                 if (isRetainedRecordSource(retained)) {
                     if (path === 'api/review') {
                         return json({
+                            ...checkpointEvidenceMetadata(retained.snapshotRoot, retained.source.checkpointEvidence),
                             recordSource: retained.source,
                             sourceHash: retained.source.sourceHash,
                             assetsBase: display.routes.assetsBase,
@@ -338,8 +349,12 @@ export function retainedPublicationRoutes(session: JobSession) {
                 }
                 const {review, parts} = await pending;
                 await assertReviewUnchanged(review);
+                if (retained.checkpointEvidencePackageHash !== undefined && retained.checkpointEvidencePackageHash !== review.sourceHash) {
+                    throw new JobError('JOB_SOURCE_MISMATCH');
+                }
                 if (path === 'api/review') {
                     return json({
+                        ...checkpointEvidenceMetadata(retained.snapshotRoot, retained.source.checkpointEvidence),
                         manifest: review.manifest,
                         sourceHash: retained.source.sourceHash,
                         reviewedSource: review.reviewedSource,
@@ -427,7 +442,9 @@ export function retainedPublicationRoutes(session: JobSession) {
             const code = error instanceof JobError ? error.code :
                 error instanceof Error && error.message.startsWith('PARTS_COMMENT_STALE_SOURCE:')
                     ? 'PARTS_COMMENT_STALE_SOURCE' : 'JOB_SOURCE_MISMATCH';
-            return failure(code, errorStatus[code as JobErrorCode] ?? 409);
+            const message = error instanceof JobError && /^CHECKPOINT_EVIDENCE_[A-Z_]+$/.test(error.message)
+                ? error.message : undefined;
+            return failure(code, errorStatus[code as JobErrorCode] ?? 409, undefined, message);
         }
     };
 }

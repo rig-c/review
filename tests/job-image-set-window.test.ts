@@ -37,7 +37,10 @@ function setup() {
     {role: 'source', name: 'Source', path: 'source.png'},
     {role: 'candidate', name: 'Candidate', path: 'candidate.png'}]}, () => bytes);
   const display = {...fixturePublication()};
-  const {model, selector, ...common} = display.publication.source;
+  const fixtureSource = display.publication.source;
+  if (fixtureSource.subject === 'image-set' || !fixtureSource.model) throw new Error('Expected model fixture source');
+  const {model, selector, checkpointEvidence, ...common} = fixtureSource;
+  expect(checkpointEvidence).toBeUndefined();
   const source: JobImageSourceBinding = {...common, subject: 'image-set', ...bound};
   display.publication = {...display.publication, source};
   const metadata: JobInspectionMetadata = {

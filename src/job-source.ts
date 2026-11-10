@@ -1,3 +1,4 @@
+import {checkpointEvidenceFields, checkpointEvidenceMetadata} from './job-checkpoint-evidence.ts';
 import { randomUUID } from 'node:crypto';
 import { type Dirent, lstatSync, readdirSync, realpathSync, type Stats } from 'node:fs';
 import { mkdir, open, rm, writeFile } from 'node:fs/promises';
@@ -8,7 +9,7 @@ import {
   JOB_PARTS_ENUMERATOR_RANGE,
 } from './job-contract.ts';
 import type {
-  JobFileIdentity, JobImageSetInput, JobInterviewDiagnostics, JobInterviewRecord, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
+  JobCheckpointEvidence, JobFileIdentity, JobImageSetInput, JobInterviewDiagnostics, JobInterviewRecord, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
   JobSelector, JobSourceBinding, JobSubject,
   OptionContext, OptionSource, PackageResultV3, PlanContext, PlanSource, ProjectRecord, PublishRequestV3,
   RecordFreeze, RecordOptionResult, RecordPlanResult, RecordPublicationReader, RecordPublishedContext,
@@ -55,6 +56,7 @@ export interface JobRootIdentity {
  * referenced-image enumeration belongs to the public Parts #1163 surface.
  */
 export interface JobPublishedContext {
+  readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
   readonly imageSet?: JobImageSetInput;
   readonly selector: JobSelector | null;
   readonly plan: JobPlanIdentity | null;
@@ -71,6 +73,8 @@ export type JobPublicationReader = (input: {
 }) => Promise<JobPublishedContext>;
 
 export interface JobRetainedSource {
+  /** Private base preimage for evidence-aware durable validation, absent historically. */
+  readonly checkpointEvidencePackageHash?: string;
   readonly root: JobRootIdentity;
   readonly record: JobFileIdentity | null;
   readonly seals: readonly JobFileIdentity[];
@@ -859,6 +863,7 @@ export async function prepareJobRecordSource(options: {
   if (inventory.files.length > maxSourceFiles) {
     throw new JobError('JOB_SOURCE_UNRETAINABLE');
   }
+  checkpointEvidenceMetadata(root.path, inventory.checkpointEvidence);
   const snapshotRoot = join(options.stateRoot, 'snapshots', randomUUID());
   const seals: JobFileIdentity[] = [];
   let snapshotIdentity: { dev: number; ino: number } | null = null;
@@ -910,6 +915,7 @@ export async function prepareJobRecordSource(options: {
     assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity, 'JOB_SOURCE_UNRETAINABLE');
     assertEqualRecordContexts(inventory, retainedContext);
     const decoded = decodeRetainedRecordProject(snapshotRoot, seals, result, retainedContext);
+    checkpointEvidenceMetadata(snapshotRoot, retainedContext.checkpointEvidence);
     const source = parseRecordSource(
       result.kind === 'option-set'
         ? buildRecordSource({
@@ -1052,6 +1058,14 @@ export async function verifyJobRecordSourceFresh(options: {
   return freshSource;
 }
 
+/** Preserve the existing composite preimage, conditionally appending the declaration. */
+function packageSourceDigest(packageSourceHash: string, record: JobFileIdentity | null,
+  source: Pick<JobModelSourceBinding, 'selector' | 'plan' | 'parts'>, files: readonly JobFileIdentity[],
+  evidence: {readonly checkpointEvidence?: readonly JobCheckpointEvidence[]}): string {
+  return jobHash(JSON.stringify({schema: 'rig-review-job-source/2', packageSourceHash, record,
+    selector: source.selector, plan: source.plan, parts: source.parts, files, ...evidence}));
+}
+
 export async function prepareJobSource(options: {
   readonly root: JobRootIdentity;
   readonly stateRoot: string;
@@ -1168,6 +1182,10 @@ export async function prepareJobSource(options: {
   }
   if (requestDigest(context.selector) !== requestDigest(request.result.selector)) throw new JobError('JOB_SOURCE_MISMATCH');
   const declared = publishedIdentities(context);
+  const evidence = checkpointEvidenceFields(context, context.plan, context.subjects, declared);
+  if (evidence.checkpointEvidence && context.imageSet !== undefined) throw new JobError(
+    'JOB_SOURCE_MISMATCH', 'CHECKPOINT_EVIDENCE_INVALID');
+  checkpointEvidenceMetadata(root.path, evidence.checkpointEvidence);
   let review: Awaited<ReturnType<typeof loadReview>>;
   try {
     const target = checkedPath(root.path, request.result.path, lstatSync(join(root.path, request.result.path)).isDirectory());
@@ -1243,11 +1261,10 @@ export async function prepareJobSource(options: {
     const originalIdentity = (file: { path: string; sha256: string } | null): JobFileIdentity | null => file && ({
       path: rootRelative(root.path, resolve(review.root, file.path)), sha256: file.sha256,
     });
-    const modelSource: JobModelSourceBinding = {
-      sourceHash: project || context.plan || context.parts ? jobHash(JSON.stringify({
-        schema: 'rig-review-job-source/2', packageSourceHash: review.sourceHash,
-        record, selector: context.selector, plan: context.plan, parts: parts.identity, files: seals,
-      })) : review.sourceHash,
+    checkpointEvidenceMetadata(snapshotRoot, evidence.checkpointEvidence);
+    const modelSource: Omit<JobModelSourceBinding, 'checkpointEvidence'> = {
+      sourceHash: project || context.plan || context.parts ? packageSourceDigest(review.sourceHash, record,
+        {selector: context.selector, plan: context.plan, parts: parts.identity}, seals, evidence) : review.sourceHash,
       projectHash: project?.hash ?? null,
       package: { id: review.manifest.id, revision: review.manifest.revision },
       selector: context.selector,
@@ -1255,7 +1272,7 @@ export async function prepareJobSource(options: {
       direction: originalIdentity(review.direction?.file ?? null),
       optionSet: null, appliedResult: null, plan: context.plan, parts: parts.identity,
     };
-    let source: JobSourceBinding = modelSource;
+    let source: JobSourceBinding = {...modelSource, ...evidence};
     if (imageSet) {
       if (modelSource.model || modelSource.selector) throw new JobError('JOB_IMAGE_SET_INVALID');
       const {model, selector, ...common} = modelSource;
@@ -1282,6 +1299,7 @@ export async function prepareJobSource(options: {
       : null;
     const prepared: JobRetainedSource = {
       root, record, seals, snapshotRoot, snapshotIdentity,
+      ...(evidence.checkpointEvidence ? {checkpointEvidencePackageHash: review.sourceHash} : {}),
       manifestPath: retained.manifestPath,
       source,
       instanceKey: openKey({ mode: 'single', p: boundReview, inputs: { input: review.manifestPath },
@@ -1303,10 +1321,37 @@ export async function prepareJobSource(options: {
     };
     await options.afterSnapshot?.();
     assertJobSourceCurrent(prepared);
+    if (source.checkpointEvidence) assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity);
     return prepared;
   } catch (error) {
     if (snapshotIdentity) await removeOwnedJobSnapshot(options.stateRoot, {snapshotRoot, ...snapshotIdentity});
     if (error instanceof JobError) throw error;
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+}
+
+/** Authenticate the optional extension without opening live files or reclaimed snapshots. */
+export function assertStoredCheckpointEvidence(retained: JobRetainedSourceV3): void {
+  if (!retained.source || typeof retained.source !== 'object' || Array.isArray(retained.source)) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  const hasEvidence = 'checkpointEvidence' in retained.source;
+  if (isRetainedRecordSource(retained)) {
+    const parsed = parseRecordSource(retained.source);
+    if (!hasEvidence && !('checkpointEvidence' in retained.context)) return;
+    const context = parseRecordPublishedContext(retained.context, retained.result, retained.record);
+    if (requestDigest(parsed.checkpointEvidence ?? null) !== requestDigest(context.checkpointEvidence ?? null) ||
+        requestDigest(parsed.subjects) !== requestDigest(retained.subjects) ||
+        requestDigest(parsed.files) !== requestDigest(retained.seals)) throw new JobError('JOB_SOURCE_MISMATCH');
+    return;
+  }
+  if (!hasEvidence && !('checkpointEvidencePackageHash' in retained)) return;
+  const source = retained.source;
+  if (!hasEvidence || source.subject === 'image-set' || !retained.record) throw new JobError('JOB_SOURCE_MISMATCH');
+  const evidence = checkpointEvidenceFields(source, source.plan, retained.subjects, retained.seals);
+  const packageSourceHash = jobSha(retained.checkpointEvidencePackageHash);
+  const expected = packageSourceDigest(packageSourceHash, retained.record, source, retained.seals, evidence);
+  if (expected !== source.sourceHash || requestDigest(evidence.checkpointEvidence) !== requestDigest(source.checkpointEvidence)) {
     throw new JobError('JOB_SOURCE_MISMATCH');
   }
 }

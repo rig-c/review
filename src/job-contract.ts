@@ -147,6 +147,23 @@ export interface JobFileIdentity {
   readonly sha256: JobSha256;
 }
 
+/** Optional sealed decision material, bound verbatim to the published source. */
+export interface JobCheckpointEvidence {
+  readonly schema: 'rig-review-checkpoint-evidence/1';
+  readonly checkpointId: string;
+  readonly planStepId: string;
+  readonly tiles: readonly (JobFileIdentity & {readonly id: string; readonly label: string})[];
+  readonly table: JobFileIdentity & {readonly label?: string};
+  readonly routesText: string;
+  readonly recommendationText: string;
+}
+
+export interface JobCheckpointTable {
+  readonly schema: 'rig-review-checkpoint-table/1';
+  readonly columns: readonly string[];
+  readonly rows: readonly (readonly (string | number | boolean | null)[])[];
+}
+
 /** IDs and existing step hashes published by Create #184 for the displayed plan.
  * Review retains these values without importing or computing Create's internal
  * stepHash. Create validates them with its existing writer. No plan revision
@@ -211,6 +228,7 @@ export type JobSelector =
  * provide trusted source hashes or transfer old approval onto a new binding.
  */
 export interface JobModelSourceBinding {
+  readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
   readonly subject?: never;
   readonly imageSet?: never;
   readonly imageSetDigest?: never;
@@ -244,7 +262,8 @@ export interface JobImageSet {
 }
 
 export interface JobImageSourceBinding extends Omit<JobModelSourceBinding,
-  'subject' | 'model' | 'selector' | 'imageSet' | 'imageSetDigest' | 'duplicateHashes'> {
+  'subject' | 'model' | 'selector' | 'imageSet' | 'imageSetDigest' | 'duplicateHashes' | 'checkpointEvidence'> {
+  readonly checkpointEvidence?: never;
   readonly subject: 'image-set';
   readonly model?: never;
   readonly selector?: never;
@@ -877,11 +896,13 @@ export interface RecordContextBase {
 }
 
 export type OptionContext = RecordContextBase & {
+  readonly checkpointEvidence?: never;
   readonly plan: null;
   readonly subjects: readonly [RecordPicksSubject];
 };
 
 export type PlanContext = RecordContextBase & {
+  readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
   readonly plan: JobPlanIdentity;
   readonly subjects: readonly RecordPlanSubject[];
 };
@@ -928,6 +949,7 @@ export interface RecordSourceBase {
 }
 
 export type OptionSource = RecordSourceBase & {
+  readonly checkpointEvidence?: never;
   readonly subject: 'option-set';
   readonly selection: RecordOptionResult;
   readonly optionSet: { readonly id: string; readonly sha256: JobSha256 };
@@ -937,6 +959,7 @@ export type OptionSource = RecordSourceBase & {
 };
 
 export type PlanSource = RecordSourceBase & {
+  readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
   readonly subject: 'plan';
   readonly selection: RecordPlanResult;
   readonly optionSet: null;

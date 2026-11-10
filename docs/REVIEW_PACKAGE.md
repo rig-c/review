@@ -1216,12 +1216,147 @@ The manifest and complete retained image rows enter the composite source hash. L
 | `PublishResultV3` | `{kind, path, selector}` (`package`), `{kind, questionId, setId}` (`option-set`), `{kind}` (`plan`) |
 | `RecordFreeze` | `{kind: 'producer-held', holdId, record: {path: 'project.json', sha256}}` |
 | `RecordSubject` | `{kind: 'interview-picks', questionId, setId}`, `{kind: 'checkpoint', checkpointId}`, `{kind: 'signoff', stage}` (`plan-approved`, `rigging-interview`, `post-interview`), `{kind: 'reopen', stage}` |
-| `RecordPublishedContext` | `['label', 'parts', 'inputs', 'files', 'plan', 'subjects']` |
+| `RecordPublishedContext` | Required `['label', 'parts', 'inputs', 'files', 'plan', 'subjects']`, optional `checkpointEvidence` on plans |
 | `RecordPartsIdentity` | `['name', 'version', 'integrity']` |
-| `RecordSource` | `['sourceHash', 'projectHash', 'record', 'inputs', 'files', 'subject', 'selection', 'optionSet', 'optionSetFile', 'plan', 'subjects']` |
-| `rig-review-job-record-source/1` | `['schema', 'record', 'selection', 'inputs', 'optionSet', 'optionSetFile', 'plan', 'subjects', 'files']` |
+| `RecordSource` | Required `['sourceHash', 'projectHash', 'record', 'inputs', 'files', 'subject', 'selection', 'optionSet', 'optionSetFile', 'plan', 'subjects']`, optional `checkpointEvidence` on plans |
+| `rig-review-job-record-source/1` | Required `['schema', 'record', 'selection', 'inputs', 'optionSet', 'optionSetFile', 'plan', 'subjects', 'files']`, optional `checkpointEvidence` on plans |
 | `rig-review-job-record-instance/1` | `['schema', 'fingerprint', 'sourceHash']` |
 
 The read-only official reader returns the six-key `RecordPublishedContext` with producer-sealed `parts`. `prepareJobRecordSource` runs `phase: 'inventory'` on the immutable source root (re-verifying `project.json` identity before and after each reader phase and before mapping generic reader failures so mid-read record movement reports `JOB_RECORD_MOVED` / `JOB_SOURCE_MISMATCH` rather than `JOB_RECORD_INCOMPLETE`) and retains the sorted, duplicate-free `inventory.files` closure into an owned snapshot (`project.json` within 8 MiB, at most 4,096 regular non-symlink files, 64 MiB per file and 256 MiB total bytes). It then calls `phase: 'retained'` on the snapshot root with `parts: inventory.parts` forwarded unchanged and requires `assertEqualRecordContexts(inventory, retainedContext)`. Before ask or finalize, `verifyJobRecordSourceFresh` re-runs `phase: 'inventory'`, rejects any `inventory.parts` drift against the originally sealed `retained.context.parts` (`JOB_SOURCE_MISMATCH` on ask and `JOB_ACT_SOURCE_STALE` on finalize) before invoking `phase: 'retained'`, and forwards the sealed `retained.context.parts` unchanged when equal; synchronous `store.update` commit re-verifies source and retained snapshot integrity before persisting. Missing reader or contract tokens (`CREATE_PUBLICATION_CONTRACT_UNAVAILABLE`, `CREATE_PLAN_PUBLICATION_CONTRACT_UNAVAILABLE`) refuse with `JOB_SOURCE_UNRETAINABLE`, while named producer tokens (`JOB_RECORD_CLOSURE_INCOMPLETE`, `JOB_RECORD_PARTS_MISMATCH`, `JOB_RECORD_PARTS_LOCK_MISSING`) map to `JOB_RECORD_INCOMPLETE` on publish or ask and `JOB_ACT_SOURCE_STALE` on finalize.
 
 `interview-picks` records carry `plan: null` and remain valid for source preparation, ask binding and `rig-review/act@4` preparation. An inspection-only plan record with `plan: {steps: []}` and `subjects: []` is valid for source preparation and freshness checks, while plan `checkpoint` and `signoff` ask binding and `rig-review/act@4` preparation require non-empty `plan.steps` and declared subjects (`JOB_ASK_INVALID` / `JOB_ACT_INVALID`), and plan `reopen` ask binding and `rig-review/act@4` `{stage, words}` preparation require a declared `{kind: 'reopen', stage}` subject on a `plan` record source ([Review #586](https://github.com/rig-c/review/issues/586)). Focused unit tests cover synthetic reader doubles, normal owner URL model-free record inspection (`retainedPublicationRoutes` + `prepareJobInspection` + `createJobWindow`), and archive-backed reader-double evidence over extracted `2-rigging-answers.tar.gz` (`rig-review/job-api@3` and `rig-review/act@4` parsed by `parseRecordAct` using a local `readRecordPublished` reader double and synthetic parts integrity, distinct from official installed Create reader/consumer conformance under [Create #278](https://github.com/rig-c/create/issues/278) and [Create #317](https://github.com/rig-c/create/issues/317)).
+
+### Optional sealed checkpoint evidence
+
+The trusted `JobPublicationReader` package context and the record reader's
+`PlanContext` may declare `checkpointEvidence`. Package-only API@2, API@3 package
+publications in record-and-package mode, and model-free record plan publications
+share this declaration. It is admitted only through the trusted reader and its
+exact work-root-relative file closure. Each packet binds an admitted checkpoint
+subject to an existing plan step. Package aliases use the subject's
+`planStepId ?? checkpointId`. Record checkpoints use the same checkpoint and plan
+step ID. Image-set and option-set publications refuse this extension.
+
+The collection contains ordered packets with exactly these fields.
+
+```ts
+{
+  schema: 'rig-review-checkpoint-evidence/1',
+  checkpointId: string,
+  planStepId: string,
+  tiles: [{id: string, label: string, path: string, sha256: string}],
+  table: {path: string, sha256: string, label?: string},
+  routesText: string,
+  recommendationText: string
+}
+```
+
+The table's sealed UTF-8 JSON document has exactly `schema`, `columns` and `rows`.
+Its schema is `rig-review-checkpoint-table/1`. Columns are ordered, nonempty text
+labels. Each row is an array of exactly that column count, with string, finite
+number, boolean or null cells. The declaration carries only the table file seal
+and optional label. The document alone supplies the table body. All rows, column
+order, tile order and exact Unicode/text values are preserved. Routes and the
+recommendation are verbatim text. The owner UI displays supplied text as text and
+labels the recommendation through its EN/KO catalog. An evidence-bearing card's
+adjacent mapping uses pass for route (i), accepting the openings, and fail plus
+the owner's words for (ii) or (iii). The browser value remains
+`{checkpointId, outcome, words}`. The daemon supplies the finalized `planStepId`.
+
+Admission bounds are explicit.
+
+| Item | Bound |
+| --- | --- |
+| Packets and tiles | 1–8 packets, 1–8 ordered tiles per packet, unique checkpoint IDs and tile IDs within each packet |
+| Entire canonical declaration | 32 KiB UTF-8 |
+| IDs and paths | Existing `jobId` 128-character and `jobPath` 4,096-character limits |
+| Tile labels, optional table label and column labels | Nonempty strings, at most 512 UTF-16 units each |
+| Routes and recommendation | Nonempty strings, at most 4,096 UTF-16 units each |
+| Tile bytes | Static noninterlaced 8-bit RGB/RGBA PNG, at most 8 MiB, each edge at most 16,384 and at most 16,777,216 pixels, validated through the existing PNG decoder |
+| Table bytes | At most 256 KiB per raw document and 512 KiB total raw table bytes per publication |
+| Table dimensions | 1–32 columns, 0–2,048 rows, at most 16,384 cells per document |
+| String cells | At most 2,048 UTF-16 units, including empty strings |
+
+Text permits LF and tab and refuses other ASCII control characters. Present
+`undefined`, null and empty evidence collections refuse. Missing required keys,
+unknown packet/tile/table/document keys, duplicate identities, nested cells and
+incorrect row widths refuse. Absent evidence stays omitted in normalized
+contexts, sources, metadata and stored state. Existing 512 KiB event, 2 MiB owner
+metadata and 16 MiB durable-document delivery/admission limits remain in force.
+The declaration and table bounds leave room for existing metadata and events.
+Existing closure file count and total retained-byte limits also apply.
+
+Every tile and table path must exactly match a trusted closure member and SHA-256.
+Review reuses regular-file, descriptor-based, literal portable path containment
+checks, including every directory component, and rejects symlinks and escapes.
+Actual PNG bytes are decoded and the table is parsed before publication.
+`JOB_SOURCE_MISMATCH` carries named details `CHECKPOINT_EVIDENCE_INVALID`,
+`CHECKPOINT_EVIDENCE_HASH_MISMATCH`, `CHECKPOINT_EVIDENCE_PNG_INVALID` or
+`CHECKPOINT_EVIDENCE_TABLE_INVALID`. Unreadable paths or byte bounds use
+`JOB_SOURCE_UNRETAINABLE` with `CHECKPOINT_EVIDENCE_PATH_REFUSED` or
+`CHECKPOINT_EVIDENCE_TABLE_LIMIT`. Existing live-source and retained-snapshot
+refusals still apply to movement during retention or subsequent operations.
+
+Source binding contains the canonical `checkpointEvidence` collection. Packet
+key order is `schema`, `checkpointId`, `planStepId`, `tiles`, `table`, `routesText`,
+`recommendationText`. Tile key order is `id`, `label`, `path`, `sha256`. Table
+key order is `path`, `sha256`, followed by `label` only when supplied. JSON uses
+these fixed keys and preserves collection order and exact strings. The package
+`rig-review-job-source/2` composite preimage appends `checkpointEvidence` after
+`files`. The record `rig-review-job-record-source/1` digest preimage does the same.
+No evidence field is emitted or hashed for historical absence. Legacy direct
+package hashes and literal historical digest/source bytes retain their existing
+form. Labels, paths, IDs, routes and recommendations all participate, so a
+metadata-only edit changes source and instance identity or refuses against an
+already bound source. Raw table bytes are bound by their seal, including changes
+that parse to the same table. Existing API, finalized-act and source schema
+markers remain as documented above.
+
+Both publication-pinned `api/review` projections conditionally include the ordered
+`checkpointEvidence` collection. Metadata retains the declaration fields, adds
+each tile's `url` as
+`/api/checkpoint-evidence/<checkpointId>/tiles/<zero-based-index>`, and expands
+`table` with its parsed `schema`, `columns`, complete `rows` and `url` as
+`/api/checkpoint-evidence/<checkpointId>/table`. Both tile and table URLs are
+relative to the pinned publication base, matching existing interview image URLs.
+The resolver admits only a declared checkpoint member, finds its exact seal and
+streams its retained bytes through the existing sealed reference route. Table
+GET returns the exact retained raw JSON bytes, including their whitespace, and
+supports HEAD through the same route. Its 256 KiB bound and regular-file/path/SHA
+checks run before streaming. The URL is derived delivery metadata. The producer's
+table declaration continues to contain only `path`, `sha256` and optional `label`.
+
+Before presenting the projection, the owner UI fetches the pinned table URL and
+checks its raw-byte SHA-256 against the source binding's declared table seal.
+It parses that authenticated UTF-8 JSON and compares its `schema`, `columns` and
+`rows` with the projected body, preserving every column and row in order. This
+comparison uses ordinary JSON parsing and exact data equality. The backend owns
+table grammar validation at admission and metadata projection. A changed metadata
+row, column, order or schema under the same source hash fails that comparison.
+Metadata has the same pinned source hash as the publication. A record publication
+remains manifest-free. Undeclared evidence has no projection, tile or table route.
+
+Durable reads authenticate evidence-bearing package composite hashes from the
+retained base-package hash, record, selector, plan, parts and closure. The private
+retained `checkpointEvidencePackageHash` stores that base hash only for this
+extension. The package metadata route additionally compares it to `loadReview`
+on the retained package. Record sources reuse their canonical digest parser.
+Stored context, publication, ask, act, event and replay copies must agree with
+the retained declaration and source identity. Null, undefined or missing source
+copies for an evidence-bound publication refuse with `JOB_SOURCE_MISMATCH` before
+source property access. These checks require no live files
+or reclaimed historical snapshots. Retained-file integrity is checked on fresh
+evidence mutations and actual asset/metadata reads. Record asks/finalizations
+also repeat the existing two reader phases and reject metadata drift. Package
+asks use the reader declaration pinned at publication and the existing current
+record/file seals. They retain the existing single-reader publication lifecycle.
+An exact committed publication/ask/act retry returns its original identity after
+live output drift. A fresh mutation still validates currentness. Reopening never
+adds current live evidence to an old publication.
+
+Review owns this additive public declaration. Create #395 implementation requires
+HQ signature at the exact Review shape PR head. Historical record-source readers
+with the earlier closed key set refuse evidence-bearing sources. New consumers
+require the signed extended contract. Owner-screen integration,
+EN/KO visual verification and later release serving have their own acceptance
+steps.

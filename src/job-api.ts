@@ -1,10 +1,11 @@
+import {checkpointEvidenceFields} from './job-checkpoint-evidence.ts';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import {
   JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PARTS_ENUMERATOR_RANGE,
   JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RECORD_ACT_SCHEMA, JOB_RECORD_INSTANCE_SCHEMA, JOB_RECORD_SOURCE_SCHEMA,
   JOB_RESERVED_ACT_KINDS,
   type AgentRequestV3, type FetchActRequestV3, type JobAgentRequest, type JobApiSchema,
-  type JobDisplayAcknowledgment, type JobErrorCode, type JobFetchActRequest, type JobFileIdentity,
+  type JobCheckpointEvidence, type JobDisplayAcknowledgment, type JobErrorCode, type JobFetchActRequest, type JobFileIdentity,
   type JobHostPorts, type JobHumanAuthority, type JobInterviewDiagnostic, type JobInterviewDiagnostics,
   type JobInterviewJson, type JobInterviewRecord, type JobPlanIdentity, type JobPublicationMode,
   type JobPublishRequest, type JobResult, type JobSelector, type JobSha256, type JobSubject,
@@ -391,13 +392,14 @@ function asCode<Value>(fn: () => Value, code: JobErrorCode): Value {
   }
 }
 
-function exactObject(
+export function exactObject(
   value: unknown,
   keys: readonly string[],
   code: JobErrorCode,
+  optional: readonly string[] = [],
 ): Record<string, unknown> {
-  const item = asCode(() => jobObject(value, keys), code);
-  if (Object.keys(item).length !== keys.length || keys.some(key => item[key] === undefined)) {
+  const item = asCode(() => jobObject(value, [...keys, ...optional]), code);
+  if (keys.some(key => !Object.hasOwn(item, key) || item[key] === undefined)) {
     throw new JobError(code);
   }
   return item;
@@ -648,6 +650,7 @@ type ParsedRecordPayload =
     }
   | {
       readonly kind: 'plan';
+      readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
       readonly inputs: readonly JobFileIdentity[];
       readonly files: readonly JobFileIdentity[];
       readonly plan: JobPlanIdentity;
@@ -661,17 +664,18 @@ function parseRecordClosureAndSubjects(
   rawSubjects: unknown,
   selection: RecordResult,
   checkedRecord?: ProjectRecord,
+  evidenceHolder: object = {},
 ): ParsedRecordPayload {
   const { inputs, files } = parseFileClosure(rawInputs, rawFiles, checkedRecord, 'JOB_SOURCE_MISMATCH');
   if (selection.kind === 'option-set') {
-    if (rawPlan !== null) throw new JobError('JOB_SOURCE_MISMATCH');
+    if (rawPlan !== null || 'checkpointEvidence' in evidenceHolder) throw new JobError('JOB_SOURCE_MISMATCH');
     const subjects = parseOptionSubjects(rawSubjects, selection, 'JOB_SOURCE_MISMATCH');
     return { kind: 'option-set', inputs, files, plan: null, subjects };
   }
   if (rawPlan === null) throw new JobError('JOB_SOURCE_MISMATCH');
   const { plan, stepIds } = parsePlanIdentity(rawPlan, 'JOB_SOURCE_MISMATCH');
   const subjects = parsePlanSubjects(rawSubjects, stepIds, 'JOB_SOURCE_MISMATCH');
-  return { kind: 'plan', inputs, files, plan, subjects };
+  return { kind: 'plan', inputs, files, plan, subjects, ...checkpointEvidenceFields(evidenceHolder, plan, subjects, files) };
 }
 
 export function parseRecordPublishedContext(
@@ -696,7 +700,7 @@ export function parseRecordPublishedContext(
 ): OptionContext | PlanContext {
   const selection = parseRecordResult(result);
   const checkedRecord = record === undefined ? undefined : parseProjectRecord(record, 'JOB_SOURCE_MISMATCH');
-  const item = exactObject(value, ['label', 'parts', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH');
+  const item = exactObject(value, ['label', 'parts', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH', ['checkpointEvidence']);
   const label = asCode(() => jobText(item.label), 'JOB_SOURCE_MISMATCH');
   const parts = parseRecordPartsIdentity(item.parts, 'JOB_SOURCE_MISMATCH');
   const body = parseRecordClosureAndSubjects(
@@ -706,11 +710,13 @@ export function parseRecordPublishedContext(
     item.subjects,
     selection,
     checkedRecord,
+    item,
   );
   if (body.kind === 'option-set') {
     return { label, parts, inputs: body.inputs, files: body.files, plan: null, subjects: body.subjects };
   }
-  return { label, parts, inputs: body.inputs, files: body.files, plan: body.plan, subjects: body.subjects };
+  return { label, parts, inputs: body.inputs, files: body.files, plan: body.plan, subjects: body.subjects,
+    ...(body.checkpointEvidence ? {checkpointEvidence: body.checkpointEvidence} : {}) };
 }
 
 export function assertEqualRecordContexts(
@@ -734,6 +740,7 @@ export function assertEqualRecordContexts(
 }
 
 export interface RecordSourceDigestInput {
+  readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
   readonly schema?: typeof JOB_RECORD_SOURCE_SCHEMA;
   readonly sourceHash?: JobSha256;
   readonly projectHash?: JobSha256;
@@ -764,6 +771,7 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
         'plan',
         'subjects',
         'files',
+        'checkpointEvidence',
       ]),
     'JOB_SOURCE_MISMATCH',
   );
@@ -787,7 +795,7 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
   const { inputs, files, byPath } = parseFileClosure(item.inputs, item.files, record, 'JOB_SOURCE_MISMATCH');
 
   if (selection.kind === 'option-set') {
-    if (item.plan !== null || item.optionSet === null || item.optionSetFile === null) {
+    if ('checkpointEvidence' in item || item.plan !== null || item.optionSet === null || item.optionSetFile === null) {
       throw new JobError('JOB_SOURCE_MISMATCH');
     }
     const rawOptionSet = exactObject(item.optionSet, ['id', 'sha256'], 'JOB_SOURCE_MISMATCH');
@@ -831,6 +839,7 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
     plan,
     subjects,
     files,
+    ...checkpointEvidenceFields(item, plan, subjects, files),
   });
 }
 
@@ -896,6 +905,7 @@ function assembleRecordSource(
     plan: body.plan,
     subjects: body.subjects,
     files: body.files,
+    ...(body.checkpointEvidence ? {checkpointEvidence: body.checkpointEvidence} : {}),
   });
   return {
     sourceHash,
@@ -903,6 +913,7 @@ function assembleRecordSource(
     record,
     inputs: body.inputs,
     files: body.files,
+    ...(body.checkpointEvidence ? {checkpointEvidence: body.checkpointEvidence} : {}),
     subject: 'plan',
     selection: { kind: 'plan' },
     optionSet: null,
@@ -948,6 +959,7 @@ export function buildRecordSource(input: {
           files: context.files,
           plan: context.plan,
           subjects: context.subjects,
+          ...(context.checkpointEvidence ? {checkpointEvidence: context.checkpointEvidence} : {}),
         };
   return assembleRecordSource(record, selection, body, input.optionSetFile);
 }
@@ -969,6 +981,7 @@ export function parseRecordSource(value: unknown): RecordSource {
       'subjects',
     ],
     'JOB_SOURCE_MISMATCH',
+    ['checkpointEvidence'],
   );
   const record = parseProjectRecord(item.record, 'JOB_SOURCE_MISMATCH');
   const projectHash = asCode(() => jobSha(item.projectHash), 'JOB_SOURCE_MISMATCH');
@@ -983,6 +996,7 @@ export function parseRecordSource(value: unknown): RecordSource {
     item.subjects,
     selection,
     record,
+    item,
   );
   if (selection.kind === 'option-set') {
     const rawOptionSet = exactObject(item.optionSet, ['id', 'sha256'], 'JOB_SOURCE_MISMATCH');
