@@ -92,6 +92,10 @@ test('parts job grid reuses shared columns while checkpoint forms fill remaining
   const gallery = body(css, '.job-window [data-job-checkpoint-evidence]>section');
   expect(gallery.get('grid-auto-flow')).toBe('row!important');
   expect(gallery.get('grid-template-columns')).toBe('repeat(auto-fit,minmax(180px,1fr))');
+  expect(body(css, '.job-window .job-stage').get('overflow')).toBe('hidden');
+  const viewport = body(css, '.job-window .job-stage #stage-layout');
+  expect(viewport.get('flex')).toBe('1');
+  expect(viewport.get('min-height')).toBe('0');
   const layout = body(css, root);
   expect(layout.get('grid-template-columns')).toBe(body(parts, '.pv-layout').get('grid-template-columns'));
   expect(layout.get('grid-template-rows')).toBe('minmax(0,1fr)');
@@ -114,6 +118,10 @@ test('parts job grid reuses shared columns while checkpoint forms fill remaining
   source.replace('grid-auto-flow:row!important', 'grid-auto-flow:column!important'),
   source.replace('grid-auto-flow:row!important', 'grid-auto-flow:row'),
   source.replace('repeat(auto-fit,minmax(180px,1fr))', 'repeat(4,minmax(180px,1fr))'),
+  source.replace('.job-stage{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}',
+   '.job-stage{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:visible}'),
+  source.replace('.job-stage #stage-layout{height:auto;flex:1;min-height:0}',
+   '.job-stage #stage-layout{height:auto;flex:1;min-height:180px}'),
  ]) {
   expect(mutant).not.toBe(source);
   expect(() => check(mutant)).toThrow();

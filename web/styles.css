@@ -448,8 +448,8 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .job-window .job-inspection{display:grid;flex:1;grid-template-columns:230px minmax(0,1fr);grid-template-rows:250px minmax(0,1fr);min-height:0;overflow:hidden}
 .job-window .job-sidebar{grid-row:1/-1;overflow:auto;padding:12px;border-right:1px solid var(--border);background:var(--rv-panel);min-width:0}
 .job-window .job-sidebar select,.job-window .job-sidebar img{max-width:100%}
-.job-window .job-stage{display:flex;flex-direction:column;min-height:0;min-width:0}
-.job-window .job-stage #stage-layout{height:auto;flex:1;min-height:180px}
+.job-window .job-stage{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
+.job-window .job-stage #stage-layout{height:auto;flex:1;min-height:0}
 .job-window .job-stage .viewbar,.job-window .job-transport{flex:none;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px}
 .job-window .job-forms{overflow:auto;border-top:1px solid var(--border);padding:12px;background:var(--rv-panel)}
 .job-window .job-forms form{margin:0 0 12px;padding:12px;border:1px solid var(--border);border-radius:var(--radius)}

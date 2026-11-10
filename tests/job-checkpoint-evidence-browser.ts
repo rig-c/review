@@ -131,6 +131,10 @@ async function run() {
                 range.selectNodeContents(fourth);
                 return {viewport:{width:innerWidth,height:innerHeight},askId:evidence.closest('form').dataset.jobAsk,
                     main:rect(main),inspection:rect(inspection),stage:rect(stage),forms:formsRect,
+                    stageChildren:[...stage.children].map(child=>({id:child.id,className:child.className,
+                        tag:child.tagName,visible:child.getClientRects().length>0,rect:rect(child),
+                        clientHeight:child.clientHeight,scrollHeight:child.scrollHeight,
+                        minHeight:getComputedStyle(child).minHeight,flex:getComputedStyle(child).flex})),
                     formsClientHeight:forms.clientHeight,
                     gallery:{...galleryRect,clientWidth:gallery.clientWidth,scrollWidth:gallery.scrollWidth,
                         clientHeight:gallery.clientHeight,scrollLeft:gallery.scrollLeft,clientLeft:gallery.clientLeft},
@@ -149,6 +153,26 @@ async function run() {
             assert.ok(layout.formsClientHeight >= viewport.height * 0.5,
                 prefix + ' forms must occupy at least half the viewport height at ' + viewport.width);
             assert.ok(Math.abs(layout.stage.height - 250) <= 1, prefix + ' stage stays 250px');
+            const requiredStageChildren = [
+                {id: '', className: 'viewbar'}, {id: 'stage-layout', className: ''}, {id: '', className: 'job-transport'},
+            ];
+            for (const required of requiredStageChildren) {
+                const child = layout.stageChildren.find((item: {id: string; className: string}) =>
+                    required.id ? item.id === required.id : item.className.split(/\s+/).includes(required.className));
+                assert.ok(child, prefix + ' required stage child exists at ' + viewport.width);
+                if (prefix.startsWith('package-')) {
+                    assert.equal(child.visible, true, prefix + ' package stage child must be visible');
+                    assert.ok(child.rect.height > 0, prefix + ' package stage child has positive height');
+                }
+            }
+            for (const child of layout.stageChildren) {
+                if (!child.visible) continue;
+                assert.ok(child.rect.top >= layout.stage.top && child.rect.bottom <= layout.stage.bottom,
+                    prefix + ' stage child ' + (child.id || child.className || child.tag) +
+                    ' must stay inside stage at ' + viewport.width);
+                assert.ok(child.rect.bottom <= layout.forms.top,
+                    prefix + ' stage child must not overlap forms at ' + viewport.width);
+            }
             assert.deepEqual(layout.labels, packet.tiles.map(tile => tile.label));
             assert.ok(layout.gallery.scrollWidth <= layout.gallery.clientWidth + 1,
                 prefix + ' wrapped checkpoint gallery must fit horizontally at ' + viewport.width);
