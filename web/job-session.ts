@@ -26,6 +26,7 @@ import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigS
     type JobRigDraw, type JobRigDrawState} from './job-rig-capture.ts';
 import {advancePlayback} from './playback-clock.ts';
 import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
+import {SENTINELS} from './parts-render.ts';
 import {CanvasRenderer} from '@rig-c/play';
 import {JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsSource, PartsHost} from './parts.ts';
@@ -630,7 +631,7 @@ export interface JobInspectionMetadata {
         preRig?: boolean;
         playback: boolean;
     };
-    feedbackCatalog: Pick<FeedbackCatalog, 'slots'>;
+    feedbackCatalog: Pick<FeedbackCatalog, 'slots'> & Partial<Pick<FeedbackCatalog, 'bones'>>;
 }
 export interface JobRecordInspectionMetadata {
     manifest?: undefined;
@@ -647,7 +648,7 @@ export interface JobRecordInspectionMetadata {
         preRig?: boolean;
         playback: boolean;
     };
-    feedbackCatalog: Pick<FeedbackCatalog, 'slots'>;
+    feedbackCatalog: Pick<FeedbackCatalog, 'slots'> & Partial<Pick<FeedbackCatalog, 'bones'>>;
 }
 export type JobInspectionMetadataV3 = JobInspectionMetadata | JobRecordInspectionMetadata;
 type JobInterview = {
@@ -1102,9 +1103,9 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
 }
 /** Browser mount is explicit so importing transaction helpers never starts an app. */
 export async function mountJobSession(host: HTMLElement): Promise<() => void> {
-    const [{ createViewportController, createViewportState }, { createRigViewportProvider }, { mountViewportPair }, i18n] = await Promise.all([
+    const [{ createViewportController, createViewportState }, { createRigViewportProvider }, { mountViewportPair }, { RigOverlays }, { bindLayerShortcuts, describeLayerToggles, layerShortcuts }, i18n] = await Promise.all([
         import('./viewport-controller.ts'), import('./rig-viewport-provider.ts'),
-        import('./viewport-pair.ts'), import('./i18n.ts'),
+        import('./viewport-pair.ts'), import('./rig-overlays.ts'), import('./view-controls.ts'), import('./i18n.ts'),
     ]);
     let storage: Storage | null = null;
     try {
@@ -1304,6 +1305,9 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     }>();
     const forms = new Map<string, JobForm>();
     const drawn = new WeakMap<JobPreparedInspection, JobRigDraw>();
+    const overlays = new WeakMap<JobPreparedInspection, InstanceType<typeof RigOverlays>>();
+    const layers = { images: true, mesh: false, bones: false, meshOpacity: 0.65 };
+    let stageBackground = '';
     let drawGeneration = 0;
     const viewportState = createViewportState();
     if (restoredCamera) {
@@ -1368,11 +1372,27 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     const reference = () => current?.references.find(item => item.id === selectedReference) ?? null;
     const setText = (id: string, value: string) => { const element = workspace.querySelector('#' + id); if (element)
         element.textContent = i18n.tr(value); };
+    function redrawOverlay(fresh: boolean): void {
+        const owner = current, overlay = owner ? overlays.get(owner) : undefined;
+        if (!owner || !overlay) return;
+        const root = owner.rigRoot, scale = viewportState.rigScale;
+        const left = parseFloat(root.style.left) || 0, top = parseFloat(root.style.top) || 0;
+        const project = (x: number, y: number) => ({ x: left + x * scale, y: top - y * scale });
+        const bones = (owner.metadata.feedbackCatalog.bones ?? []).map(name => ({ name }));
+        const frame = owner.inspection?.frame('single');
+        const selectedSlot = selectedPart || null;
+        const snap = fresh
+            ? overlay.refresh({ player: owner.player, bones, frame, selectedSlot, project, settings: layers })
+            : overlay.redraw({ project, settings: layers });
+        if (!fresh && snap.needsCapture && owner.player) {
+            overlay.refresh({ player: owner.player, bones, frame, selectedSlot, project, settings: layers });
+        }
+    }
     const provider = createRigViewportProvider({
         el, player: () => current?.player ?? null, assets: () => current?.assets ?? null,
         referenceSize: () => reference(), view: () => 'compare', referenceGeneration: () => current?.display.publication.generation ?? 0,
         parts: () => current?.inspection ?? null, text: setText,
-        message: value => { notice.textContent = jobWindowRefusal(value); }, redrawOverlay: () => { },
+        message: value => { notice.textContent = jobWindowRefusal(value); }, redrawOverlay: fresh => redrawOverlay(fresh),
     }, viewportState);
     const canonicalControls = provider.renderControls;
     provider.renderControls = controller => {
@@ -1421,13 +1441,26 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 pixels?.width, pixels?.height, canvas?.width, canvas?.height, canvas?.getAttribute('style'),
             ]),
             defaultCamera: plain && camera.zoom === 1 && camera.center.x === frame.center.x && camera.center.y === frame.center.y,
-            wholeRig: !selectedPart && !owner.inspection?.value() && player.slots === null,
+            wholeRig: !selectedPart && !owner.inspection?.value() && player.slots === null &&
+                layers.images && !layers.mesh && !layers.bones && !stageBackground,
             playing};
     }
     function rememberDraw(): void {
         const owner = current;
         if (!owner) return;
         try {
+            const pane = el('rig-viewport');
+            const bg = SENTINELS[stageBackground] ?? '';
+            pane.style.backgroundColor = bg;
+            pane.style.backgroundImage = bg ? 'none' : '';
+            if (!layers.images || layers.mesh || layers.bones || bg) {
+                drawn.delete(owner);
+                owner.rigPresentation = undefined;
+                delete pane.dataset.jobRigCanonical;
+                owner.rigRoot.style.visibility = layers.images ? 'visible' : 'hidden';
+                return;
+            }
+            owner.rigRoot.style.visibility = '';
             const player = owner.player;
             const posed = owner.inspection?.frame('single');
             const camera = viewport.numericView().cameras.rig;
@@ -1435,7 +1468,6 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 throw new Error('JOB_STILL_CAPTURE_FAILED');
             }
             const renderer = player.renderer;
-            const pane = el('rig-viewport');
             const presentation = presentJobRigViewport({pane, root: owner.rigRoot, images: true,
                 canvas: renderer instanceof CanvasRenderer ? renderer.canvas : undefined,
                 backend: renderer instanceof CanvasRenderer ? renderer.backendActive : renderer.meshBackendActive},
@@ -1454,6 +1486,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         owner.rigPresentation = undefined;
         owner.player?.draw();
         owner.inspection?.present('single');
+        if (owner === current) redrawOverlay(true);
     }
     function syncTransportControls(): void {
         const playBtn = workspace.querySelector<HTMLButtonElement>('#job-play');
@@ -1935,6 +1968,41 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 }
             }
         }
+        const hasCheckpointAsk = Boolean(current.player) && state.pending.some(
+            ask => ask.publicationId === current!.display.publication.publicationId &&
+                ask.status === 'pending' && ask.subject.kind === 'checkpoint',
+        );
+        const layerSet = workspace.querySelector<HTMLElement>('#layer-controls');
+        const bgField = workspace.querySelector<HTMLElement>('#job-background-field');
+        const bgSelect = workspace.querySelector<HTMLSelectElement>('#job-background');
+        const hadNonDefaultView = !layers.images || layers.mesh || layers.bones || Boolean(stageBackground);
+        if (!hasCheckpointAsk && hadNonDefaultView) {
+            layers.images = true;
+            layers.mesh = false;
+            layers.bones = false;
+            stageBackground = '';
+        }
+        if (layerSet) {
+            layerSet.hidden = !hasCheckpointAsk;
+            for (const [id, key] of [['layer-images', 'images'], ['layer-mesh', 'mesh'], ['layer-bones', 'bones']] as const) {
+                const box = layerSet.querySelector<HTMLInputElement>('#' + id);
+                if (box) {
+                    box.disabled = !hasCheckpointAsk;
+                    box.checked = layers[key];
+                }
+            }
+            describeLayerToggles({ getElementById: id => layerSet.querySelector('#' + id) }, t('No rig supplied'));
+            for (const label of layerSet.querySelectorAll<HTMLElement>('.layer-toggle')) label.title = i18n.tr(label.title);
+        }
+        if (bgField && bgSelect) {
+            bgField.hidden = !hasCheckpointAsk;
+            bgSelect.disabled = !hasCheckpointAsk;
+            bgSelect.value = stageBackground;
+        }
+        if (!hasCheckpointAsk && hadNonDefaultView) {
+            redrawOverlay(true);
+            rememberDraw();
+        }
     }
     async function mountJobParts(prepared: JobPreparedInspection, signal: AbortSignal): Promise<void> {
         const panel = partsPanels.get(prepared)!;
@@ -2152,6 +2220,55 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         stage.className = 'job-stage';
         const controls = node('div');
         controls.className = 'viewbar';
+        const layerSet = node('fieldset');
+        layerSet.id = 'layer-controls';
+        layerSet.className = 'layer-toggles';
+        layerSet.hidden = true;
+        const legend = node('legend', 'Rig layers');
+        legend.className = 'sr-only';
+        layerSet.append(legend);
+        for (const item of layerShortcuts) {
+            const label = node('label');
+            label.className = 'layer-toggle';
+            const box = node('input');
+            box.id = item.id;
+            box.type = 'checkbox';
+            box.setAttribute('aria-keyshortcuts', item.key.toUpperCase());
+            const keyName = item.id === 'layer-images' ? 'images' : item.id === 'layer-mesh' ? 'mesh' : 'bones';
+            box.checked = layers[keyName];
+            box.disabled = true;
+            box.onchange = () => {
+                layers[keyName] = box.checked;
+                if (current === prepared) {
+                    redrawOverlay(true);
+                    rememberDraw();
+                }
+            };
+            const kbd = node('kbd');
+            kbd.setAttribute('aria-hidden', 'true');
+            kbd.textContent = item.key.toUpperCase();
+            label.append(box, node('span', item.label), kbd);
+            layerSet.append(label);
+        }
+        describeLayerToggles({ getElementById: id => layerSet.querySelector('#' + id) }, t('No rig supplied'));
+        for (const label of layerSet.querySelectorAll<HTMLElement>('.layer-toggle')) label.title = i18n.tr(label.title);
+        const sentinelKeys = Object.keys(SENTINELS);
+        const bgSelect = selectValues(['', ...sentinelKeys], ['Rig', ...sentinelKeys.map(k => k[0]!.toUpperCase() + k.slice(1))]);
+        bgSelect.id = 'job-background';
+        bgSelect.value = stageBackground;
+        bgSelect.disabled = true;
+        bgSelect.onchange = () => {
+            stageBackground = Object.hasOwn(SENTINELS, bgSelect.value) ? bgSelect.value : '';
+            bgSelect.value = stageBackground;
+            if (current === prepared) {
+                redrawOverlay(false);
+                rememberDraw();
+            }
+        };
+        const bgField = inputLabel('Background', bgSelect);
+        bgField.id = 'job-background-field';
+        bgField.hidden = true;
+        controls.append(layerSet, bgField);
         for (const [id, key] of [['zoom-in', 'job.zoomIn'], ['zoom-out', 'job.zoomOut'], ['fit', 'Fit']]) {
             const button = node('button', key);
             button.id = id!;
@@ -2168,7 +2285,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         const pair = node('div');
         pair.id = 'stage-layout';
         mountViewportPair(pair);
-        for (const id of ['rig-overlay', 'idle-handles', 'rig-fields-stage'])
+        for (const id of ['idle-handles', 'rig-fields-stage'])
             pair.querySelector('#' + id)?.remove();
         for (const [id, key] of [['reference-label', 'Reference'], ['rig-label', 'Generated rig · read only'],
             ['reference-empty', 'No reference supplied.'], ['rig-empty', 'No compiled model supplied.']]) {
@@ -2180,7 +2297,20 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         }
         pair.querySelector('#reference-pane')?.setAttribute('aria-label', t('Reference'));
         pair.querySelector('#rig-pane')?.setAttribute('aria-label', t('Rig'));
+        const rigViewport = pair.querySelector<HTMLElement>('#rig-viewport');
+        if (rigViewport) {
+            rigViewport.setAttribute('tabindex', '-1');
+            rigViewport.addEventListener('pointerdown', () => rigViewport.focus?.());
+        }
         pair.querySelector('#rig-root')!.replaceWith(prepared.rigRoot);
+        const overlayCanvas = pair.querySelector<HTMLCanvasElement>('#rig-overlay');
+        if (overlayCanvas) {
+            overlayCanvas.setAttribute('aria-label', t('Actual rig mesh and bone overlay'));
+            const instance = new RigOverlays({ canvas: overlayCanvas, rigRoot: prepared.rigRoot });
+            overlays.set(prepared, instance);
+            const prevDispose = prepared.dispose;
+            prepared.dispose = () => { try { instance.dispose(); } finally { prevDispose(); } };
+        }
         const transport = node('div');
         transport.className = 'job-transport';
         const clips = node('select');
@@ -2431,6 +2561,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         drawn.delete(current);
         current.rigPresentation = undefined;
         current.inspection.select(selectedPart ? { side: 'single', slot: selectedPart, mode: partMode } : null);
+        redrawOverlay(true);
         rememberDraw();
         setText('job-part-observation', selectedPart ? JSON.stringify(current.inspection.observation(), null, 2) : '');
         viewport.renderCameraControls();
@@ -2542,6 +2673,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 const previousForms = new Map(forms);
                 const restoringCamera = Boolean(previous || restoredCamera);
                 const navigation = { animation, time, loop, selectedPart, partMode, selectedReference, panel,
+                    layers: { images: layers.images, mesh: layers.mesh, bones: layers.bones }, stageBackground,
                     partIdentity: previous ? (previous.inspection?.value() ?? null) : restoredPartIdentity,
                     camera: structuredClone(viewportState) };
                 compatibilityNotice = Boolean(!previous &&
@@ -2573,6 +2705,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     partMode = navigation.partMode;
                     selectedReference = navigation.selectedReference;
                     panel = navigation.panel;
+                    Object.assign(layers, navigation.layers);
+                    stageBackground = navigation.stageBackground;
                     forms.clear();
                     for (const [id, item] of previousForms)
                         forms.set(id, item);
@@ -2604,6 +2738,13 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     el<HTMLSelectElement>('job-reference').value = selectedReference;
                     el<HTMLSelectElement>('job-animation').value = animation;
                     el<HTMLInputElement>('job-loop').checked = loop;
+                    layers.images = true;
+                    layers.mesh = false;
+                    layers.bones = false;
+                    stageBackground = '';
+                    for (const [id, key] of [['layer-images', 'images'], ['layer-mesh', 'mesh'], ['layer-bones', 'bones']] as const) {
+                        el<HTMLInputElement>(id).checked = layers[key];
+                    }
                     el('rig-empty').hidden = !!prepared.player;
                     Object.assign(viewportState, navigation.camera, { cameraRestoring: restoringCamera });
                     showReference();
@@ -2724,12 +2865,17 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 if (state.receipt && !state.preparing) events?.displayed();
             },
         } });
+    const unbindLayerShortcuts = bindLayerShortcuts(document);
     const localize = i18n.onLanguageChange(() => {
         for (const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))
             element.textContent = t(element.dataset.jobText!);
         languages.setAttribute('aria-label', t('interview.language'));
-        if (current && !partsPanels.has(current))
+        if (current && !partsPanels.has(current)) {
+            workspace.querySelector('#rig-overlay')?.setAttribute('aria-label', t('Actual rig mesh and bone overlay'));
+            describeLayerToggles({ getElementById: id => workspace.querySelector('#' + id) }, t('No rig supplied'));
+            for (const label of workspace.querySelectorAll<HTMLElement>('.layer-toggle')) label.title = i18n.tr(label.title);
             viewport.renderCameraControls();
+        }
         window.refresh();
     });
     const hubVisibility = (event: MessageEvent) => {
@@ -2774,6 +2920,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         abort.abort();
         window.stop();
         localize();
+        unbindLayerShortcuts();
         unbindNavigation?.();
         resize?.disconnect();
         current?.dispose();
