@@ -4080,3 +4080,223 @@ test('C4 base inspection resources are disposed even when workspace cleanup thro
     expect(() => prepared.dispose()).toThrow('Declared cleanup failure');
     expect(disposed).toBe(1);
 });
+
+test('#623: job stage-parts accepts a sealed source-only painting outside parts root inside retained snapshot, keeps Difference unavailable, and refuses unsealed painting inputs', async () => {
+    const f = await realWindow();
+    const {mkdir} = await import('node:fs/promises');
+    const {createCanvas} = await import('@napi-rs/canvas');
+    const {PNG} = await import('pngjs');
+    const {jobHash} = await import('../src/job-api.ts');
+    const packageRoot = join(f.input.root, 'out');
+    const canvas = createCanvas(80, 64), ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#336699'; ctx.fillRect(0, 0, 80, 64);
+    const paintingBytes = canvas.toBuffer('image/png');
+    const paintingHash = jobHash(paintingBytes);
+
+    const partBytes = await readFile(join(packageRoot, 'mesh.png'));
+    const pixels = PNG.sync.read(partBytes);
+    await mkdir(join(packageRoot, 'rig/parts'), {recursive: true});
+    await writeFile(join(packageRoot, 'rig/parts/mesh.png'), partBytes);
+    for (const [name, content] of [['rig.json', '{"skins":{}}'], ['motion.json', '{}'], ['mesh_report.json', '[]']] as const) {
+        await writeFile(join(packageRoot, 'rig', name), content);
+    }
+    const partsManifestBytes = Buffer.from(JSON.stringify({
+        rig_size: [80, 64], scale_rig_per_source: 1,
+        parts: [{name: 'mesh', from: 'full:mesh', x: 0, y: 0, w: pixels.width, h: pixels.height}],
+    }, null, 2) + '\n');
+    await writeFile(join(packageRoot, 'rig/parts.json'), partsManifestBytes);
+    await writeFile(join(packageRoot, 'config.json'), '{}\n');
+    await writeFile(join(packageRoot, 'painting.png'), paintingBytes);
+    const manifest = JSON.parse(await readFile(join(packageRoot, 'review.json'), 'utf8'));
+    await writeFile(join(packageRoot, 'review.json'), JSON.stringify({
+        ...manifest,
+        producer: {config: 'config.json', parts: 'rig', source: 'painting.png'},
+    }, null, 2) + '\n');
+
+    const partsIdentity = {
+        enumeratorVersion: f.input.partsEnumerator.version,
+        manifest: {path: 'out/rig/parts.json' as const, sha256: jobHash(partsManifestBytes)},
+        images: [{path: 'parts/mesh.png' as const, role: 'part', sha256: jobHash(partBytes)}],
+    };
+    f.input.setPartsReferences(partsIdentity.images.map(({path, role}) => ({path, role})));
+    f.input.setContext({
+        ...f.input.getContext(),
+        selector: {kind: 'draft', id: 'synthetic-parts'},
+        parts: partsIdentity,
+        partIds: ['mesh'],
+        subjects: [{kind: 'parts-verdict', draftId: 'synthetic-parts'}],
+    });
+    await writeFile(join(f.input.root, 'project.json'), '{"schema":"rig-create/project@0","interview":{}}\n');
+    f.input.setRecordPath('project.json');
+
+    const beforeHashes = await jobInputHashes(f.input.root);
+    const publication = await f.publish();
+    const descriptor = await (await fetch(f.locator + '/publications/' + publication.publicationId)).json();
+    expect(descriptor.ok).toBe(true);
+    const routes = jobPublicationRoutes(descriptor.value, f.host.origin);
+
+    const stagePartsRes = await fetch(routes.api('stage-parts'));
+    expect(stagePartsRes.status).toBe(200);
+    const stageParts = await stagePartsRes.json();
+    expect(stageParts.painting).toEqual({sha256: paintingHash, width: 80, height: 64});
+    expect(stageParts.differenceAvailable).toBe(false);
+
+    const reviewRes = await fetch(routes.api('review'));
+    expect(reviewRes.status).toBe(200);
+    const reviewMeta = await reviewRes.json();
+    expect(reviewMeta.sourcePainting).toEqual({id: 'source-painting', path: 'painting.png', sha256: paintingHash, url: '/review-painting'});
+    const paintingRes = await fetch(routes.instance('/review-painting'));
+    expect(paintingRes.status).toBe(200);
+    expect(new Uint8Array(await paintingRes.arrayBuffer())).toEqual(new Uint8Array(paintingBytes));
+
+    // Overlay comment succeeds with the sealed painting, while Difference remains unavailable when painting_in_rig is absent.
+    const cropBuffer = createCanvas(4, 4).toBuffer('image/png');
+    const cropSha = jobHash(cropBuffer);
+    const cropPng = 'data:image/png;base64,' + cropBuffer.toString('base64');
+    const baseComment = {
+        schema: 'rig-review-parts-comment/2',
+        id: 'overlay-issue-1', summary: 'overlay check',
+        sourceHash: publication.source.sourceHash,
+        parts: [{name: 'mesh', imageHash: jobHash(partBytes)}],
+        view: {
+            mode: 'assembled',
+            camera: {zoom: 1, center: {x: 10, y: 10}, viewport: {width: 80, height: 64}},
+            cameraSync: false, referenceCamera: null, background: 'checker',
+            alpha: true, footprints: false, mesh: false,
+            comparison: {mode: 'overlay', opacity: 0.5},
+        },
+        rigRegion: {x: 0, y: 0, width: 2, height: 2}, imageRegion: null,
+        crop: {path: `comment-crops/${cropSha}.png`, sha256: cropSha, width: 4, height: 4, png: cropPng},
+        nativeCrop: null,
+    };
+    const overlayRes = await fetch(routes.api('stage-parts/comment'), {
+        method: 'POST',
+        headers: {Origin: f.host.origin, 'Content-Type': 'application/json', 'X-Review-Capability': f.credentials.ui},
+        body: JSON.stringify(baseComment),
+    });
+    expect(overlayRes.status).toBe(200);
+    const overlayBody = await overlayRes.json();
+    expect(overlayBody.comment.view.comparison).toEqual({mode: 'overlay', opacity: 0.5});
+
+    const diffRes = await fetch(routes.api('stage-parts/comment'), {
+        method: 'POST',
+        headers: {Origin: f.host.origin, 'Content-Type': 'application/json', 'X-Review-Capability': f.credentials.ui},
+        body: JSON.stringify({
+            ...baseComment,
+            id: 'diff-issue-1', summary: 'diff check',
+            view: {...baseComment.view, comparison: {mode: 'difference', opacity: 0.5, threshold: 8}},
+        }),
+    });
+    expect(diffRes.status).toBe(409);
+    expect((await diffRes.json()).error.code).toBe('JOB_SOURCE_MISMATCH');
+
+    // Commit a nonempty Overlay issue through the normal job ask -> displayed -> ui/acts -> fetch-act cycle.
+    const asked = await (await f.call({
+        ...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
+        idempotencyKey: 'parts-verdict-ask-623', publicationId: publication.publicationId,
+        subject: {kind: 'parts-verdict', draftId: 'synthetic-parts'},
+    })).json();
+    expect(asked.ok).toBe(true);
+    const ack = await (await f.ui('displayed', {
+        publicationId: publication.publicationId, pageId: 'parts-page-623', sourceHash: publication.source.sourceHash,
+    })).json();
+    expect(ack.ok).toBe(true);
+
+    const submissionBody = {
+        ...ack.value, askId: asked.value.askId,
+        expectedGeneration: f.host.session.status().generation,
+        submissionId: 'parts-verdict-submit-623',
+        kind: 'parts-verdict',
+        value: {verdict: 'changes-requested', issues: [overlayBody.comment], words: 'overlay alignment shift'},
+    };
+    const origReadPub = f.host.session.readPublicationResponse.bind(f.host.session);
+    // Unsealed extra file in snapshotRoot or tampered painting seal during commitUIAct refuses at assertRetainedSnapshotIntact as JOB_ACT_SOURCE_STALE.
+    f.host.session.readPublicationResponse = (pubId, reader) => origReadPub(pubId, retained =>
+        'snapshotRoot' in retained
+            ? reader({...retained, seals: retained.seals.filter(s => s.path !== 'out/painting.png')})
+            : reader(retained));
+    try {
+        const unsealedCommit = await (await f.ui('acts', {...submissionBody, submissionId: 'unsealed-commit-623'})).json();
+        expect(unsealedCommit).toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE'}});
+    } finally {
+        f.host.session.readPublicationResponse = origReadPub;
+    }
+    f.host.session.readPublicationResponse = (pubId, reader) => origReadPub(pubId, retained =>
+        'snapshotRoot' in retained
+            ? reader({...retained, seals: retained.seals.map(s => s.path === 'out/painting.png' ? {...s, sha256: '0'.repeat(64)} : s)})
+            : reader(retained));
+    try {
+        const tamperedCommit = await (await f.ui('acts', {...submissionBody, submissionId: 'tampered-commit-623'})).json();
+        expect(tamperedCommit).toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE'}});
+    } finally {
+        f.host.session.readPublicationResponse = origReadPub;
+    }
+
+    const committed = await (await f.ui('acts', submissionBody)).json();
+    expect(committed).toMatchObject({
+        ok: true,
+        value: {
+            kind: 'parts-verdict',
+            askId: asked.value.askId,
+            publicationId: publication.publicationId,
+            value: {verdict: 'changes-requested', issues: [overlayBody.comment], words: 'overlay alignment shift'},
+        },
+    });
+    const fetchedAct = await (await fetch(f.locator + '/api', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + f.host.session.writerGrant().fetchCapability},
+        body: JSON.stringify({...f.input.base(), verb: 'fetch-act', actId: committed.value.actId}),
+    })).json();
+    expect(fetchedAct).toEqual({ok: true, value: committed.value, generation: f.host.session.status().generation,
+        schema: 'rig-review/job-api@2', verb: 'fetch-act', jobId: f.host.session.jobId, requestId: expect.any(String)});
+
+    // Unsealed refusal: if a forwarded file's seal sha256 does not match (or is unsealed in the seal loop), job-front refuses with JOB_SOURCE_UNRETAINABLE.
+    const {retainedPublicationRoutes} = await import('../src/job-front.ts');
+    const tamperedRoute = retainedPublicationRoutes(Object.create(f.host.session, {
+        readPublicationResponse: {
+            value: (pubId: string, reader: (retained: any) => Promise<Response>) =>
+                f.host.session.readPublicationResponse(pubId, retained => {
+                    if ('snapshotRoot' in retained) {
+                        const tamperedSeals = retained.seals.map(s => s.path === 'out/painting.png' ? {...s, sha256: '0'.repeat(64)} : s);
+                        return reader({...retained, seals: tamperedSeals});
+                    }
+                    return reader(retained);
+                }),
+        },
+    }));
+    const tamperedRes = await tamperedRoute(
+        f.host.session.jobId, publication.publicationId, descriptor.value.publication.instanceKey,
+        'api/stage-parts', new Request(routes.api('stage-parts')),
+    );
+    expect(tamperedRes.status).toBe(409);
+    expect((await tamperedRes.json()).error.code).toBe('JOB_SOURCE_UNRETAINABLE');
+
+    // And if out/painting.png is omitted from seals altogether, retainedFile does not forward it to loadPartsView and /review-painting is refused.
+    const unsealedRoute = retainedPublicationRoutes(Object.create(f.host.session, {
+        readPublicationResponse: {
+            value: (pubId: string, reader: (retained: any) => Promise<Response>) =>
+                f.host.session.readPublicationResponse(pubId, retained => {
+                    if ('snapshotRoot' in retained) {
+                        const filteredSeals = retained.seals.filter(s => s.path !== 'out/painting.png');
+                        return reader({...retained, seals: filteredSeals});
+                    }
+                    return reader(retained);
+                }),
+        },
+    }));
+    const unsealedRes = await unsealedRoute(
+        f.host.session.jobId, publication.publicationId, descriptor.value.publication.instanceKey,
+        'api/stage-parts', new Request(routes.api('stage-parts')),
+    );
+    expect(unsealedRes.status).toBe(200);
+    const unsealedStageParts = await unsealedRes.json();
+    expect(unsealedStageParts.painting).toBeNull();
+    const unsealedPaintingRoute = await unsealedRoute(
+        f.host.session.jobId, publication.publicationId, descriptor.value.publication.instanceKey,
+        'review-painting', new Request(routes.instance('/review-painting')),
+    );
+    expect(unsealedPaintingRoute.status).toBe(404);
+    expect((await unsealedPaintingRoute.json()).error.code).toBe('JOB_SOURCE_UNRETAINABLE');
+
+    expect(await jobInputHashes(f.input.root)).toEqual(beforeHashes);
+});

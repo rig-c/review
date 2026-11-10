@@ -371,3 +371,56 @@ test('#546: error mapping, explicit external flag paths and acquisition order pa
   await writeFile(join(atlas, 'skeleton.model.json'), '{');
   await expect(loadPartsAtlas(rev)).rejects.toThrow(SyntaxError);
 });
+
+test('#623: standalone loadPartsView defaults painting containment to parts root, while explicit paintingRoot contains painting inside snapshot root and keeps size and Difference checks unchanged', async () => {
+  const root = await planted(), ext = await mkdtemp(join(tmpdir(), 'parts-painting-ext-'));
+  roots.push(ext);
+  const realRoot = await realpath(root);
+  const paintingCanvas = createCanvas(64, 64), pCtx = paintingCanvas.getContext('2d');
+  pCtx.fillStyle = '#204060'; pCtx.fillRect(0, 0, 64, 64);
+  const paintingBytes = paintingCanvas.toBuffer('image/png');
+  const paintingHash = new Bun.CryptoHasher('sha256').update(paintingBytes).digest('hex');
+  const paintingPath = join(realRoot, 'painting.png');
+  await writeFile(paintingPath, paintingBytes);
+
+  // Standalone defaults to parts root (<root>/rig), refusing a sibling painting outside <root>/rig.
+  await expect(loadPartsView(realRoot, { painting: paintingPath })).rejects.toThrow('PARTS_PAINTING_OUTSIDE: painting resolves outside rig/');
+
+  // Explicit paintingRoot accepts the painting inside realRoot while outside <root>/rig, and hashes it into pkg.files.
+  const pkg = await loadPartsView(realRoot, { painting: paintingPath, paintingRoot: realRoot });
+  expect(pkg.painting).toEqual({ abs: paintingPath, bytes: paintingBytes.length, sha256: paintingHash, width: 64, height: 64 });
+  expect(pkg.files).toContainEqual({ abs: paintingPath, bytes: paintingBytes.length, sha256: paintingHash });
+
+  // Difference-unavailable stays unchanged when painting_in_rig is absent.
+  expect(pkg.paintingInRig).toBeUndefined();
+  const view = partsViewJson(pkg, { verdict: null, stale: null });
+  expect(view.painting).toEqual({ sha256: paintingHash, width: 64, height: 64 });
+  expect(view.differenceAvailable).toBe(false);
+  const baseIssue = candidate(pkg);
+  const overlayIssue = await preparePartsComment(pkg, {
+    ...baseIssue,
+    rigRegion: { x: 2, y: 11, width: 8, height: 9 },
+    imageRegion: null,
+    view: { ...baseIssue.view, mode: 'assembled', comparison: { mode: 'overlay', opacity: 0.5 } },
+  });
+  expect(overlayIssue.view.comparison).toEqual({ mode: 'overlay', opacity: 0.5 });
+  await expect(preparePartsComment(pkg, {
+    ...baseIssue,
+    rigRegion: { x: 2, y: 11, width: 8, height: 9 },
+    imageRegion: null,
+    view: { ...baseIssue.view, mode: 'assembled', comparison: { mode: 'difference', opacity: 0.5, threshold: 8 } },
+  })).rejects.toThrow('PARTS_DIFFERENCE_UNAVAILABLE');
+
+  // Escape outside paintingRoot (direct or symlink) is still refused by insideRoot.
+  const outsidePainting = join(await realpath(ext), 'outside.png');
+  await writeFile(outsidePainting, paintingBytes);
+  await expect(loadPartsView(realRoot, { painting: outsidePainting, paintingRoot: realRoot })).rejects.toThrow('PARTS_PAINTING_OUTSIDE:');
+  const linkPainting = join(realRoot, 'escape-painting.png');
+  await symlink(outsidePainting, linkPainting);
+  await expect(loadPartsView(realRoot, { painting: linkPainting, paintingRoot: realRoot })).rejects.toThrow('PARTS_PAINTING_OUTSIDE:');
+
+  // assertOriginalPaintingSize remains enforced under paintingRoot.
+  const wrongSizePath = join(realRoot, 'wrong-size.png');
+  await writeFile(wrongSizePath, createCanvas(32, 32).toBuffer('image/png'));
+  await expect(loadPartsView(realRoot, { painting: wrongSizePath, paintingRoot: realRoot })).rejects.toThrow('PARTS_PAINTING_SIZE:');
+});

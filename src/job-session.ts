@@ -647,7 +647,7 @@ export class JobSession {
                 const sealedPainting = painting && retained.seals.some(file =>
                   file.path === relative(retained.snapshotRoot, painting).split(sep).join('/')) ? painting : undefined;
                 const pkg = await loadPartsView(dirname(join(retained.snapshotRoot, retained.source.parts.manifest.path)),
-                  {painting: sealedPainting});
+                  {painting: sealedPainting, paintingRoot: retained.snapshotRoot});
                 for (const issue of candidate.value.issues) {
                   await validateStoredPartsComment(pkg, issue, false, {sourceHash: retained.source.sourceHash});
                 }
