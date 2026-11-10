@@ -52,11 +52,11 @@ test('#557/#588 control public job-host retains its runtime exports, record-mode
 test('C4 schemas and enumerator range retain the actual installed version', () => {
   expect(JOB_API_SCHEMA).toBe('rig-review/job-api@2');
   expect(JOB_ACT_SCHEMA).toBe('rig-review/act@2');
-  expect(JOB_PARTS_ENUMERATOR_RANGE).toBe('>=2.25.0 <4.0.0');
-  for (const version of ['2.25.0', '2.25.1', '2.26.0', '2.99.99']) {
+  expect(JOB_PARTS_ENUMERATOR_RANGE).toBe('>=2.25.0 <3.0.0');
+  for (const version of ['2.25.0', '2.25.1', '2.26.0', '2.37.0', '2.99.99']) {
     expect(jobPartsEnumeratorVersion(version)).toBe(version);
   }
-  for (const version of [undefined, '', '2.24.9', '4.0.0', 'invalid', '2.25.1\n']) {
+  for (const version of [undefined, '', '2.24.9', '3.0.0', '3.7.0', 'invalid', '2.25.1\n']) {
     expect(() => jobPartsEnumeratorVersion(version)).toThrow('PARTS_ENUMERATOR_VERSION_MISMATCH');
     expect(() => jobPartsEnumeratorVersion(version)).toThrow(JOB_PARTS_ENUMERATOR_RANGE);
   }
