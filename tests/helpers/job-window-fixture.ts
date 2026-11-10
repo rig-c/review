@@ -212,11 +212,12 @@ import {jobHash} from '../../src/job-api.ts';
 import {readProject} from '../../src/interview-project.ts';
 import {joinedVerdictFixture} from './joined-verdict-fixture.ts';
 import {PROBE_MP4_BASE64} from '../compare-mode-browser.ts';
+import {writeComparisonPackage} from './parts-comparison-package.ts';
 
 /** Declared synthetic visual/producer context over a real retained Create question.
  * It proves window transport, not Create #184 or Parts' enumerator/writer acceptance.
  */
-export async function scriptedJobWindowFixture() {
+export async function scriptedJobWindowFixture(options: {c5Parts?: 'mesh' | 'no-mesh'} = {}) {
     const f = await realJobWindowFixture();
     await joinedVerdictFixture(f.input.root, '2-rigging-answers');
     f.input.setRecordPath('project.json');
@@ -238,14 +239,30 @@ export async function scriptedJobWindowFixture() {
     );
     const partBytes = await readFile(join(packageRoot, 'mesh.png'));
     const pixels = PNG.sync.read(partBytes);
-    await mkdir(join(packageRoot, 'parts'));
-    await writeFile(join(packageRoot, 'parts/mesh.png'), partBytes);
-    await writeFile(join(packageRoot, 'parts.json'), JSON.stringify({rig_size: [80, 64], scale_rig_per_source: 1,
-        parts: [{name: 'mesh', from: 'full:mesh', x: 0, y: 0, w: pixels.width, h: pixels.height}]}));
-    const context = {...f.input.getContext(),
-        parts: {enumeratorVersion: f.input.partsEnumerator.version, manifest: {path: 'out/parts.json' as const, sha256: jobHash(await readFile(join(packageRoot, 'parts.json')))},
-            images: [{path: 'parts/mesh.png' as const, role: 'part', sha256: jobHash(partBytes)}]},
-        partIds: ['mesh'],
+    if (options.c5Parts) {
+        await writeComparisonPackage(packageRoot, options.c5Parts === 'mesh');
+        // The ordinary handoff loader discovers this public fixture's real painting beside its config.
+        await writeFile(join(packageRoot, 'config.json'), JSON.stringify({key: 'synthetic-c5-parts'}));
+    } else {
+        await mkdir(join(packageRoot, 'parts'));
+        await writeFile(join(packageRoot, 'parts/mesh.png'), partBytes);
+        await writeFile(join(packageRoot, 'parts.json'), JSON.stringify({rig_size: [80, 64], scale_rig_per_source: 1,
+            parts: [{name: 'mesh', from: 'full:mesh', x: 0, y: 0, w: pixels.width, h: pixels.height}]}));
+    }
+    const references = options.c5Parts ? [
+        {path: 'parts/body.png', role: 'part'},
+        {path: 'parts/front.png', role: 'part'},
+        {path: 'painting.png', role: 'painting'},
+    ] : [{path: 'parts/mesh.png', role: 'part'}];
+    const images = await Promise.all(references.map(async image => ({...image,
+        sha256: jobHash(await readFile(join(packageRoot, image.path)))})));
+    const files = [...f.input.getContext().files];
+    if (options.c5Parts === 'mesh') files.push({path: 'out/rig.json',
+        sha256: jobHash(await readFile(join(packageRoot, 'rig.json')))});
+    const context = {...f.input.getContext(), files,
+        parts: {enumeratorVersion: f.input.partsEnumerator.version, manifest: {path: 'out/parts.json' as const,
+            sha256: jobHash(await readFile(join(packageRoot, 'parts.json')))}, images},
+        partIds: options.c5Parts ? ['body', 'front'] : ['mesh'],
         subjects: [...f.input.getContext().subjects, {kind: 'parts-verdict' as const, draftId: 'synthetic-parts'}],
     };
     f.input.setPartsReferences(context.parts.images.map(({path, role}) => ({path, role})));

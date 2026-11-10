@@ -104,6 +104,31 @@ test('Change 1, 2, 3, 4: compare.css and styles.css enforce fixed tool area, scr
   }
 });
 
+test('#614 shared parts load notices stay outside pane sizing and retain full refusal text', () => {
+  const css = readFileSync(new URL('../web/parts.css', import.meta.url), 'utf8');
+  const rules = cssRuleMap(css);
+  const notice = (rules.get('#pv-load') ?? []).join(';');
+  const embedded = (rules.get('#pv-load.pv-embedded-status') ?? []).join(';');
+
+  expect(notice).toContain('position:absolute');
+  expect(notice).toContain('inset:0 0 auto auto');
+  expect(notice).toContain('max-width:100%');
+  expect(notice).not.toMatch(/(?:^|;)\s*(?:width|inline-size)\s*:/);
+  expect(notice).toContain('margin:0');
+  expect(notice).toContain('overflow-wrap:anywhere');
+  expect(notice).toContain('background:var(--panel)');
+  expect(notice).toContain('z-index:25');
+  expect((rules.get('.pv-stage') ?? []).join(';')).toContain('position:relative');
+  for (const declarations of [notice, embedded]) {
+    expect(declarations).not.toMatch(/(?:^|;)\s*(?:(?:max-|min-)?(?:height|block-size)|line-clamp|-webkit-line-clamp)\s*:/);
+    expect(declarations).not.toMatch(/(?:overflow(?:-[xy])?\s*:\s*(?:hidden|clip)|text-overflow\s*:\s*ellipsis|white-space\s*:\s*nowrap|display\s*:\s*none)/);
+  }
+  expect(embedded).toContain('padding:10px 14px');
+  expect(embedded).toContain('border-bottom:1px solid var(--line)');
+  expect((rules.get('#pv-load.pv-embedded-status[data-result="refused"]') ?? []).join(';')).toContain('color:var(--flag)');
+  expect(rules.get('#pv-save-status')).toEqual(['overflow-wrap:anywhere']);
+});
+
 test('Change 2: compare.ts reuses PartThumbnails, pageRegionTable, and loadPartModel without copying, and draws per-side thumbnails', async () => {
   const compareTs = readFileSync(new URL('../web/compare.ts', import.meta.url), 'utf8');
   expect(compareTs).toContain("import {PartExplorer,loadPartModel} from './part-selection.ts';");

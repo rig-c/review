@@ -3,6 +3,8 @@ useTemporaryReviewState();
 import {commentFixture,candidate} from './helpers/parts-comments-package.ts';
 import {preparePartsComment} from '../src/parts-comment-crops.ts';
 import {expect,test} from 'bun:test';
+import {PNG} from 'pngjs';
+import {createCanvas,loadImage,type Canvas} from '@napi-rs/canvas';
 import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -147,10 +149,18 @@ test('#612 actual list caller renders complete names, producer flag counts, issu
  expect(html).not.toContain('id="pv-overall"');
 });
 
-function partsMountDocument() {
+function partsMountDocument(raster = false) {
  class FakeElement {
   tagName:string;id='';className='';textContent='';title='';type='';value='';min='';max='';step='';
-  hidden=false;disabled=false;checked=false;tabIndex=0;clientWidth=160;clientHeight=120;width=16;height=16;
+  hidden=false;disabled=false;checked=false;tabIndex=0;clientWidth=160;clientHeight=120;clientLeft=0;clientTop=0;
+  private pixelWidth=16;private pixelHeight=16;
+  private surface:Canvas|null=null;
+  get width(){return this.pixelWidth;}
+  set width(value:number){this.pixelWidth=value;if(this.surface)this.surface.width=value;}
+  get height(){return this.pixelHeight;}
+  set height(value:number){this.pixelHeight=value;if(this.surface)this.surface.height=value;}
+  rasterSurface(){return this.surface??=createCanvas(this.width,this.height);}
+  toDataURL(){return this.rasterSurface().toDataURL('image/png');}
   style:Record<string,string>={left:'',top:'',width:'',height:'',transform:'',transformOrigin:''};
   dataset:Record<string,string>={};
   attrs=new Map<string,string>();
@@ -262,11 +272,32 @@ function partsMountDocument() {
   addEventListener(type:string,fn:Function){const group=this.handlers.get(type)??new Set();group.add(fn);this.handlers.set(type,group);}
   removeEventListener(type:string,fn:Function){this.handlers.get(type)?.delete(fn);}
   emit(type:string,event:any){for(const fn of this.handlers.get(type)??[])fn(event);}
-  hasPointerCapture(){return false;}
+  captured=new Set<number>();
+  setPointerCapture(id:number){this.captured.add(id);}
+  hasPointerCapture(id:number){return this.captured.has(id);}
+  releasePointerCapture(id:number){this.captured.delete(id);}
   focus(){fakeDoc.activeElement=this;fakeDoc.emit('focusin',{target:this});}
 
-  getBoundingClientRect(){return {left:0,top:0,width:this.clientWidth,height:this.clientHeight,right:this.clientWidth,bottom:this.clientHeight,x:0,y:0};}
+  getBoundingClientRect(){
+   let left=0,top=0,width=this.clientWidth,height=this.clientHeight;
+   if(raster&&this.tagName==='CANVAS'){
+    const root=this.closest('#rig-root')??this.closest('#reference-content');
+    const zoom=Number(root?.style.transform.match(/scale\(([^)]+)\)/)?.[1]??1);
+    left=parseFloat(root?.style.left??'0')||0;top=parseFloat(root?.style.top??'0')||0;
+    width=this.width*zoom;height=this.height*zoom;
+   }
+   return {left,top,width,height,right:left+width,bottom:top+height,x:left,y:top};
+  }
   getContext(){
+   if(raster){
+    const ctx=this.rasterSurface().getContext('2d');
+    if(!(ctx as any).mountDrawImage){
+     const drawImage=ctx.drawImage.bind(ctx);
+     (ctx as any).mountDrawImage=true;
+     ctx.drawImage=((image:any,...args:any[])=>drawImage(image instanceof FakeElement?image.rasterSurface():image,...args as [number,number])) as typeof ctx.drawImage;
+    }
+    return ctx;
+   }
    return {
     imageSmoothingEnabled:false,fillStyle:'',strokeStyle:'',lineWidth:1,globalAlpha:1,
     clearRect(){},fillRect(){},strokeRect(){},drawImage(){},beginPath(){},moveTo(){},lineTo(){},stroke(){},
@@ -276,6 +307,7 @@ function partsMountDocument() {
   }
  }
 
+ const savedStyle=Object.getOwnPropertyDescriptor(globalThis,'getComputedStyle');
  const savedDoc=Object.getOwnPropertyDescriptor(globalThis,'document');
  const savedWin=Object.getOwnPropertyDescriptor(globalThis,'window');
  const savedRaf=Object.getOwnPropertyDescriptor(globalThis,'requestAnimationFrame');
@@ -286,7 +318,7 @@ function partsMountDocument() {
  const rootDoc=new FakeElement('body');
  const fakeDoc={
   body:rootDoc,
-  title:'',
+  title:'',documentElement:rootDoc,visibilityState:'visible',
   activeElement:null as FakeElement|null,
   defaultView:null as any,
   createElement:(tag:string)=>new FakeElement(tag),
@@ -307,6 +339,7 @@ function partsMountDocument() {
  };
  fakeDoc.defaultView=fakeWin;
  class FakeObserver{observe(){}disconnect(){}}
+ if(raster)Object.defineProperty(globalThis,'getComputedStyle',{value:(node:FakeElement)=>({getPropertyValue:()=> '#3b82f6',backgroundColor:'transparent',backgroundImage:'none',backgroundSize:'auto',backgroundPosition:'0% 0%',display:node.hidden?'none':'block',visibility:node.style.visibility??'visible',opacity:'1',filter:'none',transformOrigin:'0px 0px',transform:'none',zIndex:'0'}),configurable:true,writable:true});
  Object.defineProperty(globalThis,'document',{value:fakeDoc,configurable:true,writable:true});
  Object.defineProperty(globalThis,'window',{value:fakeWin,configurable:true,writable:true});
  Object.defineProperty(globalThis,'requestAnimationFrame',{value:()=>1,configurable:true,writable:true});
@@ -321,7 +354,9 @@ function partsMountDocument() {
    rootDoc.append(hostWrap);
    return {left:left as unknown as HTMLElement,stage:stage as unknown as HTMLElement,toolbar:toolbar as unknown as HTMLElement,side:side as unknown as HTMLElement,hostWrap};
   };
- return {FakeElement, fakeDoc, rootDoc, makeSlots, cleanup() {
+ return {FakeElement, fakeDoc, fakeWin, rootDoc, makeSlots, cleanup() {
+  if(savedStyle)Object.defineProperty(globalThis,'getComputedStyle',savedStyle);
+  else delete (globalThis as any).getComputedStyle;
   if(savedDoc)Object.defineProperty(globalThis,'document',savedDoc);
   else delete (globalThis as any).document;
   if(savedWin)Object.defineProperty(globalThis,'window',savedWin);
@@ -345,6 +380,7 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
  expect(partsSourceText).not.toContain("getElementById('parts-app')");
  expect(partsSourceText).not.toContain('pageInstanceAccess(');
 
+ const cropRoot=await mkdtemp(join(tmpdir(),'mount-edit-crops-'));
  const fixture=partsMountDocument();
  const {FakeElement, fakeDoc, rootDoc, makeSlots}=fixture;
  type FakeElement=InstanceType<typeof FakeElement>;
@@ -373,6 +409,13 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
    crop:{path:`comment-crops/${'c'.repeat(64)}.png`,sha256:'c'.repeat(64),width:8,height:8,png:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='},
    nativeCrop:null,
   };
+  await writeMeshPackage(cropRoot);
+  const cropPackage=await loadPartsView(cropRoot);
+  const cropPng=PNG.sync.write(new PNG({width:8,height:8}));
+  const cropHash=new Bun.CryptoHasher('sha256').update(cropPng).digest('hex');
+  sampleIssue.parts[0]!.imageHash=cropPackage.files.find(file=>file.abs===cropPackage.imagePaths[0])!.sha256;
+  sampleIssue.crop={path:`comment-crops/${cropHash}.png`,sha256:cropHash,width:8,height:8,png:'data:image/png;base64,'+cropPng.toString('base64')};
+  Object.assign(sampleIssue,await preparePartsComment(cropPackage,sampleIssue,false,{sourceHash:sampleIssue.sourceHash}));
   const makeView=(title:string,sourceHash:string,issues:PartsIssue[]):ViewData=>({
    mode:'parts',
    title,
@@ -380,7 +423,7 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
    painting:null,
    rigSize:[64,64],
    items:[
-    {name:'gap',index:0,x:0,y:0,w:16,h:16,imageHash:'a'.repeat(64)},
+    {name:'gap',index:0,x:0,y:0,w:16,h:16,imageHash:sampleIssue.parts[0]!.imageHash},
     {name:'covered',index:1,x:8,y:8,w:16,h:16,imageHash:'b'.repeat(64)},
    ],
    pages:[],
@@ -400,7 +443,7 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
   const sourceA:PartsSource={
    view:async()=>makeView('Package A','1'.repeat(64),[sampleIssue]),
    image:()=>firstImage,page:async()=>({width:16,height:16} as HTMLImageElement),painting:()=>null,
-   crop:async issue=>issue,
+   crop:async issue=>preparePartsComment(cropPackage,issue,false,{sourceHash:sampleIssue.sourceHash}),
   };
   const sourceB:PartsSource={
    view:async()=>makeView('Package B','2'.repeat(64),[]),
@@ -434,6 +477,13 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
   await waitReady(handleA.ready,'A',slotsA);
   expect(firstPaintSettled).toBe(true);
   expect(slotsA.hostWrap.querySelector<FakeElement>('#pv-canvas')!.width).toBe(64);
+  const loadA=slotsA.hostWrap.querySelector<FakeElement>('#pv-load')!;
+  const loadB=slotsB.hostWrap.querySelector<FakeElement>('#pv-load')!;
+  expect(loadA.textContent).toBe('Saved sign-off loaded.');
+  expect(loadB.textContent).toBe('');
+  expect(loadA.getAttribute('role')).toBe('status');
+  expect(loadA.parentElement).toBe(slotsA.stage as unknown as FakeElement);
+  expect(loadA).not.toBe(slotsA.hostWrap.querySelector('#pv-save-status'));
 
 
   const sidebarA=slotsA.side as unknown as FakeElement,sidebarB=slotsB.side as unknown as FakeElement;
@@ -446,6 +496,12 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
    expect(list.classList.contains('stage-comment-list-inline')).toBe(true);
    expect(list.hidden).toBe(false);
    expect(list.style.top).toBe('');
+  }
+  for(const slots of [slotsA,slotsB]){
+   const mesh=slots.hostWrap.querySelector<FakeElement>('#pv-mesh-control input')!;
+   expect(mesh.disabled).toBe(false);expect(mesh.checked).toBe(true);
+   expect(slots.hostWrap.querySelector('#pv-mesh-control')?.textContent).toBe('Mesh (none 0/2)');
+   expect(slots.hostWrap.querySelector('#pv-mesh-panel p')?.textContent).toBe('No mesh geometry is available for this draft.');
   }
   expect(issueListA.querySelectorAll('.stage-comment-item')).toHaveLength(1);
   expect(issueListA.querySelector('.stage-comment-summary')?.textContent).toContain('seam gap on A');
@@ -536,7 +592,7 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
  }finally{
   handleA?.dispose();
   handleB?.dispose();
-  fixture.cleanup();
+  fixture.cleanup();await rm(cropRoot,{recursive:true,force:true});
  }
 });
 
@@ -567,6 +623,10 @@ test('#613 C during a current paint exposes busy then clears only its owned stat
  const handle=mountPartsWorkspace(slots,{view:async()=>view,image:index=>{requested[index]!();return images[index]!;},page:async()=>({} as HTMLImageElement),painting:()=>null,crop:async issue=>issue},
   {initial:()=>[],changed(){},register(){},locked:()=>'open'},{defaultView:'item'});
  const flush=async()=>{for(let i=0;i<30;i++)await Promise.resolve();};
+ const browserSource=await readFile('tests/parts-comments-browser.ts','utf8');
+ const definitions=browserSource.slice(browserSource.indexOf('const commentState='),browserSource.indexOf('function source('));
+ const readinessExpression=new Function(definitions+';return commentReady;')() as string;
+ const captureReady=new Function('document','return '+readinessExpression) as (document:unknown)=>boolean;
  const pressC=()=>{
   node('rig-viewport').focus();
   fixture.fakeDoc.emit('keydown',{key:'c',target:node('rig-viewport'),defaultPrevented:false,repeat:false,ctrlKey:false,metaKey:false,altKey:false,preventDefault(){}});
@@ -584,6 +644,32 @@ test('#613 C during a current paint exposes busy then clears only its owned stat
   expect(slots.stage.dataset.partsPaintState).toBe('ready');
   expect(node('stage-comment').disabled).toBe(false);
   expect(node('pv-save-status').textContent).toBe('');
+
+  // Assemble waits for uncached part images even after the initial item is ready.
+  node('pv-assemble').onclick!();await arrivals[1];
+  expect(captureReady(fixture.fakeDoc)).toBe(false);
+  expect(slots.stage.dataset.partsPaintState).toBe('busy');
+  expect(node('stage-comment').disabled).toBe(true);
+  node('fit').onclick!();
+  expect(captureReady(fixture.fakeDoc)).toBe(false);
+  expect(slots.stage.dataset.partsPaintState).toBe('busy');
+  expect(node('stage-comment').disabled).toBe(true);
+  node('stage-comment').onclick!();
+  expect(node('stage-comment').getAttribute('aria-pressed')).toBe('false');
+  expect(node('rig-viewport').classList.contains('stage-comment-mode')).toBe(false);
+  expect(node('pv-save-status').textContent).toContain('COMMENT_BUSY');
+  node('pv-assemble').onclick!();await flush();
+  expect(captureReady(fixture.fakeDoc)).toBe(true);
+  expect(slots.stage.dataset.partsPaintState).toBe('ready');
+  expect(node('stage-comment').disabled).toBe(false);
+  node('stage-comment').onclick!();
+  expect(node('stage-comment').getAttribute('aria-pressed')).toBe('true');
+  expect(node('rig-viewport').classList.contains('stage-comment-mode')).toBe(true);
+  expect(node('reference-viewport').classList.contains('stage-comment-mode')).toBe(false);
+  node('stage-comment').onclick!();
+  expect(node('stage-comment').getAttribute('aria-pressed')).toBe('false');
+  console.log('PARTS_ASSEMBLY_CAPTURE_CONTROL '+JSON.stringify({assembledWithPendingImage:'busy',afterFit:'busy',
+   busyClickActivated:false,readyClickActivated:true,secondClickDeactivated:true,control:'actual mount and existing comment engine'}));
 
   handle.select('part-1');await arrivals[1];pressC();
   handle.select('part-2');await arrivals[2];pressC();
@@ -607,4 +693,159 @@ test('#613 C during a current paint exposes busy then clears only its owned stat
   expect(slots.stage.getAttribute('aria-busy')).toBe('false');
   expect(node('pv-save-status').textContent).toContain('PARTS_PAINT_FAILED');
  }finally{handle.dispose();fixture.cleanup();}
+});
+
+test('#614 shared mount creates real assembled issues, validates chip edits atomically and isolates P/hover/Escape lifetime',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'c5-mount-'));
+ const dom=partsMountDocument(true);
+ const mounts:ReturnType<typeof mountPartsWorkspace>[]=[];
+ try{
+  const {writeComparisonPackage}=await import('./helpers/parts-comparison-package.ts');
+  await writeComparisonPackage(root,true);
+  const pkg=await loadPartsView(root,{painting:join(root,'painting.png')});
+  const before=await Promise.all(pkg.files.map(file=>readFile(file.abs)));
+  const originalImages=await Promise.all(pkg.imagePaths.map(path=>loadImage(path)));
+  const originalPainting=await loadImage(join(root,'painting.png'));
+  const items=pkg.items.map(item=>({...item,imageHash:pkg.files.find(file=>file.abs===pkg.imagePaths[item.index])!.sha256}));
+  const slotsA=dom.makeSlots('c5-standalone'),slotsB=dom.makeSlots('c5-job');
+  type Element=InstanceType<typeof dom.FakeElement>;
+  const node=(slots:typeof slotsA,selector:string)=>slots.hostWrap.querySelector<Element>(selector)!;
+  const tick=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setTimeout(resolve,0));};
+  const key=(value:string)=>({key:value,repeat:false,defaultPrevented:false,target:dom.rootDoc,ctrlKey:false,metaKey:false,altKey:false,preventDefault(){this.defaultPrevented=true;}});
+  const outputs:PanelOutput[]=[];const changes:PartsIssue[][][]=[[],[]];
+  let phase:ReturnType<PartsHost['locked']>='open';
+  let releaseCrop:(()=>void)|null=null,holdCrop=false,cropRequests=0;
+  const mount=(slots:typeof slotsA,index:number)=>{
+   const sourceHash=index===0?verdictSource(pkg).sha256:'a'.repeat(64);
+   const data:ViewData={mode:'parts',title:'Synthetic C5',sourceHash,rigSize:pkg.rigSize,
+    painting:pkg.painting?{sha256:pkg.painting.sha256,width:pkg.painting.width,height:pkg.painting.height}:null,
+    items,pages:[],flags:[],flagSources:[],flagMissing:[],verdictFile:'parts-review.json',verdict:null,verdictStale:null};
+   const source:PartsSource={view:async()=>data,
+    image:async index=>originalImages[index] as unknown as HTMLImageElement,
+    page:async()=>{throw Error('Unexpected atlas image');},painting:()=>Promise.resolve(originalPainting as unknown as HTMLImageElement),
+    crop:async issue=>{
+     cropRequests++;
+     const prepared=await preparePartsComment(pkg,issue,false,{sourceHash});
+     if(holdCrop)await new Promise<void>(resolve=>{releaseCrop=resolve;});
+     return prepared;
+    }};
+   const host:PartsHost={initial:()=>[],changed:issues=>changes[index]!.push(issues),register:output=>{outputs[index]=output;},locked:()=>phase};
+   const handle=mountPartsWorkspace(slots,source,host,{defaultView:'assembled'});mounts.push(handle);return handle;
+  };
+  const a=mount(slotsA,0),b=mount(slotsB,1);
+  await Promise.all([a.ready,b.ready]);
+  expect(node(slotsA,'#pv-bg').value).toBe('checker');
+  expect(node(slotsB,'#pv-bg').value).toBe('checker');
+  for(const slots of [slotsA,slotsB]){
+   const mesh=node(slots,'#pv-mesh-control input');expect(mesh.disabled).toBe(false);mesh.checked=true;mesh.onchange!();
+  }
+  await tick();
+  const canvasA=node(slotsA,'#pv-canvas'),canvasB=node(slotsB,'#pv-canvas');
+  const pixels=()=>canvasA.toDataURL();const base=pixels();const otherBase=canvasB.toDataURL();
+  const paneA=node(slotsA,'#rig-viewport'),paneB=node(slotsB,'#rig-viewport');
+  node(slotsA,'[data-pv-comparison="overlay"]').onclick!();await tick();
+  expect(node(slotsA,'#pv-mesh-control input').disabled).toBe(false);
+  expect(node(slotsA,'#pv-mesh-control input').checked).toBe(true);
+  const overlayWithMesh=pixels();const overlayToggle=node(slotsA,'#pv-mesh-control input');overlayToggle.checked=false;overlayToggle.onchange!();await tick();
+  expect(pixels()).not.toBe(overlayWithMesh);overlayToggle.checked=true;overlayToggle.onchange!();await tick();
+  expect(pixels()).toBe(overlayWithMesh);node(slotsA,'[data-pv-comparison="part"]').onclick!();await tick();
+  paneA.focus();dom.fakeDoc.emit('keydown',key('p'));await tick();
+  expect(pixels()).not.toBe(base);expect(canvasB.toDataURL()).toBe(otherBase);
+  expect(node(slotsA,'#stage-comment').disabled).toBe(true);
+  const painted=pixels();dom.fakeDoc.emit('keydown',key('c'));
+  expect(node(slotsA,'#stage-comment').getAttribute('aria-pressed')).toBe('false');
+  expect(pixels()).toBe(painted);expect(a.issues()).toEqual([]);
+  dom.fakeDoc.emit('keyup',key('p'));await tick();expect(pixels()).toBe(base);
+  for(let hold=0;hold<2;hold++){
+   dom.fakeDoc.visibilityState='visible';
+   dom.fakeDoc.emit('keydown',key('p'));await tick();
+   expect(pixels()).toBe(painted);expect(node(slotsA,'#stage-comment').disabled).toBe(true);
+   dom.fakeDoc.emit('visibilitychange',{});await tick();
+   expect(pixels()).toBe(painted);expect(node(slotsA,'#stage-comment').disabled).toBe(true);
+   dom.fakeDoc.visibilityState='hidden';dom.fakeDoc.emit('visibilitychange',{});await tick();
+   expect(pixels()).toBe(base);expect(node(slotsA,'#stage-comment').disabled).toBe(false);
+   expect(slotsA.stage.dataset.partsPaintState).toBe('ready');
+   expect(canvasB.toDataURL()).toBe(otherBase);expect(node(slotsB,'#stage-comment').disabled).toBe(false);
+   dom.fakeDoc.visibilityState='visible';dom.fakeDoc.emit('visibilitychange',{});await tick();
+   expect(pixels()).toBe(base);
+  }
+  dom.fakeDoc.emit('keydown',key('p'));await tick();dom.fakeWin.emit('blur',{});await tick();expect(pixels()).toBe(base);
+  dom.fakeDoc.emit('keydown',key('p'));await tick();paneB.focus();await tick();expect(pixels()).toBe(base);
+  paneA.focus();
+  const event=(point:{x:number;y:number},extra:Record<string,unknown>={})=>{
+   const bounds=canvasA.getBoundingClientRect(),zoom=bounds.width/canvasA.width;
+   return {button:0,buttons:0,isPrimary:true,pointerId:17,clientX:bounds.left+point.x*zoom,clientY:bounds.top+point.y*zoom,target:paneA,
+    preventDefault(){},stopImmediatePropagation(){},...extra};
+  };
+  paneA.emit('pointermove',event({x:15,y:9}));
+  expect(node(slotsA,'[data-assembly-hover="front"] span').textContent).toBe('front');
+  expect(slotsB.hostWrap.querySelector('[data-assembly-hover]')).toBeNull();
+  paneA.emit('pointerleave',{});expect(slotsA.hostWrap.querySelector('[data-assembly-hover]')).toBeNull();
+  paneA.emit('dblclick',event({x:15,y:9}));await tick();
+  expect(node(slotsA,'#pv-assemble').getAttribute('aria-pressed')).toBe('false');
+  expect(node(slotsA,'button[aria-current="true"]').dataset.pvItem).toBe('front');
+  expect(node(slotsA,'#pv-mesh-control input').checked).toBe(true);
+  expect(node(slotsA,'#pv-mesh-panel p').textContent).toBe('No mesh geometry is available for this part.');
+  const toggle=node(slotsA,'#pv-mesh-control input');toggle.checked=false;toggle.onchange!();await tick();
+  dom.fakeDoc.emit('keydown',key('Escape'));await tick();
+  expect(node(slotsA,'#pv-assemble').getAttribute('aria-pressed')).toBe('true');
+  expect(node(slotsA,'#pv-mesh-control input').checked).toBe(false);
+  const drag=async(from:{x:number;y:number},to:{x:number;y:number})=>{
+   paneA.emit('pointerdown',event(from,{buttons:1}));paneA.emit('pointermove',event(to,{buttons:1}));
+   await Promise.all([...paneA.handlers.get('pointerup')!].map(handler=>handler(event(to))));
+  };
+  dom.fakeDoc.emit('keydown',key('c'));
+  await drag({x:12,y:7},{x:20,y:15});
+  let composer=node(slotsA,'.stage-comment-composer');
+  const chips=()=>composer.querySelector<Element>('.stage-comment-parts')!.children;
+  expect(chips().filter(chip=>chip.getAttribute('aria-pressed')==='true').map(chip=>chip.textContent)).toEqual(['body','front']);
+  composer.querySelector<Element>('input')!.value='Shared seam';
+  await (composer as unknown as HTMLFormElement).onsubmit!({preventDefault(){}} as SubmitEvent);
+  expect(a.issues()).toHaveLength(1);expect(changes[0]).toHaveLength(1);expect(b.issues()).toEqual([]);
+  const issue=a.issues()[0]!;
+  expect(issue.parts.map(part=>part.name)).toEqual(['body','front']);
+  expect(issue.view.mode).toBe('assembled');expect(issue.imageRegion).toBeNull();expect(issue.nativeCrop).toBeNull();
+  expect(issue.rigRegion).toEqual({x:12,y:7,width:8,height:8});
+  const {readPngCrop}=await import('../src/comment-crops.ts');
+  const crop=PNG.sync.read(await readPngCrop(issue.crop));expect(crop.width).toBe(issue.crop.width);expect(crop.data.some(channel=>channel>0)).toBe(true);
+  await node(slotsA,'.stage-comment-summary').onclick!();await tick();
+  expect(slotsA.hostWrap.querySelectorAll('[data-assembly-outline]')).toHaveLength(2);
+  composer=node(slotsA,'.stage-comment-composer');const input=composer.querySelector<Element>('input')!;
+  input.value='Invalid narrowed seam';chips().find(chip=>chip.textContent==='body')!.onclick!();
+  const requestsBefore=cropRequests;
+  await (composer as unknown as HTMLFormElement).onsubmit!({preventDefault(){}} as SubmitEvent);
+  expect(node(slotsA,'[role="alert"]').textContent).toContain('PARTS_COMMENT_OUT_OF_BOUNDS');
+  expect(a.issues()).toEqual([issue]);expect(outputs[0]!.value()).toMatchObject({issues:[issue]});expect(cropRequests).toBe(requestsBefore);
+  chips().find(chip=>chip.textContent==='body')!.onclick!();input.value='Validated seam';holdCrop=true;
+  const pending=(composer as unknown as HTMLFormElement).onsubmit!({preventDefault(){}} as SubmitEvent);
+  await tick();expect(releaseCrop).not.toBeNull();phase='sent';holdCrop=false;(releaseCrop as unknown as ()=>void)();await pending;
+  expect(a.issues()).toEqual([issue]);expect(changes[0]).toHaveLength(1);
+  phase='open';await (composer as unknown as HTMLFormElement).onsubmit!({preventDefault(){}} as SubmitEvent);
+  expect(a.issues()[0]!.summary).toBe('Validated seam');expect(changes[0]).toHaveLength(2);
+  dom.fakeDoc.emit('keydown',key('Escape'));expect(node(slotsA,'.stage-comment-list').hidden).toBe(false);
+  dom.fakeDoc.emit('keydown',key('c'));await drag({x:15,y:9},{x:18,y:12});
+  composer=node(slotsA,'.stage-comment-composer');
+  expect(chips().filter(chip=>chip.getAttribute('aria-pressed')==='true').map(chip=>chip.textContent)).toEqual(['front']);
+  dom.fakeDoc.emit('keydown',key('Escape'));
+  dom.fakeDoc.emit('keydown',key('c'));await drag({x:0,y:0},{x:2,y:2});
+  composer=node(slotsA,'.stage-comment-composer');expect(chips().every(chip=>chip.getAttribute('aria-pressed')==='false')).toBe(true);
+  composer.querySelector<Element>('input')!.value='Empty background';await (composer as unknown as HTMLFormElement).onsubmit!({preventDefault(){}} as SubmitEvent);
+  expect(node(slotsA,'[role="alert"]').textContent).toBe('Select at least one part.');expect(a.issues()).toHaveLength(1);
+  dom.fakeDoc.emit('keydown',key('Escape'));dom.fakeDoc.emit('keydown',key('c'));await drag({x:12,y:7},{x:20,y:15});
+  composer=node(slotsA,'.stage-comment-composer');composer.querySelector<Element>('input')!.value='Disposed pending seam';holdCrop=true;
+  const disposedSave=(composer as unknown as HTMLFormElement).onsubmit!({preventDefault(){}} as SubmitEvent);
+  await tick();a.dispose();holdCrop=false;(releaseCrop as unknown as ()=>void)();await disposedSave;
+  expect(changes[0]).toHaveLength(2);expect(slotsA.stage.children).toHaveLength(0);
+  expect(slotsA.side.querySelectorAll('.stage-comment-list')).toHaveLength(0);
+  expect(slotsB.side.querySelectorAll('.stage-comment-list')).toHaveLength(1);
+  expect(b.issues()).toEqual([]);expect(await Promise.all(pkg.files.map(file=>readFile(file.abs)))).toEqual(before);
+  const visibilityListeners=dom.fakeDoc.handlers.get('visibilitychange')!;
+  expect(visibilityListeners.size).toBe(1);
+  paneB.focus();dom.fakeDoc.emit('keydown',key('p'));await tick();
+  expect(node(slotsB,'#stage-comment').disabled).toBe(true);
+  b.dispose();expect(visibilityListeners.size).toBe(0);
+  dom.fakeDoc.visibilityState='hidden';dom.fakeDoc.emit('visibilitychange',{});
+  dom.fakeDoc.emit('keyup',key('p'));dom.fakeWin.emit('blur',{});await tick();
+  expect(slotsB.stage.children).toHaveLength(0);expect(slotsB.stage.dataset.partsPaintState).toBe('disposed');
+ }finally{for(const mount of mounts)mount.dispose();dom.cleanup();await rm(root,{recursive:true,force:true});}
 });

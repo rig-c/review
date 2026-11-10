@@ -13,9 +13,10 @@ import { writeMeshPackage } from './helpers/parts-mesh-package.ts';
 import { provePartsEquivalence } from './helpers/parts-equivalence.ts';
 import { launchSoftwareCapture } from './helpers/software-capture.ts';
 import { launchCdpSession } from './parts-explorer-browser.ts';
+const c5 = Bun.argv.includes('--c5');
 const baselineArg = Bun.argv.indexOf('--baseline'), baselineRootArg = Bun.argv.indexOf('--baseline-root');
 const baselineRoot = baselineRootArg >= 0 ? resolve(Bun.argv[baselineRootArg + 1]!) : null;
-if (!baselineRoot && (baselineArg < 0 || !Bun.argv[baselineArg + 1])) throw new Error('Required: --baseline-root <frozen original source root>');
+if (!c5 && !baselineRoot && (baselineArg < 0 || !Bun.argv[baselineArg + 1])) throw new Error('Required: --baseline-root <frozen original source root>');
 if (Bun.argv.includes('--instruments') && !baselineRoot) throw new Error('Exact instruments require frozen original HTML/CSS/JS via --baseline-root');
 const root = await mkdtemp(join(tmpdir(), 'mesh-browser-')), profile = await mkdtemp(join(tmpdir(), 'mesh-profile-'));
 const shots = 'mesh-evidence'; await mkdir(shots, { recursive: true });
@@ -55,11 +56,19 @@ try {
       const figures = await page.evaluate<Record<string, string>>(`Object.fromEntries([...document.querySelectorAll('[data-mesh-figure]')].map(e=>[e.dataset.meshFigure,e.textContent]))`);
       const rows = JSON.parse(await readFile(join(root, 'mesh_report.json'), 'utf8')), expected = { ...rows[0] }; delete expected.part;
       for (const [key, value] of Object.entries(expected)) if (figures[key] !== JSON.stringify(value)) throw new Error(`figure ${key}`);
-      await page.evaluate(`document.querySelector('[data-pv-zoom="4"]').click();document.querySelector('#pv-mesh-control input').click()`); await Bun.sleep(250);
+      await page.evaluate(`document.getElementById('native-one').click();for(let i=0;i<6;i++)document.getElementById('zoom-in').click();document.querySelector('#pv-mesh-control input').click()`); await Bun.sleep(250);
       const gapCentre = await page.evaluate<number[]>(`[...document.getElementById('pv-canvas').getContext('2d').getImageData(24,25,1,1).data]`);
       if (gapCentre[0]! <= 136) throw new Error('gap pixel not tinted');
       await writeFile(join(shots, `mesh-overlay-${lang}.png`), await page.screenshot());
       report[lang] = { figures, differences: 0, hiddenByDefault: before, gapCentre };
+      if(c5){
+        await page.evaluate(`document.getElementById('pv-assemble').click()`);await Bun.sleep(150);
+        if(!await page.evaluate(`(()=>{const t=document.querySelector('#pv-mesh-control input');return !t.disabled&&t.checked&&document.getElementById('pv-canvas').width===128;})()`))throw Error('global mesh enabled in assembly');
+        await writeFile(join(shots,'mesh-assembled-'+lang+'.png'),await page.screenshot());
+        await page.evaluate(`document.querySelector('#pv-mesh-control input').click();document.getElementById('pv-assemble').click();document.querySelector('[data-pv-item="covered"]').click()`);await Bun.sleep(150);
+        if(!await page.evaluate(`!document.querySelector('#pv-mesh-control input').checked`))throw Error('global mesh off survives view and selection changes');
+      }
+
     }
     if (!Bun.argv.includes('--no-rig-only')) {
     await ready(`http://127.0.0.1:${server.port}/?lang=en#cap=${capability}`);
@@ -91,6 +100,18 @@ try {
     const current = await page.screenshot();
     await writeFile(join(shots, 'no-rig-current.png'), current);
     const noControls = await page.evaluate<boolean>(`!document.getElementById('pv-mesh-panel')&&!document.getElementById('pv-mesh-control')`);
+    if(c5){
+      const languages=[];
+      for(const lang of ['en','ko']){
+        await ready(`http://127.0.0.1:${server2.port}/?lang=${lang}#cap=${capability}`);
+        const state=await page.evaluate<any>(`(()=>{const t=document.querySelector('#pv-mesh-control input');return {enabled:!!t&&!t.disabled,checked:t?.checked,label:document.getElementById('pv-mesh-control')?.textContent,reason:document.querySelector('#pv-mesh-panel p')?.textContent,bg:document.getElementById('pv-bg').value,pixels:document.getElementById('pv-canvas').toDataURL()};})()`);
+        if(!state.enabled||!state.checked||state.bg!=='checker'||!state.label.includes('0/2')||!state.reason)throw Error('explicit no-mesh state');
+        await page.evaluate(`document.querySelector('#pv-mesh-control input').click()`);await Bun.sleep(100);
+        if(state.pixels!==await page.evaluate(`document.getElementById('pv-canvas').toDataURL()`))throw Error('no-mesh toggle fabricated geometry');
+        await writeFile(join(shots,'no-mesh-'+lang+'.png'),await page.screenshot());languages.push({lang,...state});
+      }
+      report.noRig={languages,source:'generated public fixture',fullPageHistoricalEquivalence:'historical path retained separately; C5 intentionally adds mesh availability and checker presentation'};
+    }else{
     if (!noControls) throw new Error('mesh controls without rig');
     const digest = (bytes: string | Uint8Array) => new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
     const provenance = baselineRoot ? JSON.parse(await readFile(join(baselineRoot, 'baseline-provenance.json'), 'utf8')) as { authoritativeCommit: string; files: Record<string, string> } : null;
@@ -260,6 +281,7 @@ try {
 
       }
     } finally { proxy.stop(true); }
+    }
   } finally { server2.stop(true); }
   const publicArg = Bun.argv.indexOf('--public');
   if (publicArg >= 0) {

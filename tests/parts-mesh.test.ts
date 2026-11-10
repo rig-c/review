@@ -271,3 +271,28 @@ test('#546: readPartMeshes reuses the producerFlags mesh_report buffer instead o
     swapped: true, reads: 1, meshReadsAfterSwap: 0, faintCount: 0, gapTriangles: 30, flagHash: hashA, fileHash: hashA, refused: true,
   });
 });
+
+test('#614 mesh wire-only alpha keeps tint and vertices selected-only and restores canvas state',async()=>{
+ const root=await fixture(),pkg=await loadPartsView(root),item=pkg.items[0]!;
+ const source=await loadImage(join(root,'parts/gap.png'));
+ const canvas=createCanvas(64,64),ctx=canvas.getContext('2d');
+ ctx.globalAlpha=.8;ctx.strokeStyle='#123456';ctx.fillStyle='#654321';ctx.lineWidth=3;
+ let scratchCalls=0,strokeAlpha=0;
+ const stroke=ctx.stroke.bind(ctx);
+ ctx.stroke=()=>{strokeAlpha=ctx.globalAlpha;stroke();};
+ paintMesh(ctx as never,source as never,64,64,item.mesh!,()=>{scratchCalls++;throw Error('wire-only must not read/tint source pixels');},{tint:false,alpha:.35});
+ expect(scratchCalls).toBe(0);
+ const wire=ctx.getImageData(0,0,64,64).data;
+ expect(wire[(24*64+24)*4+3]).toBe(0);
+ expect(wire.some((value,index)=>index%4===3&&value>0)).toBe(true);
+ expect(strokeAlpha).toBeCloseTo(.8*.35);
+ expect(ctx.globalAlpha).toBeCloseTo(.8);expect(ctx.lineWidth).toBe(3);
+ // Native context getters cache assigned colours after restore, so inspect the restored draw state in RGBA.
+ ctx.globalAlpha=1;ctx.clearRect(0,0,64,64);ctx.beginPath();ctx.moveTo(0,2.5);ctx.lineTo(5,2.5);ctx.stroke();
+ expect([...ctx.getImageData(2,2,1,1).data]).toEqual([18,52,86,255]);
+ ctx.fillRect(32,32,1,1);expect([...ctx.getImageData(32,32,1,1).data]).toEqual([101,67,33,255]);
+ const selected=createCanvas(64,64),selectedCtx=selected.getContext('2d');selectedCtx.drawImage(source,0,0);
+ paintMesh(selectedCtx as never,source as never,64,64,item.mesh!, (w,h)=>createCanvas(w,h) as never,{tint:true,alpha:1});
+ expect(selectedCtx.getImageData(24,24,1,1).data[0]).toBeGreaterThan(136);
+ expect(ctx.getImageData(24,24,1,1).data[3]).toBe(0);
+});
