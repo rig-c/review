@@ -90,7 +90,7 @@ export interface PartsViewPackage {
   pagePaths: string[];
 }
 
-export interface PartsViewOptions { rig?: string; meshReport?: string; check?: string; verdict?: string;painting?:string;paintingRoot?:string }
+export interface PartsViewOptions { rig?: string; meshReport?: string; check?: string; verdict?: string; painting?: string; paintingRoot?: string }
 
 const record = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
 const finite = (v: unknown, min: number): v is number => typeof v === 'number' && Number.isFinite(v) && v >= min;
@@ -376,7 +376,12 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
   let painting:PartsViewPackage['painting'];if(options.painting){
     // Both paths are physical: a user-designated alias to an inside file is valid,
     // while a link reaching outside is refused before any painting bytes are read.
-    let abs:string,bytes:Buffer;try{const paintingRoot=options.paintingRoot!==undefined?await realpath(resolve(options.paintingRoot)):root;abs=await insideRoot(paintingRoot,resolve(options.painting),'PARTS_PAINTING_OUTSIDE','painting');packagePath(relative(paintingRoot,abs).split(sep).join('/'),'painting');bytes=await readFile(abs);}catch(error){if(error instanceof Error&&error.message.startsWith('PARTS_PAINTING_OUTSIDE:'))throw error;refuse('PARTS_PAINTING_UNAVAILABLE','painting must be a readable portable package PNG');}
+    let abs:string,bytes:Buffer;try{
+      const paintingRoot = options.paintingRoot !== undefined ? await realpath(resolve(options.paintingRoot)) : root;
+      abs = await insideRoot(paintingRoot, resolve(options.painting), 'PARTS_PAINTING_OUTSIDE', 'painting');
+      packagePath(relative(paintingRoot, abs).split(sep).join('/'), 'painting');
+      bytes = await readFile(abs);
+    }catch(error){if(error instanceof Error&&error.message.startsWith('PARTS_PAINTING_OUTSIDE:'))throw error;refuse('PARTS_PAINTING_UNAVAILABLE','painting must be a readable portable package PNG');}
     let png:PNG;try{png=PNG.sync.read(bytes!);}catch{refuse('PARTS_PAINTING_PNG','painting must be a valid PNG');}
     assertOriginalPaintingSize(png!.width,png!.height,rigSize,doc.scale_rig_per_source);
     const file={abs:abs!,bytes:bytes!.length,sha256:createHash('sha256').update(bytes!).digest('hex')};painting={...file,width:png!.width,height:png!.height};files.push(file);
