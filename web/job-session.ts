@@ -23,6 +23,7 @@ import type {
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
 import {t} from './i18n.ts';
+import {renderAskGroup, renderQuestionImages, refreshInterviewConstraints} from './interview-panel.ts';
 import {JOB_HUB_READY, jobHubMessageMatches, type JobHubBinding} from './job-hub.ts';
 import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
     type JobRigDraw, type JobRigDrawState} from './job-rig-capture.ts';
@@ -1715,6 +1716,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 forms: [...forms].filter(([, item]) => item.dirty).map(([askId, item]) => ({
                     askId, value: item.read(),
                     controls: [...item.form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')]
+                        .filter(input => !(input instanceof HTMLInputElement && input.type === 'radio') || input.checked)
                         .map(input => ({ name: input.name, value: input.value })),
                 })),
             }));
@@ -1791,6 +1793,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         source.textContent = prepared.display.publication.label + ' · ' + ask.source.sourceHash;
         fields.append(source);
         const note = textArea(fields, 'interview.note');
+        let refreshInterview: (() => void) | undefined;
         let read: () => UISubmissionV3['value'];
         let submitKey = 'Submit review';
         const subject = ask.subject;
@@ -1819,50 +1822,32 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 fields.prepend(legacyNotice);
             }
             const heading = node('h3');
-            heading.textContent = question.set.question;
-            fields.prepend(heading);
+            heading.textContent = t('job.picks.title', [question.set.question, question.set.stage]);
+            const provenance = node('p');
+            provenance.textContent = t('interview.provenance', [question.set.drafted_by, question.set.drafted_at]);
+            fields.prepend(heading, provenance);
             const answers = question.set.asks.map(item => {
-                const group = node('fieldset');
-                const legend = node('legend');
-                legend.textContent = item.prompt;
-                group.append(legend);
-                const pick = node('select');
-                pick.required = true;
-                pick.name = 'choice.' + item.id;
-                const empty = node('option', 'job.choose');
-                empty.value = '';
-                pick.append(empty);
-                for (const choice of item.options) {
-                    const option = node('option');
-                    option.value = choice.id;
-                    option.textContent = choice.label + ' · ' + choice.effect;
-                    pick.append(option);
-                }
-                const other = node('textarea');
-                other.hidden = true;
-                other.name = 'other.' + item.id;
-                const warning = node('p');
-                warning.hidden = true;
-                pick.onchange = () => {
-                    const choice = item.options.find(option => option.id === pick.value);
-                    other.hidden = choice?.kind !== 'other';
-                    other.required = choice?.kind === 'other';
-                    warning.hidden = choice?.kind === 'value';
-                    warning.textContent = t(choice?.kind === 'other' ? 'interview.otherPending' : 'interview.autoPending');
-                };
-                group.append(pick, other, warning);
-                fields.append(group);
-                return { item, pick, other };
+                const answer = renderAskGroup(item, undefined, () => refreshInterview?.(),
+                    {name:'choice.' + item.id, otherName:'other.' + item.id});
+                fields.append(answer.group);
+                return answer;
             });
-            for (const image of question.images) {
-                const visual = prepared.interviewImages.get(image.url);
-                if (!visual)
-                    throw new Error('JOB_VISUAL_UNAVAILABLE');
-                fields.append(visual.cloneNode(true));
-            }
+            fields.append(note.parentElement!);
+            const answered = node('p');
+            answered.dataset.jobInterviewAnswered = '';
+            answered.setAttribute('role', 'status');
+            fields.append(answered);
+            refreshInterview = () => {
+                answers.forEach(answer => answer.sync());
+                refreshInterviewConstraints(question.set, answers);
+                answered.textContent = t('job.picks.answered', [answers.filter(answer => answer.read().option_id).length, answers.length]);
+            };
+            refreshInterview();
             read = () => ({ questionId: subject.questionId,
-                selections: answers.map(({ item, pick, other }) => ({ itemId: item.id, optionId: pick.value,
-                    otherText: item.options.find(option => option.id === pick.value)?.kind === 'other' ? other.value : null })), note: note.value });
+                selections: answers.map(answer => {
+                    const pick = answer.read();
+                    return {itemId:pick.ask, optionId:pick.option_id, otherText:pick.other_text ?? null};
+                }), note: note.value });
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {
@@ -2023,11 +2008,14 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                         value: string;
                     }) => item.name === input.name);
                     if (restored && typeof restored.value === 'string') {
-                        input.value = restored.value;
+                        if (input instanceof HTMLInputElement && input.type === 'radio')
+                            input.checked = input.value === restored.value;
+                        else input.value = restored.value;
                         if (input instanceof HTMLSelectElement)
                             input.dispatchEvent(new Event('change'));
                     }
                 }
+                refreshInterview?.();
                 entry.dirty = !!original;
             }
         }
@@ -2646,12 +2634,12 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         direction.dataset.jobDirection = '';
         if (prepared.metadata.direction)
             direction.textContent = t('job.metadata') + '\n' + JSON.stringify(prepared.metadata.direction, null, 2);
-        const interviewDiagnostics = node('section');
+        const interviewDiagnostics = node('details');
         interviewDiagnostics.className = 'job-interview-diagnostics';
         interviewDiagnostics.dataset.jobInterviewDiagnostics = '';
         const interviewState = prepared.interview?.interview ?? prepared.display.publication.interview ?? null;
         if (interviewState && (interviewState.diagnostics.length > 0 || interviewState.records.some(record => record.timeKind !== 'inspection'))) {
-            interviewDiagnostics.append(node('h3', 'interview.history'));
+            interviewDiagnostics.append(node('summary', 'interview.history'));
             for (const diagnostic of interviewState.diagnostics) {
                 const item = node('div');
                 item.dataset.jobInterviewDiagnostic = diagnostic.code;
@@ -2683,6 +2671,26 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         history.className = 'job-history';
         history.dataset.jobHistory = '';
         formsHost.append(direction, interviewDiagnostics, history);
+        if (source.subject === 'option-set') {
+            root.dataset.jobInterviewWorkspace = '';
+            const question = prepared.interview?.questions[0];
+            const context = node('section');
+            context.className = 'job-interview-context';
+            context.append(node('h2', 'job.picks.context'));
+            const images = (question?.images ?? []).map(image => {
+                const preview = prepared.interviewImages.get(image.url);
+                if (!preview) throw new Error('JOB_VISUAL_UNAVAILABLE');
+                return {name:image.name, preview};
+            });
+            context.append(renderQuestionImages(images, {image:0}, t('job.picks.noImages', [source.subject])));
+            const summary = stage.querySelector<HTMLElement>('[data-job-record]');
+            bindingTitle.textContent = t(question?.hasParts ? 'interview.parts' : 'interview.source');
+            if (question?.partsUnavailable) binding.append(node('p', 'interview.partsUnavailable'));
+            if (summary) binding.append(summary);
+            context.append(identity, binding);
+            root.append(context, formsHost);
+            return root;
+        }
         root.append(sidebar, stage, formsHost);
         return root;
     }
@@ -2843,7 +2851,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                         forms.set(id, item);
                     workspace.replaceChildren(...(previousElement ? [previousElement] : []));
                     Object.assign(viewportState, navigation.camera);
-                    if (current && !partsPanels.has(current)) {
+                    if (current && !partsPanels.has(current) && current.display.publication.source.subject !== 'option-set') {
                         el<HTMLSelectElement>('job-reference').value = selectedReference;
                         syncTransportControls();
                         viewport.fitCamera();
@@ -2855,7 +2863,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     forms.clear();
                     for (const [id, entry] of nextForms) forms.set(id, entry);
                     workspace.replaceChildren(root);
-                    if (partsPanels.has(prepared)) {
+                    if (partsPanels.has(prepared) || prepared.display.publication.source.subject === 'option-set') {
                         updateForms(window.state());
                         return {rollback, finalize() {
                             unbindNavigation?.(); resize?.disconnect();
@@ -3001,7 +3009,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         for (const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))
             element.textContent = t(element.dataset.jobText!);
         languages.setAttribute('aria-label', t('interview.language'));
-        if (current && !partsPanels.has(current)) {
+        if (current && !partsPanels.has(current) && current.display.publication.source.subject !== 'option-set') {
             workspace.querySelector('#rig-overlay')?.setAttribute('aria-label', t('Actual rig mesh and bone overlay'));
             describeLayerToggles({ getElementById: id => workspace.querySelector('#' + id) }, t('No rig supplied'));
             for (const label of workspace.querySelectorAll<HTMLElement>('.layer-toggle')) label.title = i18n.tr(label.title);
@@ -3034,7 +3042,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         resolution?.removeEventListener('change', resolutionChanged);
         resolution = globalThis.matchMedia(`(resolution:${globalThis.devicePixelRatio || 1}dppx)`);
         resolution.addEventListener('change', resolutionChanged);
-        if (current && !partsPanels.has(current)) {
+        if (current && !partsPanels.has(current) && current.display.publication.source.subject !== 'option-set') {
             drawn.delete(current);
             current.rigPresentation = undefined;
             viewport.fitCamera();

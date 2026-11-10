@@ -33,6 +33,108 @@ async function request(access: InstanceAccess, path: string, body?: Picks) {
   return result;
 }
 
+type InterviewAsk = InterviewQuestion['set']['asks'][number];
+type InterviewPick = Picks['picks'][number];
+
+/** Shared native ask controls. Transport and source binding stay with each caller. */
+export function renderAskGroup(ask: InterviewAsk, pick: InterviewPick | undefined,
+  onChange: (pick: InterviewPick) => void,
+  settings: {name?:string; otherName?:string; autoResolved?:boolean; otherResolved?:boolean} = {}) {
+  const group = element('fieldset');
+  group.className = 'interview-ask';
+  group.append(element('legend', ask.prompt));
+  const other = element('textarea');
+  other.name = settings.otherName ?? 'other.' + ask.id;
+  other.setAttribute('aria-label', t('interview.other'));
+  other.value = pick?.other_text ?? '';
+  const pending = element('p');
+  pending.setAttribute('role', 'status');
+  const radios = ask.options.map(option => {
+    const label = element('label'); label.className = 'interview-option';
+    const radio = element('input');
+    radio.type = 'radio'; radio.name = settings.name ?? ask.id; radio.value = option.id;
+    radio.required = true; radio.checked = option.id === pick?.option_id;
+    label.append(radio, element('strong', option.label), element('span', option.effect));
+    if (option.recommended) label.append(element('b', t('interview.recommended')), element('span', option.reason));
+    group.append(label);
+    if (option.kind === 'other') group.append(other, pending);
+    return radio;
+  });
+  const read = (): InterviewPick => {
+    const option = ask.options.find((_, index) => radios[index]!.checked);
+    return {ask:ask.id, option_id:option?.id ?? '',
+      ...(option?.kind === 'other' ? {other_text:other.value} : {})};
+  };
+  const sync = () => {
+    const selected = read();
+    const kind = ask.options.find(option => option.id === selected.option_id)?.kind;
+    other.hidden = kind !== 'other'; other.required = kind === 'other';
+    pending.hidden = !(kind === 'auto' && !settings.autoResolved || kind === 'other' && !settings.otherResolved);
+    pending.textContent = t(kind === 'other' ? 'interview.otherPending' : 'interview.autoPending');
+  };
+  for (const radio of radios) radio.onchange = () => {sync(); onChange(read());};
+  other.oninput = () => onChange(read());
+  sync();
+  return {group, radios, other, read, sync};
+}
+
+/** The retained set's value-only tuple rule, evaluated against each candidate. */
+export function refreshInterviewConstraints(set: InterviewQuestion['set'], groups: ReturnType<typeof renderAskGroup>[]) {
+  groups.forEach((group, askIndex) => {
+    group.radios.forEach((radio, optionIndex) => {
+      const candidate = set.asks[askIndex]!.options[optionIndex]!;
+      const disallowed = (set.constraints ?? []).some(constraint => {
+        if (!constraint.asks.includes(set.asks[askIndex]!.id)) return false;
+        const tuple = constraint.asks.map(id => {
+          const index = set.asks.findIndex(ask => ask.id === id);
+          return index === askIndex ? candidate : set.asks[index]!.options.find(option => option.id === groups[index]!.read().option_id);
+        });
+        return tuple.every(option => option?.kind === 'value') &&
+          !constraint.allowed.some(allowed => allowed.every((id, index) => id === tuple[index]?.id));
+      });
+      radio.disabled = disallowed;
+      radio.title = disallowed ? t('job.picks.notAllowed') : '';
+    });
+  });
+}
+
+/** Image selection reuses supplied previews or the standalone caller's routed URL. */
+export function renderQuestionImages(images: {name:string; url?:string; preview?:HTMLImageElement}[],
+  state: {image:number}, emptyText?:string) {
+  const art = element('section'); art.className = 'interview-images';
+  art.tabIndex = 0;
+  art.setAttribute('aria-label', t('job.picks.context'));
+  const tabs = element('div'); tabs.className = 'interview-image-tabs';
+  const viewport = element('div'); viewport.className = 'interview-image-preview';
+  const unavailable = element('p', t('interview.imageUnavailable'));
+  unavailable.setAttribute('role', 'status'); unavailable.hidden = true;
+  const show = (index:number) => {
+    const asset = images[index];
+    if (!asset) return;
+    state.image = index;
+    buttons.forEach((button, at) => button.setAttribute('aria-pressed', String(at === index)));
+    const preview = asset.preview ? asset.preview.cloneNode(true) as HTMLImageElement : element('img');
+    preview.alt = asset.name;
+    if (!asset.preview && asset.url) preview.src = asset.url;
+    preview.hidden = false; unavailable.hidden = true;
+    preview.onerror = () => {preview.hidden = true; unavailable.hidden = false;};
+    viewport.replaceChildren(preview);
+  };
+  const buttons = images.map((asset, index) => {
+    const button = element('button', asset.name); button.type = 'button';
+    button.onclick = () => show(index); tabs.append(button); return button;
+  });
+  art.onkeydown = event => {
+    if (/^[1-9]$/.test(event.key) && images[Number(event.key) - 1]) {
+      event.preventDefault(); show(Number(event.key) - 1);
+    }
+  };
+  art.append(tabs, viewport, unavailable);
+  if (images.length) show(Math.min(state.image, images.length - 1));
+  else if (emptyText) art.append(element('p', emptyText));
+  return art;
+}
+
 export async function mountInterview(host: HTMLElement, access: InstanceAccess) {
   let data: {questions:Question[];historical:HistoricalInterview[]; diagnostics?:InterviewDiagnostic[]; binding?:{projectHash:string;sourceHash:string;version?:number;draftId?:string}};
   try {data = await request(access, '/api/interview');}
@@ -98,23 +200,7 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
     art.append(element('h2', t(question.hasParts ? 'interview.parts' : 'interview.source')));
     if (!question.hasParts) art.append(element('p', t('interview.noParts')));
     if (question.partsUnavailable) art.append(element('p', t('interview.partsUnavailable')));
-    const image = question.images[state.image];
-    if (image) {
-      const tabs = element('div');
-      question.images.forEach((asset, index) => {
-        const button = element('button', asset.name);
-        button.type = 'button';
-        button.setAttribute('aria-pressed', String(index === state.image));
-        button.onclick = () => {state.image = index; render();};
-        tabs.append(button);
-      });
-      const preview = element('img'); preview.alt = image.name; preview.src = access.route(image.url);
-      const unavailable = element('p', t('interview.imageUnavailable'));
-      unavailable.setAttribute('role','status');
-      unavailable.hidden = true;
-      preview.onerror = () => {preview.hidden = true; unavailable.hidden = false;};
-      art.append(tabs, preview, unavailable);
-    }
+    art.append(renderQuestionImages(question.images.map(image => ({name:image.name, url:access.route(image.url)})), state));
 
     const form = element('form');
     const fields = element('fieldset'); fields.disabled = !question.editable || !access.capability || busy;
@@ -131,44 +217,17 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
       state.status = 'interview.unsaved';
       status.textContent = t(state.status);
     };
-    for (const ask of question.set.asks) {
-      const group = element('fieldset');
-      group.append(element('legend', ask.prompt));
+    const groups = question.set.asks.map(ask => {
       const pick = state.picks.get(ask.id) ?? historical?.picks?.find(pick => pick.ask === ask.id);
-      const other = element('textarea');
-      other.setAttribute('aria-label', t('interview.other'));
-      other.value = pick?.other_text ?? '';
-      other.hidden = pick?.other_text === undefined && !ask.options.some(option => option.id === pick?.option_id && option.kind === 'other');
-      other.oninput = () => {
-        const previous = state.picks.get(ask.id);
-        if (previous) {state.picks.set(ask.id, {...previous, other_text:other.value}); markUnsaved();}
-      };
-      for (const option of ask.options) {
-        const label = element('label'); label.className = 'interview-option';
-        const radio = element('input'); radio.type = 'radio'; radio.name = ask.id; radio.value = option.id;
-        radio.required = true; radio.checked = option.id === pick?.option_id;
-        radio.onchange = () => {
-          const next = {ask:ask.id, option_id:option.id};
-          state.picks.set(ask.id, option.kind === 'other' ? {...next, other_text:other.value} : next);
-          markUnsaved();
-          other.hidden = option.kind !== 'other';
-          other.required = option.kind === 'other';
-          pending.hidden = option.kind === 'value';
-          pending.textContent = t(option.kind === 'other' ? 'interview.otherPending' : 'interview.autoPending');
-        };
-        label.append(radio, element('strong', option.label), element('span', option.effect));
-        if (option.recommended) label.append(element('b', t('interview.recommended')), element('span', option.reason));
-        group.append(label);
-      }
-      const kind = ask.options.find(option => option.id === pick?.option_id)?.kind;
       const autoResolved = !question.editable && Array.isArray((question.answer?.agent_decision as {fragments?:unknown}|undefined)?.fragments) &&
         ((question.answer!.agent_decision as {fragments:{ask:string}[]}).fragments).some(fragment => fragment.ask === ask.id);
-      const pending = element('p', t(kind === 'other' ? 'interview.otherPending' : 'interview.autoPending'));
-      pending.hidden = !(kind === 'auto' && !autoResolved || kind === 'other' && !(pick && 'other_fragment' in pick));
-      other.required = kind === 'other';
-      group.append(other, pending);
-      fields.append(group);
-    }
+      const group = renderAskGroup(ask, pick, next => {
+        state.picks.set(ask.id, next); markUnsaved(); refreshInterviewConstraints(question.set, groups);
+      }, {autoResolved, otherResolved:!!pick && 'other_fragment' in pick});
+      fields.append(group.group);
+      return group;
+    });
+    refreshInterviewConstraints(question.set, groups);
     const noteLabel = element('label', t('interview.note'));
     const note = element('textarea');
     note.value = state.note ?? historical?.note ?? '';
