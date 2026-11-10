@@ -76,7 +76,7 @@ test('styles.css: resize separators and scrollbars never share a colour, in eith
 });
 
 
-test('parts job grid reuses shared columns, fills the workspace and keeps ordinary publication layout', async () => {
+test('parts job grid reuses shared columns while checkpoint forms fill remaining height and tiles wrap', async () => {
  const source = await readFile(new URL('../web/styles.css', import.meta.url), 'utf8');
  const parts = await readFile(new URL('../web/parts.css', import.meta.url), 'utf8');
  const body = (css: string, selector: string) => new Map(cssRules(css)
@@ -86,7 +86,12 @@ test('parts job grid reuses shared columns, fills the workspace and keeps ordina
  const check = (css: string) => {
   const ordinary = body(css, '.job-window .job-inspection');
   expect(ordinary.get('grid-template-columns')).toBe('230px minmax(0,1fr)');
-  expect(ordinary.get('grid-template-rows')).toBe('minmax(250px,1fr) minmax(100px,30dvh)');
+  expect(ordinary.get('flex')).toBe('1');
+  expect(ordinary.get('min-height')).toBe('0');
+  expect(ordinary.get('grid-template-rows')).toBe('250px minmax(0,1fr)');
+  const gallery = body(css, '.job-window [data-job-checkpoint-evidence]>section');
+  expect(gallery.get('grid-auto-flow')).toBe('row!important');
+  expect(gallery.get('grid-template-columns')).toBe('repeat(auto-fit,minmax(180px,1fr))');
   const layout = body(css, root);
   expect(layout.get('grid-template-columns')).toBe(body(parts, '.pv-layout').get('grid-template-columns'));
   expect(layout.get('grid-template-rows')).toBe('minmax(0,1fr)');
@@ -104,5 +109,13 @@ test('parts job grid reuses shared columns, fills the workspace and keeps ordina
   source.replace('grid-template-columns:240px minmax(0,1fr) 300px', 'grid-template-columns:230px minmax(0,1fr)'),
   source.replace('[data-job-parts-workspace]{flex:1;', '[data-job-parts-workspace]{flex:0;'),
   source.replace('>.job-forms{grid-column:3;', '>.job-forms{grid-column:2;'),
- ]) expect(() => check(mutant)).toThrow();
+  source.replace('.job-inspection{display:grid;flex:1;', '.job-inspection{display:grid;flex:0;'),
+  source.replace('grid-template-rows:250px minmax(0,1fr)', 'grid-template-rows:minmax(250px,1fr) minmax(100px,30dvh)'),
+  source.replace('grid-auto-flow:row!important', 'grid-auto-flow:column!important'),
+  source.replace('grid-auto-flow:row!important', 'grid-auto-flow:row'),
+  source.replace('repeat(auto-fit,minmax(180px,1fr))', 'repeat(4,minmax(180px,1fr))'),
+ ]) {
+  expect(mutant).not.toBe(source);
+  expect(() => check(mutant)).toThrow();
+ }
 });

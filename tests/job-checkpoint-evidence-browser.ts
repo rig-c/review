@@ -112,6 +112,54 @@ async function run() {
         owner.searchParams.set('lang', language);
         await page!.goto(owner.href);
         await until(() => page!.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`), prefix + ' evidence');
+        const layoutObservations: unknown[] = [];
+        observations[prefix + '-layout'] = layoutObservations;
+        for (const viewport of [{width: 1024, height: 768}, {width: 1440, height: 900}]) {
+            await page!.setViewport(viewport.width, viewport.height);
+            const askId = await page!.evaluate<string>(`document.querySelector('[data-job-checkpoint-evidence]').closest('form').dataset.jobAsk`);
+            await until(async () => (await checkpointForm(askId)).ready, prefix + ' layout checkpoint ready');
+            await page!.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+            const layout = await page!.evaluate<any>(`(()=>{
+                const inspection=document.querySelector('.job-inspection'), main=inspection.parentElement;
+                const forms=inspection.querySelector('[data-job-forms]'), stage=inspection.querySelector('.job-stage');
+                const evidence=forms.querySelector('[data-job-checkpoint-evidence]');
+                const gallery=evidence.querySelector('section'), titles=[...gallery.querySelectorAll('figure h3')];
+                const fourth=titles[3];
+                fourth.scrollIntoView({block:'center',inline:'nearest'});
+                const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
+                const formsRect=rect(forms), galleryRect=rect(gallery), range=document.createRange();
+                range.selectNodeContents(fourth);
+                return {viewport:{width:innerWidth,height:innerHeight},askId:evidence.closest('form').dataset.jobAsk,
+                    main:rect(main),inspection:rect(inspection),stage:rect(stage),forms:formsRect,
+                    formsClientHeight:forms.clientHeight,
+                    gallery:{...galleryRect,clientWidth:gallery.clientWidth,scrollWidth:gallery.scrollWidth,
+                        clientHeight:gallery.clientHeight,scrollLeft:gallery.scrollLeft,clientLeft:gallery.clientLeft},
+                    labels:titles.map(n=>n.textContent),fourthTitle:rect(fourth),
+                    fourthTitleTextRects:[...range.getClientRects()].map(r=>({left:r.left,right:r.right,top:r.top,bottom:r.bottom})),
+                    clip:{left:Math.max(formsRect.left+forms.clientLeft,galleryRect.left+gallery.clientLeft),
+                        right:Math.min(formsRect.left+forms.clientLeft+forms.clientWidth,galleryRect.left+gallery.clientLeft+gallery.clientWidth),
+                        top:Math.max(formsRect.top+forms.clientTop,galleryRect.top+gallery.clientTop),
+                        bottom:Math.min(formsRect.top+forms.clientTop+forms.clientHeight,galleryRect.top+gallery.clientTop+gallery.clientHeight)}};
+            })()`);
+            layoutObservations.push(layout);
+            assert.deepEqual(layout.viewport, viewport);
+            assert.equal(layout.askId, askId);
+            assert.ok(Math.abs(layout.inspection.bottom - layout.main.bottom) <= 1,
+                prefix + ' inspection must fill main at ' + viewport.width);
+            assert.ok(layout.formsClientHeight >= viewport.height * 0.5,
+                prefix + ' forms must occupy at least half the viewport height at ' + viewport.width);
+            assert.ok(Math.abs(layout.stage.height - 250) <= 1, prefix + ' stage stays 250px');
+            assert.deepEqual(layout.labels, packet.tiles.map(tile => tile.label));
+            assert.ok(layout.gallery.scrollWidth <= layout.gallery.clientWidth + 1,
+                prefix + ' wrapped checkpoint gallery must fit horizontally at ' + viewport.width);
+            assert.ok(layout.fourthTitleTextRects.length > 0);
+            for (const rect of layout.fourthTitleTextRects) {
+                assert.ok(rect.left >= layout.clip.left - 1 && rect.right <= layout.clip.right + 1 &&
+                    rect.top >= layout.clip.top - 1 && rect.bottom <= layout.clip.bottom + 1,
+                    prefix + ' complete fourth-tile title must be accessible at ' + viewport.width);
+            }
+            await writeFile(join(output, prefix + '-' + viewport.width + 'x' + viewport.height + '-layout.png'), await page!.screenshot());
+        }
         const snapshot = await page!.evaluate<any>(`(()=>{const s=document.querySelector('[data-job-checkpoint-evidence]');
             return {id:s.dataset.jobCheckpointEvidence, labels:[...s.querySelectorAll('figure h3')].map(n=>n.textContent),
             images:[...s.querySelectorAll('img')].map(n=>({complete:n.complete,width:n.naturalWidth})),
@@ -237,7 +285,7 @@ async function run() {
         }});
         await until(async () => !!control, 'CDP page session');
         await control!('Network.enable');
-        await page.setViewport(1440, 1000);
+        await page.setViewport(1440, 900);
         assert.ok(grant);
         await inspect(planHost, 'rig-review/job-api@3', publication, evidence.packet, 'plan-' + language, grant.fetchCapability);
         let packageGrant: {fetchCapability: string} | undefined;

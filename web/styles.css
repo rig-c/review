@@ -445,7 +445,7 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .job-window .job-header select{width:auto;flex:0 0 auto;max-width:12rem}
 .job-window .job-notice{padding:8px 16px;margin:0;color:var(--fg-soft);background:var(--rv-panel);border-bottom:1px solid var(--border)}
 .job-window .job-notice[data-failed=true]{color:var(--fail)}
-.job-window .job-inspection{display:grid;grid-template-columns:230px minmax(0,1fr);grid-template-rows:minmax(250px,1fr) minmax(100px,30dvh);min-height:0;overflow:hidden}
+.job-window .job-inspection{display:grid;flex:1;grid-template-columns:230px minmax(0,1fr);grid-template-rows:250px minmax(0,1fr);min-height:0;overflow:hidden}
 .job-window .job-sidebar{grid-row:1/-1;overflow:auto;padding:12px;border-right:1px solid var(--border);background:var(--rv-panel);min-width:0}
 .job-window .job-sidebar select,.job-window .job-sidebar img{max-width:100%}
 .job-window .job-stage{display:flex;flex-direction:column;min-height:0;min-width:0}
@@ -486,6 +486,8 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .job-window [data-job-parts-workspace] [hidden]{display:none!important}
 
 .job-window [data-job-checkpoint-evidence]{min-width:0;margin:12px 0}
+/* The shared gallery supplies inline column flow; checkpoint tiles wrap inside the existing form. */
+.job-window [data-job-checkpoint-evidence]>section{grid-auto-flow:row!important;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
 .job-window [data-job-checkpoint-evidence] table{border-collapse:collapse;width:100%}
 .job-window [data-job-checkpoint-evidence] th,.job-window [data-job-checkpoint-evidence] td{padding:6px 10px;border:1px solid var(--border);text-align:left;white-space:pre-wrap;overflow-wrap:anywhere}
 .job-window [data-job-checkpoint-evidence] caption{text-align:left;margin-bottom:8px}
