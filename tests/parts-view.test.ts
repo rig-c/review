@@ -388,7 +388,8 @@ test('#623: standalone loadPartsView defaults painting containment to parts root
 
   // Explicit paintingRoot accepts the painting inside realRoot while outside <root>/rig, and hashes it into pkg.files.
   const pkg = await loadPartsView(realRoot, { painting: paintingPath, paintingRoot: realRoot });
-  expect(pkg.painting).toEqual({ abs: paintingPath, bytes: paintingBytes.length, sha256: paintingHash, width: 64, height: 64 });
+  const expectedPainting = { abs: paintingPath, bytes: paintingBytes.length, sha256: paintingHash, width: 64, height: 64 };
+  expect(pkg.painting).toEqual(expectedPainting);
   expect(pkg.files).toContainEqual({ abs: paintingPath, bytes: paintingBytes.length, sha256: paintingHash });
 
   // Difference-unavailable stays unchanged when painting_in_rig is absent.
