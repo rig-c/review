@@ -22,7 +22,7 @@ is written), `--painting <png>` (the original painting), `--by <name>` (launch-o
 
 ## What it shows
 
-- **Every part on its own**, on a sentinel background (green, magenta, black, white or checker), at native scale with
+- **Every part on its own**, on a checker background by default (green, magenta, black and white are also available), at native scale with
   Fit and exact **1:1**, cursor-anchored wheel zoom, pinch and drag pan in the shared rig/reference viewport pair. Sampling stays nearest-neighbour. **Alpha only** shows the alpha channel as grey (white is opaque).
 - **Footprints of parts in front** (parts mode): the alpha of every part later in `parts.json` whose box meets the
   selected part's box, placed by its rig box and tinted cyan at 50 %. Where the selected part has no pixel under its
@@ -97,7 +97,16 @@ The occlusion-coverage report (rig-c/parts#998) is not read yet; the footprint t
 Standalone sign-off uses saved files. The active Create and Parts cycle uses finalized acts through the
 [standing live job workflow](WORKFLOWS.md#standing-live-job-workflow).
 
-**Approve all** marks every pending part and available mesh clean, then saves an explicit approved sign-off. It preserves notes and existing clean outcomes; any flagged part or mesh refuses with `PARTS_APPROVE_ALL_FLAGGED` before changes are made. Individual approval remains available. `tests/parts-approve-all.test.ts` exercises the page action and unchanged verdict guard; `tests/parts-approve-all-browser.ts` checks the real save and refusal flows.
+The shared workspace keeps pointed issues in the persistent **Issues** sidebar, including an empty state.
+**Save sign-off** saves the current issue collection. An empty collection approves the inspection, and a
+non-empty collection requests changes. The live job host submits the same issue collection through its
+review dialog. Reviewer wording stays verbatim.
+
+Historically, **Approve all** marked every pending part and available mesh clean and saved an approved
+sign-off. It preserved notes and existing clean outcomes, and refused flagged items with
+`PARTS_APPROVE_ALL_FLAGGED`. Per-part approval and mesh outcomes belong to that historical UI and
+`/1`–`/3` read compatibility. The existing `tests/parts-approve-all.test.ts` and
+`tests/parts-approve-all-browser.ts` now exercise the shared mount and current issue-based save flows.
 
 New saves write `schema: "rig-review-parts-verdict/4"` (`status: "approved"` when `issues` is empty, `"changes-requested"` when `issues` is non-empty, `issues: PartsIssue[]`, `updatedAt`, and optional `by`) to `parts-review.json` beside `parts.json` (atlas mode: beside the model), or to `--verdict`. In historical `/1`..`/3` saves, each item was **pending**, **clean** or **flagged** with a note (a note is optional on clean), and an unnamed historical `/2` save had the following shape (preserved on read):
 
@@ -124,12 +133,12 @@ New saves write `schema: "rig-review-parts-verdict/4"` (`status: "approved"` whe
 - `source.sha256` is the SHA-256 of the UTF-8 lines `<path>\t<sha256>\n`, one per `source.files` entry, sorted by path
   bytewise. Review revalidates inspected inputs when reading a saved verdict.
 - `source.flags` lists the producer files the flags were read from; `parts.<name>.flags` the historical producer-attribution IDs defined above, not the classified sidebar count.
-- `status`: `approved` only when every part is clean; `changes-requested` only with at least one part flagged;
-  otherwise `pending`.
+- Historical `/2` `status` is `approved` when every part is clean, `changes-requested` with at least one
+  flagged part, and otherwise `pending`.
 
-Refusals, by name: `PARTS_VERDICT_MISSING_PART`, `PARTS_VERDICT_UNKNOWN_PART`, `PARTS_VERDICT_NOTE_REQUIRED`,
-`PARTS_VERDICT_NOT_CLEAN`, `PARTS_VERDICT_NOTHING_FLAGGED`, `PARTS_VERDICT_INVALID`, and `PARTS_VIEW_SOURCE_CHANGED`
-when a file changed after the view opened.
+Historical per-part validation refusals include `PARTS_VERDICT_MISSING_PART`, `PARTS_VERDICT_UNKNOWN_PART`, `PARTS_VERDICT_NOTE_REQUIRED`,
+`PARTS_VERDICT_NOT_CLEAN` and `PARTS_VERDICT_NOTHING_FLAGGED`. Current saves retain `PARTS_VERDICT_INVALID`
+for invalid verdicts and `PARTS_VIEW_SOURCE_CHANGED` when an inspected file changes after opening.
 
 A verdict destination matching a protected part, producer report, rig/package input, model or atlas image is
 refused as `PARTS_VERDICT_INPUT_COLLISION`, including normalized paths, symbolic links and filesystem aliases.
@@ -227,13 +236,17 @@ Crash-proof exactly-once delivery requires an additional acknowledgment/replay p
 ## Mesh geometry
 
 In parts mode, a `rig.json` beside `parts.json` supplies optional mesh geometry;
-`--rig <file>` selects an explicit input instead. The per-part **mesh from
-rig.json UVs** toggle starts off. It draws edges and vertices over the sentinel
-background, and tints nontransparent art pixels pink when their centres lie
-outside every nondegenerate triangle (triangle boundaries count as covered).
-The mesh outcome has its own Pending / Clean / Flagged states and note; Flagged
-requires a note. Approval requires both part and mesh outcomes to be Clean.
-A part without a mesh has no mesh controls or outcome.
+`--rig <file>` selects an explicit input instead. The workspace-wide **mesh from
+rig.json UVs** toggle starts off and retains its setting across part selection, assembled view,
+Overlay and Difference in both standalone and live job hosts. It draws edges and vertices for
+visible mesh-bearing parts. The selected part also tints nontransparent art pixels pink when their
+centres lie outside every nondegenerate triangle (triangle boundaries count as covered).
+Other assembled meshes use reduced-opacity wire lines. The selected part's geometry panel names
+unavailable geometry explicitly. A draft with no mesh geometry retains a **Mesh (none 0/n)** control
+and an unavailable message.
+
+Historical per-part mesh outcomes had Pending / Clean / Flagged states and a note. Flagged required a
+note, and approval required clean part and mesh outcomes. These fields remain legacy read data.
 
 Image-space positions are `(u × width, v × height)` from each attachment's own
 UVs and dimensions, never reconstructed through bones or weights. The mesh's raster
@@ -254,8 +267,8 @@ not an exact recovery of the producer's original unrounded positions.
 Mode, vertex count, triangle count, `art_coverage` and `stray_cleared` are copied
 from the part's `mesh_report.json` row without recomputing them. Absent fields
 say **not reported**; faint islands remain in Producer flags. A report count may
-differ from the loaded geometry; it is the producer's reading. The verdict's
-`parts[name].mesh` contains `{outcome,note}` only for a mesh-bearing part.
+differ from the loaded geometry. These are producer readings. Historical verdicts stored
+`parts[name].mesh` as `{outcome,note}` only for a mesh-bearing part.
 `rig.json` and the loaded mesh report enter `source.files`, and the mesh report
 also remains in `source.flags`. Changes invalidate the saved sign-off. No rig
 means the existing parts view and verdict format remain unchanged.
@@ -286,10 +299,17 @@ The four-stage navigator preserves this entry and its explicit save behavior. Co
 ## Pointed parts comments
 
 **Comment · C (n)** uses the same capture toggle, dragged region, composer and pins as the rig stage.
-While capture is on, drag draws only a region; close the toggle to pan. Enter adds the comment;
-**Save sign-off** persists the verdict. Select a comment row or pin after reopening to restore its
-part, both cameras, background, alpha, footprints, mesh and painting comparison view. There is no frame, animation or slot
-placeholder in a parts comment. Atlas inspection remains read only for pointed comments.
+The **Issues** list stays visible in the side panel while C opens or closes capture. While capture is
+on, drag within the rig pane away from existing pins and controls to mark a region. Close capture to
+pan. Enter adds the issue,
+and **Save sign-off** persists the verdict. Escape cancels the composer or capture while the inline
+list stays visible. Rows and pins use the same edit, delete and jump actions.
+
+Select an issue row or pin after reopening to restore its item or assembled view, both cameras,
+background, alpha, footprints, mesh and painting comparison. Atlas inspection remains read only for
+pointed comments. Joined compiled Stage 1 refuses issue authoring with
+`PARTS_JOINED_ISSUE_UNSUPPORTED` and directs the reviewer to the standing live job route. Its
+zero-issue approval path remains available.
 
 `rig-review-parts-verdict/4` stores `issues[]` of closed `rig-review-parts-comment/2` records (historical `rig-review-parts-verdict/2` and `/3` stored `comments[]` of `rig-review-parts-comment/1`; a historical `/1` verdict file reads with an empty array).
 Each historical closed `rig-review-parts-comment/1` carries `id`, original reviewer `summary`, `part`,
@@ -302,11 +322,12 @@ center and viewport extent, plus `cameraSync` and the actual `referenceCamera` (
 ordinary part view. Unknown modes/keys and out-of-range opacity refuse `PARTS_COMPARISON_INVALID`.
 
 The viewport `crop` comes from the shared displayed-pixel compositor and includes its mark.
-`nativeCrop` is cut on the server from the hash-bound original PNG, preserving all RGBA bytes,
-including alpha. Both use the common PNG validator/content-addressed store; paths are selected
-by the server. The native crop has no alpha-mask, background or zoom transform. The saved
-viewport crop includes its private inline PNG; exported JSON and issue Markdown replace it
-with a resolved file path and hash. Both exports name the part and both regions and crops.
+In item mode, `nativeCrop` is cut on the server from the hash-bound original PNG, preserving all
+RGBA bytes, including alpha. It has no alpha-mask, background or zoom transform. Assembled issues
+retain their rig-space region and viewport crop, with `imageRegion` and `nativeCrop` both null.
+Crops use the common PNG validator/content-addressed store and server-selected paths. The saved
+viewport crop includes its private inline PNG. Exported JSON and issue Markdown resolve stored
+crops to file paths and hashes and retain the referenced parts and regions.
 
 ```sh
 npx rig-review parts <out>/rig --painting painting.png
@@ -330,7 +351,7 @@ Both use the existing canvas host/camera/capture. The original source rectangle 
 `(x × originalWidth/rigWidth, y × originalHeight/rigHeight, w × originalWidth/rigWidth,
 h × originalHeight/rigHeight)`, retaining fractional placement. Browser image interpolation displays
 this continuous rectangle; it does not reproduce the producer's resampling or claim native pixel equality.
-Alpha-only and mesh diagnostics are disabled in Overlay; front footprints remain available.
+Overlay retains the global mesh setting and front footprints. Alpha-only applies to the ordinary part raster.
 Without a painting the comparison controls are absent and the reference pane names
 `PARTS_REFERENCE_UNAVAILABLE`. No comparison changes the verdict. These behaviors are guarded by
 `tests/parts-comparison.test.ts`; `tests/parts-overlay-browser.ts` separately exercises trusted input,
@@ -354,9 +375,13 @@ For real scaled evidence, `scripts/prepare-parts-overlay-demo.ts` fetches hash-v
 inputs at `ba99e403d4058fc1cfe40699bdcde8aaf00a90c0`, then runs explicitly installed `@rig-c/parts@2.17.0`
 assemble in a separate fixture directory. It is an evidence script, never an app action.
 
-**Difference remains absent** pending the producer-declared rig-space painting raster and
-[the waiting consumer #390](https://github.com/rig-c/review/issues/390). Review adds no producer resampler.
-Neither visual comparison nor opening a package supplies an approval.
+The earlier visual-comparison release deferred Difference to
+[consumer #390](https://github.com/rig-c/review/issues/390). The current producer-declared operand and
+metric are documented under [Declared-grid Difference](#declared-grid-difference).
+
+Hold **P** to show the original painting at full opacity in item or assembled view. Capture is
+suspended during the hold. Releasing P, leaving the active mount, hiding the document or losing
+window focus restores the inspection view. The hold is temporary inspection state.
 
 Parts native zoom ranges from `min(fit, 1)` to 16. Exact native 1 is always reachable for a valid,
 successfully rendered frame. **Fit** is
@@ -386,30 +411,41 @@ while the existing verdict cannot be revalidated. Real source/flag identity chan
 separate stale warning. `PARTS_PAINTING_OUTSIDE` and `PARTS_PAINTING_PNG` refuse external or non-PNG
 painting inputs. `tests/parts-comments.test.ts` covers these read and cross-encoding boundaries;
 `tests/parts-async-navigation.test.ts` guards reordered painting loads and actionable atlas clicks.
-A downstream create consumer must support verdict/2 before a review release can ship.
+The historical verdict/2 rollout required downstream create read support before release.
 
 ### Assembled package
 
-**Assembled** toggles the existing rig/reference pair from the selected part to the declared
+**Assembled** switches the existing rig/reference pair from the selected part to the declared
 `rig_size` canvas. Parts draw back to front in package order at their exact fractional rig-pixel
-placements. The checkbox beside each part controls assembly visibility only; the verdict remains
-per part. List rows occupy one line, with full part names available to assistive technology and on hover, separate source counts and the outcome badge. The former **Visible / 표시** caption is removed; the checkbox retains its per-part accessible name (`tests/parts-approve-all.test.ts`, with full-list geometry in `tests/parts-approve-all-browser.ts`). A tap selects the frontmost visible part with nonzero native source alpha, including
-through transparent holes; drags remain camera gestures. The selected part's alpha edge is a
-separate outline, outside the comparison raster. Background, alpha-only, Fit, 1:1 and the shared
-camera controls remain available. `tests/parts-assembly.test.ts` guards fractional placement,
-order controls, picking, hidden layers, separate outline pixels and per-part verdict invariance.
+placements. Each part's checkbox controls assembly visibility. A tap selects the frontmost visible
+part with nonzero native alpha, including through transparent holes. Hover outlines that part and
+shows its name. Double-click opens its individual view. Escape returns from an individual part to
+assembly when comment capture or a draft does not own the key. Drags with capture off remain camera
+gestures. Selected, hovered and issue-referenced outlines stay separate from the comparison raster.
+Background, alpha-only, Fit, 1:1 and shared camera controls remain available.
 
-With `--painting`, the reference pane and optional Overlay use the same whole-canvas visual
-mapping described above. No producer resampler, Difference or assembled verdict is added.
-Without painting the reference keeps `PARTS_REFERENCE_UNAVAILABLE`; atlas assembly is disabled
-because atlas regions carry no rig placement, and missing `rig_size` is named separately.
-Comments remain bound to individual original PNGs: switch out of assembly to capture one;
-restoring a saved comment returns to its individual part view. Assembly visibility is temporary
-inspection state and is never saved into a verdict or comment. `tests/parts-assembly-browser.ts`
-checks real EN/KO assembly/reference pixels against an independent browser draw after a
-base-vs-base control, tap/hole/hide selection, pan, camera preservation, background, alpha,
-verdict save and missing-input refusals. Existing `tests/parts-comparison.test.ts` and
-`tests/parts-comments.test.ts` retain the painting-size and protected-input guards.
+The one-line part rows retain full accessible names and source counts. The historical outcome badge
+and **Visible / 표시** caption belong to the earlier per-part sign-off UI. Existing
+`tests/parts-assembly.test.ts` guards placement, ordering, alpha picking, hidden layers and outlines.
+
+An assembled issue can span several parts. The composer autoattaches part-name chips by sampling
+frontmost visible nontransparent art within the marked region. Review the chips and add or remove
+visible parts as needed. At least one referenced part is required, and the rig-space region must
+remain inside their combined bounding box. Editing chips or wording validates and prepares the
+candidate through the same source-bound crop pipeline before replacing the existing issue. A rejected
+edit preserves the existing issue. Restoring an issue restores assembled view and highlights its
+referenced parts. Assembly visibility stays temporary and is excluded from saved issues and verdicts.
+
+With `--painting`, the reference pane and Overlay use the same whole-canvas visual mapping described
+above. Without painting the reference names `PARTS_REFERENCE_UNAVAILABLE`. Atlas assembly is disabled
+because atlas regions carry no rig placement, and missing `rig_size` is named separately. Difference
+uses the individual part view described below.
+
+`tests/parts-assembly-browser.ts` covers EN/KO assembly/reference pixels against an independent browser
+draw, alpha picking, hidden layers, pan and camera preservation. `tests/parts-comments-browser.ts`
+covers assembled seam capture, chip edits, saved-view restoration, crop evidence and source immutability
+in both languages. `tests/parts-mesh-browser.ts` covers the global mesh control and unavailable states.
+The live job host's `tests/job-window-browser.ts` covers the same mount through submission and reconnect.
 
 ## Draft mesh correction connection
 

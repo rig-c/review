@@ -15,8 +15,8 @@ const mutants = {
     'viewport?.fitCamera();paintFailure=null;commentUi?.refresh();',
   ],
   COMMENT_RESTORE_WITHOUT_GUARD: [
-    'await paint();if(!paintFailure){viewport!.writeCamera',
-    'await paint();if(true){viewport!.writeCamera',
+    'if (disposed || token !== paintToken || paintFailure) return;',
+    'if (disposed || token !== paintToken) return;',
   ],
   STAGE_RESTORE_WITHOUT_GUARD: [
     'select(index);await paint();if(!disposed&&!paintFailure){viewport.writeCamera',
@@ -208,7 +208,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
     footprints: false,
     comparison: { mode: 'part' as const, opacity: 0.65 },
     differenceThreshold: 8,
-    meshShown: new Set<string>(),
+    meshVisible: false,
     hidden: new Set<string>(),
     verdict: new Map(),
   };
@@ -229,7 +229,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
   };
 
   const code = ts.transpileModule(
-    `const REGION_MARGIN = 4;\nlet painting = false;\n${paintSlice}\n${selectSlice}\nconst hostConfig = { ${frameSizeSlice} };\nlet navEnabled: () => boolean;\nconst navigationHost = { bindNavigation: (_carry: unknown, enabled: () => boolean) => { navEnabled = enabled; } };\n${navigationCall.replace('viewport.bindNavigation', 'navigationHost.bindNavigation')};\nconst restoreComment = ${restoreCallback};\n${selection}\n${stageRestore}\nreturn { partFrame, rasterFrame, pageImage, paint, paintRaster, paintReference, select: (idx: number) => { select(idx); }, setView, hostConfig, navEnabled, restoreComment, restoreStageParts, getState: () => ({ paintToken, painting, paintFailure, paintReset }) };`,
+    `const REGION_MARGIN = 4;\nlet painting = false,paintingHeld=false,hoverName=null;const highlightedParts=new Set();\n${paintSlice}\n${selectSlice}\nconst hostConfig = { ${frameSizeSlice} };\nlet navEnabled: () => boolean;\nconst navigationHost = { bindNavigation: (_carry: unknown, enabled: () => boolean) => { navEnabled = enabled; } };\n${navigationCall.replace('viewport.bindNavigation', 'navigationHost.bindNavigation')};\nconst restoreComment = ${restoreCallback};\n${selection}\n${stageRestore}\nreturn { partFrame, rasterFrame, pageImage, paint, paintRaster, paintReference, select: (idx: number) => { select(idx); }, setView, hostConfig, navEnabled, restoreComment, restoreStageParts, getState: () => ({ paintToken, painting, paintFailure, paintReset }) };`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } },
   ).outputText;
 
@@ -645,9 +645,9 @@ describe('failed paint follow-up controls (#502)', () => {
         writeCamera(target, value);
       };
       const restore = () => kind === 'stage' ? h.api.restoreStageParts(saved) : h.api.restoreComment({
-        part: saved.part, imageHash: saved.imageHash, sourceHash: h.state.data.sourceHash,
+        parts: [{name: saved.part, imageHash: saved.imageHash}], sourceHash: h.state.data.sourceHash,
         view: {
-          camera: saved.rig, referenceCamera: saved.reference, cameraSync: saved.cameraSync,
+          mode: 'item', camera: saved.rig, referenceCamera: saved.reference, cameraSync: saved.cameraSync,
           background: saved.bg, alpha: saved.alpha, footprints: saved.footprints, mesh: saved.mesh,
           comparison: defaultPartsComparison(),
         },

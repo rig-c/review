@@ -39,10 +39,34 @@ test('#381 actual parts page raster caller keeps outline separate, hides pixels,
  const source=await readFile('web/parts.ts','utf8'),start=source.indexOf('const assemblyAlpha='),end=source.indexOf('async function paintReference(',start);
  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(start,end));
  const canvas=createCanvas(1,1),children:any[]=[],caption={textContent:''},state={data:{mode:'parts',rigSize:[32,24],items,painting:null},selected:0,view:'assembled',hidden:new Set<string>(),comparison:{mode:'part',opacity:.5},bg:'magenta',alpha:false,verdict:new Map([['body',{outcome:'clean',note:'unchanged'}],['front',{outcome:'flagged',note:'keep'}]])};
- const scope={...renderer,state,disposed:false,paintToken:1,itemImage:async(i:any)=>imgs[i.index],setCanvas:(c:any,w:number,h:number)=>{c.width=w;c.height=h;return c.getContext('2d');},$:((id:string)=>id==='pv-canvas'?canvas:id==='pv-overlay'?{replaceChildren:(...c:any[])=>{children.splice(0,children.length,...c);},append:(c:any)=>children.push(c)}:caption),doc:{createElement:()=>Object.assign(createCanvas(1,1),{dataset:{}})},t:(s:string)=>s};
+ const scope={...renderer,state,paintingHeld:false,hoverName:null,highlightedParts:new Set(),disposed:false,paintToken:1,itemImage:async(i:any)=>imgs[i.index],setCanvas:(c:any,w:number,h:number)=>{c.width=w;c.height=h;return c.getContext('2d');},$:((id:string)=>id==='pv-canvas'?canvas:id==='pv-overlay'?{replaceChildren:(...c:any[])=>{children.splice(0,children.length,...c);},append:(c:any)=>children.push(c)}:caption),doc:{createElement:()=>Object.assign(createCanvas(1,1),{dataset:{}})},t:(s:string)=>s};
  const paint=new Function('scope',`with(scope){${code};return paintRaster;}`)(scope),before=JSON.stringify([...state.verdict]);
  await paint(1);expect([canvas.width,canvas.height]).toEqual([32,24]);expect(children).toHaveLength(1);expect(children[0].dataset.assemblyOutline).toBe('body');expect(children[0].getContext('2d').getImageData(0,0,32,24).data.some((v:number,i:number)=>i%4===3&&v>0)).toBe(true);
  const pixel=()=>[...canvas.getContext('2d').getImageData(15,9,1,1).data];expect(pixel()).toEqual([225,70,40,255]);state.hidden.add('front');await paint(1);expect(pixel()).not.toEqual([225,70,40,255]);
  state.hidden.add('body');await paint(1);expect(pixel()).toEqual([255,0,255,255]);expect(children).toHaveLength(0);state.alpha=true;await paint(1);expect(pixel()).toEqual([0,0,0,255]);expect(JSON.stringify([...state.verdict])).toBe(before);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('#614 transparent assembly reuses ordered source-over pixels for Overlay and 100-percent painting hold',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'assembly-transparent-'));
+ try{
+  const f=await writeComparisonPackage(root);
+  const layers=await Promise.all([f.body,f.front].map(async(box,index)=>({box:{...box,index},image:await loadImage(join(root,'parts',box.name+'.png'))})));
+  const painting=await loadImage(join(root,'painting.png'));
+  const actual=createCanvas(32,24),expected=createCanvas(32,24);
+  actual.getContext('2d').fillStyle='#ff00ff';actual.getContext('2d').fillRect(0,0,32,24);
+  renderer.paintAssembly(actual.getContext('2d') as never,32,24,layers as never,{bg:'green',alpha:false,transparent:true});
+  const oracle=expected.getContext('2d');oracle.imageSmoothingEnabled=false;
+  oracle.drawImage(layers[0]!.image,4,4);oracle.drawImage(layers[1]!.image,14,8);
+  const bytes=(canvas:typeof actual)=>Buffer.from(canvas.getContext('2d').getImageData(0,0,32,24).data);
+  expect(bytes(actual)).toEqual(bytes(expected));
+  expect([...actual.getContext('2d').getImageData(0,0,1,1).data]).toEqual([0,0,0,0]);
+  for(const opacity of [0,.25,1]){
+   const composite=createCanvas(32,24),control=createCanvas(32,24);
+   for(const canvas of [composite,control]){const ctx=canvas.getContext('2d');ctx.drawImage(painting,0,0);ctx.globalAlpha=opacity;}
+   composite.getContext('2d').drawImage(actual,0,0);control.getContext('2d').drawImage(expected,0,0);
+   expect(bytes(composite)).toEqual(bytes(control));
+   if(opacity===0){const original=createCanvas(32,24);original.getContext('2d').drawImage(painting,0,0);expect(bytes(composite)).toEqual(bytes(original));}
+  }
  }finally{await rm(root,{recursive:true,force:true});}
 });

@@ -18,7 +18,9 @@ export interface CommentUiMark extends Partial<Omit<StageComment,'mode'>> {mode:
 export interface CommentCodec<Row extends CommentRow,Pose extends CommentUiPose> {
  read:(row:Row)=>CommentUiMark|null;signature:(pose:Pose)=>unknown;matches:(mark:CommentUiMark,pose:Pose,row:Row)=>boolean;
  label:(row:Row,mark:CommentUiMark)=>string;
- create:(pose:Pose,view:StageComment['viewport'],screen:MarkRegion,crop:StageComment['crop'],bookmark:unknown,summary:string)=>Promise<Row>;
+ chips?:(pose:Pose,screen:MarkRegion,existing?:Row)=>{selected:string[];candidates:string[]};
+ update?:(row:Row,summary:string,parts?:string[])=>Promise<Row>|Row;
+ create:(pose:Pose,view:StageComment['viewport'],screen:MarkRegion,crop:StageComment['crop'],bookmark:unknown,summary:string,parts?:string[])=>Promise<Row>;
 }
 interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=CommentPose> {
  toolbar:HTMLElement;toggle?:HTMLButtonElement;listHost?:HTMLElement;viewports:Partial<Record<StageComment['viewport'],HTMLElement>>;
@@ -77,7 +79,27 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const cancel=()=>{++interaction;const previous=pending;pending=null;if(previous){const pane=host.viewports[previous.view];if(pane?.hasPointerCapture(previous.id))pane.releasePointerCapture(previous.id);}composer?.remove();composer=null;composerReadOnly=false;syncComposerLang=null;draftMark=null;last='';};
  const assertCapture=()=>{const reason=updateRefusal();if(reason){cancel();setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
  const assertEdit=()=>{const reason=updateRefusal();if(reason){setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
- const jump=async(f:Row):Promise<boolean>=>{const mark=readMark(f);if(!mark)return false;const panes=Object.values(host.viewports).map(p=>({pane:p!,visibility:p!.style.visibility}));try{cancel();for(const {pane}of panes)pane.style.visibility='hidden';await host.restore(mark.bookmark,mark.frame===null);last='';return true;}catch(error){host.error(String(error));return false;}finally{for(const {pane,visibility}of panes)pane.style.visibility=visibility;}};
+ let jumpGeneration = 0;
+ let hiddenPanes: {pane: HTMLElement; visibility: string}[] | null = null;
+ const jump = async (row: Row): Promise<boolean> => {
+  const mark = readMark(row);if (!mark) return false;
+  cancel();const generation = interaction, request = ++jumpGeneration;
+  hiddenPanes ??= Object.values(host.viewports).map(pane => ({pane: pane!, visibility: pane!.style.visibility}));
+  try {
+   for (const {pane} of hiddenPanes) pane.style.visibility = 'hidden';
+   await host.restore(mark.bookmark, mark.frame === null);
+   if (disposed || request !== jumpGeneration || generation !== interaction) return false;
+   last = '';return true;
+  } catch (error) {
+   if (!disposed && request === jumpGeneration) host.error(String(error));
+   return false;
+  } finally {
+   if (request === jumpGeneration) {
+    if (!disposed) for (const {pane, visibility} of hiddenPanes!) pane.style.visibility = visibility;
+    hiddenPanes = null;
+   }
+  }
+ };
  const setOpen=(value:boolean)=>{
   if(!value){cancel();list.hidden=!inline;toggle.setAttribute('aria-expanded',String(inline));setCapture(false);return;}
   if(host.busy?.()){(host.busyError??host.error)(t('COMMENT_BUSY: close the active editor or wait for the inspection to settle'));return;}
@@ -122,23 +144,53 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   }
   // Capture all view context now; camera or dial changes while typing cannot rebind the mark.
   const pose=host.pose(view),bookmark=copy(host.bookmark()),turn=pose?.turn===undefined?null:copy(pose.turn);
+  const initialParts = pose ? host.codec?.chips?.(pose, screen, existing) : undefined;
+  let selectedParts = initialParts?.selected.slice();
+  const chipBox = initialParts ? document.createElement('div') : null;
+  const chipNames = initialParts ? [...new Set([...initialParts.selected, ...initialParts.candidates])] : [];
+  const syncChips = () => {
+   if (!chipBox || !initialParts) return;
+   chipBox.setAttribute('aria-label', t('Issue parts'));
+   chipBox.replaceChildren(...chipNames.map(name => {
+    const chip = document.createElement('button');
+    chip.type = 'button';chip.textContent = name;chip.dataset.commentPart = name;chip.disabled = composerReadOnly || busy;
+    chip.setAttribute('aria-pressed', String(selectedParts!.includes(name)));
+    chip.onclick = () => {
+     if (busy || composerReadOnly) return;
+     const chosen = new Set(selectedParts);
+     if (chosen.has(name)) chosen.delete(name);else chosen.add(name);
+     selectedParts = chipNames.filter(part => chosen.has(part));
+     syncChips();place();
+    };
+    return chip;
+   }));
+  };
+  if (chipBox) {chipBox.className = 'stage-comment-parts';chipBox.setAttribute('role', 'group');form.append(chipBox);syncChips();}
   if(initialRefusal){errorSource=toEn(host.refusal?.()??initialRefusal);error.textContent=t(errorSource);host.error(t(errorSource));}
   else if(!host.codec&&!existing&&pose&&!pose.frame&&!pose.timeBasis){errorSource=toEn(pose.frameReason??'COMMENT_FRAME_UNAVAILABLE: no explicit frame index');error.textContent=t(errorSource);}
-  syncComposerLang=()=>{if(composer!==form)return;form.setAttribute('aria-label',t('Comment composer'));field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');hint.textContent=t(composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels');if(removeBtn)removeBtn.textContent=t('Delete');if(errorSource)error.textContent=t(errorSource);};
+  syncComposerLang=()=>{if(composer!==form)return;form.setAttribute('aria-label',t('Comment composer'));field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');hint.textContent=t(composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels');if(removeBtn)removeBtn.textContent=t('Delete');if(errorSource)error.textContent=t(errorSource);syncChips();};
   pane.append(form);place();
   const previous=existing?readMark(existing):null;
   const prepared=previous?Promise.resolve(previous.crop):pose?crop(pose,screen):Promise.reject(new Error('COMMENT_VIEW_UNAVAILABLE'));
   prepared.catch(()=>{});
   form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();setOpen(false);pane.focus();}};
   form.onsubmit=async e=>{e.preventDefault();if(busy)return;if(generation!==interaction||host.pose(view)&&host.pose(view)?.mode!==placementMode){cancel();return;}const summary=field.value.trim();if(!summary){field.focus();return;}try{
+   if(selectedParts && !selectedParts.length)throw new Error(t('Select at least one part.'));
    if(existing){
     assertEdit();if(host.locked(existing.id))throw new Error(t('COMMENT_SUBMITTED: submitted evidence is immutable'));
-    busy=true;field.disabled=true;
-    existing.summary=summary;
+    busy=true;field.disabled=true;syncChips();
+    if(host.codec?.update){
+     const replacement=await host.codec.update(copy(existing),summary,selectedParts?.slice());
+     if(disposed||generation!==interaction)return;
+     assertEdit();if(host.locked(existing.id))throw new Error(t('COMMENT_SUBMITTED: submitted evidence is immutable'));
+     const all=host.feedback(),index=all.indexOf(existing);
+     if(index<0)return;
+     all.splice(index,1,replacement);
+    }else existing.summary=summary;
    }else{
     assertCapture();if(!pose||!host.codec&&!pose.frame&&!pose.timeBasis)throw new Error(t(pose?.frameReason??'COMMENT_FRAME_UNAVAILABLE: provide an explicit producer clock or a decoded reference frame index'));
-    busy=true;field.disabled=true;
-    if(host.codec){const row=await host.codec.create(pose,view,screen,await prepared,bookmark,summary);assertCapture();if(disposed||generation!==interaction||host.pose(view)?.mode!==placementMode)return;host.add(row);}
+    busy=true;field.disabled=true;syncChips();
+    if(host.codec){const pixels=await prepared;if(disposed||generation!==interaction)return;assertCapture();const row=await host.codec.create(pose,view,screen,pixels,bookmark,summary,selectedParts?.slice());if(disposed||generation!==interaction)return;assertCapture();if(host.pose(view)?.mode!==placementMode)return;host.add(row);}
     else {const rigPose=pose as unknown as CommentPose;
     const world=region(unprojectMark(screen,rigPose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},rigPose.camera));
     const slots=rigPose.posed?drawnSlots(rigPose.posed,world):[];
@@ -149,7 +201,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     }
    }
    cancel();host.changed();refresh();
-  }catch(e){const msg=e instanceof Error?e.message:String(e);errorSource=toEn(msg);error.textContent=t(errorSource);place();if(locked)host.error(t(errorSource));field.disabled=false;field.focus();}finally{busy=false;}};
+  }catch(e){if(disposed||generation!==interaction)return;const msg=e instanceof Error?e.message:String(e);errorSource=toEn(msg);error.textContent=t(errorSource);place();if(locked)host.error(t(errorSource));field.disabled=false;field.focus();}finally{busy=false;if(composer===form)syncChips();}};
   field.focus();last='';
  };
  const disposers:(()=>void)[]=[];

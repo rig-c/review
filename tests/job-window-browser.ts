@@ -1,6 +1,6 @@
 /** Ordinary Nova browser test for the standing owner window. Run --lang en or --lang ko. */
 import assert from 'node:assert/strict';
-import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {PNG} from 'pngjs';
@@ -12,6 +12,8 @@ import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.t
 import {rigStillBrowserProbe} from './helpers/job-rig-still-browser.ts';
 import {interviewDiagnosticsBrowserProbe} from './helpers/job-interview-browser.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
+import {readPngCrop} from '../src/comment-crops.ts';
+import {withDeadline} from './helpers/walk-deadline.ts';
 
 const argument = (key: string) => {const index = Bun.argv.indexOf(key); return index < 0 ? undefined : Bun.argv[index + 1];};
 const language = argument('--lang') ?? 'en';
@@ -21,11 +23,14 @@ const onlyStill = Bun.argv.includes('--rig-still-only');
 const onlyInterviewDiagnostics = Bun.argv.includes('--interview-diagnostics-only');
 const onlyParts = Bun.argv.includes('--parts-only');
 const onlyIssueFlow = Bun.argv.includes('--parts-issue-only');
-assert.ok([observeStill, onlyStill, onlyInterviewDiagnostics, onlyParts, onlyIssueFlow].filter(Boolean).length <= 1);
+const onlyC5Parts = Bun.argv.includes('--c5-parts-only');
+const c5Parts = argument('--parts-fixture') ?? 'mesh';
+assert.ok(c5Parts === 'mesh' || c5Parts === 'no-mesh');
+assert.ok([observeStill, onlyStill, onlyInterviewDiagnostics, onlyParts, onlyIssueFlow, onlyC5Parts].filter(Boolean).length <= 1);
 assert.ok(!observeStill || language === 'en', 'the diagnostic observation mode is EN only');
 const output = argument('--out') ?? 'evidence/job-window-' + language;
 await mkdir(output, {recursive: true});
-const fixture = await scriptedJobWindowFixture();
+const fixture = await scriptedJobWindowFixture(onlyC5Parts ? {c5Parts} : {});
 const stillProbe = onlyStill || observeStill ? rigStillBrowserProbe(fixture, output, language, observeStill) : null;
 const interviewProbe = onlyInterviewDiagnostics ? await interviewDiagnosticsBrowserProbe(fixture, output, language) : null;
 const profile = await mkdtemp(join(tmpdir(), 'review-job-window-'));
@@ -157,7 +162,7 @@ async function assertHeaderGeometry(name: string) {
     assert.ok(geometry.title.x >= geometry.header.x && geometry.title.right <= geometry.control.x);
     assert.ok(geometry.control.right <= geometry.viewport.width);
 }
-async function assertPersistentIssues(count: number, checkpoint: string) {
+async function assertPersistentIssues(count: number, checkpoint: string, summary = 'Visible boundary defect') {
     const state = await page!.evaluate<{visible: boolean; rightSide: boolean; rows: number; text: string; capture: string; listRect: unknown; stageRect: unknown; view: unknown}>(`(()=>{
         const list=document.querySelector('[data-job-parts-workspace] .job-forms #stage-comment-list');
         const stage=document.querySelector('[data-job-parts-workspace] .job-stage');
@@ -174,10 +179,10 @@ async function assertPersistentIssues(count: number, checkpoint: string) {
     assert.equal(state.rows, count);
     const catalog = language === 'ko' ? koCatalog : enCatalog;
     assert.ok(state.text.includes(catalog['Issues']));
-    assert.ok(state.text.includes(count ? 'Visible boundary defect' : catalog['No issues yet.']));
+    assert.ok(state.text.includes(count ? summary : catalog['No issues yet.']));
     return state;
 }
-async function assertPartsLayout(checkpoint: string) {
+async function assertPartsLayout(checkpoint: string, expectedFrame = {width: 80, height: 64}) {
     type Box = {left: number; top: number; right: number; bottom: number; width: number; height: number};
     const geometry = await page!.evaluate<{
         viewport: {width: number; height: number}; boxes: Record<string, Box>;
@@ -208,8 +213,8 @@ async function assertPartsLayout(checkpoint: string) {
         assert.ok(boxes[name]!.height >= boxes.pair!.height - 24 && boxes[name]!.width >= boxes.pair!.width * 0.35,
             'JOB_PARTS_PANE_ALLOCATION: ' + name + ' receives the available pair area');
     }
-    assert.equal(canvas.intrinsicWidth, 80, 'JOB_PARTS_SOURCE_PIXELS: assembled buffer width');
-    assert.equal(canvas.intrinsicHeight, 64, 'JOB_PARTS_SOURCE_PIXELS: assembled buffer height');
+    assert.equal(canvas.intrinsicWidth, expectedFrame.width, 'JOB_PARTS_SOURCE_PIXELS: assembled buffer width');
+    assert.equal(canvas.intrinsicHeight, expectedFrame.height, 'JOB_PARTS_SOURCE_PIXELS: assembled buffer height');
     assert.ok(canvas.zoom > 1, 'JOB_PARTS_INITIAL_FIT: the small fixture uses the existing Fit camera');
     assert.ok(Math.abs(canvas.clientRect.width - canvas.intrinsicWidth * canvas.zoom) <= 1,
         'JOB_PARTS_DISPLAY_SCALE: client size records camera zoom separately from source pixels');
@@ -288,8 +293,8 @@ async function captureCropRequest(prefix: string, requestId: string, request: {u
     const input = JSON.parse(postData) as PartsIssue;
     const {summary, crop, ...issue} = input;
     const {png, ...metadata} = crop;
-    assert.ok(typeof png === 'string' && png.startsWith('data:image/png;base64,'), 'CROP_CAPTURE_INLINE_PNG_REQUIRED');
-    const bytes = Buffer.from(png.slice('data:image/png;base64,'.length), 'base64');
+    assert.ok(png === undefined || typeof png === 'string' && png.startsWith('data:image/png;base64,'), 'CROP_CAPTURE_PNG_REQUIRED');
+    const bytes = png === undefined ? await readPngCrop(metadata) : Buffer.from(png.slice('data:image/png;base64,'.length), 'base64');
     const file = prefix + '.png';
     await writeFile(join(output, file), bytes);
     await writeFile(join(output, prefix + '-request.json'), JSON.stringify({language, requestId,
@@ -391,10 +396,234 @@ async function partsIssueFlow(owner: URL) {
         await checkpoints('parts-complete', {language, createConsumerAcceptance: 'CREATE_380_AFTER_REVIEW_GREEN_MAIN'});
 }
 
+async function c5Click(selector: string) {
+    const at = await page!.evaluate<{x: number; y: number}>(`(()=>{
+        const element=document.querySelector(${JSON.stringify(selector)});
+        if(!element)throw new Error('C5_CONTROL_MISSING '+${JSON.stringify(selector)});
+        element.scrollIntoView({block:'nearest'});const box=element.getBoundingClientRect();
+        if(!box.width||!box.height)throw new Error('C5_CONTROL_HIDDEN');
+        return {x:box.left+box.width/2,y:box.top+box.height/2};})()`);
+    await page!.mouse('mouseMoved', at.x, at.y);
+    await page!.mouse('mousePressed', at.x, at.y);
+    await page!.mouse('mouseReleased', at.x, at.y);
+}
+async function c5Key(key: 'p' | 'Escape' | 'Enter', type: 'keyDown' | 'keyUp' = 'keyDown') {
+    const codes = {p: {code: 'KeyP', windowsVirtualKeyCode: 80},
+        Escape: {code: 'Escape', windowsVirtualKeyCode: 27}, Enter: {code: 'Enter', windowsVirtualKeyCode: 13}};
+    assert.ok(control);
+    await control('Input.dispatchKeyEvent', {type, key, ...codes[key],
+        ...(type === 'keyDown' && key !== 'Escape' ? {text: key === 'Enter' ? '\r' : key} : {})});
+}
+async function c5Point(x: number, y: number) {
+    return page!.evaluate<{x: number; y: number}>(`(()=>{
+        const canvas=document.querySelector('#pv-canvas'),box=canvas.getBoundingClientRect();
+        return {x:box.left+${x}*box.width/canvas.width,y:box.top+${y}*box.height/canvas.height};})()`);
+}
+async function c5Capture(name: string) {
+    const data = await page!.evaluate<{png: string; selected: string | null; assembled: string | null; mesh: boolean}>(`({
+        png:document.querySelector('#pv-canvas').toDataURL(),
+        selected:document.querySelector('#pv-items [aria-current="true"]')?.dataset.pvItem??null,
+        assembled:document.querySelector('#pv-assemble').getAttribute('aria-pressed'),
+        mesh:document.querySelector('#pv-mesh-control input').checked})`);
+    const bytes = Buffer.from(data.png.split(',')[1]!, 'base64'), decoded = PNG.sync.read(bytes);
+    const {png: _inlinePng, ...view} = data;
+    await writeFile(join(output, name + '-canvas.png'), bytes);
+    await writeFile(join(output, name + '.png'), await page!.screenshot());
+    const result = {...view, pngSha256: new Bun.CryptoHasher('sha256').update(bytes).digest('hex'),
+        rgbaSha256: new Bun.CryptoHasher('sha256').update(decoded.data).digest('hex'),
+        width: decoded.width, height: decoded.height};
+    await checkpoints(name, result);
+    return result;
+}
+async function c5PartsFlow(owner: URL) {
+    assert.ok(page && control);
+    const publication = await fixture.publish('parts', 'c5-' + c5Parts + '-' + language);
+    await show(publication);
+    const ask = await fixture.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+    await wait(`!!document.querySelector('form[data-job-ask="${ask.askId}"]')`, 'C5 parts form');
+    await waitForPartsPaint('c5-initial');
+    const inputs = await jobInputHashes(fixture.input.root);
+    const retained = fixture.host.session.retainedSourceV3(publication.publicationId);
+    const snapshotInputs = await jobInputHashes(retained.snapshotRoot);
+    await checkpoints('c5-source-hashes', {publicationId: publication.publicationId,
+        sourceHash: publication.source.sourceHash, files: inputs, retainedFiles: snapshotInputs,
+        fixture: c5Parts, reader: 'job-window-fixture-reader/1', enumerator: 'synthetic-job-window-parts/1'});
+    await assertPartsLayout('c5-initial-layout', {width: 32, height: 24});
+    await assertPersistentIssues(0, 'c5-inline-empty');
+    assert.equal(await page.evaluate(`document.querySelector('#pv-bg').value`), 'checker');
+    assert.equal(await page.evaluate(`document.querySelector('#pv-mesh-control input').disabled`), false);
+    if (c5Parts === 'mesh') {
+        assert.equal(await page.evaluate(`document.querySelector('#pv-mesh-control input').checked`), false);
+        await c5Click('#pv-mesh-control input');await waitForPartsPaint('c5-mesh-on');
+    } else {
+        assert.equal(await page.evaluate(`document.querySelector('#pv-mesh-control input').checked`), true);
+        const label = await page.evaluate<string>(`document.querySelector('#pv-mesh-control').textContent`);
+        const reason = await page.evaluate<string>(`document.querySelector('#pv-mesh-panel p').textContent`);
+        const catalog = language === 'ko' ? koCatalog : enCatalog;
+        assert.ok(label.includes('0/2'));assert.equal(reason, catalog['No mesh geometry is available for this draft.']);
+        await checkpoints('c5-no-mesh-copy', {label, reason});
+    }
+    const beforeToggle = await c5Capture('c5-mesh-on');
+    await c5Click('#pv-mesh-control input');await waitForPartsPaint('c5-mesh-off');
+    const afterToggle = await c5Capture('c5-mesh-off');
+    if (c5Parts === 'mesh') assert.notEqual(afterToggle.rgbaSha256, beforeToggle.rgbaSha256);
+    else assert.equal(afterToggle.rgbaSha256, beforeToggle.rgbaSha256);
+    await c5Click('#pv-mesh-control input');await waitForPartsPaint('c5-mesh-restored');
+    await c5Click('[data-pv-comparison="overlay"]');await waitForPartsPaint('c5-overlay');
+    assert.equal(await page.evaluate(`document.querySelector('#pv-mesh-control input').disabled`), false);
+    assert.equal(await page.evaluate(`document.querySelector('#pv-mesh-control input').checked`), true);
+    const overlay = await c5Capture('c5-overlay-mesh');
+    await c5Click('#pv-mesh-control input');await waitForPartsPaint('c5-overlay-mesh-off');
+    const overlayOff = await c5Capture('c5-overlay-no-mesh');
+    if (c5Parts === 'mesh') assert.notEqual(overlayOff.rgbaSha256, overlay.rgbaSha256);
+    else assert.equal(overlayOff.rgbaSha256, overlay.rgbaSha256);
+    await c5Click('#pv-mesh-control input');await waitForPartsPaint('c5-overlay-mesh-restored');
+    assert.equal((await c5Capture('c5-overlay-restored')).rgbaSha256, overlay.rgbaSha256);
+    await c5Click('[data-pv-comparison="part"]');await waitForPartsPaint('c5-overlay-exit');
+    const hover = await c5Point(15, 9);await page.mouse('mouseMoved', hover.x, hover.y);
+    await wait(`document.querySelector('[data-assembly-hover="front"] span')?.textContent==='front'`, 'C5 frontmost hover');
+    await c5Capture('c5-hover');
+    await control('Input.dispatchMouseEvent', {type: 'mousePressed', button: 'left', buttons: 1, clickCount: 2, ...hover});
+    await control('Input.dispatchMouseEvent', {type: 'mouseReleased', button: 'left', buttons: 0, clickCount: 2, ...hover});
+    await wait(`document.querySelector('#pv-assemble').getAttribute('aria-pressed')==='false'`, 'C5 native double-click');
+    await waitForPartsPaint('c5-item');
+    assert.equal(await page.evaluate(`document.querySelector('#pv-items [aria-current="true"]').dataset.pvItem`), 'front');
+    assert.equal(await page.evaluate(`document.querySelector('#pv-mesh-control input').checked`), true);
+    await page.evaluate(`(()=>{document.querySelector('#rig-viewport').focus();window.__c5Input=[];window.__c5Visibility=[];
+        document.addEventListener('keydown',event=>window.__c5Input.push({type:event.type,key:event.key,trusted:event.isTrusted}));
+        window.addEventListener('blur',event=>window.__c5Input.push({type:'blur',trusted:event.isTrusted}));
+        const record=event=>window.__c5Visibility.push({type:event.type,trusted:event.isTrusted,
+            wallMs:Date.now(),monotonicMs:performance.now(),visibility:document.visibilityState,
+            focused:document.hasFocus(),activeElement:document.activeElement?.id});
+        document.addEventListener('visibilitychange',record);
+        window.addEventListener('blur',record);window.addEventListener('focus',record);})()`);
+    await c5Key('Escape');await c5Key('Escape', 'keyUp');
+    await wait(`document.querySelector('#pv-assemble').getAttribute('aria-pressed')==='true'`, 'C5 Escape with persistent list');
+    await waitForPartsPaint('c5-assembled');
+    await assertPersistentIssues(0, 'c5-inline-after-escape');
+    const retainedView = await c5Capture('c5-retained-view');
+    await c5Key('p');
+    await wait(`document.querySelector('#stage-comment').disabled&&document.querySelector('[data-parts-paint-state]').dataset.partsPaintState==='ready'`, 'C5 P hold rendered');
+    assert.equal(await page.evaluate(`document.querySelector('#pv-canvas').toDataURL()===document.querySelector('#pv-reference').toDataURL()`), true,
+        'P hold shows the actual original painting at 100 percent');
+    await c5Capture('c5-painting-hold');
+    await c5Key('p', 'keyUp');await waitForPartsPaint('c5-P-release');
+    assert.equal((await c5Capture('c5-painting-release')).rgbaSha256, retainedView.rgbaSha256);
+    await c5Key('p');
+    await wait(`document.querySelector('#stage-comment').disabled`, 'C5 second P hold');
+    const target = await control('Target.getTargetInfo') as {targetInfo: {targetId: string}};
+    const other = await control('Target.createTarget', {url: 'about:blank'}) as {targetId: string};
+    try {
+        await control('Target.activateTarget', {targetId: other.targetId});
+        await wait(`document.visibilityState==='hidden'&&window.__c5Visibility.some(event=>event.type==='visibilitychange'&&event.visibility==='hidden'&&event.trusted)`,
+            'C5 native target visibility hidden');
+        await withDeadline('C5_PARTS_NATIVE_HIDDEN_READY', 20_000, () => waitForPartsPaint('c5-P-native-hidden'));
+        await checkpoints('c5-native-visibility-hidden', await page.evaluate(`({visibility:document.visibilityState,
+            focused:document.hasFocus(),events:window.__c5Visibility})`));
+        assert.equal((await c5Capture('c5-painting-hidden')).rgbaSha256, retainedView.rgbaSha256);
+    } finally {
+        await control('Target.activateTarget', {targetId: target.targetInfo.targetId});
+        await control('Target.closeTarget', {targetId: other.targetId});
+        await c5Key('p', 'keyUp');
+    }
+    await wait(`document.visibilityState==='visible'&&window.__c5Visibility.some(event=>event.type==='visibilitychange'&&event.visibility==='visible'&&event.trusted)`,
+        'C5 native target visibility restored');
+    await withDeadline('C5_PARTS_NATIVE_VISIBLE_READY', 20_000, () => waitForPartsPaint('c5-P-native-visible'));
+    await checkpoints('c5-native-visibility-restored', await page.evaluate(`({visibility:document.visibilityState,
+        focused:document.hasFocus(),events:window.__c5Visibility})`));
+    await page.evaluate(`document.querySelector('#rig-viewport').focus()`);
+    await c5Click('#stage-comment');
+    const start = await c5Point(12.2, 7.2), end = await c5Point(19.8, 14.8);
+    await checkpoints('c5-native-drag', {start, end, nativeStart: [12.2, 7.2], nativeEnd: [19.8, 14.8]});
+    await page.mouse('mouseMoved', start.x, start.y);await page.mouse('mousePressed', start.x, start.y);
+    await page.mouse('mouseMoved', end.x, end.y);await page.mouse('mouseReleased', end.x, end.y);
+    await wait(`!!document.querySelector('.stage-comment-composer input')`, 'C5 real assembled composer');
+    assert.deepEqual(await page.evaluate(`Array.from(document.querySelectorAll('.stage-comment-parts [aria-pressed="true"]'),node=>node.textContent)`), ['body', 'front']);
+    await c5Click('.stage-comment-composer input');
+    const beforeTextP = await c5Capture('c5-before-text-P');
+    await c5Key('p');await c5Key('p', 'keyUp');
+    assert.equal((await c5Capture('c5-after-text-P')).rgbaSha256, beforeTextP.rgbaSha256);
+    assert.equal(await page.evaluate(`document.querySelector('.stage-comment-composer input').value`), 'p');
+    const summary = 'Visible boundary defect · C5 ' + language;
+    await edit('.stage-comment-composer input', summary);
+    await c5Key('Enter');await c5Key('Enter', 'keyUp');
+    await wait(`!document.querySelector('.stage-comment-composer')&&document.querySelectorAll('.stage-comment-item').length===1`, 'C5 real crop accepted');
+    await c5Key('Escape');await c5Key('Escape', 'keyUp');
+    await assertPersistentIssues(1, 'c5-inline-one', summary);
+    await c5Click('.stage-comment-summary');
+    await wait(`!!document.querySelector('.stage-comment-composer input')`, 'C5 seam restore');
+    assert.equal(await page.evaluate(`document.querySelectorAll('[data-assembly-outline]').length`), 2);
+    await c5Capture('c5-restored-seam');
+    const priorRequests = cropCaptures.size;
+    await c5Click('.stage-comment-parts [data-comment-part="body"]');
+    await c5Click('.stage-comment-composer input');await edit('.stage-comment-composer input', 'Invalid narrowed seam');
+    await c5Key('Enter');await c5Key('Enter', 'keyUp');
+    await wait(`document.querySelector('.stage-comment-composer [role=alert]')?.textContent.includes('PARTS_COMMENT_OUT_OF_BOUNDS')`, 'C5 invalid chip edit');
+    assert.equal(await page.evaluate(`document.querySelector('.stage-comment-summary').textContent.includes(${JSON.stringify(summary)})`), true);
+    assert.equal(cropCaptures.size, priorRequests, 'invalid region is rejected before crop transport');
+    await c5Capture('c5-atomic-edit-refusal');
+    await c5Click('.stage-comment-parts [data-comment-part="body"]');await c5Click('.stage-comment-composer input');
+    const edited = 'Validated seam · C5 ' + language;
+    await edit('.stage-comment-composer input', edited);await c5Key('Enter');await c5Key('Enter', 'keyUp');
+    await wait(`!document.querySelector('.stage-comment-composer')&&document.querySelector('.stage-comment-summary').textContent.includes(${JSON.stringify(edited)})`, 'C5 validated chip edit');
+    const trustedInput = await page.evaluate<{type: string; key?: string; trusted: boolean}[]>(`window.__c5Input`);
+    const visibilityEvents = await page.evaluate<{type: string; visibility: string; trusted: boolean}[]>(`window.__c5Visibility`);
+    assert.ok(visibilityEvents.some(event => event.type === 'visibilitychange' && event.visibility === 'hidden'));
+    assert.ok(visibilityEvents.some(event => event.type === 'visibilitychange' && event.visibility === 'visible'));
+    assert.ok(visibilityEvents.every(event => event.trusted));
+    await checkpoints('c5-native-visibility-events', visibilityEvents);
+    assert.ok(trustedInput.some(event => event.key === 'p') && trustedInput.some(event => event.key === 'Escape'));
+    assert.ok(trustedInput.every(event => event.trusted));
+    await checkpoints('c5-trusted-input', trustedInput);
+    await page.goto('about:blank');await page.goto(owner.href);await show(publication);
+    await waitForPartsPaint('c5-draft-reconnect');await assertPersistentIssues(1, 'c5-draft-restored', edited);
+    await c5Click(`form[data-job-ask="${ask.askId}"] button[type=submit]`);
+    await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='sent'`, 'C5 actual job act submitted');
+    const events = await fixture.next();
+    const acts = events.events.filter(event => event.type === 'act' && event.act.publicationId === publication.publicationId);
+    assert.equal(acts.length, 1);
+    const event = acts[0];assert.ok(event?.type === 'act' && event.act.kind === 'parts-verdict' && event.act.schema === 'rig-review/act@5');
+    const issue = event.act.value.issues[0]!;
+    assert.equal(event.act.value.verdict, 'changes-requested');assert.equal(event.act.value.issues.length, 1);
+    assert.equal(issue.summary, edited);assert.deepEqual(issue.parts.map(part => part.name), ['body', 'front']);
+    assert.equal(issue.sourceHash, publication.source.sourceHash);assert.equal(event.act.source.sourceHash, publication.source.sourceHash);
+    assert.equal(issue.view.mode, 'assembled');assert.equal(issue.imageRegion, null);assert.equal(issue.nativeCrop, null);
+    assert.deepEqual(issue.rigRegion, {x: 12, y: 7, width: 8, height: 8});
+    for (const part of issue.parts) assert.equal(part.imageHash, publication.source.parts!.images.find(image => image.role === 'part' && image.path === 'parts/' + part.name + '.png')!.sha256);
+    const crop = await readPngCrop(issue.crop), decoded = PNG.sync.read(crop);
+    assert.equal(new Bun.CryptoHasher('sha256').update(crop).digest('hex'), issue.crop.sha256);
+    assert.deepEqual([decoded.width, decoded.height], [issue.crop.width, issue.crop.height]);
+    await writeFile(join(output, 'c5-finalized-crop.png'), crop);
+    await checkpoints('c5-finalized-act', event.act);
+    await page.goto('about:blank');await page.goto(owner.href);await show(publication);
+    await waitForPartsPaint('c5-act-reconnect');await assertPersistentIssues(1, 'c5-act-restored', edited);
+    await c5Click('.stage-comment-summary');await wait(`!!document.querySelector('.stage-comment-composer input')`, 'C5 readonly finalized issue');
+    assert.equal(await page.evaluate(`document.querySelector('.stage-comment-composer input').readOnly`), true);
+    assert.equal(await page.evaluate(`Array.from(document.querySelectorAll('.stage-comment-parts button')).every(button=>button.disabled)`), true);
+    await c5Capture('c5-finalized-readonly');
+    const replay = (await fixture.next()).events.find(item => item.type === 'act' && item.act.actId === event.act.actId);
+    assert.ok(replay?.type === 'act');assert.deepEqual(replay.act, event.act);
+    assert.deepEqual(await jobInputHashes(fixture.input.root), inputs);
+    assert.deepEqual(await jobInputHashes(retained.snapshotRoot), snapshotInputs);
+    assert.equal(cropCaptures.size, 2, 'one creation and one validated chip edit use the crop route');
+    for (const capture of cropCaptures.values()) {
+        await capture.request;await until(() => Boolean(capture.response), 'C5 crop response evidence');
+        const response = await capture.response!;assert.equal(response.status, 200);
+        const request = JSON.parse(await readFile(join(output, capture.prefix + '-request.json'), 'utf8'));
+        assert.equal(request.issue.sourceHash, publication.source.sourceHash);
+        assert.equal(request.actualCrop.sha256, request.issue.crop.sha256);
+        assert.deepEqual(request.issue.parts.map((part: {name: string}) => part.name), ['body', 'front']);
+    }
+    await checkpoints('c5-complete', {language, fixture: c5Parts, sourceHash: publication.source.sourceHash,
+        strictLiveInputHashes: inputs, strictRetainedInputHashes: snapshotInputs, cropRequests: cropCaptures.size,
+        actId: event.act.actId, schema: event.act.schema, browserProof: 'actual job owner window'});
+    await fixture.finish();
+}
+
 try {
     page = await launchCdpSession(profile, {async onEvent(event, send) {
         if (event.sessionId) control = send;
-        if (onlyIssueFlow && event.method === 'Network.requestWillBeSent') {
+        if ((onlyIssueFlow || onlyC5Parts) && event.method === 'Network.requestWillBeSent') {
             const request = event.params!.request as {url: string; method: string; postData?: string};
             if (request.method === 'POST' && request.url.startsWith(fixture.host.origin + '/jobs/') &&
                 request.url.endsWith('/api/stage-parts/comment')) {
@@ -467,7 +696,7 @@ try {
     await page.setViewport(1440, 960);
     assert.ok(control);
     await control('Network.enable', stillProbe ? {maxPostDataSize: 12 * 1024 * 1024} :
-        onlyIssueFlow ? {maxPostDataSize: 256 * 1024} : {});
+        onlyIssueFlow || onlyC5Parts ? {maxPostDataSize: 256 * 1024} : {});
     await control('Fetch.enable', {patterns: [
         {urlPattern: fixture.host.origin + '/jobs/*/publications/*/instances/*/api/review'},
         {urlPattern: fixture.host.origin + '/jobs/*/ui/displayed'},
@@ -488,6 +717,8 @@ try {
         await interviewProbe.run(page, {wait, show, edit, submit, checkpoints, send: control!});
         assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
         assert.equal(navigation.length, 1);
+    } else if (onlyC5Parts) {
+        await c5PartsFlow(owner);
     } else if (onlyIssueFlow) {
         await partsIssueFlow(owner);
     } else {

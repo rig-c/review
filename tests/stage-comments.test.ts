@@ -115,7 +115,7 @@ test('B/reference hashes, viewport and bookmark are independently bound; loopbac
 
 const {bindStageComments}=await import(process.env.RIG_REVIEW_COMMENTS_ADAPTER??'../web/stage-comments.ts');
 /** Event/DOM adapter control only; this does not claim browser pixels or native capture. */
-function commentUI(feedback:any[]=[],options:{locked?:(id:string)=>boolean;cropImpl?:()=>Promise<any>;canvasFactory?:()=>any;inline?:boolean}={}) {
+function commentUI(feedback:any[]=[],options:{locked?:(id:string)=>boolean;cropImpl?:()=>Promise<any>;canvasFactory?:()=>any;inline?:boolean;restoreImpl?:()=>Promise<void>;codec?:import("../web/stage-comments.ts").CommentCodec<any,any>}={}) {
  class Node {
   children:Node[]=[];parent:Node|null=null;style:any={};dataset:Record<string,string>={};className='';id='';textContent='';title='Comment · C';value='';placeholder='';type='';maxLength=0;hidden=false;disabled=false;readOnly=false;clientWidth=100;clientHeight=100;clientLeft=0;clientTop=0;captured=new Set<number>();attributes=new Map<string,string>();listeners=new Map<string,Function[]>();onclick:Function|null=null;onsubmit:Function|null=null;onkeydown:Function|null=null;
   classList={toggle:(name:string,on:boolean)=>{
@@ -134,7 +134,7 @@ function commentUI(feedback:any[]=[],options:{locked?:(id:string)=>boolean;cropI
  const prevGetComputedStyle=(globalThis as any).getComputedStyle;
  for(const [k,v]of Object.entries({document:doc,window:win,requestAnimationFrame:(f:Function)=>{next=f;return 1;},cancelAnimationFrame:()=>{},getComputedStyle:()=>({getPropertyValue:()=>'#3b82f6',backgroundColor:'rgb(20, 24, 32)',backgroundImage:'none',backgroundSize:'auto',backgroundPosition:'0% 0%',display:'block',visibility:'visible',opacity:'1',filter:'none',transformOrigin:'0px 0px',transform:'matrix(1, 0, 0, 1, 0, 0)',zIndex:'0',width:'100px',height:'100px',mixBlendMode:'normal'})})){saved.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;}
  let pose:any={mode:'animate',camera:mark({sourceHash:'a'.repeat(64)}).camera,frame:{index:0,basis:'producer'},time:0,animation:'idle',turn:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,rig:'probe'};
- const tool=bindStageComments({toolbar:toolbar as any,listHost:options.inline?side as any:undefined,viewports:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>mark({sourceHash:'a'.repeat(64)}).bookmark,restore:async()=>{restores++;},feedback:()=>feedback,locked:options.locked??(()=>false),add:(f:any)=>feedback.push(f),changed:()=>{changes++;},error:(m:string)=>errors.push(m),blocked:()=>false});
+ const tool=bindStageComments({toolbar:toolbar as any,listHost:options.inline?side as any:undefined,viewports:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>mark({sourceHash:'a'.repeat(64)}).bookmark,restore:async()=>{restores++;await options.restoreImpl?.();},feedback:()=>feedback,locked:options.locked??(()=>false),add:(f:any)=>feedback.push(f),changed:()=>{changes++;},error:(m:string)=>errors.push(m),blocked:()=>false,codec:options.codec});
  const event=(extra:any={})=>({button:0,isPrimary:true,pointerId:7,clientX:50,clientY:50,target:new Node(),preventDefault(){},stopImmediatePropagation(){},...extra});
  const list=()=>(options.inline?side:workspace).children.find(n=>n.id==='stage-comment-list')!;
  return {toggle,pane,workspace,side,list,tool,pose,errors,restores:()=>restores,changes:()=>changes,tick:()=>next(),down:()=>{if(!tool.active())toggle.onclick?.();pane.dispatch('pointerdown',event());},up:()=>pane.emit('pointerup',event()),key:(k:string)=>doc.dispatch('keydown',event({key:k})),escape:()=>doc.dispatch('keydown',event({key:'Escape'})),blur:()=>win.dispatch('blur'),cleanup:()=>{tool.dispose();for(const [k,v]of saved)(globalThis as any)[k]=v;if(prevGetComputedStyle===undefined)delete (globalThis as any).getComputedStyle;}};
@@ -537,5 +537,65 @@ test('#276 Bar 8 & Bar 9: full-viewport region over noisy art scales down inside
    expect(linkPixels).toBeGreaterThan(10);
    console.log('CROP_FIT_MEASUREMENT '+JSON.stringify({summary:f.summary,width:c.crop.width,height:c.crop.height,scale:+(c.crop.width/paddedSide).toFixed(6),dataUrlChars:c.crop.png.length,linkPixels}));
   }
+ }finally{ui.cleanup();}
+});
+
+for(const inline of [false,true])test('#614 '+(inline?'inline':'overlay')+' composer keeps chip edits atomic when codec validation fails after changing its candidate',async()=>{
+ const original={id:'issue',summary:'Original owner words',parts:['body','front']};
+ const rows=[structuredClone(original)];
+ let rejectUpdate=true;
+ const codec:import('../web/stage-comments.ts').CommentCodec<typeof original,any>={
+  read:()=>({...mark({sourceHash:'a'.repeat(64)}),mode:'animate'}),signature:pose=>pose.camera,matches:()=>true,label:row=>row.summary,
+  chips:(_pose,_screen,row)=>({selected:row?.parts??['body'],candidates:['body','front']}),
+  create:async()=>{throw Error('Unexpected creation');},
+  update:async(row,summary,parts)=>{
+   row.summary=summary;row.parts=parts??[];
+   await Promise.resolve();
+   if(rejectUpdate)throw Error('PARTS_COMMENT_OUT_OF_BOUNDS');
+   return row;
+  },
+ };
+ const ui=commentUI(rows,{inline,codec});
+ try{
+  const row=ui.list().children.find(node=>node.className==='stage-comment-item')!;
+  await row.children[0]!.onclick!();
+  const composer=ui.pane.children.find(node=>node.className.includes('stage-comment-composer'))!;
+  const group=()=>composer.children.find(node=>node.className==='stage-comment-parts')!;
+  expect(group().getAttribute('aria-label')).toBe('Issue parts');
+  composer.children[0]!.value='Changed owner words';
+  group().children.find(node=>node.textContent==='body')!.onclick!();
+  expect(group().children.filter(node=>node.getAttribute('aria-pressed')==='true').map(node=>node.textContent)).toEqual(['front']);
+  await composer.onsubmit!({preventDefault(){}});
+  expect(rows).toEqual([original]);expect(ui.changes()).toBe(0);
+  expect(composer.children.find(node=>node.getAttribute('role')==='alert')!.textContent).toContain('PARTS_COMMENT_OUT_OF_BOUNDS');
+  group().children.find(node=>node.textContent==='body')!.onclick!();rejectUpdate=false;
+  await composer.onsubmit!({preventDefault(){}});
+  expect(rows).toEqual([{...original,summary:'Changed owner words'}]);expect(ui.changes()).toBe(1);
+  expect(ui.list().children.filter(node=>node.className==='stage-comment-item')).toHaveLength(1);
+  expect(ui.workspace.children.filter(node=>node.id==='stage-comment-list')).toHaveLength(inline?0:1);
+  expect(ui.side.children.filter(node=>node.id==='stage-comment-list')).toHaveLength(inline?1:0);
+ }finally{ui.cleanup();}
+});
+
+test('#614 only the latest overlapping issue restore owns pane visibility and composer lifetime',async()=>{
+ const first={id:'first',summary:'First',context:{comment:mark({sourceHash:'a'.repeat(64)})}};
+ const second={...first,id:'second',summary:'Second'};
+ const releases:(()=>void)[]=[];
+ const ui=commentUI([first,second],{inline:true,restoreImpl:()=>new Promise<void>(resolve=>releases.push(resolve))});
+ try{
+  ui.pane.style.visibility='visible';
+  const buttons=ui.list().children.filter(node=>node.className==='stage-comment-item').map(row=>row.children[0]!);
+  const older=buttons[0]!.onclick!(),newer=buttons[1]!.onclick!();
+  expect(releases).toHaveLength(2);expect(ui.pane.style.visibility).toBe('hidden');
+  releases[0]!();await older;
+  expect(ui.pane.style.visibility).toBe('hidden');
+  expect(ui.pane.children.filter(node=>node.className.includes('stage-comment-composer'))).toHaveLength(0);
+  releases[1]!();await newer;
+  expect(ui.pane.style.visibility).toBe('visible');
+  const composers=ui.pane.children.filter(node=>node.className.includes('stage-comment-composer'));
+  expect(composers).toHaveLength(1);expect(composers[0]!.children[0]!.value).toBe('Second');
+  const pending=buttons[0]!.onclick!();expect(releases).toHaveLength(3);ui.tool.dispose();
+  releases[2]!();await pending;
+  expect(ui.pane.children.filter(node=>node.className.includes('stage-comment-composer'))).toHaveLength(0);
  }finally{ui.cleanup();}
 });

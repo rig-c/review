@@ -4081,6 +4081,31 @@ test('C4 base inspection resources are disposed even when workspace cleanup thro
     expect(disposed).toBe(1);
 });
 
+for (const c5Parts of ['mesh', 'no-mesh'] as const) test('C5 ordinary job fixture retains public ' + c5Parts + ' assembly geometry and source painting', async () => {
+    const fixture = await scriptedJobWindowFixture({c5Parts});
+    try {
+        const publication = await fixture.publish('parts', 'c5-' + c5Parts);
+        const before = await jobInputHashes(fixture.input.root);
+        const descriptor = await (await fetch(fixture.locator + '/publications/' + publication.publicationId)).json();
+        expect(descriptor.ok).toBe(true);
+        const response = await fetch(fixture.host.origin + descriptor.value.routes.apiBase + 'stage-parts');
+        expect(response.status).toBe(200);
+        const inventory = await response.json();
+        expect(inventory.sourceHash).toBe(publication.source.sourceHash);
+        expect(inventory.rigSize).toEqual([32, 24]);
+        expect(inventory.items.map((item: {name: string}) => item.name)).toEqual(['body', 'front']);
+        expect(inventory.items.map((item: {mesh?: unknown}) => Boolean(item.mesh))).toEqual([c5Parts === 'mesh', false]);
+        expect(inventory.painting).toMatchObject({width: 32, height: 24});
+        const review = await (await fetch(fixture.host.origin + descriptor.value.routes.apiBase + 'review')).json();
+        expect(review.sourcePainting.sha256).toBe(inventory.painting.sha256);
+        expect(publication.source.parts!.images.map(image => image.role)).toEqual(['part', 'part', 'painting']);
+        const retained = fixture.host.session.retainedSourceV3(publication.publicationId);
+        expect(retained.seals.some(file => file.path === 'out/rig.json')).toBe(c5Parts === 'mesh');
+        expect(await jobInputHashes(fixture.input.root)).toEqual(before);
+        console.log('C5_JOB_FIXTURE_SOURCE ' + JSON.stringify({fixture: c5Parts, files: before}));
+    } finally {await fixture.close();}
+});
+
 test('#623: job stage-parts accepts a sealed source-only painting outside parts root inside retained snapshot, keeps Difference unavailable, and refuses unsealed painting inputs', async () => {
     const f = await realWindow();
     const {mkdir} = await import('node:fs/promises');
