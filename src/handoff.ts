@@ -430,7 +430,7 @@ export async function resolveHandoff(root: string, declared: HandoffDeclaration 
     const full = declared.full !== undefined ? await blockPath(root, declared.full, 'producer.full', 'dir') : undefined;
     const head = declared.head !== undefined ? await blockPath(root, declared.head, 'producer.head', 'dir') : undefined;
     const keypoints = declared.keypoints !== undefined ? await blockPath(root, declared.keypoints, 'producer.keypoints', 'file') : undefined;
-    if ((source === undefined) !== (full === undefined) || (head !== undefined && full === undefined)) throw new HandoffError('HANDOFF_FLAGS_INVALID', 'producer', 'source and full are given together, head only with them');
+    if ((full !== undefined && source === undefined) || (head !== undefined && full === undefined)) throw new HandoffError('HANDOFF_FLAGS_INVALID', 'producer', 'full requires source, and head requires full');
     return { handoff: await record(root, root, 'declared', 'review.json producer', config, parts, { source, full, head, keypoints }, declared.parts !== undefined, options), reason: null };
   }
   for (const name of ['config.json', 'rig/config.json']) {

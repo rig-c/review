@@ -336,7 +336,7 @@ npx rig-review parts <out>/rig --painting painting.png --format issue
 ```
 
 The optional painting must be a PNG contained in the parts package (including symlink resolution),
-with a portable source path. Format, size and hash derive from one buffer read. Its original dimensions
+with a portable source path. In the live job host, a painting loaded from a retained snapshot via `paintingRoot` must instead resolve inside that snapshot root and match its retained seal. Format, size and hash derive from one buffer read. Its original dimensions
 must satisfy `trunc(width × scale_rig_per_source) = rig_size[0]` and the equivalent height check
 (`PARTS_PAINTING_SIZE`); missing/invalid declared geometry refuses `PARTS_PAINTING_MAPPING`.
 The painting stays in `source.files` and the protected input set. Adding it to an older verdict changes

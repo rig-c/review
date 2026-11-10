@@ -536,3 +536,39 @@ test('#591: threads logical options.cwd across loadReview, loadOpenPackage, asse
   await s.done();
  }
 });
+
+test('#623: review.json producer accepts source alone as a hashed painting file, while refusing source+head without full or full without source',async()=>{
+ const s=await scratch();
+ try{
+  const dir=await pkg(s.root,'rig/config.json'),paintingPath=join(dir,'painting.png'),paintingBytes='source-only-painting-bytes';
+  await writeFile(paintingPath,paintingBytes);
+  await mkdir(join(dir,'head'),{recursive:true});await writeFile(join(dir,'head/h.png'),'head-bytes');
+  await mkdir(join(dir,'full'),{recursive:true});await writeFile(join(dir,'full/f.png'),'full-bytes');
+  const writeManifest=(producer:Record<string,unknown>)=>writeFile(join(dir,'review.json'),JSON.stringify({schema:'rig-review/1',id:'p',title:'P',revision:'1',motion:'motion.json',producer}));
+  await writeManifest({config:'rig/config.json',parts:'rig/out',source:'painting.png'});
+  const beforeTree=await treeMd5(dir);
+  const opened=await loadReview(dir);
+  expect(opened.handoff).toMatchObject({config:join(dir,'rig/config.json'),parts:join(dir,'rig/out'),rig:join(dir,'rig/out/rig'),source:paintingPath,full:null,head:null});
+  expect(opened.reviewedSource.handoff).toMatchObject({how:'declared',via:'review.json producer',source:{path:'painting.png',sha256:sha(paintingBytes)},full:null,head:null});
+  expect(opened.reviewedSource.handoff!.files).toContainEqual({path:'painting.png',sha256:sha(paintingBytes)});
+  expect(opened.sourcePainting).toEqual({id:'source-painting',path:'painting.png',sha256:sha(paintingBytes)});
+  await assertReviewUnchanged(opened);
+  await writeFile(paintingPath,paintingBytes+'-changed');
+  await expect(assertReviewUnchanged(opened)).rejects.toThrow('Package inputs changed');
+  await writeFile(paintingPath,paintingBytes);
+  await assertReviewUnchanged(opened);
+  expect(await treeMd5(dir)).toBe(beforeTree);
+
+  // source-only plus head (without full) is refused by name.
+  await writeManifest({config:'rig/config.json',parts:'rig/out',source:'painting.png',head:'head'});
+  await expect(loadReview(dir)).rejects.toMatchObject({code:'HANDOFF_FLAGS_INVALID',field:'producer'});
+
+  // full without source is refused by name.
+  await writeManifest({config:'rig/config.json',parts:'rig/out',full:'full'});
+  await expect(loadReview(dir)).rejects.toMatchObject({code:'HANDOFF_FLAGS_INVALID',field:'producer'});
+
+  // source must remain a regular file inside root.
+  await writeManifest({config:'rig/config.json',parts:'rig/out',source:'head'});
+  await expect(loadReview(dir)).rejects.toMatchObject({code:'HANDOFF_INPUT_INVALID',field:'producer.source'});
+ }finally{await s.done();}
+});

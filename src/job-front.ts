@@ -319,6 +319,7 @@ export function retainedPublicationRoutes(session: JobSession) {
                             rig: rigRoot ? retainedFile(join(rigRoot, 'rig.json')) : undefined,
                             meshReport: rigRoot ? retainedFile(join(rigRoot, 'mesh_report.json')) : undefined,
                             painting: review.handoff?.source ? retainedFile(review.handoff.source) : undefined,
+                            paintingRoot: retained.snapshotRoot,
                         }) : null;
                         if (parts) {
                             if (parts.items.length !== retained.partIds.length || parts.items.some(item => !retained.partIds.includes(item.name))) {
