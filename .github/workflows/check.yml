@@ -67,8 +67,11 @@ jobs:
         timeout-minutes: 3
         shell: bash
         run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends fonts-noto-cjk
+          # Keep the runner's Ubuntu HTTPS fallbacks instead of the stalled Azure HTTP mirror.
+          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+          apt_options=(-o Acquire::Retries=0 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
+          sudo DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends fonts-noto-cjk
           fc-cache -f
       - name: Verify Parts camera in Chrome
         timeout-minutes: 2
