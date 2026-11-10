@@ -386,10 +386,22 @@ async function partsIssueFlow(owner: URL) {
         assert.ok(issueAct?.type === 'act' && issueAct.act.kind === 'parts-verdict' && issueAct.act.schema === 'rig-review/act@5');
         assert.equal(issueAct.act.value.verdict, 'changes-requested');
         assert.equal(issueAct.act.value.issues.length, 1);
-        assert.deepEqual(issueAct.act.value.issues[0]!.parts.map(part => part.name), ['mesh']);
-        assert.equal(issueAct.act.value.issues[0]!.sourceHash, issuePublication.source.sourceHash);
-        assert.equal(issueAct.act.value.issues[0]!.view.mode, 'item');
-        assert.ok(issueAct.act.value.issues[0]!.nativeCrop);
+        const savedIssue = issueAct.act.value.issues[0]!;
+        assert.deepEqual(savedIssue.parts.map(part => part.name), ['mesh']);
+        assert.equal(savedIssue.sourceHash, issuePublication.source.sourceHash);
+        assert.equal(savedIssue.view.mode, 'item');
+        assert.deepEqual(savedIssue.imageRegion, {x: 2, y: 2, width: 10, height: 10});
+        assert.deepEqual(savedIssue.rigRegion, {x: 2, y: 2, width: 10, height: 10});
+        assert.ok(savedIssue.nativeCrop);
+        const nativePng = PNG.sync.read(await readPngCrop(savedIssue.nativeCrop));
+        assert.deepEqual({width: nativePng.width, height: nativePng.height}, {width: 10, height: 10});
+        const sourceMesh = PNG.sync.read(await readFile(join(fixture.input.root, 'out/parts/mesh.png')));
+        const expectedRgba = new Uint8Array(10 * 10 * 4);
+        for (let y = 0; y < 10; y += 1) {
+            const start = ((y + 2) * sourceMesh.width + 2) * 4;
+            expectedRgba.set(sourceMesh.data.subarray(start, start + 10 * 4), y * 10 * 4);
+        }
+        assert.deepEqual(new Uint8Array(nativePng.data), expectedRgba);
         assert.deepEqual(await jobInputHashes(fixture.input.root), issueInputs);
         await checkpoints('parts-single-item-issue-act', issueAct.act);
         await fixture.finish();

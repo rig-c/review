@@ -63,10 +63,24 @@ jobs:
           name: parts-explorer-measurements
           path: ${{ runner.temp }}/parts-explorer.json
           if-no-files-found: error
+      - name: Install CJK fonts for Parts camera
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          # Keep the runner's Ubuntu HTTPS fallbacks instead of the stalled Azure HTTP mirror.
+          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+          apt_options=(-o Acquire::Retries=0 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
+          sudo DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends fonts-noto-cjk
+          fc-cache -f
       - name: Verify Parts camera in Chrome
         timeout-minutes: 2
         shell: bash
         run: |
+          pkg_info="$(dpkg-query -W -f='${Package}=${Version} (${db:Status-Abbrev})' fonts-noto-cjk)"
+          ko_font="$(fc-match :lang=ko)"
+          mkdir -p "$RUNNER_TEMP/parts-camera-race"
+          printf 'dpkg-query: %s\nfc-match :lang=ko: %s\n' "$pkg_info" "$ko_font" | tee "$RUNNER_TEMP/parts-camera-race/cjk-font.txt"
           chrome_bin="$(command -v google-chrome)"
           printf 'Chrome path: %s\n' "$chrome_bin"
           "$chrome_bin" --version
