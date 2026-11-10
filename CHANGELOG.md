@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.9.0
+
+Return `@rig-c/review` to its `2.x` release line, with exact pins to `@rig-c/play@1.24.0` and development-only `@rig-c/parts@2.37.0` (rig-hq#22). Restore the Parts enumerator package range to `>=2.25.0 <3.0.0`.
+
 ## 3.7.0
 
 **Explicit `@rig-c/play` source resolution in workspace builds and launches** (#610). Workspace bundling and launch paths resolve `@rig-c/play` through its explicit `@rig-c/source` export condition when building and starting the review server and web entrypoints.

@@ -3434,7 +3434,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "PARTS_REFERENCE_LIMIT row={0} role={1} path={2}": "PARTS_REFERENCE_LIMIT row={0} role={1} path={2}",
   "PARTS_ENUMERATOR_VERSION_MISMATCH range=\"{0}\" received={1}": "PARTS_ENUMERATOR_VERSION_MISMATCH range=\"{0}\" received={1}",
   "PARTS_ENUMERATOR_VERSION_MISMATCH range=\"{0}\" received=\"{1}\" installed=\"{2}\"": "PARTS_ENUMERATOR_VERSION_MISMATCH range=\"{0}\" received=\"{1}\" installed=\"{2}\"",
-  ">=2.25.0 <4.0.0": ">=2.25.0 <4.0.0",
+  ">=2.25.0 <3.0.0": ">=2.25.0 <3.0.0",
   "JOB_ROOT_REPLACED": "JOB_ROOT_REPLACED",
   "JOB_SAME_ORIGIN_REQUIRED": "JOB_SAME_ORIGIN_REQUIRED",
   "JOB_SOURCE_MISMATCH": "JOB_SOURCE_MISMATCH",
