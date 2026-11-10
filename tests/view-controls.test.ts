@@ -1,4 +1,5 @@
 import {createViewportController,createViewportState} from '../web/viewport-controller.ts';
+import {RigOverlays} from '../web/rig-overlays.ts';
 import {createRigViewportProvider,type RigViewportHost} from '../web/rig-viewport-provider.ts';
 import type {ModelAssets,PoseBounds,PosedFrame,RigPlayer,SlotFilter} from '@rig-c/play';
 import {singleCameraWiring} from './helpers/viewport-387-wiring.ts';
@@ -539,13 +540,22 @@ test('#496 explicit camera and saved numeric coverage survive the expanded basis
 
 test('#496 semantic window uses the shared stable frame through pose changes and publication rollback',async()=>{
  const source=await readFile(new URL('../web/job-session.ts',import.meta.url),'utf8');
- const start=source.indexOf('const provider = createRigViewportProvider('),end=source.indexOf('const canonicalControls',start);
+ const start=source.indexOf('    function redrawOverlay('),end=source.indexOf('const canonicalControls',start);
  expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
- const construct=new Function('deps',`const {el,current,reference,setText,notice,jobWindowRefusal,viewportState,createRigViewportProvider}=deps;${source.slice(start,end)}return provider;`);
- const h=rigFramingHarness({x:0,y:0,width:80,height:80},{x:-11,y:-11,width:22,height:22},(host,state)=>construct({
-  el:host.el,current:{get player(){return host.player();},get assets(){return host.assets();},get inspection(){return host.parts();},display:{publication:{generation:1}}},
-  reference:host.referenceSize,setText:host.text,notice:{textContent:''},jobWindowRefusal:String,viewportState:state,createRigViewportProvider,
- }));
+ const script=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(start,end));
+ const construct=new Function('deps',`const {el,current,reference,setText,notice,jobWindowRefusal,viewportState,createRigViewportProvider,overlays,layers,selectedPart}=deps;${script}return provider;`);
+ let overlayReads=0;
+ const h=rigFramingHarness({x:0,y:0,width:80,height:80},{x:-11,y:-11,width:22,height:22},(host,state)=>{
+  const current={get player(){return host.player();},get assets(){return host.assets();},get inspection(){return host.parts();},
+   rigRoot:host.el('rig-root'),metadata:{feedbackCatalog:{bones:[]}},display:{publication:{generation:1}}};
+  // This numeric host has no Canvas2D surface; run the real overlay's unavailable-context path.
+  const canvas={style:{pointerEvents:''},getContext:()=>{overlayReads++;return null;}} as unknown as HTMLCanvasElement;
+  const overlays=new WeakMap([[current,new RigOverlays({canvas,rigRoot:current.rigRoot})]]);
+  return construct({el:host.el,current,reference:host.referenceSize,setText:host.text,notice:{textContent:''},
+   jobWindowRefusal:String,viewportState:state,createRigViewportProvider,overlays,
+   layers:{images:true,mesh:false,bones:false,meshOpacity:.65},selectedPart:'',
+  });
+ });
  h.controller.fitCamera();
  const original=h.source(),box=h.provider.geometry('rig')!.box,key=h.provider.layoutKey(),view=h.controller.numericView();
  h.pose({x:-300,y:-400,width:600,height:800});h.controller.fitCamera();
@@ -556,4 +566,5 @@ test('#496 semantic window uses the shared stable frame through pose changes and
  h.use(original);h.controller.fitCamera();
  expect(h.provider.geometry('rig')?.box).toEqual(box);
  expect(h.controller.numericView()).toEqual(view);
+ expect(overlayReads).toBeGreaterThan(0);
 });

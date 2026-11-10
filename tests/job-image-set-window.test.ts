@@ -3,6 +3,9 @@ import {afterEach, expect, test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
 import {mountViewportPair} from '../web/viewport-pair.ts';
+import {layerShortcuts, describeLayerToggles} from '../web/view-controls.ts';
+import {SENTINELS} from '../web/parts-render.ts';
+import {RigOverlays} from '../web/rig-overlays.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {jobHash} from '../src/job-api.ts';
 import {prepareJobImageSet} from '../src/job-image-set.ts';
@@ -134,11 +137,13 @@ test('522 the frozen old parser body matches its recorded original-function prov
 });
 
 /** DOM double for the production build body and its real shared viewport-pair mount. */
-class MountElement {
+class MountElement extends EventTarget {
   id = '';
   className = '';
   hidden = false;
   disabled = false;
+  checked = false;
+  title = '';
   value = '';
   type = '';
   style: Record<string, string> = {};
@@ -146,7 +151,12 @@ class MountElement {
   children: MountElement[] = [];
   parentElement: MountElement | null = null;
   private text = '';
-  constructor(readonly tagName: string) {}
+  constructor(readonly tagName: string) {super();}
+  closest(selector: string): MountElement | null {
+    return this.tagName === selector ? this : this.parentElement?.closest(selector) ?? null;
+  }
+  // There is no drawing surface in this DOM-only build fixture.
+  getContext(): null {return null;}
   get textContent(): string {return this.text + this.children.map(child => child.textContent).join('');}
   set textContent(value: string) {this.text = value; this.children = [];}
   append(...nodes: MountElement[]) {
@@ -228,8 +238,16 @@ function mountActualBuild(body: string, prepared: JobPreparedInspection): MountE
   replaceGlobal('document', {createTextNode: (text: string) => {const node = new MountElement('#text'); node.textContent = text; return node;}});
   // Execute the actual nested production build body, without adding a product test seam.
   const javascript = new Bun.Transpiler({loader: 'ts'}).transformSync(body);
-  const build = new Function('node', 'inputLabel', 'selectValues', 'mountViewportPair', 't', 'loop', javascript + '\nreturn build;')(
-    node, inputLabel, selectValues, mountViewportPair, translate, true) as (prepared: JobPreparedInspection) => MountElement;
+  const build = new Function('deps', `
+    const {node, inputLabel, selectValues, mountViewportPair, t, layerShortcuts,
+      describeLayerToggles, SENTINELS, RigOverlays} = deps;
+    let loop = true, stageBackground = '';
+    const layers = {images: true, mesh: false, bones: false, meshOpacity: 0.65};
+    const i18n = {tr: t}, overlays = new WeakMap();
+    ${javascript}
+    return build;
+  `)({node, inputLabel, selectValues, mountViewportPair, t: translate, layerShortcuts,
+    describeLayerToggles, SENTINELS, RigOverlays}) as (prepared: JobPreparedInspection) => MountElement;
   const host = node('main'); host.append(build(prepared));
   return host;
 }
@@ -246,7 +264,10 @@ function buildFixture(f: ReturnType<typeof setup>): JobPreparedInspection {
 test('522 production build mounts a real-null image catalog and its viewport pair; the original unguarded loop fails', async () => {
   const f = setup(), body = await actualBuildBody();
   expect(f.metadata.feedbackCatalog.slots).toBe(null);
-  const prepared = buildFixture(f), mounted = mountActualBuild(body, prepared);
+  const prepared = buildFixture(f);
+  let disposed = 0;
+  prepared.dispose = () => {disposed++;};
+  const mounted = mountActualBuild(body, prepared);
   expect(mounted.querySelector('.job-inspection')).not.toBe(null);
   expect(mounted.querySelector('#reference-pane')).not.toBe(null);
   expect(mounted.querySelector('#rig-root')).not.toBe(null);
@@ -254,6 +275,17 @@ test('522 production build mounts a real-null image catalog and its viewport pai
   expect(mounted.querySelector('#job-part')?.disabled).toBe(true);
   expect(mounted.querySelectorAll('figure').map(figure => figure.dataset.imageName)).toEqual(['Source', 'Candidate']);
   expect(mounted.querySelector('#job-part')?.children.map(option => option.value)).toEqual(['']);
+  for (const item of layerShortcuts) {
+    const box = mounted.querySelector('#' + item.id);
+    expect(box?.disabled).toBe(true);
+    expect(box?.checked).toBe(item.id === 'layer-images');
+    expect(box?.closest('label')?.title).toBe(enCatalog['No rig supplied']);
+  }
+  expect(mounted.querySelector('#job-background')?.children.map(option => option.value)).toEqual(['', ...Object.keys(SENTINELS)]);
+  expect(mounted.querySelector('#rig-overlay')?.style.pointerEvents).toBe('none');
+  prepared.dispose();
+  expect(disposed).toBe(1);
+  expect(mounted.querySelector('#rig-overlay')?.style.pointerEvents).toBeUndefined();
   const guarded = 'for (const slot of prepared.metadata.feedbackCatalog.slots ?? [])';
   expect(body).toContain(guarded);
   const originalLoop = body.replace(guarded, 'for (const slot of prepared.metadata.feedbackCatalog.slots)');
@@ -271,5 +303,6 @@ test('522 production build preserves populated and known-empty model slot arrays
     expect(parts?.children.map(option => option.value)).toEqual(['', ...slots]);
     expect(mounted.querySelectorAll('figure')).toHaveLength(0);
     expect(mounted.querySelector('#stage-layout')?.hidden).toBe(false);
+    prepared.dispose();
   }
 });

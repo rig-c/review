@@ -187,8 +187,8 @@ try {
         },
         partIds: ['rigid', 'mesh'],
         subjects: [
-            {kind: 'checkpoint', checkpointId: 'meshes'},
-            {kind: 'checkpoint', checkpointId: 'step-one'},
+            {kind: 'checkpoint', checkpointId: 'meshes', planStepId: 'inspect-body'},
+            {kind: 'checkpoint', checkpointId: 'step-one', planStepId: 'step-one'},
             {kind: 'review-verdict', stage: 'rig-review'},
         ],
     });
@@ -310,11 +310,12 @@ try {
     assert.equal(cpState.bgDisabled, false, 'Background selector is enabled at meshes checkpoint');
     assert.deepEqual(cpState.bgOptions.map(o => o.value), ['', ...Object.keys(SENTINELS)]);
     assert.equal(cpState.bgLabel, catalog['Background']);
-    assert.deepEqual(cpState.layerTitles, [
-        catalog['Toggle images (I)'],
-        catalog['Toggle mesh (M)'],
-        catalog['Toggle bones (B)'],
-    ]);
+    assert.deepEqual(
+        cpState.layerTitles,
+        language === 'ko'
+            ? ['이미지 · 키 I', '메시 모서리 · 키 M', '본 점 · 키 B']
+            : ['Images · key I', 'Mesh edges · key M', 'Bone points · key B'],
+    );
     await record('checkpoint-controls-revealed', cpState);
 
     // 3. Toggle Mesh edges (M) and Bone points (B) via real keyboard shortcuts while #rig-viewport is focused
@@ -363,6 +364,7 @@ try {
                     }
                 }
             }
+            const dpr = window.devicePixelRatio || 1;
             const totalPixels = leftHalfPixels + rightHalfPixels;
             return {
                 activeElementId: document.activeElement?.id ?? null,
@@ -371,8 +373,8 @@ try {
                 leftHalfPixels,
                 rightHalfPixels,
                 totalPixels,
-                centroidX: totalPixels > 0 ? sumX / totalPixels : 0,
-                centroidY: totalPixels > 0 ? sumY / totalPixels : 0,
+                centroidX: totalPixels > 0 ? sumX / totalPixels / dpr : 0,
+                centroidY: totalPixels > 0 ? sumY / totalPixels / dpr : 0,
                 rootLeft: Number.parseFloat(root.style.left || '0'),
                 rootTop: Number.parseFloat(root.style.top || '0'),
                 viewportCenterX: Math.round(rect.left + rect.width / 2),

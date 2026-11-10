@@ -342,6 +342,8 @@ function canonicalLayout(ratio: number, run: (fixture: {
   player: ReturnType<typeof view>['player'];
   changeRatio(value: number): void;
   setPlaying(value: boolean): void;
+  layers: {images: boolean; mesh: boolean; bones: boolean; meshOpacity: number};
+  setBackground(value: string): void;
 }) => void) {
   const source = readFileSync(new URL('../web/job-session.ts', import.meta.url), 'utf8');
   const start = source.indexOf('    function rigDrawState(): JobRigDrawState {');
@@ -368,7 +370,7 @@ function canonicalLayout(ratio: number, run: (fixture: {
   const owner = {player: v.player, rigRoot, rigPresentation: presentation, display: {publication},
     inspection: {frame: () => ({generation: v.player.generation}), value: () => null}};
   const context = {current: owner, hubVisible: true, selectedPart: '', pageId: v.state.source.pageId,
-    playing: false,
+    playing: false, layers: {images: true, mesh: false, bones: false, meshOpacity: 0.65}, stageBackground: '',
     viewport: {paneFrame: () => ({center}), numericView: () => ({cameras: {rig: camera}})},
     el: (id: string) => id === 'rig-viewport' ? viewportPane : {hidden: false}, jobRigPixelPlacement};
   const read: () => JobRigDrawState = new Function('scope', `with(scope){${body};return rigDrawState;}`)(context);
@@ -381,6 +383,7 @@ function canonicalLayout(ratio: number, run: (fixture: {
   try {
     run({read, pane, pixels, canvas, publication, player: v.player, changeRatio,
       setPlaying(value) {context.playing = value;},
+      layers: context.layers, setBackground(value) {context.stageBackground = value;},
       move(x, y) {pane.left += x; pane.top += y; pixels.left += x; pixels.top += y;}});
   } finally {
     for (const [key, descriptor] of descriptors) {
@@ -546,6 +549,28 @@ test('#559 UI refuses capture before and after synchronous pixel copy when playi
       expect(copies).toBe(phase === 'before-copy' ? 0 : 1);
     }
   }
+});
+
+test('#630 actual rigDrawState refuses noncanonical layers and background before pixel copy', () => {
+  canonicalLayout(1, fixture => {
+    const draw = recordJobRigDraw(fixture.read(), 1);
+    const refuse = () => {
+      expect(fixture.read().wholeRig).toBe(false);
+      expect(() => freezeJobRigCapture(draw, fixture.read(), 'ask-1', () => {
+        throw new Error('noncanonical view must refuse before pixel copy');
+      })).toThrow('JOB_STILL_VIEW_UNSUPPORTED');
+    };
+    for (const key of ['images', 'mesh', 'bones'] as const) {
+      fixture.layers[key] = key !== 'images';
+      refuse();
+      fixture.layers[key] = key === 'images';
+      expect(fixture.read().wholeRig).toBe(true);
+    }
+    fixture.setBackground('green');
+    refuse();
+    fixture.setBackground('');
+    expect(fixture.read().wholeRig).toBe(true);
+  });
 });
 
 test('#559 UI canonical rigDrawState binds live playing state instead of hardcoded false', () => {

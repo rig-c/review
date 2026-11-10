@@ -2,6 +2,8 @@ import {expect, test} from 'bun:test';
 import {readFileSync} from 'node:fs';
 import type {LiveFrame, PosedFrame, SlotIdentitySnapshot, TrackEntry} from '@rig-c/play';
 import {PartInspection, type PartEntry} from '../web/part-selection.ts';
+import {RigOverlays} from '../web/rig-overlays.ts';
+import {SENTINELS} from '../web/parts-render.ts';
 import type {JobRigPresentation} from '../web/viewport-capture.ts';
 import {freezeJobRigCapture, recordJobRigDraw, type JobRigDrawState} from '../web/job-rig-capture.ts';
 
@@ -17,6 +19,7 @@ const resetBody = fragment('            resetToSetup = (setup = true) => {', '  
 const poseBody = fragment('    function pose(seekReference = true): void {', '    function hubBinding()')
     .replace('pose(seekReference = true): void', 'pose(seekReference = true)')
     .replace("el<HTMLInputElement>('job-time')", "el('job-time')");
+const redrawBody = fragment('    function redrawOverlay(fresh: boolean): void {', '    const provider =');
 const drawBody = fragment('    function drawInspection(owner: JobPreparedInspection): void {', '    function syncTransportControls(')
     .replace('owner: JobPreparedInspection', 'owner').replace('): void {', ') {');
 
@@ -93,7 +96,7 @@ class PublicPlayer {
 }
 
 function windowPose(visible = true) {
-    const root = {}, assets = {animations: [{name: 'inspect', duration: 1}]};
+    const root = {style: {left: '0px', top: '0px', visibility: ''}}, assets = {animations: [{name: 'inspect', duration: 1}]};
     const players: PublicPlayer[] = [];
     const entries: PartEntry[] = [{slot: 'mesh', bone: 'mesh', setup: 'mesh', declarations: []}];
     const clock = {value: ''};
@@ -110,11 +113,16 @@ function windowPose(visible = true) {
         el: () => clock, setText: () => {}, viewport: {fitCamera() {}},
     };
     const reset: (setup?: boolean) => void = new Function('scope', `with(scope){${resetBody};return resetToSetup;}`)(scope);
-    const current = {assets, source: binding,
+    const current = {assets, source: binding, rigRoot: root, metadata: {feedbackCatalog: {bones: []}},
         get player() {return scope.player;}, get inspection() {return scope.inspection;}, setupPose: reset};
-    const context = {...scope, current,
-        drawInspection: new Function('scope', `with(scope){${drawBody};return drawInspection;}`)(scope)};
-    const pose: () => void = new Function('scope', `with(scope){${poseBody};return ()=>pose(false);}`)(context);
+    // Exercise the actual overlay's unavailable-Canvas2D path in this public-player fixture.
+    const canvas = {style: {pointerEvents: ''}, getContext: () => null} as unknown as HTMLCanvasElement;
+    const overlays = new WeakMap<object, RigOverlays>([[current, new RigOverlays({canvas, rigRoot: root as unknown as HTMLElement})]]);
+    const context = {...scope, current, overlays, viewportState: {rigScale: 1},
+        layers: {images: true, mesh: false, bones: false, meshOpacity: 0.65}};
+    const drawScript = new Bun.Transpiler({loader: 'ts', target: 'bun'}).transformSync(redrawBody + drawBody);
+    const drawInspection = new Function('scope', `with(scope){${drawScript};return drawInspection;}`)(context);
+    const pose: () => void = new Function('scope', 'drawInspection', `with(scope){${poseBody};return ()=>pose(false);}`)(context, drawInspection);
     reset();
     function at(animation: string, time: number) {context.animation = animation; context.time = time; pose();}
     function state(): JobRigDrawState {
@@ -194,13 +202,16 @@ test('#557 setup initialization retains valid models with no visible attachment'
 
 test('#557 canonical selection return commits the final public frame and render failure clears capture', () => {
     const h = windowPose();
-    const pane = {dataset: {} as Record<string, string>, append() {}};
+    const pane = {dataset: {} as Record<string, string>, style: {} as Record<string, string>, append() {}};
     let fail = false;
     let compositions = 0;
     let presentation: JobRigPresentation | undefined;
     const owner = {player: h.current.player, assets: h.assets, rigRoot: h.root, inspection: h.current.inspection,
+        metadata: h.current.metadata,
         get rigPresentation() {return presentation;}, set rigPresentation(value) {presentation = value;}};
+    h.context.overlays.set(owner, h.context.overlays.get(h.current)!);
     const context = {
+        layers: h.context.layers, stageBackground: '', SENTINELS, overlays: h.context.overlays, viewportState: h.context.viewportState,
         current: owner, selectedPart: '', partMode: 'context', hubVisible: true, drawGeneration: 0,
         drawn: new WeakMap(), CanvasRenderer: class {}, el: () => pane, setText() {},
         viewport: {numericView: () => ({cameras: {rig: {}}}), renderCameraControls() {}},
@@ -221,7 +232,8 @@ test('#557 canonical selection return commits the final public frame and render 
         .replace('rememberDraw(): void', 'rememberDraw()');
     const select = fragment('    function selectPart(): void {', '    function showReference()')
         .replace('selectPart(): void', 'selectPart()');
-    const selectPart: () => void = new Function('scope', `with(scope){${remember};${select};return selectPart;}`)(context);
+    const selectScript = new Bun.Transpiler({loader: 'ts', target: 'bun'}).transformSync(redrawBody + remember + select);
+    const selectPart: () => void = new Function('scope', `with(scope){${selectScript};return selectPart;}`)(context);
     for (const mode of ['context', 'solo']) {
         context.selectedPart = 'mesh';
         context.partMode = mode;
