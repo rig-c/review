@@ -15,6 +15,7 @@ import {koCatalog} from '../web/catalog-ko.ts';
 import {createSyntheticPlanRecordWorkspace, createSyntheticRecordReader, makeSyntheticPngBytes,
     writeWorkspaceFile} from './helpers/job-record-fixture.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {inspectPartsViewportPng, type HalfOpenBox, type RgbaTuple} from './helpers/job-window-paint.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 
 /** Shared ordinary test input for preparation, DOM controls and browser orchestration. */
@@ -110,12 +111,17 @@ async function run() {
         fetchCapability: string) {
         const owner = new URL(host.ownerUrl);
         owner.searchParams.set('lang', language);
-        await page!.goto(owner.href);
-        await until(() => page!.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`), prefix + ' evidence');
         const layoutObservations: unknown[] = [];
         observations[prefix + '-layout'] = layoutObservations;
-        for (const viewport of [{width: 1024, height: 768}, {width: 1440, height: 900}]) {
+        const narrow = {width: 1024, height: 768}, wide = {width: 1440, height: 900};
+        const samples = prefix.startsWith('package-')
+            ? [{...wide, phase: 'initial'}, {...narrow, phase: 'resize'},
+                {...narrow, phase: 'initial'}, {...wide, phase: 'resize'}]
+            : [{...narrow, phase: 'initial'}, {...wide, phase: 'resize'}];
+        for (const {phase, ...viewport} of samples) {
             await page!.setViewport(viewport.width, viewport.height);
+            if (phase === 'initial') await page!.goto(owner.href);
+            await until(() => page!.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`), prefix + ' evidence');
             const askId = await page!.evaluate<string>(`document.querySelector('[data-job-checkpoint-evidence]').closest('form').dataset.jobAsk`);
             await until(async () => (await checkpointForm(askId)).ready, prefix + ' layout checkpoint ready');
             await page!.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
@@ -145,6 +151,7 @@ async function run() {
                         top:Math.max(formsRect.top+forms.clientTop,galleryRect.top+gallery.clientTop),
                         bottom:Math.min(formsRect.top+forms.clientTop+forms.clientHeight,galleryRect.top+gallery.clientTop+gallery.clientHeight)}};
             })()`);
+            layout.phase = phase;
             layoutObservations.push(layout);
             assert.deepEqual(layout.viewport, viewport);
             assert.equal(layout.askId, askId);
@@ -163,7 +170,14 @@ async function run() {
                 if (prefix.startsWith('package-')) {
                     assert.equal(child.visible, true, prefix + ' package stage child must be visible');
                     assert.ok(child.rect.height > 0, prefix + ' package stage child has positive height');
+                    if (!required.id) assert.ok(child.scrollHeight <= child.clientHeight,
+                        prefix + ' controls must fit one row vertically');
                 }
+            }
+            if (prefix.startsWith('package-')) {
+                const pair = layout.stageChildren.find((child: {id: string}) => child.id === 'stage-layout');
+                assert.ok(pair.rect.height >= Math.max(layout.stage.height * 0.6, 150),
+                    prefix + ' render pair must occupy at least 60% of stage and 150px');
             }
             for (const child of layout.stageChildren) {
                 if (!child.visible) continue;
@@ -182,7 +196,55 @@ async function run() {
                     rect.top >= layout.clip.top - 1 && rect.bottom <= layout.clip.bottom + 1,
                     prefix + ' complete fourth-tile title must be accessible at ' + viewport.width);
             }
-            await writeFile(join(output, prefix + '-' + viewport.width + 'x' + viewport.height + '-layout.png'), await page!.screenshot());
+            let screenshot: Buffer | undefined;
+            if (prefix.startsWith('package-')) {
+                await until(async () => {
+                    const paint = await page!.evaluate<any>(`(()=>{
+                        const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,
+                            bottom:r.bottom,width:r.width,height:r.height};};
+                        return ['reference','rig'].map(target=>{
+                            const pane=document.getElementById(target+'-viewport');
+                            const image=pane.querySelector('#reference-content img');
+                            const canonical=pane.querySelector('canvas[data-job-rig-presentation]');
+                            const canvases=[...pane.querySelectorAll('canvas')].map(canvas=>({
+                                canonical:canvas===canonical,width:canvas.width,height:canvas.height,rect:rect(canvas),
+                                visibility:getComputedStyle(canvas).visibility,display:getComputedStyle(canvas).display}));
+                            return {target,pane:rect(pane),canvases,devicePixelRatio,
+                                sourceVisibility:target==='rig'?getComputedStyle(document.getElementById('rig-root')).visibility:null,
+                                image:image?{width:image.naturalWidth,height:image.naturalHeight,
+                                    complete:image.complete,rect:rect(image)}:null};
+                        });
+                    })()`);
+                    screenshot = await page!.screenshot();
+                    for (const pane of paint) {
+                        const box: HalfOpenBox = [Math.ceil(pane.pane.left), Math.ceil(pane.pane.top),
+                            Math.floor(pane.pane.right), Math.floor(pane.pane.bottom)];
+                        const rgba: RgbaTuple = pane.target === 'reference' ? [239, 32, 32, 255] : [32, 220, 48, 255];
+                        // The existing scanner counts exact supplied RGBA in backgroundPixels.
+                        // Here that supplied color is the immutable fixture's red or green pixel.
+                        const pixels = inspectPartsViewportPng(screenshot, {viewport, backgroundRgba: rgba,
+                            leftROI: box, rightAdjacent: box});
+                        assert.ok(pixels.supportedViewport && pixels.inBounds, prefix + ' paint ROI stays in viewport');
+                        pane.fixtureRgba = rgba;
+                        pane.matchedPixels = pixels.leftROI.backgroundPixels;
+                    }
+                    layout.paintAttempts = (layout.paintAttempts ?? 0) + 1;
+                    layout.firstPaint ??= paint;
+                    layout.paint = paint;
+                    return paint.every((pane: any) => pane.matchedPixels > 0 &&
+                        (pane.target === 'reference' ? pane.image?.complete && pane.image.width > 0 && pane.image.height > 0
+                            : pane.sourceVisibility === 'hidden' && pane.canvases.some((canvas: any) =>
+                                canvas.canonical && canvas.width > 0 && canvas.height > 0 &&
+                                canvas.rect.width > 0 && canvas.rect.height > 0 &&
+                                Math.abs(canvas.width - canvas.rect.width * pane.devicePixelRatio) <= 1 &&
+                                Math.abs(canvas.height - canvas.rect.height * pane.devicePixelRatio) <= 1 &&
+                                canvas.visibility === 'visible' && canvas.display !== 'none')));
+                }, prefix + ' red reference and green rig pixels after ' + phase + ' ' + viewport.width);
+                assert.ok(layout.paint.every((pane: any) => pane.matchedPixels > 0));
+            }
+            const capturePhase = prefix.startsWith('package-') ? '-' + phase : '';
+            await writeFile(join(output, prefix + '-' + viewport.width + 'x' + viewport.height + capturePhase + '-layout.png'),
+                screenshot ?? await page!.screenshot());
         }
         const snapshot = await page!.evaluate<any>(`(()=>{const s=document.querySelector('[data-job-checkpoint-evidence]');
             return {id:s.dataset.jobCheckpointEvidence, labels:[...s.querySelectorAll('figure h3')].map(n=>n.textContent),

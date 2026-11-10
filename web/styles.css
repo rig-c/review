@@ -451,6 +451,12 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .job-window .job-stage{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
 .job-window .job-stage #stage-layout{height:auto;flex:1;min-height:0}
 .job-window .job-stage .viewbar,.job-window .job-transport{flex:none;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px}
+.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden])) #stage-layout{min-height:max(60%,150px)}
+.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport){height:48px;flex-wrap:nowrap;padding:2px 8px;overflow-x:auto;overflow-y:hidden;white-space:nowrap}
+.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport)>*{flex:none}
+.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport)>label{display:flex;align-items:center;gap:4px}
+.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>.job-transport>select{width:auto}
+.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>.job-transport input[type=number]{width:8rem}
 .job-window .job-forms{overflow:auto;border-top:1px solid var(--border);padding:12px;background:var(--rv-panel)}
 .job-window .job-forms form{margin:0 0 12px;padding:12px;border:1px solid var(--border);border-radius:var(--radius)}
 .job-window .job-forms fieldset{border:0;padding:0;min-width:0}
