@@ -63,13 +63,17 @@ jobs:
           name: parts-explorer-measurements
           path: ${{ runner.temp }}/parts-explorer.json
           if-no-files-found: error
-      - name: Verify Parts camera in Chrome
-        timeout-minutes: 2
+      - name: Install CJK fonts for Parts camera
+        timeout-minutes: 3
         shell: bash
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends fonts-noto-cjk
           fc-cache -f
+      - name: Verify Parts camera in Chrome
+        timeout-minutes: 2
+        shell: bash
+        run: |
           pkg_info="$(dpkg-query -W -f='${Package}=${Version} (${db:Status-Abbrev})' fonts-noto-cjk)"
           ko_font="$(fc-match :lang=ko)"
           mkdir -p "$RUNNER_TEMP/parts-camera-race"
