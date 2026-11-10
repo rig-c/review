@@ -910,8 +910,9 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
             if (signal.aborted) cancel();
         });
         try {
-            await Promise.race([image.decode().catch(() => {
-                throw new Error(evidence ? 'CHECKPOINT_EVIDENCE_PNG_INVALID' : 'JOB_VISUAL_UNAVAILABLE');
+            await Promise.race([image.decode().catch(error => {
+                if (evidence) throw new Error('CHECKPOINT_EVIDENCE_PNG_INVALID');
+                throw error;
             }), cancelled]);
             if (disposed || signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
             if (!image.naturalWidth || !image.naturalHeight)

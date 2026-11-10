@@ -5112,6 +5112,25 @@ describe('#629 sealed checkpoint preparation without browser or raster execution
             await Bun.sleep(1); expect([...f.revoked].sort()).toEqual([...f.created].sort());
         } finally {await f.close();}
     });
+    test('#629 legacy image path preserves the original decoder rejection identity and message', async () => {
+        const f = await setup('package', true); f.hold();
+        const decoderError = new Error('Legacy decoder rejected the original image');
+        decoderError.name = 'EncodingError';
+        f.metadata.manifest.references = [{id: 'legacy-image', type: 'image',
+            path: 'legacy/tiles/0', label: 'Legacy reference'}];
+        try {
+            const pending = prepareJobInspection(f.display, new AbortController().signal);
+            const rejection = pending.then(() => null, error => error as Error);
+            await until(() => f.images.length === 1);
+            f.images[0]!.reject(decoderError);
+            const error = await rejection;
+            expect(error).toBe(decoderError);
+            expect(error?.message).toBe(decoderError.message);
+            expect(error?.name).toBe('EncodingError');
+            expect(f.requests.some(url => url.includes('/checkpoint-evidence/'))).toBe(false);
+            expect(f.revoked).toEqual(f.created);
+        } finally {await f.close();}
+    });
     test('#629 image decode failure and cancellation dispose every allocated URL', async () => {
         for (const cancel of [false, true]) {
             const f = await setup(); f.hold();
