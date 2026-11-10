@@ -8,9 +8,9 @@ import {
   type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
 } from './job-contract.ts';
 import { bindJobAsk, bindJobRecordAsk, finalizeJobAct, parseUISubmission, prepareJobRecordAct, prepareJobStill } from './job-act.ts';
-import { jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
+import { isRecordSource, parseRecordSource, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
-  assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
+  assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
   type JobPublicationReader, type JobRetainedSource, type JobRetainedSourceV3, type JobRootIdentity,
 } from './job-source.ts';
 import { JobError, JobStore, type JobSnapshotOwner, type StoredJob } from './job-store.ts';
@@ -77,6 +77,37 @@ function assertStoredSchemas(data: JobData): void {
   if (data.apiSchema !== JOB_API_SCHEMA || data.actSchema !== JOB_ACT_SCHEMA) {
     throw new JobError('JOB_SOURCE_UNRETAINABLE', 'JOB_STORED_SCHEMA_MISMATCH');
   }
+  assertStoredEvidence(data);
+}
+
+/** Check only the new extension and its durable copies, including committed replay values. */
+function assertStoredEvidence(data: JobData): void {
+  for (const stored of Object.values(data.publications)) {
+    assertStoredCheckpointEvidence(stored.retained);
+    assertStoredEvidenceCopy(stored.publication, data);
+  }
+  for (const ask of Object.values(data.asks)) assertStoredEvidenceCopy(ask, data);
+  for (const act of Object.values(data.acts)) assertStoredEvidenceCopy(act, data);
+  for (const event of data.events) {
+    if (event.type === 'published') assertStoredEvidenceCopy(event.publication, data);
+    if (event.type === 'pending') assertStoredEvidenceCopy(event.ask, data);
+    if (event.type === 'act') assertStoredEvidenceCopy(event.act, data);
+  }
+  for (const replay of Object.values(data.replays)) assertStoredEvidenceCopy(replay.value, data);
+}
+
+function assertStoredEvidenceCopy(value: unknown, data: JobData): void {
+  if (!value || typeof value !== 'object') return;
+  const copy = value as {publicationId: string; source: JobPublication['source'] | PublicationV3['source']};
+  const stored = data.publications[copy.publicationId];
+  const bound = stored?.retained.source;
+  if (!('source' in value) && !(bound && 'checkpointEvidence' in bound)) return;
+  if (!copy.source || typeof copy.source !== 'object' || Array.isArray(copy.source)) throw new JobError('JOB_SOURCE_MISMATCH');
+  if (!('checkpointEvidence' in copy.source) && !(bound && 'checkpointEvidence' in bound)) return;
+  if (!bound || copy.source.sourceHash !== bound.sourceHash ||
+      requestDigest(copy.source.checkpointEvidence ?? null) !== requestDigest(bound.checkpointEvidence ?? null) ||
+      requestDigest(copy.source.plan) !== requestDigest(bound.plan)) throw new JobError('JOB_SOURCE_MISMATCH');
+  if (isRecordSource(copy.source)) parseRecordSource(copy.source);
 }
 
 function within(root: string, path: string): boolean {
@@ -359,6 +390,7 @@ export class JobSession {
   }
 
   private replay(data: JobData, key: string, digest: string): Replay | null {
+    assertStoredSchemas(data);
     const previous = data.replays[key];
     if (previous && previous.digest !== digest) throw new JobError('JOB_IDEMPOTENCY_CONFLICT');
     return previous ?? null;
@@ -490,7 +522,7 @@ export class JobSession {
         switch (input.verb) {
           case 'publish': {
             assertJobSourceCurrent(candidate!);
-            if (isRetainedRecordSource(candidate!)) {
+            if (isRetainedRecordSource(candidate!) || candidate!.source.checkpointEvidence) {
               assertRetainedSnapshotIntact(
                 candidate!.snapshotRoot,
                 candidate!.seals,
@@ -518,7 +550,7 @@ export class JobSession {
             if (data.head !== input.publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
             const retained = data.publications[input.publicationId].retained;
             assertJobSourceCurrent(retained);
-            if (isRetainedRecordSource(retained)) {
+            if (isRetainedRecordSource(retained) || retained.source.checkpointEvidence) {
               assertRetainedSnapshotIntact(
                 retained.snapshotRoot,
                 retained.seals,
@@ -679,7 +711,7 @@ export class JobSession {
       if (!ask) throw new JobError('JOB_ASK_INVALID');
       const retained = fresh.data.publications[input.publicationId].retained;
       assertJobSourceCurrent(retained);
-      if (isRetainedRecordSource(retained) || input.kind === 'parts-verdict') {
+      if (isRetainedRecordSource(retained) || retained.source.checkpointEvidence || input.kind === 'parts-verdict') {
         assertRetainedSnapshotIntact(
           retained.snapshotRoot,
           retained.seals,
