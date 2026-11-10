@@ -67,6 +67,13 @@ jobs:
         timeout-minutes: 2
         shell: bash
         run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends fonts-noto-cjk
+          fc-cache -f
+          pkg_info="$(dpkg-query -W -f='${Package}=${Version} (${db:Status-Abbrev})' fonts-noto-cjk)"
+          ko_font="$(fc-match :lang=ko)"
+          mkdir -p "$RUNNER_TEMP/parts-camera-race"
+          printf 'dpkg-query: %s\nfc-match :lang=ko: %s\n' "$pkg_info" "$ko_font" | tee "$RUNNER_TEMP/parts-camera-race/cjk-font.txt"
           chrome_bin="$(command -v google-chrome)"
           printf 'Chrome path: %s\n' "$chrome_bin"
           "$chrome_bin" --version
