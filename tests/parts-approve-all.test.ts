@@ -12,6 +12,7 @@ import {writeMeshPackage} from './helpers/parts-mesh-package.ts';
 import {buildVerdict,loadPartsView,verdictSource} from '../src/parts-view.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
+import {getLanguage,setLanguagePreference,setLinkLanguage} from '../web/i18n.ts';
 import {countedFlag} from '../web/parts-flags.ts';
 import {mountPartsWorkspace,REGION_MARGIN,type PanelOutput,type PartsHost,type PartsSource,type ViewData} from '../web/parts.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
@@ -848,4 +849,186 @@ test('#614 shared mount creates real assembled issues, validates chip edits atom
   dom.fakeDoc.emit('keyup',key('p'));dom.fakeWin.emit('blur',{});await tick();
   expect(slotsB.stage.children).toHaveLength(0);expect(slotsB.stage.dataset.partsPaintState).toBe('disposed');
  }finally{for(const mount of mounts)mount.dispose();dom.cleanup();await rm(root,{recursive:true,force:true});}
+});
+
+test('#620 EN/KO stage comment drags save identical regions and native RGBA crops across first paint and toolbar layout transitions',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'c620-mount-'));
+ const dom=partsMountDocument(true);
+ const mounts:ReturnType<typeof mountPartsWorkspace>[]=[];
+ const savedPref=getLanguage();
+ try{
+  const {writeComparisonPackage}=await import('./helpers/parts-comparison-package.ts');
+  const {readPngCrop}=await import('../src/comment-crops.ts');
+  const {writeFile}=await import('node:fs/promises');
+  await writeComparisonPackage(root,true);
+  const rawParts=JSON.parse(await readFile(join(root,'parts.json'),'utf8'));
+  rawParts.parts[0].w=16;rawParts.parts[0].h=16;
+  await writeFile(join(root,'parts.json'),JSON.stringify(rawParts,null,2)+'\n');
+  const rawRig=JSON.parse(await readFile(join(root,'rig.json'),'utf8'));
+  rawRig.skins.default.body.body.width=16;rawRig.skins.default.body.body.height=16;
+  await writeFile(join(root,'rig.json'),JSON.stringify(rawRig));
+  const fullBody=PNG.sync.read(await readFile(join(root,'parts/body.png')));
+  const body16=new PNG({width:16,height:16});
+  for(let y=0;y<16;y++)body16.data.set(fullBody.data.subarray(y*20*4,(y*20+16)*4),y*16*4);
+  await writeFile(join(root,'parts/body.png'),PNG.sync.write(body16));
+  const pkg=await loadPartsView(root,{painting:join(root,'painting.png')});
+  const originalImages=await Promise.all(pkg.imagePaths.map(path=>loadImage(path)));
+  const originalPainting=await loadImage(join(root,'painting.png'));
+  const sourceHash=verdictSource(pkg).sha256;
+  const items=pkg.items.map(item=>({...item,imageHash:pkg.files.find(file=>file.abs===pkg.imagePaths[item.index])!.sha256}));
+  const bodyItem=items.find(item=>item.name==='body')!;
+  const bodyPng=PNG.sync.read(await readFile(pkg.imagePaths[bodyItem.index]!));
+  const expectedSubrect=new Uint8Array(10*10*4);
+  for(let y=0;y<10;y++){
+   const srcStart=((y+2)*bodyPng.width+2)*4;
+   expectedSubrect.set(bodyPng.data.subarray(srcStart,srcStart+10*4),y*10*4);
+  }
+  type Element=InstanceType<typeof dom.FakeElement>;
+  const node=(slots:ReturnType<typeof dom.makeSlots>,selector:string)=>slots.hostWrap.querySelector<Element>(selector)!;
+  const tick=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setTimeout(resolve,0));};
+
+  const runLanguage=async(lang:'en'|'ko',withLayoutShift=false)=>{
+   setLinkLanguage(null);
+   setLanguagePreference(lang);
+   const slots=dom.makeSlots(`c620-${lang}-${withLayoutShift?'shift':'paint'}`);
+   let extraRowOffset=0;
+   const data:ViewData={mode:'parts',title:'Synthetic C620',sourceHash,rigSize:pkg.rigSize,
+    painting:pkg.painting?{sha256:pkg.painting.sha256,width:pkg.painting.width,height:pkg.painting.height}:null,
+    items,pages:[],flags:[],flagSources:[],flagMissing:[],verdictFile:'parts-review.json',verdict:null,verdictStale:null};
+   const source:PartsSource={view:async()=>data,
+    image:async index=>originalImages[index] as unknown as HTMLImageElement,
+    page:async()=>{throw Error('Unexpected atlas image');},painting:()=>Promise.resolve(originalPainting as unknown as HTMLImageElement),
+    crop:async issue=>preparePartsComment(pkg,issue,false,{sourceHash})};
+   const host:PartsHost={initial:()=>[],changed:()=>{},register:()=>{},locked:()=>'open'};
+   const handle=mountPartsWorkspace(slots,source,host,{defaultView:'assembled'});
+   mounts.push(handle);
+   const pane=node(slots,'#rig-viewport');
+   const commentBtn=node(slots,'#stage-comment');
+   pane.clientWidth=437;
+   Object.defineProperty(pane,'clientHeight',{
+    configurable:true,
+    get:()=>{
+     const wrapped=lang==='en'||commentBtn.textContent.includes('렌더링 중');
+     return (wrapped?695:722)-extraRowOffset;
+    }
+   });
+   await handle.ready;
+   await tick();
+   const canvas=node(slots,'#pv-canvas');
+   const dragCanvas=async(x0:number,y0:number,x1:number,y1:number)=>{
+    const box=canvas.getBoundingClientRect();
+    const sx=box.width/(canvas.width||16),sy=box.height/(canvas.height||16);
+    const p0={clientX:Math.floor(box.left+x0*sx),clientY:Math.floor(box.top+y0*sy)};
+    const p1={clientX:Math.floor(box.left+x1*sx),clientY:Math.floor(box.top+y1*sy)};
+    const mk=(pt:{clientX:number;clientY:number},buttons:number)=>({
+     button:0,buttons,isPrimary:true,pointerId:23,clientX:pt.clientX,clientY:pt.clientY,target:pane,
+     preventDefault(){},stopImmediatePropagation(){}
+    });
+    pane.emit('pointerdown',mk(p0,1));
+    pane.emit('pointermove',mk(p1,1));
+    await Promise.all([...pane.handlers.get('pointerup')!].map(handler=>handler(mk(p1,0))));
+   };
+
+   const ensureCapture=()=>{if(commentBtn.getAttribute('aria-pressed')!=='true')commentBtn.onclick!();};
+   node(slots,'button[data-pv-item="body"]').onclick!();
+   if(node(slots,'#pv-assemble').getAttribute('aria-pressed')==='true')node(slots,'#pv-assemble').onclick!();
+   node(slots,'#native-one').onclick!();
+   for(let i=0;i<4;i++)node(slots,'#zoom-in').onclick!();
+   await tick();
+
+   if(withLayoutShift)extraRowOffset=27;
+   ensureCapture();
+   await dragCanvas(3,3,12,12);
+   let composer=node(slots,'.stage-comment-composer');
+   composer.querySelector<Element>('input')!.value=`item-${lang}`;
+   await (composer as unknown as HTMLFormElement).onsubmit!({preventDefault(){}} as SubmitEvent);
+   commentBtn.onclick!();
+   expect(handle.issues()).toHaveLength(1);
+   expect(handle.issues()[0]!.imageRegion).toEqual({x:2,y:2,width:10,height:10});
+   expect(handle.issues()[0]!.rigRegion).toEqual({x:6,y:6,width:10,height:10});
+
+   node(slots,'#pv-assemble').onclick!();
+   node(slots,'#native-one').onclick!();
+   for(let i=0;i<4;i++)node(slots,'#zoom-in').onclick!();
+   await tick();
+   ensureCapture();
+   await dragCanvas(12,7,20,15);
+   composer=node(slots,'.stage-comment-composer');
+   composer.querySelector<Element>('input')!.value=`assembled-${lang}`;
+   await (composer as unknown as HTMLFormElement).onsubmit!({preventDefault(){}} as SubmitEvent);
+   commentBtn.onclick!();
+
+   node(slots,'#pv-assemble').onclick!();
+   node(slots,'#native-one').onclick!();
+   for(let i=0;i<4;i++)node(slots,'#zoom-in').onclick!();
+   await tick();
+   const pin=node(slots,'.stage-comment-pin'),rigRoot=node(slots,'#rig-root');
+   const zoom=Number(rigRoot.style.transform.match(/scale\(([^)]+)\)/)?.[1]??1);
+   expect(parseFloat(pin.style.left)-parseFloat(rigRoot.style.left)).toBeCloseTo(2*zoom,5);
+   expect(parseFloat(pin.style.top)-parseFloat(rigRoot.style.top)).toBeCloseTo(2*zoom,5);
+   ensureCapture();
+   await dragCanvas(-3,-3,-1,-1);
+   composer=node(slots,'.stage-comment-composer');
+   composer.querySelector<Element>('input')!.value=`empty-${lang}`;
+   await (composer as unknown as HTMLFormElement).onsubmit!({preventDefault(){}} as SubmitEvent);
+   expect(node(slots,'[role="alert"]').textContent).toContain('PARTS_COMMENT_EMPTY');
+   commentBtn.onclick!();
+
+   const issues=handle.issues();
+   expect(issues).toHaveLength(2);
+   expect(issues[0]!.imageRegion).toEqual({x:2,y:2,width:10,height:10});
+   expect(issues[0]!.rigRegion).toEqual({x:6,y:6,width:10,height:10});
+   expect(issues[1]!.rigRegion).toEqual({x:11,y:6,width:9,height:9});
+   expect(issues[0]!.sourceHash).toBe(sourceHash);
+   expect(issues[0]!.parts).toEqual([{name:'body',imageHash:bodyItem.imageHash!}]);
+   expect(issues[0]!.nativeCrop).not.toBeNull();
+   const decoded=PNG.sync.read(await readPngCrop(issues[0]!.nativeCrop!));
+   expect({width:decoded.width,height:decoded.height}).toEqual({width:10,height:10});
+   expect(new Uint8Array(decoded.data)).toEqual(expectedSubrect);
+   return issues;
+  };
+
+  const enIssues=await runLanguage('en',false);
+  const koIssues=await runLanguage('ko',false);
+  expect(koIssues[0]!.imageRegion).toEqual(enIssues[0]!.imageRegion);
+  expect(koIssues[0]!.rigRegion).toEqual(enIssues[0]!.rigRegion);
+  expect(koIssues[0]!.nativeCrop!.sha256).toBe(enIssues[0]!.nativeCrop!.sha256);
+  expect(koIssues[1]!.rigRegion).toEqual(enIssues[1]!.rigRegion);
+  const enShift=await runLanguage('en',true);
+  const koShift=await runLanguage('ko',true);
+  expect(koShift[0]!.imageRegion).toEqual(enShift[0]!.imageRegion);
+
+  const failSlots=dom.makeSlots('c620-final-fit-fail');
+  const failData:ViewData={mode:'parts',title:'Synthetic C620 Fail',sourceHash,rigSize:pkg.rigSize,
+   painting:null,items,pages:[],flags:[],flagSources:[],flagMissing:[],verdictFile:'parts-review.json',verdict:null,verdictStale:null};
+  const failSource:PartsSource={view:async()=>failData,
+   image:async index=>originalImages[index] as unknown as HTMLImageElement,
+   page:async()=>{throw Error('Unexpected atlas image');},painting:()=>Promise.resolve(originalPainting as unknown as HTMLImageElement),
+   crop:async issue=>preparePartsComment(pkg,issue,false,{sourceHash})};
+  const failHost:PartsHost={initial:()=>[],changed:()=>{},register:()=>{},locked:()=>'open'};
+  const failHandle=mountPartsWorkspace(failSlots,failSource,failHost,{defaultView:'item'});
+  mounts.push(failHandle);
+  const failPane=node(failSlots,'#rig-viewport');
+  let throwFinalFit=true;
+  Object.defineProperty(failPane,'clientHeight',{
+   configurable:true,
+   get:()=>{
+    if(throwFinalFit&&failSlots.stage.dataset.partsPaintState==='ready'){
+     throwFinalFit=false;
+     throw new Error('planted-final-fit-failure');
+    }
+    return 722;
+   }
+  });
+  await expect(failHandle.ready).rejects.toThrow('planted-final-fit-failure');
+  expect(failSlots.stage.dataset.partsPaintState).toBe('failed');
+  expect(failSlots.stage.getAttribute('aria-busy')).toBe('false');
+  expect(node(failSlots,'#pv-save-status').textContent).toContain('PARTS_PAINT_FAILED');
+ }finally{
+  setLinkLanguage(null);
+  setLanguagePreference(savedPref);
+  for(const mount of mounts)mount.dispose();
+  dom.cleanup();
+  await rm(root,{recursive:true,force:true});
+ }
 });

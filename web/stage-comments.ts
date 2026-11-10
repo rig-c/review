@@ -108,7 +108,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   if(!reason&&host.blocked()){host.error(t('COMMENT_BUSY: close the active editor or wait for the inspection to settle'));return;}
   list.hidden=false;placeList();toggle.setAttribute('aria-expanded','true');renderList();
   if(reason){setCapture(false);host.error(reason);return;}
-  setCapture(true);
+  setCapture(true);for(const view of layers.keys())host.pose(view);
  };
  const openComment=async(f:Row)=>{const mark=readMark(f);if(!mark)return;if(list.hidden)setOpen(true);if(list.hidden)return;if(await jump(f)){const reason=updateRefusal();setCapture(!reason&&!host.blocked());openComposer(mark.viewport,mark.screen,f,host.pose(mark.viewport)?.mode??mark.mode);}};
  const renderList=()=>{placeList();list.setAttribute('aria-label',t(inline?'Issues':'Stage comments'));list.replaceChildren();const title=document.createElement('strong');title.textContent=t(inline?'Issues':'Comments');list.append(title);const rawReason=host.refusal?.()??null,reason=rawReason?t(rawReason):null;if(reason){const note=document.createElement('small');note.className='stage-comment-refusal-note';note.title=reason;note.textContent=reason;Object.assign(note.style,{display:'block',marginTop:'4px',maxWidth:'100%',whiteSpace:inline?'normal':'nowrap',overflow:'hidden',textOverflow:'ellipsis'});list.append(note);}const all=host.feedback().filter(f=>readMark(f));toggle.textContent=t(host.busy?.()?'Comment · C ({0}) · Rendering':'Comment · C ({0})').replace('{0}',String(all.length));if(!all.length){const empty=document.createElement('p');empty.textContent=t(inline?'No issues yet.':reason?'Read only · Escape closes':'Mark a point or region, then type. Enter saves · Escape cancels.');list.append(empty);}for(const [i,f]of all.entries()){
@@ -117,7 +117,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   if(host.locked(f.id)){const submitted=document.createElement('span');submitted.textContent=t('Submitted');row.append(submitted);}
   list.append(row);
  }};
- const refresh=()=>{last='';renderList();};
+ const refresh=()=>{last='';renderList();renderPins();};
  const openComposer=(view:StageComment['viewport'],screen:MarkRegion,existing?:Row,placementMode=host.pose(view)?.mode)=>{
   if(!existing){try{assertCapture();}catch{return;}}
   const currentMode=host.pose(view)?.mode;
@@ -207,7 +207,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const disposers:(()=>void)[]=[];
  for(const [key,pane]of Object.entries(host.viewports)){
   const view=key as StageComment['viewport'],local=(e:PointerEvent)=>{const r=pane!.getBoundingClientRect();return {x:Math.max(0,Math.min(pane!.clientWidth,e.clientX-r.left-pane!.clientLeft)),y:Math.max(0,Math.min(pane!.clientHeight,e.clientY-r.top-pane!.clientTop))};};
-  const down=(e:PointerEvent)=>{if(e.button!==0||!e.isPrimary||(e.target as Element)?.closest?.('.stage-comment-ui,button,input'))return;if(enabled||!inline&&!list.hidden){try{assertCapture();}catch{return;}}if(!enabled||host.blocked())return;e.preventDefault();e.stopImmediatePropagation();cancel();const at=local(e),mode=host.pose(view)?.mode;if(!mode)return;const generation=interaction;pending={view,start:at,end:at,mode,id:e.pointerId,interaction:generation,settled:host.pause()};pending.settled.catch(e=>{if(interaction===generation&&!disposed)host.error(String(e));});pane!.setPointerCapture(e.pointerId);};
+  const down=(e:PointerEvent)=>{if(e.button!==0||!e.isPrimary||(e.target as Element)?.closest?.('.stage-comment-ui,button,input'))return;if(enabled||!inline&&!list.hidden){try{assertCapture();}catch{return;}}if(!enabled||host.blocked())return;e.preventDefault();e.stopImmediatePropagation();cancel();const mode=host.pose(view)?.mode;if(!mode)return;const at=local(e),generation=interaction;pending={view,start:at,end:at,mode,id:e.pointerId,interaction:generation,settled:host.pause()};pending.settled.catch(e=>{if(interaction===generation&&!disposed)host.error(String(e));});pane!.setPointerCapture(e.pointerId);};
   const move=(e:PointerEvent)=>{if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();pending.end=local(e);draftMark={view,mode:pending.mode,screen:region(pending.start,pending.end)};last='';};
   const up=async(e:PointerEvent)=>{if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();const p=pending;pending=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);try{await p.settled;assertCapture();if(disposed||interaction!==p.interaction||!enabled)return;const r=Math.hypot(p.end.x-p.start.x,p.end.y-p.start.y)<4?region(p.start,p.start):region(p.start,p.end);openComposer(view,r,undefined,p.mode);}catch(error){host.error(String(error));cancel();}};
   const abort=(e:PointerEvent)=>{if(pending?.view===view&&pending.id===e.pointerId)cancel();};

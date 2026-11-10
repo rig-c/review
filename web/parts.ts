@@ -284,7 +284,12 @@ async function paint():Promise<void>{
  try{
   await paintRaster(token);if(disposed||token!==paintToken)return;
   await paintReference(token);if(disposed||token!==paintToken)return;
-  if(paintFailure&&$('pv-save-status').textContent===t(paintFailure))$('pv-save-status').textContent='';paintFailure=null;viewport?.fitCamera();commentUi?.refresh();settleReady();
+  if(paintFailure&&$('pv-save-status').textContent===t(paintFailure))$('pv-save-status').textContent='';paintFailure=null;painting=false;
+  if(paintBusyStatus?.token===token){
+   if($('pv-save-status').textContent===paintBusyStatus.text)$('pv-save-status').textContent='';
+   paintBusyStatus=null;
+  }
+  syncPaintState();viewport?.fitCamera();commentUi?.refresh();settleReady();
  }catch(error){
   if(disposed||token!==paintToken)return;
   settleReady(error instanceof Error?error:new Error('PARTS_PAINT_FAILED'));
