@@ -312,9 +312,8 @@ try {
     assert.equal(cpState.bgLabel, catalog['Background']);
     assert.deepEqual(
         cpState.layerTitles,
-        language === 'ko'
-            ? ['이미지 · 키 I', '메시 모서리 · 키 M', '본 점 · 키 B']
-            : ['Images · key I', 'Mesh edges · key M', 'Bone points · key B'],
+        ([['Images', 'I'], ['Mesh edges', 'M'], ['Bone points', 'B']] as const).map(([label, key]) =>
+            catalog['{0} · key {1}'].replace('{0}', catalog[label]).replace('{1}', key)),
     );
     await record('checkpoint-controls-revealed', cpState);
 
