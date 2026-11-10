@@ -22,7 +22,7 @@ import { flagLabel, readingGroup, countedFlag } from './parts-flags.ts';
 import { paintAssembly, pickAssembly, paintAssemblyOutline, frontParts, paintAlphaOnly, paintBackground, paintPart, paintMesh, paintOverlay, paintPaintingCrop, paintFootprints } from './parts-render.ts';
 
 export interface Mesh { vertices: number[]; triangles: number[]; figures: Record<string, unknown> }
-export interface Item { mesh?: Mesh; name: string; index: number; x: number; y: number; w: number; h: number; page?: string; degrees?: number; image?: boolean;imageHash?:string }
+export interface Item { mesh?: Mesh; meshUnavailable?: 'PARTS_MESH_GENERATED'; name: string; index: number; x: number; y: number; w: number; h: number; page?: string; degrees?: number; image?: boolean;imageHash?:string }
 export interface Page { name: string; width: number; height: number; index: number }
 export type Flag =
   | { id: string; item: string; source: 'mesh_report'; kind: 'faint'; art: number; maxAlpha: number; box: [number, number, number, number] }
@@ -579,7 +579,7 @@ function renderMesh(): void {
   const heading = doc.createElement('h2'); heading.textContent = t('Mesh geometry'); panel.append(heading);
   if (!item.mesh) {
     const unavailable = doc.createElement('p');
-    unavailable.textContent = t(meshCount ? 'No mesh geometry is available for this part.' : 'No mesh geometry is available for this draft.');
+    unavailable.textContent = t(item.meshUnavailable === 'PARTS_MESH_GENERATED' ? 'PARTS_MESH_GENERATED: No mesh geometry is available for this part.' : meshCount ? 'No mesh geometry is available for this part.' : 'No mesh geometry is available for this draft.');
     panel.append(unavailable);slots.side.append(panel);return;
   }
   const figures = doc.createElement('dl');

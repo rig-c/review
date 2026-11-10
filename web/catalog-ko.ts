@@ -5,6 +5,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Select at least one part.": "파츠를 하나 이상 선택하세요.",
   "Mesh (none 0/{0})": "메시 (없음 0/{0})",
   "No mesh geometry is available for this part.": "이 파츠에는 표시할 메시 형상이 없습니다.",
+  "PARTS_MESH_GENERATED": "PARTS_MESH_GENERATED",
+  "PARTS_MESH_GENERATED: No mesh geometry is available for this part.": "PARTS_MESH_GENERATED: 이 파츠에는 표시할 메시 형상이 없습니다.",
   "JOB_STILL_CAPTURE_FAILED": "JOB_STILL_CAPTURE_FAILED · 표시된 리그 프레임을 캡처하지 못했습니다. 정상적으로 그려진 뒤 다시 시도하세요.",
   "JOB_STILL_CAMERA_NOT_FIXED": "JOB_STILL_CAMERA_NOT_FIXED · 판정을 제출하기 전에 리그를 기본 화면 구도로 되돌리세요.",
   "JOB_STILL_VIEW_UNSUPPORTED": "JOB_STILL_VIEW_UNSUPPORTED · 단독 표시·강조·비교 레이어를 해제하고 전체 리그를 표시한 뒤 제출하세요.",

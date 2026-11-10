@@ -243,7 +243,11 @@ visible mesh-bearing parts. The selected part also tints nontransparent art pixe
 centres lie outside every nondegenerate triangle (triangle boundaries count as covered).
 Other assembled meshes use reduced-opacity wire lines. The selected part's geometry panel names
 unavailable geometry explicitly. A draft with no mesh geometry retains a **Mesh (none 0/n)** control
-and an unavailable message.
+and an unavailable message. A mesh attachment that declares a plain-object `generator` without inline
+`uvs` or `triangles` is accepted without reconstructing geometry. Its part raster renders normally
+without a mesh overlay, the item reports `meshUnavailable: "PARTS_MESH_GENERATED"`, and the **Mesh
+geometry** panel states `PARTS_MESH_GENERATED: No mesh geometry is available for this part.` Non-object
+`generator` values or attachments combining `generator` with `uvs` or `triangles` still refuse by name.
 
 Historical per-part mesh outcomes had Pending / Clean / Flagged states and a note. Flagged required a
 note, and approval required clean part and mesh outcomes. These fields remain legacy read data.
