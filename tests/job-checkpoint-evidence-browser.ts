@@ -7,7 +7,7 @@ import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import type {JobCheckpointEvidence, JobCheckpointTable, PlanContext} from '../src/job-contract.ts';
+import type {JobCheckpointEvidence, JobCheckpointTable, NextValueV3, PlanContext} from '../src/job-contract.ts';
 import {JOB_RECORD_READER_ID} from '../src/job-contract.ts';
 import {startJobHost} from '../src/job-front.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -55,6 +55,42 @@ async function run() {
     let page: InputCdpSession | undefined;
     let control: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
     let corruptTiles = false;
+    let activeDecision: {host: Awaited<ReturnType<typeof startJobHost>>; schema: string;
+        askId: string; publicationId: string; sourceHash: string; outcome: string; words: string; prefix: string} | undefined;
+    let latestNext: ReturnType<typeof summarizeNext> | undefined;
+    const browserErrors: Record<string, unknown>[] = [];
+    const networkFailures: Record<string, unknown>[] = [];
+    const uiResponses: Record<string, unknown>[] = [];
+    const networkRequests = new Map<string, {url: string; method: string}>();
+    const redact = (text: string) => text.replace(/#cap=[^\s"']+/g, '#cap=<redacted>');
+    function summarizeNext(next: NextValueV3) {
+        return {status: next.status, cursor: next.cursor, events: next.events.map(event => ({
+            type: event.type, generation: event.generation, cursor: event.cursor,
+            ...(event.type === 'act' ? {askId: event.act.askId, actId: event.act.actId, kind: event.act.kind} : {}),
+            ...(event.type === 'pending' ? {askId: event.ask.askId, status: event.ask.status, subject: event.ask.subject} : {}),
+        }))};
+    }
+    async function checkpointForm(askId: string) {
+        return page!.evaluate<{exists: boolean; ready: boolean; askId: string | null; outcome: string | null;
+            words: string | null; valid: boolean; fieldsetDisabled: boolean | null; submitDisabled: boolean | null;
+            status: {key: string | null; text: string} | null; notice: {failed: string | null; text: string} | null;
+            binding: string | null; controls: unknown[]}>(`(()=>{
+            const f=document.querySelector('form[data-job-ask="${askId}"]');
+            const fields=f?.querySelector('fieldset'), submit=f?.querySelector('button[type=submit]');
+            const outcome=f?.querySelector('select[name=outcome]'), words=f?.querySelector('textarea[name=note]');
+            const status=f?.querySelector('[role=status]'), notice=document.querySelector('.job-notice');
+            return {exists:!!f, askId:f?.dataset.jobAsk??null,
+                ready:!!fields&&!fields.disabled&&!!submit&&!submit.matches(':disabled')&&
+                    !!outcome&&!outcome.matches(':disabled')&&!!words&&!words.matches(':disabled'),
+                fieldsetDisabled:fields?.disabled??null, submitDisabled:submit?.matches(':disabled')??null,
+                outcome:outcome?.value??null, words:words?.value??null, valid:f?.checkValidity()??false,
+                status:status?{key:status.dataset.jobText??null,text:status.textContent}:null,
+                notice:notice?{failed:notice.dataset.failed??null,text:notice.textContent}:null,
+                binding:f?.querySelector('.job-source')?.textContent??null,
+                controls:f?[...f.querySelectorAll('input[name],textarea[name],select[name],button[type=submit]')]
+                    .map(n=>({tag:n.tagName,name:n.name,type:n.type,value:n.value,disabled:n.matches(':disabled'),
+                        willValidate:n.willValidate,valid:n.validity.valid})):[]};})()`);
+    }
     const observations: Record<string, unknown> = {provenance: 'synthetic four-tile / 103-row evidence, no producer execution'};
     async function until(check: () => Promise<boolean>, label: string) {
         const deadline = Date.now() + 20_000;
@@ -108,7 +144,10 @@ async function run() {
                 subject: {kind: 'checkpoint', checkpointId: packet.checkpointId,
                     ...(schema === 'rig-review/job-api@2' ? {planStepId: packet.planStepId} : {})}});
             const words = `  ${outcome} 한글 <owner>\nPass\n`;
-            await until(() => page!.evaluate(`!!document.querySelector('form[data-job-ask="${asked.askId}"] select[name=outcome]')`), 'decision form');
+            activeDecision = {host, schema, askId: asked.askId, publicationId: publication.publicationId,
+                sourceHash: publication.source.sourceHash, outcome, words, prefix};
+            latestNext = undefined;
+            await until(async () => (await checkpointForm(asked.askId)).ready, prefix + ' ' + outcome + ' decision ready');
             await page!.evaluate(`(()=>{const f=document.querySelector('form[data-job-ask="${asked.askId}"]');
                 f.querySelector('select[name=outcome]').value=${JSON.stringify(outcome)};
                 f.querySelector('textarea[name=note]').value=${JSON.stringify(words)};
@@ -116,11 +155,21 @@ async function run() {
             // Reconnect preserves the source-bound owner draft before its ordinary UI submission.
             await page!.goto('about:blank');
             await page!.goto(owner.href);
-            await until(() => page!.evaluate(`document.querySelector('form[data-job-ask="${asked.askId}"] textarea[name=note]')?.value===${JSON.stringify(words)}`), 'restored words');
+            // updateForms enables this fieldset only after display acknowledgment and pending-ask readiness.
+            await until(async () => (await checkpointForm(asked.askId)).ready, prefix + ' ' + outcome + ' reconnect ready');
+            const restored = await checkpointForm(asked.askId);
+            assert.equal(restored.askId, asked.askId);
+            assert.equal(restored.ready, true);
+            assert.equal(restored.outcome, outcome);
+            assert.equal(restored.words, words);
+            assert.equal(restored.valid, true);
+            observations[prefix + '-' + outcome + '-ready'] = restored;
             await page!.evaluate(`document.querySelector('form[data-job-ask="${asked.askId}"]').requestSubmit()`);
+            observations[prefix + '-' + outcome + '-submit'] = await checkpointForm(asked.askId);
             let act: any;
             await until(async () => {
                 const next = await call(host, schema, {verb: 'next', after: null, waitMs: 0});
+                latestNext = summarizeNext(next);
                 act = next.events.find((event: any) => event.type === 'act' && event.act.askId === asked.askId)?.act;
                 return !!act;
             }, 'finalized act');
@@ -128,6 +177,7 @@ async function run() {
             assert.equal(fetched.source.sourceHash, publication.source.sourceHash);
             assert.deepEqual(fetched.value, {checkpointId: packet.checkpointId, planStepId: packet.planStepId, outcome, words});
             observations[prefix + '-' + outcome] = {actId: fetched.actId, sourceHash: fetched.source.sourceHash, value: fetched.value};
+            activeDecision = undefined;
         }
         corruptTiles = true;
         await control!('Fetch.enable', {patterns: [{urlPattern: '*checkpoint-evidence/*/tiles/0', requestStage: 'Request'}]});
@@ -152,6 +202,31 @@ async function run() {
             subject: {kind: 'checkpoint', checkpointId: evidence.packet.checkpointId}});
         page = await launchCdpSession(join(scratch, 'profile'), {onEvent: async (event, send) => {
             if (event.sessionId) control = send;
+            const params = event.params ?? {};
+            if (event.method === 'Runtime.exceptionThrown') {
+                const details = params.exceptionDetails as {text?: string; exception?: {description?: string}};
+                browserErrors.push({method: event.method, text: redact(details.text ?? ''),
+                    description: redact(details.exception?.description ?? '')});
+            }
+            if (event.method === 'Runtime.consoleAPICalled' && params.type === 'error') {
+                const args = params.args as {value?: unknown; description?: string}[];
+                browserErrors.push({method: event.method,
+                    text: args.map(arg => redact(String(arg.value ?? arg.description ?? ''))).join(' ')});
+            }
+            if (event.method === 'Network.requestWillBeSent') {
+                const request = params.request as {url: string; method: string};
+                networkRequests.set(params.requestId as string, {url: request.url.split(/[?#]/)[0]!, method: request.method});
+            }
+            if (event.method === 'Network.loadingFailed') networkFailures.push({
+                ...networkRequests.get(params.requestId as string), requestId: params.requestId,
+                errorText: params.errorText, canceled: params.canceled, blockedReason: params.blockedReason,
+                corsErrorStatus: params.corsErrorStatus, type: params.type});
+            if (event.method === 'Network.responseReceived') {
+                const response = params.response as {url: string; status: number};
+                const url = response.url.split(/[?#]/)[0]!;
+                if (url.endsWith('/ui/displayed') || url.endsWith('/ui/acts'))
+                    uiResponses.push({requestId: params.requestId, url, status: response.status});
+            }
             if (event.method === 'Fetch.requestPaused') {
                 const requestId = event.params!.requestId;
                 if (corruptTiles) await send('Fetch.fulfillRequest', {requestId, responseCode: 200,
@@ -160,6 +235,8 @@ async function run() {
                 else await send('Fetch.continueRequest', {requestId});
             }
         }});
+        await until(async () => !!control, 'CDP page session');
+        await control!('Network.enable');
         await page.setViewport(1440, 1000);
         assert.ok(grant);
         await inspect(planHost, 'rig-review/job-api@3', publication, evidence.packet, 'plan-' + language, grant.fetchCapability);
@@ -181,8 +258,30 @@ async function run() {
                 idempotencyKey: randomUUID(), reason: 'synthetic checkpoint browser complete'});
         await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2) + '\n');
     } catch (error) {
+        const failure: Record<string, unknown> = {error: redact(error instanceof Error ? error.message : String(error)), latestNext};
+        if (activeDecision) {
+            const {host, ...decision} = activeDecision;
+            failure.activeDecision = decision;
+            try {failure.form = await checkpointForm(decision.askId);}
+            catch (diagnosticError) {failure.formError = redact(String(diagnosticError));}
+            try {
+                const status = host.session.status();
+                failure.host = {jobId: status.jobId, generation: status.generation, status: status.status, cursor: status.cursor,
+                    publicationId: status.publication?.publicationId, sourceHash: status.publication?.source.sourceHash,
+                    pending: status.pending.map(ask => ({askId: ask.askId, publicationId: ask.publicationId,
+                        status: ask.status, subject: ask.subject}))};
+                failure.next = summarizeNext(await call(host, decision.schema, {verb: 'next', after: null, waitMs: 0}));
+            } catch (diagnosticError) {failure.hostError = redact(String(diagnosticError));}
+        }
+        observations.failure = failure;
+        observations.browserErrors = browserErrors;
+        observations.networkFailures = networkFailures;
+        observations.uiResponses = uiResponses;
+        if (page) {
+            try {await writeFile(join(output, 'failure.png'), await page.screenshot());}
+            catch (diagnosticError) {failure.screenshotError = redact(String(diagnosticError));}
+        }
         await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2) + '\n');
-        if (page) await writeFile(join(output, 'failure.png'), await page.screenshot());
         throw error;
     } finally {
         await page?.close();
