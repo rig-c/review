@@ -580,11 +580,11 @@ test('#743 workspace owns detached portal lookup, settles redocking, and dispose
  const second=openHost({ownedRoot:true,bottomPanel:true,tabs:['rig','feedback']}),fieldB=new Host('input');fieldB.id=fieldA.id;second.panels.rig!.append(fieldB);
  try{
   first.layout.clientWidth=0;first.layout.clientHeight=0;first.ui.refresh();second.flush();
-  expect(first.ownedRoot.contains(fieldA)).toBe(false);expect(first.ui.element(fieldA.id)).toBe(fieldA);expect(second.ui.element(fieldB.id)).toBe(fieldB);
+  expect(first.ownedRoot.contains(fieldA)).toBe(false);expect(first.ui.element(fieldA.id)).toBe(fieldA as unknown as HTMLElement);expect(second.ui.element(fieldB.id)).toBe(fieldB as unknown as HTMLElement);
   const foreign=new Host('input');foreign.id='only-second-source';second.panels.rig!.append(foreign);expect(first.ui.element(foreign.id)).toBeNull();
   first.layout.clientWidth=1400;first.layout.clientHeight=900;let settled=false;const ready=first.ui.settle().then(()=>{settled=true;});expect(settled).toBe(false);second.flush();await ready;
-  expect(first.ownedRoot.contains(fieldA)).toBe(true);expect(first.ui.element(fieldA.id)).toBe(fieldA);
+  expect(first.ownedRoot.contains(fieldA)).toBe(true);expect(first.ui.element(fieldA.id)).toBe(fieldA as unknown as HTMLElement);
   const ownDrawer=first.ui.element('workspace-drawer-inspectorHeight')!,otherDrawer=second.ui.element('workspace-drawer-inspectorHeight')!;
-  first.ui.dispose();expect(ownDrawer.parentElement).toBeNull();expect(otherDrawer.parentElement).not.toBeNull();expect(second.ui.element(fieldB.id)).toBe(fieldB);
+  first.ui.dispose();expect(ownDrawer.parentElement).toBeNull();expect(otherDrawer.parentElement).not.toBeNull();expect(second.ui.element(fieldB.id)).toBe(fieldB as unknown as HTMLElement);
  }finally{second.close();first.close();}
 });
