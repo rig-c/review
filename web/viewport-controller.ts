@@ -32,7 +32,8 @@ export function createViewportController(provider:ViewportProvider,state=createV
  const {el,message}=provider;const panes=()=>provider.panes??(['rig','reference'] as const).map(target=>({target,viewport:el(target+'-viewport'),pane:el(target+'-pane')}));const targets=()=>panes().map(p=>p.target);const paneNodes=(target:CameraTarget)=>panes().find(p=>p.target===target)!;
  const range=(frame:CameraFrame)=>provider.nativeScale?{min:Math.min(frame.fitScale??1,1),max:16}:{min:.25,max:8};const from=(value:CameraSignature,frame:CameraFrame)=>{const limits=range(frame);if(provider.nativeScale&&(!Number.isFinite(value.zoom)||value.zoom<limits.min||value.zoom>limits.max))throw new Error('PARTS_CAMERA_RANGE: native zoom outside supported range');return cameraFromSignature(value,frame,limits);};const input=(id:string)=>el<HTMLInputElement>(id),button=(id:string)=>el<HTMLButtonElement>(id);
 function paneFrame(target:CameraTarget,hidden=false):CameraFrame|null {
- const {viewport,pane}=paneNodes(target),geometry=provider.geometry(target);
+ const nodes=paneNodes(target);if(!nodes)return null;
+ const {viewport,pane}=nodes,geometry=provider.geometry(target);
  if(!geometry){delete state.cameraFrames[target];return null;}
  if(pane.hidden||viewport.clientWidth<=0||viewport.clientHeight<=0)return hidden?state.cameraFrames[target]??null:null;
  const frame=cameraFrame(geometry.space,geometry.box,viewport.clientWidth,viewport.clientHeight,geometry.marginX,geometry.marginY);

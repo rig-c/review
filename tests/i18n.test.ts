@@ -1096,6 +1096,62 @@ test('unsupported interview kind copy retains its named code and meaning in Engl
  }
 });
 
+test('#605 failed interview API mount disposes without a TDZ and releases its language listener', async () => {
+ const {doc} = makeTestDoc();
+ const host = doc.createElement('main');
+ const previousFetch = globalThis.fetch, preference = getLanguagePreference();
+ let unmount:(() => void) | undefined;
+ try {
+  globalThis.fetch = Object.assign(async () => Response.json({error:'INTERVIEW_OPTIONS_STALE'},{status:409}),{preconnect:previousFetch.preconnect});
+  setLanguagePreference('en');
+  unmount = await mountInterview(host as unknown as HTMLElement,{base:'/',key:'failed-interview',capability:null,route:path=>path,headers:init=>new Headers(init)});
+  expect(host.textContent).toBe(t('interview.stale'));
+  setLanguagePreference('ko');expect(host.textContent).toBe(t('interview.stale'));
+  expect(() => unmount!()).not.toThrow();
+  const disposedText = host.textContent;
+  setLanguagePreference('en');expect(host.textContent).toBe(disposedText);
+ } finally {
+  try {unmount?.();} catch { /* The planted failing source cannot release this listener. */ }
+  globalThis.fetch = previousFetch;setLanguagePreference(preference);
+ }
+});
+
+test('#605 persisted interview answers drive progress while draft Other and Auto picks do not', async () => {
+ const {doc,root} = makeTestDoc(), host = doc.createElement('main');root.append(host);
+ const previousDocument = Object.getOwnPropertyDescriptor(globalThis,'document');
+ const previousFetch = globalThis.fetch, preference = getLanguagePreference();
+ const set = {id:'progress-set',question:'shape',stage:'interview',drafted_by:'fixture author',drafted_at:'2026-11-01T00:00:00Z',assembly:{rule:'single'},asks:[{id:'shape',prompt:'Original question',options:[
+  {id:'keep',kind:'value',label:'Original answer',effect:'Original effect',recommended:true,reason:'Original reason'},
+  {id:'other',kind:'other',label:'Original Other',effect:'Custom',recommended:false},
+  {id:'auto',kind:'auto',label:'Original Delegate',effect:'Agent',recommended:false}]}]};
+ const ref = {path:'options.json',sha256:'a'.repeat(64)};
+ let saved:any = null, posts = 0, unmount:(() => void) | undefined;
+ try {
+  Object.defineProperty(globalThis,'document',{value:doc,configurable:true});setLanguagePreference('en');
+  globalThis.fetch = Object.assign(async (_input:any,init?:RequestInit) => {
+   if(init?.method==='POST'){posts++;saved=JSON.parse(String(init.body));return Response.json(saved);}
+   return Response.json({questions:[{ref,set,editable:true,images:[],hasParts:false,saved}],historical:[]});
+  },{preconnect:previousFetch.preconnect});
+  unmount = await mountInterview(host as unknown as HTMLElement,{base:'/',key:'saved-progress',capability:'b'.repeat(64),route:path=>path,headers:init=>new Headers(init)});
+  const progress = () => host.querySelector('nav')!.querySelector('p')!.textContent;
+  expect(progress()).toBe(t('interview.progress',[0,1]));
+  const radios = host.querySelectorAll('input');
+  radios[1]!.checked=true;(radios[1] as any).onchange();
+  expect(progress()).toBe(t('interview.progress',[0,1]));
+  radios[1]!.checked=false;radios[2]!.checked=true;(radios[2] as any).onchange();
+  expect(progress()).toBe(t('interview.progress',[0,1]));
+  expect(host.querySelector('nav')!.textContent).not.toContain(t('interview.delegated'));
+  await (host.querySelector('form') as any).onsubmit({preventDefault(){}});
+  expect(posts).toBe(1);expect(saved.picks).toEqual([{ask:'shape',option_id:'auto'}]);
+  expect(progress()).toBe(t('interview.progress',[1,1]));
+  expect(host.querySelector('nav')!.textContent).toContain(t('interview.delegated'));
+  expect(host.textContent).toContain('Original Delegate');
+ } finally {
+  unmount?.();globalThis.fetch=previousFetch;setLanguagePreference(preference);
+  if(previousDocument)Object.defineProperty(globalThis,'document',previousDocument);else delete (globalThis as {document?:Document}).document;
+ }
+});
+
 test('scene interview warnings and historical issues render in EN/KO while original records and editability survive', async () => {
  const {doc, root} = makeTestDoc();
  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
@@ -1119,18 +1175,28 @@ test('scene interview warnings and historical issues render in EN/KO while origi
   unmount = await mountInterview(host as unknown as HTMLElement, {base: '/', key: 'synthetic', capability: 'a'.repeat(64), route: path => path, headers: init => new Headers(init)});
   for (const language of ['en', 'ko'] as const) {
    setLanguagePreference(language);
-   const picker = host.querySelectorAll('select')[0]!;
-   picker.value = '0'; (picker as any).onchange();
+   const historical = host.querySelectorAll('[data-interview-question]')[0]!;
+   (historical as any).onclick();
    expect(host.textContent).toContain(t('INTERVIEW_OPTIONS_SCENE_LEGACY', undefined, language));
    expect(host.textContent).toContain(t('interview.historicalIssue', undefined, language));
    expect(host.textContent).toContain('history[0].agent_decision');
    expect(host.querySelectorAll('pre').some((node: TestElement) => node.textContent === words)).toBe(true);
    expect(host.textContent).toContain('user · 2026-11-08T00:00:02Z · Check');
    expect(host.querySelectorAll('fieldset')[0]!.disabled).toBe(true);
-   const currentPicker = host.querySelectorAll('select')[0]!;
-   currentPicker.value = '1'; (currentPicker as any).onchange();
+   const currentQuestion = host.querySelectorAll('[data-interview-question]')[1]!;
+   (currentQuestion as any).onclick();
    expect(host.querySelectorAll('fieldset')[0]!.disabled).toBe(false);
    expect(host.textContent).toContain(t('interview.save', undefined, language));
+   const rows = host.querySelectorAll('[data-interview-question]');
+   expect(rows).toHaveLength(2);
+   expect(host.querySelectorAll('select')).toHaveLength(0);
+   let prevented = false;
+   (rows[1] as any).onkeydown({key:'Home',preventDefault(){prevented = true;}});
+   expect(prevented).toBe(true);
+   expect(host.querySelectorAll('fieldset')[0]!.disabled).toBe(true);
+   expect(host.querySelectorAll('[data-interview-question]')[0]!.getAttribute('aria-current')).toBe('step');
+   const details = host.querySelectorAll('details');
+   expect(details.every(entry => !entry.open)).toBe(true);
   }
  } finally {
   unmount?.(); globalThis.fetch = previousFetch; setLanguagePreference(preference);

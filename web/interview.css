@@ -26,3 +26,18 @@ details { margin-block: 1rem; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .interview-binding { overflow-wrap: anywhere; }
+
+.interview-workspace { display: grid; grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr); gap: 1rem; align-items: start; }
+.interview-navigation { display: flex; flex-direction: column; gap: .5rem; min-width: 0; position: sticky; top: 1rem; }
+.interview-navigation button { display: flex; flex-direction: column; gap: .35rem; text-align: start; overflow-wrap: anywhere; white-space: normal; }
+.interview-navigation button span { font-size: .85em; }
+.interview-navigation [aria-current=step] { border-color: currentColor; }
+.interview-workspace .interview-grid { margin-top: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); }
+.interview-image-controls, .interview-image-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; }
+.interview-image-preview { position: relative; overflow: hidden; resize: vertical; height: clamp(240px, 40vh, 520px); min-height: 180px; max-height: 75vh; min-width: 0; touch-action: none; }
+.interview-image-preview img:not([hidden]) { position: absolute; max-width: none; max-height: none; margin: 0; transform-origin: 0 0; user-select: none; }
+@media (max-width: 70rem) { .interview-workspace .interview-grid { grid-template-columns: minmax(0, 1fr); } .interview-workspace aside { position: static; } }
+@media (max-width: 42rem) { .interview-workspace { grid-template-columns: minmax(0, 1fr); } .interview-navigation { position: static; max-height: 12rem; overflow: auto; } }
+
+.interview-navigation ol { display: flex; flex-direction: column; gap: .5rem; list-style: none; padding: 0; margin: 0; }
+.interview-navigation li, .interview-navigation button { width: 100%; box-sizing: border-box; }

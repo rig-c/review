@@ -538,3 +538,28 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 
 .job-window .job-inspection[data-job-plan-workspace]>.job-stage .job-source,
 .job-window .job-inspection[data-job-plan-workspace]>.job-stage pre{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* Owner questionnaire order stays left; the shared image camera lives in main. */
+.job-window .job-inspection[data-job-interview-workspace]{grid-template-columns:minmax(160px,220px) minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.job-window .job-interview-navigation{min-width:0;min-height:0;overflow:auto;padding:12px;border-right:1px solid var(--border)}
+.job-window .interview-navigation{display:flex;flex-direction:column;gap:8px;min-width:0}
+.job-window .interview-navigation button{display:flex;flex-direction:column;gap:4px;white-space:normal;text-align:start;overflow-wrap:anywhere;min-width:0}
+.job-window .interview-navigation button span{color:var(--fg-soft);font-size:.85em}
+.job-window .interview-navigation [aria-current=step]{border-color:var(--pass);background:var(--active-bg)}
+.job-window .job-interview-main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);min-width:0;min-height:0;overflow:hidden}
+.job-window .job-interview-main>.job-forms{border-top:0;border-left:1px solid var(--border);min-width:0;min-height:0}
+.job-window .job-interview-image-host{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
+.job-window .job-interview-image-host>.interview-images{flex:1;min-height:240px}
+.job-window .interview-image-controls{display:flex;flex-wrap:wrap;align-items:center;gap:4px;flex:none}
+.job-window .interview-image-preview{position:relative;display:block;resize:vertical;touch-action:none}
+.job-window .interview-image-preview img{position:absolute;max-width:none;max-height:none;object-fit:fill;transform-origin:0 0;user-select:none}
+@media(max-width:1199px){.job-window .job-interview-main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(240px,42%) minmax(0,1fr)}.job-window .job-interview-main>.job-forms{border-left:0;border-top:1px solid var(--border)}}
+@media(max-width:699px){.job-window .job-inspection[data-job-interview-workspace]{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(100px,20%) minmax(0,1fr)}.job-window .job-interview-navigation{border-right:0;border-bottom:1px solid var(--border)}}
+
+.job-window .interview-navigation ol{display:flex;flex-direction:column;gap:8px;list-style:none;padding:0;margin:0}
+.job-window .interview-navigation li,.job-window .interview-navigation button{width:100%;box-sizing:border-box}
+
+.job-window .interview-retained-question,.job-window .interview-retained-question .interview-grid{display:block;min-width:0}
+.job-window .interview-retained-question aside{min-width:0;margin:0 0 12px}
+.job-window .interview-retained-question .interview-image-preview{flex:none;height:clamp(160px,25vh,220px)}
+.job-window .interview-retained-host[hidden]{display:none}

@@ -5,7 +5,7 @@ import { buildRecordSource, parseRecordAct, parseRecordPublishedContext, parseRe
 import {createJobRigSubmission} from '../web/job-rig-capture.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
 import {t} from '../web/i18n.ts';
-import {renderAskGroup,renderQuestionImages,refreshInterviewConstraints,localizeQuestionImages} from '../web/interview-panel.ts';
+import {renderAskGroup,renderQuestionImages,refreshInterviewConstraints,localizeQuestionImages,renderInterviewNavigation,interviewAnswerState,mountInterview} from '../web/interview-panel.ts';
 import {jobHubMessageMatches, JOB_HUB_VISIBILITY, type JobHubBinding} from '../web/job-hub.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 
@@ -1369,6 +1369,7 @@ describe('hub member event subscription lifetime', () => {
 
 import type {RigPlayer} from '@rig-c/play';
 import {createViewportController, createViewportState} from '../web/viewport-controller.ts';
+import {createPartsViewport} from '../web/parts-viewport-provider.ts';
 import {createRigViewportProvider} from '../web/rig-viewport-provider.ts';
 import {mountViewportPair} from '../web/viewport-pair.ts';
 import * as i18nModule from '../web/i18n.ts';
@@ -1426,6 +1427,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         constructor(readonly tagName: string) {
             this.pixels.fill(120);
         }
+        focus(): void { (globalThis.document as unknown as {activeElement:RuntimeDomNode}).activeElement = this; }
         get isConnected(): boolean { return true; }
         get firstElementChild(): RuntimeDomNode | null {
             return this.children.find(child => child.tagName !== '#text') ?? null;
@@ -2107,7 +2109,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'isRecordSource', 'sourceSnapshot', 'parseControlPart',
             'recordJobRigDraw', 'freezeJobRigCapture', 'copyJobRigViewport', 'createJobRigSubmission', 'jobRigPixelPlacement',
             'presentJobRigViewport', 'CanvasRenderer', 'enCatalog', 'koCatalog', 'JOB_HUB_READY', 'jobHubMessageMatches', 'advancePlayback', 'JOB_PLAN_TEXT_FIELDS',
-            'renderAskGroup', 'renderQuestionImages', 'refreshInterviewConstraints', 'localizeQuestionImages',
+            'renderAskGroup', 'renderQuestionImages', 'refreshInterviewConstraints', 'localizeQuestionImages', 'renderInterviewNavigation', 'interviewAnswerState', 'mountInterview',
             transpiled,
         );
         const mounted = runner(
@@ -2118,7 +2120,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             prepareJobInspection, startEvents, assertJobAskSource, isRecordSource, sourceSnapshot, parseControlPart,
             recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
             presentJobRigViewport, CanvasRenderer, enCatalog, koCatalog, JOB_HUB_READY, jobHubMessageMatches, advancePlayback, JOB_PLAN_TEXT_FIELDS,
-            renderAskGroup, renderQuestionImages, refreshInterviewConstraints, localizeQuestionImages,
+            renderAskGroup, renderQuestionImages, refreshInterviewConstraints, localizeQuestionImages, renderInterviewNavigation, interviewAnswerState, mountInterview,
         ) as {window: ReturnType<typeof createJobWindow>; workspace: RuntimeDomNode; stop: () => void};
 
         async function drainPreparing() {
@@ -2885,6 +2887,73 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                     {id:'auto',kind:'auto' as const,label:'Auto',effect:'Agent',recommended:false},
                 ]})),constraints:[{asks:['shape','detail'],allowed:[['recommended','recommended']]}]}};
 
+    test('#605 ordered job question rows open retained history and the active ask without creating another answer path', async () => {
+        const active = structuredClone(screenAQuestion);
+        active.set.asks[0]!.prompt = 'Current question title';
+        const historical:any = structuredClone(screenAQuestion);
+        historical.set.id = 'historical-set'; historical.set.question = 'earlier'; historical.editable = false;
+        historical.set.asks[0].prompt = 'Earlier question title';
+        historical.answer = {verbatim:'Original history 한글\n',choice:{picks:historical.set.asks.map((ask:any)=>({ask:ask.id,option_id:'recommended'})),note:' exact old note '}};
+        const session = await mountRuntimeSession({interview:{questions:[historical,active]} as any});
+        try {
+            const display = await session.publishRig(1,{optionSet:{id:active.set.id,sha256:active.ref.sha256}});
+            const ask:PendingAskV3 = {askId:'ordered-current-question',publicationId:display.publication.publicationId,source:display.publication.source,
+                subject:{kind:'interview-picks',questionId:active.set.question,setId:active.set.id},status:'pending'};
+            session.fixture.pending(ask,2);session.window.event(session.fixture.events.at(-1)!);
+            const rows = session.workspace.querySelectorAll('[data-interview-question]');
+            expect(rows.map(row=>row.querySelector('strong')!.textContent)).toEqual(['Earlier question title','Current question title']);
+            const form = session.workspace.querySelector('form[data-job-ask="ordered-current-question"]')!;
+            expect(form.hidden).toBe(false);
+            rows[0]!.onclick?.({});
+            expect(form.hidden).toBe(true);
+            const retained = session.workspace.querySelector('.interview-retained-host')!;
+            expect(retained.textContent).toContain('Original history 한글\n');
+            expect(retained.querySelector('fieldset')!.disabled).toBe(true);
+            await retained.querySelector('form')!.onsubmit?.({preventDefault(){}});
+            expect(session.outgoingSubmits).toHaveLength(0);
+            rows[1]!.onclick?.({});
+            expect(form.hidden).toBe(false);
+            expect(retained.hidden).toBe(true);
+            expect(form.querySelectorAll('input').filter(input=>input.checked)).toHaveLength(0);
+        } finally {session.cleanup();}
+    });
+
+    test('#605 shared native image provider supports a single IMG pane while preserving source geometry and resize', () => {
+        const nodes = new Map<string,any>();
+        const el = (id:string) => {
+            if (!nodes.has(id)) nodes.set(id,{clientWidth:640,clientHeight:480,hidden:false,style:{},setAttribute(){}});
+            return nodes.get(id);
+        };
+        const image = {width:128,height:96,naturalWidth:128,naturalHeight:96};
+        let renders = 0;
+        const camera = createPartsViewport({el,canvas:image as HTMLImageElement,reference:()=>null,
+            frameSize:()=>({w:image.naturalWidth,h:image.naturalHeight}),message:()=>{},
+            panes:[{target:'rig',viewport:el('rig-viewport'),pane:el('rig-viewport')}],rendered:()=>{renders++;}});
+        camera.fitCamera(); camera.fitActiveCamera('rig');
+        expect(camera.availableCamera()).toBe('rig');
+        expect(camera.numericView().cameras.reference).toBeNull();
+        camera.updateCamera('rig',{zoom:1,pan:{x:0,y:0}});
+        expect(camera.paneCamera('rig').zoom).toBe(1);
+        camera.zoomCamera(1.25,'rig');
+        expect(el('rig-root').style.transform).toBe('scale(1.25)');
+        Object.assign(el('rig-viewport'),{clientWidth:320,clientHeight:240});camera.fitCamera();
+        expect(camera.numericView().cameras.rig!.viewport).toEqual({width:320,height:240});
+        expect(camera.paneCamera('rig').zoom).toBe(1.25);
+        camera.fitActiveCamera('rig'); expect(camera.paneCamera('rig').zoom).toBe(2.25);
+        expect(image).toEqual({width:128,height:96,naturalWidth:128,naturalHeight:96});
+        expect(renders).toBeGreaterThan(0);
+    });
+
+    test('#605 owner question progress distinguishes incomplete, complete and delegated answers without changing option labels', () => {
+        const set = screenAQuestion.set;
+        expect(interviewAnswerState(set,[])).toBe('unanswered');
+        expect(interviewAnswerState(set,['auto',undefined])).toBe('unanswered');
+        expect(interviewAnswerState(set,['recommended','recommended'])).toBe('answered');
+        expect(interviewAnswerState(set,['other','recommended'])).toBe('answered');
+        expect(interviewAnswerState(set,['auto','recommended'])).toBe('delegated');
+        expect(set.asks[0]!.options.map(option => option.label)).toEqual(['Original label','Alternative','Other','Auto']);
+    });
+
     test('#605 literal old SELECT draft restores radios and resubmits exact values and verbatim words in EN/KO', async () => {
         const question = structuredClone(screenAQuestion);
         const store = new Map<string,string>();
@@ -2925,7 +2994,8 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
 
             for(const language of ['ko','en'] as const){
                 i18nModule.setLanguagePreference(language);
-                expect(form.querySelector('[data-job-interview-answered]')!.textContent).toBe(i18nModule.t('job.picks.answered',[2,2]));
+                expect(form.querySelector('[data-job-interview-answered]')!.textContent).toBe(i18nModule.t('job.picks.answered',[0,2]));
+                expect(s.workspace.querySelector('nav')!.querySelector('p')!.textContent).toBe(i18nModule.t('interview.progress',[0,1]));
                 expect(groups[0]!.querySelector('b')!.textContent).toBe(i18nModule.t('interview.recommended'));
                 expect(groups[0]!.querySelector('[role=status]')!.textContent).toBe(i18nModule.t('interview.otherPending'));
                 expect(groups[1]!.querySelector('[role=status]')!.textContent).toBe(i18nModule.t('interview.autoPending'));
@@ -2941,6 +3011,8 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(persisted.forms[0].controls.filter((input:any)=>input.name.startsWith('choice.'))).toEqual([oldControls[0],oldControls[2]]);
             await form.onsubmit?.({preventDefault(){}});
             expect(JSON.stringify(s.outgoingSubmits[0]!.body.value)).toBe(JSON.stringify(expected));
+            expect(s.workspace.querySelector('nav')!.querySelector('p')!.textContent).toBe(i18nModule.t('interview.progress',[1,1]));
+            expect(s.workspace.querySelector('nav')!.textContent).toContain(i18nModule.t('interview.delegated'));
             // A fresh ask is unselected, even for the recommended option.
             const fresh={...ask,askId:'unselected'};s.fixture.pending(fresh,4);s.window.event(s.fixture.events.at(-1)!);
             const freshForm=s.workspace.querySelector('form[data-job-ask="unselected"]')!;
@@ -4813,7 +4885,7 @@ describe('C4 async source and host ownership', () => {
 
 test('C4 base inspection resources are disposed even when workspace cleanup throws', async () => {
     const text = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
-    const start = text.indexOf('            prepared.dispose = () =>');
+    const start = text.indexOf('            prepared.dispose = () => {try {panel.dispose?.();}');
     const end = text.indexOf('\n', start);
     const prepared = {dispose() {}};
     let disposed = 0;

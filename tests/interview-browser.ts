@@ -94,8 +94,8 @@ async function sceneContextMode(destination: string | undefined) {
         for (const language of ['en', 'ko'] as const) {
           const url = new URL(server.url); url.searchParams.set('lang', language);
           await browser.goto(url.href);
-          await waitFor('!!document.querySelector("main select")');
-          const selected: number = await browser.evaluate<number>(`(()=>{const picker=document.querySelector('main select');picker.selectedIndex=[...picker.options].findIndex(option=>option.text.includes(' · review551-scene-current'));picker.dispatchEvent(new Event('change'));return picker.selectedIndex;})()`);
+          await waitFor('!!document.querySelector("[data-interview-question]")');
+          const selected: number = await browser.evaluate<number>(`(()=>{const rows=[...document.querySelectorAll('[data-interview-question]')];const index=${opened.questions.findIndex(entry => entry.set.id === 'review551-scene-current')};rows[index]?.click();return index;})()`);
           assert(selected >= 0);
           assert.equal(await browser.evaluate('document.documentElement.lang'), language);
           assert.equal(await browser.evaluate('document.querySelector("form > fieldset").disabled'), !question.editable);
@@ -110,7 +110,7 @@ async function sceneContextMode(destination: string | undefined) {
           }
           if (name === 'current') assert(question.images.length > 0);
           for (const image of question.images) {
-            await browser.evaluate(`[...document.querySelectorAll('aside button')].find(button=>button.textContent===${JSON.stringify(image.name)}).click()`);
+            await browser.evaluate(`[...document.querySelectorAll('.interview-image-tabs button')].find(button=>button.textContent===${JSON.stringify(image.name)}).click()`);
             await waitFor('document.querySelector("aside img")?.naturalWidth > 0');
             const source: string = await browser.evaluate<string>('document.querySelector("aside img").src');
             assert.equal(digest(Buffer.from(await (await fetch(source)).arrayBuffer())), image.ref.sha256);
@@ -169,12 +169,12 @@ const navigate = async (launch: string, lang: string, setId: string) => {
   const url = new URL(launch); url.searchParams.set('lang',lang);
   url.searchParams.set('visit',String(++navigation));
   await browser.goto(url.href);
-  await until('!!document.querySelector("main select")');
-  await browser.evaluate(`(()=>{const s=document.querySelector('main select');s.selectedIndex=[...s.options].findIndex(o=>o.text.includes(${JSON.stringify(' · ' + setId)}));s.dispatchEvent(new Event('change'));})()`);
+  await until('!!document.querySelector("[data-interview-question]")');
+  await browser.evaluate(`(()=>{const row=[...document.querySelectorAll('[data-interview-set]')].find(node=>node.dataset.interviewSet===${JSON.stringify(setId)});if(!row)throw new Error('INTERVIEW_QUESTION_ROW_MISSING');row.click();})()`);
   await until('document.querySelector("aside img")?.naturalWidth > 0');
 };
 const selectTorso = async () => {
-  await browser.evaluate(`[...document.querySelectorAll('aside button')].find(button=>button.textContent==='torso').click()`);
+  await browser.evaluate(`[...document.querySelectorAll('.interview-image-tabs button')].find(button=>button.textContent==='torso').click()`);
   await until('document.querySelector("aside img[alt=torso]")?.naturalWidth > 0');
 };
 const readSet = async (root: string, id: string) => {
@@ -215,7 +215,7 @@ try {
     assert.equal(await browser.evaluate('document.querySelector("form [role=status]").textContent'),
       lang==='en'?'Historical answer':'이전 답변');
     const options = await verifyOptions(historyRoot,'example-bones');
-    const names = await browser.evaluate<string[]>('[...document.querySelectorAll("aside button")].map(button=>button.textContent)');
+    const names = await browser.evaluate<string[]>('[...document.querySelectorAll(".interview-image-tabs button")].map(button=>button.textContent)');
     const {snapshot} = await readSet(historyRoot,'example-bones');
     const parts = snapshot.context.parts as {path:string;files:{path:string;sha256:string}[]};
     const manifestPath = parts.path + '/parts.json';
@@ -225,7 +225,7 @@ try {
     assert.deepEqual(names,manifest.parts.map(part=>part.name));
     const images = [];
     for (const {name,w,h} of manifest.parts) {
-      await browser.evaluate(`[...document.querySelectorAll('aside button')].find(button=>button.textContent===${JSON.stringify(name)}).click()`);
+      await browser.evaluate(`[...document.querySelectorAll('.interview-image-tabs button')].find(button=>button.textContent===${JSON.stringify(name)}).click()`);
       await until('document.querySelector("aside img")?.naturalWidth > 0');
       const src = await browser.evaluate<string>('document.querySelector("aside img").src');
       const served = digest(Buffer.from(await (await fetch(src)).arrayBuffer()));
@@ -241,8 +241,8 @@ try {
     await selectTorso();
     await writeFile(join(artifacts,'historical-parts-'+lang+'.png'),await browser.screenshot());
     await navigate(history.url,lang,'example-reference');
-    assert.equal(await browser.evaluate('document.querySelectorAll("aside button").length'),1);
-    assert.equal(await browser.evaluate('document.querySelector("aside p").textContent'),lang==='en'?'This set has no bound separated parts.':'이 세트에 바인딩된 분리 파츠가 없습니다.');
+    assert.equal(await browser.evaluate('document.querySelectorAll(".interview-image-tabs button").length'),1);
+    assert.equal(await browser.evaluate('document.querySelector("aside p").textContent'),lang==='en'?'There are no part images linked to this question.':'이 질문에 연결된 파츠 그림이 없어요');
     await writeFile(join(artifacts,'direction-source-'+lang+'.png'),await browser.screenshot());
     results.push({lang, ...options,images});
   }
@@ -302,7 +302,7 @@ try {
     await selectTorso();
     await browser.evaluate(`(()=>{const field=document.querySelector('header select');field.value=${JSON.stringify(lang==='en'?'ko':'en')};field.dispatchEvent(new Event('change'));})()`);
     assert.equal(await browser.evaluate(status),lang==='en'?'저장하지 않은 변경 사항이 있습니다.':'Unsaved changes.');
-    await browser.evaluate(`(()=>{const field=document.querySelector('main select');const previous=field.selectedIndex;field.selectedIndex=0;field.dispatchEvent(new Event('change'));const restored=document.querySelector('main select');restored.selectedIndex=previous;restored.dispatchEvent(new Event('change'));})()`);
+    await browser.evaluate(`(()=>{const previous=document.querySelector('[data-interview-question][aria-current=step]').dataset.interviewQuestion;document.querySelector('[data-interview-question]').click();[...document.querySelectorAll('[data-interview-question]')].find(row=>row.dataset.interviewQuestion===previous).click();})()`);
     assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(noteField)}).value`),note+' edited');
     assert.equal(await browser.evaluate(status),lang==='en'?'저장하지 않은 변경 사항이 있습니다.':'Unsaved changes.');
     await browser.evaluate(`(()=>{const field=document.querySelector('header select');field.value=${JSON.stringify(lang)};field.dispatchEvent(new Event('change'));})()`);

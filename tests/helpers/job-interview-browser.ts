@@ -664,9 +664,18 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                 await page.setViewport(sample.width, sample.height);
                 if (sample.phase === 'initial')
                     await page.goto(owner.href);
-                await wait(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector + ' fieldset')}).disabled`);
+                await wait(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector + ' fieldset')}).disabled && document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().width>0`);
                 assert.equal(await page.evaluate(`document.querySelectorAll(${JSON.stringify(selector + ' input[type=radio]:checked')}).length`), 0);
                 const geometry = await page.evaluate<any>(`(()=>{const form=document.querySelector(${JSON.stringify(selector)}),workspace=document.querySelector('.job-inspection');const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};return {forms:rect(form.closest('[data-job-forms]')),workspace:rect(workspace),reason:[...form.querySelectorAll('.interview-option b')].map(n=>n.textContent),tabs:[...workspace.querySelectorAll('.interview-image-tabs button')].map(n=>n.textContent),radios:[...form.querySelectorAll('input[type=radio]')].map(n=>({name:n.name,value:n.value,checked:n.checked})),source:form.querySelector('.job-source').textContent};})()`);
+                Object.assign(geometry, await page.evaluate(`(()=>{const rows=[...document.querySelectorAll('[data-interview-question]')];
+                    const source=document.querySelector(${JSON.stringify(selector + ' .job-source')});
+                    return {questionRows:rows.map(node=>({text:node.textContent,title:node.querySelector('strong')?.textContent,current:node.getAttribute('aria-current')})),
+                        sourceDetailsClosed:source.closest('details')?.open===false,
+                        emptyHistory:[...document.querySelectorAll('[data-job-interview-diagnostics] summary')].some(node=>node.textContent===${JSON.stringify((language === 'ko' ? koCatalog : enCatalog)['interview.history'])}&&node.parentElement.children.length===1)};})()`));
+                assert.ok(geometry.questionRows.length > 0, 'ordered question navigation is visible');
+                assert.deepEqual(geometry.questionRows.map((row:any)=>row.title),interviewMetadata.questions.map((item:any)=>item.set.asks[0]?.prompt ?? (language === 'ko' ? koCatalog : enCatalog)['interview.question']),'questionnaire titles preserve admitted order and original words');
+                assert.equal(geometry.sourceDetailsClosed,true,'technical source metadata starts inside a closed disclosure');
+                assert.equal(geometry.emptyHistory,false,'empty historical answer heading is absent');
                 assert.ok(geometry.source.includes(publication.source.sourceHash));
                 assert.ok(geometry.reason.length > 0);
                 assert.deepEqual(geometry.tabs, imageMapping.map((image: any) => image.name));
@@ -678,7 +687,7 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                 }
                 for (let index = 0; index < geometry.tabs.length; index++) {
                     await page.evaluate(`document.querySelectorAll('.interview-image-tabs button')[${index}].click()`);
-                    await wait(`document.querySelector('.interview-image-preview img')?.complete && document.querySelector('.interview-image-preview img').naturalWidth>0`);
+                    await wait(`document.querySelector('.interview-image-preview img')?.complete && document.querySelector('.interview-image-preview img').naturalWidth>0 && Number(document.querySelector('.interview-image-preview').dataset.interviewZoom)>0`);
                     const image = await page.evaluate<any>(`(()=>{
                         const art=document.querySelector('.interview-images'),img=art.querySelector('img');
                         const target=${JSON.stringify(mode)}==='package'?img.parentElement:art;
@@ -742,6 +751,15 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                         matchedROI: pixels.leftROI, expectedRgba: color[0].split(',').map(Number) });
                     await writeFile(join(output, mode + '-' + sample.width + '-' + sample.phase + '-image' + index + '.png'), shot);
                     assert.ok(pixels.inBounds && pixels.leftROI.backgroundPixels > 0);
+                    const cameraInteraction = await page.evaluate(`(()=>{const art=document.querySelector('.interview-images'),view=art.querySelector('.interview-image-preview');
+                        art.querySelector('[data-interview-view=native-one]').click();const native=Number(view.dataset.interviewZoom);
+                        art.querySelector('[data-interview-view=zoom-in]').click();const zoomed=Number(view.dataset.interviewZoom);
+                        art.querySelector('[data-interview-view=fit]').click();const fitted=Number(view.dataset.interviewZoom);
+                        return {native,zoomed,fitted};})()`);
+                    imageObservation.cameraInteraction = cameraInteraction;
+                    assert.equal(cameraInteraction.native,1,'shared native scale control reaches 1:1');
+                    assert.equal(cameraInteraction.zoomed,1.25,'shared zoom control changes the native camera');
+                    assert.ok(cameraInteraction.fitted>0,'shared Fit returns a usable camera');
                     assert.equal(image.selected, 'true');
                     assert.ok(image.image.left >= image.preview.left - 1 && image.image.right <= image.preview.right + 1 && image.image.top >= image.preview.top - 1 && image.image.bottom <= image.preview.bottom + 1);
                     if (mode === 'package') {
@@ -759,6 +777,26 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                 await control!('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: virtual });
                 await control!('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: virtual });
             };
+            const currentQuestionIndex = interviewMetadata.questions.findIndex((item:any)=>item.ref.sha256===question.ref.sha256);
+            const nextQuestionIndex = (currentQuestionIndex + 1) % interviewMetadata.questions.length;
+            await page.evaluate(`document.querySelectorAll('[data-interview-question]')[${currentQuestionIndex}].focus()`);
+            await key('ArrowDown','ArrowDown',40);
+            const questionNavigation = await page.evaluate<any>(`(()=>{const row=document.querySelector('[data-interview-question][aria-current=step]');
+                const retained=document.querySelector('.interview-retained-host:not([hidden])');
+                return {index:Number(row.dataset.interviewQuestion),focused:document.activeElement===row,
+                    readonly:retained?retained.querySelector('fieldset')?.disabled:null,
+                    submitControls:retained?retained.querySelectorAll('button[type=submit]').length:0,text:retained?.textContent??''};})()`);
+            Object.assign(observations[mode] as object,{questionNavigation});
+            assert.equal(questionNavigation.index,nextQuestionIndex,'ArrowDown opens the next ordered question');
+            assert.equal(questionNavigation.focused,true,'question keyboard navigation keeps actual focus on its new row');
+            if(interviewMetadata.questions.length>1){
+                assert.equal(questionNavigation.readonly,true,'a retained question without a current ask is read-only');
+                assert.equal(questionNavigation.submitControls,0,'retained question has no alternate submission path');
+                const original=interviewMetadata.questions[nextQuestionIndex].answer?.verbatim;
+                if(typeof original==='string')assert.ok(questionNavigation.text.includes(original),'historical words are verbatim');
+            }
+            await page.evaluate(`document.querySelectorAll('[data-interview-question]')[${currentQuestionIndex}].click()`);
+            await wait(`document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().width>0`);
             await page.evaluate(`document.querySelector(${JSON.stringify(selector + ' input[type=radio]')}).focus()`);
             await key('ArrowDown', 'ArrowDown', 40);
             assert.equal(await page.evaluate(`document.querySelectorAll(${JSON.stringify(selector + ' input[type=radio]:checked')}).length`), 1);
@@ -823,9 +861,14 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
             assert.equal(await page.evaluate(`document.querySelector(${JSON.stringify(selector + ' textarea[name=note]')}).value`), exactNote);
             await page.goto('about:blank');
             await page.goto(owner.href);
-            await wait(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector + ' fieldset')}).disabled`);
+            await wait(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector + ' fieldset')}).disabled && document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().width>0`);
             persistence.after = await readDraft();
             assert.equal(await page.evaluate(`document.querySelector(${JSON.stringify(selector + ' textarea[name=note]')}).value`), exactNote);
+            const progress = {before:await page.evaluate<any>(`(()=>{const nav=document.querySelector('.interview-navigation');const text=nav.querySelector('p').textContent;
+                const counts=/^(\\d+)\\/(\\d+)/.exec(text);return {text,count:Number(counts?.[1]),total:Number(counts?.[2]),state:nav.querySelector('[aria-current=step] span').textContent};})()`),after:null as any};
+            Object.assign(observations[mode] as object,{progress});
+            const copy = language === 'ko' ? koCatalog : enCatalog;
+            assert.equal(progress.before.state,copy['interview.currentState'].replace('{0}',copy['interview.unanswered']),'restored local picks remain unanswered until normal Submit');
             await page.evaluate(`document.querySelector(${JSON.stringify(selector)}).requestSubmit()`);
             let act: any;
             for (let tick = 0; tick < 200; tick++) {
@@ -840,6 +883,10 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
             const fetched = await fetchedResponse.json();
             assert.equal(fetched.ok, true);
             assert.deepEqual(fetched.value.value, expected);
+            const delegatedState=copy['interview.currentState'].replace('{0}',copy['interview.delegated']);
+            await wait(`document.querySelector('.interview-navigation [aria-current=step] span').textContent===${JSON.stringify(delegatedState)}`);
+            progress.after=await page.evaluate(`document.querySelector('.interview-navigation p').textContent`);
+            assert.equal(progress.after,copy['interview.progress'].replace('{0}',String(progress.before.count+1)).replace('{1}',String(progress.before.total)),'normal finalized act increments saved-answer progress');
             await readbackInputs(managed);
             Object.assign(observations[mode] as object, { actId: act.actId, expected, sourceFiles: before });
             await closeManaged(managedHosts[managedHosts.length - 1]!);

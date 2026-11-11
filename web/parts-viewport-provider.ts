@@ -1,8 +1,8 @@
 /** Native image policy for the canonical pair. Camera gestures and writes belong to viewport-controller. */
-import {createViewportController,createViewportState,type CameraTarget,type ViewportProvider} from './viewport-controller.ts';
+import {createViewportController,createViewportState,type CameraTarget,type ViewportProvider,type ViewportController} from './viewport-controller.ts';
 import {t} from './i18n.ts';
 
-export function createPartsViewport(host:{el:ViewportProvider['el'];canvas:HTMLCanvasElement;message:ViewportProvider['message'];reference:()=>HTMLCanvasElement|null;frameSize:(target:CameraTarget)=>{w:number;h:number}|null}){
+export function createPartsViewport(host:{el:ViewportProvider['el'];canvas:HTMLCanvasElement|HTMLImageElement;message:ViewportProvider['message'];reference:()=>HTMLCanvasElement|HTMLImageElement|null;frameSize:(target:CameraTarget)=>{w:number;h:number}|null;panes?:ViewportProvider['panes'];rendered?:(controller:ViewportController)=>void}){
  const state=createViewportState();state.cameraSync=false;
  let dimensionProbe:HTMLCanvasElement|undefined;
  const ordinaryExtent=(value:number)=>Number.isInteger(value)&&value>=0&&value<=0x7fffffff;
@@ -14,7 +14,7 @@ export function createPartsViewport(host:{el:ViewportProvider['el'];canvas:HTMLC
   return {width:probe.width,height:probe.height};
  };
  const provider:ViewportProvider={el:host.el,message:host.message,nativeScale:true,
- panes:(['rig','reference'] as const).map(target=>({target,viewport:host.el(target+'-viewport'),pane:host.el(target+'-pane')})),
+ panes:host.panes??(['rig','reference'] as const).map(target=>({target,viewport:host.el(target+'-viewport'),pane:host.el(target+'-pane')})),
  geometry:target=>{
   const declared=host.frameSize(target);
   const size=declared?canvasSize(declared):target==='rig'?host.canvas:host.reference();
@@ -26,7 +26,7 @@ export function createPartsViewport(host:{el:ViewportProvider['el'];canvas:HTMLC
  render:controller=>{
   // Translated controls can wrap the toolbar and resize its sibling panes.
   controller.renderCameraControls();
-  for(const target of ['rig','reference'] as const){
+  for(const {target} of provider.panes!){
    const frame=controller.paneFrame(target);if(!frame)continue;
    const c=controller.paneCamera(target),center=c.center??frame.center;
    const root=host.el(target==='rig'?'rig-root':'reference-content');
@@ -35,6 +35,7 @@ export function createPartsViewport(host:{el:ViewportProvider['el'];canvas:HTMLC
    root.style.transform=`scale(${c.zoom})`;
    if(target==='rig'){state.rigScale=c.zoom;state.displayedCenter={...center};}
   }
+  host.rendered?.(controller);
  },
  renderControls:controller=>{const zoom=controller.paneCamera(controller.availableCamera()??'rig').zoom;host.el('zoom-value').textContent=zoom===1?t('1:1'):`${(zoom*100).toFixed(1)}%`;host.el('native-one').setAttribute('aria-pressed',String(zoom===1));(host.el('camera-sync') as HTMLInputElement).checked=state.cameraSync;host.el('fit').textContent=t('Fit');}
  };
