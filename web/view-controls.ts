@@ -136,9 +136,6 @@ export function inspectionViewSwitch(onChange?:((id:string)=>void),partsSetup=fa
 }
 export type ViewControlsOptions = {layout:'rigStep1';viewSwitch:ViewSwitchConfig} | {
  layout:'legacyCompareStep3';
-} | {
- layout:'legacyCompiledJobStep5';
- inputLabel:(key:string,input:HTMLElement)=>HTMLElement;
 };
 /** One creation site for each common control; hosts retain adjacent tools and camera/event binding. */
 export function createViewControls(options:ViewControlsOptions) {
@@ -148,8 +145,7 @@ export function createViewControls(options:ViewControlsOptions) {
  const fit=actionButton(t(compare?'Fit synchronized views':'Fit'),null);fit.id='fit';
  const value=panelMake(rig||compare?'output':'span',{id:compare?'zoom-label':'zoom-value',textContent:rig||compare?'100%':''});
  const sync=panelMake('input',{id:'camera-sync',type:'checkbox'});
- const syncLabel=options.layout==='legacyCompiledJobStep5'?options.inputLabel('job.cameraSync',sync):labelledControl(t('Sync cameras'),sync,true);
- if(options.layout==='legacyCompiledJobStep5'){zoomIn.dataset.jobText='job.zoomIn';zoomOut.dataset.jobText='job.zoomOut';fit.dataset.jobText='Fit';}
+ const syncLabel=labelledControl(t('Sync cameras'),sync,true);
  if(rig||compare){sync.checked=true;syncLabel.className='camera-sync';zoomIn.setAttribute('aria-label',t(compare?'Zoom active view in':'Zoom in'));zoomOut.setAttribute('aria-label',t(compare?'Zoom active view out':'Zoom out'));}
  if(compare)for(const button of [zoomIn,zoomOut,fit])button.removeAttribute('type');
  const zoomButtons=[zoomIn,zoomOut,fit];

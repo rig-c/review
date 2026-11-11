@@ -678,7 +678,6 @@ test('#671 common group composition retains each finite host tag, class, child o
    if(layout==='legacyCompareStep3'){expect(group.children[0]).toBe(controls.syncLabel);expect(controls.nativeOne).toBeNull();expect(controls.viewSwitch).toBeNull();}
    else expect(group.children).toContain(controls.nativeOne);
   }
-  const controls=createViewControls({layout:'legacyCompiledJobStep5',inputLabel:(_key,input)=>input});expect(controls.zoomGroup).toBeNull();expect(controls.zoomButtons.map(button=>button.id)).toEqual(['zoom-in','zoom-out','fit']);
  }finally{if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });
 

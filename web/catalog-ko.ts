@@ -115,7 +115,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.plan.produces": "산출물",
   "job.plan.bar": "기준",
   "job.plan.rests_on": "근거 답변",
-  "job.plan.noText": "단계 설명을 읽을 수 없어 ID와 해시만 표시합니다.",
+  "job.plan.noText": "단계 설명을 읽을 수 없습니다.",
   "job.plan.field.absent": "이 기록에 제공되지 않았습니다.",
   "job.plan.field.invalid": "제공된 필드의 형식을 지원하지 않습니다.",
   "job.plan.field.limit": "제공된 필드가 표시 한도를 초과합니다.",

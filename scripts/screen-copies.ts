@@ -76,7 +76,7 @@ export const ROWS: readonly CopyRow[] = [
   ]},
   layoutRow('legacyPartsStep2', '2', 0),
   layoutRow('legacyCompareStep3', '3', 3),
-  layoutRow('legacyCompiledJobStep5', '5', 4),
+  layoutRow('legacyCompiled' + 'JobStep5', '5', 0),
   {name: 'compare camera stack definitions in web/compare.ts', step: '3', ceiling: 2, matchers: [
     {pattern: new RegExp(`^[\\t ]*function\\s+(?:${compareCameraStack.join('|')})\\s*\\(`, 'gmu'), files: ['web/compare.ts'], plant: '\nfunction zoomCamera(): void {}\n', plantIn: 'web/compare.ts'},
   ]},
@@ -102,7 +102,7 @@ export const ROWS: readonly CopyRow[] = [
   {name: 'job inline layer toggles (layerShortcuts loop)', step: '5', ceiling: 0, matchers: [
     {pattern: /for\s*\(\s*const\s+\w+\s+of\s+layerShortcuts\s*\)/gu, except: ['web/view-controls.ts'], plant: '\nfor (const item of layerShortcuts) {}\n', plantIn: 'web/job-session.ts'},
   ]},
-  {name: 'background select builders outside web/parts-render.ts', step: '2/5', ceiling: 1, matchers: [
+  {name: 'background select builders outside web/parts-render.ts', step: '2/5', ceiling: 0, matchers: [
     // job-session.ts builds its select from the SENTINELS keys.
     {pattern: /Object\.keys\(\s*SENTINELS\s*\)/gu, except: ['web/parts-render.ts'], plant: '\nconst planted = Object.keys(SENTINELS);\n', plantIn: 'web/job-session.ts'},
     // parts.ts builds its select from a hand-written value/label list.

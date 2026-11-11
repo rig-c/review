@@ -163,3 +163,68 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   expect(restored.form.querySelectorAll('select')).toHaveLength(0);
  }finally{inspection?.dispose();dom.restore();await f.close();}
 });
+
+
+// HQ 89f85831: projected prose is the label; source identities stay in tooltips.
+for (const language of ['en','ko'] as const) for (const rule of [1,2,3,4,5,6]) test(`#756 human text/title rule ${rule} (${language})`,async()=>{
+ const i18n=await import('../web/i18n.ts'),preference=i18n.getLanguagePreference(),link=i18n.getLinkLanguage();
+ i18n.setLinkLanguage(null);i18n.setLanguagePreference(language);const h=await harness();
+ try{
+  const prepared=await h.screen.prepare(h.f.display,new AbortController().signal),inspection=prepared!.record!.inspection;
+  const source=h.f.ask.source,plan=source.plan!,before=JSON.stringify(source),original=inspection.metadata.planText!;
+  if(original.status!=='projected')throw new Error('Expected projected fixture');
+  const descriptions=['  Inspect layout <literal> 한글\n','Inspect weights'];
+  const projection={...original,steps:original.steps.map((row,index)=>({...row,does:descriptions[index]!,rests_on:[plan.steps[1]!.id,'external producer text',plan.steps[0]!.id],issues:row.issues.filter(issue=>!['does','rests_on'].includes(issue.field))}))};
+  inspection.metadata.planText=projection;
+  const node=((tag:string,key?:string)=>{const element=h.dom.document.createElement(tag);if(key)element.textContent=i18n.t(key);return element;}) as JobFormDependencies['node'];
+  const helpers=createJobFormHelpers(node,i18n.t),deps={...h.deps,node,translate:i18n.t,helpers:{...helpers,jobCheckpointContext,assertJobAskSource:h.deps.helpers.assertJobAskSource}};
+  if(rule<=3){
+   const list=helpers.planTextList(plan,projection,rule===1?plan.steps[1]!.id:undefined);
+   for(const step of plan.steps){expect(list.textContent).not.toContain(step.id);expect(list.textContent).not.toContain(step.hash);}
+   expect(list.querySelector('[data-job-plan-field="does"]')).toBeNull();
+   const summaries=[...list.querySelectorAll('summary')];
+   if(rule===1){expect(summaries).toHaveLength(1);expect(summaries[0]!.textContent).toBe(descriptions[1]!);expect(summaries[0]!.title).toContain(plan.steps[1]!.id);}
+   if(rule===2)for(const [index,summary]of summaries.entries()){expect(summary.textContent).toBe(descriptions[index]!);expect(summary.title).toContain(plan.steps[index]!.id);expect(summary.title).toContain(plan.steps[index]!.hash);}
+   if(rule===3){const entries=[...list.querySelector('[data-job-plan-field="rests_on"]')!.querySelectorAll('li')];expect(entries.slice(0,3).map(item=>item.textContent)).toEqual([descriptions[1]!,'external producer text',descriptions[0]!]);expect(entries[0]!.title).toBe(plan.steps[1]!.id);expect(entries[2]!.title).toBe(plan.steps[0]!.id);}
+  }else if(rule===4){
+   const form=formFor(h.f.ask,inspection,deps).form,heading=form.querySelector('h3')!;
+   expect(heading.textContent).toBe(descriptions[0]!);expect(heading.title).toBe((h.f.ask.subject as {checkpointId:string}).checkpointId);
+   expect(form.textContent).not.toContain(plan.steps[0]!.id);expect(form.textContent).not.toContain(plan.steps[0]!.hash);
+  }else if(rule===5){
+   for(const kind of ['signoff','reopen'] as const){const entry=formFor({...h.f.ask,subject:{kind,stage:'plan-approved'}},inspection,deps);expect(entry.form.textContent).not.toContain('plan-approved');expect(entry.fieldset.title).toBe('plan-approved');expect(entry.read()).toMatchObject({stage:'plan-approved',words:''});}
+  }else{
+   const form=formFor(h.f.ask,inspection,deps).form,line=form.querySelector<HTMLElement>('.job-source')!;
+   expect(line.textContent).toBe(h.f.display.publication.label);expect(line.title).toBe(source.sourceHash);
+   for(const raw of [source.sourceHash,source.projectHash!,...plan.steps.map(item=>item.hash)])expect(form.textContent).not.toContain(raw);
+  }
+  expect(JSON.stringify(source)).toBe(before);inspection.dispose();
+ }finally{await h.close();i18n.setLinkLanguage(link);i18n.setLanguagePreference(preference);}
+});
+
+for(const absence of ['absent','invalid','limit','no-issue','no-projection'] as const)test(`#756 missing plan prose uses existing ${absence} copy and refreshes checkpoint headings in place`,async()=>{
+ const i18n=await import('../web/i18n.ts'),preference=i18n.getLanguagePreference(),link=i18n.getLinkLanguage();
+ i18n.setLinkLanguage(null);i18n.setLanguagePreference('en');const h=await harness();let unbind:(()=>void)|undefined;
+ try{
+  const prepared=await h.screen.prepare(h.f.display,new AbortController().signal),inspection=prepared!.record!.inspection;
+  const checkpointId=(h.f.ask.subject as {checkpointId:string}).checkpointId,plan=h.f.ask.source.plan!;
+  const original=inspection.metadata.planText!;if(original.status!=='projected')throw new Error('Expected projected fixture');
+  inspection.metadata.planText=absence==='no-projection'?undefined:{...original,steps:original.steps.map((row,index)=>{const {does,issues,...rest}=row;return {...rest,rests_on:[plan.steps[1-index]!.id],issues:[...issues.filter(issue=>!['does','rests_on'].includes(issue.field)),...absence==='no-issue'?[]:[{field:'does' as const,reason:absence as 'absent'|'invalid'|'limit'}]]};})};
+  // A historical runtime row can exist without a title, although current manifests require one.
+  inspection.metadata.manifest={checkpoints:[{id:checkpointId}]} as NonNullable<typeof inspection.metadata.manifest>;
+  const node=((tag:string,key?:string)=>{const element=h.dom.document.createElement(tag);if(key){element.dataset.jobText=key;element.textContent=i18n.t(key);}return element;}) as JobFormDependencies['node'];
+  const deps={...h.deps,node,translate:i18n.t,helpers:{...createJobFormHelpers(node,i18n.t),jobCheckpointContext,assertJobAskSource:h.deps.helpers.assertJobAskSource}};
+  const form=formFor(h.f.ask,inspection,deps).form,heading=form.querySelector('h3')!,container=h.dom.document.createElement('div');container.append(form);
+  inspection.metadata.manifest.checkpoints[0]!.title='Existing human title';const named=formFor(h.f.ask,inspection,deps).form,namedHeading=named.querySelector('h3')!;container.append(named);
+  const source=await readFile(new URL('../web/job-session.ts',import.meta.url),'utf8'),subscription=source.split('\n').find(line=>line.includes('const localize=i18n.onLanguageChange('))!;
+  expect(subscription).toBeDefined();unbind=new Function('i18n','t','host',new Bun.Transpiler({loader:'ts'}).transformSync(subscription+';return localize;'))(i18n,i18n.t,container);
+  for(const language of ['ko','en'] as const){
+   i18n.setLanguagePreference(language);const reason=absence==='no-issue'||absence==='no-projection'?'absent':absence,copy=i18n.t('job.plan.field.'+reason);
+   expect(form.querySelector('h3')).toBe(heading);expect(heading.textContent).toBe(copy);expect(heading.title).toBe(checkpointId);
+   expect(namedHeading.textContent).toBe('Existing human title');expect(namedHeading.title).toBe(checkpointId);
+   for(const summary of form.querySelectorAll('summary')){expect(summary.textContent).toBe(copy);expect(summary.title).toContain(plan.steps[0]!.id);expect(summary.title).toContain(plan.steps[0]!.hash);}
+   for(const rest of form.querySelector('[data-job-plan-field="rests_on"]')?.querySelectorAll('li')??[]){expect(rest.textContent).toBe(copy);expect(rest.title).toBe(plan.steps[1]!.id);}
+   for(const step of plan.steps){expect(form.textContent).not.toContain(step.id);expect(form.textContent).not.toContain(step.hash);}
+  }
+  inspection.dispose();
+ }finally{unbind?.();await h.close();i18n.setLinkLanguage(link);i18n.setLanguagePreference(preference);}
+});

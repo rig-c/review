@@ -1,4 +1,4 @@
-import {formFor, jobPublicationRoutes, prepareJobForms, prepareJobInspection, type JobForm, type JobFormDependencies, type JobPreparedInspection} from './job-session.ts';
+import {formFor, jobCheckpointContext, jobPublicationRoutes, prepareJobForms, prepareJobInspection, type JobForm, type JobFormDependencies, type JobPreparedInspection} from './job-session.ts';
 import {commentPartsIssues,type PartsIssue} from '../src/parts-comment.ts';
 import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
@@ -24,12 +24,20 @@ export function jobRigScreenAnswers(ask: Pick<PendingAskV3, 'subject'>, checkpoi
   return subject.kind === 'review-verdict' ? subject.stage === 'rig-review' :
     subject.kind === 'checkpoint' && checkpoints.has(subject.checkpointId);
 }
-export function jobRigScreenRoute(display: DisplayPublicationV3, pending: readonly Pick<PendingAskV3, 'publicationId' | 'status' | 'subject'>[],
+export function jobRigScreenRoute(display: DisplayPublicationV3, pending: readonly PendingAskV3[],
   checkpoints: ReadonlySet<string>): boolean {
   const id = display.publication.publicationId;
   if('selector' in display.publication.source&&display.publication.source.selector?.kind==='draft'&&display.publication.source.parts)return true;
-  return jobRigScreenSubject(display.publication.source) &&
-    pending.every(ask => ask.publicationId !== id || ask.status !== 'pending' || jobRigScreenAnswers(ask, checkpoints) || ask.subject.kind === 'signoff' || ask.subject.kind === 'interview-picks');
+  return jobRigScreenSubject(display.publication.source) && pending.every(ask => {
+    if (ask.publicationId !== id || ask.status !== 'pending') return true;
+    if (ask.subject.kind === 'checkpoint') {
+      try {
+        prepareJobForms(display, [ask], () => jobCheckpointContext(ask, []));
+        return true;
+      } catch {return false;}
+    }
+    return jobRigScreenAnswers(ask, checkpoints) || ask.subject.kind === 'signoff' || ask.subject.kind === 'interview-picks';
+  });
 }
 
 export type JobRigScreenDecision =
@@ -74,7 +82,6 @@ export function createJobRigScreen(options: {
   routes(display: DisplayPublicationV3): {entry: string; api(path: string): string};
   readPublication?(publicationId:string,signal:AbortSignal):Promise<JobResult<DisplayPublicationV3>>;
   formDependencies?:JobFormDependencies;
-  legacyRecords?:boolean;
   refusal(error: unknown, fallback?: string): string;
   translate(key: string): string;
   /** Imports the rig composition once the host is set. */
@@ -86,7 +93,7 @@ export function createJobRigScreen(options: {
     if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
     const source = display.publication.source;
     if ('record' in source) {
-      if (!options.formDependencies) {if(options.legacyRecords)return null;throw new Error('JOB_PANEL_UNAVAILABLE');}
+      if (!options.formDependencies) throw new Error('JOB_PANEL_UNAVAILABLE');
       const inspection = await prepareJobInspection(display, signal);
       try {
         const forms = prepareJobForms(display, options.window.state().pending, ask => formFor(ask, inspection, options.formDependencies!));
