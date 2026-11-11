@@ -25,13 +25,40 @@ plan, checkpoint, rig, direction, image review and signoff.
   any number of comments. Each comment can be general or pinned to an image
   point, region, part, frame or checkpoint. Keep pointed image comments through
   `stage-comments.ts` and `parts-comment-crops.ts` with their source-bound evidence.
-  Remove separate memo, note, per-part note, summary and `words` input surfaces.
-  Structured-answer mappings that conflict with this rule require an HQ ruling.
+  Remove separate memo, note, per-part note, summary and `words` feedback input
+  surfaces. Survey answers are a separate input kind. Preserve interview
+  selections, inline Other text and per-question note inputs through the existing
+  interview answer contract. R2 applies to feedback inputs.
 - **R3** Inspection uses the main view's Difference switch to cover all regions.
   Remove separate sidebar key-region checkpoint and evidence panels. Retain the
   supported checkpoint act flow through its existing contract.
+- **R3a** Any main view in rig, comparison, parts, job, interview or package review
+  has a resizable bottom panel directly beneath it. Use one control set in this
+  order: **Zoom in → Zoom out → Fit → 1:1 → View switch**, with the same names and
+  behavior across views. Use the shared viewport implementation and extend it
+  for missing behavior. Keep main-view code shared across screens.
 - **R4** All view areas share zoom, Fit, 1:1 and resize behavior through the existing
   viewport modules. Extend the shared modules for a missing capability.
+- **R5** `web/index.html` is the single web entry for every screen, including rig,
+  comparison, parts, interview, package, job, hub and owner workspaces. Compose
+  these screens from a shared workspace shell, main view (viewport and controls),
+  resizable bottom and side panels, main and secondary toolbars, view switcher,
+  inspector and comments components. Do not introduce a screen through a new
+  HTML page or per-screen server route. Preserve existing public job, hub,
+  language and capability URLs as redirects or routes into the single entry.
+  The owner rules on the shared shell layout before implementation.
+
+The main-view consistency requirement is retained verbatim.
+
+```text
+메인 뷰를 넣을거면 기준을 항상 규일하게 가져가(지침) * 메인뷰 하단 패널 리사이즈 * 뷰전환 기능 통일, * 에인뷰 코드가 하나가 아니라 여러개 복붙인지 확인
+```
+
+The single-entry architecture requirement is retained verbatim.
+
+```text
+뷰는 index.html 단일 진입점 하나고, 컴포넌트 조합으로 화면을 만들어내(ide like) 이거 안되면 진도 빼는거 의미없어, 이미 열린 헬 게이트를 더 활짝 여는 꼴이라고
+```
 
 Act-field and downstream-consumer changes follow the existing HQ approval boundary
 for public contracts. Preserve historical record parsing, source binding and
@@ -58,6 +85,12 @@ The owner's comments clarification is retained verbatim.
 
 ```text
 코멘트가 왜 하나야? 미친거야?
+```
+
+The owner's survey and comment distinction is retained verbatim.
+
+```text
+설문과 코멘트는 다른 종류의 입력이야 / 설문은 여기 어떻게 할까요? 이고 / 코멘트는 유저가 여기 이상하니까 꼬쳐주세요! 라는 의미
 ```
 
 The earlier shared-view requirement is also retained verbatim.
