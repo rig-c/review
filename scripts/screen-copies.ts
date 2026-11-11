@@ -97,7 +97,7 @@ export const ROWS: readonly CopyRow[] = [
   {name: 'job parts and plan fixed columns in web/styles.css', step: '5', ceiling: 2, matchers: [
     {pattern: /grid-template-columns\s*:/gu, files: ['web/styles.css'], cssSelector: /\.job-inspection\[data-job-(?:parts|plan)-workspace\]/u, plant: '\n.job-window .job-inspection[data-job-plan-workspace]{grid-template-columns:1fr 1fr}\n', plantIn: 'web/styles.css'},
   ]},
-  {name: 'job inline layer toggles (layerShortcuts loop)', step: '5', ceiling: 1, matchers: [
+  {name: 'job inline layer toggles (layerShortcuts loop)', step: '5', ceiling: 0, matchers: [
     {pattern: /for\s*\(\s*const\s+\w+\s+of\s+layerShortcuts\s*\)/gu, except: ['web/view-controls.ts'], plant: '\nfor (const item of layerShortcuts) {}\n', plantIn: 'web/job-session.ts'},
   ]},
   {name: 'background select builders outside web/parts-render.ts', step: '2/5', ceiling: 2, matchers: [

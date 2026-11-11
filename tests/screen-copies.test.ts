@@ -49,11 +49,22 @@ for (const row of ROWS) {
   test(`#686 reaching 0 without lowering the ceiling refuses: ${row.name}`, () => {
     const map = zeroed(row);
     expect(countRow(row, map)).toBe(0);
-    expect(failuresOf(map)).toContain(`SCREEN_COPY_CEILING_STALE: ${row.name}: 0 hits, lower its ceiling from ${row.ceiling} to 0 (step ${row.step})`);
-    // The same tree passes that row once its ceiling is lowered to 0.
+    // A synthetic positive ceiling stands for the row before its step lowered it, so this still holds once the row is 0.
+    const stale = {...row, ceiling: Math.max(row.ceiling, 1)};
+    expect(checkScreenCopies(map, [stale])[0]!.failure).toBe(`SCREEN_COPY_CEILING_STALE: ${row.name}: 0 hits, lower its ceiling from ${stale.ceiling} to 0 (step ${row.step})`);
+    // The same tree passes that row once its ceiling is 0.
     expect(checkScreenCopies(map, [{...row, ceiling: 0}])[0]!.failure).toBeNull();
   });
 }
+
+test('#686 a row at 0 with ceiling 0 passes, and one hit on it refuses', () => {
+  const row: CopyRow = {name: 'planted zero row', step: 'x', ceiling: 0, matchers: [{pattern: /plantedCopy/gu, plant: 'plantedCopy', plantIn: 'web/main.ts'}]};
+  expect(checkScreenCopies(new Map([['web/main.ts', '']]), [row])[0]).toMatchObject({current: 0, failure: null});
+  expect(checkScreenCopies(new Map([['web/main.ts', 'plantedCopy']]), [row])[0]!.failure).toBe('SCREEN_COPY_ROSE: planted zero row: 1 > ceiling 0 (step x)');
+  const lowered = ROWS.filter(real => real.ceiling === 0);
+  expect(lowered.length).toBeGreaterThan(0);
+  for (const real of lowered) expect(checkScreenCopies(sources, [real])[0]).toMatchObject({current: 0, failure: null});
+});
 
 test('#686 CLI exits non-zero on a planted tree', () => {
   const dir = mkdtempSync(join(tmpdir(), 'review-screen-copies-'));
