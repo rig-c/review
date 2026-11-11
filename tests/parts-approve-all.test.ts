@@ -1032,3 +1032,71 @@ test('#620 EN/KO stage comment drags save identical regions and native RGBA crop
   await rm(root,{recursive:true,force:true});
  }
 });
+
+// Reader-first rollout: capture stays legacy until Create pins the shared parser.
+test.each([true,false])('#652 assembled comment restores visible layers when recorded=%s',async recorded=>{
+ const root=await mkdtemp(join(tmpdir(),'review-652-'));
+ const dom=partsMountDocument(true);
+ let handle:ReturnType<typeof mountPartsWorkspace>|undefined;
+ try{
+  const {writeComparisonPackage}=await import('./helpers/parts-comparison-package.ts');
+  await writeComparisonPackage(root);
+  const pkg=await loadPartsView(root),sourceHash=verdictSource(pkg).sha256;
+  const images=await Promise.all(pkg.imagePaths.map(path=>loadImage(path)));
+  const items=pkg.items.map(item=>({...item,imageHash:pkg.files.find(file=>file.abs===pkg.imagePaths[item.index])!.sha256}));
+  const data:ViewData={mode:'parts',title:'Visibility restore',sourceHash,rigSize:pkg.rigSize,painting:null,
+   items,pages:[],flags:[],flagSources:[],flagMissing:[],verdictFile:'parts-review.json',verdict:null,verdictStale:null};
+  const slots=dom.makeSlots('visible-layers-652');
+  type Element=InstanceType<typeof dom.FakeElement>;
+  const node=(selector:string)=>slots.hostWrap.querySelector<Element>(selector)!;
+  const tick=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setTimeout(resolve,0));};
+  const source:PartsSource={view:async()=>data,image:async index=>images[index] as unknown as HTMLImageElement,
+   page:async()=>{throw Error('Unexpected atlas image');},painting:()=>null,crop:issue=>preparePartsComment(pkg,issue,false,{sourceHash})};
+  handle=mountPartsWorkspace(slots,source,{initial:()=>[],changed:()=>{},register:()=>{},locked:()=>'open'},{defaultView:'assembled'});
+  await handle.ready;await tick();
+  const visibility=()=>node('[data-pv-visible="front"]');
+  visibility().checked=false;visibility().onchange!();await tick();
+  expect(visibility().checked).toBe(false);
+  let canvas=node('#pv-canvas');const pane=node('#rig-viewport');
+  const pixels=()=>canvas.toDataURL();
+  const savedPixels=pixels();
+  node('#stage-comment').onclick!();
+  const bounds=canvas.getBoundingClientRect(),zoom=bounds.width/canvas.width;
+  const event=(buttons:number,x=15,y=9)=>({button:0,buttons,isPrimary:true,pointerId:652,
+   clientX:bounds.left+x*zoom,clientY:bounds.top+y*zoom,target:pane,preventDefault(){},stopImmediatePropagation(){}});
+  pane.emit('pointerdown',event(1));pane.emit('pointermove',event(1,18,12));
+  await Promise.all([...pane.handlers.get('pointerup')!].map(fn=>fn(event(0,18,12))));
+  const composer=node('.stage-comment-composer');
+  composer.querySelector<Element>('input')!.value='Back part A with front B hidden';
+  await (composer as unknown as HTMLFormElement).onsubmit!({preventDefault(){}} as SubmitEvent);
+  if(handle.issues().length!==1)throw Error('REVIEW_652_CAPTURE '+node('[role="alert"]').textContent);
+  expect(handle.issues()).toHaveLength(1);
+  expect(handle.issues()[0]!.parts.map(part=>part.name)).toEqual(['body']);
+  expect(handle.issues()[0]!.sourceHash).toBe(sourceHash);
+  expect(handle.issues()[0]!.view.mode).toBe('assembled');
+  node('#stage-comment').onclick!();
+  expect(Object.hasOwn(handle.issues()[0]!.view,'visibleLayers')).toBe(false);
+  const saved=handle.issues()[0]!;
+  if(recorded)saved.view.visibleLayers=items.filter(item=>item.name==='body').map(item=>({name:item.name,imageHash:item.imageHash}));
+  const savedBytes=JSON.stringify(saved);
+  handle.dispose();
+  let output:PanelOutput|undefined;
+  handle=mountPartsWorkspace(slots,source,{initial:()=>[saved],changed:()=>{},register:value=>{output=value;},locked:()=>'open'},{defaultView:'assembled'});
+  await handle.ready;await tick();
+  canvas=node('#pv-canvas');
+  expect(visibility().checked).toBe(true);
+  expect(pixels()).not.toBe(savedPixels);
+  await node('.stage-comment-summary').onclick!();await tick();
+  console.log('REVIEW_652_REOPEN '+JSON.stringify({frontVisible:visibility().checked,pixelsRestored:pixels()===savedPixels}));
+  expect(visibility().checked).toBe(!recorded);
+  expect(pixels()===savedPixels).toBe(recorded);
+  expect(JSON.stringify(handle.issues()[0])).toBe(savedBytes);
+  const emitted=output!.value();
+  if(!('issues' in emitted))throw new Error('Expected parts issue output');
+  expect(Object.hasOwn(emitted.issues[0]!.view,'visibleLayers')).toBe(false);
+  expect(emitted.issues[0]!.sourceHash).toBe(sourceHash);
+ }finally{
+  handle?.dispose();dom.cleanup();
+  await rm(root,{recursive:true,force:true});
+ }
+});
