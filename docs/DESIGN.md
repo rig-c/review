@@ -25,8 +25,10 @@ plan, checkpoint, rig, direction, image review and signoff.
   any number of comments. Each comment can be general or pinned to an image
   point, region, part, frame or checkpoint. Keep pointed image comments through
   `stage-comments.ts` and `parts-comment-crops.ts` with their source-bound evidence.
-  Remove separate memo, note, per-part note, summary and `words` input surfaces.
-  Structured-answer mappings that conflict with this rule require an HQ ruling.
+  Remove separate memo, note, per-part note, summary and `words` feedback input
+  surfaces. Survey answers are a separate input kind. Preserve interview
+  selections, inline Other text and per-question note inputs through the existing
+  interview answer contract. R2 applies to feedback inputs. (Naru, 2026-11-11)
 - **R3** Inspection uses the main view's Difference switch to cover all regions.
   Remove separate sidebar key-region checkpoint and evidence panels. Retain the
   supported checkpoint act flow through its existing contract.
@@ -58,6 +60,12 @@ The owner's comments clarification is retained verbatim.
 
 ```text
 코멘트가 왜 하나야? 미친거야?
+```
+
+The owner's survey and comment distinction is retained verbatim.
+
+```text
+설문과 코멘트는 다른 종류의 입력이야 / 설문은 여기 어떻게 할까요? 이고 / 코멘트는 유저가 여기 이상하니까 꼬쳐주세요! 라는 의미
 ```
 
 The earlier shared-view requirement is also retained verbatim.
