@@ -1422,7 +1422,10 @@ async function restorePublicationNavigation():Promise<void> {
  if(bookmark.selection.turn){try{if(!turnPad)throw new Error('TURN_UNAVAILABLE');turnPad.state.validate(bookmark.selection.turn);}catch{delete bookmark.selection.turn;missing=true;}}
  if(bookmark.selection.partSet&&!player?.sets().some(item=>item.name===bookmark.selection.partSet)){bookmark.selection.partSet=null;missing=true;}
  if(bookmark.selection.axis){const saved=bookmark.selection.axis,axis=data.manifest.axes.find(item=>item.id===saved.id);if(!axis||axis.animation!==bookmark.animation||saved.value<axis.min||saved.value>axis.max){bookmark.selection.axis=null;missing=true;}}
- if(bookmark.selection.person){const info=await inspectionReferenceInfo(bookmark.selection.reference??null,new AbortController().signal);if(!info.people.includes(bookmark.selection.person)){bookmark.selection.person=null;missing=true;}}
+ const info=await inspectionReferenceInfo(bookmark.selection.reference===undefined?select('reference-select').value:bookmark.selection.reference,new AbortController().signal);
+ const limit=inspectionTimeLimit(bookmark,info);
+ if(bookmark.time!==null&&(bookmark.time<0||bookmark.time>limit&&limit>=0)){bookmark.time=0;missing=true;}
+ if(bookmark.selection.person&&!info.people.includes(bookmark.selection.person)){bookmark.selection.person=null;missing=true;}
  await restoreInspection(bookmark,new AbortController().signal,true,true);
  persistence?.save();
  navigationMissing=missing;if(missing)message(tr('job.incompatible'));
@@ -1573,6 +1576,12 @@ async function inspectionReferenceInfo(id:string|null,signal:AbortSignal):Promis
  const media=document.createElement('video');media.preload='metadata';media.muted=true;
  try{media.src=referenceUrl(reference);await waitReferenceMetadata(media,signal);return {width:media.videoWidth,height:media.videoHeight,duration:media.duration,people:[]};}finally{media.pause();media.removeAttribute('src');media.load();}
 }
+/** One duration bound for validation and carried publication navigation. */
+function inspectionTimeLimit(bookmark:InspectionBookmark,info:{duration:number|null}):number {
+ const selection=bookmark.selection;
+ const clipDuration=bookmark.animation?assets?.animations.find(a=>a.name===bookmark.animation)?.duration:undefined,referenceId=selection.reference===undefined?select('reference-select').value:selection.reference,isVideo=data.manifest.references.find(r=>r.id===referenceId)?.type==='video';
+ return clipDuration===undefined?info.duration??0:isVideo&&info.duration!==null?Math.min(clipDuration,info.duration):clipDuration;
+}
 async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  const selection=bookmark.selection;
  if(selection.turn){if(!turnPad)throw new Error('TURN_UNAVAILABLE');turnPad.state.validate(selection.turn);}
@@ -1586,7 +1595,7 @@ async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal)
  if(bookmark.view.cameras.a||bookmark.view.cameras.b||bookmark.view.cameras.rig&&!player)throw new Error('Saved camera is unavailable in this single review');
  const info=await inspectionReferenceInfo(selection.reference===undefined?select('reference-select').value:selection.reference,signal);
  if(selection.person&&!info.people.includes(selection.person))throw new Error('Saved pose person is absent');
- const clipDuration=bookmark.animation?assets?.animations.find(a=>a.name===bookmark.animation)?.duration:undefined,referenceId=selection.reference===undefined?select('reference-select').value:selection.reference,isVideo=data.manifest.references.find(r=>r.id===referenceId)?.type==='video';const limit=clipDuration===undefined?info.duration??0:isVideo&&info.duration!==null?Math.min(clipDuration,info.duration):clipDuration;
+ const limit=inspectionTimeLimit(bookmark,info);
  if(bookmark.time!==null&&(bookmark.time<0||bookmark.time>limit&&limit>=0))throw new Error('Saved inspection time is outside the selected clip/reference');
  const rig=bookmark.view.cameras.rig,ref=bookmark.view.cameras.reference;
  if(rig&&!player)throw new Error('Saved rig camera is unavailable');

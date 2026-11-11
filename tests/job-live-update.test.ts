@@ -76,17 +76,60 @@ for(const parts of [true,false])test(`#743 all status phases follow ${parts?'par
 test('#743 main caller rebinds only navigation; missing selection clears Solo and preserves camera/reference/time',async()=>{
  const main=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();
  const body=main.slice(main.indexOf('async function restorePublicationNavigation()'),main.indexOf('function suspendScreen()'));
- const {Transpiler}=await import('bun');const js=new Transpiler({loader:'ts'}).transformSync(body);
+ const helperStart=main.indexOf('function inspectionTimeLimit(');expect(helperStart).toBeGreaterThan(0);
+ const helper=main.slice(helperStart,main.indexOf('async function prepareInspection(',helperStart));
+ const {Transpiler}=await import('bun');const js=new Transpiler({loader:'ts'}).transformSync(helper+body);
  for(const missing of [false,true]){
   let restored:any,notice=false,saves=0;
   const binding={mode:'single',sourceHash:'b'.repeat(64),rigs:['c'.repeat(64)]};
   const bookmark={binding:{...binding,sourceHash:'a'.repeat(64)},animation:'idle',time:.625,view:{cameras:{rig:{zoom:2,center:{x:12,y:34}},reference:null}},selection:{part:{side:'single',slot:'sleeve',mode:'solo',identity:{skin:'old-skin',attachment:'old-art'}},reference:'painting',partSet:'gone',axis:{id:'gone',value:1},turn:{schema:'rig-review-turn/1',values:{yaw:1}},person:'gone'}};
   const state=await new Function('host','partsOnly','parts','data','assets','inspectionBinding','restoreInspection','persistence','message','tr','player','turnPad','inspectionReferenceInfo',`let navigationMissing=false;${js};return restorePublicationNavigation().then(()=>navigationMissing);`)(
    {navigation:{subject:'rig',bookmark}},false,{validate(){if(missing)throw Error('missing');}},
-   {manifest:{references:[{id:'painting'}],checkpoints:[],axes:[]}}, {animations:[{name:'idle'}]},()=>binding,async(value:any)=>{restored=value;},{save(){saves++;}},()=>{notice=true;},String,{sets:()=>[]},null,async()=>({people:[]}));
+   {manifest:{references:[{id:'painting'}],checkpoints:[],axes:[]}}, {animations:[{name:'idle',duration:10}]},()=>binding,async(value:any)=>{restored=value;},{save(){saves++;}},()=>{notice=true;},String,{sets:()=>[]},null,async()=>({people:[],duration:null}));
   expect(restored.binding).toEqual(binding);expect(bookmark.binding.sourceHash).toBe('a'.repeat(64));expect(restored.time).toBe(.625);expect(restored.view).toEqual(bookmark.view);expect(restored.selection.reference).toBe('painting');
   expect(restored.selection.part).toEqual(missing?null:{side:'single',slot:'sleeve',mode:'solo'});expect(restored.selection.part?.identity).toBeUndefined();expect(restored.selection.partSet).toBeNull();expect(restored.selection.axis).toBeNull();expect(restored.selection.person).toBeNull();expect(restored.selection.turn).toBeUndefined();expect(state).toBe(true);expect(notice).toBe(true);expect(saves).toBe(1);
  }
+});
+
+for(const scenario of [
+ {name:'same idle shortens from at least 8 seconds to 2',clip:2,referenceType:'image',referenceDuration:null,time:8,expected:0,missing:true},
+ {name:'same idle remains 8 seconds and keeps endpoint',clip:8,referenceType:'image',referenceDuration:null,time:8,expected:8,missing:false},
+ {name:'video reference is shorter than the clip',clip:10,referenceType:'video',referenceDuration:2,time:8,expected:0,missing:true},
+ {name:'clip is shorter than the video reference',clip:2,referenceType:'video',referenceDuration:10,time:8,expected:0,missing:true},
+ {name:'pose reference duration does not shorten a named clip',clip:10,referenceType:'pose',referenceDuration:2,time:8,expected:8,missing:false},
+ {name:'no selected clip uses reference duration',clip:null,referenceType:'video',referenceDuration:2,time:8,expected:0,missing:true},
+ {name:'null inspection time remains null',clip:2,referenceType:'video',referenceDuration:1,time:null,expected:null,missing:false},
+ {name:'negative carried time resets before validation',clip:2,referenceType:'image',referenceDuration:null,time:-1,expected:0,missing:true},
+ {name:'negative duration keeps the existing unbounded upper check',clip:-1,referenceType:'image',referenceDuration:null,time:8,expected:8,missing:false},
+ {name:'implicit selected video uses the same reference minimum',clip:10,referenceType:'video',referenceDuration:2,time:8,expected:0,missing:true,implicitReference:true},
+])test('#743 carried publication time: '+scenario.name,async()=>{
+ const main=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();
+ const restore=main.slice(main.indexOf('async function restorePublicationNavigation()'),main.indexOf('function suspendScreen()'));
+ const prepare=main.slice(main.indexOf('async function prepareInspection('),main.indexOf('async function applyInspection('));
+ const helperStart=main.indexOf('function inspectionTimeLimit(');
+ expect(helperStart).toBeGreaterThan(0);
+ const helper=main.slice(helperStart,main.indexOf('async function prepareInspection(',helperStart));
+ const js=new Bun.Transpiler({loader:'ts'}).transformSync(helper+prepare+restore);
+ const binding={mode:'single',sourceHash:'b'.repeat(64),rigs:['c'.repeat(64)]};
+ const bookmark={binding:{...binding,sourceHash:'a'.repeat(64)},animation:scenario.clip===null?null:'idle',time:scenario.time,
+  view:{cameras:{rig:{zoom:2,center:{x:12,y:34}},reference:{zoom:3,center:{x:56,y:78}}}},
+  selection:{part:{side:'single',slot:'sleeve',mode:'solo'},...scenario.implicitReference?{}:{reference:'reference'}}};
+ const result:{restored?:any;notices:string[];saves:number}={notices:[],saves:0};
+ const scope={host:{navigation:{subject:'rig',bookmark}},partsOnly:false,parts:{validate(){}},
+  data:{manifest:{references:[{id:'reference',type:scenario.referenceType}],checkpoints:[],axes:[]}},
+  assets:{animations:scenario.clip===null?[]:[{name:'idle',duration:scenario.clip}]},inspectionBinding:()=>binding,
+  persistence:{save(){result.saves++;}},message:(value:string)=>result.notices.push(value),tr:String,
+  player:{sets:()=>[]},turnPad:null,select:()=>({value:'reference'}),
+  inspectionReferenceInfo:async()=>({width:100,height:100,duration:scenario.referenceDuration,people:[]}),result};
+ // Execute the actual validator on the normalized bookmark: an out-of-range restore must reject the old implementation.
+ const validate=await new Function('scope',`with(scope){let navigationMissing=false;${js};async function restoreInspection(bookmark,signal){await prepareInspection(bookmark,signal);result.restored=structuredClone(bookmark);}return restorePublicationNavigation().then(()=>{result.missing=navigationMissing;return prepareInspection;});}`)(scope);
+ if(scenario.missing)await expect(validate(bookmark,new AbortController().signal)).rejects.toThrow('Saved inspection time is outside the selected clip/reference');
+ else await validate(bookmark,new AbortController().signal);
+ expect(result.restored.time).toBe(scenario.expected);expect((result as any).missing).toBe(scenario.missing);
+ expect(result.notices).toEqual(scenario.missing?['job.incompatible']:[]);expect(result.saves).toBe(1);
+ expect(result.restored.animation).toBe(bookmark.animation);expect(result.restored.binding).toEqual(binding);
+ expect(bookmark.binding.sourceHash).toBe('a'.repeat(64));expect(bookmark.time).toBe(scenario.time);
+ expect(result.restored.selection).toEqual(bookmark.selection);expect(result.restored.view).toEqual(bookmark.view);
 });
 
 test('#743 parts caller keeps named selection, Solo, both numeric cameras and layout; a removed part clears only selection',async()=>{
