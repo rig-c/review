@@ -260,3 +260,38 @@ test('#671 compiled provider retains the final rendered scale floor below the ra
  expect(state.rigScale).toBe(.001);expect(state.referenceScale).toBe(.001);
  expect(el('fit').textContent).toBe('Fit active');
 });
+
+test('#706 requestFit lands once the pane is measured, refits on a later layout, and yields to any camera write',()=>{
+ for(const native of [false,true]){
+  const h=host(),c=h.controller,rig=h.nodes.get('rig-viewport'),reference=h.nodes.get('reference-viewport');
+  h.provider.nativeScale=native;c.state.cameraSync=false;
+  const fit=()=>native?Math.min(16,(rig.clientWidth)/320,(rig.clientHeight)/240):1;
+  // Not measured yet: the Fit is owed, the camera is left alone (a stale 24% stays until the pane has a size).
+  rig.clientWidth=0;reference.clientWidth=0;c.state.zoom=.24;c.requestFit();
+  expect(c.paneCamera('rig').zoom).toBe(.24);
+  rig.clientWidth=640;reference.clientWidth=640;c.fitCamera();
+  expect(c.paneCamera('rig').zoom).toBe(fit());
+  // The layout settles later: the camera nobody moved is fitted again.
+  rig.clientWidth=900;rig.clientHeight=700;c.fitCamera();
+  expect(c.paneCamera('rig').zoom).toBe(fit());
+  // A person zooms: a later layout keeps their camera.
+  c.zoomCamera(1/1.25,'rig');const moved=c.paneCamera('rig').zoom;expect(moved).not.toBe(fit());
+  rig.clientWidth=700;rig.clientHeight=500;c.fitCamera();
+  expect(c.paneCamera('rig').zoom).toBe(moved);
+  // A restore that sets the camera itself cancels an owed Fit.
+  c.requestFit();rig.clientWidth=0;c.cancelFit();c.writeCamera('rig',{zoom:.5,center:null});rig.clientWidth=640;c.fitCamera();
+  expect(c.paneCamera('rig').zoom).toBe(.5);
+ }
+});
+
+test('#706 a held Fit fits each synchronized native pane to its own frame without a range refusal',()=>{
+ const h=host(),c=h.controller,rig=h.nodes.get('rig-viewport'),reference=h.nodes.get('reference-viewport');
+ h.provider.nativeScale=true;c.state.cameraSync=true;
+ // A pane one pixel shorter fits slightly smaller: aligning the other pane's Fit into it would be under its range.
+ rig.clientWidth=495;rig.clientHeight=139;reference.clientWidth=495;reference.clientHeight=138;
+ h.provider.geometry=()=>({space:'image',box:{x:0,y:0,width:846,height:862},marginX:24,marginY:24});
+ expect(()=>c.requestFit()).not.toThrow();
+ expect(c.paneCamera('rig').zoom).toBe((139-24)/862);expect(c.paneCamera('reference').zoom).toBe((138-24)/862);
+ reference.clientWidth=496;reference.clientHeight=140;expect(()=>c.fitCamera()).not.toThrow();
+ expect(c.paneCamera('reference').zoom).toBe((140-24)/862);
+});
