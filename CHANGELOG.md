@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.11.0
+
+Display sealed plan-step `does`, `produces`, `bar` and ordered `rests_on` verbatim in checkpoint and plan-bound signoff forms (#638). D1 retains its checkpoint visual evidence, and D2 shows the plan beside pending forms. Partial fields carry named absence or invalidity labels. [Sealed plan step text](docs/REVIEW_PACKAGE.md#sealed-plan-step-text)
+
+The server authenticates retained record bytes, seals and `projectHash`. The browser checks the closed delivery grammar and source association, including record SHA and ordered step ids/hashes, and trusts daemon-provided field values. Canonical source/act definitions and runtime schema markers remain stable. [Projection contract](docs/REVIEW_PACKAGE.md#sealed-plan-step-text)
+
+Recorded #638 evidence comprises a fresh-server metadata replay of 9 rows and 36 fields from frozen official Create output. The frozen consumer receipt retains its Review 2.10.0 identity. Browser fixtures are labelled synthetic. Review 2.11.0 actual-consumer acceptance remains pending.
+
 ## 2.10.0
 
 * Install Korean fonts in CI for camera captures (#631).
