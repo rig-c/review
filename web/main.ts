@@ -309,6 +309,8 @@ async function chooseCheckpoint(point: Checkpoint,initial?:{referenceId?:string;
   viewport.state.zoom = Math.min(8, Math.max(.25, point.camera?.zoom ?? 1));
   if(viewport.state.cameraSync)viewport.state.activeCamera=player?'rig':'reference';
   viewport.state.cameraCenter = point.camera ? { x: point.camera.x, y: point.camera.y } : null;
+  // A checkpoint without its own camera opens at Fit, held until the panes are measured and until someone moves it.
+  if(point.camera)viewport.cancelFit();else viewport.requestFit();
   seek(time);
   if (point.axis && player && !input('axis-value').disabled) {
     select('axis-select').value = point.axis.id; chooseAxis(); input('axis-value').value = String(point.axis.value); applyAxis();
@@ -1305,6 +1307,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,pr
  const camera=bookmark.view.cameras.rig,ref=bookmark.view.cameras.reference,rigViewport=el('rig-viewport'),referenceViewport=el('reference-viewport');
  const nextZoom=camera&&player&&rigViewport.clientWidth&&rigViewport.clientHeight?restoredZoom(camera,viewport.state.rigScale/viewport.state.zoom,rigViewport.clientWidth,rigViewport.clientHeight):camera?.zoom??null;
  const nextReferenceZoom=ref&&referenceSize&&referenceViewport.clientWidth&&referenceViewport.clientHeight?restoredZoom(ref,viewport.state.referenceScale/viewport.state.referenceZoom,referenceViewport.clientWidth,referenceViewport.clientHeight):ref?.zoom??null;
+ viewport.cancelFit();
  if(nextZoom!==null&&camera){viewport.state.zoom=nextZoom;viewport.state.cameraCenter={...camera.center};}
  if(nextReferenceZoom!==null&&ref){viewport.state.referenceZoom=nextReferenceZoom;viewport.state.referenceCenter={...ref.center};}
  viewport.state.cameraSync=bookmark.view.cameraSync??false;viewport.state.activeCamera=bookmark.view.activeCamera==='reference'?'reference':'rig';
