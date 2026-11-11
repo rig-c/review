@@ -11,6 +11,15 @@ export const actionButton=(
  ...(disabled===undefined?{}:{disabled}),
  onclick:click,
 });
+export const labelledControl=(
+ label:Node|string,
+ control:HTMLElement,
+ controlFirst=false,
+):HTMLLabelElement=>panelMake(
+ 'label',
+ {},
+ ...(controlFirst?[control,label]:[label,control]),
+);
 export type ThemePreference = 'system' | 'dark' | 'light';
 export interface ViewPoint { x:number; y:number }
 export function stageOrientation(width:number,height:number):'horizontal'|'vertical' {return width>=height?'horizontal':'vertical';}
