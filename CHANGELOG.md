@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.13.0
+
+* Review job acts now write `rig-review/act@6` comments for `checkpoint`, `parts-verdict`, `review-verdict`, `signoff` and `reopen` (#713). The act's words are the ordered comment projection. A general note longer than 9,990 units is refused, because the 10,000-unit bound includes the `[label]` prefix. Historical acts keep their stored bytes and readers. [Comments decoder contract](docs/REVIEW_PACKAGE.md#comments-decoder-contract)
+* `rig-review/act@7` adds optional comment context (#714). It ships behind `EMIT_UNPINNED_CREATE_FIELDS`, which is off, so this release still writes act@6. [Public exports](docs/STABILITY.md#named-export-inventory)
+* Parts comment pins restore the full visible-layer set (#652).
+* The managed front can bind an OS-assigned port, so a lifecycle start no longer races a released port (#642).
+* Shared-module consolidation for the single review screen: inspector tabs, view controls, the bottom panel, the act bar, View switch modes, shell layout regions and the compare camera are now one implementation each (#668, #670, #673, #675, #679, #680, #681, #687, #688, #692, #694, #695, #696). Screen-copy and public-URL ratchets guard the move (#686, #693, #704).
+
 ## 2.12.0
 
 * Document the owner's R0–R4 Review rules: owner layout and working-screen rulings, separate main and secondary toolbars, general or pointed comments as the only feedback-input feature, main-view Difference coverage and shared viewport controls (#647). [Core UI rules](docs/DESIGN.md#core-ui-rules-owner-2026-11-11), [Code Review Rules](AGENTS.md#code-review-rules)
