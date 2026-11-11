@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {PNG} from 'pngjs';
 import {writeComparisonPackage} from './helpers/parts-comparison-package.ts';
-import {loadPartsView,readVerdict} from '../src/parts-view.ts';
+import {loadPartsView,readVerdict,saveVerdict} from '../src/parts-view.ts';
 import {startPartsServer} from '../src/parts-server.ts';
 import {launchCdpSession,type InputCdpSession as Page} from './parts-explorer-browser.ts';
 const assert=(v:unknown,m:string)=>{if(!v)throw Error(m);};
@@ -66,6 +66,30 @@ async function main(){
  assert(await page.evaluate(`window.__c5Keys.length>=2&&window.__c5Keys.every(e=>e.trusted)`),'native keyboard events');
  await click(page,'#stage-comment');assert(await page.evaluate(`document.getElementById('stage-comment').getAttribute('aria-pressed')==='true'&&!document.getElementById('stage-comment-refusal').textContent`),'assembled capture enabled');await click(page,'#stage-comment');
  await click(page,'#native-one');assert(await page.evaluate(`new DOMMatrix(document.getElementById('rig-root').style.transform).a===1`),'native one');await click(page,'#fit');
+ // #652: trusted UI captures the legacy form; a prepared reader fixture adds the signed field.
+ await click(page,'[data-pv-visible="front"]');
+ const hiddenPixels=await page.evaluate(pixels);
+ await click(page,'#stage-comment');
+ await point(page,15,9,true);
+ await wait(page,`!!document.querySelector('.stage-comment-composer')`);
+ await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Restore back A, hide front B';form.requestSubmit();})()`);
+ await wait(page,`document.querySelectorAll('.stage-comment-item').length===1`);
+ await click(page,'#stage-comment');await click(page,'#pv-save');
+ await wait(page,`document.getElementById('pv-save-status').dataset.result==='saved'`);
+ const captured=(await readVerdict(pkg)).verdict!.issues[0]!;
+ assert(!Object.hasOwn(captured.view,'visibleLayers'),'#652 gate off writes legacy capture');
+ assert(captured.parts.length===1&&captured.parts[0]!.name==='body','#652 pin targets back A');
+ captured.view.visibleLayers=[...captured.parts];
+ await saveVerdict(pkg,{status:'changes-requested',issues:[captured]});
+ await page.goto(`${base}?lang=${lang}#cap=${cap}`);
+ await wait(page,`document.body.dataset.ready==='true'`);await click(page,'#pv-assemble');
+ await click(page,'#stage-comment');await click(page,'.stage-comment-summary');
+ await wait(page,`document.querySelector('[data-pv-visible="front"]').checked===false`);
+ assert(await page.evaluate(pixels)===hiddenPixels,'#652 complete assembly pixels restored');
+ await writeFile(join(out,'visible-layers-restored-'+lang+'.png'),await page.screenshot());
+ report['visibleLayers'+lang]={frontHidden:true,pixelsRestored:true,gateOffCapture:true};
+ // Reset only this disposable test's verdict for the next language's zero-issue controls.
+ await saveVerdict(pkg,{status:'approved',issues:[]});
  assert(await page.evaluate(`document.querySelector('[data-pv-comparison="difference"]').disabled`),'Difference absent');report[lang]={baseVsBase:true,oracle:true,frontmost:true,hole:true,hidden:true,outline:true,verdict:true,camera:true,label:await page.evaluate(`document.getElementById('pv-assemble').textContent`)};
  }
  assert((await Promise.all(pkg.files.map(async(f,i)=>createHash('sha256').update(await readFile(f.abs)).digest('hex')===before[i]))).every(Boolean),'inputs immutable');

@@ -43,7 +43,7 @@ export interface PartsIssue {
   sourceHash: string;
   rigRegion: MarkRegion;
   imageRegion: MarkRegion | null;
-  view: PartsComment['view'] & { mode: 'item' | 'assembled' };
+  view: PartsComment['view'] & { mode: 'item' | 'assembled'; visibleLayers?: { name: string; imageHash: string }[] };
   crop: PartsCrop & { png?: string };
   nativeCrop: PartsCrop | null;
 }
@@ -97,9 +97,22 @@ function parseView(raw: unknown, withMode: boolean): Record<string, any> {
     'footprints',
     'mesh',
     ...(Object.hasOwn(view, 'comparison') ? ['comparison'] : []),
+    ...(withMode && Object.hasOwn(view, 'visibleLayers') ? ['visibleLayers'] : []),
   ]);
   if (withMode && view.mode !== 'item' && view.mode !== 'assembled') {
     fail('PARTS_COMMENT_INVALID', 'view mode');
+  }
+  if (Object.hasOwn(view, 'visibleLayers')) {
+    if (!withMode || view.mode !== 'assembled' || !Array.isArray(view.visibleLayers) || view.visibleLayers.length > 1000) {
+      fail('PARTS_COMMENT_INVALID', 'assembled visible layers required');
+    }
+    const seen = new Set<string>();
+    for (const rawLayer of view.visibleLayers) {
+      const layer = obj(rawLayer);
+      exact(layer, ['name', 'imageHash']);
+      if (!token(layer.name) || !hash(layer.imageHash) || seen.has(layer.name)) fail('PARTS_COMMENT_INVALID', 'visible layer binding');
+      seen.add(layer.name);
+    }
   }
   if (Object.hasOwn(view, 'comparison')) {
     parsePartsComparison(view.comparison);
@@ -283,6 +296,11 @@ export function assertPartsIssueBinding(
 ): void {
   if (c.sourceHash !== sourceHash) {
     fail('PARTS_COMMENT_STALE_SOURCE', 'original image or package source hash differs');
+  }
+  for (const layer of c.view.visibleLayers ?? []) {
+    const item = items.get(layer.name);
+    if (!item) fail('PARTS_COMMENT_PART_MISMATCH', 'visible layer belongs to another part');
+    if (item!.imageHash !== layer.imageHash) fail('PARTS_COMMENT_STALE_SOURCE', 'visible layer image hash differs');
   }
   const matchedItems: { name: string; x: number; y: number; w: number; h: number; imageHash: string }[] = [];
   for (const p of c.parts) {

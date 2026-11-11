@@ -1,3 +1,4 @@
+import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
 import {defaultPartsComparison,paintingRectangle,type PartsComparison} from '../src/parts-comparison.ts';
 import {mountViewportPair} from './viewport-pair.ts';
 import {createPartsViewport} from './parts-viewport-provider.ts';
@@ -650,7 +651,7 @@ async function boot(): Promise<void> {
   comments.push(...structuredClone(host.initial()).map(issue => parsePartsIssue(issue, false, true, false)));
   host.register({kind: 'parts-verdict', value: () => {
     if (disposed || state.data?.legacyVerdict?.readOnly) throw new Error('PARTS_VERDICT_READ_ONLY');
-    return {verdict: comments.length ? 'changes-requested' : 'approved', issues: structuredClone(comments), words: ''};
+    return {verdict: comments.length ? 'changes-requested' : 'approved', issues: structuredClone(comments.map(writablePartsIssue)), words: ''};
   }});
   setupPartsComments();const ro=viewport.observeResize();disposers.push(viewport.bindNavigation(undefined,()=>mountActive&&!disposed&&!commentUi?.active()&&!paintFailure),()=>ro.disconnect());
   renderLegacyVerdict();
@@ -793,8 +794,15 @@ function issueParts(names: string[]): PartsIssue['parts'] {
   });
 }
 
+function writablePartsIssue(issue: PartsIssue): PartsIssue {
+  if (EMIT_UNPINNED_CREATE_FIELDS || !Object.hasOwn(issue.view, 'visibleLayers')) return issue;
+  const {visibleLayers: _visibleLayers, ...view} = issue.view;
+  return {...issue, view};
+}
+
 async function prepareIssue(issue: PartsIssue): Promise<PartsIssue> {
   const data = state.data!;
+  issue = writablePartsIssue(issue);
   const bound = parsePartsIssue(issue, false, false, false);
   const items = new Map(data.items.map(item => [item.name, {...item, imageHash: item.imageHash!}]));
   assertPartsIssueBinding(bound, items, data.sourceHash);
@@ -805,7 +813,7 @@ async function prepareIssue(issue: PartsIssue): Promise<PartsIssue> {
 
 function setupPartsComments():void {
  const codec:CommentCodec<PartsIssue,PartsPose>={
- read:raw=>{try{const c=parsePartsIssue(raw,false,true,false);const camera={space:'image' as const,center:c.view.camera.center,zoom:c.view.camera.zoom,viewport:c.view.camera.viewport,visible:{x:c.view.camera.center.x-c.view.camera.viewport.width/c.view.camera.zoom/2,y:c.view.camera.center.y-c.view.camera.viewport.height/c.view.camera.zoom/2,width:c.view.camera.viewport.width/c.view.camera.zoom,height:c.view.camera.viewport.height/c.view.camera.zoom}};const r=c.view.mode==='assembled'?c.rigRegion:c.imageRegion!;return {mode:'parts',viewport:'rig',screen:region(projectMark(r,camera),projectMark({x:r.x+r.width,y:r.y+r.height},camera)),world:r,camera,crop:{...c.crop,png:c.crop.png??''},bookmark:{parts:c.parts,sourceHash:c.sourceHash,view:c.view}};}catch{return null;}},
+ read:raw=>{try{const c=parsePartsIssue(raw,false,true,false);const camera={space:'image' as const,center:c.view.camera.center,zoom:c.view.camera.zoom,viewport:c.view.camera.viewport,visible:{x:c.view.camera.center.x-c.view.camera.viewport.width/c.view.camera.zoom/2,y:c.view.camera.center.y-c.view.camera.viewport.height/c.view.camera.zoom/2,width:c.view.camera.viewport.width/c.view.camera.zoom,height:c.view.camera.viewport.height/c.view.camera.zoom}};const r=c.view.mode==='assembled'?c.rigRegion:c.imageRegion!;return {mode:'parts',viewport:'rig',screen:region(projectMark(r,camera),projectMark({x:r.x+r.width,y:r.y+r.height},camera)),world:r,camera,crop:{...c.crop,png:c.crop.png??''},bookmark:c.view.visibleLayers!==undefined?c:{parts:c.parts,sourceHash:c.sourceHash,view:c.view}};}catch{return null;}},
  signature:p=>[p.view.mode,p.item.name,p.item.imageHash,p.sourceHash,p.camera,p.view],
  matches:(_mark,p,raw)=>{try{const c=parsePartsIssue(raw,false,true,false);return p.sourceHash===c.sourceHash&&p.view.mode===c.view.mode&&(c.view.mode==='assembled'?c.parts.every(part=>state.data?.items.some(item=>item.name===part.name&&item.imageHash===part.imageHash)):p.item.name===c.parts[0]?.name&&p.item.imageHash===c.parts[0]?.imageHash);}catch{return false;}},
  label:raw=>{const c=parsePartsIssue(raw,false,true,false);return `${c.parts.map(pt=>pt.name).join(', ')} · ${c.summary}`;},
@@ -838,7 +846,7 @@ function setupPartsComments():void {
  update:async(existing,summary,parts)=>prepareIssue({...existing,summary,
    parts:existing.view.mode==='assembled'?issueParts(parts??[]):existing.parts}),
  };
- const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||paintingHeld||(state.view!=='item'&&state.view!=='assembled'))return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{mode:state.view,camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshVisible,comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
+ const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||paintingHeld||(state.view!=='item'&&state.view!=='assembled'))return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{mode:state.view,...(state.view==='assembled'&&EMIT_UNPINNED_CREATE_FIELDS?{visibleLayers:issueParts(data.items.filter(item=>!state.hidden.has(item.name)).map(item=>item.name))}:{}),camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshVisible,comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
  commentUi=bindStageComments({toolbar:slots.toolbar,listHost:slots.side,toggle:$<HTMLButtonElement>('stage-comment'),viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
   restore:async(raw)=>{
     const data = state.data!, navigation = paintToken, current = await source.view();
@@ -848,8 +856,19 @@ function setupPartsComments():void {
     const bookmark = raw as {parts:PartsIssue['parts'];sourceHash:string;view:PartsIssue['view']};
     const matched = bookmark.parts.map(part => data.items.find(item => item.name === part.name && item.imageHash === part.imageHash));
     if (!matched.length || matched.some(item => !item) || data.sourceHash !== bookmark.sourceHash) throw new Error('PARTS_COMMENT_STALE_SOURCE: reopen the bound source');
+    const visibleLayers = bookmark.view.visibleLayers;
+    if (visibleLayers !== undefined) {
+      const issue = parsePartsIssue(raw, false, true, false);
+      assertPartsIssueBinding(issue, new Map(data.items.map(item => [item.name, {...item, imageHash: item.imageHash!}])), data.sourceHash);
+    }
     setView(bookmark.view.mode);select(matched[0]!.index);
-    highlightedParts.clear();for (const part of bookmark.parts) {highlightedParts.add(part.name);state.hidden.delete(part.name);}
+    if (visibleLayers !== undefined) {
+      const names = new Set(visibleLayers.map(layer => layer.name));
+      state.hidden = new Set(data.items.filter(item => !names.has(item.name)).map(item => item.name));
+      highlightedParts.clear();for (const part of bookmark.parts) highlightedParts.add(part.name);
+    } else {
+      highlightedParts.clear();for (const part of bookmark.parts) {highlightedParts.add(part.name);state.hidden.delete(part.name);}
+    }
     state.bg = bookmark.view.background;state.alpha = bookmark.view.alpha;state.footprints = bookmark.view.footprints;
     state.comparison = {...(bookmark.view.comparison ?? defaultPartsComparison())};
     if (state.comparison.mode === 'difference') state.differenceThreshold = state.comparison.threshold;
@@ -865,7 +884,7 @@ function setupPartsComments():void {
       viewport!.state.cameraSync = bookmark.view.cameraSync;viewport!.fitCamera();
     } finally {if (!disposed) viewport!.state.cameraRestoring = false;}
   },
-  feedback:()=>comments,locked:()=>Boolean(state.data?.legacyVerdict?.readOnly)||host.locked() !== 'open',add:c=>comments.push(c),changed:()=>{renderList();host.changed(structuredClone(comments));},error:m=>{paintBusyStatus=null;$('pv-save-status').textContent=t(m);},blocked:()=>painting||paintingHeld,busy:()=>painting||paintingHeld,busyError:message=>{paintBusyStatus={token:paintToken,text:t(message)};$('pv-save-status').textContent=paintBusyStatus.text;},shortcutActive:()=>mountActive&&!disposed,refusal:()=>paintFailure??(state.data?.legacyVerdict?.readOnly?state.data.legacyVerdict.code+': '+t('parts.legacyVerdictBanner',[state.data.legacyVerdict.flaggedCount]):null)??(host.locked() !== 'open'?'Read-only view: reopen with rig-review open to edit.':null)??(stageEmbedded&&state.data?.mode==='parts'?'PARTS_JOINED_ISSUE_UNSUPPORTED':null)??(state.data?.mode!=='parts'?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
+  feedback:()=>comments,locked:()=>Boolean(state.data?.legacyVerdict?.readOnly)||host.locked() !== 'open',add:c=>comments.push(c),changed:()=>{renderList();host.changed(structuredClone(comments.map(writablePartsIssue)));},error:m=>{paintBusyStatus=null;$('pv-save-status').textContent=t(m);},blocked:()=>painting||paintingHeld,busy:()=>painting||paintingHeld,busyError:message=>{paintBusyStatus={token:paintToken,text:t(message)};$('pv-save-status').textContent=paintBusyStatus.text;},shortcutActive:()=>mountActive&&!disposed,refusal:()=>paintFailure??(state.data?.legacyVerdict?.readOnly?state.data.legacyVerdict.code+': '+t('parts.legacyVerdictBanner',[state.data.legacyVerdict.flaggedCount]):null)??(host.locked() !== 'open'?'Read-only view: reopen with rig-review open to edit.':null)??(stageEmbedded&&state.data?.mode==='parts'?'PARTS_JOINED_ISSUE_UNSUPPORTED':null)??(state.data?.mode!=='parts'?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
 }
 
 function renderCorrections():void {
