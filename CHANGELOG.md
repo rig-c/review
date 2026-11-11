@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.12.0
+
+* Document the owner's R0–R4 Review rules: owner layout and working-screen rulings, separate main and secondary toolbars, general or pointed comments as the only feedback-input feature, main-view Difference coverage and shared viewport controls (#647). [Core UI rules](docs/DESIGN.md#core-ui-rules-owner-2026-11-11), [Code Review Rules](AGENTS.md#code-review-rules)
+* Add read-only decoders and ordered comment projections through the public `@rig-c/review/job-host` facade (#653): `rig-review/act@6` covers `checkpoint`, `parts-verdict`, `review-verdict`, `signoff` and `reopen`; standalone decoders cover `rig-review-session/2`, `rig-review-compare-session/2` and `rig-review-parts-verdict/5`. Projections preserve entry order and literal text. [Comments decoder contract](docs/REVIEW_PACKAGE.md#comments-decoder-contract), [Public exports](docs/STABILITY.md#named-export-inventory)
+
+Historical act/session readers, stored act bytes, source binding and replay remain on their existing paths. Survey selections, inline Other text and per-question notes keep their existing behavior. Retained-asset freshness and owner authority use their existing checks.
+
+Fresh comments UI writers remain disabled pending Create #422 on main, its actual source/install/facade-import and normal @6 ingest/replay receipt with command exits, and HQ activation. This parser release is a dependency for Create #422 default CI; actual Review 2.12.0 consumer acceptance remains pending. The #650 UI work is excluded.
+
 ## 2.11.0
 
 Display sealed plan-step `does`, `produces`, `bar` and ordered `rests_on` verbatim in checkpoint and plan-bound signoff forms (#638). D1 retains its checkpoint visual evidence, and D2 shows the plan beside pending forms. Partial fields carry named absence or invalidity labels. [Sealed plan step text](docs/REVIEW_PACKAGE.md#sealed-plan-step-text)
