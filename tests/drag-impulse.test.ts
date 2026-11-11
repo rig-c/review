@@ -95,7 +95,7 @@ test('#331: the rig view carries its player, the comparison carries both sides, 
  expect(entry).toContain('bindNavigation(rigPanCarry(');
  expect(main).toContain("target==='rig'?carryRig:undefined,");
  expect(main).toContain('const impulse=dragImpulse(dx,dy,rigScale);if(impulse&&player)player.moved(impulse);');
- expect(compare).toContain("target==='reference'?undefined:carryBoth));");
+ expect(compare).toContain("viewport.bindNavigation(target=>target==='reference'?undefined:carryBoth,()=>!comments?.active())");
  expect(compare).toContain("for(const side of ['a','b'] as const){const impulse=dragImpulse(dx,dy,rigScales[side]);if(impulse)players[side]?.moved(impulse);}");
  // The retired Drag to trail toggle left no second drag handler behind.
  for(const source of [main,entry,pair,compare,await readFile(new URL('../web/compare-picked-tools.ts',import.meta.url),'utf8'),await readFile(new URL('../web/index.html',import.meta.url),'utf8')])expect(source).not.toContain('drag-trail');
