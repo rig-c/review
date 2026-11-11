@@ -21,10 +21,12 @@ plan, checkpoint, rig, direction, image review and signoff.
 - **R1** Every review view separates its main toolbar and secondary toolbar into
   distinct areas. Group primary inspection actions in the main area and auxiliary
   controls in the secondary area.
-- **R2** Remove the memo feature. Collect all user input in one comment per review
-  submission. Remove separate per-region, per-checkpoint and per-image text-entry
-  surfaces. Any structured-answer mapping that conflicts with this rule requires
-  an HQ ruling.
+- **R2** Comments are the only feedback-input feature. A submission can contain
+  any number of comments. Each comment can be general or pinned to an image
+  point, region, part, frame or checkpoint. Keep pointed image comments through
+  `stage-comments.ts` and `parts-comment-crops.ts` with their source-bound evidence.
+  Remove separate memo, note, per-part note, summary and `words` input surfaces.
+  Structured-answer mappings that conflict with this rule require an HQ ruling.
 - **R3** Inspection uses the main view's Difference switch to cover all regions.
   Remove separate sidebar key-region checkpoint and evidence panels. Retain the
   supported checkpoint act flow through its existing contract.
@@ -34,7 +36,7 @@ plan, checkpoint, rig, direction, image review and signoff.
 Act-field and downstream-consumer changes follow the existing HQ approval boundary
 for public contracts. Preserve historical record parsing, source binding and
 replay, with the original recorded text intact. Keep the frozen payload definitions
-in their contract references until an approved change maps the single comment to
+in their contract references until an approved change maps the comments feature to
 those fields. [Live job contract](REVIEW_PACKAGE.md#live-job-contract),
 [Public API stability](STABILITY.md).
 
@@ -52,6 +54,12 @@ The owner's UI ruling requirement is retained verbatim.
 HQ는 리뷰 UI 추가/변경은 오빠 판정 무조건 받아
 ```
 
+The owner's comments clarification is retained verbatim.
+
+```text
+코멘트가 왜 하나야? 미친거야?
+```
+
 The earlier shared-view requirement is also retained verbatim.
 
 ```text
@@ -64,7 +72,7 @@ The CLI opens `review.json` or an existing output directory. The directory adapt
 
 Inspection supports local references, checkpoint context, runtime playback when a real compatible model exists, available angle/audio facilities and explicit review state. The canonical `rig-pose-sequence/1` format documented by `@rig-c/pose` preserves frame times, person IDs, joint states/coordinates/confidence and optional camera metadata. The demo pose is an authored synthetic transport example, not extracted from footage.
 
-Each review submission collects one comment under R2. Source-bound inspection context records an inclusive integer frame interval, or explicit seconds when a frame/interval is unavailable, the target `{kind: bone|slot|rig, name}`, category `defect|quality`, checkpoint, time, reference/person and camera/axis state. The person can export data and issue-ready Markdown; this app neither posts issues automatically nor writes proposed motion keys. The comment must be useful to the producing agent without interpreting a free-form key-edit JSON blob. Existing serialized feedback and comment fields follow the compatibility boundary above.
+Each review submission collects feedback through the comments feature under R2 and can contain any number of general or pointed comments. Source-bound inspection context records an inclusive integer frame interval, or explicit seconds when a frame/interval is unavailable, the target `{kind: bone|slot|rig, name}`, category `defect|quality`, checkpoint, time, reference/person and camera/axis state. The person can export data and issue-ready Markdown; this app neither posts issues automatically nor writes proposed motion keys. Comments must be useful to the producing agent without interpreting a free-form key-edit JSON blob. Existing serialized feedback and comment fields follow the compatibility boundary above.
 
 Identity, revision and content hash bind every decision. A submission also records separate exact rig/motion hashes and paths, packageRevision, viewerVersion and installed runtimeVersion; absent source stays null. The producing agent can retrieve the saved JSON with the read-only feedback CLI after the UI closes. Opening never means reviewed. The person explicitly approves, requests changes or returns to pending, independently of checkpoint outcomes. Changed inputs do not inherit prior approval. Feedback writes remain outside source, are bounded and atomic, and require the app's exact Origin.
 
@@ -96,7 +104,7 @@ Any future modeling edit needs provenance, undo/redo, explicit units and an expo
 
 ## Acceptance progression
 
-1. Delivery and feedback: one command opens unchanged output; declared assets load; one submission comment with source-bound inspection context saves and exports; changed source invalidates approval.
+1. Delivery and feedback: one command opens unchanged output; declared assets load; comments with source-bound inspection context save and export; changed source invalidates approval.
 2. Runtime inspection: a real gated artifact plays and seeks through the public runtime, survives reference and Inspector section changes and names missing dependencies. Source-only fixtures cannot close this item.
 3. Modeling touch-up: a bounded real geometry edit round-trips into authoritative source, reruns its gate and presents measured before/after evidence with undo/conflict controls.
 
@@ -120,7 +128,7 @@ The single review page is one inspection workspace: a left column, the stage, th
 - **Cloth.** In Setup, after Cuts: `#cloth-panel` (#111). One form per cloth tag the installed reader accepts (`bottomwear`, `back hair`, `front hair` — its own `CLOTH_TARGETS`), holding the recipe's fields as the config states them; each change is a patch op at `/cloth/<tag>/…` (`src/cloth-recipe.ts`, `web/cloth-panel.ts`). **Show links** draws, in rig px of the setup pose, every chain the tag's parts are meshed on from the config's `points` and `tip`, and after an Apply the chains of the config the producer wrote (one label per set). Apply runs `rig-parts propose --cloth --write-config` on the declared parts, painting and keypoints, then builds the written config (`build` when the config declares `limbs`, else `rig --config`) and reloads it under the stage's Environment. Review never merges the producer's draft: it reads only the written config, lists where it differs from its input and refuses one that differs outside the drafted sections. Hand-editing the drafted constraints is the physics block's, after the draft.
 - **Mesh edit.** In Setup only, the view bar's **Edit mesh** toggle (`#mesh-edit`, `aria-pressed`) opens `#mesh-editor-bar`: sub-modes Modify / Create / Delete / Edges (keys `V` / `C` / `X` / `E`, one pressed), Undo, Redo, Reset, Download JSON and **Apply · Rebuild** (#135: `rig-parts remesh --delta` through the shared runner, the revision loaded in place, the producer's refusal verbatim; while a delta revision is on the stage Reset returns to the inspected build). A package without the compiled model document refuses `MESH_EDIT_MODEL_UNAVAILABLE` and does not open; whole rig refuses `MESH_EDIT_SELECT_SLOT`; a non-mesh or linked-mesh slot `MESH_EDIT_NO_MESH <slot>`. It edits in setup space (#100): the attachment's stored provenance in the model document (`src/setup-mesh.ts`) and geometry from Play's public `readSetupMesh` (`web/setup-pose.ts`, shared with Weights) and drawn over the paused stage with the stage camera. It records a typed delta (`src/mesh-edit.ts`, `basis: "setup"`, the shape `rig-parts remesh --delta` reads) and previews it over the original triangulation on the overlay; Delete removes only constraint edges the delta added (the triangulation is the producer's); it is not a mesher and never retriangulates, writes the package or runs a producer. The chest editor and mesh edit are exclusive: turning one on turns the other off.
 - **Inspector.** Two sections and no section tab row: **Setup** is the mesh-review composition (selected part, part presets, the modeling-review proposals for mesh density, contour curvature and chest position) and holds no control that seeks or plays; **Animate** has the transport with the Repeat idle toggle, frame navigation, the motion-review proposals and angle inspection with its axis panel, sound cues and report events. Their element ids and saved section names (`rig`, `playback`) are unchanged. Each section opens with a sticky block row (`.block-row`, `web/inspector-blocks.ts`), a WAI-ARIA tablist: Setup — Part · Modeling · Chest · Mesh · Weights · Bones · Fields · Cuts · Cloth; Animate — Transport (the motion tools and the angle panel) · Sound · Environment · Physics · Idle tracks · Readings · Requirements · Retarget · Report, in document order. Animate's timeline is its own panel beside the blocks, not a tab. Each `role=tab` button controls the `role=tabpanel` block it names: selecting it shows that block alone and hides the others (`hidden`; a block a tab carries, such as the angle panel, by `data-block-hidden`, so its own `hidden` stays its own), and nothing scrolls between blocks. Arrow keys, Home and End move between tabs and select as they go. Hiding writes nothing inside a block, so drafts, pending edits and stage overlays such as the chest editor's are kept while their tab is hidden, and each block keeps its own scroll offset for the session. The row is one line that scrolls sideways when narrow. The active tab per section is the only thing the row adds to the inspection draft (`ui.inspectorBlocks`); the section's scroll offset stays with the Inspector scroll memory, and the control protocol and saved-view link are unchanged. A saved `view` or `feedback` section from older links and drafts restores without selecting a section or opening the dialog.
-- **Review dialog.** A native modal `<dialog id="review-dialog">` holds the review status, reviewed source with the read-only source-file list, one submission comment under R2, frame-strip export and the **Submit review** button (`#save`). **Write review** opens it with `showModal()` and pauses playback; Escape or Close dismisses it and focus returns to **Write review**. The single comment stays in the document while the dialog is closed, with source-bound autosave, recovery and conflict handling. The modal makes the rest of the page inert, so the dialog repeats the footer's message and draft state in its own status line; the footer keeps reporting both.
+- **Review dialog.** A native modal `<dialog id="review-dialog">` holds the review status, reviewed source with the read-only source-file list, the comments feature under R2, frame-strip export and the **Submit review** button (`#save`). **Write review** opens it with `showModal()` and pauses playback; Escape or Close dismisses it and focus returns to **Write review**. Comment drafts stay in the document while the dialog is closed, with source-bound autosave, recovery and conflict handling. The modal makes the rest of the page inert, so the dialog repeats the footer's message and draft state in its own status line; the footer keeps reporting both.
 - **Footer.** Message (truncated, full text as tooltip) on the left; player, effective layout, renderer, layers, idle, remote control and draft state in the middle; the numeric view region (behind **View region**) and the source hash on the right. The View region body is a `position:fixed` popover above the 40px footer, right-aligned, its width and height clamped to the viewport and its content scrolling inside, so the footer's clipping never hides it and opening it never scrolls the page.
 
 The compare page keeps its own markup and stylesheet: sources left, Parts explorer right, its four Inspector sections, its export buttons and its separator colour. It shares the workspace coordinator, so its separators are drawn at the same 4px.
@@ -281,9 +289,9 @@ Difference uses the producer-declared rig-space painting artifact; see [Declared
 `tests/parts-comparison.test.ts` guards the geometry/settings; `tests/parts-overlay-browser.ts` verifies
 displayed overlay pixels and comment restoration in both languages.
 
-R2 places reviewer input in the single submission comment. Historical region-comment
-records retain their source-bound codec and reproduction evidence. `viewport-capture.ts`
-supplies displayed viewport pixels, while `parts-comment-crops.ts` reads native RGBA
-evidence from the bound original PNG. `comment-crops.ts` supplies their common PNG
-validator and immutable store. The existing record format and refusal references remain
-available for compatibility. [Parts view](PARTS_VIEW.md#pointed-parts-comments).
+`stage-comments.ts` shares capture/composer/pins with a codec boundary for the closed parts
+variant; no rig frame/slot/model placeholder is manufactured. `viewport-capture.ts` supplies
+displayed viewport pixels, while `parts-comment-crops.ts` cuts native RGBA evidence on the server
+from the bound original PNG. `comment-crops.ts` supplies their common PNG validator and immutable
+store. [Parts view](PARTS_VIEW.md#pointed-parts-comments) names the format, refusals and the unit
+and real-browser instruments that verify these behaviors.
