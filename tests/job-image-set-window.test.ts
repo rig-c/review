@@ -3,10 +3,11 @@ import {afterEach, expect, test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
 import {mountViewportPair} from '../web/viewport-pair.ts';
-import {layerShortcuts, describeLayerToggles, createViewControls} from '../web/view-controls.ts';
+import {layerShortcuts, describeLayerToggles, createViewControls, createRigLayerControls} from '../web/view-controls.ts';
 import {SENTINELS} from '../web/parts-render.ts';
 import {RigOverlays} from '../web/rig-overlays.ts';
 import {enCatalog} from '../web/catalog-en.ts';
+import {koCatalog} from '../web/catalog-ko.ts';
 import {jobHash} from '../src/job-api.ts';
 import {prepareJobImageSet} from '../src/job-image-set.ts';
 import {parseManifest} from '../src/manifest.ts';
@@ -187,6 +188,7 @@ class MountElement extends EventTarget {
     return this.querySelectorAll(selector)[0] ?? null;
   }
   querySelectorAll(selector: string): MountElement[] {
+    if (selector.includes(',')) return selector.split(',').flatMap(part => this.querySelectorAll(part.trim()));
     const result: MountElement[] = [];
     for (const child of this.children) {
       if (selector.startsWith('#') ? child.id === selector.slice(1) :
@@ -205,7 +207,8 @@ class MountElement extends EventTarget {
         const node = new MountElement(token[1]!);
         for (const attribute of token[2]!.matchAll(/([a-z-]+)="([^"]*)"/g)) node.setAttribute(attribute[1]!, attribute[2]!);
         node.hidden = /\bhidden\b/.test(token[2]!);
-        stack.at(-1)!.append(node); stack.push(node);
+                    if (node.tagName === 'input') { node.type = token[2]!.match(/type="([^"]*)"/)?.[1] ?? ''; node.checked = /\bchecked\b/.test(token[2]!); node.disabled = /\bdisabled\b/.test(token[2]!); }
+        stack.at(-1)!.append(node); if (node.tagName !== 'input') stack.push(node);
       }
     }
   }
@@ -244,14 +247,14 @@ function mountActualBuild(body: string, prepared: JobPreparedInspection): MountE
   // Execute the actual nested production build body, without adding a product test seam.
   const javascript = new Bun.Transpiler({loader: 'ts'}).transformSync(body);
   const build = new Function('deps', `
-    const {node, inputLabel, selectValues, mountViewportPair, t, layerShortcuts, createViewControls,
+    const {node, inputLabel, selectValues, mountViewportPair, t, layerShortcuts, createViewControls, createRigLayerControls,
       describeLayerToggles, SENTINELS, RigOverlays} = deps;
     let loop = true, stageBackground = '';
     const layers = {images: true, mesh: false, bones: false, meshOpacity: 0.65};
     const i18n = {tr: t}, overlays = new WeakMap();
     ${javascript}
     return build;
-  `)({node, inputLabel, selectValues, mountViewportPair, t: translate, layerShortcuts, createViewControls,
+  `)({node, inputLabel, selectValues, mountViewportPair, t: translate, layerShortcuts, createViewControls, createRigLayerControls,
     describeLayerToggles, SENTINELS, RigOverlays}) as (prepared: JobPreparedInspection) => MountElement;
   const host = node('main'); host.append(build(prepared));
   return host;
@@ -265,6 +268,28 @@ function buildFixture(f: ReturnType<typeof setup>): JobPreparedInspection {
     imageSetImages: f.source.imageSet.images.map(() => new MountElement('img') as unknown as HTMLImageElement),
     inspection: null, setupPose() {}, dispose() {}};
 }
+
+test('#688 shared rig layer constructor preserves structure and job language bindings in EN and KO', async () => {
+  const f = setup();
+  mountActualBuild(await actualBuildBody(), buildFixture(f));
+  const rig = createRigLayerControls();
+  expect(rig.id).toBe('layer-controls');
+  expect(rig.className).toBe('layer-toggles');
+  expect(Array.from(rig.children).map(child => child.tagName.toLowerCase())).toEqual(['legend', 'label', 'label', 'label']);
+  expect(Array.from(rig.querySelectorAll('input')).map(input => [input.id, input.type, input.checked, input.disabled]))
+    .toEqual([['layer-images', 'checkbox', true, true], ['layer-mesh', 'checkbox', false, true], ['layer-bones', 'checkbox', false, true]]);
+  for (const catalog of [enCatalog, koCatalog]) {
+    const job = createRigLayerControls({jobText: true, translate: key => catalog[key] ?? key});
+    expect(job.querySelector('legend')!.textContent).toBe(catalog['Rig layers']);
+    for (const [index, item] of layerShortcuts.entries()) {
+      const label = job.querySelectorAll('label')[index]!;
+      expect(Array.from(label.children).map(child => child.tagName.toLowerCase())).toEqual(['input', 'span', 'kbd']);
+      expect(label.querySelector('span')!.textContent).toBe(catalog[item.label]);
+      expect((label.querySelector('span') as HTMLElement).dataset.jobText).toBe(item.label);
+      expect(label.querySelector('kbd')!.textContent).toBe(item.key.toUpperCase());
+    }
+  }
+});
 
 test('522 production build mounts a real-null image catalog and its viewport pair; the original unguarded loop fails', async () => {
   const f = setup(), body = await actualBuildBody();

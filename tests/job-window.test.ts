@@ -1380,7 +1380,7 @@ import {parseControlPart, parsePartIdentity, type ControlPart} from '../src/cont
 import {parseManifest} from '../src/manifest.ts';
 import type {JobPreparedInspection} from '../web/job-session.ts';
 import {RigOverlays} from '../web/rig-overlays.ts';
-import {labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts} from '../web/view-controls.ts';
+import {labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls} from '../web/view-controls.ts';
 import {mountWorkspaceShell} from '../web/workspace-ui.ts';
 import {SENTINELS} from '../web/parts-render.ts';
 import {JOB_PLAN_TEXT_FIELDS, type JobPlanTextProjection} from '../src/job-contract.ts';
@@ -1644,8 +1644,9 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                         element.setAttribute(attribute[1]!, attribute[2]!);
                     }
                     element.hidden = /\bhidden\b/.test(token[2]!);
+                    if (element.tagName === 'input') { element.type = element.getAttribute('type') ?? ''; element.checked = /\bchecked\b/.test(token[2]!); element.disabled = /\bdisabled\b/.test(token[2]!); }
                     stack.at(-1)!.append(element);
-                    stack.push(element);
+                    if (element.tagName.toLowerCase() !== 'input') stack.push(element);
                 }
             }
         }
@@ -2091,7 +2092,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         const runner = new Function(
             'host', 'access', 'hubIncarnation', 'hubVisible', 'events', 'pageId', 'transport', 'abort',
             'i18n', 't', 'createViewportController', 'createViewportState', 'createRigViewportProvider', 'mountViewportPair', 'mountWorkspaceShell',
-            'RigOverlays', 'labelledControl', 'createViewControls', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'SENTINELS',
+            'RigOverlays', 'labelledControl', 'createViewControls', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'createRigLayerControls', 'SENTINELS',
             'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal', 'jobPartsReviewState',
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
             'recordJobRigDraw', 'freezeJobRigCapture', 'copyJobRigViewport', 'createJobRigSubmission', 'jobRigPixelPlacement',
@@ -2101,7 +2102,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         const mounted = runner(
             host, access, hubIncarnation, hubVisible, undefined, options?.pageId ?? 'page-one', transport, abort,
             i18nModule, i18nModule.t, createViewportController, createViewportState, createRigViewportProvider, mountViewportPair, mountWorkspaceShell,
-            RigOverlays, labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, SENTINELS,
+            RigOverlays, labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls, SENTINELS,
             createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal, jobPartsReviewState,
             prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,
             recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
