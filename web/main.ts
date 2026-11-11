@@ -1232,7 +1232,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  };
  viewDisposers.push(viewport.bindControls(),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
- viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');text('draft-state','Not submitted');message('Parts ready. Source files remain unchanged.');referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
+ viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message('Parts ready. Source files remain unchanged.');referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
  if(host){host.attach({stage:()=>null,redraw:()=>partsSubject?.redraw(),message,pendingSubjects:renderPendingSubjects});host.displayed();}
  window.addEventListener('pagehide',()=>{partsSubject?.dispose();inspectorTabs?.dispose();workspace?.dispose();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());});
