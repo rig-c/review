@@ -7,6 +7,7 @@
  * baseline guard; Reset returns to the inspected build. The source draft keeps the pending ops (`#rig-fields-pending`);
  * the generated controls carry no ids.
  */
+import {panelNode as node,panelMake as make} from './view-controls.ts';
 import {arcBound,dragRow,readingPair,fieldsApplyEnabled,fieldsDraftEdits,fieldsDraftText,INHERIT_MODES,rigFieldOps,rigFieldsSource,seedStill,setInherit,setRegion,setStill,setStop,setTurn,stillParts,stopArcs,turnDial,TURN_DIAL_RANGE,TURN_PREVIEW_LABEL,type FieldEdit,type RigFieldsSource,type RigPoint,type StillEntry} from '../src/rig-fields.ts';
 import type {JsonValue,PatchOp} from '../src/config-patch.ts';
 
@@ -54,8 +55,6 @@ export interface RigFieldsPanel {
  place():void;restore():void;clear():void;dispose():void;
 }
 
-const node=<T extends HTMLElement>(id:string)=>{const found=document.getElementById(id);if(!found)throw new Error(`Missing UI element: ${id}`);return found as T;};
-const make=<K extends keyof HTMLElementTagNameMap>(tag:K,props:Record<string,unknown>={},...children:(Node|string)[]):HTMLElementTagNameMap[K]=>{const item=document.createElement(tag);Object.assign(item,props);item.append(...children);return item;};
 const SVG='http://www.w3.org/2000/svg';
 const svg=<K extends keyof SVGElementTagNameMap>(tag:K,attrs:Record<string,string|number>):SVGElementTagNameMap[K]=>{const e=document.createElementNS(SVG,tag);for(const [k,v] of Object.entries(attrs))e.setAttribute(k,String(v));return e;};
 const shown=(v:JsonValue|undefined)=>v===undefined?'(absent)':typeof v==='string'?v:JSON.stringify(v);

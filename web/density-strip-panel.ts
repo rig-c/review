@@ -6,6 +6,7 @@
  * verbatim). The two labels name rows; the table has no Apply. Load puts a built row on the stage as pending (the
  * Mesh panel's Apply then applies it, reusing its build); Refine between builds the next strip inside two rows.
  */
+import {panelNode as node,panelMake as make} from './view-controls.ts';
 import {barText,densityField,densityPath,refineValues,stripValues,type DensityField,type StripRow} from '../src/density-strip.ts';
 import {entryValue,type MeshEntry} from '../src/mesh-entry.ts';
 
@@ -26,8 +27,6 @@ export interface DensityStripPanel {
  show(view:DensityStripViewLike|null,pending:number|null,busy:boolean):void;
  status(text:string,error:boolean):void;
 }
-const node=<T extends HTMLElement>(id:string)=>{const found=document.getElementById(id);if(!found)throw new Error(`Missing UI element: ${id}`);return found as T;};
-const make=<K extends keyof HTMLElementTagNameMap>(tag:K,props:Record<string,unknown>={},...children:(Node|string)[]):HTMLElementTagNameMap[K]=>{const item=document.createElement(tag);Object.assign(item,props);item.append(...children);return item;};
 const fieldLabel=(f:DensityField)=>f==='grid'?'grid':'contour.spacing';
 
 export function bindDensityStrip(host:DensityStripHost):DensityStripPanel {

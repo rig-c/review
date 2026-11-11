@@ -10,6 +10,7 @@
  * Hand-editing the drafted constraints is the physics block's, after the draft. The draft keeps the pending edits
  * (`#cloth-pending`).
  */
+import {panelNode as node,panelMake as make} from './view-controls.ts';
 import {ClothFieldError,fieldText,recipeFromFields,recipeOps,RECIPE_FIELDS,type ClothTagView,type RecipeField} from '../src/cloth-recipe.ts';
 import type {PatchOp} from '../src/config-patch.ts';
 import {itemApplied} from '../src/applied-blocks.ts';
@@ -41,8 +42,6 @@ export interface ClothPanel {
  status(text:string,error:boolean):void;busy(value:boolean):void;
  restore():void;clear():void;sync():void;dispose():void;
 }
-const node=<T extends HTMLElement>(id:string)=>{const found=document.getElementById(id);if(!found)throw new Error(`Missing UI element: ${id}`);return found as T;};
-const make=<K extends keyof HTMLElementTagNameMap>(tag:K,props:Record<string,unknown>={},...children:(Node|string)[]):HTMLElementTagNameMap[K]=>{const item=document.createElement(tag);Object.assign(item,props);item.append(...children);return item;};
 const isObject=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 
 export function bindClothPanel(deps:ClothPanelDeps):ClothPanel {
