@@ -40,6 +40,14 @@ test('#709 a rig publication routes to the rig screen only while every pending a
   expect(jobRigScreenRoute(display, [...asks, {...signoff, publicationId: 'other'}], ids)).toBe(true);
   const interview = {...signoff, subject: {kind: 'interview-picks', questionId: 'q', setId: 's'}} as unknown as PendingAskV3;
   expect(jobRigScreenRoute(display, [interview], ids)).toBe(false);
+  for (const subject of [{kind: 'parts-verdict', draftId: 'd'}, {kind: 'reopen', stage: 'rig-review'},
+    {kind: 'review-verdict', stage: 'direction-review'}, {kind: 'review-verdict', stage: 'image-review'},
+    {kind: 'checkpoint', checkpointId: 'undeclared'}]) {
+    expect(jobRigScreenRoute(display, [...asks, {...signoff, subject} as PendingAskV3], ids)).toBe(false);
+  }
+  const image = {...publication, source: {...publication.source, subject: 'image-set'}};
+  expect(jobRigScreenSubject(image.source as unknown as DisplayPublicationV3['publication']['source'])).toBe(false);
+  expect(jobRigScreenRoute({publication: image} as unknown as DisplayPublicationV3, [], ids)).toBe(false);
   const draft = {...publication, source: {...publication.source, selector: {kind: 'draft', id: 'd'}}};
   expect(jobRigScreenRoute({publication: draft} as unknown as DisplayPublicationV3, [], ids)).toBe(false);
 });
@@ -138,4 +146,19 @@ test('#709 the rig screen still does not depend on the mesh or bone overlay togg
   expect(stage).toContain('wholeRig:!parts?.value()&&player.slots===null&&layers.images,');
   expect(stage).not.toContain('layers.mesh');
   expect(stage).not.toContain('layers.bones');
+});
+
+// The job window retains only the image and direction verdict owners; rig capture belongs to this shared screen.
+test('#709 job-window rig verdict mount and capture path are deleted, not hidden by a test override', async () => {
+  const source = await Bun.file(new URL('../web/job-session.ts', import.meta.url)).text();
+  const form = source.slice(source.indexOf('    function formFor('), source.indexOf('    function updateForms('));
+  expect(form).toContain("else if (subject.kind === 'review-verdict' && (subject.stage === 'image-review' || subject.stage === 'direction-review'))");
+  expect(form).not.toContain("else if (subject.kind === 'review-verdict')");
+  expect(form).not.toContain('rigSubmission');
+  expect(source).not.toContain('copyRigVerdict');
+  expect(source).not.toContain('createJobRigSubmission');
+  expect(source).not.toContain('freezeJobRigCapture');
+  expect(source).not.toContain('copyJobRigViewport');
+  const controls = await Bun.file(new URL('./job-window.test.ts', import.meta.url)).text();
+  expect(controls).not.toContain('legacy' + 'RigForm');
 });

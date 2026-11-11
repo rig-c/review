@@ -10,7 +10,6 @@ import type {
     JobCheckpointTable,
     JobInterviewDiagnostics,
     JobResult,
-    JobUISubmission,
     PendingAskV3,
     JobPanelComposition,
     PanelComponent,
@@ -26,7 +25,7 @@ import {koCatalog} from './catalog-ko.ts';
 import {t} from './i18n.ts';
 import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjection} from '../src/job-contract.ts';
 import {JOB_HUB_READY, jobHubMessageMatches, type JobHubBinding} from './job-hub.ts';
-import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigDrawState, presentJobRigStage,
+import {recordJobRigDraw, jobRigDrawState, presentJobRigStage,
     type JobRigDraw, type JobRigDrawState} from './job-rig-capture.ts';
 import {advancePlayback} from './playback-clock.ts';
 import {createJobRigScreen, isJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts';
@@ -1378,7 +1377,6 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         submissionId: string;
         dirty: boolean;
         submitting: boolean;
-        rigSubmission: ReturnType<typeof createJobRigSubmission>;
     };
     type PreparedWindow = JobPreparedInspection & {
         element: HTMLElement;
@@ -1655,16 +1653,6 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             armPlayback(expectedOwner, expectedPlayer);
         }
     }
-    function copyRigVerdict(ask: PendingAskV3, owner: JobPreparedInspection) {
-        if (owner !== current || ask.publicationId !== owner.display.publication.publicationId) {
-            throw new Error('JOB_STILL_BINDING_MISMATCH');
-        }
-        assertJobAskSource(ask, owner.display);
-        return freezeJobRigCapture(drawn.get(owner), rigDrawState(), ask.askId, () => {
-            if (!owner.rigPresentation) throw new Error('JOB_STILL_CAPTURE_FAILED');
-            return copyJobRigViewport(owner.rigPresentation);
-        });
-    }
     const referenceSelection = createJobReferenceSelection<JobReferenceView>({
         current: () => ({owner: current, time}),
         present(value) {
@@ -1824,6 +1812,9 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         if (ask.publicationId !== prepared.display.publication.publicationId)
             throw new Error('JOB_DISPLAY_MISMATCH');
         assertJobAskSource(ask, prepared.display);
+        // Rig verdicts belong to the shared screen; unsupported combinations have no job-window form.
+        if (ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review')
+            throw new Error('JOB_ACT_KIND_DISABLED');
         const form = node('form');
         form.dataset.jobAsk = ask.askId;
         const fields = node('fieldset');
@@ -1982,7 +1973,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             };
             submitKey = 'job.partsApprove';
         }
-        else if (subject.kind === 'review-verdict') {
+        else if (subject.kind === 'review-verdict' && (subject.stage === 'image-review' || subject.stage === 'direction-review')) {
             const verdict = selectValues(['pending', 'approved', 'changes-requested'], ['Pending', 'Approved', 'Changes requested']);
             verdict.name = 'verdict';
             fields.append(verdict);
@@ -2042,7 +2033,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         status.setAttribute('role', 'status');
         form.append(status);
         const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
-            submitting: false, rigSubmission: createJobRigSubmission() };
+            submitting: false };
         const signoffSubmissionId = crypto.randomUUID();
         try {
             const saved = JSON.parse(localStorage.getItem(localDraftKey(prepared.display)) ?? 'null');
@@ -2072,7 +2063,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             }
         }
         catch { /* Invalid or unavailable local drafts grant no submission authority. */ }
-        form.oninput = () => { entry.dirty = true; entry.submissionId = crypto.randomUUID(); entry.rigSubmission.reset(); saveDraft(); };
+        form.oninput = () => { entry.dirty = true; entry.submissionId = crypto.randomUUID(); saveDraft(); };
         form.onsubmit = async (event) => {
             event.preventDefault();
             const state = window.state();
@@ -2085,11 +2076,9 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     expectedGeneration: state.generation, submissionId: entry.submissionId, value: read() } as UISubmissionV3;
                 const activeAsk = state.pending.find(item => item.askId === ask.askId);
                 if (!activeAsk) throw new Error('JOB_ASK_INVALID');
-                const pending = subject.kind === 'review-verdict' && subject.stage === 'rig-review'
-                    ? entry.rigSubmission.prepare(input as JobUISubmission, () => copyRigVerdict(activeAsk, prepared)) : Promise.resolve(input);
                 entry.submitting = true;
                 fields.disabled = true;
-                const frozen = await pending;
+                const frozen = await Promise.resolve(input);
                 if (entry.submissionId !== frozen.submissionId) throw new Error('JOB_STILL_BINDING_MISMATCH');
                 if (subject.kind === 'parts-verdict') window.refresh();
                 const result = subject.kind === 'parts-verdict'
@@ -2098,7 +2087,6 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     throw new Error(result.error.code);
                 entry.submitting = false;
                 entry.dirty = false;
-                entry.rigSubmission.reset();
                 status.dataset.jobText = 'job.saved';
                 status.textContent = t('job.saved');
                 saveDraft();
