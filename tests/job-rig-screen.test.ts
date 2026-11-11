@@ -33,7 +33,7 @@ test('#715 mixed rig verdict and supported modal asks stay on the shared screen'
   const checkpoint = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
   const asks = [verdict, checkpoint] as unknown as PendingAskV3[];
   expect(jobRigScreenRoute(display, asks, ids)).toBe(true);
-  expect(jobRigScreenRoute(display, asks, new Set())).toBe(false);
+  expect(jobRigScreenRoute(display, asks, new Set())).toBe(true);
   const signoff = {...verdict, askId: 'signoff', subject: {kind: 'signoff', stage: 'rig-review'}} as unknown as PendingAskV3;
   expect(jobRigScreenRoute(display, [...asks, signoff], ids)).toBe(true);
   expect(jobRigScreenRoute(display, [...asks, {...signoff, status: 'answered'}], ids)).toBe(true);
@@ -166,4 +166,15 @@ test('#709 job-window rig verdict mount and capture path are deleted, not hidden
   expect(source).not.toContain('copyJobRigViewport');
   const controls = await Bun.file(new URL('./job-window.test.ts', import.meta.url)).text();
   expect(controls).not.toContain('legacy' + 'RigForm');
+});
+
+test('#756 package checkpoint modal requires the same-source plan mapping before leaving the legacy route',async()=>{
+ const f=await fixture(),publication=await f.publish(),checkpoint=await f.ask(publication,{kind:'checkpoint',checkpointId:'step-one'});
+ const display={publication} as unknown as DisplayPublicationV3,ask=checkpoint as unknown as PendingAskV3;
+ expect(jobRigScreenRoute(display,[ask],new Set())).toBe(true);
+ const alias={...ask,subject:{kind:'checkpoint' as const,checkpointId:'not-a-manifest-checkpoint',planStepId:'step-one'}};
+ expect(jobRigScreenRoute(display,[alias],new Set())).toBe(true);
+ expect(jobRigScreenRoute(display,[{...alias,subject:{...alias.subject,planStepId:'missing'}}],new Set())).toBe(false);
+ expect(jobRigScreenRoute(display,[{...alias,source:{...alias.source,sourceHash:'f'.repeat(64)}}],new Set())).toBe(false);
+ expect(jobRigScreenRoute(display,[{...alias,source:{...alias.source,plan:null} as PendingAskV3['source']}],new Set())).toBe(false);
 });

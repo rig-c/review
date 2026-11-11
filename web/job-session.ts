@@ -1,6 +1,5 @@
 import {mountWorkspaceShell} from './workspace-ui.ts';
 /** Live job window transactions. Every form remains bound to its displayed publication. */
-import { parseControlPart, type ControlPart } from '../src/control.ts';
 import type {
     ActV3,
     DisplayPublicationV3,
@@ -26,14 +25,11 @@ import {t,onLanguageChange} from './i18n.ts';
 import type {InstanceAccess} from './instance-access.ts';
 import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjection} from '../src/job-contract.ts';
 import {JOB_HUB_READY, jobHubMessageMatches, type JobHubBinding} from './job-hub.ts';
-import {recordJobRigDraw, jobRigDrawState, presentJobRigStage,
-    type JobRigDraw, type JobRigDrawState} from './job-rig-capture.ts';
 import {advancePlayback} from './playback-clock.ts';
 import {createJobRigScreen, isJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts';
 import type {JobRigPresentation} from './viewport-capture.ts';
-import {labelledControl,createViewControls} from './view-controls.ts';
+import {labelledControl,createViewControls,inspectionViewSwitch} from './view-controls.ts';
 import {createInterviewForm,interviewPicksRecord,interviewRecords,interviewErrors,type InterviewDisplayQuestion} from './interview-panel.ts';
-import {SENTINELS} from './parts-render.ts';
 import {JOB_COMMENTS_ACT_SCHEMA, JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 
@@ -1233,7 +1229,7 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
         return input;
     }
     function imageGallery(images: readonly {name: string; sha256: string; element?: HTMLImageElement;
-        role?: string; duplicate?: boolean}[]): HTMLElement {
+        role?: string; duplicate?: boolean}[], titleOnly = false): HTMLElement {
         const gallery = node('section');
         gallery.style.display = 'grid';
         gallery.style.gridAutoFlow = 'column';
@@ -1251,13 +1247,15 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
             figure.dataset.imageName = image.name;
             const name = node('h3');
             name.textContent = image.name;
+            if (titleOnly) name.setAttribute('translate', 'no');
             name.style.overflowWrap = 'anywhere';
             const role = image.role ? node('p', 'job.imageRole.' + image.role) : node('p');
             const hash = node('code');
             hash.className = 'job-source';
             hash.style.display = 'block';
             hash.style.overflowWrap = 'anywhere';
-            hash.textContent = image.sha256;
+            if (titleOnly) hash.title = image.sha256;
+            else hash.textContent = image.sha256;
             element.style.width = '100%';
             element.style.height = 'auto';
             element.style.maxHeight = '70vh';
@@ -1268,6 +1266,16 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
             gallery.append(figure);
         }
         return gallery;
+    }
+    function planStepText(element: HTMLElement, step: NonNullable<SourceV3['plan']>['steps'][number],
+        projection: JobPlanTextProjection | undefined): void {
+        const row = projection?.status === 'projected' ? projection.steps.find(row => row.id === step.id && row.hash === step.hash) : undefined;
+        const key = row?.does === undefined ? 'job.plan.field.' + (row?.issues.find(issue => issue.field === 'does')?.reason ?? 'absent') : undefined;
+        // Producer identities stay raw; absence keys still follow the job form's own language binding.
+        element.setAttribute('translate', 'no');
+        if (key) element.dataset.jobText = key;
+        else delete element.dataset.jobText;
+        element.textContent = key ? t(key) : row!.does!;
     }
     function planTextList(plan: NonNullable<SourceV3['plan']>, projection: JobPlanTextProjection | undefined,
         selectedId?: string): HTMLElement {
@@ -1286,15 +1294,14 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
             const details = node('details');
             details.open = true;
             const title = node('summary');
-            title.textContent = step.id;
-            const hash = node('code');
-            hash.className = 'job-source';
-            hash.textContent = step.hash;
-            details.append(title, hash);
+            planStepText(title, step, projection);
+            title.title = step.id + ' · ' + step.hash;
+            details.append(title);
             const row = projection?.status === 'projected' ? projection.steps.find(row => row.id === step.id && row.hash === step.hash) : undefined;
             if (row) {
                 const fields = node('dl');
                 for (const field of JOB_PLAN_TEXT_FIELDS) {
+                    if (field === 'does') continue;
                     const term = node('dt', 'job.plan.' + field);
                     const value = node('dd');
                     value.dataset.jobPlanField = field;
@@ -1302,9 +1309,14 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
                     if (issue) value.append(node('span', 'job.plan.field.' + issue.reason));
                     else if (field === 'rests_on') {
                         const rests = node('ul');
-                        for (const text of row.rests_on!) {const rest = node('li'); rest.textContent = text; rests.append(rest);}
+                        for (const text of row.rests_on!) {
+                            const rest = node('li'), dependency = plan.steps.find(step => step.id === text);
+                            if (dependency) {planStepText(rest, dependency, projection); rest.title = text;}
+                            else {rest.textContent = text; rest.setAttribute('translate', 'no');}
+                            rests.append(rest);
+                        }
                         value.append(rests);
-                    } else value.textContent = row[field]!;
+                    } else {value.textContent = row[field]!; value.setAttribute('translate', 'no');}
                     fields.append(term, value);
                 }
                 details.append(fields);
@@ -1322,7 +1334,7 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
         section.append(list);
         return section;
     }
-    return {inputLabel, selectValues, textArea, imageGallery, planTextList};
+    return {inputLabel, selectValues, textArea, imageGallery, planTextList, planStepText};
 }
 
 /** The answer builder owns no page shell, transport or draft collection. */
@@ -1346,7 +1358,7 @@ export interface JobFormDependencies {
 
 /** Build the existing answer form with explicit host dependencies. */
     function formFor(ask: PendingAskV3, prepared: JobPreparedInspection, deps: JobFormDependencies): JobForm {
-        const {node, translate: t, helpers: {textArea, selectValues, imageGallery, planTextList, assertJobAskSource, jobCheckpointContext},
+        const {node, translate: t, helpers: {textArea, selectValues, imageGallery, planTextList, planStepText, assertJobAskSource, jobCheckpointContext},
             draftStorage, localDraftKey, saveDraft, window, access, pageId} = deps;
         if (ask.publicationId !== prepared.display.publication.publicationId)
             throw new Error('JOB_DISPLAY_MISMATCH');
@@ -1361,7 +1373,9 @@ export interface JobFormDependencies {
         form.append(fields);
         const source = node('p');
         source.className = 'job-source';
-        source.textContent = prepared.display.publication.label + ' · ' + ask.source.sourceHash;
+        source.textContent = ask.subject.kind === 'review-verdict'
+            ? prepared.display.publication.label + ' · ' + ask.source.sourceHash : prepared.display.publication.label;
+        if (ask.subject.kind !== 'review-verdict') {source.title = ask.source.sourceHash; source.setAttribute('translate', 'no');}
         fields.append(source);
         const subject = ask.subject;
         const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff' || subject.kind === 'reopen';
@@ -1406,9 +1420,14 @@ export interface JobFormDependencies {
             const checkpoint = jobCheckpointContext(ask, prepared.metadata.manifest?.checkpoints ?? []);
             const heading = node('h3');
             heading.textContent = checkpoint.title;
+            heading.title = subject.checkpointId;
+            heading.setAttribute('translate', 'no');
+            if (prepared.metadata.manifest?.checkpoints.find(item => item.id === subject.checkpointId)?.title == null)
+                planStepText(heading, checkpoint.step, prepared.metadata.planText);
             fields.prepend(heading);
             const guidance = node('p');
             guidance.textContent = checkpoint.note;
+            guidance.setAttribute('translate', 'no');
             fields.append(guidance, planTextList(ask.source.plan!, prepared.metadata.planText, checkpoint.step.id));
             const evidence = prepared.checkpointEvidence?.find(item => item.packet.checkpointId === subject.checkpointId);
             const declared = ask.source.checkpointEvidence?.find(item => item.checkpointId === subject.checkpointId);
@@ -1421,7 +1440,7 @@ export interface JobFormDependencies {
                 section.dataset.jobCheckpointEvidence = subject.checkpointId;
                 section.append(node('h4', 'job.checkpointEvidence'));
                 section.append(imageGallery(evidence.packet.tiles.map((tile, index) => ({name: tile.label,
-                    sha256: tile.sha256, element: evidence.images[index]?.cloneNode(true) as HTMLImageElement}))));
+                    sha256: tile.sha256, element: evidence.images[index]?.cloneNode(true) as HTMLImageElement})), true));
                 const tableHost = node('div');
                 tableHost.style.overflow = 'auto';
                 tableHost.style.maxHeight = '50dvh';
@@ -1431,8 +1450,10 @@ export interface JobFormDependencies {
                 if (evidence.packet.table.label !== undefined) {
                     delete caption.dataset.jobText;
                     caption.textContent = evidence.packet.table.label;
+                    caption.setAttribute('translate', 'no');
                 }
                 const head = node('thead');
+                head.setAttribute('translate', 'no');
                 const columns = node('tr');
                 for (const column of evidence.table.columns) {
                     const cell = node('th');
@@ -1442,6 +1463,7 @@ export interface JobFormDependencies {
                 }
                 head.append(columns);
                 const body = node('tbody');
+                body.setAttribute('translate', 'no');
                 for (const row of evidence.table.rows) {
                     const cells = node('tr');
                     for (const value of row) {
@@ -1455,8 +1477,10 @@ export interface JobFormDependencies {
                 tableHost.append(table);
                 const routes = node('pre');
                 routes.textContent = evidence.packet.routesText;
+                routes.setAttribute('translate', 'no');
                 const recommendation = node('pre');
                 recommendation.textContent = evidence.packet.recommendationText;
+                recommendation.setAttribute('translate', 'no');
                 section.append(tableHost, node('h4', 'job.checkpointRoutes'), routes,
                     node('h4', 'job.checkpointRecommendation'), recommendation);
                 fields.append(section, node('p', 'job.checkpointRouteMapping'));
@@ -1496,9 +1520,7 @@ export interface JobFormDependencies {
             }
         }
         else if (subject.kind === 'signoff') {
-            const stage = node('p');
-            stage.textContent = subject.stage;
-            fields.append(stage);
+            fields.title = subject.stage;
             if (ask.source.plan) fields.append(planTextList(ask.source.plan, prepared.metadata.planText));
             read = () => ({ stage: subject.stage, decision: 'approved', words: commentWords() });
             submitKey = 'job.signoff';
@@ -1513,9 +1535,7 @@ export interface JobFormDependencies {
             ) {
                 throw new Error('JOB_ASK_INVALID');
             }
-            const stage = node('p');
-            stage.textContent = subject.stage;
-            fields.append(stage);
+            fields.title = subject.stage;
             read = () => ({ stage: subject.stage, words: commentWords() });
             submitKey = 'job.reopen';
         }
@@ -1720,9 +1740,9 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
 /** `inherited` keeps the capability the one-screen mount already took off the URL (it may live only in memory). */
 export async function mountJobSession(host: HTMLElement, legacy=false, inherited?: JobWindowAccess): Promise<() => void> {
     if(!legacy)return mountJobScreen(host);
-    const [{ createViewportController, createViewportState }, { createRigViewportProvider }, { mountViewportPair }, { RigOverlays }, { bindLayerShortcuts, describeLayerToggles, createRigLayerControls }, i18n] = await Promise.all([
+    const [{ createViewportController, createViewportState }, { createRigViewportProvider }, { mountViewportPair }, i18n] = await Promise.all([
         import('./viewport-controller.ts'), import('./rig-viewport-provider.ts'),
-        import('./viewport-pair.ts'), import('./rig-overlays.ts'), import('./view-controls.ts'), import('./i18n.ts'),
+        import('./viewport-pair.ts'), import('./i18n.ts'),
     ]);
     let storage: Storage | null = null;
     try {
@@ -1749,7 +1769,7 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         return value;
     };
     const formHelpers = prepareJobForms.helpers(node, t);
-    const {inputLabel, selectValues, imageGallery, planTextList} = formHelpers;
+    const {inputLabel, imageGallery} = formHelpers;
     const shell = mountWorkspaceShell({compatibility: 'legacyJobStep5', title: t('job.title')});
     const {header, title} = shell, languages = shell.language!;
     languages.value = i18n.getLanguage();
@@ -1763,6 +1783,7 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
     host.replaceChildren(header, notice, workspace);
     let current: JobPreparedInspection | null = null;
     let currentElement: HTMLElement | null = null;
+    let view = 'compare';
     type SavedCameraState = Pick<
         ReturnType<typeof createViewportState>,
         'cameraSync' | 'activeCamera' | 'zoom' | 'cameraCenter' | 'referenceZoom' | 'referenceCenter'
@@ -1776,11 +1797,8 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         animation?: string;
         time?: number;
         loop?: boolean;
-        selectedPart?: string;
-        partMode?: 'context' | 'solo';
         selectedReference?: string;
         panel?: string;
-        partIdentity?: unknown;
         camera?: unknown;
     };
     const parseSavedPoint = (raw: unknown): { x: number; y: number } | null | undefined => {
@@ -1812,14 +1830,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
             referenceZoom: value.referenceZoom,
             referenceCenter,
         };
-    };
-    const parseSavedPartIdentity = (raw: unknown): ControlPart | null => {
-        try {
-            return parseControlPart(raw);
-        }
-        catch {
-            return null;
-        }
     };
     const parseSavedDraftRecord = (raw: unknown): JobRetainedDraft | null => {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -1884,12 +1894,9 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
     let inPlaybackStep = false;
     let lastRunningSaveMs: number | null = null;
     let lastSavedWindowJson: string | null = null;
-    let selectedPart = typeof savedWindow?.selectedPart === 'string' ? savedWindow.selectedPart : '';
-    let partMode: 'context' | 'solo' = savedWindow?.partMode === 'solo' ? 'solo' : 'context';
     let selectedReference = typeof savedWindow?.selectedReference === 'string' ? savedWindow.selectedReference : '';
     let panel = typeof savedWindow?.panel === 'string' && ['1', '2', '3', '4'].includes(savedWindow.panel)
         ? savedWindow.panel : '3';
-    let restoredPartIdentity: ControlPart | null = parseSavedPartIdentity(savedWindow?.partIdentity);
     let restoredCamera: SavedCameraState | null = parseSavedCamera(savedWindow?.camera);
     let compatibilityNotice = Boolean(savedWindow?.compatibilityNotice);
     type PreparedWindow = JobPreparedInspection & {
@@ -1897,11 +1904,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         forms: Map<string, JobForm>;
     };
     const forms = new Map<string, JobForm>();
-    const drawn = new WeakMap<JobPreparedInspection, JobRigDraw>();
-    const overlays = new WeakMap<JobPreparedInspection, InstanceType<typeof RigOverlays>>();
-    const layers = { images: true, mesh: false, bones: false, meshOpacity: 0.65 };
-    let stageBackground = '';
-    let drawGeneration = 0;
     const viewportState = createViewportState();
     if (restoredCamera) {
         Object.assign(viewportState, restoredCamera, { cameraRestoring: false });
@@ -1933,11 +1935,8 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
                 animation,
                 time,
                 loop,
-                selectedPart,
-                partMode,
                 selectedReference,
                 panel,
-                partIdentity: current.inspection?.value() ?? null,
                 camera: {
                     cameraSync: viewportState.cameraSync,
                     activeCamera: viewportState.activeCamera,
@@ -1965,27 +1964,11 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
     const reference = () => current?.references.find(item => item.id === selectedReference) ?? null;
     const setText = (id: string, value: string) => { const element = workspace.querySelector('#' + id); if (element)
         element.textContent = i18n.tr(value); };
-    function redrawOverlay(fresh: boolean): void {
-        const owner = current, overlay = owner ? overlays.get(owner) : undefined;
-        if (!owner || !overlay) return;
-        const root = owner.rigRoot, scale = viewportState.rigScale;
-        const left = parseFloat(root.style.left) || 0, top = parseFloat(root.style.top) || 0;
-        const project = (x: number, y: number) => ({ x: left + x * scale, y: top - y * scale });
-        const bones = (owner.metadata.feedbackCatalog.bones ?? []).map(name => ({ name }));
-        const frame = owner.inspection?.frame('single');
-        const selectedSlot = selectedPart || null;
-        const snap = fresh
-            ? overlay.refresh({ player: owner.player, bones, frame, selectedSlot, project, settings: layers })
-            : overlay.redraw({ project, settings: layers });
-        if (!fresh && snap.needsCapture && owner.player) {
-            overlay.refresh({ player: owner.player, bones, frame, selectedSlot, project, settings: layers });
-        }
-    }
     const provider = createRigViewportProvider({
         el, player: () => current?.player ?? null, assets: () => current?.assets ?? null,
-        referenceSize: () => reference(), view: () => 'compare', referenceGeneration: () => current?.display.publication.generation ?? 0,
-        parts: () => current?.inspection ?? null, text: setText,
-        message: value => { notice.textContent = jobWindowRefusal(value); }, redrawOverlay: fresh => redrawOverlay(fresh),
+        referenceSize: () => reference(), view: () => view, referenceGeneration: () => current?.display.publication.generation ?? 0,
+        parts: () => current?.inspection ?? null, text: setText, fitLabel: 'Fit',
+        message: value => { notice.textContent = jobWindowRefusal(value); }, redrawOverlay: () => {},
     }, viewportState);
     const canonicalControls = provider.renderControls;
     provider.renderControls = controller => {
@@ -1995,66 +1978,9 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         saveWindowState();
     };
     const viewport = createViewportController(provider, viewportState);
-    const renderViewport = provider.render;
-    provider.render = controller => {
-        try {renderViewport(controller); rememberDraw();}
-        catch (error) {
-            if (current) {
-                drawn.delete(current);
-                current.rigPresentation = undefined;
-            }
-            throw error;
-        }
-    };
-    function rigDrawState(): JobRigDrawState {
-        const owner = current, player = owner?.player;
-        if (!owner || !player || !hubVisible) throw new Error('JOB_STILL_CAPTURE_FAILED');
-        return jobRigDrawState({pane: el('rig-viewport'), paneHidden: el('rig-pane').hidden, root: owner.rigRoot, player,
-            presentation: owner.rigPresentation, frameGeneration: owner.inspection?.frame('single')?.generation,
-            camera: viewport.numericView().cameras.rig, frame: viewport.paneFrame('rig'),
-            source: {pageId, publicationId: owner.display.publication.publicationId,
-                instanceKey: owner.display.publication.instanceKey, sourceHash: owner.display.publication.source.sourceHash},
-            wholeRig: !selectedPart && !owner.inspection?.value() && player.slots === null &&
-                layers.images && !layers.mesh && !layers.bones && !stageBackground,
-            playing});
-    }
-    function rememberDraw(): void {
-        const owner = current;
-        if (!owner) return;
-        try {
-            const pane = el('rig-viewport');
-            const bg = SENTINELS[stageBackground] ?? '';
-            pane.style.backgroundColor = bg;
-            pane.style.backgroundImage = bg ? 'none' : '';
-            if (!layers.images || layers.mesh || layers.bones || bg) {
-                drawn.delete(owner);
-                owner.rigPresentation = undefined;
-                delete pane.dataset.jobRigCanonical;
-                owner.rigRoot.style.visibility = layers.images ? 'visible' : 'hidden';
-                return;
-            }
-            owner.rigRoot.style.visibility = '';
-            const player = owner.player;
-            const posed = owner.inspection?.frame('single');
-            const camera = viewport.numericView().cameras.rig;
-            if (!hubVisible || !player || !owner.assets || !posed || !camera) {
-                throw new Error('JOB_STILL_CAPTURE_FAILED');
-            }
-            const presentation = presentJobRigStage({pane, root: owner.rigRoot, player, camera, posed, assets: owner.assets});
-            owner.rigPresentation = presentation;
-            pane.dataset.jobRigCanonical = '';
-            drawn.set(owner, recordJobRigDraw(rigDrawState(), ++drawGeneration));
-        } catch {
-            drawn.delete(owner);
-            owner.rigPresentation = undefined;
-        }
-    }
     function drawInspection(owner: JobPreparedInspection): void {
-        drawn.delete(owner);
-        owner.rigPresentation = undefined;
         owner.player?.draw();
         owner.inspection?.present('single');
-        if (owner === current) redrawOverlay(true);
     }
     function syncTransportControls(): void {
         const playBtn = workspace.querySelector<HTMLButtonElement>('#job-play');
@@ -2085,8 +2011,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
     function presentCurrentFrame(owner: JobPreparedInspection): void {
         if (!owner.player) return;
         drawInspection(owner);
-        owner.inspection?.select(selectedPart ? { side: 'single', slot: selectedPart, mode: partMode } : null);
-        setText('job-part-observation', selectedPart ? JSON.stringify(owner.inspection?.observation(), null, 2) : '');
         viewport.fitCamera();
     }
     function armPlayback(expectedOwner: JobPreparedInspection, expectedPlayer: RigPlayer): void {
@@ -2193,48 +2117,14 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         if (!host)
             return;
         for(const ask of state.pending){
-            if(ask.publicationId!==current.display.publication.publicationId||ask.subject.kind==='parts-verdict'||ask.subject.kind==='interview-picks')continue;
+            if(ask.publicationId!==current.display.publication.publicationId)continue;
+            if(ask.subject.kind!=='review-verdict'||!['image-review','direction-review'].includes(ask.subject.stage))throw new Error('JOB_PANEL_UNAVAILABLE');
             let entry=forms.get(ask.askId);
             if(!entry&&ask.status==='pending'){
                 try{entry=prepareJobForms.formFor(ask,current,formDependencies);forms.set(ask.askId,entry);host.append(entry.form);}
                 catch(error){const refusal=node('p');refusal.textContent=jobWindowRefusal(error,'JOB_ASK_INVALID');host.append(refusal);}
             }
             if(entry)entry.fieldset.disabled=entry.submitting||ask.status!=='pending'||state.preparing||state.closed||!state.receipt||!access.capability;
-        }
-        const hasCheckpointAsk = Boolean(current.player) && state.pending.some(
-            ask => ask.publicationId === current!.display.publication.publicationId &&
-                ask.status === 'pending' && ask.subject.kind === 'checkpoint',
-        );
-        const layerSet = workspace.querySelector<HTMLElement>('#layer-controls');
-        const bgField = workspace.querySelector<HTMLElement>('#job-background-field');
-        const bgSelect = workspace.querySelector<HTMLSelectElement>('#job-background');
-        const hadNonDefaultView = !layers.images || layers.mesh || layers.bones || Boolean(stageBackground);
-        if (!hasCheckpointAsk && hadNonDefaultView) {
-            layers.images = true;
-            layers.mesh = false;
-            layers.bones = false;
-            stageBackground = '';
-        }
-        if (layerSet) {
-            layerSet.hidden = !hasCheckpointAsk;
-            for (const [id, key] of [['layer-images', 'images'], ['layer-mesh', 'mesh'], ['layer-bones', 'bones']] as const) {
-                const box = layerSet.querySelector<HTMLInputElement>('#' + id);
-                if (box) {
-                    box.disabled = !hasCheckpointAsk;
-                    box.checked = layers[key];
-                }
-            }
-            describeLayerToggles({ getElementById: id => layerSet.querySelector('#' + id) }, t('No rig supplied'));
-            for (const label of layerSet.querySelectorAll<HTMLElement>('.layer-toggle')) label.title = i18n.tr(label.title);
-        }
-        if (bgField && bgSelect) {
-            bgField.hidden = !hasCheckpointAsk;
-            bgSelect.disabled = !hasCheckpointAsk;
-            bgSelect.value = stageBackground;
-        }
-        if (!hasCheckpointAsk && hadNonDefaultView) {
-            redrawOverlay(true);
-            rememberDraw();
         }
     }
     function build(prepared: JobPreparedInspection): HTMLElement {
@@ -2253,29 +2143,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         sourceBinding.textContent = JSON.stringify(prepared.display.publication.source, null, 2);
         binding.append(bindingTitle, sourceBinding);
         sidebar.append(binding);
-        const parts = node('select');
-        parts.id = 'job-part';
-        parts.disabled = !prepared.metadata.manifest?.model || prepared.metadata.feedbackCatalog.slots === null;
-        const whole = node('option', 'job.wholeRig');
-        whole.value = '';
-        parts.append(whole);
-        for (const slot of prepared.metadata.feedbackCatalog.slots ?? []) {
-            const option = node('option');
-            option.value = slot;
-            option.textContent = slot;
-            parts.append(option);
-        }
-        parts.onchange = () => { selectedPart = parts.value; selectPart(); };
-        sidebar.append(inputLabel('Parts', parts));
-        const solo = node('input');
-        solo.type = 'checkbox';
-        solo.id = 'job-solo';
-        solo.onchange = () => { partMode = solo.checked ? 'solo' : 'context'; selectPart(); };
-        sidebar.append(inputLabel('Solo', solo));
-        const observation = node('pre');
-        observation.id = 'job-part-observation';
-        observation.className = 'job-source';
-        sidebar.append(observation);
         const referenceSelect = node('select');
         referenceSelect.id = 'job-reference';
         for (const reference of prepared.references) {
@@ -2293,41 +2160,13 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         stage.className = 'job-stage';
         const controls = node('div');
         controls.className = 'viewbar';
-        const layerSet = createRigLayerControls({jobText: true, translate: t});
-        layerSet.hidden = true;
-        for (const keyName of ['images', 'mesh', 'bones'] as const) {
-            const box = layerSet.querySelector<HTMLInputElement>('#layer-' + keyName)!;
-            box.checked = layers[keyName];
-            box.disabled = true;
-            box.onchange = () => {
-                layers[keyName] = box.checked;
-                if (current === prepared) {
-                    redrawOverlay(true);
-                    rememberDraw();
-                }
-            };
-        }
-        describeLayerToggles({ getElementById: id => layerSet.querySelector('#' + id) }, t('No rig supplied'));
-        for (const label of layerSet.querySelectorAll<HTMLElement>('.layer-toggle')) label.title = i18n.tr(label.title);
-        const sentinelKeys = Object.keys(SENTINELS);
-        const bgSelect = selectValues(['', ...sentinelKeys], ['Rig', ...sentinelKeys.map(k => k[0]!.toUpperCase() + k.slice(1))]);
-        bgSelect.id = 'job-background';
-        bgSelect.value = stageBackground;
-        bgSelect.disabled = true;
-        bgSelect.onchange = () => {
-            stageBackground = Object.hasOwn(SENTINELS, bgSelect.value) ? bgSelect.value : '';
-            bgSelect.value = stageBackground;
-            if (current === prepared) {
-                redrawOverlay(false);
-                rememberDraw();
-            }
-        };
-        const bgField = inputLabel('Background', bgSelect);
-        bgField.id = 'job-background-field';
-        bgField.hidden = true;
-        controls.append(layerSet, bgField);
-        const viewControls = createViewControls({layout:'legacyCompiledJobStep5', inputLabel});
-        controls.append(...viewControls.zoomButtons, viewControls.syncLabel, viewControls.value);
+        const viewControls = createViewControls({layout:'rigStep1', viewSwitch:inspectionViewSwitch(next => {
+            view = next;
+            pair.querySelector<HTMLElement>('#reference-pane')!.hidden = next === 'rig';
+            pair.querySelector<HTMLElement>('#rig-pane')!.hidden = next === 'reference';
+            viewport.fitCamera();
+        })});
+        controls.append(viewControls.syncLabel, viewControls.zoomGroup!);
         const pair = node('div');
         pair.id = 'stage-layout';
         mountViewportPair(pair);
@@ -2349,14 +2188,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
             rigViewport.addEventListener('pointerdown', () => rigViewport.focus?.());
         }
         pair.querySelector('#rig-root')!.replaceWith(prepared.rigRoot);
-        const overlayCanvas = pair.querySelector<HTMLCanvasElement>('#rig-overlay');
-        if (overlayCanvas) {
-            overlayCanvas.setAttribute('aria-label', t('Actual rig mesh and bone overlay'));
-            const instance = new RigOverlays({ canvas: overlayCanvas, rigRoot: prepared.rigRoot });
-            overlays.set(prepared, instance);
-            const prevDispose = prepared.dispose;
-            prepared.dispose = () => { try { instance.dispose(); } finally { prevDispose(); } };
-        }
         const transport = node('div');
         transport.className = 'job-transport';
         const clips = node('select');
@@ -2541,17 +2372,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         root.append(sidebar, stage, formsHost);
         return root;
     }
-    function selectPart(): void {
-        if (!current?.inspection)
-            return;
-        drawn.delete(current);
-        current.rigPresentation = undefined;
-        current.inspection.select(selectedPart ? { side: 'single', slot: selectedPart, mode: partMode } : null);
-        redrawOverlay(true);
-        rememberDraw();
-        setText('job-part-observation', selectedPart ? JSON.stringify(current.inspection.observation(), null, 2) : '');
-        viewport.renderCameraControls();
-    }
     function showReference(): void {
         const value = reference();
         el('reference-content').replaceChildren(...(value ? [value.element] : []));
@@ -2576,8 +2396,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         // Setup uses an empty composed track. Animation seek needs a fresh single track.
         if (animation && current.player?.composed) current.setupPose(false);
         if (current.player) {
-            drawn.delete(current);
-            current.rigPresentation = undefined;
             if (animation && (current.player.current !== animation || current.player.entry(0)?.loop !== loop))
                 current.player.play(animation, { loop });
             if (animation) {
@@ -2596,8 +2414,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
             }
             current.player.pause();
             drawInspection(current);
-            current.inspection?.select(selectedPart ? { side: 'single', slot: selectedPart, mode: partMode } : null);
-            setText('job-part-observation', selectedPart ? JSON.stringify(current.inspection?.observation(), null, 2) : '');
         }
         syncTransportControls();
         if (seekReference) {
@@ -2624,13 +2440,14 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
     function announceHubFrame(): void {
         if (hubIncarnation) globalThis.parent.postMessage({...hubBinding(), schema: JOB_HUB_READY}, location.origin);
     }
-    // #709: a rig publication opens the one review screen; the job window keeps every other subject.
+    // Only publications without a shared-screen host retain this fallback.
     const formDependencies: JobFormDependencies = {
         node, translate: t, helpers: {...formHelpers, assertJobAskSource, jobCheckpointContext},
         draftStorage: () => localStorage, localDraftKey, saveDraft, access, pageId,
         window: {state: () => window.state(), submit: input => window.submit(input)},
     };
-    const rigScreen = createJobRigScreen({host, pageId, access, translate: (key, values) => i18n.t(key, values, 'en'), refusal: jobWindowRefusal, legacyRecords:true,
+    const rigScreen = createJobRigScreen({host, pageId, access, translate: (key, values) => i18n.t(key, values, 'en'), refusal: jobWindowRefusal, formDependencies,
+        readPublication: (id, signal) => transport.readPublication(id, signal),
         window: {state: () => window.state(), submit: input => window.submit(input)},
         routes: display => jobPublicationRoutes(display, location.origin), load: async () => (await import('./main.ts')).mountRigScreen()});
     const window = createJobWindow({ jobId: access.jobId, pageId, transport,
@@ -2641,6 +2458,9 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
                 if (!rig && rigScreen.mounted()) { location.reload(); return new Promise<never>(() => {}); }
                 if (rig && current) { location.reload(); return new Promise<never>(() => {}); }
                 if (rig) return rig;
+                const source = display.publication.source;
+                if ('record' in source || source.subject !== 'image-set' && !source.direction && (source.model || source.parts))
+                    throw new Error('JOB_PANEL_UNAVAILABLE');
                 const inspection = await prepareJobInspection(display, signal);
                 try {
                     const element = build(inspection);
@@ -2655,7 +2475,7 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
             },
             captureDraft() { if (rigScreen.mounted()) return null; saveDraft(); const dirty = [...forms].filter(([, item]) => item.dirty); return dirty.length ? dirty.map(([askId, item]) => ({ askId, value: item.read() })) : null; },
             commit(prepared, display) {
-                if (isJobRigScreen(prepared)) { unbindLayerShortcuts(); return rigScreen.commit(prepared); }
+                if (isJobRigScreen(prepared)) return rigScreen.commit(prepared);
                 // Pending asks can arrive while assets load. Finish their forms before the visible replacement.
                 const asks = window.state().pending;
                 const nextForms = prepareJobForms(display, asks,
@@ -2670,9 +2490,7 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
                 const previousElement = currentElement;
                 const previousForms = new Map(forms);
                 const restoringCamera = Boolean(previous || restoredCamera);
-                const navigation = { animation, time, loop, selectedPart, partMode, selectedReference, panel,
-                    layers: { images: layers.images, mesh: layers.mesh, bones: layers.bones }, stageBackground,
-                    partIdentity: previous ? (previous.inspection?.value() ?? null) : restoredPartIdentity,
+                const navigation = { animation, time, loop, selectedReference, panel,
                     camera: structuredClone(viewportState) };
                 compatibilityNotice = Boolean(!previous &&
                     savedWindow?.publicationId === display.publication.publicationId &&
@@ -2680,10 +2498,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
                 if (animation && !prepared.assets?.animations.some(item => item.name === animation && time <= item.duration)) {
                     animation = '';
                     time = 0;
-                    compatibilityNotice = true;
-                }
-                if (selectedPart && !(prepared.metadata.feedbackCatalog.slots ?? []).includes(selectedPart)) {
-                    selectedPart = '';
                     compatibilityNotice = true;
                 }
                 if (!prepared.references.some(item => item.id === selectedReference))
@@ -2699,12 +2513,8 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
                     animation = navigation.animation;
                     time = navigation.time;
                     loop = navigation.loop;
-                    selectedPart = navigation.selectedPart;
-                    partMode = navigation.partMode;
                     selectedReference = navigation.selectedReference;
                     panel = navigation.panel;
-                    Object.assign(layers, navigation.layers);
-                    stageBackground = navigation.stageBackground;
                     forms.clear();
                     for (const [id, item] of previousForms)
                         forms.set(id, item);
@@ -2722,36 +2532,13 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
                     forms.clear();
                     for (const [id, entry] of nextForms) forms.set(id, entry);
                     workspace.replaceChildren(root);
-                    el<HTMLSelectElement>('job-part').value = selectedPart;
-                    el<HTMLInputElement>('job-solo').checked = partMode === 'solo';
                     el<HTMLSelectElement>('job-reference').value = selectedReference;
                     el<HTMLSelectElement>('job-animation').value = animation;
                     el<HTMLInputElement>('job-loop').checked = loop;
-                    layers.images = true;
-                    layers.mesh = false;
-                    layers.bones = false;
-                    stageBackground = '';
-                    for (const [id, key] of [['layer-images', 'images'], ['layer-mesh', 'mesh'], ['layer-bones', 'bones']] as const) {
-                        el<HTMLInputElement>(id).checked = layers[key];
-                    }
                     el('rig-empty').hidden = !!prepared.player;
                     Object.assign(viewportState, navigation.camera, { cameraRestoring: restoringCamera });
                     showReference();
                     pose(false);
-                    if (selectedPart) {
-                        try {
-                            if (!navigation.partIdentity || navigation.partIdentity.slot !== selectedPart) {
-                                throw new Error('PART_IDENTITY_UNAVAILABLE');
-                            }
-                            prepared.inspection?.assertIdentity(navigation.partIdentity);
-                        }
-                        catch {
-                            selectedPart = '';
-                            compatibilityNotice = true;
-                            el<HTMLSelectElement>('job-part').value = '';
-                        }
-                    }
-                    selectPart();
                     viewportState.cameraRestoring = false;
                     updateForms(window.state());
                     showPanel();
@@ -2761,7 +2548,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
                     return {
                         rollback,
                         finalize() {
-                            restoredPartIdentity = null;
                             restoredCamera = null;
                             savedWindow = null;
                             unbindNavigation?.();
@@ -2787,7 +2573,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
                 await reference()?.seek(time, signal);
                 if (prepared.player) {
                     drawInspection(prepared);
-                    rememberDraw();
                 }
                 await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
                 if (signal.aborted)
@@ -2849,15 +2634,12 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
                 if (state.receipt && !state.preparing) events?.displayed();
             },
         } });
-    const unbindLayerShortcuts = bindLayerShortcuts(document);
     const localize = i18n.onLanguageChange(() => {
         for (const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))
             element.textContent = t(element.dataset.jobText!);
         languages.setAttribute('aria-label', t('interview.language'));
         if (current) {
             workspace.querySelector('#rig-overlay')?.setAttribute('aria-label', t('Actual rig mesh and bone overlay'));
-            describeLayerToggles({ getElementById: id => workspace.querySelector('#' + id) }, t('No rig supplied'));
-            for (const label of workspace.querySelectorAll<HTMLElement>('.layer-toggle')) label.title = i18n.tr(label.title);
             viewport.renderCameraControls();
         }
         window.refresh();
@@ -2871,11 +2653,7 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
             i18n.setLinkLanguage(null); i18n.setLanguagePreference(event.data.language);
         }
         pauseHiddenHubFrame();
-        if (current && !hubVisible) {
-            drawn.delete(current);
-            current.rigPresentation = undefined;
-        }
-        if (hubVisible && current?.player) {drawInspection(current); rememberDraw();}
+        if (hubVisible && current?.player) drawInspection(current);
     };
     if (hubIncarnation) {globalThis.addEventListener('message', hubVisibility); announceHubFrame();}
     events = startJobWindowEvents({access, signal: abort.signal, member: !!hubIncarnation,
@@ -2888,8 +2666,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         resolution = globalThis.matchMedia(`(resolution:${globalThis.devicePixelRatio || 1}dppx)`);
         resolution.addEventListener('change', resolutionChanged);
         if (current) {
-            drawn.delete(current);
-            current.rigPresentation = undefined;
             viewport.fitCamera();
         }
     };
@@ -2904,7 +2680,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         abort.abort();
         window.stop();
         localize();
-        unbindLayerShortcuts();
         unbindNavigation?.();
         resize?.disconnect();
         current?.dispose();

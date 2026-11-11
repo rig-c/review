@@ -1,3 +1,4 @@
+import {t} from '../web/i18n.ts';
 import {expect,test} from 'bun:test';
 import {createViewportController,createViewportState,type ViewportProvider} from '../web/viewport-controller.ts';
 import {projectMark,unprojectMark} from '../src/stage-comment.ts';
@@ -5,7 +6,8 @@ import {viewportPairMarkup,expandViewportPair,viewportPairPlaceholder} from '../
 import {createPartsViewport,createPartsViewportProvider} from '../web/parts-viewport-provider.ts';
 import {createRigViewportProvider,type RigViewportHost} from '../web/rig-viewport-provider.ts';
 function host(){
- const nodes=new Map<string,any>();for(const target of ['rig','reference']){nodes.set(target+'-viewport',{clientWidth:640,clientHeight:480});nodes.set(target+'-pane',{hidden:false});}
+ const nodes=new Map<string,any>();for(const target of ['rig','reference']){nodes.set(target+'-viewport',{clientWidth:640,clientHeight:480,addEventListener(){},removeEventListener(){}});nodes.set(target+'-pane',{hidden:false});}
+ for(const id of ['zoom-in','zoom-out','fit','camera-sync','native-one'])nodes.set(id,{onclick:null as (()=>void)|null,onchange:null,checked:true,click(){this.onclick?.();}});
  const state=createViewportState();let renders=0;
  const provider:ViewportProvider={el:(id:string)=>nodes.get(id),geometry:target=>({space:target==='rig'?'world':'image',box:{x:0,y:0,width:320,height:240},marginX:0,marginY:0}),layoutKey:()=>[...nodes.values()].map(n=>n.clientWidth??n.hidden).join(','),render:()=>{renders++;},renderControls:()=>{},selection:()=>({selected:false,bounds:null}),message:()=>{}};
  return {nodes,state,provider,controller:createViewportController(provider,state),renders:()=>renders};
@@ -359,4 +361,46 @@ test('#742 physical parts sync uses the selected world box, absolute centre and 
  selected=false;c.requestFit();view=c.numericView();expect(view.cameras.rig!.center).toEqual({x:416,y:608});expect(view.cameras.reference!.center).toEqual(view.cameras.rig!.center);
  const zoom=view.cameras.rig!.zoom;expect(el('reference-content').style.transform).toBe(`scale(${zoom*.5},${zoom*.5})`);expect(el('rig-root').style.transform).toBe(`scale(${zoom})`);
  for(const target of ['rig','reference']as const){c.activateCamera(target);expect(()=>c.fitActiveCamera()).not.toThrow();expect(c.paneCamera('reference')).toEqual(c.paneCamera('rig'));}
+});
+
+
+test('#756 shared 1:1 button reaches CSS unit scale without a host callback and disposes its binding',()=>{
+ for(const nativeScale of [false,true]){
+  const h=host(),c=createViewportController({...h.provider,nativeScale},h.state);c.state.cameraSync=false;
+  c.updateCamera('rig',{zoom:3,pan:{x:.2,y:-.1}});const one=h.nodes.get('native-one'),dispose=c.bindControls();
+  one.click();const camera=c.numericView().cameras.rig!;
+  expect(camera.center).toEqual({x:160,y:120});expect(camera.visible.width).toBe(640);
+  const a=projectMark({x:160,y:120},camera),b=projectMark({x:161,y:121},camera);
+  expect(b.x-a.x).toBe(1);expect(Math.abs(b.y-a.y)).toBe(1);expect(c.state.zoom).toBe(nativeScale?1:.5);
+  dispose();expect(one.onclick).toBeNull();const held=structuredClone(c.paneCamera('rig'));one.click();expect(c.paneCamera('rig')).toEqual(held);
+ }
+});
+
+test('#756 shared button keeps available-camera fallback and the actual main callback messages',async()=>{
+ const source=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();
+ const begin=source.indexOf('function unitScaleMessage('),end=source.indexOf('\nfunction bindReviewDialog(',begin);
+ const callbackSource=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(begin,end));
+ for(const language of ['en','ko'] as const)for(const mode of ['rig','reference','parts'] as const){
+  const h=host(),c=createViewportController({...h.provider,nativeScale:mode==='parts'},h.state);c.state.cameraSync=false;
+  if(mode==='reference')h.nodes.get('rig-pane').hidden=true;
+  const messages:string[]=[],callback=new Function('partsOnly','message',callbackSource+';return unitScaleMessage;')(mode==='parts',(value:string)=>messages.push(t(value,undefined,language)));
+  const dispose=c.bindControls(callback);h.nodes.get('native-one').click();const target=mode==='reference'?'reference':'rig';
+  expect(c.state.activeCamera).toBe(target);expect(c.numericView().cameras[target]!.visible.width).toBe(640);
+  const key=mode==='parts'?'1:1':mode==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.';
+  expect(messages).toEqual([t(key,undefined,language)]);dispose();
+ }
+});
+
+test('#756 shared 1:1 refusal uses cameraAction without a success callback or camera mutation',()=>{
+ const h=host(),errors:{value:string;error:boolean}[]=[],success:string[]=[];h.provider.message=(value,error=false)=>errors.push({value,error});
+ h.provider.geometry=()=>({space:'world',box:{x:0,y:0,width:64000,height:48000},marginX:0,marginY:0});
+ const c=createViewportController(h.provider,h.state);c.state.cameraSync=false;c.state.zoom=3;c.state.cameraCenter={x:12,y:34};const before=structuredClone(c.paneCamera('rig'));
+ const dispose=c.bindControls(target=>success.push(target));h.nodes.get('native-one').click();
+ expect(errors).toHaveLength(1);expect(errors[0]!.value).toContain('VIEW_CAMERA_RANGE');expect(errors[0]!.error).toBe(true);expect(success).toEqual([]);expect(c.paneCamera('rig')).toEqual(before);dispose();
+});
+
+test('#756 legacy compare callers may omit native-one even when their scoped lookup throws',()=>{
+ const h=host();h.nodes.delete('native-one');h.provider.el=<T extends HTMLElement>(id:string):T=>{if(!h.nodes.has(id))throw new Error('MISSING_CONTROL '+id);return h.nodes.get(id);};
+ const c=createViewportController(h.provider,h.state),dispose=c.bindControls();h.nodes.get('zoom-in').click();expect(c.state.zoom).toBe(1.25);
+ dispose();expect(h.nodes.get('zoom-in').onclick).toBeNull();
 });

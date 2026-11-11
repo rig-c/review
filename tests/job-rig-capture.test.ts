@@ -331,7 +331,7 @@ test('#557 oracle restores null and empty attributes with one operation before a
 });
 
 
-/** Execute the actual window state reader over synthetic DOM geometry. */
+/** Execute the shared screen stage reader and capture module over synthetic DOM geometry. */
 function canonicalLayout(ratio: number, run: (fixture: {
   read(): JobRigDrawState;
   move(x: number, y: number): void;
@@ -343,14 +343,13 @@ function canonicalLayout(ratio: number, run: (fixture: {
   changeRatio(value: number): void;
   setPlaying(value: boolean): void;
   layers: {images: boolean; mesh: boolean; bones: boolean; meshOpacity: number};
-  setBackground(value: string): void;
+  setDifference(value: boolean): void;
 }) => void) {
-  const source = readFileSync(new URL('../web/job-session.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('    function rigDrawState(): JobRigDrawState {');
-  const end = source.indexOf('    function rememberDraw(): void {', start);
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  const body = source.slice(start, end).replace('rigDrawState(): JobRigDrawState', 'rigDrawState()');
+  const source = readFileSync(new URL('../web/main.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('function hostStage():RigHostStage|null {');
+  const end = source.indexOf('\n}', start) + 2;
+  expect(start).toBeGreaterThanOrEqual(0);expect(end).toBeGreaterThan(start);
+  const body = new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end));
   const keys = ['getComputedStyle', 'devicePixelRatio'] as const;
   const descriptors = keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   const v = view();
@@ -369,11 +368,13 @@ function canonicalLayout(ratio: number, run: (fixture: {
     width: canvas.width, height: canvas.height, ratio, area: {x: 0.5, y: 0, width: 591, height: 162}};
   const owner = {player: v.player, rigRoot, rigPresentation: presentation, display: {publication},
     inspection: {frame: () => ({generation: v.player.generation}), value: () => null}};
-  const context = {current: owner, hubVisible: true, selectedPart: '', pageId: v.state.source.pageId,
-    playing: false, layers: {images: true, mesh: false, bones: false, meshOpacity: 0.65}, stageBackground: '',
-    viewport: {paneFrame: () => ({center}), numericView: () => ({cameras: {rig: camera}})},
-    el: (id: string) => id === 'rig-viewport' ? viewportPane : {hidden: false}, jobRigPixelPlacement, jobRigDrawState};
-  const read: () => JobRigDrawState = new Function('scope', `with(scope){${body};return rigDrawState;}`)(context);
+  const context = {player:v.player,parts:owner.inspection,assets:null,rigDifference:null as object|null,
+    playing:false,layers:{images:true,mesh:false,bones:false,meshOpacity:0.65},
+    paneFrame:()=>({center}),numericView:()=>({cameras:{rig:camera}}),
+    el:(id:string)=>id==='rig-viewport'?viewportPane:id==='rig-root'?rigRoot:{hidden:false}};
+  const stage=new Function('scope',`with(scope){${body};return hostStage;}`)(context);
+  const read=()=>jobRigDrawState({...stage(),presentation,source:{pageId:v.state.source.pageId,
+    publicationId:publication.publicationId,instanceKey:publication.instanceKey,sourceHash:publication.source.sourceHash}});
   const changeRatio = (value: number) => Object.defineProperty(globalThis, 'devicePixelRatio', {configurable: true, value});
   Object.defineProperty(globalThis, 'getComputedStyle', {configurable: true, value: (node: unknown) => ({
     visibility: 'visible', display: 'block', opacity: '1', filter: 'none', perspective: 'none',
@@ -383,7 +384,7 @@ function canonicalLayout(ratio: number, run: (fixture: {
   try {
     run({read, pane, pixels, canvas, publication, player: v.player, changeRatio,
       setPlaying(value) {context.playing = value;},
-      layers: context.layers, setBackground(value) {context.stageBackground = value;},
+      layers: context.layers, setDifference(value) {context.rigDifference = value?{}:null;},
       move(x, y) {pane.left += x; pane.top += y; pixels.left += x; pixels.top += y;}});
   } finally {
     for (const [key, descriptor] of descriptors) {
@@ -551,25 +552,13 @@ test('#559 UI refuses capture before and after synchronous pixel copy when playi
   }
 });
 
-test('#630 actual rigDrawState refuses noncanonical layers and background before pixel copy', () => {
+test('#630 shared screen refuses hidden images and Difference while capture excludes mesh/bone overlays', () => {
   canonicalLayout(1, fixture => {
-    const draw = recordJobRigDraw(fixture.read(), 1);
-    const refuse = () => {
-      expect(fixture.read().wholeRig).toBe(false);
-      expect(() => freezeJobRigCapture(draw, fixture.read(), 'ask-1', () => {
-        throw new Error('noncanonical view must refuse before pixel copy');
-      })).toThrow('JOB_STILL_VIEW_UNSUPPORTED');
-    };
-    for (const key of ['images', 'mesh', 'bones'] as const) {
-      fixture.layers[key] = key !== 'images';
-      refuse();
-      fixture.layers[key] = key === 'images';
-      expect(fixture.read().wholeRig).toBe(true);
-    }
-    fixture.setBackground('green');
-    refuse();
-    fixture.setBackground('');
-    expect(fixture.read().wholeRig).toBe(true);
+    const draw=recordJobRigDraw(fixture.read(),1);
+    const refuse=()=>{expect(fixture.read().wholeRig).toBe(false);expect(()=>freezeJobRigCapture(draw,fixture.read(),'ask-1',()=>{throw new Error('must refuse before pixel copy');})).toThrow('JOB_STILL_VIEW_UNSUPPORTED');};
+    fixture.layers.images=false;refuse();fixture.layers.images=true;
+    for(const key of ['mesh','bones'] as const){fixture.layers[key]=true;expect(fixture.read().wholeRig).toBe(true);fixture.layers[key]=false;}
+    fixture.setDifference(true);refuse();fixture.setDifference(false);expect(fixture.read().wholeRig).toBe(true);
   });
 });
 

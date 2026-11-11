@@ -36,7 +36,7 @@ async function mainSave(session: ReviewSession, submittedBaseline: ReviewSession
   const javascript = new Bun.Transpiler({loader: 'ts'}).transformSync(source.slice(stateStart, stateEnd) + lock + '\nconst save = ' + save);
   return new Function('deps', `
     let {session, submittedBaseline, host} = deps;
-    let dirty = true, saving = false, draftConflict = false, readOnly = null;
+    let dirty = true, saving = false, draftConflict = false, readOnly = null, actReadOnly = null;
     const readouts = {}, messages = [], saved = [];
     const node = {classList: {toggle() {}}, disabled: false, title: ''};
     const el = () => node, button = el, text = (id, value) => {readouts[id] = value;};

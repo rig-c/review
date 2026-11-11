@@ -67,3 +67,11 @@ test('instance replacement failures propagate before storage is touched',()=>{
  expect(()=>instanceAccess('http://127.0.0.1:4318/#cap='+capability,storage,()=>{throw new Error('replace failed');})).toThrow('replace failed');
  expect(calls).toEqual([]);
 });
+
+test('#756 act status waits for resolution and never upgrades immutable backdrop source access',()=>{
+ const backdrop={capability:null},owner={capability:'owner'},copied={capability:null};
+ for(const authority of [owner,copied])expect(readOnlyReason(backdrop,null,authority)).toBeNull();
+ expect(readOnlyReason(backdrop,true,owner)).toBeNull();expect(readOnlyReason(backdrop,true,copied)).toBe(readOnlyMessage);
+ expect(readOnlyReason(backdrop,true)).toBe(readOnlyMessage);expect(backdrop.capability).toBeNull();
+ expect(readOnlyReason(backdrop,false,copied)).toBeNull();
+});

@@ -8,6 +8,7 @@ import {realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {JobCheckpointEvidence, JobCheckpointTable, NextValueV3, PlanContext} from '../src/job-contract.ts';
+import {checkpointNoteComments,projectComments} from '../src/stage-comment.ts';
 import {JOB_RECORD_READER_ID} from '../src/job-contract.ts';
 import {startJobHost} from '../src/job-front.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -59,6 +60,7 @@ async function run() {
     let page: InputCdpSession | undefined;
     let control: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
     let corruptTiles = false;
+    let expectedDeparture: URL | undefined;
     let activeDecision: {host: Awaited<ReturnType<typeof startJobHost>>; schema: string;
         askId: string; publicationId: string; sourceHash: string; outcome: string; words: string; prefix: string} | undefined;
     let latestNext: ReturnType<typeof summarizeNext> | undefined;
@@ -81,13 +83,13 @@ async function run() {
             binding: string | null; controls: unknown[]}>(`(()=>{
             const f=document.querySelector('form[data-job-ask="${askId}"]');
             const fields=f?.querySelector('fieldset'), submit=f?.querySelector('button[type=submit]');
-            const outcome=f?.querySelector('select[name=outcome]'), words=f?.querySelector('textarea[name=note]');
-            const status=f?.querySelector('[role=status]'), notice=document.querySelector('.job-notice');
+            const outcome=f?.querySelector('select[name=outcome]'), words=f?.commentWords?.();
+            const status=f?.querySelector('[role=status]'), notice=document.querySelector('#message');
             return {exists:!!f, askId:f?.dataset.jobAsk??null,
                 ready:!!fields&&!fields.disabled&&!!submit&&!submit.matches(':disabled')&&
-                    !!outcome&&!outcome.matches(':disabled')&&!!words&&!words.matches(':disabled'),
+                    !!outcome&&!outcome.matches(':disabled')&&typeof words==='string',
                 fieldsetDisabled:fields?.disabled??null, submitDisabled:submit?.matches(':disabled')??null,
-                outcome:outcome?.value??null, words:words?.value??null, valid:f?.checkValidity()??false,
+                outcome:outcome?.value??null, words:words??null, valid:f?.checkValidity()??false,
                 status:status?{key:status.dataset.jobText??null,text:status.textContent}:null,
                 notice:notice?{failed:notice.dataset.failed??null,text:notice.textContent}:null,
                 binding:f?.querySelector('.job-source')?.textContent??null,
@@ -126,116 +128,31 @@ async function run() {
             const askId = await page!.evaluate<string>(`document.querySelector('[data-job-checkpoint-evidence]').closest('form').dataset.jobAsk`);
             await until(async () => (await checkpointForm(askId)).ready, prefix + ' layout checkpoint ready');
             await page!.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+            await page!.evaluate(`(()=>{const d=document.querySelector('#job-record-asks');if(!d.open)document.querySelector('#workspace-pending-ask').click();})()`);
             const layout = await page!.evaluate<any>(`(()=>{
-                const inspection=document.querySelector('.job-inspection'), main=inspection.parentElement;
-                const forms=inspection.querySelector('[data-job-forms]'), stage=inspection.querySelector('.job-stage');
-                const evidence=forms.querySelector('[data-job-checkpoint-evidence]');
-                const gallery=evidence.querySelector('section'), titles=[...gallery.querySelectorAll('figure h3')];
-                const fourth=titles[3];
-                fourth.scrollIntoView({block:'center',inline:'nearest'});
+                const dialog=document.querySelector('#job-record-asks'),forms=document.querySelector('form[data-job-ask="${askId}"]');
+                const evidence=forms.querySelector('[data-job-checkpoint-evidence]'),gallery=evidence.querySelector('section');
+                const titles=[...gallery.querySelectorAll('figure h3')],fourth=titles[3];fourth.scrollIntoView({block:'center',inline:'nearest'});
                 const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
-                const formsRect=rect(forms), galleryRect=rect(gallery), range=document.createRange();
-                range.selectNodeContents(fourth);
+                const range=document.createRange();range.selectNodeContents(fourth);
                 return {viewport:{width:innerWidth,height:innerHeight},askId:evidence.closest('form').dataset.jobAsk,
-                    main:rect(main),inspection:rect(inspection),stage:rect(stage),forms:formsRect,
-                    stageChildren:[...stage.children].map(child=>({id:child.id,className:child.className,
-                        tag:child.tagName,visible:child.getClientRects().length>0,rect:rect(child),
-                        clientHeight:child.clientHeight,scrollHeight:child.scrollHeight,
-                        minHeight:getComputedStyle(child).minHeight,flex:getComputedStyle(child).flex})),
-                    formsClientHeight:forms.clientHeight,
-                    gallery:{...galleryRect,clientWidth:gallery.clientWidth,scrollWidth:gallery.scrollWidth,
-                        clientHeight:gallery.clientHeight,scrollLeft:gallery.scrollLeft,clientLeft:gallery.clientLeft},
-                    labels:titles.map(n=>n.textContent),fourthTitle:rect(fourth),
+                    dialog:rect(dialog),forms:rect(forms),formsClientHeight:forms.clientHeight,
+                    labels:titles.map(n=>n.textContent),gallery:{...rect(gallery),scrollWidth:gallery.scrollWidth,clientWidth:gallery.clientWidth},
                     fourthTitleTextRects:[...range.getClientRects()].map(r=>({left:r.left,right:r.right,top:r.top,bottom:r.bottom})),
-                    clip:{left:Math.max(formsRect.left+forms.clientLeft,galleryRect.left+gallery.clientLeft),
-                        right:Math.min(formsRect.left+forms.clientLeft+forms.clientWidth,galleryRect.left+gallery.clientLeft+gallery.clientWidth),
-                        top:Math.max(formsRect.top+forms.clientTop,galleryRect.top+gallery.clientTop),
-                        bottom:Math.min(formsRect.top+forms.clientTop+forms.clientHeight,galleryRect.top+gallery.clientTop+gallery.clientHeight)}};
+                    summaries:[...forms.querySelectorAll('.job-plan-steps summary')].map(n=>({text:n.textContent,title:n.title})),
+                    legacy:document.querySelectorAll('.job-inspection,[data-job-forms],[data-job-plan-workspace]').length};
             })()`);
-            layout.phase = phase;
-            layout.sourceHash = publication.source.sourceHash;
-            layout.recordSha256 = publication.source.projectHash;
-            assert.ok(layout.recordSha256, prefix+' authenticated text record');
-            layoutObservations.push(layout);
-            assert.deepEqual(layout.viewport, viewport);
-            assert.equal(layout.askId, askId);
-            assert.ok(Math.abs(layout.inspection.bottom - layout.main.bottom) <= 1,
-                prefix + ' inspection must fill main at ' + viewport.width);
-            assert.ok(layout.formsClientHeight >= viewport.height * 0.5,
-                prefix + ' forms must occupy at least half the viewport height at ' + viewport.width);
-            if (prefix.startsWith('package-')) assert.ok(Math.abs(layout.stage.height - 250) <= 1, prefix + ' stage stays 250px');
-            else assert.ok(layout.stage.right <= layout.forms.left + 1, prefix+' plan and forms stay beside each other');
-            const requiredStageChildren = [
-                {id: '', className: 'viewbar'}, {id: 'stage-layout', className: ''}, {id: '', className: 'job-transport'},
-            ];
-            for (const required of requiredStageChildren) {
-                const child = layout.stageChildren.find((item: {id: string; className: string}) =>
-                    required.id ? item.id === required.id : item.className.split(/\s+/).includes(required.className));
-                assert.ok(child, prefix + ' required stage child exists at ' + viewport.width);
-                if (prefix.startsWith('package-')) {
-                    assert.equal(child.visible, true, prefix + ' package stage child must be visible');
-                    assert.ok(child.rect.height > 0, prefix + ' package stage child has positive height');
-                    if (!required.id) assert.ok(child.scrollHeight <= child.clientHeight,
-                        prefix + ' controls must fit one row vertically');
-                }
-            }
+            layout.phase=phase;layout.sourceHash=publication.source.sourceHash;layout.recordSha256=publication.source.projectHash;
+            layoutObservations.push(layout);assert.deepEqual(layout.viewport,viewport);assert.equal(layout.askId,askId);
+            assert.equal(layout.legacy,0);assert.ok(layout.recordSha256,prefix+' authenticated text record');
+            assert.ok(layout.dialog.left>=0&&layout.dialog.top>=0&&layout.dialog.right<=viewport.width&&layout.dialog.bottom<=viewport.height,prefix+' native dialog is bounded');
+            assert.ok(layout.forms.width>0&&layout.formsClientHeight>0&&layout.forms.width<=layout.dialog.width,prefix+' scrollable form stays inside dialog');
+            assert.deepEqual(layout.labels,packet.tiles.map(tile=>tile.label));
+            for(const box of layout.fourthTitleTextRects)assert.ok(box.left>=layout.dialog.left-1&&box.right<=layout.dialog.right+1&&box.top>=layout.dialog.top-1&&box.bottom<=layout.dialog.bottom+1,prefix+' complete fourth-tile title remains reachable');
+            for(const summary of layout.summaries){assert.ok(summary.title.includes(packet.planStepId));assert.equal(summary.text.includes(packet.planStepId),false);}
+            let screenshot:Uint8Array|undefined;
             if (prefix.startsWith('package-')) {
-                const pair = layout.stageChildren.find((child: {id: string}) => child.id === 'stage-layout');
-                assert.ok(pair.rect.height >= Math.max(layout.stage.height * 0.6, 150),
-                    prefix + ' render pair must occupy at least 60% of stage and 150px');
-            }
-            for (const child of layout.stageChildren) {
-                if (!child.visible || !prefix.startsWith('package-')) continue;
-                assert.ok(child.rect.top >= layout.stage.top && child.rect.bottom <= layout.stage.bottom,
-                    prefix + ' stage child ' + (child.id || child.className || child.tag) +
-                    ' must stay inside stage at ' + viewport.width);
-                assert.ok(child.rect.bottom <= layout.forms.top,
-                    prefix + ' stage child must not overlap forms at ' + viewport.width);
-            }
-            assert.deepEqual(layout.labels, packet.tiles.map(tile => tile.label));
-            assert.ok(layout.gallery.scrollWidth <= layout.gallery.clientWidth + 1,
-                prefix + ' wrapped checkpoint gallery must fit horizontally at ' + viewport.width);
-            assert.ok(layout.fourthTitleTextRects.length > 0);
-            for (const rect of layout.fourthTitleTextRects) {
-                assert.ok(rect.left >= layout.clip.left - 1 && rect.right <= layout.clip.right + 1 &&
-                    rect.top >= layout.clip.top - 1 && rect.bottom <= layout.clip.bottom + 1,
-                    prefix + ' complete fourth-tile title must be accessible at ' + viewport.width);
-            }
-            if (prefix.startsWith('plan-')) {
-                const sourceReachability = await page!.evaluate<any>(`(()=>{
-                    const stage=document.querySelector('[data-job-plan-workspace]>.job-stage');
-                    const record=stage.querySelector('[data-job-record="plan"]');
-                    const disclosure=record.querySelector('details');
-                    disclosure.open=true;
-                    const pre=disclosure.querySelector('pre');
-                    const source=JSON.parse(pre.textContent);
-                    const lines=[...record.querySelectorAll('.job-source')].map(element=>{
-                        element.scrollIntoView({block:'center',inline:'nearest'});
-                        const range=document.createRange();range.selectNodeContents(element);
-                        return {text:element.textContent,rects:[...range.getClientRects()].map(r=>({left:r.left,right:r.right})),
-                            clientWidth:element.clientWidth,scrollWidth:element.scrollWidth};
-                    });
-                    const bounds=stage.getBoundingClientRect();
-                    const result={sourceHash:source.sourceHash,lines,left:bounds.left,right:bounds.right,
-                        clientWidth:stage.clientWidth,scrollWidth:stage.scrollWidth,opened:disclosure.open};
-                    disclosure.open=false;
-                    result.closed=!disclosure.open;
-                    return result;
-                })()`);
-                assert.equal(sourceReachability.sourceHash,publication.source.sourceHash);
-                assert.ok(sourceReachability.opened && sourceReachability.closed,prefix+' source disclosure opens and closes');
-                assert.ok(sourceReachability.scrollWidth<=sourceReachability.clientWidth+1,prefix+' stage has no horizontal overflow');
-                assert.ok(sourceReachability.lines.some((line:any)=>line.text.includes(publication.source.sourceHash)),
-                    prefix+' complete source hash remains available');
-                for (const line of sourceReachability.lines) {
-                    assert.ok(line.scrollWidth<=line.clientWidth+1,prefix+' complete identity text wraps');
-                    assert.ok(line.rects.every((rect:any)=>rect.left>=sourceReachability.left-1 && rect.right<=sourceReachability.right+1),
-                        prefix+' complete identity text stays within stage');
-                }
-                layout.sourceReachability=sourceReachability;
-            }
-            let screenshot: Buffer | undefined;
-            if (prefix.startsWith('package-')) {
+                await page!.evaluate(`document.querySelector('#job-record-asks').close()`);
                 await until(async () => {
                     const paint = await page!.evaluate<any>(`(()=>{
                         const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,
@@ -271,14 +188,15 @@ async function run() {
                     layout.paint = paint;
                     return paint.every((pane: any) => pane.matchedPixels > 0 &&
                         (pane.target === 'reference' ? pane.image?.complete && pane.image.width > 0 && pane.image.height > 0
-                            : pane.sourceVisibility === 'hidden' && pane.canvases.some((canvas: any) =>
-                                canvas.canonical && canvas.width > 0 && canvas.height > 0 &&
+                            : pane.canvases.some((canvas: any) =>
+                                canvas.width > 0 && canvas.height > 0 &&
                                 canvas.rect.width > 0 && canvas.rect.height > 0 &&
                                 Math.abs(canvas.width - canvas.rect.width * pane.devicePixelRatio) <= 1 &&
                                 Math.abs(canvas.height - canvas.rect.height * pane.devicePixelRatio) <= 1 &&
                                 canvas.visibility === 'visible' && canvas.display !== 'none')));
                 }, prefix + ' red reference and green rig pixels after ' + phase + ' ' + viewport.width);
                 assert.ok(layout.paint.every((pane: any) => pane.matchedPixels > 0));
+                await page!.evaluate(`document.querySelector('#workspace-pending-ask').click()`);
             }
             const capturePhase = '-' + phase;
             await writeFile(join(output, prefix + '-' + viewport.width + 'x' + viewport.height + capturePhase + '-layout.png'),
@@ -287,14 +205,14 @@ async function run() {
             for (const field of ['does','produces','bar','rests_on']) {
                 const fieldState = await page!.evaluate<any>(`(()=>{
                     const form=document.querySelector('form[data-job-ask="${askId}"]');
-                    const value=form.querySelector('[data-job-plan-field="${field}"]');
+                    const value=form.querySelector(${field==='does'?JSON.stringify('.job-plan-steps summary'):JSON.stringify('[data-job-plan-field="'+field+'"]')});
                     const target=value.textContent.length?value:value.previousElementSibling;
                     target.scrollIntoView({block:'center',inline:'nearest'});
                     const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
                     return {field:${JSON.stringify(field)},text:value.textContent,rests:[...value.querySelectorAll('li')].map(n=>n.textContent),
-                        value:rect(value),target:rect(target),forms:rect(form.closest('[data-job-forms]')),
+                        value:rect(value),target:rect(target),forms:rect(form),
                         markupCount:value.querySelectorAll('mark,script').length,
-                        label:value.previousElementSibling.textContent};
+                        label:${field==='does'?JSON.stringify(catalog['job.plan.does']):'value.previousElementSibling.textContent'}};
                 })()`);
                 assert.equal(fieldState.markupCount,0,prefix+' inert field '+field);
                 assert.equal(fieldState.label,catalog['job.plan.'+field]);
@@ -305,14 +223,7 @@ async function run() {
                 assert.ok(fieldState.target.top>=fieldState.forms.top && fieldState.target.bottom<=fieldState.forms.bottom,
                     prefix+' field vertically reachable '+field);
                 const fieldShot=await page!.screenshot();
-                if (prefix.startsWith('package-')) {
-                    fieldState.paint=layout.paint.map((pane:any)=>{
-                        const box:HalfOpenBox=[Math.ceil(pane.pane.left),Math.ceil(pane.pane.top),Math.floor(pane.pane.right),Math.floor(pane.pane.bottom)];
-                        const pixels=inspectPartsViewportPng(fieldShot,{viewport,backgroundRgba:pane.fixtureRgba,leftROI:box,rightAdjacent:box});
-                        assert.ok(pixels.inBounds && pixels.leftROI.backgroundPixels>0,prefix+' context pixels with '+field);
-                        return {target:pane.target,matchedPixels:pixels.leftROI.backgroundPixels};
-                    });
-                }
+                // Native modal backdrop intentionally tints context; exact source pixels were proved above with it closed.
                 layout.planFields.push(fieldState);
                 await writeFile(join(output,prefix+'-'+viewport.width+'x'+viewport.height+capturePhase+'-'+field+'.png'),fieldShot);
             }
@@ -345,21 +256,34 @@ async function run() {
         await page!.evaluate(`document.querySelector('[data-job-text="job.checkpointRecommendation"]').scrollIntoView()`);
         await writeFile(join(output, prefix + '-recommendation.png'), await page!.screenshot());
         for (const outcome of ['pass', 'fail']) {
+            console.log('CHECKPOINT_DECISION ' + prefix + ' ' + outcome);
             const asked = await call(host, schema, {verb: 'ask', expectedGeneration: host.session.status().generation,
                 idempotencyKey: randomUUID(), publicationId: publication.publicationId,
                 subject: {kind: 'checkpoint', checkpointId: packet.checkpointId,
                     ...(schema === 'rig-review/job-api@2' ? {planStepId: packet.planStepId} : {})}});
-            const words = `  ${outcome} 한글 <owner>\nPass\n`;
+            const words = `${outcome} 한글 <owner>`;
             activeDecision = {host, schema, askId: asked.askId, publicationId: publication.publicationId,
                 sourceHash: publication.source.sourceHash, outcome, words, prefix};
             latestNext = undefined;
             await until(async () => (await checkpointForm(asked.askId)).ready, prefix + ' ' + outcome + ' decision ready');
-            await page!.evaluate(`(()=>{const f=document.querySelector('form[data-job-ask="${asked.askId}"]');
-                f.querySelector('select[name=outcome]').value=${JSON.stringify(outcome)};
-                f.querySelector('textarea[name=note]').value=${JSON.stringify(words)};
-                f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+            await page!.evaluate(`(()=>{document.querySelector('#job-record-asks').close();const comments=[...document.querySelectorAll('.inspector-heading button')].find(n=>n.textContent.includes(${JSON.stringify(language==='en'?'Comments':'코멘트')}));comments.click();})()`);
+            if(await page!.evaluate(`!!document.querySelector('[data-comment-general]')`))await page!.evaluate(`document.querySelector('[data-comment-general]').click()`);
+            else {
+                await page!.evaluate(`(()=>{const button=document.querySelector('#stage-comment');if(button.getAttribute('aria-pressed')!=='true')button.click();})()`);
+                const point=await page!.evaluate<{x:number;y:number}>(`(()=>{const r=document.querySelector('#rig-viewport').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+                await control!('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...point});
+                await control!('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...point});
+            }
+            console.log('CHECKPOINT_COMMENT_REQUESTED ' + prefix + ' ' + outcome);
+            await until(()=>page!.evaluate(`!!document.querySelector('.stage-comment-composer input')`),'existing comment composer');
+            await page!.evaluate(`(()=>{const composer=document.querySelector('.stage-comment-composer');composer.querySelector('input').value=${JSON.stringify(words)};composer.requestSubmit();})()`);
+            await until(()=>page!.evaluate(`!document.querySelector('.stage-comment-composer')`),'existing comment saved');
+            const projected=await page!.evaluate<string>(`document.querySelector('form[data-job-ask="${asked.askId}"]').commentWords()`);
+            activeDecision.words=projected;
+            await page!.evaluate(`(()=>{const f=document.querySelector('form[data-job-ask="${asked.askId}"]');f.querySelector('select[name=outcome]').value=${JSON.stringify(outcome)};f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
             // Reconnect preserves the source-bound owner draft before its ordinary UI submission.
-            await page!.goto('about:blank');
+            expectedDeparture = owner;
+            try {await page!.goto('about:blank');} finally {expectedDeparture = undefined;}
             await page!.goto(owner.href);
             // updateForms enables this fieldset only after display acknowledgment and pending-ask readiness.
             await until(async () => (await checkpointForm(asked.askId)).ready, prefix + ' ' + outcome + ' reconnect ready');
@@ -367,7 +291,7 @@ async function run() {
             assert.equal(restored.askId, asked.askId);
             assert.equal(restored.ready, true);
             assert.equal(restored.outcome, outcome);
-            assert.equal(restored.words, words);
+            assert.equal(restored.words, projected);
             assert.equal(restored.valid, true);
             observations[prefix + '-' + outcome + '-ready'] = restored;
             await page!.evaluate(`document.querySelector('form[data-job-ask="${asked.askId}"]').requestSubmit()`);
@@ -381,13 +305,19 @@ async function run() {
             }, 'finalized act');
             const fetched = await call(host, schema, {verb: 'fetch-act', actId: act.actId}, fetchCapability);
             assert.equal(fetched.source.sourceHash, publication.source.sourceHash);
-            assert.deepEqual(fetched.value, {checkpointId: packet.checkpointId, planStepId: packet.planStepId, outcome, words});
+            assert.equal(fetched.value.checkpointId,packet.checkpointId);assert.equal(fetched.value.planStepId,packet.planStepId);assert.equal(fetched.value.outcome,outcome);
+            if ('comments' in fetched.value) {
+                const comments = checkpointNoteComments({checkpointId: packet.checkpointId, planStepId: packet.planStepId, note: projected});
+                assert.deepEqual(fetched.value.comments, comments);
+                assert.equal(projectComments(fetched.value.comments), projectComments(comments));
+            } else assert.equal(fetched.value.words, projected);
             observations[prefix + '-' + outcome] = {actId: fetched.actId, sourceHash: fetched.source.sourceHash, value: fetched.value};
             activeDecision = undefined;
         }
         corruptTiles = true;
         await control!('Fetch.enable', {patterns: [{urlPattern: '*checkpoint-evidence/*/tiles/0', requestStage: 'Request'}]});
-        await page!.goto('about:blank');
+        expectedDeparture = owner;
+        try {await page!.goto('about:blank');} finally {expectedDeparture = undefined;}
         await page!.goto(owner.href);
         await until(() => page!.evaluate(`document.body.textContent.includes('CHECKPOINT_EVIDENCE_HASH_MISMATCH')`), 'named hash refusal');
         assert.equal(await page!.evaluate(`document.querySelectorAll('[data-job-checkpoint-evidence]').length`), 0);
@@ -406,9 +336,16 @@ async function run() {
         await call(planHost, 'rig-review/job-api@3', {verb: 'ask', expectedGeneration: 1,
             idempotencyKey: randomUUID(), publicationId: publication.publicationId,
             subject: {kind: 'checkpoint', checkpointId: evidence.packet.checkpointId}});
-        page = await launchCdpSession(join(scratch, 'profile'), {onEvent: async (event, send) => {
+        page = await launchCdpSession(join(scratch, 'profile'), {sendDeadlineMs: 15_000, onEvent: async (event, send) => {
             if (event.sessionId) control = send;
             const params = event.params ?? {};
+            if (event.method === 'Page.javascriptDialogOpening') {
+                const url = new URL(String(params.url));
+                assert.equal(params.type, 'beforeunload', 'only the dirty-comment reconnect departure is expected');
+                assert.ok(expectedDeparture && url.origin === expectedDeparture.origin && url.pathname === expectedDeparture.pathname);
+                console.log('CHECKPOINT_RECONNECT_DEPARTURE ' + url.pathname);
+                await send('Page.handleJavaScriptDialog', {accept: true});
+            }
             if (event.method === 'Runtime.exceptionThrown') {
                 const details = params.exceptionDetails as {text?: string; exception?: {description?: string}};
                 browserErrors.push({method: event.method, text: redact(details.text ?? ''),

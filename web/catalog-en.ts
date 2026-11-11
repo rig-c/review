@@ -116,7 +116,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.plan.produces": "Produces",
   "job.plan.bar": "Bar",
   "job.plan.rests_on": "Rests on",
-  "job.plan.noText": "Step text is not available; showing ids and hashes.",
+  "job.plan.noText": "Text is not available.",
   "job.plan.field.absent": "Not supplied in this record.",
   "job.plan.field.invalid": "The supplied field has an unsupported type.",
   "job.plan.field.limit": "The supplied field exceeds the display limit.",

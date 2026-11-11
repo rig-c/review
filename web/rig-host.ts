@@ -44,6 +44,8 @@ export interface RigHost {
   readonly record?:{readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean};
   submitParts?(issues:readonly PartsIssue[]):Promise<string>;
   readonly access: InstanceAccess;
+  /** UI act authority is separate from a retained backdrop's immutable source access. */
+  readonly ownerActAccess?: Pick<InstanceAccess, 'capability'>;
   /** Existing pending subjects, for the local act heading only; no wire field. */
   pendingSubjects?():readonly PendingAskV3['subject'][];
   /** A read the host answers itself, or undefined to fetch it from the subject's routes. */
