@@ -1,8 +1,20 @@
 /** Browser workspace presentation. Source selection, player clocks and review decisions stay with the page. */
 import {WorkspacePreferenceStore,panelBounds,type WorkspaceLanguage,type WorkspacePanels,type WorkspacePreferences,type WorkspaceTheme} from './workspace-preferences.ts';
 import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defaultWorkspaceColumns,InspectorScrollMemory,inspectorTabs,workspaceMinimums,type InspectorTab,type WorkspaceColumns,type WorkspacePanel,type SeparatorRange} from './workspace-layout.ts';
-import {bindDomI18n,getLinkLanguage,setLanguagePreference,setLinkLanguage,tr} from './i18n.ts';
+import {bindDomI18n,getLinkLanguage,setLanguagePreference,setLinkLanguage,tr,onLanguageChange} from './i18n.ts';
 import {panelMake,actionButton,labelledControl} from './view-controls.ts';
+
+/** Header availability belongs to the shared shell, independently of the removed step chips. */
+export function bindHeaderModeAvailability(options:{model:boolean;preRig?:boolean;root?:Pick<Document,'querySelectorAll'>}):()=>void {
+ const root=options.root??document,reason=options.preRig?'RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.':!options.model?'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.':null;
+ if(!reason)return ()=>{};
+ const modes=[...root.querySelectorAll<HTMLButtonElement>('[data-mode]')].map(button=>({button,disabled:button.disabled,title:button.getAttribute('title'),pressed:button.getAttribute('aria-pressed')}));
+ const render=()=>{for(const {button}of modes){button.disabled=true;button.title=tr(reason);button.setAttribute('title',tr(reason));if(button.getAttribute('aria-pressed')!=='false')button.setAttribute('aria-pressed','false');}};
+ const refuse=(event:Event)=>{event.preventDefault();event.stopImmediatePropagation();render();};
+ const observer=new MutationObserver(render);for(const {button}of modes){observer.observe(button,{attributes:true,attributeFilter:['aria-pressed']});button.addEventListener('click',refuse,true);}
+ const off=onLanguageChange(render);render();
+ return ()=>{off();observer.disconnect();for(const {button,disabled,title,pressed}of modes){button.removeEventListener('click',refuse,true);button.disabled=disabled;button.title=title??'';if(title===null)button.removeAttribute('title');else button.setAttribute('title',title);if(pressed===null)button.removeAttribute('aria-pressed');else button.setAttribute('aria-pressed',pressed);}};
+}
 
 export interface WorkspaceStatusBarOptions {
  message:HTMLElement|string;readouts:readonly HTMLElement[];source?:HTMLElement;
@@ -68,11 +80,7 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
   else{dirty=panelMake('span',{id:'dirty',className:'subtle',textContent:'Loading…'});header.append(panelMake('div',{className:'top-actions'},dirty));}
  }
  let stages:HTMLElement|null=null,status:HTMLParagraphElement|null=null;
- if(branded||interview){
-  stages=panelMake('nav');stages.dataset.stageNav='';
-  if(branded){stages.className='review-stage-nav';stages.setAttribute('aria-label','Inspection stages');}
-  if(interview)header.append('\n    ');header.append(stages);
- }
+
  if(hub||owner){status=panelMake('p',{className:hub?'hub-status':'owner-status'});status.setAttribute('role','status');header.append(status);}
  let language:HTMLSelectElement|null=null,languageLabel:HTMLLabelElement|null=null;
  if(!parts){

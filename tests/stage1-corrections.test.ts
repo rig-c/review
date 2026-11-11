@@ -116,7 +116,7 @@ test('new chest/delta records require successful checks; historical absence rema
 });
 
 test('non-first part selection transfers by exact art/package/address, never by list position or name alone',async()=>{
- const {stagePartsSelectionIndex}=await import('../web/stage-nav.ts');
+ const {stagePartsSelectionIndex}=await import('../web/parts.ts');
  const item=(name:string,hash:string)=>({name,imageHash:hash,x:10,y:20,w:64,h:64});
  const mappings=['first','second'].map(part=>({part,skin:'default',slot:part,attachment:part}));
  const saved={inspectionSourceHash:'package-a',part:'second',imageHash:'image-b',box:{x:10,y:20,w:64,h:64},mapping:{skin:'default',slot:'second',attachment:'second'},rig:{zoom:2,center:{x:22,y:28}},reference:{zoom:1,center:null},cameraSync:false,bg:'green',alpha:false,footprints:false,view:'item' as const,mesh:true};

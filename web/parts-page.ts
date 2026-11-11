@@ -2,7 +2,6 @@ import { mountWorkspaceShell } from './workspace-ui.ts';
 import { bindDomI18n, unbindDomI18n, onLanguageChange, t } from './i18n.ts';
 import { pageInstanceAccess } from './instance-access.ts';
 import { connectLiveWindow } from './live-connection.ts';
-import { bindStageNav } from './stage-nav.ts';
 import { parsePartsIssue } from '../src/parts-comment.ts';
 import { mountPartsWorkspace, type PanelOutput, type PartsHost, type PartsSource, type PartsWorkspaceHandle, type ViewData } from './parts.ts';
 
@@ -135,7 +134,6 @@ export function bootPartsPage(): PartsWorkspaceHandle {
     }
   };
   bindDomI18n(document); disposers.push(unbindDomI18n);
-  disposers.push(bindStageNav({only: 1, model: false}));
   disposers.push(connectLiveWindow(access));
   const syncActions = () => {
     const button = required<HTMLButtonElement>('#pv-save');

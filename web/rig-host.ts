@@ -1,6 +1,7 @@
 /** The one review screen's host seam (#709). A live job sets it before importing the rig composition
  * (`main.ts`): the job keeps the transport, the screen keeps its own view. Unset, the screen is the package page. */
 import type {ModelAssets, PosedFrame} from '@rig-c/play';
+import type {PendingAskV3} from '../src/job-contract.ts';
 import type {ReviewSession} from '../src/session.ts';
 import type {InstanceAccess} from './instance-access.ts';
 import type {JobRigStage} from './job-rig-capture.ts';
@@ -16,6 +17,7 @@ export interface RigHostScreen {
   /** Draw the held frame again so the posed frame and the player share one generation. */
   redraw(): void;
   message(text: string, error?: boolean): void;
+  pendingSubjects?(subjects:readonly PendingAskV3['subject'][]):void;
 }
 /** Only the content carried by an act the host has actually committed. This is local UI state, not an act field. */
 export interface RigHostCommit {
@@ -25,6 +27,8 @@ export interface RigHostCommit {
 }
 export interface RigHost {
   readonly access: InstanceAccess;
+  /** Existing pending subjects, for the local act heading only; no wire field. */
+  pendingSubjects?():readonly PendingAskV3['subject'][];
   /** A read the host answers itself, or undefined to fetch it from the subject's routes. */
   read(path: string, method: string): Promise<unknown> | undefined;
   /** The act bar's Submit review: the session's decisions go out as the pending asks' acts. */

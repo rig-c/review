@@ -82,6 +82,7 @@ for (const rigPending of [false, true]) test(`#721 checkpoint commit leaves comm
       async load() {rigHost()!.displayed();}});
     screen.commit(prepared);
     await screen.painted(prepared, new AbortController().signal);
+    expect(rigHost()!.pendingSubjects?.()).toEqual(f.session.status().pending.filter(ask=>ask.status==='pending').map(ask=>ask.subject));
     const current = structuredClone(initial);
     current.checkpoints['step-one'] = {outcome: 'pass', note: 'checkpoint words'};
     current.feedback.push(structuredClone(comment));

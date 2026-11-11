@@ -132,13 +132,14 @@ export function createJobRigScreen(options: {
     }
     return options.translate('job.saved');
   }
+  const pendingSubjects=()=>options.window.state().pending.filter(ask=>ask.publicationId===mounted?.display.publication.publicationId&&ask.status==='pending').map(ask=>ask.subject);
   function host(prepared: JobRigScreenPrepared, ready: {resolve(): void; reject(error: unknown): void}): RigHost {
     const base = new URL(prepared.entry).pathname;
     const access: InstanceAccess = {base, key: prepared.display.publication.instanceKey, capability: options.access.capability,
       route: path => {if (!path.startsWith('/') || path.startsWith('//')) throw new Error('Instance route must be app-absolute'); return base + path.slice(1);},
       headers: init => options.access.headers(init)};
     const review = prepared.review;
-    return {access,
+    return {access,pendingSubjects,
       read(path, method) {
         if (method !== 'GET') return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
         if (path === '/api/review') return Promise.resolve(structuredClone(review));
@@ -149,7 +150,7 @@ export function createJobRigScreen(options: {
         return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
       },
       submit: (session, committed) => submit(session, committed).catch(error => {throw new Error(options.refusal(error, 'JOB_ACT_INVALID'));}),
-      attach: value => {screen = value;},
+      attach: value => {screen = value;screen.pendingSubjects?.(pendingSubjects());},
       displayed: () => ready.resolve(),
       failed: error => ready.reject(error)};
   }
@@ -174,6 +175,7 @@ export function createJobRigScreen(options: {
     changed(state: {readonly pending: readonly PendingAskV3[]; readonly closed: boolean}): void {
       if (!mounted) return;
       if (!jobRigScreenRoute(mounted.display, state.pending, mounted.checkpoints)) {location.reload(); return;}
+      screen?.pendingSubjects?.(pendingSubjects());
       if (state.closed) screen?.message(options.translate('job.closed'), true);
     },
   };

@@ -1,3 +1,4 @@
+import {setSourceText} from '../web/i18n.ts';
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readdir,readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
@@ -581,6 +582,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
    const run=new Function('scope',`with(scope){${jsSource}; renderProposals();}`);
    run({
     comments:null,
+    rigInspector:{comments:{button:doc.createElement('button')}},setSourceText,
     el:(id:string)=>doc.getElementById(id),
     text:(id:string,v:string)=>{const n=doc.getElementById(id);if(n)n.textContent=v;},
     session,
