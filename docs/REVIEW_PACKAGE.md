@@ -867,8 +867,10 @@ path/hash, source hash, label and capability flags, with no manifest, model,
 reviewed-package identity or package session. The existing modal mounts the
 existing interview form. Model APIs refuse `MODEL_UNAVAILABLE`; source drift
 refuses `INTERVIEW_OPTIONS_STALE`. Reads do not write sources. The joined dialog and standing record form use one shared list | image | survey
-answer builder. There is no form-level Note input; new answers serialize
-`note: ''`. Historical records, picks/act/verdict schemas and explicit
+answer builder. There is no interview Note input. Existing saved or historical
+notes remain readable as read-only text and are carried unchanged. Joined picks
+omit `note` when none exists; the job act retains its required string field.
+Historical records, picks/act/verdict schemas and explicit
 version/draft joins retain their existing readers and checks.
 This opening form does not replace the semantic standing review cycle.
 

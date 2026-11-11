@@ -31,8 +31,10 @@ Model-dependent capabilities are named unavailable (`MODEL_UNAVAILABLE`); no
 manifest, model or package session is synthesized. Project, option-set and input
 hashes bind the inspection, and changed bytes require reopening
 (`INTERVIEW_OPTIONS_STALE`). The joined dialog and standing record form use one shared list | image | survey
-answer builder. There is no form-level Note input; new answers serialize
-`note: ''`. Historical records, picks/act/verdict schemas and explicit
+answer builder. There is no interview Note input. Existing saved or historical
+notes remain readable as read-only text and are carried unchanged. Joined picks
+omit `note` when none exists; the job act retains its required string field.
+Historical records, picks/act/verdict schemas and explicit
 version/draft joins retain their existing readers and checks. Use the
 semantic standing cycle for active consumer ingestion; do not construct or
 carry picks files to bypass it. See [project opening stability](https://github.com/rig-c/review/blob/main/docs/STABILITY.md#interview-stage-project-opening).

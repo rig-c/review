@@ -1625,8 +1625,9 @@ export async function joinedInterviewForms(access:InstanceAccess,present:(forms:
                 answer.fieldset.disabled=true;
                 try{
                     const value=answer.read(),picks=value.selections.map(selection=>({ask:selection.itemId,option_id:selection.optionId,...(selection.otherText!==null?{other_text:selection.otherText}:{})}));
-                    await request('/api/interview/picks',interviewPicksRecord(question.ref,picks,'',new Date().toISOString()));
-                    question.saved=interviewPicksRecord(question.ref,picks,'',new Date().toISOString());answer.form.dataset.interviewAnswered='true';answer.status.dataset.jobText='interview.saved';answer.status.textContent=t('interview.saved');answer.form.dispatchEvent(new Event('change'));
+                    const record=interviewPicksRecord(question.ref,picks,answer.retainedNote,new Date().toISOString());
+                    await request('/api/interview/picks',record);
+                    question.saved=record;answer.form.dataset.interviewAnswered='true';answer.status.dataset.jobText='interview.saved';answer.status.textContent=t('interview.saved');answer.form.dispatchEvent(new Event('change'));
                 }catch(error){const code=error instanceof Error?error.message.split(':')[0]:'';answer.status.dataset.jobText=interviewErrors[code]??'interview.failed';answer.status.textContent=t(answer.status.dataset.jobText);}
                 finally{answer.fieldset.disabled=!question.editable||!access.capability;}
             };

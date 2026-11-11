@@ -26,8 +26,10 @@ Model-dependent APIs refuse `MODEL_UNAVAILABLE`. Project, retained option sets
 and declared inputs are hash-bound and rechecked; drift refuses
 `INTERVIEW_OPTIONS_STALE`. Opening and reading change no source files.
 The joined dialog and standing record form use one shared list | image | survey
-answer builder. There is no form-level Note input; new answers serialize
-`note: ''`. Historical records, picks/act/verdict schemas and explicit
+answer builder. There is no interview Note input. Existing saved or historical
+notes remain readable as read-only text and are carried unchanged. Joined picks
+omit `note` when none exists; the job act retains its required string field.
+Historical records, picks/act/verdict schemas and explicit
 version/draft joins retain their existing readers and checks. This introduces
 no job API, act schema, consumer contract or package-export change; it does not
 replace the active standing review cycle with a picks-file handoff.

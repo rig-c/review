@@ -212,8 +212,18 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   form.className='interview-answer interview-grid';form.dataset.interviewAnswered=String(options.answered??Boolean(question.saved||question.answer));
   fields.className='interview-answer-fields';fields.id=options.id;fields.disabled=!question.editable;
   const heading=make('h3',question.set.question);fields.append(heading);
-  const historical=question.answer?.choice as {picks?:Picks['picks']}|undefined;
-  const answers=question.set.asks.map(item=>{const pick=question.saved?.picks.find(value=>value.ask===item.id)??historical?.picks?.find(value=>value.ask===item.id);const answer=interviewAskGroup(item,{text:node,name:'choice.'+item.id,otherName:'other.'+item.id,pick});fields.append(answer.group);return {item,answer};});
+  const historical=question.answer?.choice as {picks?:Picks['picks'];note?:string}|undefined;
+  const retainedNote=question.saved?.note??historical?.note;
+  const answers=question.set.asks.map(item=>{
+    const pick=question.saved?.picks.find(value=>value.ask===item.id)??historical?.picks?.find(value=>value.ask===item.id);
+    const kind=item.options.find(option=>option.id===pick?.option_id)?.kind;
+    const fragments=(question.answer?.agent_decision as {fragments?:unknown}|undefined)?.fragments;
+    const autoResolved=!question.editable&&Array.isArray(fragments)&&fragments.some(fragment=>fragment?.ask===item.id);
+    const pendingHidden=!(kind==='auto'&&!autoResolved||kind==='other'&&!(pick&&'other_fragment' in pick));
+    const answer=interviewAskGroup(item,{text:node,name:'choice.'+item.id,otherName:'other.'+item.id,pick,pendingHidden});
+    fields.append(answer.group);return {item,answer};
+  });
+  if(retainedNote!==undefined){const note=make('pre',retainedNote);note.className='interview-note';fields.append(note);}
   const context=make('div');context.id=options.id+'-source';context.className='interview-image-context';
   if(options.source)context.append(options.source);
   context.append(node('h2',question.hasParts?'interview.parts':'interview.source'));
@@ -237,7 +247,7 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   const dispose=()=>{view?.dispose();form.removeEventListener('input',refresh);form.removeEventListener('change',refresh);form.removeEventListener('job-form-language',localize);};
   form.addEventListener('input',refresh);form.addEventListener('change',refresh);form.addEventListener('job-form-language',localize);
   try{if(options.images.length)showImage(0);else art.append(context);refresh();}catch(error){dispose();throw error;}
-  return {form,fieldset:fields,submit,status,
-    read:()=>jobInterviewValue(question.set.question,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),''),
+  return {form,fieldset:fields,submit,status,retainedNote,
+    read:()=>jobInterviewValue(question.set.question,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),retainedNote??''),
     localize,dispose};
 }

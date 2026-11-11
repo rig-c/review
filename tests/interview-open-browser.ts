@@ -15,10 +15,16 @@ import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
+import {readProject} from '../src/interview-project.ts';
+import {savePicks} from '../src/interview-picks.ts';
+import {interviewPicksRecord} from '../web/interview-panel.ts';
 
 const index=Bun.argv.indexOf('--out'),out=resolve(index<0?'artifacts/interview-open-725':Bun.argv[index+1]!);
 await mkdir(out,{recursive:true});
 const f=await interviewOpenFixture(),profile=await mkdtemp(join(tmpdir(),'review-725-browser-'));
+const retainedNote='  Retained note\r\n원문 👁 e\u0301\n  ';
+const question=readProject(f.root).questions[0]!;
+savePicks(join(f.root,'picks'),question,interviewPicksRecord(question.ref,question.set.asks.map(ask=>({ask:ask.id,option_id:ask.options.find(option=>option.kind==='value')!.id})),retainedNote,'2026-11-11T00:00:00.000Z'));
 const inputs=parseOpenInputs([f.root,'--project',f.root,'--picks-dir','picks']);
 const prepared=await prepareOpenTarget(inputs,{stateDir:f.stateDir});
 const host=await startOpenWorkspace({stateDir:f.stateDir,fingerprint:prepared.fingerprint,port:0});
@@ -45,6 +51,7 @@ try{
   assert.equal(state.language,language);assert.equal(state.width,1600);assert.equal(state.height,1000);
   assert.equal(state.topbars,1);assert.equal(state.viewports,1);assert.equal(state.dialogs,1);assert.equal(state.formCount,1);assert.equal(state.focusContained,true);assert.equal(state.modelCanvas,0);
   assert.equal(state.noteInputs,0);assert.deepEqual(state.columns,['NAV','ASIDE','FIELDSET']);
+  assert.equal(await page.evaluate(`document.querySelector('#job-record-asks pre.interview-note')?.textContent`),retainedNote);
   assert.equal(state.interviewButton,catalog['interview.title']);
   assert.equal(state.modelReason,catalog['MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.']);
   assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
