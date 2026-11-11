@@ -60,7 +60,7 @@ try{
   await click(page,'#job-record-asks .workspace-drawer-close');
   assert.equal(await page.evaluate(`!document.querySelector('dialog[open]')&&document.activeElement.id==='workspace-pending-ask'`),true);
   assert.equal(await page.evaluate(`document.querySelectorAll('.topbar').length===1&&document.querySelectorAll('#rig-viewport').length===1`),true);
-  const closed=await page.evaluate<{visibleInterviewTriggers:string[];saveDisabled:boolean;focused:string}>(`(()=>{const label=${JSON.stringify(catalog['interview.title'])};return {visibleInterviewTriggers:[...document.querySelectorAll('button')].filter(button=>button.textContent.trim()===label&&button.getClientRects().length>0&&getComputedStyle(button).visibility!=='hidden').map(button=>button.id),saveDisabled:document.getElementById('save').disabled,focused:document.activeElement.id};})()`);
+  const closed:{visibleInterviewTriggers:string[];saveDisabled:boolean;focused:string}=await page.evaluate<{visibleInterviewTriggers:string[];saveDisabled:boolean;focused:string}>(`(()=>{const label=${JSON.stringify(catalog['interview.title'])};return {visibleInterviewTriggers:[...document.querySelectorAll('button')].filter(button=>button.textContent.trim()===label&&button.getClientRects().length>0&&getComputedStyle(button).visibility!=='hidden').map(button=>button.id),saveDisabled:document.getElementById('save').disabled,focused:document.activeElement.id};})()`);
   assert.deepEqual(closed.visibleInterviewTriggers,['workspace-pending-ask']);assert.equal(closed.saveDisabled,true);assert.equal(closed.focused,'workspace-pending-ask');
   state.closedWorkspace=closed;
   await writeFile(join(out,language+'-workspace.png'),await page.screenshot());
