@@ -57,6 +57,15 @@ for (const row of ROWS) {
   });
 }
 
+test('#704 a ceiling above the current count refuses, and the unmodified tree passes', () => {
+  expect(failuresOf(sources)).toEqual([]);
+  const real = ROWS.find(row => countRow(row, sources) > 0)!;
+  const current = countRow(real, sources);
+  const raised = ROWS.map(row => row === real ? {...row, ceiling: row.ceiling + 1} : row);
+  const failures = checkScreenCopies(sources, raised).flatMap(result => result.failure ? [result.failure] : []);
+  expect(failures).toEqual([`SCREEN_COPY_CEILING_STALE: ${real.name}: ${current} hits, lower its ceiling from ${current + 1} to ${current} (step ${real.step})`]);
+});
+
 test('#686 a row at 0 with ceiling 0 passes, and one hit on it refuses', () => {
   const row: CopyRow = {name: 'planted zero row', step: 'x', ceiling: 0, matchers: [{pattern: /plantedCopy/gu, plant: 'plantedCopy', plantIn: 'web/main.ts'}]};
   expect(checkScreenCopies(new Map([['web/main.ts', '']]), [row])[0]).toMatchObject({current: 0, failure: null});

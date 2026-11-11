@@ -4,8 +4,10 @@ import {fileURLToPath} from 'node:url';
 
 /**
  * #686: a copy ratchet for docs/SCREENS.md §4. Each row counts one known screen-level copy of shared UI.
- * A count may fall but never rise, and the PR that brings a row to 0 also sets its ceiling to 0, so
- * "zero hits for the copies it replaces" is a machine gate instead of a PR-body claim.
+ * Every ceiling equals its row's current count (#704): a count above the ceiling fails as SCREEN_COPY_ROSE,
+ * and a count below it fails as SCREEN_COPY_CEILING_STALE, so the PR that removes copies also lowers the
+ * ceiling to the new count and copies cannot grow back into the slack. At 0 this makes "zero hits for the
+ * copies it replaces" a machine gate instead of a PR-body claim.
  */
 
 /** Source files keyed by repository-relative path with forward slashes, e.g. `web/compare.ts`. */
@@ -75,7 +77,7 @@ export const ROWS: readonly CopyRow[] = [
   layoutRow('legacyPartsStep2', '2', 3),
   layoutRow('legacyCompareStep3', '3', 3),
   layoutRow('legacyCompiledJobStep5', '5', 4),
-  {name: 'compare camera stack definitions in web/compare.ts', step: '3', ceiling: compareCameraStack.length, matchers: [
+  {name: 'compare camera stack definitions in web/compare.ts', step: '3', ceiling: 2, matchers: [
     {pattern: new RegExp(`^[\\t ]*function\\s+(?:${compareCameraStack.join('|')})\\s*\\(`, 'gmu'), files: ['web/compare.ts'], plant: '\nfunction zoomCamera(): void {}\n', plantIn: 'web/compare.ts'},
   ]},
   identifierRow('legacyCompareLayerControlsMarkup', '3', 3, 'web/compare.ts'),
@@ -155,8 +157,8 @@ export function checkScreenCopies(sources: Sources, rows: readonly CopyRow[] = R
     const current = countRow(row, sources);
     const failure = current > row.ceiling
       ? `SCREEN_COPY_ROSE: ${row.name}: ${current} > ceiling ${row.ceiling} (step ${row.step})`
-      : current === 0 && row.ceiling > 0
-        ? `SCREEN_COPY_CEILING_STALE: ${row.name}: 0 hits, lower its ceiling from ${row.ceiling} to 0 (step ${row.step})`
+      : current < row.ceiling
+        ? `SCREEN_COPY_CEILING_STALE: ${row.name}: ${current} hits, lower its ceiling from ${row.ceiling} to ${current} (step ${row.step})`
         : null;
     return {row, current, failure};
   });
@@ -176,5 +178,5 @@ if (import.meta.main) {
   if (failures.length) {
     console.error(failures.join('\n'));
     process.exitCode = 1;
-  } else console.log(`SCREEN_COPIES_OK: ${results.length} rows at or below ceiling`);
+  } else console.log(`SCREEN_COPIES_OK: ${results.length} rows at their ceiling`);
 }
