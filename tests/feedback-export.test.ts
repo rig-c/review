@@ -11,6 +11,48 @@ import { freshCompareSession, compareSessionFile, type CompareSession } from '..
 import { readFeedbackSession, readFeedbackCompareSession, type FeedbackHistory } from '../src/session-history.ts';
 import { formatCorrectionIssue, formatFeedbackIssues, groupFeedbackIssues, feedbackMarkdownText } from '../src/feedback-export.ts';
 import { feedbackFormat } from '../src/cli.ts';
+import {parseCommentsSession, parseCommentsCompareSession, parseCommentsPartsVerdict, projectSelectedCommentsFeedback, type JobCommentFeedbackAnchor} from '../src/job-host.ts';
+import {parseSession} from '../src/session.ts';
+import {parseCompareSession} from '../src/compare-session.ts';
+import commentsLegacy from './fixtures/comments-contract-legacy.json';
+
+test('#646 standalone-new-comment-reader: public session, compare and Parts decoders retain exact comments and selected correction', () => {
+  const old = JSON.parse(commentsLegacy.records.session.raw), {feedback: _feedback, ...header} = old;
+  const anchor = {id: 'existing-feedback-id', frameStart: 3, frameEnd: 3, target: {kind: 'slot', name: 'sleeve'}, category: 'defect'} satisfies JobCommentFeedbackAnchor;
+  const raw = {...header, schema: 'rig-review-session/2', comments: [{text: 'general'}, {text: 'Fix this', anchor}]};
+  const bytes = JSON.stringify(raw), session = parseCommentsSession(JSON.parse(bytes));
+  expect(projectSelectedCommentsFeedback(session, 'existing-feedback-id')).toEqual({anchor, summary: '[["slot","sleeve",3,3,null]]\nFix this'});
+  expect(JSON.stringify(session)).toBe(bytes);
+  expect(() => projectSelectedCommentsFeedback(session, 'absent')).toThrow('JOB_ACT_INVALID');
+  expect(() => parseCommentsSession({...raw, comments: [...raw.comments, raw.comments[1]]})).toThrow('JOB_ACT_INVALID');
+  expect(() => parseCommentsSession({...raw, comments: [{text: 'x', anchor: {...anchor, side: 'a'}}]})).toThrow('JOB_ACT_INVALID');
+  const previous = JSON.parse(commentsLegacy.records.compare.raw), {feedback: _compareFeedback, ...compare} = previous;
+  const current = {...compare, schema: 'rig-review-compare-session/2', comments: [{text: 'Side B', anchor: {...anchor, side: 'b'}}]};
+  current.sourceHash = createHash('sha256').update(JSON.stringify(current.binding)).digest('hex');
+  expect(parseCommentsCompareSession(current).comments[0]!.anchor).toEqual({...anchor, side: 'b'});
+  expect(() => parseCommentsCompareSession({...current, sourceHash: '0'.repeat(64)})).toThrow('JOB_ACT_INVALID');
+  expect(() => parseCommentsCompareSession({...current, feedbackWarnings: [{id: 'x', error: 'x', extra: true}]})).toThrow('JOB_ACT_INVALID');
+  expect(() => parseCommentsCompareSession({...current, comments: [{text: 'x', anchor}]})).toThrow('JOB_ACT_INVALID');
+  const priorParts = JSON.parse(commentsLegacy.records.parts.raw), {issues: _issues, ...parts} = priorParts;
+  expect(parseCommentsPartsVerdict({...parts, schema: 'rig-review-parts-verdict/5', comments: [{text: 'Ready'}]}).schema).toBe('rig-review-parts-verdict/5');
+  expect(() => parseCommentsPartsVerdict({...parts, schema: 'rig-review-parts-verdict/5', comments: [{text: 'x', anchor}]})).toThrow('JOB_ACT_INVALID');
+});
+
+test('#646 legacy-correction-summary-control: old session/compare parsers and exports preserve original whitespace', () => {
+  const old = JSON.parse(commentsLegacy.records.session.raw), compare = JSON.parse(commentsLegacy.records.compare.raw);
+  // Metadata-only packages select the existing historical readers, without a new schema or migration.
+  const p = {manifest: {id: old.id, revision: old.revision, checkpoints: []}, sourceHash: old.sourceHash, reviewedSource: old.reviewedSource} as unknown as ReviewPackage;
+  expect(parseSession(old, p, false).schema).toBe('rig-review-session/1');
+  const pair = {response: {id: compare.id, revision: compare.revision, sourceHash: compare.sourceHash, binding: compare.binding},
+    a: {feedbackCatalog: {}}, b: {feedbackCatalog: {}}} as unknown as ComparePackage;
+  expect(parseCompareSession(compare, pair, false).schema).toBe('rig-review-compare-session/1');
+  const selected = {...note('old'), summary: 'exact old correction\n'};
+  expect(decode(formatFeedbackIssues({...old, feedback: [selected]}))).toContain('exact old correction\n');
+  for (const key of ['session', 'compare', 'parts', 'survey'] as const) {
+    const record = commentsLegacy.records[key];
+    expect(createHash('sha256').update(record.raw).digest('hex')).toBe(record.sha256);
+  }
+});
 
 const dirs: string[] = [];
 afterEach(async () => { for (const path of dirs.splice(0)) await rm(path, { recursive: true, force: true }); });

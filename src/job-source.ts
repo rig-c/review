@@ -234,6 +234,33 @@ function referenceRow(raw: unknown, row: number, hashed: boolean): JobPartsFileR
   return {path, role, ...(hashed ? {sha256: item.sha256 as string} : {})};
 }
 
+function partsIdentityHeader(value: unknown): {raw: Record<string, unknown>; version: string} {
+  const raw = jobObject(value, ['enumeratorVersion', 'manifest', 'images']);
+  return {raw, version: jobPartsEnumeratorVersion(raw.enumeratorVersion)};
+}
+
+function partsManifest(value: unknown): JobFileIdentity {
+  try {
+    const raw = jobObject(value, ['path', 'sha256']);
+    const path = jobPath(raw.path);
+    if (posix.basename(path) !== 'parts.json') throw new Error('Manifest directory API');
+    return {path, sha256: jobSha(raw.sha256)};
+  } catch { throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_PATH_REFUSED manifest'); }
+}
+
+function partsReferenceList(value: unknown): unknown[] {
+  if (!Array.isArray(value) || value.length > maxSourceFiles) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_LIMIT');
+  return value;
+}
+
+/** Pure declared identity decoder; official enumeration and native bytes remain preparation checks. */
+export function parseJobPartsIdentity(value: unknown): JobPartsIdentity {
+  const {raw, version} = partsIdentityHeader(value);
+  const manifest = partsManifest(raw.manifest);
+  const images = partsReferenceList(raw.images).map((row, index) => referenceRow(row, index, true));
+  return {enumeratorVersion: version, manifest, images: images as JobPartsIdentity['images']};
+}
+
 /** Membership, order and duplicate semantics belong solely to the trusted public
  * enumerator. Review compares its exact array and validates byte boundaries.
  */
@@ -242,22 +269,13 @@ async function prepareParts(root: string, snapshotRoot: string, claimed: JobPart
   const bytes = new Map<string, Buffer>();
   if (claimed === null) return {identity: null, bytes};
   if (!enumerator) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_ENUMERATOR_UNAVAILABLE');
-  jobObject(claimed, ['enumeratorVersion', 'manifest', 'images']);
-  const version = jobPartsEnumeratorVersion(claimed.enumeratorVersion);
+  const {version} = partsIdentityHeader(claimed);
   if (version !== jobPartsEnumeratorVersion(enumerator.version)) {
     throw new JobError('JOB_SOURCE_UNRETAINABLE',
       `PARTS_ENUMERATOR_VERSION_MISMATCH range="${JOB_PARTS_ENUMERATOR_RANGE}" received="${version}" installed="${enumerator.version}"`);
   }
-  let manifestPath: string;
-  try {
-    jobObject(claimed.manifest, ['path', 'sha256']);
-    manifestPath = jobPath(claimed.manifest.path);
-    if (posix.basename(manifestPath) !== 'parts.json') throw new Error('Manifest directory API');
-    jobSha(claimed.manifest.sha256);
-  } catch { throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_PATH_REFUSED manifest'); }
-  if (!Array.isArray(claimed.images) || claimed.images.length > maxSourceFiles) {
-    throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_LIMIT');
-  }
+  const {path: manifestPath} = partsManifest(claimed.manifest);
+  const claimedImages = partsReferenceList(claimed.images);
   let manifestBytes: Buffer;
   try { manifestBytes = sourceBytes(root, manifestPath); }
   catch (error) {
@@ -282,11 +300,8 @@ async function prepareParts(root: string, snapshotRoot: string, claimed: JobPart
       throw new JobError('JOB_SOURCE_MISMATCH', 'PARTS_ENUMERATION_REFUSED' + rule);
     }
   } finally { await rm(enumerationRoot, {recursive: true, force: true}); }
-  if (!Array.isArray(references) || references.length > maxSourceFiles) {
-    throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_LIMIT');
-  }
-  const official = references.map((raw, row) => referenceRow(raw, row, false));
-  const supplied = claimed.images.map((raw, row) => referenceRow(raw, row, true));
+  const official = partsReferenceList(references).map((raw, row) => referenceRow(raw, row, false));
+  const supplied = claimedImages.map((raw, row) => referenceRow(raw, row, true));
   const difference = official.findIndex((row, i) => row.path !== supplied[i]?.path || row.role !== supplied[i]?.role);
   if (difference !== -1 || official.length !== supplied.length) {
     throw new JobError('JOB_SOURCE_MISMATCH',

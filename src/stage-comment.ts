@@ -1,8 +1,37 @@
 /** Stage marks are optional inspection evidence on an ordinary feedback row. */
 import type {PosedFrame} from '@rig-c/play';
 import type {ControlNumericCamera} from './control.ts';
+import type {JobComment, JobCommentAnchor} from './job-contract.ts';
 export interface MarkPoint {x:number;y:number}
 export interface MarkRegion {x:number;y:number;width:number;height:number}
+
+/** Stable logical labels survive a new Apply capture; raw anchors retain its full evidence. */
+function commentLabel(anchor: JobCommentAnchor): string {
+ if ('checkpointId' in anchor) return JSON.stringify(['checkpoint', anchor.checkpointId]);
+ if ('schema' in anchor) return JSON.stringify([anchor.schema, anchor.parts.map(part => part.name), anchor.view.mode]);
+ if ('name' in anchor) return JSON.stringify([anchor.name]);
+ const context = anchor.context as Record<string, unknown> | undefined;
+ if (hasStageComment(context?.comment)) {
+  const mark = parseStageComment(context!.comment);
+  return JSON.stringify([mark.schema, mark.mode, mark.viewport, anchor.target.kind, anchor.target.name,
+   anchor.frameStart, anchor.frameEnd]);
+ }
+ return JSON.stringify([anchor.target.kind, anchor.target.name, anchor.frameStart, anchor.frameEnd,
+  'side' in anchor ? anchor.side : null]);
+}
+
+/** The signed scalar projection. Entry text and array order are never normalized. */
+export function projectComments(comments: readonly JobComment[]): string {
+ if (!Array.isArray(comments) || comments.length > 1000) throw new Error('JOB_ACT_INVALID');
+ const blocks = comments.map(comment => {
+  if (!comment || typeof comment.text !== 'string' || !comment.text.trim() || comment.text.length > 10000 ||
+   Object.keys(comment).some(key => key !== 'text' && key !== 'anchor')) throw new Error('JOB_ACT_INVALID');
+  return `[${comment.anchor === undefined ? 'general' : commentLabel(comment.anchor)}]\n${comment.text}`;
+ });
+ const text = blocks.join('\n\n');
+ if (text.length > 10000) throw new Error('JOB_ACT_INVALID');
+ return text;
+}
 export const commentModes=['setup','animate','compare'] as const;
 export type CommentMode=typeof commentModes[number];
 export const timeOnlyReason='frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)' as const;

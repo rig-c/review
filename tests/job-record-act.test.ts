@@ -11,7 +11,9 @@ import {
   type RecordSubject,
   type RecordUISubmission,
 } from '../src/job-contract.ts';
-import { parseRecordAct } from '../src/job-api.ts';
+import { parseRecordAct, buildRecordSource } from '../src/job-api.ts';
+import {parseCommentsAct, projectComments} from '../src/job-host.ts';
+import commentsLegacy from './fixtures/comments-contract-legacy.json';
 import {
   bindJobAsk,
   bindJobRecordAsk,
@@ -44,6 +46,25 @@ afterEach(() => {
     const dir = tempDirs.pop()!;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('#646 record-plan @6 reuses declared checkpoint/signoff/reopen subjects and refuses option-set sources', () => {
+  const root = makeTempDir('646-record-plan-'), workspace = createSyntheticPlanRecordWorkspace(root, {subjects: [
+    {kind: 'checkpoint', checkpointId: 'step_layout'}, {kind: 'signoff', stage: 'plan-approved'}, {kind: 'reopen', stage: 'plan-approved'},
+  ]});
+  const source = buildRecordSource({record: workspace.record, selection: workspace.result, context: workspace.context});
+  const old = JSON.parse(commentsLegacy.records['@4'].raw);
+  for (const subject of source.subjects) {
+    const value = subject.kind === 'checkpoint' ? {checkpointId: subject.checkpointId, planStepId: subject.checkpointId, outcome: 'pass', comments: [{text: 'Review plan'}]} :
+      {stage: subject.stage, ...(subject.kind === 'signoff' ? {decision: 'approved'} : {}), comments: [{text: 'Review plan'}]};
+    const parsed = parseCommentsAct({...old, schema: 'rig-review/act@6', source, kind: subject.kind, value});
+    expect(parsed.source).toEqual(source);
+    expect(projectComments(parsed.value.comments)).toBe('[general]\nReview plan');
+  }
+  const options = createSyntheticOptionRecordWorkspace(makeTempDir('646-record-options-'));
+  const optionSource = buildRecordSource({record: options.record, selection: options.result, context: options.context, optionSetFile: options.optionSetFile});
+  expect(() => parseCommentsAct({...old, schema: 'rig-review/act@6', source: optionSource,
+    kind: 'signoff', value: {stage: 'plan-approved', decision: 'approved', comments: []}})).toThrow('JOB_ACT_INVALID');
 });
 
 function buildPendingRecordAsk(

@@ -17,6 +17,64 @@ import { parseReadingsContext } from './readings.ts';
 import { parseRequirementsContext } from './requirements.ts';
 import { parseScheduleContext } from './environment-schedule.ts';
 import { choice, object, string, type Json, type ReviewPackage, type ReviewedSource } from './manifest.ts';
+import { commentsObject, jobSha, parseComments } from './job-api.ts';
+import { REVIEW_COMMENTS_SESSION_SCHEMA, type ReviewCommentsSession } from './job-contract.ts';
+
+/** Shared declared provenance decoder. Native source freshness belongs to the package owner. */
+export function parseCommentsReviewedSource(value: unknown): ReviewedSource {
+  const source = commentsObject(value, ['packageRevision', 'viewerVersion', 'runtimeVersion', 'rig', 'motion'], ['handoff']);
+  for (const key of ['packageRevision', 'viewerVersion', 'runtimeVersion']) string(source[key], `reviewedSource.${key}`);
+  for (const key of ['rig', 'motion']) {
+    if (source[key] === null) continue;
+    const file = commentsObject(source[key], ['path', 'sha256']);
+    string(file.path, `reviewedSource.${key}.path`); jobSha(file.sha256);
+  }
+  if ('handoff' in source) object(source.handoff, 'reviewedSource.handoff');
+  return structuredClone(source) as unknown as ReviewedSource;
+}
+
+/** The two standalone envelopes share their existing diagnostic row shape. */
+export function parseCommentsWarnings(value: unknown): FeedbackWarning[] {
+  if (!Array.isArray(value) || value.length > 1000) throw new Error('JOB_ACT_INVALID');
+  for (const warning of value) {
+    const row = commentsObject(warning, ['id', 'error']);
+    string(row.id, 'warning.id'); string(row.error, 'warning.error');
+  }
+  return structuredClone(value) as FeedbackWarning[];
+}
+
+/** Read-only session/2 decoder. The active UI/save path remains session/1. */
+export function parseCommentsSession(value: unknown): ReviewCommentsSession {
+  const raw = commentsObject(value, ['schema', 'id', 'revision', 'sourceHash', 'reviewedSource', 'status',
+    'checkpoints', 'comments', 'feedbackWarnings', 'updatedAt'], ['referenceBinding']);
+  if (raw.schema !== REVIEW_COMMENTS_SESSION_SCHEMA) throw new Error('JOB_ACT_INVALID');
+  string(raw.id, 'session.id'); string(raw.revision, 'session.revision'); jobSha(raw.sourceHash);
+  parseCommentsReviewedSource(raw.reviewedSource);
+  choice(raw.status, ['pending', 'approved', 'changes-requested'], 'session.status');
+  const checkpoints = object(raw.checkpoints, 'session.checkpoints');
+  for (const item of Object.values(checkpoints)) {
+    const checkpoint = commentsObject(item, ['outcome']);
+    choice(checkpoint.outcome, ['pending', 'pass', 'fail'], 'checkpoint.outcome');
+  }
+  parseCommentsWarnings(raw.feedbackWarnings);
+  if (raw.updatedAt !== null && (typeof raw.updatedAt !== 'string' || !Number.isFinite(Date.parse(raw.updatedAt)))) throw new Error('JOB_ACT_INVALID');
+  if ('referenceBinding' in raw) {
+    const binding = commentsObject(raw.referenceBinding, ['packageSourceHash', 'reference']);
+    jobSha(binding.packageSourceHash);
+    const reference = commentsObject(binding.reference, ['id', 'name', 'sha256']);
+    string(reference.id, 'reference.id'); string(reference.name, 'reference.name'); jobSha(reference.sha256);
+  }
+  const comments = parseComments(raw.comments, raw.sourceHash as string);
+  if (comments.some(comment => comment.anchor && 'side' in comment.anchor)) throw new Error('JOB_ACT_INVALID');
+  const reviewed = raw.reviewedSource as unknown as ReviewedSource;
+  for (const {anchor} of comments) {
+    if (!anchor || !('frameStart' in anchor) || !hasStageComment((anchor.context as any)?.comment)) continue;
+    const mark = parseStageComment((anchor.context as any).comment);
+    parseBookmark(mark.bookmark, {mode: 'single', sourceHash: raw.sourceHash as string, rigs: [reviewed.rig?.sha256 ?? null]});
+    if (!['rig', 'reference'].includes(mark.viewport) || mark.modelHash !== (mark.viewport === 'reference' ? null : reviewed.rig?.sha256 ?? null)) throw new Error('JOB_ACT_INVALID');
+  }
+  return {...structuredClone(raw), comments} as unknown as ReviewCommentsSession;
+}
 export interface Feedback {id:string;frameStart:number|null;frameEnd:number|null;target:{kind:'bone'|'slot'|'rig';name:string};category:'defect'|'quality';summary:string;context?:Json}
 export function parseFeedback(item:unknown,strict=true):Feedback {
   const f=object(item,'feedback');const target=object(f.target,'feedback.target');

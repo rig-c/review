@@ -563,6 +563,11 @@ model binding nor a valid image-set binding uses `JOB_ASK_INVALID`.
 
 The backend rig-still extension retains the original twelve runtime exports and `JOB_ACT_SCHEMA` at act@2. `JobAct` additionally includes `JobRigReviewAct` at act@3 with top-level `JobRigStill` and `JobPartsVerdictAct` at act@5 (`PartsVerdictValue` with pointed `issues` and `words`, while preserving `JobLegacyPartsVerdictValue` at act@2 for historical acts). The facade adds type-only `JobLegacyAct`, `JobRigReviewAct`, `JobPartsVerdictAct`, `JobLegacyPartsVerdictValue`, `PartsVerdictValue`, `JobPanelComposition`, `PanelComponent`, `JobRigStill` and `JobRigCapture` exports, [Review #563](https://github.com/rig-c/review/issues/563) adds five type-only exports (`JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`, `JobHostAttachField` and `JobHostAttachFailure`), and [Review #555](https://github.com/rig-c/review/issues/555) adds four type-only interview diagnostic exports (`JobInterviewJson`, `JobInterviewRecord`, `JobInterviewDiagnostic` and `JobInterviewDiagnostics`). [Review #588](https://github.com/rig-c/review/issues/588) activates record mode when `readRecordPublished` and `recordReaderId` are supplied to a host or session (`publicationMode: 'record-and-package'`), serving `rig-review/job-api@3` (`JOB_API_V3_SCHEMA`), `rig-review/act@4` (`JOB_RECORD_ACT_SCHEMA`) and normal owner URL model-free record inspection while keeping default package-only hosts and exact `package-only` `job-ui/<jobId>.json` descriptor bytes at @2 and enforcing `publicationMode` / `recordReaderId` reuse compatibility across ordinary reuse and strict `reuseOnly` attachment. It exports six additional record-mode runtime symbols (`JOB_API_V3_SCHEMA`, `JOB_RECORD_ACT_SCHEMA`, `JOB_RECORD_READER_ID`, `parseRecordAct`, `prepareJobRecordAct` and `prepareJobRecordSource`, for eighteen runtime exports total) and the V3/record type surface listed below. The rig and parts-verdict act revision constants, transport limits and the internal `POST /jobs/<jobId>/host` helper remain internal to their modules. Consumer checks distinguish these act revisions as described in [Rig verdict still backend](REVIEW_PACKAGE.md#rig-verdict-still-backend) and [Model-free record mode and source seam](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
 
+The comments decoder extension adds six functions and four schema constants,
+for twenty-eight runtime exports total. It is a read-only contract preparation;
+the existing UI finalizers and legacy type unions retain their current versions.
+See [Comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
+
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 
@@ -572,6 +577,16 @@ values from the frozen semantic contract.
 - `parseRecordAct`
 - `prepareJobRecordAct`
 - `prepareJobRecordSource`
+- `parseCommentsAct`
+- `projectComments`
+- `parseCommentsSession`
+- `parseCommentsCompareSession`
+- `parseCommentsPartsVerdict`
+- `projectSelectedCommentsFeedback`
+- `JOB_COMMENTS_ACT_SCHEMA`
+- `REVIEW_COMMENTS_SESSION_SCHEMA`
+- `REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA`
+- `PARTS_COMMENTS_VERDICT_SCHEMA`
 - `JOB_CAPABILITIES`
 - `JOB_API_SCHEMA`
 - `JOB_API_V3_SCHEMA`
@@ -734,6 +749,16 @@ without aliases or copied wire shapes.
 - `JobRetainedSource`
 - `JobRetainedSourceV3`
 - `JobRootIdentity`
+- `JobComment`
+- `JobCommentAnchor`
+- `JobCommentFeedbackAnchor`
+- `JobCommentPartsAnchor`
+- `JobCommentImageAnchor`
+- `JobCommentsAct`
+- `JobCommentsActValues`
+- `ReviewCommentsSession`
+- `CompareCommentsSession`
+- `PartsCommentsVerdict`
 
 ## Parts enumeration boundary
 
@@ -746,11 +771,11 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ## Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer imports the eighteen runtime exports and every listed type, including
+A consumer checks the twenty-eight runtime exports and every listed type, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and
-the record-mode `JobRecordAct` / `JobActV3` / `JobPlanSource` /
+the comments decoder types and the record-mode `JobRecordAct` / `JobActV3` / `JobPlanSource` /
 `JobFetchActRequestV3` / `JobRecordHostHooks` surface, through `@rig-c/review/job-host`.
 TypeScript checks the installed consumer and the runtime checks the full owner
 resources, retained publication, semantic ports, declared hooks, enumerator
