@@ -119,26 +119,25 @@ export function eligibilityViewSwitch<L extends string>(state:{requested:L;effec
 export const compareViewModes:readonly (readonly [PairLayout,string])[]=Object.freeze([['compare','Side by side'],['reference','Reference'],['a','Build A'],['b','Build B']]);
 export function compareViewSwitch(state:Pick<PairEligibility,'requested'|'effective'|'reasons'>,onChange?:(id:PairLayout)=>void):ViewSwitchConfig {return eligibilityViewSwitch(state,compareViewModes,onChange);}
 export type ViewControlsOptions = {layout:'rigStep1';viewSwitch:ViewSwitchConfig} | {
- layout:'legacyCompareStep3'|'legacyPartsStep2';
+ layout:'legacyPartsStep2';
 } | {
  layout:'legacyCompiledJobStep5';
  inputLabel:(key:string,input:HTMLElement)=>HTMLElement;
 };
 /** One creation site for each common control; hosts retain adjacent tools and camera/event binding. */
 export function createViewControls(options:ViewControlsOptions) {
- const parts=options.layout==='legacyPartsStep2',rig=options.layout==='rigStep1',compare=options.layout==='legacyCompareStep3';
- const zoomIn=actionButton(parts||compare?'+':t(rig?'Zoom in':'job.zoomIn'),null);zoomIn.id='zoom-in';
- const zoomOut=actionButton(parts||compare?'−':t(rig?'Zoom out':'job.zoomOut'),null);zoomOut.id='zoom-out';
- const fit=actionButton(t(compare?'Fit synchronized views':'Fit'),null);fit.id='fit';
- const value=panelMake(rig||compare?'output':'span',{id:compare?'zoom-label':'zoom-value',textContent:parts?'1:1':rig||compare?'100%':''});
+ const parts=options.layout==='legacyPartsStep2',rig=options.layout==='rigStep1';
+ const zoomIn=actionButton(parts?'+':t(rig?'Zoom in':'job.zoomIn'),null);zoomIn.id='zoom-in';
+ const zoomOut=actionButton(parts?'−':t(rig?'Zoom out':'job.zoomOut'),null);zoomOut.id='zoom-out';
+ const fit=actionButton(t('Fit'),null);fit.id='fit';
+ const value=panelMake(rig?'output':'span',{id:'zoom-value',textContent:parts?'1:1':rig?'100%':''});
  const sync=panelMake('input',{id:'camera-sync',type:'checkbox'});
  const syncLabel=options.layout==='legacyCompiledJobStep5'?options.inputLabel('job.cameraSync',sync):labelledControl(t('Sync cameras'),sync,true);
  if(parts)syncLabel.className='pv-field';
  else if(options.layout==='legacyCompiledJobStep5'){zoomIn.dataset.jobText='job.zoomIn';zoomOut.dataset.jobText='job.zoomOut';fit.dataset.jobText='Fit';}
- if(rig||compare){sync.checked=true;syncLabel.className='camera-sync';zoomIn.setAttribute('aria-label',t(compare?'Zoom active view in':'Zoom in'));zoomOut.setAttribute('aria-label',t(compare?'Zoom active view out':'Zoom out'));}
- if(compare)for(const button of [zoomIn,zoomOut,fit])button.removeAttribute('type');
+ if(rig){sync.checked=true;syncLabel.className='camera-sync';zoomIn.setAttribute('aria-label',t('Zoom in'));zoomOut.setAttribute('aria-label',t('Zoom out'));}
  const zoomButtons=[zoomIn,zoomOut,fit];
- const zoomGroup=parts||rig||compare?panelMake(parts?'span':'div',{className:parts?'pv-group':rig?'zoom-controls':'row'}):null;
+ const zoomGroup=parts||rig?panelMake(parts?'span':'div',{className:parts?'pv-group':'zoom-controls'}):null;
  const nativeOne=parts||rig?actionButton('1:1',null):null;
  if(nativeOne)nativeOne.id='native-one';
  let viewSwitch:HTMLDetailsElement|null=null,viewLabel:HTMLSpanElement|null=null;
@@ -196,7 +195,7 @@ export function createViewControls(options:ViewControlsOptions) {
   }
   viewSwitch.append(summary,list);
   zoomGroup!.append(zoomIn,zoomOut,fit,nativeOne!,viewSwitch,value);
- }else if(compare)zoomGroup!.append(syncLabel,zoomOut,value,zoomIn,fit);
+ }
  return {zoomButtons,zoomGroup,syncLabel,value,choices,nativeOne,viewSwitch,viewModeIds:[...modes.keys()],setMode,setDisabled};
 }
 

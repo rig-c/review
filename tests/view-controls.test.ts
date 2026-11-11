@@ -1,6 +1,6 @@
 import {openCompareCamera} from './helpers/compare-camera-687.ts';
 import {createRigViewControls} from './helpers/rig-view-controls.ts';
-import {createViewControls} from '../web/view-controls.ts';
+import {createViewControls,compareViewSwitch} from '../web/view-controls.ts';
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {createViewportController,createViewportState} from '../web/viewport-controller.ts';
 import {RigOverlays} from '../web/rig-overlays.ts';
@@ -302,21 +302,18 @@ test('#279: view bar wraps without shrinking or clipping layer toggles and keeps
  expect(checkViewbarCss(css.replaceAll('#stage-comment-refusal{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}','#stage-comment-refusal{flex:0 1 180px}'))).toBe(false);
 });
 
-test('#284: comment list CSS anchors below the view bar on both review and compare stylesheets; planted top:55px fails',async()=>{
+test('#284: comment list CSS anchors below the view bar on the shared review stylesheet; planted top:55px fails',async()=>{
  const styles=await readFile(new URL('../web/styles.css',import.meta.url),'utf8');
- const compare=await readFile(new URL('../web/compare.css',import.meta.url),'utf8');
  const checkListAnchorCss=(sheet:string)=>{
   const stripped=sheet.replace(/\/\*[\s\S]*?\*\//g,'');
   const rules=(sel:string)=>[...stripped.matchAll(/([^{}@]+)\{([^{}]*)\}/g)].filter(m=>m[1]!.split(',').map(s=>s.trim()).includes(sel)).map(m=>m[2]!);
-  const viewbarAnchored=rules('.viewbar').some(r=>r.includes('anchor-name:--stage-comment-bar'))&&rules('.toolbar').some(r=>r.includes('anchor-name:--stage-comment-bar'));
+  const viewbarAnchored=rules('.viewbar').some(r=>r.includes('anchor-name:--stage-comment-bar'));
   const listRules=rules('.stage-comment-list'),lastList=listRules.at(-1)??'';
   const listAnchored=lastList.includes('position-anchor:--stage-comment-bar')&&lastList.includes('top:calc(anchor(bottom,50px) + 5px)')&&!listRules.some(r=>/(?:^|;)top:\s*55px(?:;|$)/.test(r));
   return viewbarAnchored&&listAnchored;
  };
  expect(checkListAnchorCss(styles)).toBe(true);
- expect(checkListAnchorCss(compare)).toBe(true);
  expect(checkListAnchorCss(styles.replace('top:calc(anchor(bottom,50px) + 5px)','top:55px'))).toBe(false);
- expect(checkListAnchorCss(compare.replace('top:calc(anchor(bottom,50px) + 5px)','top:55px'))).toBe(false);
 });
 
 function rigFramingHarness(stage:PoseBounds|null,initialBounds:PoseBounds|null,factory= createRigViewportProvider) {
@@ -669,15 +666,17 @@ test('#671 common group composition retains each finite host tag, class, child o
  }
  Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Element(tag)}});
  try{
-  for(const layout of ['legacyPartsStep2','rigStep1','legacyCompareStep3'] as const){
+  for(const layout of ['legacyPartsStep2','rigStep1'] as const){
    const controls=layout==='rigStep1'?createRigViewControls():createViewControls({layout}),group=controls.zoomGroup as unknown as Element;
-   const expected=layout==='legacyPartsStep2'?['zoom-out','zoom-value','zoom-in','fit','native-one']:layout==='rigStep1'?['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value']:['camera-sync','zoom-out','zoom-label','zoom-in','fit'];
-   expect(group.tagName).toBe(layout==='legacyPartsStep2'?'span':'div');expect(group.className).toBe(layout==='legacyPartsStep2'?'pv-group':layout==='rigStep1'?'zoom-controls':'row');
+   const expected=layout==='legacyPartsStep2'?['zoom-out','zoom-value','zoom-in','fit','native-one']:['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value'];
+   expect(group.tagName).toBe(layout==='legacyPartsStep2'?'span':'div');expect(group.className).toBe(layout==='legacyPartsStep2'?'pv-group':'zoom-controls');
    expect(group.children.map(node=>node.id||(node===controls.syncLabel?'camera-sync':null))).toEqual(expected);
    expect(group.children).toContain(controls.value);for(const button of controls.zoomButtons)expect(group.children).toContain(button);
-   if(layout==='legacyCompareStep3'){expect(group.children[0]).toBe(controls.syncLabel);expect(controls.nativeOne).toBeNull();expect(controls.viewSwitch).toBeNull();}
-   else expect(group.children).toContain(controls.nativeOne);
+   expect(group.children).toContain(controls.nativeOne);
   }
+  const compareControls=createViewControls({layout:'rigStep1',viewSwitch:compareViewSwitch({requested:'compare',effective:'compare',reasons:{}})}),compareGroup=compareControls.zoomGroup as unknown as Element;
+  expect(compareGroup.children.map(node=>node.id)).toEqual(['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value']);
+  expect(compareControls.nativeOne).not.toBeNull();expect(compareControls.viewSwitch).not.toBeNull();
   const controls=createViewControls({layout:'legacyCompiledJobStep5',inputLabel:(_key,input)=>input});expect(controls.zoomGroup).toBeNull();expect(controls.zoomButtons.map(button=>button.id)).toEqual(['zoom-in','zoom-out','fit']);
  }finally{if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });

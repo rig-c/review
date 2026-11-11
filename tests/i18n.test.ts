@@ -1,4 +1,4 @@
-import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
+import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup,compareBuildPickerMarkup,compareTransportMarkup,compareTransportContextMarkup,compareFeedbackMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readdir,readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -68,7 +68,7 @@ test('Bar 2: checkWebHardcodedStrings passes on web/, lists every exemption with
  const files:Array<{path:string;content:string}>=[];
  for(const name of entries.sort()){
   if(name.endsWith('.html')||name.endsWith('.ts')){
-   files.push({path:`web/${name}`,content:await readFile(new URL(name,webDir),'utf8')+(name==='index.html'?rigWorkspaceMarkup+rigReviewDialogMarkup+rigLayerControlsMarkup+sharedViewToolsMarkup+sharedCommentMarkup:'')});
+   files.push({path:`web/${name}`,content:await readFile(new URL(name,webDir),'utf8')+(name==='index.html'?rigWorkspaceMarkup+rigReviewDialogMarkup+rigLayerControlsMarkup+sharedViewToolsMarkup+sharedCommentMarkup+compareBuildPickerMarkup+compareTransportMarkup+compareTransportContextMarkup+compareFeedbackMarkup:'')});
   }
  }
  const clean=checkWebHardcodedStrings(files);
@@ -93,10 +93,10 @@ test('Bar 2: checkWebHardcodedStrings passes on web/, lists every exemption with
  expect(resHtml.violations.some(v=>v.file==='web/index.html'&&v.kind==='html-text'&&v.text==='Planted hardcoded button label')).toBe(true);
 
  // Planted control 2: hardcoded visible attribute in HTML fails.
- const plantedAttr=files.map(f=>f.path==='web/compare.html'?{...f,content:f.content.replace('</body>','<input aria-label="Planted hardcoded aria label"></body>')}:f);
+ const plantedAttr=files.map(f=>f.path==='web/index.html'?{...f,content:f.content.replace('</body>','<input aria-label="Planted hardcoded aria label"></body>')}:f);
  const resAttr=checkWebHardcodedStrings(plantedAttr);
  expect(resAttr.ok).toBe(false);
- expect(resAttr.violations.some(v=>v.file==='web/compare.html'&&v.kind==='html-attr'&&v.text==='Planted hardcoded aria label')).toBe(true);
+ expect(resAttr.violations.some(v=>v.file==='web/index.html'&&v.kind==='html-attr'&&v.text==='Planted hardcoded aria label')).toBe(true);
 
  // Planted control 3: hardcoded visible string literal in TypeScript fails.
  const plantedTs=files.map(f=>f.path==='web/main.ts'?{...f,content:f.content+'\nconst plantedVisibleWarning = "Planted hardcoded status message";\nvoid plantedVisibleWarning;\n'}:f);

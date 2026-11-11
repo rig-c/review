@@ -66,33 +66,33 @@ const identifierRow = (name: string, step: string, ceiling: number, plantIn: str
 
 export const ROWS: readonly CopyRow[] = [
   {name: 'entry HTML web/parts.html', step: '2', ceiling: 1, files: ['web/parts.html']},
-  {name: 'entry HTML web/compare.html', step: '3', ceiling: 1, files: ['web/compare.html']},
+  {name: 'entry HTML web/compare.html', step: '3', ceiling: 0, files: ['web/compare.html']},
   {name: 'entry HTML web/interview.html', step: '4', ceiling: 1, files: ['web/interview.html']},
   {name: 'entry HTML web/job-hub.html', step: '6', ceiling: 1, files: ['web/job-hub.html']},
   {name: 'entry HTML web/owner-workspace.html', step: '6', ceiling: 1, files: ['web/owner-workspace.html']},
-  {name: 'entry HTML files besides web/index.html', step: '2-6', ceiling: 5, fileGlob: {pattern: /^web\/[^/]+\.html$/u, except: ['web/index.html']}},
+  {name: 'entry HTML files besides web/index.html', step: '2-6', ceiling: 4, fileGlob: {pattern: /^web\/[^/]+\.html$/u, except: ['web/index.html']}},
   {name: 'inline HTML document in src/job-front.ts', step: '5', ceiling: 1, matchers: [
     {pattern: /<!doctype html/giu, files: ['src/job-front.ts'], plant: "\nconst planted = '<!doctype html>';\n", plantIn: 'src/job-front.ts'},
   ]},
   layoutRow('legacyPartsStep2', '2', 3),
-  layoutRow('legacyCompareStep3', '3', 3),
+  layoutRow('legacyCompareStep3', '3', 0),
   layoutRow('legacyCompiledJobStep5', '5', 4),
-  {name: 'compare camera stack definitions in web/compare.ts', step: '3', ceiling: 2, matchers: [
+  {name: 'compare camera stack definitions in web/compare.ts', step: '3', ceiling: 0, matchers: [
     {pattern: new RegExp(`^[\\t ]*function\\s+(?:${compareCameraStack.join('|')})\\s*\\(`, 'gmu'), files: ['web/compare.ts'], plant: '\nfunction zoomCamera(): void {}\n', plantIn: 'web/compare.ts'},
   ]},
-  identifierRow('legacyCompareLayerControlsMarkup', '3', 3, 'web/compare.ts'),
-  {name: 'compare static inspector tab strip in web/compare.html', step: '3', ceiling: 1, matchers: [
+  identifierRow('legacyCompareLayerControlsMarkup', '3', 0, 'web/compare.ts'),
+  {name: 'compare static inspector tab strip in web/compare.html', step: '3', ceiling: 0, matchers: [
     {pattern: /role="tablist"/gu, files: ['web/compare.html'], plant: '\n<div role="tablist"></div>\n', plantIn: 'web/compare.html'},
   ]},
-  {name: 'compare static status footer in web/compare.html', step: '3', ceiling: 1, matchers: [
+  {name: 'compare static status footer in web/compare.html', step: '3', ceiling: 0, matchers: [
     {pattern: /<footer\b/gu, files: ['web/compare.html'], plant: '\n<footer></footer>\n', plantIn: 'web/compare.html'},
   ]},
   {name: 'per-screen CSS web/parts.css', step: '2', ceiling: 1, files: ['web/parts.css']},
-  {name: 'per-screen CSS web/compare.css', step: '3', ceiling: 1, files: ['web/compare.css']},
+  {name: 'per-screen CSS web/compare.css', step: '3', ceiling: 0, files: ['web/compare.css']},
   {name: 'per-screen CSS web/interview.css', step: '4', ceiling: 1, files: ['web/interview.css']},
   {name: 'per-screen CSS web/job-hub.css', step: '6', ceiling: 1, files: ['web/job-hub.css']},
   {name: 'per-screen CSS web/owner-workspace.css', step: '6', ceiling: 1, files: ['web/owner-workspace.css']},
-  {name: 'CSS files besides web/styles.css', step: '2-6', ceiling: 5, fileGlob: {pattern: /^web\/[^/]+\.css$/u, except: ['web/styles.css']}},
+  {name: 'CSS files besides web/styles.css', step: '2-6', ceiling: 4, fileGlob: {pattern: /^web\/[^/]+\.css$/u, except: ['web/styles.css']}},
   {name: 'job fixed row grid-template-rows:250px in .job-inspection', step: '5', ceiling: 1, matchers: [
     {pattern: /grid-template-rows\s*:\s*250px\b/gu, files: ['web/styles.css'], cssSelector: /\.job-inspection\b/u, plant: '\n.job-window .job-inspection{grid-template-rows:250px}\n', plantIn: 'web/styles.css'},
   ]},

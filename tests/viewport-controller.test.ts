@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {createViewportController,createViewportState,type ViewportProvider} from '../web/viewport-controller.ts';
 import {projectMark,unprojectMark} from '../src/stage-comment.ts';
-import {viewportPairMarkup,expandViewportPair,viewportPairPlaceholder} from '../web/viewport-pair.ts';
+import {viewportPairMarkup,compareViewportMarkup,mountViewportPair,mountCompareViewport} from '../web/viewport-pair.ts';
 import {createPartsViewport} from '../web/parts-viewport-provider.ts';
 import {createRigViewportProvider,type RigViewportHost} from '../web/rig-viewport-provider.ts';
 function host(){
@@ -112,7 +112,13 @@ test('#387 provider boundary keeps cursor anchor, shared state and hidden frame 
  const h=host(),c=h.controller;c.fitCamera();const point={x:113,y:207},before=unprojectMark(point,c.numericView().cameras.rig!);c.zoomViewport('rig',-1,point);const after=unprojectMark(point,c.numericView().cameras.rig!);expect(after.x).toBeCloseTo(before.x,12);expect(after.y).toBeCloseTo(before.y,12);expect(c.state).toBe(h.state);
  c.setCameraSync(false);const ref=structuredClone(c.paneCamera('reference'));c.panCamera('rig',64,-48);expect(c.paneCamera('reference')).toEqual(ref);const held=c.paneFrame('rig');h.nodes.get('rig-pane').hidden=true;expect(c.paneFrame('rig')).toBeNull();expect(c.paneFrame('rig',true)).toBe(held);expect(h.renders()).toBeGreaterThan(0);
 });
-test('#387 pair expansion preserves the exact subtree instead of maintaining another markup copy',()=>{const shell='<div id="stage-layout" class="stages">'+viewportPairPlaceholder+'</div>';expect(expandViewportPair(shell)).toBe('<div id="stage-layout" class="stages">'+viewportPairMarkup+'</div>');expect(viewportPairMarkup.match(/id="rig-viewport"/g)).toHaveLength(1);expect(viewportPairMarkup.match(/id="reference-viewport"/g)).toHaveLength(1);});
+test('#387 pair and compare stage mounts populate the exact subtree instead of maintaining markup copies',()=>{
+ const stage={innerHTML:''} as unknown as HTMLElement;
+ mountViewportPair(stage);expect(stage.innerHTML).toBe(viewportPairMarkup);
+ expect(viewportPairMarkup.match(/id="rig-viewport"/g)).toHaveLength(1);expect(viewportPairMarkup.match(/id="reference-viewport"/g)).toHaveLength(1);
+ mountCompareViewport(stage);expect(stage.innerHTML).toBe(compareViewportMarkup);
+ for(const id of ['reference-viewport','a-viewport','b-viewport'])expect(compareViewportMarkup.match(new RegExp(`id="${id}"`,'g'))).toHaveLength(1);
+});
 
 test('#382 native scale reaches exact 1, refuses beyond min(fit,1)..16, preserves cursor and retains rig limits',()=>{
  const h=host();const native=createViewportController({el:(id)=>h.nodes.get(id),nativeScale:true,geometry:()=>({space:'image',box:{x:0,y:0,width:12800,height:9600},marginX:0,marginY:0}),layoutKey:()=>'',render:()=>{},renderControls:()=>{},selection:()=>({selected:false,bounds:null}),message:()=>{}});

@@ -3532,4 +3532,9 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "PARTS_JOINED_ISSUE_UNSUPPORTED": "PARTS_JOINED_ISSUE_UNSUPPORTED · 이슈는 상시 잡 리뷰 경로(/jobs/<jobId>/)에서 등록해 주세요. 연결된 점검 페이지에서는 이슈 없는 승인을 지원합니다.",
   "Issues": "이슈",
   "No issues yet.": "아직 이슈가 없습니다.",
+  "Compare builds": "빌드 비교",
+  "Loading ordered A/B packages…": "순서가 지정된 A/B 패키지 불러오는 중…",
+  "Showing reference video.": "레퍼런스 비디오 표시 중.",
+  "Showing Build {0}.": "빌드 {0} 표시 중.",
+  "SOURCE PROVENANCE": "소스 출처 정보",
 };

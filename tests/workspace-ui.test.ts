@@ -109,8 +109,8 @@ test('actual user scroll cancels a queued old restore; stale intent cannot repla
  }finally{app.close();}
 });
 
-test('drawer sources override the legacy important narrow sidebar hide in both real stylesheets',async()=>{
- for(const file of ['styles.css','compare.css']){
+test('drawer sources override the legacy important narrow sidebar hide in the shared stylesheet',async()=>{
+ for(const file of ['styles.css']){
   const css=await readFile(new URL('../web/'+file,import.meta.url),'utf8');
   const matching=[...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap((match,index)=>{
    const display=match[2]!.match(/(?:^|;)\s*display\s*:\s*([^;]+)/);if(!display)return [];

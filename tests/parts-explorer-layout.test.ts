@@ -28,24 +28,12 @@ function cssRuleMap(css: string): Map<string, string[]> {
   return map;
 }
 
-test('Change 1 & 4: compare and single-review HTML separate fixed tools from the scrolling [data-part-list]', () => {
-  const compareHtml = readFileSync(new URL('../web/compare.html', import.meta.url), 'utf8');
+test('Change 1 & 4: single and compare workspace HTML separate fixed tools from the scrolling [data-part-list]', () => {
+  const compareTs = readFileSync(new URL('../web/compare.ts', import.meta.url), 'utf8');
+  expect(compareTs).toContain('rigWorkspaceMarkup');
   const singleHtml = (rigWorkspaceMarkup+rigReviewDialogMarkup);
 
-  // Compare panel: heading, Whole rig button, search label + input, Solo toggle, and status count are inside .parts-tools before <ul data-part-list>
-  const compareExplorerMatch = compareHtml.match(/<aside id="parts-explorer"[^>]*>([\s\S]*?)<\/aside>/);
-  expect(compareExplorerMatch).not.toBeNull();
-  const compareInner = compareExplorerMatch![1]!;
-  const compareToolsMatch = compareInner.match(/<div class="parts-tools">([\s\S]*?)<\/div><ul data-part-list/);
-  expect(compareToolsMatch).not.toBeNull();
-  const compareTools = compareToolsMatch![1]!;
-  expect(compareTools).toContain('<h2>PARTS</h2>');
-  expect(compareTools).toContain('data-part-whole');
-  expect(compareTools).toContain('id="part-search"');
-  expect(compareTools).toContain('data-part-solo');
-  expect(compareTools).toContain('data-part-status');
-
-  // Single-review panel: .left-header.parts-header holds PARTS + #part-search, and #parts-explorer wraps Whole rig, Solo toggle, and status count in .parts-tools before <ul data-part-list>
+  // Shared review panel: .left-header.parts-header holds PARTS + #part-search, and #parts-explorer wraps Whole rig, Solo toggle, and status count in .parts-tools before <ul data-part-list>
   expect(singleHtml).toContain('<div class="left-header parts-header"><h2>PARTS</h2><input id="part-search"');
   const singleExplorerMatch = singleHtml.match(/<aside id="parts-explorer"[^>]*>([\s\S]*?)<\/aside>/);
   expect(singleExplorerMatch).not.toBeNull();
@@ -58,12 +46,10 @@ test('Change 1 & 4: compare and single-review HTML separate fixed tools from the
   expect(singleTools).toContain('data-part-status');
 });
 
-test('Change 1, 2, 3, 4: compare.css and styles.css enforce fixed tool area, scrolling list, one-line ellipsis labels, and one row height', () => {
-  const compareCss = readFileSync(new URL('../web/compare.css', import.meta.url), 'utf8');
+test('Change 1, 2, 3, 4: styles.css enforces fixed tool area, scrolling list, one-line ellipsis labels, and one row height', () => {
   const singleCss = readFileSync(new URL('../web/styles.css', import.meta.url), 'utf8');
 
   for (const [name, css] of [
-    ['compare.css', compareCss],
     ['styles.css', singleCss],
   ] as const) {
     const rules = cssRuleMap(css);

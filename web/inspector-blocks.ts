@@ -5,7 +5,7 @@ import {tr,onLanguageChange,setSourceText,setSourceAttribute} from './i18n.ts';
  * block alone and hides the others with `hidden`, so one block is on screen at a time and nothing scrolls between them.
  * A tab may carry blocks that belong to its group (`data-block-includes`, e.g. Transport's Angle block): those keep
  * their own `hidden` for their own reasons and are hidden with the group by `data-block-hidden` instead. Arrow keys,
- * Home and End move between tabs and select as they go (the pattern compare.html's Inspector tabs follow).
+ * Home and End move between tabs and select as they go (standard WAI-ARIA tabs).
  * Hiding writes nothing inside a block, so a hidden block keeps whatever it held. Each block keeps its own scroll
  * offset for the session; the section's saved offset stays with the Inspector scroll memory. The active tab per
  * section is the only thing this adds to the inspection draft (its `ui` record, key `inspectorBlocks`). */
@@ -71,12 +71,13 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
  };
 }
 
-/** Compose the real rig acts into C6; all fields, submit nodes and their listeners retain identity. */
-export function mountRigInspector(root:Document=document):BottomPanel&{actBar:ActBar} {
+/** Compose the real rig/compare acts into C6; all fields, submit nodes and their listeners retain identity. */
+export function mountRigInspector(root:Document=document,options:{statusId?:string;submitId?:string;saveStateId?:string}={}):BottomPanel&{actBar:ActBar} {
+ const statusId=options.statusId??'review-status',submitId=options.submitId??'save',saveStateId=options.saveStateId??'review-draft-state';
  const inspector=root.querySelector<HTMLElement>('.inspector')!,body=inspector.querySelector<HTMLElement>('.inspector-body')!,heading=inspector.querySelector<HTMLElement>('.inspector-heading')!;
  const feedback=root.getElementById('inspector-feedback')!,dialog=root.getElementById('review-dialog')!;
- const [label,status,actions]=[feedback.querySelector<HTMLLabelElement>('label[for="review-status"]')!,root.getElementById('review-status')!,dialog.querySelector<HTMLElement>('.review-dialog-actions')!];
- const actBar=mountActBar({id:'workspace-review-act',decision:[label,status],actions,submit:root.getElementById('save') as HTMLButtonElement,saveState:root.getElementById('review-draft-state')!,saveStateCopies:[root.getElementById('draft-state')].flatMap(node=>node?[{node,title:true}]:[])}),act=actBar.element;
+ const [label,status,actions]=[feedback.querySelector<HTMLLabelElement>(`label[for="${statusId}"]`)!,root.getElementById(statusId)!,dialog.querySelector<HTMLElement>('.review-dialog-actions')!];
+ const actBar=mountActBar({id:'workspace-review-act',decision:[label,status],actions,submit:root.getElementById(submitId) as HTMLButtonElement,saveState:root.getElementById(saveStateId)!,saveStateCopies:[root.getElementById('draft-state')].flatMap(node=>node?[{node,title:true}]:[])}),act=actBar.element;
  const title=dialog.querySelector<HTMLElement>('.review-dialog-header')!;title.querySelector('#review-dialog-close')?.remove();
  feedback.dataset.inspectorPanel='feedback';feedback.className='workspace-review-panel';feedback.hidden=true;feedback.prepend(title);feedback.append(act);body.append(feedback);dialog.remove();
  // Header modes retain inspection mode while Review is revealed; the bottom row alone owns panel selection.

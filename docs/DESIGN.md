@@ -222,15 +222,15 @@ Browser storage is origin-scoped. Managed opens (the default) share one loopback
 
 ## Theme
 
-The palette comes from the rig-c.org site stylesheet. Its dark `:root` values (`--bg`, `--fg`, `--fg-strong`, `--fg-soft`, `--fg-muted`, `--border`, `--border-strong`, `--hover-bg`, `--active-bg`, `--link`, `--link-hover`, `--btn-fg`, `--code-*`, `--footer-bg`, `--pass`, `--warn`, `--fail`, the font stacks and `--radius`) are copied into the `:root` block of `web/styles.css` and `web/compare.css`; nothing is fetched at runtime, so the viewer stays offline. The site loads Inter and JetBrains Mono from a font CDN; the review keeps only the family stacks and falls back to local fonts. The site has no light scheme, so the light values and every review-only surface token (`--rv-*`: bars, panels, controls, fields, pressed state, focus ring, backdrop, stage) are review-local derivations of the same palette.
+The palette comes from the rig-c.org site stylesheet. Its dark `:root` values (`--bg`, `--fg`, `--fg-strong`, `--fg-soft`, `--fg-muted`, `--border`, `--border-strong`, `--hover-bg`, `--active-bg`, `--link`, `--link-hover`, `--btn-fg`, `--code-*`, `--footer-bg`, `--pass`, `--warn`, `--fail`, the font stacks and `--radius`) are copied into the `:root` block of `web/styles.css`; nothing is fetched at runtime, so the viewer stays offline. The site loads Inter and JetBrains Mono from a font CDN; the review keeps only the family stacks and falls back to local fonts. The site has no light scheme, so the light values and every review-only surface token (`--rv-*`: bars, panels, controls, fields, pressed state, focus ring, backdrop, stage) are review-local derivations of the same palette.
 
 Rules:
 
-- No literal colour (`#hex`, `rgb()`, `hsl()`) outside the `:root` token blocks of either stylesheet. Rules use `var(--…)` only.
+- No literal colour (`#hex`, `rgb()`, `hsl()`) outside the `:root` token blocks of the stylesheet. Rules use `var(--…)` only.
 - Every colour token is defined for both schemes: `:root` holds dark (the default before any script runs) and `:root[data-theme=light]` redefines the same set. The appearance control resolves `system` through `prefers-color-scheme` and always writes `data-theme=dark|light` on the root element, so the stylesheets carry no per-component light overrides.
 - State colours: pressed and current selections use the `--pass` family, primary actions and links `--link`, dirty and draft notices `--warn`, errors `--fail`.
 - The stage (pane gradient, grid dots, pane labels, empty-state text, video letterbox) stays dark in both schemes so source pixels and overlays read the same; its tokens carry equal values in both blocks.
-- Resize separators and scrollbars never share a colour: `--rv-separator` and `--rv-separator-hover` resolve to values different from both `--rv-scrollbar-*` colours in each scheme (the review page; the compare stylesheet keeps its own separator colour).
+- Resize separators and scrollbars never share a colour: `--rv-separator` and `--rv-separator-hover` resolve to values different from both `--rv-scrollbar-*` colours in each scheme.
 
 `tests/theme.test.ts` enforces the first two rules and the separator/scrollbar rule.
 

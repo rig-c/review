@@ -19,7 +19,6 @@ import { BONES_CHECK_LIMIT, createBonesCheck } from './bones-check.ts';
 import { createRequirementsCheck } from './requirements-run.ts';
 import { REQUIREMENTS_LIMIT, RequirementsError } from './requirements.ts';
 import { createEnvironmentCheck, ENVIRONMENT_CHECK_LIMIT, EnvironmentCheckError } from './environment-check.ts';
-import { renderCompareHtml } from './compare-html.ts';
 import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type LiveLifecycle, type UpgradableServer } from './live-lifecycle.ts';
 
 const headers={'X-Content-Type-Options':'nosniff','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self'; frame-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'};
@@ -193,8 +192,8 @@ export async function createCompareRequestContext(p: ComparePackage, options: Co
     if(url.pathname==='/compare-reference')return await serveReference(req,await safeCompareReference(p),p.response.binding.reference.sha256,headers);
     if(url.pathname.startsWith('/compare-assets/')){const match=/^\/compare-assets\/(a|b)\/(.+)$/.exec(url.pathname);if(!match)return json({error:'Unknown comparison side'},404);const side=match[1] as 'a'|'b',path=packagePath(decodeURIComponent(match[2]!));if(!p[side].files.has(path))return json({error:'Asset not declared by package'},404);return serveAsset(req,await safeFile(p[side].root,path));}
     if(url.pathname==='/main.js')return new Response(req.method==='HEAD'?null:bundle,{headers:{...headers,'Content-Type':'text/javascript'}});
-    if(url.pathname==='/'||url.pathname==='/index.html'){const html=renderCompareHtml(await readFile(appRoot+'web/compare.html','utf8'));return new Response(req.method==='HEAD'?null:html,{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});}
-    if(url.pathname==='/styles.css')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/compare.css'),{headers:{...headers,'Content-Type':'text/css'}});
+    if(url.pathname==='/'||url.pathname==='/index.html'){const html=await readFile(appRoot+'web/index.html','utf8');return new Response(req.method==='HEAD'?null:html,{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});}
+    if(url.pathname==='/styles.css')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/styles.css'),{headers:{...headers,'Content-Type':'text/css'}});
     return json({error:'Not found'},404);
     } finally { live.onRequestEnd(url.pathname); }
   }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message.includes('inputs changed')?409:400);}};

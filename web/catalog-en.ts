@@ -3532,4 +3532,9 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "PARTS_JOINED_ISSUE_UNSUPPORTED": "PARTS_JOINED_ISSUE_UNSUPPORTED · To report issues, use the standing job review route (/jobs/<jobId>/). This joined page supports approval with no issues.",
   "Issues": "Issues",
   "No issues yet.": "No issues yet.",
+  "Compare builds": "Compare builds",
+  "Loading ordered A/B packages…": "Loading ordered A/B packages…",
+  "Showing reference video.": "Showing reference video.",
+  "Showing Build {0}.": "Showing Build {0}.",
+  "SOURCE PROVENANCE": "SOURCE PROVENANCE",
 };

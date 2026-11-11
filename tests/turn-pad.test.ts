@@ -55,7 +55,7 @@ test('#289: reserved width derives from each dial range and precision, keeps exa
   }
  }
 
- for(const file of ['styles.css','compare.css']){
+ for(const file of ['styles.css']){
   const css=await readFile(new URL('../web/'+file,import.meta.url),'utf8');
   const rules=[...css.replace(/\/\*[\s\S]*?\*\//g,'').matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(m=>m[1]!.trim()==='.turn-pad output').map(m=>m[2]!);
   expect(rules).toHaveLength(1);

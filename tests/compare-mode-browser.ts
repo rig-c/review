@@ -539,7 +539,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
     // Verify comparison session in browser
     await session.goto(opened.url);
-    const compareCheck = await session.evaluate<any>(`(async () => {
+    const comparePhase1 = await session.evaluate<any>(`(async () => {
       const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       // Wait for comparison session and both players + side tools to finish loading
       for (let i = 0; i < 200; i++) {
@@ -553,33 +553,6 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
       window.__compareBootSentinel = 'no-reload-1';
 
-      const modeButtons = [...document.querySelectorAll('.mode-switch button')].map(b => ({
-        mode: b.getAttribute('data-mode'),
-        text: (b.textContent || '').trim(),
-        disabled: b.disabled,
-        pressed: b.getAttribute('aria-pressed'),
-      }));
-
-      const initialMode = {
-        comparePressed: document.querySelector('.mode-switch [data-mode="compare"]')?.getAttribute('aria-pressed'),
-        pickerHidden: document.getElementById('mode-build-picker')?.hidden,
-        refHidden: document.getElementById('reference-pane')?.hidden,
-        aHidden: document.getElementById('a-pane')?.hidden,
-        bHidden: document.getElementById('b-pane')?.hidden,
-      };
-
-      // Seek to t = 0.25s and select the 'mesh' slot in Parts explorer
-      const scrub = document.getElementById('scrub');
-      scrub.value = '0.25';
-      scrub.dispatchEvent(new Event('input', { bubbles: true }));
-      await sleep(120);
-      const timeBeforeSwitch = Number(scrub.value);
-
-      const meshPartBtn = document.querySelector('[data-part-list] button[data-side="a"][data-slot="mesh"]');
-      if (meshPartBtn) meshPartBtn.click();
-      await sleep(80);
-
-      // Switch Setup -> Animate -> Compare -> Setup with no reload, time and selection preserved
       const readScreenState = (m) => {
         const pressedPart = document.querySelector('[data-part-list] button[aria-pressed="true"]');
         return {
@@ -612,10 +585,90 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         return readScreenState(m);
       };
 
+      window.__compareTestHelpers = { sleep, readScreenState, clickMode };
+
+      const modeButtons = [...document.querySelectorAll('.mode-switch button')].map(b => ({
+        mode: b.getAttribute('data-mode'),
+        text: (b.textContent || '').trim(),
+        disabled: b.disabled,
+        pressed: b.getAttribute('aria-pressed'),
+      }));
+
+      const initialMode = {
+        comparePressed: document.querySelector('.mode-switch [data-mode="compare"]')?.getAttribute('aria-pressed'),
+        pickerHidden: document.getElementById('mode-build-picker')?.hidden,
+        refHidden: document.getElementById('reference-pane')?.hidden,
+        aHidden: document.getElementById('a-pane')?.hidden,
+        bHidden: document.getElementById('b-pane')?.hidden,
+        hasMainToolbar: !!document.querySelector('.workspace-main-toolbar'),
+        hasSecondaryToolbar: !!document.querySelector('.workspace-secondary-toolbar'),
+        zoomControlIds: [...document.querySelectorAll('[data-workspace-camera] .zoom-controls > *')].map(n => n.id),
+        fitLabel: (document.getElementById('fit')?.textContent || '').trim(),
+        nativeOneLabel: (document.getElementById('native-one')?.textContent || '').trim(),
+        bottomTabLabels: [...document.querySelectorAll('.workspace-bottom-tabs [role="tab"]')].map(b => (b.textContent || '').trim()),
+        hasReviewAct: !!document.getElementById('workspace-review-act'),
+        hasLegacyDialog: !!document.getElementById('review-dialog'),
+        hasStatusBar: !!document.querySelector('footer.status-bar'),
+      };
+
+      // Exercise R3a View switch (Side by side · Reference · Build A · Build B) and 1:1 / Fit on the shared shell
+      const choosePairView = async (id) => {
+        const menu = document.getElementById('view-menu');
+        if (menu && !menu.open) menu.querySelector('summary')?.click();
+        const item = document.querySelector('#view-menu [data-view="' + id + '"]');
+        if (item) item.click();
+        await sleep(50);
+        return {
+          id,
+          panes: document.getElementById('stage-layout')?.getAttribute('data-panes'),
+          refHidden: document.getElementById('reference-pane')?.hidden,
+          aHidden: document.getElementById('a-pane')?.hidden,
+          bHidden: document.getElementById('b-pane')?.hidden,
+          domainText: document.getElementById('domain')?.textContent || '',
+        };
+      };
+      const pairViewChecks = [
+        await choosePairView('reference'),
+        await choosePairView('a'),
+        await choosePairView('b'),
+        await choosePairView('compare'),
+      ];
+      document.getElementById('native-one')?.click();
+      await sleep(30);
+      const zoomAfterNativeOne = document.getElementById('zoom-value')?.textContent || '';
+      document.getElementById('fit')?.click();
+      await sleep(30);
+      const zoomAfterFit = document.getElementById('zoom-value')?.textContent || '';
+
+      // Seek to t = 0.25s and select the 'mesh' slot in Parts explorer
+      const scrub = document.getElementById('scrub');
+      scrub.value = '0.25';
+      scrub.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(120);
+      const timeBeforeSwitch = Number(scrub.value);
+
+      const meshPartBtn = document.querySelector('[data-part-list] button[data-side="a"][data-slot="mesh"]');
+      if (meshPartBtn) meshPartBtn.click();
+      await sleep(80);
+
       const stepSetup1 = await clickMode('rig');
       const stepAnimate = await clickMode('playback');
       const stepCompare = await clickMode('compare');
       const stepSetup2 = await clickMode('rig');
+
+      return {
+        modeButtons,
+        initialMode,
+        pairViewChecks,
+        zoomAfterNativeOne,
+        zoomAfterFit,
+        timeBeforeSwitch,
+        switches: [stepSetup1, stepAnimate, stepCompare, stepSetup2],
+      };
+    })()`);
+
+    const comparePhase2 = await session.evaluate<any>(`(async () => {
+      const { sleep, readScreenState, clickMode } = window.__compareTestHelpers;
 
       // Inspect Setup and Animate modules on Build A, then Build B
       const inspectPickedBuild = async (side) => {
@@ -793,6 +846,17 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
       const backToCompare = await clickMode('compare');
 
+      return {
+        buildA,
+        buildB,
+        blockScrolling,
+        backToCompare,
+      };
+    })()`);
+
+    const comparePhase3 = await session.evaluate<any>(`(async () => {
+      const { sleep, clickMode } = window.__compareTestHelpers;
+
       // Place stage comments in Setup, Animate and Compare modes (before Apply · Rebuild puts a scratch build on stage)
       const placeStageComment = async (modeKey, noteText, offset) => {
         await clickMode(modeKey);
@@ -915,6 +979,28 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         deleteButtons[deleteButtons.length - 1].click();
         await sleep(60);
       }
+
+      return {
+        applyIsolation: {
+          bAppliedCount,
+          aAppliedCount,
+          aChestCxAfterBApply,
+        },
+        appliedFeedbackCheck: {
+          chestStatusAfterRegionsApply,
+          bFeedbackApplied: fbAppliedB?.context?.applied ?? null,
+          aFeedbackApplied: fbUnappliedA?.context?.applied ?? null,
+          stageBApplied,
+          stageBFailedPatchCheck: stageBFailedPatch?.check ?? null,
+          failedCheckMessage,
+          failedCheckIsError,
+        },
+      };
+    })()`);
+
+    const comparePhase4 = await session.evaluate<any>(`(async () => {
+      const { sleep, clickMode } = window.__compareTestHelpers;
+      const scrub = document.getElementById('scrub');
 
       // Bar 2: With environment applied, playing after Gust and after Jolt moves the picked build's pose
       // away from the same run without them (read as a number), while the unpicked build's pose does not change.
@@ -1072,28 +1158,6 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       const commentModes = (sessionData.feedback || []).map(f => f.context?.comment?.mode).filter(Boolean);
 
       return {
-        modeButtons,
-        initialMode,
-        timeBeforeSwitch,
-        switches: [stepSetup1, stepAnimate, stepCompare, stepSetup2],
-        buildA,
-        buildB,
-        blockScrolling,
-        backToCompare,
-        applyIsolation: {
-          bAppliedCount,
-          aAppliedCount,
-          aChestCxAfterBApply,
-        },
-        appliedFeedbackCheck: {
-          chestStatusAfterRegionsApply,
-          bFeedbackApplied: fbAppliedB?.context?.applied ?? null,
-          aFeedbackApplied: fbUnappliedA?.context?.applied ?? null,
-          stageBApplied,
-          stageBFailedPatchCheck: stageBFailedPatch?.check ?? null,
-          failedCheckMessage,
-          failedCheckIsError,
-        },
         environmentPlayback,
         commentModes,
         binding: {
@@ -1104,6 +1168,13 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         },
       };
     })()`);
+
+    const compareCheck = {
+      ...comparePhase1,
+      ...comparePhase2,
+      ...comparePhase3,
+      ...comparePhase4,
+    };
 
     // Slice 4c (#235): Per-side keyed animation editing in Compare mode on Side B while Side A stays untouched:
     // - Pick Build B in Animate mode, reset Build B to clean baseline, seek to t = 0.5s.
@@ -1136,7 +1207,10 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       const scrub = document.getElementById('scrub');
       scrub.value = '0.5';
       scrub.dispatchEvent(new Event('input', { bubbles: true }));
-      await sleep(60);
+      for (let i = 0; i < 120; i++) {
+        if (!document.getElementById('add-feedback').disabled && Math.abs(Number(scrub.value) - 0.5) < 0.05) break;
+        await sleep(25);
+      }
 
       const aPoseBaseline = ed.bone('rigid', 'a');
       const bPoseBaseline = ed.bone('rigid', 'b');
@@ -1155,7 +1229,10 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       easeSel.value = 'cubic';
       easeSel.dispatchEvent(new Event('change'));
       await sleep(30);
-      const h1 = document.querySelector('#animation-inspection [data-curve-handle="1"]').getBoundingClientRect();
+      const h1El = document.querySelector('#animation-inspection [data-curve-handle="1"]');
+      h1El?.scrollIntoView({ block: 'center', inline: 'nearest' });
+      await sleep(20);
+      const h1 = h1El.getBoundingClientRect();
       return {
         aPoseBaseline,
         bPoseBaseline,
@@ -1182,8 +1259,25 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       const scrub = document.getElementById('scrub');
       scrub.value = '0.5';
       scrub.dispatchEvent(new Event('input', { bubbles: true }));
-      await sleep(40);
-      const pick = document.querySelector('#b-viewport .animation-bone-pick[data-bone="rigid"]').getBoundingClientRect();
+      for (let i = 0; i < 120; i++) {
+        if (!document.getElementById('add-feedback').disabled && document.querySelector('#b-viewport .animation-bone-pick[data-bone="rigid"]')) break;
+        await sleep(25);
+      }
+      const pickEl = document.querySelector('#b-viewport .animation-bone-pick[data-bone="rigid"]');
+      if (!pickEl) {
+        const picksHost = document.querySelector('.animation-stage-picks');
+        throw new Error('MISSING_RIGID_PICK: ' + JSON.stringify({
+          mode: window.rigReviewEditor.mode(),
+          pickedSide: window.rigReviewEditor.pickedSide(),
+          inspector: document.querySelector('[data-inspector][aria-selected="true"]')?.getAttribute('data-inspector'),
+          picksParent: picksHost?.parentElement?.id ?? null,
+          picksHidden: picksHost?.hidden ?? null,
+          boneButtons: [...document.querySelectorAll('.animation-bone-pick')].map(n => ({ bone: n.getAttribute('data-bone'), parent: n.parentElement?.parentElement?.id, hidden: n.hidden })),
+          layerBonesChecked: document.getElementById('layer-bones')?.checked ?? null,
+          curveHandle1Center: ${JSON.stringify(compareAnimPreDrag.curveHandle1Center)},
+        }));
+      }
+      const pick = pickEl.getBoundingClientRect();
       return {
         rigidPickCenterB: { x: pick.left + pick.width / 2, y: pick.top + pick.height / 2 },
       };
@@ -1435,6 +1529,33 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       };
     })()`);
 
+    if (screenshotDir) {
+      await session.setViewport(1600, 1000);
+      for (const lang of ['en', 'ko'] as const) {
+        const shotUrl = new URL(opened.url);
+        shotUrl.searchParams.set('lang', lang);
+        shotUrl.hash = '';
+        await session.goto(shotUrl.toString());
+        await session.evaluate(`(async () => {
+          const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+          for (let i = 0; i < 200; i++) {
+            const playBtn = document.getElementById('play');
+            const aCanvas = document.querySelector('#a-root canvas, #a-root img');
+            const bCanvas = document.querySelector('#b-root canvas, #b-root img');
+            if (playBtn && !playBtn.disabled && aCanvas && bCanvas) break;
+            await sleep(25);
+          }
+          const scrub = document.getElementById('scrub');
+          if (scrub) {
+            scrub.value = '0.25';
+            scrub.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          await sleep(150);
+        })()`);
+        await writeFile(join(screenshotDir, `compare-${lang}.png`), await session.screenshot());
+      }
+    }
+
     const afterHashA = await treeHash(join(root, 'a'));
     const afterHashB = await treeHash(join(root, 'b'));
     const diskUnchanged = {
@@ -1451,8 +1572,30 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
     if (compareCheck.modeButtons.map((m: any) => m.text).join(' · ') !== 'Setup · Animate · Compare')
       failures.push(`compare mode switch labels mismatch: ${JSON.stringify(compareCheck.modeButtons)}`);
-    if (compareCheck.initialMode.comparePressed !== 'true' || !compareCheck.initialMode.pickerHidden)
-      failures.push(`compare initial mode state mismatch: ${JSON.stringify(compareCheck.initialMode)}`);
+    if (
+      compareCheck.initialMode.comparePressed !== 'true' ||
+      !compareCheck.initialMode.pickerHidden ||
+      !compareCheck.initialMode.hasMainToolbar ||
+      !compareCheck.initialMode.hasSecondaryToolbar ||
+      JSON.stringify(compareCheck.initialMode.zoomControlIds) !== JSON.stringify(['zoom-in', 'zoom-out', 'fit', 'native-one', 'view-menu', 'zoom-value']) ||
+      compareCheck.initialMode.fitLabel !== 'Fit' ||
+      compareCheck.initialMode.nativeOneLabel !== '1:1' ||
+      JSON.stringify(compareCheck.initialMode.bottomTabLabels) !== JSON.stringify(['Setup', 'Animate', 'Write review']) ||
+      !compareCheck.initialMode.hasReviewAct ||
+      compareCheck.initialMode.hasLegacyDialog ||
+      !compareCheck.initialMode.hasStatusBar
+    )
+      failures.push(`compare initial mode / R1 / R3a / C6 / C10 / C11 state mismatch: ${JSON.stringify(compareCheck.initialMode)}`);
+
+    if (
+      compareCheck.pairViewChecks?.[0]?.panes !== '1' || compareCheck.pairViewChecks?.[0]?.refHidden !== false || compareCheck.pairViewChecks?.[0]?.aHidden !== true || compareCheck.pairViewChecks?.[0]?.bHidden !== true ||
+      compareCheck.pairViewChecks?.[1]?.panes !== '1' || compareCheck.pairViewChecks?.[1]?.refHidden !== true || compareCheck.pairViewChecks?.[1]?.aHidden !== false || compareCheck.pairViewChecks?.[1]?.bHidden !== true ||
+      compareCheck.pairViewChecks?.[2]?.panes !== '1' || compareCheck.pairViewChecks?.[2]?.refHidden !== true || compareCheck.pairViewChecks?.[2]?.aHidden !== true || compareCheck.pairViewChecks?.[2]?.bHidden !== false ||
+      compareCheck.pairViewChecks?.[3]?.panes !== '3' || compareCheck.pairViewChecks?.[3]?.refHidden !== false || compareCheck.pairViewChecks?.[3]?.aHidden !== false || compareCheck.pairViewChecks?.[3]?.bHidden !== false ||
+      !compareCheck.pairViewChecks.every((c: any) => String(c.domainText).includes('Shared range')) ||
+      !compareCheck.zoomAfterNativeOne || compareCheck.zoomAfterFit !== '100%'
+    )
+      failures.push(`compare View switch / 1:1 / Fit check failed: ${JSON.stringify({ pairViewChecks: compareCheck.pairViewChecks, zoomAfterNativeOne: compareCheck.zoomAfterNativeOne, zoomAfterFit: compareCheck.zoomAfterFit })}`);
 
     for (const step of compareCheck.switches) {
       if (step.sentinel !== 'no-reload-1')

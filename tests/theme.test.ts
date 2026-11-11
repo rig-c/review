@@ -41,7 +41,7 @@ export function schemeTokenDifference(source:string):{darkOnly:string[];lightOnl
  return {darkOnly:[...dark].filter(n=>!light.has(n)&&!/^--(font-|radius)/.test(n)).sort(),lightOnly:[...light].filter(n=>!dark.has(n)).sort()};
 }
 
-for(const file of ['styles.css','compare.css']){
+for(const file of ['styles.css']){
  const read=()=>readFile(new URL('../web/'+file,import.meta.url),'utf8');
  test(`${file}: no literal colour outside the :root token blocks`,async()=>{expect(literalColoursOutsideTokens(await read())).toEqual([]);});
  test(`${file}: every var(--x) is defined in a :root block of the same file`,async()=>{expect(undefinedTokens(await read())).toEqual([]);});

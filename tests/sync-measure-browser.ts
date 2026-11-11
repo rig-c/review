@@ -18,11 +18,9 @@ export interface SyncBrowserReport {bindingIdentity?:{sourceHash:string;referenc
 interface TransportProbe {drawn:{a:number|null;b:number|null};prepared:{a:number|null;b:number|null};targetPts:number|null;feedbackDisabled:boolean;frameSeekDisabled:boolean;status:string}
 export interface SyncProbe { ready():boolean; playback():Promise<void>;basicPlayback():Promise<void>;lateControl():Promise<{initial:TransportProbe;late:TransportProbe;recovered:TransportProbe;injectedSeekDelayMs:number}>; scrub(frame:number,time:number):Promise<void>; mutant():Promise<void>; report():SyncBrowserReport; stop():void }
 declare global { interface Window { __rigReviewSync?:SyncProbe } }
-const video= document.querySelector<HTMLVideoElement>('#reference-video');
-if(!video)throw new Error('sync-measure: compare reference video required');
-const reference=video,players:RigPlayer[]=[],samples:Sample[]=[],scrubs:Scrub[]=[],errors:string[]=[];
+let reference!:HTMLVideoElement;
+const players:RigPlayer[]=[],samples:Sample[]=[],scrubs:Scrub[]=[],errors:string[]=[];
 let indexProof:ReferenceIndexProof|null=null,endInspection:EndInspection|null=null;const endedEvents:NonNullable<SyncBrowserReport['endedEvents']>=[];
-reference.addEventListener('ended',()=>{endedEvents.push({at:performance.now(),ended:reference.ended,phase});if(phase==='playback')phase='idle';});
 let indexedVideo:VideoInfo|null=null,lastPresented:number|null=null,lastMediaPts:number|null=null,playbackBounds:SyncBrowserReport['playbackBounds']=null;
 const windowAt=(time:number,expected:number|null)=>{const selected=indexedVideo?referenceFrameAtTime(indexedVideo,time):null,next=selected?indexedVideo?.frames[selected.index+1]:null,rate=reference.playbackRate,delta=selected&&next?(next.time-selected.time)/rate:null;return {decodedIndex:selected?.index??null,nextDecodedPts:next?.time??null,playbackRate:rate,nextReferenceEstimateMs:expected!==null&&Number.isFinite(rate)&&rate>0&&delta!==null&&Number.isFinite(delta)&&delta>0&&Number.isFinite(expected+delta*1000)?expected+delta*1000:null};};
 let phase:Phase='idle',active:Sample|null=null,latest:Sample|null=null,timer:{rate:number;epoch:number}|null=null,disposed=false;
@@ -40,7 +38,8 @@ RigPlayer.prototype.seek=function(time:number):void {
 RigPlayer.prototype.draw=function():void {const started=performance.now();try{const result=originalDraw.call(this);drawn.set(this,this.time);return result;}finally{const cost=performance.now()-started;drawSerial++;totalDrawMs+=cost;const row=active??(phase==='scrub'&&latest?.phase===phase?latest:null);if(row){row.drawMs+=cost;row.drawCalls++;row.after=pose();row.preparedAfter=prepared();row.currentTimeAfter=reference.currentTime;row.poseFinishedAt=performance.now();}}};
 const prototype=HTMLVideoElement.prototype,originalFrames=prototype.requestVideoFrameCallback;
 if(typeof originalFrames==='function')prototype.requestVideoFrameCallback=function(callback:VideoFrameRequestCallback):number {
- if(this!==reference)return originalFrames.call(this,callback);
+ if(this.id!=='reference-video')return originalFrames.call(this,callback);
+ reference=this;
  let handle=0;handle=originalFrames.call(this,(now,metadata)=>{
   callbacks.delete(handle);
   lastPresented=metadata.presentedFrames;lastMediaPts=metadata.mediaTime;
@@ -49,11 +48,6 @@ if(typeof originalFrames==='function')prototype.requestVideoFrameCallback=functi
   try{callback(now,metadata);}finally{row.after=pose();row.preparedAfter=prepared();row.currentTimeAfter=reference.currentTime;row.callbackMs=performance.now()-started;active=null;if(phase!=='idle')samples.push(row);}
  });callbacks.add(handle);return handle;
 };
-else {
- // Observational only: no independent posing. Costs still use public methods;
- // fallback cannot claim actual presented-frame PTS or full decoded-frame bars.
- const next=()=>{if(disposed)return;const p=pose();if(phase!=='idle')samples.push({...windowAt(reference.currentTime,null),videoPaused:reference.paused,videoSeeking:reference.seeking,phase,callbackNow:performance.now(),callbackStartedAt:performance.now(),mediaTime:reference.currentTime,currentTimeBefore:reference.currentTime,currentTimeAfter:reference.currentTime,preparedBefore:prepared(),preparedAfter:prepared(),expectedDisplayTime:null,presentedFrames:null,before:p,after:p,poseFinishedAt:null,seekMs:0,drawMs:0,callbackMs:0,seekCalls:0,drawCalls:0,requestedTimes:[],appliedTimes:[]});fallbackHandle=requestAnimationFrame(next);};fallbackHandle=requestAnimationFrame(next);
-}
 const node=<T extends HTMLElement>(id:string)=>{const value=document.getElementById(id);if(!value)throw new Error('sync-measure: missing '+id);return value as T;};
 async function until(condition:()=>boolean,timeout=20000):Promise<void>{const deadline=performance.now()+timeout;while(!condition()){if(performance.now()>deadline)throw new Error('sync-measure: timed out waiting for actual app state');await new Promise<void>(resolve=>setTimeout(resolve,20));}}
 let data:CompareResponse;
@@ -105,3 +99,12 @@ window.__rigReviewSync={
 data=await(await fetch('/api/compare')).json() as CompareResponse;
 try{const index=await(await fetch('/api/compare/reference-frames')).json();if(index.available&&index.sourceHash===data.sourceHash&&index.referenceSha256===data.reference.sha256){indexedVideo=index.video as VideoInfo;indexProof={sourceHash:index.sourceHash,referenceSha256:index.referenceSha256,count:indexedVideo.frames.length,last:indexedVideo.frames.at(-1)??null};}}catch{/* explicit unknown deadline; basic playback still measured */}
 await import('../web/compare.ts');
+const video=document.querySelector<HTMLVideoElement>('#reference-video');
+if(!video)throw new Error('sync-measure: compare reference video required');
+reference=video;
+reference.addEventListener('ended',()=>{endedEvents.push({at:performance.now(),ended:reference.ended,phase});if(phase==='playback')phase='idle';});
+if(typeof originalFrames!=='function'){
+ // Observational only: no independent posing. Costs still use public methods;
+ // fallback cannot claim actual presented-frame PTS or full decoded-frame bars.
+ const next=()=>{if(disposed)return;const p=pose();if(phase!=='idle')samples.push({...windowAt(reference.currentTime,null),videoPaused:reference.paused,videoSeeking:reference.seeking,phase,callbackNow:performance.now(),callbackStartedAt:performance.now(),mediaTime:reference.currentTime,currentTimeBefore:reference.currentTime,currentTimeAfter:reference.currentTime,preparedBefore:prepared(),preparedAfter:prepared(),expectedDisplayTime:null,presentedFrames:null,before:p,after:p,poseFinishedAt:null,seekMs:0,drawMs:0,callbackMs:0,seekCalls:0,drawCalls:0,requestedTimes:[],appliedTimes:[]});fallbackHandle=requestAnimationFrame(next);};fallbackHandle=requestAnimationFrame(next);
+}

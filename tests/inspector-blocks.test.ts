@@ -1,8 +1,7 @@
-import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
+import {rigWorkspaceMarkup,rigReviewDialogMarkup,compareFeedbackMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readFile,readdir} from 'node:fs/promises';
 import {bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,parseActiveBlocks,inspectorBlocksKey} from '../web/inspector-blocks.ts';
-import {renderCompareHtml} from '../src/compare-html.ts';
 
 const webFile=(name:string)=>readFile(new URL(`../web/${name}`,import.meta.url),'utf8');
 const indexHtml=async()=>rigWorkspaceMarkup+rigReviewDialogMarkup;
@@ -73,8 +72,8 @@ test('each block row is a WAI-ARIA tablist: role=tab buttons control role=tabpan
  expect(attr(openTag(html,'angle-panel'),'hidden')).not.toBeNull();expect(attr(openTag(html,'angle-panel'),'role')).toBeNull();
 });
 
-test('the comparison page renders the same tablists, and its own Part block is a tabpanel too',async()=>{
- const html=renderCompareHtml(await webFile('compare.html'),await indexHtml());
+test('the comparison mode composes the same tablists, and its own Part block is a tabpanel too',async()=>{
+ const html=rigWorkspaceMarkup+compareFeedbackMarkup;
  for(const container of Object.keys(expected)){const {nav,tabs}=rowTabs(html,container);expect(attr(nav,'role')).toBe('tablist');for(const tab of tabs){const panel=openTag(html,tab.target);expect({panel:tab.target,role:attr(panel,'role'),labelledby:attr(panel,'aria-labelledby')}).toEqual({panel:tab.target,role:'tabpanel',labelledby:`block-tab-${tab.target}`});}}
 });
 
@@ -312,7 +311,7 @@ test('the review page and the comparison tools bind both Inspector sections and 
  expect(main).toMatch(/inspectorBlocks\?\.restore\(restoreActiveBlocksUI\(value\)\);workspace\?\.restoreScroll\(value\.inspectorScroll\);/);
  const compare=await webFile('compare-picked-tools.ts');
  expect(compare).toContain('bindInspectorBlocks({');expect(compare).toContain('inspectorBlocks?.restore(restoreActiveBlocksUI(ui));');expect(compare).not.toContain('inspectorBlocks?.refresh()');
- for(const sheet of ['styles.css','compare.css']){
+ for(const sheet of ['styles.css']){
   const css=await webFile(sheet);
   expect(css).toMatch(/\.block-row\{position:sticky;top:-12px;[^}]*overflow-x:auto/);expect(css).toContain('.block-row button[aria-selected=true]{');expect(css).not.toContain('.block-row button[aria-current=true]');
   expect(css).toContain('[data-block-hidden]{display:none!important}');

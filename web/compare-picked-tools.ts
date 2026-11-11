@@ -15,7 +15,7 @@ import { AnimationInspectionPanel, type AnimationSideState } from './animation-i
 import type { AnimationSourceOp } from '../src/animation-ops.ts';
 import { partBounds, type PartExplorer } from './part-selection.ts';
 import { bindInspectorBlocks, activeBlocksUI, restoreActiveBlocksUI, type InspectorBlocks } from './inspector-blocks.ts';
-import { sourceTextContent, tr } from './i18n.ts';
+import { setSourceText, sourceTextContent, tr } from './i18n.ts';
 import { bindChestEditor, canvasToCrop, bustLabel, bustSides, chestPoseOffset, LANDMARKS, landmarkInputId, posedChestMapping, rowShape, type ChestEditor, type LandmarkKey } from './chest-editor.ts';
 import { chestOverlayPolygons, chestRegionRows, chestRowId, evaluateChestForm } from './chest-regions-tool.ts';
 import { chestRegionsBinding, cropWorldMapping, type CropWorldMapping } from '../src/chest-regions.ts';
@@ -201,7 +201,7 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
 const input = (id: string) => el<HTMLInputElement>(id);
 const select = (id: string) => el<HTMLSelectElement>(id);
 const button = (id: string) => el<HTMLButtonElement>(id);
-const text = (id: string, value: string) => { el(id).textContent = value; };
+const text = (id: string, value: string) => { setSourceText(el(id), value); };
 const option = (value: string, label: string) => { const o = document.createElement('option'); o.value = value; o.textContent = label; return o; };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -268,6 +268,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   let workspaceMode: CommentMode = 'compare';
   let pickedSide: Side = 'a';
   let switchingSide = false;
+  let switchingMode = false;
   const sides: Record<Side, SideBuildState> = { a: emptySideState(), b: emptySideState() };
   let rebuildBusy = false, densityBusy = false, readingsBusy = false, environmentCheckBusy = false;
   let handoffTimer: ReturnType<typeof setTimeout> | null = null;
@@ -315,10 +316,10 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function currentInspector(): string {
-    return document.querySelector<HTMLElement>('[data-inspector][aria-selected="true"]')?.dataset.inspector ?? 'view';
+    return document.querySelector<HTMLElement>('[data-inspector][aria-selected="true"]')?.dataset.inspector ?? 'playback';
   }
 
-  function selectInspectorTab(name: 'view' | 'rig' | 'playback' | 'feedback'): void {
+  function selectInspectorTab(name: 'rig' | 'playback' | 'feedback'): void {
     const tab = document.querySelector<HTMLButtonElement>(`[data-inspector="${name}"]`);
     if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click();
   }
@@ -339,7 +340,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     const modeLabel = workspaceMode === 'setup' ? 'Setup' : 'Animate';
     const isCompare = workspaceMode === 'compare';
     const label = document.getElementById('picked-build-label');
-    if (label) label.textContent = `Build ${sideUpper} — ${title}`;
+    if (label) setSourceText(label, `Build ${sideUpper} — ${title}`);
     for (const btn of document.querySelectorAll<HTMLButtonElement>('#mode-build-picker [data-build-side]')) {
       const active = btn.dataset.buildSide === pickedSide;
       btn.setAttribute('aria-pressed', String(active));
@@ -366,27 +367,39 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     );
     const toolbarHint = document.getElementById('toolbar-mode-hint');
     if (toolbarHint) {
-      toolbarHint.textContent = isCompare
-        ? 'Inspect A and B at the reference video time'
-        : `Inspect Build ${sideUpper} (${title}) in ${modeLabel} mode at the reference video time`;
+      setSourceText(
+        toolbarHint,
+        isCompare
+          ? 'Inspect A and B at the reference video time'
+          : `Inspect Build ${sideUpper} (${title}) in ${modeLabel} mode at the reference video time`,
+      );
     }
     const inputsHint = document.querySelector<HTMLElement>('#workspace-left .workspace-sources > p.hint, #workspace-left > p.hint');
     if (inputsHint) {
-      inputsHint.textContent = isCompare
-        ? 'A and B retain their fixed source bindings. The reference video and shared animation are named above the stage.'
-        : `Editing Build ${sideUpper} (${title}) in ${modeLabel} mode; Apply writes to scratch while A and B retain their fixed on-disk source bindings.`;
+      setSourceText(
+        inputsHint,
+        isCompare
+          ? 'A and B retain their fixed source bindings. The reference video and shared animation are named above the stage.'
+          : `Editing Build ${sideUpper} (${title}) in ${modeLabel} mode; Apply writes to scratch while A and B retain their fixed on-disk source bindings.`,
+      );
     }
     const rigHint = document.getElementById('rig-inspector-hint');
     if (rigHint) {
-      rigHint.textContent = isCompare
-        ? 'These controls show actual images, last-drawn mesh edges and named bone points. Both builds use the fixed animation named above. This inspector does not author geometry or motion.'
-        : `These controls show actual images, last-drawn mesh edges and named bone points for Build ${sideUpper} (${title}). Setup tools apply changes only to Build ${sideUpper} in a scratch build; on-disk packages stay immutable.`;
+      setSourceText(
+        rigHint,
+        isCompare
+          ? 'These controls show actual images, last-drawn mesh edges and named bone points. Both builds use the fixed animation named above. This inspector does not author geometry or motion.'
+          : `These controls show actual images, last-drawn mesh edges and named bone points for Build ${sideUpper} (${title}). Setup tools apply changes only to Build ${sideUpper} in a scratch build; on-disk packages stay immutable.`,
+      );
     }
     const playbackHint = document.getElementById('playback-inspector-hint');
     if (playbackHint) {
-      playbackHint.textContent = isCompare
-        ? 'Motion is read only. The reference video FPS is not used to infer the pose frame clock.'
-        : `Inspecting Build ${sideUpper} (${title}) in ${modeLabel} mode: Animate tools apply motion changes only to Build ${sideUpper} in a scratch build. The reference video FPS is not used to infer the pose frame clock.`;
+      setSourceText(
+        playbackHint,
+        isCompare
+          ? 'Motion is read only. The reference video FPS is not used to infer the pose frame clock.'
+          : `Inspecting Build ${sideUpper} (${title}) in ${modeLabel} mode: Animate tools apply motion changes only to Build ${sideUpper} in a scratch build. The reference video FPS is not used to infer the pose frame clock.`,
+      );
     }
     const msgNode = document.getElementById('message');
     if (msgNode && !msgNode.classList.contains('error')) {
@@ -458,9 +471,14 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     syncModeButtons();
     syncPickedBanner();
     if (!options.fromTab) {
-      if (nextMode === 'setup') selectInspectorTab('rig');
-      else if (nextMode === 'animate') selectInspectorTab('playback');
-      else if (currentInspector() === 'rig' || currentInspector() === 'playback') selectInspectorTab('view');
+      switchingMode = true;
+      try {
+        if (nextMode === 'setup') selectInspectorTab('rig');
+        else if (nextMode === 'animate') selectInspectorTab('playback');
+        else if (currentInspector() !== 'feedback') selectInspectorTab('playback');
+      } finally {
+        switchingMode = false;
+      }
     }
     refreshAnimationInspection();
     host.redrawOverlays(modeBoundaryChanged);
@@ -2179,15 +2197,16 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function onInspectorTabChanged(): void {
+    if (switchingMode) {
+      syncModeButtons();
+      return;
+    }
     const which = currentInspector();
     if (which === 'rig') {
       if (workspaceMode !== 'setup') setMode('setup', { fromTab: true });
       else syncModeButtons();
     } else if (which === 'playback') {
       if (workspaceMode !== 'animate') setMode('animate', { fromTab: true });
-      else syncModeButtons();
-    } else if (which === 'view') {
-      if (workspaceMode !== 'compare') setMode('compare', { fromTab: true });
       else syncModeButtons();
     } else {
       syncModeButtons();
@@ -2231,7 +2250,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     host: el('animation-inspection'),
     stage: viewportProxy,
     project: (x, y) => rigProject()(x, y),
-    enabled: () => !!currentState().partModel && currentInspector() === 'playback',
+    enabled: () => workspaceMode !== 'compare' && !!currentState().partModel && currentInspector() === 'playback',
     readOnlyReason: () => host.readOnly(),
     pause: () => host.pause(),
     preview: fn => {

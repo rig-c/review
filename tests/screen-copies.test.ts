@@ -34,10 +34,13 @@ test('#686: every row is at its ceiling on this tree and the script exits 0', ()
 for (const row of ROWS) {
   for (const [i, matcher] of (row.matchers ?? []).entries()) test(`#686 planted extra hit refuses: ${row.name} [${i}]`, () => {
     const map = new Map(sources);
-    expect(map.has(matcher.plantIn)).toBe(true);
-    map.set(matcher.plantIn, map.get(matcher.plantIn)! + matcher.plant);
+    const hadFile = map.has(matcher.plantIn);
+    map.set(matcher.plantIn, (map.get(matcher.plantIn) ?? '') + matcher.plant);
     expect(countRow(row, map)).toBe(row.ceiling + 1);
-    expect(failuresOf(map)).toEqual([`SCREEN_COPY_ROSE: ${row.name}: ${row.ceiling + 1} > ceiling ${row.ceiling} (step ${row.step})`]);
+    const expected = `SCREEN_COPY_ROSE: ${row.name}: ${row.ceiling + 1} > ceiling ${row.ceiling} (step ${row.step})`;
+    expect(checkScreenCopies(map, [row])[0]!.failure).toBe(expected);
+    if (hadFile) expect(failuresOf(map)).toEqual([expected]);
+    else expect(failuresOf(map)).toContain(expected);
   });
   if (row.fileGlob) test(`#686 planted extra file refuses: ${row.name}`, () => {
     const map = new Map(sources);
@@ -100,5 +103,5 @@ test('#686 matchers count the copy, not shared code', () => {
   // The 250px row counts only inside .job-inspection rules.
   expect(countRow(only('job fixed row grid-template-rows:250px in .job-inspection'), new Map([['web/styles.css', '.other{grid-template-rows:250px}@media(x){.job-window .job-inspection{grid-template-rows:250px}}']]))).toBe(1);
   // The shell compatibility kind of the same name is not a view-controls layout.
-  expect(countRow(only('createViewControls layout legacyCompareStep3'), new Map([['web/workspace-ui.ts', "compatibility:'legacyCompareStep3'"]]))).toBe(0);
+  expect(countRow(only('createViewControls layout legacyPartsStep2'), new Map([['web/workspace-ui.ts', "compatibility:'legacyPartsStep2'"]]))).toBe(0);
 });

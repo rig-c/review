@@ -17,11 +17,11 @@ export function mountStatusBar(options:WorkspaceStatusBarOptions):{footer:HTMLEl
  return {footer,message};
 }
 
-export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyJobStep5'|'legacyHubStep6'|'legacyOwnerStep6';
+export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyJobStep5'|'legacyHubStep6'|'legacyOwnerStep6';
 export interface WorkspaceHeaderOptions {
  compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;title?:string;revision?:string;
- /** Only the stopped compare host supplies its existing domain controls and actions. */
- compare?:{modeSwitch:HTMLElement;buildPicker:HTMLElement;actions:HTMLElement};
+ /** Optional A/B build picker placed beside the header mode switch when a second build is supplied. */
+ buildPicker?:HTMLElement;
 }
 export interface WorkspaceHeader {
  header:HTMLElement;title:HTMLElement;subtitle:HTMLElement|null;modeSwitch:HTMLElement|null;dirty:HTMLElement|null;
@@ -30,42 +30,40 @@ export interface WorkspaceHeader {
 }
 /** One C1 construction path; the finite legacy choices expire at their named screen migrations. */
 export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHeader {
- const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',parts=kind==='legacyPartsStep2',interview=kind==='legacyInterviewStep4',job=kind==='legacyJobStep5',hub=kind==='legacyHubStep6',owner=kind==='legacyOwnerStep6';
- const branded=rig||compare||parts,settingsLanguage=rig||compare;
+ const kind=options.compatibility,rig=kind==='rigStep1',parts=kind==='legacyPartsStep2',interview=kind==='legacyInterviewStep4',job=kind==='legacyJobStep5',hub=kind==='legacyHubStep6',owner=kind==='legacyOwnerStep6';
+ const branded=rig||parts,settingsLanguage=rig;
  const header=panelMake('header');
  const headerClass=rig?'topbar':parts?'pv-top':job?'job-header':hub?'hub-header':owner?'owner-header':null;
  if(headerClass)header.className=headerClass;
  if(branded){
   const brand=panelMake('div',{className:parts?'pv-brand':'brand'});
-  const mark=panelMake('span',compare?{}:{className:parts?'pv-mark':'brand-mark'},compare?'COMPARE':'r');
-  if(compare)brand.append('rig review ',mark);else brand.append(mark,'rig review');
+  const mark=panelMake('span',{className:parts?'pv-mark':'brand-mark'},'r');
+  brand.append(mark,'rig review');
   header.append(brand);
  }
  const title=panelMake(rig||parts?'strong':'h1');
- const titleId=rig?'package-title':compare?'title':parts?'pv-title':null;
+ const titleId=rig?'package-title':parts?'pv-title':null;
  if(titleId)title.id=titleId;
- title.textContent=options.title??(rig?'Review package':compare?'A / B comparison':parts?'Parts review':'');
+ title.textContent=options.title??(rig?'Review package':parts?'Parts review':'');
  if(job)title.dataset.jobText='job.title';
  let subtitle:HTMLElement|null=null;
  if(branded){
-  subtitle=panelMake('span',{id:rig?'revision':compare?'animation':'pv-mode',className:rig?'subtle':compare?'hint':'pv-subtle',textContent:options.revision??''});
+  subtitle=panelMake('span',{id:rig?'revision':'pv-mode',className:rig?'subtle':'pv-subtle',textContent:options.revision??''});
   const identity=panelMake('div',{},title,...(parts?[' ']:[]),subtitle);header.append(identity);
  }else{if(interview)header.append('\n    ');header.append(title);}
  let modeSwitch:HTMLElement|null=null,dirty:HTMLElement|null=null;
- if(rig||compare){
-  modeSwitch=compare?options.compare!.modeSwitch:panelMake('div',{className:'mode-switch'});
-  if(rig){
-   modeSwitch.setAttribute('role','group');modeSwitch.setAttribute('aria-label','Mode');
-   for(const [mode,label] of [['rig','Setup'],['playback','Animate'],['compare','Compare']] as const){
-    const button=actionButton(label,null);button.dataset.mode=mode;button.setAttribute('aria-pressed',String(mode==='rig'));
-    if(mode==='compare'){button.disabled=true;button.title='No second build supplied: reopen with --compare <built> --reference <video>';}
-    else{button.dataset.inspector=mode;button.setAttribute('aria-controls','inspector-'+mode);}
-    modeSwitch.append(button);
-   }
+ if(rig){
+  modeSwitch=panelMake('div',{className:'mode-switch'});
+  modeSwitch.setAttribute('role','group');modeSwitch.setAttribute('aria-label','Mode');
+  for(const [mode,label] of [['rig','Setup'],['playback','Animate'],['compare','Compare']] as const){
+   const button=actionButton(label,null);button.dataset.mode=mode;button.setAttribute('aria-pressed',String(mode==='rig'));
+   if(mode==='compare'){button.disabled=true;button.title='No second build supplied: reopen with --compare <built> --reference <video>';}
+   else{button.dataset.inspector=mode;button.setAttribute('aria-controls','inspector-'+mode);}
+   modeSwitch.append(button);
   }
   header.append(modeSwitch);
-  if(compare)header.append(options.compare!.buildPicker,options.compare!.actions);
-  else{dirty=panelMake('span',{id:'dirty',className:'subtle',textContent:'Loading…'});header.append(panelMake('div',{className:'top-actions'},dirty));}
+  if(options.buildPicker)header.append(options.buildPicker);
+  dirty=panelMake('span',{id:'dirty',className:'subtle',textContent:'Loading…'});header.append(panelMake('div',{className:'top-actions'},dirty));
  }
  let stages:HTMLElement|null=null,status:HTMLParagraphElement|null=null;
  if(branded||interview){
@@ -82,7 +80,7 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
    const text=settingsLanguage?(value==='system'?'System':value==='en'?'English':'한국어'):interview?(value==='en'?'English':'한국어'):job?value:'';
    language.append(panelMake('option',{value,textContent:text}));
   }
-  if(settingsLanguage){languageLabel=labelledControl('Language ',language);if(rig)header.append(languageLabel);}
+  if(settingsLanguage){languageLabel=labelledControl('Language ',language);header.append(languageLabel);}
   else{if(interview)header.append('\n    ');header.append(language);if(interview)header.append('\n  ');}
  }
  if(options.embedded){if(rig||parts)header.hidden=true;else if(interview)language!.hidden=true;}
