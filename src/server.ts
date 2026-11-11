@@ -61,13 +61,15 @@ export interface ReviewRequestContextOptions extends ReviewServerOptions {
 }
 
 /** Package-scoped routes without a listener. An injected lifecycle belongs to its caller. */
-export async function createReviewRequestContext(p: ReviewPackage, options: ReviewRequestContextOptions = {}) {
+export async function createReviewRequestContext(p: ReviewPackage | null, options: ReviewRequestContextOptions = {}) {
   const joined = options.joined;
+  if(!p&&(!joined||!('interviewOnly' in joined)))throw new Error(interviewUnavailable);
   if (joined && !options.capability) throw new Error('Joined interview requires an instance capability');
   const interview = joined && interviewRoutes(joined.opened.root, joined.designation.picksDir, options.capability!,
-    {...joined, sourceHash:p.sourceHash, version:joined.designation.version,draftId:joined.designation.draftId});
+    {...joined, sourceHash:p?.sourceHash??(joined as import('./joined-project.ts').JoinedInterview).sourceHash, version:joined.designation.version,draftId:joined.designation.draftId});
   const bundle=options.bundle??await buildWeb();
-  const unchanged=()=>assertReviewUnchanged(p);
+  const unchanged=()=>p?assertReviewUnchanged(p):joined!.assertCurrent();
+  const services=p?(()=>{
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
   const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones,...(options.stripConcurrency?{stripConcurrency:options.stripConcurrency}:{}),...(options.viewOnly??p.viewOnly?{viewOnly:true}:{}),...(joined?.draft?{draft:draftRebuildOption(joined,starts)}:{})});
   const stageParts=stagePartsRoutes({single:p},undefined,rebuilds.stageDraft,joined?.draft?{
@@ -85,7 +87,10 @@ export async function createReviewRequestContext(p: ReviewPackage, options: Revi
   // Check under this world (#112): the exported schedule written into scratch; the installed producer's check --environment reads it.
   const environmentCheck=createEnvironmentCheck(p,{stateDir,starts,unchanged,latest:rebuilds.latest});
   const control=options.control?createControlServer({identity:options.control,sourceHash:p.sourceHash,mode:'single',unchanged,activity:options.activity}):null;
-  const busy=()=>Boolean(rebuilds.busy()||readings.running()||requirements.running()||environmentCheck.running()||bonesCheck.running());
+  return {rebuilds,stageParts,readings,bonesCheck,requirements,environmentCheck,control,
+    busy:()=>Boolean(rebuilds.busy()||readings.running()||requirements.running()||environmentCheck.running()||bonesCheck.running())};
+  })():null;
+  const busy=()=>services?.busy()??false;
   const ownsLifecycle=options.lifecycle===undefined;
   const live=options.lifecycle??createLiveLifecycle({
     label:'review',
@@ -100,7 +105,7 @@ export async function createReviewRequestContext(p: ReviewPackage, options: Revi
   const handle=async(req:Request,port:number|undefined,srv:UpgradableServer):Promise<Response|undefined>=>{try {
       const url=new URL(req.url);const origin=`http://127.0.0.1:${port}`;
       if(url.origin!==origin)return json({error:'Loopback host required'},403);
-      const refused=openNonceGate(req,options.open)??accessGate(req,options.capability,!!control);if(refused)return refused;
+      const refused=openNonceGate(req,options.open)??accessGate(req,options.capability,!!services?.control);if(refused)return refused;
       if(req.method==='GET'&&url.pathname===LIVE_PATH){
         const fromFront=Boolean(options.open&&sameSecret(req.headers.get(openNonceHeader),options.open.nonce)&&req.headers.get('origin')===null);
         if(!fromFront&&req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
@@ -112,6 +117,24 @@ export async function createReviewRequestContext(p: ReviewPackage, options: Revi
     if (interviewRequest(path)) {
       return await interview?.(req, origin) ?? json({error:interviewUnavailable},404);
     }
+    options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await unchanged();}catch{return staleOpenStatus(options.open!);}if(!live.rearmUnopened())return json({error:'Server is closing'},503);}return gate;}
+    if(req.method==='GET'||req.method==='HEAD'){
+      if(url.pathname==='/main.js')return new Response(req.method==='HEAD'?null:bundle,{headers:{...headers,'Content-Type':'text/javascript'}});
+      if(url.pathname==='/'||url.pathname==='/index.html')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/index.html'),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
+      if(url.pathname==='/styles.css')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/styles.css'),{headers:{...headers,'Content-Type':'text/css'}});
+    }
+    if(!p){
+      await unchanged();
+      if(req.method!=='GET'&&req.method!=='HEAD'&&req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
+      if((req.method==='GET'||req.method==='HEAD')&&path==='/api/review'){
+        const source=joined as import('./joined-project.ts').JoinedInterview;
+        return json({subject:'interview',project:{path:'project.json',sha256:source.opened.hash},
+          label:typeof source.opened.project.name==='string'?source.opened.project.name:source.opened.root.split('/').at(-1),sourceHash:source.sourceHash,
+          capabilities:{interview:true,playback:false,modeling:false,motion:false,feedback:false,audio:false},unavailable:'MODEL_UNAVAILABLE'});
+      }
+      return /^\/api\/(?:session|stage-parts|rebuild|density-strip|bones-check|requirements|environment-check|readings|strip|control)(?:\/|$)/.test(path)?json({error:'MODEL_UNAVAILABLE'},409):json({error:'Not found'},404);
+    }
+    const {rebuilds,stageParts,readings,bonesCheck,requirements,environmentCheck,control}=services!;
     if (joined && /^\/api\/stage-parts(?:\/|$)/.test(path)) {
       try {await joined.assertCurrent();}
       catch {return json({error:interviewStale},409);}
@@ -119,7 +142,7 @@ export async function createReviewRequestContext(p: ReviewPackage, options: Revi
     const stageResponse=await stageParts(req);if(stageResponse)return stageResponse;
 
       const controlled=await control?.(req,origin);if(controlled)return controlled;
-      options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await unchanged();}catch{return staleOpenStatus(options.open!);}if(!live.rearmUnopened())return json({error:'Server is closing'},503);}return gate;}
+
       if(req.method==='PUT'&&url.pathname==='/api/session'){
         if(joined?.draft)return json({error:'MODEL_UNAVAILABLE'},409);
         if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);
@@ -235,9 +258,6 @@ export async function createReviewRequestContext(p: ReviewPackage, options: Revi
         }
         return new Response(req.method==='HEAD'?null:file,{headers:{...assetHeaders,'Content-Length':String(size)}});
       }
-      if(url.pathname==='/main.js')return new Response(req.method==='HEAD'?null:bundle,{headers:{...headers,'Content-Type':'text/javascript'}});
-      if(url.pathname==='/'||url.pathname==='/index.html')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/index.html'),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
-      if(url.pathname==='/styles.css')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/styles.css'),{headers:{...headers,'Content-Type':'text/css'}});
       return json({error:'Not found'},404);
       } finally { live.onRequestEnd(url.pathname); }
     }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message===directionStale || message.startsWith(interviewStale) || message.includes('inputs changed')?409:400);}};
@@ -252,7 +272,7 @@ export async function createReviewRequestContext(p: ReviewPackage, options: Revi
   };
 }
 
-export async function startServer(p: ReviewPackage, options: ReviewServerOptions = {}) {
+export async function startServer(p: ReviewPackage | null, options: ReviewServerOptions = {}) {
   let rawStop:((closeActiveConnections?:boolean)=>void)|null=null;
   const context=await createReviewRequestContext(p,{...options,stopServer:()=>{rawStop?.(true);}});
   const server=Bun.serve({hostname:'127.0.0.1',port:options.port??4317,websocket:context.live.websocket,async fetch(req,srv){return await context.handle(req,srv.port,srv) as Response;}});

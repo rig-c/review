@@ -1,0 +1,41 @@
+{
+  "schema": "rig-create/project@0",
+  "name": "Synthetic interview",
+  "stage": "interview",
+  "drafts": null,
+  "versions": [
+    {
+      "n": 1,
+      "kind": "demo",
+      "at": "2020-01-02T00:00:00Z"
+    },
+    {
+      "n": 2,
+      "kind": "build",
+      "at": "2020-01-03T00:00:00Z",
+      "review_package": null
+    }
+  ],
+  "signoffs": [],
+  "inputs": [
+    {
+      "path": "source.svg",
+      "sha256": "760599f615605184c2df50d6a9b454a412044a1fb54324a0ad5003ebb94920ef"
+    }
+  ],
+  "interview": {
+    "order": {
+      "spec": "rig-create/stage-order@2",
+      "choices_adopted_at": "2020-01-01T00:00:00Z"
+    },
+    "framing": [
+      {
+        "id": "reference",
+        "pending_options": {
+          "path": "evidence/options.json",
+          "sha256": "6443e7376bb9072ab45dfe04d3767a8563c2439fdf3916c81663309870366f10"
+        }
+      }
+    ]
+  }
+}

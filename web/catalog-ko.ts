@@ -1,4 +1,5 @@
 export const koCatalog: Readonly<Record<string, string>> = {
+  "project.json": "project.json",
   'job.commentsFromWorkspace': '작업 공간의 코멘트를 함께 제출해요. 코멘트를 추가하거나 고치려면 이 요청을 닫으세요.',
   'Add general comment': '일반 코멘트 추가',
   'General comment': '일반 코멘트',

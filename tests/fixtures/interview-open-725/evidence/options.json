@@ -1,0 +1,59 @@
+{
+  "schema": "rig-create/interview-options@1",
+  "id": "synthetic-set",
+  "question": "reference",
+  "stage": "interview",
+  "drafted_by": "synthetic-agent",
+  "drafted_at": "2020-01-01T00:00:00Z",
+  "context": {
+    "kind": "inputs",
+    "files": [
+      {
+        "path": "source.svg",
+        "sha256": "760599f615605184c2df50d6a9b454a412044a1fb54324a0ad5003ebb94920ef"
+      }
+    ]
+  },
+  "assembly": {
+    "rule": "single"
+  },
+  "asks": [
+    {
+      "id": "reference",
+      "prompt": "Choose the reference treatment.",
+      "options": [
+        {
+          "id": "keep",
+          "kind": "value",
+          "label": "Keep the reference",
+          "effect": "Keep the declared source",
+          "fragment": "keep",
+          "recommended": true,
+          "reason": "Synthetic retained input"
+        },
+        {
+          "id": "change",
+          "kind": "value",
+          "label": "Change the treatment",
+          "effect": "Request a different treatment",
+          "fragment": "change",
+          "recommended": false
+        },
+        {
+          "id": "other",
+          "kind": "other",
+          "label": "Other",
+          "effect": "Describe another treatment",
+          "recommended": false
+        },
+        {
+          "id": "auto",
+          "kind": "auto",
+          "label": "Auto",
+          "effect": "Delegate this decision",
+          "recommended": false
+        }
+      ]
+    }
+  ]
+}

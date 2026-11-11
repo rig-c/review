@@ -1400,7 +1400,7 @@ import {RigOverlays} from '../web/rig-overlays.ts';
 import {labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls} from '../web/view-controls.ts';
 import {mountWorkspaceShell} from '../web/workspace-ui.ts';
 import {SENTINELS} from '../web/parts-render.ts';
-import {interviewAskGroup, interviewImageView, interviewQuestionList, jobInterviewValue} from '../web/interview-panel.ts';
+import {createInterviewForm, interviewAskGroup, interviewImageView, interviewQuestionList, jobInterviewValue} from '../web/interview-panel.ts';
 import {JOB_PLAN_TEXT_FIELDS, type JobPlanTextProjection} from '../src/job-contract.ts';
 
 describe('#559 continuous Rig motion transport and job forms', () => {
@@ -2128,7 +2128,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
         const runner = new Function(
             'host', 'access', 'hubIncarnation', 'hubVisible', 'events', 'pageId', 'transport', 'abort',
             'i18n', 't', 'createViewportController', 'createViewportState', 'createRigViewportProvider', 'mountViewportPair', 'mountWorkspaceShell',
-            'RigOverlays', 'labelledControl', 'createViewControls', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'createRigLayerControls', 'SENTINELS', 'interviewAskGroup', 'interviewImageView', 'interviewQuestionList', 'jobInterviewValue',
+            'RigOverlays', 'labelledControl', 'createViewControls', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'createRigLayerControls', 'SENTINELS', 'createInterviewForm', 'interviewAskGroup', 'interviewImageView', 'interviewQuestionList', 'jobInterviewValue',
             'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal', 'jobPartsReviewState',
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
             'recordJobRigDraw',
@@ -2139,7 +2139,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
         const mounted = runner(
             host, access, hubIncarnation, hubVisible, undefined, options?.pageId ?? 'page-one', transport, abort,
             i18nModule, i18nModule.t, createViewportController, createViewportState, createRigViewportProvider, mountViewportPair, mountWorkspaceShell,
-            RigOverlays, labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls, SENTINELS, interviewAskGroup, interviewImageView, interviewQuestionList, jobInterviewValue,
+            RigOverlays, labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls, SENTINELS, createInterviewForm, interviewAskGroup, interviewImageView, interviewQuestionList, jobInterviewValue,
             createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal, jobPartsReviewState,
             prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,
             recordJobRigDraw,
