@@ -518,3 +518,20 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .job-window .interview-option b{color:var(--link)}
 .job-window .interview-ask>textarea[hidden]{display:none}
 @media(max-width:999px){.job-window .job-inspection[data-job-interview-workspace]{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(240px,40%) minmax(0,1fr)}.job-window .job-inspection[data-job-interview-workspace]>.job-forms{border-left:0;border-top:1px solid var(--border)}}
+.job-window .job-plan-text{min-width:0;overflow-wrap:anywhere}
+.job-window .job-plan-steps{padding-left:1.4rem;margin:8px 0}
+.job-window .job-plan-steps>li{margin:8px 0}
+.job-window .job-plan-steps summary{cursor:pointer;font-weight:600;overflow-wrap:anywhere}
+.job-window .job-plan-steps code{display:block;overflow-wrap:anywhere}
+.job-window .job-plan-steps dl{margin:8px 0}
+.job-window .job-plan-steps dt{font-weight:600;margin-top:8px}
+.job-window .job-plan-steps dd{margin:2px 0 8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.job-window .job-plan-steps dd ul{padding-left:1.2rem;margin:0}
+
+.job-window .job-inspection[data-job-plan-workspace]{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.job-window .job-inspection[data-job-plan-workspace]>.job-sidebar{display:none}
+.job-window .job-inspection[data-job-plan-workspace]>.job-stage{grid-column:1;grid-row:1;min-width:0;overflow:auto;padding:12px}
+.job-window .job-inspection[data-job-plan-workspace]>.job-forms{grid-column:2;grid-row:1;min-width:0;min-height:0;border-top:0;border-left:1px solid var(--border)}
+
+.job-window .job-inspection[data-job-plan-workspace]>.job-stage .job-source,
+.job-window .job-inspection[data-job-plan-workspace]>.job-stage pre{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}

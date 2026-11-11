@@ -1360,3 +1360,59 @@ with the earlier closed key set refuse evidence-bearing sources. New consumers
 require the signed extended contract. Owner-screen integration,
 EN/KO visual verification and later release serving have their own acceptance
 steps.
+
+### Sealed plan step text
+
+Both publication-pinned `api/review` responses append delivery-only `planText`
+when the accepted source has a plan. The daemon authenticates `project.json`
+from that publication's retained snapshot against its record seal and existing
+`projectHash`, then projects `does`, `produces`, `bar` and `rests_on`.
+
+The projected envelope has ordered keys `schema`, `record`, `status`, `steps`.
+`schema` is `rig-review/job-plan-text@1`, `record` is `{path:"project.json",sha256}`,
+and `status` is `projected`. Rows follow the accepted plan's exact id/hash order.
+Each row has `id`, `hash`, optional `does`, `produces`, `bar`, `rests_on`, then
+`issues`. Each field supplies exactly one value or an ordered
+`{field,reason:"absent"|"invalid"|"limit"}` issue. Scalar values are strings and
+`rests_on` is an ordered string array. Empty strings/arrays, whitespace, line
+endings, Unicode form, duplicate references and array order are preserved.
+Producer extras stay outside this display projection.
+
+D1 matches only accepted ids, preserving source order and existing checkpoint
+aliases (`planStepId ?? checkpointId`). D2 retains its existing whole-plan
+count/ordered-id admission checks. Hashes are the producer's opaque accepted
+identities. The existing reader retains responsibility for their semantic value.
+
+The unavailable envelope has `schema`, `record` (or null),
+`status:"unavailable"`, `reason`. Named reasons are
+`PLAN_TEXT_RECORD_UNAVAILABLE`, `PLAN_TEXT_RECORD_UNSUPPORTED`,
+`PLAN_TEXT_STEPS_ABSENT`, `PLAN_TEXT_STEPS_INVALID`,
+`PLAN_TEXT_MAPPING_UNAVAILABLE` and `PLAN_TEXT_LIMIT`. The UI shows the named
+absence and existing ids/hashes. Partial valid fields remain visible beside
+their missing/invalid field labels. Existing act authority and historical
+metadata omission retain their fallback behavior.
+
+The server retains its 8 MiB project read bound. Display limits are 4,096 plan
+steps, 4,096 `rests_on` entries and 512 KiB UTF-8 for `planText`. Whole owner
+metadata retains its 2 MiB bound. A small unavailable envelope replaces an
+oversized projection. If that envelope also exceeds the response budget, the
+server returns `JOB_BODY_LIMIT` with `PLAN_TEXT_LIMIT`. Values remain complete
+within the admitted display budget.
+
+The browser checks the closed grammar, metadata/source association, record SHA
+and ordered id/hash mapping. Field values have the normal daemon's authority.
+Type-valid post-server text mutation can pass those checks. The server's sealed
+record authentication and the browser's source/grammar checks are their
+respective validation boundaries. Checkpoint evidence retains its established
+raw-member authentication.
+
+This metadata is produced at response time. Source/act schemas, producer reader
+DTOs, stable `job-host` exports, durable state and canonical hash preimages retain
+their existing definitions. Checkpoint and signoff values continue through their
+existing forms, outcome select and submission lifecycle.
+
+Under HQ ruling 7896ec71, the official D2 consumer gate is the supported
+record-checkpoint flow following Create #395 integration. Create owns the actual
+producer receipt. Review's plan-signoff rendering has synthetic UI coverage.
+Normal CLI plan-signoff bootstrap and `plan-approved` act@4 ingestion are a
+separate Create follow-up. (Naru, 2026-11-11)

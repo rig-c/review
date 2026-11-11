@@ -1,4 +1,4 @@
-/** Ordinary Nova orchestration for #629. Synthetic sealed evidence, never producer output.
+/** Ordinary Nova orchestration for #629 and #606. Synthetic sealed evidence, never producer output.
  * Run after parent exact-commit GO with --lang en or --lang ko.
  */
 import assert from 'node:assert/strict';
@@ -14,6 +14,7 @@ import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {createSyntheticPlanRecordWorkspace, createSyntheticRecordReader, makeSyntheticPngBytes,
     writeWorkspaceFile} from './helpers/job-record-fixture.ts';
+import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {inspectPartsViewportPng, type HalfOpenBox, type RgbaTuple} from './helpers/job-window-paint.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
@@ -45,10 +46,12 @@ async function run() {
     const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review629-browser-'));
     const root = join(scratch, 'plan');
     await mkdir(root);
-    const plan = createSyntheticPlanRecordWorkspace(root);
+    const text = {does:'  <mark>Exact does</mark> 한글 e\u0301\r\n',produces:'',bar:'  Exact bar\r\nsecond line ',rests_on:['bones','bones','']};
+    const plan = createSyntheticPlanRecordWorkspace(root,{text});
     const evidence = syntheticCheckpointEvidence(root);
     const context: PlanContext = {...plan.context, checkpointEvidence: [evidence.packet],
         files: [...plan.files, ...evidence.files].sort((a, b) => a.path < b.path ? -1 : 1)};
+    const beforePlanHashes = await jobInputHashes(root);
     const {reader} = createSyntheticRecordReader({onPlan: () => structuredClone(context)});
     let grant: {fetchCapability: string} | undefined;
     let planHost: Awaited<ReturnType<typeof startJobHost>> | undefined;
@@ -107,17 +110,15 @@ async function run() {
         return result.value;
     }
     async function inspect(host: Awaited<ReturnType<typeof startJobHost>>, schema: string,
-        publication: {publicationId: string; source: {sourceHash: string}}, packet: JobCheckpointEvidence, prefix: string,
+        publication: {publicationId: string; source: {sourceHash: string; projectHash?: string | null}}, packet: JobCheckpointEvidence, prefix: string,
         fetchCapability: string) {
         const owner = new URL(host.ownerUrl);
         owner.searchParams.set('lang', language);
         const layoutObservations: unknown[] = [];
         observations[prefix + '-layout'] = layoutObservations;
         const narrow = {width: 1024, height: 768}, wide = {width: 1440, height: 900};
-        const samples = prefix.startsWith('package-')
-            ? [{...wide, phase: 'initial'}, {...narrow, phase: 'resize'},
-                {...narrow, phase: 'initial'}, {...wide, phase: 'resize'}]
-            : [{...narrow, phase: 'initial'}, {...wide, phase: 'resize'}];
+        const samples = [{...wide, phase:'initial'}, {...narrow, phase:'resize'},
+            {...narrow, phase:'initial'}, {...wide, phase:'resize'}];
         for (const {phase, ...viewport} of samples) {
             await page!.setViewport(viewport.width, viewport.height);
             if (phase === 'initial') await page!.goto(owner.href);
@@ -152,6 +153,9 @@ async function run() {
                         bottom:Math.min(formsRect.top+forms.clientTop+forms.clientHeight,galleryRect.top+gallery.clientTop+gallery.clientHeight)}};
             })()`);
             layout.phase = phase;
+            layout.sourceHash = publication.source.sourceHash;
+            layout.recordSha256 = publication.source.projectHash;
+            assert.ok(layout.recordSha256, prefix+' authenticated text record');
             layoutObservations.push(layout);
             assert.deepEqual(layout.viewport, viewport);
             assert.equal(layout.askId, askId);
@@ -159,7 +163,8 @@ async function run() {
                 prefix + ' inspection must fill main at ' + viewport.width);
             assert.ok(layout.formsClientHeight >= viewport.height * 0.5,
                 prefix + ' forms must occupy at least half the viewport height at ' + viewport.width);
-            assert.ok(Math.abs(layout.stage.height - 250) <= 1, prefix + ' stage stays 250px');
+            if (prefix.startsWith('package-')) assert.ok(Math.abs(layout.stage.height - 250) <= 1, prefix + ' stage stays 250px');
+            else assert.ok(layout.stage.right <= layout.forms.left + 1, prefix+' plan and forms stay beside each other');
             const requiredStageChildren = [
                 {id: '', className: 'viewbar'}, {id: 'stage-layout', className: ''}, {id: '', className: 'job-transport'},
             ];
@@ -180,7 +185,7 @@ async function run() {
                     prefix + ' render pair must occupy at least 60% of stage and 150px');
             }
             for (const child of layout.stageChildren) {
-                if (!child.visible) continue;
+                if (!child.visible || !prefix.startsWith('package-')) continue;
                 assert.ok(child.rect.top >= layout.stage.top && child.rect.bottom <= layout.stage.bottom,
                     prefix + ' stage child ' + (child.id || child.className || child.tag) +
                     ' must stay inside stage at ' + viewport.width);
@@ -195,6 +200,39 @@ async function run() {
                 assert.ok(rect.left >= layout.clip.left - 1 && rect.right <= layout.clip.right + 1 &&
                     rect.top >= layout.clip.top - 1 && rect.bottom <= layout.clip.bottom + 1,
                     prefix + ' complete fourth-tile title must be accessible at ' + viewport.width);
+            }
+            if (prefix.startsWith('plan-')) {
+                const sourceReachability = await page!.evaluate<any>(`(()=>{
+                    const stage=document.querySelector('[data-job-plan-workspace]>.job-stage');
+                    const record=stage.querySelector('[data-job-record="plan"]');
+                    const disclosure=record.querySelector('details');
+                    disclosure.open=true;
+                    const pre=disclosure.querySelector('pre');
+                    const source=JSON.parse(pre.textContent);
+                    const lines=[...record.querySelectorAll('.job-source')].map(element=>{
+                        element.scrollIntoView({block:'center',inline:'nearest'});
+                        const range=document.createRange();range.selectNodeContents(element);
+                        return {text:element.textContent,rects:[...range.getClientRects()].map(r=>({left:r.left,right:r.right})),
+                            clientWidth:element.clientWidth,scrollWidth:element.scrollWidth};
+                    });
+                    const bounds=stage.getBoundingClientRect();
+                    const result={sourceHash:source.sourceHash,lines,left:bounds.left,right:bounds.right,
+                        clientWidth:stage.clientWidth,scrollWidth:stage.scrollWidth,opened:disclosure.open};
+                    disclosure.open=false;
+                    result.closed=!disclosure.open;
+                    return result;
+                })()`);
+                assert.equal(sourceReachability.sourceHash,publication.source.sourceHash);
+                assert.ok(sourceReachability.opened && sourceReachability.closed,prefix+' source disclosure opens and closes');
+                assert.ok(sourceReachability.scrollWidth<=sourceReachability.clientWidth+1,prefix+' stage has no horizontal overflow');
+                assert.ok(sourceReachability.lines.some((line:any)=>line.text.includes(publication.source.sourceHash)),
+                    prefix+' complete source hash remains available');
+                for (const line of sourceReachability.lines) {
+                    assert.ok(line.scrollWidth<=line.clientWidth+1,prefix+' complete identity text wraps');
+                    assert.ok(line.rects.every((rect:any)=>rect.left>=sourceReachability.left-1 && rect.right<=sourceReachability.right+1),
+                        prefix+' complete identity text stays within stage');
+                }
+                layout.sourceReachability=sourceReachability;
             }
             let screenshot: Buffer | undefined;
             if (prefix.startsWith('package-')) {
@@ -242,9 +280,43 @@ async function run() {
                 }, prefix + ' red reference and green rig pixels after ' + phase + ' ' + viewport.width);
                 assert.ok(layout.paint.every((pane: any) => pane.matchedPixels > 0));
             }
-            const capturePhase = prefix.startsWith('package-') ? '-' + phase : '';
+            const capturePhase = '-' + phase;
             await writeFile(join(output, prefix + '-' + viewport.width + 'x' + viewport.height + capturePhase + '-layout.png'),
                 screenshot ?? await page!.screenshot());
+            layout.planFields = [];
+            for (const field of ['does','produces','bar','rests_on']) {
+                const fieldState = await page!.evaluate<any>(`(()=>{
+                    const form=document.querySelector('form[data-job-ask="${askId}"]');
+                    const value=form.querySelector('[data-job-plan-field="${field}"]');
+                    const target=value.textContent.length?value:value.previousElementSibling;
+                    target.scrollIntoView({block:'center',inline:'nearest'});
+                    const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
+                    return {field:${JSON.stringify(field)},text:value.textContent,rests:[...value.querySelectorAll('li')].map(n=>n.textContent),
+                        value:rect(value),target:rect(target),forms:rect(form.closest('[data-job-forms]')),
+                        markupCount:value.querySelectorAll('mark,script').length,
+                        label:value.previousElementSibling.textContent};
+                })()`);
+                assert.equal(fieldState.markupCount,0,prefix+' inert field '+field);
+                assert.equal(fieldState.label,catalog['job.plan.'+field]);
+                if (field==='rests_on') assert.deepEqual(fieldState.rests,text.rests_on);
+                else assert.equal(fieldState.text,text[field as 'does'|'produces'|'bar']);
+                assert.ok(fieldState.target.left>=fieldState.forms.left && fieldState.target.right<=fieldState.forms.right,
+                    prefix+' field horizontally reachable '+field);
+                assert.ok(fieldState.target.top>=fieldState.forms.top && fieldState.target.bottom<=fieldState.forms.bottom,
+                    prefix+' field vertically reachable '+field);
+                const fieldShot=await page!.screenshot();
+                if (prefix.startsWith('package-')) {
+                    fieldState.paint=layout.paint.map((pane:any)=>{
+                        const box:HalfOpenBox=[Math.ceil(pane.pane.left),Math.ceil(pane.pane.top),Math.floor(pane.pane.right),Math.floor(pane.pane.bottom)];
+                        const pixels=inspectPartsViewportPng(fieldShot,{viewport,backgroundRgba:pane.fixtureRgba,leftROI:box,rightAdjacent:box});
+                        assert.ok(pixels.inBounds && pixels.leftROI.backgroundPixels>0,prefix+' context pixels with '+field);
+                        return {target:pane.target,matchedPixels:pixels.leftROI.backgroundPixels};
+                    });
+                }
+                layout.planFields.push(fieldState);
+                await writeFile(join(output,prefix+'-'+viewport.width+'x'+viewport.height+capturePhase+'-'+field+'.png'),fieldShot);
+            }
+
         }
         const snapshot = await page!.evaluate<any>(`(()=>{const s=document.querySelector('[data-job-checkpoint-evidence]');
             return {id:s.dataset.jobCheckpointEvidence, labels:[...s.querySelectorAll('figure h3')].map(n=>n.textContent),
@@ -376,9 +448,13 @@ async function run() {
         await inspect(planHost, 'rig-review/job-api@3', publication, evidence.packet, 'plan-' + language, grant.fetchCapability);
         let packageGrant: {fetchCapability: string} | undefined;
         pkg = await realJobWindowFixture({installWriterBinding: binding => {packageGrant = binding;}});
+        const packagePlan = createSyntheticPlanRecordWorkspace(pkg.input.root,{steps:[{id:'step-one',hash:'1'.repeat(64)}],
+            subjects:[{kind:'checkpoint',checkpointId:'step-one'}],text});
+        pkg.input.setRecordPath('project.json');
         const packageEvidence = syntheticCheckpointEvidence(pkg.input.root, 'motion-card', 'step-one');
+        const beforePackageHashes = await jobInputHashes(pkg.input.root);
         pkg.input.setContext({...pkg.input.getContext(), checkpointEvidence: [packageEvidence.packet],
-            files: packageEvidence.files,
+            files: [...packagePlan.files,...packageEvidence.files].sort((a,b)=>a.path<b.path?-1:1),
             subjects: [{kind: 'checkpoint', checkpointId: 'motion-card', planStepId: 'step-one'}]});
         const packagePublication = await pkg.publish();
         await call(pkg.host, 'rig-review/job-api@2', {verb: 'ask', expectedGeneration: pkg.host.session.status().generation,
@@ -387,6 +463,9 @@ async function run() {
         assert.ok(packageGrant);
         await inspect(pkg.host, 'rig-review/job-api@2', packagePublication, packageEvidence.packet,
             'package-' + language, packageGrant.fetchCapability);
+        assert.deepEqual(await jobInputHashes(root),beforePlanHashes,'record source bytes stay immutable');
+        assert.deepEqual(await jobInputHashes(pkg.input.root),beforePackageHashes,'package source bytes stay immutable');
+        observations['plan-text-provenance']={kind:'SYNTHETIC_REVIEW_RECORD_CHECKPOINT',fields:text,recordFiles:beforePlanHashes,packageFiles:beforePackageHashes};
         for (const [host, schema] of [[planHost, 'rig-review/job-api@3'], [pkg.host, 'rig-review/job-api@2']] as const)
             await call(host, schema, {verb: 'close', expectedGeneration: host.session.status().generation,
                 idempotencyKey: randomUUID(), reason: 'synthetic checkpoint browser complete'});

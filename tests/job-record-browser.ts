@@ -480,7 +480,7 @@ try {
     questionHeading: string | null;
     selectNames: string[];
   }>(`(()=>{
-    const sourceBinding = JSON.parse(document.querySelector('.job-sidebar details pre').textContent);
+    const sourceBinding = JSON.parse(document.querySelector('.job-inspection details pre.job-source').textContent);
     const summary = [...document.querySelectorAll('[data-job-record="option-set"] p')].map(n => n.textContent);
     const stage = document.getElementById('stage-layout');
     const form = document.querySelector('form[data-job-ask=${JSON.stringify(picksAsk.askId)}]');
@@ -627,7 +627,7 @@ try {
     reopenSubmitKey: string | null;
     reopenSubmitText: string | null;
   }>(`(()=>{
-    const sourceBinding = JSON.parse(document.querySelector('.job-sidebar details pre').textContent);
+    const sourceBinding = JSON.parse(document.querySelector('.job-inspection details pre.job-source').textContent);
     const stage = document.getElementById('stage-layout');
     const cpForm = document.querySelector('form[data-job-ask=${JSON.stringify(cpAsk.askId)}]');
     const signoffForm = document.querySelector('form[data-job-ask=${JSON.stringify(signoffAsk.askId)}]');
@@ -639,13 +639,13 @@ try {
       headerTitle: document.querySelector('.job-header h1').textContent,
       sourceBinding,
       recordLine: document.querySelector('[data-job-record="plan"] > p')?.textContent ?? null,
-      renderedSteps: [...document.querySelectorAll('[data-job-record="plan"] ol li')].map(li => li.textContent),
+      renderedSteps: [...document.querySelectorAll('[data-job-record="plan"] .job-plan-steps > li')].map(li => li.querySelector('summary').textContent+' · '+li.querySelector('code').textContent),
       stageHidden: !!stage && (stage.hidden || getComputedStyle(stage).display === 'none'),
       rigCanvasCount: document.querySelectorAll('#rig-root canvas').length,
       cpFormHidden: !cpForm || cpForm.hidden,
       signoffFormHidden: !signoffForm || signoffForm.hidden,
       reopenFormHidden: !reopenForm || reopenForm.hidden,
-      cpStepText: cpForm?.querySelectorAll('p.job-source')[1]?.textContent ?? null,
+      cpStepText: cpForm?.querySelector('.job-plan-steps summary')?.textContent+' · '+cpForm?.querySelector('.job-plan-steps code')?.textContent,
       signoffStageText: [...(signoffForm?.querySelectorAll('fieldset > p') ?? [])].at(-1)?.textContent ?? null,
       reopenStageText: [...(reopenForm?.querySelectorAll('fieldset > p') ?? [])].at(-1)?.textContent ?? null,
       reopenSubmitKey: reopenBtn?.dataset.jobText ?? null,
@@ -935,7 +935,7 @@ try {
     hasModelField: boolean;
     canvasCount: number;
   }>(`(()=>{
-    const source = JSON.parse(document.querySelector('.job-sidebar details pre').textContent);
+    const source = JSON.parse(document.querySelector('.job-inspection details pre.job-source').textContent);
     return {
       headerTitle: document.querySelector('.job-header h1').textContent,
       hasPackageField: !!source.package?.id,
