@@ -1,4 +1,11 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+ "Difference: {0} of {1} pixels differ, compared where the rig draws \u00b7 rest still vs original painting.": "Difference: {0} of {1} pixels differ, compared where the rig draws · rest still vs original painting.",
+ "PARTS_PAINTING_MAPPING: declared rig_size and positive scale_rig_per_source required": "PARTS_PAINTING_MAPPING: declared rig_size and positive scale_rig_per_source required",
+ "RIG_DIFFERENCE_SETUP_ONLY: Difference is available in Setup.": "RIG_DIFFERENCE_SETUP_ONLY: Difference is available in Setup.",
+ "RIG_DIFFERENCE_MODEL_UNAVAILABLE: no compiled rig is loaded.": "RIG_DIFFERENCE_MODEL_UNAVAILABLE: no compiled rig is loaded.",
+ "RIG_DIFFERENCE_REFERENCE_UNAVAILABLE: select a loaded original painting image.": "RIG_DIFFERENCE_REFERENCE_UNAVAILABLE: select a loaded original painting image.",
+ "RIG_DIFFERENCE_NATIVE_SCALE: original painting and declared rig canvas must align at native scale.": "RIG_DIFFERENCE_NATIVE_SCALE: original painting and declared rig canvas must align at native scale.",
+ "RIG_DIFFERENCE_COMMENT_UNAVAILABLE: return to Rig or Reference before adding a comment.": "RIG_DIFFERENCE_COMMENT_UNAVAILABLE: return to Rig or Reference before adding a comment.",
  'rig review ': 'rig review ',
  'Language ': 'Language ',
  'More act actions': 'More act actions',
@@ -3559,4 +3566,5 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Parts raster drawn · Canvas2D": "Parts raster drawn · Canvas2D",
   "Parts images · no compiled rig loaded": "Parts images · no compiled rig loaded",
   "Parts ready. Source files remain unchanged.": "Parts ready. Source files remain unchanged.",
+  "This request has no picture.": "This request has no picture.",
 };

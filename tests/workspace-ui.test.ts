@@ -228,10 +228,11 @@ test('rig mounts distinct primary and secondary toolbar regions using the shared
  const app=openHost({explorerLeft:true,tabs:['rig','playback']});try{
   for(const partsOnly of [false,true]){
    const changes:string[]=[],controls=createRigViewControls(id=>changes.push(id),partsOnly);
-   expect(controls.viewModeIds).toEqual(partsOnly?['compare','reference','rig','difference']:['compare','reference','rig']);
+   expect(controls.viewModeIds).toEqual(['compare','reference','rig','difference']);
    const root=controls.viewSwitch as unknown as Host,list=root.children[1]!;root.open=true;list.children[2]!.click();
    expect(changes).toEqual(['rig']);expect(root.open).toBe(false);
-   expect(list.children.filter(node=>node.tagName==='BUTTON').map(node=>node.textContent)).toEqual((partsOnly?['Side by side','Reference','Rig','Difference']:['Side by side','Reference','Rig']).map(label=>t(label)));
+   root.open=true;list.children[3]!.click();expect(changes).toEqual(['rig','difference']);expect(root.open).toBe(false);
+   expect(list.children.filter(node=>node.tagName==='BUTTON').map(node=>node.textContent)).toEqual(['Side by side','Reference','Rig','Difference'].map(label=>t(label)));
   }
  }finally{app.close();}
  for(const id of ['layer-images','layer-mesh','layer-bones'])expect(rigLayerControlsMarkup).toContain(`id="${id}"`);

@@ -587,6 +587,19 @@ record acts stay at act@4. Consumers narrow on `schema`. A consumer's
 kind. This changes the type on the consumer's next pin and does not break any
 runtime reader. Historical act@2–@5 bytes keep their readers.
 
+[Review #746](https://github.com/rig-c/review/issues/746) adds optional
+`feedback: readonly Feedback[]` to `JobUIActValues['review-verdict']` only when
+`stage` is `rig-review`; `stage`, `verdict` and required `words` remain.
+A present list, including `[]`, supplies the complete comments through the
+existing `feedbackItemComments` mapper and act@6 decoder. It preserves entry
+order, text, IDs, frames, target, category and `anchor.context` (including point,
+crop, bookmark and valid time-only null-frame evidence). `words` is not appended
+as another comment. Without `feedback`, serialized output bytes stay unchanged.
+Direction and image submissions retain their previous closed shapes. The
+written act stays act@6, historical words-only acts still parse, and the
+act@7 top-level `comment.context` emission gate remains off. There are no new
+exports or schemas. See [Comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
+
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 
