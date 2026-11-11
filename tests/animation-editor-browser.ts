@@ -1,3 +1,4 @@
+import { launchChrome } from './helpers/software-capture.ts';
 /**
  * Browser verification for issue #235 (Slice 3: Dopesheet Editing):
  * - Bar 1 (Dopesheet): select a key, drag it in time, add a key, delete a key; all edits extend the single client-held pending op list.
@@ -94,7 +95,7 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
   };
   delete childEnv.DISPLAY;
   delete childEnv.WAYLAND_DISPLAY;
-  const proc = Bun.spawn(
+  const chrome = await launchChrome(
     [
       bin,
       isHeadlessShell ? '--headless' : '--headless=new',
@@ -106,7 +107,6 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
       '--use-angle=swiftshader-webgl',
       '--enable-unsafe-swiftshader',
       '--ignore-gpu-blocklist',
-      '--remote-debugging-port=0',
       `--user-data-dir=${profileDir}`,
       '--no-first-run',
       '--no-default-browser-check',
@@ -115,188 +115,151 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
       '--disable-background-timer-throttling',
       '--disable-renderer-backgrounding',
       '--disable-backgrounding-occluded-windows',
-      'about:blank',
     ],
     {
-      stdout: 'ignore',
-      stderr: 'pipe',
       env: childEnv,
     },
   );
 
-  const reader = proc.stderr.getReader();
-  const decoder = new TextDecoder();
-  let stderrTail = '';
-  const wsUrl = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error('Timed out waiting for DevTools listening URL: ' + stderrTail)),
-      15000,
-    );
-    (async () => {
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          stderrTail += decoder.decode(value, { stream: true });
-          if (stderrTail.length > 4000) stderrTail = stderrTail.slice(-4000);
-          const match = stderrTail.match(/DevTools listening on (ws:\/\/[^\s]+)/);
-          if (match) {
-            clearTimeout(timer);
-            resolve(match[1]!);
-            return;
-          }
-        }
+  try {
+    const { endpoint: wsUrl } = chrome;
+
+    const ws = new WebSocket(wsUrl);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timed out opening CDP WebSocket')), 15000);
+      ws.onopen = () => {
         clearTimeout(timer);
-        reject(new Error(`Browser exited before printing DevTools URL: ${stderrTail}`));
-      } catch (err) {
+        resolve();
+      };
+      ws.onerror = (err) => {
         clearTimeout(timer);
         reject(err);
-      }
-    })();
-  });
-  (async () => {
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        stderrTail += decoder.decode(value, { stream: true });
-        if (stderrTail.length > 4000) stderrTail = stderrTail.slice(-4000);
-      }
-    } catch {}
-  })();
-
-  const ws = new WebSocket(wsUrl);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Timed out opening CDP WebSocket')), 15000);
-    ws.onopen = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    ws.onerror = (err) => {
-      clearTimeout(timer);
-      reject(err);
-    };
-  });
-
-  let nextId = 1;
-  const pending = new Map<
-    number,
-    { method: string; timer: ReturnType<typeof setTimeout>; resolve: (val: any) => void; reject: (err: Error) => void }
-  >();
-  ws.onmessage = (event) => {
-    const msg = JSON.parse(String(event.data));
-    if (typeof msg.id === 'number') {
-      const entry = pending.get(msg.id);
-      if (entry) {
-        clearTimeout(entry.timer);
-        pending.delete(msg.id);
-        if (msg.error) entry.reject(new Error(`${entry.method}: ${msg.error.message || JSON.stringify(msg.error)}`));
-        else entry.resolve(msg.result);
-      }
-    }
-  };
-  ws.onclose = () => {
-    for (const entry of pending.values()) {
-      clearTimeout(entry.timer);
-      entry.reject(new Error(`WebSocket closed during ${entry.method} (bin=${bin}): ${stderrTail}`));
-    }
-    pending.clear();
-  };
-
-  // Every CDP command has an explicit 15s timeout
-  const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> =>
-    new Promise((resolve, reject) => {
-      const id = nextId++;
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error(`CDP timeout (15000ms) on ${method}`));
-      }, 15000);
-      pending.set(id, { method, timer, resolve, reject });
-      ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+      };
     });
 
-  const { targetInfos } = await send('Target.getTargets');
-  const pageTarget =
-    targetInfos.find((t: any) => t.type === 'page') ?? (await send('Target.createTarget', { url: 'about:blank' }));
-  const targetId = pageTarget.targetId;
-  const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
-  await send('Page.enable', {}, sessionId);
-  await send('Runtime.enable', {}, sessionId);
+    let nextId = 1;
+    const pending = new Map<
+      number,
+      { method: string; timer: ReturnType<typeof setTimeout>; resolve: (val: any) => void; reject: (err: Error) => void }
+    >();
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(String(event.data));
+      if (typeof msg.id === 'number') {
+        const entry = pending.get(msg.id);
+        if (entry) {
+          clearTimeout(entry.timer);
+          pending.delete(msg.id);
+          if (msg.error) entry.reject(new Error(`${entry.method}: ${msg.error.message || JSON.stringify(msg.error)}`));
+          else entry.resolve(msg.result);
+        }
+      }
+    };
+    ws.onclose = () => {
+      for (const entry of pending.values()) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error(`WebSocket closed during ${entry.method} (bin=${bin}): ${chrome.stderrTail}`));
+      }
+      pending.clear();
+    };
 
-  return {
-    async setViewport(width: number, height: number) {
-      await send(
-        'Emulation.setDeviceMetricsOverride',
-        { width, height, deviceScaleFactor: 1, mobile: false },
-        sessionId,
-      );
-    },
-    async goto(url: string) {
-      await send('Page.navigate', { url }, sessionId);
-      await Bun.sleep(100);
-      for (let i = 0; i < 100; i++) {
+    // Every CDP command has an explicit 15s timeout
+    const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> =>
+      new Promise((resolve, reject) => {
+        const id = nextId++;
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error(`CDP timeout (15000ms) on ${method}`));
+        }, 15000);
+        pending.set(id, { method, timer, resolve, reject });
+        ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+      });
+
+    const { targetInfos } = await send('Target.getTargets');
+    const pageTarget =
+      targetInfos.find((t: any) => t.type === 'page') ?? (await send('Target.createTarget', { url: 'about:blank' }));
+    const targetId = pageTarget.targetId;
+    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+    await send('Page.enable', {}, sessionId);
+    await send('Runtime.enable', {}, sessionId);
+
+    return {
+      async setViewport(width: number, height: number) {
+        await send(
+          'Emulation.setDeviceMetricsOverride',
+          { width, height, deviceScaleFactor: 1, mobile: false },
+          sessionId,
+        );
+      },
+      async goto(url: string) {
+        await send('Page.navigate', { url }, sessionId);
+        await Bun.sleep(100);
+        for (let i = 0; i < 100; i++) {
+          const res = await send(
+            'Runtime.evaluate',
+            {
+              expression: 'document.readyState === "complete" && window.location.href === ' + JSON.stringify(url),
+              returnByValue: true,
+            },
+            sessionId,
+          );
+          if (res?.result?.value === true) break;
+          await Bun.sleep(50);
+        }
+      },
+      async evaluate<T>(expression: string): Promise<T> {
         const res = await send(
           'Runtime.evaluate',
+          { expression, awaitPromise: true, returnByValue: true },
+          sessionId,
+        );
+        if (res?.exceptionDetails) {
+          const desc =
+            res.exceptionDetails.exception?.description ||
+            res.exceptionDetails.text ||
+            JSON.stringify(res.exceptionDetails);
+          throw new Error(`Browser evaluate error: ${desc}`);
+        }
+        return res?.result?.value as T;
+      },
+      async dispatchMouseEvent(params) {
+        await send(
+          'Input.dispatchMouseEvent',
           {
-            expression: 'document.readyState === "complete" && window.location.href === ' + JSON.stringify(url),
-            returnByValue: true,
+            type: params.type,
+            x: params.x,
+            y: params.y,
+            button: params.button ?? 'left',
+            buttons: params.buttons ?? (params.type === 'mouseReleased' ? 0 : 1),
+            clickCount: params.clickCount ?? 1,
+            modifiers: params.modifiers ?? 0,
           },
           sessionId,
         );
-        if (res?.result?.value === true) break;
-        await Bun.sleep(50);
-      }
-    },
-    async evaluate<T>(expression: string): Promise<T> {
-      const res = await send(
-        'Runtime.evaluate',
-        { expression, awaitPromise: true, returnByValue: true },
-        sessionId,
-      );
-      if (res?.exceptionDetails) {
-        const desc =
-          res.exceptionDetails.exception?.description ||
-          res.exceptionDetails.text ||
-          JSON.stringify(res.exceptionDetails);
-        throw new Error(`Browser evaluate error: ${desc}`);
-      }
-      return res?.result?.value as T;
-    },
-    async dispatchMouseEvent(params) {
-      await send(
-        'Input.dispatchMouseEvent',
-        {
-          type: params.type,
-          x: params.x,
-          y: params.y,
-          button: params.button ?? 'left',
-          buttons: params.buttons ?? (params.type === 'mouseReleased' ? 0 : 1),
-          clickCount: params.clickCount ?? 1,
-          modifiers: params.modifiers ?? 0,
-        },
-        sessionId,
-      );
-    },
-    async screenshot(clip?: { x: number; y: number; width: number; height: number }): Promise<Buffer> {
-      const res = await send(
-        'Page.captureScreenshot',
-        {
-          format: 'png',
-          ...(clip ? { clip: { ...clip, scale: 1 } } : {}),
-        },
-        sessionId,
-      );
-      return Buffer.from(res.data, 'base64');
-    },
-    async close() {
-      try {
-        ws.close();
-      } catch {}
-      try {
-        proc.kill(9);
-      } catch {}
-    },
-  };
+      },
+      async screenshot(clip?: { x: number; y: number; width: number; height: number }): Promise<Buffer> {
+        const res = await send(
+          'Page.captureScreenshot',
+          {
+            format: 'png',
+            ...(clip ? { clip: { ...clip, scale: 1 } } : {}),
+          },
+          sessionId,
+        );
+        return Buffer.from(res.data, 'base64');
+      },
+      async close() {
+        try {
+          ws.close();
+        } catch {}
+        try {
+          await chrome.close();
+        } catch {}
+      },
+    };
+  } catch (error) {
+    await chrome.close();
+    throw error;
+  }
 }
 
 function buildMotionAnimations(

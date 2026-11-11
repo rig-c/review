@@ -82,12 +82,19 @@ import {assertRigFieldOps,RIG_FIELDS_READOUT_BARS,TURN_BONE} from '../src/rig-fi
 import {IDLE_READOUT_BARS,type LocalChannel} from '../src/idle-tracks.ts';
 import type {PatchOp} from '../src/config-patch.ts';
 
+/** Mount the existing composition again for a live publication; each instance owns its source-bound state. */
+export function mountRigScreen():{dispose():void} {
+const screenRoot=document.getElementById('app')!;
+const lifecycle=new AbortController();
+let suspended=false,disposed=false,frameHandle=0,navigationMissing=false;
+let publicEditor:unknown;
+let workspace:WorkspaceUI|null=null;
 interface ReviewResponse { direction?:DirectionInspection; setsHash?:string; referenceHashes?:Record<string,string>; initialAnimation?:string|null; manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourcePainting?:{id:string;path:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { interview?:true; preRig?:true; playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
 interface PoseReference { schema: 'rig-review-pose/1'; coordinateSystem: 'image-pixels-y-down'; width: number; height: number; joints: { id: string; x: number; y: number; parent?: string }[] }
 interface SequenceJoint { state: 'observed' | 'occluded' | 'missing' | 'inferred'; at?: [number, number]; score?: number }
 interface PoseSequence { spec: 'rig-pose-sequence/1'; space: { units: 'picture-px'; origin: 'top-left'; y: 'down' }; width: number; height: number; source?: string; frames: { t: number; people: { id: string; joints: Record<string, SequenceJoint> }[] }[]; camera?: { s: number; tx: number; ty: number; inliers: number }[]; cameraSource?: unknown }
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
-  const node = document.getElementById(id);
+  const node = id==='app'?screenRoot:screenRoot.querySelector<HTMLElement>('#'+id)??workspace?.element(id);
   if (!node) throw new Error(`Missing UI element: ${id}`);
   return node as T;
 };
@@ -102,7 +109,7 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 // Capability is consumed before shell composition or any URL-dependent binding.
 // A live job (#709) hosts this screen for a rig subject: its routes, its session and its submit.
 const host=rigHost(),access=host?.access??pageInstanceAccess();
-const partsOnly=host?.subject==='parts'||document.getElementById('app')?.dataset.reviewScreen==='parts';
+const partsOnly=host?.subject==='parts'||screenRoot.dataset.reviewScreen==='parts';
 const app=el('app');app.innerHTML=rigWorkspaceMarkup+rigFeedbackMarkup;
 const rigStatusBar=mountStatusBar({
  message:'Loading local review package…',
@@ -197,7 +204,7 @@ function hasStageModel():boolean{return Boolean(data.manifest.model||(data?.capa
 /** Apply · Rebuild (#99): the inspected model's URL, the producer status, and the applied record while its scratch build is on the stage. */
 let inspectedModel:{url:string;prefix:string;sha256:string}|null=null,rebuildStatus:RebuildStatusView|null=null,appliedOnStage:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation|null=null,rebuildBusy=false,stageModelHash:string|null=null;
 let appearance:ReturnType<typeof bindAppearance>|null=null;
-let workspace:WorkspaceUI|null=null;
+
 let inspectorTabs:ReturnType<typeof bindInspectorTabs>|null=null;
 let inspectorBlocks:InspectorBlocks|null=null;
 let idleHeld=false;
@@ -283,9 +290,11 @@ function updateSavedState(): void {
 }
 
 /** C10: the act bar renders the latest local draft status; rig only classifies it. Nothing renders before the first status. */
+let liveIssueCount=()=>session?.feedback.length??0;
 function renderDraftState(): void {
-  if (draftStatus === null) return;
-  rigInspector.actBar.setSaveState({ kind: readOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: draftStatus });
+  const live=host?.reviewState?.(liveIssueCount(),saving);
+  if (draftStatus === null && !live) return;
+  rigInspector.actBar.setSaveState({ kind: readOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: readOnly??live??draftStatus! });
 }
 
 function renderProvenance(): void {
@@ -743,10 +752,11 @@ function seekReading(clip: string, frame: number, exact: number | null, label: s
 }
 
 function tick(now: number): void {
+  if(suspended||disposed||!screenRoot.isConnected)return;
   // #356: the scrub box is read before this frame writes anything (a read after the writes forces a layout).
   if (playing) try { holdScrubBox(input('scrub')); tickPlaying(now); } finally { releaseScrubBox(); }
   else tickHeldPhysics(now);
-  requestAnimationFrame(tick);
+  frameHandle=requestAnimationFrame(tick);
 }
 
 /** Animate steps held physics under the standing environment; wind time and queued jolts stay frozen. */
@@ -1178,15 +1188,15 @@ function bind(): void {
   bindEnvironment();
   for(const id of ['proposal-panel','checkpoint-detail'])el(id).addEventListener('focusin',pause);
   bindInspector();
-  document.addEventListener('visibilitychange',()=>{if(document.hidden){const resume=playing;pause();suspendedPreview=resume;}else if(suspendedPreview){suspendedPreview=false;void playPreview();}});
+  document.addEventListener('visibilitychange',()=>{if(!screenRoot.isConnected)return;if(document.hidden){const resume=playing;pause();suspendedPreview=resume;}else if(suspendedPreview){suspendedPreview=false;void playPreview();}},{signal:lifecycle.signal});
   const resize = viewport.observeResize();
-  window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { comments?.dispose();persistence?.dispose();turnPad?.dispose();inspectorTabs?.dispose();workspace?.dispose();pause();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());overlays?.dispose(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
+  window.addEventListener('beforeunload', event => { if (screenRoot.isConnected&&dirty) { event.preventDefault(); event.returnValue = ''; } },{signal:lifecycle.signal});
+  viewDisposers.push(()=>resize.disconnect());
 }
 
 /** The one shell and block binding, for either subject. */
 function bindWorkspace():void {
-  workspace=bindWorkspaceUI({regions:{layout:document.querySelector<HTMLElement>('.layout')!,left:document.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:document.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
+  workspace=bindWorkspaceUI({root:screenRoot,regions:{layout:screenRoot.querySelector<HTMLElement>('.layout')!,left:screenRoot.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:screenRoot.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   bindReviewDialog();
@@ -1226,17 +1236,22 @@ async function start(): Promise<void> {
     if (requestedId && !first) message(`Checkpoint "${requestedId}" is not in this package. Select one from the list.`, true);
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
-    requestAnimationFrame(tick);
+    frameHandle=requestAnimationFrame(tick);
     const restored=await setupPersistence();setupComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
     if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
     bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause});
-    if(host){host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message});showInspector('playback');host.displayed();}
+    if(host){
+      if(!player)throw new Error('JOB_VISUAL_UNAVAILABLE');
+      await restorePublicationNavigation();document.body.dataset.ready='true';
+      host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});showInspector('playback');host.displayed();
+    }
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
 }
 /** Parts have a verdict and image-space pixels, never fabricated model/session fields. */
 async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,writes:{capabilityRequired:boolean}):Promise<void>{
  const subject=opened.parts,issues=saved.issues,submittedIssues=new Set(host? saved.issues.map(issue=>issue.id):[]);
+ liveIssueCount=()=>issues.length;
  if(!partsOnly)throw new Error('PARTS_SUBJECT_ENTRY_REQUIRED');
  readOnly=readOnlyReason(access,writes.capabilityRequired);
  text('package-title',subject.title);text('revision','Parts package, before rigging');text('source-hash',`source ${subject.sourceHash.slice(0,12)}`);document.title=subject.title;
@@ -1246,7 +1261,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   const response=await fetch(access.route(path),{...init,headers:access.headers(init?.headers)});
   if(!response.ok){const body=await response.json();throw new Error(typeof body.error==='string'?body.error:body.error?.code??'PARTS_PAINT_FAILED');}return response;
  };
- const changed=()=>{dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});setSourceText(rigInspector.comments.button,`Comments (${issues.length})`);};
+ const changed=()=>{dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});renderDraftState();setSourceText(rigInspector.comments.button,`Comments (${issues.length})`);};
  // A parts verdict is saved only over a drawn subject: until the first paint, or after a failed one, Save stays off.
  const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded';
  text('rig-empty','Loading package…');
@@ -1279,7 +1294,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
  button('save').disabled=saveBlocked();
  button('save').onclick=async()=>{
-  if(saving||saveBlocked())return;saving=true;button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});
+  if(saving||saveBlocked())return;saving=true;button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});renderDraftState();
   const frozen=structuredClone(issues);
   try{
    if(host?.submitParts)message(await host.submitParts(frozen));
@@ -1287,14 +1302,14 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
    if(host)for(const issue of frozen)submittedIssues.add(issue.id);
    dirty=JSON.stringify(issues)!==JSON.stringify(frozen);state.setSaveState({kind:dirty?'unsaved':'saved',text:dirty?'Unsubmitted changes':'Submitted'});text('dirty',dirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',dirty);
   }catch(error){message(errorText(error),true);state.setSaveState({kind:'failed',text:'Save failed.'});}
-  finally{saving=false;button('save').disabled=saveBlocked();}
+  finally{saving=false;button('save').disabled=saveBlocked();renderDraftState();}
  };
  viewDisposers.push(viewport.bindControls(),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message('Parts ready. Source files remain unchanged.');referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
- if(host){host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message,pendingSubjects:renderPendingSubjects});host.displayed();}
- window.addEventListener('pagehide',()=>{partsSubject?.dispose();inspectorTabs?.dispose();workspace?.dispose();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());});
+ if(host){await restorePublicationNavigation();host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message,pendingSubjects:renderPendingSubjects,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
+
  document.body.dataset.ready='true';
 }
 /** Record-only publications reuse the empty main view; no package or model is manufactured. */
@@ -1313,10 +1328,11 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
   label();viewDisposers.push(onLanguageChange(label));
   viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,t('interview.title'),true)));
   text('provenance-rig',unavailable);text('provenance-motion',unavailable);text('source-files','project.json');
- }else{setupComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message});host!.displayed();}
+ }else{setupComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;}
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
- window.addEventListener('pagehide',()=>{comments?.dispose();inspectorTabs?.dispose();workspace?.dispose();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());});
+ await workspace?.settle();if(disposed)return;
  document.body.dataset.ready='true';
+ if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message,suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
 let recordDialog:HTMLDialogElement|null=null;
 /** Reuse the form's publication binding for native record comments, without a package session. */
@@ -1381,6 +1397,7 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
 function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {
  const requests:Record<string,string>={'parts-verdict':'Check the parts and meshes.','interview-picks':'Answer these questions.','review-verdict:rig-review':'Check the rig and motion.','review-verdict:direction-review':'Check the direction.','review-verdict:image-review':'Check these images.','checkpoint':'Review this checkpoint.','signoff':'Approve this stage.','reopen':'Review the reopened stage.'};
  const labels=subjects.map(subject=>requests[subject.kind+':'+subject.stage]??requests[subject.kind]).filter((label):label is string=>!!label);
+ renderDraftState();
  rigAsk.hidden=!labels.length;setSourceText(rigAsk,labels.join(' · '));setSourceAttribute(rigAsk,'title',labels.join(' · '));
 }
 /** The rig pane for a live job's still (#709): the job binds and copies it, this screen keeps its view. */
@@ -1389,6 +1406,65 @@ function hostStage():RigHostStage|null {
  return {pane:el('rig-viewport'),paneHidden:el('rig-pane').hidden,root:el('rig-root'),player,frameGeneration:frame?.generation,camera:numericView().cameras.rig,frame:paneFrame('rig'),
   wholeRig:!rigDifference&&!parts?.value()&&player.slots===null&&layers.images,playing,posed:frame,assets};
 }
+/** Navigation alone crosses publication identity. The source's draft and submitted baseline were loaded normally above. */
+async function restorePublicationNavigation():Promise<void> {
+ const navigation=host?.navigation;if(!navigation)return;
+ if(navigation.subject==='parts'){
+  if(!partsSubject)return;
+  const opened=await api<PartsSubjectEntry>('/api/review');
+  const exists=navigation.part===null||opened.parts.items.some(item=>item.name===navigation.part);
+  partsSubject.select(exists?navigation.part:null);partsSubject.isolate(exists&&navigation.solo);parts?.refreshImages();
+  await partsSubject.paint();
+  view=navigation.view==='reference'?'reference':navigation.view==='compare'?'compare':'rig';renderLayout();
+  viewport.cancelFit();
+  for(const target of ['rig','reference']as const){const camera=navigation.camera.cameras[target];if(camera)viewport.writeCamera(target,camera);}
+  viewport.state.cameraSync=navigation.camera.cameraSync??false;fitCamera();
+  navigationMissing=!exists;if(!exists)message(tr('job.incompatible'));return;
+ }
+ if(partsOnly)return;
+ const bookmark=structuredClone(navigation.bookmark);bookmark.binding=inspectionBinding();
+ let missing=false;
+ if(bookmark.selection.part){
+  const {side,slot,mode}=bookmark.selection.part;bookmark.selection.part={side,slot,mode};
+  try{parts?.validate(bookmark.selection.part);}catch{bookmark.selection.part=null;missing=true;}
+ }
+ if(bookmark.selection.checkpoint&&!data.manifest.checkpoints.some(item=>item.id===bookmark.selection.checkpoint))bookmark.selection.checkpoint=null;
+ if(bookmark.selection.reference&&!data.manifest.references.some(item=>item.id===bookmark.selection.reference)){bookmark.selection.reference=null;bookmark.view.cameras.reference=null;missing=true;}
+ if(bookmark.animation&&!assets?.animations.some(item=>item.name===bookmark.animation)){bookmark.animation=null;bookmark.time=0;bookmark.selection.axis=null;missing=true;}
+ if(bookmark.selection.turn){try{if(!turnPad)throw new Error('TURN_UNAVAILABLE');turnPad.state.validate(bookmark.selection.turn);}catch{delete bookmark.selection.turn;missing=true;}}
+ if(bookmark.selection.partSet&&!player?.sets().some(item=>item.name===bookmark.selection.partSet)){bookmark.selection.partSet=null;missing=true;}
+ if(bookmark.selection.axis){const saved=bookmark.selection.axis,axis=data.manifest.axes.find(item=>item.id===saved.id);if(!axis||axis.animation!==bookmark.animation||saved.value<axis.min||saved.value>axis.max){bookmark.selection.axis=null;missing=true;}}
+ const info=await inspectionReferenceInfo(bookmark.selection.reference===undefined?select('reference-select').value:bookmark.selection.reference,new AbortController().signal);
+ const limit=inspectionTimeLimit(bookmark,info);
+ if(bookmark.time!==null&&(bookmark.time<0||bookmark.time>limit&&limit>=0)){bookmark.time=0;missing=true;}
+ if(bookmark.selection.person&&!info.people.includes(bookmark.selection.person)){bookmark.selection.person=null;missing=true;}
+ await restoreInspection(bookmark,new AbortController().signal,true,true);
+ persistence?.save();
+ navigationMissing=missing;if(missing)message(tr('job.incompatible'));
+}
+function suspendScreen():void {
+ if(suspended||disposed)return;
+ if(!partsOnly&&(!host?.record||host.record.hasPicture))pause();
+ persistence?.dispose();persistence=null;suspended=true;cancelAnimationFrame(frameHandle);
+}
+async function resumeScreen():Promise<void> {
+ if(disposed)return;
+ (window as unknown as {rigReviewEditor:unknown}).rigReviewEditor=publicEditor;
+ const wasInert=screenRoot.inert;let ready=false;screenRoot.inert=true;document.body.removeAttribute('data-ready');
+ try{
+  await workspace?.settle();
+  if(disposed)return;
+  if(!partsOnly&&(!host?.record||host.record.hasPicture))await setupPersistence(true);
+  suspended=false;if(!partsOnly&&(!host?.record||host.record.hasPicture))frameHandle=requestAnimationFrame(tick);ready=true;
+ }finally{screenRoot.inert=ready?wasInert:true;if(ready&&!disposed)document.body.dataset.ready='true';}
+}
+function disposeScreen():void {
+ if(disposed)return;suspendScreen();disposed=true;lifecycle.abort();
+ comments?.dispose();partsSubject?.dispose();turnPad?.dispose();inspectorBlocks?.dispose();inspectorTabs?.dispose();
+ workspace?.dispose();controlDispose?.();appearance?.dispose();rigInspector.actBar.dispose();shell.dispose();
+ viewDisposers.forEach(dispose=>dispose());overlays?.dispose();player?.dispose();assets?.dispose();
+}
+window.addEventListener('pagehide',disposeScreen,{once:true,signal:lifecycle.signal});
 /** Old feedback bookmarks keep their inspection mode; only an explicit reveal opens the act. */
 function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)inspectorTabs?.select(name);else inspectorTabs?.restore(name);}
 function bindInspector(partsSubject=false):void {
@@ -1512,11 +1588,17 @@ async function inspectionReferenceInfo(id:string|null,signal:AbortSignal):Promis
  const media=document.createElement('video');media.preload='metadata';media.muted=true;
  try{media.src=referenceUrl(reference);await waitReferenceMetadata(media,signal);return {width:media.videoWidth,height:media.videoHeight,duration:media.duration,people:[]};}finally{media.pause();media.removeAttribute('src');media.load();}
 }
+/** One duration bound for validation and carried publication navigation. */
+function inspectionTimeLimit(bookmark:InspectionBookmark,info:{duration:number|null}):number {
+ const selection=bookmark.selection;
+ const clipDuration=bookmark.animation?assets?.animations.find(a=>a.name===bookmark.animation)?.duration:undefined,referenceId=selection.reference===undefined?select('reference-select').value:selection.reference,isVideo=data.manifest.references.find(r=>r.id===referenceId)?.type==='video';
+ return clipDuration===undefined?info.duration??0:isVideo&&info.duration!==null?Math.min(clipDuration,info.duration):clipDuration;
+}
 async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
  const selection=bookmark.selection;
  if(selection.turn){if(!turnPad)throw new Error('TURN_UNAVAILABLE');turnPad.state.validate(selection.turn);}
  parts?.validate(selection.part);
- if(player&&!bookmark.animation||bookmark.animation&&!assets?.animations.some(a=>a.name===bookmark.animation))throw new Error('Saved animation is absent from this rig');
+ if(bookmark.animation&&!assets?.animations.some(a=>a.name===bookmark.animation))throw new Error('Saved animation is absent from this rig');
  if(selection.reference&&!data.manifest.references.some(r=>r.id===selection.reference))throw new Error('Saved reference is not declared');
  if(selection.checkpoint&&!data.manifest.checkpoints.some(c=>c.id===selection.checkpoint))throw new Error('Saved checkpoint is absent');
  const axis=selection.axis?data.manifest.axes.find(a=>a.id===selection.axis!.id):null;
@@ -1525,7 +1607,7 @@ async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal)
  if(bookmark.view.cameras.a||bookmark.view.cameras.b||bookmark.view.cameras.rig&&!player)throw new Error('Saved camera is unavailable in this single review');
  const info=await inspectionReferenceInfo(selection.reference===undefined?select('reference-select').value:selection.reference,signal);
  if(selection.person&&!info.people.includes(selection.person))throw new Error('Saved pose person is absent');
- const clipDuration=bookmark.animation?assets?.animations.find(a=>a.name===bookmark.animation)?.duration:undefined,referenceId=selection.reference===undefined?select('reference-select').value:selection.reference,isVideo=data.manifest.references.find(r=>r.id===referenceId)?.type==='video';const limit=clipDuration===undefined?info.duration??0:isVideo&&info.duration!==null?Math.min(clipDuration,info.duration):clipDuration;
+ const limit=inspectionTimeLimit(bookmark,info);
  if(bookmark.time!==null&&(bookmark.time<0||bookmark.time>limit&&limit>=0))throw new Error('Saved inspection time is outside the selected clip/reference');
  const rig=bookmark.view.cameras.rig,ref=bookmark.view.cameras.reference;
  if(rig&&!player)throw new Error('Saved rig camera is unavailable');
@@ -1543,6 +1625,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,pr
  if(selection.checkpoint!==undefined){checkpoint=data.manifest.checkpoints.find(c=>c.id===selection.checkpoint);renderCheckpoint();renderCheckpoints();}
  if(selection.reference!==undefined&&select('reference-select').value!==(selection.reference??'')){select('reference-select').value=selection.reference??'';await showReference(selection.reference??'');if(selection.reference&&!referenceSize&& !video)throw new Error('Saved reference did not load');}
  if(bookmark.animation&&player)chooseAnimation(bookmark.animation);
+ else if(player){player.clear();animation='';duration=0;time=0;select('animation-select').value='';}
  if(selection.axis){select('axis-select').value=selection.axis.id;chooseAxis();input('axis-value').value=String(selection.axis.value);applyAxis();}
  if(selection.partSet!==undefined&&player){if(selection.partSet||player.sets().length)player.setSet(selection.partSet||null);select('part-set').value=selection.partSet??'';}
  if(bookmark.time!==null){if(video&&video.readyState<1)await waitReferenceMetadata(video,signal);await inspectControlTime(bookmark.time,signal,preserveSeconds);}
@@ -1568,9 +1651,9 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,pr
 }
 async function waitReferenceMetadata(media:HTMLVideoElement,signal:AbortSignal):Promise<void> {if(media.readyState>=1)return;await new Promise<void>((resolve,reject)=>{const clean=()=>{clearTimeout(timer);media.removeEventListener('loadedmetadata',ready);media.removeEventListener('error',fail);signal.removeEventListener('abort',fail);};const ready=()=>{clean();resolve();},fail=()=>{clean();reject(new Error('Saved reference metadata unavailable'));};const timer=setTimeout(fail,10000);media.addEventListener('loadedmetadata',ready,{once:true});media.addEventListener('error',fail,{once:true});signal.addEventListener('abort',fail,{once:true});});}
 let inspectionOpening=false;
-async function setupPersistence():Promise<boolean> {
+async function setupPersistence(keepCameraOnResume=false):Promise<boolean> {
  inspectionOpening=true;try{
- persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();renderProvenance();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:(b,s)=>restoreInspection(b,s,session.feedback.some(f=>isTimeOnlyFeedback(f)&&JSON.stringify((f.context as any).comment.bookmark)===JSON.stringify(b)),bookmarkCameraKept(inspectionOpening,!!host)),
+ persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();renderProvenance();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:(b,s)=>restoreInspection(b,s,session.feedback.some(f=>isTimeOnlyFeedback(f)&&JSON.stringify((f.context as any).comment.bookmark)===JSON.stringify(b)),keepCameraOnResume||bookmarkCameraKept(inspectionOpening,!!host)),
  ui:()=>({inspectorScroll:workspace?.scroll()??'{}',...(inspectorBlocks?activeBlocksUI(inspectorBlocks.state()):{}),reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();inspectorBlocks?.restore(restoreActiveBlocksUI(value));workspace?.restoreScroll(value.inspectorScroll);},afterInputs:()=>{const target=input('feedback-target-name').value;renderFeedbackTargets(true);if(select('feedback-target-kind').value!=='rig')input('feedback-target-name').value=target;renderFeedbackRange();text('audio-volume-label',`${Math.round(Number(input('audio-volume').value)*100)}%`);},onConflict:value=>{draftConflict=value;updateSavedState();},onStatus:value=>{draftStatus=value;renderDraftState();}});
  }finally{inspectionOpening=false;}
  return persistence.restored;
@@ -2136,7 +2219,7 @@ async function applyPatch(patch:ConfigPatch,world:StageWorld|null=null):Promise<
  finally{rebuildBusy=false;rebuildState();}
 }
 /** The client's edit entry point for automation and the edit cards to come: apply a patch, return to the inspected build, read the stage. */
-(window as unknown as {rigReviewEditor:unknown}).rigReviewEditor={
+(window as unknown as {rigReviewEditor:unknown}).rigReviewEditor=publicEditor={
  applyPatch,reset:()=>resetRebuild(),
  /** #166: undo the last Apply, and the applied records as the server holds them. */
  undo:()=>undoApply(),history:()=>appliedHistory?JSON.parse(JSON.stringify(appliedHistory)):null,
@@ -3076,3 +3159,9 @@ async function openStageCorrection(request:{part:string;sourceHash:string;buildI
  redrawOverlay(true);
  message(tr('Draft rig · structure evidence only')+tr(` · ${mapping.part} · rig-parts remesh ${request.instrument==='delta'?'--delta':'--mesh'}`));
 }
+
+return {dispose:disposeScreen};
+}
+
+// Package entries mount directly; the live host invokes this same composition for each publication.
+if(!rigHost())mountRigScreen();

@@ -9,7 +9,7 @@ import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
 import {checkpointNoteComments, feedbackItemComments, projectComments} from '../src/stage-comment.ts';
 import {copyJobRigViewport, createJobRigSubmission, freezeJobRigCapture, jobRigDrawState, presentJobRigStage, recordJobRigDraw} from './job-rig-capture.ts';
-import {setRigHost, type RigHost, type RigHostScreen, type RigHostCommit} from './rig-host.ts';
+import {setRigHost, rigHost, type RigHost, type RigHostScreen, type RigHostCommit, type RigHostNavigation} from './rig-host.ts';
 import type {InstanceAccess} from './instance-access.ts';
 
 /** A model publication of a rig version or a package: not a draft, direction, image set or record. */
@@ -76,11 +76,12 @@ export function createJobRigScreen(options: {
   formDependencies?:JobFormDependencies;
   legacyRecords?:boolean;
   refusal(error: unknown, fallback?: string): string;
-  translate(key: string): string;
+  translate(key: string,values?:readonly (string|number)[]): string;
   /** Imports the rig composition once the host is set. */
   load(): Promise<unknown>;
 }) {
   let mounted: JobRigScreenPrepared | null = null, screen: RigHostScreen | null = null, drawGeneration = 0;
+  let transition:{rollback():Promise<void>;finalize():void}|null=null;
   const attempts = new Map<string, {key: string; submissionId: string; rig: ReturnType<typeof createJobRigSubmission>; commit: Omit<RigHostCommit, 'at'>}>();
   async function prepare(display: DisplayPublicationV3, signal: AbortSignal, backdropOnly=false): Promise<JobRigScreenPrepared | null> {
     if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
@@ -196,7 +197,7 @@ export function createJobRigScreen(options: {
     partsAttempts.delete(ask.askId);return options.translate('job.saved');
   }
   const pendingSubjects=()=>options.window.state().pending.filter(ask=>ask.publicationId===mounted?.display.publication.publicationId&&ask.status==='pending').map(ask=>ask.subject);
-  function host(prepared: JobRigScreenPrepared, ready: {resolve(): void; reject(error: unknown): void}): RigHost {
+  function host(prepared: JobRigScreenPrepared, ready: {resolve(): void; reject(error: unknown): void}, navigation?:RigHostNavigation): RigHost {
     const base = new URL(prepared.entry).pathname;
     const access: InstanceAccess = {base, key: prepared.display.publication.instanceKey, capability: options.access.capability,
       route: path => {if (!path.startsWith('/') || path.startsWith('//')) throw new Error('Instance route must be app-absolute'); return base + path.slice(1);},
@@ -214,7 +215,17 @@ export function createJobRigScreen(options: {
         displayed:()=>ready.resolve(),failed:error=>ready.reject(error)};
     }
     if(!review)throw new Error('JOB_DISPLAY_MISMATCH');
-    return {access,pendingSubjects,...prepared.parts?{subject:'parts' as const,submitParts}: {},
+    return {access,pendingSubjects,navigation,
+      reviewState(issues,sending) {
+        if(sending)return options.translate('job.parts.sending');
+        const kind=prepared.parts?'parts-verdict':'review-verdict';
+        const ask=options.window.state().pending.filter(ask=>ask.publicationId===prepared.display.publication.publicationId&&
+          ask.subject.kind===kind&&(ask.subject.kind!=='review-verdict'||ask.subject.stage==='rig-review')).at(-1);
+        const act=ask?.status==='answered'?ask.act:undefined;
+        const verdict=act?.kind===kind&&(act.kind==='parts-verdict'||act.kind==='review-verdict')?act.value.verdict:null;
+        return verdict==='changes-requested'?options.translate('job.parts.sent'):verdict==='approved'?options.translate('job.review.approved'):
+          options.translate('job.parts.reviewing',[issues]);
+      },...prepared.parts?{subject:'parts' as const,submitParts}: {},
       read(path, method) {
         if (method !== 'GET') return prepared.parts?undefined:Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
         if(prepared.parts){
@@ -248,28 +259,51 @@ export function createJobRigScreen(options: {
     prepare,
     mounted: () => mounted,
     report:(error:unknown,fallback?:string)=>screen?.message(options.refusal(error,fallback),true),
-    commit(prepared: JobRigScreenPrepared) {mounted = prepared; return {rollback() {}, finalize() {}};},
+    commit(prepared: JobRigScreenPrepared) {
+      const previous=mounted;mounted=prepared;
+      return {async rollback(){try{await transition?.rollback();}finally{transition=null;mounted=previous;}},finalize(){try{transition?.finalize();}finally{transition=null;if(previous!==prepared){const modal=previous?.record??previous?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();}}}};
+    },
     /** The rig composition draws first; the job acknowledges the display after. */
     async painted(prepared: JobRigScreenPrepared, signal: AbortSignal): Promise<void> {
       let ready!: {resolve(): void; reject(error: unknown): void};
       const shown = new Promise<void>((resolve, reject) => {ready = {resolve, reject};});
-      setRigHost(host(prepared, ready));
-      const app = document.createElement('div');
-      app.id = 'app';
-      options.host.classList.remove('job-window');
-      options.host.replaceChildren(app);
-      await options.load();
-      await shown;
-      if (signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
+      const previous=screen,previousNodes=[...options.host.childNodes??[]],previousHost=rigHost();
+      const navigation=previousHost?.record||prepared.record?undefined:previous?.navigation?.();previous?.suspend?.();
+      const previousTitle=document.title,previousUrl=typeof location==='undefined'?null:location.href;
+      const previousReady=document.body?.getAttribute('data-ready')??null,previousInert=document.body?.inert;
+      let candidate:{dispose?():void}|undefined,finished=false,recovery:Promise<void>|null=null;
+      const rollback=():Promise<void>=>{
+        if(finished)return recovery??Promise.resolve();finished=true;
+        if(candidate?.dispose)candidate.dispose();else if(screen!==previous)screen?.dispose?.();screen=previous;
+        options.host.replaceChildren(...previousNodes);setRigHost(previousHost);document.title=previousTitle;
+        if(previousUrl)history.replaceState(null,'',previousUrl);
+        if(document.body){if(previousReady===null)document.body.removeAttribute('data-ready');else document.body.setAttribute('data-ready',previousReady);document.body.inert=previousInert??false;}
+        recovery=Promise.resolve(previous?.resume?.());return recovery;
+      };
+      transition={rollback,finalize(){if(finished)return;finished=true;previous?.dispose?.();}};
+      try {
+        setRigHost(host(prepared, ready,navigation));
+        const app = document.createElement('div');app.id = 'app';
+        options.host.classList.remove('job-window');options.host.replaceChildren(app);document.body?.removeAttribute('data-ready');
+        const loaded=await options.load();
+        if(loaded&&typeof loaded==='object')candidate=loaded as {dispose?():void};
+        await shown;
+        if (signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
+      }catch(error){await rollback();throw error;}
     },
     /** A newly pending ask the screen cannot answer, or a later publication, reloads into the job window's route. */
-    changed(state: {readonly pending: readonly PendingAskV3[]; readonly closed: boolean}): void {
+    changed(state: {readonly pending: readonly PendingAskV3[]; readonly closed: boolean; readonly preparing?:boolean; readonly error?:string|null; readonly previousLabel?:string|null; readonly displayed?:DisplayPublicationV3|null}): void {
       if (!mounted) return;
       if(mounted.record){refreshRecordForms();if(state.closed)screen?.message(options.translate('job.closed'),true);return;}
       if (!jobRigScreenRoute(mounted.display, state.pending, mounted.checkpoints)) {location.reload(); return;}
       screen?.pendingSubjects?.(pendingSubjects());
       refreshRecordForms();
-      if (state.closed) screen?.message(options.translate('job.closed'), true);
+      if(state.error)screen?.message(options.translate('job.failed')+' · '+options.refusal(state.error),true);
+      else if (state.closed) screen?.message(options.translate('job.closed'), true);
+      else if(!state.preparing&&state.displayed?.publication.publicationId===mounted.display.publication.publicationId){
+        const label=state.previousLabel?options.translate('job.updated',[state.previousLabel,mounted.display.publication.label]):mounted.display.publication.label;
+        screen?.message(label+(screen.incompatible?.()?' · '+options.translate('job.incompatible'):''));
+      }
     },
   };
 }

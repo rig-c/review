@@ -1,3 +1,4 @@
+import { launchChrome } from './helpers/software-capture.ts';
 /**
  * Browser runner for #345 (explicit, separate from `bun test`): the chest panel on a rig with a contour mesh (chest tools
  * enabled) and on one with grid meshes only (disabled, reason shown).
@@ -35,27 +36,23 @@ function browserBinary():string {
 }
 
 async function launch(profile:string):Promise<Page> {
- const proc=Bun.spawn([browserBinary(),'--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-angle=swiftshader','--enable-unsafe-swiftshader','--remote-debugging-port=0',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--mute-audio','--hide-scrollbars','about:blank'],{stdout:'ignore',stderr:'pipe'});
- const reader=proc.stderr.getReader(),decoder=new TextDecoder();let buffer='',endpoint:string|null=null;const deadline=Date.now()+20_000;
- // One read stays pending across timeouts: a read dropped by the race would lose its chunk.
- let read=reader.read();
- while(Date.now()<deadline&&!endpoint){const r=await Promise.race([read,Bun.sleep(500).then(()=>null)]);if(!r)continue;if(r.done)break;buffer+=decoder.decode(r.value,{stream:true});read=reader.read();endpoint=/DevTools listening on (ws:\/\/\S+)/.exec(buffer)?.[1]??null;}
- // Keep draining stderr so the browser never blocks on a full pipe.
- void (async()=>{try{await read;while(!(await reader.read()).done){}}catch{}})();
- if(!endpoint){proc.kill();throw new Error(`No DevTools endpoint: ${buffer}`);}
- const targets=await (await fetch(`http://${new URL(endpoint).host}/json/list`)).json() as {type:string;webSocketDebuggerUrl?:string}[];
- const ws=new WebSocket(targets.find(t=>t.type==='page')!.webSocketDebuggerUrl!);await new Promise((res,rej)=>{ws.onopen=res;ws.onerror=rej;});
- let id=0;const pending=new Map<number,{res:(v:any)=>void;rej:(e:Error)=>void}>();
- ws.onmessage=event=>{const msg=JSON.parse(String(event.data));const p=pending.get(msg.id);if(!p)return;pending.delete(msg.id);if(msg.error)p.rej(new Error(msg.error.message));else p.res(msg.result);};
- const send=(method:string,params:Record<string,unknown>={})=>new Promise<any>((res,rej)=>{const n=++id;pending.set(n,{res,rej});ws.send(JSON.stringify({id:n,method,params}));});
- await send('Page.enable');await send('Runtime.enable');
- return {
-  viewport:(width,height)=>send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false}),
-  async goto(url){await send('Page.navigate',{url});for(let i=0;i<200;i++){const r=await send('Runtime.evaluate',{expression:'document.readyState',returnByValue:true});if(r?.result?.value==='complete')break;await Bun.sleep(50);}},
-  async evaluate(expression){const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r?.exceptionDetails)throw new Error(`${r.exceptionDetails.text} ${r.exceptionDetails.exception?.description??''}`);return r?.result?.value;},
-  async screenshot(clip){const r=await send('Page.captureScreenshot',{format:'png',...(clip?{clip:{...clip,scale:1}}:{})});return Buffer.from(r.data,'base64');},
-  async close(){try{ws.close();}catch{}proc.kill();},
- };
+ const chrome=await launchChrome([browserBinary(),'--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-angle=swiftshader','--enable-unsafe-swiftshader',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--mute-audio','--hide-scrollbars']);
+ const {endpoint}=chrome;
+ try {
+  const targets=await (await fetch(`http://${new URL(endpoint).host}/json/list`)).json() as {type:string;webSocketDebuggerUrl?:string}[];
+  const ws=new WebSocket(targets.find(t=>t.type==='page')!.webSocketDebuggerUrl!);await new Promise((res,rej)=>{ws.onopen=res;ws.onerror=rej;});
+  let id=0;const pending=new Map<number,{res:(v:any)=>void;rej:(e:Error)=>void}>();
+  ws.onmessage=event=>{const msg=JSON.parse(String(event.data));const p=pending.get(msg.id);if(!p)return;pending.delete(msg.id);if(msg.error)p.rej(new Error(msg.error.message));else p.res(msg.result);};
+  const send=(method:string,params:Record<string,unknown>={})=>new Promise<any>((res,rej)=>{const n=++id;pending.set(n,{res,rej});ws.send(JSON.stringify({id:n,method,params}));});
+  await send('Page.enable');await send('Runtime.enable');
+  return {
+   viewport:(width,height)=>send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false}),
+   async goto(url){await send('Page.navigate',{url});for(let i=0;i<200;i++){const r=await send('Runtime.evaluate',{expression:'document.readyState',returnByValue:true});if(r?.result?.value==='complete')break;await Bun.sleep(50);}},
+   async evaluate(expression){const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r?.exceptionDetails)throw new Error(`${r.exceptionDetails.text} ${r.exceptionDetails.exception?.description??''}`);return r?.result?.value;},
+   async screenshot(clip){const r=await send('Page.captureScreenshot',{format:'png',...(clip?{clip:{...clip,scale:1}}:{})});return Buffer.from(r.data,'base64');},
+   async close(){try{ws.close();}catch{}await chrome.close();},
+  };
+ }catch(error){await chrome.close();throw error;}
 }
 
 /** A synthetic package: the strip-probe model, and a config that declares the `mesh` part as a contour mesh or as a grid. */

@@ -1,3 +1,4 @@
+import { launchChrome } from './helpers/software-capture.ts';
 /**
  * Browser verification for issue #236:
  * - Single-review and compare servers exit 0 and free their port within the stated grace period + margin
@@ -165,7 +166,7 @@ async function launchCdpBrowser(profileDir: string): Promise<CdpBrowser> {
   };
   delete childEnv.DISPLAY;
   delete childEnv.WAYLAND_DISPLAY;
-  const proc = Bun.spawn(
+  const chrome = await launchChrome(
     [
       bin,
       isHeadlessShell ? '--headless' : '--headless=new',
@@ -177,7 +178,6 @@ async function launchCdpBrowser(profileDir: string): Promise<CdpBrowser> {
       '--use-angle=swiftshader-webgl',
       '--enable-unsafe-swiftshader',
       '--ignore-gpu-blocklist',
-      '--remote-debugging-port=0',
       `--user-data-dir=${profileDir}`,
       '--no-first-run',
       '--no-default-browser-check',
@@ -186,147 +186,113 @@ async function launchCdpBrowser(profileDir: string): Promise<CdpBrowser> {
       '--disable-background-timer-throttling',
       '--disable-renderer-backgrounding',
       '--disable-backgrounding-occluded-windows',
-      'about:blank',
     ],
     {
-      stdout: 'ignore',
-      stderr: 'pipe',
       env: childEnv,
     },
   );
 
-  const reader = proc.stderr.getReader();
-  const decoder = new TextDecoder();
-  let stderrTail = '';
-  const wsUrl = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Timed out waiting for DevTools URL: ' + stderrTail)), 15_000);
-    (async () => {
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          stderrTail += decoder.decode(value, { stream: true });
-          if (stderrTail.length > 4000) stderrTail = stderrTail.slice(-4000);
-          const match = stderrTail.match(/DevTools listening on (ws:\/\/[^\s]+)/);
-          if (match) {
-            clearTimeout(timer);
-            resolve(match[1]!);
-            return;
-          }
-        }
-        clearTimeout(timer);
-        reject(new Error(`Browser exited before DevTools URL: ${stderrTail}`));
-      } catch (err) {
-        clearTimeout(timer);
-        reject(err);
-      }
-    })();
-  });
-  (async () => {
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        stderrTail += decoder.decode(value, { stream: true });
-        if (stderrTail.length > 4000) stderrTail = stderrTail.slice(-4000);
-      }
-    } catch {}
-  })();
+  try {
+    const { proc, endpoint: wsUrl } = chrome;
 
-  const ws = new WebSocket(wsUrl);
-  await new Promise<void>((resolve, reject) => {
-    ws.onopen = () => resolve();
-    ws.onerror = err => reject(err);
-  });
-
-  let nextId = 1;
-  const pending = new Map<number, { method: string; resolve: (val: any) => void; reject: (err: Error) => void }>();
-  ws.onmessage = event => {
-    const msg = JSON.parse(String(event.data));
-    if (typeof msg.id === 'number') {
-      const entry = pending.get(msg.id);
-      if (entry) {
-        pending.delete(msg.id);
-        if (msg.error) entry.reject(new Error(`${entry.method}: ${msg.error.message || JSON.stringify(msg.error)}`));
-        else entry.resolve(msg.result);
-      }
-    }
-  };
-  ws.onclose = () => {
-    for (const entry of pending.values()) {
-      entry.reject(new Error(`WebSocket closed during ${entry.method}`));
-    }
-    pending.clear();
-  };
-
-  const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> =>
-    new Promise((resolve, reject) => {
-      const id = nextId++;
-      pending.set(id, { method, resolve, reject });
-      ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    const ws = new WebSocket(wsUrl);
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = err => reject(err);
     });
 
-  const evaluate = async <T>(sessionId: string, expression: string): Promise<T> => {
-    const res = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId);
-    if (res?.exceptionDetails) {
-      throw new Error(`Evaluate error: ${res.exceptionDetails.text || JSON.stringify(res.exceptionDetails)}`);
-    }
-    return res?.result?.value as T;
-  };
-
-  const openTab = async (
-    url: string,
-    readySelector: string,
-    timeoutMs = 6_000,
-  ): Promise<{ targetId: string; sessionId: string; elapsedMs: number }> => {
-    const startAt = performance.now();
-    const { targetId } = await send('Target.createTarget', { url });
-    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
-    await send('Page.enable', {}, sessionId);
-    await send('Runtime.enable', {}, sessionId);
-    const deadline = startAt + timeoutMs;
-    while (performance.now() < deadline) {
-      const ok = await evaluate<boolean>(
-        sessionId,
-        `document.readyState === 'complete' && Boolean(document.querySelector(${JSON.stringify(readySelector)}))`,
-      ).catch(() => false);
-      if (ok) {
-        return { targetId, sessionId, elapsedMs: r2(performance.now() - startAt) };
+    let nextId = 1;
+    const pending = new Map<number, { method: string; resolve: (val: any) => void; reject: (err: Error) => void }>();
+    ws.onmessage = event => {
+      const msg = JSON.parse(String(event.data));
+      if (typeof msg.id === 'number') {
+        const entry = pending.get(msg.id);
+        if (entry) {
+          pending.delete(msg.id);
+          if (msg.error) entry.reject(new Error(`${entry.method}: ${msg.error.message || JSON.stringify(msg.error)}`));
+          else entry.resolve(msg.result);
+        }
       }
-      await Bun.sleep(25);
-    }
-    throw new Error(`Timed out waiting for ${readySelector} on ${url}`);
-  };
+    };
+    ws.onclose = () => {
+      for (const entry of pending.values()) {
+        entry.reject(new Error(`WebSocket closed during ${entry.method}`));
+      }
+      pending.clear();
+    };
 
-  const closeTab = async (targetId: string): Promise<void> => {
-    await send('Target.closeTarget', { targetId });
-  };
+    const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> =>
+      new Promise((resolve, reject) => {
+        const id = nextId++;
+        pending.set(id, { method, resolve, reject });
+        ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+      });
 
-  const killHard = async (): Promise<void> => {
-    try {
-      ws.close();
-    } catch {}
-    if (process.platform !== 'win32') {
+    const evaluate = async <T>(sessionId: string, expression: string): Promise<T> => {
+      const res = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId);
+      if (res?.exceptionDetails) {
+        throw new Error(`Evaluate error: ${res.exceptionDetails.text || JSON.stringify(res.exceptionDetails)}`);
+      }
+      return res?.result?.value as T;
+    };
+
+    const openTab = async (
+      url: string,
+      readySelector: string,
+      timeoutMs = 6_000,
+    ): Promise<{ targetId: string; sessionId: string; elapsedMs: number }> => {
+      const startAt = performance.now();
+      const { targetId } = await send('Target.createTarget', { url });
+      const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+      await send('Page.enable', {}, sessionId);
+      await send('Runtime.enable', {}, sessionId);
+      const deadline = startAt + timeoutMs;
+      while (performance.now() < deadline) {
+        const ok = await evaluate<boolean>(
+          sessionId,
+          `document.readyState === 'complete' && Boolean(document.querySelector(${JSON.stringify(readySelector)}))`,
+        ).catch(() => false);
+        if (ok) {
+          return { targetId, sessionId, elapsedMs: r2(performance.now() - startAt) };
+        }
+        await Bun.sleep(25);
+      }
+      throw new Error(`Timed out waiting for ${readySelector} on ${url}`);
+    };
+
+    const closeTab = async (targetId: string): Promise<void> => {
+      await send('Target.closeTarget', { targetId });
+    };
+
+    const killHard = async (): Promise<void> => {
       try {
-        Bun.spawnSync(['pkill', '-9', '-P', String(proc.pid)]);
+        ws.close();
       } catch {}
-    }
-    try {
-      proc.kill(9);
-    } catch {}
-    await proc.exited.catch(() => {});
-  };
+      if (process.platform !== 'win32') {
+        try {
+          Bun.spawnSync(['pkill', '-9', '-P', String(proc.pid)]);
+        } catch {}
+      }
+      try {
+        proc.kill(9);
+      } catch {}
+      await proc.exited.catch(() => {});
+    };
 
-  return {
-    bin,
-    proc,
-    send,
-    openTab,
-    evaluate,
-    closeTab,
-    killHard,
-    close: killHard,
-  };
+    return {
+      bin,
+      proc,
+      send,
+      openTab,
+      evaluate,
+      closeTab,
+      killHard,
+      close: killHard,
+    };
+  } catch (error) {
+    await chrome.close();
+    throw error;
+  }
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
