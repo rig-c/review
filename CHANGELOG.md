@@ -6,8 +6,15 @@ Every Create ask now opens on the one review screen. The header owns the inspect
 
 ### Removed
 
-* Remove the standalone `rig-review interview <create-root> --picks-dir <dir> [--port <n>]` command, with `src/interview-server.ts`, `web/interview.ts`, `web/interview.html` and `web/interview.css` (#726). The interview opens over the review screen of a joined workspace (`rig-review open … --project … --picks-dir …`); `rig-review/interview-picks@1` records are unchanged.
-* Remove the legacy stage frames `/stage-parts.html` and `/stage-interview.html` (and their `/parts.js`, `/parts.css`, `/interview.js`, `/interview.css` instance routes) (#726). The stage chips open modes of the one screen instead: 1 Setup, 2 the interview modal, 3 Animate; 4 Direction names itself not available. `/api/stage-parts` data routes, the parts verdict and the job API are unchanged.
+* `rig-review interview <create-root> --picks-dir <dir> [--port <n>]` command (#726, #731). Replacement: `rig-review open <create-root> --project <create-root> --picks-dir <dir>` opens the interview as a modal over the review screen; `rig-review/interview-picks@1` records are unchanged.
+* Stage-frame URLs `/stage-parts.html` and `/stage-interview.html`, with their `/parts.js`, `/parts.css`, `/interview.js` and `/interview.css` instance routes (#726, #731). Replacement: the stage chips open modes of the one review screen (1 Setup, 2 the interview modal, 3 Animate; 4 Direction says it is not available). `/api/stage-parts/*` data routes are unchanged.
+* Parts screen assets `/parts.js` and `/parts.css` on `rig-review parts` (#737, #745). Replacement: the parts package opens on the one review screen at `/`; `/parts.html` remains and redirects there with its query.
+* Atlas-only inputs to `rig-review parts` (a review package or `check/` folder without `parts.json`) as a way to open a workspace (#748, #761). No replacement in `parts`: they refuse with `PARTS_ATLAS_NOT_CARRIED`; open the rig review for atlas inspection. `--format json|issue` still reads saved parts and atlas verdicts.
+* Hub assets `/hub/job-hub.js` and `/hub/job-hub.css` (#712, #734). Replacement: `/hub/` serves the single entry with `/hub/main.js` and `/hub/styles.css`; the `/hub/` URL and its `#cap=` link are unchanged.
+* Owner workspace assets `/workspace.js` and `/workspace.css` (#712, #734). Replacement: `/` serves the single entry with `/main.js` and `/styles.css`; the owner workspace URL is unchanged.
+* Job window owner surface for steps that now open on the review screen (#756, #768). Replacement: the review screen's plan step, sign-off and reopen modals; job URLs and the job API are unchanged.
+
+No package `bin` entry, `exports` entry or other CLI flag was removed since 2.12.0.
 
 These removals ship as a minor release, following the 2.x release policy; Create was the only consumer of the removed paths.
 
