@@ -1,6 +1,6 @@
 import {afterEach, expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
-import {mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, symlinkSync, unlinkSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, realpathSync, rmSync, readFileSync, writeFileSync, symlinkSync, unlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import type {JobCheckpointEvidence, PlanContext, JobPublication, PublicationV3} from '../src/job-contract.ts';
@@ -649,4 +649,71 @@ test('v3 package table route follows the admitted checkpoint alias rather than t
   expect(jobHash(new Uint8Array(await correct.arrayBuffer()))).toBe(packet.packet.table.sha256);
   const wrong = await metadata(f.session, publication, 'api/checkpoint-evidence/step-one/table');
   expect(wrong.status).toBe(404); await wrong.text();
+});
+
+for (const format of ['png', 'svg', 'SvG'] as const) test(`#636: ${format} original retains metadata and evidence without requiring a PNG comparison`, async () => {
+  const f = await packageFixture(), out = join(f.root, 'out');
+  const part = readFileSync(join(out, 'rigid.png'));
+  const painting = format === 'png' ? makeSyntheticPngBytes(10, 100, 200)
+    : Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="red"/></svg>');
+  mkdirSync(join(out, 'draft/parts'), {recursive: true});
+  writeFileSync(join(out, 'draft/parts/body.png'), part);
+  const partsBytes = JSON.stringify({rig_size: [2, 2], scale_rig_per_source: 1,
+    parts: [{name: 'body', x: 0, y: 0, w: 1, h: 1}]});
+  writeFileSync(join(out, 'draft/parts.json'), partsBytes);
+  writeFileSync(join(out, 'config.json'), '{}');
+  writeFileSync(join(out, `painting.${format}`), painting);
+  const manifest = JSON.parse(readFileSync(join(out, 'review.json'), 'utf8'));
+  writeFileSync(join(out, 'review.json'), JSON.stringify({...manifest,
+    producer: {config: 'config.json', parts: 'draft', source: `painting.${format}`}}));
+  const parts = {enumeratorVersion: f.partsEnumerator.version,
+    manifest: {path: 'out/draft/parts.json' as const, sha256: jobHash(partsBytes)},
+    images: [{path: 'parts/body.png', role: 'part', sha256: jobHash(part)}]};
+  f.setPartsReferences(parts.images.map(({path, role}) => ({path, role})));
+  f.setContext({...f.getContext(), parts, partIds: ['body']});
+  const {packet} = contextWithEvidence(f), publication = await f.publish();
+  const retained = f.session.retainedSource(publication.publicationId);
+  const sourceBytes = JSON.stringify(retained.source);
+  expect(retained.source.checkpointEvidence).toEqual([packet]);
+  expect(publication.source.checkpointEvidence).toEqual([packet]);
+  const response = await metadata(f.session, publication), body = await response.json();
+  expect(response.status).toBe(200);
+  expect(body.sourceHash).toBe(publication.source.sourceHash);
+  expect(body.sourcePainting.sha256).toBe(jobHash(painting));
+  const original = await metadata(f.session, publication, 'review-painting');
+  expect(original.status).toBe(200);
+  expect(Buffer.from(await original.arrayBuffer())).toEqual(painting);
+  const view = await metadata(f.session, publication, 'api/stage-parts');
+  expect(view.status).toBe(200);
+  const inventory = await view.json();
+  expect(inventory.items.map((item: {name: string}) => item.name)).toEqual(['body']);
+  expect(inventory.painting).toEqual(format === 'png' ? {sha256: jobHash(painting), width: 2, height: 2} : null);
+  expect(inventory.differenceAvailable).toBe(false);
+  for (const member of [...packet.tiles, packet.table]) {
+    expect(retained.seals).toContainEqual({path: member.path, sha256: member.sha256});
+  }
+  for (const member of body.checkpointEvidence[0].tiles) {
+    const tile = await metadata(f.session, publication, member.url.slice(1));
+    expect(tile.status).toBe(200);
+    expect(jobHash(new Uint8Array(await tile.arrayBuffer()))).toBe(member.sha256);
+  }
+  const table = await metadata(f.session, publication, body.checkpointEvidence[0].table.url.slice(1));
+  expect(table.status).toBe(200);
+  expect(jobHash(new Uint8Array(await table.arrayBuffer()))).toBe(packet.table.sha256);
+  const retainedPainting = join(retained.snapshotRoot, `out/painting.${format}`);
+  expect(readFileSync(retainedPainting)).toEqual(painting);
+  expect(readFileSync(join(out, `painting.${format}`))).toEqual(painting);
+  expect(JSON.stringify(f.session.retainedSource(publication.publicationId).source)).toBe(sourceBytes);
+  // Omitting SVG from the optional comparison never removes its original seal.
+  const changed = Buffer.from(painting); changed[changed.length - 1] ^= 1;
+  writeFileSync(retainedPainting, changed);
+  try {
+    for (const path of ['api/review', 'api/stage-parts', 'review-painting']) {
+      const refusal = await metadata(f.session, publication, path);
+      expect(refusal.status).toBe(409);
+      await refusal.text();
+    }
+  } finally { writeFileSync(retainedPainting, painting); }
+  expect(readFileSync(retainedPainting)).toEqual(painting);
+  expect(readFileSync(join(out, `painting.${format}`))).toEqual(painting);
 });
