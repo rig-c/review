@@ -1,5 +1,5 @@
 import {bindInspectorTabs,panelMake,actionButton,type InspectorTabs,type InspectorTabRow} from './view-controls.ts';
-import {tr,onLanguageChange} from './i18n.ts';
+import {tr,onLanguageChange,setSourceText,setSourceAttribute} from './i18n.ts';
 /** Inspector block row: the sticky row at the top of each Inspector section (index.html `.block-row`) is a WAI-ARIA
  * tablist. Each `role=tab` button owns the `role=tabpanel` block its `aria-controls` names; selecting it shows that
  * block alone and hides the others with `hidden`, so one block is on screen at a time and nothing scrolls between them.
@@ -72,16 +72,16 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
 }
 
 /** Compose the real rig acts into C6; all fields, submit nodes and their listeners retain identity. */
-export function mountRigInspector(root:Document=document):BottomPanel {
+export function mountRigInspector(root:Document=document):BottomPanel&{actBar:ActBar} {
  const inspector=root.querySelector<HTMLElement>('.inspector')!,body=inspector.querySelector<HTMLElement>('.inspector-body')!,heading=inspector.querySelector<HTMLElement>('.inspector-heading')!;
  const feedback=root.getElementById('inspector-feedback')!,dialog=root.getElementById('review-dialog')!;
  const [label,status,actions]=[feedback.querySelector<HTMLLabelElement>('label[for="review-status"]')!,root.getElementById('review-status')!,dialog.querySelector<HTMLElement>('.review-dialog-actions')!];
- const act=mountActBar({id:'workspace-review-act',decision:[label,status],actions,submit:root.getElementById('save') as HTMLButtonElement,saveState:root.getElementById('review-draft-state')!}).element;
+ const actBar=mountActBar({id:'workspace-review-act',decision:[label,status],actions,submit:root.getElementById('save') as HTMLButtonElement,saveState:root.getElementById('review-draft-state')!,saveStateCopies:[root.getElementById('draft-state')].flatMap(node=>node?[{node,title:true}]:[])}),act=actBar.element;
  const title=dialog.querySelector<HTMLElement>('.review-dialog-header')!;title.querySelector('#review-dialog-close')?.remove();
  feedback.dataset.inspectorPanel='feedback';feedback.className='workspace-review-panel';feedback.hidden=true;feedback.prepend(title);feedback.append(act);body.append(feedback);dialog.remove();
  // Header modes retain inspection mode while Review is revealed; the bottom row alone owns panel selection.
  for(const mode of root.querySelectorAll<HTMLElement>('[data-mode]'))mode.removeAttribute('data-inspector');
- return mountBottomPanel({kind:'rig',heading,act,actHome:feedback,tabs:([{id:'rig',label:'Setup'},{id:'playback',label:'Animate'},{id:'feedback',label:'Write review'}]).map(tab=>({...tab,panel:root.getElementById('inspector-'+tab.id)!}))});
+ return {...mountBottomPanel({kind:'rig',heading,act,actHome:feedback,tabs:([{id:'rig',label:'Setup'},{id:'playback',label:'Animate'},{id:'feedback',label:'Write review'}]).map(tab=>({...tab,panel:root.getElementById('inspector-'+tab.id)!}))}),actBar};
 }
 
 export interface BottomPanel {
@@ -118,9 +118,14 @@ export interface ActBarOptions {
  /** Omit for an existing button whose text is owned by the screen. */
  submitLabel?:string|(()=>string);
  saveState:HTMLElement;
+ /** Other nodes that show the same save state (the C11 footer copy); `title` repeats the text as a tooltip. */
+ saveStateCopies?:{node:HTMLElement;title?:boolean}[];
  overflow?:{label:string;handler:()=>void}[];
 }
-export interface ActBar {element:HTMLElement;refresh():void;dispose():void}
+/** C10 save state: one model for every screen. `text` and the retry label are English source text the caller owns. */
+export type ActSaveKind='saved'|'unsaved'|'saving'|'failed'|'read-only';
+export interface ActSaveState {kind:ActSaveKind;text:string;retry?:{label:string;run:()=>void}}
+export interface ActBar {element:HTMLElement;refresh():void;dispose():void;setSaveState(state:ActSaveState):void;saveState():ActSaveState|null}
 /** C10: screen-owned decision, submit and save state, with an optional shared action menu. */
 export function mountActBar(options:ActBarOptions):ActBar {
  const actions=options.actions??panelMake('div',{className:'review-dialog-actions'},options.saveState,options.submit);
@@ -153,5 +158,14 @@ export function mountActBar(options:ActBarOptions):ActBar {
   for(const {button,label}of labels)if(label==='More act actions')button.setAttribute('aria-label',tr(label));else button.textContent=tr(label);
  };
  refresh();const off=options.submitLabel!==undefined||labels.length?onLanguageChange(refresh):()=>{};
- return {element,refresh,dispose(){off();for(const cleanup of cleanups)cleanup();}};
+ let current:ActSaveState|null=null,retry:HTMLButtonElement|null=null;
+ /** The one renderer: kind as data, the same text in the act node and its copies, a retry action only when failed. */
+ const setSaveState=(state:ActSaveState)=>{
+  current={...state};options.saveState.dataset.saveState=state.kind;setSourceText(options.saveState,state.text);
+  for(const copy of options.saveStateCopies??[]){copy.node.dataset.saveState=state.kind;setSourceText(copy.node,state.text);if(copy.title)setSourceAttribute(copy.node,'title',state.text);}
+  const action=state.kind==='failed'?state.retry:undefined;
+  if(action&&!retry){retry=actionButton('',()=>{const run=current?.kind==='failed'?current.retry?.run:undefined;run?.();});retry.className='act-save-retry';options.saveState.after(retry);}
+  if(retry){retry.hidden=!action;if(action)setSourceText(retry,action.label);}
+ };
+ return {element,refresh,setSaveState,saveState:()=>current&&{...current},dispose(){off();for(const cleanup of cleanups)cleanup();retry?.remove();retry=null;}};
 }

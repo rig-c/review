@@ -1,6 +1,6 @@
 import {composedRigMarkup} from './helpers/workspace-status-dom.ts';
 import {getLanguagePreference,getLinkLanguage,setLanguagePreference,setLinkLanguage,t} from '../web/i18n.ts';
-import {mountRigInspector,mountBottomPanel,mountActBar} from '../web/inspector-blocks.ts';
+import {mountRigInspector,mountBottomPanel,mountActBar,type ActSaveKind} from '../web/inspector-blocks.ts';
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {workspaceResizeRange,workspaceResizeTarget,bindWorkspaceUI} from '../web/workspace-ui.ts';
@@ -162,7 +162,7 @@ test('the real review decision and Submit nodes move to the bottom act end witho
  const composition=await readFile(new URL('../web/inspector-blocks.ts',import.meta.url),'utf8');
  expect(composition).toContain("label,status,actions");expect(composition).toContain('feedback.append(act)');expect(composition).toContain('dialog.remove()');
  const main=await mainSource();expect(main).toContain("rigInspector.row.reveal=id=>");expect(main).not.toContain('dialog.showModal()');expect(main).not.toContain("button('write-review')");
- expect(main).toContain("text('review-draft-state',value);");expect(main).toContain("text('review-message', value);");
+ expect(main).toContain("onStatus:value=>{draftStatus=value;renderDraftState();}");expect(main).toContain('rigInspector.actBar.setSaveState(');for(const id of ['review-draft-state','draft-state'])expect(main).not.toMatch(new RegExp(`text\\('${id}'|el\\('${id}'\\)\\.(title|textContent)`));expect(main).toContain("text('review-message', value);");
  for(const gone of ["button('export')","button('export-markdown')"])expect(main).not.toContain(gone);
 });
 test('the left column is a fixed header row and one scrolling body: strip, parts and Settings scroll together',async()=>{
@@ -502,6 +502,32 @@ test('#676 parts-shaped act bar derives its label, shares state nodes and operat
   expect(saved.textContent).toBe('saved');expect(submit.parentElement).toBe(actions);
   bar.dispose();button.click();expect(menu.hidden).toBe(true);issues=0;setLanguagePreference('ko');expect(submit.textContent).toBe('Request fixes (2 issues)');
  }finally{bar?.dispose();setLinkLanguage(link);setLanguagePreference(preference);hostDocument=oldFocus;if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
+});
+
+test('#695 act bar save state: one model renders saved, unsaved, saving, failed with retry and read-only into the act node and its copies',()=>{
+ const previous=Object.getOwnPropertyDescriptor(globalThis,'document'),preference=getLanguagePreference(),link=getLinkLanguage();
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Host(tag)}});
+ let bar:ReturnType<typeof mountActBar>|undefined;
+ try{
+  setLinkLanguage(null);setLanguagePreference('en');
+  const submit=new Host('button'),state=new Host('span'),footer=new Host('span'),plain=new Host('span');let retried=0;
+  bar=mountActBar({id:'save-act',submit:submit as unknown as HTMLButtonElement,saveState:state as unknown as HTMLElement,saveStateCopies:[{node:footer as unknown as HTMLElement,title:true},{node:plain as unknown as HTMLElement}]});
+  const actions=bar.element.children[0] as unknown as Host;
+  expect(bar.saveState()).toBeNull();expect(state.textContent).toBe('');expect(actions.children).toEqual([state,submit]);
+  const shown=(kind:ActSaveKind,text:string)=>{for(const node of [state,footer,plain]){expect(node.dataset.saveState).toBe(kind);expect(node.textContent).toBe(text);}expect(footer.getAttribute('title')).toBe(text);expect(plain.getAttribute('title')).toBeNull();expect(bar!.saveState()?.kind).toBe(kind);};
+  bar.setSaveState({kind:'unsaved',text:'Unsaved changes.'});shown('unsaved','Unsaved changes.');expect(actions.children).toEqual([state,submit]);
+  bar.setSaveState({kind:'saving',text:'Restoring source-bound view · inspection controls temporarily paused.'});shown('saving','Restoring source-bound view · inspection controls temporarily paused.');
+  bar.setSaveState({kind:'failed',text:'Save failed.'});shown('failed','Save failed.');expect(actions.children).toEqual([state,submit]);
+  bar.setSaveState({kind:'failed',text:'Save failed.',retry:{label:'Submit review',run:()=>retried++}});shown('failed','Save failed.');
+  const retry=actions.children[1]!;expect(actions.children).toEqual([state,retry,submit]);expect(retry.hidden).toBe(false);expect(retry.textContent).toBe('Submit review');
+  retry.click();expect(retried).toBe(1);
+  bar.setSaveState({kind:'saved',text:'Local draft discarded · current submitted review retained.'});shown('saved','Local draft discarded · current submitted review retained.');expect(retry.hidden).toBe(true);
+  retry.click();expect(retried).toBe(1);
+  bar.setSaveState({kind:'read-only',text:'Read-only view: reopen with rig-review open to edit.',retry:{label:'Submit review',run:()=>retried++}});shown('read-only','Read-only view: reopen with rig-review open to edit.');expect(retry.hidden).toBe(true);
+  bar.setSaveState({kind:'failed',text:'Save failed.',retry:{label:'Submit review',run:()=>retried+=10}});expect(retry.hidden).toBe(false);expect(actions.children.filter(node=>node===retry).length).toBe(1);retry.click();expect(retried).toBe(11);
+  const snapshot=bar.saveState()!;snapshot.text='changed';expect(bar.saveState()?.text).toBe('Save failed.');
+  bar.dispose();expect(actions.children).toEqual([state,submit]);
+ }finally{bar?.dispose();setLinkLanguage(link);setLanguagePreference(preference);if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });
 
 test('#678 caller-owned parts regions without a parts explorer or right host share separators, collapse and drawers',()=>{
