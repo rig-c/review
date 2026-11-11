@@ -91,6 +91,10 @@ for (const kind of ['hub', 'owner'] as const) {
       expect(h.root.children.map((node: any) => [node.tagName, node.className])).toEqual([
         ['HEADER', kind === 'hub' ? 'hub-header' : 'owner-header'], ['NAV', kind === 'hub' ? 'hub-list' : 'owner-list'], ['MAIN', kind === 'hub' ? 'hub-stage' : 'owner-stage'],
       ]);
+      const status = h.root.children[0].children[1];
+      expect(status.className).toBe(kind === 'hub' ? 'hub-status' : 'owner-status');
+      expect(status.getAttribute('role')).toBe('status');
+      expect(status.getAttribute('aria-live')).toBe('polite');
       expect(h.location.hash).toBe(''); expect(h.frames).toHaveLength(1);
       expect(h.requests[0]!.init?.headers).toEqual({'X-Review-Capability': capability});
       const frame = h.frames[0], first = h.messages[0]!;
@@ -139,6 +143,38 @@ for (const kind of ['hub', 'owner'] as const) {
     } finally {h.close();}
   });
 }
+
+test('hub keeps main row order, full source hashes, pending state and closed selection without grouping', async () => {
+  const h = await host('hub'), hash = 'a1b2c3d4' + 'e'.repeat(56);
+  h.jobs[0] = {jobId: 'a', generation: 3, status: 'closed', pendingCount: 0,
+    publication: {publicationId: 'pub-a', instanceKey: '1'.repeat(64), sourceHash: hash, label: 'Existing publication'}} as any;
+  h.jobs[1]!.pendingCount = 2;
+  try {
+    await h.mount();
+    const list = h.root.children[1];
+    expect(list.children.map((node: any) => node.tagName)).toEqual(['BUTTON', 'BUTTON']);
+    expect(list.children[0].children.map((node: any) => node.textContent)).toEqual(['Existing publication', t('job.hubClosed'), hash]);
+    expect(list.children[1].children.map((node: any) => node.textContent)).toEqual(['b', t('job.hubPending', [2]), '']);
+    expect(list.children[0].getAttribute('aria-pressed')).toBe('true');
+    expect(h.frames).toHaveLength(0);
+    setLanguagePreference('ko');
+    expect(list.children[0].children.map((node: any) => node.textContent)).toEqual(['Existing publication', t('job.hubClosed'), hash]);
+    expect(list.children[1].children[1].textContent).toBe(t('job.hubPending', [2]));
+  } finally {h.close();}
+});
+
+test('owner keeps the original title, inspection state and animation rather than substituting source metadata', async () => {
+  const h = await host('owner');
+  h.targets[0]!.title = 'Existing target'; h.targets[0]!.animation = 'idle' as never;
+  h.targets[0]!.viewOnly = true; h.targets[0]!.mode = 'compare';
+  try {
+    await h.mount(); await h.waitForFrame();
+    const list = h.root.children[1];
+    expect(list.children[0].children.map((node: any) => node.textContent)).toEqual(['Existing target', 'Inspection only', 'idle']);
+    setLanguagePreference('ko');
+    expect(list.children[0].children.map((node: any) => node.textContent)).toEqual(['Existing target', t('Inspection only'), 'idle']);
+  } finally {h.close();}
+});
 
 test('owner mount preserves malformed stored capability transmission rather than silently adopting hub validation', async () => {
   const h = await host('owner', 'historical malformed value');
