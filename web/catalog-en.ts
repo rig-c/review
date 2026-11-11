@@ -3526,6 +3526,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.partsApprove": "Approve parts and sign off",
   "job.partsRequestFixes": "Request fixes ({0} issues)",
   "job.partsRetrySignoff": "Retry stage signoff",
+  "job.review.approved": "Approved · Next step",
   "job.parts.reviewing": "Reviewing · {0} issues",
   "job.parts.sending": "Sending",
   "job.parts.sent": "Changes requested · Waiting for a new draft",

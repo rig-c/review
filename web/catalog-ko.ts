@@ -3526,6 +3526,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.partsApprove": "파츠 승인 및 단계 서명",
   "job.partsRequestFixes": "수정 요청 보내기 (이슈 {0})",
   "job.partsRetrySignoff": "단계 서명 다시 보내기",
+  "job.review.approved": "승인됨 · 다음 단계",
   "job.parts.reviewing": "검수 중 · 이슈 {0}",
   "job.parts.sending": "보내는 중",
   "job.parts.sent": "수정 요청 보냄 · 새 드래프트 대기 중",

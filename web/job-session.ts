@@ -2541,14 +2541,13 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     // #709: a rig publication opens the one review screen; the job window keeps every other subject.
     const rigScreen = createJobRigScreen({host, pageId, access, translate: t, refusal: jobWindowRefusal,
         window: {state: () => window.state(), submit: input => window.submit(input)},
-        routes: display => jobPublicationRoutes(display, location.origin), load: () => import('./main.ts')});
+        routes: display => jobPublicationRoutes(display, location.origin), load: async () => (await import('./main.ts')).mountRigScreen()});
     const window = createJobWindow({ jobId: access.jobId, pageId, transport,
         previousDisplayed, initialRetainedDrafts,
         adapter: {
             async prepare(display, signal): Promise<PreparedWindow | JobRigScreenPrepared> {
-                // The rig composition cannot be unmounted in place: another publication reopens the page on its route.
-                if (rigScreen.mounted()) { location.reload(); return new Promise<never>(() => {}); }
                 const rig = await rigScreen.prepare(display, signal);
+                if (!rig && rigScreen.mounted()) { location.reload(); return new Promise<never>(() => {}); }
                 if (rig && current) { location.reload(); return new Promise<never>(() => {}); }
                 if (rig) return rig;
                 const inspection = await prepareJobInspection(display, signal);
