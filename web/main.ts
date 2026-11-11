@@ -1308,7 +1308,8 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty',unavailable);
  for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')){control.disabled=true;setSourceAttribute(control,'title',unavailable);}
  if(interview){
-  const label=()=>{setSourceText(button('save'),t('interview.title'));recordDialog?.setAttribute('aria-label',t('interview.title'));};
+  button('save').disabled=true;setSourceAttribute(button('save'),'title',unavailable);
+  const label=()=>{setSourceText(rigAsk,t('interview.title'));recordDialog?.setAttribute('aria-label',t('interview.title'));};
   label();viewDisposers.push(onLanguageChange(label));
   viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,t('interview.title'),true)));
   text('provenance-rig',unavailable);text('provenance-motion',unavailable);text('source-files','project.json');
@@ -1372,7 +1373,7 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
   setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);comments?.refresh();partsSubject?.refreshComments();
   button('save').disabled=!forms.some(form=>!form.querySelector('fieldset')?.disabled);button('save').onclick=()=>rigAsk.click();
  }
- if(standalone){rigAsk.hidden=false;setSourceText(rigAsk,t('interview.title'));button('save').disabled=!forms.length;button('save').onclick=()=>rigAsk.click();}
+ if(standalone){rigAsk.hidden=false;setSourceText(rigAsk,t('interview.title'));}
  rigAsk.disabled=!forms.length;
  if((standalone?added.length>0:added.some(form=>form.classList.contains('interview-answer')))&&!recordDialog.open)rigAsk.click();
 }
