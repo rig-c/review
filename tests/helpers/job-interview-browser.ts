@@ -505,6 +505,7 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
     const { launchCdpSession } = await import('../parts-explorer-browser.ts');
     const { inspectPartsViewportPng } = await import('./job-window-paint.ts');
     const { PNG } = await import('pngjs');
+    const { jobPublicationRoutes } = await import('../../web/job-session.ts');
     await mkdir(output, { recursive: true });
     const scratch = await mkdtemp(join(tmpdir(), 'review605-browser-'));
     let control: Send | undefined;
@@ -516,7 +517,20 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                 browserErrors.push(event.params);
         } });
     const observations: Record<string, unknown> = { provenance: 'SYNTHETIC_REVIEW_SCREEN_A, no Create consumer receipt' };
-    const stops: (() => Promise<void>)[] = [];
+    const managedHosts: {
+        mode: string;
+        host: any;
+        schema: string;
+        stop: () => Promise<void>;
+    }[] = [];
+    const semanticClosures: unknown[] = [];
+    const cleanupErrors: string[] = [];
+    let failure: unknown;
+    function recordCleanupError(stage: string, error: unknown) {
+        cleanupErrors.push(stage + ': ' + String(error));
+        if (failure === undefined)
+            failure = error;
+    }
     async function wait(expression: string) {
         const deadline = Date.now() + 20000;
         while (Date.now() < deadline) {
@@ -532,13 +546,26 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
         assert.equal(result.ok, true, JSON.stringify(result));
         return result.value;
     }
+    async function closeManaged(entry: typeof managedHosts[number]) {
+        const before = entry.host.session.status();
+        let result: unknown;
+        if (before.status !== 'closed') {
+            result = await call(entry.host, entry.schema, { verb: 'close', expectedGeneration: before.generation,
+                idempotencyKey: randomUUID(), reason: 'Synthetic Screen A browser cleanup' });
+        }
+        const after = entry.host.session.status();
+        assert.equal(after.status, 'closed');
+        assert.equal(after.pending.length, 0);
+        semanticClosures.push({ mode: entry.mode, jobId: entry.host.session.jobId, result, status: after.status,
+            generation: after.generation, pendingCount: after.pending.length });
+    }
     try {
         for (const mode of ['record-images', 'record-unavailable', 'package'] as const) {
             let host: any, publication: any, question: any, schema: string, root: string, fetchCapability = '';
             if (mode === 'package') {
                 const fixture = await scriptedJobWindowFixture();
-                stops.push(() => fixture.close());
                 host = fixture.host;
+                managedHosts.push({ mode, host, schema: 'rig-review/job-api@2', stop: () => fixture.close() });
                 root = fixture.input.root;
                 schema = 'rig-review/job-api@2';
                 // Existing package fixture already has its retained editable question and reader.
@@ -561,18 +588,41 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                 const context = { ...input.context, files };
                 const { reader } = createSyntheticRecordReader({ onOption: () => structuredClone(context) });
                 host = await startJobHost({ root, stateDir: join(scratch, mode + '-state'), fingerprint: 'a'.repeat(64), reviewer: { id: 'synthetic-owner', role: 'owner' }, publicationMode: 'record-and-package', readRecordPublished: reader, recordReaderId: JOB_RECORD_READER_ID, bindingId: 'synthetic-screen-a/1', installWriterBinding: binding => { fetchCapability = binding.fetchCapability; } });
-                stops.push(async () => host.stop());
+                managedHosts.push({ mode, host, schema: 'rig-review/job-api@3', stop: async () => host.stop() });
                 schema = 'rig-review/job-api@3';
                 question = { set, ref: optionSetFile };
                 publication = await call(host, schema, { verb: 'publish', expectedGeneration: 0, idempotencyKey: randomUUID(), freeze: { kind: 'producer-held', holdId: 'synthetic', record }, result: input.result });
             }
+            const routes = jobPublicationRoutes(host.session.displayPublication(publication.publicationId), host.origin);
+            const interviewResponse = await fetch(routes.api('interview'));
+            assert.equal(interviewResponse.ok, true);
+            const interviewMetadata = await interviewResponse.json();
+            const admitted = interviewMetadata.questions.find((item: any) => item.ref.sha256 === question.ref.sha256);
+            const retained = host.session.retainedSourceV3(publication.publicationId).questions
+                .find((item: any) => item.ref.sha256 === question.ref.sha256);
+            assert.ok(admitted && retained, 'normal metadata maps to the retained question');
+            assert.equal(admitted.images.length, retained.images.length);
+            const imageMapping = await Promise.all(admitted.images.map(async (image: any, index: number) => {
+                const source = retained.images[index];
+                assert.equal(image.name, source.name);
+                const normalUrl = routes.instance(image.url);
+                const response = await fetch(normalUrl);
+                assert.equal(response.ok, true);
+                const raw = Buffer.from(await response.arrayBuffer());
+                const sourceBytes = await readFile(join(root, source.ref.path));
+                assert.equal(digest(sourceBytes), source.ref.sha256, 'immutable source image seal');
+                assert.equal(digest(raw), source.ref.sha256, 'normal image route bytes match source seal');
+                const png = PNG.sync.read(raw);
+                return { index, name: image.name, normalUrl, source: source.ref, rawSha256: digest(raw),
+                    decodedWidth: png.width, decodedHeight: png.height };
+            }));
             const before = await jobInputHashes(root);
             const asked = await call(host, schema, { verb: 'ask', expectedGeneration: host.session.status().generation, idempotencyKey: randomUUID(), publicationId: publication.publicationId, subject: { kind: 'interview-picks', questionId: question.set.question, setId: question.set.id } });
             const owner = new URL(host.ownerUrl);
             owner.searchParams.set('lang', language);
             const selector = 'form[data-job-ask="' + asked.askId + '"]';
             const phases: any[] = [];
-            observations[mode] = { sourceHash: publication.source.sourceHash, publicationId: publication.publicationId, askId: asked.askId, phases };
+            observations[mode] = { sourceHash: publication.source.sourceHash, publicationId: publication.publicationId, askId: asked.askId, imageMapping, phases };
             for (const sample of [{ width: 1440, height: 900, phase: 'initial' }, { width: 1024, height: 768, phase: 'resize' }, { width: 1024, height: 768, phase: 'initial' }, { width: 1440, height: 900, phase: 'resize' }]) {
                 await page.setViewport(sample.width, sample.height);
                 if (sample.phase === 'initial')
@@ -582,6 +632,7 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                 const geometry = await page.evaluate<any>(`(()=>{const form=document.querySelector(${JSON.stringify(selector)}),workspace=document.querySelector('.job-inspection');const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};return {forms:rect(form.closest('[data-job-forms]')),workspace:rect(workspace),reason:[...form.querySelectorAll('.interview-option b')].map(n=>n.textContent),tabs:[...workspace.querySelectorAll('.interview-image-tabs button')].map(n=>n.textContent),radios:[...form.querySelectorAll('input[type=radio]')].map(n=>({name:n.name,value:n.value,checked:n.checked})),source:form.querySelector('.job-source').textContent};})()`);
                 assert.ok(geometry.source.includes(publication.source.sourceHash));
                 assert.ok(geometry.reason.length > 0);
+                assert.deepEqual(geometry.tabs, imageMapping.map((image: any) => image.name));
                 const phase: any = { ...sample, sourceHash: publication.source.sourceHash, geometry, images: [] };
                 phases.push(phase);
                 if (mode === 'record-unavailable') {
@@ -592,9 +643,23 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                     await page.evaluate(`document.querySelectorAll('.interview-image-tabs button')[${index}].click()`);
                     await wait(`document.querySelector('.interview-image-preview img')?.complete && document.querySelector('.interview-image-preview img').naturalWidth>0`);
                     const image = await page.evaluate<any>(`(()=>{const art=document.querySelector('.interview-images'),img=art.querySelector('img');art.scrollIntoView({block:'center'});const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};return {src:img.src,naturalWidth:img.naturalWidth,naturalHeight:img.naturalHeight,image:rect(img),preview:rect(img.parentElement),selected:art.querySelectorAll('button')[${index}].getAttribute('aria-pressed')};})()`);
-                    const response = await fetch(image.src);
-                    const raw = Buffer.from(await response.arrayBuffer());
+                    // The existing CDP evaluate seam reads browser-owned object URLs in their owning context.
+                    const blobBytes = await page.evaluate<number[]>(`(async()=>{
+                        const image=document.querySelector('.interview-image-preview img');
+                        const response=await fetch(image.src);
+                        if(!response.ok)throw new Error('SCREEN_A_IMAGE_BYTES_UNAVAILABLE');
+                        return Array.from(new Uint8Array(await response.arrayBuffer()));
+                    })()`);
+                    const raw = Buffer.from(blobBytes);
+                    const mapping = imageMapping[index];
+                    assert.ok(mapping);
+                    assert.equal(digest(raw), mapping.source.sha256, 'rendered blob matches declared source image');
+                    assert.equal(digest(raw), mapping.rawSha256, 'rendered blob matches declared normal image route');
                     const png = PNG.sync.read(raw);
+                    assert.equal(png.width, mapping.decodedWidth);
+                    assert.equal(png.height, mapping.decodedHeight);
+                    assert.equal(image.naturalWidth, png.width, 'natural width matches exact source PNG');
+                    assert.equal(image.naturalHeight, png.height, 'natural height matches exact source PNG');
                     const colors = new Map<string, number>();
                     for (let at = 0; at < png.data.length; at += 4) {
                         if (png.data[at + 3] !== 255)
@@ -620,7 +685,8 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                     assert.ok(pixels.inBounds && pixels.leftROI.backgroundPixels > 0);
                     assert.equal(image.selected, 'true');
                     assert.ok(image.image.left >= image.preview.left - 1 && image.image.right <= image.preview.right + 1 && image.image.top >= image.preview.top - 1 && image.image.bottom <= image.preview.bottom + 1);
-                    phase.images.push({ ...image, rawSha256: digest(raw), matchedPixels: pixels.leftROI.backgroundPixels });
+                    phase.images.push({ ...image, mapping, rawSha256: digest(raw), decodedWidth: png.width, decodedHeight: png.height,
+                        matchedPixels: pixels.leftROI.backgroundPixels, matchedROI: pixels.leftROI, expectedRgba: color[0].split(',').map(Number) });
                     await writeFile(join(output, mode + '-' + sample.width + '-' + sample.phase + '-image' + index + '.png'), shot);
                 }
                 await writeFile(join(output, mode + '-' + sample.width + '-' + sample.phase + '-layout.png'), await page.screenshot());
@@ -634,8 +700,27 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
             await page.evaluate(`document.querySelector(${JSON.stringify(selector + ' input[type=radio]')}).focus()`);
             await key('ArrowDown', 'ArrowDown', 40);
             assert.equal(await page.evaluate(`document.querySelectorAll(${JSON.stringify(selector + ' input[type=radio]:checked')}).length`), 1);
+            const focusBefore = await page.evaluate<any>(`(()=>{
+                const form=document.querySelector(${JSON.stringify(selector)});
+                const describe=node=>node?{tag:node.tagName,name:node.name||'',type:node.type||'',value:node.value||''}:null;
+                const controls=[...form.querySelectorAll('input,select,textarea,button,[tabindex]')]
+                    .filter(node=>node.tabIndex>=0&&!node.matches(':disabled')&&node.getClientRects().length>0&&getComputedStyle(node).visibility!=='hidden');
+                const stops=controls.filter(node=>{
+                    if(node.type!=='radio')return true;
+                    const group=controls.filter(item=>item.type==='radio'&&item.name===node.name);
+                    return node===(group.find(item=>item.checked)||group[0]);
+                });
+                const selected=form.querySelector('input[type=radio]:checked');
+                const index=stops.indexOf(selected);
+                if(index<0||document.activeElement!==selected||!stops[index+1])throw new Error('SCREEN_A_FOCUS_BEFORE_INVALID');
+                return {before:describe(selected),expected:describe(stops[index+1]),tabStops:stops.map(describe)};
+            })()`);
             await key('Tab', 'Tab', 9);
-            assert.ok(await page.evaluate(`document.activeElement!==document.body`));
+            const focusAfter = await page.evaluate<any>(`(()=>{const node=document.activeElement;
+                return {tag:node.tagName,name:node.name||'',type:node.type||'',value:node.value||''};})()`);
+            Object.assign(observations[mode] as object, { focusProgression: { ...focusBefore, after: focusAfter } });
+            assert.notDeepEqual(focusAfter, focusBefore.before, 'Tab leaves the selected radio');
+            assert.deepEqual(focusAfter, focusBefore.expected, 'Tab reaches the next native focusable control');
             if (mode === 'record-images') {
                 await page.evaluate(`document.querySelector('.interview-images').focus()`);
                 await key('1', 'Digit1', 49);
@@ -672,24 +757,66 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
             assert.deepEqual(fetched.value.value, expected);
             assert.deepEqual(await jobInputHashes(root), before);
             Object.assign(observations[mode] as object, { actId: act.actId, expected, sourceFiles: before });
-            await call(host, schema, { verb: 'close', expectedGeneration: host.session.status().generation, idempotencyKey: randomUUID(), reason: 'Synthetic Screen A browser complete' });
+            await closeManaged(managedHosts[managedHosts.length - 1]!);
         }
         observations.browserErrors = browserErrors;
         assert.deepEqual(browserErrors, []);
+    }
+    catch (error) {
+        failure = error;
+        observations.failure = String(error);
+        try {
+            await writeFile(join(output, 'failure.png'), await page.screenshot());
+        }
+        catch (captureError) {
+            recordCleanupError('failure screenshot', captureError);
+        }
+    }
+    finally {
+        for (const entry of managedHosts) {
+            if (semanticClosures.some((item: any) => item.jobId === entry.host.session.jobId))
+                continue;
+            try {
+                await closeManaged(entry);
+            }
+            catch (error) {
+                recordCleanupError('semantic close ' + entry.mode, error);
+            }
+        }
+        try {
+            await page.close();
+        }
+        catch (error) {
+            recordCleanupError('browser close', error);
+        }
+        for (const entry of [...managedHosts].reverse()) {
+            try {
+                await entry.stop();
+            }
+            catch (error) {
+                recordCleanupError('host stop ' + entry.mode, error);
+            }
+        }
+        try {
+            await rm(scratch, { recursive: true, force: true });
+        }
+        catch (error) {
+            recordCleanupError('scratch removal', error);
+        }
+    }
+    observations.semanticClosures = semanticClosures;
+    observations.cleanupErrors = cleanupErrors;
+    if (failure !== undefined)
+        observations.failure = String(failure);
+    try {
         await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2) + '\n');
     }
     catch (error) {
-        observations.failure = String(error);
-        await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2) + '\n');
-        await writeFile(join(output, 'failure.png'), await page.screenshot());
-        throw error;
+        recordCleanupError('observations write', error);
+        console.error('SCREEN_A_EVIDENCE_WRITE_FAILED', String(error));
     }
-    finally {
-        await page.close();
-        for (const stop of stops.reverse())
-            await stop();
-        await rm(scratch, { recursive: true, force: true });
-    }
+    if (failure !== undefined)
+        throw failure;
 }
 if (import.meta.main) {
     const value = (key: string) => { const at = Bun.argv.indexOf(key); return at < 0 ? undefined : Bun.argv[at + 1]; };

@@ -2872,8 +2872,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         }
     });
 
-    test('#605 literal old SELECT draft restores radios and resubmits exact values and verbatim words in EN/KO', async () => {
-        const question = {ref:{path:'options.json',sha256:'a'.repeat(64)},editable:true,hasParts:false,
+    const screenAQuestion = {ref:{path:'options.json',sha256:'a'.repeat(64)},editable:true,hasParts:false,
             images:[{name:'first painting',url:'first.png'},{name:'second painting',url:'second.png'}],
             set:{id:'legacy-set',question:'bones',stage:'rigging-interview',drafted_by:'original agent',drafted_at:'2026-11-01T00:00:00Z',
                 assembly:{rule:'concat' as const},asks:['shape','detail'].map(id=>({id,prompt:id,options:[
@@ -2882,6 +2881,9 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                     {id:'other',kind:'other' as const,label:'Other',effect:'Custom',recommended:false},
                     {id:'auto',kind:'auto' as const,label:'Auto',effect:'Agent',recommended:false},
                 ]})),constraints:[{asks:['shape','detail'],allowed:[['recommended','recommended']]}]}};
+
+    test('#605 literal old SELECT draft restores radios and resubmits exact values and verbatim words in EN/KO', async () => {
+        const question = structuredClone(screenAQuestion);
         const store = new Map<string,string>();
         const s = await mountRuntimeSession({localStore:store,interview:{questions:[question]} as any});
         const preference=i18nModule.getLanguagePreference();
@@ -2949,6 +2951,47 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(freshGroups[1]!.querySelectorAll('input')[3]!.disabled).toBe(false);
         } finally {s.cleanup();i18nModule.setLanguagePreference(preference);}
     });
+
+    for (const scenario of [
+        {name:'all recommended',ids:['recommended','recommended'],other:''},
+        {name:'one Other with exact text',ids:['other','recommended'],other:'  한글 <owner> e\u0301\nKeep spaces  '},
+        {name:'one auto',ids:['auto','recommended'],other:''},
+    ]) {
+        test('#605 original SELECT/radio value parity — '+scenario.name, async () => {
+            const question=structuredClone(screenAQuestion);
+            const words='  exact note 한글\nEND ';
+            // Independent accepted462 SELECT read oracle, web/job-session.ts:1937–1939.
+            const answers=question.set.asks.map((item,index)=>({item,pick:{value:scenario.ids[index]!},other:{value:scenario.other}}));
+            const originalSelectValue={questionId:question.set.question,
+                selections:answers.map(({item,pick,other})=>({itemId:item.id,optionId:pick.value,
+                    otherText:item.options.find(option=>option.id===pick.value)?.kind==='other'?other.value:null})),note:words};
+            const controls=answers.flatMap(({item,pick,other})=>[
+                {name:'choice.'+item.id,value:pick.value},{name:'other.'+item.id,value:other.value},
+            ]).concat([{name:'note',value:words}]);
+            const store=new Map<string,string>();
+            const s=await mountRuntimeSession({localStore:store,interview:{questions:[question]} as any});
+            try {
+                const display=await s.publishRig(1,{optionSet:{id:question.set.id,sha256:question.ref.sha256}});
+                const ask:PendingAskV3={askId:'select-parity',publicationId:display.publication.publicationId,
+                    source:display.publication.source,subject:{kind:'interview-picks',questionId:question.set.question,setId:question.set.id},status:'pending'};
+                const key='rig-review-job-draft/1:'+s.fixture.jobId+':'+display.publication.publicationId+':'+display.publication.source.sourceHash;
+                store.set(key,JSON.stringify({publicationId:display.publication.publicationId,sourceHash:display.publication.source.sourceHash,
+                    source:display.publication.source,forms:[{askId:ask.askId,value:originalSelectValue,controls}]}));
+                s.fixture.pending(ask,2);s.window.event(s.fixture.events.at(-1)!);
+                const form=s.workspace.querySelector('form[data-job-ask="select-parity"]')!;
+                const groups=form.querySelectorAll('.interview-ask');
+                expect(groups.map(group=>group.querySelectorAll('input').filter(radio=>radio.checked).map(radio=>radio.value))).toEqual(scenario.ids.map(id=>[id]));
+                expect(form.querySelector('textarea[name="note"]')!.value).toBe(words);
+                const act=fixtureAct('interview-picks',words);
+                s.fixture.returnAct({...act,source:display.publication.source,value:originalSelectValue} as any);
+                await form.onsubmit?.({preventDefault(){}});
+                expect(s.outgoingSubmits).toHaveLength(1);
+                expect(s.outgoingSubmits[0]!.body.kind).toBe('interview-picks');
+                expect(s.outgoingSubmits[0]!.body.value).toEqual(originalSelectValue);
+                expect(JSON.stringify(s.outgoingSubmits[0]!.body.value)).toBe(JSON.stringify(originalSelectValue));
+            } finally {s.cleanup();}
+        });
+    }
 
     test('#605 record option-set omits model controls, names unavailable context honestly, and refuses stale select cache', async () => {
         const root=await mkdtemp(join(tmpdir(),'review605-option-runtime-'));
