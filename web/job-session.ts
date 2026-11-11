@@ -21,14 +21,15 @@ import type {
 } from '../src/job-contract.ts';
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
-import {t} from './i18n.ts';
+import {t,onLanguageChange} from './i18n.ts';
+import type {InstanceAccess} from './instance-access.ts';
 import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjection} from '../src/job-contract.ts';
 import {JOB_HUB_READY, jobHubMessageMatches, type JobHubBinding} from './job-hub.ts';
 import {advancePlayback} from './playback-clock.ts';
 import {createJobRigScreen, isJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts';
 import type {JobRigPresentation} from './viewport-capture.ts';
 import {labelledControl,createViewControls,inspectionViewSwitch} from './view-controls.ts';
-import {interviewAskGroup,interviewImageView,interviewQuestionList,jobInterviewValue} from './interview-panel.ts';
+import {createInterviewForm,interviewPicksRecord,interviewRecords,interviewErrors,type InterviewDisplayQuestion} from './interview-panel.ts';
 import {JOB_COMMENTS_ACT_SCHEMA, JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 
@@ -1385,6 +1386,7 @@ export interface JobFormDependencies {
         let read: () => UISubmissionV3['value'];
         let submitKey = 'Submit review';
         let disposeInterview:(()=>void)|undefined;
+        let interviewForm:ReturnType<typeof createInterviewForm>|undefined;
         if (subject.kind === 'interview-picks') {
             const question = prepared.interview?.questions.find(item => item.set.id === subject.setId && item.set.question === subject.questionId);
             if (!question || !question.editable) throw new Error('JOB_ASK_INVALID');
@@ -1409,37 +1411,9 @@ export interface JobFormDependencies {
                 legacyNotice.dataset.record = legacyDiagnostic.record;
                 fields.prepend(legacyNotice);
             }
-            const heading = node('h3');
-            heading.textContent = question.set.question;
-            fields.prepend(heading);
-            form.classList.add('interview-answer','interview-grid');form.dataset.interviewAnswered=String(ask.status==='answered');
-            fields.classList.add('interview-answer-fields');fields.id='interview-answer-'+ask.askId;
-            const answers = question.set.asks.map(item => {
-                const answer=interviewAskGroup(item,{text:node,name:'choice.'+item.id,otherName:'other.'+item.id});
-                fields.append(answer.group);
-                return {item,answer};
-            });
-            const context=node('div');context.id=fields.id+'-source';context.className='interview-image-context';context.append(source);
-            const images=question.images.map(image=>{
-                const visual=prepared.interviewImages.get(image.url);
-                if(!visual)throw new Error('JOB_VISUAL_UNAVAILABLE');
-                return {name:image.name,src:visual.src};
-            });
-            const art=node('aside');art.className='interview-art';form.prepend(art);
-            let activeView:ReturnType<typeof interviewImageView>|undefined;
-            const showImage=(index:number)=>{
-                activeView?.dispose();activeView?.element.remove();
-                activeView=interviewImageView(images,index,showImage,context);art.append(activeView.element);
-            };
-            if(images.length)showImage(0);else art.append(context);
-            let list:HTMLElement|undefined;
-            const refreshQuestions=()=>{
-                const next=interviewQuestionList([{label:question.set.question+' · '+question.set.id,answered:form.dataset.interviewAnswered==='true'}],0,()=>{});
-                if(list)list.replaceWith(next);else form.prepend(next);list=next;
-            };
-            form.addEventListener('input',refreshQuestions);form.addEventListener('change',refreshQuestions);form.addEventListener('job-form-language',refreshQuestions);refreshQuestions();
-            disposeInterview=()=>{activeView?.dispose();form.removeEventListener('input',refreshQuestions);form.removeEventListener('change',refreshQuestions);form.removeEventListener('job-form-language',refreshQuestions);};
-            read=()=>jobInterviewValue(subject.questionId,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),'');
+            interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,
+                images:question.images.map(image=>{const visual=prepared.interviewImages.get(image.url);if(!visual)throw new Error('JOB_VISUAL_UNAVAILABLE');return {name:image.name,src:visual.src};}),answered:ask.status==='answered'});
+            disposeInterview=interviewForm.dispose;read=interviewForm.read;
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {
@@ -1568,10 +1542,10 @@ export interface JobFormDependencies {
         else {
             throw new Error('JOB_ACT_KIND_DISABLED');
         }
-        const submit = node('button', submitKey);
+        const submit = interviewForm?.submit??node('button', submitKey);
         submit.type = 'submit';
         fields.append(submit);
-        const status = node('p');
+        const status = interviewForm?.status??node('p');
         status.setAttribute('role', 'status');
         form.append(status);
         const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
@@ -1654,6 +1628,49 @@ prepareJobForms.formFor = formFor;
 prepareJobForms.helpers = createJobFormHelpers;
 
 /** The original source-bound draft storage, shared by the legacy and single-screen hosts. */
+/** Joined inspection uses real API rows and the same answer builder; no job identities or acts are synthesized. */
+export async function joinedInterviewForms(access:InstanceAccess,present:(forms:readonly HTMLElement[])=>void):Promise<()=>void> {
+    const request=async(path:string,body?:unknown)=>{
+        const response=await fetch(access.route(path),body?{method:'POST',headers:access.headers({'Content-Type':'application/json'}),body:JSON.stringify(body)}:undefined);
+        const value=await response.json();if(!response.ok)throw new Error(value.error);return value;
+    };
+    const data=await request('/api/interview') as {questions:InterviewDisplayQuestion[];diagnostics?:import('../src/interview-project.ts').InterviewDiagnostic[];historical?:import('../src/interview-project.ts').HistoricalInterview[]};
+    const forms=new Map<number,ReturnType<typeof createInterviewForm>>();
+    let selected=Math.max(0,data.questions.findIndex(question=>question.editable&&!question.saved)),disposed=false;
+    const node:JobFormNode=(tag,key)=>{const item=document.createElement(tag);if(key){item.dataset.jobText=key;item.textContent=t(key);}return item;};
+    const show=(index:number)=>{
+        if(disposed)return;selected=index;
+        const question=data.questions[index];
+        if(!question){const empty=node('section');empty.append(node('p','interview.empty'),interviewRecords(data.diagnostics,data.historical));present([empty]);return;}
+        let entry=forms.get(index);
+        if(!entry){
+            entry=createInterviewForm({question,id:'joined-interview-'+question.ref.sha256,node,
+                images:question.images.map(image=>({name:image.name,src:access.route(image.url)})),
+                questions:()=>data.questions.map((item,i)=>({label:item.set.question+' · '+item.set.id+(item.editable?'':' · '+t('interview.history')),answered:forms.get(i)?.form.dataset.interviewAnswered==='true'||Boolean(item.saved||item.answer)})),
+                selected:index,onSelect:show,diagnostics:data.diagnostics,historical:data.historical});
+            const answer=entry;
+            entry.fieldset.disabled=!question.editable||!access.capability;
+            entry.form.onsubmit=async event=>{
+                event.preventDefault();if(!question.editable||!access.capability||entry!.fieldset.disabled||!entry!.form.reportValidity())return;
+                answer.fieldset.disabled=true;
+                try{
+                    const value=answer.read(),picks=value.selections.map(selection=>({ask:selection.itemId,option_id:selection.optionId,...(selection.otherText!==null?{other_text:selection.otherText}:{})}));
+                    const record=interviewPicksRecord(question.ref,picks,answer.retainedNote,new Date().toISOString());
+                    await request('/api/interview/picks',record);
+                    question.saved=record;answer.form.dataset.interviewAnswered='true';answer.status.dataset.jobText='interview.saved';answer.status.textContent=t('interview.saved');answer.form.dispatchEvent(new Event('change'));
+                }catch(error){const code=error instanceof Error?error.message.split(':')[0]:'';answer.status.dataset.jobText=interviewErrors[code]??'interview.failed';answer.status.textContent=t(answer.status.dataset.jobText);}
+                finally{answer.fieldset.disabled=!question.editable||!access.capability;}
+            };
+            forms.set(index,entry);
+        }
+        entry.form.dispatchEvent(new Event('change'));present([entry.form]);
+    };
+    const localize=()=>{for(const entry of forms.values())entry.localize();};
+    try{show(selected);}catch(error){for(const entry of forms.values())entry.dispose();throw error;}
+    const off=onLanguageChange(localize);
+    return ()=>{disposed=true;off();for(const entry of forms.values())entry.dispose();forms.clear();};
+}
+
 export function createJobFormDrafts(options:{jobId:string;current():JobPreparedInspection|null;forms():ReadonlyMap<string,JobForm>;storage():Pick<Storage,'setItem'>}) {
     function localDraftKey(display: DisplayPublicationV3): string {
         return 'rig-review-job-draft/1:' + options.jobId + ':' + display.publication.publicationId + ':' + display.publication.source.sourceHash;

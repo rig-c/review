@@ -1,13 +1,11 @@
 import type { HistoricalInterview, InterviewQuestion, InterviewDiagnostic } from '../src/interview-project.ts';
 import type { Picks } from '../src/interview-picks.ts';
 import { onLanguageChange, t } from './i18n.ts';
-import type { InstanceAccess } from './instance-access.ts';
 import { bindWorkspaceSeparator } from './workspace-layout.ts';
 import { createViewControls } from './view-controls.ts';
 import {WorkspacePreferenceStore,panelBounds} from './workspace-preferences.ts';
 import { createPartsViewport } from './parts-viewport-provider.ts';
 
-type Question = Omit<InterviewQuestion,'images'> & {images:{name:string;url:string}[]; saved:Picks|null};
 type Ask = InterviewQuestion['set']['asks'][number];
 type Pick = Picks['picks'][number];
 /** Element factory: the stage interview translates with `t`; the job page tags `data-job-text` for its own relocalize. */
@@ -24,24 +22,12 @@ export const interviewErrors: Readonly<Record<string,string>> = {
   INTERVIEW_OPTIONS_STALE:'interview.stale',
   INTERVIEW_PICKS_OUTPUT:'interview.output',
 };
-function element<K extends keyof HTMLElementTagNameMap>(tag: K, content?: string): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
+function element<K extends keyof HTMLElementTagNameMap>(tag: K, content?: string, factory?:InterviewText): HTMLElementTagNameMap[K] {
+  const el = factory?factory(tag):document.createElement(tag);
   if (content !== undefined) el.textContent = content;
   return el;
 }
 const translated: InterviewText = (tag, key) => element(tag, key === undefined ? undefined : t(key));
-function errorKey(error: unknown) {
-  return error instanceof Error ? interviewErrors[error.message] ?? 'interview.failed' : 'interview.failed';
-}
-async function request(access: InstanceAccess, path: string, body?: Picks) {
-  const response = await fetch(access.route(path), body ? {
-    method:'POST', headers:access.headers({'Content-Type':'application/json'}), body:JSON.stringify(body),
-  } : undefined);
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error);
-  return result;
-}
-
 /** The `rig-review/interview-picks@1` record exactly as the stage interview has always posted it (key order is the file's bytes). */
 export function interviewPicksRecord(ref: Picks['set'], picks: readonly Pick[], note: string | undefined, at: string): Picks {
   return {schema:'rig-review/interview-picks@1', set:ref, picks:picks as Pick[], ...(note !== undefined ? {note} : {}), by:'user', at};
@@ -60,11 +46,12 @@ export function jobInterviewValue(questionId: string, asks: readonly Ask[], chos
 export function interviewAskGroup(ask: Ask, options: {text?: InterviewText; name?: string; otherName?: string; pick?: Partial<Pick>;
     pendingHidden?: boolean; onPick?: (pick: Pick) => void; onOther?: (text: string) => void}): {group: HTMLFieldSetElement; value(): {optionId: string; otherText: string}} {
   const text = options.text ?? translated;
-  const group = element('fieldset');
+  const make=<K extends keyof HTMLElementTagNameMap>(tag:K,content?:string)=>element(tag,content,options.text);
+  const group = make('fieldset');
   group.className = 'interview-ask';
-  group.append(element('legend', ask.prompt));
+  group.append(make('legend', ask.prompt));
   const pick = options.pick;
-  const other = element('textarea');
+  const other = make('textarea');
   if (options.otherName) other.name = options.otherName;
   other.setAttribute('aria-label', t('interview.other'));
   other.value = pick?.other_text ?? '';
@@ -76,8 +63,8 @@ export function interviewAskGroup(ask: Ask, options: {text?: InterviewText; name
   pending.className = 'interview-pending';
   pending.hidden = options.pendingHidden ?? !(kind === 'auto' || kind === 'other');
   const radios = ask.options.map(option => {
-    const label = element('label'); label.className = 'interview-option';
-    const radio = element('input'); radio.type = 'radio'; radio.name = options.name ?? ask.id; radio.value = option.id;
+    const label = make('label'); label.className = 'interview-option';
+    const radio = make('input'); radio.type = 'radio'; radio.name = options.name ?? ask.id; radio.value = option.id;
     radio.required = true; radio.checked = option.id === pick?.option_id;
     radio.onchange = () => {
       if (!radio.checked) return;
@@ -90,12 +77,12 @@ export function interviewAskGroup(ask: Ask, options: {text?: InterviewText; name
       const next = {ask:ask.id, option_id:option.id};
       options.onPick?.(option.kind === 'other' ? {...next, other_text:other.value} : next);
     };
-    label.append(radio, element('strong', option.label), element('span', option.effect));
+    label.append(radio, make('strong', option.label), make('span', option.effect));
     if(option.kind==='auto'){const badge=text('b','interview.delegate');badge.className='interview-delegate';label.append(badge);}
     if (option.recommended) {
       const badge = text('b', 'interview.recommended'); badge.className = 'interview-recommended';
       label.dataset.recommended = '';
-      label.append(badge, element('span', option.reason));
+      label.append(badge, make('span', option.reason));
     }
     group.append(label);
     return radio;
@@ -106,15 +93,16 @@ export function interviewAskGroup(ask: Ask, options: {text?: InterviewText; name
 
 /** The modal's question list: "Answered n / total" and one button per question. */
 export function interviewQuestionList(items: readonly {label: string; answered: boolean}[], selected: number,
-    onSelect: ((index: number) => void) | null, disabled = false): HTMLElement {
-  const nav = element('nav');
+    onSelect: ((index: number) => void) | null, disabled = false, factory?:InterviewText): HTMLElement {
+  const make=<K extends keyof HTMLElementTagNameMap>(tag:K,content?:string)=>element(tag,content,factory);
+  const nav = make('nav');
   nav.className = 'interview-questions';
   nav.setAttribute('aria-label', t('interview.question'));
-  nav.append(element('p', t('interview.answered', [items.filter(item => item.answered).length, items.length])));
-  const list = element('ol');
+  nav.append(make('p', t('interview.answered', [items.filter(item => item.answered).length, items.length])));
+  const list = make('ol');
   items.forEach((item, index) => {
-    const row = element('li');
-    const button = element('button', item.label);
+    const row = make('li');
+    const button = make('button', item.label);
     button.type = 'button';
     button.className = 'interview-question';
     if (item.answered) button.dataset.answered = '';
@@ -191,134 +179,75 @@ export function interviewImageView(images: readonly {name: string; src: string}[
   return {element:view, dispose() {source.onload=source.onerror=null;source.src='';resize.disconnect(); for (const dispose of disposers) dispose();}};
 }
 
-export async function mountInterview(host: HTMLElement, access: InstanceAccess) {
-  let data: {questions:Question[];historical:HistoricalInterview[]; diagnostics?:InterviewDiagnostic[]; binding?:{projectHash:string;sourceHash:string;version?:number;draftId?:string}};
-  try {data = await request(access, '/api/interview');}
-  catch (error) {
-    const render = () => {host.textContent = t(errorKey(error));};
-    const unmount = onLanguageChange(render); render(); return unmount;
+/** Real interview API rows shared by job publications and joined project inspection. */
+export type InterviewDisplayQuestion = Omit<InterviewQuestion,'images'> & {images:{name:string;url:string}[];saved?:Picks|null};
+
+/** Read-only diagnostics and verbatim historical records, independent of submission transport. */
+export function interviewRecords(diagnostics:readonly InterviewDiagnostic[]=[],historical:readonly HistoricalInterview[]=[],factory?:InterviewText):HTMLElement {
+  const make=<K extends keyof HTMLElementTagNameMap>(tag:K,content?:string)=>element(tag,content,factory);
+  const records=make('div');records.className='interview-records';
+  const notices=make('section');notices.className='interview-diagnostics';notices.setAttribute('role','status');
+  for(const diagnostic of diagnostics){
+    notices.append(make('p',t(diagnostic.code==='INTERVIEW_OPTIONS_STALE'?'interview.historicalIssue':diagnostic.code)),
+      make('code',[diagnostic.question,diagnostic.record,diagnostic.at,diagnostic.ref.path,diagnostic.ref.sha256].filter(Boolean).join(' · ')));
   }
-  const {questions, historical:legacy} = data;
-  const drafts = questions.map(question => {
-    const saved = question.editable ? question.saved : null;
-    return {
-      picks:new Map(saved?.picks.map(pick => [pick.ask, pick])),
-      note:saved?.note,
-      image:0,
-      status:saved ? 'interview.saved' : '',
-      answered:question.editable ? Boolean(saved) : Boolean(question.answer),
-    };
+  records.append(notices);
+  if(historical.length){
+    const archive=make('details');archive.append(make('summary',t('interview.legacy')));
+    for(const answer of historical){const row=make('section');row.append(make('h3',answer.question),make('p',[answer.by,answer.at].filter(Boolean).join(' · ')),make('pre',answer.verbatim));if(answer.ref)row.append(make('code',answer.ref.path+' · '+answer.ref.sha256));if(answer.answer)row.append(make('pre',[answer.answer.by,answer.answer.at,answer.answer.source].filter(value=>typeof value==='string').join(' · ')));archive.append(row);}
+    records.append(archive);
+  }
+  return records;
+}
+
+/** B's list | image | survey builder. Hosts supply genuine source data and their own submit transport. */
+export function createInterviewForm(options:{question:InterviewDisplayQuestion;id:string;node?:InterviewText;form?:HTMLFormElement;fieldset?:HTMLFieldSetElement;source?:HTMLElement;
+    images:readonly {name:string;src:string}[];questions?:readonly {label:string;answered:boolean}[]|(()=>readonly {label:string;answered:boolean}[]);selected?:number;onSelect?:(index:number)=>void;answered?:boolean;
+    diagnostics?:readonly InterviewDiagnostic[];historical?:readonly HistoricalInterview[]}) {
+  const question=options.question,copy=new Map<HTMLElement,string>();
+  const make=<K extends keyof HTMLElementTagNameMap>(tag:K,content?:string)=>element(tag,content,options.node);
+  const node:InterviewText=(tag,key)=>{const result=options.node?options.node(tag,key):element(tag,key===undefined?undefined:t(key));if(key!==undefined)copy.set(result,key);return result;};
+  const form=options.form??make('form'),fields=options.fieldset??make('fieldset');
+  if(!options.fieldset)form.append(fields);
+  form.className='interview-answer interview-grid';form.dataset.interviewAnswered=String(options.answered??Boolean(question.saved||question.answer));
+  fields.className='interview-answer-fields';fields.id=options.id;fields.disabled=!question.editable;
+  const heading=make('h3',question.set.question);fields.append(heading);
+  const historical=question.answer?.choice as {picks?:Picks['picks'];note?:string}|undefined;
+  const retainedNote=question.saved?.note??historical?.note;
+  const answers=question.set.asks.map(item=>{
+    const pick=question.saved?.picks.find(value=>value.ask===item.id)??historical?.picks?.find(value=>value.ask===item.id);
+    const kind=item.options.find(option=>option.id===pick?.option_id)?.kind;
+    const fragments=(question.answer?.agent_decision as {fragments?:unknown}|undefined)?.fragments;
+    const autoResolved=!question.editable&&Array.isArray(fragments)&&fragments.some(fragment=>fragment?.ask===item.id);
+    const pendingHidden=!(kind==='auto'&&!autoResolved||kind==='other'&&!(pick&&'other_fragment' in pick));
+    const answer=interviewAskGroup(item,{text:node,name:'choice.'+item.id,otherName:'other.'+item.id,pick,pendingHidden});
+    fields.append(answer.group);return {item,answer};
   });
-  // The modal opens on the first question still waiting for explicit picks.
-  let selected = Math.max(0, questions.findIndex((question, index) => question.editable && !drafts[index]!.answered));
-  let busy = false;
-  let disposeView: (() => void) | undefined;
-  const render = () => {
-    const joined = data.binding;
-    const source = joined ? element('p', t(joined.draftId===undefined?'interview.joined':'interview.joinedDraft', [joined.draftId??String(joined.version), joined.projectHash, joined.sourceHash])) : null;
-    if (source) source.className = 'interview-binding';
-    const diagnostics = element('section');
-    diagnostics.className = 'interview-diagnostics';
-    diagnostics.setAttribute('role', 'status');
-    for (const diagnostic of data.diagnostics ?? []) {
-      const message = diagnostic.code === 'INTERVIEW_OPTIONS_STALE' ? 'interview.historicalIssue' : diagnostic.code;
-      diagnostics.append(element('p', t(message)),
-        element('code', [diagnostic.question, diagnostic.record, diagnostic.at, diagnostic.ref.path, diagnostic.ref.sha256].filter(Boolean).join(' · ')));
-    }
-    const archive = element('details');
-    archive.append(element('summary', t('interview.legacy')));
-    for (const answer of legacy) {
-      const item = element('section');
-      item.append(element('h3', answer.question), element('p', [answer.by,answer.at].filter(Boolean).join(' · ')),
-        element('pre', answer.verbatim));
-      if (answer.ref) item.append(element('code', answer.ref.path + ' · ' + answer.ref.sha256));
-      if (answer.answer) item.append(element('pre', [answer.answer.by, answer.answer.at, answer.answer.source].filter(value => typeof value === 'string').join(' · ')));
-      archive.append(item);
-    }
-    if (!questions.length) {
-      host.replaceChildren(element('p', t('interview.empty')));
-      if (source) host.prepend(source);
-      host.append(diagnostics);
-      if (legacy.length) {archive.open = true; host.append(archive);}
-      return;
-    }
-    const question = questions[selected]!;
-    const state = drafts[selected]!;
-    const list = interviewQuestionList(questions.map((item, index) => ({
-      label:item.set.question + ' · ' + item.set.id + (item.editable ? '' : ' · ' + t('interview.history')), answered:drafts[index]!.answered,
-    })), selected, index => {selected = index; render();}, busy);
-
-    const grid = element('div'); grid.className = 'interview-grid';
-    const art = element('aside');
-    art.append(element('h2', t(question.hasParts ? 'interview.parts' : 'interview.source')));
-    if (!question.hasParts) art.append(element('p', t('interview.noParts')));
-    if (question.partsUnavailable) art.append(element('p', t('interview.partsUnavailable')));
-    disposeView?.(); disposeView = undefined;
-    if (question.images[state.image]) {
-      const view = interviewImageView(question.images.map(asset => ({name:asset.name, src:access.route(asset.url)})), state.image,
-        index => {state.image = index; render();});
-      disposeView = view.dispose;
-      art.append(view.element);
-    }
-
-    const form = element('form');
-    const fields = element('fieldset'); fields.disabled = !question.editable || !access.capability || busy;
-    const provenance = element('p', t('interview.provenance', [question.set.drafted_by, question.set.drafted_at]));
-    const binding = element('code', question.ref.path + ' · ' + question.ref.sha256);
-    form.append(provenance, binding);
-    if (question.answer) {
-      form.append(element('pre', [question.answer.by, question.answer.at, question.answer.source].filter(value => typeof value === 'string').join(' · ')),
-        element('pre', typeof question.answer.verbatim === 'string' ? question.answer.verbatim : ''));
-    }
-    const historical = question.answer?.choice as {picks?:Picks['picks'];note?:string} | undefined;
-    const status = element('p'); status.setAttribute('role','status');
-    const markUnsaved = () => {
-      state.status = 'interview.unsaved';
-      status.textContent = t(state.status);
-    };
-    for (const ask of question.set.asks) {
-      const pick = state.picks.get(ask.id) ?? historical?.picks?.find(pick => pick.ask === ask.id);
-      const kind = ask.options.find(option => option.id === pick?.option_id)?.kind;
-      const autoResolved = !question.editable && Array.isArray((question.answer?.agent_decision as {fragments?:unknown}|undefined)?.fragments) &&
-        ((question.answer!.agent_decision as {fragments:{ask:string}[]}).fragments).some(fragment => fragment.ask === ask.id);
-      const {group} = interviewAskGroup(ask, {pick,
-        pendingHidden:!(kind === 'auto' && !autoResolved || kind === 'other' && !(pick && 'other_fragment' in pick)),
-        onPick:next => {state.picks.set(ask.id, next); markUnsaved();},
-        onOther:text => {
-          const previous = state.picks.get(ask.id);
-          if (previous) {state.picks.set(ask.id, {...previous, other_text:text}); markUnsaved();}
-        }});
-      fields.append(group);
-    }
-    const noteLabel = element('label', t('interview.note'));
-    const note = element('textarea');
-    note.value = state.note ?? historical?.note ?? '';
-    note.oninput = () => {state.note = note.value; markUnsaved();};
-    noteLabel.append(note);
-    fields.append(noteLabel);
-    if (question.editable) {
-      const submit = element('button', t('interview.save')); submit.type = 'submit'; submit.className = 'primary'; fields.append(submit);
-    }
-    status.textContent = state.status ? t(state.status) : t(!question.editable ? 'interview.history' : access.capability ? 'interview.choose' : 'interview.readOnly');
-    form.append(fields, status);
-    form.onsubmit = async event => {
-      event.preventDefault();
-      if (!question.editable || !access.capability || busy) return;
-      const ordered = question.set.asks.map(ask => state.picks.get(ask.id));
-      if (ordered.some(pick => !pick)) return;
-      busy = true; fields.disabled = true;
-      for (const button of list.querySelectorAll('button')) button.disabled = true;
-      try {
-        await request(access, '/api/interview/picks', interviewPicksRecord(question.ref, ordered as Pick[], state.note, new Date().toISOString()));
-        state.status = 'interview.saved';
-        state.answered = true;
-      } catch (error) {state.status = errorKey(error);}
-      finally {busy = false; render();}
-    };
-    grid.append(list, art, form); host.replaceChildren(grid);
-    if (source) host.prepend(source);
-    host.append(diagnostics);
-    if (legacy.length) host.append(archive);
+  if(retainedNote!==undefined){const note=make('pre',retainedNote);note.className='interview-note';fields.append(note);}
+  const context=make('div');context.id=options.id+'-source';context.className='interview-image-context';
+  if(options.source)context.append(options.source);
+  context.append(node('h2',question.hasParts?'interview.parts':'interview.source'));
+  if(!question.hasParts)context.append(node('p','interview.noParts'));
+  if(question.partsUnavailable)context.append(node('p','interview.partsUnavailable'));
+  const provenance=make('p'),binding=make('code',question.ref.path+' · '+question.ref.sha256);context.append(provenance,binding);
+  if(question.answer)context.append(make('pre',[question.answer.by,question.answer.at,question.answer.source].filter(value=>typeof value==='string').join(' · ')),make('pre',typeof question.answer.verbatim==='string'?question.answer.verbatim:''));
+  const art=make('aside');art.className='interview-art';form.prepend(art);
+  let view:ReturnType<typeof interviewImageView>|undefined,list:HTMLElement|undefined,records:HTMLElement|undefined;
+  const showImage=(index:number)=>{view?.dispose();view?.element.remove();view=interviewImageView(options.images,index,showImage,context);art.append(view.element);};
+  const refresh=()=>{
+    provenance.textContent=t('interview.provenance',[question.set.drafted_by,question.set.drafted_at]);
+    const questions=typeof options.questions==='function'?options.questions():options.questions;
+    const items=questions?.map((item,index)=>({...item,answered:index===(options.selected??0)?form.dataset.interviewAnswered==='true':item.answered}))??[{label:question.set.question+' · '+question.set.id,answered:form.dataset.interviewAnswered==='true'}];
+    const next=interviewQuestionList(items,options.selected??0,options.onSelect??(()=>{}),false,options.node);list?.remove();form.prepend(next);list=next;
+    records?.remove();records=interviewRecords(options.diagnostics,options.historical,options.node);context.append(records);
   };
-  const unmount = onLanguageChange(render); render(); return () => {unmount(); disposeView?.();};
+  const submit=node('button','interview.save');submit.type='submit';submit.hidden=!question.editable;fields.append(submit);
+  const status=node('p',!question.editable?'interview.history':question.saved?'interview.saved':'interview.choose');status.setAttribute('role','status');form.append(status);
+  const localize=()=>{for(const [item,key]of copy)item.textContent=t(item.dataset.jobText??key);refresh();};
+  const dispose=()=>{view?.dispose();form.removeEventListener('input',refresh);form.removeEventListener('change',refresh);form.removeEventListener('job-form-language',localize);};
+  form.addEventListener('input',refresh);form.addEventListener('change',refresh);form.addEventListener('job-form-language',localize);
+  try{if(options.images.length)showImage(0);else art.append(context);refresh();}catch(error){dispose();throw error;}
+  return {form,fieldset:fields,submit,status,retainedNote,
+    read:()=>jobInterviewValue(question.set.question,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),retainedNote??''),
+    localize,dispose};
 }

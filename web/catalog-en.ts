@@ -1,4 +1,5 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+  "project.json": "project.json",
   'job.commentsFromWorkspace': 'Comments from the workspace are included. Close this request to add or edit comments.',
   'Add general comment': 'Add general comment',
   'General comment': 'General comment',

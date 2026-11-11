@@ -1,4 +1,4 @@
-import { joinProject, type JoinedProject, type ProjectDesignation } from './joined-project.ts';
+import { joinProject, type JoinedProject, type JoinedInterview, type ProjectDesignation } from './joined-project.ts';
 import {parseControlCommand,type ControlCommand,type ControlReceipt} from './control.ts';
 /** One fixed-package worker per exact binding. There is no general daemon API. */
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
@@ -35,7 +35,7 @@ export function buildOpenDiagnostic(build:BuildOpen):string{
 export interface OpenInputs {input:string;project?:ProjectDesignation;compare?:string;reference?:string;animation?:string;control?:boolean;direct?:boolean;viewOnly?:boolean;config?:string;parts?:string;source?:string;full?:string;head?:string;keypoints?:string}
 /** The producer handoff flags (#101) among the inputs, or undefined when none was given. */
 export function handoffFlags(inputs:OpenInputs):HandoffFlags|undefined{const present=HANDOFF_FLAGS.filter(f=>inputs[f]!==undefined);if(!present.length)return undefined;return Object.fromEntries(present.map(f=>[f,inputs[f]])) as unknown as HandoffFlags;}
-export type OpenPackage=({mode:'single';p:ReviewPackage;joined?:JoinedProject;inputs:OpenInputs;contentHash:string}|{mode:'compare';p:ComparePackage;inputs:OpenInputs;contentHash:string})&{selection:AnimationSelection|null};
+export type OpenPackage=({mode:'single';p:ReviewPackage;joined?:Exclude<JoinedProject,JoinedInterview>;inputs:OpenInputs;contentHash:string}|{mode:'interview';joined:JoinedInterview;p:null;inputs:OpenInputs;contentHash:string}|{mode:'compare';p:ComparePackage;inputs:OpenInputs;contentHash:string})&{selection:AnimationSelection|null};
 /** Private 0600 record. `capability` is the 256-bit page write capability, handed out only in the printed `#cap=` fragment. */
 export interface RecordFile extends OpenIdentity {schema:'rig-review-open-instance/1';pid:number;origin:string;mode:'single'|'compare';capability:string;controlToken?:string}
 /** `cwd` is the launcher's working directory: the worker runs in the state directory, so Apply · Rebuild looks for the producer from here after the package's own directories. */
@@ -45,6 +45,13 @@ const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value))
 const sleep=(ms:number)=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 export const defaultStateDir=()=>process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review');
 export async function loadOpenPackage(inputs:OpenInputs,options:{cwd?:string}={}):Promise<OpenPackage>{
+ if(inputs.project&&inputs.project.version===undefined&&inputs.project.draftId===undefined){
+  if(inputs.compare!==undefined||inputs.reference!==undefined||inputs.animation!==undefined||inputs.control||inputs.direct||inputs.viewOnly||handoffFlags(inputs))throw new Error('OPEN_OPTION_INVALID --project: interview-only open takes only the project root, --project and --picks-dir');
+  const joined=joinProject(null,inputs.project);
+  if(await realpath(resolve(inputs.input))!==joined.opened.root)throw new Error('INTERVIEW_SOURCE_MISMATCH: interview input must be the designated project root');
+  await joined.assertCurrent();
+  return {mode:'interview',p:null,joined,selection:null,contentHash:joined.sourceHash,inputs:{input:joined.opened.root,project:joined.designation}};
+ }
  // Handoff flags become canonical absolute paths here, so the worker and every reload read exactly these files.
  if(!inputs.compare){const base=await loadReferencedReview(inputs.input,inputs.reference,handoffFlags(inputs),options.cwd);const joined=inputs.project?joinProject(base,inputs.project,{starts:[options.cwd??process.cwd()]}):undefined;const p=joined?.review??base,selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);if(inputs.viewOnly)p.viewOnly=true;return {mode:'single',p,selection,contentHash:p.sourceHash,...(joined?{joined}:{}),inputs:{input:p.manifestPath,...(joined?{project:joined.designation}:{}),...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{}),...(inputs.control?{control:true}:{}),...(p.handoffInputs??{})}};}
  if(inputs.project)throw new Error('INTERVIEW_SOURCE_MISMATCH: compare takes no joined project');
@@ -63,7 +70,7 @@ export async function openFingerprint():Promise<string>{
  hash.update('bun.lock\0');try{hash.update(await readFile(join(appRoot,'bun.lock')));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;hash.update('(absent)');}
  hash.update('@rig-c/play/package.json\0');hash.update(await readFile(playPackagePath()));return hash.digest('hex');
 }
-export function openKey(p:OpenPackage,fingerprint:string):string {return digest({fingerprint,installation:appRoot,mode:p.mode,inputs:p.inputs,content:p.contentHash,identity:p.mode==='single'?p.p.reviewedSource:p.p.response.binding,...(p.mode==='single'&&p.joined?{projectHash:p.joined.opened.hash}:{})});}
+export function openKey(p:OpenPackage,fingerprint:string):string {return digest({fingerprint,installation:appRoot,mode:p.mode,inputs:p.inputs,content:p.contentHash,identity:p.mode==='interview'?{projectHash:p.joined.opened.hash}:p.mode==='single'?p.p.reviewedSource:p.p.response.binding,...(p.mode==='single'&&p.joined?{projectHash:p.joined.opened.hash}:{})});}
 /** Handoff URL: the managed front's `/instances/<key>/` path (or the worker's own origin when direct). The
  * capability rides in the fragment, which browsers never send to a server; the page stores and strips it. */
 export function openUrl(record:Pick<RecordFile,'origin'|'key'|'contentHash'|'capability'>,front?:string):string {const url=new URL(front?`${front}/instances/${record.key}/`:record.origin);url.searchParams.set('input',record.contentHash);url.searchParams.set('handoff',record.key);url.hash='cap='+record.capability;return url.href;}
@@ -110,6 +117,7 @@ async function openRefusal(error:unknown,inputs:OpenInputs):Promise<unknown>{
  return new Error(`${name}: ${detail}`,{cause:error});
 }
 async function verifyOpenLoad(p:OpenPackage,viewOnly:boolean,cwd=process.cwd()):Promise<void>{
+ if(p.mode==='interview'){await p.joined.assertCurrent();return;}
  if(p.mode==='single'){
   // A recorded pre-rig draft has a bound model for Stage 1 mesh mapping only.
   if(p.joined?.draft)return;
@@ -134,8 +142,8 @@ export async function prepareOpenTarget(inputs: OpenInputs, options: OpenOptions
  let p:OpenPackage;try{p=await loadOpenPackage(inputs,{cwd:options.cwd});}catch(error){throw await openRefusal(error,inputs);}
  fingerprint??=await openFingerprint();const key=openKey(p,fingerprint);
  // #187: canonical (symlinks and ancestors resolved) and outside every supplied folder: the package, the build root a check package belongs to, the handoff root.
- const stateDir=destinationDirectory(options.stateDir??defaultStateDir(),'OPEN_STATE_INVALID: the state directory path has a non-directory component or a symlink loop'),roots=p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
- if(p.mode==='single'&&p.joined&&stateDirInside(stateDir,[{kind:'package',path:p.joined.opened.root}]))throw new Error('OPEN_STATE_INSIDE_PACKAGE: review state must be outside the joined project');
+ const stateDir=destinationDirectory(options.stateDir??defaultStateDir(),'OPEN_STATE_INVALID: the state directory path has a non-directory component or a symlink loop'),roots=p.mode==='interview'?[{kind:'package' as const,path:p.joined.opened.root}]:p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
+ if(p.mode!=='compare'&&p.joined&&stateDirInside(stateDir,[{kind:'package',path:p.joined.opened.root}]))throw new Error('OPEN_STATE_INSIDE_PACKAGE: review state must be outside the joined project');
  const inside=stateDirInside(stateDir,roots);if(inside)throw new Error(`OPEN_STATE_INSIDE_PACKAGE ${inside.kind}: the review state directory must be outside input packages; it is inside the ${inside.kind}; set RIG_REVIEW_STATE_DIR outside it`);
  await verifyOpenLoad(p,viewOnly,options.cwd);
  const build=p.mode==='single'&&basename(p.p.root)==='check'&&await isBuildRoot(dirname(p.p.root))?{package:p.p.root,handoff:p.p.reviewedSource.handoff??null,reason:p.p.handoffReason}:null;
@@ -153,7 +161,7 @@ export async function openReview(inputs:OpenInputs,options:OpenOptions={}):Promi
 }
 async function ensureWorker(p:OpenPackage,key:string,fingerprint:string,stateDir:string,canonicalControl:string,idleMs:number,graceMs?:number,viewOnly=false,cwd=process.cwd()):Promise<{row:RecordFile;reused:boolean}>{
  const registry=join(canonicalControl,key+'.json'),claim=join(canonicalControl,key+'.claim'),nonce=randomUUID(),deadline=performance.now()+20000;
- const reuse=async()=>{const row=await readRecord(registry,key);return row&&row.fingerprint===fingerprint&&row.contentHash===p.contentHash&&row.mode===p.mode&&await alive(row)?row:null;};
+ const reuse=async()=>{const row=await readRecord(registry,key);return row&&row.fingerprint===fingerprint&&row.contentHash===p.contentHash&&row.mode===(p.mode==='interview'?'single':p.mode)&&await alive(row)?row:null;};
  const ready=await reuse();if(ready)return {row:ready,reused:true};
  const claimed=await acquireClaim(canonicalControl,key,nonce,reuse,deadline,'OPEN_BUSY: instance startup claim did not become ready');if('row' in claimed)return {row:claimed.row,reused:true};
  let request:string|undefined,spawned:ReturnType<typeof spawn>|undefined,handedOff=false;
@@ -175,9 +183,9 @@ export async function runOpenWorker(requestPath:string):Promise<void>{
  // The worker mints its own page capability; it lives only in this process and the private record.
  const removeRecord=async()=>{const current=await readRecord(spec.registry,spec.identity.key);if(current?.nonce===spec.identity.nonce)await unlink(spec.registry).catch(()=>{});};
  const capability=randomBytes(32).toString('hex');const options={port:0,stateDir:spec.stateDir,open:spec.identity,capability,unopenedTimeoutMs:spec.idleMs,...(spec.graceMs!==undefined?{graceMs:spec.graceMs}:{}),exitOnClose:true,onClose:removeRecord,...(spec.inputs.control?{control:{token:spec.controlToken!,instanceKey:spec.identity.key}}:{})};
- const server=p.mode==='single'?await startServer(p.p,{...options,joined:p.joined,initialAnimation:p.selection?.name,...(typeof spec.cwd==='string'&&isAbsolute(spec.cwd)?{cwd:spec.cwd}:{}),...(spec.viewOnly?{viewOnly:true}:{})}):await startCompareServer(p.p,options);
- const check=()=>p.mode==='single'?assertReviewUnchanged(p.p):assertCompareUnchanged(p.p);
- await check();const record:RecordFile={schema:'rig-review-open-instance/1',...spec.identity,pid:process.pid,origin:`http://127.0.0.1:${server.port}`,mode:p.mode,capability,...(spec.inputs.control?{controlToken:spec.controlToken}:{})};const tmp=spec.registry+'.'+spec.identity.nonce+'.tmp';await writeFile(tmp,JSON.stringify(record),{mode:0o600,flag:'wx'});await rename(tmp,spec.registry);
+ const server=p.mode!=='compare'?await startServer(p.p,{...options,joined:p.joined,initialAnimation:p.selection?.name,...(typeof spec.cwd==='string'&&isAbsolute(spec.cwd)?{cwd:spec.cwd}:{}),...(spec.viewOnly?{viewOnly:true}:{})}):await startCompareServer(p.p,options);
+ const check=()=>p.mode==='interview'?p.joined.assertCurrent():p.mode==='single'?assertReviewUnchanged(p.p):assertCompareUnchanged(p.p);
+ await check();const record:RecordFile={schema:'rig-review-open-instance/1',...spec.identity,pid:process.pid,origin:`http://127.0.0.1:${server.port}`,mode:p.mode==='interview'?'single':p.mode,capability,...(spec.inputs.control?{controlToken:spec.controlToken}:{})};const tmp=spec.registry+'.'+spec.identity.nonce+'.tmp';await writeFile(tmp,JSON.stringify(record),{mode:0o600,flag:'wx'});await rename(tmp,spec.registry);
  await unlink(requestPath).catch(e=>{if(e.code!=='ENOENT')throw e;});
  let stopped=false;const stop=async(signal:string)=>{if(stopped)return;stopped=true;await removeRecord();server.stop(true);console.log(`review: exiting — received ${signal}.`);process.exit(0);};
  process.on('SIGTERM',()=>{void stop('SIGTERM');});process.on('SIGINT',()=>{void stop('SIGINT');});

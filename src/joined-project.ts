@@ -9,7 +9,8 @@ import { assertReviewUnchanged, withReviewAssertion } from './reference.ts';
 
 export type ProjectDesignation={root:string;picksDir:string}&(
   {version:number;postVersion?:number;draftId?:never;partsVerdictDir?:never} |
-  {draftId:string;partsVerdictDir?:string;version?:never;postVersion?:never}
+  {draftId:string;partsVerdictDir?:string;version?:never;postVersion?:never} |
+  {version?:never;draftId?:never;postVersion?:never;partsVerdictDir?:never}
 );
 interface DraftRecord {
   id:string;
@@ -45,7 +46,62 @@ export const interviewMismatch = 'INTERVIEW_SOURCE_MISMATCH';
 export const interviewStale = 'INTERVIEW_OPTIONS_STALE';
 export const directionStale = 'DIRECTION_SOURCE_STALE';
 
-export function joinProject(p: ReviewPackage, designation: ProjectDesignation, options: { starts?: readonly string[] } = {}):JoinedSource {
+/** Project inspection metadata; deliberately has no manifest, model or package session. */
+export interface InterviewSubjectEntry {
+  subject:'interview';
+  project:{path:'project.json';sha256:string};
+  label:string;
+  sourceHash:string;
+  capabilities:{interview:true;playback:false;modeling:false;motion:false;feedback:false;audio:false};
+  unavailable:'MODEL_UNAVAILABLE';
+}
+export interface JoinedInterview {
+  interviewOnly:true;
+  opened:ReturnType<typeof readProject>;
+  designation:Extract<ProjectDesignation,{version?:never;draftId?:never}>;
+  sourceHash:string;
+  available:boolean;
+  assertCurrent:()=>Promise<void>;
+  review?:never;
+  draft?:never;
+  verdictDirectory?:never;
+}
+export function joinProject(p:null,designation:ProjectDesignation,options?:{starts?:readonly string[]}):JoinedInterview;
+export function joinProject(p:ReviewPackage,designation:ProjectDesignation,options?:{starts?:readonly string[]}):JoinedSource;
+export function joinProject(p:ReviewPackage|null,designation:ProjectDesignation,options:{starts?:readonly string[]}={}):JoinedSource|JoinedInterview {
+  if(designation.version===undefined&&designation.draftId===undefined){
+    const fail=():never=>{throw new Error(interviewMismatch+': expected an interview-stage project without a draft or recorded package');};
+    if(p!==null||designation.postVersion!==undefined||designation.partsVerdictDir!==undefined)return fail();
+    const opened=readProject(designation.root),{root,project,hash}=opened;
+    const assertStage=()=>{
+      if(project.stage!=='interview'||!Array.isArray(project.versions)||
+         project.versions.some(entry=>object(entry).review_package!=null)||
+         !(project.drafts==null||Array.isArray(project.drafts)&&project.drafts.length===0))return fail();
+    };
+    assertStage();
+    outputDirectory(root,designation.picksDir,project);
+    if(!opened.questions.length&&!opened.historical.length)throw new Error(interviewUnavailable);
+    const files=new Map<string,string>([['project.json',hash]]);
+    const retain=(ref:SetRef)=>{
+      if(!literalPath(ref.path)||typeof ref.sha256!=='string'||!/^[a-f0-9]{64}$/.test(ref.sha256))return fail();
+      if(files.has(ref.path)&&files.get(ref.path)!==ref.sha256)return fail();
+      boundBytes(root,ref);files.set(ref.path,ref.sha256);
+    };
+    if(!Array.isArray(project.inputs))return fail();
+    for(const input of project.inputs)retain(object(input) as unknown as SetRef);
+    for(const question of opened.questions){retain(question.ref);for(const image of question.images)retain(image.ref);}
+    const assertCurrent=async()=>{
+      try{
+        assertStage();
+        for(const [path,sha256]of files)boundBytes(root,{path,sha256});
+        if(readProject(root).hash!==hash)throw new Error('Project changed');
+        outputDirectory(root,designation.picksDir,project);
+      }catch{throw new Error(interviewStale+': project or interview inputs changed; reopen the project');}
+    };
+    return {interviewOnly:true,opened,designation:{root,picksDir:designation.picksDir},available:true,assertCurrent,
+      sourceHash:digest(JSON.stringify({project:{path:'project.json',sha256:hash},files:[...files].sort(([a],[b])=>a.localeCompare(b))}))};
+  }
+  if(!p)throw new Error(interviewMismatch+': expected the explicitly designated recorded package');
   if(designation.draftId!==undefined)return joinDraft(p,designation,options);
   const opened = readProject(designation.root);
   const {root, hash, project} = opened;
@@ -302,4 +358,4 @@ function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draft
   return {review,opened,designation:{...designation,root},assertCurrent,draft,verdictDirectory,
     available:opened.questions.length>0||opened.historical.length>0};
 }
-export type JoinedProject = ReturnType<typeof joinProject>;
+export type JoinedProject = JoinedSource | JoinedInterview;

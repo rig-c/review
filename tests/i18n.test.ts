@@ -7,7 +7,13 @@ import {join} from 'node:path';
 import {feedbackTimingLabel,timeOnlyBasis} from '../src/stage-comment.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
-import {interviewErrors,mountInterview} from '../web/interview-panel.ts';
+import {createInterviewForm,interviewErrors,interviewPicksRecord} from '../web/interview-panel.ts';
+import {joinedInterviewForms} from '../web/job-session.ts';
+import {joinProject} from '../src/joined-project.ts';
+import {digest} from '../src/interview-project.ts';
+import {savePicks} from '../src/interview-picks.ts';
+import {createReviewRequestContext} from '../src/server.ts';
+import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
 import {
  WEB_STRING_EXEMPTIONS,
  applyDomI18n,
@@ -502,6 +508,8 @@ class TestElement {
   walk(this);
   return out;
  }
+ prepend(...nodes:(TestElement|TestTextNode|string)[]):void{const existing=[...this.childNodes];this.replaceChildren(...nodes,...existing);}
+ dispatchEvent(event:Event):boolean{return true;}
  focus():void{}
  getBoundingClientRect(){return {left:0,top:0};}
  addEventListener():void{}
@@ -1099,6 +1107,128 @@ test('unsupported interview kind copy retains its named code and meaning in Engl
  }
 });
 
+test('#764 joined interview submits retained notes byte-exact, omits absent note, and reads them back without a Note input',async()=>{
+ const previousDocument=Object.getOwnPropertyDescriptor(globalThis,'document'),previousFetch=globalThis.fetch,preference=getLanguagePreference();
+ const ref={path:'evidence/options.json',sha256:'a'.repeat(64)};
+ const set=await Bun.file(new URL('./fixtures/interview-open-725/evidence/options.json',import.meta.url)).json();
+ const historicalNote='  historical\r\n원문 e\u0301  ',savedNote='  saved\r\n原文 👁 e\u0301\n  ';
+ try{
+  for(const item of [{saved:savedNote,historical:historicalNote,expected:savedNote},{saved:'',historical:historicalNote,expected:''},
+    {saved:undefined,historical:historicalNote,expected:historicalNote},{saved:undefined,historical:'',expected:''},
+    {saved:undefined,historical:undefined,expected:undefined}]){
+   const {doc,root}=makeTestDoc(),dialog=doc.createElement('dialog');root.append(dialog);
+   Object.defineProperty(globalThis,'document',{value:doc,configurable:true});
+   const pick={ask:set.asks[0].id,option_id:set.asks[0].options[0].id};
+   const question={ref,set,editable:true,images:[],hasParts:false,
+    saved:item.saved===undefined?null:{schema:'rig-review/interview-picks@1',set:ref,picks:[pick],note:item.saved,by:'user',at:'2026-11-11T00:00:00Z'},
+    ...(item.historical===undefined?{}:{answer:{choice:{picks:[pick],note:item.historical}}})};
+   const before=JSON.stringify(question);let posted:Record<string,unknown>|undefined;
+   globalThis.fetch=Object.assign(async(_input:unknown,init?:RequestInit)=>{
+    if(init?.method==='POST'){posted=JSON.parse(String(init.body));return Response.json({ok:true});}
+    return Response.json({questions:[{...question,saved:posted??question.saved}],historical:[],diagnostics:[]});
+   },{preconnect:previousFetch.preconnect}) as typeof fetch;
+   const mount=()=>joinedInterviewForms({base:'/',key:'synthetic',capability:'a'.repeat(64),route:path=>path,headers:init=>new Headers(init)},forms=>dialog.replaceChildren(...forms as unknown as TestElement[]));
+   let dispose:undefined|(()=>void);
+   try{
+    dispose=await mount();
+    const form=dialog.querySelectorAll('form')[0]! as TestElement&{reportValidity():boolean};form.reportValidity=()=>true;
+    const radio=form.querySelectorAll('input')[0]! as TestElement&{checked:boolean};radio.checked=true;
+    for(const language of ['en','ko'] as const){setLanguagePreference(language);
+     expect(form.querySelectorAll('.interview-note').map(node=>node.textContent)).toEqual(item.expected===undefined?[]:[item.expected]);
+     expect(form.querySelectorAll('textarea').every(node=>(node as any).name!=='note')).toBe(true);
+    }
+    expect(JSON.stringify(question)).toBe(before);
+    await form.onsubmit!({preventDefault(){}});
+    expect(posted).toBeDefined();expect(Object.hasOwn(posted!,'note')).toBe(item.expected!==undefined);
+    expect(posted!.note).toBe(item.expected);
+    if(item.expected!==undefined)expect(Buffer.from(posted!.note as string)).toEqual(Buffer.from(item.expected));
+    dispose();dispose=await mount();
+    expect(dialog.querySelectorAll('.interview-note').map((node:TestElement)=>node.textContent)).toEqual(item.expected===undefined?[]:[item.expected]);
+   }finally{dispose?.();}
+  }
+ }finally{globalThis.fetch=previousFetch;setLanguagePreference(preference);if(previousDocument)Object.defineProperty(globalThis,'document',previousDocument);else delete (globalThis as any).document;}
+});
+
+test('#764 joined UI preserves planted notes through the real route, picks file and reloaded GET',async()=>{
+ const previousDocument=Object.getOwnPropertyDescriptor(globalThis,'document'),previousFetch=globalThis.fetch;
+ const capability='a'.repeat(64),origin='http://127.0.0.1:4321';
+ try{
+  for(const note of ['  planted\r\n원문 👁 e\u0301\n  ','',undefined]){
+   const fixture=await interviewOpenFixture();let context:Awaited<ReturnType<typeof createReviewRequestContext>>|undefined,dispose:undefined|(()=>void);
+   try{
+    // A real non-image input keeps this storage test within the existing DOM fixture's capabilities.
+    const project=fixture.project,options=JSON.parse(await readFile(join(fixture.root,'evidence/options.json'),'utf8'));
+    await writeFile(join(fixture.root,'source.txt'),await readFile(join(fixture.root,'source.svg')));
+    project.inputs[0].path='source.txt';options.context.files[0].path='source.txt';
+    const optionBytes=JSON.stringify(options)+'\n';await writeFile(join(fixture.root,'evidence/options.json'),optionBytes);
+    project.interview.framing[0].pending_options.sha256=digest(optionBytes);
+    await writeFile(join(fixture.root,'project.json'),JSON.stringify(project)+'\n');
+    const joined=joinProject(null,fixture.inputs.project),question=joined.opened.questions[0]!;
+    expect(question.editable).toBe(true);expect(question.images).toHaveLength(0);
+    const picks=question.set.asks.map(ask=>({ask:ask.id,option_id:ask.options.find(option=>option.kind==='value')!.id}));
+    if(note!==undefined)savePicks(join(fixture.root,'picks'),question,interviewPicksRecord(question.ref,picks,note,'2026-11-11T00:00:00Z'));
+    const inputs=['project.json','evidence/options.json','source.txt','source.svg'];
+    const baseline=await Promise.all(inputs.map(path=>readFile(join(fixture.root,path))));
+    context=await createReviewRequestContext(null,{joined,capability,stateDir:fixture.stateDir,bundle:new Blob(['// synthetic storage test'])});
+    const {doc,root}=makeTestDoc(),dialog=doc.createElement('dialog');root.append(dialog);
+    Object.defineProperty(globalThis,'document',{value:doc,configurable:true});
+    let posts=0;
+    globalThis.fetch=Object.assign(async(input:RequestInfo|URL,init?:RequestInit)=>{
+     const request=new Request(String(input),init);
+     if(request.method==='POST'){request.headers.set('Origin',origin);posts++;}
+     const response=await context!.handle(request,4321,{} as never);
+     expect(response?.status).toBe(200);return response!;
+    },{preconnect:previousFetch.preconnect}) as typeof fetch;
+    const access={base:'/',key:'synthetic',capability,route:(path:string)=>origin+path,headers:(init?:HeadersInit)=>{const headers=new Headers(init);headers.set('X-Review-Capability',capability);return headers;}};
+    const mount=()=>joinedInterviewForms(access,forms=>dialog.replaceChildren(...forms as unknown as TestElement[]));
+    dispose=await mount();
+    const form=dialog.querySelectorAll('form')[0]! as TestElement&{reportValidity():boolean};form.reportValidity=()=>true;
+    const radio=form.querySelectorAll('input')[0]! as TestElement&{checked:boolean};radio.checked=true;
+    expect(form.querySelectorAll('.interview-note').map(node=>node.textContent)).toEqual(note===undefined?[]:[note]);
+    expect(form.querySelectorAll('textarea').every(node=>(node as any).name!=='note')).toBe(true);
+    await form.onsubmit!({preventDefault(){}});expect(posts).toBe(1);
+    const file=await readFile(join(fixture.root,'picks',question.ref.sha256+'.json'),'utf8'),stored=JSON.parse(file);
+    expect(stored.picks).toEqual(picks);expect(Object.hasOwn(stored,'note')).toBe(note!==undefined);expect(stored.note).toBe(note);
+    const response=await context.handle(new Request(origin+'/api/interview'),4321,{} as never);
+    expect(response?.status).toBe(200);
+    const reloaded=(await response!.json()).questions[0].saved;
+    expect(Object.hasOwn(reloaded,'note')).toBe(note!==undefined);expect(reloaded.note).toBe(note);
+    if(note!==undefined){expect(Buffer.from(stored.note)).toEqual(Buffer.from(note));expect(Buffer.from(reloaded.note)).toEqual(Buffer.from(note));}
+    else expect(file).not.toContain('"note":');
+    dispose();dispose=await mount();
+    expect(dialog.querySelectorAll('.interview-note').map((node:TestElement)=>node.textContent)).toEqual(note===undefined?[]:[note]);
+    expect(await Promise.all(inputs.map(path=>readFile(join(fixture.root,path))))).toEqual(baseline);
+   }finally{dispose?.();context?.stop();await fixture.close();}
+  }
+ }finally{globalThis.fetch=previousFetch;if(previousDocument)Object.defineProperty(globalThis,'document',previousDocument);else delete (globalThis as any).document;}
+});
+
+test('#764 shared interview preserves resolved Auto/Other pending state and historical note immutability',async()=>{
+ const set=await Bun.file(new URL('./fixtures/interview-open-725/evidence/options.json',import.meta.url)).json();
+ const preference=getLanguagePreference(),note='  historical\r\n원문 👁 e\u0301  ';
+ try{
+  for(const item of [{kind:'auto',covered:true,pending:false},{kind:'auto',covered:false,pending:true},
+    {kind:'other',covered:true,pending:false},{kind:'other',covered:false,pending:true}]){
+   const {doc}=makeTestDoc(),ask=set.asks[0],option=ask.options.find((option:any)=>option.kind===item.kind);
+   const question={ref:{path:'evidence/options.json',sha256:'a'.repeat(64)},set,editable:false,images:[],hasParts:false,
+    answer:{choice:{picks:[{ask:ask.id,option_id:option.id,...(item.kind==='other'?{other_text:'  literal Other\n',...(item.covered?{other_fragment:{reference:'tailored'}}:{})}:{})}],note},
+     agent_decision:{fragments:[{ask:item.covered?ask.id:'uncovered'}]}}};
+   const before=JSON.stringify(question),entry=createInterviewForm({question:question as never,id:'history',images:[],node:(tag,key)=>{const node=doc.createElement(tag);if(key)node.textContent=t(key);return node;}});
+   try{
+    for(const language of ['en','ko'] as const){setLanguagePreference(language);entry.localize();
+     const form=entry.form as unknown as TestElement;
+     expect(form.querySelectorAll('.interview-pending')[0]!.hidden).toBe(!item.pending);
+     expect(entry.fieldset.disabled).toBe(true);expect(entry.submit.hidden).toBe(true);
+     expect(form.querySelectorAll('.interview-note')[0]!.textContent).toBe(note);
+     expect(form.querySelectorAll('textarea').every(node=>(node as any).name!=='note')).toBe(true);
+     expect(entry.read().note).toBe(note);expect(entry.retainedNote).toBe(note);
+    }
+    expect(JSON.stringify(question)).toBe(before);
+   }finally{entry.dispose();}
+  }
+ }finally{setLanguagePreference(preference);}
+});
+
 test('scene interview warnings and historical issues render in EN/KO while original records and editability survive', async () => {
  const {doc, root} = makeTestDoc();
  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
@@ -1119,7 +1249,8 @@ test('scene interview warnings and historical issues render in EN/KO while origi
   Object.defineProperty(globalThis, 'document', {value: doc, configurable: true});
   const fetchMock: typeof fetch = Object.assign(async () => Response.json(payload), {preconnect: previousFetch.preconnect});
   globalThis.fetch = fetchMock;
-  unmount = await mountInterview(host as unknown as HTMLElement, {base: '/', key: 'synthetic', capability: 'a'.repeat(64), route: path => path, headers: init => new Headers(init)});
+  const dialog=doc.createElement('dialog');dialog.setAttribute('open','');host.append(dialog);
+  unmount = await joinedInterviewForms({base:'/',key:'synthetic',capability:'a'.repeat(64),route:path=>path,headers:init=>new Headers(init)},forms=>dialog.replaceChildren(...forms as unknown as TestElement[]));
   for (const language of ['en', 'ko'] as const) {
    setLanguagePreference(language);
    // #708: the modal's question list replaces the set picker.
@@ -1134,6 +1265,9 @@ test('scene interview warnings and historical issues render in EN/KO while origi
    (host.querySelectorAll('.interview-question')[1] as any).onclick();
    expect(host.querySelectorAll('fieldset')[0]!.disabled).toBe(false);
    expect(host.textContent).toContain(t('interview.save', undefined, language));
+   expect(host.querySelectorAll('textarea')).toHaveLength(0);
+   expect(host.textContent).not.toContain(t('interview.note',undefined,language));
+   expect(host.querySelectorAll('dialog')).toHaveLength(1);
   }
  } finally {
   unmount?.(); globalThis.fetch = previousFetch; setLanguagePreference(preference);

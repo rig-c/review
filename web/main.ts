@@ -1,3 +1,5 @@
+import type {InterviewSubjectEntry} from '../src/joined-project.ts';
+import {joinedInterviewForms} from './job-session.ts';
 import {partsIssueComments,parsePartsIssue,assertPartsIssueBinding} from '../src/parts-comment.ts';
 import type {JobForm} from './job-session.ts';
 import {bindWorkspaceDrawer} from './workspace-layout.ts';
@@ -41,7 +43,7 @@ import {appliedCheckState,renderAppliedHistory,isPatchJob,recordFor,refusedText,
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {mountWorkspaceShell,mountStatusBar,bindWorkspaceUI,bindHeaderModeAvailability,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
-import {setSourceAttribute,setSourceText,sourceTextContent,t,tr} from './i18n.ts';
+import {setSourceAttribute,setSourceText,sourceTextContent,onLanguageChange,t,tr} from './i18n.ts';
 import {holdScrubBox,releaseScrubBox,scrubBox} from './scrub-box.ts';
 import {mountRigInspector,bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
 import {connectControl} from './control.ts';
@@ -1205,7 +1207,9 @@ async function start(): Promise<void> {
   try {
     if(host?.record&&!host.record.hasPicture){await startRecord();return;}
     let writes: { capabilityRequired: boolean; control?: boolean };
-    const [opened,saved,accessState]=await Promise.all([api<ReviewResponse|PartsSubjectEntry>('/api/review'),api<ReviewSession|PartsSubjectSession>('/api/session'),api<{capabilityRequired:boolean;control?:boolean}>('/api/access')]);
+    const opened=await api<ReviewResponse|PartsSubjectEntry|InterviewSubjectEntry>('/api/review');
+    if('subject' in opened&&opened.subject==='interview'){await startRecord(opened);return;}
+    const [saved,accessState]=await Promise.all([api<ReviewSession|PartsSubjectSession>('/api/session'),api<{capabilityRequired:boolean;control?:boolean}>('/api/access')]);
     if('subject' in opened&&opened.subject==='parts'){await startParts(opened,saved as PartsSubjectSession,accessState);return;}
     data=opened as ReviewResponse;session=saved as ReviewSession;writes=accessState;
     readOnly = host?.record ? tr('JOB_REVIEW_READ_ONLY') : readOnlyReason(access, writes.capabilityRequired);
@@ -1313,20 +1317,27 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  document.body.dataset.ready='true';
 }
 /** Record-only publications reuse the empty main view; no package or model is manufactured. */
-async function startRecord():Promise<void> {
- if(!host?.record)throw new Error('JOB_DISPLAY_MISMATCH');
- readOnly=tr('JOB_REVIEW_READ_ONLY');
- actReadOnly=readOnlyReason(access,true,host.ownerActAccess);
+async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
+ if(!host?.record&&!interview)throw new Error('JOB_DISPLAY_MISMATCH');
+ const unavailable=interview?'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.':'This request has no picture.';
+ readOnly=tr(interview?'MODEL_UNAVAILABLE':'JOB_REVIEW_READ_ONLY');
+ if(!interview)actReadOnly=readOnlyReason(access,true,host?.ownerActAccess);
  bindWorkspace();bindInspector(true);rigInput={state:'absent'};referenceInput={state:'absent'};renderLayout();
- parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');message(actReadOnly??'This request has no picture.',!!actReadOnly);
- text('package-title',host.record.label);text('revision','');text('source-hash',`source ${host.record.sourceHash.slice(0,12)}`);
- el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty','This request has no picture.');
- for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')){control.disabled=true;setSourceAttribute(control,'title','This request has no picture.');}
- setupComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;
+ parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??unavailable,!!actReadOnly);
+ text('package-title',interview?.label??host!.record!.label);text('revision','');text('source-hash',`source ${(interview?.sourceHash??host!.record!.sourceHash).slice(0,12)}`);
+ el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty',unavailable);
+ for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')){control.disabled=true;setSourceAttribute(control,'title',unavailable);}
+ if(interview){
+  button('save').disabled=true;setSourceAttribute(button('save'),'title',unavailable);
+  const label=()=>{setSourceText(rigAsk,t('interview.title'));recordDialog?.setAttribute('aria-label',t('interview.title'));};
+  label();viewDisposers.push(onLanguageChange(label));
+  viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,t('interview.title'),true)));
+  text('provenance-rig',unavailable);text('provenance-motion',unavailable);text('source-files','project.json');
+ }else{setupComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;}
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  await workspace?.settle();if(disposed)return;
  document.body.dataset.ready='true';
- host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message,suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();
+ if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message,suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
 let recordDialog:HTMLDialogElement|null=null;
 /** Reuse the form's publication binding for native record comments, without a package session. */
@@ -1362,20 +1373,20 @@ function recordCommentsChanged():void {
  for(const form of recordDialog?.querySelectorAll('form[data-job-ask]')??[])form.dispatchEvent(new Event('input',{bubbles:true}));
 }
 /** The shared answer forms use the one native dialog, opened from the current ask line. */
-function renderRecordForms(forms:readonly HTMLFormElement[]):void {
+function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',standalone=false):void {
  if(!forms.length&&!recordDialog)return;
  if(!recordDialog){
-  recordDialog=panelMake('dialog',{id:'job-record-asks',className:'workspace-drawer'});recordDialog.setAttribute('aria-label',tr('job.pending'));
+  recordDialog=panelMake('dialog',{id:'job-record-asks',className:'workspace-drawer'});recordDialog.setAttribute('aria-label',tr(label));
   const close=panelMake('button',{className:'workspace-drawer-close',type:'button'},tr('Close'));recordDialog.append(close);app.append(recordDialog);
-  viewDisposers.push(bindWorkspaceDrawer({trigger:rigAsk,drawer:recordDialog,label:tr('job.pending'),close}));
+  viewDisposers.push(bindWorkspaceDrawer({trigger:rigAsk,drawer:recordDialog,label:tr(label),close}));
   viewDisposers.push(()=>{recordDialog?.close();recordDialog?.remove();recordDialog=null;});
  }
  recordDialog.classList.toggle('interview-modal',forms.some(form=>form.classList.contains('interview-answer')));
- for(const form of recordDialog.querySelectorAll<HTMLFormElement>('form[data-job-ask]'))if(!forms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
- if(forms[0])restoreRecordComments(forms[0]);
+ for(const form of recordDialog.querySelectorAll<HTMLFormElement>('form.interview-answer,form[data-job-ask]'))if(!forms.includes(form)){if(!standalone)form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
+ if(!standalone&&forms[0])restoreRecordComments(forms[0] as HTMLFormElement);
  const added=forms.filter(form=>!recordDialog!.contains(form));
  for(const form of forms){
-  (form as JobForm['form']).commentWords=()=>host?.record?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):projectComments(feedbackItemComments(session.feedback));
+  if(!standalone)(form as JobForm['form']).commentWords=()=>host?.record?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):projectComments(feedbackItemComments(session.feedback));
   if(!recordDialog.contains(form)){if(!form.classList.contains('interview-answer'))form.style.overflow='auto';form.style.minHeight='0';recordDialog.append(form);}
  }
  if(host?.record){
@@ -1383,8 +1394,9 @@ function renderRecordForms(forms:readonly HTMLFormElement[]):void {
   setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);comments?.refresh();partsSubject?.refreshComments();
   button('save').disabled=!forms.some(form=>!form.querySelector('fieldset')?.disabled);button('save').onclick=()=>rigAsk.click();
  }
+ if(standalone){rigAsk.hidden=false;setSourceText(rigAsk,t('interview.title'));}
  rigAsk.disabled=!forms.length;
- if(added.some(form=>form.classList.contains('interview-answer'))&&!recordDialog.open)rigAsk.click();
+ if((standalone?added.length>0:added.some(form=>form.classList.contains('interview-answer')))&&!recordDialog.open)rigAsk.click();
 }
 /** The ask heading reads only already-pending subjects. It never synthesizes an agent request. */
 function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {

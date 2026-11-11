@@ -1,5 +1,39 @@
 # Public API stability
 
+## Interview-stage project opening
+
+The additional CLI form is:
+
+```sh
+rig-review open /path/to/project --project /path/to/project --picks-dir scratch/review-picks
+```
+
+Both root operands must resolve to the same Create project. The picks directory
+must already exist, be project-relative and be disjoint from declared inputs.
+Omitting both selectors is supported only at `stage: "interview"` without a
+recorded draft or a non-null `versions[].review_package`. Demo/build versions
+without a review package are allowed. Unrelated files under `derived/` do not
+select or manufacture a review package. Explicit `--project-version` and
+`--project-draft` retain their strict package joins and never fall back here.
+This form is single-target and accepts no additional inspection options;
+`feedback` and `control` keep their existing selector requirements.
+
+The existing single-entry workspace opens the interview in its existing modal.
+Its internal `/api/review` transport uses `subject: "interview"`, an actual
+`project.json` path/hash, source hash, label and availability flags. It carries
+no manifest, compiled model, reviewed-package identity or package session.
+Model-dependent APIs refuse `MODEL_UNAVAILABLE`. Project, retained option sets
+and declared inputs are hash-bound and rechecked; drift refuses
+`INTERVIEW_OPTIONS_STALE`. Opening and reading change no source files.
+The joined dialog and standing record form use one shared list | image | survey
+answer builder. There is no interview Note input. Existing saved or historical
+notes remain readable as read-only text and are carried unchanged. Joined picks
+omit `note` when none exists; the job act retains its required string field.
+Historical records, picks/act/verdict schemas and explicit
+version/draft joins retain their existing readers and checks. This introduces
+no job API, act schema, consumer contract or package-export change; it does not
+replace the active standing review cycle with a picks-file handoff.
+
 ## Managed owner host
 
 `@rig-c/review/job-host` is the installed Bun entry for the full standing owner

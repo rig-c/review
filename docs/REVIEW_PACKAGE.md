@@ -848,6 +848,32 @@ parts verdict source digest and actual original PNG SHA-256, without a fabricate
 manifest id, revision or compiled model. The rig's `rig-review-comment/1` schema stays closed.
 See [the parts contract and validation instruments](PARTS_VIEW.md#pointed-parts-comments).
 
+### Interview-stage project subject
+
+`rig-review open <project-root> --project <project-root> --picks-dir <dir>`
+opens an interview-stage Create project before a draft or recorded review
+package exists. Both roots must resolve to the same directory. The picks output
+is an existing dedicated project-relative directory disjoint from inputs.
+No version/draft selector is inferred: demo/build version records and unrelated
+derived evidence are allowed, while an actual draft or a non-null
+`versions[].review_package` requires its existing explicit package designation.
+This form takes exactly one target and no additional inspection options.
+
+The existing joined resolver reads the project, retained option sets and input
+hashes. The launcher retains an internal interview subject, not a `ReviewPackage`.
+The shared server serves the same `web/index.html` and bounded interview routes;
+its internal `/api/review` response contains `subject: "interview"`, project
+path/hash, source hash, label and capability flags, with no manifest, model,
+reviewed-package identity or package session. The existing modal mounts the
+existing interview form. Model APIs refuse `MODEL_UNAVAILABLE`; source drift
+refuses `INTERVIEW_OPTIONS_STALE`. Reads do not write sources. The joined dialog and standing record form use one shared list | image | survey
+answer builder. There is no interview Note input. Existing saved or historical
+notes remain readable as read-only text and are carried unchanged. Joined picks
+omit `note` when none exists; the job act retains its required string field.
+Historical records, picks/act/verdict schemas and explicit
+version/draft joins retain their existing readers and checks.
+This opening form does not replace the semantic standing review cycle.
+
 ## Stage-1 draft mesh inspection
 
 `GET /api/stage-parts` in single inspections uses the live handoff's original
