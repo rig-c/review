@@ -2,7 +2,8 @@ import {readFileSync} from 'node:fs';
 import {createRigViewControls} from './helpers/rig-view-controls.ts';
 import {expect,test} from 'bun:test';
 import {createViewControls,compareViewModes,eligibilityViewSwitch,type ViewSwitchConfig} from '../web/view-controls.ts';
-import {pairEligibility} from '../src/comparison-eligibility.ts';
+import {rigRestCanvas} from '../web/job-rig-capture.ts';
+import {singleEligibility,pairEligibility} from '../src/comparison-eligibility.ts';
 import {getLanguagePreference,setLanguagePreference,t} from '../web/i18n.ts';
 
 /** Numeric DOM host: no browser, layout or rendering claims. */
@@ -48,9 +49,9 @@ for(const language of ['en','ko'] as const){
   expect(summary.getAttribute('aria-label')).toBe(t('View layout'));expect(summary.children[0]).toBe(t('View switch')+' ');
   expect(label.id).toBe('view-menu-label');expect(label.textContent).toBe(t('Side by side'));
   expect(list.getAttribute('role')).toBe('group');expect(list.getAttribute('aria-label')).toBe(t('View'));
-  expect(buttons.map(button=>button.dataset.view)).toEqual(['compare','reference','rig']);
-  expect(buttons.map(button=>button.textContent)).toEqual(['Side by side','Reference','Rig'].map(key=>t(key)));
-  expect(buttons.map(button=>button.getAttribute('aria-pressed'))).toEqual(['true','false','false']);
+  expect(buttons.map(button=>button.dataset.view)).toEqual(['compare','reference','rig','difference']);
+  expect(buttons.map(button=>button.textContent)).toEqual(['Side by side','Reference','Rig','Difference'].map(key=>t(key)));
+  expect(buttons.map(button=>button.getAttribute('aria-pressed'))).toEqual(['true','false','false','false']);
   expect(buttons.every(button=>!button.disabled&&button.title==='')).toBe(true);
  }));
  test(`#677 ${language}: parts configuration orders six modes, separates groups and names disabled reason`,()=>withControls(()=>{
@@ -124,18 +125,34 @@ test('#677 runtime Difference refusal can be cleared, re-enabled and selected wi
 for(const language of ['en','ko'] as const)test(`#736 Amendment 1 ${language}: actual rig refresh keeps original names, legacy ids and named layout refusals`,()=>withControls(()=>{
  setLanguagePreference(language);
  const source=readFileSync(new URL('../web/main.ts',import.meta.url),'utf8');
- const start=source.indexOf('function renderLayout():void {'),end=source.indexOf('function setReferenceInput(',start);
- const {controls,buttons,label}=menu(),panes=new Map<string,{hidden:boolean}>();
- let state:{requested:string;effective:string|null;reasons:Record<string,string>}={requested:'compare',effective:'rig',reasons:{compare:'REFERENCE_ABSENT: not supplied',reference:'REFERENCE_ABSENT: not supplied'}};
- const call=new Bun.Transpiler({loader:'ts'}).transformSync('let effectiveView;'+source.slice(start,end)+';return renderLayout;');
- const render=new Function('layoutEligibility','controls','el','text','fitCamera','partsSubject','tr',call)(()=>state,controls,(id:string)=>{if(!panes.has(id))panes.set(id,{hidden:false});return panes.get(id);},()=>{},()=>{},null,t) as ()=>void;
- render();expect(label.textContent).toBe(t('Rig'));expect(controls.viewModeIds).toEqual(['compare','reference','rig']);
- expect(buttons.map(button=>button.disabled)).toEqual([true,true,false]);
- expect(buttons[1]!.title).toBe(state.reasons.reference!);expect(buttons[1]!.getAttribute('aria-description')).toBe(state.reasons.reference!);
+ const reasonStart=source.indexOf('function rigDifferenceReason()'),reason=source.slice(reasonStart,source.indexOf('/** Restore the compiled view',reasonStart));
+ const start=source.indexOf('function layoutEligibility()'),end=source.indexOf('function setReferenceInput(',start);
+ const {controls,buttons,label}=menu(),panes=new Map<string,{hidden:boolean}>(),painting={naturalWidth:320,naturalHeight:240};
+ const scope:any={controls,rigDifference:null,rigDifferenceFailure:null,partsSubject:null,view:'compare',rigInput:{state:'loaded'},referenceInput:{state:'absent'},
+  assets:{stage:{x:0,y:0,width:320,height:240}},player:{},selectedInspector:()=>'rig',singleEligibility,rigRestCanvas,tr:t,
+  el:(id:string)=>{if(id==='reference-content')return {querySelector:()=>painting};if(!panes.has(id))panes.set(id,{hidden:false});return panes.get(id);},
+  text:()=>{},fitCamera:()=>{},leaveRigDifference:()=>{throw new Error('No diagnostic was active in this fixture');},
+ };
+ const call=new Bun.Transpiler({loader:'ts'}).transformSync('let effectiveView;'+reason+source.slice(start,end)+';return {render:renderLayout,state:layoutEligibility};');
+ const {render,state}=new Function('scope','with(scope){'+call+'}')(scope) as {render:()=>void;state:()=>ReturnType<typeof singleEligibility>};
+ render();expect(label.textContent).toBe(t('Rig'));expect(controls.viewModeIds).toEqual(['compare','reference','rig','difference']);
+ expect(buttons.map(button=>button.disabled)).toEqual([true,true,false,true]);
+ expect(buttons[1]!.title).toBe(state().reasons.reference!);expect(buttons[1]!.getAttribute('aria-description')).toBe(state().reasons.reference!);
+ expect(buttons[3]!.title).toBe(t('RIG_DIFFERENCE_REFERENCE_UNAVAILABLE: select a loaded original painting image.'));
  expect(panes.get('reference-pane')!.hidden).toBe(true);expect(panes.get('rig-pane')!.hidden).toBe(false);
- state={requested:'compare',effective:'compare',reasons:{}};render();
+ scope.referenceInput={state:'loaded'};render();
  expect(buttons.every(button=>!button.disabled)).toBe(true);expect(label.textContent).toBe(t('Side by side'));
- expect(buttons.map(button=>button.textContent)).toEqual(['Side by side','Reference','Rig'].map(key=>t(key)));
+ expect(buttons.map(button=>button.textContent)).toEqual(['Side by side','Reference','Rig','Difference'].map(key=>t(key)));
+ // Difference-specific reasons must not disturb the real first-three eligibility and fallback decision.
+ painting.naturalWidth=640;render();expect(buttons.map(button=>button.disabled)).toEqual([false,false,false,true]);
+ expect(buttons[3]!.title).toBe(t('RIG_DIFFERENCE_NATIVE_SCALE: original painting and declared rig canvas must align at native scale.'));
+ painting.naturalWidth=320;scope.selectedInspector=()=>'playback';render();expect(buttons.map(button=>button.disabled)).toEqual([false,false,false,true]);
+ expect(buttons[3]!.title).toBe(t('RIG_DIFFERENCE_SETUP_ONLY: Difference is available in Setup.'));
+ scope.selectedInspector=()=>'rig';scope.rigInput={state:'failed',reason:'decode error'};render();
+ expect(state().effective).toBe('reference');expect(label.textContent).toBe(t('Reference'));expect(buttons.map(button=>button.disabled)).toEqual([true,false,true,true]);
+ expect(buttons[2]!.title).toBe('RIG_FAILED: decode error');expect(panes.get('reference-pane')!.hidden).toBe(false);expect(panes.get('rig-pane')!.hidden).toBe(true);
+ scope.referenceInput={state:'absent'};render();expect(state().effective).toBeNull();expect(buttons.every(button=>button.disabled)).toBe(true);
+ expect(panes.get('reference-pane')!.hidden).toBe(true);expect(panes.get('rig-pane')!.hidden).toBe(true);
  const changes:string[]=[],live=createRigViewControls(id=>changes.push(id));
  const root=live.viewSwitch as unknown as ControlNode,list=root.children[1] as ControlNode;
  root.open=true;(list.children[2] as ControlNode).onclick!();expect(changes).toEqual(['rig']);expect(root.open).toBe(false);
