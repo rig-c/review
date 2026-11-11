@@ -1428,7 +1428,25 @@ this extension. Technical configuration and search controls are outside it.
 The decoders and consumer projections are read-only. Since [Review #713](https://github.com/rig-c/review/issues/713)
 (HQ contract ruling), the UI finalizers write fresh checkpoint, parts-verdict,
 rig and direction review-verdict and signoff acts as act@6. The UI submission
-keeps its existing `words` and `issues` fields. The daemon maps a nonblank note
+keeps its existing `words` and `issues` fields. [Review #746](https://github.com/rig-c/review/issues/746)
+adds optional `feedback: Feedback[]` beside required `words` only for the
+`rig-review` verdict submission. When present, including an empty list, it is
+the complete comment list: `feedbackItemComments` maps each row's `summary` to
+`text` and retains its `id`, frames, target, category and `anchor.context`.
+The existing decoder validates every mapped comment, its evidence and the
+whole scalar bound; malformed or blank rows refuse rather than falling back to
+`words`. The act bar sends a detached feedback list when comments exist and
+keeps `words` as their projection. It omits `feedback` when there are no comments.
+Absent `feedback` retains the previous written bytes and words-only mapping.
+Direction and image verdict submissions do not accept `feedback`. The written
+act remains act@6; historical words-only acts retain their readers.
+
+Pointed marks, inline crops, bookmarks and valid time-only null frames remain
+inside the existing `anchor.context`. This is distinct from act@7's top-level
+`comment.context`, which remains disabled by `EMIT_UNPINNED_CREATE_FIELDS`.
+No new field or decoder rule is added to the written act.
+
+For the words-only mapping, the daemon maps a nonblank note
 to one comment: anchored to the checkpoint for a checkpoint, general otherwise.
 It maps each Parts issue to a Parts-anchored comment, before the note. A blank
 or whitespace-only note writes no comment (`comments: []`). Nothing is padded.

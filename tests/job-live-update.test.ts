@@ -43,7 +43,7 @@ test('#743 publication swaps in place and transports navigation only; ack failur
  expect(h.hosts[1]!.navigation).toEqual({subject:'rig',bookmark:h.bookmark} as never);
  expect(h.hosts[1]!.access.key).toBe(b.display.publication.instanceKey);
  const fresh=await h.hosts[1]!.read('/api/session','GET') as any;
- expect(fresh.sourceHash).toBe(b.review.sourceHash);expect(fresh.status).toBe('pending');expect(fresh.feedback).toEqual([]);expect(fresh.checkpoints).toEqual({});
+ expect(fresh.sourceHash).toBe(b.review!.sourceHash);expect(fresh.status).toBe('pending');expect(fresh.feedback).toEqual([]);expect(fresh.checkpoints).toEqual({});
  await swap.rollback();expect(h.nodes()).toEqual(oldNodes);expect(rigHost()).toBe(oldHost);expect(h.view.mounted()).toBe(a);
  expect(h.events).toContain('resume 1');expect(h.events).not.toContain('dispose 1');
 });
@@ -105,13 +105,15 @@ test('#743 parts caller keeps named selection, Solo, both numeric cameras and la
 test('#743 rollback resume waits for workspace redocking and persistence before reporting ready',async()=>{
  const source=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();const body=source.slice(source.indexOf('async function resumeScreen()'),source.indexOf('function disposeScreen()'));
  const {Transpiler}=await import('bun');const js=new Transpiler({loader:'ts'}).transformSync(body);
+ for(const recordWithoutPicture of [false,true]){
  const queue:Function[]=[],events:string[]=[],screenRoot={inert:false},document={body:{dataset:{ready:'true'} as Record<string,string>,removeAttribute(name:string){if(name==='data-ready')delete this.dataset.ready;}}};let docked=false;
- const resume=new Function('window','document','screenRoot','workspace','setupPersistence','requestAnimationFrame','tick',`let disposed=false,suspended=true,partsOnly=false,frameHandle=0;const publicEditor={};${js};return resumeScreen;`)(
-  {},document,screenRoot,{settle(){return new Promise<void>(resolve=>queue.push(()=>{docked=true;events.push('docked');resolve();}));}},async()=>{if(!docked)throw Error('Missing UI element: feedback-target-name');events.push('persistence');},(fn:Function)=>{queue.push(fn);return queue.length;},()=>{});
+ const resume=new Function('window','document','screenRoot','workspace','setupPersistence','requestAnimationFrame','tick','host',`let disposed=false,suspended=true,partsOnly=false,frameHandle=0;const publicEditor={};${js};return resumeScreen;`)(
+  {},document,screenRoot,{settle(){return new Promise<void>(resolve=>queue.push(()=>{docked=true;events.push('docked');resolve();}));}},async()=>{if(!docked)throw Error('Missing UI element: feedback-target-name');events.push('persistence');},(fn:Function)=>{queue.push(fn);return queue.length;},()=>{},recordWithoutPicture?{record:{hasPicture:false}}:null);
  const done=resume();let complete=false;const completed=Promise.resolve(done).then(()=>{complete=true;});
  expect(document.body.dataset.ready).toBeUndefined();expect(screenRoot.inert).toBe(true);
  for(let i=0;i<6&&!complete;i++){for(const task of queue.splice(0))task();await Promise.resolve();}
- await completed;expect(events).toEqual(['docked','persistence']);expect(document.body.dataset.ready).toBe('true');expect(screenRoot.inert).toBe(false);
+ await completed;expect(events).toEqual(recordWithoutPicture?['docked']:['docked','persistence']);expect(document.body.dataset.ready).toBe('true');expect(screenRoot.inert).toBe(false);
+ }
 });
 
 test('#743 scoped element lookup resolves only the mount root or its owned workspace portals',async()=>{
@@ -135,4 +137,26 @@ test('#743 window replacement keeps preparing until asynchronous rollback restor
  const window=createJobWindow({jobId:'window-fixture',pageId:'page',transport:{readPublication:async()=>({ok:true,value:display}),acknowledge:async()=>({ok:false,error:{code:'JOB_DISPLAY_MISMATCH',message:'planted acknowledgment refusal'}}),submit:async()=>{throw Error('not used');}},
   adapter:{prepare:async()=>display,captureDraft:()=>null,commit:()=>({async rollback(){entered();await gate;},finalize(){}}),painted:async()=>{},discard(){},changed(){}}});
  const pending=window.replace(display.publication);await started;expect(window.state().preparing).toBe(true);release();await pending;expect(window.state().preparing).toBe(false);expect(window.state().error).toBe('JOB_DISPLAY_MISMATCH');window.stop();
+});
+
+
+test('#743 no-picture record attaches owned lifecycle only after asynchronous workspace readiness',async()=>{
+ const source=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();
+ const body=source.slice(source.indexOf('async function startRecord()'),source.indexOf('let recordDialog:'));
+ const js=new Bun.Transpiler({loader:'ts'}).transformSync(body),events:string[]=[],disposers:Function[]=[];
+ let settle!:()=>void,attached:any;
+ const document={body:{dataset:{} as Record<string,string>},querySelectorAll:()=>[]};
+ const suspend=()=>{},resume=async()=>{},dispose=()=>{};
+ const scope={document,host:{record:{label:'Plan',sourceHash:'a'.repeat(64),hasPicture:false},attach(screen:unknown){attached=screen;events.push('attached');},displayed(){expect(document.body.dataset.ready).toBe('true');events.push('displayed');}},
+  readOnly:null,rigInput:null,referenceInput:null,parts:null,disposed:false,tr:String,
+  bindWorkspace(){},bindInspector(){},renderLayout(){},text(){},message(){},el:()=>({hidden:false}),
+  PartExplorer:class{},workspace:{settle:()=>new Promise<void>(resolve=>{settle=resolve;})},
+  viewport:{observeResize:()=>({disconnect:()=>events.push('disconnected')})},viewDisposers:disposers,
+  renderRecordForms(){},renderPendingSubjects(){},suspendScreen:suspend,resumeScreen:resume,disposeScreen:dispose};
+ const run=new Function('scope',`with(scope){${js};return startRecord();}`);
+ const pending=run(scope);expect(attached).toBeUndefined();expect(document.body.dataset.ready).toBeUndefined();
+ settle();await pending;expect(events).toEqual(['attached','displayed']);
+ expect(attached.suspend).toBe(suspend);expect(attached.resume).toBe(resume);expect(attached.dispose).toBe(dispose);
+ expect(attached.navigation).toBeUndefined();expect(attached.incompatible).toBeUndefined();expect(attached.recordForms).toBe(scope.renderRecordForms);
+ for(const close of disposers)close();expect(events.at(-1)).toBe('disconnected');
 });

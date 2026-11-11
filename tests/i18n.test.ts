@@ -1228,12 +1228,15 @@ test('#743 live host notices and act status retain English source and render in 
  const main = await readFile(new URL('../web/main.ts', import.meta.url), 'utf8');
  const inspector = await readFile(new URL('../web/inspector-blocks.ts', import.meta.url), 'utf8');
  const transpiler = new Bun.Transpiler({loader: 'ts'});
- const start = sessionSource.indexOf('    const rigScreen = createJobRigScreen(');
- const end = sessionSource.indexOf('    const window = createJobWindow(', start);
+ const live = sessionSource.indexOf('export async function mountJobScreen(');
+ const start = sessionSource.indexOf('    const rigScreen=createJobRigScreen(', live);
+ const end = sessionSource.indexOf('    let bootstrapNotice:', start);
+ expect(start).toBeGreaterThan(live);
+ expect(end).toBeLessThan(sessionSource.indexOf('/** Browser mount is explicit', live));
  // Execute the actual host wiring, rather than supplying an already corrected translator.
- const translate = new Function('createJobRigScreen', 'host', 'pageId', 'access', 'i18n', 't', 'jobWindowRefusal',
+ const translate = new Function('createJobRigScreen', 'host', 'pageId', 'access', 'i18n', 't', 'jobWindowRefusal', 'dependencies',
   transpiler.transformSync(sessionSource.slice(start, end)) + ';return rigScreen.translate;')(
-   (options: {translate: typeof t}) => options, {}, 'page', {}, {t}, t, String);
+   (options: {translate: typeof t}) => options, {}, 'page', {}, {t}, t, String, {});
  const text = main.slice(main.indexOf('const text = '), main.indexOf('const option = '));
  const message = main.slice(main.indexOf('function message('), main.indexOf('async function api<'));
  const saveState = inspector.slice(inspector.indexOf(' const setSaveState='), inspector.indexOf(' return {element,refresh,setSaveState'));
@@ -1275,4 +1278,12 @@ test('#743 live host notices and act status retain English source and render in 
    }
   }
  } finally { setLinkLanguage(link); setLanguagePreference(preference); }
+});
+
+test('#739 rig Difference pixel count translates and round-trips in the existing dynamic DOM path',()=>{
+ const key='Difference: {0} of {1} pixels differ, compared where the rig draws · rest still vs original painting.';
+ const english=t(key,[64,100],'en'),korean=t(key,[64,100],'ko');
+ expect(english).toBe('Difference: 64 of 100 pixels differ, compared where the rig draws · rest still vs original painting.');
+ expect(korean).toBe('차이: 리그가 그리는 100픽셀 중 64픽셀 다름 · 정지 셋업과 원본 그림.');
+ expect(tr(english,'ko')).toBe(korean);expect(tr(korean,'en')).toBe(english);
 });

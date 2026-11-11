@@ -76,6 +76,8 @@ test('post direction verdict is written as act@6 and read back through the publi
     value: {stage: 'direction-review', verdict: 'changes-requested', comments: [{text: 'tighten the turn'}]}});
   expect(act).not.toHaveProperty('still');
   expect(parseCommentsAct(JSON.parse(JSON.stringify(act)))).toEqual(act as never);
+  expect(() => finalizeJobAct({jobId: f.session.jobId, submission: {...submission,
+    value: {...submission.value, feedback: []}} as JobUISubmission, ask, retained, reviewer})).toThrow('JOB_REQUEST_INVALID');
 });
 
 test('image-review stays pinned at act@2 with words and imageNotes', async () => {
@@ -91,6 +93,11 @@ test('image-review stays pinned at act@2 with words and imageNotes', async () =>
   const publication = await f.publish(), ask = await f.ask(publication, {kind: 'review-verdict', stage: 'image-review'});
   const page = await f.display(publication);
   const value = {stage: 'image-review', verdict: 'approved', words: '  exact  ', imageNotes: [{name: 'Image 0', words: ' note '}]};
+  const refused = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
+    expectedGeneration: f.session.status().generation, submissionId: 'image-feedback-refused', kind: 'review-verdict',
+    value: {...value, feedback: []}}));
+  expect(refused.ok).toBe(false);
+  if (!refused.ok) expect(refused.error.code).toBe('JOB_REQUEST_INVALID');
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
     expectedGeneration: f.session.status().generation, submissionId: 'image-pin', kind: 'review-verdict', value}));
   if (!saved.ok) throw new Error(saved.error.code);
