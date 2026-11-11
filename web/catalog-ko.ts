@@ -21,6 +21,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "JOB_STILL_CAMERA_NOT_FIXED": "JOB_STILL_CAMERA_NOT_FIXED · 판정을 제출하기 전에 리그를 기본 화면 구도로 되돌리세요.",
   "JOB_STILL_VIEW_UNSUPPORTED": "JOB_STILL_VIEW_UNSUPPORTED · 단독 표시·강조·비교 레이어를 해제하고 전체 리그를 표시한 뒤 제출하세요.",
   "JOB_STILL_BINDING_MISMATCH": "JOB_STILL_BINDING_MISMATCH · 표시된 소스·페이지·그려진 프레임이 바뀌었습니다. 새 판정 시도를 시작하세요.",
+  "JOB_REVIEW_READ_ONLY": "JOB_REVIEW_READ_ONLY · 이 작업 대상은 여기서 읽기 전용입니다. 프로듀서 도구와 다시 빌드는 사용할 수 없습니다.",
+  "JOB_ACT_NOTHING_TO_SUBMIT": "JOB_ACT_NOTHING_TO_SUBMIT · 제출하기 전에 승인, 변경 요청 또는 체크포인트 결과를 고르세요.",
   "JOB_STILL_UNAVAILABLE": "JOB_STILL_UNAVAILABLE · 이 과거 기록 또는 리그 외 판정에는 보관된 리그 PNG가 없습니다.",
   "JOB_STILL_OUTPUT_FAILED": "JOB_STILL_OUTPUT_FAILED · 소비자가 리그 PNG 또는 판정 출력을 끝까지 기록하지 못했습니다.",
   "WORKSPACE_BODY_TIMEOUT": "WORKSPACE_BODY_TIMEOUT",

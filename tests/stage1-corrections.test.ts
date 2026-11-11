@@ -907,7 +907,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   };
   let fitCameraHook:(()=>void)|null=null;
   const mainSlice=[
-   sliceBetween('const viewportState=createViewportState();','connectLiveWindow(access);').replace('const {fitCamera,','const {')+'\nconst fitCamera=()=>{viewport.fitCamera();onFitCamera?.();};',
+   sliceBetween('const viewportState=createViewportState();','if(!host)connectLiveWindow(access);').replace('const {fitCamera,','const {')+'\nconst fitCamera=()=>{viewport.fitCamera();onFitCamera?.();};',
    sliceBetween('let partModel:unknown=null;','let referenceSize:').replace('let inspectorTabs:ReturnType<typeof bindInspectorTabs>|null=null;','let inspectorTabs=stageInspectorTabs;'),
    sliceBetween('function setView(','function setReferenceInput('),
    sliceBetween('function drawRig(','function chooseAnimation('),

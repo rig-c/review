@@ -21,6 +21,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "JOB_STILL_CAMERA_NOT_FIXED": "JOB_STILL_CAMERA_NOT_FIXED · Restore the default Rig framing before submitting this verdict.",
   "JOB_STILL_VIEW_UNSUPPORTED": "JOB_STILL_VIEW_UNSUPPORTED · Show the whole Rig without solo, highlight or comparison layers before submitting.",
   "JOB_STILL_BINDING_MISMATCH": "JOB_STILL_BINDING_MISMATCH · The displayed source, page or drawn frame changed. Start a new verdict attempt.",
+  "JOB_REVIEW_READ_ONLY": "JOB_REVIEW_READ_ONLY · This job subject is read only here: producer tools and rebuilds are unavailable.",
+  "JOB_ACT_NOTHING_TO_SUBMIT": "JOB_ACT_NOTHING_TO_SUBMIT · Choose Approve, Changes requested or a checkpoint outcome before submitting.",
   "JOB_STILL_UNAVAILABLE": "JOB_STILL_UNAVAILABLE · This historical or non-rig act has no retained Rig PNG.",
   "JOB_STILL_OUTPUT_FAILED": "JOB_STILL_OUTPUT_FAILED · The consumer could not finish writing the Rig PNG or act output.",
   "WORKSPACE_BODY_TIMEOUT": "WORKSPACE_BODY_TIMEOUT",

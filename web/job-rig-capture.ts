@@ -1,6 +1,7 @@
-import type {RigPlayer} from '@rig-c/play';
+import {CanvasRenderer, type ModelAssets, type PosedFrame, type RigPlayer} from '@rig-c/play';
 import {jobStillByteLimit, type JobRigCapture, type JobUISubmission} from '../src/job-contract.ts';
-import type {JobRigPresentation} from './viewport-capture.ts';
+import type {ControlNumericCamera} from '../src/control.ts';
+import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
 
 type DrawSource = Pick<JobRigCapture['binding'], 'publicationId' | 'instanceKey' | 'sourceHash' | 'pageId'>;
 export interface JobRigDrawState {
@@ -208,4 +209,59 @@ export function createJobRigSubmission() {
       return saved.pending;
     },
   };
+}
+
+/** One screen's rig pane as the still reads it: the job window's and the one review screen's share this. */
+export interface JobRigStage {
+  readonly pane: HTMLElement;
+  readonly paneHidden: boolean;
+  readonly root: HTMLElement;
+  readonly player: RigPlayer;
+  readonly presentation: JobRigPresentation | undefined;
+  readonly frameGeneration: number | undefined;
+  readonly camera: ControlNumericCamera | null | undefined;
+  readonly frame: {readonly center: {readonly x: number; readonly y: number}} | null;
+  readonly source: DrawSource;
+  /** No part selected or solo, images only, no mesh, bones or background sentinel. */
+  readonly wholeRig: boolean;
+  readonly playing: boolean;
+}
+
+/** The draw state a still is bound to: pane geometry, camera, canonical pixels and the posed frame. */
+export function jobRigDrawState(stage: JobRigStage): JobRigDrawState {
+  const {pane, root, player, presentation, frame, camera} = stage;
+  const rect = pane.getBoundingClientRect(), ratio = globalThis.devicePixelRatio || 1;
+  if (!frame || !camera || !pane.isConnected || !root.isConnected || stage.paneHidden ||
+      rect.width <= 0 || rect.height <= 0) throw new Error('JOB_STILL_CAPTURE_FAILED');
+  const style = getComputedStyle(root), paneStyle = getComputedStyle(pane);
+  const plain = style.filter === 'none' && style.perspective === 'none' && style.opacity === '1' &&
+    paneStyle.filter === 'none' && paneStyle.transform === 'none' && paneStyle.perspective === 'none' && paneStyle.opacity === '1';
+  const canvas = presentation?.canvas;
+  const pixels = canvas?.getBoundingClientRect();
+  const canvasStyle = canvas ? getComputedStyle(canvas) : null;
+  if (canvas && (!canvas.isConnected || canvasStyle?.visibility !== 'visible' ||
+      canvasStyle.display === 'none' || canvasStyle.opacity !== '1' || canvasStyle.filter !== 'none' ||
+      canvasStyle.transform !== 'none')) throw new Error('JOB_STILL_CAPTURE_FAILED');
+  return {player, presentation, frameGeneration: stage.frameGeneration, source: stage.source,
+    layout: JSON.stringify([
+      pane.clientWidth, pane.clientHeight, rect.width, rect.height, ratio,
+      root.getAttribute('style'), style.transform, camera, presentation?.area, presentation?.ratio,
+      pixels ? jobRigPixelPlacement(rect, pixels, ratio) : null,
+      pixels?.width, pixels?.height, canvas?.width, canvas?.height, canvas?.getAttribute('style'),
+    ]),
+    defaultCamera: plain && camera.zoom === 1 && camera.center.x === frame.center.x && camera.center.y === frame.center.y,
+    wholeRig: stage.wholeRig, playing: stage.playing};
+}
+
+/** Paint the pane's actual pixels into one canonical canvas and put it on the pane. */
+export function presentJobRigStage(stage: Pick<JobRigStage, 'pane' | 'root' | 'player' | 'camera'> &
+  {readonly posed: PosedFrame | undefined; readonly assets: ModelAssets | null}): JobRigPresentation {
+  const renderer = stage.player.renderer;
+  if (!stage.posed || !stage.assets || !stage.camera) throw new Error('JOB_STILL_CAPTURE_FAILED');
+  const presentation = presentJobRigViewport({pane: stage.pane, root: stage.root, images: true,
+    canvas: renderer instanceof CanvasRenderer ? renderer.canvas : undefined,
+    backend: renderer instanceof CanvasRenderer ? renderer.backendActive : renderer.meshBackendActive},
+  {camera: stage.camera, posed: stage.posed, assets: stage.assets});
+  stage.pane.append(presentation.canvas);
+  return presentation;
 }

@@ -12,19 +12,11 @@ import { scheduleContextLine } from './environment-schedule.ts';
 import {parseCommentsSession} from './session.ts';
 import {projectComments} from './stage-comment.ts';
 import type {ReviewCommentsSession, JobCommentFeedbackAnchor} from './job-contract.ts';
-import type {JobComment, JobActValues, ActV3} from './job-contract.ts';
-import type {CompareFeedback} from './compare-session.ts';
+import type {JobComment, ActV3} from './job-contract.ts';
 import {parseRecordAct} from './job-api.ts';
 
-/** Pure preparation only: the caller still decodes the complete source-bound envelope. */
-export function feedbackItemComments(items: readonly (Feedback | CompareFeedback)[]): {text: string; anchor: JobCommentFeedbackAnchor}[] {
-  return items.map(({summary, ...anchor}) => ({text: summary, anchor: structuredClone(anchor)}));
-}
-
-/** Mapping comes from the decoded plan/ask, never from an inferred checkpoint ID. */
-export function checkpointNoteComments(value: Pick<JobActValues['checkpoint'], 'checkpointId' | 'planStepId'> & {note: string}): JobComment[] {
-  return [{text: value.note, anchor: {checkpointId: value.checkpointId, planStepId: value.planStepId}}];
-}
+/** Browser-safe mappers live beside projectComments; this module keeps exporting them. */
+export {feedbackItemComments, checkpointNoteComments} from './stage-comment.ts';
 
 /** Per-ask feedback has no ask anchor in act@6. */
 export function feedbackWordsComments(words: string): JobComment[] {
