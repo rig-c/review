@@ -10,6 +10,7 @@
     "check:demo": "bun run check -- examples/demo/review.json",
     "demo": "bun src/entry.ts examples/demo/review.json --view-only",
     "check:readme": "bun scripts/check-readme.ts",
+    "check:screen-copies": "bun scripts/screen-copies.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "build": "bun src/build.ts",

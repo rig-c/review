@@ -42,6 +42,7 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bun run check:readme
+      - run: bun run check:screen-copies
       - run: bun run typecheck
       - name: Install reference video export tools
         timeout-minutes: 3
