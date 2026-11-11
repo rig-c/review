@@ -1,5 +1,5 @@
 import {bindInspectorTabs,panelMake,actionButton,type InspectorTabs,type InspectorTabRow} from './view-controls.ts';
-import {tr} from './i18n.ts';
+import {tr,onLanguageChange} from './i18n.ts';
 /** Inspector block row: the sticky row at the top of each Inspector section (index.html `.block-row`) is a WAI-ARIA
  * tablist. Each `role=tab` button owns the `role=tabpanel` block its `aria-controls` names; selecting it shows that
  * block alone and hides the others with `hidden`, so one block is on screen at a time and nothing scrolls between them.
@@ -74,9 +74,9 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
 /** Compose the real rig acts into C6; all fields, submit nodes and their listeners retain identity. */
 export function mountRigInspector(root:Document=document):BottomPanel {
  const inspector=root.querySelector<HTMLElement>('.inspector')!,body=inspector.querySelector<HTMLElement>('.inspector-body')!,heading=inspector.querySelector<HTMLElement>('.inspector-heading')!;
- const feedback=root.getElementById('inspector-feedback')!,dialog=root.getElementById('review-dialog')!,actions=dialog.querySelector<HTMLElement>('.review-dialog-actions')!;
- const status=root.getElementById('review-status')!,label=feedback.querySelector<HTMLLabelElement>('label[for="review-status"]')!;
- const act=panelMake('div',{className:'workspace-act-bar',id:'workspace-review-act'},label,status,actions);
+ const feedback=root.getElementById('inspector-feedback')!,dialog=root.getElementById('review-dialog')!;
+ const [label,status,actions]=[feedback.querySelector<HTMLLabelElement>('label[for="review-status"]')!,root.getElementById('review-status')!,dialog.querySelector<HTMLElement>('.review-dialog-actions')!];
+ const act=mountActBar({id:'workspace-review-act',decision:[label,status],actions,submit:root.getElementById('save') as HTMLButtonElement,saveState:root.getElementById('review-draft-state')!}).element;
  const title=dialog.querySelector<HTMLElement>('.review-dialog-header')!;title.querySelector('#review-dialog-close')?.remove();
  feedback.dataset.inspectorPanel='feedback';feedback.className='workspace-review-panel';feedback.hidden=true;feedback.prepend(title);feedback.append(act);body.append(feedback);dialog.remove();
  // Header modes retain inspection mode while Review is revealed; the bottom row alone owns panel selection.
@@ -106,4 +106,52 @@ export function mountBottomPanel(options:BottomPanelOptions):BottomPanel {
  const collapse=actionButton(tr('Collapse bottom panel'),null);collapse.id='workspace-bottom-collapse';collapse.setAttribute('aria-expanded','true');collapse.setAttribute('aria-controls','workspace-inspector');
  options.heading.replaceChildren(strip,collapse);
  return {row:{tabs,panels:tabs.flatMap(tab=>tab.panels),initialize:true},strip,act:options.act,actHome:options.actHome,collapse,kind:options.kind};
+}
+
+
+export interface ActBarOptions {
+ id:string;
+ decision?:HTMLElement[];
+ /** Reuse a screen's action group without replacing any of its nodes. */
+ actions?:HTMLElement;
+ submit:HTMLButtonElement;
+ /** Omit for an existing button whose text is owned by the screen. */
+ submitLabel?:string|(()=>string);
+ saveState:HTMLElement;
+ overflow?:{label:string;handler:()=>void}[];
+}
+export interface ActBar {element:HTMLElement;refresh():void;dispose():void}
+/** C10: screen-owned decision, submit and save state, with an optional shared action menu. */
+export function mountActBar(options:ActBarOptions):ActBar {
+ const actions=options.actions??panelMake('div',{className:'review-dialog-actions'},options.saveState,options.submit);
+ const element=panelMake('div',{className:'workspace-act-bar',id:options.id},...(options.decision??[]),actions);
+ const cleanups:(()=>void)[]=[],labels:{button:HTMLButtonElement;label:string}[]=[];
+ const listen=(node:HTMLElement,type:string,fn:(event:Event)=>void)=>{node.addEventListener(type,fn);cleanups.push(()=>node.removeEventListener(type,fn));};
+ if(options.overflow?.length){
+  const button=actionButton('⋯',null),menu=panelMake('div',{id:options.id+'-menu',hidden:true});
+  button.setAttribute('aria-haspopup','menu');button.setAttribute('aria-controls',menu.id);button.setAttribute('aria-expanded','false');
+  menu.setAttribute('role','menu');
+  const close=(focus=true)=>{menu.hidden=true;button.setAttribute('aria-expanded','false');if(focus)button.focus();};
+  const items=options.overflow.map(action=>{
+   const item=actionButton(tr(action.label),null);item.setAttribute('role','menuitem');item.tabIndex=-1;
+   listen(item,'click',()=>{close();action.handler();});labels.push({button:item,label:action.label});menu.append(item);return item;
+  });
+  const open=(last=false)=>{menu.hidden=false;button.setAttribute('aria-expanded','true');items[last?items.length-1:0]!.focus();};
+  listen(button,'click',()=>menu.hidden?open():close());
+  listen(button,'keydown',event=>{const key=(event as KeyboardEvent).key;if(['ArrowDown','ArrowUp','Enter',' '].includes(key)){event.preventDefault();open(key==='ArrowUp');}else if(key==='Escape'){event.preventDefault();close();}});
+  listen(menu,'keydown',event=>{
+   const key=(event as KeyboardEvent).key;
+   if(key==='Escape'){event.preventDefault();close();return;}
+   if(['ArrowDown','ArrowUp','Home','End'].includes(key)){event.preventDefault();const index=items.indexOf(event.target as HTMLButtonElement);items[key==='Home'?0:key==='End'?items.length-1:(index+(key==='ArrowDown'?1:items.length-1))%items.length]!.focus();}
+  });
+  listen(menu,'focusout',event=>{const target=(event as FocusEvent).relatedTarget;if(target!==button&&!menu.contains(target as Node|null))close(false);});
+  // Item listeners own activation; events from the sibling popup never trigger submit.
+  actions.append(button,menu);labels.push({button,label:'More act actions'});
+ }
+ const refresh=()=>{
+  if(options.submitLabel!==undefined)options.submit.textContent=tr(typeof options.submitLabel==='function'?options.submitLabel():options.submitLabel);
+  for(const {button,label}of labels)if(label==='More act actions')button.setAttribute('aria-label',tr(label));else button.textContent=tr(label);
+ };
+ refresh();const off=options.submitLabel!==undefined||labels.length?onLanguageChange(refresh):()=>{};
+ return {element,refresh,dispose(){off();for(const cleanup of cleanups)cleanup();}};
 }

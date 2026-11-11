@@ -1,6 +1,7 @@
 export const enCatalog: Readonly<Record<string, string>> = {
  'rig review ': 'rig review ',
  'Language ': 'Language ',
+ 'More act actions': 'More act actions',
  'View switch': 'View switch',
  'One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.': 'One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.',
  '1:1 · one CSS pixel per model coordinate unit.': '1:1 · one CSS pixel per model coordinate unit.',
