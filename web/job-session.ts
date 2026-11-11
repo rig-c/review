@@ -1677,7 +1677,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
         async prepare(display,signal){if(rigScreen.mounted()){location.reload();return new Promise<never>(()=>{});}return rigScreen.prepare(display,signal);},
         captureDraft(){drafts.saveDraft();const forms=rigScreen.mounted()?.record?.forms;const dirty=forms?[...forms].filter(([,entry])=>entry.dirty):[];return dirty.length?dirty.map(([askId,entry])=>({askId,value:entry.read()})):null;},
         commit:prepared=>prepared?rigScreen.commit(prepared):{rollback(){},finalize(){}},
-        async painted(prepared,signal){if(prepared)await rigScreen.painted(prepared,signal);else{if(stopped||fallingBack||signal.aborted)return;fallingBack=true;abort.abort();window.stop();await events?.done;if(!stopped){const dispose=await mountJobSession(host,true);if(stopped)dispose();else legacyStop=dispose;}}},
+        async painted(prepared,signal){if(prepared)await rigScreen.painted(prepared,signal);else{if(stopped||fallingBack||signal.aborted)return;fallingBack=true;abort.abort();window.stop();await events?.done;if(!stopped){const dispose=await mountJobSession(host,true,access);if(stopped)dispose();else legacyStop=dispose;}}},
         discard:prepared=>prepared?.record?.inspection.dispose(),
         changed(state){rigScreen.changed(state);if(state.error)report(state.error);if(state.receipt&&!state.preparing)events?.displayed();},
     }});
@@ -1692,7 +1692,8 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
 }
 
 /** Browser mount is explicit so importing transaction helpers never starts an app. */
-export async function mountJobSession(host: HTMLElement, legacy=false): Promise<() => void> {
+/** `inherited` keeps the capability the one-screen mount already took off the URL (it may live only in memory). */
+export async function mountJobSession(host: HTMLElement, legacy=false, inherited?: JobWindowAccess): Promise<() => void> {
     if(!legacy)return mountJobScreen(host);
     const [{ createViewportController, createViewportState }, { createRigViewportProvider }, { mountViewportPair }, { RigOverlays }, { bindLayerShortcuts, describeLayerToggles, createRigLayerControls }, i18n] = await Promise.all([
         import('./viewport-controller.ts'), import('./rig-viewport-provider.ts'),
@@ -1703,7 +1704,7 @@ export async function mountJobSession(host: HTMLElement, legacy=false): Promise<
         storage = sessionStorage;
     }
     catch { /* Capability stays in memory. */ }
-    const access = jobWindowAccess(location.href, storage, href => history.replaceState(history.state, '', href));
+    const access = inherited ?? jobWindowAccess(location.href, storage, href => history.replaceState(history.state, '', href));
     const hubIncarnation = new URL(location.href).searchParams.get('hub');
     let hubVisible = !hubIncarnation;
     let events: ReturnType<typeof startJobWindowEvents> | undefined;
