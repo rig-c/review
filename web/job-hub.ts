@@ -1,5 +1,4 @@
-import {mountWorkspaceShell} from './workspace-ui.ts';
-import {createRetainedFrameStage} from './retained-frame-stage.ts';
+import {createRetainedFrameStage, mountRetainedWorkspace} from './retained-frame-stage.ts';
 import {hashCapabilityAccess} from './instance-access.ts';
 /** Owner-only job selection. Each retained frame owns its existing job window and draft. */
 import type {JobHubList, JobHubRow} from '../src/job-hub.ts';
@@ -62,11 +61,8 @@ export async function mountJobHub(root: HTMLElement): Promise<() => void> {
   const access = {incarnation, capability};
   const requestedLanguage = new URL(location.href).searchParams.get('lang');
   if (requestedLanguage === 'en' || requestedLanguage === 'ko') i18n.setLanguagePreference(requestedLanguage);
-  const shell = mountWorkspaceShell({compatibility: 'legacyHubStep6'});
-  const {header, title} = shell, notice = shell.status!, language = shell.language!;
-  const list = document.createElement('nav'); list.className = 'hub-list';
-  const stage = document.createElement('main'); stage.className = 'hub-stage';
-  root.replaceChildren(header, list, stage);
+  const workspace = mountRetainedWorkspace({root, kind: 'hub'});
+  const {stage, language} = workspace;
   type Frame = {frame: HTMLIFrameElement; row: JobHubRow; binding: JobHubBinding; announced?: JobHubBinding};
   const cancellation = new AbortController();
   let current: JobHubList | null = null, disposed = false;
@@ -77,21 +73,17 @@ export async function mountJobHub(root: HTMLElement): Promise<() => void> {
     message: entry => ({...entry.binding, schema: JOB_HUB_VISIBILITY}), language: getLanguage, origin: location.origin,
     visibilityOrder: 'after-state', languageChange: 'selection'});
   function render() {
-    document.documentElement.lang = getLanguage();
-    title.textContent = t('job.hubTitle'); document.title = t('job.hubTitle'); notice.textContent = t(status);
-    list.setAttribute('aria-label', t('job.hubJobs')); language.setAttribute('aria-label', t('interview.language'));
-    language.options[0]!.textContent = t('English'); language.options[1]!.textContent = t('Korean'); language.value = getLanguage();
-    list.replaceChildren();
-    for (const row of current?.jobs ?? []) {
-      const button = document.createElement('button'); button.type = 'button';
-      button.dataset.jobId = row.jobId; button.setAttribute('aria-pressed', String(row.jobId === retained.selected));
-      const name = document.createElement('span'); name.textContent = row.publication?.label || row.jobId;
-      const state = document.createElement('span'); state.className = 'hub-job-state';
-      state.textContent = row.status === 'closed' ? t('job.hubClosed') : t('job.hubPending', [row.pendingCount]);
-      const source = document.createElement('span'); source.className = 'hub-job-source'; source.textContent = row.publication?.sourceHash ?? '';
-      button.append(name, state, source);
-      button.onclick = () => {void select(row).catch(() => {status = 'JOB_HUB_REQUEST_REFUSED'; render();});}; list.append(button);
-    }
+    workspace.render({
+      lang: getLanguage(), heading: t('job.hubTitle'), listLabel: t('job.hubJobs'),
+      languageLabel: t('interview.language'), englishLabel: t('English'), koreanLabel: t('Korean'),
+      message: t(status), selected: retained.selected,
+      items: (current?.jobs ?? []).map(row => ({
+        key: row.jobId, dataset: {jobId: row.jobId}, label: row.publication?.label || row.jobId,
+        state: row.status === 'closed' ? t('job.hubClosed') : t('job.hubPending', [row.pendingCount]),
+        detail: row.publication?.sourceHash ?? '',
+        onSelect: () => {void select(row).catch(() => {status = 'JOB_HUB_REQUEST_REFUSED'; render();});},
+      })),
+    });
   }
   async function select(row: JobHubRow) {
     const selection = retained.beginSelection();
@@ -157,9 +149,12 @@ export async function mountJobHub(root: HTMLElement): Promise<() => void> {
   globalThis.addEventListener('pagehide', stop, {once: true});
   render(); void refresh(); return stop;
 }
-if (typeof document !== 'undefined' && document.body?.hasAttribute('data-job-hub')) {
-  void mountJobHub(document.getElementById('job-hub')!).catch(async () => {
-    const {t} = await import('./i18n.ts');
-    document.getElementById('job-hub')!.textContent = t('JOB_HUB_REQUEST_REFUSED');
-  });
+if (typeof document !== 'undefined' && typeof location !== 'undefined' && location.pathname === '/hub/') {
+  const root = document.getElementById('app');
+  if (root && !root.childElementCount) {
+    void mountJobHub(root).catch(async () => {
+      const {t} = await import('./i18n.ts');
+      root.textContent = t('JOB_HUB_REQUEST_REFUSED');
+    });
+  }
 }

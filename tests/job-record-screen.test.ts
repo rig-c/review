@@ -133,3 +133,33 @@ test('#715 a parts-backed record uses the real parts host and source binding',as
   entry.form.commentWords=()=> '[general]\nParts record comment';expect(entry.read()).toMatchObject({words:'[general]\nParts record comment'});
  }finally{await h.close();}
 });
+
+test('#722 real form saves only checked radios, restores Other with empty contract note without changing option identities',async()=>{
+ const f=await recordScreenFixture('interview-picks'),dom=await recordScreenDom();
+ let inspection:Awaited<ReturnType<typeof prepareJobInspection>>|undefined;
+ try{
+  dom.set('location',{origin:f.origin});
+  inspection=await prepareJobInspection(f.display,new AbortController().signal);
+  // Draft controls are the subject here; the ordinary Nova browser covers the bound-image viewport.
+  for(const question of inspection.interview!.questions)question.images=[];
+  const store=new Map<string,string>(),forms=new Map<string,ReturnType<typeof formFor>>();
+  const node=((tag:string,key?:string)=>{const value=dom.document.createElement(tag);if(key)value.textContent=key;return value;}) as JobFormDependencies['node'];
+  const drafts=createJobFormDrafts({jobId:f.session.jobId,current:()=>inspection!,forms:()=>forms,storage:()=>({setItem:(key,value)=>{store.set(key,value);}})});
+  const deps:JobFormDependencies={node,translate:key=>key,helpers:{...createJobFormHelpers(node,key=>key),jobCheckpointContext,assertJobAskSource:(ask,display)=>{prepareJobForms(display,[ask],()=>null);}},draftStorage:()=>({getItem:key=>store.get(key)??null}),...drafts,access:{capability:'fixture'},pageId:'page',window:{state:()=>({pending:[f.ask],receipt:null,preparing:false,closed:false,generation:1}),submit:async()=>{throw new Error('No submission in draft test');}}};
+  const entry=formFor(f.ask,inspection,deps);forms.set(f.ask.askId,entry);
+  const radios=[...entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')],identities=radios.map(input=>({name:input.name,value:input.value}));
+  for(const input of radios){input.checked=['topology_other','density_auto'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
+  entry.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.value='  직접 입력\n';
+  expect(entry.form.querySelector('textarea[name="note"]')).toBeNull();
+  entry.dirty=true;drafts.saveDraft();
+  const saved=JSON.parse(store.get(drafts.localDraftKey(f.display))!);
+  expect(saved.forms[0].controls.filter((input:{name:string})=>input.name.startsWith('choice.'))).toEqual([{name:'choice.topology',value:'topology_other'},{name:'choice.detail_level',value:'density_auto'}]);
+  const restored=formFor(f.ask,inspection,deps),restoredRadios=[...restored.form.querySelectorAll<HTMLInputElement>('input[type=radio]')];
+  expect(restoredRadios.map(input=>({name:input.name,value:input.value}))).toEqual(identities);
+  expect(restoredRadios.filter(input=>input.checked).map(input=>input.value)).toEqual(['topology_other','density_auto']);
+  expect(restored.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.hidden).toBe(false);
+  expect(restored.read()).toEqual(entry.read());
+  expect(restored.read()).toEqual({questionId:'rig_type',selections:[{itemId:'topology',optionId:'topology_other',otherText:'  직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null}],note:''});
+  expect(restored.form.querySelectorAll('select')).toHaveLength(0);
+ }finally{inspection?.dispose();dom.restore();await f.close();}
+});

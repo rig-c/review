@@ -34,7 +34,7 @@ try{
   const refusal=lang==='ko'?'저장된 점검 시간이 선택된 클립/레퍼런스 범위를 벗어났습니다':'Saved inspection time is outside the selected clip/reference';
   const url=`http://127.0.0.1:${proxy.port}/?lang=${lang}#cap=${cap}`;
   await page.goto(url);await wait('window.__bookmarkReading&&!window.__bookmarkReading().restoring&&!document.getElementById("play").disabled');
-  await page.evaluate(`document.querySelector('[data-review-stage="3"]').click();document.querySelector('[data-mode="playback"]').click();document.querySelector('[data-part-list] button[data-slot="lantern"]').click();if(document.getElementById('play').getAttribute('aria-label')!=='Pause')document.getElementById('play').click()`);
+  await page.evaluate(`document.querySelector('[data-mode="playback"]').click();document.querySelector('[data-part-list] button[data-slot="lantern"]').click();if(document.getElementById('play').getAttribute('aria-label')!=='Pause')document.getElementById('play').click()`);
   await wait('window.__bookmarkReading().runtime>2.2&&window.__bookmarkReading().display>.2&&window.__bookmarkReading().display<.8');
   await page.evaluate(`document.getElementById('play').click()`);
   const paused=await read();if(!red)check(paused.control.time===paused.display,'control observation uses inspected clock independently of runtime');check(!paused.playing&&paused.runtime>2&&paused.display<1,'independent accumulated runtime must survive multiple loops');

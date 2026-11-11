@@ -124,7 +124,7 @@ const rigStatusBar=mountStatusBar({
 app.querySelector<HTMLElement>('[data-workspace-status]')!.replaceWith(rigStatusBar.footer);
 for(const id of ['layout-state','idle-state','control-state','draft-state'])el(id).setAttribute('role','status');
 el('layout-state').setAttribute('aria-label','Effective layout');el('renderer-state').setAttribute('aria-label','Last draw backend');el('draft-state').setAttribute('aria-live','polite');el('view-coordinates').setAttribute('aria-label','Current numeric inspection region');
-const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearchParams(location.search).has('stageEmbed')});app.prepend(shell.header);
+const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearchParams(location.search).has('stageEmbed')&&!location.pathname.endsWith('/stage-interview.html')});app.prepend(shell.header);
 el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=sharedCommentMarkup;
 el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.append(createRigLayerControls());
 el('app').querySelector<HTMLElement>('[data-workspace-view-tools]')!.innerHTML=sharedViewToolsMarkup;
@@ -133,7 +133,7 @@ const primaryToolbar=app.querySelector<HTMLElement>('.viewbar')!;primaryToolbar.
 const secondaryToolbar=document.createElement('div');secondaryToolbar.className='workspace-secondary-toolbar';secondaryToolbar.append(app.querySelector<HTMLElement>('[data-workspace-layers]')!,app.querySelector<HTMLElement>('[data-workspace-view-tools]')!);primaryToolbar.after(secondaryToolbar);
 for(const event of ['click','change'])secondaryToolbar.addEventListener(event,()=>{if(rigDifference){leaveRigDifference();renderLayout();}},true);
 const rigInspector=mountRigInspector();
-const rigAsk=panelMake('button',{type:'button',className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigInspector.act.prepend(rigAsk);
+const rigAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigAsk.type='button';rigInspector.act.prepend(rigAsk);
 mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
 const partsCanvas=document.createElement('canvas'),partsReference=document.createElement('canvas');partsCanvas.width=partsCanvas.height=partsReference.width=partsReference.height=0;
@@ -1350,10 +1350,13 @@ function renderRecordForms(forms:readonly HTMLFormElement[]):void {
   viewDisposers.push(bindWorkspaceDrawer({trigger:rigAsk,drawer:recordDialog,label:tr('job.pending'),close}));
   viewDisposers.push(()=>{recordDialog?.close();recordDialog?.remove();recordDialog=null;});
  }
+ recordDialog.classList.toggle('interview-modal',forms.some(form=>form.classList.contains('interview-answer')));
+ for(const form of recordDialog.querySelectorAll<HTMLFormElement>('form[data-job-ask]'))if(!forms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
  if(forms[0])restoreRecordComments(forms[0]);
+ const added=forms.filter(form=>!recordDialog!.contains(form));
  for(const form of forms){
   (form as JobForm['form']).commentWords=()=>host?.record?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):projectComments(feedbackItemComments(session.feedback));
-  if(!recordDialog.contains(form)){form.style.overflow='auto';form.style.minHeight='0';recordDialog.append(form);}
+  if(!recordDialog.contains(form)){if(!form.classList.contains('interview-answer'))form.style.overflow='auto';form.style.minHeight='0';recordDialog.append(form);}
  }
  if(host?.record){
   for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
@@ -1361,6 +1364,7 @@ function renderRecordForms(forms:readonly HTMLFormElement[]):void {
   button('save').disabled=!forms.some(form=>!form.querySelector('fieldset')?.disabled);button('save').onclick=()=>rigAsk.click();
  }
  rigAsk.disabled=!forms.length;
+ if(added.some(form=>form.classList.contains('interview-answer'))&&!recordDialog.open)rigAsk.click();
 }
 /** The ask heading reads only already-pending subjects. It never synthesizes an agent request. */
 function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {

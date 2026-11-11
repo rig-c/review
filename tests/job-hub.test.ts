@@ -99,8 +99,10 @@ test('one embedded listener owns nine independent jobs, asks, generations and fi
   expect(new Set(jobs.map(job => job.session.jobId)).size).toBe(9);
   expect(new Set(grants).size).toBe(9);
   expect(new Set(jobs.flatMap(job => Object.values(job.session.hostCredentials()))).size).toBe(18);
-  expect((await list(h)).jobs.map((row: {generation: number; pendingCount: number}) => [row.generation, row.pendingCount]))
+  const rows = (await list(h)).jobs;
+  expect(rows.map((row: {generation: number; pendingCount: number}) => [row.generation, row.pendingCount]))
     .toEqual(Array.from({length: 9}, () => [2, 1]));
+  expect(Object.keys(rows[0]).sort()).toEqual(['generation', 'jobId', 'pendingCount', 'publication', 'status']);
   const acts = [];
   for (const [index, job] of jobs.entries()) {
     const publication = publications[index]!;
@@ -119,6 +121,7 @@ test('one embedded listener owns nine independent jobs, asks, generations and fi
   }
   expect(new Set(acts.map(act => act.actId)).size).toBe(9);
   expect(jobs.map(job => job.session.status().generation)).toEqual(Array(9).fill(3));
+  expect((await list(h)).jobs.map((row: {pendingCount: number}) => row.pendingCount)).toEqual(Array(9).fill(0));
   expect((await api(jobs[1]!, {verb: 'next', after: null, waitMs: 0}, jobs[0]!.session.hostCredentials().agent)).status).toBe(403);
   expect((await ui(jobs[1]!, 'displayed', {}, jobs[0]!.session.hostCredentials().ui)).status).toBe(403);
   expect((await api(jobs[1]!, {verb: 'fetch-act', actId: acts[1].actId}, grants[0])).status).toBe(403);
@@ -159,7 +162,12 @@ test('writer binding failure hides the candidate and retries/concurrent matching
   expect(installs).toBe(3); expect((await list(h)).jobs).toHaveLength(1);
   const response = await fetch(h.origin + '/hub/api/jobs'); expect(response.status).toBe(403);
   const ownerPage = await fetch(h.ownerUrl);
-  expect(ownerPage.status).toBe(200); expect(await ownerPage.text()).toContain('data-job-hub');
+  expect(ownerPage.status).toBe(200); expect(await ownerPage.text()).toContain('<div id="app"></div>');
+  for (const [asset, mime] of [['/hub/styles.css', 'text/css'], ['/hub/main.js', 'text/javascript']] as const) {
+    const res = await fetch(h.origin + asset);
+    expect(res.status).toBe(200); expect(res.headers.get('Content-Type')).toContain(mime);
+    expect((await res.text()).length).toBeGreaterThan(0);
+  }
   const headers = {'X-Review-Capability': new URL(h.ownerUrl).hash.slice(5)};
   expect((await fetch(h.origin + '/hub/api/jobs?unknown=1', {headers})).status).toBe(400);
   expect((await fetch(h.origin + '/hub/api/jobs', {headers: {...headers, Origin: 'http://127.0.0.1:1'}})).status).toBe(403);
