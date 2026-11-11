@@ -525,10 +525,13 @@ test('#678 caller-owned parts regions without a parts explorer or right host sha
 
 
 test('#678 rig caller regions preserve the legacy shell DOM, labels, drawers and bottom controls in EN and KO',()=>{
- for(const language of ['en','ko']){
-  const legacy=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});let snapshot:ReturnType<typeof legacy.dom>;
-  try{legacy.choose('settings-language',language);legacy.flush();snapshot=legacy.dom();}finally{legacy.close();}
-  const explicit=openHost({explorerLeft:true,explicitRegions:true,tabs:['rig','playback','feedback'],bottomPanel:true});
-  try{explicit.choose('settings-language',language);explicit.flush();expect(explicit.dom()).toEqual(snapshot!);}finally{explicit.close();}
- }
+ const preference=getLanguagePreference(),link=getLinkLanguage();
+ try{
+  for(const language of ['en','ko']){
+   const legacy=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});let snapshot:ReturnType<typeof legacy.dom>;
+   try{legacy.choose('settings-language',language);legacy.flush();snapshot=legacy.dom();}finally{legacy.close();}
+   const explicit=openHost({explorerLeft:true,explicitRegions:true,tabs:['rig','playback','feedback'],bottomPanel:true});
+   try{explicit.choose('settings-language',language);explicit.flush();expect(explicit.dom()).toEqual(snapshot!);}finally{explicit.close();}
+  }
+ }finally{setLinkLanguage(link);setLanguagePreference(preference);}
 });
